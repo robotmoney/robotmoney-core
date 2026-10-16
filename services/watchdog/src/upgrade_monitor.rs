@@ -34,16 +34,21 @@
 //! The indexer's proxy backfill inserts every historical proxy event at once,
 //! including deploy-time rows indexed before the deployment mark existed. Paging
 //! each of them would bury the pages that matter. So on its first run the
-//! monitor records a baseline block in `watchdog_proxy_baseline`: the highest
-//! chain head the indexer has seen (else its cursor). A proxy event at or below
-//! the baseline happened before the monitor ever ran. It is logged once and
-//! recorded in the pager state as seen, never paged. Every event above the
-//! baseline pages as before, including one the backfill inserts later.
+//! monitor records a baseline block in `watchdog_proxy_baseline`: the indexer's
+//! cursor (`MAX(last_indexed_block)`), which is also the upper bound of the
+//! backfill. A proxy event at or below the baseline was indexable before the
+//! monitor ever ran. It is logged once and recorded in the pager state as seen,
+//! never paged. Every event above the baseline pages as before, including one
+//! between the cursor and the chain head that live ingestion indexes later.
 //!
-//! The baseline is taken once and kept. A monitor that already recorded a
-//! proxy change before this rule existed seeds nothing (baseline `-1`), so a
-//! change whose page had not been delivered yet is still paged. With nothing
-//! indexed yet no baseline is taken and nothing is seeded.
+//! The baseline is taken once and kept, and only by a watchdog that never ran
+//! before on this database. The watchdog takes it at startup, before its first
+//! cycle writes anything. If the chain already has a `watchdog_cursor` row or
+//! any `watchdog_pager_state` row, an older watchdog ran here. It may have seen
+//! a real upgrade whose page was never delivered (webhook down or unset), so the
+//! baseline is `-1` and nothing is seeded. With nothing indexed at startup no
+//! baseline is taken; by the next cycle the watchdog has its own cursor row, so
+//! the baseline becomes `-1` too. Every doubtful case pages.
 //!
 //! Alert-only: an upgrade never pauses the gateway.
 
@@ -116,8 +121,10 @@ pub const PROXY_BASELINE_DDL: &str = "CREATE TABLE IF NOT EXISTS watchdog_proxy_
      PRIMARY KEY (chain_id))";
 
 /// The block at or below which a proxy event predates the monitor's first run
-/// (see the module doc). Taken on the first call and kept. `None` while
-/// nothing is indexed for `chain_id`.
+/// (see the module doc). Taken on the first call and kept: the indexer cursor
+/// when no watchdog ran on this database before, else `-1`. `None` when no
+/// watchdog ran before and nothing is indexed yet. Call it at startup, before
+/// the first cycle writes the watchdog cursor.
 pub async fn proxy_change_baseline(
     pool: &PgPool,
     chain_id: i64,
@@ -131,8 +138,8 @@ pub async fn proxy_change_baseline(
         return Ok(Some(b));
     }
     let ran_before: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM watchdog_pager_state \
-                        WHERE chain_id = $1 AND dedup_key LIKE 'proxy_change:%')",
+        "SELECT EXISTS (SELECT 1 FROM watchdog_cursor WHERE chain_id = $1) \
+             OR EXISTS (SELECT 1 FROM watchdog_pager_state WHERE chain_id = $1)",
     )
     .bind(chain_id)
     .fetch_one(pool)
@@ -141,7 +148,7 @@ pub async fn proxy_change_baseline(
         Some(-1)
     } else {
         sqlx::query_scalar(
-            "SELECT COALESCE(MAX(chain_head_block), MAX(last_indexed_block)) FROM indexer_runs \
+            "SELECT MAX(last_indexed_block) FROM indexer_runs \
              WHERE chain_id = $1 AND error IS NULL",
         )
         .bind(chain_id)
@@ -295,7 +302,17 @@ pub async fn alert_new_proxy_changes(
     now: i64,
 ) -> Result<usize, WatchdogError> {
     let mut paged = 0;
-    let baseline = proxy_change_baseline(pool, chain_id).await?;
+    // Fail toward paging: without a baseline every change pages.
+    let baseline = match proxy_change_baseline(pool, chain_id).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!(
+                chain_id,
+                "proxy change baseline unavailable, paging every unpaged proxy change: {e}"
+            );
+            None
+        }
+    };
     for change in governed_proxy_changes(pool, chain_id).await? {
         let key = change.dedup_key();
         if load_pager_state(pool, chain_id, &key)

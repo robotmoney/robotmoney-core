@@ -299,8 +299,9 @@ upgrade from a throwaway contract's constructor. Neither the deploy block nor
 "the first indexed `Upgraded`" exempts a row, so a late-registered vault's
 first upgrade and a freeze with no indexed `Upgraded` both page (issue 1840).
 Rows indexed before this rule existed are marked by the startup backfill. Proxy
-events at or below the watchdog's first-run baseline (the chain head the indexer
-had seen) are recorded as seen and never paged, so neither those rows nor the
+events at or below the watchdog's first-run baseline (the indexer cursor when a
+watchdog first starts on the database; `-1`, so nothing, when one ran before)
+are recorded as seen and never paged, so neither those rows nor the
 backfilled history page in a burst; every later event pages (issue 1856,
 `docs/operations/watchdog-liveness.md`). The dapp re-verifies the gateway proxy and implementation
 at the latest block right before each write from AdminFlow and AgentsPanel,

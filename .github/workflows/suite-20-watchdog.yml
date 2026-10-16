@@ -225,11 +225,13 @@ jobs:
       # paged, and so is an upgrade executed from a throwaway contract's
       # constructor in the deploy block. Issue 1856: events older than the
       # watchdog's first run are recorded as seen, not paged, and a new
-      # upgrade after it pages. Postgres testcontainer plus a mock
-      # webhook. Floor = the seven tests the target holds.
+      # upgrade after it pages; an upgrade an older watchdog failed to
+      # deliver still pages, and an unreadable baseline pages everything.
+      # Postgres testcontainer plus a mock webhook. Floor = the nine tests
+      # the target holds.
       - name: Proxy upgrade and freeze alert integration test (issues 1810, 1840, 1856)
         env:
-          CARGO_TEST_MIN_EXECUTED: 7
+          CARGO_TEST_MIN_EXECUTED: 9
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             -p watchdog \

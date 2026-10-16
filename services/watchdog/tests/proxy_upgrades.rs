@@ -426,9 +426,10 @@ async fn seed_run(pool: &sqlx::PgPool, last_indexed_block: i64, head: i64) {
 
 /// Issue 1856: the indexer's first backfill inserts every historical proxy
 /// event at once, including deploy-time rows indexed before the deployment
-/// mark existed. On its first run the watchdog records the chain head it can
-/// see as a baseline. Events at or below it, even ones the backfill inserts
-/// later, are recorded as seen and never paged. A new upgrade above it pages.
+/// mark existed. On its first run the watchdog records the indexer cursor as a
+/// baseline. Events at or below it, even ones the backfill inserts later, are
+/// recorded as seen and never paged. An event between the cursor and the chain
+/// head at first run, indexed later, pages, and so does a new upgrade.
 #[tokio::test]
 async fn proxy_events_older_than_the_first_run_do_not_page_and_a_new_upgrade_does() {
     let fx = pg_fixture().await;
@@ -468,8 +469,8 @@ async fn proxy_events_older_than_the_first_run_do_not_page_and_a_new_upgrade_doe
     assert_eq!(first, 0, "history older than the first run is not paged");
     assert_eq!(
         proxy_change_baseline(&fx.pool, CHAIN).await.unwrap(),
-        Some(100),
-        "the baseline is the chain head the indexer saw"
+        Some(95),
+        "the baseline is the indexer cursor, not the chain head (100)"
     );
     let seen = load_pager_state(
         &fx.pool,
@@ -505,11 +506,23 @@ async fn proxy_events_older_than_the_first_run_do_not_page_and_a_new_upgrade_doe
     );
     assert_eq!(
         proxy_change_baseline(&fx.pool, CHAIN).await.unwrap(),
-        Some(100),
+        Some(95),
         "the baseline is kept, not moved with the chain"
     );
 
-    // A new upgrade after the first run pages, once.
+    // A real upgrade at block 98: above the cursor but below the head the
+    // indexer had seen at first run. Live ingestion indexes it later. It pages,
+    // and so does a new upgrade after the first run.
+    seed_event(
+        &fx.pool,
+        GATEWAY,
+        98,
+        0,
+        0x06,
+        "Upgraded",
+        &format!(r#"{{"implementation":"{v2}"}}"#),
+    )
+    .await;
     seed_event(
         &fx.pool,
         GATEWAY,
@@ -523,13 +536,17 @@ async fn proxy_events_older_than_the_first_run_do_not_page_and_a_new_upgrade_doe
     let paged = alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_024)
         .await
         .unwrap();
-    assert_eq!(paged, 1);
+    assert_eq!(paged, 2);
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let bodies = server.drain_captures();
-    assert_eq!(bodies.len(), 1, "only the new upgrade was sent");
-    let body: serde_json::Value = serde_json::from_slice(&bodies[0].body).unwrap();
-    assert_eq!(body["payload"]["custom_details"]["block_number"], 150);
-    assert_eq!(body["payload"]["custom_details"]["implementation"], v3);
+    let bodies: Vec<serde_json::Value> = server
+        .drain_captures()
+        .iter()
+        .map(|c| serde_json::from_slice(&c.body).unwrap())
+        .collect();
+    assert_eq!(bodies.len(), 2, "only the two new upgrades were sent");
+    assert_eq!(bodies[0]["payload"]["custom_details"]["block_number"], 98);
+    assert_eq!(bodies[1]["payload"]["custom_details"]["block_number"], 150);
+    assert_eq!(bodies[1]["payload"]["custom_details"]["implementation"], v3);
     assert_eq!(
         alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_036)
             .await
@@ -577,6 +594,69 @@ async fn a_monitor_that_ran_before_seeds_nothing_and_an_undelivered_change_still
     assert_eq!(
         body["payload"]["custom_details"]["alert_kind"],
         "proxy_upgrades_frozen"
+    );
+    server.shutdown();
+}
+
+/// Issue 1856 (review): an older watchdog ran here, saw a real upgrade and
+/// could not deliver its page (webhook down or unset), so it saved no pager
+/// row. Its `watchdog_cursor` row shows it ran. The new watchdog seeds nothing
+/// and the undelivered upgrade pages.
+#[tokio::test]
+async fn an_upgrade_an_older_watchdog_failed_to_deliver_still_pages_after_rollout() {
+    let fx = pg_fixture().await;
+    ensure_pager_state_table(&fx.pool).await.unwrap();
+    seed(&fx.pool).await;
+    seed_run(&fx.pool, 95, 100).await;
+    sqlx::query("INSERT INTO watchdog_cursor (chain_id, last_processed_block) VALUES ($1, 90)")
+        .bind(CHAIN)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    // The old watchdog's delivery failed: nothing is recorded.
+    let failing = FailingWebhookServer::start(503).await;
+    let client = Client::new();
+    assert_eq!(
+        alert_new_proxy_changes(&fx.pool, &client, Some(&failing.url), CHAIN, 900)
+            .await
+            .unwrap(),
+        0
+    );
+    failing.shutdown();
+    assert_eq!(
+        proxy_change_baseline(&fx.pool, CHAIN).await.unwrap(),
+        Some(-1),
+        "a watchdog ran here before: nothing is seeded"
+    );
+
+    let server = MockWebhookServer::start().await;
+    let paged = alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_000)
+        .await
+        .unwrap();
+    assert_eq!(paged, 2, "the undelivered upgrade and freeze both page");
+    server.shutdown();
+}
+
+/// Issue 1856 (review): the baseline table is unreadable (the watchdog role
+/// could not create it). The monitor fails toward paging: every change pages.
+#[tokio::test]
+async fn an_unreadable_baseline_pages_everything() {
+    let fx = pg_fixture().await;
+    ensure_pager_state_table(&fx.pool).await.unwrap();
+    seed(&fx.pool).await;
+    seed_run(&fx.pool, 95, 100).await;
+    sqlx::query("DROP TABLE watchdog_proxy_baseline")
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    let server = MockWebhookServer::start().await;
+    let client = Client::new();
+    let paged = alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        paged, 2,
+        "below the cursor, yet paged: no baseline, no seeding"
     );
     server.shutdown();
 }
