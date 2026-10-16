@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ERC1967_IMPLEMENTATION_SLOT, compareCode, compareDeployedCode, implicitRefs, logicCode, maskHex } from "../../src/verify/codehash.ts";
@@ -31,6 +31,20 @@ describe("implicit masks (found in the first Twin rehearsal)", () => {
     const chain = "0x6080604052" + "11".repeat(10) + "ddeeff" + "0003";
     expect(compareCode(chain as `0x${string}`, art).ok).toBe(true);
     expect(compareCode(("0x6080604053" + "11".repeat(10) + "ddeeff" + "0003") as `0x${string}`, art).ok).toBe(false);
+  });
+  test("issue 1842: nothing is masked when the byte at the computed CBOR offset is not a CBOR map byte (0xa0-0xbf)", () => {
+    for (const b of ["9f", "c0", "00", "60"]) expect(implicitRefs("0x6080604052" + "11".repeat(10) + b + "bbcc" + "0003", true)).toEqual([]);
+    for (const b of ["a0", "a2", "bf"]) expect(implicitRefs("0x6080604052" + "11".repeat(10) + b + "bbcc" + "0003", true)).toEqual([{ start: 15, length: 3 }]);
+    // a length that reaches past the start of the code masks nothing either
+    expect(implicitRefs("0xa2bbcc" + "00ff", true)).toEqual([]);
+  });
+  test("issue 1842: the trailer of a real solc artifact (the committed TimelockController build) is masked, a CBOR map of the length its last two bytes give", () => {
+    const art = JSON.parse(readFileSync(join(import.meta.dir, "..", "fixtures", "build-out", "TimelockController.sol", "TimelockController.json"), "utf8"));
+    const hex = String(art.deployedBytecode.object).replace(/^0x/, "");
+    const total = hex.length / 2, len = parseInt(hex.slice(-4), 16);
+    expect(len).toBeGreaterThan(0);
+    expect(hex.slice((total - 2 - len) * 2, (total - 2 - len) * 2 + 2)).toBe("a2"); // solc's map of two entries (ipfs, solc)
+    expect(implicitRefs(hex, true)).toEqual([{ start: total - 2 - len, length: len }]);
   });
 });
 
