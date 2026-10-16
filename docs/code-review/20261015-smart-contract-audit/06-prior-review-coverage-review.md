@@ -1,5 +1,7 @@
 # Prior-review coverage — audit record
 
+> **October 16 update:** The [adversarial pass](08-adversarial-validation.md) identifies a specific closure claim requiring revalidation: FS-RTR-2 (`docs/audits.md:257`) is marked fixed/mitigated, but the direct router reads a holder-to-caller allowance without consuming it. Gateway self-custody does not establish safety of repeated direct-router calls. This remains a source-level lead, not an executed exploit. The baseline run also finds eight duplicated wrong-error-encoding failures across the vault and inherited historical review suites; old suite names and ledger labels are not sufficient closure evidence.
+
 ## Recheck basis
 
 The [October 12 contract review](../20261012-security-review.md), [October 14 V4 economics assessment](../20261014-code-review-internal-claude-v4-sampling-economics.md), and [October 15 branch security review](../20261015-review-security-claude.md) are the immediate leads. The October 15 report reviewed an uncommitted working tree based on `9d9bb854`, while this audit targets the later QA contract tree at `f828eabb`; a previous `fixed` verdict is not inherited. The June 12 and June 18 reports supply older regression cases, including findings that earlier remediation reports had marked fixed without a landed or complete fix.

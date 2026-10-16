@@ -1,0 +1,40 @@
+ok   identical layout passes (exit 0)
+ok   a moved slot fails (exit 1)
+ok   a retyped variable fails (exit 1)
+ok   an added variable fails against an older snapshot (exit 1)
+ok   reordered struct members fail (exit 1)
+ok   a changed library link fails (exit 1)
+ok   a reordered ERC-7201 namespace fails (exit 1)
+ok   a reordered storage enum member fails (review-security-046) (exit 1)
+ok   an inserted storage enum member fails (review-security-046) (exit 1)
+ok   a storage enum deleted from the snapshot by hand fails (review-security-047) (exit 1)
+ok   the enum scan reads members in declaration order and skips comments
+ok   a stored enum with no definition is a tooling error
+ok   an empty snapshot is an error (exit 2)
+ok   namespace robotmoney.storage.GovernedUUPS is in the gateway layout
+ok   namespace openzeppelin.storage.AccessControl is in the gateway layout
+ok   namespace openzeppelin.storage.ReentrancyGuard is in the gateway layout
+ok   namespace openzeppelin.storage.Initializable is in the gateway layout
+ok   committed snapshot RobotMoneyVault.json is normalized
+ok   committed snapshot ProtocolAssetVault.json is normalized
+ok   committed snapshot AgentTokenVault.json is normalized
+ok   committed snapshot RwaBasketVault.json is normalized
+ok   committed snapshot VaultRegistry.json is normalized
+ok   committed snapshot PortfolioRouter.json is normalized
+ok   committed snapshot RobotMoneyGateway.json is normalized
+ok   committed snapshot InvestmentCommitteePolicy.json is normalized
+ok   committed snapshot ConsensusRecommendationReceipt.json is normalized
+ok   committed snapshot RouterGovernance.json is normalized
+check-core-storage-layout selftest: all cases passed
+
+check-core-storage-layout: OpenZeppelin pins matches pins.json
+check-core-storage-layout: RobotMoneyVault storage layout matches RobotMoneyVault.json
+check-core-storage-layout: ProtocolAssetVault storage layout matches ProtocolAssetVault.json
+check-core-storage-layout: AgentTokenVault storage layout matches AgentTokenVault.json
+check-core-storage-layout: RwaBasketVault storage layout matches RwaBasketVault.json
+check-core-storage-layout: VaultRegistry storage layout matches VaultRegistry.json
+check-core-storage-layout: PortfolioRouter storage layout matches PortfolioRouter.json
+check-core-storage-layout: RobotMoneyGateway storage layout matches RobotMoneyGateway.json
+check-core-storage-layout: InvestmentCommitteePolicy storage layout matches InvestmentCommitteePolicy.json
+check-core-storage-layout: ConsensusRecommendationReceipt storage layout matches ConsensusRecommendationReceipt.json
+check-core-storage-layout: RouterGovernance storage layout matches RouterGovernance.json

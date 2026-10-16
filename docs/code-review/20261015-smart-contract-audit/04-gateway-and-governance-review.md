@@ -1,5 +1,7 @@
 # Gateway and governance audit — 2026-10-15
 
+> **October 16 update:** GW-GOV-1 is now locally reproduced: a fresh owner commitment accepts agent consent older than `COMMIT_EXPIRY_BLOCKS`. [Adversarial validation](08-adversarial-validation.md) records the passing PoC and preserves the prior-consent, valid-policy, and unowned-agent prerequisites. Earlier pending-reproduction wording below describes the original source pass. Live role topology remains unverified.
+
 **Target:** `3c753ff5b72f828f082673d4c5983418a418c47e` (`review/contracts-security-20261015`). **Status:** source review in progress; this chapter is not a deployment attestation. Severity describes the contract behavior under the stated prerequisites.
 
 ## Scope and authority map
@@ -16,7 +18,7 @@ Read `RobotMoneyGateway`, `AccessRoles`, `GatewayWindows`, `InvestmentCommitteeP
 
 Narrowing condition: while the address remains unowned, the agent can self-authorize it and thereby prevent the owner's later reveal; revoking that agent still does not clear the separate consent commitment. The late reveal remains possible only while the matching policy is valid and the agent has not consumed the address this way. Assess the owner impact under those exact conditions before final severity.
 
-**Recommendation:** enforce the same expiry on the agent's consent commitment and expose cancellation by the committer, or use a signed consent with an explicit deadline and nonce. Add a regression that advances more than 256 blocks, creates a fresh owner commitment, and expects the reveal to fail on the stale agent consent. This finding is based on source reasoning; the exact sequence has not yet been run as a PoC.
+**Recommendation:** enforce the same expiry on the agent's consent commitment and expose cancellation by the committer, or use a signed consent with an explicit deadline and nonce. Add a regression that advances more than 256 blocks, creates a fresh owner commitment, and expects the reveal to fail on the stale agent consent. The October 16 PoC executes this exact stale-consent sequence successfully; a future fix should make it revert.
 
 ## Historical findings rechecked
 

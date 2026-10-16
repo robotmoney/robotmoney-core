@@ -1,5 +1,7 @@
 # Upgrades and deployment — source review
 
+> **October 16 update:** The storage checker self-tests passed, all ten core snapshots and dependency pins match the current checkout, and Slither analysis completed. These results do not prove compatibility with a previous deployment or detection of a mutated namespace slot constant. UD-03 remains unverified, while UD-01/02 remain explicit process/readiness dependencies. See [adversarial validation](08-adversarial-validation.md) for measured evidence and remaining checks.
+
 Review base: `3c753ff5b72f828f082673d4c5983418a418c47e` (15 October 2026). This review inspected the current UUPS library, proxy and timelock deployment path, storage gate, verifier, and upgrade-related release tooling. It is a source assessment. No Base RPC or deployed bytecode was checked.
 
 ## Findings

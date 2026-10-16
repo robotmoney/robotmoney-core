@@ -1,6 +1,8 @@
 # Evidence and closeout — audit record
 
-## Evidence available at this pass
+> **October 16 update — supersedes the original evidence status below:** [Adversarial validation](08-adversarial-validation.md) records **1,863 baseline tests passed, 14 failed, 30 skipped**, plus **six new PoCs passed**. The storage checker self-tests pass; Slither reports 229 alerts pending full triage. The custody guard itself panics before its source checks, so its claimed INV-1 evidence is not valid at this target. C-03-02 is reopened as unresolved custody/recoverability risk. No live deployment verification, comprehensive historical disposition, or complete invariant proof exists; no sign-off is given.
+
+## Historical evidence at the original October 15 pass
 
 The chapter reviews are source inspections pinned to `3c753ff5b72f828f082673d4c5983418a418c47e`. No new Foundry test completed for this audit pass: a targeted gateway regression began compiling and was stopped before results. No fork reproduction, static-analysis run, deployed-bytecode comparison, or live-chain read has been executed. Findings that depend on venue behavior, deployment configuration, or measurable economic impact remain candidates until reproduced.
 
@@ -8,6 +10,6 @@ The earlier October 15 review says its 68 proposed fixes were compile-checked bu
 
 The formal-invariant dispatch must be interpreted carefully. `FvInvariantsTest._assertHolds` checks an ID's registry status and remediation issue, not the invariant's behavior ([`contracts/test/fv/FvInvariants.t.sol:156`](../../../contracts/test/fv/FvInvariants.t.sol)); some named `expectedFail` functions call only `_assertHolds` (for example `SUP-5` at line 210). Other dedicated harnesses may exercise the behavior. Each invariant needs a link to its actual behavioral or static proof, and any `vm.skip` or placeholder assertion must be recorded as unverified.
 
-## Closeout status
+## Historical closeout assessment — superseded by October 16 validation
 
 This is an initial, incomplete source pass, not an audit sign-off or complete issue inventory. A design review against the canonical docs moved C-03-02, UD-01, and UD-02 out of the vulnerability count. It narrowed VA-01, VA-02, and VA-03. It retained C-03-01, GW-GOV-1, and UD-03. The [README](README.md#disposition-after-design-review) holds the summary table. The remaining candidates cover basket mint and preview semantics, max-view accuracy, V3 pool identity, agent-consent lifetime, and namespace-slot drift. These have not been independently reproduced or checked against live deployments. Before closeout, reconcile duplicate findings across chapter reports, reproduce material candidates, complete the historical finding and invariant matrices, run the required tests and static checks, compare deployed code/configuration, and re-review any fixes made after this pass. The final verdict must separate source correctness, deployment truth, and operational assumptions.

@@ -1,5 +1,7 @@
 # Scope and method — audit record
 
+> **October 16 update:** [Adversarial validation](08-adversarial-validation.md) pins HEAD `aa471faf` and the unchanged QA contract tree, records commit authorship, executes six local PoCs and a baseline suite, and runs static analysis. The inventory below remains a source inventory, not proof of complete function/role/deployment coverage.
+
 ## Target and initial inventory
 
 This source pass is pinned to `3c753ff5b72f828f082673d4c5983418a418c47e` on `review/contracts-security-20261015`. That commit contains only audit-plan changes relative to `qa/test-merge-v1` at `f828eabb`; the contract source is the QA branch's source at that commit. No deployed address, implementation bytecode, or chain state has been verified in this pass.

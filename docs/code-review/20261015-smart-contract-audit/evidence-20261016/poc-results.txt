@@ -1,0 +1,16 @@
+Ran 1 test for contracts/test/AuditAdversarial20261016.t.sol:AuditConsent20261016
+[PASS] test_audit_expiredAgentConsentAcceptedWithFreshOwnerCommit() (gas: 364441)
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 2.75ms (164.29µs CPU time)
+
+Ran 1 test for contracts/test/AuditAdversarial20261016.t.sol:AuditLiquidity20261016
+[PASS] test_audit_maxViewsOverstateExecutableLiquidity() (gas: 1490883)
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 4.90ms (1.31ms CPU time)
+
+Ran 4 tests for contracts/test/AuditAdversarial20261016.t.sol:AuditBasket20261016
+[PASS] test_audit_degradedReabsorbIgnoresCallerFloorAndLeavesCustody() (gas: 294246)
+[PASS] test_audit_mintIssuesMoreSharesThanRequested() (gas: 596750)
+[PASS] test_audit_nonDustRedeemCanMissPreviewByOneUnit() (gas: 873413)
+[PASS] test_audit_positivePreviewAllDustPaysZero() (gas: 2407227)
+Suite result: ok. 4 passed; 0 failed; 0 skipped; finished in 4.91ms (2.86ms CPU time)
+
+Ran 3 test suites in 14.82ms (12.55ms CPU time): 6 tests passed, 0 failed, 0 skipped (6 total tests)

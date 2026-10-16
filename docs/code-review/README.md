@@ -12,7 +12,10 @@ Dated subdirectories hold review plans and work in progress. The
 [2026-10-15 smart-contract audit](20261015-smart-contract-audit/README.md)
 has a chapter index, scope and method, coverage checklists, and prior-finding
 cross-checks. Its chapters are a plan; findings and dispositions require review
-evidence before they enter the audit ledger.
+evidence before they enter the audit ledger. The latest [October 16 adversarial
+validation](20261015-smart-contract-audit/08-adversarial-validation.md) records six
+local reproductions, baseline failures, static-analysis results, and corrected
+dispositions. It does not provide audit sign-off.
 
 ## Filename pattern
 

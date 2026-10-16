@@ -1,0 +1,1641 @@
+{
+  "target_commit": "aa471faf0be462e401977b9b60054424a358d85e",
+  "success": true,
+  "analysis_contracts": 143,
+  "detectors_run": 102,
+  "alert_count": 229,
+  "counts_by_impact": {
+    "High": 3,
+    "Medium": 58,
+    "Low": 106,
+    "Informational": 62
+  },
+  "counts_by_detector": {
+    "uninitialized-state": 3,
+    "divide-before-multiply": 3,
+    "incorrect-equality": 19,
+    "reentrancy-no-eth": 1,
+    "uninitialized-local": 13,
+    "unused-return": 22,
+    "shadowing-local": 1,
+    "events-maths": 1,
+    "missing-zero-check": 1,
+    "calls-loop": 70,
+    "reentrancy-benign": 1,
+    "reentrancy-events": 6,
+    "timestamp": 26,
+    "assembly": 2,
+    "costly-loop": 1,
+    "cyclomatic-complexity": 4,
+    "dead-code": 7,
+    "missing-inheritance": 3,
+    "naming-convention": 44,
+    "unindexed-event-address": 1
+  },
+  "triage": "Three uninitialized-state High alerts refuted as described in 08; remaining alerts not fully triaged.",
+  "alerts": [
+    {
+      "id": "3ec0403bb7da2cad3d02dec0e245125b1f4ca5b906b529baf884ec987fe56f26",
+      "check": "uninitialized-state",
+      "impact": "High",
+      "confidence": "High",
+      "description": "BasketVault.assets (contracts/vaults/BasketVault.sol#153) is never initialized. It is used in:\n\t- BasketVault._guardAssets() (contracts/vaults/BasketVault.sol#482-488)\n\t- BasketVault.totalAssets() (contracts/vaults/BasketVault.sol#524-535)\n\t- BasketVault._routeDeposit(address,uint256) (contracts/vaults/BasketVault.sol#670-712)\n\t- BasketVault.redeem(uint256,address,address) (contracts/vaults/BasketVault.sol#732-743)\n\t- BasketVault._sellProportional(uint256,uint256) (contracts/vaults/BasketVault.sol#934-974)\n\t- BasketVault.addAsset(address,address,uint24,address,BasketVault.Venue) (contracts/vaults/BasketVault.sol#1108-1152)\n\t- BasketVault.sweepForeignToken(address) (contracts/vaults/BasketVault.sol#1373-1387)\n\t- BasketVault.minSlippageFloorBps() (contracts/vaults/BasketVault.sol#1447-1454)\n\t- BasketVault.assetUsdcValue(uint256,uint256) (contracts/vaults/BasketVault.sol#1550-1553)\n\t- BasketVault.assetTokenValue(uint256,uint256) (contracts/vaults/BasketVault.sol#1557-1560)\n\t- BasketVault.assetCount() (contracts/vaults/BasketVault.sol#1564-1566)\n\t- BasketVault._activeAssetCount() (contracts/vaults/BasketVault.sol#1578-1583)\n\t- BasketVault._activeAssetForToken(address) (contracts/vaults/BasketVault.sol#1585-1591)\n"
+    },
+    {
+      "id": "e4ea0c632cf10f16ab68d8f35920c3906504d9a207695c8b5ea92a8f2c693247",
+      "check": "uninitialized-state",
+      "impact": "High",
+      "confidence": "High",
+      "description": "ExclusionLedger._checkpoints (contracts/ExclusionLedger.sol#120) is never initialized. It is used in:\n\t- ExclusionLedger.balanceAt(address,uint256) (contracts/ExclusionLedger.sol#284-298)\n\t- ExclusionLedger._checkpoint(address,uint256) (contracts/ExclusionLedger.sol#353-359)\n"
+    },
+    {
+      "id": "f86d051833006faf2a991d9b605e780d6a342150674fee20309f0f2a88e7c6ee",
+      "check": "uninitialized-state",
+      "impact": "High",
+      "confidence": "High",
+      "description": "RobotMoneyVault.adapters (contracts/RobotMoneyVault.sol#99) is never initialized. It is used in:\n\t- RobotMoneyVault.totalAssets() (contracts/RobotMoneyVault.sol#543-553)\n\t- RobotMoneyVault._book() (contracts/RobotMoneyVault.sol#1349-1355)\n\t- RobotMoneyVault.adapterCount() (contracts/RobotMoneyVault.sol#1391-1393)\n"
+    },
+    {
+      "id": "874f294e3181f5331ef14629241f19cc593c8e7b46549cc51938ecea846a54ae",
+      "check": "divide-before-multiply",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "BasketVault._routeDeposit(address,uint256) (contracts/vaults/BasketVault.sol#670-712) performs a multiplication on the result of a division:\n\t- perAsset = usdcAmount / n (contracts/vaults/BasketVault.sol#674)\n\t- remainder = usdcAmount - perAsset * n (contracts/vaults/BasketVault.sol#675)\n"
+    },
+    {
+      "id": "e33f5257337c8baf076d90292186cdd1a815752ee6474bee9064a634fd78ef75",
+      "check": "divide-before-multiply",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "BasketVault._routeDeposit(address,uint256) (contracts/vaults/BasketVault.sol#670-712) performs a multiplication on the result of a division:\n\t- baseWeightBps = MAX_BPS / n (contracts/vaults/BasketVault.sol#682)\n\t- remainderWeightBps = MAX_BPS - baseWeightBps * n (contracts/vaults/BasketVault.sol#683)\n"
+    },
+    {
+      "id": "f0eec9326b5857bc9cebb3f6ea22ae722e18440ed5ea946808302c8ef40d6da9",
+      "check": "divide-before-multiply",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "UniswapV4PriceRecorder._observeSingle(UniswapV4PriceRecorder.State,uint32,uint32) (contracts/adapters/UniswapV4PriceRecorder.sol#305-326) performs a multiplication on the result of a division:\n\t- beforeOrAt.tickCumulative + ((atOrAfter.tickCumulative - beforeOrAt.tickCumulative) / observationTimeDelta) * targetDelta (contracts/adapters/UniswapV4PriceRecorder.sol#323-325)\n"
+    },
+    {
+      "id": "1c8ee9358261156db7eb30d40b342447be1184e0c6f19369968c51b88fad770c",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "UniswapV4PriceRecorder.record() (contracts/adapters/UniswapV4PriceRecorder.sol#151-180) uses a dangerous strict equality:\n\t- last.blockTimestamp == ts (contracts/adapters/UniswapV4PriceRecorder.sol#155)\n"
+    },
+    {
+      "id": "2b1f70080193f8e3e5eaf3a2824456a26238ed2fa8675e80dbcb359644fcf63c",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "BasketVault.maxMint(address) (contracts/vaults/BasketVault.sol#875-879) uses a dangerous strict equality:\n\t- assets_ == type()(uint256).max (contracts/vaults/BasketVault.sol#877)\n"
+    },
+    {
+      "id": "4a0efb6077145f3fb3ce134b02c168e310ffd0eeceb192be4196e8258defee79",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "ConsensusRecommendationReceipt.getReceiptById(bytes32) (contracts/gateway/ConsensusRecommendationReceipt.sol#209-213) uses a dangerous strict equality:\n\t- slot == 0 (contracts/gateway/ConsensusRecommendationReceipt.sol#211)\n"
+    },
+    {
+      "id": "5130f2ec28cd337632c2a1a6a3022ff94eb6636e9df28dd88a4a7e7b4a4ba905",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "ConsensusRecommendationReceipt.isReleased(bytes32) (contracts/gateway/ConsensusRecommendationReceipt.sol#221-225) uses a dangerous strict equality:\n\t- slot == 0 (contracts/gateway/ConsensusRecommendationReceipt.sol#223)\n"
+    },
+    {
+      "id": "525f07f01ea89bce77af82f4ac0935924624b1933d2a8518b35bcaf3da722679",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "ExclusionLedger.claim(uint256,address) (contracts/ExclusionLedger.sol#258-266) uses a dangerous strict equality:\n\t- amount == 0 (contracts/ExclusionLedger.sol#260)\n"
+    },
+    {
+      "id": "5d4de0ad2f34cbc70f33e8bff164ace71b4edc62e7bcfb2ab197d8a507b17d1e",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "RobotMoneyVault._withdraw(address,address,address,uint256,uint256) (contracts/RobotMoneyVault.sol#767-813) uses a dangerous strict equality:\n\t- grossAssets == 0 && shares != 0 && _anyActiveAdapterBlocked(false) (contracts/RobotMoneyVault.sol#783)\n"
+    },
+    {
+      "id": "a2370eaa796bb3cd6956dc9b4c37343f7cd3cf511cebb8669558e657529c70d4",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "BasketVault._sellProportional(uint256,uint256) (contracts/vaults/BasketVault.sol#934-974) uses a dangerous strict equality:\n\t- minUsdcOut == 0 (contracts/vaults/BasketVault.sol#961)\n"
+    },
+    {
+      "id": "b63e04cbeeb2bb414212a6f22a68062d1576f03febbe2c698aaef6b09fc4abb7",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "BasketVault._twapQuote(address,address,address,uint256) (contracts/vaults/BasketVault.sol#1038-1052) uses a dangerous strict equality:\n\t- amountIn == 0 (contracts/vaults/BasketVault.sol#1043)\n"
+    },
+    {
+      "id": "bd8eef32fbf8eb80ea0fd9d98f934e8e3801ba1c3803a91bff730db030b3449c",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "UniswapV4PriceRecorder._observeSingle(UniswapV4PriceRecorder.State,uint32,uint32) (contracts/adapters/UniswapV4PriceRecorder.sol#305-326) uses a dangerous strict equality:\n\t- target == beforeOrAt.blockTimestamp (contracts/adapters/UniswapV4PriceRecorder.sol#318)\n"
+    },
+    {
+      "id": "cd72c9f97ac404c5d2a22f8ce3c3610cb2dfc16d5700748009cfafabbc5ab1bc",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "RobotMoneyVault._pullProportional(uint256) (contracts/RobotMoneyVault.sol#839-865) uses a dangerous strict equality:\n\t- assetsNeeded == 0 (contracts/RobotMoneyVault.sol#840)\n"
+    },
+    {
+      "id": "d212dbe4c37464f17fec2e9520c20a70bf913a5e9ecf2c25c8fe70112e3b8d4e",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "BasketVault._routeDeposit(address,uint256) (contracts/vaults/BasketVault.sol#670-712) uses a dangerous strict equality:\n\t- n == 0 || usdcAmount == 0 (contracts/vaults/BasketVault.sol#672)\n"
+    },
+    {
+      "id": "d593244c32a6feb3a2b713a6f24e92d36c28470363290e8816fcac27847607a2",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "BasketVault._routeDeposit(address,uint256) (contracts/vaults/BasketVault.sol#670-712) uses a dangerous strict equality:\n\t- swapIn == 0 (contracts/vaults/BasketVault.sol#694)\n"
+    },
+    {
+      "id": "dc9ce16c9a85a415aa8b276a87a325232e9bdaadb792ea28be22f8947317f68e",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "UniswapV4PriceRecorder._observeSingle(UniswapV4PriceRecorder.State,uint32,uint32) (contracts/adapters/UniswapV4PriceRecorder.sol#305-326) uses a dangerous strict equality:\n\t- target == atOrAfter.blockTimestamp (contracts/adapters/UniswapV4PriceRecorder.sol#319)\n"
+    },
+    {
+      "id": "df7d05b5ca22fe6fd6c1d697dca0636c20c3360ff25acaf3cb5632b0ba096dbd",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "UniswapV4PriceRecorder._surrounding(UniswapV4PriceRecorder.State,uint32) (contracts/adapters/UniswapV4PriceRecorder.sol#337-353) uses a dangerous strict equality:\n\t- beforeOrAt.blockTimestamp == target (contracts/adapters/UniswapV4PriceRecorder.sol#344)\n"
+    },
+    {
+      "id": "e17b49f580da3cc48efda4443c37aa566a8bb501fcf4a9a113afd92ffca5698a",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "BasketVault._sellProportional(uint256,uint256) (contracts/vaults/BasketVault.sol#934-974) uses a dangerous strict equality:\n\t- sellAmount == 0 (contracts/vaults/BasketVault.sol#951)\n"
+    },
+    {
+      "id": "e5f1c8fe522cc2e79fbee21d491088966d5b7a60eb5da5f3d226f100b55ecb30",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "AaveV3Adapter.withdraw(uint256,uint256) (contracts/adapters/AaveV3Adapter.sol#155-177) uses a dangerous strict equality:\n\t- amount == 0 (contracts/adapters/AaveV3Adapter.sol#173)\n"
+    },
+    {
+      "id": "e9a7d83bd38f2bd6d56b781b68d45bece3524572558f638236b3fd4b3f812785",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "BasketVault._sellProportional(uint256,uint256) (contracts/vaults/BasketVault.sol#934-974) uses a dangerous strict equality:\n\t- bal == 0 (contracts/vaults/BasketVault.sol#948)\n"
+    },
+    {
+      "id": "f4b06511c7a2423228b1d6f9c9d9a94e496c71e445ca3f8a0793ccd8d50bbee9",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "RobotMoneyVault.maxMint(address) (contracts/RobotMoneyVault.sol#720-724) uses a dangerous strict equality:\n\t- assets == type()(uint256).max (contracts/RobotMoneyVault.sol#722)\n"
+    },
+    {
+      "id": "f9e3dbdeb6e2c5c2a9a96973dec2ced3042f4f5d18557ba6cf5b3250ec5e6e8b",
+      "check": "incorrect-equality",
+      "impact": "Medium",
+      "confidence": "High",
+      "description": "UniswapV4PriceRecorder.record() (contracts/adapters/UniswapV4PriceRecorder.sol#151-180) uses a dangerous strict equality:\n\t- (s.cardinalityNext > s.cardinality && s.index == s.cardinality - 1) (contracts/adapters/UniswapV4PriceRecorder.sol#165-168)\n"
+    },
+    {
+      "id": "b00e077d314be8ab808cff212ab300e18b39872a7e98ea12d0515acd9d82ead6",
+      "check": "reentrancy-no-eth",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "Reentrancy in UniswapV4SwapAdapter.swap(address,address,uint24,uint256,uint256,address,uint256) (contracts/adapters/UniswapV4SwapAdapter.sol#135-165):\n\tExternal calls:\n\t- IERC20(tokenIn).safeTransferFrom(msg.sender,address(this),amountIn) (contracts/adapters/UniswapV4SwapAdapter.sol#156)\n\t- RECORDER.record() (contracts/adapters/UniswapV4SwapAdapter.sol#158)\n\t- result = POOL_MANAGER.unlock(abi.encode(zeroForOne,tokenIn,tokenOut,amountIn128,minAmountOut,recipient)) (contracts/adapters/UniswapV4SwapAdapter.sol#160-162)\n\tState variables written after the call(s):\n\t- _open = 1 (contracts/adapters/UniswapV4SwapAdapter.sol#163)\n\tUniswapV4SwapAdapter._open (contracts/adapters/UniswapV4SwapAdapter.sol#69) can be used in cross function reentrancies:\n\t- UniswapV4SwapAdapter.swap(address,address,uint24,uint256,uint256,address,uint256) (contracts/adapters/UniswapV4SwapAdapter.sol#135-165)\n\t- UniswapV4SwapAdapter.unlockCallback(bytes) (contracts/adapters/UniswapV4SwapAdapter.sol#168-212)\n"
+    },
+    {
+      "id": "15d80ad967f7b95b674d888b4361f7467f403a9d8be9af5177f576dcc361e9ab",
+      "check": "uninitialized-local",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "PortfolioRouter.redeemFor(address,address,address[],uint256[],uint256[],uint256).legs (contracts/PortfolioRouter.sol#1011) is a local variable never initialized\n"
+    },
+    {
+      "id": "480101b911ebf29dadc9a3dad5af50f1d7642052cd7646e86a04cb53f6a9cb3e",
+      "check": "uninitialized-local",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._splitAcrossAvailable(bool[],uint256[],uint256).allocated (contracts/PortfolioRouter.sol#823) is a local variable never initialized\n"
+    },
+    {
+      "id": "584fd0a0a78d51fee940576627dfea43b1240b038d9615eadc6b380f9ded6d3d",
+      "check": "uninitialized-local",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._splitAcrossAvailable(bool[],uint256[],uint256).lastAvailable (contracts/PortfolioRouter.sol#824) is a local variable never initialized\n"
+    },
+    {
+      "id": "68ef703e25496f5816c0a4372f72041ec227e1ec140278736d4d7e1a58fcb4cc",
+      "check": "uninitialized-local",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._depositTo(address,uint256,uint256[]).anyFunded (contracts/PortfolioRouter.sol#1145) is a local variable never initialized\n"
+    },
+    {
+      "id": "797916d8e9af2b87fbe0c3f2a86af5968969a1acaa9c81c076d1e65a9fb5fc48",
+      "check": "uninitialized-local",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway.withdrawFromRouter(bytes32,address[],uint256[],uint256[],uint64,bytes32).found (contracts/gateway/RobotMoneyGateway.sol#1252) is a local variable never initialized\n"
+    },
+    {
+      "id": "7e628b0c59c306d5d62f7b2fc3246a56cdc8efee64eb52f865d8873524eaba0b",
+      "check": "uninitialized-local",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._depositTo(address,uint256,uint256[]).anyAvailable (contracts/PortfolioRouter.sol#1130) is a local variable never initialized\n"
+    },
+    {
+      "id": "874ec4594bd52acb2abcaad4ad67a1f127913d95c4c140d0126632e65fa527fc",
+      "check": "uninitialized-local",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway.withdraw(bytes32,uint256,address,uint64,bytes32).found (contracts/gateway/RobotMoneyGateway.sol#1057) is a local variable never initialized\n"
+    },
+    {
+      "id": "a85d4443e348c52f2b69240faa0071e44d4b098186738f1fd891a8d57c4f0946",
+      "check": "uninitialized-local",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._setDefaultWeights(address[],uint256[]).total (contracts/PortfolioRouter.sol#583) is a local variable never initialized\n"
+    },
+    {
+      "id": "bd856c3b0859aaa369b652847b2be1592481d12e401a3ecebc22baf5a05aaa4c",
+      "check": "uninitialized-local",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._splitAcrossAvailable(bool[],uint256[],uint256).availableBps (contracts/PortfolioRouter.sol#817) is a local variable never initialized\n"
+    },
+    {
+      "id": "d466dc315cae64344836cacde6598fa441b8c9614f6b313c9e4a95ec85615567",
+      "check": "uninitialized-local",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway.withdrawFromRouter(bytes32,address[],uint256[],uint256[],uint64,bytes32).args (contracts/gateway/RobotMoneyGateway.sol#1208) is a local variable never initialized\n"
+    },
+    {
+      "id": "e0a7ada427960f453839415de39dc87fbbfc1a7e8d41e82c857ce2947d7c1f75",
+      "check": "uninitialized-local",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway.depositTo(bytes32,uint256,uint64,bytes32,address,uint256[]).args (contracts/gateway/RobotMoneyGateway.sol#784) is a local variable never initialized\n"
+    },
+    {
+      "id": "e18b41e2251287f2aea1a76baade424f61bda471c04e93c73e0f6028c8d19f47",
+      "check": "uninitialized-local",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "PortfolioRouter.setWeights(address[],uint256[]).total (contracts/PortfolioRouter.sol#496) is a local variable never initialized\n"
+    },
+    {
+      "id": "f5be4a1b76ae527d4b8addedc0758b380f6a1064511d657629da92305b3370e7",
+      "check": "uninitialized-local",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway.withdrawFromRouter(bytes32,address[],uint256[],uint256[],uint64,bytes32).legs (contracts/gateway/RobotMoneyGateway.sol#1199) is a local variable never initialized\n"
+    },
+    {
+      "id": "00dc9403d78570517ad05a5abb8050cd2a51c6c514e73508da5b6249cc75d88f",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "MorphoAdapter.withdraw(uint256,uint256) (contracts/adapters/MorphoAdapter.sol#169-194) ignores return value by MORPHO_VAULT.redeem(shares,VAULT,address(this)) (contracts/adapters/MorphoAdapter.sol#184)\n"
+    },
+    {
+      "id": "12174fab3b240b6e9c8186dc324e4e53ea38abe1166c8d7882dc6d7c137de92b",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "UniswapV4SwapAdapter.unlockCallback(bytes) (contracts/adapters/UniswapV4SwapAdapter.sol#168-212) ignores return value by POOL_MANAGER.settle() (contracts/adapters/UniswapV4SwapAdapter.sol#209)\n"
+    },
+    {
+      "id": "16071d1d016e64777caef6bb2a1c05b27ad74eecff84dd7c1780b3b42ea0640e",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "ExclusionLedger.sweepForeignToken(address) (contracts/ExclusionLedger.sol#340-347) ignores return value by ForeignTokenQuarantine.sweep(token,IExclusionLedgerVault(VAULT).quarantineAddress(),msg.sender) (contracts/ExclusionLedger.sol#344-346)\n"
+    },
+    {
+      "id": "2887d6c26a258797d5cd017bcee7613b8207bd8fcdf8ca6407ee9e6ba52e9cff",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._requireActiveAndEligible(address) (contracts/PortfolioRouter.sol#1407-1414) ignores return value by (None,status) = registry.getVault(vault) (contracts/PortfolioRouter.sol#1409)\n"
+    },
+    {
+      "id": "437a5dbecb90ba800b0af712dbd52e82cab488e275fa57dbeba5de710cea97b8",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.sweepForeignToken(address) (contracts/RobotMoneyVault.sol#1313-1318) ignores return value by ForeignTokenQuarantine.sweep(token,quarantineAddress,msg.sender) (contracts/RobotMoneyVault.sol#1317)\n"
+    },
+    {
+      "id": "5351a081581fa8573610b3c4df2571614f11456dade774822fcb4d363231c157",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "AaveV3Adapter.sweepForeignToken(address) (contracts/adapters/AaveV3Adapter.sol#192-197) ignores return value by ForeignTokenQuarantine.sweep(token,msg.sender) (contracts/adapters/AaveV3Adapter.sol#196)\n"
+    },
+    {
+      "id": "6691c5e45de60afd870b3310a66e07e4e19f76a4139fee8f734ba5fb85d096da",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._isDepositable(address) (contracts/PortfolioRouter.sol#848-862) ignores return value by (status) = registry.getVault(vault) (contracts/PortfolioRouter.sol#849-855)\n"
+    },
+    {
+      "id": "71581100058ff4b41e668e4c322727e77b477226e83bf96688684d14615a7c64",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "MorphoAdapter.sweepForeignToken(address) (contracts/adapters/MorphoAdapter.sol#210-215) ignores return value by ForeignTokenQuarantine.sweep(token,msg.sender) (contracts/adapters/MorphoAdapter.sol#214)\n"
+    },
+    {
+      "id": "782d06cd0dd32ca4c6d70b8fce8f6af1ec62063322df57380cb5920c5605a7dd",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "MorphoAdapter.withdraw(uint256,uint256) (contracts/adapters/MorphoAdapter.sol#169-194) ignores return value by MORPHO_VAULT.withdraw(usdcWanted,VAULT,address(this)) (contracts/adapters/MorphoAdapter.sol#187)\n"
+    },
+    {
+      "id": "8319fde3978cc18338884c69be30f374430a90bae1ac9b50999d6cc37d7be5a2",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway._requireDepositGas(bool) (contracts/gateway/RobotMoneyGateway.sol#881-888) ignores return value by (legs,None) = routerContract.getEffectiveWeights() (contracts/gateway/RobotMoneyGateway.sol#884)\n"
+    },
+    {
+      "id": "87352b9290373bf9f331be2500321bdf0d4b61e83032f6f47c299131b6d91517",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "MorphoAdapter._deposit(uint256) (contracts/adapters/MorphoAdapter.sol#93-98) ignores return value by MORPHO_VAULT.deposit(amount,address(this)) (contracts/adapters/MorphoAdapter.sol#96)\n"
+    },
+    {
+      "id": "9a13145da229f177e895632400bdfd2ba93b3bedff5531b34d1796f6df5ef4ca",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "BasketVault.sweepForeignToken(address) (contracts/vaults/BasketVault.sol#1373-1387) ignores return value by ForeignTokenQuarantine.sweep(token,msg.sender) (contracts/vaults/BasketVault.sol#1386)\n"
+    },
+    {
+      "id": "b581b7e8110944c3b45ffcfffb3f87ae95c8da2d124cb71ade053ec5e5f52c67",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "PortfolioRouter.sweepForeignToken(address) (contracts/PortfolioRouter.sol#655-658) ignores return value by ForeignTokenQuarantine.sweep(token,quarantineAddress,msg.sender) (contracts/PortfolioRouter.sol#657)\n"
+    },
+    {
+      "id": "c2d5f38a6b24363eaaa6ea28e27468ab68c2067fe68c9a07e42b8320a7913c13",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "MorphoAdapter.withdraw(uint256) (contracts/adapters/MorphoAdapter.sol#147-163) ignores return value by MORPHO_VAULT.withdraw(amount,VAULT,address(this)) (contracts/adapters/MorphoAdapter.sol#155)\n"
+    },
+    {
+      "id": "c7bf381a3431584e828acfbaf2fd25adc101abdb5a602254f563990ed35e2268",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._executeLeg(address,address,uint256,uint256) (contracts/PortfolioRouter.sol#1237-1270) ignores return value by (None,vaultStatus) = registry.getVault(vault) (contracts/PortfolioRouter.sol#1242)\n"
+    },
+    {
+      "id": "c832d94dc9764195cdd43b4c8258eeac5e336f131e927badda1949a3aff5bc07",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._redeemLeg(address,address,address,uint256,uint256) (contracts/PortfolioRouter.sol#1039-1076) ignores return value by () = registry.getVault(vault) (contracts/PortfolioRouter.sol#1051-1056)\n"
+    },
+    {
+      "id": "d9d27de814169eddc14c73d5ec61150fa5e2f985f2c4675b332653d14b5a238c",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "CompoundV3Adapter.sweepForeignToken(address) (contracts/adapters/CompoundV3Adapter.sol#204-209) ignores return value by ForeignTokenQuarantine.sweep(token,msg.sender) (contracts/adapters/CompoundV3Adapter.sol#208)\n"
+    },
+    {
+      "id": "e14492ff5e4dc0d352d1c1626f1d1ffb636ce407b298d984a5f3d040e82ba00c",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "PortfolioRouter.isRouterEligibleAndActive(address) (contracts/PortfolioRouter.sol#1379-1388) ignores return value by (status) = registry.getVault(vault) (contracts/PortfolioRouter.sol#1381-1387)\n"
+    },
+    {
+      "id": "e4ab01845f99844cc4d8dcfa7aa8947fe2b71aba8ffd40848f81ed9f4ce8b697",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.initialize(IERC20,uint256,uint256,uint256,address,address,address,address,GovernedUUPS.UpgradeMode) (contracts/RobotMoneyVault.sol#433-478) ignores return value by RobotMoneyVaultOps.createLedger(_asset) (contracts/RobotMoneyVault.sol#477)\n"
+    },
+    {
+      "id": "edfd317c814e785bd9aa04f8c7a968dd1e3eb6e4d14d22e4bb3122ac771e7bd7",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "UniswapV4SwapAdapter.swap(address,address,uint24,uint256,uint256,address,uint256) (contracts/adapters/UniswapV4SwapAdapter.sol#135-165) ignores return value by RECORDER.record() (contracts/adapters/UniswapV4SwapAdapter.sol#158)\n"
+    },
+    {
+      "id": "fa12383d1020a282f60279b2fa6a89b7d33f0fdba2bae0ab6bd5f9f9b59bfe68",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "MorphoAdapter.deploy(uint256) (contracts/adapters/MorphoAdapter.sol#119-128) ignores return value by MORPHO_VAULT.deposit(amount,address(this)) (contracts/adapters/MorphoAdapter.sol#122-126)\n"
+    },
+    {
+      "id": "fe039f29f568b36a6a86e38656a43aaaca6f7d3d0b242b9b9de7fa5d0e84fd02",
+      "check": "unused-return",
+      "impact": "Medium",
+      "confidence": "Medium",
+      "description": "UniswapV4SwapAdapter.swap(address,address,uint24,uint256,uint256,address,uint256) (contracts/adapters/UniswapV4SwapAdapter.sol#135-165) ignores return value by SafeCast.toUint128(minAmountOut) (contracts/adapters/UniswapV4SwapAdapter.sol#153)\n"
+    },
+    {
+      "id": "c4625c882a7634d0a9ccf31992072419372bf5e4b3f28adb9a07f90a37d127da",
+      "check": "shadowing-local",
+      "impact": "Low",
+      "confidence": "High",
+      "description": "BasketVault.deposit(uint256,address).assets (contracts/vaults/BasketVault.sol#552) shadows:\n\t- BasketVault.assets (contracts/vaults/BasketVault.sol#153) (state variable)\n"
+    },
+    {
+      "id": "7c7d2729fe1ecdc23ddb74de394fc1113b37f4703d4a58053163a153b3ed402a",
+      "check": "events-maths",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "MorphoAdapter.setMaxExposure(uint256) (contracts/adapters/MorphoAdapter.sol#82-84) should emit an event for: \n\t- maxExposure = cap (contracts/adapters/MorphoAdapter.sol#83) \n"
+    },
+    {
+      "id": "c925dc51c24aa271e970bc99b840a452246bd821c8e2aa012efd9bba2f53b8dc",
+      "check": "missing-zero-check",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "ExclusionLedger.constructor(address,IERC20).vault_ (contracts/ExclusionLedger.sol#177) lacks a zero-check on :\n\t\t- VAULT = vault_ (contracts/ExclusionLedger.sol#178)\n"
+    },
+    {
+      "id": "063be820951008220a26ee12fcf97c2c9309f5b307fdb0b01494a5c51dc34799",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault.totalAssets() (contracts/vaults/BasketVault.sol#524-535) has external calls inside a loop: bal = IERC20(assets[i].token).balanceOf(address(this)) (contracts/vaults/BasketVault.sol#529)\n\tCalls stack containing the loop:\n\t\tERC4626Upgradeable.withdraw(uint256,address,address)\n\t\tERC4626Upgradeable.maxWithdraw(address)\n\t\tERC4626Upgradeable._convertToAssets(uint256,Math.Rounding)\n"
+    },
+    {
+      "id": "0802270d467c62a9afaa63e557b9d924bdaba34ce8fa63816e585400f559ad15",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault.totalAssets() (contracts/vaults/BasketVault.sol#524-535) has external calls inside a loop: bal = IERC20(assets[i].token).balanceOf(address(this)) (contracts/vaults/BasketVault.sol#529)\n\tCalls stack containing the loop:\n\t\tBasketVault.previewDeposit(uint256)\n\t\tBasketVault._previewDepositFloor(uint256)\n\t\tERC4626Upgradeable._convertToShares(uint256,Math.Rounding)\n"
+    },
+    {
+      "id": "0d83cd3287e85a46aa8fe0dfa10e46042ee10bfe27b4161c1ad00c9af4973bc4",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._requireRouterEligible(address) (contracts/PortfolioRouter.sol#1420-1439) has external calls inside a loop: vaultAsset = IERC4626(vault).asset() (contracts/PortfolioRouter.sol#1426-1432)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.setDefaultWeights(address[],uint256[])\n\t\tPortfolioRouter._setDefaultWeights(address[],uint256[])\n\t\tPortfolioRouter._requireActiveAndEligible(address)\n"
+    },
+    {
+      "id": "0ee69b77f9620f063bc6bea61af545c9c2d2d477abff50a2a0878c6ea3d0236f",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault.totalAssets() (contracts/vaults/BasketVault.sol#524-535) has external calls inside a loop: bal = IERC20(assets[i].token).balanceOf(address(this)) (contracts/vaults/BasketVault.sol#529)\n\tCalls stack containing the loop:\n\t\tERC4626Upgradeable.convertToShares(uint256)\n\t\tERC4626Upgradeable._convertToShares(uint256,Math.Rounding)\n"
+    },
+    {
+      "id": "11f8394fa8754d50a414e29a3384d59164680fd83b5f231a6023c860fb8f1207",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._requireActiveAndEligible(address) (contracts/PortfolioRouter.sol#1407-1414) has external calls inside a loop: (None,status) = registry.getVault(vault) (contracts/PortfolioRouter.sol#1409)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.applyMigrationDefaultWeights(address[],uint256[])\n\t\tPortfolioRouter._setDefaultWeights(address[],uint256[])\n"
+    },
+    {
+      "id": "144cfb8a7a7f246793f462c12bfaa7010fe00a7a55ab5be5d1cbad629dc6c057",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault._twapUsdcValue(address,address,address,uint256) (contracts/vaults/BasketVault.sol#980-992) has external calls inside a loop: IBasketSwapAdapter(adapter).twapPrice(pool,token,address(_USDC),tokenAmount,window) (contracts/vaults/BasketVault.sol#987-989)\n\tCalls stack containing the loop:\n\t\tERC4626Upgradeable.convertToShares(uint256)\n\t\tERC4626Upgradeable._convertToShares(uint256,Math.Rounding)\n\t\tBasketVault.totalAssets()\n"
+    },
+    {
+      "id": "1bb8efa0746cfa008f8d704e61cf49d757ff28cc3de811dc08e535e40dd58ff4",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._requireRouterEligible(address) (contracts/PortfolioRouter.sol#1420-1439) has external calls inside a loop: ! registry.isRouterEligible(vault) (contracts/PortfolioRouter.sol#1436)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.setDefaultWeights(address[],uint256[])\n\t\tPortfolioRouter._setDefaultWeights(address[],uint256[])\n\t\tPortfolioRouter._requireActiveAndEligible(address)\n"
+    },
+    {
+      "id": "1f0bf3eb776a51e9195174149b31a723b491846419bbbf7b296f027abd953f40",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault.totalAssets() (contracts/vaults/BasketVault.sol#524-535) has external calls inside a loop: bal = IERC20(assets[i].token).balanceOf(address(this)) (contracts/vaults/BasketVault.sol#529)\n\tCalls stack containing the loop:\n\t\tERC4626Upgradeable.convertToAssets(uint256)\n\t\tERC4626Upgradeable._convertToAssets(uint256,Math.Rounding)\n"
+    },
+    {
+      "id": "21116a8538f6326202cfd486d67b1e4db025c19ddada97005d8d58b2275e39e3",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault.totalAssets() (contracts/vaults/BasketVault.sol#524-535) has external calls inside a loop: bal = IERC20(assets[i].token).balanceOf(address(this)) (contracts/vaults/BasketVault.sol#529)\n"
+    },
+    {
+      "id": "27d5966152ee5399f94e8ab1b12434d950001aa735e659b682d6a2c7d370ec7b",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._executeLeg(address,address,uint256,uint256) (contracts/PortfolioRouter.sol#1237-1270) has external calls inside a loop: shares = IERC4626(vault).deposit(legAmount,receiver) (contracts/PortfolioRouter.sol#1263-1267)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.depositFor(address,uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n\t\tPortfolioRouter._executeLegs(address,address[],uint256[],uint256[],bool[],uint256[],uint256[],uint256)\n"
+    },
+    {
+      "id": "2d16245d60993bc0af188aaf84218a241aae257378b9eb73af99ab001d6d059b",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._requireActiveAndEligible(address) (contracts/PortfolioRouter.sol#1407-1414) has external calls inside a loop: (None,status) = registry.getVault(vault) (contracts/PortfolioRouter.sol#1409)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.setDefaultWeights(address[],uint256[])\n\t\tPortfolioRouter._setDefaultWeights(address[],uint256[])\n"
+    },
+    {
+      "id": "2da38b63d3a09d41b32829c86df47035ce6f686d4ce39e4764d0c116ba9f59c4",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault._twapUsdcValue(address,address,address,uint256) (contracts/vaults/BasketVault.sol#980-992) has external calls inside a loop: IBasketSwapAdapter(adapter).twapPrice(pool,token,address(_USDC),tokenAmount,window) (contracts/vaults/BasketVault.sol#987-989)\n\tCalls stack containing the loop:\n\t\tBasketVault.maxMint(address)\n\t\tBasketVault.maxDeposit(address)\n\t\tBasketVault.totalAssets()\n"
+    },
+    {
+      "id": "2fdea030693542b17a87b099e358afe7cad7850d264bf85ab3a51e46c3077532",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._isDepositable(address) (contracts/PortfolioRouter.sol#848-862) has external calls inside a loop: ! this.isRouterEligible(vault) (contracts/PortfolioRouter.sol#856)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.depositFor(address,uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n\t\tPortfolioRouter._availabilityAndAmounts(address[],uint256[],uint256)\n"
+    },
+    {
+      "id": "31b7649c0d2abd3e323f0f102da8ffe3361194b3e638dc9771c538bf5efed9f9",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._isDepositable(address) (contracts/PortfolioRouter.sol#848-862) has external calls inside a loop: (status) = registry.getVault(vault) (contracts/PortfolioRouter.sol#849-855)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.deposit(uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n\t\tPortfolioRouter._availabilityAndAmounts(address[],uint256[],uint256)\n"
+    },
+    {
+      "id": "34b194a978b6db02122350335fbe7b183d61a8dcfdcc4e6e03df0c72d7644081",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.totalAssets() (contracts/RobotMoneyVault.sol#543-553) has external calls inside a loop: sum += adapters[i].adapter.totalAssets() (contracts/RobotMoneyVault.sol#549)\n\tCalls stack containing the loop:\n\t\tERC4626Upgradeable.previewMint(uint256)\n\t\tERC4626Upgradeable._convertToAssets(uint256,Math.Rounding)\n"
+    },
+    {
+      "id": "3566ad477bb0f0d36043fcd461e182cda5e84e6405d24e2732d703698e83e477",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._requireRouterEligible(address) (contracts/PortfolioRouter.sol#1420-1439) has external calls inside a loop: ! registry.isRouterEligible(vault) (contracts/PortfolioRouter.sol#1436)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.deposit(uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n\t\tPortfolioRouter._executeLegs(address,address[],uint256[],uint256[],bool[],uint256[],uint256[],uint256)\n\t\tPortfolioRouter._executeLeg(address,address,uint256,uint256)\n"
+    },
+    {
+      "id": "37da05549839df291d1ce10854aaac1090dd85a7a50bdbc3d219311e690a57c8",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.totalAssets() (contracts/RobotMoneyVault.sol#543-553) has external calls inside a loop: sum += adapters[i].adapter.totalAssets() (contracts/RobotMoneyVault.sol#549)\n\tCalls stack containing the loop:\n\t\tRobotMoneyVault.rebalance()\n"
+    },
+    {
+      "id": "42409d3e952efd074fb4dff88a189762ba7b9124f03c6211904507f26ae09611",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway._executeRouterWithdraw(RobotMoneyGateway.RouterWithdrawArgs,uint256[],uint256[]) (contracts/gateway/RobotMoneyGateway.sol#1478-1532) has external calls inside a loop: args.shareBalancesBefore[i] = IERC20(args.vaultList[i]).balanceOf(address(this)) (contracts/gateway/RobotMoneyGateway.sol#1494)\n\tCalls stack containing the loop:\n\t\tRobotMoneyGateway.withdrawFromRouter(bytes32,address[],uint256[],uint256[],uint64,bytes32)\n"
+    },
+    {
+      "id": "461a6c6c221fc3a9f82cbc524cdec6928dd071c52ee856189f623cd37495ad5f",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._requireActiveAndEligible(address) (contracts/PortfolioRouter.sol#1407-1414) has external calls inside a loop: (None,status) = registry.getVault(vault) (contracts/PortfolioRouter.sol#1409)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.setWeights(address[],uint256[])\n"
+    },
+    {
+      "id": "4fa78e697c9e284a3689a8b305b03746dd4b0316cd3455ab24451fd949f81dcd",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._isDepositable(address) (contracts/PortfolioRouter.sol#848-862) has external calls inside a loop: cap = IERC4626(vault).maxDeposit(address(this)) (contracts/PortfolioRouter.sol#857-861)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.previewDeposit(uint256)\n\t\tPortfolioRouter._availabilityAndAmounts(address[],uint256[],uint256)\n"
+    },
+    {
+      "id": "53709c151e363128e30f284c458ab1702e0f0283ce77a778b4fe33f65f0ed417",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault._sellProportional(uint256,uint256) (contracts/vaults/BasketVault.sol#934-974) has external calls inside a loop: bal = IERC20(assets[i].token).balanceOf(address(this)) (contracts/vaults/BasketVault.sol#947)\n\tCalls stack containing the loop:\n\t\tERC4626Upgradeable.withdraw(uint256,address,address)\n\t\tBasketVault._withdraw(address,address,address,uint256,uint256)\n"
+    },
+    {
+      "id": "54edb97350aaf2dcf440366ba1acd1e31b7015a955314fe9b75e9ae274cfd647",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.totalAssets() (contracts/RobotMoneyVault.sol#543-553) has external calls inside a loop: sum += adapters[i].adapter.totalAssets() (contracts/RobotMoneyVault.sol#549)\n\tCalls stack containing the loop:\n\t\tRobotMoneyVault.getAdapterDrift()\n"
+    },
+    {
+      "id": "55ceb5197b5d4718c4efa3f52942e2a6d973ff32a4254c82159275182c78c690",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway._executeRouterWithdraw(RobotMoneyGateway.RouterWithdrawArgs,uint256[],uint256[]) (contracts/gateway/RobotMoneyGateway.sol#1478-1532) has external calls inside a loop: IERC20(args.vaultList[i_scope_1]).balanceOf(address(this)) != args.shareBalancesBefore[i_scope_1] (contracts/gateway/RobotMoneyGateway.sol#1527)\n\tCalls stack containing the loop:\n\t\tRobotMoneyGateway.withdrawFromRouter(bytes32,address[],uint256[],uint256[],uint64,bytes32)\n"
+    },
+    {
+      "id": "5700eceada7668a3d1fa73175c6628f67abf5e9a7c5107fbafd2fb5e44f2d8d8",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._isDepositable(address) (contracts/PortfolioRouter.sol#848-862) has external calls inside a loop: (status) = registry.getVault(vault) (contracts/PortfolioRouter.sol#849-855)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.previewDeposit(uint256)\n\t\tPortfolioRouter._availabilityAndAmounts(address[],uint256[],uint256)\n"
+    },
+    {
+      "id": "59b553e9fb166df9931b38f62ebdd07a31345b7362703c71e56ccf12229d2c18",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault._twapUsdcValue(address,address,address,uint256) (contracts/vaults/BasketVault.sol#980-992) has external calls inside a loop: IBasketSwapAdapter(adapter).twapPrice(pool,token,address(_USDC),tokenAmount,window) (contracts/vaults/BasketVault.sol#987-989)\n\tCalls stack containing the loop:\n\t\tBasketVault.previewDeposit(uint256)\n\t\tBasketVault._previewDepositFloor(uint256)\n\t\tERC4626Upgradeable._convertToShares(uint256,Math.Rounding)\n\t\tBasketVault.totalAssets()\n"
+    },
+    {
+      "id": "5bb6a38c36c985bd146882743a46ea572b9a8f4f6c0300542339476ca4dbb5da",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._redeemLeg(address,address,address,uint256,uint256) (contracts/PortfolioRouter.sol#1039-1076) has external calls inside a loop: msg.sender != shareHolder && IERC20(vault).allowance(shareHolder,msg.sender) < shares (contracts/PortfolioRouter.sol#1062)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.redeemFor(address,address,address[],uint256[],uint256[],uint256)\n"
+    },
+    {
+      "id": "7482d9b94567160abce4e0b2575fab3b0f674a93f3d0a1265e8b06e0e5a85544",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._isDepositable(address) (contracts/PortfolioRouter.sol#848-862) has external calls inside a loop: ! this.isRouterEligible(vault) (contracts/PortfolioRouter.sol#856)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.deposit(uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n\t\tPortfolioRouter._availabilityAndAmounts(address[],uint256[],uint256)\n"
+    },
+    {
+      "id": "76434d5867bf5d3724f0272a05e9bb8222d70a6417c0222f80f3125d58bd4677",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._availabilityAndAmounts(address[],uint256[],uint256) (contracts/PortfolioRouter.sol#764-800) has external calls inside a loop: s = IERC4626(vaultList[i_scope_0]).previewDeposit(legAmounts[i_scope_0]) (contracts/PortfolioRouter.sol#791-797)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.deposit(uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n"
+    },
+    {
+      "id": "7760132d4a80209e3648f36a5bff74ce16929ae8fed1ab62c4b09f602e2dc849",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault.totalAssets() (contracts/vaults/BasketVault.sol#524-535) has external calls inside a loop: bal = IERC20(assets[i].token).balanceOf(address(this)) (contracts/vaults/BasketVault.sol#529)\n\tCalls stack containing the loop:\n\t\tBasketVault.maxMint(address)\n\t\tBasketVault.maxDeposit(address)\n"
+    },
+    {
+      "id": "776f633022e610b859478d8455096200ecccd7101c69f41c88aa69e8f090bd63",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.totalAssets() (contracts/RobotMoneyVault.sol#543-553) has external calls inside a loop: sum += adapters[i].adapter.totalAssets() (contracts/RobotMoneyVault.sol#549)\n\tCalls stack containing the loop:\n\t\tERC4626Upgradeable.previewDeposit(uint256)\n\t\tERC4626Upgradeable._convertToShares(uint256,Math.Rounding)\n"
+    },
+    {
+      "id": "7c4bb8a0d761492d2a8228f99c568167cdc98badbad1e9053230ef59b6bca0fc",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.totalAssets() (contracts/RobotMoneyVault.sol#543-553) has external calls inside a loop: sum += adapters[i].adapter.totalAssets() (contracts/RobotMoneyVault.sol#549)\n\tCalls stack containing the loop:\n\t\tRobotMoneyVault.maxMint(address)\n\t\tRobotMoneyVault.maxDeposit(address)\n"
+    },
+    {
+      "id": "7cbbfbcbeae2348b20690ed3030ab7f6e74083af7b639c49f82895d049bded79",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._requireRouterEligible(address) (contracts/PortfolioRouter.sol#1420-1439) has external calls inside a loop: vaultAsset = IERC4626(vault).asset() (contracts/PortfolioRouter.sol#1426-1432)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.applyMigrationDefaultWeights(address[],uint256[])\n\t\tPortfolioRouter._setDefaultWeights(address[],uint256[])\n\t\tPortfolioRouter._requireActiveAndEligible(address)\n"
+    },
+    {
+      "id": "7e39b780abb82b10dd420050316ead7b10bedf1b15495ac2ce483034c7f1c043",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault._twapUsdcValue(address,address,address,uint256) (contracts/vaults/BasketVault.sol#980-992) has external calls inside a loop: IBasketSwapAdapter(adapter).twapPrice(pool,token,address(_USDC),tokenAmount,window) (contracts/vaults/BasketVault.sol#987-989)\n\tCalls stack containing the loop:\n\t\tBasketVault.totalAssets()\n"
+    },
+    {
+      "id": "7ed67e1b29924cbc997b31d56683d60e3cee223db9af4e0c02896d6eb4131b30",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault.totalAssets() (contracts/vaults/BasketVault.sol#524-535) has external calls inside a loop: bal = IERC20(assets[i].token).balanceOf(address(this)) (contracts/vaults/BasketVault.sol#529)\n\tCalls stack containing the loop:\n\t\tBasketVault.previewRedeem(uint256)\n\t\tERC4626Upgradeable._convertToAssets(uint256,Math.Rounding)\n"
+    },
+    {
+      "id": "80bca5f95224345388741056d7f088017565446191dcca49d328a3e932ccfae4",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._executeLeg(address,address,uint256,uint256) (contracts/PortfolioRouter.sol#1237-1270) has external calls inside a loop: (None,vaultStatus) = registry.getVault(vault) (contracts/PortfolioRouter.sol#1242)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.deposit(uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n\t\tPortfolioRouter._executeLegs(address,address[],uint256[],uint256[],bool[],uint256[],uint256[],uint256)\n"
+    },
+    {
+      "id": "82794f707020a790a0b47968a39ad2aac49a89c807a1a2bb9546d6930e6fa128",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault.totalAssets() (contracts/vaults/BasketVault.sol#524-535) has external calls inside a loop: bal = IERC20(assets[i].token).balanceOf(address(this)) (contracts/vaults/BasketVault.sol#529)\n\tCalls stack containing the loop:\n\t\tBasketVault.maxDeposit(address)\n"
+    },
+    {
+      "id": "841ae670c6db3e673a7347d64e95b0103a36e8b2a765e5c7f8ffd766b7f90efd",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "ExclusionLedger.balanceAt(address,uint256) (contracts/ExclusionLedger.sol#284-298) has external calls inside a loop: IERC20(VAULT).balanceOf(holder) (contracts/ExclusionLedger.sol#296)\n\tCalls stack containing the loop:\n\t\tExclusionLedger.claimableTotal(address)\n\t\tExclusionLedger.claimable(uint256,address)\n"
+    },
+    {
+      "id": "84c5ba729e58f5b5da6da41c189256bdc31516b2803c096e62f529a6f42be6f3",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault._twapUsdcValue(address,address,address,uint256) (contracts/vaults/BasketVault.sol#980-992) has external calls inside a loop: IBasketSwapAdapter(adapter).twapPrice(pool,token,address(_USDC),tokenAmount,window) (contracts/vaults/BasketVault.sol#987-989)\n\tCalls stack containing the loop:\n\t\tBasketVault.previewRedeem(uint256)\n\t\tERC4626Upgradeable._convertToAssets(uint256,Math.Rounding)\n\t\tBasketVault.totalAssets()\n"
+    },
+    {
+      "id": "8a34bafd791db6ae11da43333828530ce81c6a2d453238fd0f02d1fc6413deca",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._requireRouterEligible(address) (contracts/PortfolioRouter.sol#1420-1439) has external calls inside a loop: ! registry.isRouterEligible(vault) (contracts/PortfolioRouter.sol#1436)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.depositFor(address,uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n\t\tPortfolioRouter._executeLegs(address,address[],uint256[],uint256[],bool[],uint256[],uint256[],uint256)\n\t\tPortfolioRouter._executeLeg(address,address,uint256,uint256)\n"
+    },
+    {
+      "id": "8b0a82d92d4f13201b9c8d6b7119961c9be53edd8061b30861ab1a4bc76d0b1a",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._requireRouterEligible(address) (contracts/PortfolioRouter.sol#1420-1439) has external calls inside a loop: ! registry.isRouterEligible(vault) (contracts/PortfolioRouter.sol#1436)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.setWeights(address[],uint256[])\n\t\tPortfolioRouter._requireActiveAndEligible(address)\n"
+    },
+    {
+      "id": "8f23275a471c5515d05010ea0e49c9f1c80749d6975f93b5f514a266588d08cc",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._requireRouterEligible(address) (contracts/PortfolioRouter.sol#1420-1439) has external calls inside a loop: vaultAsset = IERC4626(vault).asset() (contracts/PortfolioRouter.sol#1426-1432)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.setWeights(address[],uint256[])\n\t\tPortfolioRouter._requireActiveAndEligible(address)\n"
+    },
+    {
+      "id": "90b11935b7a6e6a3a2ce62b48954f29f96d67a32f465a2beac13aab08526f4dc",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._redeemLeg(address,address,address,uint256,uint256) (contracts/PortfolioRouter.sol#1039-1076) has external calls inside a loop: () = registry.getVault(vault) (contracts/PortfolioRouter.sol#1051-1056)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.redeemFor(address,address,address[],uint256[],uint256[],uint256)\n"
+    },
+    {
+      "id": "9115ea0226a85fd3c06b1ae2ab04120002a0ccb41773c66a46b19d26b967c9d6",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._isDepositable(address) (contracts/PortfolioRouter.sol#848-862) has external calls inside a loop: cap = IERC4626(vault).maxDeposit(address(this)) (contracts/PortfolioRouter.sol#857-861)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.deposit(uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n\t\tPortfolioRouter._availabilityAndAmounts(address[],uint256[],uint256)\n"
+    },
+    {
+      "id": "94e2c26d156d989777f2e71cf1b8b7ff735138bc833895218687a91e193038ab",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._availabilityAndAmounts(address[],uint256[],uint256) (contracts/PortfolioRouter.sol#764-800) has external calls inside a loop: s = IERC4626(vaultList[i_scope_0]).previewDeposit(legAmounts[i_scope_0]) (contracts/PortfolioRouter.sol#791-797)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.depositFor(address,uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n"
+    },
+    {
+      "id": "96e3fe695ca883cabe17ae72021f3ccb6577c066229ef9c06218402d50fd7e7f",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._requireRouterEligible(address) (contracts/PortfolioRouter.sol#1420-1439) has external calls inside a loop: ! registry.isRouterEligible(vault) (contracts/PortfolioRouter.sol#1436)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.applyMigrationDefaultWeights(address[],uint256[])\n\t\tPortfolioRouter._setDefaultWeights(address[],uint256[])\n\t\tPortfolioRouter._requireActiveAndEligible(address)\n"
+    },
+    {
+      "id": "97dd0070be227a8a60e633404248765becebb924b4ccaa0e9290c02836c8ed43",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.totalAssets() (contracts/RobotMoneyVault.sol#543-553) has external calls inside a loop: sum += adapters[i].adapter.totalAssets() (contracts/RobotMoneyVault.sol#549)\n\tCalls stack containing the loop:\n\t\tRobotMoneyVault.deposit(uint256,address)\n"
+    },
+    {
+      "id": "9d95e6027e586505b8a910818182e0781aaa1583ce65689dbbd6e6c0e23df192",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault._twapUsdcValue(address,address,address,uint256) (contracts/vaults/BasketVault.sol#980-992) has external calls inside a loop: IBasketSwapAdapter(adapter).twapPrice(pool,token,address(_USDC),tokenAmount,window) (contracts/vaults/BasketVault.sol#987-989)\n\tCalls stack containing the loop:\n\t\tERC4626Upgradeable.withdraw(uint256,address,address)\n\t\tERC4626Upgradeable.maxWithdraw(address)\n\t\tERC4626Upgradeable._convertToAssets(uint256,Math.Rounding)\n\t\tBasketVault.totalAssets()\n"
+    },
+    {
+      "id": "a0b586b7f0b33a33ed326a1b5a87b3d6f9530044fe1cd580ba7cc29b43db0efe",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._isDepositable(address) (contracts/PortfolioRouter.sol#848-862) has external calls inside a loop: cap = IERC4626(vault).maxDeposit(address(this)) (contracts/PortfolioRouter.sol#857-861)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.depositFor(address,uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n\t\tPortfolioRouter._availabilityAndAmounts(address[],uint256[],uint256)\n"
+    },
+    {
+      "id": "a5b28cb47f4d72cff03ad6bc68d658affb0d323c8b87d28a745116f59ea1435b",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._executeLeg(address,address,uint256,uint256) (contracts/PortfolioRouter.sol#1237-1270) has external calls inside a loop: shares = IERC4626(vault).deposit(legAmount,receiver) (contracts/PortfolioRouter.sol#1263-1267)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.deposit(uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n\t\tPortfolioRouter._executeLegs(address,address[],uint256[],uint256[],bool[],uint256[],uint256[],uint256)\n"
+    },
+    {
+      "id": "a769008d6aa7e72b75ea911e97abd21fa352f3b2d7917ef0cfdead598df7952c",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "ExclusionLedger.balanceAt(address,uint256) (contracts/ExclusionLedger.sol#284-298) has external calls inside a loop: IERC20(VAULT).balanceOf(holder) (contracts/ExclusionLedger.sol#296)\n\tCalls stack containing the loop:\n\t\tExclusionLedger.claimAll(address)\n\t\tExclusionLedger.claim(uint256,address)\n\t\tExclusionLedger.claimable(uint256,address)\n"
+    },
+    {
+      "id": "aabda20a53408e64db0045e80cedf4eec58049e24b27535b8ba7175ee86b6710",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._isDepositable(address) (contracts/PortfolioRouter.sol#848-862) has external calls inside a loop: (status) = registry.getVault(vault) (contracts/PortfolioRouter.sol#849-855)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.depositFor(address,uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n\t\tPortfolioRouter._availabilityAndAmounts(address[],uint256[],uint256)\n"
+    },
+    {
+      "id": "b189cbfd22d82f8bcf746d0f1075d7172ee293af96b436a6c2ba9498f2bb6c02",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._availabilityAndAmounts(address[],uint256[],uint256) (contracts/PortfolioRouter.sol#764-800) has external calls inside a loop: s = IERC4626(vaultList[i_scope_0]).previewDeposit(legAmounts[i_scope_0]) (contracts/PortfolioRouter.sol#791-797)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.previewDeposit(uint256)\n"
+    },
+    {
+      "id": "b296ddec638841e8b101d1ce38e52265d59bafc93b6a5f6eb73b1762e0db0d13",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault._twapUsdcValue(address,address,address,uint256) (contracts/vaults/BasketVault.sol#980-992) has external calls inside a loop: IBasketSwapAdapter(adapter).twapPrice(pool,token,address(_USDC),tokenAmount,window) (contracts/vaults/BasketVault.sol#987-989)\n\tCalls stack containing the loop:\n\t\tBasketVault.previewMint(uint256)\n\t\tERC4626Upgradeable._convertToAssets(uint256,Math.Rounding)\n\t\tBasketVault.totalAssets()\n"
+    },
+    {
+      "id": "b298b3b65b469844251e62beb7e3c6ae12e85dc6e3fdb96bba2a3ca8bb98957c",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault.totalAssets() (contracts/vaults/BasketVault.sol#524-535) has external calls inside a loop: bal = IERC20(assets[i].token).balanceOf(address(this)) (contracts/vaults/BasketVault.sol#529)\n\tCalls stack containing the loop:\n\t\tBasketVault.previewMint(uint256)\n\t\tERC4626Upgradeable._convertToAssets(uint256,Math.Rounding)\n"
+    },
+    {
+      "id": "b3ab0191b4e2a690818b3888aba15d44f07b193c065fa1d10a0b97240f44eb8e",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.totalAssets() (contracts/RobotMoneyVault.sol#543-553) has external calls inside a loop: sum += adapters[i].adapter.totalAssets() (contracts/RobotMoneyVault.sol#549)\n\tCalls stack containing the loop:\n\t\tRobotMoneyVault.maxDeposit(address)\n"
+    },
+    {
+      "id": "bd8114f96ef9f0bc7f7054c6dcc9c8edb045cbc75c2c86d65f6db7eb3610ae94",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.totalAssets() (contracts/RobotMoneyVault.sol#543-553) has external calls inside a loop: sum += adapters[i].adapter.totalAssets() (contracts/RobotMoneyVault.sol#549)\n"
+    },
+    {
+      "id": "c5636b67d5f4bd2006dd3ee29f6f167503d8b2e1ec8b18f8cfbf48f5d5ceea75",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._redeemLeg(address,address,address,uint256,uint256) (contracts/PortfolioRouter.sol#1039-1076) has external calls inside a loop: assetsOut = IERC4626(vault).redeem(shares,assetRecipient,shareHolder) (contracts/PortfolioRouter.sol#1070)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.redeemFor(address,address,address[],uint256[],uint256[],uint256)\n"
+    },
+    {
+      "id": "c56894a6622d50d8dc539b9c7566645a82fb333691c878be57f72d7dbed9eac1",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.totalAssets() (contracts/RobotMoneyVault.sol#543-553) has external calls inside a loop: sum += adapters[i].adapter.totalAssets() (contracts/RobotMoneyVault.sol#549)\n\tCalls stack containing the loop:\n\t\tRobotMoneyVault.previewRedeem(uint256)\n\t\tERC4626Upgradeable._convertToAssets(uint256,Math.Rounding)\n"
+    },
+    {
+      "id": "ca607a97de8845892ea4c8c501f094f7a05962867754990a6d4afaeaf1bd60d6",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault._twapUsdcValue(address,address,address,uint256) (contracts/vaults/BasketVault.sol#980-992) has external calls inside a loop: IBasketSwapAdapter(adapter).twapPrice(pool,token,address(_USDC),tokenAmount,window) (contracts/vaults/BasketVault.sol#987-989)\n\tCalls stack containing the loop:\n\t\tERC4626Upgradeable.convertToAssets(uint256)\n\t\tERC4626Upgradeable._convertToAssets(uint256,Math.Rounding)\n\t\tBasketVault.totalAssets()\n"
+    },
+    {
+      "id": "cc727e7486747092ed7a0c3967f20ae5b93c5ca825f11f6e557650db5e176ece",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._isDepositable(address) (contracts/PortfolioRouter.sol#848-862) has external calls inside a loop: ! this.isRouterEligible(vault) (contracts/PortfolioRouter.sol#856)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.previewDeposit(uint256)\n\t\tPortfolioRouter._availabilityAndAmounts(address[],uint256[],uint256)\n"
+    },
+    {
+      "id": "cdf72f64a039f887e1363278ecf239e176a0ae0c31b52daac6dbe764beb36aee",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault.totalAssets() (contracts/vaults/BasketVault.sol#524-535) has external calls inside a loop: bal = IERC20(assets[i].token).balanceOf(address(this)) (contracts/vaults/BasketVault.sol#529)\n\tCalls stack containing the loop:\n\t\tERC4626Upgradeable.maxWithdraw(address)\n\t\tERC4626Upgradeable._convertToAssets(uint256,Math.Rounding)\n"
+    },
+    {
+      "id": "d254b3ee88e35a162e82785e123a2918012bdc79e01fc53b4494611e52d5bd8a",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault._twapUsdcValue(address,address,address,uint256) (contracts/vaults/BasketVault.sol#980-992) has external calls inside a loop: IBasketSwapAdapter(adapter).twapPrice(pool,token,address(_USDC),tokenAmount,window) (contracts/vaults/BasketVault.sol#987-989)\n\tCalls stack containing the loop:\n\t\tBasketVault.maxDeposit(address)\n\t\tBasketVault.totalAssets()\n"
+    },
+    {
+      "id": "e0b48cc2a0bb3eef119a4219fa1336dec1b16858a048a7692f218bcf23a59399",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.totalAssets() (contracts/RobotMoneyVault.sol#543-553) has external calls inside a loop: sum += adapters[i].adapter.totalAssets() (contracts/RobotMoneyVault.sol#549)\n\tCalls stack containing the loop:\n\t\tRobotMoneyVault.maxWithdraw(address)\n\t\tERC4626Upgradeable._convertToAssets(uint256,Math.Rounding)\n"
+    },
+    {
+      "id": "e2bff1c41300d1f0e49316b974e778ef2da1f9f764a9c95488ef4d56e705a37f",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._requireRouterEligible(address) (contracts/PortfolioRouter.sol#1420-1439) has external calls inside a loop: vaultAsset = IERC4626(vault).asset() (contracts/PortfolioRouter.sol#1426-1432)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.depositFor(address,uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n\t\tPortfolioRouter._executeLegs(address,address[],uint256[],uint256[],bool[],uint256[],uint256[],uint256)\n\t\tPortfolioRouter._executeLeg(address,address,uint256,uint256)\n"
+    },
+    {
+      "id": "e3fd6cfefcd9364f03727dece565c9ea8a4c23b31a7ab51dc8b7f445075da025",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.totalAssets() (contracts/RobotMoneyVault.sol#543-553) has external calls inside a loop: sum += adapters[i].adapter.totalAssets() (contracts/RobotMoneyVault.sol#549)\n\tCalls stack containing the loop:\n\t\tERC4626Upgradeable.convertToAssets(uint256)\n\t\tERC4626Upgradeable._convertToAssets(uint256,Math.Rounding)\n"
+    },
+    {
+      "id": "e4b7842e883dee803f923fa8f3c794bb1fa4d4ce6ec6997abf4546286c264a92",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.totalAssets() (contracts/RobotMoneyVault.sol#543-553) has external calls inside a loop: sum += adapters[i].adapter.totalAssets() (contracts/RobotMoneyVault.sol#549)\n\tCalls stack containing the loop:\n\t\tRobotMoneyVault.previewWithdraw(uint256)\n\t\tERC4626Upgradeable._convertToShares(uint256,Math.Rounding)\n"
+    },
+    {
+      "id": "e80e1503b17ddc549ad73c18117f53c1ddf57ba7b6099b663a60072312a1e55b",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "BasketVault._twapUsdcValue(address,address,address,uint256) (contracts/vaults/BasketVault.sol#980-992) has external calls inside a loop: IBasketSwapAdapter(adapter).twapPrice(pool,token,address(_USDC),tokenAmount,window) (contracts/vaults/BasketVault.sol#987-989)\n\tCalls stack containing the loop:\n\t\tERC4626Upgradeable.maxWithdraw(address)\n\t\tERC4626Upgradeable._convertToAssets(uint256,Math.Rounding)\n\t\tBasketVault.totalAssets()\n"
+    },
+    {
+      "id": "f53c7ef500322e51fc327de19610aeb037662957372be87807f1cacced225713",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._requireRouterEligible(address) (contracts/PortfolioRouter.sol#1420-1439) has external calls inside a loop: vaultAsset = IERC4626(vault).asset() (contracts/PortfolioRouter.sol#1426-1432)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.deposit(uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n\t\tPortfolioRouter._executeLegs(address,address[],uint256[],uint256[],bool[],uint256[],uint256[],uint256)\n\t\tPortfolioRouter._executeLeg(address,address,uint256,uint256)\n"
+    },
+    {
+      "id": "f794fa1b6edb8a000402089d1a51e1a584b81abfa9dfc2f5593ec737642175b0",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter._executeLeg(address,address,uint256,uint256) (contracts/PortfolioRouter.sol#1237-1270) has external calls inside a loop: (None,vaultStatus) = registry.getVault(vault) (contracts/PortfolioRouter.sol#1242)\n\tCalls stack containing the loop:\n\t\tPortfolioRouter.depositFor(address,uint256,uint256[])\n\t\tPortfolioRouter._depositTo(address,uint256,uint256[])\n\t\tPortfolioRouter._executeLegs(address,address[],uint256[],uint256[],bool[],uint256[],uint256[],uint256)\n"
+    },
+    {
+      "id": "f7aef34138d64652a487145792ff6e1190d03a22e0e532d36d6ffe1d4351bd04",
+      "check": "calls-loop",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.totalAssets() (contracts/RobotMoneyVault.sol#543-553) has external calls inside a loop: sum += adapters[i].adapter.totalAssets() (contracts/RobotMoneyVault.sol#549)\n\tCalls stack containing the loop:\n\t\tERC4626Upgradeable.convertToShares(uint256)\n\t\tERC4626Upgradeable._convertToShares(uint256,Math.Rounding)\n"
+    },
+    {
+      "id": "81c799a3116b6c16485e13bff51385591a84347df1ad479d0494c720b22a4962",
+      "check": "reentrancy-benign",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "Reentrancy in RobotMoneyVault.adminRebalance(uint256[]) (contracts/RobotMoneyVault.sol#1029-1044):\n\tExternal calls:\n\t- (totalMoved,opened) = RobotMoneyVaultOps.adminRebalancePull(_book(),asset(),_ledger(),totalSupply(),targetBalances) (contracts/RobotMoneyVault.sol#1034-1036)\n\t- RobotMoneyVaultOps.adminRebalanceAllocate(_book(),asset(),targetBalances,ADAPTER_CALL_GAS_FLOOR) (contracts/RobotMoneyVault.sol#1038-1040)\n\tState variables written after the call(s):\n\t- lastRebalanceAt = block.timestamp (contracts/RobotMoneyVault.sol#1042)\n"
+    },
+    {
+      "id": "3943b45feace192ff1a99c4a377e5ba6008fc1d3fe8f3dbb5826010b78ebefca",
+      "check": "reentrancy-events",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "Reentrancy in VaultRegistry.setVaultStatus(address,VaultRegistry.VaultStatus) (contracts/VaultRegistry.sol#331-364):\n\tExternal calls:\n\t- IRetirableVault(vault).unretire() (contracts/VaultRegistry.sol#357)\n\t- IRetirableVault(vault).retire() (contracts/VaultRegistry.sol#359)\n\tEvent emitted after the call(s):\n\t- VaultStatusChanged(vault,newStatus,block.timestamp) (contracts/VaultRegistry.sol#363)\n"
+    },
+    {
+      "id": "63d2bc4b8d205546085751bfa6f11a25e340b6c54cbb4a11be99608e52da739a",
+      "check": "reentrancy-events",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "Reentrancy in CompoundV3Adapter.deploy(uint256) (contracts/adapters/CompoundV3Adapter.sol#102-111):\n\tExternal calls:\n\t- IERC20(USDC).safeIncreaseAllowance(address(COMET),amount) (contracts/adapters/CompoundV3Adapter.sol#103)\n\t- COMET.supply(USDC,amount) (contracts/adapters/CompoundV3Adapter.sol#104-109)\n\t- IERC20(USDC).safeTransfer(VAULT,amount) (contracts/adapters/CompoundV3Adapter.sol#107)\n\tEvent emitted after the call(s):\n\t- DeployRefused(amount,reason) (contracts/adapters/CompoundV3Adapter.sol#108)\n"
+    },
+    {
+      "id": "7b910eb298f372dd643a4a2ef085fa21c505700b05b0a3af054eb3a8c12e9972",
+      "check": "reentrancy-events",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "Reentrancy in VaultRegistry.retire(address) (contracts/VaultRegistry.sol#280-292):\n\tExternal calls:\n\t- IRetirableVault(vault).retire() (contracts/VaultRegistry.sol#290)\n\tEvent emitted after the call(s):\n\t- VaultStatusChanged(vault,VaultStatus.Retired,block.timestamp) (contracts/VaultRegistry.sol#291)\n"
+    },
+    {
+      "id": "8726d29c845278bd5aea919079c291c31b0870cef30127687bb156525a2d5f18",
+      "check": "reentrancy-events",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "Reentrancy in VaultRegistry.reactivate(address) (contracts/VaultRegistry.sol#300-305):\n\tExternal calls:\n\t- IRetirableVault(vault).unretire() (contracts/VaultRegistry.sol#303)\n\tEvent emitted after the call(s):\n\t- VaultStatusChanged(vault,VaultStatus.Active,block.timestamp) (contracts/VaultRegistry.sol#304)\n"
+    },
+    {
+      "id": "c78118ffd699cf29c8e47739b37096c6e8b28fe8172561778c6d9869a73acee3",
+      "check": "reentrancy-events",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "Reentrancy in MorphoAdapter.deploy(uint256) (contracts/adapters/MorphoAdapter.sol#119-128):\n\tExternal calls:\n\t- IERC20(USDC).forceApprove(address(MORPHO_VAULT),amount) (contracts/adapters/MorphoAdapter.sol#121)\n\t- MORPHO_VAULT.deposit(amount,address(this)) (contracts/adapters/MorphoAdapter.sol#122-126)\n\t- IERC20(USDC).safeTransfer(VAULT,amount) (contracts/adapters/MorphoAdapter.sol#124)\n\tEvent emitted after the call(s):\n\t- DeployRefused(amount,reason) (contracts/adapters/MorphoAdapter.sol#125)\n"
+    },
+    {
+      "id": "dedbc616526457eb1efafd1ae4369d4834c96788adc15c54543ec578d6a2f520",
+      "check": "reentrancy-events",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "Reentrancy in AaveV3Adapter.deploy(uint256) (contracts/adapters/AaveV3Adapter.sol#107-116):\n\tExternal calls:\n\t- IERC20(USDC).forceApprove(address(POOL),amount) (contracts/adapters/AaveV3Adapter.sol#108)\n\t- POOL.supply(USDC,amount,address(this),0) (contracts/adapters/AaveV3Adapter.sol#109-114)\n\t- IERC20(USDC).safeTransfer(VAULT,amount) (contracts/adapters/AaveV3Adapter.sol#112)\n\tEvent emitted after the call(s):\n\t- DeployRefused(amount,reason) (contracts/adapters/AaveV3Adapter.sol#113)\n"
+    },
+    {
+      "id": "00d653a9e6fc0ae5b719ef993ac757501eac8836a7e0d050f53ebaa63c46b9b3",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter.redeemFor(address,address,address[],uint256[],uint256[],uint256) (contracts/PortfolioRouter.sol#988-1028) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- block.timestamp > deadline (contracts/PortfolioRouter.sol#996)\n"
+    },
+    {
+      "id": "03d4ae02616e90f5e4de96448c7b0caa2c49bf034a28b804b9986543facd60f3",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "UniswapV4PriceRecorder._surrounding(UniswapV4PriceRecorder.State,uint32) (contracts/adapters/UniswapV4PriceRecorder.sol#337-353) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- beforeOrAt.blockTimestamp <= target (contracts/adapters/UniswapV4PriceRecorder.sol#343)\n\t- beforeOrAt.blockTimestamp == target (contracts/adapters/UniswapV4PriceRecorder.sol#344)\n\t- beforeOrAt.blockTimestamp > target (contracts/adapters/UniswapV4PriceRecorder.sol#351)\n"
+    },
+    {
+      "id": "1397de2120e3c47d071503f78ce59c9254426f3c4d1e532ef3fb7d5ac14f9940",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault.isRebalanceAvailable() (contracts/RobotMoneyVault.sol#1451-1453) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- block.timestamp >= lastRebalanceAt + minRebalanceInterval (contracts/RobotMoneyVault.sol#1452)\n"
+    },
+    {
+      "id": "17aa30ef5b7fa6422094cf5876e1da62a2074a449a521a1a6faa3d4796e27040",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "UniswapV4SwapAdapter.swap(address,address,uint24,uint256,uint256,address,uint256) (contracts/adapters/UniswapV4SwapAdapter.sol#135-165) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- block.timestamp > deadline (contracts/adapters/UniswapV4SwapAdapter.sol#148)\n"
+    },
+    {
+      "id": "1dd603e8d09679f02be36bae56aa530fbaa7ea883e99690777e7ae4302f81075",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "UniswapV4PriceRecorder.isFresh() (contracts/adapters/UniswapV4PriceRecorder.sol#276-278) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- uint32(block.timestamp) - observations[_state.index].blockTimestamp <= MAX_STALENESS (contracts/adapters/UniswapV4PriceRecorder.sol#277)\n"
+    },
+    {
+      "id": "2058886e4675c987db55ca20539a23c7ce4923937360f67bf270aef34d08e2d1",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway._validatePolicy(address,IGateway.AgentPolicy) (contracts/gateway/RobotMoneyGateway.sol#623-639) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- p.validUntil < block.timestamp (contracts/gateway/RobotMoneyGateway.sol#629)\n"
+    },
+    {
+      "id": "2126f38593fb3de8d7e8339c07df3e0b7c52709131525fb3ebfe3a93574172e9",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "ConsensusRecommendationReceipt.isRecorded(bytes32) (contracts/gateway/ConsensusRecommendationReceipt.sol#216-218) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- _indexPlusOne[receiptId] != 0 (contracts/gateway/ConsensusRecommendationReceipt.sol#217)\n"
+    },
+    {
+      "id": "219fa82200fae5205ff8bb86eb7122b2a912d48536f8863abcdc35790e1857a2",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway.deposit(bytes32,uint256,uint64,bytes32) (contracts/gateway/RobotMoneyGateway.sol#663-762) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- block.timestamp > deadline (contracts/gateway/RobotMoneyGateway.sol#682)\n\t- deadline > block.timestamp + MAX_DEADLINE_SKEW (contracts/gateway/RobotMoneyGateway.sol#683)\n\t- p.validUntil < block.timestamp (contracts/gateway/RobotMoneyGateway.sol#695)\n"
+    },
+    {
+      "id": "3d03580dd4b977e3b4efcebc10009c6598ed89f9b93131badcd20283e69c76eb",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "ConsensusRecommendationReceipt.isReleased(bytes32) (contracts/gateway/ConsensusRecommendationReceipt.sol#221-225) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- slot == 0 (contracts/gateway/ConsensusRecommendationReceipt.sol#223)\n"
+    },
+    {
+      "id": "3ef4fd1ed22cfb65aa0f3f25785c53aa79de283f2391590f418c964092b53306",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "UniswapV4PriceRecorder._observeSingle(UniswapV4PriceRecorder.State,uint32,uint32) (contracts/adapters/UniswapV4PriceRecorder.sol#305-326) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- last.blockTimestamp != time (contracts/adapters/UniswapV4PriceRecorder.sol#312)\n\t- secondsAgo > time (contracts/adapters/UniswapV4PriceRecorder.sol#315)\n\t- target == beforeOrAt.blockTimestamp (contracts/adapters/UniswapV4PriceRecorder.sol#318)\n\t- target == atOrAfter.blockTimestamp (contracts/adapters/UniswapV4PriceRecorder.sol#319)\n"
+    },
+    {
+      "id": "553ed4b203ad255adc4d48a0c9d4733927eeb1eb4a4ee3f6a34d6bc127b8dc16",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "UniswapV4PriceRecorder.record() (contracts/adapters/UniswapV4PriceRecorder.sol#151-180) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- last.blockTimestamp == ts (contracts/adapters/UniswapV4PriceRecorder.sol#155)\n\t- (s.cardinalityNext > s.cardinality && s.index == s.cardinality - 1) (contracts/adapters/UniswapV4PriceRecorder.sol#165-168)\n"
+    },
+    {
+      "id": "63c2c0503fc9c9feab866c23a644489bc4ea221f117d7a469f05d3c0faac1e21",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "ConsensusRecommendationReceipt.getReceiptById(bytes32) (contracts/gateway/ConsensusRecommendationReceipt.sol#209-213) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- slot == 0 (contracts/gateway/ConsensusRecommendationReceipt.sol#211)\n"
+    },
+    {
+      "id": "71ed624125f22e86eee3127d5a9985513c7a0eea83535458cef09a00a311e661",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "UniswapV4PriceRecorder._clamp(int24,int24,uint32) (contracts/adapters/UniswapV4PriceRecorder.sol#293-302) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- t < lo (contracts/adapters/UniswapV4PriceRecorder.sol#299)\n\t- t > hi (contracts/adapters/UniswapV4PriceRecorder.sol#300)\n\t- elapsed > CLAMP_ELAPSED_CAP (contracts/adapters/UniswapV4PriceRecorder.sol#294)\n"
+    },
+    {
+      "id": "7390d5b9ebbd92173c104d013306727d2ab35bece2d3daa9dfe40f245b87bd2e",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway.withdraw(bytes32,uint256,address,uint64,bytes32) (contracts/gateway/RobotMoneyGateway.sol#1022-1140) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- block.timestamp > deadline (contracts/gateway/RobotMoneyGateway.sol#1043)\n\t- deadline > block.timestamp + MAX_DEADLINE_SKEW (contracts/gateway/RobotMoneyGateway.sol#1044)\n\t- p.validUntil < block.timestamp (contracts/gateway/RobotMoneyGateway.sol#1049)\n"
+    },
+    {
+      "id": "7451956a08425bd1344a06027c6dbeca75743cb76d40ab7f897bf88d8a692067",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "UniswapV4PriceRecorder.observe(uint32[]) (contracts/adapters/UniswapV4PriceRecorder.sol#200-218) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- time - lastTs > MAX_STALENESS (contracts/adapters/UniswapV4PriceRecorder.sol#211)\n"
+    },
+    {
+      "id": "7488bb11ea71bac10f29fbb5dfc87ead25c086c032b8d5cca68308a994747690",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway._executeRouterWithdraw(RobotMoneyGateway.RouterWithdrawArgs,uint256[],uint256[]) (contracts/gateway/RobotMoneyGateway.sol#1478-1532) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- i_scope_1 < args.vaultList.length (contracts/gateway/RobotMoneyGateway.sol#1526)\n\t- IERC20(args.vaultList[i_scope_1]).balanceOf(address(this)) != args.shareBalancesBefore[i_scope_1] (contracts/gateway/RobotMoneyGateway.sol#1527)\n"
+    },
+    {
+      "id": "81ab027a7589fef41b52cc8b431e0e82194f465b4a5694d61b1adcf88e99cc88",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "UniswapV3SwapAdapter.swap(address,address,uint24,uint256,uint256,address,uint256) (contracts/adapters/UniswapV3SwapAdapter.sol#70-99) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- block.timestamp > deadline (contracts/adapters/UniswapV3SwapAdapter.sol#80)\n"
+    },
+    {
+      "id": "942d9564ff53676a199a489af555067f021bc3f897f3cd6e10c1a5ec3835fd02",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "UniswapV4PriceRecorder._binarySearch(UniswapV4PriceRecorder.State,uint32) (contracts/adapters/UniswapV4PriceRecorder.sol#355-379) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- targetAtOrAfter = beforeOrAt.blockTimestamp <= target (contracts/adapters/UniswapV4PriceRecorder.sol#374)\n\t- targetAtOrAfter && target <= atOrAfter.blockTimestamp (contracts/adapters/UniswapV4PriceRecorder.sol#375)\n"
+    },
+    {
+      "id": "96b68418a6380d29bcf8d19332e712e3c48463e2d5bd323fe8ba54802107dd28",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway._executeRouterDeposit(RobotMoneyGateway.DepositArgs,uint256[]) (contracts/gateway/RobotMoneyGateway.sol#941-963) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- usdcToken.balanceOf(address(this)) != args.balBefore (contracts/gateway/RobotMoneyGateway.sol#949)\n"
+    },
+    {
+      "id": "aad382c0ee4de3961c82f6c5118b4dce3d804d6211376bd301d373461c268957",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "PortfolioRouter.executeWeightSetterRotation(address) (contracts/PortfolioRouter.sol#458-479) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- block.timestamp < readyAt (contracts/PortfolioRouter.sol#468)\n"
+    },
+    {
+      "id": "ad0f8645e6f8902e23edf0a64652586595ab85bcc402fc95f2dc2de3f336a7ea",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "UniswapV4PriceRecorder.grow(uint16) (contracts/adapters/UniswapV4PriceRecorder.sol#184-193) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- next <= current (contracts/adapters/UniswapV4PriceRecorder.sol#186)\n\t- i < next (contracts/adapters/UniswapV4PriceRecorder.sol#187)\n"
+    },
+    {
+      "id": "c3f5410673b517458d32230093e646eb93bfd823e2ca0f4857f4b0c68f7fd6ca",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "ConsensusRecommendationReceipt.recordReceipt(address,bytes32,bytes32,string) (contracts/gateway/ConsensusRecommendationReceipt.sol#149-179) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- _indexPlusOne[receiptId] != 0 (contracts/gateway/ConsensusRecommendationReceipt.sol#161)\n"
+    },
+    {
+      "id": "d339682588275006ad04eab948d750ea7255302a4a9295cde9a0b9f182868571",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "InvestmentCommitteePolicy.latestVoteByAgent(address) (contracts/gateway/InvestmentCommitteePolicy.sol#293-302) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- i > 0 (contracts/gateway/InvestmentCommitteePolicy.sol#295)\n\t- _votes[i].agent == agent (contracts/gateway/InvestmentCommitteePolicy.sol#299)\n"
+    },
+    {
+      "id": "de20b8bd51ddd7d183b3ed7fe641c4524280f5e8589bd203237cbd301331652c",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway._executeVaultDeposit(RobotMoneyGateway.DepositArgs) (contracts/gateway/RobotMoneyGateway.sol#971-994) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- IERC20(args.destination).balanceOf(address(this)) != shareBalanceBefore (contracts/gateway/RobotMoneyGateway.sol#978)\n\t- usdcToken.balanceOf(address(this)) != args.balBefore (contracts/gateway/RobotMoneyGateway.sol#981)\n"
+    },
+    {
+      "id": "df0c6ba1c7f52558794df0b0c8be9e0c38bfe56ce5aa124311e2ee35d1eb49d7",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway.depositTo(bytes32,uint256,uint64,bytes32,address,uint256[]) (contracts/gateway/RobotMoneyGateway.sol#772-872) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- block.timestamp > deadline (contracts/gateway/RobotMoneyGateway.sol#797)\n\t- deadline > block.timestamp + MAX_DEADLINE_SKEW (contracts/gateway/RobotMoneyGateway.sol#798)\n\t- p.validUntil < block.timestamp (contracts/gateway/RobotMoneyGateway.sol#803)\n\t- usdcToken.balanceOf(address(this)) - args.balBefore != amount (contracts/gateway/RobotMoneyGateway.sol#866)\n"
+    },
+    {
+      "id": "ed82f38f70d797c9da6d5a25c2b6dc33eecf38c33d7a2fac61ef8aef0a188a62",
+      "check": "timestamp",
+      "impact": "Low",
+      "confidence": "Medium",
+      "description": "RobotMoneyGateway.withdrawFromRouter(bytes32,address[],uint256[],uint256[],uint64,bytes32) (contracts/gateway/RobotMoneyGateway.sol#1175-1324) uses timestamp for comparisons\n\tDangerous comparisons:\n\t- block.timestamp > deadline (contracts/gateway/RobotMoneyGateway.sol#1225)\n\t- deadline > block.timestamp + MAX_DEADLINE_SKEW (contracts/gateway/RobotMoneyGateway.sol#1226)\n\t- p.validUntil < block.timestamp (contracts/gateway/RobotMoneyGateway.sol#1231)\n"
+    },
+    {
+      "id": "619e3841dffde3311b142918df49a64df52c07181ddcddee06ab78df1909aa9e",
+      "check": "assembly",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "BasketVault._guardAssets() (contracts/vaults/BasketVault.sol#482-488) uses assembly\n\t- INLINE ASM (contracts/vaults/BasketVault.sol#485-487)\n"
+    },
+    {
+      "id": "97cb44c9d5cf1ba965995756a2121d0b78bb4800eee30c7d2bca0bdd2bdac70b",
+      "check": "assembly",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "RobotMoneyVault._book() (contracts/RobotMoneyVault.sol#1349-1355) uses assembly\n\t- INLINE ASM (contracts/RobotMoneyVault.sol#1352-1354)\n"
+    },
+    {
+      "id": "e65dc950505ead5b8148667ceb525aa841b06b8312b4443df4fa847ea317b354",
+      "check": "costly-loop",
+      "impact": "Informational",
+      "confidence": "Medium",
+      "description": "ExclusionLedger.claim(uint256,address) (contracts/ExclusionLedger.sol#258-266) has costly operations inside a loop:\n\t- heldUsdc -= amount (contracts/ExclusionLedger.sol#263)\n\tCalls stack containing the loop:\n\t\tExclusionLedger.claimAll(address)\n"
+    },
+    {
+      "id": "07b3016de685fd4696c6c97780bcc5a1d20822a45cd2401cdcb993dfe906a432",
+      "check": "cyclomatic-complexity",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "RobotMoneyGateway.withdraw(bytes32,uint256,address,uint64,bytes32) (contracts/gateway/RobotMoneyGateway.sol#1022-1140) has a high cyclomatic complexity (15).\n"
+    },
+    {
+      "id": "484f29089380ad1a3028bcf9ee8a04372884a8ce24324c659acc33cbdca96cbc",
+      "check": "cyclomatic-complexity",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "RobotMoneyGateway.deposit(bytes32,uint256,uint64,bytes32) (contracts/gateway/RobotMoneyGateway.sol#663-762) has a high cyclomatic complexity (12).\n"
+    },
+    {
+      "id": "72f902e0c9d4b70d47bd65c7162083a0c0a4f97c02b585804042d123656867f6",
+      "check": "cyclomatic-complexity",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "PortfolioRouter.redeemFor(address,address,address[],uint256[],uint256[],uint256) (contracts/PortfolioRouter.sol#988-1028) has a high cyclomatic complexity (12).\n"
+    },
+    {
+      "id": "b5c44b8fe537895b0ad7dbdfc44b3f9e99ccee96e4a8a6e6116a1b0d7bf33a0f",
+      "check": "cyclomatic-complexity",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "RobotMoneyGateway.withdrawFromRouter(bytes32,address[],uint256[],uint256[],uint64,bytes32) (contracts/gateway/RobotMoneyGateway.sol#1175-1324) has a high cyclomatic complexity (24).\n"
+    },
+    {
+      "id": "0cd80ba1be8a2574ace3ec5fdf9a7d80adbfc4a3e7c6dc0c82bdb66bf68fb49e",
+      "check": "dead-code",
+      "impact": "Informational",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault._deposit(address,address,uint256,uint256) (contracts/RobotMoneyVault.sol#596-601) is never used and should be removed\n"
+    },
+    {
+      "id": "22e459308cf81b499cc6ac854c00b9fc8aa86e1bf52867fb316d9770fa6eff5e",
+      "check": "dead-code",
+      "impact": "Informational",
+      "confidence": "Medium",
+      "description": "BasketVault._routeDeposit(address,uint256) (contracts/vaults/BasketVault.sol#670-712) is never used and should be removed\n"
+    },
+    {
+      "id": "3ef1b31437fe9bd492166303ae42658c865c734f8dbaa762d68351db27e9bde8",
+      "check": "dead-code",
+      "impact": "Informational",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault._isAdapterEligible(address) (contracts/RobotMoneyVault.sol#1365-1367) is never used and should be removed\n"
+    },
+    {
+      "id": "54b86dd24b5bf8707e3c65b8563266b7c65271774842f13eca8981e782707997",
+      "check": "dead-code",
+      "impact": "Informational",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault._equalWeightBalance(uint256,uint256,uint256) (contracts/RobotMoneyVault.sol#1376-1382) is never used and should be removed\n"
+    },
+    {
+      "id": "82323290165315436d667bc2a6abcb23595e328d8eb313c980b3f207b57ad8fe",
+      "check": "dead-code",
+      "impact": "Informational",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault._pullProportional(uint256) (contracts/RobotMoneyVault.sol#839-865) is never used and should be removed\n"
+    },
+    {
+      "id": "92c8a7b4848bb877901a7443195073b854bad1d2ca326e8df37840fdd469b4ad",
+      "check": "dead-code",
+      "impact": "Informational",
+      "confidence": "Medium",
+      "description": "BasketVault._deposit(address,address,uint256,uint256) (contracts/vaults/BasketVault.sol#592-664) is never used and should be removed\n"
+    },
+    {
+      "id": "a427ed1c1af1a028257fd259efb1278effaab7a41d8d6933ec4a0fdd7127bb7b",
+      "check": "dead-code",
+      "impact": "Informational",
+      "confidence": "Medium",
+      "description": "RobotMoneyVault._withdraw(address,address,address,uint256,uint256) (contracts/RobotMoneyVault.sol#767-813) is never used and should be removed\n"
+    },
+    {
+      "id": "85626ff2dbf5a7f81fb32857b83f43e250904e2356a2bf1976a0de3cfe7295ca",
+      "check": "missing-inheritance",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "PortfolioRouter (contracts/PortfolioRouter.sol#54-1440) should inherit from IRouterDefaultWeights (contracts/VaultRegistry.sol#15-27)\n"
+    },
+    {
+      "id": "96bef442763299fc095f02b396071e138e56c9622de1cf5635a7b342315c3aeb",
+      "check": "missing-inheritance",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "RobotMoneyVault (contracts/RobotMoneyVault.sol#40-1476) should inherit from IRetirableVault (contracts/VaultRegistry.sol#35-40)\n"
+    },
+    {
+      "id": "ec42c5bd11de970e3fd7043f25a21efe0d93960a7c6dafa546e25cca5631ad89",
+      "check": "missing-inheritance",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "PortfolioRouter (contracts/PortfolioRouter.sol#54-1440) should inherit from IPortfolioRouter (contracts/gateway/interfaces/IPortfolioRouter.sol#9-61)\n"
+    },
+    {
+      "id": "01e15c7a823d9cd65663a814b708a8c53d69323f1316f069d83a5f0d178e493a",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable AaveV3Adapter.A_TOKEN (contracts/adapters/AaveV3Adapter.sol#37) is not in mixedCase\n"
+    },
+    {
+      "id": "07a15e1dd43de736e602cb4aecc1582c71ce7258f7323f7bef78e05d7d001b14",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable UniswapV3SwapAdapter.ROUTER (contracts/adapters/UniswapV3SwapAdapter.sol#42) is not in mixedCase\n"
+    },
+    {
+      "id": "0f0fdc0084d8fa1f3e638c85235218f71d15bfe21262d383f5838c137b5cb412",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable CompoundV3Adapter.VAULT (contracts/adapters/CompoundV3Adapter.sol#37) is not in mixedCase\n"
+    },
+    {
+      "id": "10efb976ae26ca05544ec511dd2a961bff07e23345ccb1672c4cabc5f21bbe7e",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Parameter RouterGovernance.initialize(address,address,address,address,GovernedUUPS.UpgradeMode)._admin (contracts/RouterGovernance.sol#125) is not in mixedCase\n"
+    },
+    {
+      "id": "1737eea8f52de637be2856234bcdd299272672cb85e3de09625b665643a09e5b",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable UniswapV4PriceRecorder.POOL_MANAGER (contracts/adapters/UniswapV4PriceRecorder.sol#70) is not in mixedCase\n"
+    },
+    {
+      "id": "179bda7a6b5739246860285753c6919bd0942a3623463de4b58a2e19c858492c",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable UniswapV4SwapAdapter.TICK_SPACING (contracts/adapters/UniswapV4SwapAdapter.sol#57) is not in mixedCase\n"
+    },
+    {
+      "id": "19ca8264634531c3055bbfa1adf9eece1551ddca03606dedace475c4d23c5435",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable BasketVault.SWAP_ROUTER (contracts/vaults/BasketVault.sol#157) is not in mixedCase\n"
+    },
+    {
+      "id": "206e8dafacfb860e864fb3609a001a559cec1ac8440559cd456c9a3b8b7dc2f8",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Function IUniswapV4PriceRecorder.POOL_ID() (contracts/interfaces/IUniswapV4PriceRecorder.sol#11) is not in mixedCase\n"
+    },
+    {
+      "id": "31b97eff18562554de986c39b219a7e7ad6d3e04dbc30872573673d7a7fc2e36",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable BasketVault._USDC (contracts/vaults/BasketVault.sol#158) is not in mixedCase\n"
+    },
+    {
+      "id": "35829ffa944cc45d1a655da4728f521256cdc7f75defcbb50665bc67ea3c4021",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable AaveV3Adapter.VAULT (contracts/adapters/AaveV3Adapter.sol#41) is not in mixedCase\n"
+    },
+    {
+      "id": "4086ba02764270a56d8a79827c370cdcfab3b34dfd955107c53e68b4e8bdc610",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable CompoundV3Adapter.USDC (contracts/adapters/CompoundV3Adapter.sol#33) is not in mixedCase\n"
+    },
+    {
+      "id": "41395921948aa1ab2fbe7fb9b2643fee71cdda904fbd1fe27cdbbc3428d8401d",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable UniswapV4SwapAdapter.POOL_ID (contracts/adapters/UniswapV4SwapAdapter.sol#59) is not in mixedCase\n"
+    },
+    {
+      "id": "4dbf5069df6d0e21357154f0de5dbd114ae77cc096c0c379359151f974f7adde",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Parameter RouterGovernance.initialize(address,address,address,address,GovernedUUPS.UpgradeMode)._router (contracts/RouterGovernance.sol#123) is not in mixedCase\n"
+    },
+    {
+      "id": "50eadc6cdbdf016b881dd2654553a70a4ed58a6ee9790339faec7e81a39f94c4",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Parameter RobotMoneyVault.initialize(IERC20,uint256,uint256,uint256,address,address,address,address,GovernedUUPS.UpgradeMode)._tvlCap (contracts/RobotMoneyVault.sol#435) is not in mixedCase\n"
+    },
+    {
+      "id": "5256e40f3921a3822c9004c065993c0f4372aace20af926f93ccdaaaffbdce16",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable UniswapV4SwapAdapter.POOL_MANAGER (contracts/adapters/UniswapV4SwapAdapter.sol#51) is not in mixedCase\n"
+    },
+    {
+      "id": "54cd8b34aebf3b57f1a7855f0d26ce3d3885b936b9a4f23d28bffade5bdddcc3",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable UniswapV4SwapAdapter.RECORDER (contracts/adapters/UniswapV4SwapAdapter.sol#53) is not in mixedCase\n"
+    },
+    {
+      "id": "54e44c61f20bc8eae277c6c666194ce4d8d98d0ca23e2d1d7878366808a84065",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Parameter PortfolioRouter.initialize(address,address,address,address,GovernedUUPS.UpgradeMode)._admin (contracts/PortfolioRouter.sol#388) is not in mixedCase\n"
+    },
+    {
+      "id": "58d9df93ca94c34acc26897495ab75a68ff0d009c5393cb6dbd245793b2f300c",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Function BasketVault.__BasketVault_init(string,string,uint256,BasketVault.InitParams) (contracts/vaults/BasketVault.sol#443-473) is not in mixedCase\n"
+    },
+    {
+      "id": "6a3b5a703c79c1f9ce45ac6716164c1537345f466086030f24cc183f2fb16c12",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable UniswapV4SwapAdapter.CURRENCY1 (contracts/adapters/UniswapV4SwapAdapter.sol#55) is not in mixedCase\n"
+    },
+    {
+      "id": "6e4b9fec5c7e8cb8aead21c2c5c1a65ecdad2e6754d80427f7ed1472caf991fc",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable ExclusionLedger.USDC (contracts/ExclusionLedger.sol#109) is not in mixedCase\n"
+    },
+    {
+      "id": "6e89bc1246f06ed500c66392d7366f2b7af907adc2970271c3677a79ec735187",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable ExclusionLedger.VAULT (contracts/ExclusionLedger.sol#107) is not in mixedCase\n"
+    },
+    {
+      "id": "80e067c177659a65eafb737934cb970c237e8448afd6a3a488c9899b48ddf905",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable AaveV3Adapter.POOL (contracts/adapters/AaveV3Adapter.sol#39) is not in mixedCase\n"
+    },
+    {
+      "id": "8247c1fbea00d0813192da9418cd6cd4a469a3767d7182c3e22795234a9fc88f",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Parameter RouterGovernance.initialize(address,address,address,address,GovernedUUPS.UpgradeMode)._receipts (contracts/RouterGovernance.sol#124) is not in mixedCase\n"
+    },
+    {
+      "id": "82cdbf356582bd97ed6af4be82b9de9df9ab950be464ce05322e3087128e84fe",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Parameter PortfolioRouter.initialize(address,address,address,address,GovernedUUPS.UpgradeMode)._registry (contracts/PortfolioRouter.sol#387) is not in mixedCase\n"
+    },
+    {
+      "id": "89389be06b4f09bdd23a9699f713e2c4172395d62d9e1de6ce92a2e71136cf45",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Function IUniswapV4PriceRecorder.POOL_MANAGER() (contracts/interfaces/IUniswapV4PriceRecorder.sol#10) is not in mixedCase\n"
+    },
+    {
+      "id": "8b7db6cb9572e64122a6acedd3bf7e20bfa61b493594b71613b7d230d0003152",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable MorphoAdapter.USDC (contracts/adapters/MorphoAdapter.sol#33) is not in mixedCase\n"
+    },
+    {
+      "id": "94c75dd6686b6a554245e84a472dec9ac3b5c29df3d5c34249dbfeb29441dbd7",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable MorphoAdapter.VAULT (contracts/adapters/MorphoAdapter.sol#35) is not in mixedCase\n"
+    },
+    {
+      "id": "9c4473d1eb0077b50a417eb52990bd762319ed4abcf1373caa50c2b2a798866e",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable AaveV3Adapter.USDC (contracts/adapters/AaveV3Adapter.sol#35) is not in mixedCase\n"
+    },
+    {
+      "id": "a433ce27619c4f3e4541e29151b4ceab35529f27b780eecfb283b2e4ce9949fd",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable UniswapV4SwapAdapter.CURRENCY0 (contracts/adapters/UniswapV4SwapAdapter.sol#54) is not in mixedCase\n"
+    },
+    {
+      "id": "a47b21bd29c79b26f84525be1a48e303dbfd06691fefe9afb425b6897db08e5f",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable AerodromeSwapAdapter.ROUTER (contracts/adapters/AerodromeSwapAdapter.sol#42) is not in mixedCase\n"
+    },
+    {
+      "id": "a6ab81c3d30d68e87eb6667f509b3a4ad8767bf402d714fab21a8b459a1859e1",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Parameter RobotMoneyVault.initialize(IERC20,uint256,uint256,uint256,address,address,address,address,GovernedUUPS.UpgradeMode)._exitFeeBps (contracts/RobotMoneyVault.sol#437) is not in mixedCase\n"
+    },
+    {
+      "id": "adf297832bc26a7df38db8c60c2d33f117d701fb8d63d62c9c0c95b6ce6800dc",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable UniswapV4PriceRecorder.POOL_ID (contracts/adapters/UniswapV4PriceRecorder.sol#71) is not in mixedCase\n"
+    },
+    {
+      "id": "ae578d6b9809e480ed22685544dc357844e6ec599e1d3d29d681d48d497ef1ee",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable MorphoAdapter.MORPHO_VAULT (contracts/adapters/MorphoAdapter.sol#29) is not in mixedCase\n"
+    },
+    {
+      "id": "b0f494417b0320882a29a6aebea92680c848445006b514c195bbf19b318132c2",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Parameter RobotMoneyVault.initialize(IERC20,uint256,uint256,uint256,address,address,address,address,GovernedUUPS.UpgradeMode)._perDepositCap (contracts/RobotMoneyVault.sol#436) is not in mixedCase\n"
+    },
+    {
+      "id": "b41107a5bb6840f0f46753258fc75cee1726dc83196e308ef66c43052a644134",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Parameter RobotMoneyVault.initialize(IERC20,uint256,uint256,uint256,address,address,address,address,GovernedUUPS.UpgradeMode)._feeRecipient (contracts/RobotMoneyVault.sol#438) is not in mixedCase\n"
+    },
+    {
+      "id": "b81bba15bf18b9edf3e0009e4f1ad1fac1f74e7d7d56ad69903cc66644035baa",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Parameter RobotMoneyVault.initialize(IERC20,uint256,uint256,uint256,address,address,address,address,GovernedUUPS.UpgradeMode)._admin (contracts/RobotMoneyVault.sol#439) is not in mixedCase\n"
+    },
+    {
+      "id": "b9d8c9b76ed34f24ef678ecebfbbb36faeba20c87ec6fb3025e4652d0506158b",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable CompoundV3Adapter.COMET (contracts/adapters/CompoundV3Adapter.sol#35) is not in mixedCase\n"
+    },
+    {
+      "id": "bfec059bfe604eb6db88725f7f6cebd86eaca34e682ecb6b358fdd8f303838f7",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable AerodromeSwapAdapter.FACTORY (contracts/adapters/AerodromeSwapAdapter.sol#45) is not in mixedCase\n"
+    },
+    {
+      "id": "c041824ed57bd8d3b541bd3d92a55ca22b386ad61f4cb71579248b17786d1e48",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable UniswapV4PriceRecorder.POOL_STATE_SLOT (contracts/adapters/UniswapV4PriceRecorder.sol#78) is not in mixedCase\n"
+    },
+    {
+      "id": "d398fe64b339b3f0069c00989c1832115370549a49ebec1bb15aab84b22f6740",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Parameter RobotMoneyVault.initialize(IERC20,uint256,uint256,uint256,address,address,address,address,GovernedUUPS.UpgradeMode)._emergencyResponder (contracts/RobotMoneyVault.sol#440) is not in mixedCase\n"
+    },
+    {
+      "id": "dc4d311c48baadb0c2f87e6cb6444748680f8c4a123096f585f7e4041f8cf57f",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Variable UniswapV4SwapAdapter.POOL_FEE (contracts/adapters/UniswapV4SwapAdapter.sol#56) is not in mixedCase\n"
+    },
+    {
+      "id": "dd6f3d63cf7fd1addc4962ccb8574eceee6a7decb7de825789cce187149606bc",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Parameter PortfolioRouter.initialize(address,address,address,address,GovernedUUPS.UpgradeMode)._usdc (contracts/PortfolioRouter.sol#386) is not in mixedCase\n"
+    },
+    {
+      "id": "eeb1c55e2d2f56e8672ad388bd8bb873e38efaebcfcc79e99ecf1512805a6cc1",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Parameter RobotMoneyVault.initialize(IERC20,uint256,uint256,uint256,address,address,address,address,GovernedUUPS.UpgradeMode)._asset (contracts/RobotMoneyVault.sol#434) is not in mixedCase\n"
+    },
+    {
+      "id": "f49269168af591fd2152b834bea1123ac0d52065377011fc8336feb7fa1a7211",
+      "check": "naming-convention",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Function IGateway.WINDOW_SECONDS() (contracts/gateway/interfaces/IGateway.sol#479) is not in mixedCase\n"
+    },
+    {
+      "id": "0026be3682ba558819f7d1a5dde2668f731bec1b174179a7c08915322d693865",
+      "check": "unindexed-event-address",
+      "impact": "Informational",
+      "confidence": "High",
+      "description": "Event BasketVault.FeeRecipientUpdated(address,address) (contracts/vaults/BasketVault.sol#261) has address parameters but no indexed parameters\n"
+    }
+  ]
+}
