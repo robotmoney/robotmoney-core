@@ -484,7 +484,7 @@ checkout of `DEPLOY_SHA`. A CLI from another sha still pauses, with one
 `vault_rules.mismatch` warning naming both stage tables (`pause-all` reads no
 per-vault rule); every other verb refuses the mismatch (issue 1851). A verify
 whose only failures are RPC-refused receipt reads exits 30 (`RPC_REFUSED`) and
-pauses nothing: the deployment is NOT verified, so do not govern; rerun verify against an RPC that serves the deploy receipts. **Initial deposit state, one rule for all four vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all four vaults deploy paused, and stage 13 unpauses all four through the Safe and the timelock. rmUSDC
+pauses nothing: the deployment is NOT verified, so do not govern; rerun verify against an RPC that serves the deploy receipts. A recorded deploy transaction with no receipt while the same RPC serves the run's other receipts is not an RPC problem: it is missing from the chain, so verify exits 13 and pauses (issue 1864). **Initial deposit state, one rule for all four vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all four vaults deploy paused, and stage 13 unpauses all four through the Safe and the timelock. rmUSDC
 pauses right after its 1 USDC seed deposit.
 Rehearsed on every pull request that touches the deploy by the Twin test
 `testing/smoke-test/tests/twin_pause_all.rs`.

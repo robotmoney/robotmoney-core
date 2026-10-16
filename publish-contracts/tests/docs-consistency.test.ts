@@ -159,6 +159,13 @@ describe("the verify RPC requirement and the pause-all DEPLOY_SHA checkout are d
     expect(r).toContain("**An adopted timelock (issue 1835) is accepted.**");
     expect(r).toContain("**Exit 30 means the deployment is NOT verified**");
   });
+  test("both exit-code lists of publish-contracts/README.md describe 30 for prove-control and verify and list 31 (issue 1864)", () => {
+    const r = flat("publish-contracts/README.md");
+    const want = "rpc refused 30 (prove-control adoption, or verify with only RPC-refused reads, nothing paused), counts untracked 31";
+    expect(r.split(want).length - 1).toBe(2);
+    // each list runs from "usage 2" to its last entry: the wording closes both of them
+    for (const list of r.split("usage 2, sheet 3").slice(1)) expect(list.slice(0, list.indexOf(want) + want.length + 1)).toEndWith(`owner signer not hardware 29, ${want}.`);
+  });
   test("manual-admin-actions.md and runbook 4.6 tell the operator to run pause-all from the DEPLOY_SHA checkout", () => {
     expect(flat("docs/operations/manual-admin-actions.md")).toContain("Run the CLI from a checkout of `DEPLOY_SHA` (the same checkout `--core-dir` names).");
     const runbook = read("docs/operations/contract-release-runbooks.md");
