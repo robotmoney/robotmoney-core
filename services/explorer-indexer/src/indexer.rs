@@ -1716,6 +1716,29 @@ pub async fn backfill_proxy_events(
             (floor, cursor, floor)
         }
     };
+    // A reorg may have rolled the cursor back below the pass's target since the
+    // pass began. Live ingestion re-indexes everything above the cursor, proxy
+    // topics included, so the pass stops at the cursor and never writes blocks
+    // above it.
+    let Some(cursor) = db
+        .last_indexed_block(cfg.chain_id)
+        .await?
+        .and_then(|c| u64::try_from(c).ok())
+    else {
+        save_backfill_state(db, cfg, "no_cursor", None, None, None, None).await?;
+        return Ok(ProxyBackfillOutcome::NoCursor);
+    };
+    let target = target.min(cursor);
+    if next > target {
+        save_backfill_state(db, cfg, "done", Some(floor), Some(target), None, None).await?;
+        tracing::info!(
+            chain_id = cfg.chain_id,
+            floor,
+            target,
+            "proxy upgrade backfill complete: the cursor fell back below the checkpoint"
+        );
+        return Ok(ProxyBackfillOutcome::Done { inserted: 0 });
+    }
     let slice_end = next
         .saturating_add(span.saturating_mul(PROXY_BACKFILL_SLICE_REQUESTS) - 1)
         .min(target);

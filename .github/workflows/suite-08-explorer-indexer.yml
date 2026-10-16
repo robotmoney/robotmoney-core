@@ -177,14 +177,15 @@ jobs:
       # when its transaction created that proxy, and
       # the lib step runs the proxy decode and RouterGovernance watch tests (floor 7).
       # Issue 1856: a refused or cursorless backfill is saved and retried, and the backfill scans one
-      # slice per tick and resumes from its saved checkpoint (floor 12 = the tests the target holds).
+      # slice per tick, resumes from its saved checkpoint and stops at the cursor after a rollback
+      # (floor 13 = the tests the target holds).
       - name: Refused RPC, Timelock and Safe events, chain head, paused snapshots (issues 1731, 1840, 1856)
         env:
           EXPLORER_INDEXER_REQUIRE_PG: "1"
         run: |
           CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test rpc_refused -- --nocapture
-          CARGO_TEST_MIN_EXECUTED=12 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=13 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test admin_events_and_progress -- --test-threads=1 --nocapture
           CARGO_TEST_MIN_EXECUTED=7 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- indexer::tests::refusal_backoff indexer::tests::timelock_and_safe indexer::tests::call_scheduled indexer::tests::safe_ indexer::tests::proxy_ indexer::tests::router_governance --nocapture

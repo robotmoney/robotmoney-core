@@ -137,6 +137,15 @@ async fn health_reports_the_proxy_backfill_state() {
     assert_eq!(h["proxy_backfill"]["target_block"], 20_000_000);
     assert!(h["proxy_backfill"]["next_block"].is_null());
     assert_eq!(h["proxy_backfill"]["detail"], "set INDEXER_START_BLOCK");
+
+    // A database the indexer has not migrated to 0020 yet: null, not an error.
+    sqlx::query("DROP TABLE proxy_backfill_progress")
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let h = get(&s, "/health").await;
+    assert_eq!(h["status"], "ok", "{h}");
+    assert!(h["proxy_backfill"].is_null(), "{h}");
 }
 
 #[tokio::test]

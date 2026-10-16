@@ -822,6 +822,71 @@ async fn the_backfill_scans_one_slice_per_tick_and_resumes_from_the_checkpoint()
     stub.shutdown();
 }
 
+/// Issue 1856 (review): a reorg rolls the cursor back below the pass's target
+/// between slices. The pass stops at the new cursor and never stores a block
+/// above it: live ingestion re-indexes that range, proxy topics included.
+#[tokio::test]
+async fn a_rollback_mid_pass_clamps_the_backfill_to_the_cursor() {
+    let fx = pg_fixture().await;
+    let stub = StubRpcServer::start().await;
+    program(&stub, 20);
+    let gateway = cfg().gateway;
+    let upgraded = IGovernedUpgradeEvents::Upgraded {
+        implementation: Address::from([0x2bu8; 20]),
+    }
+    .encode_log_data();
+    // Upgrades at 280 (below the rollback root) and 400 (above it).
+    stub.set(
+        "eth_getLogs",
+        serde_json::json!([
+            log_json(gateway, &upgraded, 280, 0),
+            log_json(gateway, &upgraded, 400, 0)
+        ]),
+    );
+    let mut c = cfg();
+    c.end_block = None;
+    c.start_block = Some(1);
+    c.max_blocks_per_tick = 10;
+    finished_run(&fx, 600).await;
+    let rpc = JsonRpc::new(&stub.url);
+    assert!(matches!(
+        backfill_proxy_events(&fx.db, &rpc, &c).await.unwrap(),
+        ProxyBackfillOutcome::Progress {
+            next_block: 251,
+            target_block: 600,
+            ..
+        }
+    ));
+
+    // Reorg: the cursor falls back to 300.
+    fx.db.delete_above_block(CHAIN, 300).await.unwrap();
+    assert_eq!(fx.db.last_indexed_block(CHAIN).await.unwrap(), Some(300));
+    assert_eq!(
+        backfill_proxy_events(&fx.db, &rpc, &c).await.unwrap(),
+        ProxyBackfillOutcome::Done { inserted: 1 },
+        "the slice ends at the cursor: only the upgrade at 280"
+    );
+    let last_from = *get_logs_from_blocks(&stub).last().unwrap();
+    assert_eq!(
+        last_from, 291,
+        "the last request starts at 291 and ends at 300"
+    );
+    let above: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM blocks WHERE chain_id = $1 AND block_number > 300",
+    )
+    .bind(CHAIN)
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(above, 0, "no block stored above the cursor");
+    let state = fx.db.proxy_backfill_progress(CHAIN).await.unwrap().unwrap();
+    assert_eq!(
+        (state.state.as_str(), state.target_block),
+        ("done", Some(300))
+    );
+    stub.shutdown();
+}
+
 /// Issue 1840: the registry is a proxied core contract, so its `Upgraded` and
 /// `UpgradesFrozen` are indexed with INDEXER_MULTI_VAULT_EVENTS off. Its
 /// `VaultRegistered` stays behind the flag.
