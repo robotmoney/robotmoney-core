@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { keccak256, type Address, type Hex } from "viem";
-import { DEPLOY_IMPL_VERB, implementationDeploysOf, linkCreationCode, runDeployImplementation, type DeployImplApi } from "../src/deploy-implementation.ts";
+import { DEPLOY_IMPL_VERB, implementationDeploysOf, linkCreationCode, realDeployImplApi, runDeployImplementation, type DeployImplApi } from "../src/deploy-implementation.ts";
 import { loadRunManifest, newManifest, saveRunManifest, type RunContext } from "../src/runner.ts";
 import { getStageTable } from "../src/stages.ts";
 import { layoutId, proxySpecs } from "../src/verify/upgradeability.ts";
@@ -140,6 +140,17 @@ describe("issue 1861: deploy-implementation links to the live libraries, deploys
 });
 
 describe("issue 1861: the deploy-implementation CLI", () => {
+  test("the real CREATE puts every cast option before --create CODE (cast's trailing subcommand) and reads the receipt", async () => {
+    const calls: string[][] = [];
+    const ctx = { rpc: "http://x", chainId: 918453, baseEnv: {}, chainReader: () => ({}) as never,
+      signer: { forgeArgs: async () => ["--keystore", "/k", "--password-file", "/p", "--sender", NEW] },
+      run: async (_tool: string, args: string[]) => { calls.push(args); return { code: 0, stdout: JSON.stringify({ transactionHash: "0x" + "ab".repeat(32), status: "0x1", contractAddress: NEW }), stderr: "" }; },
+    } as unknown as RunContext;
+    const res = await realDeployImplApi(ctx).create("0x6080");
+    expect(calls).toEqual([["send", "--json", "--keystore", "/k", "--password-file", "/p", "--from", NEW, "--create", "0x6080"]]);
+    expect(res).toEqual({ txHash: `0x${"ab".repeat(32)}`, status: true, address: NEW });
+  });
+
   test("parse: --proxy is required, --implementation and --dry-run are refused, --upgrade-build is accepted", async () => {
     const { parseCli } = await import("../src/cli.ts");
     const { SHA } = await import("./fixtures.ts");

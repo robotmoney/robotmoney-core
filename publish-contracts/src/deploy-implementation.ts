@@ -98,8 +98,9 @@ export function realDeployImplApi(ctx: RunContext): DeployImplApi {
     upgradesFrozen: async (proxy) => (await chain.read(proxy, "function upgradesFrozen() view returns (bool)")) === true,
     create: async (creationCode) => {
       const signerArgs = (await ctx.signer.forgeArgs()).map((a) => (a === "--sender" ? "--from" : a));
-      const r = await ctx.run("cast", ["send", "--create", creationCode, "--json", ...signerArgs], { env: childEnv(ctx), interactive: true });
-      if (r.code !== 0) throw new PublishError("BROADCAST", `cast send --create failed: ${r.stderr.trim().split("\n").slice(-2).join(" ")}`);
+      // `--create CODE` is cast's trailing subcommand: every option goes before it, or cast reads the options as the constructor signature and arguments.
+      const r = await ctx.run("cast", ["send", "--json", ...signerArgs, "--create", creationCode], { env: childEnv(ctx), interactive: true });
+      if (r.code !== 0) throw new PublishError("BROADCAST", `cast send --create failed: ${r.stderr.trim().split("\n").filter((l) => l.trim() !== "").slice(-3).join(" ")}`);
       const rc = JSON.parse(r.stdout.trim().split("\n").filter((l) => l.startsWith("{")).pop() ?? "{}");
       return { txHash: rc.transactionHash as Hex, status: ["0x1", "1", "success"].includes(lc(rc.status)) || rc.status === 1, address: (rc.contractAddress ?? null) as Address | null };
     },
