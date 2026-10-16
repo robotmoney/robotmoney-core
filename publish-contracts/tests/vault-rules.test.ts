@@ -1,7 +1,7 @@
 // Issue 1705: the per-vault deploy and governance rules come from ONE table, scripts/deploy/stage-table.json vaults[]. The govern rows, the evidence steps and the
 // verifier's expected paused state and router eligibility are derived from it, and none of the three tools names a vault key to treat one vault differently.
 // Run: bun test tests/vault-rules.test.ts
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { GOVERN_ROWS, TWIN_ONLY_ROWS, UNPAUSE_ROWS, stageRows } from "../src/govern.ts";
@@ -15,7 +15,7 @@ import { VAULT_RULES_PATH } from "../src/vault-rules.ts";
 import { SHA } from "./fixtures.ts";
 import { ADMIN, world } from "./harness.ts";
 import { REPO, sheetText, tmp, writeCoreAssetConfig } from "./fixtures.ts";
-import { getStageTable } from "../src/stages.ts";
+import { getStageTable, useStageTable } from "../src/stages.ts";
 import { manifestBase } from "../src/stage-table.ts";
 import type { RunContext } from "../src/runner.ts";
 
@@ -101,6 +101,9 @@ describe("the tools read the vault rules from the stage table (issue 1705)", () 
 // Issue 1833: vault-rules.ts reads the rules from the CLI's own checkout; the stages come from --core-dir at the DEPLOY_SHA. A CLI from another sha must refuse to start.
 // Issue 1851: except the emergency pause-all, which reads no per-vault rule: it runs with one warning naming both tables.
 describe("the CLI's vault rules equal the --core-dir stage table (issue 1833, 1851)", () => {
+  // A pause-all past a mismatch loads the edited --core-dir table as the process-wide stage table: put the real one back so later test files see it.
+  const original = getStageTable();
+  afterEach(() => useStageTable(original));
   /** One run of `verb` against a world whose --core-dir table `edit` changed. pause-all's pause is a stub; a govern that got past startup would log stage.start or spawn forge. */
   async function runWith(verb: "pause-all" | "govern", edit?: (t: any) => void): Promise<{ code: number; message?: string; warnings: any[]; pauses: number; stagesStarted: number; corePath: string }> {
     const w = world();
