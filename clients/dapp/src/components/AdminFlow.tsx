@@ -12,6 +12,7 @@ import { Tabs } from "./Tabs";
 import type { VerificationState } from "../lib/useGatewayVerifier";
 import { buildAdminTabs } from "./buildAdminTabs";
 import { resolveExplorerApiUrl } from "../lib/explorerApi";
+import { GatewayWriteCheck } from "../lib/gatewayWriteCheck";
 
 type Props = Readonly<{
   gatewayAddress: Address;
@@ -126,7 +127,13 @@ export function AdminFlow(props: Props) {
         </p>
       )}
 
-      <Tabs tabs={tabs} defaultTabId="agent-permissions" />
+      {/* Issue 1840: every write from the tabs re-verifies the gateway at the latest block first. */}
+      <GatewayWriteCheck
+        gatewayAddress={props.gatewayAddress}
+        verification={gatewayVerificationState}
+      >
+        <Tabs tabs={tabs} defaultTabId="agent-permissions" />
+      </GatewayWriteCheck>
     </main>
   );
 }

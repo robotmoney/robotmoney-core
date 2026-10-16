@@ -159,6 +159,31 @@ impl IndexerConfig {
         addrs
     }
 
+    /// Contracts fetched for their proxy `Upgraded` / `UpgradesFrozen` events
+    /// ONLY: the registry while `INDEXER_MULTI_VAULT_EVENTS` is off (issue
+    /// 1840). The registry is a proxied core contract, so its upgrades and
+    /// freeze are indexed whatever the flag says. Its other events
+    /// (`VaultRegistered`, `VaultStatusChanged`) stay behind the flag exactly as
+    /// before: `run_inner` drops every non-proxy log from these addresses.
+    pub fn proxy_only_addresses(&self) -> Vec<Address> {
+        let watched = self.watched_addresses();
+        self.registry
+            .into_iter()
+            .filter(|r| !watched.contains(r))
+            .collect()
+    }
+
+    /// Every contract whose `Upgraded` / `UpgradesFrozen` the indexer records:
+    /// the watched set and the proxy-only set, without the Timelock and the
+    /// Safe, which are not Robot Money proxies. Registry-discovered vaults are
+    /// added by the caller, which reads them from the database.
+    pub fn proxy_addresses(&self) -> Vec<Address> {
+        let mut out = self.watched_addresses();
+        out.extend(self.proxy_only_addresses());
+        out.retain(|a| Some(*a) != self.timelock && Some(*a) != self.safe);
+        out
+    }
+
     /// Every contract `run_once` registers in `contracts`, paired with the
     /// `kind` it registers under, deduplicated by address.
     ///
@@ -1126,10 +1151,19 @@ async fn run_inner(
             }
         }
     }
+    // The registry's proxy events are fetched whatever INDEXER_MULTI_VAULT_EVENTS
+    // says (issue 1840); its other events are dropped below while the flag is off.
+    let proxy_only = cfg.proxy_only_addresses();
+    for address in &proxy_only {
+        if !watched.contains(address) {
+            watched.push(*address);
+        }
+    }
     let topic0 = topics.all_topic0();
-    let logs = rpc
+    let mut logs = rpc
         .get_logs(from_block as u64, target, &watched, &topic0)
         .await?;
+    logs.retain(|log| !proxy_only.contains(&log.address) || is_proxy_log(&topics, log));
 
     // Group logs by (block_number, contract) so we know which blocks
     // need state snapshots per ADR §3.5 trigger 1.
@@ -1483,6 +1517,137 @@ async fn handle_admin_log(
         )
         .await?;
     Ok(Some(n))
+}
+
+/// Is `log` an ERC-1967 `Upgraded` or a `UpgradesFrozen`?
+fn is_proxy_log(topics: &Topics, log: &LogEntry) -> bool {
+    log.topics
+        .first()
+        .is_some_and(|t| *t == topics.proxy_upgraded || *t == topics.proxy_upgrades_frozen)
+}
+
+/// Most `eth_getLogs` requests one proxy backfill may make. At the default
+/// 1000-block range that is ten million blocks, about eight months of Base.
+/// A wider range means the deploy floor degraded to 0: the backfill refuses
+/// and says to set `INDEXER_START_BLOCK`, rather than scan from genesis.
+pub const PROXY_BACKFILL_MAX_REQUESTS: u64 = 10_000;
+
+/// Backfill every watched proxy's `Upgraded` and `UpgradesFrozen` events from
+/// the deploy floor to the stored cursor (issue 1840). Returns the number of
+/// `admin_events` rows inserted.
+///
+/// Live ingestion only reads blocks above the cursor. So a proxy added to the
+/// config after the cursor passed its deploy block, a vault discovered from the
+/// registry, and every block indexed before the proxy topics existed would
+/// never have their upgrade history indexed, and the explorer would report
+/// `upgrade_state = 'unknown'` for ever. The watchdog relies on the deploy-time
+/// rows too: without them a later upgrade cannot be told from a deployment.
+///
+/// Idempotent: rows insert on the existing `(chain_id, block_number,
+/// log_index)` key with `ON CONFLICT DO NOTHING`, so a second run inserts
+/// nothing. Each event block's header and transactions are stored as well, so
+/// the watchdog can recognise a deployment by its contract-creation
+/// transaction. Bounded: requests span at most `max_blocks_per_tick` blocks,
+/// and at most [`PROXY_BACKFILL_MAX_REQUESTS`] of them are made.
+///
+/// The main loop runs it once at startup, after the first successful tick. A
+/// vault registered while the indexer runs is backfilled at the next restart.
+pub async fn backfill_proxy_events(
+    db: &Db,
+    rpc: &JsonRpc,
+    cfg: &IndexerConfig,
+) -> Result<u64, IndexerError> {
+    let Some(cursor) = db.last_indexed_block(cfg.chain_id).await? else {
+        return Ok(0);
+    };
+    let Ok(cursor) = u64::try_from(cursor) else {
+        return Ok(0);
+    };
+    let floor = resolve_deploy_floor(db, rpc, cfg, Some(cursor as i64)).await;
+    if floor > cursor {
+        return Ok(0);
+    }
+    let span = cfg.max_blocks_per_tick.max(1);
+    let requests = (cursor - floor) / span + 1;
+    if requests > PROXY_BACKFILL_MAX_REQUESTS {
+        tracing::error!(
+            chain_id = cfg.chain_id,
+            floor,
+            cursor,
+            requests,
+            max_requests = PROXY_BACKFILL_MAX_REQUESTS,
+            "proxy upgrade backfill refused: the range from the deploy floor to the cursor is \
+             too wide (a floor of 0 means deploy-block detection degraded). Set \
+             INDEXER_START_BLOCK to the deployment's first block and restart"
+        );
+        return Ok(0);
+    }
+
+    let mut proxies = cfg.proxy_addresses();
+    let registered: Vec<Vec<u8>> =
+        sqlx::query_scalar("SELECT vault_address FROM vaults WHERE chain_id = $1")
+            .bind(cfg.chain_id)
+            .fetch_all(db.pool())
+            .await
+            .map_err(DbError::from)?;
+    for vault in registered {
+        if let Ok(bytes) = <[u8; 20]>::try_from(vault.as_slice()) {
+            let address = Address::from(bytes);
+            if !proxies.contains(&address) {
+                proxies.push(address);
+            }
+        }
+    }
+
+    let topics = Topics::new();
+    let proxy_topics = [topics.proxy_upgraded, topics.proxy_upgrades_frozen];
+    let mut inserted = 0u64;
+    let mut stored_blocks: BTreeSet<u64> = BTreeSet::new();
+    let mut from = floor;
+    while from <= cursor {
+        let to = from.saturating_add(span - 1).min(cursor);
+        let logs = rpc.get_logs(from, to, &proxies, &proxy_topics).await?;
+        for log in logs.iter().filter(|l| {
+            proxies.contains(&l.address)
+                && is_proxy_log(&topics, l)
+                && (from..=to).contains(&l.block_number)
+        }) {
+            if stored_blocks.insert(log.block_number) {
+                let (header, txs) = rpc.block_with_txs(log.block_number).await?;
+                db.insert_block(
+                    cfg.chain_id,
+                    log.block_number as i64,
+                    header.hash.0,
+                    header.parent_hash.0,
+                    header.timestamp as i64,
+                )
+                .await?;
+                for t in txs {
+                    db.insert_transaction(
+                        cfg.chain_id,
+                        t.tx_hash.0,
+                        log.block_number as i64,
+                        t.tx_index as i32,
+                        t.from.into_array(),
+                        t.to.map(|a| a.into_array()),
+                        t.status as i16,
+                    )
+                    .await?;
+                }
+            }
+            inserted += handle_admin_log(db, cfg, &topics, log).await?.unwrap_or(0);
+        }
+        from = to + 1;
+    }
+    tracing::info!(
+        chain_id = cfg.chain_id,
+        floor,
+        cursor,
+        proxies = proxies.len(),
+        inserted,
+        "proxy upgrade backfill complete"
+    );
+    Ok(inserted)
 }
 
 /// Walk back from `start` until we find a block whose stored hash

@@ -57,10 +57,27 @@
 //!   write is reported as `ErrImplementationChanged` with its `tx_hash`, never
 //!   as a success, and the replay entry stays so it cannot be re-sent blindly.
 //!
-//! The transaction's `deadline` (at most `MAX_DEADLINE_SKEW_SECS`) bounds how
-//! long a signed transaction can wait to execute, so an upgrade queued in
-//! the timelock (minimum delay far above that bound) cannot silently apply to
-//! an old signature for long.
+//! Exactly which commands carry which guard (issue 1840):
+//!
+//! | command | on-chain `deadline` | replay entry deadline | re-verify before broadcast | check after receipt |
+//! |---|---|---|---|---|
+//! | `deposit` | yes | the deadline | yes | yes |
+//! | `withdraw-router` | yes | the deadline | yes | yes |
+//! | `withdraw` | yes | `0` | yes | yes |
+//! | `committee vote-submit` | none | no replay cache | no | yes |
+//! | `receipt submit` | none | no replay cache | no | yes |
+//!
+//! For the three commands that go through [`WriteSession::submit`], the
+//! on-chain `deadline` in the calldata (at most `MAX_DEADLINE_SKEW_SECS` past
+//! the chain's block time) bounds how long the signed transaction can wait to
+//! execute, so an upgrade queued in the timelock (minimum delay far above that
+//! bound) cannot apply to an old signature. `withdraw` passes that deadline in
+//! its calldata but stores `replay_deadline: 0`, because its `paymentId`
+//! excludes the deadline. `committee vote-submit` and `receipt submit` build
+//! and broadcast their own envelope: they verify the gateway once before
+//! signing (`verify_gateway_code_now`) and check the implementation at the
+//! executed block (`check_executed_under`), but carry no deadline and are not
+//! re-verified between signing and broadcast.
 //!
 //! # One broadcast path
 //!

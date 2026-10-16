@@ -20,6 +20,10 @@
  * backstop for a wallet that moved between render and click.
  * Other env classes behave exactly like `useWriteContract`.
  * Every redeem also gets a fixed gas limit (redeemGas.ts, core issue 1758), on every class and path.
+ *
+ * Inside a `GatewayWriteCheck` (AdminFlow and AgentsPanel, issue 1840), every write
+ * first re-verifies the gateway proxy and implementation at the latest block, on
+ * every env class, and is refused with `GatewayChangedError` on a mismatch.
  */
 import { useCallback, useState } from "react";
 import { useAccount, useWriteContract } from "wagmi";
@@ -32,6 +36,7 @@ import {
   type WriteGuardState,
 } from "./writeChainGuard";
 import { withRedeemGasWorkaround } from "./redeemGas";
+import { useGatewayWriteCheck } from "./gatewayWriteCheck";
 
 /** Current guard state: shared by the write hook and the wrong-chain screen. */
 export function useWriteChainGuard(): { state: WriteGuardState; blocked: boolean } {
@@ -69,6 +74,7 @@ export function useGuardedWriteContract() {
   const base = useWriteContract();
   const { connector } = useAccount();
   const { state } = useWriteChainGuard();
+  const gatewayCheck = useGatewayWriteCheck();
   const [refusal, setRefusal] = useState<Error | null>(null);
   const blocked = isWriteBlocked(state);
   const pinned = state.kind === "ok" ? state.targetChainId : undefined;
@@ -91,20 +97,28 @@ export function useGuardedWriteContract() {
       pinned === undefined ? variables : { ...(variables as object), chainId: pinned },
     ) as never;
 
+  /** The asynchronous checks a write must pass before it goes to the wallet. */
+  const preflight = async (variables: unknown) => {
+    if (pinned !== undefined) {
+      await assertTargetHasCode(
+        connector as CodeSource | undefined,
+        (variables as { address?: unknown }).address,
+      );
+    }
+    if (gatewayCheck) await gatewayCheck();
+  };
+
   const writeContract = ((variables: Parameters<WriteFn>[0], options?: Parameters<WriteFn>[1]) => {
     setRefusal(null);
     if (blocked) {
       refuse(new WrongChainError(state), variables, options);
       return;
     }
-    if (pinned === undefined) {
+    if (pinned === undefined && !gatewayCheck) {
       base.writeContract(withRedeemGasWorkaround(variables) as never, options as never);
       return;
     }
-    assertTargetHasCode(
-      connector as CodeSource | undefined,
-      (variables as { address?: unknown }).address,
-    )
+    preflight(variables)
       .then(() => base.writeContract(pin(variables), options as never))
       .catch((e: unknown) => refuse(e as Error, variables, options));
   }) as WriteFn;
@@ -119,16 +133,11 @@ export function useGuardedWriteContract() {
       setRefusal(err);
       throw err;
     }
-    if (pinned !== undefined) {
-      try {
-        await assertTargetHasCode(
-          connector as CodeSource | undefined,
-          (variables as { address?: unknown }).address,
-        );
-      } catch (e) {
-        setRefusal(e as Error);
-        throw e;
-      }
+    try {
+      await preflight(variables);
+    } catch (e) {
+      setRefusal(e as Error);
+      throw e;
     }
     return base.writeContractAsync(pin(variables), options as never);
   }) as WriteAsyncFn;
