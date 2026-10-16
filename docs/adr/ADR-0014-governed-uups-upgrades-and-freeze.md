@@ -96,7 +96,8 @@ There is no beacon: one upgrade never changes more than one proxy.
   reinitializer, and emits `UpgradesFrozen(proxy, implementation, codeHash)`. A frozen proxy refuses every new and
   previously queued upgrade. Freezing never pauses or alters withdrawals.
 - The release mode is a required initializer argument with no default: `Undeclared` (the zero value) reverts.
-  `FrozenAtDeploy` sets the flag inside the atomic initialization (with the event); `Upgradeable` leaves the
+  `FrozenAtDeploy` sets the flag inside the atomic initialization (with the event) and, like `freezeUpgrades`,
+  sets the initialized version to the maximum, so no reinitializer can ever run (issue 1835); `Upgradeable` leaves the
   timelock path open for a test, demo, rehearsal, contained mainnet test or a final-mainnet proving period, closed
   later by a delayed freeze. The stage scripts read `UPGRADE_MODE` (`upgradeable` or `frozen`), required, no default.
   `publish-contracts` passes the release sheet's `UPGRADE_MODE`, which has no default either (stage 2, issue 1809), so no
@@ -108,6 +109,9 @@ There is no beacon: one upgrade never changes more than one proxy.
 struct's members, the linked libraries and the ERC-7201 namespaces of the inheritance chain, plus the commits of both
 OpenZeppelin submodules, and fails on any difference until the snapshot is rewritten and reviewed. Its self-test
 proves it fails on a moved, retyped, added or reordered entry, a changed library link and a reordered namespace.
+Because a change could rewrite the snapshot in the same commit, the gate also requires the live layout to extend,
+append-only, the snapshots committed at the pull request's base commit and at every production release tag that
+ships GovernedUUPS proxies (issue 1835): a reorder with a regenerated snapshot still fails.
 
 ## Consequences
 
