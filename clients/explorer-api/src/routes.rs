@@ -63,11 +63,11 @@ use crate::model::{
     CommitteeAgent, CommitteeAgentsResponse, CommitteeTilt, CommitteeTiltsResponse,
     CommitteeTrackRecordResponse, CommitteeVoteEntry, ConsensusReceipt, ConsensusReceiptResponse,
     ConsensusReceiptsResponse, Contract, ContractsResponse, Deposit, DepositResponse,
-    DepositsResponse, EventKind, ExclusionClaim, Freshness, Health, RegimeFeedResponse,
-    RegimeSnapshot, RouterStateResponse, RouterWeightsResponse, StatsResponse, Transaction,
-    TransactionResponse, UpgradeState, Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry,
-    VaultPosition, VaultSnapshot, VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint,
-    VaultWeight, VaultsResponse, WeightHistoryEntry,
+    DepositsResponse, EventKind, ExclusionClaim, Freshness, Health, ProxyBackfillHealth,
+    RegimeFeedResponse, RegimeSnapshot, RouterStateResponse, RouterWeightsResponse, StatsResponse,
+    Transaction, TransactionResponse, UpgradeState, Vault, VaultDetail, VaultDetailResponse,
+    VaultFeeEntry, VaultPosition, VaultSnapshot, VaultSnapshotsResponse, VaultTransferEntry,
+    VaultTvlPoint, VaultWeight, VaultsResponse, WeightHistoryEntry,
 };
 use crate::state::AppState;
 
@@ -233,7 +233,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/vaults", get(list_vaults))
         .route("/v1/vaults/:address", get(get_vault))
         // Router weights and governed-change admin events (issues #307, #1731). There is no
-        // proposals route: RouterGovernance voting was deleted (issue 1698, migration 0024).
+        // proposals route: RouterGovernance voting was deleted (issue 1698, migration 0027).
         .route("/v1/router/weights", get(get_router_weights))
         .route("/v1/governance/admin-events", get(list_admin_events))
         // Multi-vault protocol stats endpoints (issue #316).
@@ -310,6 +310,20 @@ async fn health(State(state): State<AppState>) -> ApiResult<Json<Health>> {
     .await?
     .flatten();
     let silent = since_success_secs.is_some_and(|s| s > HEALTH_MAX_SILENCE_SECS);
+    // Issue 1856. A database the indexer has not migrated to 0020 yet has no
+    // such table (42P01): report null rather than turn the probe red.
+    let proxy_backfill: Option<ProxyBackfillHealth> = match sqlx::query_as(
+        "SELECT state, floor_block, target_block, next_block, detail \
+         FROM proxy_backfill_progress WHERE chain_id = $1",
+    )
+    .bind(state.chain_id)
+    .fetch_optional(&state.pool)
+    .await
+    {
+        Ok(row) => row,
+        Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("42P01") => None,
+        Err(e) => return Err(e.into()),
+    };
     Ok(Json(Health {
         status: if last_run_error.is_some() || silent {
             "degraded"
@@ -324,6 +338,7 @@ async fn health(State(state): State<AppState>) -> ApiResult<Json<Health>> {
         last_run_error,
         since_success_secs,
         reorg_count: reorg_count.unwrap_or(0),
+        proxy_backfill,
     }))
 }
 
@@ -1261,7 +1276,7 @@ async fn get_router_state(State(state): State<AppState>) -> ApiResult<Json<Route
 /// is the vault's `previewRedeem(totalSupply())` at the snapshot block, so the
 /// value is what a redeem of `shares` pays after the exit fee and (BasketVault)
 /// the slippage floor, never the gross `convertToAssets` value (core 1795, QA
-/// plan X8). A snapshot without it (older than migration 0023) gives `null`.
+/// plan X8). A snapshot without it (older than migration 0026) gives `null`.
 /// Chain-scoped to state.chain_id.
 async fn get_account_positions(
     State(state): State<AppState>,

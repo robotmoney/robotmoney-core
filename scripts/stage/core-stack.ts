@@ -30,7 +30,9 @@
 //   core-stack publish args    [--out-dir DIR]
 //   core-stack publish run     [--out-dir DIR]
 //   core-stack governance preflight|ensure|verify [--out-dir DIR]
-//   core-stack governance release --receipt-id ID [--out-dir DIR]
+//   core-stack governance apply --receipt-id ID --payload FILE [--out-dir DIR]
+//     (govern row apply-receipt: the Safe applies the consensus receipt through the timelock. The old
+//     `governance release` verb is refused with 64: govern refuses row release-receipt since issue 1831.)
 //   core-stack parity labels   --mainnet FILE [--stage-labels FILE] [--out-dir DIR]
 //   core-stack parity sheet    --production FILE
 //   core-stack dapp status
@@ -114,7 +116,8 @@ export const RECORD_REQUIRED_FIELDS = [
 const USAGE_TEXT = `usage: core-stack <noun> <verb> [flags]
   chain up|down|status [--ref REF] [--timeout SECS] [--out-dir DIR]
   publish args|run [--out-dir DIR]
-  governance preflight|ensure|verify|release [--receipt-id ID] [--out-dir DIR]
+  governance preflight|ensure|verify [--out-dir DIR]
+  governance apply --receipt-id ID --payload FILE [--out-dir DIR]
   parity labels --mainnet FILE [--stage-labels FILE] | parity sheet --production FILE
   dapp status
   dapp up --chain 8453 --rpc URL --manifests DIR --start-block N [--logs-rpc URL] [--max-block-range N] [--dapp-port P] [--explorer-port P] [--public-dapp-url U --public-explorer-url U]
@@ -234,6 +237,8 @@ export interface Opts {
   outDir: string;
   timeoutSecs: number;
   receiptId: string;
+  /** `governance apply` only: the consensus receipt payload file passed to the apply-receipt row. */
+  payload: string;
   mainnet: string;
   production: string;
   stageLabels: string;
@@ -270,6 +275,7 @@ export function parseCli(argv: string[]): Parsed {
         "out-dir": { type: "string" },
         timeout: { type: "string" },
         "receipt-id": { type: "string" },
+        payload: { type: "string" },
         mainnet: { type: "string" },
         production: { type: "string" },
         "stage-labels": { type: "string" },
@@ -298,7 +304,7 @@ export function parseCli(argv: string[]): Parsed {
   const timeoutSecs = v.timeout === undefined ? 3600 : Number(v.timeout);
   if (!Number.isInteger(timeoutSecs) || timeoutSecs < 1) throw usageError("--timeout must be a positive integer");
   const str = (x: string | undefined): string => x ?? "";
-  for (const [name, val] of Object.entries({ ref: v.ref, record: v.record, "out-dir": v["out-dir"], mainnet: v.mainnet, production: v.production, "receipt-id": v["receipt-id"], "stage-labels": v["stage-labels"], chain: v.chain, rpc: v.rpc, "logs-rpc": v["logs-rpc"], manifests: v.manifests, "start-block": v["start-block"], "max-block-range": v["max-block-range"], "dapp-port": v["dapp-port"], "explorer-port": v["explorer-port"], "public-dapp-url": v["public-dapp-url"], "public-explorer-url": v["public-explorer-url"] })) {
+  for (const [name, val] of Object.entries({ ref: v.ref, record: v.record, "out-dir": v["out-dir"], mainnet: v.mainnet, production: v.production, "receipt-id": v["receipt-id"], payload: v.payload, "stage-labels": v["stage-labels"], chain: v.chain, rpc: v.rpc, "logs-rpc": v["logs-rpc"], manifests: v.manifests, "start-block": v["start-block"], "max-block-range": v["max-block-range"], "dapp-port": v["dapp-port"], "explorer-port": v["explorer-port"], "public-dapp-url": v["public-dapp-url"], "public-explorer-url": v["public-explorer-url"] })) {
     if (val !== undefined && val === "") throw usageError(`--${name} needs a value`);
   }
   return {
@@ -310,6 +316,7 @@ export function parseCli(argv: string[]): Parsed {
       outDir: resolve(v["out-dir"] ?? DEFAULT_OUT_DIR),
       timeoutSecs,
       receiptId: str(v["receipt-id"]),
+      payload: str(v.payload),
       mainnet: str(v.mainnet),
       production: str(v.production),
       stageLabels: str(v["stage-labels"]),
@@ -840,9 +847,14 @@ async function governanceVerb(s: Stack, verb: string): Promise<void> {
       return governUnwindGuards(s);
     case "verify":
       return s.passthrough(await s.publishContracts("verify"));
+    case "apply":
+      // Issue 1849: the apply-receipt row (core 1696) releases the receipt and sets its weights in one timelock call.
+      if (!s.opts.receiptId || !s.opts.payload) throw usageError("apply needs --receipt-id ID and --payload FILE");
+      return governRun(s, ["--row", "apply-receipt", "--receipt-id", s.opts.receiptId, "--payload", s.opts.payload]);
     case "release":
-      if (!s.opts.receiptId) throw usageError("release needs --receipt-id");
-      return governRun(s, ["--row", "release-receipt", "--receipt-id", s.opts.receiptId]);
+      // Issue 1831: govern refuses row release-receipt, because a bare release burns the receipt and applyReceipt
+      // then reverts ReceiptAlreadyReleased. Refuse here too, before publish contracts is ever called.
+      throw usageError("governance release is refused: a bare release burns the receipt (issue 1831). Run `governance apply --receipt-id ID --payload FILE` (govern row apply-receipt) instead");
     default:
       throw usageError();
   }

@@ -3,10 +3,15 @@
 // by the Twin fork publish (core-stages-twin-chain) and on 8453 (runbook Q2), never here.
 // Issue 1520: the only mainnet operation after the handover is the basket unpause. Everything else is deploy-time configuration.
 import { describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { receiptPayloadDigest } from "../src/receipt-digest.ts";
-import { decodeFunctionData, encodeFunctionData, keccak256, parseAbi, toBytes, toFunctionSelector, type Address } from "viem";
+import { decodeFunctionData, encodeFunctionData, keccak256, pad, parseAbi, toBytes, toFunctionSelector, type Address } from "viem";
+import { GOVERNED_PROXY_ABI, rerecordProxyManifest, upgradeRecordKey } from "../src/upgrade-rows.ts";
+import { upgradeCalldata } from "../src/upgrade-lifecycle.ts";
+import { layoutId, proxySpecs } from "../src/verify/upgradeability.ts";
+import { getStageTable } from "../src/stages.ts";
+import { manifestBase } from "../src/stage-table.ts";
 import { APPLY_ROW, GOVERNANCE_APPLY_ABI, applyRecordKey } from "../src/apply-receipt.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
 import { GOVERN_ROWS, govRowRefusal, SAFE_ADMIN_ABI, SAFE_ADMIN_ROWS, SELF_ADMIN_ROWS, TIMELOCK_ADMIN_ROWS, assertNotLastProposer, buildSelfAdminCall, parseSafeAdminArgs, refuseSafeConfigChange, resumeCommand, safeAdminEffect, safeRuleProblem, selfAdminRecordKey, sheetRosterProblems, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, VAULT_ABI, roundKey, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
@@ -1996,5 +2001,270 @@ describe("QA plan v1 D7: set-unwind-guard sets a basket vault's emergency unwind
     // the record key names the row and the vault, and differs with the values
     expect(unwindGuardRecordKey("RWA", calls)).toMatch(new RegExp(`^${UNWIND_GUARD_ROW}-RWA-[0-9a-f]{8}$`));
     expect(unwindGuardRecordKey("RWA", calls)).not.toBe(unwindGuardRecordKey("RWA", calls.slice(0, 1)));
+  });
+});
+
+// Issue 1842: the operator rows of the governed upgrade lifecycle, on the govern world (an in-memory Safe and timelock; the GovernedUUPS proxies are faked with the
+// library's rules: timelock only, never once frozen, the freeze bound to the live implementation and its code hash). The real contracts run in the Twin rehearsal.
+describe("issue 1842: govern --row freeze-upgrades and --row upgrade-proxy", () => {
+  const SPECS = proxySpecs(getStageTable());
+  const PINS = getStageTable().upgradeAuthority!.layoutPins;
+  const GW = SPECS.find((x) => x.name === "gateway")!;
+  const codeOf = (seed: string) => `0x6080604052${keccak256(toBytes(seed)).slice(2)}` as `0x${string}`;
+  const GW_CODE = codeOf("RobotMoneyGateway build");
+  const NEW = addr(0x9200);
+  const warpTo = (tl: ReturnType<typeof fakeTimelock>) => async (sec: bigint) => { tl.s.clock += sec; };
+  const opts = (sheet: ReturnType<typeof setup>["sheet"], tl: ReturnType<typeof fakeTimelock>, extra: object = {}) =>
+    ({ ownerSigners: signers(sheet), sender, api: tl.api, sleep: async () => { tl.s.clock += 30n; }, pollMs: 0, warp: warpTo(tl), maxWaitSeconds: 10_000_000, emit: () => {}, ...extra });
+  /** A core checkout layout: the committed snapshots and pins, and a build whose RobotMoneyGateway artifact is GW_CODE. */
+  function writeBuild(dir: string, edit?: (gatewaySnapshot: any) => void): void {
+    for (const f of [...SPECS.map((x) => x.layout), PINS]) { mkdirSync(dirname(join(dir, f)), { recursive: true }); copyFileSync(join(REPO, f), join(dir, f)); }
+    if (edit) { const p = join(dir, GW.layout); const j = JSON.parse(readFileSync(p, "utf8")); edit(j); writeFileSync(p, JSON.stringify(j)); }
+    mkdirSync(join(dir, "out", `${GW.contract}.sol`), { recursive: true });
+    writeFileSync(join(dir, "out", `${GW.contract}.sol`, `${GW.contract}.json`), JSON.stringify({ deployedBytecode: { object: GW_CODE, linkReferences: {}, immutableReferences: {} } }));
+  }
+  function world(chainId = 918453) {
+    const d = setup(ALL, chainId);
+    const tl = fakeTimelock(d.sheet, DELAY);
+    writeBuild(d.ctx.coreDir);
+    const dir = join(d.ctx.coreDir, "deployments", String(chainId));
+    const proxies: Record<string, any> = {};
+    SPECS.forEach((x, i) => {
+      const proxy = x.name === "gateway" ? A.gateway : addr(0x9000 + i), impl = addr(0x9100 + i), code = x.name === "gateway" ? GW_CODE : codeOf(x.name);
+      tl.s.proxies.set(proxy.toLowerCase(), { impl, frozen: false });
+      tl.s.codes.set(impl.toLowerCase(), code);
+      proxies[x.name] = { proxy, implementation: impl, implementation_code_hash: keccak256(code), layout_id: layoutId(d.ctx.coreDir, x.layout, PINS), upgrades_frozen: false };
+    });
+    tl.s.codes.set(NEW.toLowerCase(), GW_CODE); // a second copy of the build's gateway implementation, already deployed
+    tl.s.codes.set(A.gateway.toLowerCase(), "0x60806040aa");
+    writeFileSync(join(dir, "upgradeability.json"), JSON.stringify({ chain_id: chainId, mode: "upgradeable", proxies }));
+    const gm = join(dir, `${manifestBase(getStageTable().stages.find((x) => x.name === "gateway")!.manifest)}.json`);
+    writeFileSync(gm, JSON.stringify({ ...JSON.parse(readFileSync(gm, "utf8")), gateway_implementation: proxies.gateway.implementation, gateway_implementation_runtime_hash: keccak256(GW_CODE), gateway_runtime_hash: keccak256("0x60806040aa") }));
+    const manifest = newManifest(d.ctx, addr(0xa001));
+    manifest.firstBlock = 1;
+    const run = (extra: object) => runGovern(d.ctx, stageByName("govern"), manifest, opts(d.sheet, tl, extra));
+    return { ...d, tl, dir, gm, proxies, manifest, run };
+  }
+
+  test("freeze-upgrades schedules ONE timelock batch with one freezeUpgrades per proxy of upgradeability.json, executes it, every proxy reads frozen, the evidence records both transactions", async () => {
+    const w = world();
+    const res = await w.run({ row: "freeze-upgrades" });
+    expect(res.rows).toEqual(["freeze-upgrades"]);
+    expect(w.tl.s.events).toEqual(["scheduleBatch:freeze-upgrades", "executeBatch:freeze-upgrades"]);
+    const sc = w.tl.s.scheduled.get("freeze-upgrades")!;
+    expect(sc.form).toBe("batch");
+    expect(sc.calls.length).toBe(SPECS.length);
+    for (const [i, x] of SPECS.entries()) {
+      const c = sc.calls[i]!;
+      expect(c.target.toLowerCase()).toBe(w.proxies[x.name].proxy.toLowerCase());
+      const dec = decodeFunctionData({ abi: GOVERNED_PROXY_ABI, data: c.data as `0x${string}` });
+      expect(dec.functionName).toBe("freezeUpgrades");
+      expect(String(dec.args[0]).toLowerCase()).toBe(w.proxies[x.name].implementation.toLowerCase());
+      expect(dec.args[1]).toBe(w.proxies[x.name].implementation_code_hash);
+    }
+    for (const p of w.tl.s.proxies.values()) expect(p.frozen).toBe(true);
+    const ev = (w.manifest as { upgrade_freezes?: any[] }).upgrade_freezes!;
+    expect(ev.length).toBe(1);
+    expect(ev[0]).toMatchObject({ step: "freeze-upgrades", timelock: A.timelock, schedule_status: 1, execute_status: 1 });
+    expect(ev[0].schedule_tx).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(ev[0].execute_tx).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(ev[0].schedule_tx).not.toBe(ev[0].execute_tx);
+    expect(Object.keys(ev[0].targets)).toEqual(SPECS.map((x) => x.name));
+    // the preview names every proxy, its expected implementation and code hash
+    const preview = w.lines.map((l) => JSON.parse(l)).filter((l) => l.event === "govern.preview");
+    expect(preview.map((l) => l.proxy_name)).toEqual(SPECS.map((x) => x.name));
+    expect(preview[0]).toMatchObject({ expected_implementation: w.proxies[SPECS[0]!.name].implementation, expected_code_hash: w.proxies[SPECS[0]!.name].implementation_code_hash });
+    // a rerun reprints and sends nothing
+    await w.run({ row: "freeze-upgrades" });
+    expect(w.tl.s.events.length).toBe(2);
+  });
+
+  test("freeze-upgrades is refused before scheduling while an upgrade operation is pending on the timelock", async () => {
+    const w = world();
+    const id = keccak256(toBytes("queued upgrade"));
+    w.tl.s.scheduledCalls.push({ id, target: A.gateway, data: upgradeCalldata(NEW) });
+    w.tl.s.ops.set(id, { exists: true, pending: true, done: false, readyAt: w.tl.s.clock + DELAY });
+    await expect(w.run({ row: "freeze-upgrades" })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining(`upgrade operation(s) still pending on the timelock ${A.timelock}: ${id} on ${A.gateway}`) });
+    expect(w.tl.s.events).toEqual([]);
+    expect(w.manifest.govern?.["freeze-upgrades"]).toBeUndefined();
+    // executed (done) or cancelled, the same upgrade no longer blocks
+    w.tl.s.ops.set(id, { exists: true, pending: false, done: true, readyAt: 1n });
+    await w.run({ row: "freeze-upgrades" });
+    expect(w.tl.s.events).toEqual(["scheduleBatch:freeze-upgrades", "executeBatch:freeze-upgrades"]);
+  });
+
+  test("freeze-upgrades refuses a stale record (the live implementation moved since verify) and a frozen release, scheduling nothing", async () => {
+    const w = world();
+    w.tl.s.proxies.get(A.gateway.toLowerCase())!.impl = NEW;
+    await expect(w.run({ row: "freeze-upgrades" })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("upgradeability.json is stale: gateway") });
+    const f = world();
+    writeFileSync(join(f.dir, "upgradeability.json"), JSON.stringify({ chain_id: 918453, mode: "frozen", proxies: f.proxies }));
+    await expect(f.run({ row: "freeze-upgrades" })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("mode frozen") });
+    expect([...w.tl.s.events, ...f.tl.s.events]).toEqual([]);
+  });
+
+  test("upgrade-proxy upgrades the gateway through the Safe and the timelock, rewrites its manifest implementation fields and records the evidence", async () => {
+    const w = world();
+    const res = await w.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW });
+    expect(res.rows).toEqual([upgradeRecordKey("gateway", NEW)]);
+    expect(w.tl.s.events).toEqual(["schedule:upgrade-proxy", "execute:upgrade-proxy"]);
+    const sc = w.tl.s.scheduled.get("upgrade-proxy")!;
+    expect(sc.calls).toEqual([{ target: A.gateway, data: upgradeCalldata(NEW) }]);
+    expect(w.tl.s.proxies.get(A.gateway.toLowerCase())!.impl).toBe(NEW);
+    const m = JSON.parse(readFileSync(w.gm, "utf8"));
+    expect(m.gateway_implementation.toLowerCase()).toBe(NEW.toLowerCase());
+    expect(m.gateway_implementation_runtime_hash).toBe(keccak256(GW_CODE));
+    expect(m.gateway_runtime_hash).toBe(keccak256("0x60806040aa"));
+    expect(m.gateway).toBe(A.gateway);
+    const ev = (w.manifest as { proxy_upgrades?: any[] }).proxy_upgrades!;
+    expect(ev[0]).toMatchObject({ step: "upgrade-proxy", proxy_name: "gateway", proxy: A.gateway, from_implementation: w.proxies.gateway.implementation.toLowerCase(), to_implementation: NEW, to_code_hash: keccak256(GW_CODE), schedule_status: 1, execute_status: 1 });
+    expect(ev[0].schedule_tx).not.toBe(ev[0].execute_tx);
+    const preview = w.lines.map((l) => JSON.parse(l)).find((l) => l.event === "govern.preview")!;
+    expect(preview).toMatchObject({ proxy_name: "gateway", old_implementation: w.proxies.gateway.implementation.toLowerCase(), new_implementation: NEW, new_code_hash: keccak256(GW_CODE) });
+  });
+
+  test("a verify after the re-record passes the gateway's implementation slot and runtime code labels (the verifier world, the same manifest rewrite)", async () => {
+    const { buildWorld, failed, GATEWAY, IMPLS, IMPL_SLOT } = await import("./verify/world.ts");
+    const { verifyDeployment } = await import("../src/verify/index.ts");
+    const { stageManifestFile } = await import("../src/verify/constants.ts");
+    const { PROXY_LABELS, CODE_LABEL } = await import("../src/verify/upgradeability.ts");
+    const v = buildWorld(918453);
+    const to = addr(0x9300);
+    const implCode = v.chain.codes.get(IMPLS.gateway!.toLowerCase())!;
+    v.chain.codes.set(to.toLowerCase(), implCode);
+    v.chain.storage.set(`${GATEWAY.toLowerCase()}|${IMPL_SLOT}`, pad(to, { size: 32 }));
+    const slotLabel = `gateway: ${PROXY_LABELS[1]}`, codeLabel = `gateway: ${CODE_LABEL}`;
+    expect(failed(await verifyDeployment(v.opts))).toContain(slotLabel); // the upgrade alone leaves the label red
+    rerecordProxyManifest(join(v.manifestDir, stageManifestFile(getStageTable(), "gateway")), GW, to, keccak256(implCode), keccak256(v.chain.codes.get(GATEWAY.toLowerCase())!));
+    const r = await verifyDeployment(v.opts);
+    expect(failed(r)).toEqual([]);
+    for (const l of [slotLabel, codeLabel]) expect(r.checks.find((c) => c.label === l)?.ok, l).toBe(true);
+  });
+
+  test("upgrade-proxy is refused before scheduling for a frozen proxy, a layout-incompatible implementation and an implementation whose runtime code is not the build", async () => {
+    const frozen = world();
+    frozen.tl.s.proxies.get(A.gateway.toLowerCase())!.frozen = true;
+    await expect(frozen.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("reads upgradesFrozen() true") });
+    const layout = world();
+    const build = join(layout.ctx.coreDir, "upgrade-build");
+    writeBuild(build, (j) => { j.storage = [j.storage[1], j.storage[0], ...j.storage.slice(2)]; });
+    await expect(layout.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW, upgradeBuild: build })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("storage layout gate refuses") });
+    const dropped = world();
+    const build2 = join(dropped.ctx.coreDir, "upgrade-build");
+    writeBuild(build2, (j) => { j.namespaces["robotmoney.storage.GovernedUUPS"] = ["address upgradeTimelock;"]; });
+    await expect(dropped.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW, upgradeBuild: build2 })).rejects.toMatchObject({ message: expect.stringContaining("namespace robotmoney.storage.GovernedUUPS") });
+    const code = world();
+    code.tl.s.codes.set(NEW.toLowerCase(), codeOf("another contract"));
+    await expect(code.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining(`is not the build's ${GW.contract}`) });
+    for (const w of [frozen, layout, dropped, code]) { expect(w.tl.s.events).toEqual([]); expect(w.tl.s.proxies.get(A.gateway.toLowerCase())!.impl).toBe(w.proxies.gateway.implementation); }
+    // an append-only layout change passes the gate
+    const ok = world();
+    const build3 = join(ok.ctx.coreDir, "upgrade-build");
+    writeBuild(build3, (j) => { j.storage.push({ label: "appended", offset: 0, slot: "99", type: "t_uint256" }); });
+    await ok.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW, upgradeBuild: build3 });
+    expect(ok.tl.s.proxies.get(A.gateway.toLowerCase())!.impl).toBe(NEW);
+  });
+
+  test("the CLI: --proxy, --implementation and --upgrade-build go with --row upgrade-proxy, which needs the first two", async () => {
+    const { parseCli } = await import("../src/cli.ts");
+    const base = ["govern", "--chain", "8453", "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "keystore:/k"];
+    const p = parseCli([...base, "--row", "upgrade-proxy", "--proxy", "gateway", "--implementation", NEW, "--upgrade-build", "upgrade-build"]);
+    expect(p).toMatchObject({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW, upgradeBuild: join(process.cwd(), "upgrade-build") });
+    expect(() => parseCli([...base, "--row", "upgrade-proxy", "--proxy", "gateway"])).toThrow("--proxy NAME and --implementation");
+    expect(() => parseCli([...base, "--row", "freeze-upgrades", "--proxy", "gateway"])).toThrow("go with --row upgrade-proxy only");
+    expect(() => parseCli([...base, "--row", "upgrade-proxy", "--proxy", "gateway", "--implementation", "0x12"])).toThrow("--implementation must be an address");
+    expect(parseCli([...base, "--row", "freeze-upgrades"]).row).toBe("freeze-upgrades");
+    // issue 1859: --no-warp (the Twin rehearsal stops the freeze row after its schedule) goes with govern only
+    expect(parseCli([...base, "--row", "freeze-upgrades", "--no-warp", "--max-wait", "0"])).toMatchObject({ noWarp: true, maxWait: 0 });
+    expect(parseCli([...base, "--row", "freeze-upgrades"]).noWarp).toBe(false);
+    expect(() => parseCli(["verify", ...base.slice(1), "--no-warp"])).toThrow("--no-warp goes with the govern verb only");
+  });
+
+  test("usage: the rows are on demand, upgrade-proxy needs a known proxy and an address, and --proxy goes with upgrade-proxy only; both run on 8453", async () => {
+    expect([...GOVERN_ROWS]).not.toContain("freeze-upgrades");
+    expect(() => resolveGovernRow("freeze-upgrades")).toThrow("on-demand");
+    expect(() => resolveGovernRow("upgrade-proxy")).toThrow("--proxy NAME --implementation");
+    for (const r of ["freeze-upgrades", "upgrade-proxy"]) for (const kind of ["production", "rehearsal"] as const) expect(govRowRefusal(r, 8453, kind)).toBeUndefined();
+    const w = world();
+    await expect(w.run({ row: "upgrade-proxy", proxy: "nope", implementation: NEW })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("vault[rmUSDC]") });
+    await expect(w.run({ row: "upgrade-proxy", proxy: "gateway", implementation: "0x12" })).rejects.toMatchObject({ kind: "USAGE" });
+    await expect(w.run({ row: "freeze-upgrades", proxy: "gateway" })).rejects.toMatchObject({ kind: "USAGE" });
+    expect(w.tl.s.events).toEqual([]);
+  });
+
+  // Issue 1859: the follow-ups of 1857. A rerun of an older upgrade row never re-records a superseded implementation, and an operation executed outside the row (a crash after
+  // the Safe execute mined, or another signer through the Safe UI) still gets its re-record and its evidence entry, with the execute transaction from the CallExecuted log.
+  const C = addr(0x9201);
+  /** The row stops at GOVERN_PENDING right after its schedule (no warp, no wait), the delay passes, and the Safe executes the same operation outside the row. */
+  async function executedOutsideTheRow(w: ReturnType<typeof world>, row: string, extra: object): Promise<`0x${string}`> {
+    await expect(w.run({ row, ...extra, warp: false, maxWaitSeconds: 0 })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    const sc = w.tl.s.scheduled.get(row)!;
+    w.tl.s.clock += DELAY;
+    const b = await w.tl.api.executeOnTimelock(w.tl.handle, { timelock: A.timelock, calls: sc.calls, salt: sc.salt, form: sc.form, description: "safe-ui execute" } as never);
+    await w.tl.api.executeTx(w.tl.handle, { ...b, signatures: ["a", "b", "c"] } as never, sender);
+    return b.timelock_operation_id as `0x${string}`;
+  }
+
+  test("issue 1859: upgrade A to B, then B to C, then a rerun of the B row: the manifest still names C, the B entry is unchanged, nothing is sent, the run succeeds", async () => {
+    const w = world();
+    w.tl.s.codes.set(C.toLowerCase(), GW_CODE);
+    await w.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW });
+    await w.run({ row: "upgrade-proxy", proxy: "gateway", implementation: C });
+    expect(w.tl.s.proxies.get(A.gateway.toLowerCase())!.impl).toBe(C);
+    const before = JSON.parse(JSON.stringify((w.manifest as { proxy_upgrades?: any[] }).proxy_upgrades));
+    const sent = w.tl.s.events.length;
+    const res = await w.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW });
+    expect(res.rows).toEqual([upgradeRecordKey("gateway", NEW)]);
+    expect(JSON.parse(readFileSync(w.gm, "utf8")).gateway_implementation.toLowerCase()).toBe(C.toLowerCase());
+    expect((w.manifest as { proxy_upgrades?: any[] }).proxy_upgrades).toEqual(before);
+    expect(before.map((e: any) => e.to_implementation)).toEqual([NEW, C]);
+    expect(w.tl.s.events.length).toBe(sent);
+    const warn = w.lines.map((l) => JSON.parse(l)).find((l) => l.event === "govern.manifest_not_rerecorded")!;
+    expect(warn).toMatchObject({ level: "warn", live_implementation: C.toLowerCase(), row_implementation: NEW });
+  });
+
+  test("issue 1859: an upgrade executed outside the row (the Safe UI): the rerun re-records the manifest and writes proxy_upgrades with execute_tx from the CallExecuted log", async () => {
+    const w = world();
+    const id = await executedOutsideTheRow(w, "upgrade-proxy", { proxy: "gateway", implementation: NEW });
+    expect(JSON.parse(readFileSync(w.gm, "utf8")).gateway_implementation).toBe(w.proxies.gateway.implementation); // not yet re-recorded
+    await w.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW });
+    expect(w.tl.s.events.filter((e) => e === "execute:upgrade-proxy")).toEqual([]); // the row sent no execute of its own
+    expect(JSON.parse(readFileSync(w.gm, "utf8")).gateway_implementation.toLowerCase()).toBe(NEW.toLowerCase());
+    const ev = (w.manifest as { proxy_upgrades?: any[] }).proxy_upgrades!;
+    expect(ev.length).toBe(1);
+    expect(ev[0]).toMatchObject({ operation_id: id, schedule_tx: w.tl.s.timelockLogs.get(`CallScheduled:${id}`), execute_tx: w.tl.s.timelockLogs.get(`CallExecuted:${id}`), execute_status: 1, schedule_status: 1 });
+    expect(ev[0].execute_tx).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(ev[0].note).toContain("execute_tx recovered from the timelock's CallExecuted log");
+    const { governedUpgradeProblems } = await import("../src/evidence-check.ts");
+    expect(governedUpgradeProblems({ proxy_upgrades: ev }, Number(DELAY))).toEqual([]);
+  });
+
+  test("issue 1859: a freeze executed outside the row: the rerun reads every proxy frozen and writes the upgrade_freezes entry with execute_tx from the CallExecuted log", async () => {
+    const w = world();
+    const id = await executedOutsideTheRow(w, "freeze-upgrades", {});
+    for (const p of w.tl.s.proxies.values()) expect(p.frozen).toBe(true);
+    expect((w.manifest as { upgrade_freezes?: any[] }).upgrade_freezes).toBeUndefined();
+    await w.run({ row: "freeze-upgrades" });
+    expect(w.tl.s.events.filter((e) => e === "executeBatch:freeze-upgrades")).toEqual([]);
+    const ev = (w.manifest as { upgrade_freezes?: any[] }).upgrade_freezes!;
+    expect(ev.length).toBe(1);
+    expect(ev[0]).toMatchObject({ step: "freeze-upgrades", operation_id: id, execute_tx: w.tl.s.timelockLogs.get(`CallExecuted:${id}`), execute_status: 1 });
+    expect(Object.keys(ev[0].targets)).toEqual(SPECS.map((x) => x.name));
+    const { governedUpgradeProblems } = await import("../src/evidence-check.ts");
+    expect(governedUpgradeProblems({ upgrade_freezes: ev }, Number(DELAY))).toEqual([]);
+  });
+
+  test("issue 1859: no CallExecuted log to find: execute_tx is recorded null with a note, and evidence-check accepts that entry", async () => {
+    const w = world();
+    const id = await executedOutsideTheRow(w, "upgrade-proxy", { proxy: "gateway", implementation: NEW });
+    w.tl.s.timelockLogs.delete(`CallExecuted:${id}`);
+    await w.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW });
+    const ev = (w.manifest as { proxy_upgrades?: any[] }).proxy_upgrades!;
+    expect(ev[0]).toMatchObject({ operation_id: id, execute_tx: null, execute_status: null, execute_block_timestamp: null, schedule_status: 1 });
+    expect(ev[0].note).toContain("execute_tx unknown");
+    expect(JSON.parse(readFileSync(w.gm, "utf8")).gateway_implementation.toLowerCase()).toBe(NEW.toLowerCase()); // the slot read-back still gates the re-record
+    const { governedUpgradeProblems } = await import("../src/evidence-check.ts");
+    expect(governedUpgradeProblems({ proxy_upgrades: ev }, Number(DELAY))).toEqual([]);
+    expect(governedUpgradeProblems({ proxy_upgrades: [{ ...ev[0], note: undefined }] }, Number(DELAY)).join("\n")).toContain("execute_tx is null with no note");
   });
 });

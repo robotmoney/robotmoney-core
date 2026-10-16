@@ -5,6 +5,8 @@
 // Rules:
 //   - A required name is missing when no check-run carries it, pending when any run of it is not completed.
 //   - Every run of a required name must conclude success. A failure next to a success is a failure.
+//   - The listing is requested with filter=latest, so a re-run attempt of a job replaces its earlier
+//     failed attempt. Re-running a failed job (for example after a Base upstream outage) clears it.
 //   - Optional entries are listed when they are not green and never change the exit code.
 //   - Exempt entries run on every push but test nothing about the sha (twin-pin): never read here.
 //     scripts/ci/deploy-gate-jobs.ts holds the three lists equal to the jobs the workflow tree runs on every push.
@@ -127,7 +129,7 @@ export async function fetchAllCheckRuns(
   token: string,
   fetcher: Fetcher = fetch,
 ): Promise<CheckRun[]> {
-  let url: string | null = `${apiUrl}/repos/${repo}/commits/${sha}/check-runs?per_page=100`;
+  let url: string | null = `${apiUrl}/repos/${repo}/commits/${sha}/check-runs?filter=latest&per_page=100`;
   const runs: CheckRun[] = [];
   let pages = 0;
   while (url) {

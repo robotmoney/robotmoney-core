@@ -182,7 +182,9 @@ Ordered registry of all strategy adapters (active and inactive).
 <i>
 
 Written only through the `RobotMoneyVaultOps` library's storage pointer (`_book()`), which
-slither cannot follow, hence the same-line `uninitialized-state` suppression.
+slither cannot follow, hence the `uninitialized-state` suppression around this declaration
+(slither has no same-line form, and a comment between the NatSpec and the declaration would
+detach the NatSpec).
 
 </i>
 

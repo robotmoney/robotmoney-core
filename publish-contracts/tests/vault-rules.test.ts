@@ -1,7 +1,7 @@
 // Issue 1705: the per-vault deploy and governance rules come from ONE table, scripts/deploy/stage-table.json vaults[]. The govern rows, the evidence steps and the
 // verifier's expected paused state and router eligibility are derived from it, and none of the three tools names a vault key to treat one vault differently.
 // Run: bun test tests/vault-rules.test.ts
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { GOVERN_ROWS, TWIN_ONLY_ROWS, UNPAUSE_ROWS, stageRows } from "../src/govern.ts";
@@ -13,9 +13,9 @@ import { TABLE_REL, vaultRules } from "../src/stage-table.ts";
 import { EXIT_CODES } from "../src/errors.ts";
 import { VAULT_RULES_PATH } from "../src/vault-rules.ts";
 import { SHA } from "./fixtures.ts";
-import { world } from "./harness.ts";
+import { ADMIN, world } from "./harness.ts";
 import { REPO, sheetText, tmp, writeCoreAssetConfig } from "./fixtures.ts";
-import { getStageTable } from "../src/stages.ts";
+import { getStageTable, useStageTable } from "../src/stages.ts";
 import { manifestBase } from "../src/stage-table.ts";
 import type { RunContext } from "../src/runner.ts";
 
@@ -99,35 +99,55 @@ describe("the tools read the vault rules from the stage table (issue 1705)", () 
 });
 
 // Issue 1833: vault-rules.ts reads the rules from the CLI's own checkout; the stages come from --core-dir at the DEPLOY_SHA. A CLI from another sha must refuse to start.
-describe("the CLI's vault rules equal the --core-dir stage table (issue 1833)", () => {
-  /** A pause-all whose pause is a stub: it exits 0 once startup passes, so the exit code tells whether the startup check let the run through. */
-  async function pauseAllWith(edit?: (t: any) => void): Promise<{ code: number; message?: string; pauses: number; corePath: string }> {
+// Issue 1851: except the emergency pause-all, which reads no per-vault rule: it runs with one warning naming both tables.
+describe("the CLI's vault rules equal the --core-dir stage table (issue 1833, 1851)", () => {
+  // A pause-all past a mismatch loads the edited --core-dir table as the process-wide stage table: put the real one back so later test files see it.
+  const original = getStageTable();
+  afterEach(() => useStageTable(original));
+  /** One run of `verb` against a world whose --core-dir table `edit` changed. pause-all's pause is a stub; a govern that got past startup would log stage.start or spawn forge. */
+  async function runWith(verb: "pause-all" | "govern", edit?: (t: any) => void): Promise<{ code: number; message?: string; warnings: any[]; pauses: number; stagesStarted: number; corePath: string }> {
     const w = world();
     if (edit) { const p = join(w.coreDir, TABLE_REL); const t = JSON.parse(readFileSync(p, "utf8")); edit(t); writeFileSync(p, JSON.stringify(t)); }
     mkdirSync(w.evidence, { recursive: true });
-    writeFileSync(join(w.evidence, "publish-run.json"), JSON.stringify({ version: 1, chainId: 918453, coreSha: SHA, deployer: "0x0000000000000000000000000000000000000001", environment: "local", startedAt: "t", firstBlock: 7, stages: {} }));
+    writeFileSync(join(w.evidence, "publish-run.json"), JSON.stringify({ version: 1, chainId: 918453, coreSha: SHA, deployer: ADMIN, environment: "local", startedAt: "t", firstBlock: 7, stages: {} }));
     let pauses = 0;
     const pauseAll = (async () => { pauses++; return { allPaused: true, manifestRecorded: true, vaults: [] }; }) as never;
-    const code = await w.run(["pause-all"], { pauseAll });
-    return { code, message: w.logs().filter((l) => l.event === "run.failed").pop()?.message, pauses, corePath: join(w.coreDir, TABLE_REL) };
+    const code = await w.run([verb], { pauseAll });
+    const logs = w.logs();
+    return {
+      code, message: logs.filter((l) => l.event === "run.failed").pop()?.message, warnings: logs.filter((l) => l.event === "vault_rules.mismatch"), pauses,
+      stagesStarted: logs.filter((l) => l.event === "stage.start").length + (w.state().calls ?? []).filter((c: any) => c.tool === "forge").length, corePath: join(w.coreDir, TABLE_REL),
+    };
   }
 
-  test("the tables match: the CLI starts and runs the verb", async () => {
-    expect(await pauseAllWith()).toMatchObject({ code: 0, message: undefined, pauses: 1 });
+  test("the tables match: pause-all runs without a warning, and govern gets past the startup check (it stops later, at the stage manifests this world lacks)", async () => {
+    expect(await runWith("pause-all")).toMatchObject({ code: 0, message: undefined, pauses: 1, warnings: [] });
+    const g = await runWith("govern");
+    // govern stops later: at the run manifest (QA plan v1 B1 refuses a run with no finished timelock stage) or at a stage manifest this world lacks.
+    expect(g.message).toMatch(/is missing: run the stage that writes it first|has no finished timelock stage/);
+    expect(g.message).not.toContain("same core sha as DEPLOY_SHA");
   });
   for (const [what, edit] of [
     ["deployPaused", (t: any) => { const v = t.vaults.find((x: any) => x.key === "AGENT"); v.deployPaused = !v.deployPaused; }],
     ["unpauseRow", (t: any) => { t.vaults.find((x: any) => x.key === "AGENT").unpauseRow = "unpause-RWA"; }],
   ] as const) {
-    test(`one vault's ${what} differs: refused at startup, naming both table paths, before the verb runs`, async () => {
-      const r = await pauseAllWith(edit);
+    test(`one vault's ${what} differs: govern is refused at startup with INPUT_MISSING naming both table paths, before any stage runs`, async () => {
+      const r = await runWith("govern", edit);
       expect(r.code).toBe(EXIT_CODES.INPUT_MISSING);
-      expect(r.pauses).toBe(0);
+      expect(r.stagesStarted).toBe(0);
       expect(r.message).toContain(VAULT_RULES_PATH);
       expect(r.message).toContain(r.corePath);
       expect(r.corePath).not.toBe(VAULT_RULES_PATH);
       expect(r.message).toContain("for vault AGENT");
       expect(r.message).toContain("same core sha as DEPLOY_SHA");
+    });
+    test(`one vault's ${what} differs: the emergency pause-all still runs (exit 0, one pause) with one warning naming both table paths`, async () => {
+      const r = await runWith("pause-all", edit);
+      expect(r).toMatchObject({ code: 0, message: undefined, pauses: 1 });
+      expect(r.warnings.length).toBe(1);
+      expect(r.warnings[0].message).toContain(VAULT_RULES_PATH);
+      expect(r.warnings[0].message).toContain(r.corePath);
+      expect(r.warnings[0].message).toContain("pause-all reads no per-vault rule");
     });
   }
 });

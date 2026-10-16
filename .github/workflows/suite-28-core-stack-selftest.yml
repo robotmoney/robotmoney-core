@@ -45,7 +45,7 @@ jobs:
       CI_CLASS: system-correctness
       # Executed-test floor: a run that silently did less (a section skipped, a
       # truncated file, a lost exit status) is red. Raise it when cases are added.
-      CORE_STACK_SELFTEST_FLOOR: "107"
+      CORE_STACK_SELFTEST_FLOOR: "120"
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     # scripts/stage/tests/core-stack.test.ts: the stage verbs in
     # scripts/stage/core-stack.ts (publish / governance / parity / record) against a fake

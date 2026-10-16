@@ -54,7 +54,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../../services/explorer-indexer/migrations/0018_vault_snapshot_caps.sql"),
     include_str!("../../../services/explorer-indexer/migrations/0019_proxy_upgrade_events.sql"),
     include_str!(
-        "../../../services/explorer-indexer/migrations/0020_committee_votes_contract_scope.sql"
+        "../../../services/explorer-indexer/migrations/0021_committee_votes_contract_scope.sql"
     ),
 ];
 

@@ -129,6 +129,54 @@ installer refuses to run if that binary is missing.
    chain id.
 6. When the fix is in, run `watchdog-liveness` by hand and confirm exit `0`.
 
+## Proxy upgrade pages and the first run
+
+The watchdog pages every governed upgrade or freeze of a proxied core contract
+once (`services/watchdog/src/upgrade_monitor.rs`). The explorer indexer's proxy
+backfill inserts the whole upgrade history at once, so without a rule the first
+backfill would page every historical upgrade in one burst (issue 1856).
+
+- When a watchdog starts for the first time on a database, it stores a
+  baseline block per chain in `watchdog_proxy_baseline`. It is the indexer's
+  cursor (`MAX(last_indexed_block)`), which is also the upper end of the
+  backfill. It is not the chain head: an upgrade between the cursor and the
+  head is indexed later and must page.
+- A proxy event at or below the baseline was indexable before the watchdog ever
+  ran. It is logged once at `warn` ("not paged: this proxy change predates the
+  watchdog's first run") and recorded in `watchdog_pager_state` as seen. It is
+  never paged, even when the backfill inserts it later.
+- Every event above the baseline pages as before. That includes a new upgrade,
+  a new freeze, and a deployment row the indexer could not mark.
+- The baseline is kept. It does not move with the chain.
+- The watchdog takes the baseline at startup, before its first cycle. If the
+  chain already has a `watchdog_cursor` row or any `watchdog_pager_state` row,
+  an older watchdog ran here and may have seen an upgrade it could not deliver
+  (webhook down or unset). The baseline is then `-1` and nothing is seeded:
+  every unpaged proxy event pages once. This is the rollout of issue 1856 on an
+  existing deployment.
+- With nothing indexed when the watchdog first starts, no baseline is taken. By
+  its next cycle it has its own cursor row, so the baseline becomes `-1`. Start
+  the watchdog after the indexer has indexed its first blocks to get the seeding.
+- If the baseline table cannot be read, the watchdog logs an error and pages
+  every unpaged proxy event.
+
+Before issue 1856, a watchdog that started before the indexer finished its
+backfill paged every unmarked deployment row once. On a fresh install the
+baseline now covers those rows.
+
+To re-take the baseline (for example after restoring the database), first make
+sure no proxy page is still undelivered: every `admin_events` row with
+`contract_kind = 'proxy'` above the old baseline must have a `proxy_change:`
+row in `watchdog_pager_state`, or have been reviewed by hand. Re-taking it marks
+every event at or below the new cursor as seen, so an undelivered upgrade would
+never page. Then delete the chain's row from `watchdog_proxy_baseline`, its
+`proxy_change:` rows from `watchdog_pager_state`, and every other row for the
+chain in `watchdog_pager_state` and `watchdog_cursor`, and restart the watchdog.
+
+The indexer reports the backfill's own state in the explorer's `/health` as
+`proxy_backfill`. `refused` means the range is too wide: set
+`INDEXER_START_BLOCK` and restart the indexer.
+
 ## Proving it works
 
 These tests in suite 20 run this whole path:

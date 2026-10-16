@@ -114,6 +114,14 @@ describe("parseConfig", () => {
       parseConfig({ version: 1, required: [{ name: "a" }], optional: [], exempt: [{ name: "b", prefix: "c" }] }),
     ).toThrow();
   });
+  test("the Twin upgrade lifecycle job is required and the comment names the re-run recovery", () => {
+    const raw = JSON.parse(readFileSync(resolve(repo, "scripts/ci/required-checks.json"), "utf8"));
+    const c = parseConfig(raw);
+    expect(c.required.map((s) => s.name)).toContain("core-stages-twin-upgrade-lifecycle");
+    expect(c.optional.map((s) => s.name)).not.toContain("core-stages-twin-upgrade-lifecycle");
+    expect(raw.comment).toContain("core-stages-twin-upgrade-lifecycle");
+    expect(raw.comment).toContain("re-run");
+  });
   test("rejects an unknown class and a deploy-paths entry with no paths", () => {
     expect(() => parseConfig({ version: 1, required: [{ name: "a", class: "x" }], optional: [] })).toThrow();
     expect(() => parseConfig({ version: 1, required: [{ name: "a", class: "required-on-deploy-paths" }], optional: [] })).toThrow();
@@ -123,7 +131,7 @@ describe("parseConfig", () => {
 describe("fetchAllCheckRuns pagination", () => {
   test("reads every page by following the Link header", async () => {
     const pages: Record<string, { runs: CheckRun[]; next?: string }> = {
-      "https://api.test/repos/o/r/commits/abc1234/check-runs?per_page=100": {
+      "https://api.test/repos/o/r/commits/abc1234/check-runs?filter=latest&per_page=100": {
         runs: [run("dapp-lint-build")],
         next: "https://api.test/page2",
       },
@@ -155,6 +163,16 @@ describe("fetchAllCheckRuns pagination", () => {
     const runs = await fetchAllCheckRuns("https://api.test", "o/r", "abc1234", "t", fetcher);
     const v = evaluate(runs, cfg);
     expect(v.failing[0]).toContain("dapp-lint-build");
+  });
+  test("the first request asks for filter=latest so a successful re-run supersedes the failed attempt", async () => {
+    const seen: string[] = [];
+    const fetcher = async (url: string) => {
+      seen.push(url);
+      return new Response(JSON.stringify({ check_runs: green() }));
+    };
+    await fetchAllCheckRuns("https://api.test", "o/r", "abc1234", "t", fetcher);
+    expect(seen.length).toBe(1);
+    expect(new URL(seen[0]).searchParams.get("filter")).toBe("latest");
   });
   test("an HTTP error throws", async () => {
     const fetcher = async () => new Response("no", { status: 403 });

@@ -95,10 +95,14 @@ contract RobotMoneyVault is
         uint16 capBps; // max allocation % out of MAX_BPS — also acts as ramp control
         bool active;
     }
+    // slither-disable-start uninitialized-state
     /// @notice Ordered registry of all strategy adapters (active and inactive).
     /// @dev Written only through the `RobotMoneyVaultOps` library's storage pointer (`_book()`), which
-    ///      slither cannot follow, hence the same-line `uninitialized-state` suppression.
-    AdapterInfo[] public adapters; // slither-disable-line uninitialized-state
+    ///      slither cannot follow, hence the `uninitialized-state` suppression around this declaration
+    ///      (slither has no same-line form, and a comment between the NatSpec and the declaration would
+    ///      detach the NatSpec).
+    AdapterInfo[] public adapters;
+    // slither-disable-end uninitialized-state
     /// @notice Exact adapter instances approved by vault governance to receive this vault's USDC.
     mapping(address adapter => bool allowed) public adapterAllowed;
     /// @notice Runtime bytecode hashes approved by vault governance for adapter onboarding.

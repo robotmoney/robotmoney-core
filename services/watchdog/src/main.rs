@@ -60,7 +60,7 @@ use watchdog::{
     receipt_liveness::{
         check_receipt_liveness_status, AlertPager, PageAction, ReceiptLivenessStatus,
     },
-    upgrade_monitor::alert_new_proxy_changes,
+    upgrade_monitor::{alert_new_proxy_changes, proxy_change_baseline},
     watchdog::{latest_indexed_block, run_cycles_since_cursor, CycleResult},
 };
 
@@ -223,6 +223,11 @@ async fn main() {
     // `consensus_receipt_missing:<chain>` open forever.
     if let Err(e) = ensure_pager_state_table(&pool).await {
         error!("pager state table unavailable, pager state will not survive a restart: {e}");
+    }
+    // Issue 1856: take the proxy-change baseline before the first cycle writes
+    // the watchdog cursor, so a first-ever start is told from a restart.
+    if let Err(e) = proxy_change_baseline(&pool, chain_id).await {
+        error!("proxy change baseline unavailable, every unpaged proxy change will page: {e}");
     }
     let cadence = config.consensus_receipts.expected_cadence_secs;
     let gap_key = missing_receipt_dedup_key(chain_id);

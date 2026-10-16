@@ -15,7 +15,10 @@ use common::{pg_fixture, StubRpcServer};
 use explorer_indexer::{
     abi::{IGovernedUpgradeEvents, ITimelockEvents, IVaultRegistryEvents, Topics},
     db::CountTable,
-    indexer::{backfill_proxy_events, run_once, IndexerConfig},
+    indexer::{
+        backfill_proxy_events, run_once, IndexerConfig, ProxyBackfillOutcome,
+        PROXY_BACKFILL_MAX_REQUESTS, PROXY_BACKFILL_SLICE_REQUESTS,
+    },
     rpc::JsonRpc,
 };
 use std::io::{Read, Write};
@@ -622,7 +625,8 @@ async fn the_startup_backfill_indexes_proxy_events_below_the_cursor_once() {
     );
     let inserted = backfill_proxy_events(&fx.db, &rpc, &c).await.unwrap();
     assert_eq!(
-        inserted, 2,
+        inserted,
+        ProxyBackfillOutcome::Done { inserted: 2 },
         "the registered vault's events; the gateway's row already existed"
     );
     let rows: Vec<(Vec<u8>, i64, String, String, String)> = sqlx::query_as(
@@ -678,8 +682,271 @@ async fn the_startup_backfill_indexes_proxy_events_below_the_cursor_once() {
     );
 
     let again = backfill_proxy_events(&fx.db, &rpc, &c).await.unwrap();
-    assert_eq!(again, 0, "idempotent: a second run inserts nothing");
+    assert_eq!(
+        again,
+        ProxyBackfillOutcome::Done { inserted: 0 },
+        "idempotent: a second pass inserts nothing"
+    );
     assert_eq!(fx.db.count(CountTable::AdminEvents).await.unwrap(), 3);
+    stub.shutdown();
+}
+
+/// A finished indexer run whose cursor is `last_indexed_block`.
+async fn finished_run(fx: &common::PgFixture, last_indexed_block: i64) {
+    fx.db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
+    let run = fx.db.start_run(CHAIN, 1).await.unwrap();
+    fx.db
+        .finish_run(
+            run,
+            Some(last_indexed_block),
+            Some(last_indexed_block),
+            0,
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+}
+
+/// The `fromBlock` of every `eth_getLogs` request the stub has seen.
+fn get_logs_from_blocks(stub: &StubRpcServer) -> Vec<u64> {
+    stub.captured_requests()
+        .into_iter()
+        .filter(|r| r["method"] == "eth_getLogs")
+        .map(|r| {
+            let from = r["params"][0]["fromBlock"].as_str().unwrap();
+            u64::from_str_radix(from.trim_start_matches("0x"), 16).unwrap()
+        })
+        .collect()
+}
+
+/// Issue 1856: a refused range and a missing cursor used to return `Ok(0)`,
+/// which the main loop took as done, so the backfill never ran again and only
+/// one log line said why. Each is now its own outcome, saved in
+/// `proxy_backfill_progress` (which `/health` reports as `proxy_backfill`),
+/// and the next call tries again.
+#[tokio::test]
+async fn a_refused_or_cursorless_backfill_is_reported_and_retried_not_marked_done() {
+    let fx = pg_fixture().await;
+    let stub = StubRpcServer::start().await;
+    program(&stub, 20);
+    stub.set("eth_getLogs", serde_json::json!([]));
+    let rpc = JsonRpc::new(&stub.url);
+    let mut c = cfg();
+    c.end_block = None;
+    c.start_block = Some(1);
+    c.max_blocks_per_tick = 1000;
+    fx.db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
+
+    // Nothing indexed yet.
+    assert_eq!(
+        backfill_proxy_events(&fx.db, &rpc, &c).await.unwrap(),
+        ProxyBackfillOutcome::NoCursor
+    );
+    let state = fx.db.proxy_backfill_progress(CHAIN).await.unwrap().unwrap();
+    assert_eq!(state.state, "no_cursor");
+
+    // A cursor 20M blocks above the floor: 20000 requests, over the limit.
+    finished_run(&fx, 20_000_000).await;
+    let refused = ProxyBackfillOutcome::Refused {
+        floor: 1,
+        cursor: 20_000_000,
+        requests: 20_000,
+    };
+    const { assert!(20_000 > PROXY_BACKFILL_MAX_REQUESTS) };
+    assert_eq!(
+        backfill_proxy_events(&fx.db, &rpc, &c).await.unwrap(),
+        refused
+    );
+    let state = fx.db.proxy_backfill_progress(CHAIN).await.unwrap().unwrap();
+    assert_eq!(state.state, "refused", "{state:?}");
+    assert_eq!(
+        (state.floor_block, state.target_block),
+        (Some(1), Some(20_000_000))
+    );
+    assert!(
+        state
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.contains("INDEXER_START_BLOCK")),
+        "the health record says what to do: {state:?}"
+    );
+
+    // Retried, not done: the next call refuses again, and nothing was scanned.
+    assert_eq!(
+        backfill_proxy_events(&fx.db, &rpc, &c).await.unwrap(),
+        refused
+    );
+    assert!(get_logs_from_blocks(&stub).is_empty());
+
+    // The operator sets INDEXER_START_BLOCK: the retry now completes.
+    c.start_block = Some(19_999_001);
+    assert_eq!(
+        backfill_proxy_events(&fx.db, &rpc, &c).await.unwrap(),
+        ProxyBackfillOutcome::Done { inserted: 0 }
+    );
+    let state = fx.db.proxy_backfill_progress(CHAIN).await.unwrap().unwrap();
+    assert_eq!(state.state, "done", "{state:?}");
+    assert_eq!(state.detail, None);
+    stub.shutdown();
+}
+
+/// Issue 1856: the backfill used to scan the whole floor-to-cursor range inside
+/// one tick, stalling live ingestion, and restart from the floor after any
+/// error. Each call now scans one slice of at most
+/// PROXY_BACKFILL_SLICE_REQUESTS requests from the saved checkpoint, and a
+/// restart resumes the saved pass (same target) where it stopped.
+#[tokio::test]
+async fn the_backfill_scans_one_slice_per_tick_and_resumes_from_the_checkpoint() {
+    let fx = pg_fixture().await;
+    let gateway = cfg().gateway;
+    let impl_v2 = Address::from([0x2bu8; 20]);
+    let upgraded = IGovernedUpgradeEvents::Upgraded {
+        implementation: impl_v2,
+    }
+    .encode_log_data();
+    let stub = StubRpcServer::start().await;
+    program(&stub, 20);
+    // One upgrade at block 300, in the second slice.
+    stub.set(
+        "eth_getLogs",
+        serde_json::json!([log_json(gateway, &upgraded, 300, 0)]),
+    );
+    let mut c = cfg();
+    c.end_block = None;
+    c.start_block = Some(1);
+    c.max_blocks_per_tick = 10;
+    let slice = 10 * PROXY_BACKFILL_SLICE_REQUESTS; // 250 blocks
+    finished_run(&fx, 600).await;
+
+    // Tick 1: blocks 1..=250, one slice of requests, checkpoint saved.
+    let rpc = JsonRpc::new(&stub.url);
+    assert_eq!(
+        backfill_proxy_events(&fx.db, &rpc, &c).await.unwrap(),
+        ProxyBackfillOutcome::Progress {
+            next_block: 1 + slice,
+            target_block: 600,
+            inserted: 0
+        }
+    );
+    let first = get_logs_from_blocks(&stub);
+    assert_eq!(
+        first.len() as u64,
+        PROXY_BACKFILL_SLICE_REQUESTS,
+        "one slice"
+    );
+    assert_eq!((first[0], *first.last().unwrap()), (1, 241));
+    let state = fx.db.proxy_backfill_progress(CHAIN).await.unwrap().unwrap();
+    assert_eq!(
+        (
+            state.state.as_str(),
+            state.floor_block,
+            state.target_block,
+            state.next_block
+        ),
+        ("running", Some(1), Some(600), Some(251))
+    );
+
+    // Live ingestion moves the cursor on, then the process restarts (a new
+    // RPC client, nothing in memory). The saved pass resumes at block 251 and
+    // keeps its target of 600.
+    finished_run(&fx, 900).await;
+    let restarted = JsonRpc::new(&stub.url);
+    assert_eq!(
+        backfill_proxy_events(&fx.db, &restarted, &c).await.unwrap(),
+        ProxyBackfillOutcome::Progress {
+            next_block: 501,
+            target_block: 600,
+            inserted: 1
+        }
+    );
+    let second = get_logs_from_blocks(&stub)[first.len()..].to_vec();
+    assert_eq!(second.len() as u64, PROXY_BACKFILL_SLICE_REQUESTS);
+    assert_eq!(second[0], 251, "resumed from the checkpoint, not the floor");
+
+    // Tick 3: the last 100 blocks, and the pass is done.
+    assert_eq!(
+        backfill_proxy_events(&fx.db, &restarted, &c).await.unwrap(),
+        ProxyBackfillOutcome::Done { inserted: 0 }
+    );
+    let third = get_logs_from_blocks(&stub)[first.len() + second.len()..].to_vec();
+    assert_eq!(third.len(), 10);
+    assert_eq!((third[0], *third.last().unwrap()), (501, 591));
+    assert_eq!(
+        fx.db
+            .proxy_backfill_progress(CHAIN)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        "done"
+    );
+    assert_eq!(fx.db.count(CountTable::AdminEvents).await.unwrap(), 1);
+    stub.shutdown();
+}
+
+/// Issue 1856 (review): a reorg rolls the cursor back below the pass's target
+/// between slices. The pass stops at the new cursor and never stores a block
+/// above it: live ingestion re-indexes that range, proxy topics included.
+#[tokio::test]
+async fn a_rollback_mid_pass_clamps_the_backfill_to_the_cursor() {
+    let fx = pg_fixture().await;
+    let stub = StubRpcServer::start().await;
+    program(&stub, 20);
+    let gateway = cfg().gateway;
+    let upgraded = IGovernedUpgradeEvents::Upgraded {
+        implementation: Address::from([0x2bu8; 20]),
+    }
+    .encode_log_data();
+    // Upgrades at 280 (below the rollback root) and 400 (above it).
+    stub.set(
+        "eth_getLogs",
+        serde_json::json!([
+            log_json(gateway, &upgraded, 280, 0),
+            log_json(gateway, &upgraded, 400, 0)
+        ]),
+    );
+    let mut c = cfg();
+    c.end_block = None;
+    c.start_block = Some(1);
+    c.max_blocks_per_tick = 10;
+    finished_run(&fx, 600).await;
+    let rpc = JsonRpc::new(&stub.url);
+    assert!(matches!(
+        backfill_proxy_events(&fx.db, &rpc, &c).await.unwrap(),
+        ProxyBackfillOutcome::Progress {
+            next_block: 251,
+            target_block: 600,
+            ..
+        }
+    ));
+
+    // Reorg: the cursor falls back to 300.
+    fx.db.delete_above_block(CHAIN, 300).await.unwrap();
+    assert_eq!(fx.db.last_indexed_block(CHAIN).await.unwrap(), Some(300));
+    assert_eq!(
+        backfill_proxy_events(&fx.db, &rpc, &c).await.unwrap(),
+        ProxyBackfillOutcome::Done { inserted: 1 },
+        "the slice ends at the cursor: only the upgrade at 280"
+    );
+    let last_from = *get_logs_from_blocks(&stub).last().unwrap();
+    assert_eq!(
+        last_from, 291,
+        "the last request starts at 291 and ends at 300"
+    );
+    let above: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM blocks WHERE chain_id = $1 AND block_number > 300",
+    )
+    .bind(CHAIN)
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(above, 0, "no block stored above the cursor");
+    let state = fx.db.proxy_backfill_progress(CHAIN).await.unwrap().unwrap();
+    assert_eq!(
+        (state.state.as_str(), state.target_block),
+        ("done", Some(300))
+    );
     stub.shutdown();
 }
 

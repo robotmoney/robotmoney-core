@@ -5,7 +5,7 @@
 //! Also covers issue #315 acceptance criteria:
 //!   - Migration 0003 creates router_weight_snapshots and the
 //!     account_positions view. (It also created governance_proposals and
-//!     governance_votes; migration 0024 dropped them, issue 1698.)
+//!     governance_votes; migration 0025 dropped them, issue 1698.)
 //!   - vault_address column is added to vault_snapshots and backfilled.
 //!
 //! Issue #1359 adds the two `migrate_only_mode_*` tests, which drive the
@@ -473,7 +473,7 @@ async fn migrations_create_all_tables() {
 
 /// Issue #315 AC — the multi-vault migrations create router_weight_snapshots
 /// and the account_positions view. The two governance tables they also created
-/// are gone since migration 0024 (issue 1698).
+/// are gone since migration 0025 (issue 1698).
 #[tokio::test]
 async fn migration_0003_creates_multi_vault_tables() {
     let fx = pg_fixture().await;
@@ -622,9 +622,9 @@ async fn every_row_has_chain_id_and_block_number() {
     }
 }
 
-// ─── QA plan C1 — migration 0024 drops RouterGovernance voting ────────────────
+// ─── QA plan C1 — migration 0025 drops RouterGovernance voting ────────────────
 
-/// Migration `0024` (QA plan C1, core issue 1698) removes what the deleted
+/// Migration `0025` (QA plan C1, core issue 1698) removes what the deleted
 /// RouterGovernance voting events fed. On a database that ran 0001..0023 and
 /// holds a proposal, a vote and a `governance_vote` history row, it must drop
 /// `governance_votes` and `governance_proposals`, delete the `governance_vote`
@@ -694,7 +694,7 @@ async fn migration_0024_drops_governance_voting_tables_and_history_rows() {
     .unwrap();
 
     sqlx::raw_sql(include_str!(
-        "../migrations/0024_drop_governance_voting.sql"
+        "../migrations/0025_drop_governance_voting.sql"
     ))
     .execute(&pool)
     .await
@@ -822,9 +822,9 @@ async fn migration_0016_refuses_a_populated_consensus_receipts_table() {
     );
 }
 
-// ─── DI-10 — migration 0020 must REFUSE rather than fabricate provenance ──────
+// ─── DI-10 — migration 0021 must REFUSE rather than fabricate provenance ──────
 
-/// Migration `0020` puts the emitting policy `contract_address` into the
+/// Migration `0021` puts the emitting policy `contract_address` into the
 /// `committee_votes` primary key, for the reason `0016` did it for receipts: a
 /// redeployed InvestmentCommitteePolicy numbers its votes from 0 again. The
 /// emitting address of an existing row was never recorded, so the migration
@@ -868,7 +868,7 @@ async fn migration_0020_refuses_a_populated_committee_votes_table() {
     .expect("seed one pre-migration vote");
 
     let err = sqlx::raw_sql(include_str!(
-        "../migrations/0020_committee_votes_contract_scope.sql"
+        "../migrations/0021_committee_votes_contract_scope.sql"
     ))
     .execute(&pool)
     .await
@@ -892,7 +892,7 @@ async fn migration_0020_refuses_a_populated_committee_votes_table() {
         .await
         .unwrap();
     sqlx::raw_sql(include_str!(
-        "../migrations/0020_committee_votes_contract_scope.sql"
+        "../migrations/0021_committee_votes_contract_scope.sql"
     ))
     .execute(&pool)
     .await
@@ -914,9 +914,9 @@ async fn migration_0020_refuses_a_populated_committee_votes_table() {
     );
 }
 
-// ─── DI-8 (QA plan X7) — migration 0021 backfills the membership history ─────
+// ─── DI-8 (QA plan X7) — migration 0022 backfills the membership history ─────
 
-/// Migration `0021` adds `committee_agent_events`, the block-numbered history
+/// Migration `0022` adds `committee_agent_events`, the block-numbered history
 /// `committee_agents` is derived from, so a reorg can undo a revoke. Unlike
 /// 0016 and 0020 it has a sound backfill: `registered_at` and `revoked_at` are
 /// the blocks of the events that wrote them. Each existing row gets the entries
@@ -954,7 +954,7 @@ async fn migration_0021_backfills_the_history_that_reproduces_each_member() {
         .expect("seed one member");
     }
 
-    let migration = include_str!("../migrations/0021_committee_agent_events.sql");
+    let migration = include_str!("../migrations/0022_committee_agent_events.sql");
     sqlx::raw_sql(migration)
         .execute(&pool)
         .await

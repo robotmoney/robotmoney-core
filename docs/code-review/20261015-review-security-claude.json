@@ -3303,7 +3303,7 @@
       "merged_candidates": [],
       "fix": {
         "notes": [
-          "exclusion_ledger_of is removed. exclusion_ledgers_of calls the vault's exclusionLedger() once at the tick's safe head and stores the answer in the new table vault_exclusion_ledgers (migration 0025). The table has block_number = the read block, so the reorg rollback covers it. A revert (BasketVault) is stored as NULL. A zero, empty or undecodable reply is not stored and is read again next tick. Any other RPC error fails the tick, so the cursor holds. The watched set, the X1 refetch (the new vault is read in the same tick) and the handle_log emitter gate (Db::vault_of_exclusion_ledger) all use the stored mapping. I chose an eth_call over indexing ExclusionLedgerCreated because the factory event fires at vault initialize, which is before the registration block that the X1 refetch starts from. catch_up_budget now counts one ledger read per vault on the first tick only. vault_snapshot_cadence's reads_of_vault leaves out the getter."
+          "exclusion_ledger_of is removed. exclusion_ledgers_of calls the vault's exclusionLedger() once at the tick's safe head and stores the answer in the new table vault_exclusion_ledgers (migration 0026). The table has block_number = the read block, so the reorg rollback covers it. A revert (BasketVault) is stored as NULL. A zero, empty or undecodable reply is not stored and is read again next tick. Any other RPC error fails the tick, so the cursor holds. The watched set, the X1 refetch (the new vault is read in the same tick) and the handle_log emitter gate (Db::vault_of_exclusion_ledger) all use the stored mapping. I chose an eth_call over indexing ExclusionLedgerCreated because the factory event fires at vault initialize, which is before the registration block that the X1 refetch starts from. catch_up_budget now counts one ledger read per vault on the first tick only. vault_snapshot_cadence's reads_of_vault leaves out the getter."
         ],
         "regression_tests": [
           "fork_indexer::exclusion_record_of_a_proxy_vault_is_indexed_at_its_factory_ledger (Twin/anvil: a holder deposits, the real Safe and timelock exclude and then restore the Aave adapter, run_once indexes the range, then it asserts the vault_exclusion_ledgers row, the exclusion_records row at the factory ledger and that /v1/accounts/:holder/exclusion-claims claimable equals the ledger's on-chain claimable(1, holder) > 0); vault_detail::exclusion_record_events_store_each_snapshot_holders_balance (updated: the ledger is factory.create(1), the old vault.create(1) is the impostor); vault_detail::exclusion_ledger_is_set_once_from_the_factory_and_read_from_the_vault (replaces the failing nonce-1 guard); vault_detail::ledger_read_classifies_each_reply; multi_vault::vault_registered_and_deposited_in_one_tick_indexes_the_deposit (updated)"
@@ -3312,7 +3312,7 @@
           "services/explorer-indexer/src/indexer.rs",
           "services/explorer-indexer/src/abi.rs",
           "services/explorer-indexer/src/db.rs",
-          "services/explorer-indexer/migrations/0025_vault_exclusion_ledgers.sql",
+          "services/explorer-indexer/migrations/0026_vault_exclusion_ledgers.sql",
           "services/explorer-indexer/tests/vault_detail.rs",
           "services/explorer-indexer/tests/multi_vault.rs",
           "services/explorer-indexer/tests/fork_indexer.rs",
@@ -3333,7 +3333,7 @@
       "requirement": null,
       "evidence": [
         "services/explorer-indexer/src/indexer.rs:1098-1099 uses the stored vault_exclusion_ledgers row whenever one exists. The chain is read only when no row exists (1100-1138). A NULL row (LedgerRead::NoLedger) is final.",
-        "services/explorer-indexer/migrations/0025_vault_exclusion_ledgers.sql says the row is 'written once from the vault's own exclusionLedger() getter (set once, in initialize)' and that 'a NULL row is a final answer'. The emitter gate accepts exclusion events only from stored ledgers.",
+        "services/explorer-indexer/migrations/0026_vault_exclusion_ledgers.sql says the row is 'written once from the vault's own exclusionLedger() getter (set once, in initialize)' and that 'a NULL row is a final answer'. The emitter gate accepts exclusion events only from stored ledgers.",
         "indexer.rs:2793-2808 handles Upgraded and UpgradesFrozen by inserting proxy_upgrade_events only. It does not invalidate vault_exclusion_ledgers for that vault.",
         "contracts/RobotMoneyVault.sol:168 declares `ExclusionLedger public exclusionLedger` as a plain state variable written by _initLedger (line 485). ExclusionLedger is not in proxied.txt. Under ADR-0014 the only way to fix a ledger bug is a vault upgrade whose reinitializer points the vault at a new ledger."
       ],
@@ -3366,13 +3366,13 @@
       "merged_candidates": [],
       "fix": {
         "notes": [
-          "Migration 0025 was amended in place. It is untracked and was created in round 1 on this branch, so no deployed DB has it. The PK is now (chain_id, vault_address, block_number), one row per answer. exclusion_ledgers_of returns every ledger a vault ever named, so old ledgers stay watched. The new exclusion_ledgers_moved_by_upgrades runs in the same tick, after the discovery refetch. It re-reads the getter at the safe head for each watched vault that emitted Upgraded. A new ledger is stored as of the upgrade block, so a reorg drops it with the upgrade, and its logs are refetched from that block to target before the cursor moves. I chose this over the finding's 'delete the row, re-read next tick': that approach loses new-ledger events between the upgrade and the tick's target. A NULL (basket) row gains a ledger the same way. The test covers the same-tick record on the new ledger, a late record on the old ledger, a basket vault gaining a ledger, one getter read per upgrade, and reorg rollback."
+          "Migration 0026 was amended in place. It is untracked and was created in round 1 on this branch, so no deployed DB has it. The PK is now (chain_id, vault_address, block_number), one row per answer. exclusion_ledgers_of returns every ledger a vault ever named, so old ledgers stay watched. The new exclusion_ledgers_moved_by_upgrades runs in the same tick, after the discovery refetch. It re-reads the getter at the safe head for each watched vault that emitted Upgraded. A new ledger is stored as of the upgrade block, so a reorg drops it with the upgrade, and its logs are refetched from that block to target before the cursor moves. I chose this over the finding's 'delete the row, re-read next tick': that approach loses new-ledger events between the upgrade and the tick's target. A NULL (basket) row gains a ledger the same way. The test covers the same-tick record on the new ledger, a late record on the old ledger, a basket vault gaining a ledger, one getter read per upgrade, and reorg rollback."
         ],
         "regression_tests": [
           "services/explorer-indexer/tests/vault_detail.rs::a_vault_upgrade_that_moves_its_ledger_keeps_both_ledgers_indexed"
         ],
         "files": [
-          "services/explorer-indexer/migrations/0025_vault_exclusion_ledgers.sql",
+          "services/explorer-indexer/migrations/0026_vault_exclusion_ledgers.sql",
           "services/explorer-indexer/src/indexer.rs",
           "services/explorer-indexer/src/db.rs",
           "services/explorer-indexer/src/abi.rs",
@@ -3539,13 +3539,13 @@
       "merged_candidates": [],
       "fix": {
         "notes": [
-          "record_exclusion_balances now handles only claim-revealed holders. The new read_snapshot_balances pass runs every tick under SNAPSHOT_READ_TIME_BUDGET = 10 s. It reads candidates in owner byte order, 256 per DB batch, and only owners whose latest wallet_positions row at or below the record block has shares > 0. Progress goes to a new exclusion_snapshot_progress table (migration 0027: read_through, done, block_number = the record's block, so it rolls back with the record). That keeps exclusion_records append-only, and zero balances are never re-read. A failed or cut read ends the pass for that tick without failing the tick, and the next tick resumes at that holder. Multicall3 batching was not added; the budget alone removes the stall. The existing exclusion_record_events_store_each_snapshot_holders_balance expectations still hold."
+          "record_exclusion_balances now handles only claim-revealed holders. The new read_snapshot_balances pass runs every tick under SNAPSHOT_READ_TIME_BUDGET = 10 s. It reads candidates in owner byte order, 256 per DB batch, and only owners whose latest wallet_positions row at or below the record block has shares > 0. Progress goes to a new exclusion_snapshot_progress table (migration 0028: read_through, done, block_number = the record's block, so it rolls back with the record). That keeps exclusion_records append-only, and zero balances are never re-read. A failed or cut read ends the pass for that tick without failing the tick, and the next tick resumes at that holder. Multicall3 batching was not added; the budget alone removes the stall. The existing exclusion_record_events_store_each_snapshot_holders_balance expectations still hold."
         ],
         "regression_tests": [
           "services/explorer-indexer/tests/vault_detail.rs::exclusion_snapshot_balances_are_read_by_a_budgeted_pass; services/explorer-indexer/tests/reorg_cursor_vault_status.rs (rollback set now must include exclusion_snapshot_progress)"
         ],
         "files": [
-          "services/explorer-indexer/migrations/0027_exclusion_snapshot_progress.sql",
+          "services/explorer-indexer/migrations/0028_exclusion_snapshot_progress.sql",
           "services/explorer-indexer/src/indexer.rs",
           "services/explorer-indexer/src/db.rs",
           "services/explorer-indexer/tests/vault_detail.rs",
@@ -3652,7 +3652,7 @@
       "merged_candidates": [],
       "fix": {
         "notes": [
-          "The VoteSubmitted branch now shares INLINE_FETCH_TIME_BUDGET with receipts. Past the deadline a vote is stored unfetched, and the in-flight fetch is cut by timeout_at. Migration 0028 adds committee_votes.verify_attempts, last_verify_error and a partial index. The new Db functions are note_vote_verification (called only when the insert stored a row), list_unverified_votes (newest first) and repair_vote_verification (never downgrades, counts every attempt). The new sweep_unverified_votes runs in run_once after the receipt sweep under the same SWEEP_TIME_BUDGET deadline. So the worst-case cost per tick is unchanged at 30 s total. The cap is 12 attempts per vote. The tick's existing DI-3 regime refresh counts a vote once it verifies. The test sends five votes at hosts that never answer. The first tick returns within budget plus 15 s with all five stored, and vote 5 has 0 attempts. Then vote 5's host starts answering. The next tick's sweep verifies vote 5, the tarpit attempts count, and the vault's regime vote_count becomes 1."
+          "The VoteSubmitted branch now shares INLINE_FETCH_TIME_BUDGET with receipts. Past the deadline a vote is stored unfetched, and the in-flight fetch is cut by timeout_at. Migration 0029 adds committee_votes.verify_attempts, last_verify_error and a partial index. The new Db functions are note_vote_verification (called only when the insert stored a row), list_unverified_votes (newest first) and repair_vote_verification (never downgrades, counts every attempt). The new sweep_unverified_votes runs in run_once after the receipt sweep under the same SWEEP_TIME_BUDGET deadline. So the worst-case cost per tick is unchanged at 30 s total. The cap is 12 attempts per vote. The tick's existing DI-3 regime refresh counts a vote once it verifies. The test sends five votes at hosts that never answer. The first tick returns within budget plus 15 s with all five stored, and vote 5 has 0 attempts. Then vote 5's host starts answering. The next tick's sweep verifies vote 5, the tarpit attempts count, and the vault's regime vote_count becomes 1."
         ],
         "regression_tests": [
           "services/explorer-indexer/tests/committee_indexing.rs::tarpit_memo_hosts_cannot_hold_the_tick_and_the_sweep_verifies_a_skipped_vote"
@@ -3660,7 +3660,7 @@
         "files": [
           "services/explorer-indexer/src/indexer.rs",
           "services/explorer-indexer/src/db.rs",
-          "services/explorer-indexer/migrations/0028_committee_votes_verify_attempts.sql",
+          "services/explorer-indexer/migrations/0029_committee_votes_verify_attempts.sql",
           "services/explorer-indexer/tests/committee_indexing.rs",
           "docs/architecture.md"
         ],
@@ -3764,13 +3764,13 @@
       "merged_candidates": [],
       "fix": {
         "notes": [
-          "Migration 0026 adds wallet_positions.last_log_index. The new Db::apply_wallet_position_delta runs in a transaction. If the block already has a row with a lower log index, it uses that row as the prior balance and updates it in place (ON CONFLICT DO UPDATE ... WHERE last_log_index < new). A log at or below last_log_index is skipped, so a replay is a no-op. A legacy row with NULL last_log_index is treated as final, which is the old DO NOTHING behaviour."
+          "Migration 0027 adds wallet_positions.last_log_index. The new Db::apply_wallet_position_delta runs in a transaction. If the block already has a row with a lower log index, it uses that row as the prior balance and updates it in place (ON CONFLICT DO UPDATE ... WHERE last_log_index < new). A log at or below last_log_index is skipped, so a replay is a no-op. A legacy row with NULL last_log_index is treated as final, which is the old DO NOTHING behaviour."
         ],
         "regression_tests": [
           "account_history::two_share_changes_of_one_owner_in_one_block_both_count (two Deposits and a Withdraw of one owner at block 10 through run_once, then a full replay after the indexer_runs are deleted, still 1200000); idempotency::wallet_position_delta_counts_each_log_of_a_block_once"
         ],
         "files": [
-          "services/explorer-indexer/migrations/0026_wallet_position_log_index.sql",
+          "services/explorer-indexer/migrations/0027_wallet_position_log_index.sql",
           "services/explorer-indexer/src/db.rs",
           "services/explorer-indexer/src/indexer.rs",
           "services/explorer-indexer/tests/account_history.rs",
@@ -4257,7 +4257,7 @@
     "[round 3] block_before_window lower bound: block timestamps are monotonic and every event block has a blocks row, so the per-hour cut does not under-count",
     "[round 3] advance_cursor heartbeat SQL (RETURNING updated_at = now(), first insert stamps), max_cursor_lag_blocks validation at config load",
     "[round 3] Pause re-send on a held cursor reads depositsPaused() at latest and treats unknown as not paused",
-    "[round 3] classify_ledger_read: revert means no ledger, zero or empty means retry, transport errors fail the tick; the emitter gate goes through vault_exclusion_ledgers; migrations 0025 and 0027 roll back by block_number",
+    "[round 3] classify_ledger_read: revert means no ledger, zero or empty means retry, transport errors fail the tick; the emitter gate goes through vault_exclusion_ledgers; migrations 0026 and 0027 roll back by block_number",
     "[round 3] Budgeted snapshot pass: owner-order cursor, zero balances not re-read, balances and progress stored at the record block",
     "[round 3] wallet_positions per-log in-place update with last_log_index; replayed ticks are no-ops",
     "[round 3] SSRF guard for payload and memo URIs: http/https only, link-local and IMDS refused including IPv4-mapped IPv6, pinned resolution, same-host redirects only, streamed 1 MiB cap, DNS inside the timeout",
@@ -4493,7 +4493,7 @@
     "[round 3] Non-upgrade round-2 contract logic: VaultAdapterOps exclusion/exposure caps (note: Book.openExclusionOf is keyed by adapter index), RobotMoneyVault emergencyExcludeAdapter/recoverRemovedAdapter, PortfolioRouter leg skipping, and RouterGovernance. These belong to the economics and contracts lens.",
     "[round 3] CI supply chain: release-rmpc.yml, release-dapp.yml, audit_workflow_run_splice_and_perms.py, check_governance_docs.py and install-rmpc.sh.",
     "[round 3] services/watchdog (volume.rs, watchdog.rs, liveness.rs, pause.rs) and clients/explorer-api route changes.",
-    "[round 3] explorer-indexer changes other than the ExclusionLedger refresh, and migrations 0025-0027.",
+    "[round 3] explorer-indexer changes other than the ExclusionLedger refresh, and migrations 0026-0027.",
     "[round 3] Pre-existing upgrade code untouched by round 2: GovernedProxyDeploy deploy+initialize atomicity, twin-upgrade-rehearsal.ts, and the gateway implementationVersion consent binding. These were only spot-checked.",
     "[round 3] No test suite was run. The layout checks used the gate's own normalize() and compare() through forge inspect, plus small pure simulations in the session scratchpad.",
     "[round 3] publish-contracts/, scripts/ci/, .github/workflows/ and release scripts changed in round 2 (tooling and CI, outside the economics lens)",
@@ -4572,7 +4572,7 @@
     "[round 2] services/watchdog/src/upgrade_events.rs paging logic (unchanged in round 1)",
     "[round 2] Committee regime, vote FK and key, and reorg reconcile code paths unchanged since base 9d9bb854",
     "[round 2] Test-file changes under services/*/tests and clients/explorer-api/tests (read only to locate behavior; not audited for adequacy)",
-    "[round 2] Backfill of historical ledger events on an existing indexer DB after migration 0025 (the cursor is not reset). Not assessed for data completeness.",
+    "[round 2] Backfill of historical ledger events on an existing indexer DB after migration 0026 (the cursor is not reset). Not assessed for data completeness.",
     "[round 2] Indexer and watchdog behavior behind an HTTP proxy set through environment variables (reqwest system proxy)",
     "[round 2] services/ and clients/explorer-api changes (indexer lens)",
     "[round 2] contracts/ and publish-contracts/ round-1 changes beyond the BasketVault previewDeposit and router skip semantics used in the composition pass",
@@ -4585,7 +4585,7 @@
     "[round 2] cargo check of rust-payment-client (not run)",
     "[round 2] Keystore load paths do not refuse or warn on a world-readable identity or EVM keystore made by an older rmpc (noted as hygiene, not reported)",
     "[round 2] Contract diffs (RobotMoneyVault.sol, PortfolioRouter.sol, RouterGovernance.sol, BasketVault.sol) and their tests: outside the CI lens.",
-    "[round 2] services/explorer-indexer, services/watchdog, clients/explorer-api: changes and migrations 0025/0026 not read.",
+    "[round 2] services/explorer-indexer, services/watchdog, clients/explorer-api: changes and migrations 0026/0026 not read.",
     "[round 2] clients/dapp and clients/rust-payment-client source changes: only the build-arg plumbing was read.",
     "[round 2] publish-contracts runner.ts, evidence-check.ts, upgrade-rows.ts round numbering, verify-stage.ts, redeploy-vault.ts, owner-signers.ts: only the build-provenance, layout and release-gate seams were traced.",
     "[round 2] Workflows not changed this round: release-tag-suite-dispatch.yml, suite-21-nightly.yml, suite-13-doc-checks.yml and suite-07 write scopes. Also release-dapp.yml, which any writer can dispatch with any commit_hash, pushes ghcr.io/<owner>/dapp:latest and an unprotected v* tag, and uses a cache-from/cache-to type=gha cache. That path is pre-existing and was not re-scored.",
@@ -4626,7 +4626,7 @@
     "[round 1] clients/explorer-api exclusion-claims SQL claimable math (moot while no records are indexed)",
     "[round 1] services/watchdog/src/receipt_liveness.rs and alert.rs payload formats in depth",
     "[round 1] services/explorer-indexer/src/abi.rs full topic table (only the upgrade and exclusion topics were checked)",
-    "[round 1] Migrations 0019-0023 behaviour against a populated production database and the rebuild runbook",
+    "[round 1] Migrations 0019-0024 behaviour against a populated production database and the rebuild runbook",
     "[round 1] scripts/stage/measure-catch-up.ts and the stage supervisor install units",
     "[round 1] Dapp display paths that consume explorer data without signing (VaultCards, RouterView, ConsensusReceiptPanel's browser-side payload fetch)",
     "[round 1] Watchdog upgrade-event cursor versus out-of-order inserts from the X1 refetch within one in-flight tick (judged too improbable to report, not proven safe)",

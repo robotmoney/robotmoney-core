@@ -183,15 +183,18 @@ jobs:
       # refusal backoff. Each is wrapped in the executed-count guard so zero collected tests is RED.
       # Issue 1840: admin_events_and_progress also runs the startup proxy backfill and the registry
       # proxy topics with INDEXER_MULTI_VAULT_EVENTS off, and marks a proxy row as its deployment only
-      # when its transaction created that proxy (floor 11 = the tests the target holds), and
+      # when its transaction created that proxy, and
       # the lib step runs the proxy decode and RouterGovernance watch tests (floor 7).
-      - name: Refused RPC, Timelock and Safe events, chain head, paused snapshots (issues 1731, 1840)
+      # Issue 1856: a refused or cursorless backfill is saved and retried, and the backfill scans one
+      # slice per tick, resumes from its saved checkpoint and stops at the cursor after a rollback
+      # (floor 14 = the tests the target holds).
+      - name: Refused RPC, Timelock and Safe events, chain head, paused snapshots (issues 1731, 1840, 1856)
         env:
           EXPLORER_INDEXER_REQUIRE_PG: "1"
         run: |
           CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test rpc_refused -- --nocapture
-          CARGO_TEST_MIN_EXECUTED=11 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=14 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test admin_events_and_progress -- --test-threads=1 --nocapture
           CARGO_TEST_MIN_EXECUTED=7 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- indexer::tests::refusal_backoff indexer::tests::timelock_and_safe indexer::tests::call_scheduled indexer::tests::safe_ indexer::tests::proxy_ indexer::tests::router_governance --nocapture
@@ -401,10 +404,11 @@ jobs:
       # Core 1731: the index cursor and chain head are not read from the newest (in-flight or failed) run
       # row, vaults carry their own deposits_paused flag, and the Safe, the timelock and their events are
       # listed. Issue 1840: a contract with only a freeze row reports that row's implementation.
-      # Testcontainer Postgres, same Docker check as above. Floor = the eleven tests the target holds.
-      - name: explorer-api index cursor, chain head, deposits_paused, admin events (issues 1731, 1840)
+      # Issue 1856: /health reports the proxy upgrade backfill state.
+      # Testcontainer Postgres, same Docker check as above. Floor = the twelve tests the target holds.
+      - name: explorer-api index cursor, chain head, deposits_paused, admin events (issues 1731, 1840, 1856)
         run: |
-          CARGO_TEST_MIN_EXECUTED=11 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=12 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test progress_and_admin -- --test-threads=1 --nocapture
 

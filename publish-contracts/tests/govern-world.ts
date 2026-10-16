@@ -19,6 +19,8 @@ import { GOVERNANCE_CLEAR_ABI } from "../src/clear-voted-weights.ts";
 import { COMMIT_EXPIRY_BLOCKS, GATEWAY_REGISTER_ABI, selfAuthCommitmentKey } from "../src/committee-register.ts";
 import { REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI } from "../src/redeploy-vault.ts";
 import { VAULT_UNWIND_GUARD_ABI } from "../src/unwind-guard.ts";
+import { GOVERNED_PROXY_ABI } from "../src/upgrade-rows.ts";
+import { ERC1967_IMPLEMENTATION_SLOT } from "../src/verify/codehash.ts";
 import { SHA, sheetText, tmp } from "./fixtures.ts";
 
 export const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as Address;
@@ -52,7 +54,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     /** `kind:row` per timelock bundle built, in order: the row is the first word of the description. */
     events: [] as string[],
     /** The scheduled calls per row, with the timelock predecessor each operation carries (undefined: none) and the description of the Safe transaction that scheduled it. */
-    scheduled: new Map<string, { form: string; calls: { target: string; data: string }[]; predecessor?: string; description?: string }>(),
+    scheduled: new Map<string, { form: string; calls: { target: string; data: string }[]; predecessor?: string; description?: string; salt: Hex }>(),
     /** The timelock operation id of each scheduled row. */
     ids: new Map<string, Hex>(),
     /** Every transaction hash the fake Safe sent, per timelock operation id: a Safe transaction shared by two operations would show here. */
@@ -101,6 +103,11 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
      * Safe is the one proposer and canceller (DeployTimelock), so the fake seeds both (QA plan v1 B4: schedule and cancel check them).
      */
     owners: [...sheet.safeOwners] as string[], threshold: BigInt(sheet.safeThreshold), roles: new Set<string>([`${PROPOSER_ROLE_ID}:${A.safe.toLowerCase()}`, `${CANCELLER_ROLE_ID}:${A.safe.toLowerCase()}`]),
+    /** Issue 1842: the GovernedUUPS proxies (lower-case address to its implementation and freeze flag), the code at an address (else a default), and every call the timelock
+     *  scheduled (the CallScheduled logs the freeze row scans). An executed upgradeToAndCall moves the implementation, an executed freezeUpgrades sets the flag, as the library does. */
+    proxies: new Map<string, { impl: Address; frozen: boolean }>(), codes: new Map<string, Hex>(), scheduledCalls: [] as { id: Hex; target: Address; data: Hex }[],
+    /** Issue 1859: the transaction of each timelock CallScheduled and CallExecuted log, keyed `event:operation id` (what operationTx finds). A test deletes one to model a log not found. */
+    timelockLogs: new Map<string, Hex>(),
   };
   const recordedAtOf = (rid: string): bigint => s.recordedAt.get(rid.toLowerCase()) ?? BigInt([...s.recorded].map((x) => x.toLowerCase()).indexOf(rid.toLowerCase()) + 1);
   const rowOf = (d?: string) => (d ?? "").split(/[ :]/)[0]!;
@@ -112,7 +119,11 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     get owners(): string[] { return s.owners; }, set owners(v: string[]) { s.owners = [...v]; },
     get threshold(): number { return Number(s.threshold); }, set threshold(v: number) { s.threshold = BigInt(v); },
     client: {
-      getCode: async () => "0x6001600155",
+      getCode: async ({ address }: { address?: string } = {}) => s.codes.get(String(address).toLowerCase()) ?? "0x6001600155",
+      getStorageAt: async ({ address, slot }: { address: string; slot: string }) => {
+        const p = s.proxies.get(address.toLowerCase());
+        return slot.toLowerCase() === ERC1967_IMPLEMENTATION_SLOT && p ? (`0x${"0".repeat(24)}${p.impl.slice(2).toLowerCase()}` as Hex) : (`0x${"0".repeat(64)}` as Hex);
+      },
       // the chain head: the fake's clock is also its block number (getTransactionReceipt answers the clock of a transaction as its block)
       getBlockNumber: async () => s.clock,
       getBlock: async (a?: { blockNumber?: bigint }) => ({ timestamp: a?.blockNumber ?? s.clock }),
@@ -156,6 +167,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           // QA plan v1 D7: BasketVault.assets(i) (reverts past the end) and the public emergencyUnwindGuard(token) getter (zeros until a guard is set)
           case "assets": { const r = (s.assetRows.get(address) ?? [])[Number(args?.[0])]; if (!r) throw new Error("execution reverted"); return [r.token, addr(0xf00), 500, r.active, addr(0xad), 0]; }
           case "emergencyUnwindGuard": return s.guards.get(`${address.toLowerCase()}|${String(args?.[0]).toLowerCase()}`) ?? [0n, false, 0n];
+          case "upgradesFrozen": { const p = s.proxies.get(address.toLowerCase()); if (!p) throw new Error(`fake: ${address} is not a proxy`); return p.frozen; }
         }
         throw new Error(`fake: ${functionName}`);
       },
@@ -176,10 +188,11 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     timelockMinDelay: (async () => s.minDelay) as never,
     operationId: (async (_h: unknown, p: never) => idOf(p)) as never,
     operationState: (async (_h: unknown, _t: unknown, id: string) => { const o = s.ops.get(id); return o ? { exists: true, pending: o.pending, done: o.done, ready: o.pending && s.clock >= o.readyAt, readyAt: o.readyAt } : { exists: false, pending: false, done: false, ready: false, readyAt: 0n }; }) as never,
-    scheduleOnTimelock: (async (_h: unknown, p: { form?: string; description?: string; predecessor?: string; calls: { target: string; data: string }[] }) => {
+    scheduleOnTimelock: (async (_h: unknown, p: { form?: string; description?: string; predecessor?: string; salt: Hex; calls: { target: string; data: string }[] }) => {
       const id = idOf(p as never); const k = p.form === "single" ? "schedule" : "scheduleBatch";
-      s.log.push(k); s.events.push(`${k}:${rowOf(p.description)}`); s.scheduled.set(rowOf(p.description), { form: p.form ?? "batch", calls: p.calls, predecessor: p.predecessor, description: p.description });
+      s.log.push(k); s.events.push(`${k}:${rowOf(p.description)}`); s.scheduled.set(rowOf(p.description), { form: p.form ?? "batch", calls: p.calls, predecessor: p.predecessor, description: p.description, salt: p.salt });
       s.ids.set(rowOf(p.description), id);
+      for (const c of p.calls) s.scheduledCalls.push({ id, target: c.target as Address, data: c.data as Hex });
       return { ...bundle("schedule", id), predecessor: p.predecessor };
     }) as never,
     executeOnTimelock: (async (_h: unknown, p: { form?: string; description?: string; predecessor?: string; calls: { target: string; data: Hex }[] }) => {
@@ -260,13 +273,26 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
         s.ops.delete(id);
       }
       else if (b.action === "execute") {
-        const snap = { listed: [...s.listed], ineligible: new Set(s.ineligible), weights: { vaults: [...s.weights.vaults], bps: [...s.weights.bps] }, statuses: new Map(s.statuses), retiredFlag: new Set(s.retiredFlag), paused: new Set(s.paused), vaultCaps: new Map(s.vaultCaps), released: new Set(s.released), voted: s.voted, ops: new Map(s.ops), lastAppliedRecordedAt: s.lastAppliedRecordedAt, guards: new Map(s.guards), policies: new Map(s.policies), agentOwner: new Map(s.agentOwner), agentRole: new Set(s.agentRole), committee: new Map(s.committee), roles: new Set(s.roles) };
+        const snap = { proxies: new Map([...s.proxies].map(([k, v]) => [k, { ...v }])), listed: [...s.listed], ineligible: new Set(s.ineligible), weights: { vaults: [...s.weights.vaults], bps: [...s.weights.bps] }, statuses: new Map(s.statuses), retiredFlag: new Set(s.retiredFlag), paused: new Set(s.paused), vaultCaps: new Map(s.vaultCaps), released: new Set(s.released), voted: s.voted, ops: new Map(s.ops), lastAppliedRecordedAt: s.lastAppliedRecordedAt, guards: new Map(s.guards), policies: new Map(s.policies), agentOwner: new Map(s.agentOwner), agentRole: new Set(s.agentRole), committee: new Map(s.committee), roles: new Set(s.roles) };
         try {
         // a TimelockController refuses an operation whose predecessor is not done
         if (b.predecessor && !s.ops.get(b.predecessor)?.done) throw new Error("TimelockController: missing dependency");
         s.ops.set(id, { exists: true, pending: false, done: true, readyAt: 1n });
         for (const c of (b.calls ?? []) as { target: string; data: Hex }[]) {
           if (s.failOn?.(c)) throw new Error("injected revert");
+          const px = s.proxies.get(c.target.toLowerCase());
+          if (px) {
+            // GovernedUpgrade: timelock only (the fake timelock is the caller), never once frozen; a freeze is bound to the live implementation and its code hash
+            const d = decodeFunctionData({ abi: GOVERNED_PROXY_ABI, data: c.data });
+            if (px.frozen) throw new Error("UpgradesAreFrozen()");
+            if (d.functionName === "upgradeToAndCall") px.impl = d.args[0] as Address;
+            else if (d.functionName === "freezeUpgrades") {
+              const code = s.codes.get(px.impl.toLowerCase()) ?? "0x6001600155";
+              if (String(d.args[0]).toLowerCase() !== px.impl.toLowerCase() || String(d.args[1]).toLowerCase() !== keccak256(code as Hex).toLowerCase()) throw new Error("FreezeTargetMismatch");
+              px.frozen = true;
+            }
+            continue;
+          }
           if (c.target === A.governance) {
             if (c.data === encodeFunctionData({ abi: GOVERNANCE_CLEAR_ABI, functionName: "clearVotedWeights" })) { s.voted = undefined; continue; }
             // RouterGovernance.applyReceipt (issue 1698): the contract's own checks, then release and the active vector in one call
@@ -352,11 +378,14 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       s.nonce++;
       const hash = `0x${s.nonce.toString(16).padStart(64, "0")}`;
       s.txClock.set(hash, s.clock);
+      if (b.action === "schedule" || b.action === "execute") s.timelockLogs.set(`${b.action === "schedule" ? "CallScheduled" : "CallExecuted"}:${id}`, hash as Hex);
       s.safeTxs.set(id, [...(s.safeTxs.get(id) ?? []), hash]);
       return { txHash: `0x${s.nonce.toString(16).padStart(64, "0")}` as Hex, bundle: { ...b, executed: { tx_hash: `0x${s.nonce.toString(16).padStart(64, "0")}`, status: 1 } } };
     }) as never,
     proposeTx: (async (_h: unknown, o: { to: string; data: Hex; action?: string }) => { s.events.push(`propose:${o.action}`); return { ...bundle(o.action ?? "call", keccak256(o.data)), to: o.to, data: o.data }; }) as never,
     verifyTimelockEffect: (async () => ({ ok: true, detail: "", state: {} })) as never,
+    scheduledCalls: (async () => [...s.scheduledCalls]) as never,
+    operationTx: (async (_h: unknown, _t: unknown, id: Hex, event: string) => s.timelockLogs.get(`${event}:${id}`)) as never,
   };
   return { s, api, handle };
 }

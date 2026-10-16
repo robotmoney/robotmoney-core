@@ -22,7 +22,7 @@ mod common;
 
 use crate::common::{
     install_direct_gateway_code_mocks, install_gateway_implementation, jrpc_result,
-    jrpc_result_raw, GATEWAY, SIGNER_ADDRESS, TEST_PASSPHRASE,
+    jrpc_result_raw, FIXTURE_BLOCK_TAG, GATEWAY, SIGNER_ADDRESS, TEST_PASSPHRASE,
 };
 use alloy_consensus::TxEip1559;
 use alloy_primitives::TxKind;
@@ -812,6 +812,94 @@ async fn test_committee_vote_submit_refuses_an_unapproved_implementation() {
     assert_eq!(v["ok"], false);
     assert_eq!(v["error"], "ErrImplementationNotApproved");
     assert!(v["tx_hash"].is_null(), "nothing was sent: {v}");
+}
+
+/// Issue 1856: the gateway is verified before signing at the pinned block
+/// (FIXTURE_BLOCK_TAG shows the approved IMPL_A), and again after signing at
+/// `latest`, where the slot now names IMPL_B. The signed vote is discarded
+/// unsent, exactly as `WriteSession::submit` does for a deposit.
+#[tokio::test]
+async fn test_committee_vote_submit_discards_the_signed_vote_when_the_implementation_changes_before_broadcast(
+) {
+    use alloy_primitives::keccak256;
+    const IMPL_A: Address = address!("00000000000000000000000000000000000a11ce");
+    const IMPL_B: Address = address!("00000000000000000000000000000000000b0b00");
+    const IMPL_A_CODE: &[u8] = &[0x60, 0x01, 0xaa];
+    const IMPL_B_CODE: &[u8] = &[0x60, 0x01, 0xbb];
+
+    let mut server = mockito::Server::new_async().await;
+    install_committee_mocks(&mut server, &simple_receipt_body()).await;
+    install_gateway_implementation(&mut server, IMPL_A, IMPL_A_CODE, Some(FIXTURE_BLOCK_TAG)).await;
+    install_gateway_implementation(&mut server, IMPL_B, IMPL_B_CODE, Some("latest")).await;
+    let send = server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("{TX_HASH:#x}")))
+        .expect(0)
+        .create_async()
+        .await;
+    let fix = CommitteeFixture::build_with(
+        &server.url(),
+        &format!(
+            "gateway_implementation = \"{IMPL_A:#x}\"\n\
+             gateway_implementation_runtime_hash = \"0x{}\"\n",
+            ahex::encode(keccak256(IMPL_A_CODE))
+        ),
+    );
+
+    let output = rmpc()
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
+        .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
+        .args([
+            "committee",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "vote-submit",
+            "--vault",
+            "0x1111111111111111111111111111111111111111",
+            "--stance",
+            "overweight",
+            "--weight-bps",
+            "6000",
+            "--confidence",
+            "85",
+            "--rationale-uri",
+            "https://gist.github.com/robotmoney/test123",
+            "--vote-json-hash",
+            &format!("{VOTE_JSON_HASH:#x}"),
+            "--prompt-hash",
+            &format!("{PROMPT_HASH:#x}"),
+            "--inputs-digest",
+            &format!("{INPUTS_DIGEST:#x}"),
+            "--schema-version",
+            "1.0",
+            "--timestamp",
+            "1750000000",
+            "--order-id",
+            "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ])
+        .output()
+        .expect("rmpc ran");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    eprintln!("STDOUT: {stdout}");
+    eprintln!("STDERR: {}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.status.code(), Some(2), "refusal exit code");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON");
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["error"], "ErrImplementationChanged", "{v}");
+    assert!(
+        v["message"].as_str().unwrap().contains("discarded unsent"),
+        "{v}"
+    );
+    assert!(v["tx_hash"].is_null(), "nothing was sent: {v}");
+    send.assert_async().await;
 }
 
 // ─── rmpc is not a governance signer (issue #1447, workstream K) ──────────────

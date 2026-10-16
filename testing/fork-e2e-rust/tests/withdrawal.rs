@@ -1028,7 +1028,7 @@ fn router_withdrawal() {
                 minSharesPerLeg: vec![],
             },
             U256::ZERO,
-            5_000_000,
+            8_000_000,
         )
         .expect("gateway.depositTo(router)");
     assert_eq!(deposit_receipt.status, 1, "depositTo must succeed");

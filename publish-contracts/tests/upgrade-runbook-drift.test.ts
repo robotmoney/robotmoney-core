@@ -86,3 +86,77 @@ describe("the release checklist and the Twin lifecycle rehearsal (issue 1811)", 
     for (const s of ["`core-stages-twin-upgrade-lifecycle`", "`deployments/twin-918453/upgrade-rehearsal.env`", "`publish-contracts/src/ci/twin-upgrade-lifecycle.ts`", "--upgrade-lifecycle FILE --rpc URL", "`UpgradesAreFrozen`", "**Rollback is not assumed safe.**", "**After a governed upgrade.**"]) expect(SECTION, s).toContain(s);
   });
 });
+
+// Issue 1842 docs drift check: runbook 4.12 names the two operator rows the code runs, the manifest re-record, the WARN and ESCALATE states verify reports, and the
+// upgradeability plan no longer says publish passes a fixed frozen mode.
+describe("the operator rows and the deadline alert states (issue 1842)", () => {
+  test("runbook 4.12 names govern --row freeze-upgrades and govern --row upgrade-proxy, the re-record step and the WARN and ESCALATE states", async () => {
+    const { FREEZE_ROW, UPGRADE_ROW } = await import("../src/upgrade-rows.ts");
+    expect([FREEZE_ROW, UPGRADE_ROW]).toEqual(["freeze-upgrades", "upgrade-proxy"]);
+    for (const s of [`govern --row ${FREEZE_ROW}`, `govern --row ${UPGRADE_ROW} --proxy NAME --implementation 0x<new>`, "--upgrade-build DIR", "**The governed upgrade procedure:", "**Layout review.**", "**Schedule.**", "**Execute.**", "**Re-record.**",
+      "rewrites the proxy's stage manifest", "`gateway_implementation_runtime_hash` and `gateway_runtime_hash`", "`proxy_upgrades`", "`upgrade_freezes`", "`govern.preview`", "starts with `WARN`", "starts with `ESCALATE`", "starts with `MISSED`",
+      "`freeze_block` and `freeze_tx`", "(`govern --row upgrade-proxy` back to the previous implementation), possible only while the proxy is unfrozen", "now + `TIMELOCK_MIN_DELAY` + 1 day"]) expect(SECTION, s).toContain(s);
+    expect(SECTION).not.toContain("is not part of this procedure yet");
+    // the verifier detail words are the ones the runbook quotes
+    const src = readFileSync(join(REPO, "publish-contracts", "src", "verify", "upgradeability.ts"), "utf8");
+    for (const w of ['"ESCALATE" : "WARN"', "MISSED: ", "govern --row freeze-upgrades"]) expect(src).toContain(w);
+  });
+  test("the upgradeability plan does not say publish passes a fixed frozen mode", () => {
+    const plan = readFileSync(join(REPO, "docs", "technical", "contract-upgradeability-plan.md"), "utf8");
+    expect(plan).not.toContain("publish passes `UPGRADE_MODE=frozen`");
+    expect(plan).toContain("publish passes the sheet's `UPGRADE_MODE`");
+  });
+});
+
+// Issue 1846 docs drift check: one required-check policy for the lifecycle job (the runbook and scripts/ci/required-checks.json agree), the 4.1 closing sentence scoped to the
+// items that apply, and 4.12 naming who owns the implementation deploy with library linking and the manifest re-record.
+describe("the lifecycle job's required-check policy and the 4.1 and 4.12 wording (issue 1846)", () => {
+  const gate = RUNBOOK.slice(RUNBOOK.indexOf("### 4.1. Code-readiness gate"), RUNBOOK.indexOf("### 4.2."));
+  const item4 = gate.slice(gate.indexOf("4. **Twin rehearsal of the governed proxy lifecycle.**"), gate.indexOf("Do not begin preflight"));
+  const greenOnly = (() => {
+    const start = RUNBOOK.indexOf("  - **Green rehearsal only.**");
+    const end = RUNBOOK.indexOf("\n  - **", start + 1);
+    if (start < 0 || end < 0) throw new Error("the runbook has no Green rehearsal only bullet");
+    return RUNBOOK.slice(start, end);
+  })();
+  test("4.1 item 4 gates every DEPLOY_SHA with the lifecycle job, as the required list does", () => {
+    expect(item4.length).toBeGreaterThan(0);
+    expect(item4).not.toContain("For a release that deploys governed proxies");
+    expect(item4).toContain("`core-stages-twin-upgrade-lifecycle` gates every `DEPLOY_SHA`");
+    const required = JSON.parse(readFileSync(join(REPO, "scripts", "ci", "required-checks.json"), "utf8")).required.map((r: { name: string }) => r.name);
+    expect(required).toContain("core-stages-twin-upgrade-lifecycle");
+    // QA plan v1 T4 keeps the rehearsal job required too: both Twin jobs gate a DEPLOY_SHA, and an upstream outage is recovered by a re-run.
+    expect(required).toContain("core-stages-twin-chain");
+  });
+  test("the Green rehearsal only bullet names both Twin jobs and the re-run recovery", () => {
+    for (const s of ["`core-stages-twin-chain`", "`core-stages-twin-upgrade-lifecycle`", "is a required entry", "directly through `check-sha-green`", "re-run the failed job", "`filter=latest`"]) expect(greenOnly, s).toContain(s);
+  });
+  test("the 4.1 closing sentence applies only the items that apply to this deployment", () => {
+    expect(gate).toContain("that applies to this deployment");
+    expect(gate).not.toContain("while any of the above is incomplete");
+  });
+  test("4.12 assigns the implementation deploy with library linking and the manifest re-record to the operator tooling follow-up (1842)", () => {
+    const own = SECTION.slice(SECTION.indexOf("**Ownership of the implementation deploy and the re-record.**"), SECTION.indexOf("**After a governed upgrade.**"));
+    expect(own.length).toBeGreaterThan(0);
+    for (const s of ["Deploying the new implementation with its library links", "re-recording the stage manifest", "gateway runtime hashes", "owned by the operator tooling follow-up (1842)", "only executed path", "`publish-contracts/src/ci/twin-upgrade-lifecycle.ts`"]) expect(own, s).toContain(s);
+  });
+});
+
+// Issue 1859 docs drift check: 4.12 describes verify's per-proxy build directories (verify-stage.ts proxyBuildDirsOf) and no longer states the deployed-build-only limitation;
+// it names the rerun and already-executed behavior of the rows, and the Twin harness runs both rows.
+describe("per-proxy build directories and the row follow-ups (issue 1859)", () => {
+  const after = SECTION.slice(SECTION.indexOf("**After a governed upgrade.**"), SECTION.indexOf("**Rollback is not assumed safe.**"));
+  test("4.12 describes per-proxy build directories and no longer states the deployed-build-only limitation", () => {
+    expect(after.length).toBeGreaterThan(0);
+    for (const s of ["per-proxy build directories", `\`${CODE_LABEL}\``, "the `build` its last `proxy_upgrades` entry names", "every other contract with the DEPLOY_SHA's `out/`"]) expect(after, s).toContain(s);
+    expect(SECTION).not.toContain("verify compares every contract with one build directory");
+    expect(SECTION).not.toContain("re-records in its own harness");
+    const stage = readFileSync(join(REPO, "publish-contracts", "src", "verify-stage.ts"), "utf8");
+    expect(stage).toContain("...proxyBuildDirsOf(manifest, join(ctx.coreDir, \"out\"))");
+  });
+  test("4.12 names the stale-rerun guard, the already-executed repair and the null execute_tx note, and the Twin harness runs both rows", () => {
+    for (const s of ["gated on the live implementation slot", "leaves the manifest and the entry unchanged", "`CallExecuted` log", "`execute_tx` null with a `note`", "`govern --row freeze-upgrades --no-warp --max-wait 0`"]) expect(SECTION, s).toContain(s);
+    const harness = readFileSync(join(REPO, "publish-contracts", "src", "ci", "twin-upgrade-lifecycle.ts"), "utf8");
+    for (const s of ['"--row", UPGRADE_ROW', '"--row", FREEZE_ROW, "--no-warp", "--max-wait", "0"]', "governedUpgradeProblems("]) expect(harness, s).toContain(s);
+  });
+});

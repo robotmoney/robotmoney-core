@@ -336,7 +336,7 @@ async fn account_history_policy_change_authorized_indexed() {
 /// AC-5 (QA plan C1, core issue 1698): RouterGovernance voting was deleted,
 /// so the indexer ignores the old `ProposalCreated` / `VoteCast` logs. The
 /// tick succeeds, writes no `governance_vote` history row (no row at all),
-/// and the governance tables migration 0024 dropped stay gone.
+/// and the governance tables migration 0025 dropped stay gone.
 #[tokio::test]
 async fn account_history_ignores_deleted_governance_vote_events() {
     let fx = pg_fixture().await;
@@ -408,7 +408,7 @@ async fn account_history_ignores_deleted_governance_vote_events() {
             .fetch_one(fx.db.pool())
             .await
             .unwrap();
-        assert!(!exists, "migration 0024 must drop {table}");
+        assert!(!exists, "migration 0025 must drop {table}");
     }
 }
 

@@ -242,6 +242,7 @@ contracts/test/contract.PortfolioRouterZeroLegTest.mdx
 contracts/test/contract.PosConfAavePool.mdx
 contracts/test/contract.PosConfComet.mdx
 contracts/test/contract.PosConfMorphoVault.mdx
+contracts/test/contract.PredictionHarness.mdx
 contracts/test/contract.ProbeAdapter.mdx
 contracts/test/contract.ProtocolAssetVaultScriptGuardsTest.mdx
 contracts/test/contract.ProtocolAssetVaultShortlistTest.mdx
@@ -314,6 +315,7 @@ contracts/test/contract.UniswapV4SwapAdapterForkTest.mdx
 contracts/test/contract.UniswapV4SwapAdapterTest.mdx
 contracts/test/contract.UnprotectedStubVault.mdx
 contracts/test/contract.UpgradeAuthorityHarness.mdx
+contracts/test/contract.UpgradeAuthorityPredictionTest.mdx
 contracts/test/contract.UpgradeAuthorityStagesTest.mdx
 contracts/test/contract.UpgradeCeilingsTest.mdx
 contracts/test/contract.UpgradeLifecycleForkTest.mdx

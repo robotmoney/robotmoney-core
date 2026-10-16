@@ -942,7 +942,7 @@ async fn reorg_rollback_exclusions_are_documented_and_live() {
 /// block-scoped child that references a block-scoped parent must be deleted
 /// first: deleting the parent first raises a foreign-key violation. The live
 /// schema held one such pair (`governance_votes` → `governance_proposals`)
-/// until migration 0024 dropped it (issue 1698), so the test creates its own
+/// until migration 0025 dropped it (issue 1698), so the test creates its own
 /// pair. The parent's name sorts first, so a set derived in name order would
 /// delete it first: this asserts the FK-aware ordering, not just membership.
 #[tokio::test]

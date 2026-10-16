@@ -102,6 +102,33 @@ for (const [job, file] of Object.entries(SUITES)) {
   ok("suite 28 rehearsal runs on push to dev, is called by the nightly, starts its own fork and uploads rehearsal-counts-<sha>");
 }
 
+// 2a'. suite 28 (issue 1846): the upgrade lifecycle job runs after the rehearsal job at the same pin, so the two forks never run at once and the
+// lifecycle job restores the pin's RPC cache the rehearsal saved. always() keeps it independent of the rehearsal's result; the pin and draft guards stay.
+function lifecycleJobProblem(wf: any): string | null {
+  const job = wf.jobs?.["core-stages-twin-upgrade"];
+  if (!job || job.name !== "core-stages-twin-upgrade-lifecycle") return "suite-28-core-stages.yml has no core-stages-twin-upgrade-lifecycle job";
+  const needs: string[] = [].concat(job.needs ?? []);
+  for (const n of ["pin", "core-stages-twin"]) if (!needs.includes(n)) return `core-stages-twin-upgrade-lifecycle must need ${n} (needs: ${JSON.stringify(job.needs)})`;
+  const cond = String(job.if ?? "");
+  if (!/always\(\)/.test(cond)) return "core-stages-twin-upgrade-lifecycle if: must contain always()";
+  if (!cond.includes("needs.pin.result == 'success'")) return "core-stages-twin-upgrade-lifecycle if: must require needs.pin.result == 'success'";
+  if (!cond.includes("github.event.pull_request.draft == false")) return "core-stages-twin-upgrade-lifecycle if: must keep the draft guard";
+  return null;
+}
+{
+  const wf = yaml(".github/workflows/suite-28-core-stages.yml");
+  const problem = lifecycleJobProblem(wf);
+  if (problem) bad(problem);
+  // negative fixture: the same workflow with the job needing only pin must be refused
+  const onlyPin = structuredClone(wf);
+  onlyPin.jobs["core-stages-twin-upgrade"].needs = "pin";
+  if (lifecycleJobProblem(onlyPin) === null) bad("the lifecycle job check accepted a job that needs only pin");
+  const noAlways = structuredClone(wf);
+  noAlways.jobs["core-stages-twin-upgrade"].if = "${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}";
+  if (lifecycleJobProblem(noAlways) === null) bad("the lifecycle job check accepted an if: without always()");
+  ok("suite 28 lifecycle job needs pin and core-stages-twin, runs if: always() with the pin and draft guards (a needs-only-pin fixture is refused)");
+}
+
 // 2b. the nightly uploads the results and the pin file.
 const uploads = Object.values<any>(nightly.jobs).flatMap((j: any) => (j.steps ?? []).filter((x: any) => String(x.uses ?? "").includes("upload-artifact")).map((x: any) => x.with?.name));
 for (const want of ["suite-results", "twin-pin"]) if (!uploads.includes(want)) bad(`${NIGHTLY} does not upload the ${want} artifact`);

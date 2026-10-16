@@ -2,7 +2,7 @@
 
 `stage-table.json` is the one source of truth for the core deploy. It is DATA. The one deploy driver, the publish-contracts CLI (`bun publish-contracts/src/cli.ts`, in this repo), reads it from the repo root and keeps no script, env, artifact or manifest names of its own. Devops checks core out and runs the same CLI. There is no other runner.
 
-The CLI must run from the same core sha as `DEPLOY_SHA`. It reads the stages from `--core-dir` at `DEPLOY_SHA`, but the per-vault rules (`vaults[]`, issue 1705) from its own checkout. It refuses to start, naming both table paths, when the two checkouts' vault rules differ (issue 1833).
+The CLI must run from the same core sha as `DEPLOY_SHA`. It reads the stages from `--core-dir` at `DEPLOY_SHA`, but the per-vault rules (`vaults[]`, issue 1705) from its own checkout. It refuses to start, naming both table paths, when the two checkouts' vault rules differ (issue 1833). The emergency `pause-all` is the one exception: it reads no per-vault rule, so it runs with one warning naming both table paths (issue 1851).
 
 `stage-table.test.ts` (bun test) checks the table against the real scripts: every script file and contract exists, every `requiredEnv` name is read by its script, every manifest name is written by it, and no deploy script lacks a stage.
 

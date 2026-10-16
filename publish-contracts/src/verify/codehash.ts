@@ -49,7 +49,7 @@ export function loadArtifact(outDir: string, name: string): Artifact {
 /**
  * Two byte ranges the compiler fills in that no reference list names.
  *  - A library's own address: its runtime code starts with PUSH20 <address(this)> (0x73 and 20 zero bytes in the artifact, the deployed address on chain).
- *  - The CBOR metadata trailer (when `linksLibraries`): `forge script --libraries` compiles with the libraries in the settings, which
+ *  - The CBOR metadata trailer (when `linksLibraries`, and only when a CBOR map byte 0xa0-0xbf starts at the offset the last two bytes give): `forge script --libraries` compiles with the libraries in the settings, which
  *    changes the metadata hash (the last bytes) and nothing executable. `loadArtifact` masks it for every artifact (issue 1808).
  */
 export function implicitRefs(object: string, linksLibraries: boolean): Ref[] {
@@ -59,7 +59,11 @@ export function implicitRefs(object: string, linksLibraries: boolean): Ref[] {
   if (linksLibraries && hex.length > 4) {
     const cborLen = parseInt(hex.slice(-4), 16); // the last two bytes hold the CBOR length
     const total = hex.length / 2;
-    if (cborLen > 0 && cborLen + 2 < total) out.push({ start: total - 2 - cborLen, length: cborLen });
+    // Issue 1842: mask only a real trailer, a CBOR map (major type 5, first byte 0xa0-0xbf) starting at the computed offset inside the code. Two arbitrary last bytes
+    // that merely look like a plausible length would otherwise blank executable bytes.
+    const start = total - 2 - cborLen;
+    const first = cborLen > 0 && cborLen + 2 < total ? parseInt(hex.slice(start * 2, start * 2 + 2), 16) : NaN;
+    if (first >= 0xa0 && first <= 0xbf) out.push({ start, length: cborLen });
   }
   return out;
 }

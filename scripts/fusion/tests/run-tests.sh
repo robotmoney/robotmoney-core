@@ -45,14 +45,15 @@ REPO_ROOT="$(cd "$FUSION_DIR/../.." && pwd)"
 # and explorer-API block) raises the total to 170, and the timelock-sourced duplicate-release probe
 # check (issue 1647) makes it 171. Issue 1698 deleted the draft watcher and every
 # draft-proposal assertion; with the govern-stage weight-setter checks that
-# replace the draft checks, the full count is 117. The QA reconcile onto dev
-# (QA plan v1 leftovers L1) adds six: the cross-repo receipt-weights refusal and
-# apply-path binding (three), and the submit worker's no-rmpc-before-refusal and
-# outage-resolve checks (three), which makes it 123. Raise it whenever
+# replace the draft checks, the full count is 117. Issue 1849 moved the release
+# step to the apply-receipt row and its checks make it 129. The QA reconcile onto
+# dev (QA plan v1 leftovers L1) adds six: the cross-repo receipt-weights refusal
+# and apply-path binding (three), and the submit worker's no-rmpc-before-refusal
+# and outage-resolve checks (three), which makes it 135. Raise it whenever
 # assertions are added; lowering it is a deliberate, reviewable act and the
 # workflow re-checks the same number independently (see below), so lowering it
 # here alone buys nothing.
-MIN_EXPECTED_ASSERTIONS=123
+MIN_EXPECTED_ASSERTIONS=135
 
 # The workflow that runs this suite re-asserts the same floor against the
 # machine-readable FUSION_SELFTESTS_EXECUTED line, precisely so a silently
@@ -87,7 +88,9 @@ check(){ if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (want: $3, got: $2)";
 # STUB_DIR/malformed_tuple    — non-empty: getReceiptById emits a garbage tuple
 # STUB_DIR/rpc_down           — non-empty: every `cast call` fails like an outage
 # STUB_DIR/released           — non-empty: isReleased reports true
-# STUB_DIR/release_sends      — one line per `cast send` (a release broadcast)
+# STUB_DIR/release_sends      — one line per apply (or `cast send`) broadcast
+# STUB_DIR/govern_calls       — every govern-apply argv, one line each
+# STUB_DIR/govern_row         — the row name govern-apply prints (default apply-receipt)
 # STUB_DIR/cast_calls         — every `cast` argv, one line each
 # STUB_DIR/witness_drift      — non-empty: totalAssets moves one unit per read
 # STUB_DIR/weights            — what getWeights and currentWeights report
@@ -112,6 +115,8 @@ new_stubs() {
   : >"$STUB_DIR/verify_ok_false_exit_zero"
   : >"$STUB_DIR/released"
   : >"$STUB_DIR/release_sends"
+  : >"$STUB_DIR/govern_calls"
+  echo apply-receipt >"$STUB_DIR/govern_row"
   : >"$STUB_DIR/cast_calls"
   : >"$STUB_DIR/record.json"
   : >"$STUB_DIR/witness_drift"
@@ -177,23 +182,39 @@ echo "stub rmpc: unexpected argv: $*" >&2
 exit 2
 STUB
 
-  # The release stage runs the govern release command (publish contracts govern,
-  # row release-receipt, through the real Safe and the timelock), so this fake
-  # govern command, not `cast send`, records a release broadcast and flips
-  # `released`. `cast send` is never called for a release.
-  cat >"$STUB_DIR/bin/govern-release" <<'STUB'
+  # The release stage runs the govern apply command (publish contracts govern,
+  # row apply-receipt, through the real Safe and the timelock; issue 1849), so
+  # this fake govern command, not `cast send`, records the broadcast, flips
+  # `released` and moves the router weights the way applyReceipt does. It refuses
+  # like the real row: no --receipt-id or no readable --payload file is a usage
+  # error (64), an already released receipt is refused (65). `cast send` is never
+  # called for a release.
+  cat >"$STUB_DIR/bin/govern-apply" <<'STUB'
 #!/usr/bin/env bash
-echo "$*" >>"$STUB_DIR/cast_calls"
-if [[ -s "$STUB_DIR/released" ]]; then
-  echo '{"row":"release-receipt","txHash":"0x0000000000000000000000000000000000000000000000000000000000000000","status":0,"note":"already released"}'
-  exit 0
+echo "$*" >>"$STUB_DIR/govern_calls"
+id=""; payload=""; prev=""
+for a in "$@"; do
+  [[ "$prev" == "--receipt-id" ]] && id="$a"
+  [[ "$prev" == "--payload" ]] && payload="$a"
+  prev="$a"
+done
+if [[ -z "$id" || -z "$payload" || ! -s "$payload" ]]; then
+  echo "stub govern-apply: --row apply-receipt needs --receipt-id 0x<bytes32> and a readable --payload FILE" >&2
+  exit 64
 fi
-echo "release $*" >>"$STUB_DIR/release_sends"
+if [[ -s "$STUB_DIR/released" ]]; then
+  echo "stub govern-apply: receipt $id is already released" >&2
+  exit 65
+fi
+echo "apply $*" >>"$STUB_DIR/release_sends"
 echo 1 >"$STUB_DIR/released"
-printf '{"row":"release-receipt","txHash":"0x%064d","status":1}\n' 1
+echo "([0xaa,0xbb],[6000,4000])" >"$STUB_DIR/weights"
+row="$(cat "$STUB_DIR/govern_row")"
+printf '{"row":"%s","phase":"scheduled","txHash":"0x%064d","status":1}\n' "$row" 1
+printf '{"row":"%s","phase":"executed","txHash":"0x%064d","status":1}\n' "$row" 2
 exit 0
 STUB
-  chmod +x "$STUB_DIR/bin/govern-release"
+  chmod +x "$STUB_DIR/bin/govern-apply"
 
   cat >"$STUB_DIR/bin/cast" <<'STUB'
 #!/usr/bin/env bash
@@ -478,6 +499,7 @@ acceptance_env() {
   : >"$STUB_DIR/config.toml"
   RESULT="$STUB_DIR/result.json"
 }
+assertion_result() { jq -r --arg t "$1" '[.assertions[]|select(.assertion|test($t))|.result]|join(",")' "$RESULT" 2>/dev/null; }
 
 # An unknown stage name is a typo in an acceptance invocation. Refusing is the
 # only safe answer: silently running a subset would report a green run that
@@ -557,8 +579,9 @@ fi
 
 # THE RELEASE STAGE MUST BE IDEMPOTENT, BECAUSE THE SCRIPT IS RUN TWICE.
 # AC-E2E-05's bundle wording invokes this path twice against the SAME receipt.
-# `releaseReceipt` is a one-shot transition: a second send reverts
-# ReceiptAlreadyReleased, so asserting on a fresh status 0x1 would fail the
+# A receipt applies once (issue 1849: the stage runs govern row apply-receipt,
+# which releases it and sets its weights): a second apply is refused as already
+# released, so asserting on a fresh status 0x1 would fail the
 # second run for doing exactly what a released receipt should do. The record
 # stage has always been idempotent (submit-receipt-worker.sh reports
 # `already_anchored` and broadcasts nothing); the release stage was not, and the
@@ -567,7 +590,7 @@ new_stubs; acceptance_env
 printf '{"schema_version":"1.0"}' >"$STUB_DIR/receipt.json"
 printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"   # already anchored
 echo 1 >"$STUB_DIR/released"                                     # already released
-export FUSION_GOVERN_CMD="$STUB_DIR/bin/govern-release" \
+export FUSION_GOVERN_CMD="$STUB_DIR/bin/govern-apply" \
        FUSION_TIMELOCK_ADDRESS=0x00000000000000000000000000000000000000cc \
        FUSION_SUBMITTER_ADDRESS=0x00000000000000000000000000000000000000dd
 cat >"$STUB_DIR/bin/curl" <<'CURLSTUB'
@@ -582,7 +605,7 @@ chmod +x "$STUB_DIR/bin/curl"
   --out "$RESULT" >/dev/null 2>&1
 check "a second run broadcasts NO release transaction" \
   "$(wc -l <"$STUB_DIR/release_sends" | tr -d ' ')" "0"
-if [[ -s "$RESULT" ]] && jq -e '[.assertions[] | select(.stage=="release" and (.assertion|test("the admin release transaction succeeds")))]
+if [[ -s "$RESULT" ]] && jq -e '[.assertions[] | select(.stage=="release" and (.assertion|test("the Safe applies the receipt through the timelock")))]
       | length == 1 and all(.result == "PASS" and (.assertion|test("idempotent no-op")))' "$RESULT" >/dev/null 2>&1; then
   ok "an already-released receipt is recorded as an idempotent no-op, named as one"
 else
@@ -592,9 +615,9 @@ fi
 # AND THE FIRST RUN MUST STILL SEND ONE. The no-op must not become a blanket
 # pass that never releases anything.
 new_stubs; acceptance_env
-printf '{"schema_version":"1.0"}' >"$STUB_DIR/receipt.json"
+receipt_fixture   # four bucket weights, so the verify stage is all PASS
 printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"
-export FUSION_GOVERN_CMD="$STUB_DIR/bin/govern-release" \
+export FUSION_GOVERN_CMD="$STUB_DIR/bin/govern-apply" \
        FUSION_TIMELOCK_ADDRESS=0x00000000000000000000000000000000000000cc \
        FUSION_SUBMITTER_ADDRESS=0x00000000000000000000000000000000000000dd
 cat >"$STUB_DIR/bin/curl" <<'CURLSTUB'
@@ -605,14 +628,45 @@ for a in "$@"; do [[ "$prev" == "-o" ]] && out="$a"; prev="$a"; done
 exit 0
 CURLSTUB
 chmod +x "$STUB_DIR/bin/curl"
-"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,release \
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,release,govern \
   --out "$RESULT" >/dev/null 2>&1
-check "an unreleased receipt still broadcasts exactly one release" \
+check "an unreleased receipt still broadcasts exactly one apply" \
   "$(wc -l <"$STUB_DIR/release_sends" | tr -d ' ')" "1"
+check "…with no failed assertion" "$(jq -c "[.assertions[]|select(.result==\"FAIL\")|.assertion]" "$RESULT" 2>/dev/null)" "[]"
+# Issue 1849: the stage calls the govern command with the receipt id and the
+# payload file, and accepts only apply-receipt rows.
+check "the govern command gets --receipt-id ID --payload FILE" \
+  "$(grep -c -- "--receipt-id $FUSION_TEST_RECEIPT_ID --payload " "$STUB_DIR/govern_calls")" "1"
+check "…and the apply-receipt rows PASS AC-CORE-03" \
+  "$(assertion_result 'AC-CORE-03 the Safe applies the receipt through the timelock')" "PASS"
+# The apply moved the router weights (the stub does what applyReceipt does), so
+# INV-4 and AC-E2E-04 must close their window immediately before it.
+check "INV-4 closes its window before the apply, which moves the weights by design" \
+  "$(assertion_result 'up to the apply-receipt call')" "PASS"
+check "AC-E2E-04 compares the weights from before the apply" \
+  "$(assertion_result 'recording a receipt sets no router weights')" "PASS"
 # The duplicate probe must reach ReceiptAlreadyReleased: it is sent from the
 # timelock (the only ADMIN_ROLE holder), so it passes onlyRole first (issue 1647).
 check "the duplicate-release probe reaches ReceiptAlreadyReleased (sent from the timelock)" \
   "$(jq -r '[.assertions[]|select(.assertion|test("duplicate release is rejected"))|.result]|first' "$RESULT" 2>/dev/null)" "PASS"
+# The SAME stub chain, run again: exactly one apply across the two runs.
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,release,govern \
+  --out "$RESULT" >/dev/null 2>&1
+check "a second run against the same chain is an idempotent no-op" \
+  "$(assertion_result 'idempotent no-op')" "PASS"
+check "…with no failed assertion" "$(jq -c "[.assertions[]|select(.result==\"FAIL\")|.assertion]" "$RESULT" 2>/dev/null)" "[]"
+check "…and sends no second apply (one across both runs)" \
+  "$(wc -l <"$STUB_DIR/release_sends" | tr -d ' ')" "1"
+
+# A status-1 row that is NOT apply-receipt (the refused release-receipt row, say)
+# must FAIL AC-CORE-03: only apply-receipt rows count.
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"
+echo release-receipt >"$STUB_DIR/govern_row"
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,release \
+  --out "$RESULT" >/dev/null 2>&1
+check "a status-1 row that is not apply-receipt FAILS AC-CORE-03" \
+  "$(assertion_result 'AC-CORE-03 the Safe applies the receipt through the timelock')" "FAIL"
 
 # ─── T10: one shared INV-4 witness reader, failing LOUDLY ────────────────────
 # `witnesses()` built each reading as `out="name=$(cast call … 2>&1 | …)"`:
@@ -675,7 +729,7 @@ cross_repo_env() {
   export FUSION_GOVERNANCE_ADDRESS=0x0000000000000000000000000000000000000003
   export FUSION_ROUTER_ADDRESS=0x0000000000000000000000000000000000000004
   export FUSION_VAULT_ADDRESSES=0x0000000000000000000000000000000000000005,0x0000000000000000000000000000000000000006,0x0000000000000000000000000000000000000007,0x0000000000000000000000000000000000000008
-  export FUSION_GOVERN_CMD="$STUB_DIR/bin/govern-release"
+  export FUSION_GOVERN_CMD="$STUB_DIR/bin/govern-apply"
   export FUSION_EVIDENCE_DIR="$STUB_DIR/evidence"
   export FUSION_MAX_ATTEMPTS=3
   export RMPC_BIN=rmpc CAST_BIN=cast
@@ -743,30 +797,29 @@ unset FUSION_UNAUTHORIZED_SUBMITTER FUSION_SUBMITTER_ADDRESS
 # ─── T15 / issue 1698: the govern stage and the weights binding ────────────
 # Issue 1698 removed the draft step: RouterGovernance.applyReceipt releases a
 # receipt and sets the router weights in one call, so the govern stage now
-# asserts the converse of applying: the release-only path this harness runs set
-# no weights, read through the weight setter (RouterGovernance.currentWeights).
+# asserts that recording a receipt set no weights up to the apply (issue 1849),
+# read through the weight setter (RouterGovernance.currentWeights).
 echo
 echo "T15 — govern stage (no weight change) and weights assertions"
 
-assertion_result() { jq -r --arg t "$1" '[.assertions[]|select(.assertion|test($t))|.result]|join(",")' "$RESULT" 2>/dev/null; }
 
 new_stubs; acceptance_env; new_curl_stub; receipt_fixture
 "$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,govern --out "$RESULT" >/dev/null 2>&1
-check "unchanged weight-setter weights PASS the govern stage" "$(assertion_result 'release-only path sets no router weights')" "PASS"
+check "unchanged weight-setter weights PASS the govern stage" "$(assertion_result 'recording a receipt sets no router weights')" "PASS"
 check "…and the govern stage never calls rmpc governance" "$(grep -c '^governance' "$STUB_DIR/rmpc_calls")" "0"
 
 # NEGATIVE CONTROL: weights that moved inside the window must FAIL the stage.
 new_stubs; acceptance_env; new_curl_stub; receipt_fixture
 echo 1 >"$STUB_DIR/setter_weights_drift"
 "$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,govern --out "$RESULT" >/dev/null 2>&1
-check "weight-setter weights that moved FAIL the govern stage" "$(assertion_result 'release-only path sets no router weights')" "FAIL"
+check "weight-setter weights that moved FAIL the govern stage" "$(assertion_result 'recording a receipt sets no router weights')" "FAIL"
 check "…and fail the run" "$(jq -r '.ok' "$RESULT" 2>/dev/null)" "false"
 
 # An unreadable weight setter is a FAILURE, never a pass over two absences.
 new_stubs; acceptance_env; new_curl_stub; receipt_fixture
 echo 1 >"$STUB_DIR/rpc_down"
 "$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,govern --out "$RESULT" >/dev/null 2>&1
-check "an unreadable weight setter FAILS the govern stage" "$(assertion_result 'release-only path sets no router weights')" "FAIL"
+check "an unreadable weight setter FAILS the govern stage" "$(assertion_result 'recording a receipt sets no router weights')" "FAIL"
 
 # The fourth negative case: weights rewritten to 10000/0/0/0.
 new_stubs; acceptance_env; new_curl_stub; receipt_fixture
@@ -794,7 +847,7 @@ unset FUSION_UNAUTHORIZED_SUBMITTER FUSION_SUBMITTER_ADDRESS
 # register (receipts()).
 new_stubs; cross_repo_env; new_curl_stub; receipt_fixture
 "$FUSION_DIR/cross-repo-acceptance.sh" >/dev/null 2>&1
-check "cross-repo-acceptance passes with the release-only path and unchanged witnesses" "$?" "0"
+check "cross-repo-acceptance passes with the apply-receipt path and unchanged witnesses up to the apply" "$?" "0"
 check "…and never calls rmpc governance" "$(grep -c '^governance' "$STUB_DIR/rmpc_calls")" "0"
 
 new_stubs; cross_repo_env; new_curl_stub
@@ -866,6 +919,12 @@ out="$("$FUSION_DIR/cross-repo-acceptance.sh" 2>/dev/null)"
 check "an unreleased receipt broadcasts exactly one release" \
   "$(wc -l <"$STUB_DIR/release_sends" | tr -d ' ')" "1"
 check "…and reports the release as sent" "$(jq -r '.release.action' <<<"$out" 2>/dev/null)" "sent"
+# Issue 1849: the apply-receipt row gets the receipt id and the frontend receipt
+# file as its payload, and INV-4 closes before the apply moves the weights.
+check "…calling the govern command with --receipt-id ID --payload FILE" \
+  "$(grep -c -- "--receipt-id $FUSION_TEST_RECEIPT_ID --payload $FUSION_FRONTEND_RECEIPT_FILE" "$STUB_DIR/govern_calls")" "1"
+check "…and INV-4 holds up to the apply, which moved the weights" \
+  "$(jq -r '.inv4.unchanged' <<<"$out" 2>/dev/null)" "true"
 
 out="$("$FUSION_DIR/cross-repo-acceptance.sh" 2>/dev/null)"; rc=$?
 check "a second run against the same receipt still exits 0" "$rc" "0"
@@ -878,6 +937,12 @@ if jq -e '[.stages[]|select(test("already_released"))]|length==1' <<<"$out" >/de
 else
   bad "the second run's stages do not name the no-op: $(jq -c '.stages' <<<"$out" 2>/dev/null)"
 fi
+
+# Only apply-receipt rows count: a status-1 row of any other name fails the seam.
+new_stubs; cross_repo_env; new_curl_stub; receipt_fixture
+echo release-receipt >"$STUB_DIR/govern_row"
+"$FUSION_DIR/cross-repo-acceptance.sh" >/dev/null 2>&1
+check "cross-repo-acceptance fails on a status-1 row that is not apply-receipt" "$?" "1"
 
 # ─── T25: the alert path is validated, split by condition, and POSTED ───────
 # submit-receipt-worker.sh had NO alerting code: its "ALERT" was an `echo … >&2`,

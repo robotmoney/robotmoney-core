@@ -8,7 +8,7 @@ export function viemReader(rpcUrl: string): ChainReader {
     chainId: async () => await client.getChainId(),
     blockNumber: async () => await client.getBlockNumber(),
     blockTimestamp: async () => (await client.getBlock({ blockTag: "latest" })).timestamp,
-    getCode: async (address, blockNumber) => ((await client.getCode(blockNumber === undefined ? { address } : { address, blockNumber })) ?? "0x") as Hex,
+    getCode: async (address) => ((await client.getCode({ address })) ?? "0x") as Hex,
     nonce: async (address) => await client.getTransactionCount({ address, blockTag: "latest" }),
     getStorageAt: async (address, slot) => ((await client.getStorageAt({ address, slot })) ?? "0x") as Hex,
     read: async (address, signature, args = []) => {
@@ -22,6 +22,12 @@ export function viemReader(rpcUrl: string): ChainReader {
     receiptStatus: async (hash) => {
       try { return (await client.getTransactionReceipt({ hash })).status; }
       catch (e: any) { if (/not found|could not be found/i.test(String(e?.name ?? "") + String(e?.message ?? ""))) return null; throw e; }
+    },
+    deployReceipt: async (hash) => {
+      let r;
+      try { r = await client.getTransactionReceipt({ hash }); }
+      catch (e: any) { if (/not found|could not be found/i.test(String(e?.name ?? "") + String(e?.message ?? ""))) return null; throw e; }
+      return { blockNumber: r.blockNumber, status: r.status, contractAddress: (r.contractAddress ?? null) as Address | null, to: (r.to ?? null) as Address | null, logs: r.logs.map((l) => ({ address: l.address as Address })) };
     },
     callRaw: async (to, data, from): Promise<RawCallResult> => {
       try {
@@ -45,7 +51,7 @@ export function viemReader(rpcUrl: string): ChainReader {
         method: "eth_getLogs",
         params: [{ address, topics, fromBlock: `0x${fromBlock.toString(16)}`, toBlock: `0x${toBlock.toString(16)}` } as any],
       } as any) as any[];
-      return logs.map((l): LogEntry => ({ address: l.address as Address, topics: l.topics, data: l.data, blockNumber: BigInt(l.blockNumber) }));
+      return logs.map((l): LogEntry => ({ address: l.address as Address, topics: l.topics, data: l.data, blockNumber: BigInt(l.blockNumber), transactionHash: l.transactionHash }));
     },
   };
 }

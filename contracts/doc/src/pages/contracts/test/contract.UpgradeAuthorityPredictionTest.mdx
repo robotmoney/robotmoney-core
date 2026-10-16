@@ -1,0 +1,38 @@
+---
+title: "UpgradeAuthorityPredictionTest"
+description: "Issue 1853. publish-contracts derives the core timelock address in TypeScript (`predictCoreTimelock`) from the build artifact and the stage table, pins it at the first proxy stage and refuses a later stage whose recomputed prediction differs. Its runner tests use a stub forge that calls the same TypeScript, so they cannot show it equals `UpgradeAuthority.predictTimelock`, which the stage scripts really use. This test writes the Solidity prediction for fixed vectors to `VECTORS`; `scripts/ci/check-timelock-prediction-parity.ts` recomputes each one in TypeScript from the same `out/` build and fails on any difference."
+---
+
+# UpgradeAuthorityPredictionTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/66c6be7d8d38a1c949c92113a84b6f3188b35622/contracts/test/UpgradeAuthorityPrediction.t.sol)
+
+**Inherits:** Test
+
+Issue 1853. publish-contracts derives the core timelock address in TypeScript
+(`predictCoreTimelock`) from the build artifact and the stage table, pins it at the
+first proxy stage and refuses a later stage whose recomputed prediction differs. Its
+runner tests use a stub forge that calls the same TypeScript, so they cannot show it
+equals `UpgradeAuthority.predictTimelock`, which the stage scripts really use. This test
+writes the Solidity prediction for fixed vectors to `VECTORS`;
+`scripts/ci/check-timelock-prediction-parity.ts` recomputes each one in TypeScript from
+the same `out/` build and fails on any difference.
+
+## Constants
+
+### VECTORS
+
+```solidity
+string internal constant VECTORS = "out/timelock-prediction-vectors.json";
+```
+
+## Functions
+
+<a id="test_writespredictionvectors"></a>
+
+### test_writesPredictionVectors
+
+```solidity
+function test_writesPredictionVectors() public;
+```
+

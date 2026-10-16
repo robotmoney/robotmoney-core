@@ -35,6 +35,7 @@ import { APPLY_ROW } from "./apply-receipt.ts";
 import { CLEAR_ROW } from "./clear-voted-weights.ts";
 import { UNWIND_GUARD_KEYS, UNWIND_GUARD_ROW, parseUnwindGuardArgs } from "./unwind-guard.ts";
 import { REDEPLOY_ROW, REDEPLOY_VERB, REDEPLOY_KEYS, isRedeployKey, redeployRefusal, redeployShaPath, redeployShaRun, runRedeployVault } from "./redeploy-vault.ts";
+import { FREEZE_ROW, UPGRADE_ROW } from "./upgrade-rows.ts";
 import { RECEIPT_ROW, SELF_ADMIN_ROWS, assertReceiptId, assertSelfAdminAllowed, govRowRefusal, isSelfAdminRow, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { isHardwareSpecLike, ownerHardwareSigner, parseOwnerHardwareSpec, signerFromSpec, type CastRunner, type Signer } from "./safe/index.ts";
 import { pauseAll, pauseIncomplete, pauseUnrecorded, type PauseTrigger } from "./pause-all.ts";
@@ -107,6 +108,15 @@ export const USAGE = `publish contracts
                      new.unpauseDeposits(). The old vault keeps its shares, redeem and redeemInKind. Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only, refused
                      on 8453 in production. Refused (nothing scheduled) unless the old vault is Active and router-eligible, no voted vector is active and the new vault is the closed, linked, timelock-governed one the verb left.
                      --core-sha is the round's core_sha (the sha the verb ran at) or the original deployment sha: neither needs a frozen counts file of its own (QA plan v1 E1).
+                     --row freeze-upgrades (no other argument, issue 1842) freezes every unfrozen core proxy: ONE timelock batch of freezeUpgrades(implementation, implementation_code_hash), both
+                     taken from the latest deployments/<chain>/upgradeability.json (run verify first). Prints a preview per proxy. Refused (nothing scheduled) while an upgrade operation is
+                     pending on the timelock, or when the record is stale. Production and rehearsal, never part of stage 13. Run verify after it.
+                     --row upgrade-proxy --proxy NAME --implementation 0x<address> [--upgrade-build DIR] (issue 1842) upgrades one core proxy: ONE timelock call, upgradeToAndCall(new, "").
+                     Refused (nothing scheduled) when the proxy is frozen, when the new implementation's storage layout snapshot (DIR, default the DEPLOY_SHA checkout) does not extend the
+                     deployed one append-only, or when its runtime code is not DIR/out's build. After the execute it rewrites the proxy's stage manifest implementation fields. Run verify after it.
+  --proxy NAME       govern --row upgrade-proxy only: the verifier name of the proxy (gateway, registry, router, governance, icpolicy, receipt, vault[rmUSDC], ...).
+  --implementation A govern --row upgrade-proxy only: the new implementation, already deployed (linked to the live libraries).
+  --upgrade-build D  govern --row upgrade-proxy only: a core checkout at the commit the new implementation was built from, after forge build. Default: the DEPLOY_SHA checkout.
   --vault KEY        redeploy-vault only: the vault to redeploy. PROTO is the only one.
   --prior-out DIR    verify, after a redeploy: the forge out/ directory of a git checkout built at the ORIGINAL deployment sha (its HEAD must be that sha). Every contract the redeploy did not replace
                      (core, libraries, adapters, the other vaults, the retired one) runs the code of that build, so its code hash is compared with it; the replacing vault is compared with the
@@ -144,6 +154,8 @@ export const USAGE = `publish contracts
   --call-label L --call-target ADDR --call-data 0x..   govern, Twin chain 918453 only (refused on 8453): one generic Safe -> Timelock call (schedule, wait by warp, execute),
                      for test fixtures whose action is not a mainnet govern row. Not combined with --row.
   --max-wait SECONDS govern: longest timelock wait this process accepts (default 3600)
+  --no-warp          govern, Twin chain only: no time warp, the wait is real and a wait over --max-wait exits 15 (GOVERN_PENDING) as on 8453 (the Twin upgrade rehearsal
+                     queues an upgrade between the freeze schedule and its execute this way, issue 1859)
 Aliases: --chain-id for --chain, --deploy-sha for --core-sha.
 Environment: PUBLISH_MANIFEST_DIR names the manifest directory (stage manifests are written and read there, not in the core checkout).
 Govern prints one JSON line per round event on stdout: {"row":"...","phase":"scheduled|executed|cancelled","txHash":"0x...","status":1,"readyAt":1700000000}. Logs are JSON on stderr.`;
@@ -200,7 +212,7 @@ export interface CliDeps {
 
 export interface Parsed {
   chain: number; rpc: string; sheet: string; signer?: string; environment: string; coreSha: string; stage?: string; resume: boolean; dryRun: boolean;
-  verb?: Verb; row?: string; coreDir?: string; evidence?: string; countsDir?: string; countsRequireOriginDev?: boolean; measure: boolean; ownerSigners: string[]; emergencySigner?: string; compareSheet?: string; maxWait?: number; call?: { label: string; target: string; data: string };
+  verb?: Verb; row?: string; coreDir?: string; evidence?: string; countsDir?: string; countsRequireOriginDev?: boolean; measure: boolean; ownerSigners: string[]; emergencySigner?: string; compareSheet?: string; maxWait?: number; noWarp: boolean; call?: { label: string; target: string; data: string };
   /** With --row release-receipt or --row apply-receipt: the receipt. */
   receiptId?: string;
   /** With --row apply-receipt only: the receipt payload file. */
@@ -219,6 +231,10 @@ export interface Parsed {
   priorOut?: string;
   /** prove-control --resume (issue 1724): --logs-rpc, --logs-window, --logs-tries. Absent when none is given. */
   logs?: LogScanOpts;
+  /** With --row upgrade-proxy only (issue 1842): the proxy name, the new implementation and the core checkout it was built from. */
+  proxy?: string;
+  implementation?: string;
+  upgradeBuild?: string;
 }
 
 export function parseCli(argv: string[]): Parsed {
@@ -231,7 +247,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" }, "counts-require-origin-dev": { type: "boolean" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "no-warp": { type: "boolean" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, proxy: { type: "string" }, implementation: { type: "string" }, "upgrade-build": { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -253,7 +269,7 @@ export function parseCli(argv: string[]): Parsed {
     if (!(verb === "govern" || stageNames === "govern")) throw new PublishError("USAGE", `--row applies to the govern verb (or --stage govern) only\n${USAGE}`);
     // An unknown row fails here, before any work. Whether update-delay, batch and cancel may run on 8453 depends on the sheet's DEPLOYMENT_KIND, so runGovern decides that.
     if (isSelfAdminRow(row)) assertSelfAdminAllowed(Number(chainRaw), row);
-    else if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW && row !== REDEPLOY_ROW && row !== UNWIND_GUARD_ROW) resolveGovernRow(row);
+    else if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW && row !== REDEPLOY_ROW && row !== UNWIND_GUARD_ROW && row !== FREEZE_ROW && row !== UPGRADE_ROW) resolveGovernRow(row);
   }
   const vaultArg = v.vault as string | undefined;
   if (verb === REDEPLOY_VERB) {
@@ -284,6 +300,12 @@ export function parseCli(argv: string[]): Parsed {
   const payload = v.payload as string | undefined;
   if (row === APPLY_ROW && payload === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --payload FILE\n${USAGE}`);
   if (payload !== undefined && row !== APPLY_ROW && verb !== "record-receipt") throw new PublishError("USAGE", `--payload goes with --row ${APPLY_ROW} only (or the record-receipt verb)\n${USAGE}`);
+  if (v["no-warp"] && verb !== "govern") throw new PublishError("USAGE", `--no-warp goes with the govern verb only\n${USAGE}`);
+  // issue 1842: the governed upgrade row's arguments
+  const proxy = v.proxy as string | undefined, implementation = v.implementation as string | undefined, upgradeBuild = v["upgrade-build"] as string | undefined;
+  if (row === UPGRADE_ROW && (proxy === undefined || implementation === undefined)) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} needs --proxy NAME and --implementation 0x<address>\n${USAGE}`);
+  if ((proxy !== undefined || implementation !== undefined || upgradeBuild !== undefined) && row !== UPGRADE_ROW) throw new PublishError("USAGE", `--proxy, --implementation and --upgrade-build go with --row ${UPGRADE_ROW} only\n${USAGE}`);
+  if (implementation !== undefined && !/^0x[0-9a-fA-F]{40}$/.test(implementation)) throw new PublishError("USAGE", `--implementation must be an address, got '${implementation}'`);
   let adminArgs: Record<string, string> | undefined;
   const adminRaw = v["admin-arg"] as string[] | undefined;
   if (adminRaw !== undefined && row === UNWIND_GUARD_ROW) {
@@ -336,7 +358,7 @@ export function parseCli(argv: string[]): Parsed {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
     coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, countsRequireOriginDev: !!v["counts-require-origin-dev"], measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
-    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri, adminArgs, vault: vaultArg, priorOut, logs,
+    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, noWarp: !!v["no-warp"], call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri, adminArgs, vault: vaultArg, priorOut, logs, proxy, implementation, upgradeBuild: upgradeBuild === undefined ? undefined : resolve(upgradeBuild),
   };
 }
 
@@ -517,8 +539,12 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     assertExitFeeBound(coreDir, sheet.vaults);
     // the stage table is core's, at the DEPLOY_SHA: no script, env, artifact or manifest name is kept in this repo.
     // Issue 1833: the per-vault rules this CLI loaded from its own checkout must be that table's, or the CLI runs from another sha. Checked before any verb runs.
+    // Issue 1851: except the emergency pause-all, which reads no per-vault rule: a mismatch there is one warning naming both tables, never a refusal.
     const stageTable = loadStageTable(coreDir);
-    assertVaultRulesMatch(stageTable, join(coreDir, TABLE_REL));
+    try { assertVaultRulesMatch(stageTable, join(coreDir, TABLE_REL)); } catch (e) {
+      if (a.verb !== "pause-all" || !isPublishError(e, "INPUT_MISSING")) throw e;
+      log.log("warn", "vault_rules.mismatch", { ...(e.details ?? {}), message: `${e.message}. pause-all reads no per-vault rule, so it runs anyway` });
+    }
     useStageTable(stageTable);
     const evidenceDir = resolve(cwd, a.evidence ?? join("evidence", `publish-${rpcChainId}-${a.coreSha.slice(0, 12)}`));
     const buildCtx = (frozen: RunContext["frozen"], measure: boolean): RunContext => {
@@ -679,12 +705,13 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
           try { await runVerifyStage(c, row, m, { ...realVerifyDeps, ...(deps.verify ?? {}) }); } catch (e) {
             // A part-way govern run (GOVERN_PENDING, issue 1667) is not a failed verify: nothing was checked, so nothing is paused. Neither is a verify refused before
             // the verifier ran because it would compare a contract with the wrong build (QA plan v1 E1, redeploy-vault.ts verifyBuildRefusal).
-            if (!isPublishError(e, "GOVERN_PENDING") && !(isPublishError(e, "USAGE") && e.details.refused_before_verify === true)) postflight = "verify";
+            // Neither is a verify whose only failures are reads the RPC refused (RPC_REFUSED, issue 1851): an RPC without the data is not an incident.
+            if (!isPublishError(e, "GOVERN_PENDING") && !isPublishError(e, "RPC_REFUSED") && !(isPublishError(e, "USAGE") && e.details.refused_before_verify === true)) postflight = "verify";
             throw e;
           }
         },
         govern: async (c, row, m) => {
-          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, agentLabel: a.agentLabel, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
+          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, ...(a.noWarp ? { warp: false as const } : {}), row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, agentLabel: a.agentLabel, proxy: a.proxy, implementation: a.implementation, upgradeBuild: a.upgradeBuild, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
         },
       });
       try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { postflight = "postflight"; throw e; }

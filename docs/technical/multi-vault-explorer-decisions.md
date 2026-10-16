@@ -4,7 +4,7 @@
 > `Plan tracking issue #109`. Resolves all open schema questions that gate
 > any indexer code change or migration file: the `vault_snapshots`
 > generalization strategy, three new tables (`router_weight_snapshots`,
-> `governance_proposals`, `governance_votes`; migration 0024 later dropped the
+> `governance_proposals`, `governance_votes`; migration 0025 later dropped the
 > last two with the voting path, issue 1698), the `account_positions` query
 > shape, which existing API queries break after migration, and the indexer
 > poll-loop extension points. No schema migration SQL or indexer code changes
@@ -215,7 +215,7 @@ snapshot is sufficient. A heartbeat snapshot would add rows without data value.
 
 The indexer no longer writes this table. `RouterGovernance` has no voting, so
 it emits no proposal events (issue 1698). Migration
-`0024_drop_governance_voting.sql` drops the table that migration 0005 created
+`0025_drop_governance_voting.sql` drops the table that migration 0005 created
 (QA plan v1 C1), and explorer-api no longer serves `/v1/governance/proposals`.
 Weight history comes from the router's `WeightsSet` and `DefaultWeightsSet`
 events (§5.1). `RouterGovernance` emits `ReceiptApplied` when the Safe applies
@@ -225,7 +225,7 @@ a receipt, which ties an active vector to its receipt.
 
 The indexer no longer writes this table, for the same reason as §5.2: there is
 no vote event to index (issue 1698). Migration
-`0024_drop_governance_voting.sql` drops it with `governance_proposals`.
+`0025_drop_governance_voting.sql` drops it with `governance_proposals`.
 
 ---
 
@@ -420,7 +420,7 @@ the same or separate PRs but must not land before step 2.
 - `docs/technical/portfolio-router-decisions.md` — the router's `WeightsSet` and
   `DefaultWeightsSet`, the event source for `router_weight_snapshots`.
 - `docs/technical/governance-decisions.md` — the receipt application path.
-  Migration `0024_drop_governance_voting.sql` dropped the `governance_proposals`
+  Migration `0025_drop_governance_voting.sql` dropped the `governance_proposals`
   and `governance_votes` tables with the voting path (issue 1698).
 - `services/explorer-indexer/src/indexer.rs` — Single-vault hardcoding audit
   (§3.1).

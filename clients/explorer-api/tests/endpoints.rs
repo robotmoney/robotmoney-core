@@ -937,7 +937,7 @@ async fn get_router_weights_empty_when_no_snapshots() {
 
 /// QA plan C1 (core issue 1698): RouterGovernance voting was deleted, so the
 /// proposals list and detail routes are gone. Both fall through to the global
-/// 404 handler, the same as any unknown path. Migration 0024 (applied by the
+/// 404 handler, the same as any unknown path. Migration 0025 (applied by the
 /// harness) dropped the tables they read, so a route that came back would
 /// 500 instead.
 #[tokio::test]
@@ -1215,7 +1215,7 @@ async fn account_positions_returns_vault_balances() {
 /// The test writes a newer vault A snapshot shaped like rmAGENT: 1000 USDC of assets over 1000 USDC
 /// of supply (a gross share price of 1), and `previewRedeem(totalSupply())` 950 USDC after a 5%
 /// slippage floor. The agent's 50 shares are worth 47.5 USDC at exit, not 50. A later snapshot
-/// without the reading (a row from before migration 0023) serves `null`, never the gross value.
+/// without the reading (a row from before migration 0024) serves `null`, never the gross value.
 #[tokio::test]
 async fn account_positions_usdc_value_is_preview_redeem_not_convert_to_assets() {
     let s = start_with_seed().await;
@@ -1235,7 +1235,7 @@ async fn account_positions_usdc_value_is_preview_redeem_not_convert_to_assets() 
 }
 
 /// A vault A snapshot at `block` shaped like rmAGENT: 1000 USDC of assets over 1000 USDC of supply,
-/// `previewRedeem(totalSupply())` = `preview` (NULL for a row from before migration 0023).
+/// `previewRedeem(totalSupply())` = `preview` (NULL for a row from before migration 0024).
 async fn vault_a_snapshot(pool: &sqlx::PgPool, block: i64, preview: Option<&str>) {
     sqlx::query(
         "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, \

@@ -146,9 +146,15 @@ Implemented by issue 1809. The operator procedure is
   2 deployer transactions per proxy. The counts do not depend on the mode.
 - **Timelock pin (issue 1835).** The first proxy stage records the predicted
   timelock address and its init code hash, derived from the build, in the run
-  manifest. Every proxy manifest must name that address, and the timelock stage
-  refuses to run when its recomputed prediction differs (a toolchain change
-  moves the CBOR metadata and so the address). A timelock someone already
+  manifest. Every proxy manifest must name that address. Every later proxy
+  stage and the timelock stage recompute the prediction after their simulation
+  and refuse before they broadcast when it differs (issue 1853: a toolchain
+  change moves the CBOR metadata and so the address, and so does another Safe
+  or delay). A run manifest from an earlier release without the pin is
+  backfilled only when the first proxy stage's manifest, its proxy's
+  `upgradeTimelock()` on chain and the recomputed prediction agree. CI checks
+  that the TypeScript prediction equals `UpgradeAuthority.predictTimelock`
+  for the same build. A timelock someone already
   deployed at the prediction with the build's runtime code is adopted: the
   stage sends one transaction fewer and records the adoption.
 - **Verify.** Per proxied core contract the verifier proves the build's
@@ -184,9 +190,10 @@ is refused after the freeze with `UpgradesAreFrozen`. Verify then claims core
 immutability. `evidence-check --upgrade-lifecycle` reads the record back from
 the chain. The release runbook (4.1 and 4.12) makes this job and an external
 security review gates of a final mainnet release, and says why a rollback is not
-assumed safe after a state migration. Operator rows for upgrade and freeze
-rounds are follow-up work: the rehearsal drives the Safe tool library directly
-and re-records the gateway manifest itself.
+assumed safe after a state migration. The rehearsal runs the operator rows
+`govern --row upgrade-proxy` and `govern --row freeze-upgrades` (issues 1842 and
+1859); only the queued upgrade that never executes goes through the Safe tool
+library directly.
 
 ## Signing clients and disclosure (stage 3)
 
@@ -223,12 +230,12 @@ authorizes signing.
 gateway call carries an implementation version, and adding one is a Solidity
 change (stage 1 scope). The clients therefore bind what they sign:
 
-- `rmpc deposit`, `withdraw` and `withdraw-router` re-read the implementation
-  at `latest` after signing and before broadcast. A changed or unapproved
+- Every `rmpc` gateway write (`deposit`, `withdraw`, `withdraw-router`,
+  `committee vote-submit` and `receipt submit`) re-reads the implementation at
+  `latest` after signing and before broadcast. A changed or unapproved
   implementation discards the signed transaction unsent
-  (`ErrImplementationChanged`), so it can never execute. `committee
-  vote-submit` and `receipt submit` verify the gateway once before signing and
-  are not re-verified before broadcast (issue 1840, `write_path.rs` module doc).
+  (`ErrImplementationChanged`), so it can never execute (issue 1856,
+  `write_path.rs` module doc).
 - After the receipt, `rmpc` reads the implementation slot at the block the
   transaction executed in. Anything other than the implementation it verified
   is reported as `ErrImplementationChanged` with the `tx_hash`, never as a
@@ -236,8 +243,9 @@ change (stage 1 scope). The clients therefore bind what they sign:
   blindly.
 - A signed `deposit`, `withdraw` or `withdraw-router` carries an on-chain
   `deadline` of at most `MAX_DEADLINE_SKEW` (600 s) ahead of the block time.
-  `committee vote-submit` and `receipt submit` carry no deadline; only the
-  receipt check covers them. An upgrade must wait the
+  `committee vote-submit` and `receipt submit` carry no deadline, because the
+  gateway's vote and receipt ABI has none; the re-read before broadcast and the
+  receipt check cover them. An upgrade must wait the
   timelock's minimum delay after it is scheduled, which is far longer, and the
   `CallScheduled` operation is public for that whole time. A write signed before
   an upgrade can only execute after it inside that bound, and the receipt check
@@ -272,7 +280,10 @@ intended fail-closed behavior.
 registry's proxy events are fetched whether or not `INDEXER_MULTI_VAULT_EVENTS`
 is on. On startup the indexer backfills both topics for every watched proxy from
 the deploy floor to its cursor, so a proxy added after the cursor passed its
-deploy block still gets its history (issue 1840). The API
+deploy block still gets its history (issue 1840). The backfill runs one bounded
+slice per tick from a saved checkpoint, and a refused or cursorless backfill is
+retried and shown as `proxy_backfill` in the explorer's `/health` (issue 1856).
+The API
 lists them with the governance events and gives each contract its
 `implementation`, `upgrade_state` (`frozen`, `upgradeable`, `unknown`) and
 `frozen_at_block` on `/v1/chains/:chain_id/contracts`. The dapp shows the
@@ -288,8 +299,12 @@ because the timelock's executor role is open and anyone can execute a ready
 upgrade from a throwaway contract's constructor. Neither the deploy block nor
 "the first indexed `Upgraded`" exempts a row, so a late-registered vault's
 first upgrade and a freeze with no indexed `Upgraded` both page (issue 1840).
-Rows indexed before this rule existed are marked by the startup backfill; until
-then they page once. The dapp re-verifies the gateway proxy and implementation
+Rows indexed before this rule existed are marked by the startup backfill. Proxy
+events at or below the watchdog's first-run baseline (the indexer cursor when a
+watchdog first starts on the database; `-1`, so nothing, when one ran before)
+are recorded as seen and never paged, so neither those rows nor the
+backfilled history page in a burst; every later event pages (issue 1856,
+`docs/operations/watchdog-liveness.md`). The dapp re-verifies the gateway proxy and implementation
 at the latest block right before each write from AdminFlow and AgentsPanel,
 through the connected wallet's provider on the connected chain, and before a
 Safe proposal signature. A gateway, Timelock or Safe write is refused unless
@@ -339,7 +354,7 @@ the target design until code and on-chain evidence exist.
 | `docs/development/single-production-codebase.md` | Permit mode as initialized state of one artifact; prohibit an environment-specific implementation. | Done. |
 | `docs/prd.md` §9 and `docs/technical/smart-contract-invariants.md` | The PRD now requires public upgrade/freeze disclosure; add executable invariants once the interface and implementation are settled. | Done: GOV-6 to GOV-11 with their tests; the PRD names the on-chain facts. User-facing disclosure done in stage 3 (issue 1810): explorer API, dapp, `rmpc get-gateway`, watchdog. |
 | `docs/operations/contract-release-runbooks.md`, `docs/development/stage-deployment.md`, per-release runbooks | Add mode approval, storage/layout review, Safe/timelock execution, freeze proof, and existing-address cutover procedure before an upgradeable release. | Stage 2 done (issue 1809): runbook 4.12 covers the mode, the stage order, resume, the verify labels and record, freeze ownership, the deadline, missed-deadline alerts and the voluntary cutover plan. Stage 4 done (issue 1811): runbook 4.1 adds the external security review and the lifecycle rehearsal gates, 4.12 adds the Twin rehearsal, the steps after a governed upgrade and the rollback limits. |
-| `scripts/deploy/stage-table.json`, `publish-contracts/`, manifests, CI, client/indexer configuration | Implement and verify the selected mode; refresh frozen counts and address/config expectations. | Partly done: the stage table names each proxy stage's `SAFE_ADDRESS`, `TIMELOCK_MIN_DELAY`, `UPGRADE_MODE` and linked libraries; publish passes `UPGRADE_MODE=frozen` and verifies the implementation behind each proxy; the manifests record the implementation, timelock and mode; CI gates the storage layouts. Client and indexer configuration done in stage 3 (issue 1810): `rmpc` `gateway_implementation` + `gateway_implementation_runtime_hash`, the dapp's `VITE_GATEWAY_EXPECTED_IMPLEMENTATION(_HASH)`, the indexer's proxy events. Stage 2 done (issue 1809): the sheet's `UPGRADE_MODE` and `UPGRADE_FREEZE_DEADLINE`, the stage table's `proxies` and `upgradeAuthority`, the verifier's per-proxy labels and `upgradeability.json`, the evidence section, and source verification of every implementation. No frozen counts exist yet for a proxied DEPLOY_SHA: the next Twin rehearsal measures them. |
+| `scripts/deploy/stage-table.json`, `publish-contracts/`, manifests, CI, client/indexer configuration | Implement and verify the selected mode; refresh frozen counts and address/config expectations. | Partly done: the stage table names each proxy stage's `SAFE_ADDRESS`, `TIMELOCK_MIN_DELAY`, `UPGRADE_MODE` and linked libraries; publish passes the sheet's `UPGRADE_MODE` (`upgradeable` or `frozen`, no default) and verifies the implementation behind each proxy; the manifests record the implementation, timelock and mode; CI gates the storage layouts. Client and indexer configuration done in stage 3 (issue 1810): `rmpc` `gateway_implementation` + `gateway_implementation_runtime_hash`, the dapp's `VITE_GATEWAY_EXPECTED_IMPLEMENTATION(_HASH)`, the indexer's proxy events. Stage 2 done (issue 1809): the sheet's `UPGRADE_MODE` and `UPGRADE_FREEZE_DEADLINE`, the stage table's `proxies` and `upgradeAuthority`, the verifier's per-proxy labels and `upgradeability.json`, the evidence section, and source verification of every implementation. No frozen counts exist yet for a proxied DEPLOY_SHA: the next Twin rehearsal measures them. |
 | `docs/adr/` | Record the final pattern and its irreversibility in an accepted ADR once implementation choices are reviewed; do not rewrite prior ADRs. | ADR-0014 records the pattern, Proposed until it is reviewed and accepted. |
 
 ## References

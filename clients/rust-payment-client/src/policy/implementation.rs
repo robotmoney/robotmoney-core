@@ -179,6 +179,31 @@ pub async fn verify_gateway_code_now(
     verify_gateway_code(rpc, cfg, &format!("0x{block:x}")).await
 }
 
+/// After signing, before broadcast: `Ok` when the gateway at `latest` still
+/// runs the `bound` implementation it was verified against before signing,
+/// and still passes [`verify_gateway_code`]. Otherwise the caller discards
+/// the signed envelope unsent (`ErrImplementationChanged`, or the
+/// verification's own error). Every gateway write calls this between signing
+/// and broadcast: [`crate::write_path::WriteSession::submit`],
+/// `committee vote-submit` and `receipt submit` (issue 1856).
+pub async fn reverify_gateway_after_signing(
+    rpc: &FailoverRpcClient,
+    cfg: &Config,
+    gateway: Address,
+    bound: Option<Address>,
+) -> Result<()> {
+    let live = read_implementation(rpc, gateway, "latest").await?;
+    if live != bound {
+        return Err(RmpcError::ErrImplementationChanged(format!(
+            "gateway implementation changed from {} to {} after preflight; the signed \
+             transaction was discarded unsent",
+            fmt_implementation(bound),
+            fmt_implementation(live)
+        )));
+    }
+    verify_gateway_code(rpc, cfg, "latest").await.map(|_| ())
+}
+
 /// After a write executed: `Ok` when the gateway implementation in the
 /// transaction's block is the `bound` one it was signed against. Otherwise
 /// `ErrImplementationChanged` (or `ErrImplementationUnverified` when the slot

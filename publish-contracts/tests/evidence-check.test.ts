@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertOwnerExceptions } from "../src/plan.ts";
 import { UNPAUSE_ROWS } from "../src/govern.ts";
-import { releaseCalldata, checkVaultRedeploys, checkVaultRedeploysOnChain, checkVotedWeightsClears, checkVotedWeightsClearsOnChain } from "../src/evidence-check.ts";
+import { releaseCalldata, checkVaultRedeploys, checkVaultRedeploysOnChain, checkVotedWeightsClears, checkVotedWeightsClearsOnChain, governedUpgradeProblems } from "../src/evidence-check.ts";
 import { buildRedeployCalls } from "../src/redeploy-vault.ts";
 import { clearCalldata } from "../src/clear-voted-weights.ts";
 import { VAULT_RULES } from "../src/vault-rules.ts";
@@ -716,5 +716,54 @@ describe("vault_redeploys: the verify of a round at another sha is recorded (QA 
     expect(checkVaultRedeploys(ev(entry({ core_sha: SHA_B, prior_out_sha: SHA_A, verified_at_sha: SHA_B })), 900)).toEqual([]);
     expect(checkVaultRedeploys(ev(entry({ core_sha: SHA_B, prior_out_sha: SHA_B, verified_at_sha: SHA_B })), 900).join("\n")).toContain("is not the evidence core_sha");
     expect(checkVaultRedeploys(ev(entry({ core_sha: SHA_B, prior_out_sha: SHA_A, verified_at_sha: SHA_A })), 900).join("\n")).toContain(`verified_at_sha ${SHA_A} is not ${SHA_B}`);
+  });
+});
+
+// Issue 1859: the governed-upgrade lists the freeze and upgrade rows write (govern.ts), checked offline: well formed, executed once, never a cancel field. A transaction the tool
+// could not recover (an execution adopted from the chain with no CallExecuted log found) is null with a note.
+describe("upgrade_freezes and proxy_upgrades (issue 1859)", () => {
+  const D = 172800;
+  const freeze = () => ({
+    step: "freeze-upgrades", timelock: a(9), targets: { gateway: { proxy: a(40), implementation: a(41), implementation_code_hash: h(42) }, registry: { proxy: a(43), implementation: a(44), implementation_code_hash: h(45) } },
+    operation_id: h(4000), schedule_tx: h(4001), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(4002), execute_status: 1, execute_block_timestamp: T0 + D,
+  });
+  const upgrade = () => ({
+    step: "upgrade-proxy", proxy_name: "gateway", proxy: a(40), from_implementation: a(46), from_code_hash: h(47), to_implementation: a(41), to_code_hash: h(42), build: "/core",
+    timelock: a(9), manifest_fields: { gateway_implementation: a(41), gateway_implementation_runtime_hash: h(42), gateway_runtime_hash: h(48) },
+    operation_id: h(5000), schedule_tx: h(5001), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(5002), execute_status: 1, execute_block_timestamp: T0 + D,
+  });
+  const withLists = (f: (fr: any, up: any) => void = () => {}) => { const e = good(); const fr = freeze(), up = upgrade(); f(fr, up); e.upgrade_freezes = [fr]; e.proxy_upgrades = [up]; return checkEvidence(e); };
+  test("well formed entries pass, alone and inside the evidence", () => {
+    expect(withLists()).toEqual([]);
+    expect(governedUpgradeProblems({ upgrade_freezes: [freeze()], proxy_upgrades: [upgrade()] })).toEqual([]);
+  });
+  test("a malformed upgrade_freezes entry fails", () => {
+    expect(withLists((fr) => { fr.targets = {}; }).join("\n")).toContain("targets name no proxy");
+    expect(withLists((fr) => { fr.targets.gateway.implementation_code_hash = "0x12"; }).join("\n")).toContain("target gateway implementation_code_hash is not a bytes32");
+    expect(withLists((fr) => { fr.targets["vault[rmNOPE]"] = fr.targets.gateway; }).join("\n")).toContain("is not a proxied core contract");
+    expect(withLists((fr) => { fr.execute_status = 0; }).join("\n")).toContain("execute receipt status is 0");
+    expect(withLists((fr) => { fr.execute_block_timestamp = T0 + 60; }).join("\n")).toContain("schedule-to-execute gap 60 s is under 172800 s");
+    expect(withLists((fr) => { fr.timelock = a(99); }).join("\n")).toContain("is not the deployed timelock");
+  });
+  test("a malformed proxy_upgrades entry fails", () => {
+    expect(withLists((_, up) => { up.to_implementation = up.from_implementation; }).join("\n")).toContain("nothing was upgraded");
+    expect(withLists((_, up) => { up.proxy_name = "nope"; }).join("\n")).toContain("proxy_name nope is not a proxied core contract");
+    expect(withLists((_, up) => { up.to_code_hash = undefined; }).join("\n")).toContain("to_code_hash is not a bytes32");
+    expect(withLists((_, up) => { up.manifest_fields = {}; }).join("\n")).toContain("manifest_fields does not re-record the implementation field");
+    expect(withLists((_, up) => { up.execute_tx = up.schedule_tx; }).join("\n")).toContain("execute_tx is also the schedule_tx");
+    expect(withLists((fr, up) => { up.operation_id = fr.operation_id; }).join("\n")).toContain("operation_id is also the operation_id");
+    expect(checkEvidence({ ...good(), proxy_upgrades: {} }).join("\n")).toContain("proxy_upgrades is not a list");
+  });
+  test("an unknown transaction is null with a null status and timestamp and a note; without the note, or with a status, it fails", () => {
+    const unknown = (x: any) => { x.execute_tx = null; x.execute_status = null; x.execute_block_timestamp = null; x.note = "execute_tx unknown: no CallExecuted log"; };
+    expect(withLists((fr, up) => { unknown(fr); unknown(up); })).toEqual([]);
+    expect(withLists((_, up) => { unknown(up); delete up.note; }).join("\n")).toContain("execute_tx is null with no note");
+    expect(withLists((_, up) => { unknown(up); up.execute_status = 1; }).join("\n")).toContain("execute_status and execute_block_timestamp must be null");
+  });
+  test("an entry carrying cancelled, cancel_tx or cancel_status fails with the forged-cancel message", () => {
+    for (const k of ["cancelled", "cancel_tx", "cancel_status"]) {
+      expect(withLists((fr) => { fr[k] = k === "cancel_tx" ? h(1) : 1; }).join("\n")).toContain(`freeze-upgrades ${h(4000)}: ${k} is not a field of an executed operation`);
+      expect(withLists((_, up) => { up[k] = true; }).join("\n")).toContain(`upgrade-proxy gateway ${h(5000)}: ${k} is not a field of an executed operation`);
+    }
   });
 });

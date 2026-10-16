@@ -17,7 +17,7 @@ import { getStageTable } from "../../src/stages.ts";
 import { basename, dirname } from "node:path";
 import { padTopic } from "../../src/verify/logs.ts";
 import { USDC_ADDRESS } from "../../src/usdc.ts";
-import type { Address, ChainReader, Hex, LogEntry, RawCallResult, VerifyOptions, VerifySheet } from "../../src/verify/types.ts";
+import type { Address, ChainReader, DeployReceipt, Hex, LogEntry, RawCallResult, VerifyOptions, VerifySheet } from "../../src/verify/types.ts";
 
 export const addr = (n: number): Address => (`0x${n.toString(16).padStart(40, "0")}`) as Address;
 export const DEPLOYER = addr(0xde9107e5);
@@ -125,9 +125,9 @@ export class FakeChain implements ChainReader {
 
   async chainId() { return this.chain; }
   async blockNumber() { return this.head; }
-  /** Code at a past block (issue 1833): empty unless a test sets it, so every contract is created after the scan start. */
-  pastCodes = new Map<string, Hex>();
-  async getCode(a: Address, blockNumber?: bigint) { return blockNumber === undefined ? this.codes.get(a.toLowerCase()) ?? "0x" : this.pastCodes.get(`${a.toLowerCase()}@${blockNumber}`) ?? "0x"; }
+  /** Head code only: the verifier never reads a historical block (issue 1851). Every call is recorded so a test can prove it. */
+  codeCalls: { address: Address; blockNumber?: bigint }[] = [];
+  async getCode(a: Address, ...rest: unknown[]) { this.codeCalls.push({ address: a, ...(rest[0] !== undefined ? { blockNumber: rest[0] as bigint } : {}) }); return this.codes.get(a.toLowerCase()) ?? "0x"; }
   async nonce(a: Address) { return this.noncesMap.get(a.toLowerCase()) ?? 0; }
   async getStorageAt(a: Address, slot: Hex) { return this.storage.get(`${a.toLowerCase()}|${slot}`) ?? Z32; }
 
@@ -159,6 +159,12 @@ export class FakeChain implements ChainReader {
   txs = new Map<string, { to: Address | null; input: Hex; value: bigint; status: "success" | "reverted" }>();
   async getTransaction(h: Hex) { const t = this.txs.get(h.toLowerCase()); return t ? { to: t.to, input: t.input, value: t.value } : null; }
   async receiptStatus(h: Hex) { return this.txs.get(h.toLowerCase())?.status ?? null; }
+  /** Issue 1851: deploy transaction receipts by hash (the creation proof of the log scans). A function entry throws or answers per call. */
+  receipts = new Map<string, DeployReceipt | (() => DeployReceipt | null)>();
+  receiptCalls: Hex[] = [];
+  async deployReceipt(h: Hex): Promise<DeployReceipt | null> { this.receiptCalls.push(h); const r = this.receipts.get(h.toLowerCase()); return typeof r === "function" ? r() : r ?? null; }
+  /** Record `at` as created by a CREATE deploy transaction mined in `block`; returns the transaction hash. */
+  created(at: Address, block: bigint): Hex { const h = keccak256(toHex(`deploy ${at.toLowerCase()} ${block}`)); this.receipts.set(h.toLowerCase(), { blockNumber: block, status: "success", contractAddress: at, to: null, logs: [] }); return h; }
 
   async callRaw(to: Address, data: Hex, from?: Address): Promise<RawCallResult> {
     if (data.startsWith(SET_REGISTRY_SELECTOR)) return this.setRegistryOpen ? { ok: true, data: "0x" } : { ok: false, data: "0x", reason: "already set" };
@@ -438,3 +444,36 @@ export function buildWorld(chainId = 8453): World {
 
 export const failed = (r: { checks: { label: string; ok: boolean }[] }) => r.checks.filter((c) => !c.ok).map((c) => c.label);
 void ({} as VHex);
+
+/** The canonical CREATE2 factory the timelock stage deploys the core timelock through. */
+export const WORLD_CREATE2_FACTORY = "0x4e59b44847b379578588920cA78FbF26c0B4956C" as const;
+
+/**
+ * Issue 1851: the healthy world with from-block 100 and the run's deploy receipts. Every governed contract has a CREATE receipt at `blocks[name] ?? 100`, the timelock a CREATE2
+ * factory call carrying its constructor log. `opts.deployTxs` lists them, the timelock's last.
+ */
+export function deployedWorld(blocks: Record<string, bigint> = {}): World {
+  const w = buildWorld();
+  w.opts.fromBlock = 100n;
+  const contracts: Record<string, Address> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, icpolicy: ICP, receipt: REC, recorder: RECORDER, ...Object.fromEntries(Object.entries(VAULTS).map(([k, v]) => [k, v.address])) };
+  const txs = Object.entries(contracts).map(([n, a]) => w.chain.created(a, blocks[n] ?? 100n));
+  const tl = keccak256(toHex("timelock factory call"));
+  w.chain.receipts.set(tl.toLowerCase(), { blockNumber: blocks.timelock ?? 100n, status: "success", contractAddress: null, to: WORLD_CREATE2_FACTORY, logs: [{ address: TIMELOCK }] });
+  w.opts.deployTxs = [...txs, tl];
+  return w;
+}
+
+/**
+ * Issue 1835: the timelock stage ADOPTED a timelock someone else created: the run's own timelock transaction is dropped, the timelock's constructor RoleGranted log sits in a
+ * transaction mined in `block` whose receipt is `receipt(tx)` (null: the chain does not know it), and `opts.adoptedContracts` names the timelock.
+ */
+export function adoptTimelock(w: World, block: bigint, receipt: (tx: Hex) => Record<string, unknown> | null): World {
+  const own = w.opts.deployTxs!.pop()!;
+  w.chain.receipts.delete(own.toLowerCase());
+  const tx = keccak256(toHex("someone else's timelock creation"));
+  w.chain.logs.push({ address: TIMELOCK, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), ADMIN_ROLE, padTopic(TIMELOCK), padTopic(addr(0xabc))], data: "0x", blockNumber: block, transactionHash: tx });
+  const r = receipt(tx);
+  if (r) w.chain.receipts.set(tx.toLowerCase(), r as never);
+  w.opts.adoptedContracts = [TIMELOCK];
+  return w;
+}

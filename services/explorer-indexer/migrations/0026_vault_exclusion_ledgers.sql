@@ -4,7 +4,7 @@
 --             each vault's ExclusionLedger is read from the chain, never derived.
 -- (See also: contracts/lib/RobotMoneyVaultOps.sol `createLedger`; services/explorer-indexer/src/indexer.rs `exclusion_ledgers_of`.)
 --
--- Migration 0022 indexed the ledger at an address the indexer derived: the
+-- Migration 0023 indexed the ledger at an address the indexer derived: the
 -- vault's CREATE address at nonce 1, which held while the vault constructor ran
 -- `new ExclusionLedger(asset)`. ADR-0014 put every vault behind a proxy whose
 -- initializer creates the ledger (`RobotMoneyVaultOps.createLedger`, run as the proxy

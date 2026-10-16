@@ -442,7 +442,7 @@ async fn the_unknown_caps_retry_fills_caps_without_writing_repeated_rows() {
 
 /// Core 1795 (QA plan X8): each snapshot stores `previewRedeem(totalSupply())`, the USDC a redeem of the
 /// whole supply pays after exit costs, which the positions API scales to a holder's shares. A row without it
-/// (written before migration 0023) is read again on the next tick, quiet or not, and filled by one new row.
+/// (written before migration 0024) is read again on the next tick, quiet or not, and filled by one new row.
 #[tokio::test]
 async fn a_snapshot_stores_preview_redeem_of_the_supply_and_a_row_without_it_is_filled_next_tick() {
     // rmAGENT-like: a 5% slippage floor between the gross value and what a redeem pays.
@@ -461,7 +461,7 @@ async fn a_snapshot_stores_preview_redeem_of_the_supply_and_a_row_without_it_is_
         "the row stores previewRedeem(totalSupply()), not totalAssets"
     );
 
-    // A row from before migration 0023: same state, no exit value.
+    // A row from before migration 0024: same state, no exit value.
     h.fx.db
         .insert_vault_snapshot(
             CHAIN,

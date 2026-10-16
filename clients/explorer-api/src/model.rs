@@ -43,6 +43,24 @@ pub struct Health {
     /// `status` `"degraded"` (security round 1).
     pub since_success_secs: Option<i64>,
     pub reorg_count: i32,
+    /// The indexer's proxy upgrade backfill (`proxy_backfill_progress`, migration 0020; issue 1856); null
+    /// before its first attempt. `refused` and `no_cursor` mean the upgrade history below the cursor is not
+    /// indexed yet.
+    pub proxy_backfill: Option<ProxyBackfillHealth>,
+}
+
+/// One chain's proxy upgrade backfill state.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct ProxyBackfillHealth {
+    /// `running`, `done`, `refused` or `no_cursor`.
+    pub state: String,
+    pub floor_block: Option<i64>,
+    /// The cursor when the current pass began.
+    pub target_block: Option<i64>,
+    /// The first block the running pass has not scanned yet.
+    pub next_block: Option<i64>,
+    /// Why the pass was refused, and what to set.
+    pub detail: Option<String>,
 }
 
 /// One Timelock, Safe or proxy-upgrade event (`admin_events`).
@@ -227,14 +245,14 @@ pub fn headroom_of(
 
 /// The USDC a redeem of `shares` pays, priced from the vault's newest snapshot:
 /// `floor(shares * preview_redeem_total / total_supply)`, where `preview_redeem_total` is the
-/// vault's `previewRedeem(totalSupply())` at that block (migration 0023).
+/// vault's `previewRedeem(totalSupply())` at that block (migration 0024).
 ///
 /// `previewRedeem` is linear in the share count up to rounding, so this is the vault's own
 /// `previewRedeem(shares)` to within one unit: net of the exit fee and, on a BasketVault, of the
 /// `maxSlippageBps` floor. The gross `shares * total_assets / total_supply` (`convertToAssets`)
 /// overstated rmAGENT positions by about 3% against what a redeem paid (core 1795, QA plan X8).
 ///
-/// `None` when the snapshot has no exit value (a row older than migration 0023 or a failed read)
+/// `None` when the snapshot has no exit value (a row older than migration 0024 or a failed read)
 /// or a zero supply: the value is unknown, and the gross value is never served in its place.
 pub fn position_exit_value(
     shares: &BigDecimal,
@@ -572,7 +590,7 @@ pub fn exclusion_finalize_reason_label(reason: i16) -> &'static str {
 ///
 /// Architecture §5.4: deposits, withdrawals, fee events and policy changes.
 /// There is no vote kind: RouterGovernance voting was deleted (issue 1698)
-/// and migration 0024 removed the old vote history rows.
+/// and migration 0025 removed the old vote history rows.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
@@ -693,7 +711,7 @@ pub struct CommitteeVoteEntry {
     /// The InvestmentCommitteePolicy deployment that emitted `VoteSubmitted`,
     /// 0x-prefixed hex. `vote_id` is an index into one deployment's votes, so
     /// a redeployed policy reuses every id, and only this field tells two such
-    /// votes apart (DI-10, migration 0020).
+    /// votes apart (DI-10, migration 0021).
     pub contract_address: String,
     pub vote_id: i64,
     pub vault: String,
@@ -907,7 +925,7 @@ mod tests {
             position_exit_value(&d("2"), Some(&d("10")), Some(&d("3"))).map(|v| dec_to_string(&v)),
             Some("6".to_string())
         );
-        // No exit value on the snapshot (older than migration 0023): unknown, never the gross value.
+        // No exit value on the snapshot (older than migration 0024): unknown, never the gross value.
         assert_eq!(position_exit_value(&shares, None, Some(&supply)), None);
         // No snapshot, or a zero supply: unknown.
         assert_eq!(

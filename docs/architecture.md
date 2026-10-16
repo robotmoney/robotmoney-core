@@ -1292,7 +1292,7 @@ never as tilt data. The memo fetch shares the tick's 30 s inline fetch budget
 with the receipt payload fetches; a vote past it is stored unfetched. A
 budgeted sweep re-fetches unverified votes, newest first and at most 12 times
 each, and a vote counts from the tick it verifies (security round 3,
-migration 0028). The per-vault tilt aggregate counts one signal per
+migration 0029). The per-vault tilt aggregate counts one signal per
 member: each active member's latest vote on the vault in chain order, only if
 that vote verified, only if it was cast after the member's latest
 registration, and only if it sits within the freshness window (7 days of

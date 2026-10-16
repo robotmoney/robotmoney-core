@@ -39,9 +39,14 @@ pub const PAGER_STATE_DDL: &str = "CREATE TABLE IF NOT EXISTS watchdog_pager_sta
      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), \
      PRIMARY KEY (chain_id, dedup_key))";
 
-/// Create the pager-state table if it does not exist.
+/// Create the watchdog's private tables if they do not exist: the pager state
+/// and the proxy-change baseline
+/// ([`crate::upgrade_monitor::PROXY_BASELINE_DDL`], issue 1856).
 pub async fn ensure_pager_state_table(pool: &PgPool) -> Result<(), WatchdogError> {
     sqlx::query(PAGER_STATE_DDL).execute(pool).await?;
+    sqlx::query(crate::upgrade_monitor::PROXY_BASELINE_DDL)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

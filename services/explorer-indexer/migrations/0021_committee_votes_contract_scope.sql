@@ -42,7 +42,7 @@ BEGIN
     SELECT count(*) INTO n FROM committee_votes;
     IF n > 0 THEN
         RAISE EXCEPTION
-            'migration 0020 cannot backfill committee_votes.contract_address for % existing row(s): the emitting policy contract was never recorded, and inferring it would fabricate provenance. Dump the table, then rebuild/reindex the explorer database per docs/operations/explorer-db-rebuild.md.', n;
+            'migration 0021 cannot backfill committee_votes.contract_address for % existing row(s): the emitting policy contract was never recorded, and inferring it would fabricate provenance. Dump the table, then rebuild/reindex the explorer database per docs/operations/explorer-db-rebuild.md.', n;
     END IF;
 END
 $$;

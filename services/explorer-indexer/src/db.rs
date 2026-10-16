@@ -597,7 +597,7 @@ fn is_safe_identifier(name: &str) -> bool {
 /// references (Kahn's algorithm over the live foreign-key graph).
 ///
 /// A block-scoped child table with an FK to a block-scoped parent (the
-/// `governance_votes` → `governance_proposals` pair, until migration 0024
+/// `governance_votes` → `governance_proposals` pair, until migration 0027
 /// dropped both) must be cleared first: deleting the parent first raises a
 /// foreign-key violation when a child above the reorg root still points at
 /// it. The old literal
@@ -716,7 +716,7 @@ async fn derive_rollback_tables(conn: &mut sqlx::PgConnection) -> Result<Vec<Str
     Ok(fk_child_first_order(&tables, &edges))
 }
 
-/// `committee_agent_events.kind` of an `AgentRegistered` (migration 0021).
+/// `committee_agent_events.kind` of an `AgentRegistered` (migration 0024).
 pub const AGENT_EVENT_REGISTERED: i16 = 0;
 /// `committee_agent_events.kind` of an `AgentRevoked`.
 pub const AGENT_EVENT_REVOKED: i16 = 1;
@@ -1159,7 +1159,7 @@ impl Db {
     ///   rollback subsequently fails: the next [`Db::last_indexed_block`]
     ///   resolves to `root`, so indexing resumes at `root + 1` with no gap.
     /// - **`committee_agents` (X7, DI-8)** — the row is derived from the
-    ///   block-numbered `committee_agent_events` history (migration 0021). Every
+    ///   block-numbered `committee_agent_events` history (migration 0024). Every
     ///   member that lost a history entry above `root` is derived again from
     ///   what survives ([`reconcile_committee_agents`]): an orphaned
     ///   `AgentRevoked` is undone, an orphaned re-registration falls back to the
@@ -1503,7 +1503,7 @@ impl Db {
     /// migration). The flag stops deposits only; withdrawals are never frozen.
     ///
     /// `preview_redeem_total` is the vault's `previewRedeem(totalSupply())` reading: what redeeming every share
-    /// pays after the exit costs (migration 0023, core 1795). `None` is a read that failed, stored as NULL.
+    /// pays after the exit costs (migration 0026, core 1795). `None` is a read that failed, stored as NULL.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_vault_snapshot(
         &self,
@@ -1566,13 +1566,13 @@ impl Db {
     /// written (0 for a log already applied).
     ///
     /// The row of a block is the owner's balance after every applied log of that
-    /// block, and `last_log_index` (migration 0026) is the newest of them:
+    /// block, and `last_log_index` (migration 0029) is the newest of them:
     ///
     /// - No row at the block: the balance before it is the newest row below the
     ///   block (zero without one), and the new row starts at this log.
     /// - A row whose `last_log_index` is below this log: that row is the balance
     ///   just before this log, and it is updated in place.
-    /// - A row at or past this log, or a row written before migration 0026
+    /// - A row at or past this log, or a row written before migration 0029
     ///   (`last_log_index` NULL): the log is already in it, so nothing changes. A
     ///   replayed tick is a no-op.
     ///
@@ -1820,7 +1820,7 @@ impl Db {
     ///
     /// `kind` must be one of: `"deposit"`, `"withdrawal"`, `"fee_charged"`,
     /// `"policy_change"`. There is no governance-vote kind: RouterGovernance
-    /// voting was deleted (issue 1698) and migration 0024 removed its rows.
+    /// voting was deleted (issue 1698) and migration 0027 removed its rows.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_history_event(
         &self,
@@ -1919,6 +1919,48 @@ impl Db {
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())
+    }
+
+    /// The proxy upgrade backfill's checkpoint and state for `chain_id`
+    /// (`proxy_backfill_progress`, migration 0020; issue 1856). `None` before
+    /// the first backfill attempt.
+    pub async fn proxy_backfill_progress(
+        &self,
+        chain_id: i64,
+    ) -> Result<Option<ProxyBackfillProgress>, DbError> {
+        Ok(sqlx::query_as(
+            "SELECT state, floor_block, target_block, next_block, detail \
+             FROM proxy_backfill_progress WHERE chain_id = $1",
+        )
+        .bind(chain_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// Save the proxy upgrade backfill's checkpoint and state for `chain_id`.
+    pub async fn save_proxy_backfill_progress(
+        &self,
+        chain_id: i64,
+        p: &ProxyBackfillProgress,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO proxy_backfill_progress \
+                 (chain_id, state, floor_block, target_block, next_block, detail, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, now()) \
+             ON CONFLICT (chain_id) DO UPDATE SET \
+                 state = EXCLUDED.state, floor_block = EXCLUDED.floor_block, \
+                 target_block = EXCLUDED.target_block, next_block = EXCLUDED.next_block, \
+                 detail = EXCLUDED.detail, updated_at = now()",
+        )
+        .bind(chain_id)
+        .bind(&p.state)
+        .bind(p.floor_block)
+        .bind(p.target_block)
+        .bind(p.next_block)
+        .bind(&p.detail)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// Record the chain head a run saw (`indexer_runs.chain_head_block`, migration 0017).
@@ -2112,7 +2154,7 @@ impl Db {
     // every tick (freshness expiry has no event), DI-3.
     //
     // QA plan X7 (DI-8): each writer first appends the event to the
-    // block-numbered `committee_agent_events` history (migration 0021), and the
+    // block-numbered `committee_agent_events` history (migration 0024), and the
     // `committee_agents` row is derived from that history
     // ([`derive_committee_agents`]). A reorg rollback deletes the orphaned
     // history with its block and derives the row again, so an orphaned revoke
@@ -2245,7 +2287,7 @@ impl Db {
     /// Uses ON CONFLICT DO NOTHING for idempotent re-indexing.
     ///
     /// `contract_address` is the policy deployment that emitted the event, and
-    /// it is part of the key (migration 0020, DI-10). `vote_id` is an index
+    /// it is part of the key (migration 0023, DI-10). `vote_id` is an index
     /// into one deployment's vote array, so a redeployed policy reuses every
     /// id. Under the old `(chain_id, vote_id)` key the new policy's votes hit
     /// the conflict clause and were dropped with no error.
@@ -2297,7 +2339,7 @@ impl Db {
     }
 
     /// Security round 3: record how the index-time memo fetch of a vote that did not verify went
-    /// (migration 0028): `attempts` fetches (0 when the tick's inline fetch budget was spent and
+    /// (migration 0029): `attempts` fetches (0 when the tick's inline fetch budget was spent and
     /// nothing was fetched) and the reason. Call it only for a vote this tick inserted, so a
     /// re-index of a stored vote does not reset its attempt count. Never touches a verified vote.
     pub async fn note_vote_verification(
@@ -2726,7 +2768,7 @@ impl Db {
     // ─── End ConsensusRecommendationReceipt writers ────────────────────────────────
 
     // ─── ExclusionLedger writers ─────────────────────────────────────────────────
-    // Implements: QA plan v1 task X7, core issue 1820 (indexer half). Migration 0022.
+    // Implements: QA plan v1 task X7, core issue 1820 (indexer half). Migration 0025.
     //
     // Every writer appends a block-numbered row keyed on chain position or on the
     // record id, with ON CONFLICT DO NOTHING, so re-indexing a range is a no-op and a
@@ -2927,7 +2969,7 @@ impl Db {
     }
 
     /// Every exclusion record on `chain_id` whose snapshot balances the indexer has not finished
-    /// reading (security round 2, migration 0027), oldest first.
+    /// reading (security round 2, migration 0029), oldest first.
     pub async fn exclusion_snapshots_pending(
         &self,
         chain_id: i64,
@@ -3072,7 +3114,7 @@ impl Db {
         Ok(found.is_some())
     }
 
-    /// Every stored `exclusionLedger()` answer on `chain_id` (migration 0025): the vault and its
+    /// Every stored `exclusionLedger()` answer on `chain_id` (migration 0028): the vault and its
     /// ledger, `None` for a vault with no ledger. A vault has one row per answer (its first read,
     /// then one per upgrade that named a new ledger), oldest first. A vault missing from the list
     /// was never read.
@@ -3273,6 +3315,20 @@ pub struct AgentPolicyRow {
     pub max_per_window: Option<BigDecimal>,
     pub window_usage_to_date: Option<BigDecimal>,
     pub share_receiver: Option<Vec<u8>>,
+}
+
+/// One `proxy_backfill_progress` row (migration 0020; issue 1856).
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct ProxyBackfillProgress {
+    /// `running`, `done`, `refused` or `no_cursor`.
+    pub state: String,
+    pub floor_block: Option<i64>,
+    /// The cursor when the pass began.
+    pub target_block: Option<i64>,
+    /// The first block the pass has not scanned yet.
+    pub next_block: Option<i64>,
+    /// Why the pass was refused.
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]

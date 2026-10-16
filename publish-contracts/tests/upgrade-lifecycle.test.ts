@@ -2,11 +2,22 @@
 // src/ci/twin-upgrade-lifecycle.ts (upgrade-lifecycle.twin.json) and what that chain answered to the online check (upgrade-lifecycle.twin.chain.json, replayed here
 // with no RPC). Every tampering below must be caught. The CI job core-stages-twin-upgrade-lifecycle runs the same check against a live Twin chain.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import type { Hex } from "viem";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { keccak256, pad, type Hex } from "viem";
 import { repoProxyNames } from "../src/evidence-check.ts";
+import { EXIT_CODES } from "../src/errors.ts";
+import { getStageTable } from "../src/stages.ts";
+import { manifestBase } from "../src/stage-table.ts";
 import { UPGRADES_ARE_FROZEN_SELECTOR, upgradeLifecycleOnChainProblems, upgradeLifecycleProblems, type LifecycleChain } from "../src/upgrade-lifecycle.ts";
+import { rerecordProxyManifest } from "../src/upgrade-rows.ts";
+import { stageManifestFile } from "../src/verify/constants.ts";
+import { verifyDeployment } from "../src/verify/index.ts";
+import { CODE_LABEL, DEADLINE_LABEL, proxySpecs } from "../src/verify/upgradeability.ts";
+import { proxyBuildDirsOf } from "../src/verify-stage.ts";
+import { MANIFEST_ADAPTER, SHA, tmp } from "./fixtures.ts";
+import { ADMIN, world as cliWorld } from "./harness.ts";
+import { addr, buildWorld, failed, GATEWAY, IMPL_SLOT, IMPLS, type World } from "./verify/world.ts";
 
 const FIX = join(import.meta.dir, "fixtures");
 const record = (): any => JSON.parse(readFileSync(join(FIX, "upgrade-lifecycle.twin.json"), "utf8"));
@@ -99,5 +110,82 @@ describe("upgrade lifecycle record, read back from the recorded Twin chain (issu
     const r = record();
     r.upgrade.to_code_hash = `0x${"ab".repeat(32)}`;
     expect((await upgradeLifecycleOnChainProblems(r, replay())).join("\n")).toContain("upgrade: the code hash at");
+  });
+});
+
+// Issue 1859 (item 5): verify compares a governed-upgraded proxy with the build its upgrade named (the `build` of its proxy_upgrades entry), not the deploy build.
+describe("verify after an upgrade to another build (issue 1859)", () => {
+  test("the runtime-code label passes against the upgrade's own build directory and fails against the original one", async () => {
+    const v = buildWorld(918453);
+    const GW = proxySpecs(getStageTable()).find((x) => x.name === "gateway")!;
+    // the second build: the deploy build with the gateway implementation's last code byte changed (outside the immutable and library-link ranges)
+    const build2 = join(tmp("pc-upgrade-build-"), "out");
+    cpSync(v.opts.artifactsDir, build2, { recursive: true });
+    const artPath = join(build2, `${GW.contract}.sol`, `${GW.contract}.json`);
+    const art = JSON.parse(readFileSync(artPath, "utf8"));
+    const old = v.chain.codes.get(IMPLS.gateway!.toLowerCase())!;
+    const tail = old.endsWith("fe") ? "fd" : "fe";
+    art.deployedBytecode.object = `${String(art.deployedBytecode.object).slice(0, -2)}${tail}`;
+    writeFileSync(artPath, JSON.stringify(art));
+    const code = `${old.slice(0, -2)}${tail}` as Hex;
+    // the governed upgrade to the new implementation, and the re-record govern --row upgrade-proxy makes
+    const to = addr(0x9400);
+    v.chain.codes.set(to.toLowerCase(), code);
+    v.chain.storage.set(`${GATEWAY.toLowerCase()}|${IMPL_SLOT}`, pad(to, { size: 32 }));
+    rerecordProxyManifest(join(v.manifestDir, stageManifestFile(getStageTable(), "gateway")), GW, to, keccak256(code), keccak256(v.chain.codes.get(GATEWAY.toLowerCase())!));
+    const label = `gateway: ${CODE_LABEL}`;
+    // the run manifest names the build; verify-stage turns it into the per-proxy directory
+    const dirs = proxyBuildDirsOf({ proxy_upgrades: [{ proxy_name: "gateway", build: dirname(build2) }] }, v.opts.artifactsDir);
+    expect(dirs).toEqual({ proxyBuildDirs: { gateway: build2 } });
+    const own = await verifyDeployment({ ...v.opts, ...dirs });
+    expect(failed(own)).toEqual([]);
+    expect(own.checks.find((c) => c.label === label)?.detail).toContain(build2);
+    const original = await verifyDeployment(v.opts);
+    expect(original.checks.find((c) => c.label === label)?.ok).toBe(false);
+    // every other contract still reads the deploy build: only the gateway's code label moved
+    expect(original.checks.filter((c) => !c.ok && c.label.endsWith(CODE_LABEL)).map((c) => c.label)).toEqual([label]);
+    // an upgrade back onto the deploy build drops the proxy's directory again
+    expect(proxyBuildDirsOf({ proxy_upgrades: [{ proxy_name: "gateway", build: dirname(build2) }, { proxy_name: "gateway", build: dirname(v.opts.artifactsDir) }] }, v.opts.artifactsDir)).toEqual({});
+  });
+});
+
+// Issue 1859 (item 6): the missed freeze deadline fails verify with exit 13 (VERIFY). The CLI's main() return value is the process exit code (cli.ts: process.exit(await main(...))).
+describe("verify on a missed-deadline fixture exits 13 (issue 1859)", () => {
+  /** An upgradeable 8453 release whose freeze deadline passed with every proxy still upgradeable (the verifier world). */
+  function missed(): World {
+    const w = buildWorld(8453);
+    const due = "2027-01-31T00:00:00Z";
+    w.sheet.upgradeMode = "upgradeable";
+    w.sheet.freezeDeadline = due;
+    w.opts.now = BigInt(Date.parse(due) / 1000) + 1n;
+    for (const st of getStageTable().stages.filter((x) => x.proxies)) {
+      const p = join(w.manifestDir, stageManifestFile(getStageTable(), st.name));
+      writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, "utf8")), upgrade_mode: "upgradeable" }));
+    }
+    for (const n of repoProxyNames()) {
+      const spec = proxySpecs(getStageTable()).find((x) => x.name === n)!;
+      const m = JSON.parse(readFileSync(join(w.manifestDir, stageManifestFile(getStageTable(), spec.stage)), "utf8"));
+      w.chain.set(m[spec.field], "upgradesFrozen", false);
+    }
+    return w;
+  }
+  test("the publish CLI's verify verb exits 13 and names the missed deadline", async () => {
+    const v = missed();
+    const cli = cliWorld({ chainId: 8453, writeSafeManifest: true, writeFrozen: true });
+    const m = join(cli.coreDir, "deployments", "8453");
+    getStageTable().vaults.forEach((x, i) => writeFileSync(join(m, `${manifestBase(x.manifest)}.json`), JSON.stringify({ chain_id: 8453, vault: addr(0xc1 + i), adapter: MANIFEST_ADAPTER, ...(x.key === "USDC" ? { aave_adapter: addr(0xe1), compound_adapter: addr(0xe2), moonwell_flagship_adapter: addr(0xe3) } : {}) })));
+    mkdirSync(cli.evidence, { recursive: true });
+    writeFileSync(join(cli.evidence, "publish-run.json"), JSON.stringify({ version: 1, chainId: 8453, coreSha: SHA, deployer: ADMIN, environment: "local", startedAt: "t", firstBlock: 7, stages: { safe: { status: "done", startedAt: "t" }, "prove-control": { status: "done", startedAt: "t" }, timelock: { status: "done", startedAt: "t" } } }));
+    let report: Awaited<ReturnType<typeof verifyDeployment>> | undefined;
+    const verify = {
+      // the real verifier over the missed-deadline world (the in-memory chain stands in for the RPC)
+      verifyDeployment: (async () => (report = await verifyDeployment(v.opts))) as never,
+      verifySources: (async () => ({ ok: true, checks: [] })) as never, depositsPaused: async () => true,
+    };
+    const code = await cli.run(["verify"], { pauseAll: (async () => ({ allPaused: true, vaults: [] })) as never, verify });
+    expect(failed(report!)).toEqual([DEADLINE_LABEL]);
+    expect(report!.checks.find((c) => c.label === DEADLINE_LABEL)!.detail).toMatch(/^MISSED: /);
+    expect(code).toBe(EXIT_CODES.VERIFY);
+    expect(code).toBe(13);
   });
 });

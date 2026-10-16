@@ -21,7 +21,7 @@
 //!
 //! **Superseded in part (issue 1698, QA plan C1):** the governance-vote kind is
 //! gone. RouterGovernance voting was deleted, the indexer no longer reads
-//! `VoteCast`, and migration 0024 deleted the `governance_vote` rows.
+//! `VoteCast`, and migration 0025 deleted the `governance_vote` rows.
 //!
 //! **Seams to touch:**
 //! 1. `services/explorer-indexer/src/abi.rs` — add `AgentWithdrawal` to

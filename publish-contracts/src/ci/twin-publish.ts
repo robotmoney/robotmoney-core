@@ -3,6 +3,8 @@
 // Environment in: RPC_URL, SHARE_RECEIVER_IN, VERIFY_IN, GOVERN_IN, PREDEPLOY_LIBS_IN, PIN_BLOCK_IN (optional), REHEARSAL_IN, SHEET_OVERLAY_IN (optional), GITHUB_WORKSPACE, GITHUB_ENV.
 // SHEET_OVERLAY_IN (issue 1811) is a committed sheet overlay, relative to the core checkout (deployments/twin-918453/upgrade-rehearsal.env): its NAME=value lines replace the same
 // names of the committed Twin sheet, after the keystore lines and before the rehearsal-kind lines. The upgrade rehearsal uses it to deploy UPGRADE_MODE=upgradeable.
+// When the merged sheet is upgradeable and names no UPGRADE_FREEZE_DEADLINE (issue 1846), this script sets it to the pin block timestamp (PIN_BLOCK_IN, else the fork's latest block, read with
+// `cast block`) plus 365 days, so the rehearsal deadline moves with the Twin clock instead of being a hard-coded date the clock eventually passes.
 // REHEARSAL_IN=true (issue 1727) runs the Twin chain in the REHEARSAL kind the Base mainnet rehearsal uses: the sheet gets DEPLOYMENT_KIND=rehearsal, TIMELOCK_MIN_DELAY=900, a new
 // SAFE_SALT_NONCE, and the deployer is NOT fresh (one self-transfer before publish moves its nonce, so the relative nonce accounting runs). After govern and the second verify it
 // runs the receipt path with a REAL recorded receipt, not a fixture. The SUBMITTER is a SECOND Safe (issue 1750, owner decision 2026-10-10: the submitter is a multisig, never a key): this script
@@ -25,6 +27,10 @@ import { twinUnwindGuardArgs } from "../unwind-guard.ts";
 const SELF_ADMIN_MATRIX_ROW = "safe-change-threshold";
 const env = (k: string, d = ""): string => process.env[k] ?? d;
 const fail = (m: string): never => { console.error(`twin-publish: ${m}`); process.exit(1); };
+/** Issue 1846: the Twin rehearsal freeze deadline, the pin block timestamp (seconds) plus 365 days, in ISO 8601 UTC without milliseconds. */
+function freezeDeadlineFromPin(pinTimestampSec: number): string {
+  return new Date((pinTimestampSec + 365 * 86_400) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
 
 function run(cmd: string[], opts: { cwd?: string; stdoutTo?: string; childEnv?: Record<string, string> } = {}): string {
   const r = Bun.spawnSync(cmd, { cwd: opts.cwd, env: { ...process.env, ...opts.childEnv }, stdout: "pipe", stderr: "inherit" });
@@ -65,6 +71,16 @@ const safeSalt = Math.floor(Date.now() / 1000);
 if (rehearsalMode) appendFileSync(fragment, ["DEPLOYMENT_KIND=rehearsal", "TIMELOCK_MIN_DELAY=900", "GOVERN_NEW_DELAY=1800", `SAFE_SALT_NONCE=${safeSalt}`].join("\n") + "\n");
 const sheet = join(rh, "sheet.env");
 run([bun, mergeSheet, "--template", join(core, "deployments/twin-918453/stage-sheet.env"), "--fragment", fragment, "--out", sheet], { cwd: pc });
+const castBin = env("CAST", "cast");
+// Issue 1846: an upgradeable sheet with no deadline gets pin block timestamp + 365 days (well past now + TIMELOCK_MIN_DELAY + 1 day, which the sheet parser requires).
+const merged = readFileSync(sheet, "utf8");
+const sheetValue = (name: string): string => [...merged.matchAll(new RegExp(`^${name}=(.*)$`, "gm"))].pop()?.[1]?.trim() ?? "";
+if (sheetValue("UPGRADE_MODE") === "upgradeable" && sheetValue("UPGRADE_FREEZE_DEADLINE") === "") {
+  const ts = run([castBin, "block", env("PIN_BLOCK_IN") || "latest", "--field", "timestamp", "--rpc-url", rpc], { stdoutTo: join(rh, "pin-block-timestamp.txt") }).trim();
+  if (!/^(0x[0-9a-fA-F]+|[0-9]+)$/.test(ts)) fail(`cast block returned no timestamp: '${ts}'`);
+  const line = `UPGRADE_FREEZE_DEADLINE=${freezeDeadlineFromPin(Number(BigInt(ts)))}`;
+  writeFileSync(sheet, merged.replace(/^UPGRADE_FREEZE_DEADLINE=\s*$\n?/gm, "").replace(/\n?$/, "\n") + line + "\n");
+}
 // PREDEPLOY_LIBS_IN=true (issue 1721): put all four CREATE2 libraries on the fork first, so the whole run finds them already deployed (the state of Base after the real deploy).
 if (env("PREDEPLOY_LIBS_IN") === "true") run([bun, predeploy, "--rpc", rpc, "--core-dir", core], { cwd: pc });
 // Twin environment steps: gas for every key, USDC for the seed deposit.
@@ -80,7 +96,6 @@ exportVar("TWIN_RUN_DIR", rh);
 const stage = (verb: string, stdoutTo?: string, extra: string[] = [], key = "DEPLOYER") => run([bun, cli, verb, "--chain", String(TWIN_CHAIN_ID), "--rpc", rpc, "--sheet", sheet,
   "--signer", `keystore:${join(rh, "keys", key)}:${pass}`, "--environment", "stage", "--core-sha", sha,
   "--counts-dir", join(rh, "counts"), "--evidence", join(rh, "evidence"), ...extra], { cwd: pc, stdoutTo, childEnv: { PUBLISH_MANIFEST_DIR: join(rh, "manifests"), YES: "1" } });
-const castBin = env("CAST", "cast");
 
 // Rehearsal: the deployer is not fresh. One self-transfer moves its nonce before the first stage, so the start nonce is recorded and every later check runs relative to it.
 if (rehearsalMode) run([castBin, "send", admin, "--value", "0", "--keystore", join(rh, "keys/DEPLOYER"), "--password-file", pass, "--rpc-url", rpc]);

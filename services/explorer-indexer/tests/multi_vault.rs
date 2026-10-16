@@ -10,7 +10,7 @@
 //!
 //! AC-4 (governance_proposals / governance_votes from ProposalCreated and
 //! VoteCast) is gone: RouterGovernance voting was deleted (issue 1698) and
-//! migration 0024 dropped both tables. `account_history.rs` checks the old
+//! migration 0025 dropped both tables. `account_history.rs` checks the old
 //! events are ignored.
 //!
 //! DI-1: a vault registered in a tick has its own Deposit logs from the
