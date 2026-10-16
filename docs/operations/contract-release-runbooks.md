@@ -52,12 +52,17 @@ deploy to every target network. The version tag `vA.B.C` is cut on `dev` at
 the exact commit that was deployed and verified — there is no cherry-pick
 dance, because there is no long-lived release branch to keep in sync.
 
-A version tag is **network-scoped**: `vA.B.C` alone always means the Robot
-Money Devnet (§8's default target), and a network suffix names anything
-else — `vA.B.C-base` (mainnet). A given `vA.B.C` may
-exist for multiple networks (a Devnet verification pass, later followed by a
-Base mainnet deployment of the identical commit), and each network's tag is
-its own go/no-go cycle through §4.
+From v0.5.0 (Deploy 3, owner decision 2026-10-16) the version tag of a Base
+mainnet production deployment is `vA.B.C` with no network suffix: Deploy 3 is
+tagged `v0.5.0`. Earlier tags keep their old names (`release/v0.4.0-base`).
+A Devnet (Twin chain) verification pass is not tagged: its record is the CI
+run and the evidence folder.
+
+`v*.*.*` is also the dApp's release namespace (`release-dapp.yml`, issue 1243).
+Pushing `vA.B.C` builds the dApp image at that commit, pushes it to GHCR as
+`vA.B.C` and `:latest`, and starts the release-tag suite dispatch. One tag
+therefore names the contracts and the dApp of a release. Do not push a
+contract version tag whose number a dApp release already used.
 
 ## 3. Version tags and rehearsal candidates
 
@@ -126,7 +131,7 @@ This section covers two different tags. Do not confuse them.
   - **Optional hardening (owner action, defense in depth).** A GitHub tag ruleset stops a pusher from creating or moving a
     release tag at all. Settings: target `Tags`, pattern `release/*`, enforcement `Active`, rules `Restrict creations`,
     `Restrict updates` and `Restrict deletions`, bypass list only the release owners. The gate does not depend on it.
-- The **version tag** (`vA.B.C[-network]`) is the post-deploy record
+- The **version tag** (`vA.B.C`) is the post-deploy record
   described in the rest of this section.
 
 A version tag is **never** cut before **both** a completed preflight and a
@@ -148,7 +153,7 @@ The cycle:
    failure after broadcast means either the deployed contracts are
    unusable (redeploy fresh addresses) or a mitigating admin action (deposit pause,
    role revocation) contains the issue while a fix lands (§4.6).
-5. **Postflight clean** → tag `vA.B.C[-network]` at the exact commit that was
+5. **Postflight clean** → tag `vA.B.C` at the exact commit that was
    deployed and verified.
 
 Two consequences, stated outright because each one looks unusual and neither
@@ -774,7 +779,7 @@ in the shape of the frontend repo's release runbooks:
 
 Each release runbook must still:
 
-- state the release identity (`vA.B.C[-network]`) and the delta it introduces,
+- state the release identity (`vA.B.C`) and the delta it introduces,
 - map its go/no-go gates to §4,
 - mark destructive or irreversible steps (`irreversible`, with `notBefore`,
   `onlyFor` or `go`),
@@ -819,7 +824,7 @@ no release branch to backport from, since every deployment runs the same
 
 | Network | Chain id | Default per ADR-0013 | Notes |
 | --- | --- | --- | --- |
-| Robot Money Devnet | `918453` | **Yes — the default verification target.** | The Twin chain: a pinned lazy anvil fork of real Base at the upstream head minus 2 per CI run (`scripts/devnet/twin-fork.ts`, `docs/technical/full-stack-devnet.md`). Tests deploy their own vault (clean room). Full production-parity for all three yield adapters (Aave V3, Compound V3, Morpho). No lasting address record; a version tag against the Devnet documents a verification pass, not a persistent deployment. |
+| Robot Money Devnet | `918453` | **Yes — the default verification target.** | The Twin chain: a pinned lazy anvil fork of real Base at the upstream head minus 2 per CI run (`scripts/devnet/twin-fork.ts`, `docs/technical/full-stack-devnet.md`). Tests deploy their own vault (clean room). Full production-parity for all three yield adapters (Aave V3, Compound V3, Morpho). No lasting address record and no version tag: a verification pass is recorded by its CI run and evidence folder (§3). |
 | Base mainnet | `8453` | The eventual real target — a separate, deliberately-costed decision (D9). | Requires an audit pass, Safe owners signing with encrypted keystores (passphrase typed) or, at each owner's choice, hardware wallets (optional, never required), and a funded submitter key. |
 
 ## 9. Safe and timelock self-administration (Twin-only)

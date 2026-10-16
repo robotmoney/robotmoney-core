@@ -12,7 +12,9 @@ notes: |
   release/v0.4.0-base.3-rehearsal (Deploy 2, 78c50cbd, a rehearsal-kind deployment). This file QA-checks the
   next deployment of the line, Deploy 3: a NEW deployment of governed UUPS proxies at new addresses. Deploy 2
   predates the proxies and cannot be upgraded in place (ADR-0009: no assisted migration; the legacy vaults stay
-  redeemable). The release tag of a production Deploy 3 is release/v0.5.0 with no "rehearsal" in it.
+  redeemable). The release tag of a production Deploy 3 is release/v0.5.0 with no "rehearsal" in it. Its version tag
+  (P10.05, {versionTag}) is v0.5.0 with no network suffix (owner, 2026-10-16). Pushing it also builds and
+  publishes the dApp image v0.5.0 (release-dapp.yml): no dApp release may have used v0.5.0 first.
 
   What this release adds to the Deploy 2 flow (everything marked added: v0.5.0): governed proxies and the
   freeze (P2.50 to P2.52, P7.50 to P7.62), the ProposerFloorTimelock check (P2.51), set-unwind-guard and its
