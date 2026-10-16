@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 import { PROOF_TX_NONCES } from "../../src/counts.ts";
 import { getStageTable } from "../../src/stages.ts";
-import { verifyDeployment } from "../../src/verify/index.ts";
+import { RPC_REFUSED_DETAIL, verifyDeployment } from "../../src/verify/index.ts";
 import { keccak256, toHex } from "viem";
 import { padTopic } from "../../src/verify/logs.ts";
 import { ADMIN_ROLE, EMERGENCY_ROLE, SAFE_GUARD_SLOT, WEIGHT_SETTER_ROLE, stageManifestFile, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP } from "../../src/verify/constants.ts";
@@ -536,35 +536,95 @@ describe("rotation of the weight setter (core 1616, ADR-0002)", () => {
   });
 });
 
-// Issue 1833: the KEEPER/EMERGENCY holder and allowlist scans start at --from-block. A vault that already has code one block earlier was created before the scan start,
-// so a grant made before it would never be seen: the vault's scan labels fail instead of passing on a partial log.
-describe("from-block after a vault's creation (issue 1833)", () => {
+// Issue 1833, 1851: every log scan starts at --from-block. Each scanned contract's creation block is read from the receipt of the run's deploy transaction that created it
+// (eth_getTransactionReceipt, served by pruned nodes), never from historical state. A contract created before the scan start fails its scan labels instead of passing on a partial log.
+describe("from-block against the deploy receipts (issue 1833, 1851)", () => {
   const scanLabels = (key: string) => [`vault[${key}]: KEEPER_ROLE has no holder`, `vault[${key}]: EMERGENCY_ROLE has exactly one holder`, ...(key === "rmUSDC" ? [`vault[${key}]: adapter set, caps and code-hash allowlist equal the deploy script`] : [])];
-  test("no vault has code at from-block minus 1: every vault scan label passes", async () => {
+  const AGENT_SCANS = ["agents: no agent authorized at handover", "agents: no address holds AGENT_ROLE after handover"];
+  const DEPLOYER_SCAN = "deployer: holds no role on any contract (log scan)";
+  const HOLDERS_SCAN = "roles: every holder of every role on every governed contract is an expected account (log scan)";
+  const TIMELOCK_SCAN = "timelock: only the safe holds PROPOSER, CANCELLER or EXECUTOR role (log scan)";
+  const ALL_SCANS = [...["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"].flatMap(scanLabels), ...AGENT_SCANS, DEPLOYER_SCAN, HOLDERS_SCAN, TIMELOCK_SCAN];
+  const CREATE2_FACTORY = "0x4e59b44847b379578588920cA78FbF26c0B4956C" as const;
+  /** from-block 100. Every governed contract has a CREATE receipt at `blocks[name] ?? 100`, the timelock a CREATE2 factory call carrying its constructor log. */
+  function deployed(blocks: Record<string, bigint> = {}): World {
     const w = buildWorld();
     w.opts.fromBlock = 100n;
+    const contracts: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, icpolicy: addr(0x1c9), receipt: REC, recorder: addr(0x4ec0de), ...Object.fromEntries(Object.entries(VAULTS).map(([k, v]) => [k, v.address])) };
+    const txs = Object.entries(contracts).map(([n, a]) => w.chain.created(a, blocks[n] ?? 100n));
+    const tl = keccak256(toHex("timelock factory call"));
+    w.chain.receipts.set(tl.toLowerCase(), { blockNumber: blocks.timelock ?? 100n, status: "success", contractAddress: null, to: CREATE2_FACTORY, logs: [{ address: TIMELOCK }] });
+    w.opts.deployTxs = [...txs, tl];
+    return w;
+  }
+  const okOf = (r: Awaited<ReturnType<typeof verifyDeployment>>, l: string) => [l, r.checks.find((c) => c.label === l)?.ok];
+  const detailOf = (r: Awaited<ReturnType<typeof verifyDeployment>>, l: string) => r.checks.find((c) => c.label === l)?.detail ?? "";
+
+  test("every receipt at or after from-block: every scan label passes, and no code is read at a historical block", async () => {
+    const w = deployed();
     const r = await verifyDeployment(w.opts);
-    for (const k of ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]) for (const l of scanLabels(k)) expect([l, r.checks.find((c) => c.label === l)?.ok]).toEqual([l, true]);
+    expect(failed(r)).toEqual([]);
+    for (const l of ALL_SCANS) expect(okOf(r, l)).toEqual([l, true]);
+    expect(w.chain.codeCalls.filter((x) => x.blockNumber !== undefined)).toEqual([]);
+    expect(w.chain.receiptCalls.length).toBe(w.opts.deployTxs!.length); // read once per run, not once per label
   });
-  test("a vault with code at from-block minus 1: its scan labels fail with 'after the vault's creation', the other vaults' still pass", async () => {
-    const w = buildWorld();
-    w.opts.fromBlock = 100n;
-    w.chain.pastCodes.set(`${VAULTS.rmUSDC!.address.toLowerCase()}@99`, "0x6001");
-    const r = await verifyDeployment(w.opts);
+  test("a vault whose deploy receipt is before from-block: its scan labels fail with 'after the vault's creation', the other vaults' still pass", async () => {
+    const r = await verifyDeployment(deployed({ rmUSDC: 99n }).opts);
     expect(r.ok).toBe(false);
     for (const l of scanLabels("rmUSDC")) {
-      const c = r.checks.find((x) => x.label === l);
-      expect([l, c?.ok]).toEqual([l, false]);
-      expect(c!.detail).toContain("from-block 100 is after the vault's creation");
+      expect(okOf(r, l)).toEqual([l, false]);
+      expect(detailOf(r, l)).toContain("from-block 100 is after the vault's creation");
+      expect(detailOf(r, l)).toContain("created in block 99");
     }
-    for (const k of ["rmPROTO", "rmAGENT", "rmRWA"]) for (const l of scanLabels(k)) expect([l, r.checks.find((c) => c.label === l)?.ok]).toEqual([l, true]);
+    for (const k of ["rmPROTO", "rmAGENT", "rmRWA"]) for (const l of scanLabels(k)) expect(okOf(r, l)).toEqual([l, true]);
   });
-  test("an unreadable past code read fails the labels too, never a silent pass", async () => {
-    const w = buildWorld();
-    w.opts.fromBlock = 100n;
+  test("historical state reads throw 'missing trie node' and the receipts read fine: every scan passes", async () => {
+    const w = deployed();
     const getCode = w.chain.getCode.bind(w.chain);
-    w.chain.getCode = async (a, b) => { if (b !== undefined) throw new Error("missing trie node"); return getCode(a); };
+    w.chain.getCode = async (a: `0x${string}`, ...rest: unknown[]) => { if (rest[0] !== undefined) throw new Error("missing trie node"); return getCode(a); };
     const r = await verifyDeployment(w.opts);
-    for (const l of scanLabels("rmPROTO")) expect(r.checks.find((c) => c.label === l)?.detail).toContain("missing trie node");
+    expect(failed(r)).toEqual([]);
   });
+  test("a receipt read that throws: every scan label fails with an RPC_REFUSED detail, the other labels pass", async () => {
+    const w = deployed();
+    w.chain.receipts.set(w.opts.deployTxs![2]!.toLowerCase(), () => { throw new Error("missing trie node"); });
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r).sort()).toEqual([...ALL_SCANS].sort());
+    for (const l of ALL_SCANS) expect(detailOf(r, l).startsWith(`${RPC_REFUSED_DETAIL}: `)).toBe(true);
+    expect(detailOf(r, DEPLOYER_SCAN)).toContain("missing trie node");
+  });
+  test("a deploy transaction the chain does not know, or a contract no receipt created: the scan labels fail, not classified RPC_REFUSED", async () => {
+    const w = deployed();
+    w.chain.receipts.delete(w.opts.deployTxs![0]!.toLowerCase());
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r).sort()).toEqual([...ALL_SCANS].sort());
+    expect(detailOf(r, DEPLOYER_SCAN)).toContain("is not known to the chain");
+    expect(detailOf(r, DEPLOYER_SCAN).startsWith(RPC_REFUSED_DETAIL)).toBe(false);
+    const w2 = deployed();
+    w2.opts.deployTxs = w2.opts.deployTxs!.slice(1); // the gateway's receipt is missing from the run manifest
+    const r2 = await verifyDeployment(w2.opts);
+    expect(failed(r2).sort()).toEqual([...AGENT_SCANS, DEPLOYER_SCAN, HOLDERS_SCAN].sort());
+    expect(detailOf(r2, AGENT_SCANS[0]!)).toContain("no deploy transaction of the run created gateway");
+  });
+  test("no deploy transactions given with from-block above zero: every scan label fails; from-block zero needs none", async () => {
+    const w = deployed();
+    w.opts.deployTxs = undefined;
+    expect(failed(await verifyDeployment(w.opts)).sort()).toEqual([...ALL_SCANS].sort());
+    const w0 = buildWorld();
+    expect(failed(await verifyDeployment(w0.opts))).toEqual([]);
+    expect(w0.chain.receiptCalls).toEqual([]);
+  });
+  // Each scan family fails when --from-block is after the deploy receipt block of the contract it scans.
+  for (const [what, blocks, want] of [
+    ["the gateway (agent scans, deployer-role and role-holder scans)", { gateway: 99n }, [...AGENT_SCANS, DEPLOYER_SCAN, HOLDERS_SCAN]],
+    ["the router (deployer-role and role-holder scans)", { router: 99n }, [DEPLOYER_SCAN, HOLDERS_SCAN]],
+    ["the timelock, created through the CREATE2 factory (timelock-holder, deployer-role and role-holder scans)", { timelock: 99n }, [TIMELOCK_SCAN, DEPLOYER_SCAN, HOLDERS_SCAN]],
+    ["a vault (its own scans, deployer-role and role-holder scans)", { rmAGENT: 99n }, [...scanLabels("rmAGENT"), DEPLOYER_SCAN, HOLDERS_SCAN]],
+  ] as const) {
+    test(`from-block after the creation of ${what}: exactly those scan labels fail`, async () => {
+      const r = await verifyDeployment(deployed(blocks as Record<string, bigint>).opts);
+      expect(failed(r).sort()).toEqual([...want].sort());
+      for (const l of want) expect(detailOf(r, l)).toContain("from-block 100 is after the");
+    });
+  }
 });

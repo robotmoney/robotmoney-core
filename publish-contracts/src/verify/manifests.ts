@@ -6,7 +6,7 @@ import { VAULT_ADDRESS_FIELD, VAULT_KIND, LIBS_STAGE, SAFE_MANIFEST } from "../c
 import { manifestBase, type StageTable } from "../stage-table.ts";
 import { VAULT_NAME } from "../sheet.ts";
 import { requiredManifests, stageManifestName } from "./constants.ts";
-import type { Address, VaultKind } from "./types.ts";
+import type { Address, Hex, VaultKind } from "./types.ts";
 
 export interface ManifestVault {
   /** rmUSDC, rmPROTO, rmAGENT or rmRWA. */
@@ -64,4 +64,13 @@ export function loadManifests(dir: string, table: StageTable): Manifests {
   const safeName = manifestBase(SAFE_MANIFEST);
   const safe = isAddress(files[safeName]?.safe) ? files[safeName].safe : undefined;
   return { files, missing, vaults, libraries: libs, libraryArtifacts, safe };
+}
+
+/**
+ * Issue 1851: every deploy transaction a run manifest (publish-run.json) recorded: each stage's txHashes and each single-vault redeploy's deploy_tx_hashes.
+ * The log scans prove each scanned contract's creation block from their receipts (VerifyOptions.deployTxs).
+ */
+export function runDeployTxs(run: { stages?: Record<string, { txHashes?: unknown }>; vault_redeploys?: { deploy_tx_hashes?: unknown }[] }): Hex[] {
+  const all = [...Object.values(run.stages ?? {}).map((s) => s.txHashes), ...(run.vault_redeploys ?? []).map((r) => r.deploy_tx_hashes)];
+  return [...new Set(all.flatMap((h) => (Array.isArray(h) ? h : [])).filter((h): h is Hex => typeof h === "string" && /^0x[0-9a-fA-F]{64}$/.test(h)))];
 }

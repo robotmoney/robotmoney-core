@@ -183,6 +183,8 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const head = await chain.blockNumber().catch(() => undefined);
   const chunk = opts.logChunk ?? 2000;
   const retryBaseMs = opts.retryBaseMs ?? 500;
+  const created = creationProof(chain, opts.fromBlock, opts.deployTxs);
+  const governed: Scanned[] = [...core, ...man.vaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address }))];
   if (head === undefined) {
     for (const l of AGENT_LABELS) c.fail(l, "block number unreadable");
     for (const v of man.vaults) for (const l of vaultScanLabels(v)) c.fail(l, "block number unreadable");
@@ -190,12 +192,13 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     c.fail(ROLE_HOLDERS_LABEL, "block number unreadable");
   } else {
     // each label is a c.run, so a failed log scan fails that label with the error and never skips it
-    for (const v of man.vaults) await vaultScanChecks(c, chain, v, sheet.vaults[v.key], sheet.emergency, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs });
-    await agentChecks(c, chain, gateway, tlManifest, { fromBlock: opts.fromBlock, head: opts.handoverBlock !== undefined && opts.handoverBlock < head ? opts.handoverBlock : head, chunk, retryBaseMs });
-    await roleScan(c, chain, D, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs });
-    await roleHolderEnumeration(c, chain, [...core, ...man.vaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address }))], {
+    for (const v of man.vaults) await vaultScanChecks(c, chain, v, sheet.vaults[v.key], sheet.emergency, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
+    await agentChecks(c, chain, gateway, tlManifest, { fromBlock: opts.fromBlock, head: opts.handoverBlock !== undefined && opts.handoverBlock < head ? opts.handoverBlock : head, chunk, retryBaseMs, created });
+    // Issue 1851: the deployer can only have been granted a role on a contract that exists, so the scan start must precede the creation of every governed contract.
+    await roleScan(c, chain, D, governed, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
+    await roleHolderEnumeration(c, chain, governed, {
       timelock: tl, accounts: [tl, safe, byName.governance!, sheet.emergency, sheet.pauser], icPolicy: byName.icpolicy!, gateway, router,
-    }, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs });
+    }, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
   }
 
   // ---- timelock
@@ -225,7 +228,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   }
   await c.runEq("timelock: EXECUTOR_ROLE open to address zero", () => hasRole(chain, tl, EXECUTOR_ROLE, ZERO), true);
   await c.runEq("timelock: EXECUTOR_ROLE not held by deployer", () => hasRole(chain, tl, EXECUTOR_ROLE, D), false);
-  await timelockHolderScan(c, chain, tl, safe, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs });
+  await timelockHolderScan(c, chain, tl, safe, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
   await c.runEq("timelock: admin role held by timelock itself", () => hasRole(chain, tl, Z32, tl), true);
   await c.runEq("timelock: admin role not held by deployer", () => hasRole(chain, tl, Z32, D), false);
   await c.runEq("timelock: admin role not held by safe", () => hasRole(chain, tl, Z32, safe), false);
@@ -427,16 +430,49 @@ async function currentHolders(chain: ChainReader, at: Address, role: Hex, s: { f
   return out;
 }
 
-/** Issue 1833: why the scan from `fromBlock` cannot see the vault's whole history (it has code at fromBlock - 1, or that read failed), or undefined. */
-async function createdBefore(chain: ChainReader, at: Address, fromBlock: bigint): Promise<string | undefined> {
-  if (fromBlock === 0n) return undefined;
-  const before = fromBlock - 1n;
-  try {
-    const code = await chain.getCode(at, before);
-    return code.length > 2 ? `from-block ${fromBlock} is after the vault's creation: ${at} already has code at block ${before}, so a role or allowlist grant before the scan start is never seen. Pass the block of the first deploy receipt` : undefined;
-  } catch (e) {
-    return `the vault's code at block ${before} (the block before from-block) is not readable, so the scan start cannot be shown to precede the vault's creation: ${(e as Error).message}`;
-  }
+/** Issue 1851: the detail prefix of a scan label that failed because the RPC refused a read, not because the chain is wrong. verify-stage.ts does not pause the vaults for those alone. */
+export const RPC_REFUSED_DETAIL = "RPC_REFUSED";
+/** The canonical CREATE2 factory (libs-adopt.ts CREATE2_FACTORY): the timelock stage creates the timelock through it, so that receipt names no contractAddress. */
+const CREATE2_FACTORY = "0x4e59b44847b379578588920ca78fbf26c0b4956c";
+
+/** A contract a log scan reads: its name in the labels and its address. */
+type Scanned = { name: string; address: Address };
+/** Why a scan from `fromBlock` cannot be shown to see the whole history of the scanned contracts, or undefined. */
+type CreationProof = (contracts: Scanned[], noun?: string) => Promise<string | undefined>;
+
+/**
+ * Issue 1851 (replaces the issue 1833 eth_getCode at fromBlock - 1, which a pruned RPC cannot serve): every log scan starts at fromBlock and sees only the logs from there on.
+ * Each scanned contract's creation block is read from the receipt of the deploy transaction of the run that created it: a CREATE receipt names it as contractAddress, a
+ * CREATE2 factory call (the timelock) carries the constructor's logs of the contract. The scan start must not be after that block. Receipts are read once per verify run.
+ * A receipt the RPC refuses fails the labels with an RPC_REFUSED detail; a contract no receipt of the run created fails them too (its creation cannot be shown).
+ */
+function creationProof(chain: ChainReader, fromBlock: bigint, deployTxs: Hex[] | undefined): CreationProof {
+  let created: Promise<Map<string, { block: bigint; tx: Hex }>> | undefined;
+  const read = async () => {
+    const out = new Map<string, { block: bigint; tx: Hex }>();
+    const note = (a: string, block: bigint, tx: Hex) => { const k = lc(a); const prev = out.get(k); if (!prev || block < prev.block) out.set(k, { block, tx }); };
+    for (const tx of deployTxs ?? []) {
+      let r;
+      try { r = await chain.deployReceipt(tx); } catch (e) { throw new Error(`${RPC_REFUSED_DETAIL}: the RPC refused eth_getTransactionReceipt for the deploy transaction ${tx}, so the scan start cannot be shown to precede the creation of the scanned contracts: ${String((e as Error)?.message ?? e).slice(0, 200)}`); }
+      if (r === null) throw new Error(`the deploy transaction ${tx} the run manifest recorded is not known to the chain, so the scan start cannot be shown to precede the creation of the scanned contracts`);
+      if (r.status !== "success") continue; // a reverted transaction created nothing
+      if (r.contractAddress) note(r.contractAddress, r.blockNumber, tx);
+      if (r.to && lc(r.to) === CREATE2_FACTORY) for (const l of r.logs) note(l.address, r.blockNumber, tx);
+    }
+    return out;
+  };
+  return async (contracts, noun) => {
+    if (fromBlock === 0n) return undefined; // the scan reads the whole chain
+    if (!deployTxs || deployTxs.length === 0) return `no deploy transaction hashes were given (the run manifest's stages[].txHashes), so the scan start from-block ${fromBlock} cannot be shown to precede the creation of the scanned contracts`;
+    let m: Map<string, { block: bigint; tx: Hex }>;
+    try { m = await (created ??= read()); } catch (e) { return (e as Error).message; }
+    for (const x of contracts) {
+      const c = m.get(lc(x.address));
+      if (!c) return `no deploy transaction of the run created ${x.name} ${x.address}, so the scan start from-block ${fromBlock} cannot be shown to precede its creation`;
+      if (c.block < fromBlock) return `from-block ${fromBlock} is after the ${noun ?? x.name}'s creation: ${x.address} was created in block ${c.block} (deploy transaction ${c.tx}), so a role or allowlist grant before the scan start is never seen. Pass the block of the first deploy receipt`;
+    }
+    return undefined;
+  };
 }
 
 /**
@@ -446,13 +482,13 @@ async function createdBefore(chain: ChainReader, at: Address, fromBlock: bigint)
  */
 async function vaultScanChecks(
   c: Collector, chain: ChainReader, v: ManifestVault, vs: VaultSheet | undefined, emergency: Address,
-  s: { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number },
+  s: { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number; created: CreationProof },
 ): Promise<void> {
   const p = `vault[${v.key}]`;
   const a = v.address;
-  // Issue 1833: the scans see only grants from fromBlock on. A vault that already has code at fromBlock - 1 was created earlier, so a grant before the scan start
-  // would never be seen: every scan label of the vault fails instead of passing on a partial log.
-  const late = await createdBefore(chain, a, s.fromBlock);
+  // Issue 1833, 1851: the scans see only grants from fromBlock on. A vault created before the scan start (its deploy receipt's block) could hold a grant that is
+  // never seen: every scan label of the vault fails instead of passing on a partial log.
+  const late = await s.created([{ name: p, address: a }], "vault");
   if (late !== undefined) { for (const l of vaultScanLabels(v)) c.fail(l, late); return; }
   await c.run(`${p}: ${KEEPER_LABEL}`, async () => {
     const h = await currentHolders(chain, a, KEEPER_ROLE, s);
@@ -679,17 +715,21 @@ const AGENT_LABELS = [
 /** The deploy authorizes no agent (architecture 5.2 and 6.3): an agent belongs to a depositor. The gateway has no agent log since the deploy began, the timelock manifest lists none and nobody holds AGENT_ROLE. */
 async function agentChecks(
   c: Collector, chain: ChainReader, gateway: Address, timelockManifest: any,
-  s: { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number },
+  s: { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number; created: CreationProof },
 ): Promise<void> {
   const base = { address: gateway, fromBlock: s.fromBlock, toBlock: s.head, chunk: s.chunk, retryBaseMs: s.retryBaseMs };
-  try {
+  // Issue 1851: the two gateway log scans need the scan start at or before the gateway's creation. The two manifest labels do not scan.
+  const late = await s.created([{ name: "gateway", address: gateway }]);
+  if (late !== undefined) c.fail(AGENT_LABELS[0]!, late);
+  else try {
     const t1 = keccak256(toHex(SIG_AGENT_AUTHORIZED)), t2 = keccak256(toHex(SIG_AGENT_OWNERSHIP));
     const logs = [...(await scanLogs(chain, { ...base, topics: [t1] })), ...(await scanLogs(chain, { ...base, topics: [t2] }))];
     const agents = [...new Set(logs.map((l) => lc(topicToAddress(l.topics[1]))))];
     c.push(AGENT_LABELS[0]!, logs.length === 0, logs.length ? `${logs.length} agent logs from block ${s.fromBlock}, agents ${agents.join(", ")}` : `no AgentAuthorized or AgentOwnershipTransferred log from block ${s.fromBlock}`);
   } catch (e: any) { c.fail(AGENT_LABELS[0]!, `scan failed: ${String(e?.message ?? e).slice(0, 300)}`); }
   c.eq(AGENT_LABELS[1]!, timelockManifest.roles?.gateway_agents_listed_count, 0);
-  try {
+  if (late !== undefined) c.fail(AGENT_LABELS[2]!, late);
+  else try {
     const logs = await scanLogs(chain, { ...base, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), AGENT_ROLE] });
     const holders: string[] = [];
     for (const who of new Set(logs.map((l) => topicToAddress(l.topics[2])))) if (await hasRole(chain, gateway, AGENT_ROLE, who)) holders.push(who);
@@ -699,9 +739,11 @@ async function agentChecks(
 }
 
 /** Log-enumerated scan of the timelock's PROPOSER, CANCELLER and EXECUTOR holders: only the Safe, plus address(0) as the open executor. An EOA holder is named. */
-async function timelockHolderScan(c: Collector, chain: ChainReader, tl: Address, safe: Address, s: { fromBlock: bigint; head: bigint | undefined; chunk: number; retryBaseMs: number }): Promise<void> {
+async function timelockHolderScan(c: Collector, chain: ChainReader, tl: Address, safe: Address, s: { fromBlock: bigint; head: bigint | undefined; chunk: number; retryBaseMs: number; created: CreationProof }): Promise<void> {
   const label = "timelock: only the safe holds PROPOSER, CANCELLER or EXECUTOR role (log scan)";
   if (s.head === undefined) { c.fail(label, "block number unreadable"); return; }
+  const late = await s.created([{ name: "timelock", address: tl }]);
+  if (late !== undefined) { c.fail(label, late); return; }
   try {
     const sig = keccak256(toHex(SIG_ROLE_GRANTED));
     const roles = [PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE];
@@ -735,8 +777,10 @@ const ROLE_HOLDERS_LABEL = "roles: every holder of every role on every governed 
 async function roleHolderEnumeration(
   c: Collector, chain: ChainReader, governed: { name: string; address: Address }[],
   expect: { timelock: Address; accounts: Address[]; icPolicy: Address; gateway: Address; router: Address },
-  s: { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number },
+  s: { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number; created: CreationProof },
 ): Promise<void> {
+  const late = await s.created(governed);
+  if (late !== undefined) { c.fail(ROLE_HOLDERS_LABEL, late); return; }
   try {
     const sig = keccak256(toHex(SIG_ROLE_GRANTED));
     const ok = new Set(expect.accounts.map(lc));
@@ -769,8 +813,10 @@ async function roleHolderEnumeration(
 }
 
 /** Log-enumerated scan: every (contract, role) the deployer was ever granted must be gone now. Covers contracts no manifest names. */
-async function roleScan(c: Collector, chain: ChainReader, deployer: Address, s: { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number }): Promise<void> {
+async function roleScan(c: Collector, chain: ChainReader, deployer: Address, governed: Scanned[], s: { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number; created: CreationProof }): Promise<void> {
   const label = "deployer: holds no role on any contract (log scan)";
+  const late = await s.created(governed);
+  if (late !== undefined) { c.fail(label, late); return; }
   try {
     const sig = keccak256(toHex(SIG_ROLE_GRANTED));
     const logs = await scanLogs(chain, { topics: [sig, null, padTopic(deployer)], fromBlock: s.fromBlock, toBlock: s.head, chunk: s.chunk, retryBaseMs: s.retryBaseMs });
