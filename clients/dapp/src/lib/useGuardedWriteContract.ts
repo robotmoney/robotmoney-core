@@ -22,8 +22,10 @@
  * Every redeem also gets a fixed gas limit (redeemGas.ts, core issue 1758), on every class and path.
  *
  * Inside a `GatewayWriteCheck` (AdminFlow and AgentsPanel, issue 1840), every write
- * first re-verifies the gateway proxy and implementation at the latest block, on
- * every env class, and is refused with `GatewayChangedError` on a mismatch.
+ * first runs the gateway check through the connected wallet's provider, on every
+ * env class: an admin write (gateway, Timelock, Safe) is refused unless the
+ * gateway is verified and still matches at the latest block, and any write is
+ * refused on a mismatch (`GatewayChangedError`).
  */
 import { useCallback, useState } from "react";
 import { useAccount, useWriteContract } from "wagmi";
@@ -72,7 +74,7 @@ async function assertTargetHasCode(source: CodeSource | undefined, address: unkn
 
 export function useGuardedWriteContract() {
   const base = useWriteContract();
-  const { connector } = useAccount();
+  const { connector, chainId } = useAccount();
   const { state } = useWriteChainGuard();
   const gatewayCheck = useGatewayWriteCheck();
   const [refusal, setRefusal] = useState<Error | null>(null);
@@ -105,7 +107,21 @@ export function useGuardedWriteContract() {
         (variables as { address?: unknown }).address,
       );
     }
-    if (gatewayCheck) await gatewayCheck();
+    if (gatewayCheck) {
+      let provider: Eip1193 | undefined;
+      try {
+        provider = (await (connector as CodeSource | undefined)?.getProvider()) as
+          | Eip1193
+          | undefined;
+      } catch {
+        provider = undefined;
+      }
+      await gatewayCheck({
+        target: (variables as { address?: unknown }).address,
+        provider,
+        chainId,
+      });
+    }
   };
 
   const writeContract = ((variables: Parameters<WriteFn>[0], options?: Parameters<WriteFn>[1]) => {

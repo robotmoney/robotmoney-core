@@ -250,10 +250,13 @@ change (stage 1 scope). The clients therefore bind what they sign:
   `COMMIT_EXPIRY_BLOCKS`. The dapp gates every admin flow, including a
   reveal, on a verified gateway with the implementation pin. It verifies when
   the page loads, the wallet connects or changes chain, and on "Re-verify".
-  Every write from AdminFlow and AgentsPanel also re-reads the gateway code,
-  implementation slot and implementation code at the latest block right before
-  it goes to the wallet, and is refused on any change (issue 1840). It has no
-  receipt-time check.
+  Every write from AdminFlow and AgentsPanel, and every Safe proposal
+  signature, also re-reads the gateway code, implementation slot and
+  implementation code at the latest block right before it goes to the wallet,
+  and is refused on any change. A gateway, Timelock or Safe write is refused
+  outright while the gateway is not verified; other writes (approve, deposit,
+  withdraw) pass through then and rely on their previews (issue 1840). It has
+  no receipt-time check.
 - Queued timelock operations: a queued `freezeUpgrades` is bound to the
   reviewed implementation and code hash and reverts after an intervening
   upgrade; a queued upgrade reverts once the proxy is frozen. Review and cancel
@@ -278,12 +281,19 @@ detail shows each vault's indexed implementation and upgrade state. `rmpc
 get-gateway` reports the implementation, its code hash, `upgradesFrozen()` and
 `upgradeTimelock()` beside the approved pin. The watchdog pages each governed
 upgrade or freeze once; it never pauses. An event is the deployment, and not
-paged, only when its transaction is a contract creation or its block is the
-contract's known deploy block. It is never inferred from the first indexed
-`Upgraded`, so a late-registered vault's first upgrade and a freeze with no
-indexed `Upgraded` both page (issue 1840). The dapp re-verifies the gateway
-proxy and implementation at the latest block right before each admin write and
-refuses on a mismatch.
+paged, only when its transaction created that proxy: the indexer compares the
+receipt's `contractAddress` with the emitting proxy and marks the row
+`"deployment": true`. A bare contract-creation transaction is not enough,
+because the timelock's executor role is open and anyone can execute a ready
+upgrade from a throwaway contract's constructor. Neither the deploy block nor
+"the first indexed `Upgraded`" exempts a row, so a late-registered vault's
+first upgrade and a freeze with no indexed `Upgraded` both page (issue 1840).
+Rows indexed before this rule existed are marked by the startup backfill; until
+then they page once. The dapp re-verifies the gateway proxy and implementation
+at the latest block right before each write from AdminFlow and AgentsPanel,
+through the connected wallet's provider on the connected chain, and before a
+Safe proposal signature. A gateway, Timelock or Safe write is refused unless
+the gateway is verified and still matches.
 
 ## Delivery sequence and acceptance gates
 

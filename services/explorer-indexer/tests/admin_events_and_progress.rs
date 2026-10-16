@@ -524,10 +524,25 @@ async fn the_startup_backfill_indexes_proxy_events_below_the_cursor_once() {
             }]
         }),
     );
+    // Transaction 0x01 created the gateway proxy (and only the gateway).
     stub.set(
         "eth_getTransactionReceipt",
-        serde_json::json!({"status": "0x1"}),
+        serde_json::json!({"status": "0x1", "contractAddress": format!("{gateway:#x}")}),
     );
+    // The gateway's deploy-time row was indexed before the receipt check
+    // existed, so it carries no deployment mark yet.
+    sqlx::query(
+        "INSERT INTO admin_events (chain_id, block_number, log_index, tx_hash, contract, \
+                                   contract_kind, event_name, detail) \
+         VALUES ($1, 5, 0, $2, $3, 'proxy', 'Upgraded', $4)",
+    )
+    .bind(CHAIN)
+    .bind(&[0x01u8; 32][..])
+    .bind(gateway.as_slice())
+    .bind(format!(r#"{{"implementation":"{impl_v1:#x}"}}"#))
+    .execute(fx.db.pool())
+    .await
+    .unwrap();
     stub.set(
         "eth_getLogs",
         serde_json::json!([
@@ -544,11 +559,11 @@ async fn the_startup_backfill_indexes_proxy_events_below_the_cursor_once() {
     );
     let inserted = backfill_proxy_events(&fx.db, &rpc, &c).await.unwrap();
     assert_eq!(
-        inserted, 3,
-        "the gateway's and the registered vault's events"
+        inserted, 2,
+        "the registered vault's events; the gateway's row already existed"
     );
-    let rows: Vec<(Vec<u8>, i64, String, String)> = sqlx::query_as(
-        "SELECT contract, block_number, contract_kind, event_name FROM admin_events \
+    let rows: Vec<(Vec<u8>, i64, String, String, String)> = sqlx::query_as(
+        "SELECT contract, block_number, contract_kind, event_name, detail FROM admin_events \
          WHERE chain_id = $1 ORDER BY log_index",
     )
     .bind(CHAIN)
@@ -560,6 +575,16 @@ async fn the_startup_backfill_indexes_proxy_events_below_the_cursor_once() {
     assert_eq!(rows[0].0.as_slice(), gateway.as_slice());
     assert_eq!(rows[2].0.as_slice(), late_vault.as_slice());
     assert_eq!(rows[2].3, "UpgradesFrozen");
+    // Issue 1840 review: only the row whose transaction created THAT proxy is
+    // the deployment. The existing gateway row is marked now. The vault's rows
+    // share the creation transaction, but it created the gateway, so they page.
+    let deployment = |d: &str| {
+        serde_json::from_str::<serde_json::Value>(d).unwrap()["deployment"]
+            == serde_json::json!(true)
+    };
+    assert!(deployment(&rows[0].4), "{}", rows[0].4);
+    assert!(!deployment(&rows[1].4), "{}", rows[1].4);
+    assert!(!deployment(&rows[2].4), "{}", rows[2].4);
     let creation: Option<Option<Vec<u8>>> =
         sqlx::query_scalar("SELECT to_addr FROM transactions WHERE chain_id = $1 AND tx_hash = $2")
             .bind(CHAIN)
@@ -668,4 +693,62 @@ async fn registry_proxy_events_are_indexed_with_multi_vault_events_off() {
         .unwrap();
     assert_eq!(vaults, 0, "VaultRegistered stays behind the flag");
     stub.shutdown();
+}
+
+/// Issue 1840 review: the timelock's executor role is open, so anyone can run a
+/// ready upgrade from a throwaway contract's constructor. Its transaction is a
+/// contract creation, but the contract it created is not the proxy, so the
+/// indexer does not mark the `Upgraded` row as the deployment and the watchdog
+/// pages it. When the transaction created the proxy itself, the row is marked.
+#[tokio::test]
+async fn a_proxy_row_is_the_deployment_only_when_its_transaction_created_that_proxy() {
+    for (created, expect_deployment) in
+        [(Address::from([0x99u8; 20]), false), (cfg().gateway, true)]
+    {
+        let fx = pg_fixture().await;
+        let gateway = cfg().gateway;
+        let upgraded = IGovernedUpgradeEvents::Upgraded {
+            implementation: Address::from([0x2bu8; 20]),
+        }
+        .encode_log_data();
+        let stub = StubRpcServer::start().await;
+        program(&stub, 20);
+        stub.set(
+            "eth_getBlockByNumber",
+            serde_json::json!({
+                "number": "0xa",
+                "hash": format!("0x{}", hex::encode([0xaau8; 32])),
+                "parentHash": format!("0x{}", hex::encode([0x00u8; 32])),
+                "timestamp": "0x65000000",
+                "transactions": [{
+                    "hash": format!("0x{}", hex::encode([0x01u8; 32])),
+                    "transactionIndex": "0x0",
+                    "from": format!("0x{}", hex::encode([0x0eu8; 20])),
+                    "to": null
+                }]
+            }),
+        );
+        stub.set(
+            "eth_getTransactionReceipt",
+            serde_json::json!({"status": "0x1", "contractAddress": format!("{created:#x}")}),
+        );
+        stub.set(
+            "eth_getLogs",
+            serde_json::json!([log_json(gateway, &upgraded, 10, 0)]),
+        );
+        let rpc = JsonRpc::new(&stub.url);
+        let outcome = run_once(&fx.db, &rpc, &cfg()).await.unwrap();
+        assert!(outcome.error.is_none(), "{:?}", outcome.error);
+        let detail: String = sqlx::query_scalar(
+            "SELECT detail FROM admin_events WHERE chain_id = $1 AND contract_kind = 'proxy'",
+        )
+        .bind(CHAIN)
+        .fetch_one(fx.db.pool())
+        .await
+        .unwrap();
+        let marked = serde_json::from_str::<serde_json::Value>(&detail).unwrap()["deployment"]
+            == serde_json::json!(true);
+        assert_eq!(marked, expect_deployment, "created {created:#x}: {detail}");
+        stub.shutdown();
+    }
 }

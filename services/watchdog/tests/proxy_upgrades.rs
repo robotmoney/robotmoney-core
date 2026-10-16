@@ -2,9 +2,11 @@
 //! core contract once, from the indexer's `admin_events` proxy rows.
 //!
 //! A proxy's deployment emits `Upgraded` (and, frozen at deploy,
-//! `UpgradesFrozen`) in its creation transaction; those are not paged. The
-//! deployment is recognised by its creation transaction or the contract's known
-//! deploy block, never by "the first indexed `Upgraded`" (issue 1840). Any
+//! `UpgradesFrozen`) in its creation transaction; the indexer marks those rows
+//! `"deployment": true` when the receipt's `contractAddress` is the proxy, and
+//! they are not paged. Nothing else exempts a row: not "the first indexed
+//! `Upgraded`", not a contract-creation transaction, not the deploy block
+//! (issue 1840). Any
 //! other `Upgraded` (an upgrade) or `UpgradesFrozen` (a delayed freeze) is paged
 //! once and never again, and a failed delivery is retried.
 //!
@@ -47,20 +49,6 @@ async fn seed_tx(pool: &sqlx::PgPool, tx: u8, block: i64, to: Option<[u8; 20]>) 
     .unwrap();
 }
 
-/// One `contracts` row; `deployed_block = None` is a contract whose deploy
-/// block was never discovered (a registry-discovered vault).
-async fn seed_contract(pool: &sqlx::PgPool, contract: [u8; 20], deployed_block: Option<i64>) {
-    sqlx::query(
-        "INSERT INTO contracts (chain_id, address, kind, deployed_block) VALUES ($1, $2, 'vault', $3)",
-    )
-    .bind(CHAIN)
-    .bind(&contract[..])
-    .bind(deployed_block)
-    .execute(pool)
-    .await
-    .unwrap();
-}
-
 /// One `proxy` row of `admin_events`, emitted in transaction `[tx; 32]`.
 async fn seed_event(
     pool: &sqlx::PgPool,
@@ -90,12 +78,6 @@ async fn seed_event(
 
 async fn seed(pool: &sqlx::PgPool) {
     seed_chain(pool).await;
-    // The gateway's deploy block (10) was discovered by the indexer. The
-    // vault's was not, but its deployment transaction is a contract creation.
-    seed_contract(pool, GATEWAY, Some(10)).await;
-    seed_contract(pool, VAULT, None).await;
-    seed_tx(pool, 0x01, 10, Some(TIMELOCK)).await;
-    seed_tx(pool, 0x02, 12, None).await;
     let v1 = format!("0x{}", "1a".repeat(20));
     let v2 = format!("0x{}", "2b".repeat(20));
     // (contract, block, log_index, tx, event, detail)
@@ -107,7 +89,7 @@ async fn seed(pool: &sqlx::PgPool) {
             0i32,
             0x01u8,
             "Upgraded",
-            format!(r#"{{"implementation":"{v1}"}}"#),
+            format!(r#"{{"implementation":"{v1}","deployment":true}}"#),
         ),
         (
             GATEWAY,
@@ -135,7 +117,7 @@ async fn seed(pool: &sqlx::PgPool) {
             0,
             0x02,
             "Upgraded",
-            format!(r#"{{"implementation":"{v1}"}}"#),
+            format!(r#"{{"implementation":"{v1}","deployment":true}}"#),
         ),
         (
             VAULT,
@@ -144,7 +126,7 @@ async fn seed(pool: &sqlx::PgPool) {
             0x02,
             "UpgradesFrozen",
             format!(
-                r#"{{"implementation":"{v1}","code_hash":"0x{}"}}"#,
+                r#"{{"implementation":"{v1}","code_hash":"0x{}","deployment":true}}"#,
                 "66".repeat(32)
             ),
         ),
@@ -256,7 +238,6 @@ async fn a_late_registered_vaults_first_indexed_upgrade_is_paged_once() {
     ensure_pager_state_table(&fx.pool).await.unwrap();
     seed_chain(&fx.pool).await;
     // Deployed at block 5 (never indexed), registered and watched from 40.
-    seed_contract(&fx.pool, VAULT, None).await;
     seed_tx(&fx.pool, 0x09, 70, Some(TIMELOCK)).await;
     let v2 = format!("0x{}", "2b".repeat(20));
     seed_event(
@@ -312,8 +293,7 @@ async fn a_freeze_before_the_first_indexed_upgrade_is_paged() {
     let fx = pg_fixture().await;
     ensure_pager_state_table(&fx.pool).await.unwrap();
     seed_chain(&fx.pool).await;
-    // Deploy block known (3) but outside the indexed range.
-    seed_contract(&fx.pool, GATEWAY, Some(3)).await;
+    // Deployed at block 3, outside the indexed range.
     seed_tx(&fx.pool, 0x0a, 80, Some(TIMELOCK)).await;
     seed_tx(&fx.pool, 0x0b, 90, Some(TIMELOCK)).await;
     let v1 = format!("0x{}", "1a".repeat(20));
@@ -369,5 +349,59 @@ async fn a_freeze_before_the_first_indexed_upgrade_is_paged() {
             .unwrap(),
         0
     );
+    server.shutdown();
+}
+
+/// Issue 1840 (review): the timelock's executor role is open, so anyone can
+/// execute a ready upgrade from a throwaway contract's constructor. That
+/// transaction is a contract creation, and here it even lands in the proxy's
+/// deploy block. It did not create the proxy, so the indexer did not mark it
+/// as the deployment, and it pages.
+#[tokio::test]
+async fn an_upgrade_executed_from_a_constructor_in_the_deploy_block_pages() {
+    let fx = pg_fixture().await;
+    ensure_pager_state_table(&fx.pool).await.unwrap();
+    seed_chain(&fx.pool).await;
+    let v1 = format!("0x{}", "1a".repeat(20));
+    let v2 = format!("0x{}", "2b".repeat(20));
+    // Block 20: the proxy's own creation (tx 0x0c), then a throwaway
+    // contract's creation (tx 0x0d) whose constructor runs timelock.execute().
+    seed_tx(&fx.pool, 0x0c, 20, None).await;
+    seed_tx(&fx.pool, 0x0d, 20, None).await;
+    seed_event(
+        &fx.pool,
+        GATEWAY,
+        20,
+        0,
+        0x0c,
+        "Upgraded",
+        &format!(r#"{{"implementation":"{v1}","deployment":true}}"#),
+    )
+    .await;
+    seed_event(
+        &fx.pool,
+        GATEWAY,
+        20,
+        5,
+        0x0d,
+        "Upgraded",
+        &format!(r#"{{"implementation":"{v2}"}}"#),
+    )
+    .await;
+
+    let changes = governed_proxy_changes(&fx.pool, CHAIN).await.unwrap();
+    assert_eq!(
+        changes
+            .iter()
+            .map(|c| (c.event_name.as_str(), c.block_number, c.log_index))
+            .collect::<Vec<_>>(),
+        vec![("Upgraded", 20, 5)],
+        "only the proxy's own creation is exempt"
+    );
+    let server = MockWebhookServer::start().await;
+    let paged = alert_new_proxy_changes(&fx.pool, &Client::new(), Some(&server.url), CHAIN, 1_000)
+        .await
+        .unwrap();
+    assert_eq!(paged, 1);
     server.shutdown();
 }

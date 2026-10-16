@@ -1181,8 +1181,10 @@ async fn run_inner(
     // every tx on Base. The §11 acceptance criterion says "each row
     // carries chain_id and block_number"; non-event blocks aren't
     // required by the schema.
+    let mut created: Vec<(alloy_primitives::B256, Address)> = Vec::new();
     for &bn in &blocks_with_events {
         let (header, txs) = rpc.block_with_txs(bn).await?;
+        created.extend(created_contracts(&txs));
         let r = db
             .insert_block(
                 cfg.chain_id,
@@ -1231,7 +1233,7 @@ async fn run_inner(
 
     // Decode + insert events.
     for log in &logs {
-        rows_inserted += handle_log(db, cfg, &topics, log).await? as i64;
+        rows_inserted += handle_log_in_range(db, cfg, &topics, log, &created).await? as i64;
     }
 
     // Reuse the registered-vault set gathered above for the watched-address
@@ -1497,15 +1499,43 @@ pub struct AdminEvent {
     pub detail: serde_json::Value,
 }
 
+/// Contracts created at top level in a range: `(transaction, created contract)`
+/// from each receipt's `contractAddress`.
+pub type CreatedContracts = [(alloy_primitives::B256, Address)];
+
+/// Is this proxy event its contract's deployment? Only when its transaction
+/// created THIS proxy (the receipt's `contractAddress` is the emitter), issue
+/// 1840. A bare contract-creation transaction is not enough: the timelock's
+/// executor role is open, so anyone can execute a ready upgrade from a
+/// throwaway contract's constructor, and that upgrade must still page.
+pub fn is_proxy_deployment(created: &CreatedContracts, log: &LogEntry) -> bool {
+    created
+        .iter()
+        .any(|(tx, contract)| *tx == log.tx_hash && *contract == log.address)
+}
+
+/// Contracts the given transactions created.
+fn created_contracts(txs: &[crate::rpc::TxRow]) -> Vec<(alloy_primitives::B256, Address)> {
+    txs.iter()
+        .filter_map(|t| t.contract_address.map(|c| (t.tx_hash, c)))
+        .collect()
+}
+
 async fn handle_admin_log(
     db: &Db,
     cfg: &IndexerConfig,
     topics: &Topics,
     log: &LogEntry,
+    created: &CreatedContracts,
 ) -> Result<Option<u64>, IndexerError> {
-    let Some(ev) = admin_event_of(cfg, topics, log)? else {
+    let Some(mut ev) = admin_event_of(cfg, topics, log)? else {
         return Ok(None);
     };
+    // The watchdog pages every proxy row except one marked as the deployment.
+    let deployment = ev.contract_kind == "proxy" && is_proxy_deployment(created, log);
+    if deployment {
+        ev.detail["deployment"] = serde_json::Value::Bool(true);
+    }
     let n = db
         .insert_admin_event(
             cfg.chain_id,
@@ -1516,6 +1546,11 @@ async fn handle_admin_log(
             &ev,
         )
         .await?;
+    if n == 0 && deployment {
+        // Indexed before the receipt check existed: mark it now.
+        db.mark_proxy_deployment(cfg.chain_id, log.block_number as i64, log.log_index as i32)
+            .await?;
+    }
     Ok(Some(n))
 }
 
@@ -1545,9 +1580,10 @@ pub const PROXY_BACKFILL_MAX_REQUESTS: u64 = 10_000;
 ///
 /// Idempotent: rows insert on the existing `(chain_id, block_number,
 /// log_index)` key with `ON CONFLICT DO NOTHING`, so a second run inserts
-/// nothing. Each event block's header and transactions are stored as well, so
-/// the watchdog can recognise a deployment by its contract-creation
-/// transaction. Bounded: requests span at most `max_blocks_per_tick` blocks,
+/// nothing. Each event block's header and transactions are stored as well. A
+/// row whose transaction created that proxy (receipt `contractAddress`) is
+/// marked `"deployment": true`, including a row indexed before this check
+/// existed, so the watchdog does not page it. Bounded: requests span at most `max_blocks_per_tick` blocks,
 /// and at most [`PROXY_BACKFILL_MAX_REQUESTS`] of them are made.
 ///
 /// The main loop runs it once at startup, after the first successful tick. A
@@ -1603,6 +1639,7 @@ pub async fn backfill_proxy_events(
     let proxy_topics = [topics.proxy_upgraded, topics.proxy_upgrades_frozen];
     let mut inserted = 0u64;
     let mut stored_blocks: BTreeSet<u64> = BTreeSet::new();
+    let mut created: Vec<(alloy_primitives::B256, Address)> = Vec::new();
     let mut from = floor;
     while from <= cursor {
         let to = from.saturating_add(span - 1).min(cursor);
@@ -1622,6 +1659,7 @@ pub async fn backfill_proxy_events(
                     header.timestamp as i64,
                 )
                 .await?;
+                created.extend(created_contracts(&txs));
                 for t in txs {
                     db.insert_transaction(
                         cfg.chain_id,
@@ -1635,7 +1673,9 @@ pub async fn backfill_proxy_events(
                     .await?;
                 }
             }
-            inserted += handle_admin_log(db, cfg, &topics, log).await?.unwrap_or(0);
+            inserted += handle_admin_log(db, cfg, &topics, log, &created)
+                .await?
+                .unwrap_or(0);
         }
         from = to + 1;
     }
@@ -1710,6 +1750,19 @@ pub async fn handle_log(
     cfg: &IndexerConfig,
     topics: &Topics,
     log: &LogEntry,
+) -> Result<u64, IndexerError> {
+    handle_log_in_range(db, cfg, topics, log, &[]).await
+}
+
+/// [`handle_log`] with the contracts the range's transactions created, so a
+/// proxy event is marked as the deployment only when its transaction created
+/// that proxy (issue 1840).
+pub async fn handle_log_in_range(
+    db: &Db,
+    cfg: &IndexerConfig,
+    topics: &Topics,
+    log: &LogEntry,
+    created: &CreatedContracts,
 ) -> Result<u64, IndexerError> {
     let topic0 = match log.topics.first() {
         Some(t) => *t,
@@ -2378,7 +2431,7 @@ pub async fn handle_log(
     // than trusting the topic.
     // Timelock and Safe governance events (issue #1731). The topic-0s are generic hashes, so the emitter
     // must be the configured Timelock or Safe before anything is written.
-    if let Some(n) = handle_admin_log(db, cfg, topics, log).await? {
+    if let Some(n) = handle_admin_log(db, cfg, topics, log, created).await? {
         return Ok(n);
     }
 

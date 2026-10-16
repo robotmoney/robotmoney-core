@@ -11,21 +11,23 @@
 //! governed change: an upgrade that replaced the implementation, or a delayed
 //! freeze. Each one pages the on-call operator exactly once.
 //!
-//! An event is the deployment only when the chain says so (issue 1840):
+//! An event is the deployment only when its transaction created THIS proxy
+//! (issue 1840). The indexer checks the receipt's `contractAddress` against the
+//! emitting proxy and marks such rows `"deployment": true` in `detail`. Every
+//! other proxy event pages, including:
 //!
-//! - its transaction is a contract creation (`transactions.to_addr IS NULL`,
-//!   the indexer stores every transaction of a block with a watched event), or
-//! - its block is the contract's configured or discovered deploy block
-//!   (`contracts.deployed_block`).
+//! - an upgrade executed from a throwaway contract's constructor. The
+//!   timelock's executor role is open, so that transaction is a contract
+//!   creation, but it did not create the proxy;
+//! - an upgrade in the proxy's deploy block sent by another transaction;
+//! - the first indexed upgrade of a registry-discovered vault, or of a
+//!   contract added to the config after the cursor passed its deploy block.
+//!   The old rule took "the first indexed `Upgraded`" as the deployment, so
+//!   that upgrade was never paged, and a freeze before it was dropped.
 //!
-//! It is never inferred from "the first `Upgraded` the indexer happened to
-//! see". A registry-discovered vault is watched from the tick that saw its
-//! `VaultRegistered`, and a contract added to the config later is watched from
-//! the cursor, so their deploy-time events may never be indexed. Under the old
-//! first-seen rule their first governed upgrade was taken for the deployment
-//! and never paged, and a freeze before any indexed `Upgraded` was dropped.
-//! When the evidence is missing the event pages: a spurious page is
-//! recoverable, a silent upgrade is not.
+//! A deployment row the indexer could not mark (no receipt, or a proxy created
+//! by a factory) pages once too: a spurious page is recoverable, a silent
+//! upgrade is not.
 //!
 //! Alert-only: an upgrade never pauses the gateway.
 
@@ -92,8 +94,7 @@ impl ProxyChange {
 type ProxyEventRow = (Vec<u8>, String, i64, i32, Vec<u8>, String);
 
 /// Governed proxy changes for `chain_id`, oldest first: every proxy event
-/// except those of the contract's deployment, which is its creation
-/// transaction or its known deploy block (see the module doc).
+/// the indexer did not mark as its proxy's deployment (see the module doc).
 pub async fn governed_proxy_changes(
     pool: &PgPool,
     chain_id: i64,
@@ -101,11 +102,8 @@ pub async fn governed_proxy_changes(
     let rows: Vec<ProxyEventRow> = sqlx::query_as(
         "SELECT e.contract, e.event_name, e.block_number, e.log_index, e.tx_hash, e.detail \
          FROM admin_events e \
-         LEFT JOIN contracts c ON c.chain_id = e.chain_id AND c.address = e.contract \
-         LEFT JOIN transactions t ON t.chain_id = e.chain_id AND t.tx_hash = e.tx_hash \
          WHERE e.chain_id = $1 AND e.contract_kind = 'proxy' \
-           AND e.block_number IS DISTINCT FROM c.deployed_block \
-           AND NOT (t.tx_hash IS NOT NULL AND t.to_addr IS NULL) \
+           AND (e.detail::jsonb -> 'deployment') IS DISTINCT FROM 'true'::jsonb \
          ORDER BY e.block_number, e.log_index",
     )
     .bind(chain_id)
