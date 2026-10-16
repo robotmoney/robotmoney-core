@@ -3,18 +3,21 @@
 //   bun scripts/runbook/run-record.ts go --kind publish|freeze --run-dir D --sha S --target T --sheet F
 //       writes D/go/<kind>.json: the sha, the target and the sheet hash the run proceeds with. A freeze go is refused off the Twin chain:
 //       on 8453 the freeze is an owner decision, never a runbook default.
-//   bun scripts/runbook/run-record.ts report --run-dir D --evidence-dir E --sha S --target T --chain-id C --sheet F --tag TAG
+//   bun scripts/runbook/run-record.ts report --run-dir D --evidence-dir E --manifest-dir M --rpc URL --sha S --target T --chain-id C --sheet F --tag TAG
 //       writes D/rollout-report.md from the run itself: the sha, the network, the sheet hash, the tag, the journal of every step and the
-//       evidence files with their sha256. A pause report (rollout-report-<chain>.json, written by pause-all) is listed as an issue.
+//       evidence files with their sha256. A vault whose deposits are still paused at report time (read with cast from the four vault
+//       manifests in M) is an issue. A pause report (rollout-report-<chain>.json) is listed, not an issue: the pause drills write one.
 //   bun scripts/runbook/run-record.ts signoff --run-dir D --sha S --target T --sheet F
 //       writes D/go/signoff.json when the report exists, lists no issue and matches the publish go. Exit 1 otherwise.
 // A record that exists is kept when it matches and refused when it differs. Exit 1 is a refusal, exit 2 a usage error. No secret is read or written.
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const VERBS = ["go", "report", "signoff"] as const;
-export const FLAGS = ["kind", "run-dir", "evidence-dir", "sha", "target", "chain-id", "sheet", "tag"] as const;
+export const FLAGS = ["kind", "run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag"] as const;
+export const VAULT_MANIFESTS = ["vault", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault"] as const;
 const TARGETS = ["twin", "rehearsal", "production"];
 
 const sha256 = (file: string): string => createHash("sha256").update(readFileSync(file)).digest("hex");
@@ -56,19 +59,33 @@ function writeOnce(file: string, record: Record<string, unknown>, same: (old: Re
 }
 const sameBasis = (b: Record<string, unknown>) => (old: Record<string, unknown>) => old.coreSha === b.coreSha && old.target === b.target && old.sheetSha256 === b.sheetSha256;
 
-/** PURE. The issues a run shows in its evidence folder listing. */
-export function issuesOf(evidenceFiles: string[]): string[] {
-  return evidenceFiles.filter((f) => /^rollout-report-[0-9]+\.json$/.test(f)).map((f) => `${f}: a failed verify paused all four vaults (pause-all)`);
+/** PURE. The issues of a run: every vault whose deposits are still paused (`depositsPaused()` read as "true", or unreadable). */
+export function issuesOf(paused: { manifest: string; vault: string; read: string }[]): string[] {
+  return paused.filter((p) => p.read !== "false").map((p) => `${p.manifest} ${p.vault}: depositsPaused() is ${p.read === "true" ? "true at report time" : `unreadable (${p.read})`}`);
+}
+/** PURE. The pause reports in an evidence folder listing: listed, never an issue by themselves (the pause drills write one). */
+export const pauseReportsOf = (evidenceFiles: string[]): string[] => evidenceFiles.filter((f) => /^rollout-report-[0-9]+\.json$/.test(f));
+
+/** depositsPaused() of the four vaults the manifests name. */
+function vaultReads(manifestDir: string, rpc: string): { manifest: string; vault: string; read: string }[] {
+  return VAULT_MANIFESTS.map((m) => {
+    const p = join(manifestDir, `${m}.json`);
+    if (!existsSync(p)) return { manifest: m, vault: "?", read: "no manifest" };
+    const vault = String(JSON.parse(readFileSync(p, "utf8")).vault ?? "?");
+    const r = spawnSync("cast", ["call", vault, "depositsPaused()(bool)", "--rpc-url", rpc], { encoding: "utf8", env: process.env });
+    return { manifest: m, vault, read: r.status === 0 ? r.stdout.trim() : `cast exit ${r.status}` };
+  });
 }
 
 /** PURE. The rollout report text. */
-export function reportText(r: { coreSha: string; target: string; chainId: string; sheetSha256: string; tag: string; journal: { id: string; lines: number; last: string }[]; evidence: { file: string; sha256: string }[]; issues: string[] }): string {
+export function reportText(r: { coreSha: string; target: string; chainId: string; sheetSha256: string; tag: string; journal: { id: string; lines: number; last: string }[]; evidence: { file: string; sha256: string }[]; issues: string[]; pauseReports: string[] }): string {
   const out = [
     `# Rollout report`, ``,
     `Written by scripts/runbook/run-record.ts from the run directory. Nothing in it is typed by hand.`, ``,
     `| Field | Value |`, `| --- | --- |`,
     `| Core sha | ${r.coreSha} |`, `| Target | ${r.target} |`, `| Chain id | ${r.chainId} |`, `| Sheet sha256 | ${r.sheetSha256} |`, `| Release tag | ${r.tag} |`, ``,
     `## Issues`, ``, ...(r.issues.length ? r.issues.map((i) => `- ${i}`) : ["None."]), ``,
+    `## Pause reports`, ``, ...(r.pauseReports.length ? r.pauseReports.map((f) => `- ${f} (a pause drill or a failed verify; the vault reads above decide whether it is still open)`) : ["None."]), ``,
     `## Steps (journal)`, ``, `| Step | Lines | Last line |`, `| --- | --- | --- |`,
     ...r.journal.map((j) => `| ${j.id} | ${j.lines} | ${j.last.replace(/\|/g, "\\|").slice(0, 160)} |`), ``,
     `## Evidence`, ``, `| File | sha256 |`, `| --- | --- |`, ...r.evidence.map((e) => `| ${e.file} | ${e.sha256} |`), ``,
@@ -103,7 +120,8 @@ export function main(argv: string[]): number {
         return { id: x.replace(/\.out$/, ""), lines: lines.length, last: lines.at(-1) ?? "" };
       });
       const files = listFiles(evidenceDir);
-      const text = reportText({ ...b, chainId: need(f, "chain-id"), tag: need(f, "tag"), journal, evidence: files.map((x) => ({ file: x, sha256: sha256(join(evidenceDir, x)) })), issues: issuesOf(files.map((x) => x.split("/").at(-1)!)) });
+      const names = files.map((x) => x.split("/").at(-1)!);
+      const text = reportText({ ...b, chainId: need(f, "chain-id"), tag: need(f, "tag"), journal, evidence: files.map((x) => ({ file: x, sha256: sha256(join(evidenceDir, x)) })), issues: issuesOf(vaultReads(need(f, "manifest-dir"), need(f, "rpc"))), pauseReports: pauseReportsOf(names) });
       writeFileSync(join(runDir, "rollout-report.md"), text);
       return 0;
     }

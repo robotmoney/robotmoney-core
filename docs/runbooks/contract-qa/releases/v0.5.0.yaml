@@ -1819,11 +1819,11 @@ steps:
 
   - id: "P10.51-write-rollout-report"
     standing: ["4.7"]
-    description: "The rollout report is written from the run: sha, network, sheet hash, tag, every step's journal, every evidence file's sha256, and any pause as an issue"
+    description: "The rollout report is written from the run: sha, network, sheet hash, tag, every step's journal, every evidence file's sha256; a vault still paused at report time is an issue, a pause report from a drill is listed only"
     host: "control"
     phase: 10
     cmds:
-      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}"]
+      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}

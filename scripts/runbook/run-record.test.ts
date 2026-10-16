@@ -1,24 +1,32 @@
 // Tests for scripts/runbook/run-record.ts: the run writes its own go, report and sign-off, and refuses a mismatched or unsafe one.
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { main } from "./run-record.ts";
+import { VAULT_MANIFESTS, main } from "./run-record.ts";
 
 const SHA = "84952e18";
-function withRun(fn: (d: { run: string; ev: string; sheet: string }) => void): void {
+type Run = { run: string; ev: string; man: string; sheet: string; paused: (v: string) => void };
+/** A run directory with four vault manifests and a fake `cast` on PATH that answers depositsPaused() with the value `paused` sets. */
+function withRun(fn: (d: Run) => void): void {
   const root = mkdtempSync(join(tmpdir(), "run-record-"));
+  const path = process.env.PATH;
   try {
-    const run = join(root, "run"), ev = join(root, "evidence"), sheet = join(root, "sheet.env");
-    mkdirSync(join(run, "journal"), { recursive: true }); mkdirSync(ev);
+    const run = join(root, "run"), ev = join(root, "evidence"), man = join(root, "manifests"), sheet = join(root, "sheet.env"), bin = join(root, "bin");
+    mkdirSync(join(run, "journal"), { recursive: true }); mkdirSync(ev); mkdirSync(man); mkdirSync(bin);
+    VAULT_MANIFESTS.forEach((m, i) => writeFileSync(join(man, `${m}.json`), JSON.stringify({ vault: `0x${String(i + 1).padStart(40, "0")}` })));
+    const answer = join(root, "paused");
+    writeFileSync(answer, "false\n");
+    writeFileSync(join(bin, "cast"), `#!/bin/sh\ncat "${answer}"\n`); chmodSync(join(bin, "cast"), 0o755);
+    process.env.PATH = `${bin}:${path}`;
     writeFileSync(sheet, "CHAIN_ID=918453\n");
     writeFileSync(join(run, "journal", "P0.03-tools.out"), "ok\n");
     writeFileSync(join(ev, "evidence.json"), "{}\n");
-    fn({ run, ev, sheet });
-  } finally { rmSync(root, { recursive: true, force: true }); }
+    fn({ run, ev, man, sheet, paused: (v) => writeFileSync(answer, `${v}\n`) });
+  } finally { process.env.PATH = path; rmSync(root, { recursive: true, force: true }); }
 }
-const base = (d: { run: string; sheet: string }, target = "twin") => ["--run-dir", d.run, "--sha", SHA, "--target", target, "--sheet", d.sheet];
-const report = (d: { run: string; ev: string; sheet: string }) => main(["report", ...base(d), "--evidence-dir", d.ev, "--chain-id", "918453", "--tag", "release/v0.5.0-rehearsal"]);
+const base = (d: Pick<Run, "run" | "sheet">, target = "twin") => ["--run-dir", d.run, "--sha", SHA, "--target", target, "--sheet", d.sheet];
+const report = (d: Run) => main(["report", ...base(d), "--evidence-dir", d.ev, "--manifest-dir", d.man, "--rpc", "http://127.0.0.1:8545", "--chain-id", "918453", "--tag", "release/v0.5.0-rehearsal"]);
 
 test("go, report and sign-off are written by the run", () => withRun((d) => {
   expect(main(["go", "--kind", "publish", ...base(d)])).toBe(0);
@@ -41,10 +49,19 @@ test("a freeze go is refused off the Twin chain", () => withRun((d) => {
   expect(main(["go", "--kind", "freeze", ...base(d)])).toBe(0);
 }));
 
-test("no sign-off when a pause report shows an issue", () => withRun((d) => {
+test("a pause drill's report is listed, and the run still signs off once the vaults are open", () => withRun((d) => {
   expect(main(["go", "--kind", "publish", ...base(d)])).toBe(0);
   writeFileSync(join(d.ev, "rollout-report-918453.json"), "{}\n");
   expect(report(d)).toBe(0);
+  expect(readFileSync(join(d.run, "rollout-report.md"), "utf8")).toContain("- rollout-report-918453.json");
+  expect(main(["signoff", ...base(d)])).toBe(0);
+}));
+
+test("no sign-off while a vault is still paused", () => withRun((d) => {
+  expect(main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  d.paused("true");
+  expect(report(d)).toBe(0);
+  expect(readFileSync(join(d.run, "rollout-report.md"), "utf8")).toContain("depositsPaused() is true at report time");
   expect(main(["signoff", ...base(d)])).toBe(1);
 }));
 
