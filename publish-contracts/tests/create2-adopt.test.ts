@@ -212,9 +212,10 @@ describe("a run where the libraries already exist", () => {
     expect(sim.map((l) => [l.stage, l.adopted_create2?.length ?? 0])).toEqual([["proto", N], ["agent", 0], ["rwa", 0]]);
   });
 
-  test("with no build output nothing is adopted and a short count is the plain COUNT_MISMATCH", async () => {
+  test("with no build output of the libraries nothing is adopted and a short count is the plain COUNT_MISMATCH", async () => {
     const w = proWorld({ have: THREE });
     require("node:fs").rmSync(join(w.coreDir, "out"), { recursive: true, force: true });
+    cpSync(join(OUT, "TimelockController.sol"), join(w.coreDir, "out", "TimelockController.sol"), { recursive: true }); // the timelock pin (issue 1835) still needs its artifact
     expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.COUNT_MISMATCH);
   });
 });

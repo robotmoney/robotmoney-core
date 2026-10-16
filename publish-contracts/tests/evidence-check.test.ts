@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { encodeAbiParameters, encodeEventTopics, encodeFunctionData, parseAbi, type Hex } from "viem";
-import { applyCalldata, chainReaderFromFixture, checkEvidence, checkEvidenceOnChain, checkReceiptApplications, checkReceiptApplicationsOnChain, GOVERN_STEPS, recordingChainReader, scanEvidenceFolder, unpauseCalldata, type ChainReader } from "../src/evidence-check.ts";
+import { getStageTable } from "../src/stages.ts";
+import { adoptableFromTable, applyCalldata, chainReaderFromFixture, checkEvidence, checkEvidenceOnChain, checkReceiptApplications, checkReceiptApplicationsOnChain, GOVERN_STEPS, recordingChainReader, scanEvidenceFolder, unpauseCalldata, type ChainReader } from "../src/evidence-check.ts";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -528,6 +529,21 @@ describe("evidence check: an adopted libs stage (issue 1721)", () => {
     expect(checkEvidence(twice, FROZEN_WITH_LIBS, { ...cap, libs: 2 }).join()).toContain("lists a library twice");
     const unlisted = adoptedEv(); unlisted.stages[1].stage = "recorder";
     expect(checkEvidence(unlisted, { ...FROZEN_WITH_LIBS, recorder: 4 }, cap).join()).toContain("lets this stage adopt 0");
+  });
+  test("offline: the timelock stage may adopt the core timelock only (issue 1835): the table cap is one, frozen count less one passes, two entries are refused", () => {
+    const cap = adoptableFromTable(getStageTable());
+    expect(cap.timelock).toBe(1);
+    expect(cap.registry).toBe(1); // GovernedUpgrade only: the cap of other stages is unchanged
+    const mk = (n: number, txs: number) => {
+      const e: any = good();
+      e.stages.push({ stage: "timelock", frozen_count: 25, receipt_count: txs, tx_hashes: Array.from({ length: txs }, (_, i) => h(60 + i)), receipts_status: Array.from({ length: txs }, () => 1),
+        adopted: { deployer_txs: txs, libraries: Array.from({ length: n }, (_, i) => ({ name: i ? `X${i}` : "TimelockController", address: a(70 + i), code_hash: keccak256(LIBCODE) })) } });
+      e.deployer_nonce_final = 2 + txs + 1;
+      return e;
+    };
+    const f = { safe: 2, timelock: 25 };
+    expect(checkEvidence(mk(1, 24), f, cap)).toEqual([]);
+    expect(checkEvidence(mk(2, 23), f, cap).join()).toContain("the stage table lets this stage adopt 1");
   });
   test("offline: an adopted entry without a library, an address or a code hash is refused", () => {
     const none = adoptedEv(); none.stages[1].adopted.libraries = [];

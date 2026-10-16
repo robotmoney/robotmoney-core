@@ -5,6 +5,7 @@ import { basename, join } from "node:path";
 import { PROOF_TX_NONCES } from "../src/counts.ts";
 import { EXIT_CODES } from "../src/errors.ts";
 import { STAGE_NAMES, getStageTable } from "../src/stages.ts";
+import { predictCoreTimelock } from "../src/timelock-pin.ts";
 import { COUNTS, exampleText } from "./fixtures.ts";
 import { LOCAL_RPC, SCRIPT, world } from "./harness.ts";
 
@@ -348,5 +349,108 @@ describe("a failed broadcast says why (core 1505)", () => {
     expect(lastError(w).message).toContain("forge: Error: RPC connection dropped");
     expect(lastError(w).message).not.toContain("NOT resent");
     expect(w.state().calls.some((c: any) => c.tool === "cast" && (c.args[0] === "receipt" || c.args[0] === "call"))).toBe(false);
+  });
+});
+
+describe("the core timelock: pinned at the first proxy stage, adopted when someone deployed it first (issue 1835)", () => {
+  const OUT = join(import.meta.dir, "fixtures", "build-out");
+  const SAFE = "0x00000000000000000000000000000000000050fe"; // the Safe the fake Safe API creates
+  const TL = predictCoreTimelock(getStageTable().upgradeAuthority!, OUT, SAFE, 60n);
+  const RUNTIME: string = JSON.parse(readFileSync(join(OUT, "TimelockController.sol", "TimelockController.json"), "utf8")).deployedBytecode.object;
+  const A = "0x000000000000000000000000000000000000a001";
+  const sum = Object.values(COUNTS).reduce((a, b) => a + b, 0);
+  /** A griefer deployed the timelock at its prediction once the proxies were public: the stage script reuses it and plans one transaction fewer. */
+  const pregrief = (code: string | null) => {
+    const w = world({ startNonce: 0 });
+    w.cfg.counts[SCRIPT.timelock!] = COUNTS.timelock! - 1;
+    if (code === null) w.cfg.emptyCode = [SAFE, TL.address.toLowerCase()];
+    else w.cfg.codeAt = { [TL.address.toLowerCase()]: code };
+    return w;
+  };
+
+  test("the first proxy stage pins the predicted address and init code hash, every proxy manifest names it, and the timelock stage recomputes the same", async () => {
+    const w = world({ startNonce: 0 });
+    expect(await w.run(["--stage", "deploy"])).toBe(0);
+    const m = manifest(w);
+    expect(m.stages.vault.timelockPrediction).toEqual({ address: TL.address, initCodeHash: TL.initCodeHash, safe: SAFE, minDelay: "60" });
+    expect(m.stages.timelock.adopted).toBeUndefined();
+    expect(w.logs().find((l) => l.event === "stage.timelock_pin_ok")).toMatchObject({ stage: "timelock", timelock: TL.address, init_code_hash: TL.initCodeHash });
+  });
+
+  test("the expected runtime code already at the prediction: the stage passes at the frozen count minus one and records the adoption", async () => {
+    const w = pregrief(RUNTIME);
+    expect(await w.run(["--stage", "deploy"])).toBe(0);
+    expect(lastError(w)).toBeUndefined();
+    const t = manifest(w).stages.timelock;
+    expect(t).toMatchObject({ status: "done", adopted: true, count: COUNTS.timelock, dryRunCount: COUNTS.timelock! - 1, broadcastCount: COUNTS.timelock! - 1 });
+    expect(t.adoption).toEqual({ libraries: [{ name: "TimelockController", artifact: "TimelockController", address: TL.address, codeHash: TL.runtimeHash }], factory: getStageTable().upgradeAuthority!.factory, deployerTxs: COUNTS.timelock! - 1 });
+    // the end-of-deploy nonce check counts the transactions the deployer really sent
+    expect(w.state().nonces[A]).toBe(sum - 1 + PROOF_TX_NONCES);
+    expect(w.logs().some((l) => l.event === "run.nonce_ok" && l.nonce === sum - 1 + PROOF_TX_NONCES)).toBe(true);
+    expect(broadcasts(w)).toContain(SCRIPT.timelock);
+  });
+
+  test("other runtime code at the prediction is not adopted: the shortfall is COUNT_MISMATCH and nothing is sent", async () => {
+    const w = pregrief("0x6001600155aa");
+    expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.COUNT_MISMATCH);
+    expect(lastError(w).message).toContain(`stage timelock: the dry-run sends ${COUNTS.timelock! - 1} transactions, the frozen count is ${COUNTS.timelock}`);
+    expect(broadcasts(w)).not.toContain(SCRIPT.timelock);
+    expect(manifest(w).stages.timelock).toBeUndefined();
+    expect(w.logs().find((l) => l.event === "stage.timelock_not_adopted")).toMatchObject({ timelock: TL.address, runtime_hash: TL.runtimeHash });
+  });
+
+  test("a plain shortfall with no code at the prediction is COUNT_MISMATCH", async () => {
+    const w = pregrief(null);
+    expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.COUNT_MISMATCH);
+    expect(broadcasts(w)).not.toContain(SCRIPT.timelock);
+  });
+
+  /** A deploy that stopped in the timelock simulation, then resumed after `mutate`. */
+  async function resumeTimelock(mutate: (w: ReturnType<typeof world>) => void) {
+    const w = world({ startNonce: 0 });
+    w.cfg.simFails = SCRIPT.timelock;
+    expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.SIMULATION);
+    w.cfg.simFails = undefined;
+    mutate(w);
+    return { w, code: await w.run(["--stage", "deploy", "--resume"]) };
+  }
+
+  test("another build between the first proxy stage and the timelock stage (other CBOR metadata) moves the prediction: the timelock stage refuses, nothing sent", async () => {
+    const { w, code } = await resumeTimelock((w) => {
+      const f = join(w.coreDir, "out", "TimelockController.sol", "TimelockController.json");
+      const j = JSON.parse(readFileSync(f, "utf8"));
+      j.bytecode.object = `${j.bytecode.object.slice(0, -4)}0034`; // the CBOR length suffix of another compiler run
+      writeFileSync(f, JSON.stringify(j));
+    });
+    expect(code).toBe(EXIT_CODES.MANIFEST);
+    const msg: string = lastError(w).message;
+    expect(msg).toContain("stage timelock: the core timelock prediction changed since stage vault");
+    expect(msg).toContain(`pinned ${TL.address} (init code hash ${TL.initCodeHash}`);
+    expect(broadcasts(w)).not.toContain(SCRIPT.timelock);
+  });
+
+  test("a recorded init code hash that differs from the recomputed one is refused, and so is a run manifest without the pin", async () => {
+    const edit = (f: (vault: any) => void) => (w: ReturnType<typeof world>) => {
+      const p = join(w.evidence, "publish-run.json");
+      const m = JSON.parse(readFileSync(p, "utf8"));
+      f(m.stages.vault);
+      writeFileSync(p, JSON.stringify(m));
+    };
+    const hash = await resumeTimelock(edit((v) => { v.timelockPrediction.initCodeHash = `0x${"11".repeat(32)}`; }));
+    expect(hash.code).toBe(EXIT_CODES.MANIFEST);
+    expect(lastError(hash.w).message).toContain(`init code hash 0x${"11".repeat(32)}`);
+    expect(broadcasts(hash.w)).not.toContain(SCRIPT.timelock);
+    const none = await resumeTimelock(edit((v) => { delete v.timelockPrediction; }));
+    expect(none.code).toBe(EXIT_CODES.MANIFEST);
+    expect(lastError(none.w).message).toContain("has no timelock prediction from the first proxy stage vault");
+  });
+
+  test("a proxy stage whose manifest names another timelock than the pin stops after its broadcast (MANIFEST)", async () => {
+    const w = world({ startNonce: 0 });
+    w.cfg.upgradeTimelock = { [SCRIPT.vault!]: "0x00000000000000000000000000000000000000b0" };
+    expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.MANIFEST);
+    expect(lastError(w).message).toContain(`the core timelock this run pinned from the build is ${TL.address}`);
+    expect(manifest(w).stages.vault.status).toBe("started");
+    expect(broadcasts(w)).not.toContain(SCRIPT.registry);
   });
 });

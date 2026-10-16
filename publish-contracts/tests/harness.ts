@@ -1,5 +1,5 @@
 // A world for runner tests: a core checkout fixture, a sheet, frozen counts, stub forge and cast on PATH, a fake signer and a fake Safe API.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { getStageTable } from "../src/stages.ts";
 import { TABLE_REL } from "../src/stage-table.ts";
@@ -36,6 +36,7 @@ export interface World {
     emptyCode?: string[];
     vaultOut?: Record<string, string>;
     manifestMode?: Record<string, string>;
+    upgradeTimelock?: Record<string, string>;
     failBroadcastOutput?: { stdout?: string; stderr?: string }; castReplies?: Record<string, { stdout?: string; stderr?: string; code?: number }>;
   };
   state(): any;
@@ -90,6 +91,8 @@ export function world(o: WorldOpts = {}): World {
   mkdirSync(join(coreDir, "scripts", "ci"), { recursive: true });
   writeFileSync(join(coreDir, "scripts", "ci", "config-check.ts"), "// fixture: the real one is core's\n");
   writeFileSync(join(coreDir, "foundry.toml"), 'optimizer_runs = 100\nevm_version = "cancun"\n');
+  // the build artifact the runner and the stub forge derive the core timelock address from (issue 1835)
+  cpSync(join(import.meta.dir, "fixtures", "build-out", "TimelockController.sol"), join(coreDir, "out", "TimelockController.sol"), { recursive: true });
   const sheetPath = join(dir, "sheet.env");
   const delay = chainId === 8453 ? "172800" : "60";
   writeFileSync(sheetPath, sheetText({ CHAIN_ID: String(chainId), EXPECTED_CHAIN_ID: String(chainId), SAFE_OWNERS: PROVE_OWNERS.join(","), TIMELOCK_MIN_DELAY: delay, GOVERN_NEW_DELAY: chainId === 8453 ? "172800" : "3600", ...(o.sheet ?? {}) }));
