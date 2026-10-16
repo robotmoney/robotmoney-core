@@ -466,12 +466,13 @@ export function deployedWorld(blocks: Record<string, bigint> = {}): World {
 /**
  * Issue 1835: the timelock stage ADOPTED a timelock someone else created: the run's own timelock transaction is dropped, the timelock's constructor RoleGranted log sits in a
  * transaction mined in `block` whose receipt is `receipt(tx)` (null: the chain does not know it), and `opts.adoptedContracts` names the timelock.
+ * Issue 1864: that log is the constructor's RoleGranted(DEFAULT_ADMIN_ROLE, account = the timelock, sender = the CREATE2 factory) unless `grant` overrides a topic.
  */
-export function adoptTimelock(w: World, block: bigint, receipt: (tx: Hex) => Record<string, unknown> | null): World {
+export function adoptTimelock(w: World, block: bigint, receipt: (tx: Hex) => Record<string, unknown> | null, grant: { role?: Hex; account?: Address; sender?: Address } = {}): World {
   const own = w.opts.deployTxs!.pop()!;
   w.chain.receipts.delete(own.toLowerCase());
   const tx = keccak256(toHex("someone else's timelock creation"));
-  w.chain.logs.push({ address: TIMELOCK, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), ADMIN_ROLE, padTopic(TIMELOCK), padTopic(addr(0xabc))], data: "0x", blockNumber: block, transactionHash: tx });
+  w.chain.logs.push({ address: TIMELOCK, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), grant.role ?? Z32, padTopic(grant.account ?? TIMELOCK), padTopic(grant.sender ?? WORLD_CREATE2_FACTORY)], data: "0x", blockNumber: block, transactionHash: tx });
   const r = receipt(tx);
   if (r) w.chain.receipts.set(tx.toLowerCase(), r as never);
   w.opts.adoptedContracts = [TIMELOCK];
