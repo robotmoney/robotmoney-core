@@ -53,7 +53,9 @@ contract CustodyInvariantGuardTest is Test {
     ///      loop cost about 700M gas over 21 files and ran out of gas under `forge coverage`, whose instrumentation
     ///      makes every opcode dearer.
     function _contains(string memory haystack, string memory needle) internal pure returns (bool) {
-        if (bytes(needle).length == 0 || bytes(needle).length > bytes(haystack).length) return false;
+        if (bytes(needle).length == 0 || bytes(needle).length > bytes(haystack).length) {
+            return false;
+        }
         return vm.contains(haystack, needle);
     }
 
