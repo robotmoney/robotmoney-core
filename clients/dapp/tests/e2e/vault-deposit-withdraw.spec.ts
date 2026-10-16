@@ -20,6 +20,7 @@
 import { test, expect } from "./helpers/fixtures";
 import { setTimeout as sleep } from "node:timers/promises";
 import { encodeFunctionData, type Address } from "viem";
+import { syncBrowserClockToChain } from "./helpers/chainClock";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";
 import { signWithdraw } from "./helpers/withdraw";
@@ -95,6 +96,9 @@ test.describe("Deposit & Withdraw tab — vault round-trip on smoke-test devnet"
   test("approve+deposit then redeem mines real txs and updates balances", async ({ page }) => {
     // Admin EOA is pre-funded with USDC via DappStack::boot (issue #603).
 
+    // The router redeem's deadline is built from the browser clock and checked against the chain's block time, and the devnet's boot warps chain
+    // time ahead of the wall clock (helpers/chainClock.ts), so the browser takes the chain's time first (QA plan D9).
+    await syncBrowserClockToChain(page, endpoints.rpc_url);
     await openDapp(page, endpoints, { role: "admin" });
     await openTab(page, "deposit-withdraw");
 
