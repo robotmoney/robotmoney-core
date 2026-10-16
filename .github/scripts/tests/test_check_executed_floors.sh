@@ -14,7 +14,8 @@
 #   bin            1: tests::cli_parses in src/main.rs.
 #   --test it      5: one, two, common::from_common (a `mod common;` file), and the two tests
 #                  parameterized_e2e!(legs, ...) makes. --skip base_testnet leaves 4.
-#   forge fv       4: ATest's test_one, test_two, invariant_x and the inherited test_inherited.
+#   forge fv       4: ATest's test_one, test_two, the invariant_x and invariant_y pair (forge reports a
+#                  contract's invariants as one passed test) and the inherited test_inherited.
 #                  test_skipped calls vm.skip(true), internal functions are not tests, and the
 #                  abstract base does not run on its own.
 #   forge Guard    2: GuardTest only. The contract in a comment and in a string are not contracts.
@@ -131,6 +132,7 @@ contract ATest is BaseSuite {
     }
     function testHelper() internal {}
     function invariant_x() public {}
+    function invariant_y() public {}
 }
 EOF
 cat > "$T/contracts/test/B.t.sol" <<'EOF'

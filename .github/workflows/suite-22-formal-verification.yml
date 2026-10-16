@@ -53,7 +53,7 @@
 # - EXECUTED FLOORS (QA plan v1 T5). `forge test` exits 0 when its filter matches
 #   nothing, so both test steps run through .github/scripts/forge_test_require_executed.sh
 #   with FORGE_TEST_MIN_EXECUTED set to the number of tests the step runs: 37 in
-#   contracts/test/fv/ and 40 in the four anchoring contracts. One test fewer is red.
+#   contracts/test/fv/ and 37 in the four anchoring contracts. One test fewer is red.
 #   A skipped test is not a passed test, so a new RED invariant lowers the floor by
 #   one. Adding or removing a test means editing the floor in the same PR:
 #   .github/scripts/check_executed_floors.py (suite 14) fails when a floor and the
@@ -135,8 +135,9 @@ jobs:
       - name: forge test (custody invariant + guards — anchoring proofs)
         # The deep behavioural proofs the per-ID layer points at. Kept in the
         # same gate so a regression in the proven invariants surfaces here too.
-        # Floor 40 (QA plan v1 T5): AccessRolesTest 24, CustodyInvariantGuardTest 4,
-        # AdapterDelegatecallGuardTest 8, CustodyInvariantTest 4 invariants.
+        # Floor 37 (QA plan v1 T5): AccessRolesTest 24, CustodyInvariantGuardTest 4,
+        # AdapterDelegatecallGuardTest 8, CustodyInvariantTest 1 (forge reports its four
+        # invariant_* functions as one passed test).
         run: |
-          FORGE_TEST_MIN_EXECUTED=40 bash .github/scripts/forge_test_require_executed.sh \
+          FORGE_TEST_MIN_EXECUTED=37 bash .github/scripts/forge_test_require_executed.sh \
             --match-contract 'CustodyInvariant|CustodyInvariantGuard|AdapterDelegatecallGuard|AccessRoles' -vvv

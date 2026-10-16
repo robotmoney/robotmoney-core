@@ -30,7 +30,8 @@ inside a macro definition or a doc example is not a test. A `parameterized_e2e!(
 The libtest arguments after `--` apply as libtest applies them: a positional filter keeps names
 that contain it, `--skip` drops names that contain it, and `--exact` turns both into whole-name
 matches.
-forge: public or external `test*`, `invariant*` and `statefulFuzz*` functions of every
+forge: public or external `test*` and `statefulFuzz*` functions, plus ONE for all the `invariant*`
+functions of a contract (forge runs them together and reports a single passed test), of every
 non-abstract contract, inherited ones included, that `--match-path`, `--match-contract` and
 `--match-test` (and their `--no-match-*` forms) select. A test whose body calls `vm.skip(true` or
 a `_skip*` helper is skipped, and a skipped test is not a passed test, so it is not counted.
@@ -582,9 +583,14 @@ def count_forge(args: list[str], root: Path, cache: dict) -> tuple[int, str]:
             and ("mt" not in filters or re.search(filters["mt"], t))
             and ("nmt" not in filters or not re.search(filters["nmt"], t))
         ]
-        if run:
-            picked.append(f"{c.name} {len(run)}")
-            total += len(run)
+        # forge reports every `invariant*` function of a contract as ONE passed test: the invariant
+        # run drives them together and prints a single result (CustodyInvariantTest, four
+        # invariant functions, is "1 passed").
+        inv = [t for t in run if t.startswith("invariant")]
+        n = len(run) - len(inv) + (1 if inv else 0)
+        if n:
+            picked.append(f"{c.name} {n}")
+            total += n
     desc = "forge " + " ".join(f"--{k} {v}" for k, v in filters.items()) + ": " + (", ".join(picked) or "nothing")
     return total, desc
 
