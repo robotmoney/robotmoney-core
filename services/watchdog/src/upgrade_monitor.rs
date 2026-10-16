@@ -29,6 +29,22 @@
 //! by a factory) pages once too: a spurious page is recoverable, a silent
 //! upgrade is not.
 //!
+//! # History older than the first run (issue 1856)
+//!
+//! The indexer's proxy backfill inserts every historical proxy event at once,
+//! including deploy-time rows indexed before the deployment mark existed. Paging
+//! each of them would bury the pages that matter. So on its first run the
+//! monitor records a baseline block in `watchdog_proxy_baseline`: the highest
+//! chain head the indexer has seen (else its cursor). A proxy event at or below
+//! the baseline happened before the monitor ever ran. It is logged once and
+//! recorded in the pager state as seen, never paged. Every event above the
+//! baseline pages as before, including one the backfill inserts later.
+//!
+//! The baseline is taken once and kept. A monitor that already recorded a
+//! proxy change before this rule existed seeds nothing (baseline `-1`), so a
+//! change whose page had not been delivered yet is still paged. With nothing
+//! indexed yet no baseline is taken and nothing is seeded.
+//!
 //! Alert-only: an upgrade never pauses the gateway.
 
 use reqwest::Client;
@@ -88,6 +104,72 @@ impl ProxyChange {
             )
         }
     }
+}
+
+/// DDL for the proxy-change baseline (issue 1856, see the module doc). Created
+/// by the watchdog with its pager state, for the same reason: it is
+/// watchdog-private operational state.
+pub const PROXY_BASELINE_DDL: &str = "CREATE TABLE IF NOT EXISTS watchdog_proxy_baseline (\
+     chain_id BIGINT NOT NULL, \
+     baseline_block BIGINT NOT NULL, \
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now(), \
+     PRIMARY KEY (chain_id))";
+
+/// The block at or below which a proxy event predates the monitor's first run
+/// (see the module doc). Taken on the first call and kept. `None` while
+/// nothing is indexed for `chain_id`.
+pub async fn proxy_change_baseline(
+    pool: &PgPool,
+    chain_id: i64,
+) -> Result<Option<i64>, WatchdogError> {
+    let stored = "SELECT baseline_block FROM watchdog_proxy_baseline WHERE chain_id = $1";
+    if let Some(b) = sqlx::query_scalar(stored)
+        .bind(chain_id)
+        .fetch_optional(pool)
+        .await?
+    {
+        return Ok(Some(b));
+    }
+    let ran_before: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM watchdog_pager_state \
+                        WHERE chain_id = $1 AND dedup_key LIKE 'proxy_change:%')",
+    )
+    .bind(chain_id)
+    .fetch_one(pool)
+    .await?;
+    let baseline: Option<i64> = if ran_before {
+        Some(-1)
+    } else {
+        sqlx::query_scalar(
+            "SELECT COALESCE(MAX(chain_head_block), MAX(last_indexed_block)) FROM indexer_runs \
+             WHERE chain_id = $1 AND error IS NULL",
+        )
+        .bind(chain_id)
+        .fetch_one(pool)
+        .await?
+    };
+    let Some(baseline) = baseline else {
+        return Ok(None);
+    };
+    sqlx::query(
+        "INSERT INTO watchdog_proxy_baseline (chain_id, baseline_block) VALUES ($1, $2) \
+         ON CONFLICT (chain_id) DO NOTHING",
+    )
+    .bind(chain_id)
+    .bind(baseline)
+    .execute(pool)
+    .await?;
+    tracing::info!(
+        chain_id,
+        baseline,
+        "proxy change baseline recorded: proxy events at or below this block predate the \
+         watchdog's first run and are not paged"
+    );
+    // Another watchdog may have stored its own first: theirs stands.
+    Ok(sqlx::query_scalar(stored)
+        .bind(chain_id)
+        .fetch_optional(pool)
+        .await?)
 }
 
 /// (contract, event_name, block_number, log_index, tx_hash, detail) of one `admin_events` row.
@@ -202,6 +284,9 @@ pub async fn dispatch_proxy_change_alert(
 /// in this call. A change is recorded as paged only after the webhook
 /// confirmed it, so a failed delivery is retried next cycle. With no webhook
 /// configured nothing is recorded and every cycle logs the change again.
+///
+/// A change at or below the [`proxy_change_baseline`] predates the monitor's
+/// first run: it is logged once and recorded as seen, not paged (issue 1856).
 pub async fn alert_new_proxy_changes(
     pool: &PgPool,
     client: &Client,
@@ -210,12 +295,32 @@ pub async fn alert_new_proxy_changes(
     now: i64,
 ) -> Result<usize, WatchdogError> {
     let mut paged = 0;
+    let baseline = proxy_change_baseline(pool, chain_id).await?;
     for change in governed_proxy_changes(pool, chain_id).await? {
         let key = change.dedup_key();
         if load_pager_state(pool, chain_id, &key)
             .await?
             .is_some_and(|s| s.firing)
         {
+            continue;
+        }
+        if let Some(baseline) = baseline.filter(|b| change.block_number <= *b) {
+            tracing::warn!(
+                dedup_key = %key,
+                baseline,
+                "not paged: this proxy change predates the watchdog's first run. {}",
+                change.summary()
+            );
+            save_pager_state(
+                pool,
+                chain_id,
+                &key,
+                PagerState {
+                    firing: true,
+                    last_paged_at: None,
+                },
+            )
+            .await?;
             continue;
         }
         tracing::error!(dedup_key = %key, "{}", change.summary());

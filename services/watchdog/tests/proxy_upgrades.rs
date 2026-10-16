@@ -16,8 +16,11 @@ mod common;
 
 use common::{pg_fixture, FailingWebhookServer, MockWebhookServer};
 use reqwest::Client;
-use watchdog::pager_state::ensure_pager_state_table;
-use watchdog::upgrade_monitor::{alert_new_proxy_changes, governed_proxy_changes};
+use watchdog::pager_state::{ensure_pager_state_table, load_pager_state, save_pager_state};
+use watchdog::receipt_liveness::PagerState;
+use watchdog::upgrade_monitor::{
+    alert_new_proxy_changes, governed_proxy_changes, proxy_change_baseline,
+};
 
 const CHAIN: i64 = 918_453;
 const GATEWAY: [u8; 20] = [0x11; 20];
@@ -403,5 +406,177 @@ async fn an_upgrade_executed_from_a_constructor_in_the_deploy_block_pages() {
         .await
         .unwrap();
     assert_eq!(paged, 1);
+    server.shutdown();
+}
+
+/// One successful indexer run: cursor `last_indexed_block`, chain head `head`.
+async fn seed_run(pool: &sqlx::PgPool, last_indexed_block: i64, head: i64) {
+    sqlx::query(
+        "INSERT INTO indexer_runs (chain_id, from_block, finished_at, last_indexed_block, \
+                                   chain_head_block) \
+         VALUES ($1, 1, now(), $2, $3)",
+    )
+    .bind(CHAIN)
+    .bind(last_indexed_block)
+    .bind(head)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// Issue 1856: the indexer's first backfill inserts every historical proxy
+/// event at once, including deploy-time rows indexed before the deployment
+/// mark existed. On its first run the watchdog records the chain head it can
+/// see as a baseline. Events at or below it, even ones the backfill inserts
+/// later, are recorded as seen and never paged. A new upgrade above it pages.
+#[tokio::test]
+async fn proxy_events_older_than_the_first_run_do_not_page_and_a_new_upgrade_does() {
+    let fx = pg_fixture().await;
+    ensure_pager_state_table(&fx.pool).await.unwrap();
+    seed_chain(&fx.pool).await;
+    seed_run(&fx.pool, 95, 100).await;
+    let v1 = format!("0x{}", "1a".repeat(20));
+    let v2 = format!("0x{}", "2b".repeat(20));
+    let v3 = format!("0x{}", "3c".repeat(20));
+    // A deploy-time row the indexer has not marked yet, and an old upgrade.
+    seed_event(
+        &fx.pool,
+        GATEWAY,
+        10,
+        0,
+        0x01,
+        "Upgraded",
+        &format!(r#"{{"implementation":"{v1}"}}"#),
+    )
+    .await;
+    seed_event(
+        &fx.pool,
+        GATEWAY,
+        50,
+        0,
+        0x03,
+        "Upgraded",
+        &format!(r#"{{"implementation":"{v2}"}}"#),
+    )
+    .await;
+
+    let server = MockWebhookServer::start().await;
+    let client = Client::new();
+    let first = alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_000)
+        .await
+        .unwrap();
+    assert_eq!(first, 0, "history older than the first run is not paged");
+    assert_eq!(
+        proxy_change_baseline(&fx.pool, CHAIN).await.unwrap(),
+        Some(100),
+        "the baseline is the chain head the indexer saw"
+    );
+    let seen = load_pager_state(
+        &fx.pool,
+        CHAIN,
+        &format!("proxy_change:{CHAIN}:0x{}:50:0", hex::encode(GATEWAY)),
+    )
+    .await
+    .unwrap()
+    .expect("the old upgrade is recorded as seen");
+    assert_eq!(seen.last_paged_at, None, "seen, never paged");
+
+    // The backfill then inserts an even older freeze, and the chain moves on.
+    seed_event(
+        &fx.pool,
+        VAULT,
+        30,
+        0,
+        0x04,
+        "UpgradesFrozen",
+        &format!(
+            r#"{{"implementation":"{v1}","code_hash":"0x{}"}}"#,
+            "66".repeat(32)
+        ),
+    )
+    .await;
+    seed_run(&fx.pool, 200, 205).await;
+    assert_eq!(
+        alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_012)
+            .await
+            .unwrap(),
+        0,
+        "a backfilled row below the baseline is not paged either"
+    );
+    assert_eq!(
+        proxy_change_baseline(&fx.pool, CHAIN).await.unwrap(),
+        Some(100),
+        "the baseline is kept, not moved with the chain"
+    );
+
+    // A new upgrade after the first run pages, once.
+    seed_event(
+        &fx.pool,
+        GATEWAY,
+        150,
+        0,
+        0x05,
+        "Upgraded",
+        &format!(r#"{{"implementation":"{v3}"}}"#),
+    )
+    .await;
+    let paged = alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_024)
+        .await
+        .unwrap();
+    assert_eq!(paged, 1);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let bodies = server.drain_captures();
+    assert_eq!(bodies.len(), 1, "only the new upgrade was sent");
+    let body: serde_json::Value = serde_json::from_slice(&bodies[0].body).unwrap();
+    assert_eq!(body["payload"]["custom_details"]["block_number"], 150);
+    assert_eq!(body["payload"]["custom_details"]["implementation"], v3);
+    assert_eq!(
+        alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_036)
+            .await
+            .unwrap(),
+        0
+    );
+    server.shutdown();
+}
+
+/// Issue 1856: a watchdog that already recorded a proxy change before the
+/// baseline existed seeds nothing, so a change whose page was never delivered
+/// (the receiver was down) still pages after the upgrade.
+#[tokio::test]
+async fn a_monitor_that_ran_before_seeds_nothing_and_an_undelivered_change_still_pages() {
+    let fx = pg_fixture().await;
+    ensure_pager_state_table(&fx.pool).await.unwrap();
+    seed(&fx.pool).await;
+    seed_run(&fx.pool, 95, 100).await;
+    // The upgrade at 50 was paged by the old monitor; the freeze at 60 was not.
+    save_pager_state(
+        &fx.pool,
+        CHAIN,
+        &format!("proxy_change:{CHAIN}:0x{}:50:0", hex::encode(GATEWAY)),
+        PagerState {
+            firing: true,
+            last_paged_at: Some(900),
+        },
+    )
+    .await
+    .unwrap();
+
+    let server = MockWebhookServer::start().await;
+    let client = Client::new();
+    let paged = alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_000)
+        .await
+        .unwrap();
+    assert_eq!(paged, 1, "the undelivered freeze pages");
+    assert_eq!(
+        proxy_change_baseline(&fx.pool, CHAIN).await.unwrap(),
+        Some(-1)
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let bodies = server.drain_captures();
+    let body: serde_json::Value = serde_json::from_slice(&bodies[0].body).unwrap();
+    assert_eq!(
+        body["payload"]["custom_details"]["alert_kind"],
+        "proxy_upgrades_frozen"
+    );
     server.shutdown();
 }

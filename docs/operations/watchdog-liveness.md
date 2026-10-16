@@ -92,6 +92,39 @@ installer refuses to run if that binary is missing.
    chain id.
 6. When the fix is in, run `watchdog-liveness` by hand and confirm exit `0`.
 
+## Proxy upgrade pages and the first run
+
+The watchdog pages every governed upgrade or freeze of a proxied core contract
+once (`services/watchdog/src/upgrade_monitor.rs`). The explorer indexer's proxy
+backfill inserts the whole upgrade history at once, so without a rule the first
+backfill would page every historical upgrade in one burst (issue 1856).
+
+- On its first run the watchdog stores a baseline block per chain in
+  `watchdog_proxy_baseline`. It is the highest chain head the indexer has
+  recorded, or its cursor when no head is recorded.
+- A proxy event at or below the baseline happened before the watchdog ever ran.
+  It is logged once at `warn` ("not paged: this proxy change predates the
+  watchdog's first run") and recorded in `watchdog_pager_state` as seen. It is
+  never paged, even when the backfill inserts it later.
+- Every event above the baseline pages as before. That includes a new upgrade,
+  a new freeze, and a deployment row the indexer could not mark.
+- The baseline is kept. It does not move with the chain.
+- A watchdog that already recorded a proxy page before this rule existed stores
+  baseline `-1`. It seeds nothing, so a page that was never delivered still goes
+  out.
+- With nothing indexed yet, no baseline is taken and nothing is seeded.
+
+Rollout order no longer matters for this. Before issue 1856, a watchdog that
+started before the indexer finished its backfill paged every unmarked deployment
+row once. The baseline now covers those rows. To re-take the baseline (for
+example after restoring the database), delete the chain's row from
+`watchdog_proxy_baseline` and its `proxy_change:` rows from
+`watchdog_pager_state`. Events at or below the new head are then not paged.
+
+The indexer reports the backfill's own state in the explorer's `/health` as
+`proxy_backfill`. `refused` means the range is too wide: set
+`INDEXER_START_BLOCK` and restart the indexer.
+
 ## Proving it works
 
 Two tests in suite 20 run this whole path:
