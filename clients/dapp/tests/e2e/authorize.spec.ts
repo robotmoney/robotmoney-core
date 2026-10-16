@@ -12,8 +12,8 @@
  * fields OR emits an explicit refusal — there is no third path.
  *
  * The authorize flow uses a two-step commit/reveal scheme (AZ-DAPP-1):
- * the commit phase shows TxPreview for the upcoming authorizeAgent effect
- * before the user signs the commitAuthorization transaction.
+ * the commit phase previews the commitAuthorization call it signs and the
+ * revealAuthorization call (with the policy) that step 2 signs (QA plan U4).
  */
 import { test, expect } from "./helpers/fixtures";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
@@ -35,8 +35,13 @@ test.describe("authorize agent — UI invariants", () => {
     const previews = page.locator('[data-testid="tx-preview"][data-ok="true"]');
     await expect(previews.first()).toBeVisible();
 
-    await expect(page.getByTestId("tx-preview-fn").first()).toContainText("authorizeAgent");
-    await expect(page.getByTestId("tx-preview-effect").first()).toContainText("AGENT_ROLE");
+    // The depositor signs commitAuthorization then revealAuthorization, so those are
+    // the previews (QA plan U4): never authorizeAgent, which this wallet does not sign.
+    const commitPreview = page.getByTestId("authorize-commit-preview");
+    await expect(commitPreview.getByTestId("tx-preview-fn")).toHaveText("commitAuthorization");
+    const revealPreview = page.getByTestId("authorize-next-reveal-preview");
+    await expect(revealPreview.getByTestId("tx-preview-fn")).toHaveText("revealAuthorization");
+    await expect(revealPreview.getByTestId("tx-preview-effect")).toContainText("AGENT_ROLE");
 
     // Acceptance criterion: no raw-calldata-only signing surface.
     const refusalCount = await page.locator('[data-testid="refusal-reason"]').count();

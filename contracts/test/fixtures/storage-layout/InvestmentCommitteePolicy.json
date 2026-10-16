@@ -1,4 +1,11 @@
 {
+  "enums": {
+    "enum InvestmentCommitteePolicy.Stance": [
+      "Overweight",
+      "Neutral",
+      "Underweight"
+    ]
+  },
   "libraries": [
     "contracts/lib/GovernedUUPS.sol:GovernedUpgrade"
   ],

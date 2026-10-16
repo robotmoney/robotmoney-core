@@ -43,6 +43,7 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
         uint256 exitFeeBps;
         address feeRecipient;
         /// @dev ORA-4 deposit guard threshold in basis points, 1..MAX_NAV_DEVIATION_BPS. Never 0: 0 disables the guard (issue 1666).
+        ///      Above every configured pool's fee in bps (QA plan D4, `_requireGuardAbovePoolFees`).
         uint256 navDeviationGuardBps;
         /// @dev Floor for `IUniswapV3Pool.liquidity()` of every configured pool. That is the pool's in-range liquidity L, a raw uint128 of
         ///      sqrt(token0 * token1) units, NOT a USDC amount (issue 1666). Must be above 0. For a Uniswap V4 asset the same unit applies:
@@ -337,6 +338,7 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
             p.navDeviationGuardBps != 0 && p.navDeviationGuardBps <= MAX_NAV_DEVIATION_BPS,
             "NAV_DEVIATION_BPS must be 1..2000"
         );
+        _requireGuardAbovePoolFees(p.navDeviationGuardBps, cfg);
         require(p.minPoolLiquidity != 0, "MIN_POOL_LIQUIDITY missing from the sheet");
         require(p.minPoolLiquidity <= type(uint128).max, "MIN_POOL_LIQUIDITY exceeds uint128");
         require(cfg.swapRouter02 != address(0), "config swapRouter02 unset");
@@ -374,6 +376,25 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
         }
 
         // Remains paused through configuration and handover.
+    }
+
+    /// @dev QA plan D4 (E6): the ORA-4 guard must sit above the fee of every configured pool. Spot can rest anywhere inside the fee
+    ///      band with no arbitrage to close it, so a guard at or below the fee reverts deposits on idle drift, and a routed deposit
+    ///      reverts with it. The check is `NAV_DEVIATION_BPS > poolFee / 100` (V3 and V4 fees are in hundredths of a bip), written as
+    ///      a product so a fee that is not a whole number of bps is never rounded down. The RM V4 pool charges 29100 (291 bps); the
+    ///      sheet sets 400, the fee plus a TWAP lag budget (QA plan decision D10).
+    function _requireGuardAbovePoolFees(uint256 navDeviationGuardBps, Cfg memory cfg)
+        internal
+        pure
+    {
+        for (uint256 i = 0; i < cfg.assets.length; i++) {
+            require(
+                navDeviationGuardBps * 100 > cfg.assets[i].poolFee,
+                string.concat(
+                    cfg.assets[i].symbol, ": NAV_DEVIATION_BPS must be above the pool fee in bps"
+                )
+            );
+        }
     }
 
     /// @dev TickMath link integrity for one vault (finding L3-D1). The reference is the library

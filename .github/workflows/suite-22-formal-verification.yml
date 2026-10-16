@@ -4,27 +4,39 @@
 #
 # CI_CLASS: feature-correctness
 #
+# WHAT THIS SUITE IS NOT (QA plan v1 T5)
+# There is no prover here. The file name and the contracts/test/fv/ directory say
+# "formal verification", but every step is plain `forge test`: unit tests, bounded
+# fuzz tests and invariant tests. The workflow and job used to be named
+# contracts-formal-verification / forge-formal-verification, which read as a proof
+# in a check list. They are named for what runs: the invariant spec tests. The file
+# name and the fv/ directory stay, because suite 21 and the docs name them.
+#
 # WHY THIS SUITE EXISTS
 # docs/technical/smart-contract-invariants.md is the textual source of truth for
 # every property the on-chain system must never violate. This suite runs the
-# formal-verification (FV) harness that turns that spec into executable tests:
+# invariant spec harness (contracts/test/fv/) that turns that spec into tests:
 #   - CoverageMap.t.sol enforces a 1:1 mapping between every invariant ID in the
 #     spec and an entry in the executable InvariantRegistry — CI fails if a new
 #     invariant is documented without a corresponding FV test, or vice versa.
-#   - FvInvariants.t.sol drives one named test per invariant ID. Holding
-#     invariants pass; currently-violated (🔴) invariants are skipped-with-reason,
-#     each naming the contract-security-remediation-2 issue (#965–#971) that must
-#     remove the skip and flip it green.
-#   - The dedicated harnesses (CustodyMultiVault, StaleOracleRedemption,
-#     TwapManipulation, DeployAssertions) carry the family-wide custody,
-#     stale-oracle, TWAP-manipulation and post-deploy assertion scaffolding.
+#   - FvInvariants.t.sol drives one named test per invariant ID. A test whose
+#     name says expectedFail asserts the registry entry, and none is skipped today.
+#     A RED invariant would skip through _skipRed, naming the remediation issue
+#     that must remove the skip and flip it green.
+#   - The dedicated harnesses (CustodyMultiVault, TwapManipulation,
+#     DeployAssertions) carry the family-wide custody, TWAP-manipulation and
+#     post-deploy assertion scaffolding. The fv/ tree is these three, CoverageMap
+#     and FvInvariants: CustodyMultiVault 4, TwapManipulation 2, DeployAssertions 3,
+#     CoverageMap 3 and FvInvariants 25, the floor of 37 below. There is no
+#     stale-oracle harness: StaleOracleRedemption.t.sol was deleted in #1505 with
+#     the Chronicle oracle, and SUP-5 is the registry assertion in FvInvariants.
 #
 # This is the phase scout gate for contract-security-remediation-2: it pins the
 # spec BEFORE any remediation lands, so every later fix is anchored by the
 # invariant it restores.
 #
 # TIER / TRIGGERS
-# feature-correctness (LIGHT): the FV suite is forge unit + static-guard + bounded
+# feature-correctness (LIGHT): the suite is forge unit + static-guard + bounded
 # fuzz/invariant tests that finish in well under a minute. It runs on every
 # pull_request (any base branch — so it gates PRs into phase/* staging branches as
 # well as into dev) and on push to dev/dev-phase-*. Skipped 🔴 invariants keep the
@@ -38,8 +50,16 @@
 # - Red invariants use vm.skip(true, "...remediation #NNN"); removing a skip
 #   before the linked fix lands will fail the suite (that is the point — the test
 #   pins the bug). Downstream issues remove the skip in the same PR as the fix.
+# - EXECUTED FLOORS (QA plan v1 T5). `forge test` exits 0 when its filter matches
+#   nothing, so both test steps run through .github/scripts/forge_test_require_executed.sh
+#   with FORGE_TEST_MIN_EXECUTED set to the number of tests the step runs: 37 in
+#   contracts/test/fv/ and 37 in the four anchoring contracts. One test fewer is red.
+#   A skipped test is not a passed test, so a new RED invariant lowers the floor by
+#   one. Adding or removing a test means editing the floor in the same PR:
+#   .github/scripts/check_executed_floors.py (suite 14) fails when a floor and the
+#   step's test count differ.
 
-name: contracts-formal-verification
+name: contracts-invariant-spec-tests
 
 # CI taxonomy: every job in this workflow is feature-correctness — scoped Foundry
 # tests (coverage-map gate, per-invariant unit tests, bounded custody/fuzz
@@ -74,8 +94,9 @@ permissions:
   contents: read
 
 jobs:
-  fv-suite:
-    name: forge-formal-verification
+  invariant-spec:
+    # QA plan v1 T5: plain forge test, no prover. Formerly forge-formal-verification.
+    name: forge-invariant-spec-tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -101,14 +122,22 @@ jobs:
       - name: forge build
         run: forge build
 
-      - name: forge test (formal-verification harness)
-        # The full FV suite: coverage-map gate + per-invariant tests + the four
-        # dedicated harnesses. Red invariants are skipped (suite stays green); an
-        # un-skipped red test (landed remediation) must pass.
-        run: forge test --match-path 'contracts/test/fv/**' -vvv
+      - name: forge test (invariant spec harness, contracts/test/fv)
+        # The coverage-map gate, the per-invariant tests and the dedicated harnesses.
+        # A red invariant would be skipped; an un-skipped red test (landed
+        # remediation) must pass. Floor 37 is every test in contracts/test/fv/
+        # (QA plan v1 T5): CoverageMap 3, CustodyMultiVault 4, DeployAssertions 3,
+        # FvInvariants 25, TwapManipulation 2.
+        run: |
+          FORGE_TEST_MIN_EXECUTED=37 bash .github/scripts/forge_test_require_executed.sh \
+            --match-path 'contracts/test/fv/**' -vvv
 
       - name: forge test (custody invariant + guards — anchoring proofs)
-        # The deep behavioural proofs the FV per-ID layer points at. Kept in the
+        # The deep behavioural proofs the per-ID layer points at. Kept in the
         # same gate so a regression in the proven invariants surfaces here too.
+        # Floor 37 (QA plan v1 T5): AccessRolesTest 24, CustodyInvariantGuardTest 4,
+        # AdapterDelegatecallGuardTest 8, CustodyInvariantTest 1 (forge reports its four
+        # invariant_* functions as one passed test).
         run: |
-          forge test --match-contract 'CustodyInvariant|CustodyInvariantGuard|AdapterDelegatecallGuard|AccessRoles' -vvv
+          FORGE_TEST_MIN_EXECUTED=37 bash .github/scripts/forge_test_require_executed.sh \
+            --match-contract 'CustodyInvariant|CustodyInvariantGuard|AdapterDelegatecallGuard|AccessRoles' -vvv

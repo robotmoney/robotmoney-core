@@ -5,7 +5,7 @@ description: "What every stage that deploys a proxied core contract shares (issu
 
 # UpgradeAuthority
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/script/UpgradeAuthority.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/script/UpgradeAuthority.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -81,7 +81,8 @@ function setUpgradeConfig(address timelock, GovernedUUPS.UpgradeMode mode) exter
 
 ### timelockInitCode
 
-The init code of the core timelock for `safe` and `minDelay`.
+The init code of the core timelock for `safe` and `minDelay`: a `ProposerFloorTimelock`
+(an OZ `TimelockController` that cannot drop its last proposer; issue 1645 question 1).
 
 ```solidity
 function timelockInitCode(address safe, uint256 minDelay) public pure returns (bytes memory);

@@ -31,8 +31,12 @@ and only then extracts and installs:
    published `.sha256`, checks that the checksum file is a single line naming
    *that* archive, hashes the archive itself and compares.
 2. **Build provenance** (issue #1236). It runs `gh attestation verify` over the
-   archive, pinned to this repository **and** to
-   `.github/workflows/release-rmpc.yml` as the signing workflow.
+   archive, pinned to this repository, to
+   `.github/workflows/release-rmpc.yml` as the signing workflow, to the source
+   ref `refs/tags/<tag>` of the tag you install, and to the `push` trigger. Only
+   an org admin can create an `rmpc-v*` tag, and only that tag push attests, so
+   an attestation a repository writer mints by dispatching the workflow on a
+   branch is refused. `--tag` must be `rmpc-vX.Y.Z`.
 
 A checksum mismatch, a checksum file covering some other file, or an attestation
 that does not verify aborts before extraction, so an archive that fails either
@@ -56,13 +60,16 @@ rate-limit problem, run `gh auth login` and retry.
 > this repository, so a leaked `contents: write` token, a stolen `GITHUB_TOKEN`,
 > or a maintainer account used to swap release assets **cannot** produce one.
 >
+> Repository write is not enough either: a writer can dispatch the release
+> workflow on a branch, but that run never attests, and an attestation from any
+> run other than the push of the installed `rmpc-v*` tag fails the source-ref
+> and trigger pins.
+>
 > What it does **not** prove is that the code was reviewed. Provenance answers
-> "this archive came out of that workflow in this repository", not "the commit it
-> was built from was any good": anyone who can push a ref here can trigger the
-> release workflow and receive a genuine attestation for whatever that ref
-> contains. Closing that is branch and tag protection on the release workflow —
-> a repository setting, not something the installer can assert. Read `attested`
-> as *built by this repo's release workflow*, never as *reviewed*.
+> "this archive came out of that workflow for that admin-pushed tag", not "the
+> commit it was built from was any good": the admin who pushes the tag vouches
+> for the commit. Read `attested` as *built by this repo's release workflow from
+> the tagged commit*, never as *reviewed*.
 
 ```bash
 # From the repo root. rmpc releases are tagged `rmpc-vX.Y.Z`; the dApp publishes
@@ -89,10 +96,12 @@ extracted and nothing is installed.
 > began emitting `<archive>.tar.gz.sha256` in #1204 and only began attesting
 > build provenance in #1236. Every release up to and including `v0.3.3` — the
 > last rmpc release cut under the old shared `vX.Y.Z` tag namespace — ships
-> archives with no checksum beside them, and every release cut before #1236
-> merged has no attestation. The installer will correctly refuse the first with
-> exit `4` and the second with exit `6`. That is the script working, not failing.
-> Until a release cut after #1236 exists, use **Option B** and build from source.
+> archives with no checksum beside them, and the installer refuses a bare
+> `vX.Y.Z` tag outright (exit `2`). `rmpc-v0.3.4` was cut by dispatching the
+> workflow from `dev`, so its attestation names `refs/heads/dev` and the
+> `workflow_dispatch` trigger, and the installer refuses it with exit `6`. That
+> is the script working, not failing. Until a release cut by pushing its
+> `rmpc-v*` tag exists, use **Option B** and build from source.
 > Do **not** answer either exit code by downloading the tarball by hand — that is
 > precisely the unverified path this replaced.
 
@@ -220,6 +229,23 @@ VAULT=$(python3   -c "import json; d=json.load(open('$DEPLOY_JSON')); print(d['v
 HASH=$(python3    -c "import json; d=json.load(open('$DEPLOY_JSON')); print(d['gateway_runtime_hash'])")
 ```
 
+The gateway is an ERC-1967 proxy (ADR-0014), so `gateway_runtime_hash` pins
+only the proxy's own code, which an upgrade never changes. rmpc also needs the
+code hash of the implementation behind it, or every write refuses with
+`ErrImplementationNotApproved` (preflight check 2b). Read it from the chain:
+
+```bash
+RPC="https://robotmoney-dev-rpc.superfield.co"
+IMPL_SLOT=0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc   # ERC-1967 implementation slot
+IMPL=$(cast parse-bytes32-address "$(cast storage "$GATEWAY" "$IMPL_SLOT" --rpc-url "$RPC")")
+IMPL_HASH=$(cast keccak "$(cast code "$IMPL" --rpc-url "$RPC")")
+```
+
+The stage manifest `gateway.json` records the same value as
+`gateway_implementation_runtime_hash`. If `IMPL` is the zero address the
+gateway is a direct deployment: leave `gateway_implementation_hashes` out,
+because rmpc refuses a pin for a direct gateway.
+
 Then write `./rmpc-devnet.toml`:
 
 ```toml
@@ -233,6 +259,8 @@ gateway_address      = "<GATEWAY from deployments/918453.json>"
 usdc_address         = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"   # canonical Base USDC (same address on devnet)
 vault_address        = "<VAULT from deployments/918453.json>"
 gateway_runtime_hash = "<gateway_runtime_hash from deployments/918453.json>"
+gateway_implementation_hashes = ["<IMPL_HASH>"]   # approved gateway implementation(s); add the next one before its upgrade executes
+proxy_implementation_hashes   = ["<VAULT_IMPL_HASH>"]   # approved vault (and router) implementation(s), the same way
 max_fee_per_gas_cap  = 100000000000
 
 [signer]
@@ -241,8 +269,22 @@ keystore_path           = "./keystore.json"
 ```
 
 If your operator provides a different hosted devnet endpoint, replace
-`rpc_url` with that URL and update `gateway_address`, `vault_address`, and
-`gateway_runtime_hash` from the deployment manifest your operator supplies.
+`rpc_url` with that URL and update `gateway_address`, `vault_address`,
+`gateway_runtime_hash` and `gateway_implementation_hashes` from the deployment
+your operator supplies. `rmpc get-gateway --config ./rmpc-devnet.toml` prints
+the live implementation, its code hash and whether the config approves it.
+When the operator announces a gateway upgrade, add the new implementation's
+hash to `gateway_implementation_hashes` before the timelock executes it, keep
+the old one until it has executed, then drop the old one
+(`docs/operations/contract-release-runbooks.md` §4.12).
+
+The vault is a proxy too. `VAULT_IMPL_HASH` is
+`cast keccak "$(cast code "$(cast implementation "$VAULT" --rpc-url "$RPC")" --rpc-url "$RPC")"`.
+A deposit, a withdraw and the router commands refuse with
+`ErrImplementationNotApproved` naming the vault or router until its
+implementation's code hash is in `proxy_implementation_hashes`. The smoke-test
+deploy output prints both keys (`gateway_implementation_hash`,
+`proxy_implementation_hashes`).
 
 ### Profile B — Base mainnet anvil fork (chain ID 8453)
 

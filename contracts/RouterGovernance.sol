@@ -40,6 +40,13 @@ import {
 ///         digest and the vector together so anyone can re-derive the vector
 ///         from the public payload and compare.
 ///
+///         Released is not applied (security review 2026-10-15, finding 023): the
+///         timelock also holds the register's `ADMIN_ROLE` and can release a
+///         receipt directly (the standalone `release-receipt` govern row). A
+///         receipt released that way carries no weights, and `applyReceipt`
+///         refuses it forever (`ReceiptAlreadyReleased`); the committee must
+///         record a new receipt. Read `ReceiptApplied` to learn what was applied.
+///
 ///         Design constraints (docs/architecture.md §2.3):
 ///         - Controls router weights only; cannot govern vault internals,
 ///           agent permissions, or protocol admin operations.
@@ -104,7 +111,9 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuardUpgradeable
     /// @notice `receiptId` was never recorded on the receipt register.
     error ReceiptNotRecorded(bytes32 receiptId);
 
-    /// @notice `receiptId` is already released, so it was already applied.
+    /// @notice `receiptId` is already released: applied earlier, or released
+    ///         directly by the timelock without weights. Either way it can never
+    ///         be applied (again).
     error ReceiptAlreadyReleased(bytes32 receiptId);
 
     /// @notice The call named `given`, but the receipt's stored digest is `stored`.

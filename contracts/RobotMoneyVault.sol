@@ -19,6 +19,7 @@ import {IStrategyAdapter} from "./interfaces/IStrategyAdapter.sol";
 import {BpsMath} from "./lib/BpsMath.sol";
 import {ForeignTokenQuarantine} from "./lib/ForeignTokenQuarantine.sol";
 import {AdminFloorAccessControlCounter} from "./lib/AdminFloorAccessControlCounter.sol";
+import {ExclusionLedger} from "./ExclusionLedger.sol";
 
 /// @title RobotMoneyVault
 /// @notice Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight target across active
@@ -56,8 +57,12 @@ contract RobotMoneyVault is
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     /// @notice Role that can pause deposits and perform emergency withdrawals.
     ///         Asymmetric with `unpauseDeposits` by design: a compromised emergency
-    ///         key can only halt new deposits (DoS). It can never block an exit and
-    ///         cannot restart deposits. `unpauseDeposits` is restricted to
+    ///         key can only halt new deposits (DoS), drain adapters into the vault or
+    ///         into their exclusion records, and exclude an adapter from NAV
+    ///         (`emergencyExcludeAdapter`, `forceRemoveAdapter`). An exclusion moves no
+    ///         value: what the adapter holds stays owed pro rata to the holders of the
+    ///         moment (security round 1). It can never block an exit, and cannot
+    ///         restart deposits or restore an excluded adapter. `unpauseDeposits` is restricted to
     ///         `ADMIN_ROLE` so that resuming deposits is deliberate and requires
     ///         the higher-trust role — mirroring the gateway's `DEPOSIT_PAUSER_ROLE` /
     ///         `ADMIN_ROLE` asymmetry documented in `AccessRoles.sol`.
@@ -82,13 +87,22 @@ contract RobotMoneyVault is
 
     // ─── Adapter registry ──────────────────────────────────────────────
 
+    /// @dev Layout-identical to `RobotMoneyVaultOps.AdapterInfo`. The three registry variables
+    ///      below sit in consecutive slots and are read and written by the linked library as one
+    ///      `RobotMoneyVaultOps.Book` (`_book`).
     struct AdapterInfo {
         IStrategyAdapter adapter;
         uint16 capBps; // max allocation % out of MAX_BPS — also acts as ramp control
         bool active;
     }
+    // slither-disable-start uninitialized-state
     /// @notice Ordered registry of all strategy adapters (active and inactive).
+    /// @dev Written only through the `RobotMoneyVaultOps` library's storage pointer (`_book()`), which
+    ///      slither cannot follow, hence the `uninitialized-state` suppression around this declaration
+    ///      (slither has no same-line form, and a comment between the NatSpec and the declaration would
+    ///      detach the NatSpec).
     AdapterInfo[] public adapters;
+    // slither-disable-end uninitialized-state
     /// @notice Exact adapter instances approved by vault governance to receive this vault's USDC.
     mapping(address adapter => bool allowed) public adapterAllowed;
     /// @notice Runtime bytecode hashes approved by vault governance for adapter onboarding.
@@ -111,7 +125,9 @@ contract RobotMoneyVault is
     ///         redirect sweeps to an on-chain multisig that can empty the trash.
     address public quarantineAddress;
 
-    /// @notice Whether the vault has been permanently shut down. Irreversible.
+    /// @notice Whether the vault is shut down (`shutdownVault`, `EMERGENCY_ROLE`). Deposits stay
+    ///         closed and the TVL cap stays 0 until `ADMIN_ROLE` reverses it with `restoreVault`.
+    ///         Withdrawals are never blocked by it.
     bool public shutdown;
 
     /// @notice Whether the vault has been retired by the unified governance
@@ -153,6 +169,15 @@ contract RobotMoneyVault is
     /// @notice Timestamp of the most recent completed rebalance.
     uint256 public lastRebalanceAt;
 
+    // ─── Exclusion records (core 1820) ─────────────────────────────────
+    // An active adapter whose eligibility is revoked is excluded from NAV (ADP-2). Its future
+    // recovery belongs pro rata to the holders at that moment, exiters included, so the vault
+    // opens a record in `exclusionLedger()` and sends every recovered USDC there, never to idle.
+    // The ledger, the open record id per registry index (`openExclusionOf(index)`) and the
+    // checkpoint switch live in the ERC-7201 namespace `RobotMoneyVaultOps.Exclusions`, so they
+    // add nothing to this contract's sequential layout. An entry with an open record never counts
+    // in NAV, never receives USDC, and keeps deposits closed.
+
     // ─── Events ────────────────────────────────────────────────────────
 
     /// @notice Emitted when a new strategy adapter is registered.
@@ -177,6 +202,11 @@ contract RobotMoneyVault is
     /// @param oldBps Previous cap in basis points.
     /// @param newBps New cap in basis points.
     event AdapterCapUpdated(uint256 indexed index, uint16 oldBps, uint16 newBps);
+    /// @notice Emitted when governance sets an adapter's exposure cap through the vault.
+    /// @param index   Registry index of the adapter.
+    /// @param adapter Address of the adapter contract.
+    /// @param cap     New cap in USDC units; 0 means uncapped.
+    event AdapterMaxExposureSet(uint256 indexed index, address indexed adapter, uint256 cap);
     /// @notice Emitted when an adapter is force-removed without withdrawing assets (emergency).
     /// @param index      Registry index of the force-removed adapter.
     /// @param adapter    Address of the adapter contract.
@@ -297,11 +327,11 @@ contract RobotMoneyVault is
     error ExceedsAdapterCap();
     /// @notice Adapter registry already holds `MAX_ADAPTERS`; cannot add another.
     error MaxAdaptersReached();
-    /// @notice Provided adapter index is out of range or refers to an inactive entry.
-    error AdapterNotFound();
     /// @notice The adapter is already an active registry entry; a second entry would count its balance twice in NAV.
     /// @param adapter The adapter address that is already active.
     error AdapterAlreadyActive(address adapter);
+    /// @notice Provided adapter index is out of range or refers to an inactive entry.
+    error AdapterNotFound();
     /// @notice Cannot remove an adapter while it still custodies assets — withdraw first.
     error AdapterNotEmpty();
     /// @notice Deposit/rebalance attempted while no adapter is active.
@@ -315,6 +345,10 @@ contract RobotMoneyVault is
     /// @notice Adapter address has not been approved by vault governance.
     /// @param adapter Adapter address that failed the address allowlist check.
     error AdapterNotAllowed(address adapter);
+    /// @notice A redeem would burn shares for 0 USDC while an active adapter is excluded from
+    ///         NAV (core 1820, E2). The shares keep their exclusion claim either way; the vault
+    ///         refuses the empty exit instead of burning them for nothing.
+    error ZeroPayoutDuringExclusion();
     /// @notice Adapter runtime bytecode hash has not been approved by vault governance.
     /// @param adapter  Adapter address that failed the code-hash allowlist check.
     /// @param codeHash Runtime bytecode hash observed on the adapter.
@@ -344,6 +378,9 @@ contract RobotMoneyVault is
     /// @param available `gasleft()` at the check.
     /// @param required  The floor that was not met.
     error InsufficientGas(uint256 available, uint256 required);
+    /// @notice `recoverRemovedAdapter` named an inactive entry with no open exclusion record.
+    /// @param index Registry index that was named.
+    error NoOpenExclusion(uint256 index);
 
     // CHANGELOG (core 1482, audit-impact: no change to share accounting or fee math; one change
     // to how a withdrawal is split across adapters):
@@ -398,6 +435,7 @@ contract RobotMoneyVault is
     /// @param _emergencyResponder Receives EMERGENCY_ROLE. Not zero.
     /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
     /// @param upgradeMode_ The release mode. `Undeclared` reverts.
+    /// @dev Also creates this vault's `ExclusionLedger` (`exclusionLedger()`, core 1820).
     function initialize(
         IERC20 _asset,
         uint256 _tvlCap,
@@ -438,6 +476,11 @@ contract RobotMoneyVault is
         _grantRole(ADMIN_ROLE, _admin);
         _grantRole(EMERGENCY_ROLE, _emergencyResponder);
         // KEEPER_ROLE intentionally NOT granted
+
+        // core 1820: this vault's exclusion record. The linked library holds the ledger's
+        // creation code (not this EIP-170-tight vault) and runs as this proxy, so the ledger's
+        // only writer is this vault.
+        RobotMoneyVaultOps.createLedger(_asset);
     }
 
     /// @notice Returns the decimal precision used by this vault's share token (6, matching USDC).
@@ -497,25 +540,28 @@ contract RobotMoneyVault is
     ///      `active` (allowlist withdrawn or codehash de-listed) is EXCLUDED from NAV. A
     ///      revoked adapter is no longer trusted to price its holdings, so continuing to count
     ///      its self-reported balance would let a compromised/lying adapter inflate the share
-    ///      price (and, on the withdrawal side, drain honest holders' idle USDC). Eligibility
-    ///      is restorable via `setAdapterAllowed`, and the funds remain drainable by EMERGENCY
-    ///      via `emergencyWithdrawAdapter`, so this is an exclusion-not-confiscation.
+    ///      price (and, on the withdrawal side, drain honest holders' idle USDC). An entry under
+    ///      an open exclusion record is not counted either, even if its eligibility returned.
+    ///      Exclusion is not confiscation (core 1820): whatever is recovered from the adapter
+    ///      goes to `exclusionLedger()`, never to idle, and is paid pro rata to the holders at
+    ///      the moment of exclusion. So recovery never raises this NAV, and the ledger's USDC
+    ///      is never part of it.
     function totalAssets() public view override returns (uint256) {
-        uint256 sum = IERC20(asset()).balanceOf(address(this)); // include idle vault balance
+        address usdc = asset();
+        uint256 sum = IERC20(usdc).balanceOf(address(this)); // include idle vault balance
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
-            if (_isAdapterCounted(i)) sum += adapters[i].adapter.totalAssets();
+            if (RobotMoneyVaultOps.isCounted(_book(), usdc, i)) {
+                sum += adapters[i].adapter.totalAssets();
+            }
         }
         return sum;
     }
 
-    /// @dev An adapter contributes to NAV / receives proportional withdrawals only when it is
-    ///      both registered-active AND currently eligible (allowlisted + codehash-pinned +
-    ///      identity-bound). Centralises the ADP-2 NAV-side check so `totalAssets` and
-    ///      `_pullProportional` can never drift apart.
-    function _isAdapterCounted(uint256 i) internal view returns (bool) {
-        return adapters[i].active && _isAdapterEligible(address(adapters[i].adapter));
-    }
+    // An adapter contributes to NAV / receives proportional withdrawals only when it is both
+    // registered-active AND currently eligible (allowlisted + codehash-pinned + identity-bound) AND
+    // has no open exclusion record: `RobotMoneyVaultOps.isCounted`, one definition shared by
+    // `totalAssets` and the linked pull so the two can never drift apart.
 
     // ─── Deposit (atomic deposit-to-yield) ────────────────────────────
 
@@ -587,135 +633,20 @@ contract RobotMoneyVault is
     }
 
     /// @param totalAfter NAV including `amount`, which already sits idle in the vault.
+    /// @dev Two passes over the adapters (fill toward `min(equal-weight slice, capBps)`, then spread
+    ///      the leftover into absolute `capBps` headroom), in the linked
+    ///      `RobotMoneyVaultOps.routeDeposit` (issue 1808; see there for the full rationale, #1391).
+    ///      Adapters whose eligibility was revoked while still active are skipped, not reverted on,
+    ///      so depositing never bricks when governance quarantines one adapter (audit 2026-06-09,
+    ///      L-4); `addAdapter` and `adminRebalance` keep the hard eligibility revert. USDC that no
+    ///      adapter can take stays idle (still in NAV) and is reported by `UnroutedDeposit`, and so
+    ///      does a slice a lending venue refuses (supply cap, frozen reserve, `AllCapsReached`):
+    ///      the adapter hands it back instead of reverting the deposit (security round 2).
     function _routeDepositAt(uint256 amount, uint256 totalAfter) internal {
-        // slither-disable-next-line incorrect-equality
-        // Justification: `amount == 0` is a safe early-return guard, not a
-        // balance-sensitive strict equality that reentrancy could manipulate.
-        if (amount == 0) return;
-
-        uint256 activeCount = _activeAdapterCount();
-        uint256 remaining = amount;
-        uint256 len = adapters.length;
-
-        // Pass-1 `totalAssets()` reads, held as `balance + 1` so 0 means "not read"
-        // without shadowing a genuine zero balance. Reused by pass 2 ONLY when
-        // pass 1 allocated nothing at all (`remaining == amount` below): in that
-        // case nothing but staticcalls happened in between, so the cached reads
-        // are exact by construction. The moment pass 1 allocates, every later
-        // read is taken fresh — a cached value would be a MODELLED balance, and
-        // pass 2's `capBps` headroom check must never be computed from one.
-        uint256[] memory cachedBalance = new uint256[](len);
-
-        // Rank of the current adapter among the active ones, in registry order.
-        uint256 rank;
-
-        // Absolute `capBps` headroom pass 1 leaves behind, summed over the
-        // adapters it visited. Pass 2 has nothing to do when this is zero.
-        uint256 capHeadroom;
-
-        // Pass 1: fill toward min(equal target, capBps)
-        for (uint256 i = 0; i < len && remaining > 0; i++) {
-            if (!adapters[i].active) continue;
-            uint256 shareBalance = _equalWeightBalance(totalAfter, rank, activeCount);
-            rank++;
-            // Skip adapters whose allowlist / codehash eligibility was revoked while
-            // still active in the registry — depositing must not brick when governance
-            // quarantines one adapter (audit 2026-06-09, L-4). `addAdapter` and
-            // `adminRebalance` keep the hard `_requireAdapterEligible` revert.
-            if (!_isAdapterEligible(address(adapters[i].adapter))) continue;
-            // Still `min(cap, equal target)`, taken on the balances the two bps
-            // figures denote so the equal-weight slice keeps its exact partition
-            // of NAV. `capBalance` is the same expression pass 2 uses, so an
-            // adapter can never be filled past its cap here.
-            uint256 capBalance = (totalAfter * adapters[i].capBps) / MAX_BPS;
-            uint256 targetBalance = shareBalance < capBalance ? shareBalance : capBalance;
-            uint256 currentBalance = adapters[i].adapter.totalAssets();
-            if (currentBalance >= targetBalance) {
-                cachedBalance[i] = currentBalance + 1;
-                if (capBalance > currentBalance) capHeadroom += capBalance - currentBalance;
-                continue;
-            }
-            uint256 deficit = targetBalance - currentBalance;
-            uint256 allocation = deficit < remaining ? deficit : remaining;
-            _allocateTo(i, allocation);
-            remaining -= allocation;
-            uint256 filled = currentBalance + allocation;
-            if (capBalance > filled) capHeadroom += capBalance - filled;
-        }
-
-        // slither-disable-next-line incorrect-equality
-        // Justification: `remaining == amount` asks whether pass 1 allocated
-        // anything at all — both are local accumulators, not balances an
-        // attacker can nudge, and the guard only ever makes pass 2 read MORE.
-        bool passOneAllocatedNothing = remaining == amount;
-
-        // Pass 2: spread leftover into adapters with absolute cap headroom.
-        //
-        // `capHeadroom == 0` means pass 1 already saw every eligible adapter at
-        // its `capBps` share, so pass 2 could only re-read them and skip. That is
-        // not a corner case: a cap set that sums to exactly `MAX_BPS` (the devnet
-        // 3334/3333/3333) floors to slightly LESS than NAV, so a few wei of every
-        // deposit are permanently unplaceable — and re-reading every adapter to
-        // rediscover that was the second round of `totalAssets()` calls #1391 is
-        // about.
-        //
-        // `capHeadroom` scores an allocated adapter as holding
-        // `currentBalance + allocation`. That is an UPPER bound on what it really
-        // holds: `deploy` moves USDC at par, but a share-priced adapter converts
-        // it back down (`MorphoAdapter` is `convertToAssets`, which rounds down),
-        // so real assets are at most the amount deployed. `capHeadroom` is
-        // therefore a LOWER bound on real headroom, which fixes the direction of
-        // the trade:
-        //
-        //   * it can never over-state headroom, so pass 2 is never entered on a
-        //     false premise, and the cap is never widened — pass 2 re-reads and
-        //     re-checks `capBps` against a real balance before placing anyway;
-        //   * it can under-state headroom by the adapters' share-rounding dust,
-        //     so skipping pass 2 may leave a few wei idle that a second full
-        //     round of `totalAssets()` would have placed.
-        //
-        // The second is the deliberate trade: on a fork, pass 2's entire
-        // contribution to a `capBps`-bound deposit was ONE wei
-        // (`VaultForkRegressions.test_fork_unroutedDeposit_emitsEventAndStaysIdle`),
-        // bought with a full round of protocol reads. That wei stays idle, is
-        // still counted by `totalAssets`, still reported by `UnroutedDeposit`, and
-        // is routed by the next deposit or `rebalance`.
-        if (remaining > 0 && capHeadroom > 0) {
-            for (uint256 i = 0; i < len && remaining > 0; i++) {
-                if (!adapters[i].active) continue;
-                if (!_isAdapterEligible(address(adapters[i].adapter))) continue;
-                uint256 cached = passOneAllocatedNothing ? cachedBalance[i] : 0;
-                uint256 currentBalance =
-                    cached == 0 ? adapters[i].adapter.totalAssets() : cached - 1;
-                uint256 capBalance = (totalAfter * adapters[i].capBps) / MAX_BPS;
-                if (currentBalance >= capBalance) continue;
-                uint256 headroom = capBalance - currentBalance;
-                uint256 allocation = headroom < remaining ? headroom : remaining;
-                _allocateTo(i, allocation);
-                remaining -= allocation;
-            }
-        }
-
-        // Any USDC still unrouted (e.g. all adapter caps exhausted) stays idle in the vault.
-        // Emit an event so off-chain monitors can detect and react (e.g. trigger rebalance).
-        if (remaining > 0) emit UnroutedDeposit(remaining);
+        RobotMoneyVaultOps.routeDeposit(
+            _book(), asset(), amount, totalAfter, ADAPTER_CALL_GAS_FLOOR
+        );
     }
-
-    // slither-disable-start reentrancy-events
-    // `_routeDeposit()` and `rebalance()` are `nonReentrant`; the emitted
-    // event happens after the guarded external adapter calls and the warning is
-    // a false positive.
-    function _allocateTo(uint256 i, uint256 amount) internal {
-        IStrategyAdapter adpt = adapters[i].adapter;
-        address adptAddr = address(adpt);
-        _requireAdapterEligible(adptAddr);
-        IERC20(asset()).safeTransfer(adptAddr, amount);
-        _requireGas(ADAPTER_CALL_GAS_FLOOR);
-        adpt.deploy(amount);
-        emit Allocated(i, adptAddr, amount);
-    }
-
-    // slither-disable-end reentrancy-events
 
     // ─── Synchronous withdraw / redeem ────────────────────────────────
 
@@ -749,7 +680,8 @@ contract RobotMoneyVault is
     /// @notice Maximum assets that can be deposited for `receiver` given current vault state.
     ///         Returns 0 when deposits are paused, the vault is shutdown, retired,
     ///         no adapters are active, any active adapter is ineligible (excluded
-    ///         from NAV, core 1788), or the TVL cap has been reached.
+    ///         from NAV, core 1788), any active adapter's venue refuses withdrawals
+    ///         (security round 3), or the TVL cap has been reached.
     function maxDeposit(address) public view override returns (uint256) {
         if (_depositsClosed()) return 0;
         if (_capsUnbounded()) return type(uint256).max;
@@ -758,21 +690,22 @@ contract RobotMoneyVault is
 
     function _depositsClosed() internal view returns (bool) {
         return depositsPaused || shutdown || retired || _activeAdapterCount() == 0
-            || _anyActiveAdapterIneligible();
+            || _anyActiveAdapterBlocked(true);
     }
 
     /// @dev core 1788: an active adapter that fails `_isAdapterEligible` is excluded from
     ///      `totalAssets()`. Minting against that reduced NAV would hand the new depositor a
     ///      slice of the excluded balance once eligibility is restored, so deposits stay
-    ///      closed for as long as any active adapter is ineligible. Withdrawals are unaffected.
-    function _anyActiveAdapterIneligible() internal view returns (bool) {
-        uint256 len = adapters.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (adapters[i].active && !_isAdapterEligible(address(adapters[i].adapter))) {
-                return true;
-            }
-        }
-        return false;
+    ///      closed for as long as any active adapter is ineligible or under an open exclusion
+    ///      record (core 1820). Withdrawals are unaffected. Without `venues`, true means "an
+    ///      exclusion is open". With `venues` (the deposit gate), also true while an active
+    ///      adapter's venue refuses withdrawals (Aave reserve paused or inactive, Comet
+    ///      `isWithdrawPaused` set; security round 3): NAV still counts that balance at face, so
+    ///      minting against it would let early exits take full NAV from the new USDC while a
+    ///      haircut falls on the holders who stay. Body in the linked
+    ///      `RobotMoneyVaultOps.anyActiveBlocked`.
+    function _anyActiveAdapterBlocked(bool venues) internal view returns (bool) {
+        return RobotMoneyVaultOps.anyActiveBlocked(_book(), asset(), venues);
     }
 
     function _capsUnbounded() internal view returns (bool) {
@@ -851,6 +784,12 @@ contract RobotMoneyVault is
         uint256 grossAssets = _convertToAssets(shares, Math.Rounding.Floor);
         uint256 fee = grossAssets - assets;
 
+        // core 1820 / E2: when the excluded adapter holds the only funded balance, NAV is 0 and
+        // a redeem would burn the shares for 0 USDC. Refuse it while the exclusion is open.
+        if (grossAssets == 0 && shares != 0 && _anyActiveAdapterBlocked(false)) {
+            revert ZeroPayoutDuringExclusion();
+        }
+
         // FEE-2 / NC-11: the exit fee is only ever paid out of proceeds this withdrawal
         // ACTUALLY realises, never from a share-implied gross that an over-reporting adapter
         // could otherwise have other holders' idle USDC silently cover. `_pullProportional`
@@ -879,6 +818,15 @@ contract RobotMoneyVault is
         emit Withdraw(caller, receiver, owner, assets, shares);
     }
 
+    /// @dev core 1820: once any exclusion record exists, report both pre-change balances to the
+    ///      ledger before every mint, burn and transfer, so a holder's claim stays fixed at its
+    ///      balance at exclusion. Exiting or transferring later never moves the claim.
+    function _update(address from, address to, uint256 value) internal override {
+        RobotMoneyVaultOps.Exclusions storage x = RobotMoneyVaultOps.exclusions();
+        if (x.snapshots) x.ledger.checkpoint(from, to);
+        super._update(from, to, value);
+    }
+
     // slither-disable-start reentrancy-balance
     // The public entrypoints that reach this helper are `nonReentrant`; the
     // pre-call balance reads are therefore protected and the stale-balance
@@ -890,7 +838,7 @@ contract RobotMoneyVault is
     ///      that over-reports its balance can never have its shortfall funded from other holders'
     ///      idle USDC — an under-delivering adapter reverts (`InsufficientAdapterLiquidity`).
     ///
-    ///      Only eligible-and-active adapters (`_isAdapterCounted`) are pulled from: a revoked
+    ///      Only eligible-and-active adapters (`RobotMoneyVaultOps.isCounted`) are pulled from: a revoked
     ///      adapter is excluded from NAV (`totalAssets`), so it must likewise be excluded here —
     ///      otherwise the proportional denominator would not match NAV and a revoked adapter
     ///      could still receive/return withdrawal flow (ADP-2 / F-14).
@@ -904,71 +852,13 @@ contract RobotMoneyVault is
             return assetsNeeded;
         }
 
-        uint256 totalInAdapters;
-        uint256 len = adapters.length;
-        uint256 lastCounted = type(uint256).max;
-        for (uint256 i = 0; i < len; i++) {
-            if (_isAdapterCounted(i)) {
-                totalInAdapters += adapters[i].adapter.totalAssets();
-                lastCounted = i;
-            }
-        }
-
-        // Remaining amount that must come from adapters (after idle covers part of it).
-        // Fail fast with a dedicated error when the eligible adapters cannot deliver the
-        // requested amount — clamping here only converts the shortfall into an opaque
-        // downstream ERC-20 transfer revert (audit 2026-06-09, L-2).
-        uint256 remainingNeeded = assetsNeeded - idleBalance;
-        if (remainingNeeded > totalInAdapters) {
-            revert InsufficientAdapterLiquidity(remainingNeeded, totalInAdapters);
-        }
-
-        uint256 remaining = remainingNeeded;
-        uint256 pulled;
-
-        // Pass 1: proportional pulls, each capped at the adapter's reported balance.
-        for (uint256 i = 0; i < len && remaining > 0; i++) {
-            if (!_isAdapterCounted(i)) continue;
-            IStrategyAdapter adpt = adapters[i].adapter;
-            uint256 adapterBalance = adpt.totalAssets();
-            // The last counted adapter takes the rounding remainder (core 1482), so pass 2 runs
-            // only when an adapter is short, not for flooring dust. Each pass-2 pull is one more
-            // adapter call behind a 400k gas floor. Still capped at the adapter's balance (L-2).
-            uint256 pull =
-                i == lastCounted ? remaining : (remainingNeeded * adapterBalance) / totalInAdapters;
-            if (pull > remaining) pull = remaining;
-            if (pull > adapterBalance) pull = adapterBalance;
-            if (pull == 0) continue;
-            _requireGas(ADAPTER_CALL_GAS_FLOOR);
-            uint256 actual = adpt.withdraw(pull);
-            pulled += actual;
-            remaining = actual >= remaining ? 0 : remaining - actual;
-            emit Pulled(i, address(adpt), actual);
-        }
-
-        // Pass 2: sweep rounding leftovers across all eligible adapters, capping each
-        // pull at min(remaining, balance). Replaces the old behaviour of dumping the
-        // full leftover on the last active adapter regardless of its balance, which
-        // could DoS a withdrawal other adapters could cover (audit 2026-06-09, L-2).
-        for (uint256 i = 0; i < len && remaining > 0; i++) {
-            if (!_isAdapterCounted(i)) continue;
-            IStrategyAdapter adpt = adapters[i].adapter;
-            uint256 adapterBalance = adpt.totalAssets();
-            uint256 pull = adapterBalance < remaining ? adapterBalance : remaining;
-            if (pull == 0) continue;
-            _requireGas(ADAPTER_CALL_GAS_FLOOR);
-            uint256 actual = adpt.withdraw(pull);
-            pulled += actual;
-            remaining = actual >= remaining ? 0 : remaining - actual;
-            emit Pulled(i, address(adpt), actual);
-        }
-
-        // Adapters under-delivered versus their reported balances (e.g. a buggy or
-        // lying adapter). Surface the typed error instead of letting the subsequent
-        // transfer to the receiver revert opaquely.
-        if (remaining > 0) {
-            revert InsufficientAdapterLiquidity(remainingNeeded, remainingNeeded - remaining);
-        }
+        // The rest comes from the counted adapters, proportionally, in the linked
+        // `RobotMoneyVaultOps.pullFromAdapters` (issue 1808): it reverts
+        // `InsufficientAdapterLiquidity` when they cannot cover it or under-deliver (audit
+        // 2026-06-09, L-2), and checks `ADAPTER_CALL_GAS_FLOOR` before every adapter call (core 1482).
+        uint256 pulled = RobotMoneyVaultOps.pullFromAdapters(
+            _book(), asset(), assetsNeeded - idleBalance, ADAPTER_CALL_GAS_FLOOR
+        );
 
         // Realised = idle consumed by this withdrawal + USDC genuinely pulled from adapters.
         // Clamp to `assetsNeeded`: an adapter that returns MORE than requested leaves the
@@ -987,74 +877,115 @@ contract RobotMoneyVault is
     /// @notice Register a new strategy adapter. Restricted to `ADMIN_ROLE`.
     /// @param adapter_ Address of the `IStrategyAdapter`-compatible contract.
     /// @param capBps_  Maximum allocation cap in basis points (1–10 000).
-    /// @dev Reverts `AdapterAlreadyActive` for an address that is already an active adapter.
-    function addAdapter(address adapter_, uint16 capBps_) external onlyRole(ADMIN_ROLE) {
-        if (adapter_ == address(0)) revert ZeroAddress();
-        if (capBps_ == 0 || capBps_ > MAX_BPS) revert InvalidCap();
-        if (_activeAdapterCount() >= MAX_ADAPTERS) revert MaxAdaptersReached();
-        // An active duplicate would make totalAssets() read the same balance twice (core 1789).
-        // An inactive entry does not count, so deliberate re-registration still works.
-        uint256 len = adapters.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (adapters[i].active && address(adapters[i].adapter) == adapter_) {
-                revert AdapterAlreadyActive(adapter_);
-            }
-        }
-        _requireAdapterEligible(adapter_);
-        adapters.push(
-            AdapterInfo({adapter: IStrategyAdapter(adapter_), capBps: capBps_, active: true})
-        );
-        emit AdapterAdded(adapters.length - 1, adapter_, capBps_);
+    /// @dev Reverts `AdapterAlreadyActive` when any ACTIVE entry already holds `adapter_`:
+    ///      two active entries for one contract count its balance twice in `totalAssets()`
+    ///      (core 1789). Only active entries are scanned. Re-adding an address after
+    ///      `removeAdapter` or `forceRemoveAdapter` is legal and appends a NEW entry; this
+    ///      family never reactivates an inactive entry in place (unlike the basket family's
+    ///      `BasketAssetConfigGuard.reuseOrRejectDuplicate`). Inactive entries are never
+    ///      counted, so the stale entry cannot double count.
+    ///      A force-removed entry of the same address that still holds an open exclusion record
+    ///      is settled first: the adapter's balance goes into that record, never into NAV, and
+    ///      the add reverts `AdapterNotEmpty` if the adapter cannot pay out (security round 1).
+    function addAdapter(address adapter_, uint16 capBps_)
+        external
+        onlyRole(ADMIN_ROLE)
+        nonReentrant
+    {
+        RobotMoneyVaultOps.addAdapter(_book(), asset(), _ledger(), adapter_, capBps_, MAX_ADAPTERS);
     }
 
     /// @notice Approve or revoke an exact adapter instance for this vault. Restricted to `ADMIN_ROLE`.
     /// @param adapter_ Adapter address whose eligibility should change.
     /// @param allowed_ True to allow onboarding/allocation, false to quarantine the adapter.
-    /// @dev Setting `allowed_ = false` on an adapter that is already active quarantines it:
-    ///      its balance is excluded from `totalAssets()` (ADP-2), deposits and mints close
-    ///      while it stays active (core 1788), keeper `rebalance()` neither pulls from nor
-    ///      allocates to it, and new `addAdapter` calls for the address revert. Withdrawals
-    ///      stay open and are paid from eligible adapters and idle USDC only. A holder who
-    ///      exits during the exclusion is paid at the reduced NAV and forfeits any share of
-    ///      the excluded balance; holders who stay keep their full claim when eligibility is
-    ///      restored or the funds are recovered. Recovery is explicit: `emergencyWithdrawAdapter`
-    ///      (EMERGENCY) drains it, then `removeAdapter` / `forceRemoveAdapter` deactivates it.
-    function setAdapterAllowed(address adapter_, bool allowed_) external onlyRole(ADMIN_ROLE) {
+    /// @dev Setting `allowed_ = false` on an adapter that is already active excludes it:
+    ///      its balance leaves `totalAssets()` (ADP-2), deposits and mints close while it
+    ///      stays active (core 1788), keeper `rebalance()` neither pulls from nor allocates to
+    ///      it, and new `addAdapter` calls for the address revert. Withdrawals stay open and
+    ///      are paid from eligible adapters and idle USDC only.
+    ///
+    ///      Exclusion record (core 1820, owner decision 2026-10-13): in the same call the vault
+    ///      opens a record in `exclusionLedger()` with a snapshot of every holder's shares (skipped
+    ///      when no shares exist). Every USDC later recovered from the adapter is credited to
+    ///      that record, never to idle, by every recovery path: `emergencyWithdrawAdapter`
+    ///      (and `emergencyWithdraw`), `adminRebalance`, restoration here, and, after a
+    ///      force-remove, `recoverRemovedAdapter` and the re-add. It is paid pro
+    ///      rata to the holders at the snapshot through `ExclusionLedger.claim`. A holder who
+    ///      exits during the exclusion is paid at the reduced NAV AND keeps the claim; a holder
+    ///      who stays gets the same per-share recovery; shares minted or bought later get none.
+    ///      A redeem that would pay 0 USDC during the exclusion reverts
+    ///      `ZeroPayoutDuringExclusion` instead of burning the shares.
+    ///
+    ///      Setting `allowed_ = true` while the entry has an open record restores it: the
+    ///      vault first withdraws the adapter's whole balance into the record, then closes the
+    ///      record (`Restored`), and only then does the empty entry count in NAV again. If the
+    ///      adapter cannot pay out, the call reverts; drain it with `emergencyWithdrawAdapter` /
+    ///      `adminRebalance` first. `removeAdapter` (drained) closes the record too.
+    ///      `forceRemoveAdapter` closes it only when the adapter reports an empty balance;
+    ///      otherwise the record stays open on the inactive index (security round 1).
+    ///      `recoverRemovedAdapter` then credits it tranche by tranche, and a re-add of the
+    ///      address realises whatever is left into it (security round 2). A closed record stays
+    ///      claimable forever. `EMERGENCY_ROLE` can make the `false` change alone, through
+    ///      `emergencyExcludeAdapter`; only this function makes the `true` change.
+    function setAdapterAllowed(address adapter_, bool allowed_)
+        external
+        onlyRole(ADMIN_ROLE)
+        nonReentrant
+    {
         if (adapter_ == address(0)) revert ZeroAddress();
         adapterAllowed[adapter_] = allowed_;
         emit AdapterAllowedSet(adapter_, allowed_);
+        _syncExclusions(allowed_);
     }
 
     /// @notice Approve or revoke an adapter runtime bytecode hash. Restricted to `ADMIN_ROLE`.
     /// @param codeHash_ Runtime bytecode hash whose eligibility should change.
     /// @param allowed_  True to allow onboarding/allocation, false to revoke future allocations.
+    /// @dev Revoking a hash excludes every active adapter that runs it, and restoring it
+    ///      restores them, with the same exclusion-record rules as `setAdapterAllowed`.
     function setAdapterCodeHashAllowed(bytes32 codeHash_, bool allowed_)
         external
         onlyRole(ADMIN_ROLE)
+        nonReentrant
     {
         if (codeHash_ == bytes32(0)) revert InvalidParam();
         adapterCodeHashAllowed[codeHash_] = allowed_;
         emit AdapterCodeHashAllowedSet(codeHash_, allowed_);
+        _syncExclusions(allowed_);
+    }
+
+    /// @notice Open or restore exclusion records to match current adapter eligibility.
+    ///         Permissionless. The governance levers above do this themselves; this catches an
+    ///         entry that became ineligible (or eligible) without one, for example through its
+    ///         own `USDC()` / `VAULT()` views.
+    function syncExclusions() external nonReentrant {
+        _syncExclusions(true);
     }
 
     /// @notice Deactivate an adapter. The adapter must hold zero assets. Restricted to `ADMIN_ROLE`.
+    ///         Closes the entry's open exclusion record, if any (`Removed`, core 1820).
     /// @param index Registry index of the adapter to remove.
     function removeAdapter(uint256 index) external onlyRole(ADMIN_ROLE) {
-        if (index >= adapters.length || !adapters[index].active) revert AdapterNotFound();
-        if (adapters[index].adapter.totalAssets() > 0) revert AdapterNotEmpty();
-        adapters[index].active = false;
-        emit AdapterRemoved(index, address(adapters[index].adapter));
+        RobotMoneyVaultOps.removeAdapter(_book(), _ledger(), index);
     }
 
     /// @notice Update the allocation cap for an existing adapter. Restricted to `ADMIN_ROLE`.
     /// @param index     Registry index of the adapter.
     /// @param newCapBps New maximum allocation cap in basis points (1–10 000).
     function setAdapterCap(uint256 index, uint16 newCapBps) external onlyRole(ADMIN_ROLE) {
-        if (index >= adapters.length || !adapters[index].active) revert AdapterNotFound();
-        if (newCapBps == 0 || newCapBps > MAX_BPS) revert InvalidCap();
-        uint16 old = adapters[index].capBps;
-        adapters[index].capBps = newCapBps;
-        emit AdapterCapUpdated(index, old, newCapBps);
+        RobotMoneyVaultOps.setAdapterCap(_book(), index, newCapBps);
+    }
+
+    /// @notice Set the exposure cap of an active adapter that has one (`MorphoAdapter`,
+    ///         FS-VLT-10). Restricted to `ADMIN_ROLE`. The adapter's `setMaxExposure` is
+    ///         `onlyVault`, so this vault call is the only way to set it.
+    /// @dev Reverts `AdapterNotFound` for an inactive or unknown index. An adapter without
+    ///      `setMaxExposure` (Aave, Compound) makes the call revert. Read the result back with
+    ///      the adapter's `maxExposure()`.
+    /// @param index Registry index of the adapter.
+    /// @param cap   Maximum USDC the adapter may hold in its venue; 0 removes the cap.
+    function setAdapterMaxExposure(uint256 index, uint256 cap) external onlyRole(ADMIN_ROLE) {
+        RobotMoneyVaultOps.setAdapterMaxExposure(_book(), index, cap);
     }
 
     // ─── Rebalance ────────────────────────────────────────────────────
@@ -1073,38 +1004,20 @@ contract RobotMoneyVault is
         // while the pause or shutdown that guarded the drain is still in force.
         if (depositsPaused) revert DepositsArePaused();
         if (shutdown) revert VaultShutdown();
-        uint256 activeCount = _activeAdapterCount();
-        if (activeCount == 0) revert NoActiveAdapters();
+        if (_activeAdapterCount() == 0) revert NoActiveAdapters();
 
         lastRebalanceAt = block.timestamp;
 
         uint256 totalAssetsCached = totalAssets();
-        uint256 maxMovePerCall = (totalAssetsCached * maxRebalanceBpsPerCall) / MAX_BPS;
-        uint256 totalMoved;
-        uint256 rank;
-
-        uint256 len = adapters.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (!adapters[i].active) continue;
-            if (totalMoved >= maxMovePerCall) break;
-            // Same exactly-partitioning target set the allocator uses (#1391), so
-            // a rebalance does not pull dust that `_routeDeposit` hands straight
-            // back on the `_routeDeposit(idle)` leg below.
-            uint256 targetBalance = _equalWeightBalance(totalAssetsCached, rank, activeCount);
-            rank++;
-            // core 1788: never pull from a quarantined (ineligible) adapter. Its balance is
-            // outside NAV; recovery goes through `emergencyWithdrawAdapter` only.
-            if (!_isAdapterEligible(address(adapters[i].adapter))) continue;
-            uint256 currentBalance = adapters[i].adapter.totalAssets();
-            if (currentBalance <= targetBalance) continue;
-            uint256 excess = currentBalance - targetBalance;
-            uint256 pull =
-                (totalMoved + excess > maxMovePerCall) ? (maxMovePerCall - totalMoved) : excess;
-            if (pull == 0) continue;
-            uint256 actual = adapters[i].adapter.withdraw(pull);
-            totalMoved += actual;
-            emit Pulled(i, address(adapters[i].adapter), actual);
-        }
+        // Same exactly-partitioning target set the allocator uses (#1391), so a rebalance does
+        // not pull dust that `_routeDeposit` hands straight back below. Quarantined entries and
+        // entries under an open exclusion record are never pulled from (core 1788 / 1820).
+        uint256 totalMoved = RobotMoneyVaultOps.rebalancePull(
+            _book(),
+            asset(),
+            totalAssetsCached,
+            (totalAssetsCached * maxRebalanceBpsPerCall) / MAX_BPS
+        );
 
         uint256 idle = IERC20(asset()).balanceOf(address(this));
         if (idle > 0) _routeDeposit(idle);
@@ -1114,29 +1027,23 @@ contract RobotMoneyVault is
 
     /// @notice Admin-specified precision rebalance: sets each adapter to an explicit target balance.
     ///         Restricted to `ADMIN_ROLE`.
+    /// @dev The ADMIN recovery path for an excluded adapter (core 1788): a pull from an entry
+    ///      under an open exclusion record is credited to that record, not left idle (core
+    ///      1820, E2), so the drain cannot hand the excluded value to today's holders. No entry
+    ///      under an open record can be allocated to.
     /// @param targetBalances Target USDC balance for each adapter (must match `adapters.length`).
     function adminRebalance(uint256[] calldata targetBalances)
         external
         onlyRole(ADMIN_ROLE)
         nonReentrant
     {
-        if (targetBalances.length != adapters.length) revert InvalidParam();
-        uint256 len = adapters.length;
-        uint256 totalMoved = RobotMoneyVaultOps.pullToTargets(_opsAdapters(), targetBalances);
-
-        uint256 idle = IERC20(asset()).balanceOf(address(this));
-        if (idle > 0) {
-            for (uint256 i = 0; i < len && idle > 0; i++) {
-                if (!adapters[i].active) continue;
-                uint256 current = adapters[i].adapter.totalAssets();
-                if (current < targetBalances[i]) {
-                    uint256 deficit = targetBalances[i] - current;
-                    uint256 allocation = deficit < idle ? deficit : idle;
-                    _allocateTo(i, allocation);
-                    idle -= allocation;
-                }
-            }
-        }
+        (uint256 totalMoved, bool opened) = RobotMoneyVaultOps.adminRebalancePull(
+            _book(), asset(), _ledger(), totalSupply(), targetBalances
+        );
+        _markExclusionOpened(opened);
+        RobotMoneyVaultOps.adminRebalanceAllocate(
+            _book(), asset(), targetBalances, ADAPTER_CALL_GAS_FLOOR
+        );
 
         lastRebalanceAt = block.timestamp;
         emit Rebalanced(totalMoved);
@@ -1184,39 +1091,82 @@ contract RobotMoneyVault is
     function emergencyWithdraw() external onlyRole(EMERGENCY_ROLE) nonReentrant {
         _setDepositsPaused(true);
         // Withdrawals are intentionally left open so existing users can redeem idle USDC.
-        // A failing adapter is logged and skipped (RobotMoneyVaultOps.drainAll).
-        RobotMoneyVaultOps.drainAll(_opsAdapters());
-        emit EmergencyWithdrawCalled();
+        _markExclusionOpened(
+            RobotMoneyVaultOps.emergencyWithdrawAll(_book(), asset(), _ledger(), totalSupply())
+        );
     }
 
     /// @notice Pause deposits and withdraw all assets from a single adapter. Restricted to `EMERGENCY_ROLE`.
     ///         Withdrawals remain open so users can redeem assets pulled into idle USDC.
+    ///         USDC drained from an entry under an open exclusion record goes to that record
+    ///         instead of idle (core 1820), for the holders at the moment of exclusion.
     /// @param index Registry index of the adapter to drain.
     function emergencyWithdrawAdapter(uint256 index)
         external
         onlyRole(EMERGENCY_ROLE)
         nonReentrant
     {
-        if (index >= adapters.length || !adapters[index].active) {
-            revert AdapterNotFound();
-        }
         _setDepositsPaused(true);
-        RobotMoneyVaultOps.drainOne(_opsAdapters(), index);
+        _markExclusionOpened(
+            RobotMoneyVaultOps.emergencyWithdrawOne(
+                _book(), asset(), _ledger(), totalSupply(), index
+            )
+        );
+    }
+
+    /// @notice Exclude an active adapter from NAV now, without the timelock: revoke its address
+    ///         allowance and open its exclusion record with a snapshot of the share supply, in
+    ///         one call. Restricted to `EMERGENCY_ROLE`. Exclude-only: restoring it is
+    ///         `setAdapterAllowed(adapter, true)` (`ADMIN_ROLE`), which drains the adapter into the
+    ///         record first. Deposits close while the entry stays excluded (core 1788).
+    /// @dev Security round 1 (FS-VLT-8 follow-up). Runbook order for an illiquid adapter: exclude
+    ///      first, then `emergencyWithdraw`. Draining the healthy adapters to idle while the
+    ///      illiquid one still counts in NAV let early redeemers take full NAV from idle and left
+    ///      the haircut on the holders who stayed. Excluded first, every holder at the snapshot
+    ///      owns the same per-share claim on what the adapter later returns. Moves no value:
+    ///      a holder who exits is paid the reduced NAV and keeps the claim.
+    /// @param index Registry index of the active adapter to exclude.
+    function emergencyExcludeAdapter(uint256 index) external onlyRole(EMERGENCY_ROLE) nonReentrant {
+        _markExclusionOpened(
+            RobotMoneyVaultOps.emergencyExclude(_book(), asset(), _ledger(), totalSupply(), index)
+        );
     }
 
     /// @notice Force-remove an adapter without withdrawing its assets (last-resort action).
-    ///         Assets in the adapter are treated as lost. Restricted to `EMERGENCY_ROLE`.
+    ///         Its balance leaves NAV. Restricted to `EMERGENCY_ROLE`.
+    ///         The balance is not written off to anyone's gain (security round 1, SR-1012-5): a
+    ///         funded entry with no record gets one (snapshot of the share supply now), so a
+    ///         holder who exits at the reduced NAV keeps a pro-rata claim on whatever the adapter
+    ///         returns. The record closes (`ForceRemoved`) only when the adapter reports an empty
+    ///         balance. Otherwise it stays open: `recoverRemovedAdapter` credits it as the venue
+    ///         can pay, and `addAdapter` of the same address later realises the rest into it
+    ///         instead of into NAV.
     /// @param index Registry index of the adapter to force-remove.
     function forceRemoveAdapter(uint256 index) external onlyRole(EMERGENCY_ROLE) {
-        if (index >= adapters.length || !adapters[index].active) revert AdapterNotFound();
         _setDepositsPaused(true);
-        IStrategyAdapter adapter = adapters[index].adapter;
-        adapters[index].active = false;
-        uint256 lossAmount;
-        try adapter.totalAssets() returns (uint256 reported) {
-            lossAmount = reported;
-        } catch {}
-        emit AdapterForceRemoved(index, address(adapter), lossAmount);
+        _markExclusionOpened(
+            RobotMoneyVaultOps.forceRemoveAdapter(_book(), _ledger(), totalSupply(), index)
+        );
+    }
+
+    /// @notice Withdraw up to `amount` USDC from a force-removed adapter whose exclusion record
+    ///         is still open, straight into that record. Restricted to `EMERGENCY_ROLE`.
+    /// @dev Security round 2. `addAdapter` settles such a record only all at once, and reverts
+    ///      while the venue cannot repay the whole position, so a partly liquid venue stranded
+    ///      even its liquid part. This takes one tranche: `amount` is clamped to the adapter's
+    ///      balance (`type(uint256).max` asks for all of it), and the plain `withdraw` reverts on
+    ///      a shortfall, so ask for at most what the venue can pay now. The USDC goes to the
+    ///      snapshot holders' record, never to NAV, and the record closes (`ForceRemoved`) once
+    ///      the adapter reports an empty balance. Does not pause deposits: the inactive entry is
+    ///      outside NAV already.
+    /// @param index  Registry index of the inactive entry.
+    /// @param amount USDC to withdraw (clamped to the adapter's balance).
+    function recoverRemovedAdapter(uint256 index, uint256 amount)
+        external
+        onlyRole(EMERGENCY_ROLE)
+        nonReentrant
+    {
+        RobotMoneyVaultOps.recoverRemoved(_book(), asset(), _ledger(), index, amount);
     }
 
     // ─── Unified governance retire (DI-2) ─────────────────────────────────
@@ -1384,79 +1334,51 @@ contract RobotMoneyVault is
         }
     }
 
-    /// @dev Non-reverting twin of `_requireAdapterEligible`, used by `_routeDeposit`
-    ///      to skip (rather than revert on) adapters whose eligibility was revoked
-    ///      while still active in the registry (audit 2026-06-09, L-4).
+    /// @dev core 1820: open or restore exclusion records to match adapter eligibility. The loop
+    ///      runs in the linked `RobotMoneyVaultOps.syncExclusions` (see there); the share supply is the
+    ///      snapshot of every record it opens.
+    function _syncExclusions(bool restore) internal {
+        _markExclusionOpened(
+            RobotMoneyVaultOps.syncExclusions(_book(), asset(), _ledger(), totalSupply(), restore)
+        );
+    }
+
+    /// @dev core 1820: once any exclusion record exists, `_update` checkpoints every share balance
+    ///      change in the ledger. Set when a record opens; never cleared.
+    function _markExclusionOpened(bool opened) internal {
+        if (opened) RobotMoneyVaultOps.exclusions().snapshots = true;
+    }
+
+    /// @dev The adapter registry (`adapters`, `adapterAllowed`, `adapterCodeHashAllowed`, three
+    ///      consecutive slots) as the layout-identical `RobotMoneyVaultOps.Book` the linked library
+    ///      takes. Only the nominal type differs.
+    function _book() internal view returns (RobotMoneyVaultOps.Book storage b) {
+        AdapterInfo[] storage a = adapters;
+        // solhint-disable-next-line no-inline-assembly
+        assembly {
+            b.slot := a.slot
+        }
+    }
+
+    /// @dev This vault's `ExclusionLedger` (core 1820).
+    function _ledger() internal view returns (ExclusionLedger) {
+        return RobotMoneyVaultOps.exclusions().ledger;
+    }
+
+    /// @dev Non-reverting eligibility (allowlist + codehash + identity), shared with the linked
+    ///      library: `_routeDeposit` skips (rather than reverts on) an adapter whose eligibility
+    ///      was revoked while still active in the registry (audit 2026-06-09, L-4).
     function _isAdapterEligible(address adapter_) internal view returns (bool) {
-        if (!adapterAllowed[adapter_]) return false;
-        if (!adapterCodeHashAllowed[adapter_.codehash]) return false;
-        (uint256 failure,) = _adapterBinding(adapter_);
-        return failure == BINDING_OK;
+        return RobotMoneyVaultOps.isEligible(_book(), asset(), adapter_);
     }
 
-    /// @dev `_adapterBinding` results, in check order.
-    uint256 private constant BINDING_OK = 0;
-    uint256 private constant BINDING_CALL_FAILED = 1;
-    uint256 private constant BINDING_ASSET_MISMATCH = 2;
-    uint256 private constant BINDING_VAULT_MISMATCH = 3;
-
-    /// @dev The one reader of an adapter's `USDC()` / `VAULT()` binding, shared by the
-    ///      non-reverting `_isAdapterEligible` and the reverting `_requireAdapterCompatible`.
-    ///      Stops at the first failure: `VAULT()` is not called when `USDC()` fails or names
-    ///      another asset. `reported` is the mismatching address for the two mismatch results.
-    function _adapterBinding(address adapter_)
-        internal
-        view
-        returns (uint256 failure, address reported)
-    {
-        (bool usdcOk, bytes memory usdcData) =
-            adapter_.staticcall(abi.encodeWithSignature("USDC()"));
-        if (!usdcOk || usdcData.length != 32) return (BINDING_CALL_FAILED, address(0));
-        reported = abi.decode(usdcData, (address));
-        if (reported != asset()) return (BINDING_ASSET_MISMATCH, reported);
-        (bool vaultOk, bytes memory vaultData) =
-            adapter_.staticcall(abi.encodeWithSignature("VAULT()"));
-        if (!vaultOk || vaultData.length != 32) return (BINDING_CALL_FAILED, address(0));
-        reported = abi.decode(vaultData, (address));
-        if (reported != address(this)) return (BINDING_VAULT_MISMATCH, reported);
-        return (BINDING_OK, address(0));
-    }
-
-    function _requireAdapterEligible(address adapter_) internal view {
-        if (!adapterAllowed[adapter_]) revert AdapterNotAllowed(adapter_);
-        bytes32 codeHash = adapter_.codehash;
-        if (!adapterCodeHashAllowed[codeHash]) {
-            revert AdapterCodeHashNotAllowed(adapter_, codeHash);
-        }
-        _requireAdapterCompatible(adapter_);
-    }
-
-    function _requireAdapterCompatible(address adapter_) internal view {
-        (uint256 failure, address reported) = _adapterBinding(adapter_);
-        if (failure == BINDING_CALL_FAILED) revert AdapterCompatibilityCheckFailed(adapter_);
-        if (failure == BINDING_ASSET_MISMATCH) {
-            revert AdapterAssetMismatch(adapter_, asset(), reported);
-        }
-        if (failure == BINDING_VAULT_MISMATCH) {
-            revert AdapterVaultMismatch(adapter_, address(this), reported);
-        }
-    }
-
-    /// @dev The `rank`-th active adapter's slice of `total` when `active`
-    ///      adapters split it equally — the balance `RobotMoneyVaultOps.equalWeightBps`
-    ///      denotes.
-    ///
-    ///      Computed as the DIFFERENCE OF TWO PREFIX SHARES rather than as
-    ///      `total * bps / MAX_BPS`, so the slices partition `total` exactly.
-    ///      Distributing the remainder bps is necessary but not sufficient:
-    ///      flooring each `total * bps / MAX_BPS` independently still loses up to
-    ///      `active - 1` wei, and on the real devnet composition that dust alone
-    ///      kept `remaining > 0` and dragged pass 2 — and its second round of
-    ///      `totalAssets()` reads — into every deposit (issue #1391).
-    ///
-    ///      Because the slices sum to `total` while the adapters hold
-    ///      `total - idle`, pass 1's deficits always sum to at least the deposit,
-    ///      so pass 1 can place all of it whenever no `capBps` binds.
+    /// @dev The `rank`-th active adapter's slice of `total` when `active` adapters split it
+    ///      equally. One definition, in the linked library, shared with `rebalance()` and the drift
+    ///      view: the slices are a difference of two prefix shares, so they partition `total`
+    ///      exactly and the per-adapter `MAX_BPS % active` remainder bps go to the lowest ranks
+    ///      (issue #1391). Because the slices sum to `total` while the adapters hold
+    ///      `total - idle`, pass 1's deficits always sum to at least the deposit, so pass 1 can
+    ///      place all of it whenever no `capBps` binds.
     function _equalWeightBalance(uint256 total, uint256 rank, uint256 active)
         internal
         pure
@@ -1466,12 +1388,7 @@ contract RobotMoneyVault is
     }
 
     function _activeAdapterCount() internal view returns (uint256) {
-        uint256 count;
-        uint256 len = adapters.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (adapters[i].active) count++;
-        }
-        return count;
+        return RobotMoneyVaultOps.activeCount(_book());
     }
 
     // ─── Views ────────────────────────────────────────────────────────
@@ -1481,7 +1398,20 @@ contract RobotMoneyVault is
         return adapters.length;
     }
 
-    /// @notice Whether the vault has been permanently shut down.
+    /// @notice Open exclusion record id of registry index `index` (0 = none, core 1820). An entry
+    ///         with an open record never counts in NAV, never receives USDC, and keeps deposits closed.
+    /// @param index Adapter registry index.
+    function openExclusionOf(uint256 index) external view returns (uint256) {
+        return RobotMoneyVaultOps.exclusions().openExclusionOf[index];
+    }
+
+    /// @notice The exclusion record of this vault (core 1820): holds recovered USDC and pays
+    ///         snapshot holders. Created once by `initialize`; no setter exists.
+    function exclusionLedger() external view returns (ExclusionLedger) {
+        return _ledger();
+    }
+
+    /// @notice Whether the vault is shut down. `restoreVault` (`ADMIN_ROLE`) reverses it.
     function isShutdown() external view returns (bool) {
         return shutdown;
     }
@@ -1504,7 +1434,7 @@ contract RobotMoneyVault is
             uint256 targetBps
         )
     {
-        return RobotMoneyVaultOps.adapterInfo(_opsAdapters(), index);
+        return RobotMoneyVaultOps.adapterInfo(_book(), index);
     }
 
     /// @notice Compute current vs. target balances and signed drift for every adapter.
@@ -1520,18 +1450,7 @@ contract RobotMoneyVault is
             int256[] memory drifts
         )
     {
-        return RobotMoneyVaultOps.adapterDrift(_opsAdapters(), totalAssets(), _activeAdapterCount());
-    }
-
-    /// @dev Reinterpret the `adapters` storage array as the layout-identical
-    ///      `RobotMoneyVaultOps.AdapterInfo[]` for the delegatecall-linked library. The two
-    ///      structs share an exact field layout; only the nominal type differs.
-    function _opsAdapters() internal view returns (RobotMoneyVaultOps.AdapterInfo[] storage o) {
-        AdapterInfo[] storage a = adapters;
-        // solhint-disable-next-line no-inline-assembly
-        assembly {
-            o.slot := a.slot
-        }
+        return RobotMoneyVaultOps.adapterDrift(_book(), totalAssets());
     }
 
     /// @notice Whether `minRebalanceInterval` has elapsed since the last rebalance.

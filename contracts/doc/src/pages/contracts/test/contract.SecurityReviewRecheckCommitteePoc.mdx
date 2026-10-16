@@ -4,7 +4,7 @@ title: "SecurityReviewRecheckCommitteePoc"
 
 # SecurityReviewRecheckCommitteePoc
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/725de7a46a2d46fd825ed75f010959b8c56b8591/contracts/test/SecurityReviewRecheckCommitteePoc.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/SecurityReviewRecheckCommitteePoc.t.sol)
 
 **Inherits:** [ICGatewayIntegration](/contracts/test/contract.ICGatewayIntegration)
 
@@ -80,6 +80,24 @@ member and vault) is covered end to end by
 
 ```solidity
 function test_spoofedVoteFloodUnderMemberNameReverts() public;
+```
+
+<a id="test_selfrevealedagentcannotvoteunderownaddress"></a>
+
+### test_selfRevealedAgentCannotVoteUnderOwnAddress
+
+<i>
+
+With the spoof closed, the only address the attacker may put in
+`p.agent` is itself, and the IC contract refuses that because the
+attacker holds AGENT_ROLE on the gateway but not
+COMMITTEE_AGENT_ROLE on the policy. Together with Q5/Q4 this shows
+the permissionless gateway tier has no route into the vote log.
+
+</i>
+
+```solidity
+function test_selfRevealedAgentCannotVoteUnderOwnAddress() public;
 ```
 
 <a id="test_selfregisteredagentcannotanchorreceipt"></a>

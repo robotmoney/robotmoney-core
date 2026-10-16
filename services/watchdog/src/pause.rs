@@ -204,6 +204,46 @@ pub async fn trigger_pause(
     Ok(tx_hash)
 }
 
+/// Selector for `depositsPaused()`, the gateway's deposit-pause flag.
+pub fn deposits_paused_selector() -> [u8; 4] {
+    let hash = keccak256(b"depositsPaused()");
+    [hash[0], hash[1], hash[2], hash[3]]
+}
+
+/// Read `gateway.depositsPaused()` at the `latest` block.
+///
+/// [`trigger_pause`] returns once the node accepted the transaction, never once it was mined, so a
+/// submitted pause is not a paused gateway: an under-priced one can sit in the mempool. A retry asks
+/// the chain before it decides the earlier pause did its job (security round 1).
+pub async fn gateway_deposits_paused(
+    client: &Client,
+    rpc_url: &str,
+    gateway: Address,
+) -> Result<bool, WatchdogError> {
+    let call = serde_json::json!([
+        {
+            "to": format!("0x{}", hex::encode(gateway.as_slice())),
+            "data": format!("0x{}", hex::encode(deposits_paused_selector())),
+        },
+        "latest"
+    ]);
+    let result = rpc_call(client, rpc_url, "eth_call", call).await?;
+    let s = result.as_str().ok_or_else(|| {
+        WatchdogError::Pause(format!(
+            "depositsPaused(): expected a hex string, got {result}"
+        ))
+    })?;
+    let bytes = hex::decode(s.trim_start_matches("0x"))
+        .map_err(|e| WatchdogError::Pause(format!("depositsPaused(): invalid hex {s:?}: {e}")))?;
+    if bytes.len() < 32 {
+        return Err(WatchdogError::Pause(format!(
+            "depositsPaused(): short reply ({} bytes); is {gateway} the gateway?",
+            bytes.len()
+        )));
+    }
+    Ok(bytes[..32].iter().any(|b| *b != 0))
+}
+
 /// Fetch the **confirmed** transaction count (nonce) for `address` via
 /// `eth_getTransactionCount` at the `"latest"` block tag.
 ///
@@ -454,6 +494,17 @@ mod tests {
         // The removed stop-everything selector (0x8456cb59) no longer exists on
         // the gateway; the watchdog must never send it.
         assert_ne!(sel, [0x84, 0x56, 0xcb, 0x59]);
+    }
+
+    #[test]
+    fn deposits_paused_selector_matches_keccak() {
+        // keccak256("depositsPaused()")[..4]; the gateway's flag getter.
+        let hash = keccak256(b"depositsPaused()");
+        assert_eq!(
+            deposits_paused_selector(),
+            [hash[0], hash[1], hash[2], hash[3]]
+        );
+        assert_ne!(deposits_paused_selector(), pause_selector());
     }
 
     #[test]

@@ -5,18 +5,31 @@
 //         could never absorb a whole deposit into a balanced, fully-deployed vault.
 //         Pass 2 therefore ran on EVERY such deposit and re-read every adapter's
 //         `totalAssets()` — the expensive read for adapters wrapping live protocols.
+//         Security round 2 — a lending venue that refuses a supply (Aave supply cap or frozen
+//         reserve, MetaMorpho `AllCapsReached`, Comet supply pause) no longer reverts the deposit.
+//         Security round 3 — a lending venue that shuts withdrawals too (Aave reserve paused or
+//         inactive, Comet withdraw pause) closes rmUSDC deposits, and its adapter reverts instead
+//         of handing a slice back, so no new idle USDC pays an exit at a NAV that counts the
+//         stuck balance at face.
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {console2} from "forge-std/console2.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
 import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
+import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
+import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
+import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
+import {MockMorphoVault} from "./MorphoAdapter.t.sol";
+import {TestERC20} from "./helpers/TestERC20.sol";
+import {CappedAavePool, CappedMetaMorpho, PausableComet} from "./helpers/RefusingVenues.sol";
 
 // ─── Minimal USDC mock ───────────────────────────────────────────────────────
 
@@ -765,6 +778,330 @@ contract RobotMoneyVaultRouteDepositTest is Test {
             }
         }
         assertEq(unrouted, depositAmt / 2, "UnroutedDeposit must report the idle USDC");
+    }
+
+    // ─── Morpho exposure cap (security round 1, QA plan D8 follow-up) ────────
+
+    /// @notice The production rmUSDC set (Aave 3334, Compound 3333, Morpho 3333 bps,
+    ///         `DeployVault.s.sol`) with a Morpho `maxExposure` below Morpho's equal-weight
+    ///         target. A deposit succeeds, Morpho stays at its cap, Aave and Compound take their
+    ///         full slices, and what no adapter can take stays idle in NAV with
+    ///         `UnroutedDeposit`. Raise another adapter's `capBps` and the next deposit routes
+    ///         around Morpho into it. Before the fix pass 1 handed Morpho its whole third,
+    ///         `MorphoAdapter._deposit` reverted `ExposureCapExceeded`, and so did every
+    ///         deposit, every keeper `rebalance` and every router deposit with an rmUSDC leg.
+    function test_maxExposureBelowTargetRoutesAroundMorpho() public {
+        RouteHarness v =
+            newRouteHarness(IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, feeRecipient, admin);
+        ReadCountingAdapter aave = new ReadCountingAdapter(address(usdc), address(v));
+        ReadCountingAdapter compound = new ReadCountingAdapter(address(usdc), address(v));
+        MorphoAdapter morpho = new MorphoAdapter(
+            address(new MockMorphoVault(address(usdc))), address(usdc), address(v)
+        );
+        address[3] memory set = [address(aave), address(compound), address(morpho)];
+        uint256 cap = 100 * ONE_USDC;
+        vm.startPrank(admin);
+        for (uint256 i = 0; i < 3; i++) {
+            v.setAdapterAllowed(set[i], true);
+            v.setAdapterCodeHashAllowed(set[i].codehash, true);
+            v.addAdapter(set[i], CAPS[i]);
+        }
+        v.setAdapterMaxExposure(2, cap);
+        vm.stopPrank();
+        vm.prank(alice);
+        usdc.approve(address(v), type(uint256).max);
+
+        // 3 000 in: Morpho's equal-weight slice is 999.9; the cap allows 100.
+        uint256 amount = 3_000 * ONE_USDC;
+        uint256 aaveSlice = (amount * CAPS[0]) / MAX_BPS;
+        uint256 compoundSlice = (amount * (CAPS[0] + CAPS[1])) / MAX_BPS - aaveSlice;
+        uint256 unplaced = amount - aaveSlice - compoundSlice - cap;
+        vm.expectEmit(false, false, false, true, address(v));
+        emit UnroutedDeposit(unplaced);
+        vm.prank(alice);
+        uint256 shares = v.deposit(amount, alice);
+        assertGt(shares, 0, "the deposit succeeds");
+        assertEq(morpho.totalAssets(), cap, "Morpho stays at its exposure cap");
+        assertEq(usdc.balanceOf(address(aave)), aaveSlice, "Aave takes its slice");
+        assertEq(usdc.balanceOf(address(compound)), compoundSlice, "Compound takes its slice");
+        assertEq(usdc.balanceOf(address(v)), unplaced, "the rest stays idle");
+        assertEq(v.totalAssets(), amount, "idle USDC stays in NAV");
+
+        // With room at Aave, the next deposit routes around Morpho into it.
+        vm.prank(admin);
+        v.setAdapterCap(0, 10_000);
+        uint256 aaveBefore = usdc.balanceOf(address(aave));
+        vm.prank(alice);
+        v.deposit(1_000 * ONE_USDC, alice);
+        assertEq(morpho.totalAssets(), cap, "Morpho still at its cap");
+        assertEq(usdc.balanceOf(address(v)), unplaced, "the new deposit is fully placed");
+        assertGt(usdc.balanceOf(address(aave)), aaveBefore, "Aave absorbs Morpho's share");
+    }
+
+    // ─── A lending venue that refuses a supply (security round 2) ────────────
+
+    /// @dev The production rmUSDC set on the real lending adapters, over venues that can refuse.
+    struct VenueSet {
+        RouteHarness v;
+        AaveV3Adapter aave;
+        CompoundV3Adapter compound;
+        MorphoAdapter morpho;
+        CappedAavePool pool;
+        PausableComet comet;
+        CappedMetaMorpho metaMorpho;
+    }
+
+    /// @dev Aave 3334, Compound 3333, Morpho 3333 bps (`DeployVault.s.sol`), with the Aave
+    ///      reserve's remaining supply-cap room and MetaMorpho's remaining cap room as given.
+    function _venueSet(uint256 aaveHeadroom, uint256 morphoHeadroom)
+        internal
+        returns (VenueSet memory s)
+    {
+        s.v = newRouteHarness(IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, feeRecipient, admin);
+        TestERC20 aToken = new TestERC20();
+        s.pool = new CappedAavePool(address(usdc), address(aToken), aaveHeadroom);
+        s.comet = new PausableComet(address(usdc));
+        s.metaMorpho = new CappedMetaMorpho(address(usdc), morphoHeadroom);
+        s.aave = new AaveV3Adapter(address(s.pool), address(usdc), address(aToken), address(s.v));
+        s.compound = new CompoundV3Adapter(address(s.comet), address(usdc), address(s.v));
+        s.morpho = new MorphoAdapter(address(s.metaMorpho), address(usdc), address(s.v));
+        address[3] memory set = [address(s.aave), address(s.compound), address(s.morpho)];
+        vm.startPrank(admin);
+        for (uint256 i = 0; i < 3; i++) {
+            s.v.setAdapterAllowed(set[i], true);
+            s.v.setAdapterCodeHashAllowed(set[i].codehash, true);
+            s.v.addAdapter(set[i], CAPS[i]);
+        }
+        vm.stopPrank();
+        vm.prank(alice);
+        usdc.approve(address(s.v), type(uint256).max);
+    }
+
+    /// @notice Security round 2. Aave's USDC reserve has 100 USDC of supply-cap room left and
+    ///         every MetaMorpho market cap is full. A 3 000 USDC deposit succeeds: Aave's slice
+    ///         (above the room) and Morpho's slice come straight back from the adapters
+    ///         (`DeployRefused`), Compound takes its slice, and the two refused slices stay idle
+    ///         in NAV with `UnroutedDeposit`. Raise Compound's `capBps` and the next deposit
+    ///         routes around both full venues into Compound. Before the fix `AaveV3Adapter.deploy`
+    ///         reverted "51" (`SUPPLY_CAP_EXCEEDED`), and so did every rmUSDC deposit, every
+    ///         router deposit with an rmUSDC leg and keeper `rebalance`.
+    function test_venueRefusesSupply_depositSucceedsAndRefusedSlicesStayIdle() public {
+        VenueSet memory s = _venueSet(100 * ONE_USDC, 0);
+        uint256 amount = 3_000 * ONE_USDC;
+        uint256 aaveSlice = (amount * CAPS[0]) / MAX_BPS;
+        uint256 compoundSlice = (amount * (CAPS[0] + CAPS[1])) / MAX_BPS - aaveSlice;
+        uint256 morphoSlice = amount - aaveSlice - compoundSlice;
+        assertGt(aaveSlice, s.pool.headroom(), "Aave's slice is above its supply-cap room");
+        assertEq(s.metaMorpho.maxDeposit(address(s.morpho)), 0, "MetaMorpho: all caps reached");
+
+        vm.expectEmit(true, true, true, true, address(s.aave));
+        emit AaveV3Adapter.DeployRefused(aaveSlice, abi.encodeWithSignature("Error(string)", "51"));
+        vm.expectEmit(true, true, true, true, address(s.v));
+        emit Allocated(1, address(s.compound), compoundSlice);
+        vm.expectEmit(true, true, true, true, address(s.morpho));
+        emit MorphoAdapter.DeployRefused(
+            morphoSlice, abi.encodeWithSelector(CappedMetaMorpho.AllCapsReached.selector)
+        );
+        vm.expectEmit(true, true, true, true, address(s.v));
+        emit UnroutedDeposit(aaveSlice + morphoSlice);
+        vm.prank(alice);
+        uint256 shares = s.v.deposit(amount, alice);
+
+        assertGt(shares, 0, "the deposit succeeds");
+        assertEq(s.aave.totalAssets(), 0, "Aave holds nothing");
+        assertEq(s.morpho.totalAssets(), 0, "Morpho holds nothing");
+        assertEq(s.compound.totalAssets(), compoundSlice, "Compound takes its slice");
+        assertEq(usdc.balanceOf(address(s.v)), aaveSlice + morphoSlice, "refused slices idle");
+        assertEq(usdc.balanceOf(address(s.aave)), 0, "no USDC stranded on the Aave adapter");
+        assertEq(usdc.balanceOf(address(s.morpho)), 0, "no USDC stranded on the Morpho adapter");
+        assertEq(usdc.allowance(address(s.aave), address(s.pool)), 0, "no Aave allowance left");
+        assertEq(
+            usdc.allowance(address(s.morpho), address(s.metaMorpho)), 0, "no Morpho allowance left"
+        );
+        assertEq(s.v.totalAssets(), amount, "the idle USDC stays in NAV");
+        assertEq(s.v.convertToAssets(shares), amount, "the depositor is not diluted");
+
+        // With room at Compound, the next deposit routes around both full venues into it.
+        vm.prank(admin);
+        s.v.setAdapterCap(1, 10_000);
+        uint256 idleBefore = usdc.balanceOf(address(s.v));
+        uint256 compoundBefore = s.compound.totalAssets();
+        vm.prank(alice);
+        s.v.deposit(1_000 * ONE_USDC, alice);
+        assertEq(usdc.balanceOf(address(s.v)), idleBefore, "the new deposit is fully placed");
+        assertEq(
+            s.compound.totalAssets() - compoundBefore, 1_000 * ONE_USDC, "Compound absorbs it all"
+        );
+        assertEq(s.aave.totalAssets(), 0, "the full Aave reserve was not asked twice");
+    }
+
+    /// @notice Security round 2. Every venue refuses at once: the Aave reserve is frozen, Comet's
+    ///         supply is paused and MetaMorpho is full. A deposit still succeeds with its whole
+    ///         amount idle, and keeper `rebalance` runs instead of reverting. Once the venues
+    ///         accept again, the next `rebalance` places the idle USDC.
+    function test_venueRefusesSupply_keeperRebalanceDoesNotRevert() public {
+        VenueSet memory s = _venueSet(type(uint128).max, type(uint128).max);
+        vm.prank(alice);
+        s.v.deposit(3_000 * ONE_USDC, alice);
+        assertEq(usdc.balanceOf(address(s.v)), 0, "open venues take the whole deposit");
+
+        // The vault is balanced, so each adapter's deficit is its slice of the new 300 USDC.
+        s.pool.setFrozen(true);
+        s.comet.setSupplyPaused(true);
+        s.metaMorpho.setHeadroom(0);
+        uint256 aaveDeficit = (300 * ONE_USDC * CAPS[0]) / MAX_BPS;
+        uint256 compoundDeficit = (300 * ONE_USDC * (CAPS[0] + CAPS[1])) / MAX_BPS - aaveDeficit;
+        vm.expectEmit(true, true, true, true, address(s.aave));
+        emit AaveV3Adapter.DeployRefused(
+            aaveDeficit, abi.encodeWithSignature("Error(string)", "28")
+        );
+        vm.expectEmit(true, true, true, true, address(s.compound));
+        emit CompoundV3Adapter.DeployRefused(
+            compoundDeficit, abi.encodeWithSelector(PausableComet.Paused.selector)
+        );
+        vm.expectEmit(true, true, true, true, address(s.v));
+        emit UnroutedDeposit(300 * ONE_USDC);
+        vm.prank(alice);
+        s.v.deposit(300 * ONE_USDC, alice);
+        assertEq(usdc.balanceOf(address(s.v)), 300 * ONE_USDC, "the whole deposit stays idle");
+
+        vm.warp(block.timestamp + s.v.minRebalanceInterval() + 1);
+        vm.prank(admin);
+        s.v.rebalance();
+        assertEq(usdc.balanceOf(address(s.v)), 300 * ONE_USDC, "rebalance leaves it idle");
+        assertEq(s.v.totalAssets(), 3_300 * ONE_USDC, "NAV intact");
+
+        s.pool.setFrozen(false);
+        s.comet.setSupplyPaused(false);
+        s.metaMorpho.setHeadroom(type(uint128).max);
+        vm.warp(block.timestamp + s.v.minRebalanceInterval() + 1);
+        vm.prank(admin);
+        s.v.rebalance();
+        assertEq(usdc.balanceOf(address(s.v)), 0, "the next rebalance places the idle USDC");
+        assertEq(s.v.totalAssets(), 3_300 * ONE_USDC, "NAV intact");
+    }
+
+    // ─── A lending venue that shuts withdrawals too (security round 3) ───────
+
+    /// @notice Security round 3. rmUSDC holds Aave, Compound and Morpho at equal weight, and
+    ///         Aave's guardian pauses the USDC reserve: supply and withdraw both revert "29"
+    ///         (`RESERVE_PAUSED`) while the aToken balance still counts at face in NAV. rmUSDC's
+    ///         `maxDeposit` and `maxMint` read 0, so a deposit reverts and no new USDC sits idle
+    ///         to pay a redeem at that NAV. Before the fix the Aave adapter handed its slice back,
+    ///         the deposit minted at a NAV counting the paused balance, and the idle slice paid an
+    ///         informed holder's redeem at par while a later haircut fell on the holders who
+    ///         stayed (FS-VLT-8). An inactive reserve and a Comet withdraw pause close deposits
+    ///         the same way. A frozen reserve and a Comet supply-only pause still pay withdrawals
+    ///         and keep deposits open (round 2 hand-back). Deposits reopen with the venue.
+    function test_venueShutsWithdrawals_depositsCloseAndNoIdleFundsParExit() public {
+        VenueSet memory s = _venueSet(type(uint128).max, type(uint128).max);
+        vm.prank(alice);
+        s.v.deposit(3_000 * ONE_USDC, alice);
+        assertEq(usdc.balanceOf(address(s.v)), 0, "open venues take the whole deposit");
+        uint256 aaveHeld = s.aave.totalAssets();
+        assertGt(aaveHeld, 0, "Aave holds its slice");
+
+        s.pool.setPaused(true);
+        assertFalse(s.aave.venueWithdrawable(), "Aave reports its withdrawals shut");
+        assertEq(s.v.totalAssets(), 3_000 * ONE_USDC, "NAV still counts the paused aToken balance");
+        assertEq(s.v.maxDeposit(alice), 0, "deposits close");
+        assertEq(s.v.maxMint(alice), 0, "mints close");
+
+        uint256 amount = 300 * ONE_USDC;
+        uint256 walletBefore = usdc.balanceOf(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(ERC4626.ERC4626ExceededMaxDeposit.selector, alice, amount, 0)
+        );
+        vm.prank(alice);
+        s.v.deposit(amount, alice);
+        assertEq(usdc.balanceOf(alice), walletBefore, "the depositor keeps the USDC");
+        assertEq(usdc.balanceOf(address(s.v)), 0, "no idle USDC to pay an exit at par");
+        assertEq(s.aave.totalAssets(), aaveHeld, "the paused balance is untouched");
+
+        // With no idle, a redeem needs Aave's pro-rata part, which the paused reserve refuses.
+        // The exit waits for `emergencyExcludeAdapter` (exclude first, FS-VLT-8), not for idle.
+        uint256 someShares = s.v.balanceOf(alice) / 10;
+        vm.expectRevert(bytes("29"));
+        vm.prank(alice);
+        s.v.redeem(someShares, alice, alice);
+
+        s.pool.setPaused(false);
+        assertEq(s.v.maxDeposit(alice), PER_DEPOSIT_CAP, "deposits reopen with the reserve");
+
+        s.pool.setInactive(true);
+        assertFalse(s.aave.venueWithdrawable(), "an inactive reserve refuses withdrawals");
+        assertEq(s.v.maxDeposit(alice), 0, "an inactive reserve closes deposits");
+        s.pool.setInactive(false);
+
+        s.pool.setFrozen(true);
+        assertTrue(s.aave.venueWithdrawable(), "a frozen reserve still pays withdrawals");
+        assertEq(s.v.maxDeposit(alice), PER_DEPOSIT_CAP, "a frozen reserve keeps deposits open");
+        s.pool.setFrozen(false);
+
+        s.comet.setSupplyPaused(true);
+        assertTrue(s.compound.venueWithdrawable(), "a supply-only pause leaves withdrawals open");
+        assertEq(s.v.maxDeposit(alice), PER_DEPOSIT_CAP, "a supply-only pause keeps deposits open");
+        s.comet.setWithdrawPaused(true);
+        assertFalse(s.compound.venueWithdrawable(), "Comet reports isWithdrawPaused");
+        assertEq(s.v.maxDeposit(alice), 0, "a Comet withdraw pause closes deposits");
+        s.comet.setSupplyPaused(false);
+        s.comet.setWithdrawPaused(false);
+
+        vm.prank(alice);
+        s.v.deposit(amount, alice);
+        assertEq(s.v.totalAssets(), 3_000 * ONE_USDC + amount, "the deposit lands once reopened");
+    }
+
+    /// @notice Security round 3. Compound is overweight and Aave underweight when Aave's reserve
+    ///         is paused. A keeper `rebalance` pulls Compound's excess into idle and offers it to
+    ///         the Aave adapter, which now reverts `VenueWithdrawalsClosed` instead of handing it
+    ///         back, so the rebalance reverts and no healthy-venue USDC turns into idle that pays
+    ///         exits at a NAV counting the paused balance. Before the fix the slice came back and
+    ///         stayed idle. A Comet whose supply and withdraw are both paused reverts the same way.
+    function test_venueShutsWithdrawals_adapterRevertsSoRebalanceIdlesNothing() public {
+        VenueSet memory s = _venueSet(type(uint128).max, type(uint128).max);
+        vm.prank(alice);
+        s.v.deposit(3_000 * ONE_USDC, alice);
+        // A frozen reserve hands Aave's slice of the next deposit back, and with Compound's
+        // `capBps` at 100 percent pass 2 spills it into Compound.
+        vm.prank(admin);
+        s.v.setAdapterCap(1, 10_000);
+        s.pool.setFrozen(true);
+        vm.prank(alice);
+        s.v.deposit(3_000 * ONE_USDC, alice);
+        s.pool.setFrozen(false);
+        assertEq(usdc.balanceOf(address(s.v)), 0, "nothing idle");
+        uint256 aaveHeld = s.aave.totalAssets();
+        uint256 compoundHeld = s.compound.totalAssets();
+        uint256 equalSlice = s.v.totalAssets() / 3;
+        assertLt(aaveHeld, equalSlice, "Aave is underweight");
+        assertGt(compoundHeld, equalSlice, "Compound is overweight");
+
+        s.pool.setPaused(true);
+        vm.warp(block.timestamp + s.v.minRebalanceInterval() + 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AaveV3Adapter.VenueWithdrawalsClosed.selector,
+                abi.encodeWithSignature("Error(string)", "29")
+            )
+        );
+        vm.prank(admin);
+        s.v.rebalance();
+        assertEq(usdc.balanceOf(address(s.v)), 0, "the rebalance left nothing idle");
+        assertEq(s.compound.totalAssets(), compoundHeld, "Compound keeps its balance");
+        assertEq(s.aave.totalAssets(), aaveHeld, "the paused balance is untouched");
+
+        s.comet.setSupplyPaused(true);
+        s.comet.setWithdrawPaused(true);
+        usdc.mint(address(s.compound), ONE_USDC);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CompoundV3Adapter.VenueWithdrawalsClosed.selector,
+                abi.encodeWithSelector(PausableComet.Paused.selector)
+            )
+        );
+        vm.prank(address(s.v));
+        s.compound.deploy(ONE_USDC);
     }
 
     // ─── Recorded gas for the ordinary balanced-vault deposit path ───────────

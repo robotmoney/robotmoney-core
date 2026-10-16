@@ -123,7 +123,8 @@ describe("the CLI's vault rules equal the --core-dir stage table (issue 1833, 18
   test("the tables match: pause-all runs without a warning, and govern gets past the startup check (it stops later, at the stage manifests this world lacks)", async () => {
     expect(await runWith("pause-all")).toMatchObject({ code: 0, message: undefined, pauses: 1, warnings: [] });
     const g = await runWith("govern");
-    expect(g.message).toContain("is missing: run the stage that writes it first");
+    // govern stops later: at the run manifest (QA plan v1 B1 refuses a run with no finished timelock stage) or at a stage manifest this world lacks.
+    expect(g.message).toMatch(/is missing: run the stage that writes it first|has no finished timelock stage/);
     expect(g.message).not.toContain("same core sha as DEPLOY_SHA");
   });
   for (const [what, edit] of [

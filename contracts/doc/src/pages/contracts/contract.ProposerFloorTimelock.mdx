@@ -1,0 +1,157 @@
+---
+title: "ProposerFloorTimelock"
+description: "OpenZeppelin `TimelockController` with a \"last-proposer floor\": the final holder of `PROPOSER_ROLE` cannot be revoked or renounced down to zero holders. Everything else is stock `TimelockController`."
+---
+
+# ProposerFloorTimelock
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/ProposerFloorTimelock.sol)
+
+**Inherits:** TimelockController
+
+**Title:** ProposerFloorTimelock
+
+OpenZeppelin `TimelockController` with a "last-proposer floor": the final
+holder of `PROPOSER_ROLE` cannot be revoked or renounced down to zero
+holders. Everything else is stock `TimelockController`.
+
+`DeployTimelock` makes the Safe the only proposer, gives the timelock
+`ADMIN_ROLE` on every governed contract and lets the timelock administer
+its own roles (`admin = address(0)`). Stock OZ lets the Safe drop that one
+proposer role in two ways: `revokeRole` as a timelock self-call after the
+delay, or `renounceRole` in one instant Safe transaction. Either way no
+account can ever schedule an operation again, so every `ADMIN_ROLE`
+function on every governed contract is unreachable forever (withdrawals
+survive: security-model §4). This contract forbids exactly that one
+transition. Granting a second proposer first, then revoking the Safe, is
+still allowed: the floor is on the count, not on the Safe.
+
+Implementation: both `revokeRole` and `renounceRole` funnel through the
+internal `_revokeRole` in OZ v5, so a single override closes both
+vectors. `_revokeRole` runs *before* the membership is mutated, so when a
+`PROPOSER_ROLE` revoke is in flight the counter still includes the account
+being removed; a count of exactly 1 therefore means this is the last
+proposer. The counter is kept by hand (the way
+`AdminFloorAccessControlCounter` does for `ADMIN_ROLE`) because
+`TimelockController` is `AccessControl`, not `AccessControlEnumerable`.
+The constructor's grants to `proposers` go through the same override,
+so the count is right from birth. `proposerCount()` is what the govern
+tool reads before it builds `timelock-revoke-role PROPOSER_ROLE`.
+
+## State Variables
+
+### proposerCount
+
+Number of accounts currently holding `PROPOSER_ROLE`.
+
+<i>
+
+No initializer on purpose: a derived-contract initializer would run
+after the `TimelockController` constructor and reset the count.
+
+</i>
+
+```solidity
+uint256 public proposerCount;
+```
+
+## Functions
+
+<a id="constructor-uint256-address-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(
+        uint256 minDelay,
+        address[] memory proposers,
+        address[] memory executors,
+        address admin
+    ) TimelockController(minDelay, proposers, executors, admin);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| minDelay | `uint256` | Initial minimum delay in seconds for operations. |
+| proposers | `address[]` | Accounts granted `PROPOSER_ROLE` and `CANCELLER_ROLE`; at least one. |
+| executors | `address[]` | Accounts granted `EXECUTOR_ROLE` (`address(0)` opens it). |
+| admin | `address` | Optional account granted `DEFAULT_ADMIN_ROLE`; `address(0)` for self-administration. |
+
+<a id="_grantrole-bytes32-address"></a>
+
+### _grantRole
+
+<i>
+
+Track `PROPOSER_ROLE` membership so the floor can be enforced without
+enumeration. Only increments on a real (new) grant.
+
+</i>
+
+```solidity
+function _grantRole(bytes32 role, address account) internal virtual override returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` |  |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_revokerole-bytes32-address"></a>
+
+### _revokeRole
+
+<i>
+
+Reverts when the revoke would remove the final `PROPOSER_ROLE` holder.
+Covers both `revokeRole` and `renounceRole`, which both route here.
+Decrements only on a real (effective) revoke.
+
+</i>
+
+```solidity
+function _revokeRole(bytes32 role, address account) internal virtual override returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` |  |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+## Errors
+
+### LastProposerFloor
+
+Revoking or renouncing the sole `PROPOSER_ROLE` holder is forbidden:
+nothing could ever be scheduled again.
+
+```solidity
+error LastProposerFloor();
+```
+
+### NoProposer
+
+A timelock born with no proposer could never schedule anything.
+
+```solidity
+error NoProposer();
+```
+

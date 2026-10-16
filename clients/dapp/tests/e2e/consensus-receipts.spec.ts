@@ -20,9 +20,17 @@
  *   FUSION_EXPECTED_SIGNATURES   how many analyst signatures the payload carries
  *   FUSION_EXPECT_RELEASED       "true" once the admin release has landed
  *
- * It NEVER falls back to the seeded fixtures: with no receipt named, it SKIPS
+ * It NEVER falls back to the seeded fixtures: with no receipt named, it FAILS
  * with the reason stated, because a pass against core's own fixtures would be
  * the exact evidence this step exists to stop us reporting.
+ *
+ * WHERE IT RUNS (QA plan v1 T5)
+ * Only `playwright.fusion.config.ts` collects this spec, for a Fusion QA run
+ * that names its receipt. The default config (`playwright.config.ts`, suite 10
+ * dapp-e2e) ignores it: nothing there anchors a frontend receipt, so it used to
+ * SKIP on every dapp-e2e run, and a skip reads as green. The standing proof in
+ * dapp-e2e is `consensus-receipts-seeded.spec.ts`. A missing receipt id or URL
+ * is now a failure, not a skip, so a Fusion run cannot pass without one.
  *
  * Canonical: docs/architecture.md §4.9; project-fusion.md §12.4 AC-CORE-08,
  * §12.6 AC-E2E-02/03.
@@ -40,18 +48,19 @@ function dappUrl(): string {
   return loadEndpoints().dapp_url;
 }
 
-test.describe("consensus receipts — the real frontend artifact, end to end", () => {
-  test.skip(
-    !RECEIPT_ID || !RECEIPT_URL,
-    "FUSION_RECEIPT_ID and FUSION_RECEIPT_URL must name the receipt this run anchored. " +
-      "This spec deliberately has no seeded-fixture fallback: passing against core's own " +
-      "fixture payloads would not be evidence that a robotmoney-frontend receipt survives " +
-      "the round trip (QA step 3.9).",
-  );
+const MISSING_RECEIPT =
+  "FUSION_RECEIPT_ID and FUSION_RECEIPT_URL must name the receipt this run anchored. " +
+  "This spec deliberately has no seeded-fixture fallback: passing against core's own " +
+  "fixture payloads would not be evidence that a robotmoney-frontend receipt survives " +
+  "the round trip (QA step 3.9). It fails rather than skips (QA plan v1 T5).";
 
+test.describe("consensus receipts — the real frontend artifact, end to end", () => {
   test("the anchored frontend receipt renders with the correct states, counts and labelling", async ({
     page,
   }) => {
+    expect(RECEIPT_ID, MISSING_RECEIPT).toMatch(/^0x[0-9a-fA-F]{64}$/);
+    expect(RECEIPT_URL, MISSING_RECEIPT).not.toBe("");
+
     await page.goto(dappUrl(), { waitUntil: "domcontentloaded" });
     await page.getByTestId("tab-consensus-receipts").click();
 

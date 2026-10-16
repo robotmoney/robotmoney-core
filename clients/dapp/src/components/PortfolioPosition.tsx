@@ -5,9 +5,20 @@
  *
  * Displays receipt-token balances per registered vault for a watched address.
  * Fetches indexed position data from `GET /v1/accounts/:address/positions`
- * (the explorer API). Live USDC conversion via `vault.convertToAssets` is the
- * caller's responsibility (the component accepts pre-computed `usdcValues` so
- * it stays pure and testable without RPC).
+ * (the explorer API).
+ *
+ * Position value (core 1795, QA plan X8) is what the shares pay at redeem,
+ * never the gross `convertToAssets`, which ignores the exit fee and a basket
+ * vault's slippage floor (rmAGENT read about 3% high). The first source that
+ * has a value wins:
+ *   1. the parent's `usdcValues` override;
+ *   2. `vault.previewRedeem(shares)` read live on chain (`usePreviewRedeemValues`);
+ *   3. the explorer's `usdc_value`, the same `previewRedeem` semantics at its
+ *      latest snapshot (used when the chain read is not allowed, e.g. the
+ *      mainnet build with no wallet on Base).
+ * No caller used to pass `usdcValues`, so every value showed "—". Only this
+ * component knows the watched address's shares, so it reads them itself. Each
+ * shown value carries the PRD NAV disclaimer (`NavDisclosure`, prd.md §9).
  *
  * Renders:
  *   - One row per vault with non-zero indexed share balance.
@@ -16,7 +27,14 @@
  *   - Loading, error, and empty states.
  *
  * No wallet or signature required — data flows from the explorer API index and
- * the optional `usdcValues` map from the parent's on-chain reads.
+ * read-only chain calls; nothing here feeds a signature.
+ *
+ * Each card also shows the address's exclusion claim when its vault owes one
+ * (core 1820, QA plan U5): read on chain through `useExclusionClaims`, never
+ * from the explorer. A holder who exited keeps the claim but has no indexed
+ * position, so the deployment's RobotMoneyVault (`VITE_VAULT_ADDRESS`, the only
+ * vault family with an exclusion ledger) is always read, and a claim on a vault
+ * with no position gets its own line.
  *
  * docs/architecture.md §5.3.
  */
@@ -28,9 +46,12 @@ import {
   type AccountPositionsResponse,
   type FetchLike,
 } from "../lib/explorerApi";
-import { VaultPositionCard } from "./shared";
+import { NavDisclosure, VaultPositionCard } from "./shared";
 import { formatSharesString, formatUsdc, formatUsdcString } from "../lib/format";
 import { useVaultShareSymbols } from "../lib/useVaultShareSymbols";
+import { usePreviewRedeemValues } from "../lib/usePreviewRedeemValues";
+import { useExclusionClaims } from "../lib/useExclusionClaims";
+import { useRuntimeConfig } from "../lib/RuntimeConfigContext";
 
 export interface PortfolioPositionProps {
   /** Address to inspect (watched-address or connected wallet). */
@@ -38,9 +59,10 @@ export interface PortfolioPositionProps {
   /** Resolved explorer API base URL (no trailing slash required). */
   readonly apiUrl: string;
   /**
-   * Optional map from vault_address (lower-case hex) to USDC value string
-   * (decimal, 6-decimal units). Injected by the parent after live chain reads
-   * (`vault.convertToAssets(shares)`). When absent a dash is shown.
+   * Optional override: map from vault_address (lower-case hex) to the USDC the
+   * shares pay at redeem (decimal string, 6-decimal units). When absent the
+   * component reads `vault.previewRedeem(shares)` itself, then falls back to
+   * the explorer's `usdc_value`, then to a dash.
    */
   readonly usdcValues?: Readonly<Record<string, string>>;
   /** Optional fetch implementation; tests inject a mock. */
@@ -91,13 +113,36 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
   const symbolOf = useVaultShareSymbols(
     state.kind === "ready" ? state.positions.map((p) => p.vault_address) : [],
   );
+  // USDC owed to this address from each vault's exclusion records (core 1820). The
+  // RobotMoneyVault is read even without a position: an exiter keeps the claim.
+  const configured = useRuntimeConfig().VITE_VAULT_ADDRESS;
+  const primaryVault = configured && !/^0x0{40}$/i.test(configured) ? configured : undefined;
+  const positionVaults = state.kind === "ready" ? state.positions.map((p) => p.vault_address) : [];
+  const exclusionClaims = useExclusionClaims(
+    state.kind === "ready" && primaryVault ? [...positionVaults, primaryVault] : positionVaults,
+    props.address,
+  );
+  const positionKeys = new Set(positionVaults.map((v) => v.toLowerCase()));
+  const claimsWithoutPosition = [...exclusionClaims].filter(([v]) => !positionKeys.has(v));
+  // What each position pays at redeem, read on chain (core 1795, QA plan X8).
+  const exitValues = usePreviewRedeemValues(
+    state.kind === "ready"
+      ? state.positions.map((p) => ({ vault: p.vault_address, shares: p.shares }))
+      : [],
+  );
+
+  /** Raw USDC the position pays at redeem: override, then live previewRedeem, then the explorer. */
+  function valueOf(pos: AccountPosition): string | undefined {
+    const key = pos.vault_address.toLowerCase();
+    return usdcValues[key] ?? exitValues.get(key)?.toString() ?? pos.usdc_value ?? undefined;
+  }
 
   /** Compute composite total when all vaults have a USDC value. */
   function compositeTotal(positions: readonly AccountPosition[]): bigint | null {
     if (positions.length === 0) return 0n;
     let total = 0n;
     for (const p of positions) {
-      const v = usdcValues[p.vault_address.toLowerCase()];
+      const v = valueOf(p);
       if (v === undefined) return null;
       try {
         total += BigInt(v);
@@ -140,12 +185,12 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
                       <th>Vault</th>
                       <th>Risk</th>
                       <th>Shares</th>
-                      <th>USDC value</th>
+                      <th>Est. USDC at redeem</th>
                     </tr>
                   </thead>
                   <tbody>
                     {state.positions.map((pos) => {
-                      const usdc = usdcValues[pos.vault_address.toLowerCase()];
+                      const usdc = valueOf(pos);
                       return (
                         <tr key={pos.vault_address} data-testid="portfolio-position-row">
                           <td data-testid="portfolio-position-row-vault">{pos.vault_name}</td>
@@ -172,13 +217,15 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
                   })()}
                 </strong>
               </p>
+              <NavDisclosure testId="portfolio-position-nav-disclosure" />
 
               {/* Shared VaultPositionCard view — satisfies the shared-component
                   wiring requirement (issue #381). Each card is independently
                   visible and testable without the table. */}
               <div className="vault-card-grid" data-testid="portfolio-position-cards">
                 {state.positions.map((pos) => {
-                  const usdc = usdcValues[pos.vault_address.toLowerCase()];
+                  const usdc = valueOf(pos);
+                  const claim = exclusionClaims.get(pos.vault_address.toLowerCase());
                   return (
                     <VaultPositionCard
                       key={pos.vault_address}
@@ -187,11 +234,25 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
                       shares={formatSharesString(pos.shares, symbolOf(pos.vault_address))}
                       riskLabel={pos.risk_label}
                       usdcValue={usdc !== undefined ? formatUsdcString(usdc) : undefined}
+                      exclusionClaim={claim !== undefined ? formatUsdc(claim) : undefined}
                     />
                   );
                 })}
               </div>
             </>
+          )}
+
+          {claimsWithoutPosition.length > 0 && (
+            <div data-testid="portfolio-position-exclusion-only">
+              {claimsWithoutPosition.map(([vault, amount]) => (
+                <p key={vault} data-testid="portfolio-position-exclusion-only-row">
+                  Exclusion claim on vault <code>{vault}</code>:{" "}
+                  <strong>{formatUsdc(amount)}</strong>. It is USDC recovered from an adapter the
+                  vault excluded, owed to this address as a holder at the moment of exclusion, and
+                  it stays claimable after a full exit.
+                </p>
+              ))}
+            </div>
           )}
         </>
       )}

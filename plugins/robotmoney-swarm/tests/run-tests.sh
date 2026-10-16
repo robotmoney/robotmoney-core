@@ -5,17 +5,23 @@
 # Vote schema:    schemas/committee-vote.json
 #
 # NETWORK: one dependency, and only one. The four acceptance criteria below run
-# entirely offline against fixtures and a loopback HTTP server; AC-1's schema
-# validator is installed with `npm ci` from registry.npmjs.org (lockfile-pinned,
-# `--ignore-scripts`), so that single step needs the network and a registry
-# outage reds this suite. Everything else here — including the #1204 checksum and
-# BOOTSTRAP.md assertions — has no external dependency at all.
+# entirely offline against fixtures, a loopback HTTP server and a loopback
+# JSON-RPC stub; AC-1's schema validator is installed with `npm ci` from
+# registry.npmjs.org (lockfile-pinned, `--ignore-scripts`), so that single step
+# needs the network and a registry outage reds this suite. Everything else here —
+# including the #1204 checksum and BOOTSTRAP.md assertions — has no external
+# dependency at all. (When RMPC_BIN is unset the suite builds rmpc with cargo,
+# which fetches crates on a cold cache; suite-17 sets RMPC_BIN.)
 #
-# All four acceptance criteria are exercised:
+# All four acceptance criteria are exercised, AC-2..AC-4 against the REAL rmpc
+# binary and real rmpc configs (review finding DR-1; see the section that
+# resolves REAL_RMPC for why a fake rmpc is no longer used):
 #   AC-1: tilt-formation produces a vote JSON that passes ajv schema validation
-#   AC-2: skill aborts before calling rmpc when ic_contract_address is absent
+#   AC-2: skill aborts before calling rmpc when ic_policy_address is absent
 #   AC-3: skill aborts before calling rmpc when rationale_uri is unreachable
-#   AC-4: skill aborts and surfaces AgentNotRegistered when rmpc returns that error
+#   AC-4: skill aborts with AgentNotRegistered when rmpc reads hasRole(
+#         COMMITTEE_AGENT_ROLE) as false, and with AgentRoleUnreadable when the
+#         role cannot be read; it passes only when the role is held
 #
 # TEST-COVERAGE POLICY (loud-skip, never silent-skip; exit 0 != tested)
 # Every prerequisite this suite needs — jq, shellcheck, node/npm, python3 — is a
@@ -124,7 +130,14 @@ INSTALL_RMPC_SELFTEST="$REPO_ROOT/scripts/release/install-rmpc-selftest.sh"
 # restored: 62 passed / 4 failed; whole-file sweep restored: 65 / 1; allow-list
 # emptied: 55 / 11 — the last figure grew because #1237's extracted
 # `Validate inputs` step also stops resolving when the allow-list is empty).
-MIN_EXPECTED_ASSERTIONS=101
+#
+# Raised from 101 to 109 by review finding DR-1 (qa-plan-v1 task U1): AC-2..AC-4
+# now run the real rmpc instead of fake scripts. +1 the rmpc under test has
+# `committee check-agent`; +1 AC-2 the real rmpc refuses missing-ic-config.toml
+# for the same key; AC-4 went from 2 assertions to 8 (role held, role not held
+# with rmpc's ErrNotAllowlisted surfaced, RPC down, and no rmpc at all; the last
+# two printed PASS under the old guard).
+MIN_EXPECTED_ASSERTIONS=109
 
 PASS=0
 FAIL=0
@@ -149,9 +162,11 @@ require_tool jq         "parses plugin.json and the generated vote JSON"
 require_tool shellcheck "statically checks form-vote.sh / check-preflight.sh"
 require_tool node       "runs the ajv schema validator"
 require_tool npm        "installs ajv + ajv-formats for the validator"
-require_tool python3    "serves the local HTTP fixture used by AC-4"
+require_tool python3    "serves the local HTTP fixture and the JSON-RPC stub used by AC-4"
 require_tool curl       "probes the fixture HTTP server"
 echo "  OK: jq, shellcheck, node, npm, python3, curl all present"
+# cargo is required only to build rmpc when RMPC_BIN is unset; that check sits
+# with the build below.
 
 # Shared test inputs
 VAULT="0x1111111111111111111111111111111111111111"
@@ -381,34 +396,118 @@ VOTE_FLOOR=$("$FORM_VOTE" --regime risk_off --vault "$VAULT" --current-weight-bp
 TW_FLOOR=$(echo "$VOTE_FLOOR" | jq -r '.target_weight_bps')
 [[ "$TW_FLOOR" == "0" ]] && pass "risk_off floor at 0 (500-1000→0)" || fail "risk_off floor: target_weight_bps=$TW_FLOOR, expected 0"
 
-# ---------- AC-2: abort when ic_contract_address absent ----------
+# ---------- the REAL rmpc binary for AC-2..AC-4 (review finding DR-1) ----------
+# AC-2..AC-4 used to drive check-preflight.sh with fake rmpc scripts that
+# printed whatever the guard grepped for. That is how a guard 3 that called a
+# nonexistent `vote-submit --dry-run` and matched an error name rmpc never
+# prints (AgentNotRegistered; rmpc prints ErrNotAllowlisted) stayed green while
+# it passed every agent, and how fixtures keyed `ic_contract_address` (rmpc
+# reads `ic_policy_address`) stayed green while every real config aborted at
+# guard 1. Every preflight run below uses the real binary and fixtures that are
+# real rmpc configs.
+#
+# RMPC_BIN names a built rmpc (suite-17 builds one). Without it the suite builds
+# one with cargo. Loud-skip policy: no rmpc is a FATAL, never a skip.
 echo ""
-echo "--- AC-2: skill aborts before calling rmpc when ic_contract_address absent ---"
+echo "--- the real rmpc binary the preflight guard calls ---"
+
+PREFLIGHT_TMP="$(mktemp -d)"
+trap 'rm -rf "$AJV_TMP" "$PREFLIGHT_TMP"' EXIT
+
+if [[ -n "${RMPC_BIN:-}" ]]; then
+  REAL_RMPC="$RMPC_BIN"
+else
+  require_tool cargo "builds the real rmpc that check-preflight.sh guard 3 calls (or set RMPC_BIN to a built one)"
+  echo "  building rmpc with cargo (set RMPC_BIN to use a built one) ..."
+  if ! cargo build --quiet --locked --manifest-path "$REPO_ROOT/Cargo.toml" \
+       -p rust-payment-client --bin rmpc >"$PREFLIGHT_TMP/cargo-build.log" 2>&1; then
+    echo "FATAL: cargo build of rmpc failed; its output follows." >&2
+    cat "$PREFLIGHT_TMP/cargo-build.log" >&2
+    exit 1
+  fi
+  REAL_RMPC="${CARGO_TARGET_DIR:-$REPO_ROOT/target}/debug/rmpc"
+fi
+# Absolute, because run_preflight below runs from tests/fixtures/.
+[[ "$REAL_RMPC" == /* ]] || REAL_RMPC="$PWD/$REAL_RMPC"
+if [[ ! -x "$REAL_RMPC" ]]; then
+  echo "FATAL: the rmpc under test is not an executable file: $REAL_RMPC" >&2
+  exit 1
+fi
+# rmpc's diagnostic log is file-only; keep it out of the developer's home.
+export RMPC_LOG_DIR="$PREFLIGHT_TMP/rmpc-logs"
+
+# Captured first: under pipefail, `grep -q` closing the pipe early could fail
+# the producer and turn a match into a FAIL.
+RMPC_COMMITTEE_HELP=$("$REAL_RMPC" committee --help 2>&1 || true)
+if grep -q 'check-agent' <<<"$RMPC_COMMITTEE_HELP"; then
+  pass "the rmpc under test ($REAL_RMPC) has 'committee check-agent', the read guard 3 runs"
+else
+  fail "the rmpc under test ($REAL_RMPC) has no 'committee check-agent' — guard 3 cannot read COMMITTEE_AGENT_ROLE"
+fi
+
+# run_preflight <config> <rationale-uri> <rmpc> — run check-preflight.sh from
+# tests/fixtures/, because the fixtures' keystore_path is relative and rmpc
+# resolves it against the working directory. Sets PF_OUT and PF_EXIT.
+run_preflight() {
+  set +e
+  PF_OUT=$(cd "$FIXTURES" && "$CHECK_PREFLIGHT" \
+    --config "$1" \
+    --rationale-uri "$2" \
+    --rmpc "$3" 2>&1)
+  PF_EXIT=$?
+  set -e
+}
+
+# wait_up <url> [curl args...] — poll a loopback server until it answers.
+wait_up() {
+  local url="$1" attempt
+  shift
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    if curl --silent --output /dev/null --max-time 1 "$@" "$url" 2>/dev/null; then
+      return 0
+    fi
+    [[ $attempt -lt 10 ]] && sleep 0.2
+  done
+  return 1
+}
+
+# ---------- AC-2: abort when ic_policy_address absent ----------
+echo ""
+echo "--- AC-2: skill aborts before calling rmpc when ic_policy_address absent ---"
 
 MISSING_IC_CONFIG="$FIXTURES/missing-ic-config.toml"
-set +e
-PREFLIGHT_OUT=$("$CHECK_PREFLIGHT" \
-  --config "$MISSING_IC_CONFIG" \
-  --rationale-uri "$RATIONALE_URI" 2>&1)
-PREFLIGHT_EXIT=$?
-set -e
+run_preflight "$MISSING_IC_CONFIG" "$RATIONALE_URI" "$REAL_RMPC"
 
-if [[ $PREFLIGHT_EXIT -eq 2 ]]; then
-  pass "exited with code 2 (MissingICConfig) when ic_contract_address absent"
+if [[ $PF_EXIT -eq 2 ]]; then
+  pass "exited with code 2 (MissingICConfig) when ic_policy_address absent"
 else
-  fail "expected exit code 2, got $PREFLIGHT_EXIT (output: $PREFLIGHT_OUT)"
+  fail "expected exit code 2, got $PF_EXIT (output: $PF_OUT)"
 fi
 
-if echo "$PREFLIGHT_OUT" | grep -q "MissingICConfig"; then
+if echo "$PF_OUT" | grep -q "MissingICConfig"; then
   pass "error output mentions MissingICConfig"
 else
-  fail "error output does not mention MissingICConfig: $PREFLIGHT_OUT"
+  fail "error output does not mention MissingICConfig: $PF_OUT"
 fi
 
-if echo "$PREFLIGHT_OUT" | grep -q "ic_contract_address"; then
-  pass "error output mentions ic_contract_address"
+if echo "$PF_OUT" | grep -q "ic_policy_address"; then
+  pass "error output mentions ic_policy_address"
 else
-  fail "error output does not mention ic_contract_address: $PREFLIGHT_OUT"
+  fail "error output does not mention ic_policy_address: $PF_OUT"
+fi
+
+# Guard 1 and rmpc must agree on what "missing" means. The same file is a config
+# the real rmpc loads, and rmpc refuses it for the same absent key. A guard
+# grepping a key rmpc does not read (the DR-1 bug) cannot satisfy both this and
+# AC-4's passing case.
+set +e
+RMPC_MISSING_OUT=$(cd "$FIXTURES" && "$REAL_RMPC" committee --config "$MISSING_IC_CONFIG" check-agent 2>&1)
+RMPC_MISSING_EXIT=$?
+set -e
+if [[ $RMPC_MISSING_EXIT -eq 3 ]] && echo "$RMPC_MISSING_OUT" | grep -q '"error":"ErrIcContractNotConfigured"'; then
+  pass "the real rmpc refuses missing-ic-config.toml with ErrIcContractNotConfigured — guard 1 checks the key rmpc reads"
+else
+  fail "the real rmpc did not refuse missing-ic-config.toml with ErrIcContractNotConfigured (exit $RMPC_MISSING_EXIT, output: $RMPC_MISSING_OUT)"
 fi
 
 # ---------- AC-3: abort when rationale_uri unreachable ----------
@@ -416,111 +515,142 @@ echo ""
 echo "--- AC-3: skill aborts before calling rmpc when rationale_uri unreachable (mocked HTTP error) ---"
 
 # Use a URI that is guaranteed unreachable (loopback port that nothing listens on).
+# Guard 2 runs before guard 3, so the real rmpc is never invoked here.
 UNREACHABLE_URI="http://127.0.0.1:19999/nonexistent-rationale"
+run_preflight "$FIXTURES/valid-config.toml" "$UNREACHABLE_URI" "$REAL_RMPC"
 
-# Override RMPC to a no-op so guard 3 (AgentNotRegistered dry-run) never runs
-# and we isolate guard 2 (RationaleURIUnreachable).
-FAKE_RMPC="$(mktemp)"
-cat > "$FAKE_RMPC" <<'FAKERMPC'
-#!/usr/bin/env bash
-# Fake rmpc that always exits 0 — used to isolate preflight guard 2.
-exit 0
-FAKERMPC
-chmod +x "$FAKE_RMPC"
-
-set +e
-PREFLIGHT_OUT3=$("$CHECK_PREFLIGHT" \
-  --config "$FIXTURES/valid-config.toml" \
-  --rationale-uri "$UNREACHABLE_URI" \
-  --rmpc "$FAKE_RMPC" 2>&1)
-PREFLIGHT_EXIT3=$?
-set -e
-
-rm -f "$FAKE_RMPC"
-
-if [[ $PREFLIGHT_EXIT3 -eq 3 ]]; then
+if [[ $PF_EXIT -eq 3 ]]; then
   pass "exited with code 3 (RationaleURIUnreachable) for unreachable URI"
 else
-  fail "expected exit code 3, got $PREFLIGHT_EXIT3 (output: $PREFLIGHT_OUT3)"
+  fail "expected exit code 3, got $PF_EXIT (output: $PF_OUT)"
 fi
 
-if echo "$PREFLIGHT_OUT3" | grep -q "RationaleURIUnreachable"; then
+if echo "$PF_OUT" | grep -q "RationaleURIUnreachable"; then
   pass "error output mentions RationaleURIUnreachable"
 else
-  fail "error output does not mention RationaleURIUnreachable: $PREFLIGHT_OUT3"
+  fail "error output does not mention RationaleURIUnreachable: $PF_OUT"
 fi
 
-# ---------- AC-4: abort and surface AgentNotRegistered ----------
+# ---------- AC-4: guard 3 is a real hasRole(COMMITTEE_AGENT_ROLE) read ----------
 echo ""
-echo "--- AC-4: skill aborts and surfaces AgentNotRegistered when rmpc returns that error ---"
+echo "--- AC-4: skill aborts with AgentNotRegistered unless the real rmpc reads the role as held ---"
 
-# Create a fake rmpc that outputs AgentNotRegistered and exits non-zero.
-FAKE_RMPC_ANR="$(mktemp)"
-cat > "$FAKE_RMPC_ANR" <<'FAKERMPC_ANR'
-#!/usr/bin/env bash
-# Fake rmpc that returns AgentNotRegistered — used for AC-4 test.
-echo '{"error":"AgentNotRegistered","message":"the configured signing address is not a registered committee agent"}' >&2
-exit 3
-FAKERMPC_ANR
-chmod +x "$FAKE_RMPC_ANR"
+# Guard 2 runs first, so every case needs a reachable rationale_uri: a loopback
+# HTTP server over the fixtures directory. Guard 3's chain is
+# tests/ic-policy-rpc-stub.py on the port valid-config.toml's rpc_url names. It
+# answers only COMMITTEE_AGENT_ROLE() and hasRole(role, <keystore address>) on
+# the configured IC policy; any other question is a JSON-RPC error, which fails
+# closed. Its parameters are read out of the fixtures, not repeated here.
+VALID_CONFIG="$FIXTURES/valid-config.toml"
+RPC_STUB="$SCRIPT_DIR/ic-policy-rpc-stub.py"
+RPC_PORT=$(sed -n 's|^rpc_url[[:space:]]*=[[:space:]]*"http://127\.0\.0\.1:\([0-9][0-9]*\)/*".*|\1|p' "$VALID_CONFIG")
+STUB_CHAIN_ID=$(sed -n 's|^chain_id[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*|\1|p' "$VALID_CONFIG")
+IC_POLICY=$(sed -n 's|^ic_policy_address[[:space:]]*=[[:space:]]*"\(0x[0-9a-fA-F]*\)".*|\1|p' "$VALID_CONFIG")
+AGENT_ADDR=$(jq -r '.address' "$FIXTURES/agent-keystore.json")
+RPC_STUB_LOG="$PREFLIGHT_TMP/rpc-stub.log"
+RPC_PID=""
 
-# Provide a reachable rationale_uri by using an HTTP server fixture.
-# We mock it by patching the check-preflight logic: use a special env var
-# to skip the HTTP check and jump directly to the rmpc guard.
-# Since check-preflight.sh checks for curl return code, we point it at
-# a URI that curl can reach: the public loopback (always resolves to localhost).
-# We use --resolve to skip actual DNS/network and just test the rmpc guard.
-#
-# Simpler approach: create a temporary HTTP server on a known port.
-# Use python3 -m http.server if available, or nc.
+# start_rpc_stub <true|false> — serve hasRole = $1. Returns non-zero when the
+# stub does not answer, so the caller records a failure instead of a skip.
+start_rpc_stub() {
+  python3 "$RPC_STUB" --port "$RPC_PORT" --chain-id "$STUB_CHAIN_ID" \
+    --ic-policy "$IC_POLICY" --agent "$AGENT_ADDR" --has-role "$1" \
+    >>"$RPC_STUB_LOG" 2>&1 &
+  RPC_PID=$!
+  wait_up "http://127.0.0.1:$RPC_PORT/" -X POST -H 'Content-Type: application/json' \
+    --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'
+}
+
+stop_rpc_stub() {
+  if [[ -n "$RPC_PID" ]]; then
+    kill "$RPC_PID" 2>/dev/null || true
+    wait "$RPC_PID" 2>/dev/null || true
+    RPC_PID=""
+  fi
+}
+
 HTTP_PORT=18888
 python3 -m http.server "$HTTP_PORT" --directory "$FIXTURES" &>/dev/null &
 HTTP_PID=$!
-# Give the server a moment to start.
-sleep 0.3
 
-# Verify it started.
-HTTP_UP=false
-for _ in 1 2 3 4 5; do
-  if curl --silent --output /dev/null --max-time 1 "http://127.0.0.1:$HTTP_PORT/" 2>/dev/null; then
-    HTTP_UP=true
-    break
-  fi
-  sleep 0.2
-done
-
-if [[ "$HTTP_UP" == "true" ]]; then
-  set +e
-  PREFLIGHT_OUT4=$("$CHECK_PREFLIGHT" \
-    --config "$FIXTURES/valid-config.toml" \
-    --rationale-uri "http://127.0.0.1:$HTTP_PORT/" \
-    --rmpc "$FAKE_RMPC_ANR" 2>&1)
-  PREFLIGHT_EXIT4=$?
-  set -e
-
-  kill "$HTTP_PID" 2>/dev/null || true
-  wait "$HTTP_PID" 2>/dev/null || true
-  rm -f "$FAKE_RMPC_ANR"
-
-  if [[ $PREFLIGHT_EXIT4 -eq 4 ]]; then
-    pass "exited with code 4 (AgentNotRegistered) when rmpc returns that error"
-  else
-    fail "expected exit code 4, got $PREFLIGHT_EXIT4 (output: $PREFLIGHT_OUT4)"
-  fi
-
-  if echo "$PREFLIGHT_OUT4" | grep -q "AgentNotRegistered"; then
-    pass "error output mentions AgentNotRegistered"
-  else
-    fail "error output does not mention AgentNotRegistered: $PREFLIGHT_OUT4"
-  fi
-else
-  kill "$HTTP_PID" 2>/dev/null || true
-  rm -f "$FAKE_RMPC_ANR"
-  # Loud-skip policy: AC-4 must never silently opt out. python3 is a hard
-  # prerequisite (checked above), so a server that will not come up is a real
-  # failure of this environment, not a reason to declare the AC untested.
+if [[ -z "$RPC_PORT" || -z "$STUB_CHAIN_ID" || -z "$IC_POLICY" || -z "$AGENT_ADDR" || "$AGENT_ADDR" == "null" ]]; then
+  # Loud-skip policy: fixtures this section cannot read are a red, not a skip.
+  fail "could not read rpc_url port / chain_id / ic_policy_address from valid-config.toml or address from agent-keystore.json — AC-4 did not execute"
+elif ! wait_up "http://127.0.0.1:$HTTP_PORT/"; then
+  # python3 is a hard prerequisite (checked above), so a server that will not
+  # come up is a real failure of this environment, not a reason to skip AC-4.
   fail "could not start local HTTP server on port $HTTP_PORT — AC-4 did not execute"
+else
+  REACHABLE_URI="http://127.0.0.1:$HTTP_PORT/"
+
+  # (a) No chain answers. The DR-1 guard printed PASS here: it never read the
+  #     role at all. The answer is unknown, so the write is blocked.
+  run_preflight "$VALID_CONFIG" "$REACHABLE_URI" "$REAL_RMPC"
+  if [[ $PF_EXIT -eq 5 ]]; then
+    pass "exited with code 5 (AgentRoleUnreadable) when the RPC is down — an unread role is not a registered one"
+  else
+    fail "expected exit code 5 with the RPC down, got $PF_EXIT (output: $PF_OUT)"
+  fi
+  if echo "$PF_OUT" | grep -q "AgentRoleUnreadable"; then
+    pass "error output names AgentRoleUnreadable when the RPC is down"
+  else
+    fail "error output does not name AgentRoleUnreadable with the RPC down: $PF_OUT"
+  fi
+
+  # (b) No rmpc at all. The DR-1 guard skipped itself here and printed PASS.
+  run_preflight "$VALID_CONFIG" "$REACHABLE_URI" "$PREFLIGHT_TMP/no-such-rmpc"
+  if [[ $PF_EXIT -eq 5 ]]; then
+    pass "exited with code 5 (AgentRoleUnreadable) when rmpc is missing — guard 3 never skips itself"
+  else
+    fail "expected exit code 5 with no rmpc, got $PF_EXIT (output: $PF_OUT)"
+  fi
+
+  # (c) The chain says the agent does not hold COMMITTEE_AGENT_ROLE.
+  if start_rpc_stub false; then
+    run_preflight "$VALID_CONFIG" "$REACHABLE_URI" "$REAL_RMPC"
+    stop_rpc_stub
+    if [[ $PF_EXIT -eq 4 ]]; then
+      pass "exited with code 4 (AgentNotRegistered) when hasRole(COMMITTEE_AGENT_ROLE, agent) is false"
+    else
+      fail "expected exit code 4 for an unregistered agent, got $PF_EXIT (output: $PF_OUT; stub log: $(cat "$RPC_STUB_LOG"))"
+    fi
+    if echo "$PF_OUT" | grep -q "AgentNotRegistered"; then
+      pass "error output mentions AgentNotRegistered"
+    else
+      fail "error output does not mention AgentNotRegistered: $PF_OUT"
+    fi
+    if echo "$PF_OUT" | grep -q '"error":"ErrNotAllowlisted"'; then
+      pass "error output surfaces rmpc's own ErrNotAllowlisted refusal"
+    else
+      fail "error output does not surface rmpc's ErrNotAllowlisted: $PF_OUT"
+    fi
+  else
+    stop_rpc_stub
+    fail "could not start the JSON-RPC stub on port $RPC_PORT — AC-4 (unregistered agent) did not execute (stub log: $(cat "$RPC_STUB_LOG"))"
+  fi
+
+  # (d) The chain says the agent holds the role: the only case that passes.
+  if start_rpc_stub true; then
+    run_preflight "$VALID_CONFIG" "$REACHABLE_URI" "$REAL_RMPC"
+    stop_rpc_stub
+    if [[ $PF_EXIT -eq 0 ]]; then
+      pass "exited with code 0 when the real rmpc reads COMMITTEE_AGENT_ROLE as held for valid-config.toml"
+    else
+      fail "expected exit code 0 for a registered agent, got $PF_EXIT (output: $PF_OUT; stub log: $(cat "$RPC_STUB_LOG"))"
+    fi
+    if echo "$PF_OUT" | grep -q "all preflight guards passed"; then
+      pass "output reports all preflight guards passed for a registered agent"
+    else
+      fail "output does not report all preflight guards passed: $PF_OUT"
+    fi
+  else
+    stop_rpc_stub
+    fail "could not start the JSON-RPC stub on port $RPC_PORT — AC-4 (registered agent) did not execute (stub log: $(cat "$RPC_STUB_LOG"))"
+  fi
 fi
+
+kill "$HTTP_PID" 2>/dev/null || true
+wait "$HTTP_PID" 2>/dev/null || true
 
 # ---------- #1204: the rmpc install path verifies its checksum before installing ----------
 # release-rmpc.yml publishes `<archive>.tar.gz.sha256` alongside every archive,
@@ -562,11 +692,18 @@ echo "--- #1204: checksum-verified rmpc install (positive + corrupted + substitu
 # started counting build-matrix entries instead of `runner:` text anywhere in the
 # file (one assertion, on a zero-macOS fixture).
 #
+# 66 -> 73 with the tag-push-only release path: the installer must pin
+# --source-ref refs/tags/<TAG> and keep only push-triggered attestations (two
+# argv assertions), refuse an attestation that verifies but has no push trigger,
+# refuse a bare vX.Y.Z tag before downloading, and release-rmpc.yml must attest
+# only on the push of an rmpc-v* tag; its Validate inputs must refuse a
+# non-dry-run dispatch and still accept a dry run.
+#
 # This floor is no longer the only thing standing between a crashed selftest and
 # a green suite: the exit status and the RMPC_INSTALL_SELFTEST_EXECUTED contract
 # line are both asserted below. It used to be, and it worked only by arithmetic
 # accident — the known truncation point happened to land under it.
-MIN_INSTALL_SELFTEST_ASSERTIONS=66
+MIN_INSTALL_SELFTEST_ASSERTIONS=73
 
 if [[ ! -x "$INSTALL_RMPC_SELFTEST" ]]; then
   # Loud-skip policy: a missing selftest is a red suite, never a quiet pass.

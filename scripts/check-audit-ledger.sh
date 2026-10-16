@@ -28,7 +28,14 @@
 #     - EVERY finding-register data row carries a non-empty disposition drawn
 #       from {fixed, accepted-with-rationale, dismissed-with-rationale} and a
 #       non-empty "Checked against" value;
-#     - the register includes rows for the 2026-06-19 external scan (FS-* ids).
+#     - the register includes rows for the 2026-06-19 external scan (FS-* ids);
+#     - every review under docs/code-review/ dated REVIEW_KEY_FROM (2026-10-12)
+#       or later is keyed in REVIEW_KEYS, and each keyed review's numbered
+#       finding heading `### N.` has a register row `<KEY>-N`, with no
+#       `<KEY>-N` row left over for a heading that does not exist (issue #1792);
+#     - every `Name.sol:N` source cite exists and, when anchored by a
+#       `Name.symbol` before it in the row, is in or names that symbol
+#       (scripts/check_audit_source_cites.py, issue #1792).
 #   SECURITY.md:
 #     - exists at the repo root;
 #     - has a non-placeholder Disclosure address and a non-placeholder maximum
@@ -230,4 +237,98 @@ done <<< "${SHIPPED}"
 [ "${DELETED_IN_SOURCE}" -eq 0 ] || fail "${DELETED_IN_SOURCE} shipped source file(s) name deleted contracts (core 1492)"
 SHIPPED_COUNT="$(printf '%s\n' "${SHIPPED}" | wc -l | tr -d ' ')"
 
-echo "check-audit-ledger: OK (${SHIPPED_COUNT} shipped contracts all have ledger rows; finding register [${DATA_ROWS} rows] + SECURITY.md enforced)"
+# --- Review coverage: one register row per finding heading (issue #1792) ------
+# The 2026-10-12 security review sat in docs/code-review/ with nine findings and
+# no ledger row for any of them, while three older rows contradicted its source
+# checks (finding 9). A review numbers its findings as `### N. <title>`
+# headings. Each review in REVIEW_KEYS ("<file> <KEY>" per line) needs a
+# finding-register row `<KEY>-N` for every heading N, and a `<KEY>-N` row with
+# no heading N is stale. Every review .md dated REVIEW_KEY_FROM or later must be
+# keyed, so a new review cannot land without its rows. README.md and
+# `*-verification.md` companions are not reviews. Older reviews keep their
+# grouped or per-ID rows and are not keyed.
+REVIEW_DIR="${REPO_ROOT}/docs/code-review"
+REVIEW_KEY_FROM=20261012
+REVIEW_KEYS='20261012-security-review.md SR-1012
+20261015-review-security-claude.md SR-1015'
+[ -d "${REVIEW_DIR}" ] || fail "docs/code-review/ is missing; the ledger keys its reviews (issue #1792)"
+
+REGISTER_IDS="$(
+  awk '/^## Finding register/ { on = 1; next } on && /^## / { on = 0 } on && /^\|/' "${AUDITS_DOC}" \
+    | sed -nE 's/^\|[[:space:]]*([^|[:space:]]+)[[:space:]]*\|.*/\1/p' | sort -u
+)"
+KEYED_FILES="$(awk 'NF { print $1 }' <<< "${REVIEW_KEYS}")"
+COVERAGE_BAD=0
+HEADINGS_CHECKED=0
+
+for f in "${REVIEW_DIR}"/*.md; do
+  [ -f "${f}" ] || continue
+  base="$(basename "${f}")"
+  case "${base}" in
+    README.md | *-verification.md) continue ;;
+    # A measurement note with no numbered findings (V4 recorder sampling, issue 1793,
+    # PR 1824): its residual risks are dispositioned in the V4 adapter rows, not per heading.
+    20261014-code-review-internal-claude-v4-sampling-economics.md) continue ;;
+  esac
+  day="${base%%-*}"
+  [[ "${day}" =~ ^[0-9]{8}$ ]] || continue
+  [ "${day}" -ge "${REVIEW_KEY_FROM}" ] || continue
+  if ! grep -qxF "${base}" <<< "${KEYED_FILES}"; then
+    echo "  review has no ledger key: docs/code-review/${base} (add it to REVIEW_KEYS and a register row per finding heading)" >&2
+    COVERAGE_BAD=$((COVERAGE_BAD + 1))
+  fi
+done
+
+while read -r review key; do
+  [ -n "${review}" ] || continue
+  path="${REVIEW_DIR}/${review}"
+  if [ ! -f "${path}" ]; then
+    echo "  REVIEW_KEYS names a review that does not exist: docs/code-review/${review}" >&2
+    COVERAGE_BAD=$((COVERAGE_BAD + 1))
+    continue
+  fi
+  if ! grep -qF "${review}" "${AUDITS_DOC}"; then
+    echo "  docs/audits.md never names keyed review ${review} (${key})" >&2
+    COVERAGE_BAD=$((COVERAGE_BAD + 1))
+  fi
+  nums="$(sed -nE 's/^###[[:space:]]+([0-9]+)\.[[:space:]].*/\1/p' "${path}" | sort -u)"
+  if [ -z "${nums}" ]; then
+    echo "  keyed review has no numbered finding heading (### N.): docs/code-review/${review}" >&2
+    COVERAGE_BAD=$((COVERAGE_BAD + 1))
+    continue
+  fi
+  while read -r n; do
+    HEADINGS_CHECKED=$((HEADINGS_CHECKED + 1))
+    if ! grep -qxF "${key}-${n}" <<< "${REGISTER_IDS}"; then
+      echo "  finding heading '### ${n}.' in ${review} has no register row ${key}-${n}" >&2
+      COVERAGE_BAD=$((COVERAGE_BAD + 1))
+    fi
+  done <<< "${nums}"
+  rows="$(sed -nE "s/^${key}-([0-9]+)\$/\\1/p" <<< "${REGISTER_IDS}" | sort -u)"
+  stale="$(comm -23 <(printf '%s\n' "${rows}" | sed '/^$/d') <(printf '%s\n' "${nums}"))"
+  if [ -n "${stale}" ]; then
+    while read -r n; do
+      echo "  register row ${key}-${n} has no finding heading '### ${n}.' in ${review}" >&2
+      COVERAGE_BAD=$((COVERAGE_BAD + 1))
+    done <<< "${stale}"
+  fi
+done <<< "${REVIEW_KEYS}"
+
+[ "${HEADINGS_CHECKED}" -gt 0 ] || fail "no review finding heading was checked (zero checks would run)"
+[ "${COVERAGE_BAD}" -eq 0 ] || fail "${COVERAGE_BAD} review heading(s) or file(s) out of step with the finding register (issue #1792)"
+
+# --- Source line cites (issue #1792, QA plan v1 W2) ---------------------------
+# Each re-dispositioned row cites a source line. QA plan P1 moved the vault,
+# router and gateway bodies into linked libraries and every cite went stale
+# (some past the end of the file) with nothing failing. The helper checks each
+# `Name.sol:N` cite in docs/audits.md exists and, when the row names
+# `Name.symbol` before it, that the line is in or names that symbol. Its
+# self-test runs first, so a helper that stopped firing fails here.
+python3 "${SCRIPT_DIR}/check_audit_source_cites.py" --self-test >/dev/null \
+  || fail "check_audit_source_cites.py --self-test failed (the source-cite rule no longer fires)"
+CITES_REPORT="$(CHECK_REPO_ROOT="${REPO_ROOT}" python3 "${SCRIPT_DIR}/check_audit_source_cites.py" 2>&1)" || {
+  printf '%s\n' "${CITES_REPORT}" | sed 's/^/  /' >&2
+  fail "docs/audits.md cites a source line that does not exist or does not hold the named symbol (issue #1792)"
+}
+
+echo "check-audit-ledger: OK (${SHIPPED_COUNT} shipped contracts all have ledger rows; finding register [${DATA_ROWS} rows] + ${HEADINGS_CHECKED} review finding headings + source line cites + SECURITY.md enforced)"

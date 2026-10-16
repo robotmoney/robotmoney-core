@@ -1,0 +1,314 @@
+---
+title: "PortfolioRouterRedeemFloorTest"
+description: "rmAGENT as a registered router leg: the real AgentTokenVault, UniswapV4SwapAdapter and UniswapV4PriceRecorder over the mock PoolManager (the PortfolioRouterLegAvailability setup), so `previewRedeem`, the TWAP sale floor and the D5 sell anchor run production code. The holder deposits into the vault directly and exits it alone."
+---
+
+# PortfolioRouterRedeemFloorTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/PortfolioRouterRedeemFloor.t.sol)
+
+**Inherits:** Test
+
+rmAGENT as a registered router leg: the real AgentTokenVault, UniswapV4SwapAdapter and UniswapV4PriceRecorder
+over the mock PoolManager (the PortfolioRouterLegAvailability setup), so `previewRedeem`, the TWAP sale floor
+and the D5 sell anchor run production code. The holder deposits into the vault directly and exits it alone.
+
+## Constants
+
+### FEE
+
+<i>
+
+The RM V4 pool fee: 29100 hundredths of a bip, 291 bps (config/agent-token-shortlist.json).
+
+</i>
+
+```solidity
+uint24 internal constant FEE = 29100;
+```
+
+### SPACING
+
+```solidity
+int24 internal constant SPACING = 582;
+```
+
+### SHEET_NAV_DEVIATION_BPS
+
+<i>
+
+The rmAGENT sheet value (decision D10). It is also the D5 sell anchor threshold.
+
+</i>
+
+```solidity
+uint256 internal constant SHEET_NAV_DEVIATION_BPS = 400;
+```
+
+### DEPOSIT
+
+```solidity
+uint256 internal constant DEPOSIT = 1_000e6;
+```
+
+### TOLERANCE_BPS
+
+<i>
+
+The client tolerance under `previewRedeem` (dapp `ROUTER_SLIPPAGE_TOLERANCE_BPS`, QA plan U9).
+
+</i>
+
+```solidity
+uint256 internal constant TOLERANCE_BPS = 50;
+```
+
+### HOLD_TICKS
+
+<i>
+
+A held fall of 350 ticks (about 3.4 percent). The vault's own sale floor follows a dragged TWAP, and the D5
+anchor allows up to 4 percent under the 4 hour mean, so neither refuses it.
+
+</i>
+
+```solidity
+int24 internal constant HOLD_TICKS = 350;
+```
+
+### KEEPER_INTERVAL
+
+<i>
+
+The keeper cadence and the number of records: one 1800 s NAV window.
+
+</i>
+
+```solidity
+uint256 internal constant KEEPER_INTERVAL = 60;
+```
+
+### HOLD_RECORDS
+
+```solidity
+uint256 internal constant HOLD_RECORDS = 30;
+```
+
+## State Variables
+
+### pm
+
+```solidity
+MockV4PoolManager internal pm;
+```
+
+### rec
+
+```solidity
+UniswapV4PriceRecorder internal rec;
+```
+
+### adapter
+
+```solidity
+UniswapV4SwapAdapter internal adapter;
+```
+
+### agent
+
+```solidity
+AgentTokenVault internal agent;
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### rm
+
+```solidity
+TestERC20 internal rm;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### c0
+
+```solidity
+address internal c0;
+```
+
+### c1
+
+```solidity
+address internal c1;
+```
+
+### poolId
+
+```solidity
+bytes32 internal poolId;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### holder
+
+```solidity
+address internal holder = makeAddr("holder");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_key"></a>
+
+### _key
+
+```solidity
+function _key() internal view returns (IPoolManagerV4.PoolKey memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IPoolManagerV4.PoolKey` |  |
+
+<a id="_deposit-uint256"></a>
+
+### _deposit
+
+```solidity
+function _deposit(uint256 amount) internal returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="_floor-uint256"></a>
+
+### _floor
+
+<i>
+
+The client's floor: `previewRedeem(shares)` less `TOLERANCE_BPS`, rounded down.
+
+</i>
+
+```solidity
+function _floor(uint256 shares) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_oneleg-uint256-uint256"></a>
+
+### _oneLeg
+
+<i>
+
+The one-leg exit the dapp signs: `redeemFor(holder, holder, [rmAGENT], [shares], [floor], deadline)`.
+
+</i>
+
+```solidity
+function _oneLeg(uint256 shares, uint256 minAssets)
+        internal
+        view
+        returns (address[] memory vaults, uint256[] memory sharesPerLeg, uint256[] memory floors);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+| minAssets | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+| sharesPerLeg | `uint256[]` |  |
+| floors | `uint256[]` |  |
+
+<a id="_redeemfor-uint256-uint256"></a>
+
+### _redeemFor
+
+```solidity
+function _redeemFor(uint256 shares, uint256 minAssets) internal returns (uint256 paid);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+| minAssets | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| paid | `uint256` |  |
+
+<a id="test_redeemfor_singlelegfloorbindsonbasketvault"></a>
+
+### test_redeemFor_singleLegFloorBindsOnBasketVault
+
+E8 / SR-M16. ERC-4626 `redeem` takes no minimum out. A BasketVault's own sale floor is the TWAP value less
+`maxSlippageBps`, read at inclusion, and a held RM fall drags that TWAP with it (core 1793). So a direct
+redeem settles under what the holder was quoted and never reverts. The same exit as a one-leg `redeemFor`
+carries the quote-time floor (`previewRedeem` less 0.50 percent) and reverts `SlippageExceeded`, leaving
+the shares with the holder. Undisturbed, the same call pays above the floor and spends the exact router
+approval to zero. After the refusal, a fresh quote exits at the new price through the same route.
+
+```solidity
+function test_redeemFor_singleLegFloorBindsOnBasketVault() public;
+```
+

@@ -10,7 +10,9 @@
  * `playwright.config.ts`, or in the smoke-test harness sets either variable, so
  * between `b3ed4dc1` and this change `AC-CORE-08`'s claim — "browser tests cover
  * all four state dimensions and the required explanatory language" — executed on
- * ZERO runs while reporting skipped-green on every PR.
+ * ZERO runs while reporting skipped-green on every PR. Since QA plan v1 T5 the
+ * default config does not collect that spec at all, and it fails (not skips)
+ * without a receipt under `playwright.fusion.config.ts`.
  *
  * This spec is the standing gate underneath it. Its subject is the pair of
  * receipts the `--full-stack` smoke-test harness seeds unless

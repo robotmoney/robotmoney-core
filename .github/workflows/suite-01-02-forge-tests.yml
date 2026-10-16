@@ -155,7 +155,7 @@ jobs:
         run: >-
           forge test -vvv
           --no-match-test "^testFail_"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,FourVaultInitialState,UpgradeLifecycleFork}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,RecorderManipulationFork,FourVaultInitialState,UpgradeLifecycleFork}.t.sol"
 
       # Issue 1808: governed UUPS upgrades and the one-way freeze of the ten proxied core contracts
       # (implementation lock, initializer replay, release mode, timelock-only authority, freeze at
@@ -422,6 +422,8 @@ jobs:
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/RwaBasketVaultFork.t.sol"
       - name: forge test (V4 swap adapter and price recorder against the real Base PoolManager and the live RM pool — core 1676)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/UniswapV4SwapAdapterFork.t.sol"
+      - name: forge test (a held RM price drags the recorder sell floor; the USDC sell anchor bounds it, live RM pool — core 1793)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/RecorderManipulationFork.t.sol"
       - name: forge test (V4 recorder sampling cannot distort the deployed rmAGENT NAV profitably — core 1793)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/V4RecorderSamplingEconomicsFork.t.sol"
       - name: forge test (rmRWA adds the four Coinbase B20 tokens through the real timelock - core 1500)
@@ -569,7 +571,7 @@ jobs:
           forge coverage --report lcov
           --no-match-test "^testFail_"
           --no-match-contract "VaultCodeSizeGuard|GatewayAgentPolicyCodeSizeGuard"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,UpgradeLifecycleFork}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,RecorderManipulationFork,UpgradeLifecycleFork}.t.sol"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info

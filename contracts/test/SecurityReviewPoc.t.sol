@@ -17,8 +17,10 @@ contract SecurityReviewPoc is RobotMoneyVaultTest {
 
         assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "single balance counted once");
         uint256 aliceShares = vault.balanceOf(alice);
+        uint256 before = usdc.balanceOf(alice);
         vm.prank(alice);
         vault.redeem(aliceShares, alice, alice);
+        assertApproxEqAbs(usdc.balanceOf(alice) - before, 1_000 * ONE_USDC, 2, "alice at par");
     }
 
     /// Remediated by core 1788 (PR 1814): deposits close while a funded adapter is excluded
@@ -39,11 +41,14 @@ contract SecurityReviewPoc is RobotMoneyVaultTest {
         vm.expectRevert();
         vault.deposit(1_000 * ONE_USDC, bob);
 
+        // core 1820: restoration realises the excluded balance into the exclusion record, so
+        // alice's full claim is her shares plus her record claim.
         vm.prank(admin);
         vault.setAdapterAllowed(address(second), true);
         assertGt(vault.maxDeposit(bob), 0, "deposits reopen after restoration");
         assertApproxEqAbs(
-            vault.convertToAssets(vault.balanceOf(alice)),
+            vault.convertToAssets(vault.balanceOf(alice))
+                + vault.exclusionLedger().claimable(1, alice),
             2_000 * ONE_USDC,
             2,
             "alice keeps full claim"

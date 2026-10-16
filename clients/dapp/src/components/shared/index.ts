@@ -17,3 +17,6 @@ export type { ProportionPreviewProps } from "./ProportionPreview";
 
 export { ReceiptValueDisplay } from "./ReceiptValueDisplay";
 export type { ReceiptValueDisplayProps } from "./ReceiptValueDisplay";
+
+export { NavDisclosure, NAV_DISCLOSURE_TEXT } from "./NavDisclosure";
+export type { NavDisclosureProps } from "./NavDisclosure";

@@ -38,8 +38,8 @@ describe("implicit masks (found in the first Twin rehearsal)", () => {
     // a length that reaches past the start of the code masks nothing either
     expect(implicitRefs("0xa2bbcc" + "00ff", true)).toEqual([]);
   });
-  test("issue 1842: the trailer of a real solc artifact (the committed TimelockController build) is masked, a CBOR map of the length its last two bytes give", () => {
-    const art = JSON.parse(readFileSync(join(import.meta.dir, "..", "fixtures", "build-out", "TimelockController.sol", "TimelockController.json"), "utf8"));
+  test("issue 1842: the trailer of a real solc artifact (the committed ProposerFloorTimelock build) is masked, a CBOR map of the length its last two bytes give", () => {
+    const art = JSON.parse(readFileSync(join(import.meta.dir, "..", "fixtures", "build-out", "ProposerFloorTimelock.sol", "ProposerFloorTimelock.json"), "utf8"));
     const hex = String(art.deployedBytecode.object).replace(/^0x/, "");
     const total = hex.length / 2, len = parseInt(hex.slice(-4), 16);
     expect(len).toBeGreaterThan(0);

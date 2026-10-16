@@ -29,6 +29,11 @@
 # - fork_indexer needs the Twin fork (TWIN_RPC_URL, started by .github/actions/twin-fork at the run
 #   pin) and the publish-contracts run (the one deploy driver in this repo), because it deploys its own vault.
 #   A rate-limited upstream (HTTP 429) is retried by anvil and the twin-fork tool.
+# - EXECUTED FLOORS (QA plan v1 T5). Every cargo_test_require_executed.sh call here names its
+#   floor, and the floor is the number of tests the call selects, so one test fewer is red. Before
+#   T5 most calls kept the default floor of 1: the seven read-path targets (49 tests) were green with
+#   one. .github/scripts/check_executed_floors.py (suite 14) counts the tests each call selects and
+#   fails when a floor differs: adding or removing a test means editing its floor in the same PR.
 
 name: explorer-indexer-migrations-reorg
 
@@ -101,21 +106,25 @@ jobs:
         working-directory: services/explorer-indexer
         run: cargo test --no-run
 
+      # QA plan v1 T5: a renamed test would make this filter match nothing, and a bare cargo test
+      # passes with zero tests, so it runs through the executed-test guard too.
       - name: ABI drift gate
         working-directory: services/explorer-indexer
-        run: cargo test --lib -- abi::tests::abi_drift_gate --nocapture
+        run: |
+          CARGO_TEST_MIN_EXECUTED=1 bash ../../.github/scripts/cargo_test_require_executed.sh \
+            --lib -- abi::tests::abi_drift_gate --nocapture
 
-      # Vault risk_label classifier (issue 1566). Fails if zero tests ran.
+      # Vault risk_label classifier (issue 1566). Fails below its six tests.
       - name: Vault risk_label classifier lib tests
         run: |
-          bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=6 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- indexer::tests::risk_label --nocapture
 
       # RPC URL redaction (issue 1729). A keyed RPC URL must never reach logs or
-      # indexer_runs.error. Fails if zero tests ran.
+      # indexer_runs.error. Fails below the eight rpc::tests (QA plan v1 T5).
       - name: RPC transport error URL redaction lib tests
         env:
-          CARGO_TEST_MIN_EXECUTED: "3"
+          CARGO_TEST_MIN_EXECUTED: "8"
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- rpc::tests --nocapture
@@ -137,7 +146,7 @@ jobs:
         env:
           EXPLORER_INDEXER_REQUIRE_PG: "1"
         run: |
-          bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=24 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
             --test migrations -- --test-threads=1 --nocapture
 
@@ -145,7 +154,7 @@ jobs:
         working-directory: services/explorer-indexer
         run: |
           echo "::group::services/explorer-indexer/tests/idempotency.rs:"
-          CARGO_TEST_MIN_EXECUTED=3 bash ../../.github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=4 bash ../../.github/scripts/cargo_test_require_executed.sh \
             --test idempotency -- --nocapture
           echo "::endgroup::"
 
@@ -162,7 +171,7 @@ jobs:
         run: |
           CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test rpc_retry -- --nocapture
-          CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=9 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- rpc::tests indexer::tests::configured_start_block --nocapture
           CARGO_TEST_MIN_EXECUTED=3 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --bin indexer -- --nocapture
@@ -178,14 +187,14 @@ jobs:
       # the lib step runs the proxy decode and RouterGovernance watch tests (floor 7).
       # Issue 1856: a refused or cursorless backfill is saved and retried, and the backfill scans one
       # slice per tick, resumes from its saved checkpoint and stops at the cursor after a rollback
-      # (floor 13 = the tests the target holds).
+      # (floor 14 = the tests the target holds).
       - name: Refused RPC, Timelock and Safe events, chain head, paused snapshots (issues 1731, 1840, 1856)
         env:
           EXPLORER_INDEXER_REQUIRE_PG: "1"
         run: |
           CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test rpc_refused -- --nocapture
-          CARGO_TEST_MIN_EXECUTED=13 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=14 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test admin_events_and_progress -- --test-threads=1 --nocapture
           CARGO_TEST_MIN_EXECUTED=7 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- indexer::tests::refusal_backoff indexer::tests::timelock_and_safe indexer::tests::call_scheduled indexer::tests::safe_ indexer::tests::proxy_ indexer::tests::router_governance --nocapture
@@ -206,7 +215,7 @@ jobs:
         env:
           EXPLORER_INDEXER_REQUIRE_PG: "1"
         run: |
-          CARGO_TEST_MIN_EXECUTED=6 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=8 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test vault_snapshot_cadence -- --test-threads=1 --nocapture
 
       # Two targets that landed on fusion/deployment-workflow without a job
@@ -225,9 +234,9 @@ jobs:
         env:
           EXPLORER_INDEXER_REQUIRE_PG: "1"
         run: |
-          CARGO_TEST_MIN_EXECUTED=1 bash .github/scripts/cargo_test_require_executed.sh \
-            -p explorer-indexer --test catch_up_budget -- --nocapture
           CARGO_TEST_MIN_EXECUTED=3 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --test catch_up_budget -- --nocapture
+          CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- rpc::tests::backoff rpc::tests::retry_after indexer::tests::catch_up --nocapture
 
       - name: Postgres env requirement
@@ -245,7 +254,7 @@ jobs:
       # tests fails RED instead of passing as a silent skip.
       - name: Consensus receipt indexing + reorg rewrite
         run: |
-          bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=20 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
             --test consensus_receipt_indexing -- --nocapture
 
@@ -290,13 +299,16 @@ jobs:
           EXPLORER_INDEXER_REQUIRE_PG: "1"
         run: |
           echo "::group::services/explorer-indexer/tests/cursor_header_reorg.rs:"
-          bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=3 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
             --test cursor_header_reorg \
             -- --test-threads=1 --nocapture
           echo "::endgroup::"
           echo "::group::services/explorer-indexer/tests/reorg_cursor_vault_status.rs:"
-          bash .github/scripts/cargo_test_require_executed.sh \
+          # 63 tests: reorg_cursor_vault_status 15, account_history 9, account_position_vote_power 1,
+          # committee_indexing 11, multi_vault 4, vault_detail 16, vault_registry 7 (QA plan v1 T5; C1
+          # removed the governance-vote cases with the voting tables).
+          CARGO_TEST_MIN_EXECUTED=63 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
             --test reorg_cursor_vault_status \
             --test account_history \
@@ -351,7 +363,8 @@ jobs:
       - name: explorer-api committee + regime + consensus-receipt endpoint tests
         run: |
           echo "::group::clients/explorer-api/tests/consensus_receipt_api.rs:"
-          bash .github/scripts/cargo_test_require_executed.sh \
+          # 14 tests: committee_api 5, regime_api 1, consensus_receipt_api 8 (QA plan v1 T5).
+          CARGO_TEST_MIN_EXECUTED=14 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test committee_api \
             --test regime_api \
@@ -379,7 +392,9 @@ jobs:
       # dominated by endpoints.rs booting a seeded container per test.
       - name: explorer-api HTTP contract, CORS, router shape, schema parity
         run: |
-          bash .github/scripts/cargo_test_require_executed.sh \
+          # 58 tests: endpoints 51, router_introspection 1, cors 4, canonical_schema 2 (QA plan v1 T5; C1
+          # removed the /v1/governance/proposals cases with the route).
+          CARGO_TEST_MIN_EXECUTED=60 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test endpoints \
             --test router_introspection \
@@ -390,10 +405,10 @@ jobs:
       # row, vaults carry their own deposits_paused flag, and the Safe, the timelock and their events are
       # listed. Issue 1840: a contract with only a freeze row reports that row's implementation.
       # Issue 1856: /health reports the proxy upgrade backfill state.
-      # Testcontainer Postgres, same Docker check as above. Floor = the ten tests the target holds.
+      # Testcontainer Postgres, same Docker check as above. Floor = the twelve tests the target holds.
       - name: explorer-api index cursor, chain head, deposits_paused, admin events (issues 1731, 1840, 1856)
         run: |
-          CARGO_TEST_MIN_EXECUTED=10 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=12 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test progress_and_admin -- --test-threads=1 --nocapture
 
@@ -402,7 +417,7 @@ jobs:
       # Testcontainer Postgres, same Docker check as above.
       - name: explorer-api boot-time schema guard (compiled binary)
         run: |
-          bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=2 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test boot_schema_guard -- --nocapture
 
@@ -457,7 +472,7 @@ jobs:
       - name: Fork indexer test (own vault on the Twin chain)
         working-directory: services/explorer-indexer
         run: |
-          CARGO_TEST_MIN_EXECUTED=1 bash ../../.github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=2 bash ../../.github/scripts/cargo_test_require_executed.sh \
             --test fork_indexer -- --nocapture
 
       - name: Stop the Twin fork and save its RPC cache

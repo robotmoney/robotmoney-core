@@ -14,7 +14,8 @@
  *   5. Assert PositionSelector lists the vault position.
  *   6. Click the position — input should pre-fill with the share balance.
  *   7. Assert the withdrawal preview shows net USDC (previewRedeem hint).
- *   8. Click "Sign withdraw with wallet" and assert receipt balance decrements.
+ *   8. Approve the router when the route needs it (QA plan D9), click "Sign
+ *      withdraw with wallet" and assert receipt balance decrements.
  */
 import { test, expect } from "./helpers/fixtures";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -29,7 +30,9 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { sendBufferedTransaction } from "./helpers/gas";
+import { syncBrowserClockToChain } from "./helpers/chainClock";
 import { openDapp, openTab } from "./helpers/wallet";
+import { signWithdraw } from "./helpers/withdraw";
 import { erc20Abi, vaultAbi } from "../../src/lib/abi";
 
 const DEPOSIT_USDC = 5_000_000n; // 5 USDC
@@ -156,7 +159,10 @@ test.describe("Multi-vault withdrawal — PositionSelector and previewRedeem on 
       });
     });
 
-    // Step 3: open dapp and navigate to Deposit & Withdraw tab.
+    // Step 3: open dapp and navigate to Deposit & Withdraw tab. The router redeem's deadline is built
+    // from the browser clock and checked against the chain's block time, and the devnet's boot warps
+    // chain time ahead of the wall clock, so the browser takes the chain's time first.
+    await syncBrowserClockToChain(page, endpoints.rpc_url);
     await openDapp(page, endpoints, { role: "admin" });
     await openTab(page, "deposit-withdraw");
 
@@ -180,14 +186,13 @@ test.describe("Multi-vault withdrawal — PositionSelector and previewRedeem on 
     await expect(previewHint).toBeVisible({ timeout: 30_000 });
     await expect(previewHint).toContainText("USDC");
 
-    // Step 8: the TxPreview block renders the redeem calldata.
+    // Step 8: the TxPreview block renders the redeem calldata: "redeemFor" on
+    // the router route (QA plan D9), "redeem" on the direct one.
     const redeemPreviewFn = page.getByTestId("withdraw-form").getByTestId("tx-preview-fn");
     await expect(redeemPreviewFn).toContainText("redeem", { timeout: 10_000 });
 
-    // Step 9: sign the withdraw.
-    const withdrawSubmit = page.getByTestId("withdraw-submit");
-    await expect(withdrawSubmit).toBeEnabled({ timeout: 30_000 });
-    await withdrawSubmit.click();
+    // Step 9: approve the router when the route needs it, then sign the withdraw.
+    await signWithdraw(page);
 
     // Step 10: wait for receipt balance to decrease.
     const sharesAfter = await waitUntil(async () => {

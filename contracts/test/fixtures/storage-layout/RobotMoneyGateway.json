@@ -1,4 +1,5 @@
 {
+  "enums": {},
   "libraries": [
     "contracts/lib/GatewayWindows.sol:GatewayWindows",
     "contracts/lib/GovernedUUPS.sol:GovernedUpgrade"

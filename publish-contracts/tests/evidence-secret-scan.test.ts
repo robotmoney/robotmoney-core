@@ -59,6 +59,15 @@ describe("secret scan over the evidence folder", () => {
     writeFileSync(join(oneLine, "iso.json"), JSON.stringify({ configHashes: { "config/a.json": `sha256:${h}` } }) + "\n");
     expect(scanEvidenceFolder(oneLine).join()).toContain("64-hex");
   });
+  test("a pool_id value in a compact manifest is public, the same value under another key still is flagged", () => {
+    const id = `0x${"f2".repeat(32)}`;
+    const ok = scratch();
+    writeFileSync(join(ok, "m.json"), `{"vault":"0x28C5ca4DF0107679bFcc9b0ad4c2f3F209b8f797","assets":[{"pool_id":"${id}"},{"pool_id":"0x${"00".repeat(32)}"}]}\n`);
+    expect(scanEvidenceFolder(ok)).toEqual([]);
+    const other = scratch();
+    writeFileSync(join(other, "m.json"), `{"pool_id":"${id}","key":"${id}"}\n`);
+    expect(scanEvidenceFolder(other).join()).toContain("64-hex");
+  });
   test("a keystore, an assignment and a mnemonic are found", () => {
     const d = scratch(); mkdirSync(join(d, "sub"));
     writeFileSync(join(d, "sub", "ks.json"), '{"crypto": {"ciphertext": "00"}}\n');
@@ -66,6 +75,37 @@ describe("secret scan over the evidence folder", () => {
     writeFileSync(join(d, "m.txt"), "abandon ability able about above absent absorb abstract absurd abuse access accident\n");
     const r = scanEvidenceFolder(d).join("\n");
     expect(r).toContain("keystore json"); expect(r).toContain("secret assignment"); expect(r).toContain("mnemonic");
+  });
+  // Security round 1: a prefixed secret name hid behind the leading \b (the `_` before PASSWORD is a word character), and `passphrase` was not a name at all.
+  test("a prefixed password, passphrase or API key assignment is found, each on its own line", () => {
+    const lines = [
+      "CHAIN_SIGNER_PASSWORD=hunter2hunter2",
+      "ETH_KEYSTORE_PASSWORD=hunter2hunter2",
+      "ALCHEMY_API_KEY=abcdefghijk12345",
+      '{"passphrase": "hunter2hunter2"}',
+      "SAFE_OWNER_A_PASSWORD=hunter2hunter2",
+      "DEPLOYER_PRIVATE_KEY=abcdefghijk12345",
+      "export RELAYER_MNEMONIC=abcdefghijk12345",
+      "WEBHOOK_SECRET=abcdefghijk12345",
+    ];
+    for (const line of lines) {
+      const d = scratch();
+      writeFileSync(join(d, "log.txt"), `${line}\n`);
+      expect([line, scanEvidenceFolder(d).join()]).toEqual([line, expect.stringContaining("secret assignment")]);
+    }
+  });
+  test("mutation: the redacted forms and names that only contain a secret word scan clean", () => {
+    const d = scratch();
+    writeFileSync(join(d, "log.txt"), ['{"passphrase": "[redacted]"}', "CHAIN_SIGNER_PASSWORD=[redacted]", '{"passphrase_source": "prompt"}', '{"secret_scan": "clean"}', "token_out=0x" + "ab".repeat(20)].join("\n") + "\n");
+    expect(scanEvidenceFolder(d)).toEqual([]);
+  });
+  // Issue 1689 acceptance, kept through the merge: a whole-line JSON bytes32 is exempt from the 64-hex rule, so a key that names a secret must be caught by name.
+  test("a pretty-printed privateKey, private_key or authToken line holding a bytes32 is flagged by name", () => {
+    for (const line of [`  "privateKey": "0x${"ab".repeat(32)}",`, `  "private_key": "0x${"cd".repeat(32)}"`, `  "authToken": "0x${"ef".repeat(32)}",`]) {
+      const d = scratch();
+      writeFileSync(join(d, "evidence.json"), `{\n${line}\n}\n`);
+      expect([line, scanEvidenceFolder(d).join()]).toEqual([line, expect.stringContaining("secret assignment")]);
+    }
   });
   test("every committed evidence folder is clean", () => {
     const root = resolve(import.meta.dir, "..", "..");

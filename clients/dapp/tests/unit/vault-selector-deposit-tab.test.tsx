@@ -131,12 +131,15 @@ const mockState: WagmiMockState = {
 
 /** Every option object `useReadContracts` (the depositsPaused() reads) was called with. */
 const readsSeen = vi.hoisted((): { contracts: unknown[]; query?: { enabled?: boolean } }[] => []);
+/** Every option object the live registry `getVault` read was called with (QA plan U5). */
+const getVaultReads = vi.hoisted((): { chainId?: number; query?: { enabled?: boolean } }[] => []);
 
 vi.mock("wagmi", () => ({
   // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
   useReadContracts: (opts: { contracts: unknown[]; query?: { enabled?: boolean } }) => {
     readsSeen.push(opts);
-    return mockState.vaultDepositsPaused === undefined
+    // A disabled query has no data, as in wagmi: a read the guard did not allow gives no answer.
+    return mockState.vaultDepositsPaused === undefined || opts.query?.enabled === false
       ? { data: undefined }
       : {
           data: opts.contracts.map(() => ({
@@ -154,7 +157,10 @@ vi.mock("wagmi", () => ({
     if (opts.functionName === "allowance") return { data: mockState.allowance, refetch: vi.fn() };
     if (opts.functionName === "balanceOf") return { data: mockState.usdcBalance };
     if (opts.functionName === "previewDeposit") return { data: mockState.previewDepositShares };
-    if (opts.functionName === "getVault") return { data: mockState.liveVaultRecord };
+    if (opts.functionName === "getVault") {
+      getVaultReads.push(opts as { chainId?: number; query?: { enabled?: boolean } });
+      return { data: mockState.liveVaultRecord };
+    }
     if (opts.functionName === "depositsPaused") return { data: mockState.vaultDepositsPaused };
     return { data: undefined };
   },
@@ -453,6 +459,44 @@ describe("VaultSelectorDepositTab submit disabled when vault deposits are paused
     fireEvent.change(screen.getByTestId("vault-selector"), { target: { value: VAULT_A } });
     expect(readsSeen.every((r) => r.query?.enabled === false)).toBe(true);
     mockState.chainId = undefined;
+  });
+
+  // Issue 1737 part 4 (QA plan U5): the live registry status is read on the guard's chain, and a
+  // wallet on another chain neither runs the read nor has its answer trusted.
+  it("the live getVault read carries the target chainId and its answer is ignored off Base", () => {
+    getVaultReads.length = 0;
+    mockState.chainId = 8453;
+    render(
+      <RuntimeConfigProvider config={{ VITE_ENV_CLASS: "mainnet" }}>
+        <VaultSelectorDepositTab usdcAddress={USDC} registryAddress={REGISTRY} ctx={ctx} />
+      </RuntimeConfigProvider>,
+    );
+    fireEvent.change(screen.getByTestId("vault-selector"), { target: { value: VAULT_A } });
+    const onBase = getVaultReads[getVaultReads.length - 1]!;
+    expect(onBase.chainId).toBe(8453);
+    expect(onBase.query?.enabled).toBe(true);
+    cleanup();
+
+    // A wallet on chain 1 whose (wrong-chain) answer says Active must not open the form.
+    getVaultReads.length = 0;
+    mockState.chainId = 1;
+    const active = mockState.liveVaultRecord;
+    try {
+      render(
+        <RuntimeConfigProvider config={{ VITE_ENV_CLASS: "mainnet" }}>
+          <VaultSelectorDepositTab usdcAddress={USDC} registryAddress={REGISTRY} ctx={ctx} />
+        </RuntimeConfigProvider>,
+      );
+      fireEvent.change(screen.getByTestId("vault-selector"), { target: { value: VAULT_A } });
+      expect(getVaultReads.every((r) => r.query?.enabled === false)).toBe(true);
+      const amount = screen.getByTestId("vault-selector-deposit-amount") as HTMLInputElement;
+      const submit = screen.getByTestId("vault-selector-deposit-submit") as HTMLButtonElement;
+      expect(amount.disabled).toBe(true);
+      expect(submit.disabled).toBe(true);
+    } finally {
+      mockState.liveVaultRecord = active;
+      mockState.chainId = undefined;
+    }
   });
 });
 

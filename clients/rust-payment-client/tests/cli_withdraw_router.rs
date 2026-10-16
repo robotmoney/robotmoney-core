@@ -7,7 +7,8 @@
 //! were exercised through `run()`. This suite mirrors `cli_withdraw.rs`,
 //! plus the two things that are router-specific: the identity-bound
 //! `vaults[i]` / `sharesPerLeg[i]` pairing (issue #967) and the explicit
-//! `--confirm` gate.
+//! `--confirm` gate. QA plan U6 adds the required slippage floor, the full
+//! preview, and the pre-sign simulation that names a router revert.
 //!
 //! CI: run by `suite-07-rmpc-integration.yml`'s `rmpc-parity` job, which
 //! names this binary explicitly with `--test cli_withdraw_router`.
@@ -18,9 +19,11 @@ mod common;
 use crate::common::{
     enc_bool, enc_u256, install_happy_path_mocks, install_withdraw_preflight_mocks, jrpc_result,
     jrpc_result_raw, match_eth_call_selector, selector_hex_of, Fixture, ASSET_RECIPIENT, GATEWAY,
-    SIGNER_ADDRESS, TEST_PASSPHRASE, VAULT,
+    SHARE_RECEIVER, SIGNER_ADDRESS, TEST_PASSPHRASE, VAULT,
 };
-use alloy_primitives::{address, b256, hex as ahex, Address, Bytes, LogData, B256, U256};
+use alloy_primitives::{
+    address, b256, hex as ahex, keccak256, Address, Bytes, LogData, B256, U256,
+};
 use alloy_sol_types::{SolCall, SolEvent};
 use assert_cmd::Command;
 use mockito::Matcher;
@@ -43,6 +46,9 @@ const VAULT_B: Address = address!("0000000000000000000000000000000000000d01");
 
 const LEG_A: u64 = 300_000;
 const LEG_B: u64 = 200_000;
+/// Per-leg slippage floors `router_args` passes (QA plan U6: required).
+const FLOOR_A: u64 = LEG_A - 1_000;
+const FLOOR_B: u64 = LEG_B - 1_000;
 
 fn fee_history_body() -> String {
     r#"{
@@ -211,9 +217,16 @@ fn unique_state_dir() -> std::path::PathBuf {
     ))
 }
 
-/// A two-leg router withdrawal. `--confirm` is added by the callers that
-/// want to get past the preview gate.
+/// A two-leg router withdrawal with per-leg floors. `--confirm` is added by
+/// the callers that want to get past the preview gate.
 fn router_args(config_path: &str, state_dir: &std::path::Path) -> Command {
+    let mut cmd = router_args_without_floor(config_path, state_dir);
+    cmd.args(["--min-assets-per-leg", &format!("{FLOOR_A},{FLOOR_B}")]);
+    cmd
+}
+
+/// [`router_args`] minus `--min-assets-per-leg`.
+fn router_args_without_floor(config_path: &str, state_dir: &std::path::Path) -> Command {
     let mut cmd = rmpc();
     cmd.env(
         PASSPHRASE_ENV_VAR,
@@ -325,7 +338,159 @@ async fn router_without_confirm_previews_and_never_broadcasts() {
     assert!(String::from_utf8(out.stderr.clone())
         .unwrap()
         .contains("preview"));
+    // QA plan U6, finding DR-6: the preview names everything --confirm
+    // would sign: each vault with its shares and floor, whose shares are
+    // pulled, where the USDC lands, and the gas against the gateway floor.
+    let p = &v["preview"];
+    assert_eq!(p["gateway"], format!("{GATEWAY:#x}"));
+    assert_eq!(p["share_holder"], format!("{SHARE_RECEIVER:#x}"));
+    assert_eq!(p["asset_recipient"], format!("{ASSET_RECIPIENT:#x}"));
+    assert_eq!(
+        p["legs"],
+        json!([
+            {"vault": format!("{VAULT:#x}"), "shares": LEG_A.to_string(), "min_assets": FLOOR_A.to_string()},
+            {"vault": format!("{VAULT_B:#x}"), "shares": LEG_B.to_string(), "min_assets": FLOOR_B.to_string()},
+        ])
+    );
+    assert_eq!(p["total_shares"], (LEG_A + LEG_B).to_string());
+    assert_eq!(p["no_slippage_floor"], false);
+    assert_eq!(p["gas_floor"], 400_000u64 + 2 * 1_850_000);
+    assert!(p["gas_limit"].as_u64().unwrap() >= p["gas_floor"].as_u64().unwrap());
+    assert_eq!(p["deadline"], 1_688_860_140u64);
+    // The message points at a command that exists.
+    assert!(v["message"].as_str().unwrap().contains("rmpc get-router"));
     broadcast_mock.assert_async().await;
+}
+
+/// QA plan U6, finding DR-6: omitting `--min-assets-per-leg` used to sign an
+/// all-zero slippage floor. It is now a named refusal before any I/O, and
+/// `--min-assets-per-leg 0` is the explicit way to send no floor.
+#[tokio::test]
+async fn withdraw_router_refuses_without_floor_or_explicit_zero() {
+    // Omitted: refused before the keystore or the RPC is touched (the RPC
+    // URL is unreachable on purpose).
+    let fix = Fixture::build("http://127.0.0.1:1", 31337);
+    let out = router_args_without_floor(fix.config_path.to_str().unwrap(), &unique_state_dir())
+        .args(["--confirm"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert_eq!(out.status.code(), Some(2));
+    let v = stdout_json(&out);
+    assert_eq!(v["status"], "refused");
+    assert_eq!(v["error"], "ErrMinAssetsPerLegRequired");
+    assert!(v["message"]
+        .as_str()
+        .unwrap()
+        .contains("--min-assets-per-leg 0"));
+
+    // Explicit zero: signs an all-zero floor of one entry per leg.
+    use std::sync::{Arc, Mutex};
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_router_happy_path(&mut server, chain_id).await;
+    let sent: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = sent.clone();
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
+        .with_status(200)
+        .with_body_from_request(move |req| {
+            let v: Value = serde_json::from_slice(req.body().unwrap()).unwrap();
+            sink.lock()
+                .unwrap()
+                .push(v["params"][0].as_str().unwrap().to_string());
+            jrpc_result(&format!("{TX_HASH:#x}")).into_bytes()
+        })
+        .create_async()
+        .await;
+    let fix = Fixture::build(&server.url(), chain_id);
+    router_args_without_floor(fix.config_path.to_str().unwrap(), &unique_state_dir())
+        .args([
+            "--min-assets-per-leg",
+            "0",
+            "--confirm",
+            "--receipt-timeout-secs",
+            "5",
+        ])
+        .assert()
+        .success();
+    let raw = sent.lock().unwrap().first().cloned().expect("tx broadcast");
+    let raw = raw.trim_start_matches("0x").to_lowercase();
+    let selector = ahex::encode(RobotMoneyGateway::withdrawFromRouterCall::SELECTOR);
+    let at = raw.find(&selector).expect("calldata selector in raw tx");
+    let call = RobotMoneyGateway::withdrawFromRouterCall::abi_decode(
+        &ahex::decode(&raw[at..]).unwrap(),
+        false,
+    )
+    .expect("decode withdrawFromRouter calldata");
+    assert_eq!(call.minAssetsPerLeg, vec![U256::ZERO, U256::ZERO]);
+}
+
+/// QA plan U6: the pre-sign simulation names a router revert. A leg vault
+/// the registry does not know makes `withdrawFromRouter` revert
+/// `RedeemVaultNotRegistered`; rmpc refuses with `ErrVaultDisabled` before
+/// reading fees or the nonce, and never broadcasts.
+#[tokio::test]
+async fn router_simulated_unregistered_vault_refuses_with_err_vault_disabled() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_router_happy_path(&mut server, chain_id).await;
+    let mut revert = keccak256(b"RedeemVaultNotRegistered(address)")[..4].to_vec();
+    revert.extend_from_slice(&[0u8; 12]);
+    revert.extend_from_slice(VAULT_B.as_slice());
+    let simulation = server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::withdrawFromRouterCall,
+        >()))
+        .with_status(200)
+        .with_body(format!(
+            r#"{{"jsonrpc":"2.0","id":1,"error":{{"code":3,"message":"execution reverted","data":"0x{}"}}}}"#,
+            ahex::encode(&revert)
+        ))
+        .expect(1)
+        .create_async()
+        .await;
+    let nonce_read = server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_getTransactionCount"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result("0x7"))
+        .expect(0)
+        .create_async()
+        .await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let state_dir = unique_state_dir();
+    let out = router_args(fix.config_path.to_str().unwrap(), &state_dir)
+        .args(["--confirm"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert_eq!(out.status.code(), Some(2));
+    let v = stdout_json(&out);
+    assert_eq!(v["error"], "ErrVaultDisabled");
+    assert!(v["message"]
+        .as_str()
+        .unwrap()
+        .contains("RedeemVaultNotRegistered"));
+    assert!(v["checks"].is_object());
+    assert!(v.get("tx_hash").is_none(), "nothing was broadcast: {v}");
+    simulation.assert_async().await;
+    nonce_read.assert_async().await;
+    // Refused before broadcast, so no optimistic replay entry exists.
+    let cache = state_dir.join("submitted_order_ids.json");
+    if let Ok(body) = std::fs::read_to_string(&cache) {
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert!(parsed["entries"].as_array().unwrap().is_empty());
+    }
 }
 
 /// Issue #967: `vaults[i]` is identity-bound to `sharesPerLeg[i]`, so a
@@ -476,7 +641,8 @@ async fn router_total_shares_over_policy_cap_refuses_before_signing() {
         .clone();
     assert_eq!(out.status.code(), Some(2));
     let v = stdout_json(&out);
-    assert_eq!(v["error"], "ErrConfig");
+    // QA plan U6: a cap breach is `ErrWithdrawCapExceeded`, not `ErrConfig`.
+    assert_eq!(v["error"], "ErrWithdrawCapExceeded");
     assert!(v["message"]
         .as_str()
         .unwrap()

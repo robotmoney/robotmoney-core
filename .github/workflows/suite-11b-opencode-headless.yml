@@ -41,6 +41,11 @@
 #   directly without a transfer. This only works on Anvil/devnet. If this job is ever
 #   pointed at a non-Anvil chain, the funding step will silently do nothing and the
 #   deposit will fail with "insufficient funds" — which looks like an rmpc bug.
+# - Foundry is pinned to an exact release here AND in .github/actions/twin-fork (the twin-fork
+#   install runs later in the job, so its cast is the one on PATH). Bump both together; the
+#   asserter-tests self-test fails when they differ or float (issue #1682).
+# - Every vault deploys paused. The deposit job's twin-publish step passes govern "true" so stage 13
+#   unpauses rmUSDC before self-check and deposit; drop it and both refuse with ErrDepositsPaused.
 
 name: opencode-headless-deposit-read
 
@@ -67,12 +72,16 @@ on:
       - ".github/scripts/assert_headless_read_transcript.py"
       - ".github/scripts/assert_headless_deposit_transcript.py"
       - ".github/scripts/replay_headless_transcript.py"
+      - ".github/scripts/parse_cast_wallet_new.py"
       - ".github/scripts/tests/test_live_guard.py"
       - ".github/scripts/tests/test_transcript_asserter_provenance.py"
       - ".github/scripts/tests/test_replay_headless_transcript.py"
+      - ".github/scripts/tests/test_parse_cast_wallet_new.py"
       - ".github/scripts/tests/negative_control_keystore_generate_flag.sh"
       - ".github/scripts/tests/fixtures/**"
       - ".github/workflows/suite-11b-opencode-headless.yml"
+      # Its Foundry pin must equal this workflow's (test_parse_cast_wallet_new.py, issue #1682).
+      - ".github/actions/twin-fork/action.yml"
       - "clients/rust-payment-client/src/bin/rmpc_keystore_import.rs"
       - "clients/rust-payment-client/Cargo.toml"
 
@@ -119,15 +128,21 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install pytest
-        run: python -m pip install --upgrade pytest
+      # PyYAML: the keypair self-test reads this workflow and the twin-fork action for the Foundry pin.
+      - name: Install pytest and PyYAML
+        run: python -m pip install --upgrade pytest pyyaml
 
-      - name: Run transcript-asserter + live-guard + replay-harness unit tests
+      # test_parse_cast_wallet_new.py is the keypair-parse self-test (issue #1682, QA plan v1 U2): the
+      # cast >= 1.8 envelope, the cast <= 1.7.1 array and a bare object parse; a missing or malformed
+      # address or key is refused without echoing the key; the deposit job reads the wallet through the
+      # parser, runs govern, and pins the same exact Foundry release as the twin-fork action.
+      - name: Run transcript-asserter + live-guard + replay-harness + keypair-parse unit tests
         run: |
           python -m pytest -v \
             .github/scripts/tests/test_transcript_asserter_provenance.py \
             .github/scripts/tests/test_live_guard.py \
-            .github/scripts/tests/test_replay_headless_transcript.py
+            .github/scripts/tests/test_replay_headless_transcript.py \
+            .github/scripts/tests/test_parse_cast_wallet_new.py
 
       # G12 negative control (issue #1235). This proves the historical broken
       # `rmpc-keystore-import -- --generate` invocation (issue #469) cannot
@@ -162,10 +177,13 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # An exact release, never `stable` (issue #1682): cast 1.8 changed `cast wallet new --json`
+      # under a floating `stable` and kept the deposit replay red from 2026-09-05. Keep it equal to
+      # the pin in .github/actions/twin-fork/action.yml (test_parse_cast_wallet_new.py checks both).
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          version: v1.8.5
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
@@ -192,10 +210,13 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # An exact release, never `stable` (issue #1682): cast 1.8 changed `cast wallet new --json`
+      # under a floating `stable` and kept the deposit replay red from 2026-09-05. Keep it equal to
+      # the pin in .github/actions/twin-fork/action.yml (test_parse_cast_wallet_new.py checks both).
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          version: v1.8.5
 
       - name: Install Bun (publish-contracts, the one deploy driver)
         uses: oven-sh/setup-bun@v2
@@ -260,13 +281,21 @@ jobs:
       #      authorizes THIS key (not a pre-baked Anvil account).
       # A non-empty 0x[0-9a-fA-F]{40} address and an existing keystore file
       # are both required; either being missing fails the step.
+      # Issue #1682: cast <= 1.7.1 printed a bare array, cast >= 1.8 prints
+      # {"schema_version":1,"success":true,"data":[{...}]}, and the old
+      # `jq '.[0].private_key'` exited 5 on the envelope. The wallet is read
+      # through parse_cast_wallet_new.py, which takes every known shape and
+      # refuses a missing or malformed field without echoing the key (its
+      # self-test runs in asserter-tests on every PR that touches it).
       - name: Generate fresh agent keypair and keystore
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/robotmoney-opencode"
           WALLET=$(cast wallet new --json)
-          AGENT_PRIVKEY=$(echo "$WALLET" | jq -r '.[0].private_key')
-          AGENT_ADDR_FROM_CAST=$(echo "$WALLET" | jq -r '.[0].address')
+          AGENT_PRIVKEY=$(printf '%s' "$WALLET" | python3 .github/scripts/parse_cast_wallet_new.py --field private_key)
+          echo "::add-mask::$AGENT_PRIVKEY"
+          AGENT_ADDR_FROM_CAST=$(printf '%s' "$WALLET" | python3 .github/scripts/parse_cast_wallet_new.py --field address)
+          unset WALLET
           # Sanity: shape-check the address before doing any chain work.
           if ! [[ "$AGENT_ADDR_FROM_CAST" =~ ^0x[0-9a-fA-F]{40}$ ]]; then
             echo "FAIL: cast wallet new produced malformed address: $AGENT_ADDR_FROM_CAST" >&2
@@ -308,8 +337,8 @@ jobs:
           # the USDC approval from the agent itself once the gateway address is
           # known. rmpc has no approve command (approvals flow through the human
           # dapp, not the agent client), and the deposit preflight (§4.4) hard-
-          # refuses when allowance(agent, gateway) < amount.
-          echo "::add-mask::$AGENT_PRIVKEY"
+          # refuses when allowance(agent, gateway) < amount. It was masked
+          # right after the parser printed it, before any later line can log it.
           echo "AGENT_PRIVKEY=$AGENT_PRIVKEY" >> $GITHUB_ENV
 
       - name: Deploy contracts on the Twin chain (authorizes no agent)
@@ -317,15 +346,22 @@ jobs:
         # and the real Safe, with the three real Aave/Compound/Morpho adapters against the Twin chain (real
         # protocol storage is present). The deploy authorizes no agent: the next steps have the depositor
         # (the share receiver) authorize the generated key through commitAuthorization and revealAuthorization.
+        # govern "true" runs stage 13 (the four vault unpauses through the real Safe and timelock, one Twin
+        # time warp over the 60 s delay). Every vault deploys paused, so without it the replay's self-check
+        # and deposit refuse with ErrDepositsPaused (QA plan v1 U2, DR-2). The read job never deposits and
+        # keeps the paused deploy.
         uses: ./.github/actions/twin-publish
         with:
           share-receiver-address: ${{ env.SHARE_RECEIVER_ADDRESS }}
+          govern: "true"
 
       # The deploy authorizes no agent (core 1527; architecture 5.2 and 6.3). Read the stage manifests, assert
       # on-chain that the generated key holds no authorization yet, then have the depositor (the share
       # receiver, an unlocked Anvil account) authorize it the way any depositor does: commitAuthorization,
-      # then revealAuthorization in a later block. Finally assert agentOwner and AGENT_ROLE (issue #469: the
-      # create-key -> authorize path is real, before any deposit is attempted).
+      # then revealAuthorization in a later block, after the generated key committed its consent to that
+      # exact reveal (issue #1791).
+      # Finally assert agentOwner and AGENT_ROLE (issue #469: the create-key -> authorize path is real, before
+      # any deposit is attempted).
       - name: Depositor authorizes the generated agent on-chain
         run: |
           set -euo pipefail
@@ -365,9 +401,15 @@ jobs:
           COMMIT=$(cast keccak "$(cast abi-encode 'f(address,address,bytes32)' "$AGENT_ADDRESS" "$DEPOSITOR" "$SALT")")
           cast send "$GATEWAY" "commitAuthorization(bytes32)" "$COMMIT" --unlocked --from "$DEPOSITOR" --rpc-url "$RPC"
           POLICY="(true,4102444800,10000000000,100000000000,$DEPOSITOR,[],$DEPOSITOR,10000000000,100000000000,[])"
-          cast send "$GATEWAY" \
-            "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))" \
-            "$AGENT_ADDRESS" "$SALT" "$POLICY" --unlocked --from "$DEPOSITOR" --rpc-url "$RPC"
+          # The depositor is not the agent, so the agent consents first (issue #1791): from its own key it
+          # commits keccak256(abi.encode(owner, keccak256(callData))) through commitAuthorization, where
+          # callData is the exact revealAuthorization(agent, salt, policy) calldata the depositor sends next.
+          # The reveal consumes that consent; without it the reveal reverts OwnerConsentMissing.
+          REVEAL_SIG="revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))"
+          REVEAL_CALLDATA=$(cast calldata "$REVEAL_SIG" "$AGENT_ADDRESS" "$SALT" "$POLICY")
+          CONSENT_HASH=$(cast keccak "$(cast abi-encode 'f(address,bytes32)' "$DEPOSITOR" "$(cast keccak "$REVEAL_CALLDATA")")")
+          cast send "$GATEWAY" "commitAuthorization(bytes32)" "$CONSENT_HASH" --private-key "$AGENT_PRIVKEY" --rpc-url "$RPC"
+          cast send "$GATEWAY" "$REVEAL_SIG" "$AGENT_ADDRESS" "$SALT" "$POLICY" --unlocked --from "$DEPOSITOR" --rpc-url "$RPC"
 
           # 3. agentOwner is the depositor and the agent holds AGENT_ROLE.
           OWNER_RAW=$(cast call "$GATEWAY" "agentOwner(address)(address)" "$AGENT_ADDRESS" --rpc-url "$RPC")
@@ -538,10 +580,13 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # An exact release, never `stable` (issue #1682): cast 1.8 changed `cast wallet new --json`
+      # under a floating `stable` and kept the deposit replay red from 2026-09-05. Keep it equal to
+      # the pin in .github/actions/twin-fork/action.yml (test_parse_cast_wallet_new.py checks both).
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          version: v1.8.5
 
       - name: Install Bun (publish-contracts, the one deploy driver)
         uses: oven-sh/setup-bun@v2

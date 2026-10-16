@@ -53,6 +53,24 @@ uint256 internal constant GATEWAY_ROUTER_BASE = 400_000;
 uint256 internal constant GATEWAY_ROUTER_PER_LEG = 1_850_000;
 ```
 
+### ROUTER_DEPOSIT_PER_LEG
+
+<i>
+
+The deposit side runs the availability pass before any vault (QA plan D4), so its per-leg floors are above the redeem ones.
+
+</i>
+
+```solidity
+uint256 internal constant ROUTER_DEPOSIT_PER_LEG = 2_400_000;
+```
+
+### GATEWAY_ROUTER_DEPOSIT_PER_LEG
+
+```solidity
+uint256 internal constant GATEWAY_ROUTER_DEPOSIT_PER_LEG = 2_550_000;
+```
+
 ### VAULT_FLOOR
 
 ```solidity

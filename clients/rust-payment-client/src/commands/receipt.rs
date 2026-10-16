@@ -30,6 +30,13 @@
 //! `cfg.gateway_address`; the caller must hold `AGENT_ROLE` on the gateway and
 //! `COMMITTEE_AGENT_ROLE` on the IC policy (docs/architecture.md §4.9.2).
 //!
+//! Before it signs, `submit` verifies the gateway proxy code and its live
+//! implementation at one pinned block (issue 1810,
+//! `policy::implementation::verify_gateway_code_now`): the gateway's code
+//! hashes to `gateway_runtime_hash`, and a proxied gateway runs the approved
+//! `gateway_implementation` with code hash
+//! `gateway_implementation_runtime_hash`. A mismatch or a failed read exits 2.
+//!
 //! Exit codes:
 //! - 0 — success.
 //! - 2 — refusal (bad receipt, digest mismatch, failed signature, revert).
@@ -56,7 +63,7 @@ use crate::policy::implementation::{
 };
 use crate::rpc::FailoverRpcClient;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
-use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
+use crate::signer::AgentSigner;
 use crate::tx::{
     broadcast, build_eip1559, encode_signed, signing_hash, wait_for_successful_receipt,
     Eip1559Inputs,
@@ -285,17 +292,11 @@ pub fn run_submit(args: SubmitArgs) -> i32 {
         Err(code) => return code,
     };
 
-    if let Err(e) = require_production_grade_for_write(cfg.chain_id, SignerBackendKind::Software) {
-        log::error!("rmpc receipt submit: {e}");
-        emit_failure(
-            &ReceiptFailure {
-                ok: false,
-                error: e.name().to_string(),
-                message: Some(format!("{e}")),
-            },
-            args.pretty,
-        );
-        return EXIT_REFUSAL;
+    // A software keystore signs on every chain, Base mainnet included; a
+    // hardware wallet, HSM or KMS is optional, never required (owner decision
+    // 2026-10-14, QA plan Decision D12). Base mainnet only adds the warning.
+    if let Some(warn) = NetworkEnv::from_chain_id(cfg.chain_id).production_warning() {
+        log::warn!("rmpc receipt submit: {warn}");
     }
 
     let signer = match load_signer(&cfg, "submit", args.pretty) {

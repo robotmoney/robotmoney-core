@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/adr/ADR-0002-router-default-weights-on-chain.md (Amendment 2026-10-07)
-// Canonical: docs/technical/security-model.md — Timelock overriding voted router weights
+// Canonical: docs/technical/security-model.md §7 — Router weights changed outside the timelock; `WEIGHT_SETTER_ROLE` replacement
 // Implements: core 1616 — bounded rotation path for WEIGHT_SETTER_ROLE
 pragma solidity ^0.8.24;
 

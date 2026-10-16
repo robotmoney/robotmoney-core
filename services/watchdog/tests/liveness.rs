@@ -11,7 +11,13 @@
 //!   heartbeat healthy for longer than the staleness limit;
 //! - killing it degrades the signal to `stale` (exit 1) within a bounded time;
 //! - an invalid pauser key exits the daemon at startup, non-zero, and the
-//!   checker then reports `missing` rather than silence.
+//!   checker then reports `missing` rather than silence;
+//! - a quiet poll behind a wedged or stopped explorer indexer does NOT refresh
+//!   the heartbeat (DI-5), so a watchdog with nothing current to evaluate
+//!   never reads healthy;
+//! - a watchdog whose own cursor trails the indexed head by more than
+//!   `max_cursor_lag_blocks` does NOT refresh the heartbeat either (security
+//!   round 2), so a watchdog slower than the chain reads `stale`.
 //!
 //! Run: `cargo test -p watchdog --test liveness -- --test-threads=1`.
 
@@ -77,7 +83,7 @@ fn temp_config(name: &str, body: &str) -> PathBuf {
     path
 }
 
-/// Alert-only config: no pauser key, receipt check off, so the
+/// Alert-only config: no pauser key, receipt and governance checks off, so the
 /// daemon's only database side effect is the cursor.
 fn alert_only_config() -> String {
     r#"
@@ -320,6 +326,212 @@ async fn checker_reports_healthy_then_stale_then_missing() {
             .unwrap(),
         CursorLiveness::Missing,
         "a wrong chain id must read as missing, never as healthy"
+    );
+}
+
+/// DI-5: the explorer indexer is wedged. Every tick fails after reading the
+/// head, so the head it records runs away from the cursor, and the watchdog
+/// finds no new block. Before the fix that quiet poll refreshed the heartbeat
+/// exactly like a calm market, and `watchdog-liveness` exited 0 while nothing
+/// was evaluated.
+#[tokio::test]
+async fn stale_indexer_cursor_is_not_healthy() {
+    let fx = pg_fixture().await;
+    seed_indexed_head(&fx.pool).await;
+    sqlx::query(
+        "INSERT INTO indexer_runs \
+           (chain_id, started_at, finished_at, from_block, chain_head_block, error) \
+         VALUES ($1, now(), now(), $2, $3, 'committee_votes FK violation')",
+    )
+    .bind(CHAIN_ID)
+    .bind(INDEXED_HEAD + 1)
+    .bind(INDEXED_HEAD + 1_000)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    store_cursor(&fx.pool, CHAIN_ID, INDEXED_HEAD)
+        .await
+        .unwrap();
+    age_heartbeat(&fx.pool, 600).await;
+
+    let cfg_path = temp_config("stale-indexer", &alert_only_config());
+    let config = Config::from_file(&cfg_path).unwrap();
+    fs::remove_file(&cfg_path).unwrap();
+
+    let result = run_cycles_since_cursor(
+        &fx.pool,
+        &config,
+        &Client::new(),
+        CHAIN_ID,
+        INDEXED_HEAD,
+        None,
+    )
+    .await
+    .unwrap();
+    match result {
+        CycleResult::IndexerBehind(progress) => {
+            assert_eq!(progress.lag_blocks, Some(1_000), "{progress:?}");
+            assert_eq!(
+                progress.last_error.as_deref(),
+                Some("committee_votes FK violation"),
+                "the page names what the indexer is failing on"
+            );
+        }
+        other => panic!("expected IndexerBehind, got {other:?}"),
+    }
+    assert_eq!(
+        load_cursor(&fx.pool, CHAIN_ID).await.unwrap(),
+        Some(INDEXED_HEAD),
+        "the progress cursor does not move"
+    );
+    assert!(
+        !check_cursor_liveness(&fx.pool, CHAIN_ID, 60)
+            .await
+            .unwrap()
+            .is_healthy(),
+        "a quiet poll behind a wedged indexer must not refresh the heartbeat"
+    );
+}
+
+/// DI-5, the other shape: the indexer process is gone. It records no new head,
+/// so the block gap stays at a healthy-looking 5 forever; only the silence
+/// since its last good run shows it.
+#[tokio::test]
+async fn a_quiet_poll_behind_a_stopped_indexer_does_not_refresh_the_heartbeat() {
+    let fx = pg_fixture().await;
+    sqlx::query(
+        "INSERT INTO chains (chain_id, name, rpc_label) VALUES ($1, 'test', 'test') \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(CHAIN_ID)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO indexer_runs \
+           (chain_id, started_at, finished_at, from_block, last_indexed_block, chain_head_block) \
+         VALUES ($1, now() - interval '1 hour', now() - interval '1 hour', 0, $2, $3)",
+    )
+    .bind(CHAIN_ID)
+    .bind(INDEXED_HEAD)
+    .bind(INDEXED_HEAD + 5)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    store_cursor(&fx.pool, CHAIN_ID, INDEXED_HEAD)
+        .await
+        .unwrap();
+    age_heartbeat(&fx.pool, 600).await;
+
+    let cfg_path = temp_config("stopped-indexer", &alert_only_config());
+    let config = Config::from_file(&cfg_path).unwrap();
+    fs::remove_file(&cfg_path).unwrap();
+
+    let result = run_cycles_since_cursor(
+        &fx.pool,
+        &config,
+        &Client::new(),
+        CHAIN_ID,
+        INDEXED_HEAD,
+        None,
+    )
+    .await
+    .unwrap();
+    match result {
+        CycleResult::IndexerBehind(progress) => {
+            assert_eq!(progress.lag_blocks, Some(5), "the gap alone looks healthy");
+            assert!(
+                progress.since_success_secs.is_some_and(|s| s >= 3_600),
+                "{progress:?}"
+            );
+        }
+        other => panic!("expected IndexerBehind, got {other:?}"),
+    }
+    assert!(
+        !check_cursor_liveness(&fx.pool, CHAIN_ID, 60)
+            .await
+            .unwrap()
+            .is_healthy(),
+        "a quiet poll behind a stopped indexer must not refresh the heartbeat"
+    );
+}
+
+/// Security round 2: a watchdog slower than the chain. The cursor loop evaluates one block at a
+/// time from its cursor to the indexed head, and it used to refresh the heartbeat with every
+/// block. A watchdog whose per-block queries took longer than Base's 2 s block time therefore fell
+/// hours behind the head while `watchdog-liveness` read healthy and nothing paged. A cursor more
+/// than `max_cursor_lag_blocks` behind the indexed head now advances without refreshing the
+/// heartbeat, so the checker reports `stale`. Back within the budget, the heartbeat moves again.
+#[tokio::test]
+async fn a_watchdog_far_behind_the_indexed_head_reports_stale() {
+    let fx = pg_fixture().await;
+    seed_indexed_head(&fx.pool).await;
+
+    let cfg_path = temp_config("slow-watchdog", &alert_only_config());
+    let config = Config::from_file(&cfg_path).unwrap();
+    fs::remove_file(&cfg_path).unwrap();
+    let budget = config.indexer_lag.max_cursor_lag_blocks;
+
+    // The indexer is current and far ahead of the watchdog: a run without an error that
+    // finished now, 50 blocks past the watchdog's budget.
+    let far_head = INDEXED_HEAD + budget + 50;
+    sqlx::query(
+        "INSERT INTO indexer_runs \
+           (chain_id, started_at, finished_at, from_block, last_indexed_block, chain_head_block) \
+         VALUES ($1, now(), now(), 0, $2, $3)",
+    )
+    .bind(CHAIN_ID)
+    .bind(far_head)
+    .bind(far_head + 5)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    store_cursor(&fx.pool, CHAIN_ID, INDEXED_HEAD - 1)
+        .await
+        .unwrap();
+    age_heartbeat(&fx.pool, 600).await;
+
+    // One evaluated block, 200 behind the indexed head: the cursor moves, the heartbeat does not.
+    let result = run_cycles_since_cursor(
+        &fx.pool,
+        &config,
+        &Client::new(),
+        CHAIN_ID,
+        INDEXED_HEAD,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, CycleResult::Ok);
+    assert_eq!(
+        load_cursor(&fx.pool, CHAIN_ID).await.unwrap(),
+        Some(INDEXED_HEAD),
+        "the cursor still advances past the evaluated block"
+    );
+    assert!(
+        matches!(
+            check_cursor_liveness(&fx.pool, CHAIN_ID, 60).await.unwrap(),
+            CursorLiveness::Stale { .. }
+        ),
+        "a watchdog {} blocks behind the indexed head must not read as live",
+        far_head - INDEXED_HEAD
+    );
+
+    // Catching up to within the budget refreshes it again.
+    let caught_up = far_head - budget;
+    run_cycles_since_cursor(&fx.pool, &config, &Client::new(), CHAIN_ID, caught_up, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        load_cursor(&fx.pool, CHAIN_ID).await.unwrap(),
+        Some(caught_up)
+    );
+    assert!(
+        check_cursor_liveness(&fx.pool, CHAIN_ID, 60)
+            .await
+            .unwrap()
+            .is_healthy(),
+        "a watchdog within max_cursor_lag_blocks of the indexed head refreshes the heartbeat"
     );
 }
 

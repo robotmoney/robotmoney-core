@@ -6,12 +6,15 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { Address, Hash } from "viem";
 import { PRICE_RECORDER_ABI } from "../lib/priceRecorder";
 import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
+import { WriteStatus } from "./WriteStatus";
 
 /**
  * Refresh a stale price recorder (dapp issue 1760). `record()` is permissionless
  * (contracts/adapters/UniswapV4PriceRecorder.sol:151), so the connected user may send it. It goes through the
  * guarded write hook like every other write. When the receipt lands every read is refetched, so the deposit
- * form reopens as soon as `isFresh()` is true.
+ * form reopens as soon as `isFresh()` is true. The refusal, the wallet error and the receipt (mined or
+ * reverted) render through `WriteStatus` (QA plan U5): a reverted `record()` says so instead of looking
+ * like a refresh that did nothing.
  */
 export function RefreshPriceButton(props: { readonly recorders: readonly string[] }) {
   const write = useGuardedWriteContract();
@@ -44,12 +47,7 @@ export function RefreshPriceButton(props: { readonly recorders: readonly string[
       >
         {busy ? "Refreshing price..." : "Refresh price"}
       </button>
-      {write.error && (
-        <span className="hint" data-testid="refresh-price-error" role="alert">
-          {" "}
-          refresh failed: {write.error.message}
-        </span>
-      )}
+      <WriteStatus testId="refresh-price" label="Price refresh" write={write} receipt={receipt} />
     </span>
   );
 }

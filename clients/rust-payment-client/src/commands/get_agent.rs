@@ -34,6 +34,12 @@
 //! `share_allowance`, and `window_gross` are `DecimalU256` so they
 //! serialize as JSON strings.
 //!
+//! A failed sub-read renders its fields as JSON `null`, never as `"0"`,
+//! `false` or the zero address (read-output contract §3.6, QA plan U6,
+//! finding DR-8). Before U6 a failed `agents()` read printed an inactive,
+//! zero-cap, withdrawals-disabled agent under `partial: true`: a consumer
+//! that skipped the `partial` flag read a fabricated policy.
+//!
 //! Exit codes: 0 (envelope, possibly partial), 3 (pre-read setup fail).
 
 use std::path::Path;
@@ -56,37 +62,44 @@ const EXIT_STARTUP_FAIL: i32 = 3;
 
 /// `data` payload for `rmpc get-agent`. Field order matches the
 /// operator-visible JSON; downstream snapshot tests assert on it.
+///
+/// Every field a sub-read fills is an `Option`: `None` serializes as JSON
+/// `null` when that read failed, so a failed read is never mistaken for an
+/// inactive or zero-cap agent (contract §3.6).
 #[derive(Debug, Default, Serialize)]
 pub struct AgentData {
     /// Target agent address (lowercase 0x-hex).
     pub agent: String,
-    /// `agents(agent).active` — false for unauthorized / revoked.
-    pub active: bool,
+    /// `agents(agent).active` — false for unauthorized / revoked. `null`
+    /// when the `agents()` read failed.
+    pub active: Option<bool>,
     /// `agents(agent).validUntil` (unix seconds). `0` when the slot is
-    /// unset; the contract treats `now > validUntil` as expired.
-    pub valid_until: u64,
+    /// unset; the contract treats `now > validUntil` as expired. `null`
+    /// when the `agents()` read failed.
+    pub valid_until: Option<u64>,
     /// `agents(agent).maxPerPayment` — `uint256` decimal string.
-    pub max_per_payment: DecimalU256,
+    pub max_per_payment: Option<DecimalU256>,
     /// `agents(agent).maxPerWindow` — `uint256` decimal string.
-    pub max_per_window: DecimalU256,
+    pub max_per_window: Option<DecimalU256>,
     /// `agents(agent).shareReceiver` — lowercase 0x-hex.
-    pub share_receiver: String,
+    pub share_receiver: Option<String>,
     /// `agents(agent).assetRecipient` — lowercase 0x-hex. The USDC
     /// recipient when the agent calls `withdraw()`. Zero address
     /// signals withdrawals are disabled (issue #429).
-    pub asset_recipient: String,
+    pub asset_recipient: Option<String>,
     /// `agents(agent).maxWithdrawPerPayment` — `uint256` decimal string.
     /// A non-zero value means the policy allows agent-initiated
     /// withdrawals; this is the per-call share cap.
-    pub max_withdraw_per_payment: DecimalU256,
+    pub max_withdraw_per_payment: Option<DecimalU256>,
     /// `agents(agent).maxWithdrawPerWindow` — `uint256` decimal string.
     /// Per-window share cap; sets the agent-compromise blast radius
     /// for the current window.
-    pub max_withdraw_per_window: DecimalU256,
+    pub max_withdraw_per_window: Option<DecimalU256>,
     /// Derived: `maxWithdrawPerPayment > 0`. Operators MUST treat
     /// `true` as a security-relevant signal — an agent-key compromise
     /// can redeem shares up to the per-window cap while this is set.
-    pub withdrawals_enabled: bool,
+    /// `null` when the `agents()` read failed: unknown, not disabled.
+    pub withdrawals_enabled: Option<bool>,
     /// The address whose vault allowance to the gateway is reported in
     /// `share_allowance`. For router-withdrawal policies (`shareReceiver !=
     /// agent`) the gateway pulls shares from `shareReceiver`, so the
@@ -102,11 +115,11 @@ pub struct AgentData {
     /// Combined with `max_withdraw_per_payment`/`max_withdraw_per_window`
     /// this is the bound on what a compromised agent can withdraw without
     /// further on-chain action by the depositor (issue #429, AZ-GW-2, issue #1069).
-    pub share_allowance: DecimalU256,
+    pub share_allowance: Option<DecimalU256>,
     /// Calendar window id at the pinned block:
     /// `block_timestamp / WINDOW_SECONDS`. Retained for operator context
     /// only; it is **not** the source of `window_gross` (RPC-1, #1024).
-    pub window_id: u64,
+    pub window_id: Option<u64>,
     /// `effectiveDepositWindowGross(agent)` — the agent's cumulative
     /// deposit gross against the current **rolling** window (the value the
     /// gateway enforces the deposit cap on), as a `uint256` decimal string.
@@ -114,7 +127,7 @@ pub struct AgentData {
     /// mapping `agentWindowGross(agent, window_id)` to the rolling-window
     /// effective view already used by the preflight (`policy/mod.rs`), so the
     /// reported figure matches the gateway's actual admit/deny exposure.
-    pub window_gross: DecimalU256,
+    pub window_gross: Option<DecimalU256>,
 }
 
 pub fn run(config_path: &Path, agent_hex: &str, pretty: bool) -> i32 {
@@ -213,19 +226,20 @@ async fn read_agent(
     let mut allowance_owner = agent; // default: direct-vault (shareReceiver == agent)
     match call_agents(rpc, gateway, &block_tag, agent).await {
         Ok(t) => {
-            b.data_mut().active = t.active;
-            b.data_mut().valid_until = t.valid_until;
-            b.data_mut().max_per_payment = DecimalU256(t.max_per_payment);
-            b.data_mut().max_per_window = DecimalU256(t.max_per_window);
-            b.data_mut().share_receiver = format!("{:#x}", t.share_receiver);
-            b.data_mut().asset_recipient = format!("{:#x}", t.asset_recipient);
-            b.data_mut().max_withdraw_per_payment = DecimalU256(t.max_withdraw_per_payment);
-            b.data_mut().max_withdraw_per_window = DecimalU256(t.max_withdraw_per_window);
+            let d = b.data_mut();
+            d.active = Some(t.active);
+            d.valid_until = Some(t.valid_until);
+            d.max_per_payment = Some(DecimalU256(t.max_per_payment));
+            d.max_per_window = Some(DecimalU256(t.max_per_window));
+            d.share_receiver = Some(format!("{:#x}", t.share_receiver));
+            d.asset_recipient = Some(format!("{:#x}", t.asset_recipient));
+            d.max_withdraw_per_payment = Some(DecimalU256(t.max_withdraw_per_payment));
+            d.max_withdraw_per_window = Some(DecimalU256(t.max_withdraw_per_window));
             // `withdrawals_enabled` mirrors the on-chain gateway guard
             // (`if (p.maxWithdrawPerPayment == 0) revert
             // WithdrawalNotEnabled()`). Derived rather than stored so
             // it can never drift from the canonical field.
-            b.data_mut().withdrawals_enabled = !t.max_withdraw_per_payment.is_zero();
+            d.withdrawals_enabled = Some(!t.max_withdraw_per_payment.is_zero());
             // AZ-GW-2 / issue #1069: router-withdrawal policies hold shares
             // at `shareReceiver` (not the agent). The single-vault `withdraw`
             // path requires `shareReceiver == agent` (the contract comment at
@@ -237,8 +251,9 @@ async fn read_agent(
             b.data_mut().share_allowance_owner = format!("{:#x}", allowance_owner);
         }
         Err(e) => {
-            // agents() call failed — record the share_allowance_owner as the
-            // agent address so the partial output is still meaningful.
+            // agents() call failed — every field it fills stays `None`
+            // (JSON `null`). The allowance below is still read for the
+            // agent itself, so `share_allowance_owner` names it.
             b.data_mut().share_allowance_owner = format!("{agent:#x}");
             b.record_err("agents", e);
         }
@@ -253,7 +268,7 @@ async fn read_agent(
     // router-withdrawal policies, agent for direct-vault) so the reported
     // allowance matches what the gateway actually spends.
     match call_share_allowance(rpc, vault, &block_tag, allowance_owner, gateway).await {
-        Ok(v) => b.data_mut().share_allowance = DecimalU256(v),
+        Ok(v) => b.data_mut().share_allowance = Some(DecimalU256(v)),
         Err(e) => b.record_err("share_allowance", e),
     }
 
@@ -263,7 +278,7 @@ async fn read_agent(
     // `window_gross` — it is surfaced for reproducibility against the pinned
     // block only.
     match rpc.block_timestamp(block_number).await {
-        Ok(ts) => b.data_mut().window_id = ts / WINDOW_SECONDS,
+        Ok(ts) => b.data_mut().window_id = Some(ts / WINDOW_SECONDS),
         Err(e) => b.record_err("window_id", format!("eth_getBlockByNumber failed: {e}")),
     }
 
@@ -274,7 +289,7 @@ async fn read_agent(
     // per-calendar-window `agentWindowGross(agent, window_id)` mapping. The
     // read is independent of `window_id`, so it runs unconditionally.
     match call_effective_deposit_window_gross(rpc, gateway, &block_tag, agent).await {
-        Ok(v) => b.data_mut().window_gross = DecimalU256(v),
+        Ok(v) => b.data_mut().window_gross = Some(DecimalU256(v)),
         Err(e) => b.record_err("window_gross", e),
     }
 
@@ -382,4 +397,114 @@ async fn call_effective_deposit_window_gross(
     let r = RobotMoneyGateway::effectiveDepositWindowGrossCall::abi_decode_returns(&out, true)
         .map_err(|e| format!("abi decode: {e}"))?;
     Ok(r._0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_primitives::{address, hex};
+    use mockito::Matcher;
+    use serde_json::{json, Value};
+
+    const GATEWAY: Address = address!("0000000000000000000000000000000000000b00");
+    const VAULT: Address = address!("0000000000000000000000000000000000000d00");
+    const AGENT: Address = address!("00000000000000000000000000000000000000aa");
+
+    fn eth_call_of<C: SolCall>() -> Matcher {
+        Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_call"})),
+            Matcher::Regex(format!(r#""data":"0x{}"#, hex::encode(C::SELECTOR))),
+        ])
+    }
+
+    async fn mock(server: &mut mockito::ServerGuard, m: Matcher, body: String) {
+        server
+            .mock("POST", "/")
+            .match_body(m)
+            .with_status(200)
+            .with_body(body)
+            .expect_at_least(0)
+            .create_async()
+            .await;
+    }
+
+    fn word(v: u64) -> String {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":"0x{}"}}"#,
+            hex::encode(U256::from(v).to_be_bytes::<32>())
+        )
+    }
+
+    /// QA plan U6, finding DR-8: a failed `agents()` read renders every
+    /// field it fills as JSON `null` (contract §3.6), never as an inactive,
+    /// zero-cap, withdrawals-disabled agent. Reads that succeeded keep their
+    /// values, and a real zero stays the string `"0"`.
+    #[tokio::test]
+    async fn get_agent_failed_agents_read_renders_null() {
+        let mut server = mockito::Server::new_async().await;
+        mock(
+            &mut server,
+            Matcher::PartialJson(json!({"method": "eth_chainId"})),
+            r#"{"jsonrpc":"2.0","id":1,"result":"0x7a69"}"#.into(),
+        )
+        .await;
+        mock(
+            &mut server,
+            Matcher::PartialJson(json!({"method": "eth_blockNumber"})),
+            r#"{"jsonrpc":"2.0","id":1,"result":"0x100"}"#.into(),
+        )
+        .await;
+        mock(
+            &mut server,
+            Matcher::PartialJson(json!({"method": "eth_getBlockByNumber"})),
+            r#"{"jsonrpc":"2.0","id":1,"result":{"timestamp":"0x15180"}}"#.into(),
+        )
+        .await;
+        mock(
+            &mut server,
+            eth_call_of::<RobotMoneyGateway::agentsCall>(),
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"header not found"}}"#
+                .into(),
+        )
+        .await;
+        mock(&mut server, eth_call_of::<Erc20::allowanceCall>(), word(7)).await;
+        mock(
+            &mut server,
+            eth_call_of::<RobotMoneyGateway::effectiveDepositWindowGrossCall>(),
+            word(0),
+        )
+        .await;
+
+        let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+        let env = read_agent(&rpc, GATEWAY, VAULT, AGENT)
+            .await
+            .expect("envelope");
+        let v: Value = serde_json::to_value(&env).unwrap();
+
+        assert_eq!(v["partial"], true);
+        assert_eq!(v["errors"][0]["field"], "agents");
+        let d = &v["data"];
+        for field in [
+            "active",
+            "valid_until",
+            "max_per_payment",
+            "max_per_window",
+            "share_receiver",
+            "asset_recipient",
+            "max_withdraw_per_payment",
+            "max_withdraw_per_window",
+            "withdrawals_enabled",
+        ] {
+            assert!(
+                d.get(field).is_some_and(Value::is_null),
+                "{field} must be null after a failed agents() read; data = {d}"
+            );
+        }
+        // The allowance read still ran, for the agent itself.
+        assert_eq!(d["share_allowance_owner"], format!("{AGENT:#x}"));
+        assert_eq!(d["share_allowance"], "7");
+        // A successful zero is "0", distinguishable from a failed read.
+        assert_eq!(d["window_gross"], "0");
+        assert_eq!(d["window_id"], 1);
+    }
 }

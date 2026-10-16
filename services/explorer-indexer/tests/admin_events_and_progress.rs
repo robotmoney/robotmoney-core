@@ -1,6 +1,9 @@
 //! Issue 1731: the Timelock and the Safe are listed and their events indexed; every tick records the chain
 //! head; an endpoint that refuses (HTTP 403) is reported as a refusal with one request, not as a flaky tick.
 //!
+//! Core 1810: the proxies' `Upgraded` and `UpgradesFrozen` events, the other half of the governed-change
+//! path, are stored in `admin_events` (`contract_kind = 'proxy'`) and leave with their block on a reorg.
+//!
 //! The tests use the shared Postgres fixture and a stub RPC. They do not skip when Docker is missing: the
 //! fixture panics, naming the missing dependency (issue #1377).
 
@@ -174,7 +177,8 @@ async fn timelock_and_safe_events_are_indexed_listed_and_rolled_back_on_reorg() 
 /// Issue 1810: a proxied core contract's `Upgraded` and `UpgradesFrozen` are
 /// stored as `proxy` rows naming the implementation (and the frozen code
 /// hash), from the gateway and from RouterGovernance, which is now watched.
-/// The same topic from the Timelock is not a proxy event. A reorg removes the
+/// The same topic from the Timelock is not a proxy event, and a freeze that
+/// names another proxy than its emitter is not recorded. A reorg removes the
 /// rows, so the derived freeze state rolls back with them.
 #[tokio::test]
 async fn proxy_upgrade_and_freeze_events_are_indexed_and_rolled_back_on_reorg() {
@@ -204,6 +208,8 @@ async fn proxy_upgrade_and_freeze_events_are_indexed_and_rolled_back_on_reorg() 
             log_json(gateway, &frozen, 10, 3),
             // Not a Robot Money proxy: ignored.
             log_json(timelock(), &upgraded(impl_v2), 10, 4),
+            // A freeze-shaped log from RouterGovernance that names the gateway: not one of ours.
+            log_json(governance, &frozen, 10, 5),
         ]),
     );
     let rpc = JsonRpc::new(&stub.url);
@@ -235,7 +241,7 @@ async fn proxy_upgrade_and_freeze_events_are_indexed_and_rolled_back_on_reorg() 
     assert_eq!(
         rows.len(),
         4,
-        "the Timelock's Upgraded is not a proxy event: {rows:?}"
+        "the Timelock's Upgraded and the mismatched freeze are not proxy events: {rows:?}"
     );
     for r in &rows {
         assert_eq!(r.1, "proxy");
@@ -358,6 +364,58 @@ async fn a_logs_endpoint_that_answers_403_is_reported_as_a_refusal_with_one_requ
     stub.shutdown();
 }
 
+/// DI-5: a tick that reads the head and then fails still records that head. Before the fix the failed run
+/// left `chain_head_block` NULL, so the newest recorded head stayed at the last good tick and a wedged
+/// indexer read as "5 blocks behind" on `/health` and to the watchdog for as long as it stayed wedged.
+#[tokio::test]
+async fn a_failed_tick_still_records_the_chain_head_it_saw() {
+    let fx = pg_fixture().await;
+    let stub = StubRpcServer::start().await;
+    program(&stub, 20);
+    stub.set("eth_getLogs", serde_json::json!([]));
+    let mut c = cfg();
+    c.end_block = None;
+
+    let good = run_once(&fx.db, &JsonRpc::new(&stub.url), &c)
+        .await
+        .unwrap();
+    assert!(good.error.is_none(), "{:?}", good.error);
+    assert_eq!(good.last_indexed_block, Some(15));
+
+    // The chain moves on; the logs endpoint now refuses, after the head was read.
+    program(&stub, 40);
+    let (logs_url, _hits) = forbidden();
+    let wedged = JsonRpc::new(&stub.url).with_logs_url(Some(logs_url));
+    let failed = run_once(&fx.db, &wedged, &c).await.unwrap();
+    assert!(failed.error.is_some(), "the tick must fail");
+    assert_eq!(
+        failed.chain_head_block,
+        Some(40),
+        "the outcome carries the head the failed tick read"
+    );
+    let row: (Option<i64>, Option<String>) =
+        sqlx::query_as("SELECT chain_head_block, error FROM indexer_runs WHERE run_id = $1")
+            .bind(failed.run_id)
+            .fetch_one(fx.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(row.0, Some(40), "the failed run row records the head");
+    assert!(row.1.is_some(), "and its error");
+
+    // The lag a reader computes (newest recorded head minus the last good cursor) now grows.
+    let (head, cursor): (Option<i64>, Option<i64>) = sqlx::query_as(
+        "SELECT (SELECT chain_head_block FROM indexer_runs \
+                  WHERE chain_id = $1 AND chain_head_block IS NOT NULL ORDER BY run_id DESC LIMIT 1), \
+                (SELECT MAX(last_indexed_block) FROM indexer_runs WHERE chain_id = $1 AND error IS NULL)",
+    )
+    .bind(CHAIN)
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!((head, cursor), (Some(40), Some(15)), "lag 25, not 5");
+    stub.shutdown();
+}
+
 #[tokio::test]
 async fn a_transient_failure_is_not_a_refusal() {
     let fx = pg_fixture().await;
@@ -477,8 +535,8 @@ async fn a_failed_depositspaused_read_skips_the_snapshot_instead_of_recording_op
 
 /// Issue 1840: the startup backfill reads every watched proxy's `Upgraded` and
 /// `UpgradesFrozen` from the deploy floor up to the cursor, which live
-/// ingestion never revisits. It stores the event block's transactions, so the
-/// watchdog can tell a deployment by its contract-creation transaction. It
+/// ingestion never revisits. It stores the event block's transactions and marks the row whose
+/// transaction created that proxy as its deployment, so the watchdog can tell it from an upgrade. It
 /// ignores other topics, other addresses and blocks above the cursor, and a
 /// second run inserts nothing.
 #[tokio::test]
@@ -530,10 +588,15 @@ async fn the_startup_backfill_indexes_proxy_events_below_the_cursor_once() {
     // Transaction 0x01 created the gateway proxy (and only the gateway).
     stub.set(
         "eth_getTransactionReceipt",
-        serde_json::json!({"status": "0x1", "contractAddress": format!("{gateway:#x}")}),
+        serde_json::json!({
+            "from": format!("0x{}", hex::encode([0x0eu8; 20])),
+            "to": null,
+            "status": "0x1",
+            "contractAddress": format!("{gateway:#x}")
+        }),
     );
-    // The gateway's deploy-time row was indexed before the receipt check
-    // existed, so it carries no deployment mark yet.
+    // The gateway's deploy-time row was indexed before the receipt check existed, so it carries no
+    // deployment mark yet.
     sqlx::query(
         "INSERT INTO admin_events (chain_id, block_number, log_index, tx_hash, contract, \
                                    contract_kind, event_name, detail) \
@@ -579,9 +642,9 @@ async fn the_startup_backfill_indexes_proxy_events_below_the_cursor_once() {
     assert_eq!(rows[0].0.as_slice(), gateway.as_slice());
     assert_eq!(rows[2].0.as_slice(), late_vault.as_slice());
     assert_eq!(rows[2].3, "UpgradesFrozen");
-    // Issue 1840 review: only the row whose transaction created THAT proxy is
-    // the deployment. The existing gateway row is marked now. The vault's rows
-    // share the creation transaction, but it created the gateway, so they page.
+    // Issue 1840 review: only the row whose transaction created THAT proxy is the deployment. The
+    // existing gateway row is marked now. The vault's rows share the creation transaction, but it
+    // created the gateway, so they page.
     let deployment = |d: &str| {
         serde_json::from_str::<serde_json::Value>(d).unwrap()["deployment"]
             == serde_json::json!(true)
@@ -962,11 +1025,10 @@ async fn registry_proxy_events_are_indexed_with_multi_vault_events_off() {
     stub.shutdown();
 }
 
-/// Issue 1840 review: the timelock's executor role is open, so anyone can run a
-/// ready upgrade from a throwaway contract's constructor. Its transaction is a
-/// contract creation, but the contract it created is not the proxy, so the
-/// indexer does not mark the `Upgraded` row as the deployment and the watchdog
-/// pages it. When the transaction created the proxy itself, the row is marked.
+/// Issue 1840 review: the timelock's executor role is open, so anyone can run a ready upgrade from a
+/// throwaway contract's constructor. Its transaction is a contract creation, but the contract it
+/// created is not the proxy, so the indexer does not mark the `Upgraded` row as the deployment and the
+/// watchdog pages it. When the transaction created the proxy itself, the row is marked.
 #[tokio::test]
 async fn a_proxy_row_is_the_deployment_only_when_its_transaction_created_that_proxy() {
     for (created, expect_deployment) in
@@ -981,23 +1043,13 @@ async fn a_proxy_row_is_the_deployment_only_when_its_transaction_created_that_pr
         let stub = StubRpcServer::start().await;
         program(&stub, 20);
         stub.set(
-            "eth_getBlockByNumber",
-            serde_json::json!({
-                "number": "0xa",
-                "hash": format!("0x{}", hex::encode([0xaau8; 32])),
-                "parentHash": format!("0x{}", hex::encode([0x00u8; 32])),
-                "timestamp": "0x65000000",
-                "transactions": [{
-                    "hash": format!("0x{}", hex::encode([0x01u8; 32])),
-                    "transactionIndex": "0x0",
-                    "from": format!("0x{}", hex::encode([0x0eu8; 20])),
-                    "to": null
-                }]
-            }),
-        );
-        stub.set(
             "eth_getTransactionReceipt",
-            serde_json::json!({"status": "0x1", "contractAddress": format!("{created:#x}")}),
+            serde_json::json!({
+                "from": format!("0x{}", hex::encode([0x0eu8; 20])),
+                "to": null,
+                "status": "0x1",
+                "contractAddress": format!("{created:#x}")
+            }),
         );
         stub.set(
             "eth_getLogs",

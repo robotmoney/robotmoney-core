@@ -13,6 +13,7 @@
 //! {
 //!   "event_action": "trigger",
 //!   "routing_key": "watchdog",
+//!   "dedup_key": "volume_breach:8453:12345678:per_block_mint:global",
 //!   "payload": {
 //!     "summary": "RobotMoney watchdog: per_block_mint threshold breached",
 //!     "severity": "critical",
@@ -84,7 +85,41 @@ pub struct BreachEvent {
 struct AlertPayload {
     event_action: &'static str,
     routing_key: &'static str,
+    /// [`volume_breach_dedup_key`]: a breach whose delivery is retried (DI-7)
+    /// joins the incident its first attempt may already have opened.
+    dedup_key: String,
     payload: AlertPayloadInner,
+}
+
+/// Prefix shared by every volume-breach key of one evaluated block.
+///
+/// The watchdog holds its cursor on a block until every breach alert for it
+/// is delivered (DI-7); the keys under this prefix record which of them were,
+/// and are cleared once the cursor moves past the block.
+pub fn volume_breach_block_prefix(chain_id: i64, block_number: i64) -> String {
+    format!("volume_breach:{chain_id}:{block_number}:")
+}
+
+/// Stable key for one volume breach: chain, block, threshold kind and scope
+/// (`global` or the vault). Delivered once; a retry of the same block skips it.
+pub fn volume_breach_dedup_key(event: &BreachEvent) -> String {
+    format!(
+        "{}{}:{}",
+        volume_breach_block_prefix(event.chain_id, event.block_number),
+        event.kind.label(),
+        event.vault.as_deref().unwrap_or("global"),
+    )
+}
+
+/// Key recording that the gateway pause for a breached block was submitted. A
+/// retry of that block (held for an undelivered alert) then asks the gateway's
+/// `depositsPaused()` first, and sends the pause again unless it reads true:
+/// submitted is not mined (security round 1).
+pub fn volume_breach_pause_key(chain_id: i64, block_number: i64) -> String {
+    format!(
+        "{}pause",
+        volume_breach_block_prefix(chain_id, block_number)
+    )
 }
 
 /// Inner payload envelope.
@@ -136,6 +171,7 @@ pub async fn dispatch_alert(
     let body = AlertPayload {
         event_action: "trigger",
         routing_key: "watchdog",
+        dedup_key: volume_breach_dedup_key(event),
         payload: AlertPayloadInner {
             summary,
             severity: "critical",
@@ -270,6 +306,18 @@ pub fn no_baseline_dedup_key(chain_id: i64) -> String {
     format!("consensus_receipt_monitor_no_baseline:{chain_id}")
 }
 
+/// Stable incident key for "the router's weight-setter path is not the
+/// configured one" (issue 1698).
+pub fn weight_setter_path_dedup_key(chain_id: i64) -> String {
+    format!("weight_setter_path_drift:{chain_id}")
+}
+
+/// Stable incident key for "the explorer indexer the watchdog reads is behind
+/// its budget" (DI-5).
+pub fn indexer_behind_dedup_key(chain_id: i64) -> String {
+    format!("indexer_behind:{chain_id}")
+}
+
 /// Details for the no-baseline page.
 ///
 /// Its own type rather than a reuse of [`MissingReceiptDetails`] (T30c): a
@@ -300,6 +348,135 @@ struct NoBaselineAlertInner {
     severity: &'static str,
     source: &'static str,
     custom_details: NoBaselineDetails,
+}
+
+/// Details for the weight-setter-path page (issue 1698).
+#[derive(Debug, Serialize)]
+pub struct WeightSetterPathDetails {
+    /// Always `"weight_setter_path_drift"`.
+    pub alert_kind: &'static str,
+    /// Chain the router lives on.
+    pub chain_id: i64,
+    /// `PortfolioRouter` address that was read.
+    pub router_address: String,
+    /// The configured sole `WEIGHT_SETTER_ROLE` holder (`RouterGovernance`).
+    pub expected_weight_setter: String,
+    /// The configured sole `WEIGHT_SETTER_ROLE` and `ADMIN_ROLE` holder on the
+    /// weight setter.
+    pub expected_timelock: String,
+    /// `getRoleMemberCount(WEIGHT_SETTER_ROLE)` on the router.
+    pub weight_setter_role_count: u64,
+    /// The router's `WEIGHT_SETTER_ROLE` members as read (capped listing).
+    pub weight_setter_role_holders: Vec<String>,
+    /// `getRoleMemberCount(WEIGHT_SETTER_ROLE)` on the weight setter: who may
+    /// call `applyReceipt`.
+    pub apply_receipt_role_count: u64,
+    /// The weight setter's `WEIGHT_SETTER_ROLE` members as read (capped listing).
+    pub apply_receipt_role_holders: Vec<String>,
+    /// `getRoleMemberCount(ADMIN_ROLE)` on the weight setter.
+    pub weight_setter_admin_count: u64,
+    /// The weight setter's `ADMIN_ROLE` members as read (capped listing).
+    pub weight_setter_admins: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WeightSetterAlertPayload {
+    event_action: &'static str,
+    routing_key: &'static str,
+    dedup_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload: Option<WeightSetterAlertInner>,
+}
+
+#[derive(Debug, Serialize)]
+struct WeightSetterAlertInner {
+    summary: String,
+    severity: &'static str,
+    source: &'static str,
+    custom_details: WeightSetterPathDetails,
+}
+
+/// Page because the router's weight-setter path is not the configured one.
+///
+/// Issue 1698: router weights change only through `RouterGovernance.applyReceipt`
+/// on a Safe-scheduled timelock operation. A second router `WEIGHT_SETTER_ROLE`
+/// holder can set weights with no receipt and no delay; a `WEIGHT_SETTER_ROLE`
+/// holder on the weight setter other than the timelock can apply a receipt
+/// without the delay, and an `ADMIN_ROLE` holder other than the timelock can set
+/// default weights without it. The verifier checks these once at deploy; this
+/// catches a grant executed later.
+pub async fn dispatch_weight_setter_path_alert(
+    client: &Client,
+    webhook_url: &str,
+    breach: &crate::governance::WeightSetterBreach,
+) -> Result<(), WatchdogError> {
+    let role = &breach.weight_setter_role;
+    let appliers = &breach.weight_setter_appliers;
+    let admins = &breach.weight_setter_admins;
+    post_event(
+        client,
+        webhook_url,
+        &WeightSetterAlertPayload {
+            event_action: "trigger",
+            routing_key: "watchdog",
+            dedup_key: weight_setter_path_dedup_key(breach.chain_id),
+            payload: Some(WeightSetterAlertInner {
+                summary: format!(
+                    "RobotMoney watchdog: the router weight-setter path changed on chain {}. \
+                     WEIGHT_SETTER_ROLE has {} holder(s) [{}], expected only {}; the weight \
+                     setter's WEIGHT_SETTER_ROLE (applyReceipt) has {} holder(s) [{}] and its \
+                     ADMIN_ROLE has {} holder(s) [{}], each expected only the timelock {}. \
+                     A holder outside that path can change router weights without a consensus \
+                     receipt or without the timelock delay. Find the grant and revoke it through \
+                     the Safe, or update the watchdog config after a deliberate rotation (ADR-0002).",
+                    breach.chain_id,
+                    role.count,
+                    role.members.join(", "),
+                    breach.weight_setter_address,
+                    appliers.count,
+                    appliers.members.join(", "),
+                    admins.count,
+                    admins.members.join(", "),
+                    breach.timelock_address,
+                ),
+                severity: "critical",
+                source: "watchdog",
+                custom_details: WeightSetterPathDetails {
+                    alert_kind: "weight_setter_path_drift",
+                    chain_id: breach.chain_id,
+                    router_address: breach.router_address.clone(),
+                    expected_weight_setter: breach.weight_setter_address.clone(),
+                    expected_timelock: breach.timelock_address.clone(),
+                    weight_setter_role_count: role.count,
+                    weight_setter_role_holders: role.members.clone(),
+                    apply_receipt_role_count: appliers.count,
+                    apply_receipt_role_holders: appliers.members.clone(),
+                    weight_setter_admin_count: admins.count,
+                    weight_setter_admins: admins.members.clone(),
+                },
+            }),
+        },
+    )
+    .await
+}
+
+/// Resolve the weight-setter-path page once all three role sets match again.
+pub async fn dispatch_weight_setter_path_resolve(
+    client: &Client,
+    webhook_url: &str,
+    chain_id: i64,
+) -> Result<(), WatchdogError> {
+    post_event(
+        client,
+        webhook_url,
+        &WeightSetterAlertPayload {
+            event_action: "resolve",
+            routing_key: "watchdog",
+            dedup_key: weight_setter_path_dedup_key(chain_id),
+            payload: None,
+        },
+    )
+    .await
 }
 
 #[derive(Debug, Serialize)]
@@ -392,7 +569,107 @@ pub async fn dispatch_no_baseline_resolve(
     .await
 }
 
-/// The single POST seam every consensus-receipt event goes
+/// Details for the indexer-behind page (DI-5).
+#[derive(Debug, Serialize)]
+pub struct IndexerBehindDetails {
+    /// Always `"indexer_behind"`.
+    pub alert_kind: &'static str,
+    /// Chain the indexer and the watchdog follow.
+    pub chain_id: i64,
+    /// Chain head minus indexed head; `null` when unknown.
+    pub lag_blocks: Option<i64>,
+    /// The configured block budget.
+    pub max_lag_blocks: i64,
+    /// Seconds since the newest indexer run without an error; `null` when none.
+    pub since_success_secs: Option<i64>,
+    /// The configured silence budget.
+    pub max_silence_secs: i64,
+    /// `error` of the newest finished indexer run; `null` when it succeeded.
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct IndexerBehindAlertPayload {
+    event_action: &'static str,
+    routing_key: &'static str,
+    dedup_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload: Option<IndexerBehindAlertInner>,
+}
+
+#[derive(Debug, Serialize)]
+struct IndexerBehindAlertInner {
+    summary: String,
+    severity: &'static str,
+    source: &'static str,
+    custom_details: IndexerBehindDetails,
+}
+
+/// Page because the explorer indexer is behind its budget, so the watchdog has
+/// nothing current to evaluate (DI-5). Alert-only: it never pauses the gateway.
+pub async fn dispatch_indexer_behind_alert(
+    client: &Client,
+    webhook_url: &str,
+    chain_id: i64,
+    progress: &crate::liveness::IndexerProgress,
+    budget: &crate::liveness::IndexerLagBudget,
+) -> Result<(), WatchdogError> {
+    let fmt = |v: Option<i64>| v.map_or_else(|| "unknown".to_owned(), |v| v.to_string());
+    post_event(
+        client,
+        webhook_url,
+        &IndexerBehindAlertPayload {
+            event_action: "trigger",
+            routing_key: "watchdog",
+            dedup_key: indexer_behind_dedup_key(chain_id),
+            payload: Some(IndexerBehindAlertInner {
+                summary: format!(
+                    "RobotMoney watchdog: the explorer indexer on chain {chain_id} is behind \
+                     (lag {} blocks, budget {}; last good run {} s ago, budget {}) — volume \
+                     breaches are not being evaluated. Check the indexer's /health \
+                     last_run_error.",
+                    fmt(progress.lag_blocks),
+                    budget.max_lag_blocks,
+                    fmt(progress.since_success_secs),
+                    budget.max_silence_secs,
+                ),
+                severity: "critical",
+                source: "watchdog",
+                custom_details: IndexerBehindDetails {
+                    alert_kind: "indexer_behind",
+                    chain_id,
+                    lag_blocks: progress.lag_blocks,
+                    max_lag_blocks: budget.max_lag_blocks,
+                    since_success_secs: progress.since_success_secs,
+                    max_silence_secs: budget.max_silence_secs,
+                    last_error: progress.last_error.clone(),
+                },
+            }),
+        },
+    )
+    .await
+}
+
+/// Resolve the indexer-behind page once the indexer is back within its budget.
+pub async fn dispatch_indexer_behind_resolve(
+    client: &Client,
+    webhook_url: &str,
+    chain_id: i64,
+) -> Result<(), WatchdogError> {
+    post_event(
+        client,
+        webhook_url,
+        &IndexerBehindAlertPayload {
+            event_action: "resolve",
+            routing_key: "watchdog",
+            dedup_key: indexer_behind_dedup_key(chain_id),
+            payload: None,
+        },
+    )
+    .await
+}
+
+/// The single POST seam every consensus-receipt and governance event goes
 /// through. Generic over the payload so there is exactly one place to add a
 /// timeout, a retry or an auth header (T30c).
 pub(crate) async fn post_event<B: Serialize>(
@@ -495,6 +772,86 @@ mod tests {
                 "a blind monitor must not report {absent}: it measured nothing"
             );
         }
+    }
+
+    #[test]
+    fn weight_setter_dedup_key_is_its_own_incident_per_chain() {
+        assert_eq!(
+            weight_setter_path_dedup_key(918_453),
+            "weight_setter_path_drift:918453"
+        );
+        assert_ne!(
+            weight_setter_path_dedup_key(918_453),
+            missing_receipt_dedup_key(918_453)
+        );
+        assert_ne!(
+            weight_setter_path_dedup_key(918_453),
+            weight_setter_path_dedup_key(8_453)
+        );
+    }
+
+    #[test]
+    fn a_weight_setter_resolve_carries_the_key_and_no_payload() {
+        let v = serde_json::to_value(WeightSetterAlertPayload {
+            event_action: "resolve",
+            routing_key: "watchdog",
+            dedup_key: weight_setter_path_dedup_key(918_453),
+            payload: None,
+        })
+        .unwrap();
+        assert_eq!(v["event_action"], "resolve");
+        assert_eq!(v["dedup_key"], "weight_setter_path_drift:918453");
+        assert!(v.get("payload").is_none());
+    }
+
+    #[test]
+    fn volume_breach_keys_name_one_block_and_share_its_prefix() {
+        let global = BreachEvent {
+            kind: ThresholdKind::PerBlockMint,
+            threshold_usdc: 1,
+            volume_usdc: 2,
+            chain_id: 8453,
+            block_number: 1000,
+            vault: None,
+        };
+        let vault = BreachEvent {
+            vault: Some("cc".repeat(20)),
+            ..global.clone()
+        };
+        let prefix = volume_breach_block_prefix(8453, 1000);
+        assert_eq!(
+            volume_breach_dedup_key(&global),
+            "volume_breach:8453:1000:per_block_mint:global"
+        );
+        assert_ne!(
+            volume_breach_dedup_key(&global),
+            volume_breach_dedup_key(&vault),
+            "the global and the per-vault breach are two alerts"
+        );
+        for key in [
+            volume_breach_dedup_key(&global),
+            volume_breach_dedup_key(&vault),
+            volume_breach_pause_key(8453, 1000),
+        ] {
+            assert!(key.starts_with(&prefix), "{key}");
+        }
+        // Block 100 must not clear block 1000's keys.
+        assert!(
+            !volume_breach_dedup_key(&global).starts_with(&volume_breach_block_prefix(8453, 100))
+        );
+    }
+
+    #[test]
+    fn an_indexer_behind_resolve_carries_the_key_and_no_payload() {
+        let v = serde_json::to_value(IndexerBehindAlertPayload {
+            event_action: "resolve",
+            routing_key: "watchdog",
+            dedup_key: indexer_behind_dedup_key(918_453),
+            payload: None,
+        })
+        .unwrap();
+        assert_eq!(v["dedup_key"], "indexer_behind:918453");
+        assert!(v.get("payload").is_none());
     }
 
     #[test]

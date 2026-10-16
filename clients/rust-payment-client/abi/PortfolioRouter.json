@@ -1294,6 +1294,17 @@
   },
   {
     "type": "error",
+    "name": "LegSkippedWithFloor",
+    "inputs": [
+      {
+        "name": "vault",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "LengthMismatch",
     "inputs": []
   },

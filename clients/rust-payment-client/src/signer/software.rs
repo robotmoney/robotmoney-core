@@ -146,12 +146,24 @@ impl SoftwareSigner {
     /// `private_key` is a 32-byte secp256k1 scalar. The caller is
     /// responsible for zeroizing it after this returns; we zeroize our own
     /// internal copies.
+    ///
+    /// An empty passphrase is refused before anything is written: Argon2id
+    /// over zero bytes is a key anyone can derive (QA plan U7, finding
+    /// DR-11). The file is written owner-only (0600 on Unix), never with the
+    /// process umask.
     pub fn create_keystore<P: AsRef<Path>>(
         path: P,
         private_key: &[u8; PRIVKEY_LEN],
         passphrase: &[u8],
     ) -> Result<Keystore, SignerError> {
         use rand_core::{OsRng, RngCore};
+
+        if passphrase.is_empty() {
+            return Err(SignerError::ErrPassphrase(
+                "empty passphrase: a keystore must be encrypted under a non-empty passphrase"
+                    .to_string(),
+            ));
+        }
 
         let mut salt = [0u8; 16];
         OsRng.fill_bytes(&mut salt);
@@ -208,7 +220,7 @@ impl SoftwareSigner {
 
         let json = serde_json::to_string_pretty(&keystore)
             .map_err(|e| SignerError::ErrKeystoreFormat(e.to_string()))?;
-        std::fs::write(path.as_ref(), json)
+        write_owner_only(path.as_ref(), json.as_bytes())
             .map_err(|e| SignerError::ErrKeystoreIo(e.to_string()))?;
 
         Ok(keystore)
@@ -413,6 +425,33 @@ fn read_passphrase_from_env_or_stdin() -> Result<String, SignerError> {
     Ok(line)
 }
 
+/// Write `bytes` to `path` readable and writable by its owner only.
+///
+/// `std::fs::write` takes the process umask, which is 0644 on most hosts,
+/// so every local user could copy the keystore and brute-force it offline
+/// (QA plan U7, finding DR-11). On Unix a new file is created 0600, and an
+/// existing file is truncated and narrowed to 0600 before the new bytes
+/// land, so the keystore is never readable by others.
+fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
 fn derive_key(
     passphrase: &[u8],
     salt: &[u8],
@@ -501,6 +540,47 @@ mod tests {
         assert_eq!(signer.backend_kind(), SignerBackendKind::Software);
         let want = parse_address(TEST_ADDRESS_HEX).unwrap();
         assert_eq!(signer.public_address(), want);
+    }
+
+    /// QA plan U7, finding DR-11: an empty passphrase is refused before any
+    /// file is written.
+    #[test]
+    fn create_keystore_rejects_empty_passphrase() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("keystore.json");
+        let err = SoftwareSigner::create_keystore(&path, &test_privkey(), b"")
+            .expect_err("empty passphrase must be refused");
+        match err {
+            SignerError::ErrPassphrase(msg) => assert!(msg.contains("empty"), "{msg}"),
+            other => panic!("expected ErrPassphrase, got {other:?}"),
+        }
+        assert!(
+            !path.exists(),
+            "nothing may be written under an empty passphrase"
+        );
+    }
+
+    /// QA plan U7, finding DR-11: the keystore is owner-only (0600), both
+    /// when it is new and when it replaces a world-readable file.
+    #[cfg(unix)]
+    #[test]
+    fn create_keystore_writes_owner_only_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new().unwrap();
+        let fresh = dir.path().join("fresh.json");
+        SoftwareSigner::create_keystore(&fresh, &test_privkey(), TEST_PASSPHRASE).unwrap();
+        let mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "new keystore mode {mode:o}");
+
+        let existing = dir.path().join("existing.json");
+        std::fs::write(&existing, b"stale").unwrap();
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o644)).unwrap();
+        SoftwareSigner::create_keystore(&existing, &test_privkey(), TEST_PASSPHRASE).unwrap();
+        let mode = std::fs::metadata(&existing).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "overwritten keystore mode {mode:o}");
+        SoftwareSigner::load_with_passphrase(&existing, TEST_PASSPHRASE, true)
+            .expect("the overwritten keystore holds the new key");
     }
 
     #[test]

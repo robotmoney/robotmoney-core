@@ -182,6 +182,8 @@ export const gatewayAbi = [
 
 export type AdminActionName =
   | "authorizeAgent"
+  | "commitAuthorization"
+  | "revealAuthorization"
   | "setPolicy"
   | "revokeAgent"
   | "pauseDeposits"
@@ -468,6 +470,10 @@ export interface VaultRecord {
  *     the never-implemented `activeVaults()` (issue #1281) — no Solidity
  *     source ever defined that selector; `getEffectiveWeights()` is the real
  *     read `previewDeposit` itself routes by.
+ *   - `redeemFor(shareHolder, assetRecipient, vaults, sharesPerLeg,
+ *     minAssetsPerLeg, deadline)` — the Withdraw tab's single-vault exit as a
+ *     one-leg call, so the redeem carries a minimum-out floor that a direct
+ *     `vault.redeem` lacks (QA plan D9, `routerRedeem.ts`).
  *
  * The LegPreview tuple matches `PortfolioRouter.sol`'s `LegPreview` struct:
  * { vault, weightBps, legAmount, estShares, unavailable }.
@@ -553,9 +559,23 @@ export const routerAbi = [
     inputs: [{ name: "vault", type: "address" }],
     outputs: [{ name: "eligible", type: "bool" }],
   },
+  {
+    type: "function",
+    name: "redeemFor",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "shareHolder", type: "address" },
+      { name: "assetRecipient", type: "address" },
+      { name: "vaults", type: "address[]" },
+      { name: "sharesPerLeg", type: "uint256[]" },
+      { name: "minAssetsPerLeg", type: "uint256[]" },
+      { name: "deadline", type: "uint256" },
+    ],
+    outputs: [{ name: "assetsPerLeg", type: "uint256[]" }],
+  },
 ] as const;
 
-export type RouterActionName = "deposit";
+export type RouterActionName = "deposit" | "redeemFor";
 
 /**
  * Minimal ABI fragment for AgentTokenVault.shortlist() and
@@ -640,6 +660,48 @@ export function decodeShortlist(result: unknown): ShortlistEntry[] {
       Array.isArray(balances) && typeof balances[i] === "bigint" ? (balances[i] as bigint) : 0n,
   }));
 }
+
+/**
+ * The exclusion-record read surface of a RobotMoneyVault (core 1820, QA plan D3 and U5).
+ *
+ * When the vault excludes a funded adapter from NAV, it opens a record in its own
+ * `ExclusionLedger` (`contracts/ExclusionLedger.sol`). Every USDC later recovered from that
+ * adapter is held there and is owed pro rata to the holders at the moment of exclusion,
+ * whether they stayed or exited since. The dapp only SHOWS the claim on the position card:
+ * it reads `RobotMoneyVault.exclusionLedger()` and then `ExclusionLedger.claimableTotal(holder)`.
+ * Claiming is permissionless (`claimAll(holder)` pays the holder, never the caller) and is
+ * not a dapp write today.
+ *
+ * Basket vaults have no ledger: `exclusionLedger()` reverts there and the card shows no claim.
+ * `tests/unit/abi-parity.test.ts` checks both fragments against the Foundry artifacts.
+ */
+export const VAULT_EXCLUSION_ABI = [
+  {
+    type: "function",
+    name: "exclusionLedger",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+] as const;
+
+/** `ExclusionLedger` views the position card reads (see `VAULT_EXCLUSION_ABI`). */
+export const EXCLUSION_LEDGER_ABI = [
+  {
+    type: "function",
+    name: "claimableTotal",
+    stateMutability: "view",
+    inputs: [{ name: "holder", type: "address" }],
+    outputs: [{ name: "total", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "exclusionCount",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
 
 /**
  * The upgrade-disclosure views every proxied core contract inherits from

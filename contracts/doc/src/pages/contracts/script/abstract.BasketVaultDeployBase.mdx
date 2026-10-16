@@ -5,7 +5,7 @@ description: "Roles. The broadcaster is `admin` and also holds EMERGENCY_ROLE on
 
 # BasketVaultDeployBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/script/BasketVaultDeployBase.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/script/BasketVaultDeployBase.sol)
 
 **Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
@@ -439,6 +439,33 @@ function _deployConfigured(Params memory p, Cfg memory cfg)
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
+<a id="_requireguardabovepoolfees-uint256-cfg"></a>
+
+### _requireGuardAbovePoolFees
+
+<i>
+
+QA plan D4 (E6): the ORA-4 guard must sit above the fee of every configured pool. Spot can rest anywhere inside the fee
+band with no arbitrage to close it, so a guard at or below the fee reverts deposits on idle drift, and a routed deposit
+reverts with it. The check is `NAV_DEVIATION_BPS > poolFee / 100` (V3 and V4 fees are in hundredths of a bip), written as
+a product so a fee that is not a whole number of bps is never rounded down. The RM V4 pool charges 29100 (291 bps); the
+sheet sets 400, the fee plus a TWAP lag budget (QA plan decision D10).
+
+</i>
+
+```solidity
+function _requireGuardAbovePoolFees(uint256 navDeviationGuardBps, Cfg memory cfg)
+        internal
+        pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| navDeviationGuardBps | `uint256` |  |
+| cfg | `Cfg` |  |
+
 <a id="_basketinitparams-params-address"></a>
 
 ### _basketInitParams
@@ -696,6 +723,7 @@ struct Params {
         uint256 exitFeeBps;
         address feeRecipient;
         /// @dev ORA-4 deposit guard threshold in basis points, 1..MAX_NAV_DEVIATION_BPS. Never 0: 0 disables the guard (issue 1666).
+        ///      Above every configured pool's fee in bps (QA plan D4, `_requireGuardAbovePoolFees`).
         uint256 navDeviationGuardBps;
         /// @dev Floor for `IUniswapV3Pool.liquidity()` of every configured pool. That is the pool's in-range liquidity L, a raw uint128 of
         ///      sqrt(token0 * token1) units, NOT a USDC amount (issue 1666). Must be above 0. For a Uniswap V4 asset the same unit applies:

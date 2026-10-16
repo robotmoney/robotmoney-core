@@ -161,6 +161,7 @@ jobs:
           [ -z "${TWIN_VERIFY_LABELS:-}" ] || cp "$TWIN_VERIFY_LABELS" "$out/verify-labels.txt"
           [ -z "${TWIN_GOVERN_ROWS:-}" ] || cp "$TWIN_GOVERN_ROWS" "$out/govern-rows.txt"
           [ -z "${TWIN_VERIFY_LABELS_POST_GOVERN:-}" ] || cp "$TWIN_VERIFY_LABELS_POST_GOVERN" "$out/verify-labels-post-govern.txt"
+          [ -z "${TWIN_SELF_ADMIN_ROWS:-}" ] || cp "$TWIN_SELF_ADMIN_ROWS" "$out/self-admin-rows.txt"
           [ ! -f "$RUNNER_TEMP/baseline-$(git rev-parse HEAD).json" ] || cp "$RUNNER_TEMP/baseline-$(git rev-parse HEAD).json" "$out/"
           ls -R "$out"
       - uses: actions/upload-artifact@v4

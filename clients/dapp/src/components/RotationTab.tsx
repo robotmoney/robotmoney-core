@@ -9,6 +9,7 @@ import type { PreviewContext } from "../lib/preview";
 import { useRotationState } from "../lib/useRotationState";
 import { TxPreview } from "./TxPreview";
 import { PolicyFields } from "./PolicyFields";
+import { WriteStatus } from "./WriteStatus";
 
 type Props = Readonly<{
   gatewayAddress: Address;
@@ -22,16 +23,15 @@ export function RotationTab(props: Props) {
 
   const depositor = r.authorizePath === "depositor";
   const disableRevoke = !isConnected || !r.previewsOk || r.step !== "idle" || r.isPending;
-  const disableAuthorize =
-    !isConnected || !r.authorizeOk || r.step !== "revoke-sent" || r.isPending;
-  const disableReveal = !isConnected || !r.revealReady || r.isPending;
+  const disableAuthorize = !isConnected || !r.authorizeOk || !r.authorizeOpen || r.isPending;
+  const disableReveal = !isConnected || !r.revealReady || r.isPending || r.step === "final-sent";
 
   return (
     <section data-testid="rotation-form">
       <h2>Agent rotation (revoke old → authorize new)</h2>
       <p>
-        Both previews must be confirmed before wallet signing begins. Do not close this dialog
-        between transactions.
+        Every step&apos;s preview must be confirmed before wallet signing begins. Do not close this
+        dialog between transactions.
       </p>
 
       {r.combinedRiskAnnotation && (
@@ -99,6 +99,12 @@ export function RotationTab(props: Props) {
         <button type="submit" data-testid="rotation-revoke-submit" disabled={disableRevoke}>
           Step 1 — Sign revokeAgent(old) with wallet
         </button>
+        <WriteStatus
+          testId="rotation-revoke"
+          label="Revoke"
+          write={r.revokeStatus.write}
+          receipt={r.revokeStatus.receipt}
+        />
       </form>
 
       <form
@@ -115,6 +121,12 @@ export function RotationTab(props: Props) {
             ? "Step 2 — Sign commitAuthorization(new) with wallet"
             : "Step 2 — Sign authorizeAgent(new) with wallet"}
         </button>
+        <WriteStatus
+          testId="rotation-authorize"
+          label={depositor ? "Commit" : "authorizeAgent"}
+          write={r.authorizeStatus.write}
+          receipt={r.authorizeStatus.receipt}
+        />
       </form>
 
       {depositor && (
@@ -127,16 +139,24 @@ export function RotationTab(props: Props) {
         >
           <h3>Step 3: reveal new agent</h3>
           <p>Enabled one block after the commit transaction mines.</p>
+          {/* The policy preview for the call step 3 signs (QA plan U4). */}
+          {r.revealPreview && <TxPreview preview={r.revealPreview} />}
           <AgentConsentNotice testId="rotation-consent-hash" hash={r.consentHash} />
           <button type="submit" data-testid="rotation-reveal-submit" disabled={disableReveal}>
             Step 3 — Sign revealAuthorization(new) with wallet
           </button>
+          <WriteStatus
+            testId="rotation-reveal"
+            label="Reveal"
+            write={r.revealStatus.write}
+            receipt={r.revealStatus.receipt}
+          />
         </form>
       )}
 
-      {r.step === "done" && (
-        <p data-testid="rotation-complete">Rotation complete. Verify on-chain state.</p>
-      )}
+      {/* Only once the final transaction is mined with status success (QA plan U5):
+          a step the wallet accepted but the chain reverted shows its revert above. */}
+      {r.done && <p data-testid="rotation-complete">Rotation complete. Verify on-chain state.</p>}
     </section>
   );
 }

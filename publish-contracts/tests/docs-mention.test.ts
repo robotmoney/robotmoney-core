@@ -1,4 +1,4 @@
-// The docs name the apply-receipt govern row, its refusals, its 8453 on-demand use and what the Twin proves (issue 1696). Each phrase is asserted in BOTH docs,
+// The docs name the apply-receipt govern row, its refusals, its 8453 on-demand use and what the Twin proves (issue 1696, issue 1698). Each phrase is asserted in BOTH docs,
 // so a rewrite that drops one fails here. The behaviour itself is tested in govern.test.ts and evidence-check.test.ts.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -20,6 +20,7 @@ const PHRASES: [string, RegExp][] = [
   ["the order refusal", /registry order/],
   ["refusals exit USAGE and send nothing", /USAGE/],
   ["the read-back fails GOVERN", /GOVERN/],
+  ["the effective weights read-back", /getEffectiveWeights\(\)/],
   ["never part of stage 13", /stage 13/],
   ["on 8453 only when named, own delay", /172800 s delay/],
   ["GOVERN_PENDING resume", /GOVERN_PENDING/],
@@ -29,7 +30,7 @@ const PHRASES: [string, RegExp][] = [
   ["no vote", /no vote/i],
 ];
 
-describe("docs mention the apply-receipt row (issue 1696)", () => {
+describe("docs mention the apply-receipt row (issue 1696, issue 1698)", () => {
   for (const [file, text] of Object.entries(DOCS)) {
     for (const [what, re] of PHRASES) test(`${file} documents ${what}`, () => expect(text).toMatch(re));
   }
@@ -37,6 +38,14 @@ describe("docs mention the apply-receipt row (issue 1696)", () => {
     expect(DOCS["docs/operations/contract-release-runbooks.md"]).toContain("open owner decision");
     expect(DOCS["publish-contracts/README.md"]).toContain("receipt: applied receipt is released and its weights are on the router");
   });
+  // issue 1698: the pre-1698 shape (a two-call batch, setDefaultWeights as the weight change, the VOTED_WEIGHTS_ACTIVE refusal) is gone from both docs
+  for (const [file, text] of Object.entries(DOCS)) {
+    test(`${file} no longer describes the two-call batch or the voted-vector refusal`, () => {
+      expect(text).not.toMatch(/VOTED_WEIGHTS_ACTIVE/);
+      expect(text).not.toMatch(/setDefaultWeights\(vaults, bps\)` on today's bytecode/);
+      expect(text).not.toMatch(/ONE `scheduleBatch`/);
+    });
+  }
 });
 
 // Issue 1743: the clear row is documented in both docs, and that an active vector does not block apply-receipt (issue 1698).
@@ -58,7 +67,7 @@ describe("docs mention the clear-voted-weights row and that applyReceipt overwri
 // Issue 1701: the two causes of exit 25 and the apply-receipt versus pause-all ordering gap are documented in both docs.
 describe("docs name both causes of exit 25 and the apply-receipt ordering gap (issue 1701)", () => {
   const P: [string, RegExp][] = [
-    ["the ordering gap", /An apply-receipt batch scheduled before a pause-all can still execute after it/],
+    ["the ordering gap", /An apply-receipt operation scheduled before a pause-all can still execute after it/],
     ["the pause check that ignores it", /`refuseIfPausedSince`.{0,60}ignores every row that is not an unpause/],
     ["exit 25: a vault not confirmed paused", /details\.unpaused/],
     ["exit 25: a pause not recorded", /details\.manifest_recorded: false/],
@@ -69,6 +78,45 @@ describe("docs name both causes of exit 25 and the apply-receipt ordering gap (i
     expect(readme).toContain("Exit 25 (`PAUSE`) has two causes");
     expect(readme).not.toContain("A vault not confirmed paused exits 25.");
     expect(readme.match(/pause not confirmed or not recorded 25/g)?.length).toBe(2);
+  });
+});
+
+// QA plan v1 D7 (review E5, issue 1705 Q2): the emergency unwind guard row is documented in both docs, with the post-govern verify that needs it.
+describe("docs mention the set-unwind-guard row (QA plan v1 D7)", () => {
+  const P: [string, RegExp][] = [
+    ["the row and its arguments", /--row set-unwind-guard --admin-arg vault=PROTO\|AGENT\|RWA --admin-arg token=0x<address>\|all --admin-arg min-usdc-out=N --admin-arg max-loss-bps=N/],
+    ["the setter", /setEmergencyUnwindGuard\(token, minUsdcOut, overrideAllowed, maxLossBps\)/],
+    ["the override default (Decisions D3)", /`override-allowed` defaults to true/],
+    ["the evidence record", /unwind_guards/],
+    ["the stage 13 sitting", /stage 13 sitting|same sitting as the stage 13 unpauses/],
+  ];
+  for (const [file, text] of Object.entries(DOCS)) for (const [what, re] of P) test(`${file} documents ${what}`, () => expect(text).toMatch(re));
+  test("the README names the verifier label", () => expect(DOCS["publish-contracts/README.md"]).toContain("emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault"));
+  test("the runbook's post-govern verify step names the label", () => expect(DOCS["docs/operations/contract-release-runbooks.md"]).toContain("`vault[...]: emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault`"));
+});
+
+// QA plan v1 E3 (review QD-7, F2): the redeploy script's header cites a runbook section and README rows. Before, neither existed. Both docs now name the verb, the row,
+// the seven-call batch with the cap call, the cap-parity verifier label and --prior-out, and the runbook section the header names is a real heading.
+describe("docs the redeploy script header cites exist (QA plan v1 E3)", () => {
+  const HEADER = readFileSync(join(ROOT, "contracts", "script", "RedeployProtocolAssetVault.s.sol"), "utf8").split("\n").slice(0, 5).join("\n");
+  const P: [string, RegExp][] = [
+    ["the verb", /redeploy-vault --vault PROTO|`--vault PROTO`/],
+    ["the row", /govern --row redeploy-vault/],
+    ["the cap call", /router\.setVaultCap\(new, vaultCap\(old\)\)/],
+    ["the cap-parity label", /redeploy\[rmPROTO\]: router per-address cap equals approved old cap/],
+    ["--prior-out", /--prior-out/],
+    ["the evidence cap field", /router_vault_cap/],
+  ];
+  for (const [file, text] of Object.entries(DOCS)) for (const [what, re] of P) test(`${file} documents ${what}`, () => expect(text).toMatch(re));
+  test("the header names the runbook section, and the runbook has it as a heading", () => {
+    const cited = /contract-release-runbooks\.md\s+—\s+"([^"]+)"/.exec(HEADER)?.[1];
+    expect(cited).toBe("Redeploy one vault into a live deployment");
+    expect(DOCS["docs/operations/contract-release-runbooks.md"]).toMatch(new RegExp(`^###? [0-9.]* ?${cited}`, "m"));
+  });
+  test("the header names the README's verb and row, and the README has a row for each", () => {
+    expect(HEADER).toContain("publish-contracts/README.md — the `redeploy-vault` verb and the `redeploy-vault` govern row");
+    expect(DOCS["publish-contracts/README.md"]).toMatch(/^\| `redeploy-vault` \|/m);
+    expect(DOCS["publish-contracts/README.md"]).toMatch(/^- \*\*`govern --row redeploy-vault`/m);
   });
 });
 

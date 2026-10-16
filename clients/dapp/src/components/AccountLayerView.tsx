@@ -14,9 +14,10 @@
  * does not have to re-type their own address. Watched-address mode
  * requires no wallet — the form accepts any valid Ethereum address.
  *
- * Live USDC conversion (vault.convertToAssets) is intentionally left to
- * the parent or a future companion hook; this component renders "—" when
- * `usdcValues` is not provided.
+ * Position value is what the shares pay at redeem (`vault.previewRedeem`,
+ * core 1795, QA plan X8). PortfolioPosition reads it for the watched address's
+ * own shares, so the parent passes nothing: a map built in the parent would be
+ * keyed to the connected wallet, not to the address being inspected.
  *
  * docs/architecture.md §5.3.
  */
@@ -33,8 +34,8 @@ export interface AccountLayerViewProps {
   /** Connected wallet address, if any. Pre-fills the watched-address input. */
   readonly connectedAddress?: Address;
   /**
-   * Optional USDC value map from vault address to USDC amount string.
-   * Injected by the parent after on-chain `vault.convertToAssets` reads.
+   * Optional override of PortfolioPosition's own `previewRedeem` values: vault
+   * address to the USDC amount string the shares pay at redeem.
    */
   readonly usdcValues?: Readonly<Record<string, string>>;
 }

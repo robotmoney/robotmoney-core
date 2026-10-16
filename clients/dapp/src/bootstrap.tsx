@@ -264,6 +264,18 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
                 content: (
                   <div className="tab-section-stack">
                     <RouterView apiUrl={cfg.explorerApiUrl} routerAddress={cfg.router} />
+                    {/* Issue 1698: there is no proposal or vote surface. Router weights change
+                        only when the Safe schedules RouterGovernance.applyReceipt through the
+                        timelock, which applies the Investment Committee's consensus receipt. */}
+                    <section data-testid="router-governance-note">
+                      <h2>How router weights change</h2>
+                      <p className="hint">
+                        There is no voting. The Safe, through the timelock, applies the Investment
+                        Committee&apos;s consensus receipt in one call (
+                        <code>RouterGovernance.applyReceipt</code>), which writes its weights to the
+                        router. The Consensus Receipts tab shows each receipt.
+                      </p>
+                    </section>
                   </div>
                 ),
               },
@@ -293,6 +305,9 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
                     ) : (
                       <VaultList onSelectVault={setSelectedVault} />
                     )}
+                    {/* No usdcValues here (core 1795, QA plan X8): PortfolioPosition reads
+                        previewRedeem for the watched address's own shares. A map built here
+                        would be the connected wallet's, not the inspected address's. */}
                     <AccountLayerView
                       apiUrl={cfg.explorerApiUrl}
                       connectedAddress={connectedAddress as Address | undefined}

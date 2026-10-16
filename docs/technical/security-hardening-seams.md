@@ -69,7 +69,7 @@ allowed in unit tests, but production deploy scripts must not approve any
 test-only adapter code hashes.
 
 Allocation code should treat the `active` flag as necessary but not sufficient:
-any path that can send USDC to an adapter (`_allocateTo`, `rebalance`,
+any path that can send USDC to an adapter (`RobotMoneyVaultOps._allocate`, `rebalance`,
 `adminRebalance`) should either rely on the `addAdapter` invariant or re-check
 the adapter allowlist before transfer. Emergency withdrawal and force-removal
 must remain available for already-active adapters even if a later governance

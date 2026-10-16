@@ -26,14 +26,32 @@
 //!
 //! Only chain reads authorize a write. Nothing here consults the explorer
 //! indexer or any other cache.
+//!
+//! # The other proxies a write reaches
+//!
+//! The vaults and the router are ERC-1967 proxies too (issue 1808). The
+//! address pins (`vault_address`, `gateway.vault()`, `gateway.router()`) do
+//! not pin the logic behind a proxy, so a write also reads the implementation
+//! of every vault or router it reaches and refuses unless that
+//! implementation's code hash is in `proxy_implementation_hashes`
+//! ([`verify_reached_proxy`]): the vault a deposit lands in or a withdraw
+//! redeems from, the router a withdraw redeems through, and the router plus
+//! every leg of its effective weight vector for a router deposit
+//! ([`verify_router_and_legs`]). A direct (non-proxy) contract needs no entry:
+//! its address pin covers its whole code. The same fail-closed rules apply:
+//! a failed read is `ErrImplementationUnverified`, an unlisted, codeless or
+//! unpinned implementation is `ErrImplementationNotApproved` naming the proxy
+//! (QA plan P3, security review findings review-security-008 and -016).
 
 use std::str::FromStr;
 
 use alloy_primitives::{b256, keccak256, Address, B256};
+use alloy_sol_types::SolCall;
 
 use crate::config::Config;
 use crate::errors::{Result, RmpcError};
-use crate::rpc::FailoverRpcClient;
+use crate::gateway::{PortfolioRouter, RobotMoneyGateway};
+use crate::rpc::{CallRequest, FailoverRpcClient};
 
 /// ERC-1967 implementation slot:
 /// `bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1)`.
@@ -223,6 +241,135 @@ pub fn fmt_implementation(implementation: Option<Address>) -> String {
     )
 }
 
+/// `proxy_implementation_hashes`, parsed. `None` when the key is absent.
+pub fn approved_proxy_hashes(cfg: &Config) -> Result<Option<Vec<B256>>> {
+    let Some(list) = cfg.proxy_implementation_hashes.as_ref() else {
+        return Ok(None);
+    };
+    list.iter()
+        .enumerate()
+        .map(|(i, h)| parse_b256(h, &format!("proxy_implementation_hashes[{i}]")))
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
+}
+
+/// Verify one vault or router (`role`, e.g. `"vault"`, `"router"`,
+/// `"router leg vault"`) a write reaches, at `block_tag`. A direct contract
+/// (empty slot) passes: its address pin covers its whole code. A proxy passes
+/// only when its implementation has code whose hash is in
+/// `proxy_implementation_hashes`. See the module docs.
+pub async fn verify_reached_proxy(
+    rpc: &FailoverRpcClient,
+    cfg: &Config,
+    role: &str,
+    proxy: Address,
+    block_tag: &str,
+) -> Result<()> {
+    let approved = approved_proxy_hashes(cfg)?;
+    let Some(live) = read_implementation(rpc, proxy, block_tag).await? else {
+        return Ok(());
+    };
+    let label = format!("{role} {proxy:#x}");
+    let impl_code = rpc.get_code(live, Some(block_tag)).await.map_err(|e| {
+        RmpcError::ErrImplementationUnverified(format!(
+            "eth_getCode({live:#x}, {block_tag}) for the {label} implementation: {e}"
+        ))
+    })?;
+    check_reached_proxy(&label, live, impl_code.as_ref(), approved.as_deref())
+}
+
+/// The pure rule of [`verify_reached_proxy`] for a proxy (`label`) whose
+/// slot names `live`, whose code is `impl_code`, against the approved list
+/// (`None` when `proxy_implementation_hashes` is unset).
+pub fn check_reached_proxy(
+    label: &str,
+    live: Address,
+    impl_code: &[u8],
+    approved: Option<&[B256]>,
+) -> Result<()> {
+    if impl_code.is_empty() {
+        return Err(RmpcError::ErrImplementationNotApproved(format!(
+            "{label} is a proxy for implementation {live:#x}, which has no code"
+        )));
+    }
+    let live_hash = keccak256(impl_code);
+    match approved {
+        None => Err(RmpcError::ErrImplementationNotApproved(format!(
+            "{label} is a proxy for implementation {live:#x} (code hash {live_hash:#x}) and \
+             proxy_implementation_hashes is not set; pin the reviewed implementation's code hash"
+        ))),
+        Some(list) if !list.contains(&live_hash) => {
+            Err(RmpcError::ErrImplementationNotApproved(format!(
+                "{label} implementation {live:#x} code hash {live_hash:#x} is not in \
+                 proxy_implementation_hashes"
+            )))
+        }
+        Some(_) => Ok(()),
+    }
+}
+
+/// A router-destination deposit reaches the router and every vault of its
+/// effective weight vector (0 bps legs included). Check each of them at
+/// `block_tag`.
+pub async fn verify_router_and_legs(
+    rpc: &FailoverRpcClient,
+    cfg: &Config,
+    router: Address,
+    block_tag: &str,
+) -> Result<()> {
+    verify_reached_proxy(rpc, cfg, "router", router, block_tag).await?;
+    let weights = call_at(
+        rpc,
+        router,
+        block_tag,
+        PortfolioRouter::getEffectiveWeightsCall {},
+    )
+    .await?;
+    for vault in weights.vaults {
+        verify_reached_proxy(rpc, cfg, "router leg vault", vault, block_tag).await?;
+    }
+    Ok(())
+}
+
+/// `gateway.router()` at `block_tag`, checked like any other reached proxy
+/// (the router a withdraw redeems through). A zero router has no router path
+/// and is returned unchecked: the gateway then refuses the call itself.
+pub async fn verify_gateway_router(
+    rpc: &FailoverRpcClient,
+    cfg: &Config,
+    gateway: Address,
+    block_tag: &str,
+) -> Result<Address> {
+    let router = call_at(rpc, gateway, block_tag, RobotMoneyGateway::routerCall {})
+        .await?
+        ._0;
+    if router != Address::ZERO {
+        verify_reached_proxy(rpc, cfg, "router", router, block_tag).await?;
+    }
+    Ok(router)
+}
+
+/// One `eth_call` at `tag`, decoded. A revert or a transport error is `Err`.
+async fn call_at<C: SolCall>(
+    rpc: &FailoverRpcClient,
+    to: Address,
+    tag: &str,
+    call: C,
+) -> Result<C::Return> {
+    let out = rpc
+        .eth_call(
+            &CallRequest {
+                to,
+                from: None,
+                data: call.abi_encode().into(),
+            },
+            Some(tag),
+        )
+        .await?;
+    C::abi_decode_returns(&out, true)
+        .map_err(|e| RmpcError::ErrRpcDecode(format!("{} decode: {e}", C::SIGNATURE)))
+}
+
 /// Parse a 0x-prefixed (or bare) 32-byte hex config value.
 pub(crate) fn parse_b256(s: &str, field: &str) -> Result<B256> {
     let stripped = s.strip_prefix("0x").unwrap_or(s);
@@ -234,4 +381,52 @@ pub(crate) fn parse_b256(s: &str, field: &str) -> Result<B256> {
         )));
     }
     Ok(B256::from_slice(&bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_primitives::address;
+
+    const IMPL: Address = address!("00000000000000000000000000000000000001a1");
+    const CODE: &[u8] = &[0x60, 0x80, 0x60, 0x40];
+
+    fn refusal(r: Result<()>) -> String {
+        match r {
+            Err(RmpcError::ErrImplementationNotApproved(m)) => m,
+            other => panic!("expected ErrImplementationNotApproved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slot_constant_is_the_eip1967_formula() {
+        let h = keccak256(b"eip1967.proxy.implementation");
+        let slot = alloy_primitives::U256::from_be_bytes(h.0) - alloy_primitives::U256::from(1u8);
+        assert_eq!(
+            B256::from(slot.to_be_bytes::<32>()),
+            ERC1967_IMPLEMENTATION_SLOT
+        );
+    }
+
+    /// The vault behind the gateway is a proxy: its address pin matches, yet
+    /// an unlisted implementation is refused, and so is a missing
+    /// `proxy_implementation_hashes`. The refusal names the vault.
+    #[test]
+    fn a_proxied_vault_needs_its_implementation_pinned() {
+        let approved = [keccak256(CODE)];
+        assert!(check_reached_proxy("vault 0xd00", IMPL, CODE, Some(&approved)).is_ok());
+        let other = [B256::repeat_byte(0xcd)];
+        let m = refusal(check_reached_proxy("vault 0xd00", IMPL, CODE, Some(&other)));
+        assert!(m.starts_with("vault 0xd00"), "{m}");
+        assert!(m.contains("not in proxy_implementation_hashes"), "{m}");
+        let m = refusal(check_reached_proxy("vault 0xd00", IMPL, CODE, None));
+        assert!(m.contains("not set"), "{m}");
+    }
+
+    #[test]
+    fn an_implementation_without_code_is_refused_even_when_its_hash_is_listed() {
+        let empty = [keccak256(b"")];
+        let m = refusal(check_reached_proxy("router 0xr", IMPL, &[], Some(&empty)));
+        assert!(m.contains("no code"), "{m}");
+    }
 }

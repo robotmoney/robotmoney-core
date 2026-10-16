@@ -30,9 +30,11 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
     using stdJson for string;
 
     address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
-    address internal constant VAULT = 0x22bD48C56c34A2C1C1baC77BD7c4E636a6f10D57;
-    address internal constant RECORDER = 0x0aDc14e6521aF213F9DCe5585D530f237831E934;
-    address internal constant ADAPTER = 0xC1e35f6281bE5B58f0A0E7Ed012D444D4cf72030;
+    /// @dev Deploy 2 rmAGENT vault, recorder and V4 adapter. Read in `setUp` from the committed manifests in
+    ///      `deployments/8453/deploy-2` (the production-address gate, core 1498, forbids hard-coding them).
+    address internal vaultAddr;
+    address internal recorderAddr;
+    address internal adapterAddr;
 
     /// @dev Keeper cadence from core 1779 (scripts/ops/recorder-keeper.sh INTERVAL_SECS default).
     uint256 internal constant KEEPER_INTERVAL = 240;
@@ -42,9 +44,9 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
     /// @dev Existing holders' value: the 100 USDC TVL cap less 20 USDC of headroom: a mark up to 25 percent high still leaves room for one maximal deposit.
     uint256 internal constant HOLDER_TVL = 80e6;
 
-    BasketVault internal vault = BasketVault(VAULT);
-    UniswapV4PriceRecorder internal rec = UniswapV4PriceRecorder(RECORDER);
-    UniswapV4SwapAdapter internal adapter = UniswapV4SwapAdapter(ADAPTER);
+    BasketVault internal vault;
+    UniswapV4PriceRecorder internal rec;
+    UniswapV4SwapAdapter internal adapter;
     address internal rm;
     uint24 internal poolFee;
 
@@ -59,8 +61,17 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
     function setUp() public {
         string memory rpc = vm.envOr("FORK_RPC_URL", string(""));
         if (!ForkSelect.selectOrSkip(rpc)) return;
-        assertGt(VAULT.code.length, 0, "the deployed rmAGENT vault must exist at the pin");
-        assertGt(RECORDER.code.length, 0, "the deployed recorder must exist at the pin");
+        vaultAddr =
+            vm.readFile("deployments/8453/deploy-2/agent-token-vault.json").readAddress(".vault");
+        adapterAddr = vm.readFile("deployments/8453/deploy-2/agent-token-vault.json")
+            .readAddress(".adapter_v4");
+        recorderAddr =
+            vm.readFile("deployments/8453/deploy-2/recorder.json").readAddress(".recorder");
+        vault = BasketVault(vaultAddr);
+        rec = UniswapV4PriceRecorder(recorderAddr);
+        adapter = UniswapV4SwapAdapter(adapterAddr);
+        assertGt(vaultAddr.code.length, 0, "the deployed rmAGENT vault must exist at the pin");
+        assertGt(recorderAddr.code.length, 0, "the deployed recorder must exist at the pin");
 
         string memory cfg = vm.readFile("config/agent-token-shortlist.json");
         rm = cfg.readAddress(".shortlist[0].token");
@@ -81,8 +92,8 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
         }
         // Existing holders: the vault filled to the TVL cap less headroom, so the attacker can still deposit the
         // per-deposit cap. RM is dealt to the vault and shares to the victim at the mark.
-        deal(rm, VAULT, vault.assetTokenValue(0, HOLDER_TVL));
-        deal(VAULT, victim, HOLDER_TVL * 1e18, true);
+        deal(rm, vaultAddr, vault.assetTokenValue(0, HOLDER_TVL));
+        deal(vaultAddr, victim, HOLDER_TVL * 1e18, true);
     }
 
     // ─── helpers ─────────────────────────────────────────────────────
@@ -100,7 +111,7 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
         returns (uint256 out)
     {
         vm.startPrank(who);
-        IERC20(tokenIn).approve(ADAPTER, amountIn);
+        IERC20(tokenIn).approve(adapterAddr, amountIn);
         out = adapter.swap(tokenIn, tokenOut, poolFee, amountIn, 0, who, block.timestamp);
         vm.stopPrank();
     }
@@ -162,7 +173,7 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
     function _deposit(address who) internal returns (uint256 shares) {
         uint256 amt = vault.perDepositCap();
         vm.startPrank(who);
-        IERC20(USDC).approve(VAULT, amt);
+        IERC20(USDC).approve(vaultAddr, amt);
         shares = vault.deposit(amt, who);
         vm.stopPrank();
     }
@@ -201,12 +212,12 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
         // The wrong mark makes the deposit guard refuse deposits. It pauses deposits and pays nobody.
         deal(USDC, victim, 15e6);
         vm.startPrank(victim);
-        IERC20(USDC).approve(VAULT, 15e6);
+        IERC20(USDC).approve(vaultAddr, 15e6);
         vm.expectPartialRevert(TwapTickMath.NavMarketDeviationExceeded.selector);
         vault.deposit(5e6, victim);
         vm.stopPrank();
         // redeemInKind needs no oracle, so a holder can always leave
-        uint256 sh = IERC20(VAULT).balanceOf(victim);
+        uint256 sh = IERC20(vaultAddr).balanceOf(victim);
         vm.prank(victim);
         vault.redeemInKind(sh / 2, victim, victim);
         assertGt(IERC20(rm).balanceOf(victim), 0, "redeemInKind still pays");
@@ -237,10 +248,10 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
         markErr = _markErrBps();
         uint256 shares;
         if (deposit) {
-            uint256 rmBefore = IERC20(rm).balanceOf(VAULT);
-            uint256 supplyBefore = IERC20(VAULT).totalSupply();
+            uint256 rmBefore = IERC20(rm).balanceOf(vaultAddr);
+            uint256 supplyBefore = IERC20(vaultAddr).totalSupply();
             shares = _deposit(attacker);
-            uint256 rmAdded = IERC20(rm).balanceOf(VAULT) - rmBefore;
+            uint256 rmAdded = IERC20(rm).balanceOf(vaultAddr) - rmBefore;
             // Fairness: the attacker's share of supply against its share of the RM it put in. Zero means the mark error
             // cancelled out of the mint. Positive means the attacker was minted more than the RM it contributed.
             uint256 supplyAfter = supplyBefore + shares;

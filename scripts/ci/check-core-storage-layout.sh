@@ -12,6 +12,11 @@
 #   storage     (label, slot, offset, type) of every sequential state variable (`forge inspect <C> storageLayout`),
 #               AST ids stripped from type names;
 #   structs     the same four fields for every member of every struct stored in that layout;
+#   enums       the members, in declaration order, of every enum that layout can hold, keyed by the enum's type
+#               label. `forge inspect` gives an enum type no member list, and a stored enum is the index of its
+#               member, so an inserted or reordered member reinterprets every stored value while the storage rows
+#               stay identical. The members are read from the enum's definition in the contract's own sources
+#               (security review 2026-10-15, review-security-046, ported from the QA branch's layout gate);
 #   libraries   the externally linked libraries the runtime code DELEGATECALLs (a library that operates on storage
 #               through a pointer argument is part of the layout surface);
 #   namespaces  the ERC-7201 namespaces in the inheritance chain (`@custom:storage-location erc7201:<id>`), each with
@@ -84,6 +89,47 @@ namespaces_of() {
   done | jq -R -s 'split("\n") | map(select(length > 0) | split("\t")) | group_by(.[0]) | map({key: .[0][0], value: map(.[1])}) | from_entries'
 }
 
+# The members of every `enum Scope.Name` type label in the raw `forge inspect` layout on stdin, read from the
+# definitions in `files` (one JSON object: label -> [members]). Fails closed (exit 2): a stored enum with no
+# definition in the sources, or one name defined twice with different members, is a tooling error, never an
+# unrecorded enum (review-security-046).
+enums_of() {
+  python3 -c '
+import json, re, sys
+noise = re.compile(r"//[^\n]*|/\*.*?\*/|\"(?:\\.|[^\"\\\n])*\"|\x27(?:\\.|[^\x27\\\n])*\x27", re.S)
+scan = re.compile(
+    r"\b(?:abstract\s+contract|contract|library|interface)\s+(\w+)[^{;]*\{"
+    r"|\benum\s+(\w+)\s*\{([^{}]*)\}"
+    r"|[{}]", re.S)
+labels = sorted({t.get("label", "") for t in (json.load(sys.stdin).get("types") or {}).values()
+                 if t.get("label", "").startswith("enum ")})
+defs = {}
+for path in sys.argv[1:]:
+    stack = []
+    for m in scan.finditer(noise.sub(" ", open(path).read())):
+        if m.group(1):
+            stack.append(m.group(1))
+        elif m.group(2):
+            scope = stack[-1] if stack else None
+            name = f"{scope}.{m.group(2)}" if scope else m.group(2)
+            members = [x.strip() for x in m.group(3).split(",") if x.strip()]
+            if name in defs and defs[name] != members:
+                sys.exit(f"check-core-storage-layout: enum {name} is defined twice with different members ({path})")
+            defs[name] = members
+        elif m.group(0) == "{":
+            stack.append(None)
+        elif stack:
+            stack.pop()
+out = {}
+for label in labels:
+    members = defs.get(label[len("enum "):])
+    if not members:
+        sys.exit(f"check-core-storage-layout: storage type {label!r} has no enum definition in its sources")
+    out[label] = members
+print(json.dumps(out, sort_keys=True))
+' "$@" || return 2
+}
+
 # The Solidity sources the contract's artifact was compiled from that belong to its inheritance chain.
 inheritance_sources() {
   local name="$1" src="$2" artifact
@@ -95,15 +141,19 @@ inheritance_sources() {
 }
 
 normalized_live() {
-  local name="$1" src="$2" raw artifact libs ns
+  local name="$1" src="$2" raw artifact libs ns enums f
+  local -a sources=()
   raw="$(cd "$REPO_ROOT" && "$FORGE" inspect "$name" storageLayout --json)" \
     || { echo "check-core-storage-layout: forge inspect $name failed" >&2; return 2; }
   artifact="$REPO_ROOT/out/$(basename "$src")/$name.json"
   [[ -s "$artifact" ]] || { echo "check-core-storage-layout: missing artifact $artifact (run forge build)" >&2; return 2; }
   libs="$(jq -c '[.deployedBytecode.linkReferences | to_entries[] | .key as $f | .value | keys[] | "\($f):\(.)"] | sort' "$artifact")"
+  while IFS= read -r f; do sources+=("$REPO_ROOT/$f"); done < <(inheritance_sources "$name" "$src")
   # shellcheck disable=SC2046
   ns="$(namespaces_of $(inheritance_sources "$name" "$src"))"
-  jq -S --argjson libs "$libs" --argjson ns "$ns" "$NORMALIZE + {libraries: \$libs, namespaces: \$ns}" <<<"$raw" \
+  enums="$(enums_of "${sources[@]}" <<<"$raw")" || return 2
+  jq -S --argjson libs "$libs" --argjson ns "$ns" --argjson enums "$enums" \
+    "$NORMALIZE + {libraries: \$libs, namespaces: \$ns, enums: \$enums}" <<<"$raw" \
     || { echo "check-core-storage-layout: could not normalize $name" >&2; return 2; }
 }
 
@@ -183,6 +233,7 @@ baseline_check() {
 }
 
 command -v jq >/dev/null || { echo "check-core-storage-layout: jq is required" >&2; exit 2; }
+command -v python3 >/dev/null || { echo "check-core-storage-layout: python3 is required (the enum member scan)" >&2; exit 2; }
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -258,6 +309,28 @@ case "${1:-}" in
     expect "a changed library link fails" 1
     jq '.namespaces["robotmoney.storage.GovernedUUPS"] |= reverse' "$WORK/live.json" >"$WORK/snap.json"
     expect "a reordered ERC-7201 namespace fails" 1
+    jq '.enums["enum Selftest.Status"] = ["A", "B"]' "$WORK/live.json" >"$WORK/live-enum.json"
+    jq '.enums["enum Selftest.Status"] = ["B", "A"]' "$WORK/live.json" >"$WORK/snap.json"
+    cp "$WORK/live.json" "$WORK/live-plain.json"; cp "$WORK/live-enum.json" "$WORK/live.json"
+    expect "a reordered storage enum member fails (review-security-046)" 1
+    jq '.enums["enum Selftest.Status"] = ["A", "Inserted", "B"]' "$WORK/live-plain.json" >"$WORK/snap.json"
+    expect "an inserted storage enum member fails (review-security-046)" 1
+    jq 'del(.enums["enum Selftest.Status"])' "$WORK/live.json" >"$WORK/snap.json"
+    expect "a storage enum deleted from the snapshot by hand fails (review-security-047)" 1
+    cp "$WORK/live-plain.json" "$WORK/live.json"
+    # The enum scan reads the definition the label names, scoped like `forge inspect`'s `enum Scope.Name`.
+    printf '%s\n' 'contract Selftest { // enum Fake { X }' '  enum Status { A, /* B, */ B }' '}' >"$WORK/Selftest.sol"
+    got="$(enums_of "$WORK/Selftest.sol" <<<'{"types":{"t_enum(Status)1":{"label":"enum Selftest.Status"}}}' || true)"
+    if [[ "$got" == '{"enum Selftest.Status": ["A", "B"]}' ]]; then
+      echo "ok   the enum scan reads members in declaration order and skips comments"
+    else
+      echo "FAIL the enum scan read $got"; fails=$((fails + 1))
+    fi
+    if enums_of "$WORK/Selftest.sol" <<<'{"types":{"t_enum(Gone)1":{"label":"enum Selftest.Gone"}}}' >/dev/null 2>&1; then
+      echo "FAIL a stored enum with no definition was not a tooling error"; fails=$((fails + 1))
+    else
+      echo "ok   a stored enum with no definition is a tooling error"
+    fi
     : >"$WORK/snap.json"
     expect "an empty snapshot is an error" 2
     # Issue 1835: a change that reorders storage AND regenerates the in-tree snapshot passes the snapshot compare,
@@ -306,7 +379,7 @@ case "${1:-}" in
     # Every committed snapshot must itself be in the normalized shape.
     for entry in "${CONTRACTS[@]}"; do
       n="${entry%%:*}"
-      if jq -e '(.storage | length) > 0 and (.structs | type) == "object" and (.libraries | type) == "array" and (.namespaces | length) > 0' \
+      if jq -e '(.storage | length) > 0 and (.structs | type) == "object" and (.libraries | type) == "array" and (.namespaces | length) > 0 and (.enums | type) == "object"' \
         "$SNAPSHOT_DIR/$n.json" >/dev/null 2>&1; then
         echo "ok   committed snapshot $n.json is normalized"
       else
@@ -319,6 +392,6 @@ case "${1:-}" in
     fi
     echo "check-core-storage-layout selftest: all cases passed"
     ;;
-  -h|--help) sed -n '2,30p' "$0" ;;
+  -h|--help) sed -n '2,34p' "$0" ;;
   *) echo "unknown argument: $1" >&2; exit 2 ;;
 esac

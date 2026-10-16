@@ -64,9 +64,10 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
     uint256 internal constant DEPOSIT_GAS_FLOOR = 2_000_000;
     /// @dev A router-destination `depositTo` needs this fixed part plus
     ///      `ROUTER_DEPOSIT_GAS_PER_LEG` per effective weight leg, checked before the first
-    ///      vault call. Per leg the router needs 1_700_000 after the 63/64 forward.
+    ///      vault call. Per leg the router needs 2_400_000 after the 63/64 forward
+    ///      (`PortfolioRouter.DEPOSIT_GAS_PER_LEG`).
     uint256 internal constant ROUTER_DEPOSIT_BASE_GAS = 400_000;
-    uint256 internal constant ROUTER_DEPOSIT_GAS_PER_LEG = 1_850_000;
+    uint256 internal constant ROUTER_DEPOSIT_GAS_PER_LEG = 2_550_000;
 
     /// @notice Constructor or admin call passed `address(0)` where a real address is required.
     error ZeroAddress();

@@ -35,12 +35,21 @@ contract SecurityReviewCommitteePoc is ICGatewayIntegration {
         vm.roll(block.number + 1);
         vm.prank(otherAgent);
         gateway.revealAuthorization(otherAgent, salt, policy);
-        assertFalse(ic.hasRole(ic.COMMITTEE_AGENT_ROLE(), otherAgent));
+
+        // The impostor really does hold AGENT_ROLE: the revert below is the identity guard, not
+        // the role modifier. Read the role constants before pranking so the staticcalls do not
+        // consume the prank.
+        bytes32 agentRole = gateway.AGENT_ROLE();
+        bytes32 committeeRole = ic.COMMITTEE_AGENT_ROLE();
+        assertTrue(gateway.hasRole(agentRole, otherAgent));
+        assertFalse(ic.hasRole(committeeRole, otherAgent));
+
         IInvestmentCommitteePolicy.VoteParams memory p = _defaultVoteParams();
         assertEq(p.agent, committeeAgent);
         vm.prank(otherAgent);
         vm.expectRevert(RobotMoneyGateway.CommitteeAgentNotCaller.selector);
         gateway.committeeVoteSubmit(p);
         assertEq(ic.voteCount(), 0, "spoofed vote must not be recorded");
+        assertFalse(ic.hasRole(committeeRole, otherAgent));
     }
 }

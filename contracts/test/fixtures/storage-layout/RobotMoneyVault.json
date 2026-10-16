@@ -1,4 +1,5 @@
 {
+  "enums": {},
   "libraries": [
     "contracts/lib/GovernedUUPS.sol:GovernedUpgrade",
     "contracts/lib/RobotMoneyVaultOps.sol:RobotMoneyVaultOps"
@@ -28,6 +29,11 @@
     "robotmoney.storage.GovernedUUPS": [
       "address upgradeTimelock;",
       "bool upgradesFrozen;"
+    ],
+    "robotmoney.storage.RobotMoneyVaultExclusions": [
+      "ExclusionLedger ledger;",
+      "bool snapshots;",
+      "mapping(uint256 index => uint256 exclusionId) openExclusionOf;"
     ]
   },
   "storage": [

@@ -150,6 +150,9 @@ abstract contract BasketVault is
         uint256 maxLossBps;
     }
 
+    // Written only through `BasketAssetConfigGuard`'s storage pointer (`_guardAssets()`), which slither
+    // cannot follow.
+    // slither-disable-next-line uninitialized-state
     AssetInfo[] public assets;
 
     // ─── Pinned at initialization (no setter) ──────────────────────────
@@ -202,11 +205,14 @@ abstract contract BasketVault is
 
     /// @notice ORA-4 / F-10 — maximum permitted divergence (in bps) between the
     ///         NAV-pricing TWAP and the executable market (spot) price before
-    ///         deposits/redemptions are halted on the deposit/redeem hot path.
-    ///         A stale or manipulated mark whose spot has moved beyond this band
-    ///         reverts `NavMarketDeviationExceeded` rather than settling at a
-    ///         price the market no longer offers. `0` DISABLES the guard (used
-    ///         by fixtures and any vault that opts out); production deployments
+    ///         deposits are halted. A stale or manipulated mark whose spot has
+    ///         moved beyond this band reverts `NavMarketDeviationExceeded` rather
+    ///         than settling at a price the market no longer offers. The same
+    ///         value bounds the USDC sell anchor on `redeem` (core 1793): a
+    ///         Uniswap V4 leg whose spot sits more than this below its 4 hour
+    ///         mean refuses the USDC redeem with `BasketViews.SpotBelowSellAnchor`,
+    ///         and the holder uses `redeemInKind`. `0` DISABLES both (used by
+    ///         fixtures and any vault that opts out); production deployments
     ///         set a non-zero, timelock-governed threshold. Bounded above by
     ///         `MAX_NAV_DEVIATION_BPS`.
     uint256 public navDeviationGuardBps;
@@ -325,6 +331,9 @@ abstract contract BasketVault is
     ///      mark. `deviationBps` is the observed divergence; `thresholdBps` is the
     ///      configured guard.
     error NavMarketDeviationExceeded(address token, uint256 deviationBps, uint256 thresholdBps);
+    /// @dev Core 1793: mirror of `BasketViews.SpotBelowSellAnchor` (same selector), declared here so the vault ABI decodes
+    ///      the USDC sell anchor's refusal. The linked library reverts it; the vault has no code for it.
+    error SpotBelowSellAnchor(address token, uint256 belowBps, uint256 thresholdBps);
     error EmergencyUnwindOverrideDisabled();
     error EmergencyFloorUnavailable(address token);
     error PoolTokenMismatch();
@@ -549,9 +558,12 @@ abstract contract BasketVault is
         return _lastMintedShares;
     }
 
-    /// @notice Mint `shares`. Reverts `DepositsArePaused` while deposits are paused.
+    /// @notice Mint `shares`. Reverts `DepositsArePaused` while deposits are paused, and
+    ///         `NavMarketDeviationExceeded` outside the ORA-4 band (as `deposit` does through
+    ///         `previewDeposit`).
     function mint(uint256 shares, address receiver) public override returns (uint256) {
         if (depositsPaused) revert DepositsArePaused();
+        _checkMarket(false);
         return super.mint(shares, receiver);
     }
 
@@ -599,14 +611,14 @@ abstract contract BasketVault is
         if (usdcAmount > perDepositCap) revert PerDepositCapExceeded();
         if (_activeAssetCount() == 0) revert NoActiveAssets();
 
-        // ORA-4 / F-10: halt deposits when the executable market price has
+        // ORA-4 / F-10: deposits halt when the executable market price has
         // diverged from the NAV-pricing TWAP beyond the configured threshold —
         // a mint at a stale/manipulated mark is the entry leg of the F-16 leak.
-        // The per-asset divergence loop lives in the linked `BasketViews`
-        // library to keep this EIP-170-tight vault under the bytecode limit.
-        BasketViews.checkNavDeviation(
-            IBasketVaultViews(address(this)), address(_USDC), navDeviationGuardBps
-        );
+        // The check already ran on the way here, once per entrypoint: OZ
+        // `deposit` reads `previewDeposit`, which runs it, and `mint` runs it
+        // before `super.mint` (security round 1: the view runs it so the router's
+        // quote pass sees it). The per-asset divergence loop lives in the linked
+        // `BasketViews` library to keep this EIP-170-tight vault under the limit.
 
         // Snapshot pre-deposit state so shares are minted against the value the
         // pool held BEFORE this deposit's tokens landed. Reuse `taBefore` for the
@@ -716,6 +728,10 @@ abstract contract BasketVault is
     ///         per-leg slippage guard ineffective.
     ///         This override reads _lastWithdrawnAssets written by _withdraw() and
     ///         returns that instead.
+    /// @dev Core 1793 (QA plan D5): after the gas floor and before any sale, the USDC sell anchor refuses a redeem that
+    ///      would sell a Uniswap V4 leg more than `navDeviationGuardBps` below its 4 hour mean
+    ///      (`BasketViews.SpotBelowSellAnchor`). A held price displacement drags the 1800 s TWAP floor onto itself within
+    ///      one window, so the floor alone does not stop that sale. The holder exits through `redeemInKind` meanwhile.
     function redeem(uint256 shares, address receiver, address owner)
         public
         override
@@ -724,8 +740,16 @@ abstract contract BasketVault is
         uint256 floor = REDEEM_BASE_GAS + assets.length * REDEEM_GAS_PER_ASSET;
         uint256 g = gasleft();
         if (g < floor) revert InsufficientGas(g, floor);
+        _checkMarket(true);
         super.redeem(shares, receiver, owner);
         return _lastWithdrawnAssets;
+    }
+
+    /// @dev The one call site of the linked `BasketViews.checkMarket`: the ORA-4 deviation guard on deposit (`sell` false),
+    ///      the USDC sell anchor on redeem (`sell` true). One shared call site keeps the vault family smaller than two
+    ///      inline library calls (EIP-170).
+    function _checkMarket(bool sell) internal view {
+        BasketViews.checkMarket(sell);
     }
 
     /// @notice Oracle-free exit (core 1665): burn `shares` of `owner` and pay `receiver` the pro-rata
@@ -792,7 +816,21 @@ abstract contract BasketVault is
     ///
     ///         Documented as a floor, not an exact quote.
     ///         See docs/technical/basket-vault-gap-report.md §3.
+    ///
+    ///         Reverts `NavMarketDeviationExceeded` while a basket asset's spot price sits
+    ///         outside the ORA-4 band around its TWAP, because `deposit` would revert on the same
+    ///         check (ERC-4626 allows a preview to revert for a condition that reverts the
+    ///         deposit). `PortfolioRouter` drops a leg whose quote reverts and renormalises the
+    ///         amount onto the other legs, so an out-of-band basket no longer reverts the whole
+    ///         routed deposit (security round 1). `maxMint` does not run the check.
     function previewDeposit(uint256 assets_) public view override returns (uint256) {
+        _checkMarket(false);
+        return _previewDepositFloor(assets_);
+    }
+
+    /// @dev The `previewDeposit` share floor without the ORA-4 check, for `maxMint`, which
+    ///      ERC-4626 forbids to revert.
+    function _previewDepositFloor(uint256 assets_) internal view returns (uint256) {
         // Discount the effective deposit by the worst-case slippage so the
         // share conversion reflects the actual token value the vault captures.
         uint256 effectiveAssets = assets_.mulDiv(MAX_BPS - maxSlippageBps, MAX_BPS);
@@ -833,13 +871,14 @@ abstract contract BasketVault is
 
     /// @notice Maximum shares that can be minted given current vault state.
     ///         Derived from `maxDeposit` through the slippage-discounted share
-    ///         conversion (`previewDeposit`) so the implied asset charge of
+    ///         conversion (`previewDeposit`'s floor, without its ORA-4 check, so
+    ///         this view never reverts) so the implied asset charge of
     ///         `mint(maxMint(receiver))` stays within the deposit caps
     ///         (audit 2026-06-09, L-16).
     function maxMint(address receiver) public view override returns (uint256) {
         uint256 assets_ = maxDeposit(receiver);
         if (assets_ == type(uint256).max) return type(uint256).max;
-        return previewDeposit(assets_);
+        return _previewDepositFloor(assets_);
     }
 
     /// @notice BasketVault cannot guarantee ERC-4626 withdraw exactness because
@@ -919,6 +958,10 @@ abstract contract BasketVault is
             // 1% floor with "Too little received". For a normal leg one unit is below 1e-6 of it.
             // A one-unit leg floors at zero (adapters return 0 for a zero amount).
             uint256 minUsdcOut = _slippageFloor(assets[i], sellAmount - 1);
+            // QA plan D6 (E4, SR-L12): a zero floor means the leg is worth about one USDC unit or
+            // less. Its sale can pay zero, which the V4 adapter refuses, so it is skipped and stays
+            // with the remaining holders. `emergencyUnwind` and `removeAsset` use the same test.
+            if (minUsdcOut == 0) continue;
 
             uint256 received = _executeSwap(
                 assets[i].adapter,
@@ -1111,12 +1154,15 @@ abstract contract BasketVault is
         );
     }
 
-    /// @notice Deactivate a basket asset. The vault must hold zero of that token. Restricted to ADMIN_ROLE.
+    /// @notice Deactivate a basket asset. Restricted to ADMIN_ROLE. The vault must hold none of the token, or only dust:
+    ///         a balance whose TWAP sale floor rounds to zero USDC units. That is the leg `emergencyUnwind` and `redeem`
+    ///         skip, so whatever an unwind leaves behind can always be removed (QA plan D6). A balance above dust reverts
+    ///         `AssetStillHeld`.
+    /// @dev SR-L12 / E4: before D6 anyone could send one wei of the token after the unwind and make this revert
+    ///      `AssetStillHeld` forever, because the Uniswap V4 adapter refuses a sale that pays zero. The checks and the
+    ///      write run in the delegatecall-linked `BasketAssetConfigGuard.deactivateAsset` (EIP-170).
     function removeAsset(uint256 index) external onlyRole(ADMIN_ROLE) {
-        if (index >= assets.length || !assets[index].active) revert AssetNotFound();
-        if (IERC20(assets[index].token).balanceOf(address(this)) > 0) revert AssetStillHeld();
-        assets[index].active = false;
-        emit AssetRemoved(index, assets[index].token);
+        emit AssetRemoved(index, BasketAssetConfigGuard.deactivateAsset(_guardAssets(), index));
     }
 
     /// @notice Re-absorb a balance that has reappeared on a removed (inactive)
@@ -1137,6 +1183,8 @@ abstract contract BasketVault is
     ///      oracle is unavailable or the price is manipulated. The additional
     ///      caller-supplied minUsdcOut is checked against the actual received
     ///      amount and reverts with SlippageExceeded if not met (AZ-BSK-5).
+    ///      A dust balance, whose TWAP floor rounds to zero USDC units, is left in
+    ///      place and the call is a no-op (QA plan D6), like a zero balance.
     /// @param index      Registry index of an inactive (removed) basket asset.
     /// @param minUsdcOut Caller-supplied slippage floor (in USDC raw units).
     ///                   Reverts with SlippageExceeded when the swap output is
@@ -1245,7 +1293,9 @@ abstract contract BasketVault is
     ///      admin-set value acts as a secondary lower bound while the live TWAP guards against
     ///      stale configuration being exploited by a sandwich attacker. If the
     ///      oracle is unavailable, a non-zero configured floor is required.
-    ///      Reverts when any router leg cannot satisfy its effective floor.
+    ///      Reverts when any router leg cannot satisfy its effective floor. A leg whose TWAP floor
+    ///      rounds to zero USDC units is dust and is skipped (QA plan D6, SR-L12): one donated wei
+    ///      cannot block the unwind.
     function emergencyUnwind() public virtual onlyRole(EMERGENCY_ROLE) nonReentrant {
         _setDepositsPaused(true);
         // The per-asset loop runs in the delegatecall-linked `BasketSwaps.unwindAll` (issue 1808).
@@ -1368,7 +1418,9 @@ abstract contract BasketVault is
     ///      any non-zero value must be `<= MAX_NAV_DEVIATION_BPS`. When set,
     ///      deposits revert `NavMarketDeviationExceeded` if any active asset's
     ///      executable market (spot) price diverges from its NAV-pricing TWAP
-    ///      beyond `newBps`. Independent of `maxSlippageBps` (the swap floor),
+    ///      beyond `newBps`, and a USDC `redeem` reverts `SpotBelowSellAnchor`
+    ///      while a held Uniswap V4 leg's spot sits more than `newBps` below its
+    ///      4 hour sell anchor (core 1793). Independent of `maxSlippageBps` (the swap floor),
     ///      which stays TWAP/pool-fee-derived (ORA-7) — the two bounds never
     ///      share a source.
     /// @param newBps New deviation threshold in basis points.

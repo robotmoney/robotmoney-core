@@ -36,6 +36,8 @@ export type BuildAdminTabsArgs = Readonly<{
    * fine because the FaucetTab is never inserted there.
    */
   faucetWalletAddresses: ReadonlyArray<Address>;
+  /** The connected wallet: the owner of the agents it authorizes (rmpc export pin, QA plan U6). */
+  walletAddress?: Address;
   now: number;
   /** VaultRegistry address for the DestinationSelector (issue #320). Optional. */
   registryAddress?: Address;
@@ -59,6 +61,10 @@ export type BuildAdminTabsArgs = Readonly<{
    */
   gatewayImplementation?: string;
   gatewayImplementationRuntimeHash?: string;
+  /** The vault is an ERC-1967 proxy: the export names `proxy_implementation_hashes` (issue 1810). */
+  vaultIsProxy?: boolean;
+  /** Reviewed vault and router implementation hashes the build pins, for the rmpc export. */
+  proxyImplementationHashes?: readonly string[];
   /**
    * TimelockController address (issue #647 / architecture §4.5).
    * When provided, the Timelock tab is inserted in the admin area.
@@ -205,8 +211,12 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
           gatewayRuntimeHash={a.gatewayRuntimeHash ?? ""}
           gatewayImplementation={a.gatewayImplementation}
           gatewayImplementationRuntimeHash={a.gatewayImplementationRuntimeHash}
+          vaultIsProxy={a.vaultIsProxy}
+          proxyImplementationHashes={a.proxyImplementationHashes}
           chainId={a.chainId}
           agent={a.agent as Address}
+          agentOwner={a.walletAddress}
+          shareReceiver={a.shareReceiver}
         />
       ),
     });

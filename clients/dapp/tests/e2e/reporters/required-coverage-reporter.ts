@@ -1,13 +1,14 @@
 /**
  * Playwright reporter that fails the run when a spec in `REQUIRED_SPECS`
- * executed zero tests (QA finding T14). All the judgement lives in
- * `requiredCoverage.ts`; this file only translates Playwright's events into the
- * counts that function consumes, and its verdict back into the run status.
+ * executed zero tests (QA finding T14), or when a full run skipped any test
+ * (QA plan v1 T5). All the judgement lives in `requiredCoverage.ts`; this file
+ * only translates Playwright's events into the counts and labels those
+ * functions consume, and their verdict back into the run status.
  */
 import type { Reporter, TestCase, TestResult, FullResult } from "@playwright/test/reporter";
 import path from "node:path";
 import {
-  evaluateCoverage,
+  evaluateRun,
   formatFailureReport,
   shouldEnforceFromArgv,
   type SpecOutcome,
@@ -15,6 +16,7 @@ import {
 
 export default class RequiredCoverageReporter implements Reporter {
   private readonly seen = new Map<string, SpecOutcome>();
+  private readonly skipped: string[] = [];
   private readonly enforce = shouldEnforceFromArgv(process.argv);
 
   onTestEnd(test: TestCase, result: TestResult): void {
@@ -22,8 +24,10 @@ export default class RequiredCoverageReporter implements Reporter {
     const outcome = this.seen.get(spec) ?? { executed: 0, skipped: 0 };
     // `skipped` covers test.skip() and describe-level skips; everything else
     // (passed / failed / timedOut / interrupted) means the body ran.
-    if (result.status === "skipped") outcome.skipped += 1;
-    else outcome.executed += 1;
+    if (result.status === "skipped") {
+      outcome.skipped += 1;
+      this.skipped.push(`${spec} › ${test.title}`);
+    } else outcome.executed += 1;
     this.seen.set(spec, outcome);
   }
 
@@ -38,7 +42,7 @@ export default class RequiredCoverageReporter implements Reporter {
       );
       return;
     }
-    const verdict = evaluateCoverage(this.seen);
+    const verdict = evaluateRun(this.seen, this.skipped);
     if (verdict.ok) return;
     process.stderr.write(formatFailureReport(verdict));
     return { status: "failed" };

@@ -9,6 +9,12 @@
 //!      stores the commitment without tilt data.
 //!   4. AgentRevoked sets active=false on the committee_agents row.
 //!
+//! Later cases: one signal per member end to end (issue #1790), and the regime
+//! feed following a revoke, a newer unverified vote and a stale signal, each
+//! agreeing with `/v1/committee/tilts` (DI-3). A vote from a member whose
+//! registration was never indexed no longer stops the tick (DI-4), and a
+//! redeployed policy's votes are kept beside the old policy's (DI-10).
+//!
 //! All tests skip cleanly when Docker is not available.
 
 mod common;
@@ -564,4 +570,771 @@ async fn vote_flood_from_one_member_counts_once_end_to_end() {
         .parse()
         .unwrap();
     assert_eq!(snap_avg, 6000.0);
+}
+
+// ─── DI-3: the regime feed follows every change to the tilt ──────────────────
+
+/// A memo host and the digest a `VoteSubmitted` log commits to. A vote that
+/// names `hash` verifies; [`Memo::wrong`] gives the same host with a digest the
+/// memo does not hash to, so the vote is stored unverified.
+struct Memo {
+    url: String,
+    hash: [u8; 32],
+    _server: MemoServer,
+}
+
+impl Memo {
+    async fn start() -> Self {
+        let body = br#"{"agent_id":"regime","stance":"Overweight"}"#;
+        let server = MemoServer::start(body.to_vec()).await;
+        Memo {
+            url: server.url.clone(),
+            hash: alloy_primitives::keccak256(body).0,
+            _server: server,
+        }
+    }
+
+    fn wrong(&self) -> (String, [u8; 32]) {
+        (self.url.clone(), [0xddu8; 32])
+    }
+}
+
+/// A `VoteSubmitted` log from `agent` on `vault` at `block`, committing to
+/// `(rationale_uri, digest)`.
+fn regime_vote(
+    (rationale_uri, digest): (String, [u8; 32]),
+    vote_id: u64,
+    agent: Address,
+    vault: Address,
+    weight: u16,
+    block: u64,
+    log_index: u32,
+) -> serde_json::Value {
+    encode_vote_submitted_log(
+        ic_addr(),
+        vote_id,
+        agent,
+        vault,
+        0,
+        weight,
+        80,
+        &rationale_uri,
+        digest,
+        1_000_000 + vote_id,
+        block,
+        [0x40 + vote_id as u8; 32],
+        log_index,
+    )
+}
+
+/// One `run_once` tick ending at `end_block`, answering `eth_getLogs` with
+/// `logs`. Every block the stub serves has hash 0xaa, so the reorg check at the
+/// start of the next tick always matches.
+async fn regime_tick(
+    fx: &common::PgFixture,
+    stub: &StubRpcServer,
+    end_block: u64,
+    logs: Vec<serde_json::Value>,
+) {
+    stub.set("eth_getLogs", serde_json::Value::Array(logs));
+    let mut cfg = base_cfg(stub);
+    cfg.end_block = Some(end_block);
+    // The freshness test crosses COMMITTEE_VOTE_FRESHNESS_BLOCKS in one tick.
+    cfg.max_blocks_per_tick = 1_000_000;
+    let rpc = JsonRpc::new(&stub.url);
+    let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    assert!(
+        outcome.error.is_none(),
+        "indexer error: {:?}",
+        outcome.error
+    );
+    assert_eq!(
+        outcome.last_indexed_block,
+        Some(end_block as i64),
+        "the tick must reach block {end_block}"
+    );
+}
+
+/// A stub chain whose safe head sits far above every block these tests index.
+fn regime_stub_program(stub: &StubRpcServer) {
+    program_stub_block10(stub);
+    stub.set("eth_blockNumber", serde_json::json!("0x100000"));
+}
+
+/// The explorer API served over the test database, read over HTTP as the dapp
+/// reads it.
+async fn serve_api(fx: &common::PgFixture) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = explorer_api::router(explorer_api::AppState::new(fx.db.pool().clone(), 8453));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    addr
+}
+
+/// `/v1/regime/feed` (`snapshots`) or `/v1/committee/tilts` (`tilts`) as
+/// `vault -> (vote_count, avg_weight_bps)`.
+async fn read_tilts(
+    addr: SocketAddr,
+    path: &str,
+    key: &str,
+) -> std::collections::BTreeMap<String, (i64, f64)> {
+    let body = reqwest::get(format!("http://{addr}{path}"))
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    body[key]
+        .as_array()
+        .unwrap_or_else(|| panic!("{path} has no `{key}` list: {body}"))
+        .iter()
+        .map(|row| {
+            let vault = row["vault"].as_str().unwrap().to_string();
+            let count = row["vote_count"].as_i64().unwrap();
+            let avg: f64 = row["avg_weight_bps"].as_str().unwrap().parse().unwrap();
+            (vault, (count, avg))
+        })
+        .collect()
+}
+
+/// The feed as `vault -> (vote_count, avg)`, after asserting it says the same
+/// thing as the live tilt read at the same cursor.
+async fn feed_matching_tilts(addr: SocketAddr) -> std::collections::BTreeMap<String, (i64, f64)> {
+    let feed = read_tilts(addr, "/v1/regime/feed", "snapshots").await;
+    let tilts = read_tilts(addr, "/v1/committee/tilts", "tilts").await;
+    assert_eq!(
+        feed, tilts,
+        "/v1/regime/feed must agree with /v1/committee/tilts"
+    );
+    feed
+}
+
+/// Every stored regime row for `vault`, oldest first: `(block, vote_count, avg)`.
+async fn regime_rows(fx: &common::PgFixture, vault: Address) -> Vec<(i64, i32, f64)> {
+    let rows: Vec<(i64, i32, String)> = sqlx::query_as(
+        "SELECT block_number, vote_count, CAST(avg_weight_bps AS TEXT) FROM regime_snapshots \
+         WHERE chain_id = $1 AND vault_address = $2 ORDER BY block_number",
+    )
+    .bind(8453i64)
+    .bind(vault.as_slice())
+    .fetch_all(fx.db.pool())
+    .await
+    .unwrap();
+    rows.into_iter()
+        .map(|(b, c, a)| (b, c, a.parse().unwrap()))
+        .collect()
+}
+
+fn vault_key(vault: Address) -> String {
+    format!("0x{}", hex::encode(vault))
+}
+
+/// A revoked member leaves the regime feed in the block it is revoked, on
+/// every vault it voted on. Before DI-3 the snapshot was refreshed only on a
+/// verified vote, so the feed kept the revoked member's tilt as its newest row
+/// while `/v1/committee/tilts` had dropped it.
+#[tokio::test]
+async fn revoked_member_drops_out_of_regime_feed() {
+    let fx = pg_fixture().await;
+    let memo = Memo::start().await;
+    let stub = StubRpcServer::start().await;
+    regime_stub_program(&stub);
+    let api = serve_api(&fx).await;
+
+    let ic = ic_addr();
+    let vault_a = vault_addr();
+    let vault_b = Address::from([0x33u8; 20]);
+    let stays = Address::from([0xA1u8; 20]);
+    let leaves = Address::from([0xB2u8; 20]);
+    let signed = || (memo.url.clone(), memo.hash);
+
+    // Tick 1: both members tilt vault A; only the leaver tilts vault B.
+    regime_tick(
+        &fx,
+        &stub,
+        10,
+        vec![
+            encode_agent_registered_log(ic, stays, "stays", 9, [0x01; 32], 0),
+            encode_agent_registered_log(ic, leaves, "leaves", 9, [0x02; 32], 1),
+            regime_vote(signed(), 1, leaves, vault_a, 8000, 10, 0),
+            regime_vote(signed(), 2, stays, vault_a, 2000, 10, 1),
+            regime_vote(signed(), 3, leaves, vault_b, 4000, 10, 2),
+        ],
+    )
+    .await;
+    let feed = feed_matching_tilts(api).await;
+    assert_eq!(feed.len(), 2, "both vaults have a tilt: {feed:?}");
+    assert_eq!(
+        feed[&vault_key(vault_a)],
+        (2, 5000.0),
+        "mean of 8000 and 2000"
+    );
+    assert_eq!(feed[&vault_key(vault_b)], (1, 4000.0));
+
+    // Tick 2: the leaver is revoked at block 11.
+    regime_tick(
+        &fx,
+        &stub,
+        11,
+        vec![encode_agent_revoked_log(ic, leaves, 11, [0x03; 32], 0)],
+    )
+    .await;
+    let feed = feed_matching_tilts(api).await;
+    assert_eq!(
+        feed.len(),
+        1,
+        "vault B had only the revoked member and leaves the feed: {feed:?}"
+    );
+    assert_eq!(
+        feed[&vault_key(vault_a)],
+        (1, 2000.0),
+        "vault A counts only the member that stays"
+    );
+
+    // The table records the change at the revoke block: a new aggregate for
+    // vault A and a zero-count row for vault B, after the rows from tick 1.
+    assert_eq!(
+        regime_rows(&fx, vault_a).await,
+        vec![(10, 2, 5000.0), (11, 1, 2000.0)]
+    );
+    assert_eq!(
+        regime_rows(&fx, vault_b).await,
+        vec![(10, 1, 4000.0), (11, 0, 0.0)]
+    );
+}
+
+/// A member's newer vote replaces its older one even when the newer memo does
+/// not verify, so the member stops counting. The feed follows on that vote,
+/// not only on verified ones (DI-3).
+#[tokio::test]
+async fn newer_unverified_vote_drops_member_out_of_regime_feed() {
+    let fx = pg_fixture().await;
+    let memo = Memo::start().await;
+    let stub = StubRpcServer::start().await;
+    regime_stub_program(&stub);
+    let api = serve_api(&fx).await;
+
+    let ic = ic_addr();
+    let vault = vault_addr();
+    let first = Address::from([0xA1u8; 20]);
+    let second = Address::from([0xB2u8; 20]);
+    let signed = || (memo.url.clone(), memo.hash);
+
+    regime_tick(
+        &fx,
+        &stub,
+        10,
+        vec![
+            encode_agent_registered_log(ic, first, "first", 9, [0x01; 32], 0),
+            encode_agent_registered_log(ic, second, "second", 9, [0x02; 32], 1),
+            regime_vote(signed(), 1, first, vault, 8000, 10, 0),
+            regime_vote(signed(), 2, second, vault, 2000, 10, 1),
+        ],
+    )
+    .await;
+    assert_eq!(
+        feed_matching_tilts(api).await[&vault_key(vault)],
+        (2, 5000.0)
+    );
+
+    // The first member votes again at block 11, with a digest its memo does
+    // not hash to.
+    regime_tick(
+        &fx,
+        &stub,
+        11,
+        vec![regime_vote(memo.wrong(), 3, first, vault, 9000, 11, 0)],
+    )
+    .await;
+    let (verified,): (bool,) =
+        sqlx::query_as("SELECT verified FROM committee_votes WHERE chain_id = $1 AND vote_id = 3")
+            .bind(8453i64)
+            .fetch_one(fx.db.pool())
+            .await
+            .unwrap();
+    assert!(!verified, "the newer vote is stored unverified");
+    assert_eq!(
+        feed_matching_tilts(api).await[&vault_key(vault)],
+        (1, 2000.0),
+        "only the second member still counts"
+    );
+    assert_eq!(
+        regime_rows(&fx, vault).await,
+        vec![(10, 2, 5000.0), (11, 1, 2000.0)]
+    );
+}
+
+/// A signal that ages out of the freshness window leaves the feed at the first
+/// tick past the window, with no event to trigger it, and an unchanged tilt
+/// writes no row on the ticks before that (DI-3).
+#[tokio::test]
+async fn stale_signal_drops_out_of_regime_feed_without_an_event() {
+    let fx = pg_fixture().await;
+    let memo = Memo::start().await;
+    let stub = StubRpcServer::start().await;
+    regime_stub_program(&stub);
+    let api = serve_api(&fx).await;
+
+    let ic = ic_addr();
+    let vault = vault_addr();
+    let member = Address::from([0xA1u8; 20]);
+    let window = explorer_indexer::db::COMMITTEE_VOTE_FRESHNESS_BLOCKS as u64;
+
+    regime_tick(
+        &fx,
+        &stub,
+        10,
+        vec![
+            encode_agent_registered_log(ic, member, "member", 9, [0x01; 32], 0),
+            regime_vote((memo.url.clone(), memo.hash), 1, member, vault, 6000, 10, 0),
+        ],
+    )
+    .await;
+    assert_eq!(
+        feed_matching_tilts(api).await[&vault_key(vault)],
+        (1, 6000.0)
+    );
+
+    // The last block inside the window: the signal at block 10 still counts,
+    // and the unchanged tilt writes no new row.
+    regime_tick(&fx, &stub, 10 + window - 1, vec![]).await;
+    assert_eq!(
+        feed_matching_tilts(api).await[&vault_key(vault)],
+        (1, 6000.0)
+    );
+    assert_eq!(regime_rows(&fx, vault).await, vec![(10, 1, 6000.0)]);
+
+    // One block later the signal is stale. No log arrives, and the tick
+    // still takes the vault out of the feed.
+    let edge = 10 + window;
+    regime_tick(&fx, &stub, edge, vec![]).await;
+    let feed = feed_matching_tilts(api).await;
+    assert!(
+        feed.is_empty(),
+        "the stale signal leaves the feed: {feed:?}"
+    );
+    assert_eq!(
+        regime_rows(&fx, vault).await,
+        vec![(10, 1, 6000.0), (edge as i64, 0, 0.0)]
+    );
+}
+
+// ─── DI-4 / DI-10: votes the committee tables used to refuse or drop ─────────
+
+/// One `run_once` tick ending at `end_block` with `policy` as the configured
+/// InvestmentCommitteePolicy, answering `eth_getLogs` with `logs`. The same
+/// tick as [`regime_tick`], for a test that switches policy deployments.
+async fn policy_tick(
+    fx: &common::PgFixture,
+    stub: &StubRpcServer,
+    policy: Address,
+    end_block: u64,
+    logs: Vec<serde_json::Value>,
+) {
+    stub.set("eth_getLogs", serde_json::Value::Array(logs));
+    let mut cfg = base_cfg(stub);
+    cfg.investment_committee = Some(policy);
+    cfg.end_block = Some(end_block);
+    let rpc = JsonRpc::new(&stub.url);
+    let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    assert!(
+        outcome.error.is_none(),
+        "indexer error: {:?}",
+        outcome.error
+    );
+    assert_eq!(
+        outcome.last_indexed_block,
+        Some(end_block as i64),
+        "the tick must reach block {end_block}"
+    );
+}
+
+/// A member registered below the indexed range has no `committee_agents` row.
+/// Its vote used to fail the `committee_votes` foreign key, the tick errored
+/// before the cursor advanced, and every retry read the same vote again, so
+/// the indexer never moved past it (DI-4). The vote now gets an inactive
+/// placeholder member: the vote is stored, it tilts nothing, the tick reaches
+/// its target, and a registered member's vote later in the same tick still
+/// counts. When the member's registration is indexed later, the placeholder
+/// becomes a real row and only votes from that registration on count.
+#[tokio::test]
+async fn vote_from_unindexed_member_does_not_wedge_the_tick() {
+    let fx = pg_fixture().await;
+    let memo = Memo::start().await;
+    let stub = StubRpcServer::start().await;
+    regime_stub_program(&stub);
+    let api = serve_api(&fx).await;
+
+    let ic = ic_addr();
+    let vault = vault_addr();
+    let unindexed = Address::from([0xE1u8; 20]);
+    let member = Address::from([0xA1u8; 20]);
+    let signed = || (memo.url.clone(), memo.hash);
+
+    // Tick 1: the unindexed member votes first, then a member whose
+    // registration is in range. `regime_tick` fails on a tick error or a
+    // cursor short of block 10.
+    regime_tick(
+        &fx,
+        &stub,
+        10,
+        vec![
+            encode_agent_registered_log(ic, member, "member", 9, [0x01; 32], 0),
+            regime_vote(signed(), 7, unindexed, vault, 9000, 10, 0),
+            regime_vote(signed(), 8, member, vault, 3000, 10, 1),
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        fx.db.count(CountTable::CommitteeVotes).await.unwrap(),
+        2,
+        "both votes are stored"
+    );
+    let placeholder: (String, bool, i64, Option<i64>) = sqlx::query_as(
+        "SELECT agent_id, active, registered_at, revoked_at FROM committee_agents \
+         WHERE chain_id = $1 AND agent_address = $2",
+    )
+    .bind(8453i64)
+    .bind(unindexed.as_slice())
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        placeholder,
+        (String::new(), false, 10, None),
+        "an inactive placeholder row, first seen at the vote's block"
+    );
+    assert_eq!(
+        feed_matching_tilts(api).await[&vault_key(vault)],
+        (1, 3000.0),
+        "the placeholder member's verified vote tilts nothing"
+    );
+
+    // Tick 2: the member's registration is indexed at block 11 and it votes
+    // again there. The placeholder becomes a real row; the block-10 vote
+    // predates the registration and still does not count.
+    regime_tick(
+        &fx,
+        &stub,
+        11,
+        vec![
+            encode_agent_registered_log(ic, unindexed, "late", 11, [0x02; 32], 0),
+            regime_vote(signed(), 9, unindexed, vault, 7000, 11, 1),
+        ],
+    )
+    .await;
+    let registered: (String, bool, i64) = sqlx::query_as(
+        "SELECT agent_id, active, registered_at FROM committee_agents \
+         WHERE chain_id = $1 AND agent_address = $2",
+    )
+    .bind(8453i64)
+    .bind(unindexed.as_slice())
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(registered, ("late".to_string(), true, 11));
+    assert_eq!(
+        feed_matching_tilts(api).await[&vault_key(vault)],
+        (2, 5000.0),
+        "mean of 3000 and the new 7000; the block-10 vote is superseded"
+    );
+}
+
+/// A redeployed policy numbers its votes from 0 again (`voteId =
+/// _votes.length`). Under the 0014 key `(chain_id, vote_id)` the new policy's
+/// vote 0 hit the old policy's vote 0, and `ON CONFLICT DO NOTHING` dropped it
+/// with no error, so the tilt kept the superseded policy's view (DI-10). Keyed
+/// by the emitting contract (migration 0021), both votes are stored, the tilt
+/// follows the member's newest signal, and the track record tells them apart.
+#[tokio::test]
+async fn votes_from_two_policy_deployments_both_persist() {
+    let fx = pg_fixture().await;
+    let memo = Memo::start().await;
+    let stub = StubRpcServer::start().await;
+    regime_stub_program(&stub);
+    let api = serve_api(&fx).await;
+
+    let old_policy = ic_addr();
+    let new_policy = Address::from([0xCDu8; 20]);
+    let vault = vault_addr();
+    let member = Address::from([0xA1u8; 20]);
+    let vote_zero = |policy: Address, weight: u16, block: u64, tx: u8, log_index: u32| {
+        encode_vote_submitted_log(
+            policy,
+            0,
+            member,
+            vault,
+            0,
+            weight,
+            80,
+            &memo.url,
+            memo.hash,
+            1_000_000 + block,
+            block,
+            [tx; 32],
+            log_index,
+        )
+    };
+
+    // Tick 1 indexes the first policy: the member registers and casts vote 0.
+    policy_tick(
+        &fx,
+        &stub,
+        old_policy,
+        10,
+        vec![
+            encode_agent_registered_log(old_policy, member, "member", 9, [0x01; 32], 0),
+            vote_zero(old_policy, 8000, 10, 0x10, 1),
+        ],
+    )
+    .await;
+
+    // Tick 2 indexes the redeployed policy: the member registers there and
+    // casts that policy's vote 0.
+    policy_tick(
+        &fx,
+        &stub,
+        new_policy,
+        11,
+        vec![
+            encode_agent_registered_log(new_policy, member, "member", 11, [0x02; 32], 0),
+            vote_zero(new_policy, 3000, 11, 0x11, 1),
+        ],
+    )
+    .await;
+
+    let rows: Vec<(Vec<u8>, i64, i16)> = sqlx::query_as(
+        "SELECT contract_address, vote_id, target_weight_bps FROM committee_votes \
+         WHERE chain_id = $1 ORDER BY block_number",
+    )
+    .bind(8453i64)
+    .fetch_all(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            (old_policy.as_slice().to_vec(), 0, 8000),
+            (new_policy.as_slice().to_vec(), 0, 3000),
+        ],
+        "each policy's vote 0 is stored under its own contract"
+    );
+
+    assert_eq!(
+        feed_matching_tilts(api).await[&vault_key(vault)],
+        (1, 3000.0),
+        "the tilt counts the member's newest signal, from the new policy"
+    );
+
+    let body = reqwest::get(format!(
+        "http://{api}/v1/committee/agents/{member:#x}/track-record"
+    ))
+    .await
+    .unwrap()
+    .json::<serde_json::Value>()
+    .await
+    .unwrap();
+    let seen: Vec<(String, i64)> = body["votes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("track record has no `votes` list: {body}"))
+        .iter()
+        .map(|v| {
+            (
+                v["contract_address"].as_str().unwrap().to_string(),
+                v["vote_id"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            (format!("{new_policy:#x}"), 0),
+            (format!("{old_policy:#x}"), 0)
+        ],
+        "the track record names the policy behind each vote 0, newest first"
+    );
+}
+
+// ─── Security round 3: vote memo fetches under the tick's budget ─────────────
+
+/// Security round 3: memo hosts that never answer cannot hold the tick that indexes their votes,
+/// and a vote stored past the budget is verified by a later tick's sweep.
+///
+/// The `VoteSubmitted` branch fetched each vote's `rationaleUri` inline with no deadline (up to 10 s
+/// of DNS plus 10 s of request per vote), and round 2's budget reached only the receipts. Any
+/// committee agent key can submit unlimited votes with any URI, so 1,000 votes at a blackholed host
+/// held the tick for hours, and the watchdog's evaluation behind it. A vote whose memo did not
+/// verify then stayed unverified for ever, and a tilt counts only verified votes.
+///
+/// Five votes from one member, each at a host that accepts and never answers. The tick returns
+/// within the inline budget with all five stored, and the last ones unfetched. Then the newest
+/// vote's host starts answering, and the next tick's sweep verifies it, so the member counts.
+#[tokio::test]
+async fn tarpit_memo_hosts_cannot_hold_the_tick_and_the_sweep_verifies_a_skipped_vote() {
+    use explorer_indexer::indexer::{INLINE_FETCH_TIME_BUDGET, SWEEP_TIME_BUDGET};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let fx = pg_fixture().await;
+
+    // Votes 1 to 4: a host that accepts every connection and never answers.
+    let tarpit = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let tarpit_addr: SocketAddr = tarpit.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((sock, _)) = tarpit.accept().await {
+            held.push(sock);
+        }
+    });
+    // Vote 5: the same until `answering` is set, then it serves the memo.
+    let memo_body = br#"{"agent_id":"athena-v1","vault":"0x2222","stance":"Overweight"}"#.to_vec();
+    let memo_hash = alloy_primitives::keccak256(&memo_body);
+    let answering = Arc::new(AtomicBool::new(false));
+    let late = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let late_addr: SocketAddr = late.local_addr().unwrap();
+    let (answering_srv, body_srv) = (answering.clone(), memo_body.clone());
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((mut sock, _)) = late.accept().await {
+            if !answering_srv.load(Ordering::SeqCst) {
+                held.push(sock);
+                continue;
+            }
+            let body = body_srv.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = sock.write_all(head.as_bytes()).await;
+                let _ = sock.write_all(&body).await;
+            });
+        }
+    });
+
+    let ic = ic_addr();
+    let agent = agent_addr();
+    let vault = vault_addr();
+    let mut logs = vec![encode_agent_registered_log(
+        ic,
+        agent,
+        "athena-v1",
+        9,
+        [0x01; 32],
+        0,
+    )];
+    for i in 1..=5u64 {
+        let host = if i == 5 { late_addr } else { tarpit_addr };
+        logs.push(encode_vote_submitted_log(
+            ic,
+            i,
+            agent,
+            vault,
+            0,
+            6000,
+            80,
+            &format!("http://{host}/memo-{i}.json"),
+            memo_hash.0,
+            1_000_000 + i,
+            10,
+            [0x10 + i as u8; 32],
+            i as u32,
+        ));
+    }
+
+    let stub = StubRpcServer::start().await;
+    program_stub_block10(&stub);
+    stub.honour_log_filter(true);
+    stub.set("eth_getLogs", serde_json::Value::Array(logs));
+    let rpc = JsonRpc::new(&stub.url);
+    let mut cfg = base_cfg(&stub);
+    cfg.start_block = Some(0);
+
+    // The tick that indexes the votes.
+    let started = std::time::Instant::now();
+    let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    let elapsed = started.elapsed();
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+    assert!(
+        elapsed < INLINE_FETCH_TIME_BUDGET + std::time::Duration::from_secs(15),
+        "five tarpit memo hosts held the indexing tick for {elapsed:?}; the inline budget is \
+         {INLINE_FETCH_TIME_BUDGET:?}"
+    );
+    let votes = || async {
+        sqlx::query_as::<_, (i64, bool, i32)>(
+            "SELECT vote_id, verified, verify_attempts FROM committee_votes \
+             WHERE chain_id = $1 ORDER BY vote_id",
+        )
+        .bind(8453i64)
+        .fetch_all(fx.db.pool())
+        .await
+        .unwrap()
+    };
+    let stored = votes().await;
+    assert_eq!(stored.len(), 5, "every vote is stored, fetched or not");
+    assert!(
+        stored.iter().all(|&(_, verified, _)| !verified),
+        "no tarpit memo verifies"
+    );
+    assert_eq!(
+        stored[4],
+        (5, false, 0),
+        "three 10 s fetches spend the budget, so vote 5 is stored unfetched"
+    );
+    let counted = || async {
+        sqlx::query_scalar::<_, Option<i32>>(
+            "SELECT vote_count FROM regime_snapshots WHERE chain_id = $1 AND vault_address = $2 \
+             ORDER BY block_number DESC LIMIT 1",
+        )
+        .bind(8453i64)
+        .bind(vault.as_slice())
+        .fetch_optional(fx.db.pool())
+        .await
+        .unwrap()
+        .flatten()
+        .unwrap_or(0)
+    };
+    assert_eq!(
+        counted().await,
+        0,
+        "an unverified vote counts toward no tilt"
+    );
+
+    // Vote 5's host answers now. The next tick's sweep (newest first) verifies it, and the tick's
+    // regime refresh counts the member.
+    answering.store(true, Ordering::SeqCst);
+    cfg.end_block = Some(11);
+    let started = std::time::Instant::now();
+    let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    let elapsed = started.elapsed();
+    stub.shutdown();
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+    assert!(
+        elapsed < SWEEP_TIME_BUDGET + std::time::Duration::from_secs(15),
+        "the sweep held the tick for {elapsed:?}; its budget is {SWEEP_TIME_BUDGET:?}"
+    );
+    let stored = votes().await;
+    assert_eq!(
+        stored[4],
+        (5, true, 1),
+        "the sweep fetched the skipped vote and it verifies"
+    );
+    assert!(
+        stored[..4].iter().all(|&(_, verified, _)| !verified),
+        "the tarpit votes stay unverified"
+    );
+    assert!(
+        stored[..4].iter().any(|&(_, _, attempts)| attempts >= 2),
+        "the sweep's attempts on the tarpit votes count toward its ceiling"
+    );
+    assert_eq!(
+        counted().await,
+        1,
+        "the verified vote counts toward the vault's tilt"
+    );
 }

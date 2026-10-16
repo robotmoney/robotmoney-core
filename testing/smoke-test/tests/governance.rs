@@ -3,6 +3,8 @@
 //! Verifies that:
 //!   - RouterGovernance is deployed at a non-zero address.
 //!   - RouterGovernance has bytecode on-chain.
+//!   - RouterGovernance releases from the deployed receipt register, which grants it ADMIN_ROLE
+//!     (one `applyReceipt` call releases a receipt and applies its weights).
 //!   - The deployer holds no admin; the timelock is admin.
 //!   - The deployer cannot apply a consensus receipt: the timelock holds
 //!     `WEIGHT_SETTER_ROLE` (the `applyReceipt` gate) and the deployer does not.
@@ -45,6 +47,32 @@ fn governance_has_code() {
         code.len() > 2,
         "RouterGovernance at {:#x} has no bytecode (got {code:?})",
         fx.governance()
+    );
+}
+
+/// The weight setter applies receipts from the register the deploy wired (issue 1698, QA plan v1 C1).
+/// `applyReceipt` releases the receipt on `receipts()` and then calls `setWeights`, so the deploy must
+/// initialize `receipts()` with the deployed ConsensusRecommendationReceipt and the register must
+/// grant the weight setter ADMIN_ROLE (its `releaseReceipt` gate). Either one missing makes every
+/// `apply-receipt` revert.
+#[test]
+fn governance_releases_from_the_deployed_receipt_register() {
+    require_prereqs("governance_releases_from_the_deployed_receipt_register");
+    let fx = fixture();
+    let register = fx.consensus_receipt();
+    assert_ne!(
+        register,
+        Address::ZERO,
+        "the ic-policy manifest names no ConsensusRecommendationReceipt"
+    );
+    assert_eq!(
+        read_receipts(fx),
+        register,
+        "RouterGovernance.receipts() must be the deployed receipt register"
+    );
+    assert!(
+        has_role(fx, register, ADMIN_ROLE, fx.governance()),
+        "the receipt register must grant RouterGovernance ADMIN_ROLE (the releaseReceipt gate)"
     );
 }
 
@@ -113,19 +141,47 @@ const WEIGHT_SETTER_ROLE: &str = "a2edfd05c0c1cda238b1c99a8a31252998b19153c63b3f
 
 /// Check hasRole(role, account) on the governance contract. `role` is the
 /// 32-byte role id as 64 hex chars without a `0x` prefix.
-/// hasRole(bytes32,address) selector: 0x91d14854
 fn governance_has_role(fx: &Fixture, role: &str, account: Address) -> bool {
+    has_role(fx, fx.governance(), role, account)
+}
+
+/// Check hasRole(role, account) on `target` (RouterGovernance or the receipt register; both
+/// define ADMIN_ROLE as keccak256("ADMIN_ROLE")). `role` is 64 hex chars without a `0x` prefix.
+/// hasRole(bytes32,address) selector: 0x91d14854
+fn has_role(fx: &Fixture, target: Address, role: &str, account: Address) -> bool {
     let account_hex = format!("{account:x}");
     let data = format!("0x91d14854{role}{account_hex:0>64}");
     let result: String = rpc_call(
         fx.rpc_url(),
         "eth_call",
         serde_json::json!([
-            {"to": format!("{:#x}", fx.governance()), "data": data},
+            {"to": format!("{target:#x}"), "data": data},
             "latest"
         ]),
     );
     result.trim_start_matches("0x").ends_with('1')
+}
+
+/// Read `receipts()` (the receipt register) from the RouterGovernance contract.
+/// receipts() selector: keccak256("receipts()")[0..4] = 0xf400b10e (`cast sig "receipts()"`).
+fn read_receipts(fx: &Fixture) -> Address {
+    let result: String = rpc_call(
+        fx.rpc_url(),
+        "eth_call",
+        serde_json::json!([
+            {"to": format!("{:#x}", fx.governance()), "data": "0xf400b10e"},
+            "latest"
+        ]),
+    );
+    let word = result.trim_start_matches("0x");
+    assert_eq!(
+        word.len(),
+        64,
+        "receipts() returned {result:?}, not one word"
+    );
+    format!("0x{}", &word[24..])
+        .parse()
+        .expect("receipts() word is an address")
 }
 
 fn rpc_call<T: for<'de> serde::Deserialize<'de>>(

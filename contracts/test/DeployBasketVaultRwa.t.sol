@@ -181,6 +181,7 @@ contract DeployBasketVaultRwaTest is BasketDeployFixture {
 }
 
 import {ConstPool} from "./helpers/BasketDeployFixture.sol";
+import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
 
 contract ConstPoolFee100 is ConstPool {
     constructor(address a, address b) ConstPool(a, b, 100) {}

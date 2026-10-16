@@ -275,6 +275,11 @@ fn run() -> i32 {
         "gateway_implementation_runtime_hash={}",
         fixture.gateway_implementation_runtime_hash()
     );
+    // Issue 1810: rmpc also pins the logic behind the vault and router proxies a write reaches.
+    println!(
+        "proxy_implementation_hashes={}",
+        fixture.proxy_implementation_hashes().join(",")
+    );
 
     if cli.deploy_only {
         return finish_deploy_only(fixture, deploy_args);
@@ -551,6 +556,12 @@ fn print_endpoint_summary(
         out,
         "gateway_implementation_runtime_hash={}",
         fixture.gateway_implementation_runtime_hash()
+    );
+    // Issue 1810: rmpc refuses a proxied vault or router whose implementation is not pinned.
+    let _ = writeln!(
+        out,
+        "proxy_implementation_hashes={}",
+        fixture.proxy_implementation_hashes().join(",")
     );
     // Issue #320: surface registry and router addresses so dapp e2e
     // tests can drive the vault-selector and router deposit flow.

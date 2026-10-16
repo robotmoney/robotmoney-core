@@ -13,7 +13,7 @@
  * until rmpc implements those backends.
  */
 import { useState } from "react";
-import type { Address } from "viem";
+import { isAddress, type Address } from "viem";
 import { exportRmpcConfig, type SignerKind } from "../lib/configExport";
 
 interface Props {
@@ -25,8 +25,22 @@ interface Props {
   /** The verified implementation behind a proxied gateway (issue 1810). */
   gatewayImplementation?: string;
   gatewayImplementationRuntimeHash?: string;
+  /** The vault is an ERC-1967 proxy: the export names `proxy_implementation_hashes`. */
+  vaultIsProxy?: boolean;
+  /**
+   * Reviewed vault and router implementation code hashes from the build's pins (ADR-0014),
+   * exported as `proxy_implementation_hashes`. Never read from the live chain.
+   */
+  proxyImplementationHashes?: readonly string[];
   chainId: number;
   agent: Address;
+  /**
+   * The connected wallet. It reveals the authorization, so it is the agent's
+   * owner (`agent_owner`); absent until a wallet connects.
+   */
+  agentOwner?: Address;
+  /** The share receiver typed in the Authorize tab. Falls back to `agentOwner`. */
+  shareReceiver?: string;
 }
 
 export function ConfigExportPanel(props: Props) {
@@ -51,6 +65,14 @@ export function ConfigExportPanel(props: Props) {
             keystore_path: keystorePath,
           };
 
+  // Binding pins (QA plan D2/U6): rmpc refuses to deposit or withdraw when the
+  // gateway shows another owner or share receiver for this agent. A wallet
+  // without ADMIN_ROLE must name itself as share receiver, so the connected
+  // wallet is the fallback.
+  const shareReceiver =
+    props.shareReceiver !== undefined && isAddress(props.shareReceiver, { strict: false })
+      ? props.shareReceiver
+      : props.agentOwner;
   const toml = exportRmpcConfig({
     chain_id: props.chainId,
     rpc_url: rpcUrl,
@@ -60,6 +82,10 @@ export function ConfigExportPanel(props: Props) {
     gateway_runtime_hash: props.gatewayRuntimeHash,
     gateway_implementation: props.gatewayImplementation,
     gateway_implementation_runtime_hash: props.gatewayImplementationRuntimeHash,
+    vault_is_proxy: props.vaultIsProxy === true,
+    proxy_implementation_hashes: props.proxyImplementationHashes,
+    share_receiver: props.agentOwner ? shareReceiver : undefined,
+    agent_owner: props.agentOwner,
     signer,
   });
 
@@ -117,6 +143,18 @@ export function ConfigExportPanel(props: Props) {
           value={keystorePath}
           onChange={(e) => setKeystorePath(e.target.value)}
         />
+      )}
+      {props.agentOwner ? (
+        <p className="hint" data-testid="export-binding-pins">
+          The export pins <code>agent_owner</code> (this wallet) and <code>share_receiver</code>:
+          rmpc refuses to deposit or withdraw if the gateway shows another owner or receiver for
+          this agent.
+        </p>
+      ) : (
+        <p className="hint" data-testid="export-binding-pins-missing">
+          Connect the wallet that authorizes the agent to pin its owner and share receiver in the
+          export.
+        </p>
       )}
       <pre data-testid="exported-toml">{toml}</pre>
     </section>

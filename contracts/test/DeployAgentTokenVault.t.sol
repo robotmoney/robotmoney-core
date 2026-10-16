@@ -394,6 +394,54 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
         script.runInProcess(p, json);
     }
 
+    // ─── QA plan D4 (E6): the guard sits above the RM pool fee ───────────────────
+
+    /// @notice A guard at or below the RM pool fee (29100, 291 bps) is refused before any vault is deployed: spot rests anywhere
+    ///         inside the fee band with no arbitrage to close it, so such a guard reverts every rmAGENT deposit on idle drift.
+    function test_reverts_whenNavDeviationBpsIsNotAboveThePoolFee() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.navDeviationGuardBps = 291;
+        string memory json = _prepare(p);
+        vm.expectRevert(bytes("RM: NAV_DEVIATION_BPS must be above the pool fee in bps"));
+        script.runInProcess(p, json);
+    }
+
+    /// @notice One bps above the RM pool fee is the smallest accepted guard.
+    function test_guard_acceptsOneBpsAboveThePoolFee() public {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.navDeviationGuardBps = 292;
+        BasketVaultDeployBase.Deployed memory d = _deployWith(p);
+        assertEq(BasketVault(d.vault).navDeviationGuardBps(), 292);
+    }
+
+    /// @notice Every committed sheet sets the rmAGENT guard to the D10 value, 400 bps (the 291 bps fee plus a TWAP lag
+    ///         budget), so the agent stage passes the assertion above on the Twin and in a rehearsal.
+    function test_sheets_agentNavDeviationIsAboveThePoolFee() public view {
+        string[2] memory sheets = [
+            "deployments/twin-918453/stage-sheet.env",
+            "deployments/base-8453-rehearsal/stage-sheet.example.env"
+        ];
+        uint256 fee = vm.readFile(SHIPPED).readUint(".shortlist[0].poolFee");
+        for (uint256 i = 0; i < sheets.length; i++) {
+            uint256 nav = _sheetUint(vm.readFile(sheets[i]), "VAULT_AGENT_NAV_DEVIATION_BPS");
+            assertEq(nav, 400, sheets[i]);
+            assertGt(nav * 100, fee, sheets[i]);
+        }
+    }
+
+    /// @dev The value of `name=` in a stage sheet, with any trailing comment dropped.
+    function _sheetUint(string memory text, string memory name) internal pure returns (uint256) {
+        string[] memory lines = vm.split(text, "\n");
+        string memory key = string.concat(name, "=");
+        for (uint256 i = 0; i < lines.length; i++) {
+            if (vm.indexOf(lines[i], key) != 0) continue;
+            string[] memory rhs = vm.split(lines[i], "=");
+            string[] memory words = vm.split(vm.trim(rhs[1]), " ");
+            return vm.parseUint(words[0]);
+        }
+        revert(string.concat(name, " missing from the sheet"));
+    }
+
     function test_reverts_whenMinPoolLiquidityUnset() public {
         string memory prefix = "D1666LAGENT_";
         AgentDeployHarness h = new AgentDeployHarness();

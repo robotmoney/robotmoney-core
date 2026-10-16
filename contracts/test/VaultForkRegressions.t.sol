@@ -16,6 +16,23 @@ import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {ForkSelect} from "./helpers/ForkSelect.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
 
+/// @dev The parts of the real Aave V3 Pool and its addresses provider that pause a reserve the way
+///      `PoolConfigurator.setReservePause` does: rewrite its configuration bitmap.
+interface IAavePoolConfigurable {
+    struct ReserveConfigurationMap {
+        uint256 data;
+    }
+
+    function ADDRESSES_PROVIDER() external view returns (address);
+    function getConfiguration(address asset) external view returns (uint256);
+    function setConfiguration(address asset, ReserveConfigurationMap calldata configuration)
+        external;
+}
+
+interface IAaveAddressesProvider {
+    function getPoolConfigurator() external view returns (address);
+}
+
 /// @title VaultForkRegressions
 /// @notice Fork-level regression suite for vault accounting attack paths.
 ///
@@ -35,6 +52,8 @@ import {CoreProxies} from "./helpers/CoreProxies.sol";
 ///   AC4  Direct USDC transfer to vault is included in totalAssets / TVL-cap path.
 ///   AC5  Unrouted deposit emits UnroutedDeposit and the idle balance is observable.
 ///   AC6  MorphoAdapter.withdraw returns actual delivered USDC under fork conditions.
+///   SR3  Security round 3: the venue-health reads decode real Base state, and a paused Aave
+///        reserve closes deposits.
 contract VaultForkRegressions is Test {
     // ─── Base mainnet protocol addresses ──────────────────────────────────────
 
@@ -490,6 +509,51 @@ contract VaultForkRegressions is Test {
         // The USDC that Alice received must be approx equal to what she deposited
         // (no exit fee, rounding ≤ 1 wei per share).
         assertApproxEqAbs(assetsOut, depositAmt, 1, "morpho withdraw must return full deposit");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SR3 — a venue that shuts withdrawals closes deposits (security round 3)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// @notice SR3: `venueWithdrawable` decodes the real venues. The Base Aave USDC reserve reads
+    ///         active and not paused and Comet's withdrawals read open, so a vault over both takes
+    ///         deposits. Paused the way its guardian pauses it (bit 60 of the reserve bitmap,
+    ///         written through the pool's configurator), the real pool refuses the supply, the
+    ///         adapter reads the reserve shut, the vault's `maxDeposit` reads 0, and the adapter's
+    ///         `deploy` reverts `VenueWithdrawalsClosed` rather than handing the USDC back.
+    function test_fork_venueHealth_pausedAaveReserveClosesDeposits() public {
+        _setUp();
+
+        RobotMoneyVault vault_ = CoreProxies.robotMoneyVault(
+            IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
+        );
+        AaveV3Adapter aaveAdapter =
+            new AaveV3Adapter(AAVE_POOL, BASE_USDC, AAVE_A_TOKEN, address(vault_));
+        CompoundV3Adapter compoundAdapter =
+            new CompoundV3Adapter(COMPOUND_COMET, BASE_USDC, address(vault_));
+        assertTrue(aaveAdapter.venueWithdrawable(), "the Base Aave USDC reserve reads open");
+        assertTrue(compoundAdapter.venueWithdrawable(), "the Base Comet reads open");
+        _allowAdapter(vault_, address(aaveAdapter));
+        _allowAdapter(vault_, address(compoundAdapter));
+        vm.startPrank(admin);
+        vault_.addAdapter(address(aaveAdapter), 10_000);
+        vault_.addAdapter(address(compoundAdapter), 10_000);
+        vm.stopPrank();
+        assertGt(vault_.maxDeposit(alice), 0, "deposits open over healthy venues");
+
+        IAavePoolConfigurable pool = IAavePoolConfigurable(AAVE_POOL);
+        uint256 config = pool.getConfiguration(BASE_USDC);
+        vm.prank(IAaveAddressesProvider(pool.ADDRESSES_PROVIDER()).getPoolConfigurator());
+        pool.setConfiguration(
+            BASE_USDC, IAavePoolConfigurable.ReserveConfigurationMap(config | (uint256(1) << 60))
+        );
+        assertFalse(aaveAdapter.venueWithdrawable(), "a paused reserve reads shut");
+        assertEq(vault_.maxDeposit(alice), 0, "deposits close");
+
+        deal(BASE_USDC, address(aaveAdapter), SEED_AMOUNT);
+        vm.expectPartialRevert(AaveV3Adapter.VenueWithdrawalsClosed.selector);
+        vm.prank(address(vault_));
+        aaveAdapter.deploy(SEED_AMOUNT);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

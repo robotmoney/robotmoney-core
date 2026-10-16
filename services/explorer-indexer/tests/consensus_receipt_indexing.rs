@@ -1453,3 +1453,331 @@ async fn release_from_an_unconfigured_contract_cannot_flip_a_receipt() {
          receipt contract must not release anything"
     );
 }
+
+// ─── Security round 1: on-chain URI fetch guard ───────────────────────────────
+//
+// A receipt's `payloadUri` (and a vote's `rationaleUri`) is chosen on chain, and the indexer
+// fetches it from its own network position. It must not reach the cloud metadata endpoint or any
+// other link-local, unspecified, broadcast or multicast address, or a non-HTTP scheme, and it must
+// never buffer a body past the 1 MiB cap. Each refused URI fails before any connection, and the
+// oversized bodies come from a loopback thread, so these need no Docker.
+
+use explorer_indexer::indexer::{fetch_payload_once, is_forbidden_fetch_ip, SWEEP_TIME_BUDGET};
+
+/// The indexer's body cap (`MAX_FETCH_BODY` in `indexer.rs`).
+const MAX_FETCH_BODY_BYTES: usize = 1024 * 1024;
+
+#[tokio::test]
+async fn fetch_payload_once_refuses_metadata_link_local_and_other_schemes() {
+    for uri in [
+        "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+        "https://169.254.170.2/v2/credentials",
+        "http://[fe80::1]/payload",
+        "http://[::ffff:169.254.169.254]/latest/meta-data/",
+        "http://[fd00:ec2::254]/latest/meta-data/",
+        "http://0.0.0.0:8080/payload",
+        "http://255.255.255.255/payload",
+        "http://224.0.0.1/payload",
+        "file:///etc/passwd",
+        "ftp://example.com/payload",
+        "gopher://example.com/payload",
+    ] {
+        let err = fetch_payload_once(uri)
+            .await
+            .expect_err(&format!("{uri} must be refused"));
+        assert!(err.starts_with("refused "), "{uri}: {err}");
+    }
+}
+
+#[test]
+fn only_link_local_unspecified_broadcast_and_multicast_hosts_are_forbidden() {
+    let forbidden = [
+        "169.254.169.254",
+        "169.254.0.1",
+        "0.0.0.0",
+        "255.255.255.255",
+        "239.1.2.3",
+        "fe80::1",
+        "febf::1",
+        "::",
+        "ff02::1",
+        "::ffff:169.254.169.254",
+        "fd00:ec2::254",
+    ];
+    for ip in forbidden {
+        assert!(
+            is_forbidden_fetch_ip(ip.parse::<std::net::IpAddr>().unwrap()),
+            "{ip} must be refused"
+        );
+    }
+    // A devnet and the tests serve receipts from loopback and private ranges; public hosts
+    // are what production uses.
+    let allowed = [
+        "127.0.0.1",
+        "10.0.0.5",
+        "172.16.1.1",
+        "192.168.1.10",
+        "::1",
+        "fd00::1",
+        "8.8.8.8",
+        "2606:4700::1111",
+    ];
+    for ip in allowed {
+        assert!(
+            !is_forbidden_fetch_ip(ip.parse::<std::net::IpAddr>().unwrap()),
+            "{ip} must be fetchable"
+        );
+    }
+}
+
+/// Serve one HTTP response from a loopback thread: `head` then `body_len` bytes of `x`.
+fn serve_once(head: String, body_len: usize) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/payload", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        if let Ok((mut sock, _)) = listener.accept() {
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf);
+            let _ = sock.write_all(head.as_bytes());
+            let chunk = vec![b'x'; 64 * 1024];
+            let mut left = body_len;
+            while left > 0 {
+                let n = left.min(chunk.len());
+                if sock.write_all(&chunk[..n]).is_err() {
+                    break;
+                }
+                left -= n;
+            }
+        }
+    });
+    url
+}
+
+#[tokio::test]
+async fn a_body_past_the_cap_is_refused_while_it_streams() {
+    // No Content-Length: the body is cut while it streams, at the chunk that crosses 1 MiB.
+    let url = serve_once(
+        "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_string(),
+        2 * MAX_FETCH_BODY_BYTES,
+    );
+    let err = fetch_payload_once(&url)
+        .await
+        .expect_err("2 MiB is refused");
+    assert!(err.contains("too large"), "{err}");
+
+    // A declared Content-Length over the cap is refused before the body is read.
+    let url = serve_once(
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            MAX_FETCH_BODY_BYTES + 1
+        ),
+        0,
+    );
+    let err = fetch_payload_once(&url)
+        .await
+        .expect_err("declared size is refused");
+    assert!(err.contains("too large"), "{err}");
+
+    // A body at the cap is read whole.
+    let url = serve_once(
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {MAX_FETCH_BODY_BYTES}\r\nConnection: close\r\n\r\n"
+        ),
+        MAX_FETCH_BODY_BYTES,
+    );
+    let body = fetch_payload_once(&url).await.expect("1 MiB is read");
+    assert_eq!(body.len(), MAX_FETCH_BODY_BYTES);
+}
+
+/// Security round 1: payload hosts that never answer cannot hold a tick past the sweep's time
+/// budget.
+///
+/// The re-verification sweep runs before the tick indexes anything. One receipt whose host accepts
+/// and never answers costs three 5 s timeouts plus 8 s of backoff, about 23 s, and the sweep took
+/// up to 16 of them, so eight such receipts used to hold the tick for about three minutes (and the
+/// watchdog's evaluation behind it). With the budget the tick returns soon after it, and every cut
+/// attempt still counts toward the attempt ceiling.
+#[tokio::test]
+async fn tarpit_payload_hosts_cannot_hold_the_tick_past_the_sweep_budget() {
+    let fx = pg_fixture().await;
+    let db = &fx.db;
+    db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
+
+    // A host that accepts every connection and never answers.
+    let tarpit = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let tarpit_addr: SocketAddr = tarpit.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((sock, _)) = tarpit.accept().await {
+            held.push(sock);
+        }
+    });
+    for i in 0..8u8 {
+        db.insert_consensus_receipt(
+            CHAIN,
+            receipt_addr().into_array(),
+            [0x90 + i; 32],
+            i64::from(i),
+            submitter_addr().into_array(),
+            [0xd0u8; 32],
+            &format!("http://{tarpit_addr}/api/swarm/receipts/tarpit-{i}"),
+            1_700_000_000,
+            10,
+            i32::from(i),
+            [0x90 + i; 32],
+            ReceiptVerification {
+                verified: false,
+                payload_bytes: None,
+                attempts: 0,
+                last_error: Some("not fetched yet".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let stub = StubRpcServer::start().await;
+    program_stub(&stub, 20, 0xab, 0xaa);
+    stub.set("eth_getLogs", serde_json::json!([]));
+    let rpc = JsonRpc::new(&stub.url);
+
+    let started = std::time::Instant::now();
+    let outcome = run_once(db, &rpc, &base_cfg(20)).await.unwrap();
+    let elapsed = started.elapsed();
+    stub.shutdown();
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+    assert!(
+        elapsed < SWEEP_TIME_BUDGET + std::time::Duration::from_secs(15),
+        "eight tarpit payload hosts held the tick for {elapsed:?}; the sweep's budget is {:?}",
+        SWEEP_TIME_BUDGET
+    );
+
+    let attempted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM consensus_receipts \
+         WHERE chain_id = $1 AND verified = FALSE AND verify_attempts >= 1",
+    )
+    .bind(CHAIN)
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    assert!(
+        attempted >= 1,
+        "the attempts the sweep made, cut ones included, count toward the ceiling"
+    );
+}
+
+/// Security round 2: payload hosts that never answer cannot hold the tick that INDEXES their
+/// receipts past the inline fetch budget.
+///
+/// The sweep got a budget in round 1, but `handle_log` fetched every new `ReceiptRecorded` inline,
+/// about 23 s per host that accepts and never answers, with no cap per tick. Any committee agent
+/// can record receipts with an arbitrary URI, so 100 of them in one block held the tick (and the
+/// watchdog's evaluation behind it) for about 40 minutes. Ten such receipts now cost at most the
+/// inline budget. Every row is stored, and every one the tick did not verify is in the sweep's
+/// working set, so a later tick's sweep fetches it.
+#[tokio::test]
+async fn tarpit_payload_hosts_cannot_hold_the_indexing_tick_past_the_inline_budget() {
+    use explorer_indexer::indexer::INLINE_FETCH_TIME_BUDGET;
+
+    let fx = pg_fixture().await;
+
+    // A host that accepts every connection and never answers.
+    let tarpit = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let tarpit_addr: SocketAddr = tarpit.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((sock, _)) = tarpit.accept().await {
+            held.push(sock);
+        }
+    });
+    let logs: Vec<serde_json::Value> = (0..10u8)
+        .map(|i| {
+            encode_receipt_recorded_log(
+                receipt_addr(),
+                [0xA0 + i; 32],
+                submitter_addr(),
+                u64::from(i),
+                [0xd1u8; 32],
+                &format!("http://{tarpit_addr}/api/swarm/receipts/inline-{i}"),
+                1_700_000_000,
+                10,
+                [0xA0 + i; 32],
+                u32::from(i),
+            )
+        })
+        .collect();
+
+    let stub = StubRpcServer::start().await;
+    program_stub(&stub, 10, 0xaa, 0x00);
+    stub.set("eth_getLogs", serde_json::Value::Array(logs));
+    let rpc = JsonRpc::new(&stub.url);
+
+    let started = std::time::Instant::now();
+    let outcome = run_once(&fx.db, &rpc, &base_cfg(10)).await.unwrap();
+    let elapsed = started.elapsed();
+    stub.shutdown();
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+    assert!(
+        elapsed < INLINE_FETCH_TIME_BUDGET + std::time::Duration::from_secs(15),
+        "ten tarpit payload hosts held the indexing tick for {elapsed:?}; the inline budget is \
+         {INLINE_FETCH_TIME_BUDGET:?}"
+    );
+    assert_eq!(
+        fx.db.count(CountTable::ConsensusReceipts).await.unwrap(),
+        10,
+        "every commitment is stored, fetched or not"
+    );
+    let deferred: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM consensus_receipts \
+         WHERE chain_id = $1 AND verified = FALSE AND verify_attempts = 0",
+    )
+    .bind(CHAIN)
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+    assert!(
+        deferred >= 1,
+        "past the budget a receipt is stored unfetched, with no attempt counted against it"
+    );
+    let pending = fx
+        .db
+        .list_unverified_receipts(CHAIN, 12, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        pending.len(),
+        10,
+        "every unverified receipt is in the sweep's working set"
+    );
+}
+
+/// Security round 2: the DNS resolution before a payload or memo fetch shares the attempt's
+/// timeout. It used to run before the client existed, outside the request timeout, so a name
+/// whose nameserver never answers added the system resolver's own timeout to every attempt.
+#[tokio::test]
+async fn a_resolver_that_never_answers_fails_within_the_fetch_timeout() {
+    use explorer_indexer::indexer::resolve_within;
+
+    let timeout = std::time::Duration::from_millis(300);
+    let started = std::time::Instant::now();
+    let hang = std::future::pending::<std::io::Result<std::vec::IntoIter<SocketAddr>>>();
+    let err = resolve_within("never-answers.example", timeout, hang)
+        .await
+        .expect_err("a resolver that never answers is an error");
+    let elapsed = started.elapsed();
+    assert!(err.contains("never-answers.example"), "{err}");
+    assert!(
+        elapsed < timeout + std::time::Duration::from_secs(2),
+        "the resolution took {elapsed:?} against a {timeout:?} budget"
+    );
+
+    // An answer within the budget passes through unchanged.
+    let addr: SocketAddr = "127.0.0.1:443".parse().unwrap();
+    let ok = resolve_within("fast.example", timeout, async move {
+        Ok(vec![addr].into_iter())
+    })
+    .await
+    .unwrap();
+    assert_eq!(ok, vec![addr]);
+}

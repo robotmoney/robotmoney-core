@@ -11,8 +11,10 @@ This document maps every refusal to its source in the implementation plan.
 
 Before signing any deposit transaction, the client RPC-reads:
 
-- `gateway.depositsPaused()`
+- `gateway.depositsPaused()`, and `depositsPaused()` on the vault
 - `gateway.agents(self_addr)` (active, validUntil, caps, shareReceiver)
+- `gateway.agentOwner(self_addr)`, when the config pins `agent_owner`
+- `gateway.effectiveDepositWindowGross(self_addr)`
 - `usdc.allowance(self, gateway)`
 - `usdc.balanceOf(self)`
 - `eth_chainId` matches the configured `chain_id`
@@ -21,31 +23,75 @@ Before signing any deposit transaction, the client RPC-reads:
 - the gateway's ERC-1967 implementation slot names the configured
   `gateway_implementation`, and that implementation's code hash matches
   `gateway_implementation_runtime_hash`
+- when the vault the write reaches (or the router and its legs) is a proxy:
+  its implementation's code hash is listed in `proxy_implementation_hashes`
+- for a router deposit (`--destination <router>`): `router.previewDeposit(amount)`,
+  which marks each leg the router would skip and quotes the shares of the
+  rest. Without `--min-shares-per-leg` the floors are those quotes less 0.50%
 
 Every read runs at one pinned block. The same gateway check runs before
 the committee's signed tilt (`committee vote-submit`) and `receipt submit` sign.
 
+Every refusal prints one JSON document on stdout with `"status":"refused"`
+and the name in `error`, and exits 2. Match on `error`, never on `message`.
+
 | Condition | Error code | Meaning |
 |---|---|---|
-| `gateway.depositsPaused() == true` | `ErrDepositsPaused` | New deposits are halted by `DEPOSIT_PAUSER_ROLE`; only `ADMIN_ROLE` can unpause. Deposits only: a withdrawal is never refused for a pause. |
+| `depositsPaused() == true` on the gateway or the vault | `ErrDepositsPaused` | New deposits are halted by `DEPOSIT_PAUSER_ROLE`; only `ADMIN_ROLE` can unpause. Deposits only: a withdrawal is never refused for a pause. |
 | Agent record missing or `active == false` | `ErrAgentNotAuthorized` | This address is not (or no longer) an authorized agent. |
-| `validUntil < block.timestamp` | `ErrAgentExpired` | The authorization has expired; ADMIN must re-authorize. |
-| `amount > maxPerPayment` | `ErrPerPaymentCapExceeded` | Operator-set per-payment cap. |
-| `windowGross + amount > maxPerWindow` | `ErrPerWindowCapExceeded` | Operator-set per-window (24h) cap. |
-| `usdc.balanceOf(self) < amount` | `ErrInsufficientBalance` | Fund the agent's USDC balance. |
-| `usdc.allowance(self, gateway) < amount` | `ErrInsufficientAllowance` | Approve the gateway for at least `amount`. |
+| `agents(self).shareReceiver` differs from the config's `share_receiver`, or `agentOwner(self)` differs from its `agent_owner` | `ErrAgentBindingMismatch` | Someone other than the operator bound this agent address, so its deposits would mint shares to them. Do not retry. Tell the operator. Checked only when the config pins the value. |
+| `validUntil < now` | `ErrPolicyExpired` | The authorization has expired; its owner must re-authorize. |
+| `amount > maxPerPayment` | `ErrDepositCapExceeded` | Operator-set per-payment cap. The message names `maxPerPayment`. |
+| `windowGross + amount > maxPerWindow` | `ErrDepositCapExceeded` | Operator-set rolling 24h cap. The message names `maxPerWindow`. |
+| `usdc.allowance(self, gateway) < amount` | `ErrAllowanceInsufficient` | Approve the gateway for at least `amount`. |
+| `usdc.balanceOf(self) < amount` | `ErrBalanceInsufficient` | Fund the agent's USDC balance. |
 | `eth_chainId != config.chain_id` | `ErrChainIdMismatch` | The RPC endpoint is on the wrong chain. |
 | `keccak256(eth_getCode(gateway)) != gateway_runtime_hash` | `ErrCodeHashMismatch` | The deployed gateway bytecode does not match the pinned hash. |
 | The implementation slot names another address, the implementation code hash differs, a proxy has no approved implementation configured, or an approved implementation is configured for a gateway with an empty slot | `ErrImplementationNotApproved` | The gateway proxy points at logic the operator did not approve. The proxy hash can still match. |
 | The implementation slot or the implementation code cannot be read | `ErrImplementationUnverified` | The client cannot prove which logic would run. It never signs on an unverified implementation. |
 | The implementation changed after preflight (the signed transaction is discarded unsent), or the transaction executed under another implementation (carries `tx_hash`) | `ErrImplementationChanged` | Review what changed before any retry. A write that executed is not reported as a success. |
+| The vault the write reaches, the router or a router leg is a proxy and its implementation's code hash is not in `proxy_implementation_hashes` (or the key is missing) | `ErrImplementationNotApproved` | Same as above, for that contract: the message names it (`vault 0x…`, `router 0x…`). Do not retry. Tell the operator. |
+| Router deposit: `router.previewDeposit` marks a leg with weight above 0 unavailable (paused, at its TVL cap, an open exclusion, a basket outside its price band), and `--allow-unavailable-legs` was not passed | `ErrLegUnavailable` | The router would skip that leg and deposit its whole share into the other legs, so the split would not be the governed weights. The message names each leg and its bps. Wait and retry, or pass `--allow-unavailable-legs` only with the user's approval. |
+
+## Withdraw refusals
+
+`withdraw` and `withdraw-router` run the same chain id, code hash, agent,
+binding and expiry checks, then these. A deposit pause never refuses them.
+
+| Condition | Error code | Meaning |
+|---|---|---|
+| `shares > maxWithdrawPerPayment`, or rolling withdraw gross + shares > `maxWithdrawPerWindow` | `ErrWithdrawCapExceeded` | Operator-set withdraw cap. The message names the cap. `withdraw-router` checks the sum of its legs. |
+| Vault share `allowance(holder, gateway) < shares` | `ErrShareAllowanceInsufficient` | The share holder (the agent for `withdraw`, the policy's `shareReceiver` for `withdraw-router`) has not approved the gateway. |
+| Vault share `balanceOf(holder) < shares` | `ErrShareBalanceInsufficient` | The share holder does not hold the shares. |
+| `withdraw-router` without `--min-assets-per-leg` | `ErrMinAssetsPerLegRequired` | Pass one USDC floor per leg. `--min-assets-per-leg 0` sends no floor, and only on purpose. |
+| `withdraw-router` without `--confirm` | `ErrConfirmNotProvided` | Not an error: the JSON `preview` names each vault with its shares and floor, the share holder, the `assetRecipient`, and the gas limit against the gateway's floor. Show it to the user. Re-run with `--confirm` only after they approve it. |
+
+## Simulation refusals
+
+After the preflight, every write runs its exact calldata as an `eth_call`
+from the agent. A revert with a known reason is refused by name before
+anything is signed, so no gas is spent. The message names the contract error.
+
+| Simulated revert | Error code | Meaning |
+|---|---|---|
+| `AgentPolicyExpired` | `ErrPolicyExpired` | Expired by chain time. |
+| `VaultNotRegistered`, `RedeemVaultNotRegistered`, `VaultNotActive` (Retired), `VaultRetired`, `VaultShutdown` | `ErrVaultDisabled` | The target vault is not registered or is disabled. A retired vault is withdraw-only through its own `redeem`. |
+| `VaultNotActive` (deposits paused), `VaultNotRouterEligible`, `VaultCapExceeded`, `NoWeightsSet`, `NoFundedLeg` | `ErrLegUnavailable` | A router deposit leg cannot take deposits now. |
+| `LegSkippedWithFloor` | `ErrLegUnavailable` | A leg with a non-zero `--min-shares-per-leg` floor turned unavailable after the preview, so the router would skip it. A non-zero floor means the leg must be funded, so the deposit is refused instead of moving that leg's share onto the others. |
+| `SlippageExceeded` | `ErrSlippageBoundExceeded` | A router leg would fall below its `--min-shares-per-leg` or `--min-assets-per-leg` floor. Do not lower the floor without the user. |
+| `AmountExceedsPerPaymentCap`, `WindowCapExceeded` | `ErrDepositCapExceeded` | As in the preflight table. |
+| `SharesExceedWithdrawPerPaymentCap`, `WithdrawWindowCapExceeded` | `ErrWithdrawCapExceeded` | As in the withdraw table. |
+
+Any other simulated revert is not named. The transaction is sent. If it then
+reverts on chain the refusal is `ErrTxReverted` with the `tx_hash`.
 
 A proxied gateway's own code hash never changes when it is upgraded, so
 `gateway_runtime_hash` alone cannot detect an upgrade. An approved upgrade
 means updating `gateway_implementation` and
 `gateway_implementation_runtime_hash` from the new release manifest. A
-direct (non-proxy) gateway sets neither. The client refuses to sign on any
-mismatch — this is not advisory.
+direct (non-proxy) gateway sets neither. A proxied vault, router or router
+leg is pinned the same way through `proxy_implementation_hashes`. The client
+refuses to sign on any mismatch — this is not advisory.
 
 ## Nonce lock refusal (implementation-plan §4.6)
 
@@ -56,6 +102,12 @@ mismatch — this is not advisory.
 The lock spans
 `(eth_getTransactionCount → sign → broadcast → receipt)`. A full nonce
 manager (pending-tx queue, replacement, gap recovery) is v1 work.
+
+## Gas limit refusal
+
+| Condition | Error code | Meaning |
+|---|---|---|
+| `--gas-limit` below the gateway entry floor for the deposit | `ErrGasLimitBelowFloor` | The gateway checks `gasleft()` at entry: 2,000,000 for a vault deposit, 400,000 + 2,550,000 per `getEffectiveWeights()` leg for a router deposit. Below it the deposit reverts `InsufficientGas` and burns the gas, so the client refuses before signing. Omit `--gas-limit` to use the derived default. |
 
 ## Fee cap refusal (implementation-plan §4.7)
 
@@ -72,9 +124,8 @@ substantially lower so the cap is loud when it fires.
 
 | Condition | Error code | Meaning |
 |---|---|---|
-| Software signer selected but `[signer].allow_software_fallback != true` | `ErrSoftwareFallbackDisabled` | The binary exits before any RPC. |
-| Encrypted keystore decryption fails (bad passphrase) | `ErrSignerUnlock` | No retry; re-run with the correct passphrase from env or stdin. |
-| Public address derived from the keystore does not match the configured agent address | `ErrSignerAddressMismatch` | Wrong key for this config; do not proceed. |
+| Software signer selected but `[signer].allow_software_fallback != true` | `ErrSoftwareSignerDisallowed` | The binary exits before any RPC. |
+| Encrypted keystore decryption fails (bad passphrase) | `ErrKeystoreDecrypt` | Exit 3 with no JSON on stdout; the name is in the log. No retry; re-run with the correct passphrase in `RMPC_KEYSTORE_PASSPHRASE`. |
 
 Plaintext key material is held only for the duration of the
 `sign_eip1559_hash` call and zeroized via `zeroize` afterward. The
@@ -87,7 +138,8 @@ module. Future backends cannot widen this.
 
 | Condition | Error code | Meaning |
 |---|---|---|
-| `paymentId` already used (`usedPaymentIds[paymentId] == true`) | `DepositIdAlreadyUsed` | The contract has already processed this `(chain_id, gateway, agent, orderId, amount, idempotencyKey)` tuple. Use `rmpc status --payment-id <id>` to confirm. |
+| This client already sent the same `(orderId, amount, idempotencyKey)` | `ErrOrderIdAlreadySubmitted` | The local replay cache refuses before signing and returns the prior `tx_hash`. Use `rmpc status --payment-id <id>` to confirm. |
+| `paymentId` already used on chain (`PaymentIdAlreadyUsed`) | `ErrTxReverted` | The contract has already processed this `(chain_id, gateway, agent, orderId, amount, idempotencyKey)` tuple. Use `rmpc status --payment-id <id>` to confirm. |
 
 `paymentId = keccak256(abi.encode(chain_id, gateway, agent, orderId, amount,
 idempotencyKey))`. **`deadline` is intentionally excluded from the hash** so

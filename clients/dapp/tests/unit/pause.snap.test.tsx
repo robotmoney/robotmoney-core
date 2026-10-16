@@ -63,6 +63,7 @@ vi.mock("wagmi", () => ({
   usePublicClient: () => client,
   useReadContract: () => ({ data: false }),
   useSimulateContract: () => ({ data: undefined }),
+  useWaitForTransactionReceipt: () => ({ data: undefined }),
   useWriteContract: () => ({
     writeContract: wallet.writeContract,
     writeContractAsync: wallet.writeContractAsync,

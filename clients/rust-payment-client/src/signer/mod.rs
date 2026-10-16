@@ -4,7 +4,7 @@
 //!
 //! Issue #8 / `Plan tracking issue #109` §3.2–§3.3. The trait is
 //! deliberately narrow: only [`AgentSigner::sign_eip1559_hash`] — the
-//! live deposit path. Raw `sign_hash` / `sign_message` /
+//! live write path. Raw `sign_hash` / `sign_message` /
 //! `sign_typed_data` are intentionally absent so future HSM/KMS
 //! backends cannot widen the signing surface.
 //!
@@ -21,9 +21,6 @@
 
 use alloy_primitives::{Address, Signature as AlloySignature};
 use thiserror::Error;
-
-use crate::errors::{Result as RmpcResult, RmpcError};
-use crate::network_env::NetworkEnv;
 
 pub mod software;
 
@@ -97,26 +94,11 @@ pub trait AgentSigner: Send + Sync {
     fn sign_eip1559_hash(&self, hash: &[u8; 32]) -> Result<AlloySignature, SignerError>;
 }
 
-/// Returns whether a signer backend is acceptable for production writes.
+/// Whether a backend is device-bound (HSM/KMS). A label for `rmpc
+/// self-check` only: no write refuses a software keystore (owner decision
+/// 2026-10-14).
 pub const fn backend_is_production_grade(kind: SignerBackendKind) -> bool {
     matches!(kind, SignerBackendKind::Hsm | SignerBackendKind::Kms)
-}
-
-/// Refuse non-production signers before the committee-operator commands
-/// (`committee`, `propose`, `receipt`, `vote`) decrypt a software keystore
-/// or build a transaction for production Base. Depositor writes (`deposit`,
-/// `withdraw`, `withdraw-router`) do NOT call this: a depositor may sign with
-/// the software keystore on Base mainnet (owner decision 2026-10-06).
-pub fn require_production_grade_for_write(
-    chain_id: u64,
-    backend: SignerBackendKind,
-) -> RmpcResult<()> {
-    if NetworkEnv::from_chain_id(chain_id).is_production() && !backend_is_production_grade(backend)
-    {
-        Err(RmpcError::ErrProductionSignerRequired)
-    } else {
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -134,25 +116,13 @@ mod tests {
         assert_eq!(s, "\"software\"");
     }
 
+    /// Owner decision 2026-10-14 (QA plan Decision D12): no write refuses a
+    /// software keystore for not being hardware. `backend_is_production_grade`
+    /// only labels the backend in `self-check`; nothing gates on it.
     #[test]
-    fn production_base_refuses_software_signer_for_operator_writes() {
-        let err = require_production_grade_for_write(8453, SignerBackendKind::Software)
-            .expect_err("software signer must be refused on Base mainnet");
-        assert!(matches!(err, RmpcError::ErrProductionSignerRequired));
-        assert!(format!("{err}").contains("HSM/KMS"));
-    }
-
-    #[test]
-    fn devnet_allows_software_signer_for_writes() {
-        require_production_grade_for_write(31337, SignerBackendKind::Software)
-            .expect("local devnet software signer remains available");
-    }
-
-    #[test]
-    fn production_base_allows_reserved_production_grade_backends() {
-        require_production_grade_for_write(8453, SignerBackendKind::Hsm)
-            .expect("HSM is production grade");
-        require_production_grade_for_write(8453, SignerBackendKind::Kms)
-            .expect("KMS is production grade");
+    fn production_grade_is_a_label_not_a_gate() {
+        assert!(!backend_is_production_grade(SignerBackendKind::Software));
+        assert!(backend_is_production_grade(SignerBackendKind::Hsm));
+        assert!(backend_is_production_grade(SignerBackendKind::Kms));
     }
 }

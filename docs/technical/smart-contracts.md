@@ -31,12 +31,12 @@
         │  (USDC → yield    │ │  (USDC → basket) │ │  (split USDC   │
         │  strategy)        │ │                  │ │   by weights)  │
         │                   │ │ • ProtocolAsset  │ │                │
-        │ • Morpho Adapter  │ │   Vault          │ │ • Reads weights│
-        │ • Aave Adapter    │ │ • AgentToken     │ │   from Registry│
-        │ • Compound Adapter│ │   Vault          │ │ • Reads votes  │
-        │                   │ │ • RwaBasketVault │ │   from Router- │
-        │ ERC-4626 shares   │ │                  │ │   Governance   │
-        │ (rmUSDC)          │ │ ERC-4626 shares  │ │                │
+        │ • Morpho Adapter  │ │   Vault          │ │ • Holds weights│
+        │ • Aave Adapter    │ │ • AgentToken     │ │ • Eligibility  │
+        │ • Compound Adapter│ │   Vault          │ │   from Registry│
+        │                   │ │ • RwaBasketVault │ │ • Weights set  │
+        │ ERC-4626 shares   │ │                  │ │   by Router-   │
+        │ (rmUSDC)          │ │ ERC-4626 shares  │ │   Governance   │
         │                   │ │ (rmPROTO / rmAGT │ │ USDC → Vaults  │
         │ ADMIN_ROLE        │ │  / rmRWA)        │ │ (ERC-4626      │
         │ EMERGENCY_ROLE    │ │                  │ │  shares)       │
@@ -135,19 +135,21 @@ RobotMoneyVault
 
 The deposit pause is the vault's own `depositsPaused` flag, not OZ Pausable (core 1494). The deployed v1 vault predates this and still inherits OZ Pausable.
 
-Since issue 1808 the source runs behind an ERC-1967 proxy: `initialize(asset, tvlCap, perDepositCap, exitFeeBps, feeRecipient, admin, emergencyResponder, upgradeTimelock, upgradeMode)` replaces the constructor (same arguments plus the upgrade authority and release mode) and runs inside the proxy's constructor. Only `upgradeTimelock()` (the Safe-controlled timelock) can `upgradeToAndCall` or `freezeUpgrades`; no role below carries upgrade power. The emergency drains, the `adminRebalance` pull, `getAdapterInfo` and `getAdapterDrift` run in the linked `RobotMoneyVaultOps` library, unchanged. See [ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md).
+Since issue 1808 the source runs behind an ERC-1967 proxy: `initialize(asset, tvlCap, perDepositCap, exitFeeBps, feeRecipient, admin, emergencyResponder, upgradeTimelock, upgradeMode)` replaces the constructor (same arguments plus the upgrade authority and the release mode; the vault creates its own `ExclusionLedger` inside `initialize`, core 1820) and runs inside the proxy's constructor. The retired v1 vault is a direct deployment with a constructor. Only `upgradeTimelock()` (the Safe-controlled timelock) can `upgradeToAndCall` or `freezeUpgrades`; no role below carries upgrade power. The emergency drains, the `adminRebalance` pull, `getAdapterInfo` and `getAdapterDrift` run in the linked `RobotMoneyVaultOps` library, unchanged. See [ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md).
 
 ### 3.2 Access control roles
 
 | Role | Keccak | Granted at deploy | Powers |
 |---|---|---|---|
-| `ADMIN_ROLE` | `keccak256("ADMIN_ROLE")` | `_admin` constructor arg | Add/remove/reconfigure adapters, set caps/fees (governance-gated, INV-3: ADMIN_ROLE is held by the TimelockController on the launch vaults; the retired v1 vault is the exception, see §2), `rebalance`, `adminRebalance`, `setMaxRebalanceBps`, `setMinRebalanceInterval`. **No** `rescueTokens` — arbitrary-recipient rescue is deleted (INV-1); the only token movement is the permissionless `sweepForeignToken` |
-| `EMERGENCY_ROLE` | `keccak256("EMERGENCY_ROLE")` | `_admin` constructor arg | `pauseDeposits`, `emergencyWithdraw`, `emergencyWithdrawAdapter`, `forceRemoveAdapter`, `shutdownVault`. `unpauseDeposits` is `ADMIN_ROLE` only. |
+| `ADMIN_ROLE` | `keccak256("ADMIN_ROLE")` | `_admin` initializer arg | Add/remove/reconfigure adapters, set caps/fees (governance-gated, INV-3: ADMIN_ROLE is held by the TimelockController on the launch vaults; the retired v1 vault is the exception, see §2), `rebalance`, `adminRebalance`, `setMaxRebalanceBps`, `setMinRebalanceInterval`. **No** `rescueTokens` — arbitrary-recipient rescue is deleted (INV-1); the only token movement is the permissionless `sweepForeignToken` |
+| `EMERGENCY_ROLE` | `keccak256("EMERGENCY_ROLE")` | `_emergencyResponder` initializer arg | `pauseDeposits`, `emergencyWithdraw`, `emergencyWithdrawAdapter`, `emergencyExcludeAdapter` (exclude-only), `forceRemoveAdapter`, `recoverRemovedAdapter` (into the exclusion record only), `shutdownVault`. `unpauseDeposits` and restoring an excluded adapter (`setAdapterAllowed(adapter, true)`) are `ADMIN_ROLE` only. |
 | `KEEPER_ROLE` | `keccak256("KEEPER_ROLE")` | **Not granted at launch** | `rebalance` |
 
 `ADMIN_ROLE` is its own admin (can grant/revoke itself). For the retired v1 vault, the constructor arg is the Safe multisig `0x88bA…75A0`. For the launch vaults, stage 11 moves `ADMIN_ROLE` to the timelock and `EMERGENCY_ROLE` to the independent emergency key.
 
-### 3.3 Immutable constants (cannot be changed by any role)
+### 3.3 Fixed constants (cannot be changed by any role)
+
+These are `constant`s in the implementation's bytecode: never storage, never an initializer argument, never behind a setter. Behind a proxy constants stay constants ([ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md) §2): no role, setter or initializer can change one. Only a new implementation can, and that upgrade sits in public view for the full timelock delay with withdrawals open and needs the layout gate and implementation review (ADR-0014, Consequences). After a freeze the value is fixed forever.
 
 | Constant | Value | Meaning |
 |---|---|---|
@@ -161,10 +163,10 @@ Since issue 1808 the source runs behind an ERC-1967 proxy: `initialize(asset, tv
 
 | Variable | Initial | Setter | Notes |
 |---|---|---|---|
-| `tvlCap` | constructor arg | `setTvlCap` (ADMIN), `restoreVault` (ADMIN) | Hard cap on `totalAssets`; `shutdownVault` sets to 0, `restoreVault(newTvlCap)` sets a fresh cap |
-| `perDepositCap` | constructor arg | `setPerDepositCap` (ADMIN) | Per-call `deposit` ceiling |
-| `exitFeeBps` | constructor arg (≤ 100) | `setExitFeeBps` (ADMIN) | Charged on redeem/withdraw; max 1% |
-| `feeRecipient` | constructor arg | `setFeeRecipient` (ADMIN) | Receives exit fees |
+| `tvlCap` | initializer arg | `setTvlCap` (ADMIN), `restoreVault` (ADMIN) | Hard cap on `totalAssets`; `shutdownVault` sets to 0, `restoreVault(newTvlCap)` sets a fresh cap |
+| `perDepositCap` | initializer arg | `setPerDepositCap` (ADMIN) | Per-call `deposit` ceiling |
+| `exitFeeBps` | initializer arg (≤ 100) | `setExitFeeBps` (ADMIN) | Charged on redeem/withdraw; max 1% |
+| `feeRecipient` | initializer arg | `setFeeRecipient` (ADMIN) | Receives exit fees |
 | `adapterAllowed` | false for every address | `setAdapterAllowed` (ADMIN) | Exact adapter instances the Safe-governed admin process has approved. Setting `false` on an active adapter quarantines it: its balance leaves `totalAssets`, deposits and mints close, and keeper `rebalance` skips it (core 1788) |
 | `adapterCodeHashAllowed` | false for every hash | `setAdapterCodeHashAllowed` (ADMIN) | Runtime bytecode hashes approved for adapter implementation identity checks |
 | `shutdown` | `false` | `shutdownVault` (EMERGENCY), `restoreVault` (ADMIN) | While true, `deposit` reverts; recoverable — `restoreVault(newTvlCap)` (ADMIN) clears it and re-opens deposits |
@@ -174,7 +176,14 @@ Since issue 1808 the source runs behind an ERC-1967 proxy: `initialize(asset, tv
 Adapter onboarding is now a two-step Safe-governed process: governance first
 approves both the exact adapter address and its runtime `codehash`, then calls
 `addAdapter`. `addAdapter` also verifies the adapter reports this vault's USDC
-asset through `USDC()` and this vault address through `VAULT()`. Deposit,
+asset through `USDC()` and this vault address through `VAULT()`. It refuses an
+address that an active entry already holds (`AdapterAlreadyActive`, core 1789),
+so one adapter balance is never counted twice in NAV. A re-add after
+`removeAdapter` or `forceRemoveAdapter` is legal and appends a new entry. When the
+force-removed entry still holds an open exclusion record, the re-add first moves
+the adapter's whole balance into that record (`Restoration`, then `Restored`) and
+reverts `AdapterNotEmpty` if the adapter cannot pay out, so the new entry starts
+empty and NAV does not rise (security round 1). Deposit,
 keeper rebalance, and admin rebalance allocation paths re-check eligibility
 before USDC leaves the vault.
 
@@ -184,13 +193,37 @@ ineligible, `maxDeposit` and `maxMint` return zero and `deposit` and `mint`
 revert, so no one mints against the reduced NAV. Keeper `rebalance` never
 pulls from a quarantined adapter. It also reverts while deposits are paused or
 the vault is shut down, so it cannot re-deploy funds an emergency drain parked
-idle. Withdrawals stay open and pay from eligible adapters and idle USDC. A
-holder who exits during the exclusion is paid at the reduced NAV and forfeits
-any claim on the excluded balance. Holders who stay keep their full claim when
-eligibility is restored or the funds are recovered. Recovery is explicit:
-`emergencyWithdrawAdapter` (EMERGENCY) drains the adapter, `adminRebalance`
-(ADMIN) re-allocates, and `removeAdapter` or `forceRemoveAdapter` deactivates
-the entry.
+idle. Withdrawals stay open and pay from eligible adapters and idle USDC.
+
+Revoking approval also opens a record in the vault's `ExclusionLedger`
+(`exclusionLedger()`) with a snapshot of every holder's shares (core 1820).
+Every USDC later recovered from that adapter goes to the record, never to idle
+NAV. The recovery paths are `emergencyWithdrawAdapter` and `emergencyWithdraw`
+(EMERGENCY), `adminRebalance` (ADMIN), and restored eligibility, which first
+drains the adapter into the record. These three need an ACTIVE entry. After a
+force-remove the entry is inactive, and two paths remain:
+`recoverRemovedAdapter(i, amount)` (EMERGENCY, security round 2) withdraws one
+tranche of up to `amount` into the record, and a re-add drains the whole
+remaining balance into it. The holders at the snapshot claim it pro
+rata through `ExclusionLedger.claim`, which anyone may call for a holder. A
+holder who exits during the exclusion is paid at the reduced NAV and keeps that
+claim. Shares minted or bought later carry none, and the share price never
+rises from a recovery. A redeem that would pay 0 USDC during the exclusion
+reverts `ZeroPayoutDuringExclusion`. `removeAdapter` deactivates the drained entry
+and closes its record. `forceRemoveAdapter` deactivates the entry without a
+withdrawal: a funded entry with no record gets one (a snapshot of the supply at
+that moment), and its record closes (`ForceRemoved`) only when the adapter
+reports an empty balance. Otherwise the record stays open on the inactive index.
+`recoverRemovedAdapter` credits it as the venue can pay, and closes it
+(`ForceRemoved`) once the adapter reports an empty balance. A re-add of the same
+address realises whatever is left into it, and reverts `AdapterNotEmpty` while
+the venue cannot repay that remainder in one call. So the write-off moves no
+value from exiters to the holders of the day (security round 1, SR-1012-5), and a
+partly liquid venue no longer strands its liquid part (security round 2). `EMERGENCY_ROLE` can also open a record without the timelock:
+`emergencyExcludeAdapter(i)` revokes the entry's allowance and opens its record in
+one call. Run it before `emergencyWithdraw` when an adapter is illiquid, so the
+drain of the healthy adapters does not let early redeemers take full NAV from idle.
+Only `ADMIN_ROLE` restores the entry. A closed record stays claimable.
 
 ### 3.5 Adapter routing — deposit
 
@@ -201,6 +234,10 @@ For each active adapter, compute `effectiveTarget = min(capBps, equalWeightBps)`
 
 **Pass 2 — spread leftover into cap headroom:**  
 Any funds not allocated in Pass 1 (e.g. when an adapter hits its `capBps`) are spread across adapters that still have cap headroom.
+
+**A venue that refuses a supply (security round 2):** the lending adapters' `deploy(amount)` hands the USDC straight back to the vault when the venue refuses it for capacity (Aave supply cap reached or reserve frozen; MetaMorpho `AllCapsReached`; Comet supply paused) and emits `DeployRefused(amount, reason)`. The vault measures what each adapter kept by its own USDC balance, emits `Allocated` only for that, and pass 2 does not ask a refusing adapter again in the same call. What no adapter takes stays idle in NAV with `UnroutedDeposit`. So a full venue never reverts a deposit, a keeper `rebalance` or a router deposit with an rmUSDC leg.
+
+**A venue that shuts withdrawals too (security round 3):** an Aave reserve that is paused or inactive, or a Comet with withdrawals paused, cannot pay out while NAV still counts the position at face. `AaveV3Adapter` and `CompoundV3Adapter` report it through `venueWithdrawable()` (`IVenueHealthAdapter`). While any active adapter reports false, `maxDeposit` and `maxMint` read 0, so a deposit reverts and the router skips the rmUSDC leg. The adapter's `deploy` reverts `VenueWithdrawalsClosed(reason)` instead of handing the slice back, so a keeper `rebalance` cannot turn a healthy venue's excess into idle either. Before this, a deposit minted at a NAV that counted the stuck balance, and its idle slice paid an informed holder's redeem at par while a later haircut fell on the holders who stayed. Tested by `RobotMoneyVaultRouteDeposit.t.sol::test_venueShutsWithdrawals_depositsCloseAndNoIdleFundsParExit`, `::test_venueShutsWithdrawals_adapterRevertsSoRebalanceIdlesNothing`, `PortfolioRouterLegAvailability.t.sol::test_RTR5_rmUsdcLegWithPausedLendingVenueIsSkipped` and, on the Twin chain, `VaultForkRegressions.t.sol::test_fork_venueHealth_pausedAaveReserveClosesDeposits`.
 
 `targetBps` is `MAX_BPS / activeAdapterCount` — pure equal weight, recomputed each call. With 3 adapters: 3333 each.
 
@@ -227,10 +264,12 @@ Dust from integer division is swept from `lastActiveIdx`. If total adapter balan
 | Function | Role | Effect |
 |---|---|---|
 | `pauseDeposits()` | EMERGENCY | Sets `depositsPaused`. `deposit` and `mint` revert `DepositsArePaused()`. Emits `DepositsPaused(account)`. Withdrawals are never frozen, by anyone: the vault has no withdrawal-pause flag, and `maxRedeem`/`maxWithdraw` are never lowered by a pause (core 1494). |
-| `unpauseDeposits()` | ADMIN (timelock) | Clears `depositsPaused` and emits `DepositsUnpaused(account)`. Also clears the deposit halt the three functions below set. |
+| `unpauseDeposits()` | ADMIN (timelock) | Clears `depositsPaused` and emits `DepositsUnpaused(account)`. Also clears the deposit halt that `emergencyWithdraw`, `emergencyWithdrawAdapter` and `forceRemoveAdapter` set. |
 | `emergencyWithdraw()` | EMERGENCY | Pauses deposits, then tries `withdraw(balance)` on every active adapter with a `try/catch` — failures are logged but do not revert |
 | `emergencyWithdrawAdapter(i)` | EMERGENCY | Same for a single adapter index. Withdrawals stay open. |
-| `forceRemoveAdapter(i)` | EMERGENCY | Marks adapter inactive regardless of balance (accepts loss) — emits `AdapterForceRemoved(i, addr, lossAmount)` |
+| `emergencyExcludeAdapter(i)` | EMERGENCY | Revokes the active entry's allowance and opens its exclusion record (snapshot of the supply) in one call. Exclude-only: `setAdapterAllowed(adapter, true)` (ADMIN) restores it. Does not pause deposits; the exclusion itself closes them. |
+| `forceRemoveAdapter(i)` | EMERGENCY | Marks adapter inactive regardless of balance and emits `AdapterForceRemoved(i, addr, lossAmount)`. A funded entry keeps an open exclusion record, so the balance stays owed to the holders of the moment; `recoverRemovedAdapter` or a later re-add pays it into that record. |
+| `recoverRemovedAdapter(i, amount)` | EMERGENCY | Security round 2. For an inactive entry with an open exclusion record: withdraws up to `amount` (clamped to the adapter's balance) straight into the record (`EmergencyWithdrawAdapter` source) and closes it (`ForceRemoved`) once the adapter reports an empty balance. Reverts `AdapterNotFound` for an active entry and `NoOpenExclusion(i)` without a record. Ask for at most what the venue can pay: the adapter's `withdraw` reverts on a shortfall. Does not pause deposits. |
 | `shutdownVault()` | EMERGENCY | Sets `shutdown = true`, `tvlCap = 0`. Deposits revert with `VaultShutdown()`; withdrawals continue. Recoverable by ADMIN via `restoreVault` (see below). |
 
 `shutdownVault()` is not permanent. It is reversed by `restoreVault(uint256 newTvlCap)`,
@@ -292,6 +331,21 @@ Additional read-only helpers: `getAdapterDrift()`, `isRebalanceAvailable()`, `ne
 
 **There is no management fee in the vault contract.** The source contains no fee accrual, no `harvest()`, no `accrueFees()`, no timestamp-based skim. The only fee is the exit fee charged at redeem/withdraw time. The 2% annual management fee advertised on robotmoney.net is off-chain — likely via admin-initiated periodic USDC transfers from `feeRecipient` or from protocol revenue, not from the vault contract itself.
 
+### 3.11 Upgrade and freeze (every proxied contract)
+
+RobotMoneyVault, the three basket kinds, VaultRegistry, PortfolioRouter, RobotMoneyGateway, InvestmentCommitteePolicy, ConsensusRecommendationReceipt and RouterGovernance each inherit `GovernedUUPS` (`contracts/lib/GovernedUUPS.sol`) and run behind their own `ERC1967Proxy` ([ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md) §1). The upgrade and freeze rules live once, in the linked `GovernedUpgrade` library, which runs by DELEGATECALL in the proxy's storage (ERC-7201 namespace `robotmoney.storage.GovernedUUPS`). The storage-layout gate (`scripts/ci/check-core-storage-layout.sh`, ADR-0014 §5) pins each contract's layout. The surface is the same on all ten:
+
+| Function | Caller | Notes |
+|---|---|---|
+| `initialize(…, upgradeTimelock_, upgradeMode_)` | the proxy constructor, once | Every former constructor argument, then the upgrade timelock (the CREATE2 address of the deployment's Safe-proposer `TimelockController`, `contracts/script/UpgradeAuthority.sol`; zero reverts `InvalidUpgradeTimelock`) and the `UpgradeMode` (`Upgradeable` or `FrozenAtDeploy`; `Undeclared` reverts `UpgradeModeUndeclared`). `FrozenAtDeploy` freezes inside the atomic initialization. A second call reverts. The implementation's constructor disables its own initializers. |
+| `upgradeTimelock()` | view | The only account that may upgrade or freeze. Written once at initialization, no setter, not an AccessControl role: no grant, revoke, renounce or reinitializer moves it. |
+| `upgradesFrozen()` | view | True once frozen. It never becomes false again. |
+| `upgradeToAndCall(address newImplementation, bytes data)` | upgrade timelock only | Replace the implementation and, when `data` is not empty, run it (a reinitializer) in the same transaction. Only through an active proxy pointing at this implementation (`UUPSUnauthorizedCallContext` otherwise). Reverts `NotUpgradeTimelock(caller)` for anyone else (any role holder included), `UpgradesAreFrozen()` once frozen, and `ERC1967InvalidImplementation` for an implementation with no code or a wrong `proxiableUUID`. Scheduled through the Safe and the timelock. |
+| `freezeUpgrades(address expectedImplementation, bytes32 expectedCodeHash)` | upgrade timelock only | Sets the frozen flag forever, disables every later initializer and reinitializer, and emits `UpgradesFrozen(proxy, implementation, codeHash)`. Reverts `FreezeTargetMismatch(live, liveCodeHash)` unless the live implementation and its runtime code hash equal the arguments, so a freeze queued before an intervening upgrade cannot lock in the other version, and `UpgradesAreFrozen()` when already frozen. Scheduled through the Safe and the timelock (`docs/operations/contract-release-runbooks.md` §4.12). |
+| `proxiableUUID()` | view | UUPS: the ERC-1967 implementation slot. Reverts when called on anything but the implementation itself. |
+
+A freeze never pauses or alters `redeem`, `withdraw`, `redeemInKind` or the gateway withdraw paths (ADR-0014 §4; the freeze invariants in `smart-contract-invariants.md`).
+
 ---
 
 ## 4. Adapter contracts
@@ -351,8 +405,8 @@ This design is the reason CompoundV3Adapter was compiled with `viaIR: true` — 
 
 | Risk | Mitigation (confirmed from source) |
 |---|---|
-| Admin abuse | AccessControl with `ADMIN_ROLE` self-admined; production admin is a Safe multisig. `MAX_EXIT_FEE_BPS = 100` is an immutable ceiling — admin cannot set fees above 1% |
-| Emergency misuse | `EMERGENCY_ROLE` is separate from `ADMIN_ROLE` and initially held by the same Safe multisig (both granted in constructor). Both roles can be revoked |
+| Admin abuse | AccessControl with `ADMIN_ROLE` self-admined; production admin is the Safe-run timelock. `MAX_EXIT_FEE_BPS = 100` is a `constant` ceiling (§3.3) — admin cannot set fees above 1%, and no role holds upgrade power (§3.11) |
+| Emergency misuse | `EMERGENCY_ROLE` is separate from `ADMIN_ROLE`: the initializer grants `ADMIN_ROLE` to `_admin` and `EMERGENCY_ROLE` to `_emergencyResponder` (the retired v1 vault granted both to the same Safe in its constructor). Both roles can be revoked |
 | Malicious adapter onboarding | `addAdapter` requires Safe-governed address approval, runtime `codehash` approval, and adapter `USDC()` / `VAULT()` compatibility checks. Allocation paths re-check the address allowlist before transferring USDC |
 | Adapter loss | `forceRemoveAdapter` accepts loss explicitly; `emergencyWithdraw` uses `try/catch` so a broken adapter doesn't block others |
 | Reentrancy | `nonReentrant` on `_deposit`, `_withdraw`, `rebalance`, `adminRebalance`, `emergencyWithdraw`, `emergencyWithdrawAdapter` |
@@ -393,11 +447,14 @@ These exist in the source but were never called by the deprecated TypeScript CLI
 | `addAdapter(address, uint16)` | ADMIN | Register new adapter |
 | `removeAdapter(uint256)` | ADMIN | Deactivate empty adapter |
 | `setAdapterCap(uint256, uint16)` | ADMIN | Change per-adapter cap |
+| `setAdapterMaxExposure(uint256, uint256)` | ADMIN | Set an active adapter's `maxExposure` (Morpho only; 0 = uncapped). Emits `AdapterMaxExposureSet` |
 | `setMaxRebalanceBpsPerCall(uint16)` | ADMIN | Adjust rebalance throttle |
 | `setMinRebalanceInterval(uint256)` | ADMIN | Adjust rebalance cooldown |
 | `emergencyWithdraw()` | EMERGENCY | Pull all adapters |
 | `emergencyWithdrawAdapter(uint256)` | EMERGENCY | Pull one adapter |
-| `forceRemoveAdapter(uint256)` | EMERGENCY | Write off a broken adapter |
+| `emergencyExcludeAdapter(uint256)` | EMERGENCY | Exclude one adapter from NAV and open its exclusion record (exclude-only) |
+| `forceRemoveAdapter(uint256)` | EMERGENCY | Deactivate a broken adapter; its balance stays owed through an exclusion record |
+| `recoverRemovedAdapter(uint256, uint256)` | EMERGENCY | Withdraw one tranche from a force-removed adapter into its open exclusion record |
 | `shutdownVault()` | EMERGENCY | Halt deposits, zero `tvlCap` (recoverable by ADMIN via `restoreVault`) |
 | `restoreVault(uint256)` | ADMIN | Reverse a shutdown and re-open deposits under a fresh TVL cap |
 | `sweepForeignToken(address)` | permissionless | Quarantine a NON-protected foreign token to the fixed `QUARANTINE` address (INV-1/INV-2). Reverts for `asset()` / share token |
@@ -438,6 +495,8 @@ The vault's share token reports `decimals() == 6` (matching USDC). The internal 
 
 **Integrators must not assume raw share amounts equal asset amounts.** Always use `convertToShares` / `convertToAssets` for on-chain math. For display, divide `balanceOf(user)` by `10 ** vault.decimals()` (i.e. by `1e6`).
 
+**`convertToAssets` ignores exit costs** (core 1795). It is the gross share of NAV: it leaves out the exit fee on both vault families and the `maxSlippageBps` floor a BasketVault applies to the swaps of a redeem. To show what a position is worth at exit, use `previewRedeem(shares)`, which a redeem pays at least. A 1 USDC round trip through rmAGENT on Deploy 2 read `convertToAssets` 0.055767, `previewRedeem` 0.052978, and the redeem paid 0.054092. The dapp position card and the explorer's `positions[].usdc_value` use `previewRedeem` (QA plan X8).
+
 ### 8.3 Admin seed deposit (deploy runbook)
 
 **Before opening the vault to the public, the deployer MUST perform a seed deposit.**
@@ -462,6 +521,8 @@ Rationale: even with `_decimalsOffset() == 18`, a fresh vault with `totalSupply 
 5. Verify `vault.totalAssets() >= 1_000_000 * 9_999 / 10_000`, `vault.totalSupply() > 0`, and `vault.balanceOf(deployer) == 0`.
 6. Call `vault.pauseDeposits()` right after the seed (core 1710): rmUSDC deploys paused like the three basket vaults. The stage 13 `unpause-USDC` row, a Safe operation through the timelock, opens it.
 7. Only after steps 1–6 are confirmed and stage 13 has run: the vault is open to the public (publish the vault address). The deploy authorizes no agent: each depositor authorizes its own.
+
+All four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) deploy paused, and the Safe unpauses each one through the timelock in stage 13. The rule for each vault, with the seed, the router-eligibility source, the emergency levers and the registry-name source, is in `scripts/deploy/stage-table.json` `vaults[]` (issue 1705).
 
 The seed deposit is not recoverable through normal channels (it is locked as vault shares). Consider it a permanent operational cost of the deployment. The seed share receiver holds the rmUSDC shares minted for the seed and can participate in future withdrawals.
 
@@ -520,7 +581,7 @@ The legs that run execute atomically: if any of them reverts, the entire deposit
 The router maintains two weight vectors:
 
 - **Active weights**: Written by `setWeights(vaults, bps)`, gated by `WEIGHT_SETTER_ROLE`. While `votedWeightsActive` is true this vector is the source of truth. `RouterGovernance.applyReceipt` writes it (the `apply-receipt` govern row, core 1696).
-- **Default weights**: Written by `setDefaultWeights(vaults, bps)` through `RouterGovernance.setDefaultWeights` (ADMIN_ROLE, held by the timelock). The router routes by it whenever `votedWeightsActive` is false. It is the fallback (ADR-0002). The `apply-receipt` govern row does not write it. Its length must equal `VaultRegistry.routerEligibleCount()`.
+- **Default weights**: Written by `setDefaultWeights(vaults, bps)` through `RouterGovernance.setDefaultWeights` (ADMIN_ROLE, held by the timelock), and by `migrateEligibility` through `applyMigrationDefaultWeights`. The router routes by it whenever `votedWeightsActive` is false. It is the fallback (ADR-0002). The `apply-receipt` govern row does not write it. Its length must equal `VaultRegistry.routerEligibleCount()`.
 
 At deploy, `contracts/script/DeployPortfolioRouter.s.sol` marks rmUSDC router-eligible and writes the initial DEFAULT vector with `setDefaultWeights`: rmUSDC 10000 bps, the only router-eligible vault at that point. It never calls `setWeights`, so `votedWeightsActive` stays false from deploy (issue 1743). The basket stages then flip each basket eligible with one atomic `migrateEligibility`, which re-sets the default to the sheet's launch vector (`ROUTER_WEIGHTS`, rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0). The effective routing after the deploy is that launch vector, and the stage 12 verifier asserts both `votedWeightsActive()` false and `getEffectiveWeights()` equal to the sheet. A voted vector written at deploy would override every later default change. A router that carries an active vector is returned to the default with `govern --row clear-voted-weights` (`RouterGovernance.clearVotedWeights()`, `ADMIN_ROLE`).
 
@@ -536,7 +597,12 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 - At deposit time `_availabilityAndAmounts` skips each non-depositable leg and renormalises the full amount pro rata across the remaining legs. Nothing is left with the router or returned to the user. If no leg is depositable, `_depositTo` reverts `NoWeightsSet` and no USDC moves. An eligible leg whose computed amount is 0 is not called (issue 1746).
 - Per-vault caps do not renormalise: `_executeLeg` reverts `VaultCapExceeded` for an over-cap leg, and the whole deposit reverts.
 - `_executeLeg` re-checks registry status (`VaultNotActive`) and router eligibility (`_requireRouterEligible`) before each deposited leg, as defence in depth.
-- **Known gap:** `_isDepositable` does not read a vault's own deposit pause (`BasketVault.depositsPaused`, the `EMERGENCY_ROLE` `pauseDeposits()`, `shutdown`, or `maxDeposit == 0`). A registry-Active, router-eligible vault with deposits paused stays in the available set, its `vault.deposit` reverts, and the whole routed deposit reverts `UsdcLegTransferFailed(vault)`. Not fixed yet.
+- A vault's own deposit gate counts too (QA plan D4). `_isDepositable` reads the vault's `maxDeposit`: a deposit pause (`BasketVault.depositsPaused`, the `EMERGENCY_ROLE` `pauseDeposits()`), `shutdown`, retirement, a full TVL cap or an open rmUSDC exclusion reads 0, and a reverting `maxDeposit` counts as 0. Each funded leg is then quoted with `previewDeposit` at its split amount. A reverting quote (rmAGENT on a stale price recorder) drops the leg, and the split reruns over the survivors. `previewDeposit` reports the same legs unavailable.
+- A basket outside its ORA-4 band is skipped, not reverted: `BasketVault.previewDeposit` runs the same spot-versus-TWAP guard as `deposit` (security round 1), so the quote pass drops the leg. `maxDeposit` and `maxMint` do not run it and never revert.
+- The rmUSDC allocator stops at a Morpho adapter's `maxExposure` and leaves what no adapter can take idle (`UnroutedDeposit`), so the exposure cap never reverts the rmUSDC leg (security round 1).
+- A lending venue that refuses a supply (Aave supply cap or frozen reserve, MetaMorpho `AllCapsReached`, Comet supply pause) does not revert the rmUSDC leg either: the lending adapter hands the slice back and rmUSDC keeps it idle with `UnroutedDeposit` (security round 2, §3.5). A venue that shuts withdrawals too (Aave reserve paused or inactive, Comet withdraw pause) sets rmUSDC's `maxDeposit` to 0, so the router skips the leg (security round 3).
+- A non-zero `minSharesPerLeg[i]` means "fund this leg". A leg the router would skip (unavailable, or computed amount 0) with a non-zero floor reverts the whole deposit `LegSkippedWithFloor(vault)` (security round 2). So a leg that turns unavailable after the caller previewed (rmUSDC reaching its TVL cap, a pause, an open exclusion, a basket leaving its ORA-4 band) never moves its share onto the other legs behind the caller's back. Clients pass 0 for the legs `previewDeposit` reports unavailable or unfunded.
+- A leg whose views pass but whose `deposit` reverts still reverts the whole routed deposit `UsdcLegTransferFailed(vault)`. The case left is a basket's realised-swap slippage floor (`DepositBelowSlippageFloor`). The basket deploy script refuses a `NAV_DEVIATION_BPS` at or below any configured pool fee in bps, and rmAGENT's sheet value is 400 against the RM pool's 291 bps fee.
 
 ### 9.1.3 Caps and guards
 
@@ -544,7 +610,8 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 |---|---|---|
 | Global cap | `setRouterCap(uint256)` | Hard ceiling on total USDC per deposit. 0 = uncapped. |
 | Per-vault cap | `setVaultCap(address vault, uint256)` | Per-leg ceiling for a single vault. 0 = uncapped. |
-| Slippage protection | `minSharesPerLeg[]` parameter to `deposit()` | Revert if any deposited leg returns fewer shares than specified. The floor is NOT enforced on a skipped leg (unavailable, or computed amount 0): it is never called and returns 0 shares. Before issue 1746 a 0 bps eligible leg was called with `deposit(0)` and a non-zero floor on it tripped. |
+| Slippage protection | `minSharesPerLeg[]` parameter to `deposit()` | Revert if any deposited leg returns fewer shares than specified. A skipped leg (unavailable, or computed amount 0) is never called and returns 0 shares, so its floor must be 0: a non-zero floor on it reverts `LegSkippedWithFloor(vault)` (security round 2). Before issue 1746 a 0 bps eligible leg was called with `deposit(0)`; before security round 2 a non-zero floor on a skipped leg was silently waived. |
+| Redeem floor (QA plan D9, SR-M16) | `minAssetsPerLeg[]` parameter to `redeemFor()` | Revert `SlippageExceeded` if a leg pays less USDC than its floor; a floor of 0 sends none. A direct `vault.redeem` has no minimum-out, and a BasketVault's own sale floor follows a dragged TWAP (core 1793), so it pays under the holder's quote without reverting. A single-vault exit with a floor is the one-leg `redeemFor(holder, holder, [vault], [shares], [floor], deadline)`, after an approval of exactly `shares` to the router that the redeem spends to zero (the dapp Withdraw tab). rmpc sends the same one leg through `gateway.withdrawFromRouter` (QA plan U9). Test: `PortfolioRouterRedeemFloor.t.sol::test_redeemFor_singleLegFloorBindsOnBasketVault`. |
 | Asset verification | `VaultAssetMismatch` error | Revert if a vault's `asset()` is not the router's USDC. |
 | Vault status check | `_isDepositable`; `VaultNotActive` error | A leg that is not `Active` in the registry (or not router-eligible) is skipped and its share renormalised. `_executeLeg` reverts `VaultNotActive` only if the status changed between the availability pass and the leg. |
 | Per-leg transfer failure | `UsdcLegTransferFailed(address vault)` error | Wrap a reverting `vault.deposit()` (e.g. a USDC blacklist hit or fee-on-transfer failure) in a named per-leg error so callers can distinguish it from the generic custody check. |
@@ -564,7 +631,7 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 
 ### 9.1.5 Key invariants
 
-- **Weight normalization**: Both voted and default vectors must sum exactly to `BPS_DENOMINATOR` (10000). `setWeights` and `setDefaultWeights` revert if not.
+- **Weight normalization**: Both active and default vectors must sum exactly to `BPS_DENOMINATOR` (10000). `setWeights` and `setDefaultWeights` revert if not.
 - **All-or-revert / custody invariant**: No USDC is permanently stranded in the router. The router snapshots its USDC balance into `usdcBalanceBefore` before pulling the caller's deposit, then after all legs run requires the balance to return to that snapshot — reverting `UsdcCustodyInvariantViolated` if any leg accepted less than its allocated `legAmount`. Because the snapshot is taken before the caller's funds are pulled, any pre-existing donated USDC appears in both the before and after snapshots and cannot trigger a false revert (donation-DoS hardening).
 - **Per-leg transfer failure**: When a single `vault.deposit()` reverts (e.g. a USDC blacklist hit or a fee-on-transfer failure), the router surfaces the named error `UsdcLegTransferFailed(address vault)` rather than the opaque `UsdcCustodyInvariantViolated` custody check, so off-chain handlers and auditors can decode the specific failing leg.
 - **Vault asset consistency**: All weighted vaults must have `asset() == USDC` (the router's configured USDC address). Checked when a vector is written and again before each deposited leg.
@@ -686,12 +753,13 @@ All three subclasses inherit BasketVault behavior and are configured with:
 ### 9.3.7 Key invariants and constraints
 
 - **Small basket positions (core 1778)**: a position worth a few cents can leave a basket leg of a handful of token base units (rmPROTO on Deploy 2: 31 cbBTC units). The pool's one-unit rounding then misses the 1 percent floor and the USDC `redeem` reverts `Too little received`. The supported exit is `redeemInKind(shares, receiver, owner)`, which pays the basket tokens and swaps nothing. The dapp shows this hint when a redeem simulation fails with that reason. The cause and the fix are in [redeem-gas-1482.md](redeem-gas-1482.md).
-- **NAV closure on oracle failure**: If `observe()` reverts (cardinality too low for the configured window), NAV reads fail closed and normal deposits/withdrawals revert. `redeemInKind(shares, receiver, owner)` is the oracle-free holder exit (core 1665): pro-rata idle USDC and active basket tokens less `exitFeeBps`, no TWAP, no swap. Emergency unwind is the only escape path (ADMIN_ROLE must have pre-configured `emergencyUnwindGuard` with a fallback floor and loss tolerance).
+- **Dust legs (QA plan v1 D6, SR-L12)**: a basket leg whose TWAP sale floor (value × (1 − `maxSlippageBps`)) rounds to zero USDC units is dust, worth about one USDC unit or less. `redeem` and `emergencyUnwind` skip it, `removeAsset` accepts it, `reabsorbRemovedAsset` leaves it in place, and the USDC sell anchor does not refuse a redeem over it. Without this, one wei of RM sent after an unwind blocked `emergencyUnwind` and `removeAsset` (`AssetStillHeld`) forever, because the V4 adapter refuses a sale that pays zero. `removeAsset` prices a non-zero balance, so it fails closed while the oracle is down.
+- **NAV closure on oracle failure**: If `observe()` reverts (cardinality too low for the configured window), NAV reads fail closed and normal deposits/withdrawals revert. `redeemInKind(shares, receiver, owner)` is the oracle-free holder exit (core 1665): pro-rata idle USDC and active basket tokens less `exitFeeBps`, no TWAP, no swap. Emergency unwind is the only escape path (ADMIN_ROLE must have pre-configured `emergencyUnwindGuard` with a fallback floor and loss tolerance). The Safe sets it through the timelock with `govern --row set-unwind-guard` (QA plan v1 D7), one round per basket in the stage 13 sitting, and the stage 12 verifier fails an open basket whose active asset reads a zero `minUsdcOut`.
 - **Slippage protection**: Deposits and swaps enforce admin-set `maxSlippageBps` (max 500 BPS = 5%). ADMIN_ROLE may tighten but not exceed this hard ceiling.
 - **Proportional withdrawal**: Withdrawals pull from each active asset proportionally to balance; no rebalancing occurs on withdrawal.
 - **Equal-weight deposit split** (current): Each deposit splits equally across active assets. Future versions may allow weight vectors (not yet shipped).
 - **No oracle-based frontrunning**: TWAP is arithmetic-mean tick over a window (not spot price), making it resistant to single-block manipulation on slow-moving assets.
-- **Exit fee immutable ceiling**: Like RobotMoneyVault, `MAX_EXIT_FEE_BPS = 100` (1%) is immutable; setters revert above this.
+- **Exit fee fixed ceiling**: Like RobotMoneyVault, `MAX_EXIT_FEE_BPS = 100` (1%) is a `constant` (ADR-0014 §2: constants stay constants); setters and `initialize` revert above this.
 
 ### 9.3.8 Deployed basket vaults
 

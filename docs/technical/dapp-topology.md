@@ -78,6 +78,39 @@ the user signs.
 - The dapp trusts the **bundle**, not the **node**, for the pin. A
   gateway address supplied at runtime still has to present bytecode
   hashing to the pinned value before any admin write is enabled.
+- Vaults and the router carry build-time pins too (QA plan U5, issue
+  1737): `VITE_VAULT_EXPECTED_CODE_HASH` (vault address to runtime code
+  hash) and `VITE_ROUTER_EXPECTED_CODE_HASH`. On the `mainnet` class the
+  write guard refuses a deposit, or an approve, unless the code of the
+  contract that receives the USDC or the allowance hashes to its pin. A
+  missing pin, unreadable code, no code and a different hash are four
+  named refusals (`clients/dapp/src/lib/codePins.ts`). A redeem needs no
+  pin, so an exit never depends on a build setting. The 8453 stack
+  builder takes both pins from the timelock manifest and refuses to start
+  when a vault or the router has none.
+- Behind an ERC-1967 proxy (ADR-0014) those code hashes are the generic
+  `ERC1967Proxy`, the same for every proxy and unchanged by an upgrade.
+  So a proxied vault or router also carries a build-time implementation
+  pin (`VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH`,
+  `VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH`): at send time the guard reads
+  the code, the implementation slot and the implementation's code at one
+  block and refuses unless that implementation's hash is pinned. Nothing
+  is cached between sends. Every write to the gateway is re-checked the
+  same way against `VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH`. The badge
+  "[bytecode verified]" needs both pins. The 8453 builder takes the
+  implementation pins from the timelock manifest
+  (`vault_handover.vault_<i>.implementation_code_hash`,
+  `code_hashes.router_implementation`) and refuses a proxy with none. A
+  router deposit also checks every vault of `getEffectiveWeights()`, read
+  at the same block, against its vault pins, as rmpc does: the router
+  forwards the USDC into each leg and takes the leg's own `deposit()`
+  return as the shares. A leg that fails names itself in the refusal,
+  closes the router deposit form, and keeps the badge UNVERIFIED. A
+  router that fails its pins is not offered a share approval: the
+  Withdraw tab redeems from the vault directly, and still shows any share
+  allowance left on that router with a revoke. No redeem preview waits
+  on gateway verification either (core 1494): it is built UNVERIFIED with
+  the gateway's cause as a warning.
 
 #### Decision — the code-hash pin is build-time-only (issue #1375)
 
@@ -115,6 +148,11 @@ false for a while.
   immediately before the sign prompt.
 - The wallet's sign prompt is the canonical authorization surface,
   showing calldata derived from on-chain state, not indexer output.
+- A signing target is never taken from the indexer. The Withdraw tab
+  redeems only against the runtime-config vault or a vault the on-chain
+  VaultRegistry lists; an explorer position naming any other address is
+  refused with a visible reason, before any read or simulation against it
+  (`clients/dapp/src/lib/redeemTarget.ts`, QA plan U4).
 
 ### 5. Strict CSP, zero third-party runtime
 

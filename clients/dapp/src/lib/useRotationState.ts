@@ -15,10 +15,21 @@
  *   - depositor: step 2 signs `commitAuthorization(hash)` and step 3 signs
  *                `revealAuthorization(new, salt, policy)` one block later.
  *                No role needed; the depositor becomes the new agent's owner.
+ *                Step 2 previews the commit and step 3 previews the reveal,
+ *                each built from the inputs its write uses (QA plan U4).
  *
  * After the timelock handover no EOA holds ADMIN_ROLE on any chain, so a
  * browser wallet always takes the depositor path. Step 1 (`revokeAgent`) is
  * the same for both: the gateway only lets the agent's recorded owner call it.
+ *
+ * On the depositor path the new agent must consent (core 1791): before the
+ * reveal it commits `consentHash` (`computeConsentHash`) from its own key, or
+ * the reveal reverts `OwnerConsentMissing`. Step 3 shows that hash.
+ *
+ * Each step has its own write hook and receipt (QA plan U5). A step advances
+ * when the wallet accepts it; a step whose receipt says reverted stops the
+ * flow, and "done" means the final transaction (authorizeAgent or the reveal)
+ * is mined with status success, never that the wallet merely accepted it.
  */
 import { useState } from "react";
 import {
@@ -33,14 +44,26 @@ import { isAddress, zeroAddress, type Address, type Hex } from "viem";
 import { ADMIN_ROLE_HASH, gatewayAbi } from "./abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "./preview";
 import { composeRotationPreview } from "./rotation";
-import { computeCommitHash, computeConsentHash, generateSalt } from "./commitReveal";
+import {
+  commitAuthorizationCall,
+  computeConsentHash,
+  generateSalt,
+  revealAuthorizationCall,
+  type CommitInputs,
+  type RevealInputs,
+} from "./commitReveal";
 
-type RotationStep = "idle" | "revoke-sent" | "commit-sent" | "done";
+/** Which transaction the wallet last accepted. "Done" is derived from the final receipt. */
+type RotationStep = "idle" | "revoke-sent" | "commit-sent" | "final-sent";
 export type RotationAuthorizePath = "admin" | "depositor";
 
 export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, now: number) {
   const { address, isConnected } = useAccount();
-  const { writeContract, isPending } = useGuardedWriteContract();
+  // One hook per step, so each step shows its own refusal and receipt (QA plan U5).
+  const revokeWrite = useGuardedWriteContract();
+  const authorizeWrite = useGuardedWriteContract();
+  const revealWrite = useGuardedWriteContract();
+  const isPending = revokeWrite.isPending || authorizeWrite.isPending || revealWrite.isPending;
 
   const [oldAgentRaw, setOldAgentRaw] = useState("");
   const [newAgentRaw, setNewAgentRaw] = useState("");
@@ -49,13 +72,20 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
   const [maxPerWindow, setMaxPerWindow] = useState("1000000000");
   const [shareReceiver, setShareReceiver] = useState("");
   const [step, setStep] = useState<RotationStep>("idle");
-  const [salt, setSalt] = useState<Hex | null>(null);
+  // The salt of the next commit. It exists before the commit so the step-2
+  // preview shows the exact commitHash, and it holds until the reveal.
+  const [salt, setSalt] = useState<Hex>(generateSalt);
+  const [revokeTxHash, setRevokeTxHash] = useState<Hex | null>(null);
   const [commitTxHash, setCommitTxHash] = useState<Hex | null>(null);
+  /** authorizeAgent (admin path) or the reveal (depositor path). */
+  const [finalTxHash, setFinalTxHash] = useState<Hex | null>(null);
 
   const resetSteps = () => {
     setStep("idle");
-    setSalt(null);
+    setSalt(generateSalt());
+    setRevokeTxHash(null);
     setCommitTxHash(null);
+    setFinalTxHash(null);
   };
   const setOldAgent = (v: string) => {
     setOldAgentRaw(v);
@@ -122,8 +152,26 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
         } satisfies AdminAction)
       : null;
 
+  // Depositor path: step 2 signs the commit and step 3 the reveal, so those are
+  // what it previews (QA plan U4, DR-4). A new-agent edit resets the steps and
+  // the salt, so the agent and salt cannot drift between commit and reveal.
+  const commitInputs: CommitInputs | null =
+    authorizeAction && address ? { agent: authorizeAction.agent, committer: address, salt } : null;
+  const revealInputs: RevealInputs | null = authorizeAction
+    ? { agent: authorizeAction.agent, salt, policy: authorizeAction.policy }
+    : null;
+
   const revokePreview = revokeAction ? buildPreview(revokeAction, ctx) : null;
-  const authorizePreview = authorizeAction ? buildPreview(authorizeAction, ctx) : null;
+  const adminAuthorizePreview = authorizeAction ? buildPreview(authorizeAction, ctx) : null;
+  const commitPreview = commitInputs
+    ? buildPreview({ kind: "commitAuthorization", ...commitInputs }, ctx)
+    : null;
+  const revealPreview =
+    authorizePath === "depositor" && revealInputs
+      ? buildPreview({ kind: "revealAuthorization", ...revealInputs }, ctx)
+      : null;
+  // The step-2 preview: the call the step-2 button signs on this wallet's path.
+  const authorizePreview = authorizePath === "admin" ? adminAuthorizePreview : commitPreview;
 
   const { data: revokeSim } = useSimulateContract({
     address: gatewayAddress,
@@ -140,7 +188,7 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
     functionName: "authorizeAgent",
     args: authorizeAction ? [authorizeAction.agent, authorizeAction.policy] : undefined,
     query: {
-      enabled: authorizePath === "admin" && combinedOk && authorizePreview?.ok === true,
+      enabled: authorizePath === "admin" && combinedOk && adminAuthorizePreview?.ok === true,
     },
   });
 
@@ -174,55 +222,80 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
   const authorizeReady =
     authorizePath === "admin"
       ? Boolean(authorizeSim)
-      : newAgentFree && receiverIsSelf && authorizePreview?.ok === true;
+      : newAgentFree && receiverIsSelf && commitPreview?.ok === true && revealPreview?.ok === true;
   // Step 2 needs its own preview; step 1 needs BOTH so the operator sees the
   // whole rotation before signing anything.
   const authorizeOk = combinedOk && authorizeReady;
   const previewsOk = authorizeOk && Boolean(revokeSim);
 
+  // Each step's receipt. A reverted revoke or commit stops the flow; the
+  // rotation is complete only when the final transaction is mined with success.
+  const revokeReceipt = useWaitForTransactionReceipt({
+    hash: revokeTxHash ?? undefined,
+    query: { enabled: revokeTxHash !== null },
+  });
   // Depositor reveal gating: the reveal must land in a later block than the
   // commit (CommitmentTooRecent), so wait for the commit receipt and a newer head.
-  const { data: commitReceipt } = useWaitForTransactionReceipt({
+  const commitReceipt = useWaitForTransactionReceipt({
     hash: commitTxHash ?? undefined,
     query: { enabled: commitTxHash !== null },
   });
-  const commitBlockNumber = commitReceipt?.blockNumber ?? null;
+  const finalReceipt = useWaitForTransactionReceipt({
+    hash: finalTxHash ?? undefined,
+    query: { enabled: finalTxHash !== null },
+  });
+  const revokeReverted = revokeReceipt.data?.status === "reverted";
+  const commitReverted = commitReceipt.data?.status === "reverted";
+  const done = finalReceipt.data?.status === "success";
+  const commitBlockNumber = commitReverted ? null : (commitReceipt.data?.blockNumber ?? null);
   const { data: currentBlock } = useBlockNumber({
     watch: step === "commit-sent",
     query: { enabled: step === "commit-sent" },
   });
+  // The reveal also needs every step-2 precondition still true: the policy
+  // fields stay editable after the commit and the reveal preview follows them.
   const revealReady =
     step === "commit-sent" &&
-    salt !== null &&
+    authorizeOk &&
     commitBlockNumber !== null &&
     currentBlock !== undefined &&
     currentBlock > commitBlockNumber;
 
+  // Step 2 opens once the wallet accepted the revoke, and closes again if the
+  // revoke's receipt says it reverted (the old agent is still bound).
+  const authorizeOpen = step === "revoke-sent" && !revokeReverted;
+
   const onRevoke = () => {
     if (!revokeSim) return;
-    writeContract(revokeSim.request);
-    setStep("revoke-sent");
+    revokeWrite.writeContract(revokeSim.request, {
+      onSuccess: (txHash) => {
+        setRevokeTxHash(txHash);
+        setStep("revoke-sent");
+      },
+    });
   };
 
   const onAuthorize = () => {
+    if (!authorizeOpen) return;
     if (authorizePath === "admin") {
       if (!authorizeSim) return;
-      writeContract(authorizeSim.request);
-      setStep("done");
+      authorizeWrite.writeContract(authorizeSim.request, {
+        onSuccess: (txHash) => {
+          setFinalTxHash(txHash);
+          setStep("final-sent");
+        },
+      });
       return;
     }
-    if (!address || !authorizeAction) return;
-    const newSalt = generateSalt();
-    writeContract(
+    if (!commitInputs || commitPreview?.ok !== true) return;
+    authorizeWrite.writeContract(
       {
         address: gatewayAddress,
         abi: gatewayAbi,
-        functionName: "commitAuthorization",
-        args: [computeCommitHash(authorizeAction.agent, address, newSalt)],
+        ...commitAuthorizationCall(commitInputs),
       },
       {
         onSuccess: (txHash) => {
-          setSalt(newSalt);
           setCommitTxHash(txHash);
           setStep("commit-sent");
         },
@@ -231,20 +304,25 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
   };
 
   const onReveal = () => {
-    if (!revealReady || !salt || !authorizeAction) return;
-    writeContract(
+    if (!revealReady || !revealInputs) return;
+    revealWrite.writeContract(
       {
         address: gatewayAddress,
         abi: gatewayAbi,
-        functionName: "revealAuthorization",
-        args: [authorizeAction.agent, salt, authorizeAction.policy],
+        ...revealAuthorizationCall(revealInputs),
       },
-      { onSuccess: () => setStep("done") },
+      {
+        onSuccess: (txHash) => {
+          setFinalTxHash(txHash);
+          setStep("final-sent");
+        },
+      },
     );
   };
 
+  // Core 1791: the hash the new agent commits from its own key before the reveal.
   const consentHash =
-    address && salt && authorizeAction
+    authorizePath === "depositor" && address && authorizeAction
       ? computeConsentHash(address, authorizeAction.agent, salt, authorizeAction.policy)
       : null;
 
@@ -263,9 +341,13 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
     shareReceiver,
     setShareReceiver,
     step,
+    /** True only when the final transaction is mined with status success. */
+    done,
+    authorizeOpen,
     authorizePath,
     revokePreview,
     authorizePreview,
+    revealPreview,
     combinedRiskAnnotation,
     combinedError,
     depositorError,
@@ -273,6 +355,34 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
     authorizeOk,
     revealReady,
     isPending,
+    /**
+     * Each step's write and receipt, shown by the tab (QA plan U5, finding DR-9):
+     * the refusal or wallet error, then sent, mined or reverted.
+     */
+    revokeStatus: {
+      write: {
+        error: revokeWrite.error,
+        isPending: revokeWrite.isPending,
+        data: revokeTxHash ?? undefined,
+      },
+      receipt: revokeReceipt,
+    },
+    authorizeStatus: {
+      write: {
+        error: authorizeWrite.error,
+        isPending: authorizeWrite.isPending,
+        data: (authorizePath === "admin" ? finalTxHash : commitTxHash) ?? undefined,
+      },
+      receipt: authorizePath === "admin" ? finalReceipt : commitReceipt,
+    },
+    revealStatus: {
+      write: {
+        error: revealWrite.error,
+        isPending: revealWrite.isPending,
+        data: authorizePath === "depositor" ? (finalTxHash ?? undefined) : undefined,
+      },
+      receipt: finalReceipt,
+    },
     onRevoke,
     onAuthorize,
     onReveal,

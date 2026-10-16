@@ -53,3 +53,22 @@ enabled = true
 expected_cadence_secs = 86400
 # Extra seconds tolerated on top of the cadence before paging.
 grace_secs = 21600
+
+# Explorer-indexer lag budget (QA plan X5, DI-5). A poll that finds no new
+# indexed block refreshes the liveness heartbeat only while the indexer is
+# within this budget. Beyond it the daemon pages `indexer_behind:<chain>` and
+# lets the heartbeat age, so watchdog-liveness reports `stale` as well.
+# Absent means these defaults.
+[indexer_lag]
+max_lag_blocks = 150     # chain head minus indexed head (150 Base blocks = 300 s)
+max_silence_secs = 300   # since the newest indexer run without an error
+repage_secs = 3600
+# Security round 2: the watchdog's own lag. While its cursor trails the indexed
+# head by more than this, it keeps evaluating but stops refreshing the heartbeat,
+# so watchdog-liveness reports `stale` for a watchdog slower than the chain.
+max_cursor_lag_blocks = 150
+
+# Proxy upgrade and freeze pages (issue 1810) need no section: every poll pages
+# each governed `Upgraded` or `UpgradesFrozen` event the indexer stored in
+# `admin_events` (contract_kind = 'proxy', migration 0019) once, through
+# `action.webhook_url`. Alert-only: it never pauses, upgrades or freezes.

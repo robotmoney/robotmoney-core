@@ -4,7 +4,7 @@ title: "PortfolioRouterTest"
 
 # PortfolioRouterTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -959,6 +959,39 @@ registry's router-eligible vault count.
 function test_setDefaultWeights_revertsIfLengthMismatch() public;
 ```
 
+<a id="test_setdefaultweights_rejectsduplicatevault"></a>
+
+### test_setDefaultWeights_rejectsDuplicateVault
+
+HR-L-9 / CS-5 (issue #1698): a duplicate default `[A, A]` passes the
+`length == routerEligibleCount` check while leaving vault B out. It
+is refused by name, and the default stays untouched.
+
+```solidity
+function test_setDefaultWeights_rejectsDuplicateVault() public;
+```
+
+<a id="test_setweights_rejectsduplicatevault"></a>
+
+### test_setWeights_rejectsDuplicateVault
+
+The applied (voted) vector refuses a duplicate vault too: a digest
+binds a vector but does not prove it is unique (issue #1698).
+
+```solidity
+function test_setWeights_rejectsDuplicateVault() public;
+```
+
+<a id="test_setdefaultweights_acceptsdistinctvaults"></a>
+
+### test_setDefaultWeights_acceptsDistinctVaults
+
+The duplicate check does not refuse a distinct full-length vector.
+
+```solidity
+function test_setDefaultWeights_acceptsDistinctVaults() public;
+```
+
 <a id="test_redeemfor_unauthorizedcaller_reverts"></a>
 
 ### test_redeemFor_unauthorizedCaller_reverts
@@ -1134,37 +1167,37 @@ dropped (floor only blocks the LAST admin).
 function test_lastAdminFloor_router_cannotDropSoleAdmin() public;
 ```
 
-<a id="test_previewdeposit_uses_defaultweights_when_no_proposal"></a>
+<a id="test_previewdeposit_uses_defaultweights_when_no_receipt_applied"></a>
 
-### test_previewDeposit_uses_defaultWeights_when_no_proposal
+### test_previewDeposit_uses_defaultWeights_when_no_receipt_applied
 
-With no proposal ever passed (voted vector inactive), the router
-previews and routes by the default weight vector. ADR-0002.
+With no consensus receipt ever applied (applied vector inactive), the
+router previews and routes by the default weight vector. ADR-0002.
 
 ```solidity
-function test_previewDeposit_uses_defaultWeights_when_no_proposal() public;
+function test_previewDeposit_uses_defaultWeights_when_no_receipt_applied() public;
 ```
 
-<a id="test_previewdeposit_uses_defaultweights_after_failed_quorum"></a>
+<a id="test_previewdeposit_uses_defaultweights_after_applied_weights_cleared"></a>
 
-### test_previewDeposit_uses_defaultWeights_after_failed_quorum
+### test_previewDeposit_uses_defaultWeights_after_applied_weights_cleared
 
-After the voted vector is cleared (simulating a fall-back to
-default after the most recent proposal failed quorum), the
-router previews by the default vector again. ADR-0002.
+After the applied vector is cleared (`clearVotedWeights`, the
+timelock's fall-back to the default vector), the router previews
+by the default vector again. ADR-0002.
 
 ```solidity
-function test_previewDeposit_uses_defaultWeights_after_failed_quorum() public;
+function test_previewDeposit_uses_defaultWeights_after_applied_weights_cleared() public;
 ```
 
-<a id="test_voted_weights_override_defaults_then_revert_to_defaults"></a>
+<a id="test_applied_weights_override_defaults_then_revert_to_defaults"></a>
 
-### test_voted_weights_override_defaults_then_revert_to_defaults
+### test_applied_weights_override_defaults_then_revert_to_defaults
 
-A passed vote overrides the default; defaultWeights storage is
-unchanged; clearing the voted vector reverts to default. ADR-0002.
+An applied vector overrides the default; defaultWeights storage is
+unchanged; clearing the applied vector reverts to default. ADR-0002.
 
 ```solidity
-function test_voted_weights_override_defaults_then_revert_to_defaults() public;
+function test_applied_weights_override_defaults_then_revert_to_defaults() public;
 ```
 

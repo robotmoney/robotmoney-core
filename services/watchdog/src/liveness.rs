@@ -9,9 +9,31 @@
 //! which is byte-identical to its output when it is dead. To make the two
 //! distinguishable, the daemon refreshes `watchdog_cursor.updated_at` after every
 //! successful poll — when it advances the cursor past an evaluated block
-//! ([`crate::watchdog::store_cursor`]) and also when a poll finds no newly
+//! ([`crate::watchdog::advance_cursor`]) and also when a poll finds no newly
 //! indexed block ([`crate::watchdog::touch_cursor`]). A stopped, hung, or
 //! crash-looping daemon stops refreshing it.
+//!
+//! # A quiet poll is only proof of watching while the indexer keeps up (DI-5)
+//!
+//! "No newly indexed block" has two causes: the market is quiet, or the
+//! explorer indexer the watchdog reads has stopped (every tick failing, or the
+//! process gone). The second used to refresh the heartbeat exactly like the
+//! first, so `watchdog-liveness` exited 0 while the watchdog evaluated nothing
+//! at all. A quiet poll therefore reads [`IndexerProgress`] first and refreshes
+//! the heartbeat only when the indexer is within its [`IndexerLagBudget`]. When
+//! it is not, the daemon pages (`indexer_behind:<chain>`) and lets the heartbeat
+//! age, so this checker reports `stale` too.
+//!
+//! # Advancing is only proof of watching while the watchdog keeps up
+//!
+//! The same holds for the watchdog itself (security round 2). It evaluates
+//! every block from its cursor to the indexed head and advanced the heartbeat
+//! with each one, so a watchdog whose queries ran slower than Base makes blocks
+//! fell hours behind while `watchdog-liveness` reported healthy. The cursor
+//! write now refreshes the heartbeat only while the cursor is within
+//! [`IndexerLagBudget::max_cursor_lag_blocks`] of the indexed head
+//! ([`crate::watchdog::advance_cursor`]). Beyond it the cursor still advances
+//! and the heartbeat ages, so this checker reports `stale`.
 //!
 //! This module reads that heartbeat. The `watchdog-liveness` binary wraps it
 //! for an external monitor (the stage supervisor in
@@ -23,6 +45,7 @@
 //! deliberately not edited: sqlx checksums applied migrations, so touching the
 //! file would make every existing database refuse to start.
 
+use serde::Deserialize;
 use sqlx::postgres::PgPool;
 
 use crate::WatchdogError;
@@ -107,9 +130,235 @@ pub async fn check_cursor_liveness(
     ))
 }
 
+/// Default [`IndexerLagBudget::max_lag_blocks`]: 150 blocks is 300 s of Base
+/// blocks, the default `sla.max_response_secs`. A healthy indexer trails the
+/// head by its 5 confirmations plus at most one tick.
+pub const DEFAULT_MAX_INDEXER_LAG_BLOCKS: i64 = 150;
+
+/// Default [`IndexerLagBudget::max_silence_secs`]: the default
+/// `sla.max_response_secs`. A healthy indexer finishes a run every tick (12 s),
+/// including a tick with nothing new to read.
+pub const DEFAULT_MAX_INDEXER_SILENCE_SECS: i64 = 300;
+
+/// Default [`IndexerLagBudget::repage_secs`].
+pub const DEFAULT_INDEXER_BEHIND_REPAGE_SECS: u64 = 3_600;
+
+/// Default [`IndexerLagBudget::max_cursor_lag_blocks`]: 150 blocks is 300 s of Base blocks, the
+/// default `sla.max_response_secs`. A healthy watchdog evaluates the few blocks of one indexer
+/// tick within one poll.
+pub const DEFAULT_MAX_CURSOR_LAG_BLOCKS: i64 = 150;
+
+/// How far the explorer indexer may fall behind before a quiet poll stops
+/// counting as watching (`[indexer_lag]` in the watchdog config, DI-5).
+///
+/// Absent means these defaults, so every existing config keeps parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct IndexerLagBudget {
+    /// Most blocks the indexed head may trail the chain head the indexer last
+    /// recorded. Catches a wedged indexer: a failed tick still records the head
+    /// it read, so the gap grows while the cursor stands still.
+    #[serde(default = "default_max_lag_blocks")]
+    pub max_lag_blocks: i64,
+    /// Most seconds since the newest indexer run that finished without an
+    /// error. Catches an indexer process that is gone: it records no head at
+    /// all, so the block gap freezes, but the silence grows.
+    #[serde(default = "default_max_silence_secs")]
+    pub max_silence_secs: i64,
+    /// Floor between two `indexer_behind` pages for the same standing fault.
+    #[serde(default = "default_indexer_behind_repage_secs")]
+    pub repage_secs: u64,
+    /// Most blocks the watchdog's own cursor may trail the indexed head while
+    /// it still refreshes the heartbeat (security round 2). Catches a watchdog
+    /// that evaluates blocks slower than the chain makes them: it advances its
+    /// cursor every block, so the heartbeat used to stay fresh while it fell
+    /// hours behind. Beyond this the cursor still advances, the heartbeat ages,
+    /// and `watchdog-liveness` reports `stale`.
+    #[serde(default = "default_max_cursor_lag_blocks")]
+    pub max_cursor_lag_blocks: i64,
+}
+
+fn default_max_lag_blocks() -> i64 {
+    DEFAULT_MAX_INDEXER_LAG_BLOCKS
+}
+
+fn default_max_silence_secs() -> i64 {
+    DEFAULT_MAX_INDEXER_SILENCE_SECS
+}
+
+fn default_indexer_behind_repage_secs() -> u64 {
+    DEFAULT_INDEXER_BEHIND_REPAGE_SECS
+}
+
+fn default_max_cursor_lag_blocks() -> i64 {
+    DEFAULT_MAX_CURSOR_LAG_BLOCKS
+}
+
+impl Default for IndexerLagBudget {
+    fn default() -> Self {
+        Self {
+            max_lag_blocks: DEFAULT_MAX_INDEXER_LAG_BLOCKS,
+            max_silence_secs: DEFAULT_MAX_INDEXER_SILENCE_SECS,
+            repage_secs: DEFAULT_INDEXER_BEHIND_REPAGE_SECS,
+            max_cursor_lag_blocks: DEFAULT_MAX_CURSOR_LAG_BLOCKS,
+        }
+    }
+}
+
+impl IndexerLagBudget {
+    /// Refuse a budget that would page on every poll: a healthy indexer always
+    /// trails the head by its confirmations and finishes a run every tick.
+    pub fn validate(&self) -> Result<(), WatchdogError> {
+        if self.max_lag_blocks <= 0 {
+            return Err(WatchdogError::Config(
+                "indexer_lag.max_lag_blocks must be greater than zero".into(),
+            ));
+        }
+        if self.max_silence_secs <= 0 {
+            return Err(WatchdogError::Config(
+                "indexer_lag.max_silence_secs must be greater than zero".into(),
+            ));
+        }
+        if self.repage_secs == 0 {
+            return Err(WatchdogError::Config(
+                "indexer_lag.repage_secs must be non-zero — 0 would page on every poll".into(),
+            ));
+        }
+        if self.max_cursor_lag_blocks <= 0 {
+            return Err(WatchdogError::Config(
+                "indexer_lag.max_cursor_lag_blocks must be greater than zero".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// What the watchdog can see of the explorer indexer's progress, read from
+/// `indexer_runs` (DI-5). The same definitions as the explorer's `/health`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexerProgress {
+    /// Newest recorded `chain_head_block` minus the highest `last_indexed_block`
+    /// of a run without an error. `None` while either side is unknown.
+    pub lag_blocks: Option<i64>,
+    /// Seconds (database clock) since the newest run without an error that
+    /// committed a cursor finished. `None` when there is no such run.
+    pub since_success_secs: Option<i64>,
+    /// `error` of the newest finished run; `None` when it succeeded.
+    pub last_error: Option<String>,
+}
+
+impl IndexerProgress {
+    /// True when the indexer is measurably beyond `budget`. Unknown is not
+    /// behind: with no run at all the poll loop has no indexed block to wait
+    /// for, and the missing heartbeat already reports that.
+    pub fn is_behind(&self, budget: &IndexerLagBudget) -> bool {
+        self.lag_blocks.is_some_and(|l| l > budget.max_lag_blocks)
+            || self
+                .since_success_secs
+                .is_some_and(|s| s > budget.max_silence_secs)
+    }
+}
+
+/// Read [`IndexerProgress`] for `chain_id`.
+///
+/// The cursor is the highest `last_indexed_block` of a run without an error
+/// (what the indexer resumes from); the head is the newest one any run
+/// recorded, including a failed run, which is what makes a wedged indexer's
+/// lag grow. Ages are computed on the database clock.
+pub async fn read_indexer_progress(
+    pool: &PgPool,
+    chain_id: i64,
+) -> Result<IndexerProgress, WatchdogError> {
+    let (lag_blocks, since_success_secs, last_error): (Option<i64>, Option<i64>, Option<String>) =
+        sqlx::query_as(
+            "SELECT \
+               (SELECT chain_head_block FROM indexer_runs \
+                 WHERE chain_id = $1 AND chain_head_block IS NOT NULL \
+                 ORDER BY run_id DESC LIMIT 1) \
+               - (SELECT MAX(last_indexed_block) FROM indexer_runs \
+                 WHERE chain_id = $1 AND error IS NULL), \
+               (SELECT EXTRACT(EPOCH FROM now() - COALESCE(finished_at, started_at))::BIGINT \
+                  FROM indexer_runs \
+                 WHERE chain_id = $1 AND error IS NULL AND last_indexed_block IS NOT NULL \
+                 ORDER BY run_id DESC LIMIT 1), \
+               (SELECT error FROM indexer_runs \
+                 WHERE chain_id = $1 AND finished_at IS NOT NULL \
+                 ORDER BY run_id DESC LIMIT 1)",
+        )
+        .bind(chain_id)
+        .fetch_one(pool)
+        .await
+        .map_err(WatchdogError::Db)?;
+    Ok(IndexerProgress {
+        lag_blocks,
+        since_success_secs: since_success_secs.map(|s| s.max(0)),
+        last_error,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn progress(lag: Option<i64>, since: Option<i64>) -> IndexerProgress {
+        IndexerProgress {
+            lag_blocks: lag,
+            since_success_secs: since,
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn an_indexer_within_both_budgets_is_not_behind() {
+        let b = IndexerLagBudget::default();
+        assert!(!progress(Some(5), Some(12)).is_behind(&b));
+        assert!(!progress(Some(b.max_lag_blocks), Some(b.max_silence_secs)).is_behind(&b));
+    }
+
+    #[test]
+    fn a_wedged_indexer_is_behind_on_the_block_gap() {
+        let b = IndexerLagBudget::default();
+        // Every tick fails after reading the head: the last success may be
+        // recent enough, but the gap is not.
+        assert!(progress(Some(b.max_lag_blocks + 1), Some(0)).is_behind(&b));
+    }
+
+    #[test]
+    fn a_dead_indexer_is_behind_on_silence_even_with_a_frozen_gap() {
+        let b = IndexerLagBudget::default();
+        // The process is gone: no run records a new head, so the gap stays at
+        // the healthy 5 forever. Only the silence shows it.
+        assert!(progress(Some(5), Some(b.max_silence_secs + 1)).is_behind(&b));
+    }
+
+    #[test]
+    fn unknown_progress_is_not_behind() {
+        assert!(!progress(None, None).is_behind(&IndexerLagBudget::default()));
+    }
+
+    #[test]
+    fn a_budget_that_would_page_every_poll_is_refused() {
+        let zero_lag = IndexerLagBudget {
+            max_lag_blocks: 0,
+            ..Default::default()
+        };
+        assert!(zero_lag.validate().is_err());
+        let zero_silence = IndexerLagBudget {
+            max_silence_secs: 0,
+            ..Default::default()
+        };
+        assert!(zero_silence.validate().is_err());
+        let zero_repage = IndexerLagBudget {
+            repage_secs: 0,
+            ..Default::default()
+        };
+        assert!(zero_repage.validate().is_err());
+        let zero_cursor_lag = IndexerLagBudget {
+            max_cursor_lag_blocks: 0,
+            ..Default::default()
+        };
+        assert!(zero_cursor_lag.validate().is_err());
+        assert!(IndexerLagBudget::default().validate().is_ok());
+    }
 
     #[test]
     fn fresh_heartbeat_is_healthy_up_to_and_including_the_limit() {

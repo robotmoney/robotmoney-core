@@ -2655,6 +2655,25 @@ export const vaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "maxDeposit",
+    inputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "pure",
+  },
+  {
+    type: "function",
     name: "maxRedeem",
     inputs: [
       {
@@ -2684,6 +2703,25 @@ export const vaultAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "previewDeposit",
+    inputs: [
+      {
+        name: "assets",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "pure",
   },
   {
     type: "function",
@@ -3549,6 +3587,19 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "emergencyExcludeAdapter",
+    inputs: [
+      {
+        name: "index",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "emergencyWithdraw",
     inputs: [],
     outputs: [],
@@ -3566,6 +3617,19 @@ export const robotMoneyVaultAbiGenerated = [
     ],
     outputs: [],
     stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "exclusionLedger",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "contract ExclusionLedger",
+      },
+    ],
+    stateMutability: "view",
   },
   {
     type: "function",
@@ -3993,6 +4057,25 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "openExclusionOf",
+    inputs: [
+      {
+        name: "index",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "pauseDeposits",
     inputs: [],
     outputs: [],
@@ -4117,6 +4200,24 @@ export const robotMoneyVaultAbiGenerated = [
     type: "function",
     name: "rebalance",
     inputs: [],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "recoverRemovedAdapter",
+    inputs: [
+      {
+        name: "index",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "amount",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
     outputs: [],
     stateMutability: "nonpayable",
   },
@@ -4300,6 +4401,24 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "setAdapterMaxExposure",
+    inputs: [
+      {
+        name: "index",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "cap",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "setExitFeeBps",
     inputs: [
       {
@@ -4466,6 +4585,13 @@ export const robotMoneyVaultAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "syncExclusions",
+    inputs: [],
+    outputs: [],
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -4752,6 +4878,31 @@ export const robotMoneyVaultAbiGenerated = [
       },
       {
         name: "lossAmount",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "AdapterMaxExposureSet",
+    inputs: [
+      {
+        name: "index",
+        type: "uint256",
+        indexed: true,
+        internalType: "uint256",
+      },
+      {
+        name: "adapter",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "cap",
         type: "uint256",
         indexed: false,
         internalType: "uint256",
@@ -5809,6 +5960,17 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "NoOpenExclusion",
+    inputs: [
+      {
+        name: "index",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "NotInitializing",
     inputs: [],
   },
@@ -5892,6 +6054,11 @@ export const robotMoneyVaultAbiGenerated = [
   {
     type: "error",
     name: "ZeroAddress",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "ZeroPayoutDuringExclusion",
     inputs: [],
   },
   {
@@ -6130,25 +6297,6 @@ export const registryAbiGenerated = [
     outputs: [
       {
         name: "eligible",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "isVaultAllExact",
-    inputs: [
-      {
-        name: "vault",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    outputs: [
-      {
-        name: "exact",
         type: "bool",
         internalType: "bool",
       },
@@ -8074,6 +8222,17 @@ export const routerAbiGenerated = [
     type: "error",
     name: "LastAdminFloor",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "LegSkippedWithFloor",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
   },
   {
     type: "error",
@@ -11419,6 +11578,27 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "SpotBelowSellAnchor",
+    inputs: [
+      {
+        name: "token",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "belowBps",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "thresholdBps",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "TVLCapExceeded",
     inputs: [],
   },
@@ -14512,6 +14692,27 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "SpotBelowSellAnchor",
+    inputs: [
+      {
+        name: "token",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "belowBps",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "thresholdBps",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "TVLCapExceeded",
     inputs: [],
   },
@@ -14534,6 +14735,639 @@ export const protocolAssetVaultAbiGenerated = [
   {
     type: "error",
     name: "ZeroAddress",
+    inputs: [],
+  },
+] as const;
+
+/**
+ * Full ExclusionLedger ABI — generated from Foundry artifact (core 1820).
+ *
+ * Each RobotMoneyVault deploys one ledger that holds USDC recovered from an
+ * excluded adapter for the holders at the moment of exclusion. The canonical
+ * counterpart of `abi.ts`'s `EXCLUSION_LEDGER_ABI`, which the position card
+ * reads (QA plan U5); `abi-parity.test.ts` compares the two.
+ */
+export const exclusionLedgerAbiGenerated = [
+  {
+    type: "constructor",
+    inputs: [
+      {
+        name: "vault_",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "usdc_",
+        type: "address",
+        internalType: "contract IERC20",
+      },
+    ],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "USDC",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "contract IERC20",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "VAULT",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "balanceAt",
+    inputs: [
+      {
+        name: "holder",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "id",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "checkpoint",
+    inputs: [
+      {
+        name: "from",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "to",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "claim",
+    inputs: [
+      {
+        name: "id",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "holder",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "amount",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "claimAll",
+    inputs: [
+      {
+        name: "holder",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "total",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "claimable",
+    inputs: [
+      {
+        name: "id",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "holder",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "amount",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "claimableTotal",
+    inputs: [
+      {
+        name: "holder",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "total",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "claimed",
+    inputs: [
+      {
+        name: "id",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "holder",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "amount",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "credit",
+    inputs: [
+      {
+        name: "id",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "amount",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "source",
+        type: "uint8",
+        internalType: "enum ExclusionLedger.RecoverySource",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "exclusionCount",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "exclusions",
+    inputs: [
+      {
+        name: "id",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [
+      {
+        name: "adapterIndex",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "adapter",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "openedBlock",
+        type: "uint48",
+        internalType: "uint48",
+      },
+      {
+        name: "openedAt",
+        type: "uint40",
+        internalType: "uint40",
+      },
+      {
+        name: "finalized",
+        type: "bool",
+        internalType: "bool",
+      },
+      {
+        name: "snapshotSupply",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "adapterValue",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "recoveredUsdc",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "claimedUsdc",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "finalize",
+    inputs: [
+      {
+        name: "id",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "reason",
+        type: "uint8",
+        internalType: "enum ExclusionLedger.FinalizeReason",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "heldUsdc",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "open",
+    inputs: [
+      {
+        name: "adapterIndex",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "adapter",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "snapshotSupply",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [
+      {
+        name: "id",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "returnSurplus",
+    inputs: [],
+    outputs: [
+      {
+        name: "amount",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "sweepForeignToken",
+    inputs: [
+      {
+        name: "token",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "event",
+    name: "ExclusionClaimed",
+    inputs: [
+      {
+        name: "exclusionId",
+        type: "uint256",
+        indexed: true,
+        internalType: "uint256",
+      },
+      {
+        name: "holder",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "amount",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "ExclusionFinalized",
+    inputs: [
+      {
+        name: "exclusionId",
+        type: "uint256",
+        indexed: true,
+        internalType: "uint256",
+      },
+      {
+        name: "reason",
+        type: "uint8",
+        indexed: true,
+        internalType: "enum ExclusionLedger.FinalizeReason",
+      },
+      {
+        name: "recoveredUsdc",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "ExclusionOpened",
+    inputs: [
+      {
+        name: "exclusionId",
+        type: "uint256",
+        indexed: true,
+        internalType: "uint256",
+      },
+      {
+        name: "adapterIndex",
+        type: "uint256",
+        indexed: true,
+        internalType: "uint256",
+      },
+      {
+        name: "adapter",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "snapshotSupply",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+      {
+        name: "adapterValue",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "ExclusionRecoveryCredited",
+    inputs: [
+      {
+        name: "exclusionId",
+        type: "uint256",
+        indexed: true,
+        internalType: "uint256",
+      },
+      {
+        name: "source",
+        type: "uint8",
+        indexed: true,
+        internalType: "enum ExclusionLedger.RecoverySource",
+      },
+      {
+        name: "amount",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+      {
+        name: "recoveredUsdc",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "ExclusionSurplusReturned",
+    inputs: [
+      {
+        name: "amount",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "ForeignTokenQuarantined",
+    inputs: [
+      {
+        name: "token",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "amount",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+      {
+        name: "caller",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "error",
+    name: "AddressEmptyCode",
+    inputs: [
+      {
+        name: "target",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "AddressInsufficientBalance",
+    inputs: [
+      {
+        name: "account",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "ExclusionNotOpen",
+    inputs: [
+      {
+        name: "exclusionId",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "FailedInnerCall",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "MathOverflowedMulDiv",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "OnlyVault",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "SafeCastOverflowedUintDowncast",
+    inputs: [
+      {
+        name: "bits",
+        type: "uint8",
+        internalType: "uint8",
+      },
+      {
+        name: "value",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "SafeERC20FailedOperation",
+    inputs: [
+      {
+        name: "token",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "TokenIsProtected",
+    inputs: [
+      {
+        name: "token",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "ZeroQuarantineAddress",
     inputs: [],
   },
 ] as const;

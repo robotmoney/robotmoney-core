@@ -41,6 +41,8 @@ contract RevisionCommitteeAssessment is SecurityReviewRecheckCommitteePoc {
 contract RevisionVaultAssessment is SecurityReviewRecheckVaultPoc {
     /// The pre-1788 counterexample (re-exclude both adapters, deposit, restore) is closed by
     /// core 1788 (PR 1814): the deposit leg reverts while any active adapter is ineligible.
+    /// Since core 1820 there is also nothing orphaned to redistribute: restoration realises the
+    /// excluded balance into the exclusion record of alice, the holder at the snapshot.
     function test_assessment_orphanRedistributionSequenceBlocked() public {
         MockAdapter second = _secondAdapter();
         vm.prank(alice);
@@ -53,7 +55,8 @@ contract RevisionVaultAssessment is SecurityReviewRecheckVaultPoc {
         assertEq(vault.totalSupply(), 0);
         vm.prank(admin);
         vault.setAdapterAllowed(address(second), true);
-        assertGt(vault.totalAssets(), 999 * ONE_USDC);
+        assertEq(vault.totalAssets(), 0, "nothing orphaned in NAV");
+        assertEq(vault.exclusionLedger().claimable(1, alice), 1_000 * ONE_USDC, "alice's claim");
         vm.startPrank(admin);
         vault.setAdapterAllowed(address(adapter), false);
         vault.setAdapterAllowed(address(second), false);

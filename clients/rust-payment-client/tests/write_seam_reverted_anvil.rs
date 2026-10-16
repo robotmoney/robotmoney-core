@@ -24,13 +24,13 @@
 //!
 //! # WHEN ANVIL IS ABSENT
 //!
-//! This test needs `anvil` on PATH (Foundry). The rmpc integration workflow
-//! does not install Foundry, and adding it there is out of scope for this
-//! change, so an absent `anvil` logs loudly and returns rather than failing the
-//! build — with two guards against that becoming a quiet hole:
+//! This test needs `anvil` on PATH (Foundry). On a machine without it, an
+//! absent `anvil` logs loudly and returns rather than failing the build — with
+//! two guards against that becoming a quiet hole:
 //!
-//! 1. `RMPC_REQUIRE_ANVIL=1` turns the absence into a FAILURE, which is how the
-//!    acceptance run executes it (the same shape as the indexer suite's
+//! 1. `RMPC_REQUIRE_ANVIL=1` turns the absence into a FAILURE. suite-07's
+//!    `rmpc-parity` job installs Foundry and runs this file that way, with an
+//!    executed floor of 2 (QA plan T2; the same shape as the indexer suite's
 //!    `EXPLORER_INDEXER_REQUIRE_PG`);
 //! 2. the mocked twins in `tests/committee.rs`, `tests/receipt.rs`,
 //!    `tests/cli_deposit.rs`, `tests/cli_withdraw.rs` and

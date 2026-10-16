@@ -1,4 +1,11 @@
 {
+  "enums": {
+    "enum VaultRegistry.VaultStatus": [
+      "Active",
+      "DepositsPaused",
+      "Retired"
+    ]
+  },
   "libraries": [
     "contracts/lib/GovernedUUPS.sol:GovernedUpgrade"
   ],

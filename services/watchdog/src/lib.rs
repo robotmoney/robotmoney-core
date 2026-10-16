@@ -21,8 +21,13 @@
 //!   #1247 task 4.13). Alert-only; it never pauses the gateway.
 //! - [`pager_state`] — durable per-incident pager state, so a restart mid-incident
 //!   still sends the matching resolve (task T08).
+//! - [`governance`] — standing weight-setter-path check (issue 1698): the
+//!   router's `WEIGHT_SETTER_ROLE` is held only by the weight setter, and the
+//!   weight setter's `WEIGHT_SETTER_ROLE` (`applyReceipt`) and `ADMIN_ROLE`
+//!   only by the timelock. Read-only; it never pauses the gateway.
 //! - [`liveness`] — read-only `watchdog_cursor.updated_at` heartbeat check used
-//!   by the `watchdog-liveness` binary (issue #1378).
+//!   by the `watchdog-liveness` binary (issue #1378), and the explorer-indexer
+//!   lag budget that decides whether a quiet poll may refresh it (DI-5).
 //! - [`upgrade_monitor`] — pages each governed upgrade or freeze of a proxied
 //!   core contract once, from the indexed proxy events (issue 1810). Alert-only.
 
@@ -30,6 +35,7 @@
 
 pub mod alert;
 pub mod config;
+pub mod governance;
 pub mod liveness;
 pub mod pager_state;
 pub mod pause;

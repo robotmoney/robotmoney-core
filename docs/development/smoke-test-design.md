@@ -313,10 +313,14 @@ Two mechanisms keep that from recurring.
 
 **A standing spec and an optional spec, with different subjects.**
 
-| Spec | Subject | May skip? |
+| Spec | Subject | Where it runs |
 | --- | --- | --- |
-| `consensus-receipts-seeded.spec.ts` | the two receipts the `--full-stack` harness seeds (`Fixture::seed_consensus_receipts`, run by `DappStack::boot` unless `--no-receipt-fixtures`); it is in `REQUIRED_SPECS` | No |
-| `consensus-receipts.spec.ts` | the receipt a Fusion QA run really anchored, named by `FUSION_RECEIPT_ID` / `FUSION_RECEIPT_URL` | Yes |
+| `consensus-receipts-seeded.spec.ts` | the two receipts the `--full-stack` harness seeds (`Fixture::seed_consensus_receipts`, run by `DappStack::boot` unless `--no-receipt-fixtures`); it is in `REQUIRED_SPECS` | every suite 10 run; never skips |
+| `consensus-receipts.spec.ts` | the receipt a Fusion QA run really anchored, named by `FUSION_RECEIPT_ID` / `FUSION_RECEIPT_URL` | only `playwright.fusion.config.ts`; the default config does not collect it, and it fails without both variables (QA plan v1 T5) |
+
+Until QA plan v1 T5 the second spec was collected by the default config and
+skipped on every suite 10 run. The required-coverage reporter now also fails a
+full run that skipped any test, so no test can sit skipped in suite 10.
 
 The seeding uses the mainnet authorities, with no test-only admin grant and no
 mock Safe. `committeeRegister(agent, "smoke-test-receipt-agent")` needs the

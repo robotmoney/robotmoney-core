@@ -23,7 +23,7 @@ import { DEPLOYER_STAGES, VAULT_STAGES, getStageTable, manifestRef, type StageRo
 import { RPC_REFUSED_DETAIL, verifyDeployment, verifySources, viemReader, type VerifyReport, type VerifySheet, type VerifyOptions, type VaultSheet } from "./verify/index.ts";
 import { recordDependencyManifest, type RecorderSpawn } from "./record-dependencies.ts";
 import { contractsFromManifests } from "./verify/sources.ts";
-import { REDEPLOY_ROW, redeploysOf } from "./redeploy-vault.ts";
+import { REDEPLOY_ROW, oldVaultBuild, redeploysOf, verifyBuildRefusal } from "./redeploy-vault.ts";
 
 /** Issue 1809: the record of the upgradeability labels, written by verify under deployments/<chain>/. */
 export const UPGRADEABILITY_MANIFEST = "upgradeability.json";
@@ -216,10 +216,15 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   const redeployRecs = redeploysOf(manifest);
   const openRedeploy = redeployRecs.find((r) => r.status !== "governed");
   if (openRedeploy) {
-    const next = openRedeploy.status === "deployed" ? `bun publish-contracts/src/cli.ts govern --row ${REDEPLOY_ROW} --chain ${ctx.chainId} --core-sha ${ctx.coreSha} (plus the same --rpc, --sheet, --signer, --environment and --owner-signer arguments as this run)` : `the redeploy-vault verb with --resume (it died part-way)`;
+    // QA plan v1 E1: the row runs at the round's own sha (the verb's), whatever sha this verify names.
+    const next = openRedeploy.status === "deployed" ? `bun publish-contracts/src/cli.ts govern --row ${REDEPLOY_ROW} --chain ${ctx.chainId} --core-sha ${openRedeploy.core_sha || ctx.coreSha} (plus the same --rpc, --sheet, --signer, --environment, --evidence and --owner-signer arguments as this run)` : `the redeploy-vault verb with --resume at --core-sha ${openRedeploy.core_sha || ctx.coreSha} (it died part-way)`;
     throw new PublishError("GOVERN_PENDING", `verify refused: the redeploy of ${openRedeploy.vault} is ${openRedeploy.status} (round ${openRedeploy.ordinal}), so neither the state before it nor the state after it can be checked. Nothing was paused. Finish it first: ${next}`, { next_command: next, redeploy: openRedeploy.status });
   }
   const governedRedeploys = redeployRecs.filter((r) => r.status === "governed" && r.new_vault);
+  // QA plan v1 E1 (DT-2): after a round at another sha this verify must run at that sha with --prior-out of the original build. cli.ts refuses every other run
+  // before any signer (redeployShaRun); this is the stage's own check, so no caller can compare the replacing vault with the wrong build and pause all four vaults.
+  const buildRefusal = verifyBuildRefusal(manifest, ctx);
+  if (buildRefusal) throw buildRefusal;
   const unpaused = mode ? (mode === "post-govern" ? [...MAINNET_UNPAUSE_VAULTS] : []) : unpausedByGovern(manifest, ctx.sheet);
   ctx.log.log("info", "stage.start", { stage: row.name });
   const report = await deps.verifyDeployment({
@@ -233,7 +238,9 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     controlProof: controlProofOf(manifest),
     appliedReceipt: appliedReceiptOf(manifest),
     ...(governedRedeploys.length > 0 ? {
-      redeploys: governedRedeploys.map((r) => ({ vault: r.vault, oldVault: r.old_vault, newVault: r.new_vault!, replacementManifest: r.replacement_manifest, routerVaultCap: typeof r.router_vault_cap === "string" ? r.router_vault_cap : undefined })),
+      // QA plan v1 E1: artifactsDir is the build of this checkout. After a round at another sha that is the redeploy sha (cli.ts accepts it with --prior-out only):
+      // the replacing vault is compared with it, every contract the original deployment created with priorArtifactsDir (--prior-out, a build of the original sha).
+      redeploys: governedRedeploys.map((r) => ({ vault: r.vault, oldVault: r.old_vault, newVault: r.new_vault!, replacementManifest: r.replacement_manifest, routerVaultCap: typeof r.router_vault_cap === "string" ? r.router_vault_cap : undefined, oldBuild: oldVaultBuild(redeployRecs, r, manifest.coreSha) })),
       redeployDeployerTxs: governedRedeploys.reduce((t, r) => t + (r.deploy_count ?? 0), 0),
       ...(ctx.priorArtifactsDir ? { priorArtifactsDir: ctx.priorArtifactsDir } : {}),
     } : {}),
@@ -270,6 +277,10 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   }
   // Issue 1727: the kind and the delay go to the log (stderr), never to stdout: stdout is the label contract core's harness parses and the Twin and mainnet label sets must compare equal.
   ctx.log.log("info", "verify.deployment_kind", { deployment_kind: ctx.sheet.kind, label: kindLabel(ctx.sheet.kind, expectedTimelockDelay(manifest, ctx.sheet)) });
+  // QA plan v1 C3 (CS-6): the gating of the router's weight setter goes to the log and to the stage record below, so the run says whether every weight change
+  // waits the timelock delay. Like the kind, it stays off stdout: the label contract is unchanged.
+  const gating = report.weightSetter;
+  if (gating) ctx.log.log(gating.gating === "timelock" ? "info" : "error", "verify.weight_setter_gating", { gating: gating.gating, holders: gating.holders, timelock: gating.timelock, delay_seconds: gating.delaySeconds });
   for (const c of report.checks) ctx.log.log(c.ok ? "info" : "error", "verify.check", { label: c.label, ok: c.ok, detail: c.ok ? undefined : c.detail });
   // stdout: the verifier labels, one per line under [verify], the format of deployments/base-8453/verifier-labels.txt, so a caller can diff stage against mainnet.
   // Pass or fail is the exit code (and the verify.check log lines on stderr).
@@ -283,7 +294,11 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   emit("[verify]");
   for (const c of report.checks) emit(c.label);
   const failed = report.checks.filter((c) => !c.ok);
-  manifest.stages[row.name] = { status: report.ok ? "done" : "started", startedAt: new Date(startedAt).toISOString(), finishedAt: new Date().toISOString(), checks: report.checks.length, failed: failed.length };
+  // QA plan v1 E1: the builds the code hashes were compared with go into the evidence: the stage record names --prior-out and the sha of its checkout, and a verify that
+  // passed writes onto each governed redeploy entry the sha it ran at and that prior-out sha (evidence-check requires it to be the deployment's core_sha).
+  const priorOut = ctx.priorArtifactsDir ? { prior_out: { dir: ctx.priorArtifactsDir, sha: ctx.priorArtifactsSha ?? null }, core_sha: ctx.coreSha } : {};
+  manifest.stages[row.name] = { status: report.ok ? "done" : "started", startedAt: new Date(startedAt).toISOString(), finishedAt: new Date().toISOString(), checks: report.checks.length, failed: failed.length, ...(gating ? { weightSetterGating: gating } : {}), ...priorOut };
+  if (report.ok && ctx.priorArtifactsSha) for (const r of governedRedeploys) Object.assign(r, { verified_at_sha: ctx.coreSha, prior_out_sha: ctx.priorArtifactsSha });
   saveRunManifest(ctx.evidenceDir, manifest);
   // Issue 1851: when every failure is a read the RPC refused (a pruned node, a throttle), the scans did not run: RPC_REFUSED, which does not pause the vaults. The deployment is NOT verified.
   if (!report.ok && failed.every((c) => c.detail.startsWith(RPC_REFUSED_DETAIL))) {
@@ -291,7 +306,8 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   }
   if (!report.ok) throw new PublishError("VERIFY", `the verifier reports ${failed.length} failure(s): ${failed.slice(0, 5).map((c) => c.label).join(", ")}`, { failed: failed.map((c) => c.label) });
   if (governedRedeploys.length) {
-    const evidence = { deployment_kind: ctx.sheet.kind, registry: { address: governedRedeploys[0]!.registry }, timelock: { address: governedRedeploys[0]!.timelock }, vault_redeploys: governedRedeploys, vaults: Object.fromEntries(governedRedeploys.map((r) => [r.vault, { address: r.new_vault }])) };
+    // QA plan v1 E1: core_sha is the deployment's (the run manifest's), so the rounds' verified_at_sha and prior_out_sha are checked against it
+    const evidence = { deployment_kind: ctx.sheet.kind, core_sha: manifest.coreSha, registry: { address: governedRedeploys[0]!.registry }, timelock: { address: governedRedeploys[0]!.timelock }, vault_redeploys: governedRedeploys, vaults: Object.fromEntries(governedRedeploys.map((r) => [r.vault, { address: r.new_vault }])) };
     const chain = viemReader(ctx.rpc);
     const floor = Number(await chain.read(governedRedeploys[0]!.timelock, "function getMinDelay() view returns (uint256)"));
     const problems = [...checkVaultRedeploys(evidence, floor, ctx.sheet.kind), ...await checkVaultRedeploysOnChain(evidence, createPublicClient({ transport: http(ctx.rpc) }), floor)];

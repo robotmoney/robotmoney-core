@@ -1,9 +1,9 @@
 //! Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
 //!
 //! Minimal async JSON-RPC client. Only the methods the indexer needs:
-//! `eth_blockNumber`, `eth_chainId`, `eth_getBlockByNumber` (with and
-//! without txs), `eth_getLogs`, `eth_call`, `eth_getCode`. Mirrors the
-//! blocking variant in `testing/fork-e2e-rust/src/lib.rs`.
+//! `eth_blockNumber`, `eth_chainId`, `eth_getBlockByNumber` (header only),
+//! `eth_getTransactionReceipt`, `eth_getLogs`, `eth_call`, `eth_getCode`.
+//! Mirrors the blocking variant in `testing/fork-e2e-rust/src/lib.rs`.
 
 use alloy_primitives::{Address, Bytes, B256};
 use serde::{Deserialize, Serialize};
@@ -170,16 +170,17 @@ pub struct LogEntry {
     pub log_index: u32,
 }
 
-#[derive(Debug, Clone)]
-pub struct TxRow {
-    pub tx_hash: B256,
-    pub tx_index: u32,
+/// The fields of a `transactions` row that the log does not carry (QA plan X6, DI-6). The hash, the
+/// block and the index come from the watched log itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TxReceipt {
     pub from: Address,
+    /// `None` for a contract creation.
     pub to: Option<Address>,
     pub status: u8,
-    /// The receipt's `contractAddress`: the contract this transaction created
-    /// at top level, `None` for a call. Issue 1840: the indexer marks a proxy's
-    /// `Upgraded` / `UpgradesFrozen` as its deployment only when this is the proxy.
+    /// The receipt's `contractAddress`: the contract this transaction created at top level, `None`
+    /// for a call. Issue 1840: the indexer marks a proxy's `Upgraded` / `UpgradesFrozen` as its
+    /// deployment only when this is the proxy.
     pub contract_address: Option<Address>,
 }
 
@@ -315,7 +316,8 @@ impl JsonRpc {
     }
 
     /// Header-only fetch — keeps the response small for the per-tick
-    /// reorg check.
+    /// reorg check and for the `blocks` row of every event block (the
+    /// transactions come from the logs, QA plan X6).
     pub async fn block_header(&self, n: u64) -> Result<Option<BlockHeader>, RpcError> {
         let v: serde_json::Value = self
             .call(
@@ -350,81 +352,17 @@ impl JsonRpc {
         }))
     }
 
-    /// Fetch all transactions in a block, plus their receipts
-    /// (status). Used to populate `transactions`.
-    pub async fn block_with_txs(&self, n: u64) -> Result<(BlockHeader, Vec<TxRow>), RpcError> {
-        let v: serde_json::Value = self
-            .call(
-                "eth_getBlockByNumber",
-                serde_json::json!([format!("0x{:x}", n), true]),
-            )
-            .await?;
-        if v.is_null() {
-            return Err(RpcError::Server {
-                method: "eth_getBlockByNumber".into(),
-                message: format!("block {n} missing"),
-            });
-        }
-        let header = BlockHeader {
-            number: parse_u64_hex(
-                "eth_getBlockByNumber.number",
-                v.get("number").and_then(|x| x.as_str()).unwrap_or("0x0"),
-            )?,
-            hash: parse_b256(
-                "eth_getBlockByNumber.hash",
-                v.get("hash").and_then(|x| x.as_str()).unwrap_or("0x"),
-            )?,
-            parent_hash: parse_b256(
-                "eth_getBlockByNumber.parentHash",
-                v.get("parentHash").and_then(|x| x.as_str()).unwrap_or("0x"),
-            )?,
-            timestamp: parse_u64_hex(
-                "eth_getBlockByNumber.timestamp",
-                v.get("timestamp").and_then(|x| x.as_str()).unwrap_or("0x0"),
-            )?,
-        };
-        let mut txs = Vec::new();
-        if let Some(arr) = v.get("transactions").and_then(|x| x.as_array()) {
-            for t in arr {
-                let tx_hash = parse_b256(
-                    "tx.hash",
-                    t.get("hash").and_then(|x| x.as_str()).unwrap_or("0x"),
-                )?;
-                let tx_index = parse_u64_hex(
-                    "tx.transactionIndex",
-                    t.get("transactionIndex")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("0x0"),
-                )? as u32;
-                let from = parse_address(
-                    "tx.from",
-                    t.get("from").and_then(|x| x.as_str()).unwrap_or("0x"),
-                )?;
-                let to = match t.get("to").and_then(|x| x.as_str()) {
-                    None => None,
-                    Some("") => None,
-                    Some(s) => Some(parse_address("tx.to", s)?),
-                };
-                // Receipt fetch for status. Cheap since we're already
-                // ingesting block-by-block; a future optimization could
-                // batch these.
-                let (status, contract_address) = self.tx_receipt(tx_hash).await?;
-                txs.push(TxRow {
-                    tx_hash,
-                    tx_index,
-                    from,
-                    to,
-                    status,
-                    contract_address,
-                });
-            }
-        }
-        Ok((header, txs))
-    }
-
-    /// The receipt's status and `contractAddress` (the contract a creation
-    /// transaction deployed; `None` for a call or an unknown receipt).
-    async fn tx_receipt(&self, hash: B256) -> Result<(u8, Option<Address>), RpcError> {
+    /// The receipt of one transaction that carries a watched log (QA plan X6, DI-6).
+    ///
+    /// The indexer stores only the transactions its logs name, one receipt each. It used to fetch every
+    /// transaction of an event block and a serial receipt for each, so one busy Base block cost hundreds
+    /// of requests (issue 1780).
+    ///
+    /// A `null` answer is an error, never `status = 0`. The node returned a log of this transaction, so
+    /// a node that does not know its receipt is a lagging backend or a reorg in progress. Storing 0
+    /// recorded a successful transaction as failed for the life of the row; failing the tick retries the
+    /// range on the next one. A receipt without `from` or `status` is a decode error for the same reason.
+    pub async fn tx_receipt(&self, hash: B256) -> Result<TxReceipt, RpcError> {
         let v: serde_json::Value = self
             .call(
                 "eth_getTransactionReceipt",
@@ -432,15 +370,43 @@ impl JsonRpc {
             )
             .await?;
         if v.is_null() {
-            return Ok((0, None));
+            return Err(RpcError::Server {
+                method: "eth_getTransactionReceipt".into(),
+                message: format!(
+                    "no receipt for {hash:#x} (null): the node returned a log of this transaction but \
+                     does not know the transaction"
+                ),
+            });
         }
-        let s = v.get("status").and_then(|x| x.as_str()).unwrap_or("0x0");
-        let n = parse_u64_hex("receipt.status", s)?;
-        let created = match v.get("contractAddress").and_then(|x| x.as_str()) {
+        let from = parse_address(
+            "receipt.from",
+            v.get("from").and_then(|x| x.as_str()).unwrap_or("0x"),
+        )?;
+        let to = match v.get("to").and_then(|x| x.as_str()) {
+            None | Some("") => None,
+            Some(s) => Some(parse_address("receipt.to", s)?),
+        };
+        let status = v
+            .get("status")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| RpcError::Decode {
+                method: "receipt.status".into(),
+                message: format!("receipt for {hash:#x} has no status"),
+            })?;
+        let status = parse_u64_hex("receipt.status", status)?;
+        let contract_address = match v.get("contractAddress").and_then(|x| x.as_str()) {
             None | Some("") => None,
             Some(a) => Some(parse_address("receipt.contractAddress", a)?),
         };
-        Ok((n as u8, created))
+        Ok(TxReceipt {
+            from,
+            to,
+            contract_address,
+            status: u8::try_from(status).map_err(|_| RpcError::Decode {
+                method: "receipt.status".into(),
+                message: format!("status {status} out of range"),
+            })?,
+        })
     }
 
     /// `eth_getLogs` for a block range, optionally filtered by address

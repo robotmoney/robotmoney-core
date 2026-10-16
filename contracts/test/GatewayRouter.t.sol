@@ -51,6 +51,12 @@ contract RouterMockVault is ERC20 {
         return assets;
     }
 
+    /// @dev ERC-4626 `maxDeposit`: uncapped. The router skips a leg whose `maxDeposit` is 0 or
+    ///      reverts (QA plan D4), so a router-leg mock must answer it.
+    function maxDeposit(address) external pure returns (uint256) {
+        return type(uint256).max;
+    }
+
     function deposit(uint256 assets, address receiver) external returns (uint256 shares) {
         assetToken.safeTransferFrom(msg.sender, address(this), assets);
         shares = assets;
@@ -126,6 +132,12 @@ contract LeakyRedeemRouterVault is ERC20 {
 
     function previewDeposit(uint256 assets) external pure returns (uint256) {
         return assets;
+    }
+
+    /// @dev ERC-4626 `maxDeposit`: uncapped. The router skips a leg whose `maxDeposit` is 0 or
+    ///      reverts (QA plan D4), so a router-leg mock must answer it.
+    function maxDeposit(address) external pure returns (uint256) {
+        return type(uint256).max;
     }
 
     function deposit(uint256 assets, address receiver) external returns (uint256 shares) {

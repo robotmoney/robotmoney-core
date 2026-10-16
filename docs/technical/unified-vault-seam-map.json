@@ -38,7 +38,7 @@
       ],
       "insertion": [
         "Realized-delta `_deposit` core (route USDC into adapters first, mint on realized NAV delta with slippage-floor revert) ported from BasketVault AZ-BSK-1, degenerating to exact for lending adapters (#1119).",
-        "Idle-inclusive OZ mint denominator (`taBefore - revokedIdle + 1`); AZ-BSK-3 idle exclusion applies ONLY to recovered USDC from a revoked/excluded adapter (#1119).",
+        "Idle-inclusive OZ mint denominator (`taBefore + 1`) with no idle carve-out: USDC recovered from an excluded adapter never lands in idle. It goes to the vault's `ExclusionLedger` record and is paid pro rata to the holders at the moment of exclusion (core 1820; replaces the `revokedIdle` term of #1119).",
         "`allExact()`-gated dual accounting/redemption: exact mode keeps `_pullProportional` + `InsufficientAdapterLiquidity` + fee-on-gross; inexact mode uses BasketVault no-revert `_sellProportional` + `_lastWithdrawnAssets` + fee-on-realized (#1119).",
         "Vault-attested `AdapterInfo.isExact` bool + `allExact()` registry-visible flag + `ExactnessTransition` timelock/event on class flip; `maxWithdraw/maxRedeem == 0` when `!allExact()` (#1123).",
         "Residual adapter-independent price sanity check: single vault-wide aggregate-NAV growth-rate checkpoint on the deposit path (#1120).",

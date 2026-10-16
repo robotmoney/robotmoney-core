@@ -3,10 +3,10 @@
 // (See also: docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md; issue 1808)
 pragma solidity ^0.8.24;
 
-import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
+import {ProposerFloorTimelock} from "../ProposerFloorTimelock.sol";
 import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title UpgradeAuthority
@@ -50,14 +50,15 @@ abstract contract UpgradeAuthority is ExpectedChainGuard {
         _inProcessUpgrade = UpgradeConfig({timelock: timelock, mode: mode});
     }
 
-    /// @notice The init code of the core timelock for `safe` and `minDelay`.
+    /// @notice The init code of the core timelock for `safe` and `minDelay`: a `ProposerFloorTimelock`
+    ///         (an OZ `TimelockController` that cannot drop its last proposer; issue 1645 question 1).
     function timelockInitCode(address safe, uint256 minDelay) public pure returns (bytes memory) {
         address[] memory proposers = new address[](1);
         proposers[0] = safe;
         address[] memory executors = new address[](1);
         executors[0] = address(0);
         return abi.encodePacked(
-            type(TimelockController).creationCode,
+            type(ProposerFloorTimelock).creationCode,
             abi.encode(minDelay, proposers, executors, address(0))
         );
     }

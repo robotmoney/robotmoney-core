@@ -17,8 +17,9 @@ import {CoreProxies} from "./helpers/CoreProxies.sol";
 ///         - The write-off pauses deposits, so nobody buys shares at the written-down price.
 ///         - Only ADMIN_ROLE (the Safe through the timelock) recovers: it adds the adapter back and
 ///           unpauses. The emergency key cannot do either.
-///         - A recovery is credited pro rata to whoever holds shares when it lands. A holder who
-///           exits during the write-off is paid at the reduced NAV and keeps no claim on it.
+///         - A recovery is credited to the write-off's exclusion record (core 1820), never to NAV, and
+///           paid pro rata to whoever held shares when the write-off opened. A holder who exits
+///           during the write-off is paid at the reduced NAV and keeps the claim.
 ///         - Withdrawals are never frozen: redeem works throughout.
 ///         The baskets have no write-off lever at all (their EMERGENCY_ROLE functions are
 ///         `emergencyLevers` in the stage table, asserted by scripts/deploy/stage-table.test.ts).
@@ -110,11 +111,22 @@ contract AdapterWriteOffRuleTest is Test {
         vault.unpauseDeposits();
         vm.stopPrank();
 
+        uint256 recordId = vault.openExclusionOf(1);
+        assertGt(recordId, 0, "the write-off opened an exclusion record");
+
         vm.startPrank(timelock);
         vault.addAdapter(address(adapterB), 5_000);
         vault.unpauseDeposits();
         vm.stopPrank();
-        assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "the recovery restores NAV");
+        // core 1820: the adapter's balance is realised into the record, not into NAV.
+        assertEq(vault.totalAssets(), 500 * ONE_USDC, "the recovery stays out of NAV");
+        assertEq(adapterB.totalAssets(), 0, "the adapter was drained into the record");
+        assertApproxEqAbs(
+            vault.exclusionLedger().claimable(recordId, alice),
+            500 * ONE_USDC,
+            2,
+            "the sole holder at the snapshot is owed the recovery"
+        );
         assertFalse(vault.depositsPaused());
     }
 
@@ -135,13 +147,26 @@ contract AdapterWriteOffRuleTest is Test {
         uint256 alicePaid = usdc.balanceOf(alice) - before;
         assertApproxEqAbs(alicePaid, 500 * ONE_USDC, 2, "alice is paid at half value");
 
-        // The timelock recovers the position. Bob, the only holder now, receives all of it,
-        // including the half of alice's claim she gave up by exiting.
+        // The timelock recovers the position into the exclusion record. Both holders at the
+        // snapshot are owed their pro-rata share, alice included although she exited.
+        uint256 recordId = vault.openExclusionOf(1);
         vm.prank(timelock);
         vault.addAdapter(address(adapterB), 5_000);
         assertApproxEqAbs(
-            vault.previewRedeem(bobShares), 1_500 * ONE_USDC, 2, "bob holds the whole recovery"
+            vault.previewRedeem(bobShares), 500 * ONE_USDC, 2, "bob's NAV share stays reduced"
         );
-        assertEq(vault.totalSupply(), bobShares, "alice holds no claim after her exit");
+        assertApproxEqAbs(
+            vault.exclusionLedger().claimable(recordId, alice),
+            500 * ONE_USDC,
+            2,
+            "alice keeps her pro-rata claim after her exit"
+        );
+        assertApproxEqAbs(
+            vault.exclusionLedger().claimable(recordId, bob),
+            500 * ONE_USDC,
+            2,
+            "bob is owed the other half"
+        );
+        assertEq(vault.totalSupply(), bobShares, "alice holds no shares after her exit");
     }
 }

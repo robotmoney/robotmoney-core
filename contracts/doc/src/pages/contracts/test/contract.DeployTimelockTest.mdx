@@ -5,7 +5,7 @@ description: "These tests run in-process using Forge cheatcodes so they do not r
 
 # DeployTimelockTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7bae4c9b0cf6849694f16d3874216689595dbf25/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -379,6 +379,23 @@ An address that is neither the Safe nor an owner cannot schedule or cancel.
 
 ```solidity
 function test_executorPolicy_strangerCannotScheduleOrCancel() public;
+```
+
+<a id="test_lastproposercannotberevokedorrenounced"></a>
+
+### test_lastProposerCannotBeRevokedOrRenounced
+
+The deployed timelock is a ProposerFloorTimelock. With the Safe as the only
+proposer, `revokeRole(PROPOSER_ROLE, safe)` scheduled through the delay is refused
+at execute with `LastProposerFloor`, and the Safe's instant `renounceRole` is
+refused the same way, so the governed contracts can never lose every proposer.
+After a second proposer is granted through the delay the Safe's role can go, and
+the floor then protects the remaining holder. Every Safe step is a real
+two-signature execTransaction; the exact inner reason is read on the open
+executor path and through the Safe's own simulateAndRevert.
+
+```solidity
+function test_lastProposerCannotBeRevokedOrRenounced() public;
 ```
 
 <a id="test_directadmincall_revertsfromsafe"></a>

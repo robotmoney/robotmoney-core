@@ -24,7 +24,7 @@ import { MAINNET_CHAIN_ID, MAINNET_DELAY_FLOOR, delayFloor, rehearsalDelayProble
 import { DEPLOYMENT_KINDS, kindLabel, type DeploymentKind } from "./chains.ts";
 import { REGISTER_ROW, buildRegisterCalls } from "./committee-register.ts";
 import { CLEAR_ROW, clearCalldata } from "./clear-voted-weights.ts";
-import { REDEPLOY_ROW, buildRedeployCalls, vectorsFromFinal } from "./redeploy-vault.ts";
+import { REDEPLOY_ROW, buildRedeployCalls, createdVaultProblems, vectorsFromFinal, type DeployReceipt } from "./redeploy-vault.ts";
 import { assertOwnerExceptions } from "./plan.ts";
 import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
 import { LIBS_STAGE } from "./core-wiring.ts";
@@ -200,6 +200,15 @@ function redeployShapeProblems(ev: any, kind: DeploymentKind, bad: (m: string) =
     return [];
   }
   const seen = new Set<string>();
+  // QA plan v1 E1 (DT-2): a round at another sha than the deployment's (the evidence core_sha) is checked by ONE verify only: at that sha, with --prior-out of a
+  // checkout at the deployment's sha. A verify that passed so writes verified_at_sha (the round's sha) and prior_out_sha (the deployment's) on every governed round
+  // (verify-stage.ts), so evidence without them never ran that verify. Rounds at the deployment's sha alone need neither; a field present must still be right.
+  // No evidence core_sha (a caller that names none): nothing to compare with, the evidence check itself requires it.
+  const original: string | undefined = typeof ev?.core_sha === "string" && ev.core_sha !== "" ? ev.core_sha : undefined;
+  const roundSha = (r: any): string | undefined => (typeof r?.core_sha === "string" && r.core_sha !== "" ? r.core_sha : original);
+  const foreign = original === undefined ? [] : [...new Set(rs.map(roundSha).filter((x): x is string => x !== undefined && x !== original))];
+  if (foreign.length > 1) bad(`vault_redeploys: rounds ran at ${foreign.join(", ")}, besides the deployment's ${original}: the verifier compares with two builds only (the checkout and --prior-out), so no verify can check them`);
+  const verifiedAt = foreign.length === 1 ? foreign[0]! : original;
   for (const r of rs) {
     const w = redeployLabel(r);
     if (r?.step !== undefined && r.step !== REDEPLOY_ROW) bad(`${w}: step '${r.step}' is not ${REDEPLOY_ROW}`);
@@ -212,7 +221,17 @@ function redeployShapeProblems(ev: any, kind: DeploymentKind, bad: (m: string) =
     if (ADDR.test(r?.registry ?? "") && lc(r.registry) !== lc(ev?.registry?.address ?? "")) bad(`${w}: registry ${r.registry} is not the run's registry ${ev?.registry?.address}`);
     if (ADDR.test(r?.timelock ?? "") && lc(r.timelock) !== lc(ev?.timelock?.address ?? "")) bad(`${w}: timelock ${r.timelock} is not the run's timelock ${ev?.timelock?.address}`);
     if (typeof r?.router_vault_cap !== "string" || !/^[0-9]+$/.test(r.router_vault_cap)) bad(`${w}: router_vault_cap must record the approved old cap as a decimal string`);
+    // QA plan v1 C2 (issue 1701): the new vault must be a CREATE by the run's deployer (checkVaultRedeploysOnChain reads the receipt's sender and created address)
+    if (ADDR.test(r?.deployer ?? "") && ADDR.test(ev?.deployer ?? "") && lc(r.deployer) !== lc(ev.deployer)) bad(`${w}: deployer ${r.deployer} is not the run's deployer ${ev.deployer}: the new vault must be a CREATE by the run's deployer`);
     if (typeof r?.registry_name !== "string" || r.registry_name === "") bad(`${w}: registry_name is missing`);
+    // QA plan v1 E1: the verify after the round compared every contract the redeploy did not replace with --prior-out, a build of the deployment's own sha
+    if (r?.prior_out_sha !== undefined && original !== undefined && r.prior_out_sha !== original) bad(`${w}: prior_out_sha ${String(r.prior_out_sha)} is not the evidence core_sha ${original}: the contracts the redeploy did not replace are verified against the build of the original deployment sha`);
+    if (foreign.length > 0) {
+      const how = `a round ran at ${foreign.join(", ")}, not at the deployment's ${original}, so the verify after it runs at that sha with --prior-out of a checkout at ${original} and records it on every round`;
+      if (r?.prior_out_sha === undefined) bad(`${w}: prior_out_sha is missing: ${how}`);
+      if (r?.verified_at_sha === undefined) bad(`${w}: verified_at_sha is missing: ${how}`);
+    } else if ((r?.verified_at_sha === undefined) !== (r?.prior_out_sha === undefined)) bad(`${w}: verified_at_sha and prior_out_sha are written together by a passing verify with --prior-out: one of them is missing`);
+    if (r?.verified_at_sha !== undefined && verifiedAt !== undefined && foreign.length <= 1 && r.verified_at_sha !== verifiedAt) bad(`${w}: verified_at_sha ${String(r.verified_at_sha)} is not ${verifiedAt}: ${foreign.length ? `the replacing vault runs the build of ${verifiedAt}, the sha its round ran at` : "every round ran at the deployment's sha, so its verify runs there"}`);
     // the deploy half: every transaction the deployer sent for the vault, each with status 1
     const hashes: unknown[] = Array.isArray(r?.deploy_tx_hashes) ? r.deploy_tx_hashes : [];
     const st: unknown[] = Array.isArray(r?.deploy_receipt_statuses) ? r.deploy_receipt_statuses : [];
@@ -322,7 +341,7 @@ export function governedUpgradeProblems(ev: any, floor: number = MAINNET_DELAY_F
 }
 
 /**
- * Issue 1727, the receipt path of a rehearsal. `committee_registrations`: one entry per submitter, ONE timelock batch (authorizeAgent, committeeRegister), one schedule and one execute at
+ * Issue 1727, the receipt path of a rehearsal. `committee_registrations`: one entry per submitter, ONE timelock batch (setPolicy, committeeRegister; QA plan v1 B6), one schedule and one execute at
  * least the floor apart. `recorded_receipts`: one entry per receipt the submitter anchored through the gateway (receipt_id, payload_digest, payload_uri, submitter ADDRESS, tx_hash; never a key).
  * Both are refused in a production evidence. In a rehearsal every receipt_applications entry must trace to a recorded receipt with the same digest, by a registered submitter.
  */
@@ -382,6 +401,9 @@ function receiptPathProblems(ev: any, kind: DeploymentKind, applications: any[],
     submitterSafeProblems(ev, r, w, false, bad);
     if (typeof r?.agent_label !== "string" || r.agent_label === "") bad(`${w}: agent_label is missing`);
     if (!/^[0-9]+$/.test(String(r?.valid_until ?? ""))) bad(`${w}: valid_until is not a decimal timestamp`);
+    // QA plan v1 B6: the submitter Safe's private self-authorization, as its three transactions (the chain check orders the hand-over before the schedule)
+    const sa = r?.self_authorization;
+    if (sa !== undefined) for (const k of ["commit_tx", "reveal_tx", "hand_over_tx"]) if (sa?.[k] !== undefined && !TX.test(String(sa[k]))) bad(`${w}: self_authorization.${k} is not a transaction hash`);
   }
   const seenRec = new Set<string>();
   for (const r of recs) {
@@ -600,7 +622,8 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
 export interface ChainReader {
   getChainId(): Promise<number>;
   getTransactionCount(a: { address: `0x${string}` }): Promise<number>;
-  getTransactionReceipt(a: { hash: Hex }): Promise<{ status: "success" | "reverted"; blockNumber: bigint; logs: readonly { address: string; topics: readonly Hex[]; data: Hex }[] }>;
+  /** `from` and `contractAddress` (a CREATE's created contract, else null) are read for the redeploy deploy transactions only (QA plan v1 C2). */
+  getTransactionReceipt(a: { hash: Hex }): Promise<{ status: "success" | "reverted"; blockNumber: bigint; logs: readonly { address: string; topics: readonly Hex[]; data: Hex }[]; from?: string; contractAddress?: string | null }>;
   getBlock(a: { blockNumber: bigint }): Promise<{ timestamp: bigint }>;
   /** Runtime code at an address (viem getCode). Needed when the evidence records an adopted stage, and for the upgradeability record (issue 1809). */
   getCode?(a: { address: `0x${string}` }): Promise<Hex | undefined>;
@@ -837,7 +860,8 @@ export async function checkVotedWeightsClearsOnChain(ev: any, chain: ChainReader
 }
 
 /**
- * Chain check of `vault_redeploys` (issue 1796). Every deploy transaction succeeded. Each entry is ONE timelock batch of five calls with one operation id: the schedule tx has exactly five
+ * Chain check of `vault_redeploys` (issue 1796). Every deploy transaction succeeded, and one of them is the run deployer's CREATE of exactly `new_vault` (QA plan v1 C2,
+ * issue 1701: the address is bound to the chain, never taken from the editable record alone). Each entry is ONE timelock batch of five calls with one operation id: the schedule tx has exactly five
  * CallScheduled events, index 0 to 4, whose targets and calldata are rebuilt from the recorded vaults (registerVault(new), migrateEligibility(new, true, five legs), migrateEligibility(old, false,
  * four legs), retire(old), the new vault's unpauseDeposits()), each with a delay of at least the floor. The execute tx has the five matching CallExecuted events. The block gap is at least the floor.
  * It does not read the chain id: a Twin run uses it too.
@@ -856,7 +880,14 @@ export async function checkVaultRedeploysOnChain(ev: any, chain: ChainReader, fl
   for (const r of Array.isArray(ev?.vault_redeploys) ? ev.vault_redeploys : []) {
     const w = redeployLabel(r);
     if (!ADDR.test(r?.old_vault ?? "") || !ADDR.test(r?.new_vault ?? "") || !ADDR.test(r?.registry ?? "") || !ADDR.test(r?.asset ?? "") || !Array.isArray(r?.vaults) || !Array.isArray(r?.bps) || typeof r?.registry_name !== "string" || !TX.test(r?.schedule_tx ?? "") || !TX.test(r?.execute_tx ?? "")) continue; // the offline check already named it
-    for (const [i, h] of (Array.isArray(r.deploy_tx_hashes) ? r.deploy_tx_hashes : []).entries()) await status(`${w} deploy tx ${i}`, h);
+    // QA plan v1 C2 (issue 1701): new_vault is bound to the chain. One recorded deploy transaction must be the deployer's CREATE of exactly that address.
+    const deployReceipts: DeployReceipt[] = [];
+    for (const [i, h] of (Array.isArray(r.deploy_tx_hashes) ? r.deploy_tx_hashes : []).entries()) {
+      const rc = await status(`${w} deploy tx ${i}`, h);
+      deployReceipts.push(rc ? { hash: String(h), status: rc.status, from: rc.from, contractAddress: rc.contractAddress } : { hash: String(h), status: "not readable" });
+    }
+    // a failed or unreadable receipt is already named above; what is left is the binding itself
+    for (const m of createdVaultProblems(r.new_vault, String(r.deployer ?? ""), deployReceipts)) if (!m.includes("receipt status")) bad(`${w}: new_vault ${m}`);
     let want: ReturnType<typeof buildRedeployCalls>;
     try { want = buildRedeployCalls({ router: r.router, routerVaultCap: BigInt(r.router_vault_cap), registry: r.registry, oldVault: r.old_vault, newVault: r.new_vault, registryName: r.registry_name, asset: r.asset, finalVaults: r.vaults, finalBps: r.bps }); } catch { continue; } // the offline check already named it
     const sc = await status(`${w} schedule`, r.schedule_tx);
@@ -887,8 +918,9 @@ export async function checkVaultRedeploysOnChain(ev: any, chain: ChainReader, fl
 
 /**
  * Chain check of `committee_registrations` and `recorded_receipts` (issue 1727). A registration is ONE batch: the schedule tx has exactly two CallScheduled events with one operation id,
- * authorizeAgent then committeeRegister on the gateway with the calldata rebuilt from the recorded submitter, label and validUntil; the execute tx has the two CallExecuted events;
- * the block gap is at least the floor. A recorded receipt's transaction must have succeeded.
+ * setPolicy then committeeRegister on the gateway with the calldata rebuilt from the recorded submitter, label and validUntil; the execute tx has the two CallExecuted events;
+ * the block gap is at least the floor. QA plan v1 B6: an entry that records the submitter Safe's private self-authorization (`self_authorization.hand_over_tx`) must have
+ * handed the agent to the timelock in a block BEFORE the batch was scheduled, so the address was never public while unowned. A recorded receipt's transaction must have succeeded.
  */
 export async function checkReceiptPathOnChain(ev: any, chain: ChainReader, floor: number): Promise<string[]> {
   const p: string[] = [];
@@ -908,7 +940,7 @@ export async function checkReceiptPathOnChain(ev: any, chain: ChainReader, floor
     if (!sc) continue;
     const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled").sort((x, y) => Number(x.index - y.index));
     const want = buildRegisterCalls(r.gateway, r.timelock, r.submitter, r.agent_label, BigInt(r.valid_until));
-    if (scheduled.length !== want.length) bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, a registration is exactly ${want.length} calls (authorizeAgent, committeeRegister) in one batch`);
+    if (scheduled.length !== want.length) bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, a registration is exactly ${want.length} calls (setPolicy, committeeRegister) in one batch`);
     scheduled.forEach((e, i) => {
       const c = want[i];
       if (c === undefined) { bad(`${w}: CallScheduled call ${i} is not part of a registration`); return; }
@@ -920,6 +952,15 @@ export async function checkReceiptPathOnChain(ev: any, chain: ChainReader, floor
       if (lc(e.id) !== lc(scheduled[0]!.id)) bad(`${w}: the batch calls are not one operation`);
     });
     if (scheduled[0] && typeof r.operation_id === "string" && lc(r.operation_id) !== lc(scheduled[0].id)) bad(`${w}: operation_id ${r.operation_id} is not the scheduled operation ${scheduled[0].id}`);
+    // QA plan v1 B6: the private hand-over to the timelock came first, the public schedule after it
+    const handOver = r?.self_authorization?.hand_over_tx;
+    if (handOver !== undefined) {
+      if (!TX.test(String(handOver))) bad(`${w}: self_authorization.hand_over_tx is not a transaction hash`);
+      else {
+        const ho = await rcOf(`${w} hand-over`, handOver);
+        if (ho && !(ho.blockNumber < sc.blockNumber)) bad(`${w}: the submitter was handed to the timelock in block ${ho.blockNumber}, not before the batch was scheduled in block ${sc.blockNumber}: the address was public while unowned`);
+      }
+    }
     const schedTs = await ts(sc);
     const ex = await rcOf(`${w} execute`, r.execute_tx);
     if (!ex || !scheduled[0]) continue;
@@ -1000,7 +1041,7 @@ export interface ChainFixture {
   chainId: number;
   nonces: Record<string, number>;
   /** A list with a `hash` field, not a map keyed by hash: the evidence secret scan reads a bare 64-hex key as key material. */
-  receipts: { hash: string; status: "success" | "reverted"; blockNumber: string; logs: { address: string; topics: Hex[]; data: Hex }[] }[];
+  receipts: { hash: string; status: "success" | "reverted"; blockNumber: string; logs: { address: string; topics: Hex[]; data: Hex }[]; from?: string; contractAddress?: string | null }[];
   blocks: Record<string, number>;
   reads: Record<string, unknown>;
   /** Runtime code by lower-case address, recorded for the adopted libraries (issue 1721) and the proxies and implementations (issue 1809). Optional: older fixtures have none. */
@@ -1019,7 +1060,7 @@ export function chainReaderFromFixture(fx: ChainFixture): ChainReader {
     getTransactionCount: async ({ address }) => fx.nonces[lc(address)] ?? miss(`nonce of ${address}`),
     getTransactionReceipt: async ({ hash }) => {
       const r = fx.receipts.find((x) => lc(x.hash) === lc(hash)) ?? miss(`receipt ${hash}`);
-      return { status: r.status, blockNumber: BigInt(r.blockNumber), logs: r.logs };
+      return { status: r.status, blockNumber: BigInt(r.blockNumber), logs: r.logs, ...(r.from !== undefined ? { from: r.from } : {}), ...(r.contractAddress !== undefined ? { contractAddress: r.contractAddress } : {}) };
     },
     getBlock: async ({ blockNumber }) => ({ timestamp: BigInt(fx.blocks[blockNumber.toString()] ?? miss(`block ${blockNumber}`)) }),
     getCode: async ({ address }) => (fx.codes?.[lc(address)] ?? miss(`code of ${address}`)) as Hex,
@@ -1040,7 +1081,7 @@ export function recordingChainReader(inner: ChainReader): { reader: ChainReader;
     getTransactionReceipt: async (a) => {
       const r = await inner.getTransactionReceipt(a);
       fixture.receipts = fixture.receipts.filter((x) => lc(x.hash) !== lc(a.hash));
-      fixture.receipts.push({ hash: lc(a.hash), status: r.status, blockNumber: r.blockNumber.toString(), logs: r.logs.map((l) => ({ address: l.address, topics: [...l.topics], data: l.data })) });
+      fixture.receipts.push({ hash: lc(a.hash), status: r.status, blockNumber: r.blockNumber.toString(), logs: r.logs.map((l) => ({ address: l.address, topics: [...l.topics], data: l.data })), ...(r.from !== undefined ? { from: r.from } : {}), ...(r.contractAddress !== undefined ? { contractAddress: r.contractAddress } : {}) });
       return r;
     },
     getBlock: async (a) => {
@@ -1072,7 +1113,11 @@ const SECRET_PATTERNS: [string, RegExp][] = [
   ["PEM private key", /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
   ["keystore json", /"ciphertext"\s*:|"crypto"\s*:\s*\{/],
   ["mnemonic-like phrase", /\b(?:[a-z]{3,8} ){11,23}[a-z]{3,8}\b/],
-  ["secret assignment", /\b(PRIVATE_KEY|MNEMONIC|ETH_PASSWORD|PASSWORD|API_KEY|TOKEN)\s*[=:]\s*\S{6,}/i],
+  // Security round 1 (review-security-032): a secret name may carry a prefix (`CHAIN_SIGNER_PASSWORD=`, `ETH_KEYSTORE_PASSWORD=`, `ALCHEMY_API_KEY=`, `"passphrase":`). A leading
+  // \b never matched there, because `_` is a word character. The name now starts after any non-alphanumeric character and may follow `WORD_` or `WORD-` parts. The
+  // camelCase and quoted JSON key forms count too (`privateKey: …`, `"private_key": "…"`, `"authToken": "…"`). A value the logger redacted is not a secret. A bare
+  // `token` names an ERC-20 too (the asset configs, `--admin-arg token=0x…`): its 20-byte address value is public.
+  ["secret assignment", /(?<![A-Za-z0-9])(?:(?:[A-Za-z0-9]+[_-])*(?:PRIVATE[_-]?KEY|MNEMONIC|PASSWORD|PASSWD|PASSPHRASE|SECRET|API[_-]?KEY|(?:AUTH|ACCESS|REFRESH|BEARER|SESSION)[_-]?TOKEN)|BEARER|AUTHORIZATION|CREDENTIALS?)"?\s*[=:]\s*(?!"?\[redacted\])\S{6,}|\bTOKEN"?\s*[=:]\s*(?!"?\[redacted\])(?!"?0x[0-9a-fA-F]{40}(?![0-9a-fA-F]))\S{6,}/i],
 ];
 
 const B32 = "0x[0-9a-fA-F]{64}(?![0-9a-fA-F])";
@@ -1082,11 +1127,13 @@ const OPERATION_ID_EVENTS = new Set(["govern.waiting", "timelock.effect"]);
 /**
  * Removes the known public 0x bytes32 shapes from one line, so the 64-hex rule sees only what is left. Never a general 64-hex allowance:
  * 1. the row name `apply-receipt-0x<receipt id>` (also a publish-run.json key), anywhere in a line;
- * 2. on a `govern.waiting` or `timelock.effect` JSON log line only: the `"id"`/`"ids"` operation id values and `operation 0x<id>` in the detail text.
+ * 2. on a `govern.waiting` or `timelock.effect` JSON log line only: the `"id"`/`"ids"` operation id values and `operation 0x<id>` in the detail text;
+ * 3. the value of a `"pool_id"` key, anywhere in a line: a Uniswap V4 pool id (or the zero id of a V3 pool) is a public on-chain identifier. A compact deployment manifest
+ *    (one JSON object on one line) holds it, and such a file is committed verbatim, never re-formatted (deployments/8453/deploy-2/README.md).
  * A bare 0x64-hex, an env or keystore shaped value, or the same shapes on any other line stay in the line and are flagged.
  */
 export function stripPublicContexts(line: string): string {
-  let out = line.replace(new RegExp(`apply-receipt-${B32}`, "g"), "apply-receipt-");
+  let out = line.replace(new RegExp(`apply-receipt-${B32}`, "g"), "apply-receipt-").replace(new RegExp(`("pool_id"\\s*:\\s*)"${B32}"`, "g"), '$1"pool"');
   if (out.startsWith("{")) {
     let event: unknown;
     try { event = JSON.parse(out).event; } catch { /* not a JSON log line */ }
@@ -1193,7 +1240,8 @@ async function checkRedeploysMain(values: Record<string, string | boolean | unde
   if (need.length) { console.error(`evidence: --vault-redeploys needs ${need.map((k) => `--${k}`).join(", ")}`); process.exit(2); }
   const m = JSON.parse(readFileSync(values["vault-redeploys"] as string, "utf8"));
   const entries: any[] = Array.isArray(m.vault_redeploys) ? m.vault_redeploys : [];
-  const ev = { deployment_kind: kind, registry: { address: values.registry }, timelock: { address: values.timelock }, vault_redeploys: entries, vaults: Object.fromEntries(entries.map((r) => [r?.vault, { address: r?.new_vault }])) };
+  // QA plan v1 E1: the run manifest's own sha is the deployment's, the one prior_out_sha must name (and verified_at_sha too, unless a round ran at another sha)
+  const ev = { deployment_kind: kind, core_sha: m.coreSha, registry: { address: values.registry }, timelock: { address: values.timelock }, vault_redeploys: entries, vaults: Object.fromEntries(entries.map((r) => [r?.vault, { address: r?.new_vault }])) };
   const { createPublicClient, http } = await import("viem");
   const reader = typeof values.rpc === "string" ? createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader : undefined;
   const floor = await floorArg(values, kind, reader);

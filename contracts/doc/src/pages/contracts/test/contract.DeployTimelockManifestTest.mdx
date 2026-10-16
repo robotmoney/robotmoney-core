@@ -5,7 +5,7 @@ description: "The manifest must answer, from one file: which chain, which addres
 
 # DeployTimelockManifestTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -76,6 +76,50 @@ chains are distinguishable only by bytecode.
 
 ```solidity
 function test_manifestRecordsCodeHashes() public view;
+```
+
+<a id="test_manifestrecordsimplementationcodehashes"></a>
+
+### test_manifestRecordsImplementationCodeHashes
+
+ADR-0014 (security round 1): behind a proxy `.codehash` is the generic ERC1967Proxy, the
+same for every proxy, so the dapp's code-hash pins prove nothing about the logic. The
+manifest also records keccak256 of the code of each proxy's live implementation (zero
+for a direct contract): the dapp's implementation pins (scripts/stage/mainnet-dapp.ts).
+
+```solidity
+function test_manifestRecordsImplementationCodeHashes() public view;
+```
+
+<a id="_implementationcodehashof-address"></a>
+
+### _implementationCodeHashOf
+
+```solidity
+function _implementationCodeHashOf(address proxy) internal view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="test_manifestrecordsthereceiptregistergovernanceappliesfrom"></a>
+
+### test_manifestRecordsTheReceiptRegisterGovernanceAppliesFrom
+
+Issue #1698: the manifest records the receipt register the weight setter applies
+from, read back from the governance contract (`receipts()` is immutable).
+
+```solidity
+function test_manifestRecordsTheReceiptRegisterGovernanceAppliesFrom() public view;
 ```
 
 <a id="test_manifestrecordsther7roleconditions"></a>

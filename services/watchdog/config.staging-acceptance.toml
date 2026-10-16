@@ -56,3 +56,25 @@ enabled = true
 # observe the gap open, the anchor land, and the incident close.
 expected_cadence_secs = 300
 grace_secs = 60
+
+# Standing weight-setter path (issue 1698). Read-only: a few eth_calls per poll.
+# Router weights change only through RouterGovernance.applyReceipt on a
+# Safe-scheduled timelock operation. The check pages when the router's
+# WEIGHT_SETTER_ROLE is held by anyone but the weight setter, or the weight
+# setter's WEIGHT_SETTER_ROLE (applyReceipt) or ADMIN_ROLE by anyone but the
+# timelock: a grant executed after the stage 12 verifier ran. It replaced the
+# quorumThreshold() floor check, whose view issue 1698 deleted with the voting
+# path.
+#
+# The three addresses are left unset here on purpose: the Deploy phase fills
+# them in from the run's own deployment manifests (router.json, governance.json,
+# timelock.json) rather than this file carrying stale ones. Leaving
+# `enabled = true` with an address missing is refused at startup, which is the
+# intended failure: a blind check must not be reachable by omission.
+[governance]
+enabled = false
+rpc_url = "http://127.0.0.1:18545"
+# router_address = "0x…"          # PortfolioRouter, supplied by the Deploy phase
+# weight_setter_address = "0x…"   # RouterGovernance, supplied by the Deploy phase
+# timelock_address = "0x…"        # TimelockController, supplied by the Deploy phase
+repage_secs = 300

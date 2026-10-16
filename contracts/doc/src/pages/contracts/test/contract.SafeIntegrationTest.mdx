@@ -5,7 +5,7 @@ description: "Fork-based integration tests proving that a 2-of-3 Safe proxy depl
 
 # SafeIntegrationTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/test/SafeIntegration.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/SafeIntegration.t.sol)
 
 **Inherits:** Test
 
@@ -1337,12 +1337,41 @@ function test_selfAdmin_timelockGrantAndRevokeRole_viaSafeSelfCall() public with
 function test_selfAdmin_timelockRoleChange_directCallsRevert() public withSnap;
 ```
 
+<a id="_timelockselfcallrefusedatexecute-bytes-bytes32-bytes4"></a>
+
+### _timelockSelfCallRefusedAtExecute
+
+<i>
+
+The Safe schedules `data` on the timelock itself, the delay passes, and the Safe's
+execute is refused: GS013 through the Safe, and exactly `reason` on the open-executor
+path (EXECUTOR_ROLE is address(0), so the test calls execute itself).
+
+</i>
+
+```solidity
+function _timelockSelfCallRefusedAtExecute(bytes memory data, bytes32 salt, bytes4 reason)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+| reason | `bytes4` |  |
+
 <a id="test_selfadmin_safeproposerrolerevoked_throughthedelay"></a>
 
 ### test_selfAdmin_safeProposerRoleRevoked_throughTheDelay
 
-Owner decision 1, default (b): the Safe gives up its timelock role through the delay.
-The route is revokeRole as a timelock self-call. After it the Safe cannot schedule.
+Owner decision 1, default (b), and the last-proposer floor (issue #1645, CS-3):
+the Safe gives up its timelock role through the delay, and never as the last
+proposer. `revokeRole(PROPOSER_ROLE, safe)` as a timelock self-call is refused at
+execute with `LastProposerFloor` while the Safe is the only proposer. Once a second
+proposer holds the role the same self-call goes through, and the Safe cannot
+schedule any more.
 
 ```solidity
 function test_selfAdmin_safeProposerRoleRevoked_throughTheDelay() public withSnap;
@@ -1352,9 +1381,11 @@ function test_selfAdmin_safeProposerRoleRevoked_throughTheDelay() public withSna
 
 ### test_selfAdmin_directRenounceIsInstant_soTheToolMustNotBuildIt
 
-The contract cannot force the delay on a renounce: the timelock's renounceRole only
-accepts the role holder as caller, and a Safe transaction is instant. The tool never
-builds a renounce (default (b)), and this test pins that the contract would allow it.
+The contract forces nothing on a renounce except the floor: the timelock's
+renounceRole only accepts the role holder as caller, a Safe transaction is
+instant, and ProposerFloorTimelock refuses it only for the last proposer. With a
+second proposer the Safe's renounce goes through at once, so the tool never
+builds a renounce (default (b)). This test pins both facts.
 
 ```solidity
 function test_selfAdmin_directRenounceIsInstant_soTheToolMustNotBuildIt() public withSnap;

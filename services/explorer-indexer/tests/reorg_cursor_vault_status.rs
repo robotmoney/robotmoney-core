@@ -11,6 +11,11 @@
 //!   `vaults.status` change written at a block above `root`, by pruning the
 //!   block-numbered `vault_status_events` history and re-deriving the live
 //!   `vaults.status` from the surviving event `<= root`.
+//! - **DI-8 (QA plan X7)** — `committee_agents` and `vaults` carry no
+//!   `block_number`, so the schema-derived rollback never saw them.
+//!   `delete_above_block(root)` must undo an orphaned `AgentRevoked`, fall back
+//!   from an orphaned re-registration, drop a member or a vault that only
+//!   orphaned blocks registered, and drop a placeholder member with its vote.
 //!
 //! Both assertions are exercised end-to-end through `run_once` as well as at
 //! the db layer for deterministic root values.
@@ -307,6 +312,10 @@ async fn delete_above_block_reverts_vault_status_above_root() {
 
 /// IDX-8: a vault whose status never changed is untouched by a rollback (the
 /// re-derivation must not clobber an unchanged Active vault).
+///
+/// The root (15) is above the registration (10): a root below it orphans the
+/// registration itself, and the row goes (QA plan X7, see
+/// `reorged_vault_registration_is_undone`).
 #[tokio::test]
 async fn delete_above_block_leaves_unchanged_vault_status() {
     let fx = pg_fixture().await;
@@ -314,12 +323,254 @@ async fn delete_above_block_leaves_unchanged_vault_status() {
     let vault = [0x22u8; 20];
     seed_vault(db, vault, 10).await;
 
-    db.delete_above_block(CHAIN, 5).await.unwrap();
+    db.delete_above_block(CHAIN, 15).await.unwrap();
     assert_eq!(
         vault_status(db, vault).await,
         0,
         "an unchanged vault must remain Active after a rollback"
     );
+}
+
+// ─── DI-8 (QA plan X7): committee_agents and vaults ──────────────────────────
+//
+// Both tables were written in place with no `block_number`, so the
+// schema-derived rollback (#1283) never touched them. `committee_agents` is now
+// derived from the block-numbered `committee_agent_events` history (migration
+// 0020), and a `vaults` row whose registration block is orphaned is deleted.
+
+/// `(agent_id, active, registered_at, revoked_at)` of a member, `None` when it
+/// has no row.
+async fn agent_row(
+    db: &explorer_indexer::Db,
+    agent: [u8; 20],
+) -> Option<(String, bool, i64, Option<i64>)> {
+    sqlx::query_as(
+        "SELECT agent_id, active, registered_at, revoked_at FROM committee_agents \
+         WHERE chain_id = $1 AND agent_address = $2",
+    )
+    .bind(CHAIN)
+    .bind(&agent[..])
+    .fetch_optional(db.pool())
+    .await
+    .unwrap()
+}
+
+/// Store one committee vote from `agent` at (`block`, `log_index`).
+async fn seed_vote(
+    db: &explorer_indexer::Db,
+    agent: [u8; 20],
+    vote_id: i64,
+    block: i64,
+    log_index: i32,
+) {
+    db.insert_committee_vote(
+        CHAIN,
+        [0xCCu8; 20],
+        vote_id,
+        block,
+        log_index,
+        [0xAEu8; 32],
+        agent,
+        [0x6Au8; 20],
+        0,
+        6_000,
+        80,
+        "ipfs://memo",
+        [0xBEu8; 32],
+        1_700_000_000,
+        true,
+    )
+    .await
+    .unwrap();
+}
+
+/// DI-8, the shipped defect. A member registered at block 50 is revoked at
+/// block 105, and a reorg to root = 100 orphans the revoke. Red before X7:
+/// `committee_agents` has no `block_number`, so the rollback skipped it and the
+/// member stayed revoked for good, out of the tilt and the regime feed, while
+/// the canonical chain still has it.
+#[tokio::test]
+async fn reorged_agent_revoke_is_undone() {
+    let fx = pg_fixture().await;
+    let db = &fx.db;
+    db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
+    let agent = [0x81u8; 20];
+
+    db.upsert_committee_agent(CHAIN, agent, "member-a", 50, 3)
+        .await
+        .unwrap();
+    db.revoke_committee_agent(CHAIN, agent, 105, 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        agent_row(db, agent).await,
+        Some(("member-a".to_string(), false, 50, Some(105))),
+        "the revoke at block 105 is applied"
+    );
+
+    db.delete_above_block(CHAIN, 100).await.unwrap();
+    assert_eq!(
+        agent_row(db, agent).await,
+        Some(("member-a".to_string(), true, 50, None)),
+        "the orphaned revoke is undone: active again, no revoked_at, registration kept"
+    );
+
+    // The replay of the canonical chain carries the revoke at another block. It
+    // applies like any revoke.
+    db.revoke_committee_agent(CHAIN, agent, 103, 0)
+        .await
+        .unwrap();
+    assert_eq!(
+        agent_row(db, agent).await,
+        Some(("member-a".to_string(), false, 50, Some(103)))
+    );
+}
+
+/// DI-8: an orphaned re-registration falls back to the registration before it,
+/// with its label and its revoke. A deeper reorg undoes that revoke, and one
+/// below the first registration removes the member.
+#[tokio::test]
+async fn reorged_agent_reregistration_falls_back_to_the_earlier_one() {
+    let fx = pg_fixture().await;
+    let db = &fx.db;
+    db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
+    let agent = [0x82u8; 20];
+
+    db.upsert_committee_agent(CHAIN, agent, "member-a", 50, 0)
+        .await
+        .unwrap();
+    db.revoke_committee_agent(CHAIN, agent, 60, 0)
+        .await
+        .unwrap();
+    db.upsert_committee_agent(CHAIN, agent, "member-a-v2", 105, 0)
+        .await
+        .unwrap();
+    assert_eq!(
+        agent_row(db, agent).await,
+        Some(("member-a-v2".to_string(), true, 105, None))
+    );
+
+    db.delete_above_block(CHAIN, 100).await.unwrap();
+    assert_eq!(
+        agent_row(db, agent).await,
+        Some(("member-a".to_string(), false, 50, Some(60))),
+        "back to the block-50 registration and the block-60 revoke"
+    );
+
+    db.delete_above_block(CHAIN, 55).await.unwrap();
+    assert_eq!(
+        agent_row(db, agent).await,
+        Some(("member-a".to_string(), true, 50, None)),
+        "the block-60 revoke is orphaned too"
+    );
+
+    db.delete_above_block(CHAIN, 40).await.unwrap();
+    assert_eq!(
+        agent_row(db, agent).await,
+        None,
+        "a member only orphaned blocks registered has no row"
+    );
+}
+
+/// DI-8 with DI-4: the placeholder row a vote from an unindexed member created
+/// goes with that vote when the vote's block is orphaned.
+#[tokio::test]
+async fn reorged_placeholder_member_goes_with_its_vote() {
+    let fx = pg_fixture().await;
+    let db = &fx.db;
+    db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
+    let agent = [0x83u8; 20];
+
+    assert_eq!(
+        db.insert_committee_agent_placeholder(CHAIN, agent, 105, 2)
+            .await
+            .unwrap(),
+        1
+    );
+    seed_vote(db, agent, 1, 105, 2).await;
+    assert_eq!(
+        agent_row(db, agent).await,
+        Some((String::new(), false, 105, None))
+    );
+
+    db.delete_above_block(CHAIN, 100)
+        .await
+        .expect("the vote goes before its member, so no foreign key is violated");
+    assert_eq!(db.count(CountTable::CommitteeVotes).await.unwrap(), 0);
+    assert_eq!(agent_row(db, agent).await, None);
+}
+
+/// DI-8: a member whose only recorded registration is orphaned but whose older
+/// vote survives keeps a row, because `committee_votes` references it. This is
+/// the member whose earlier registration predates the migration-0021 backfill
+/// (which kept only the newest one). It becomes the inactive placeholder DI-4
+/// would have written for that vote, and the rollback violates no foreign key.
+#[tokio::test]
+async fn reorged_registration_with_a_surviving_vote_leaves_a_placeholder() {
+    let fx = pg_fixture().await;
+    let db = &fx.db;
+    db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
+    let agent = [0x84u8; 20];
+
+    db.upsert_committee_agent(CHAIN, agent, "member-late", 105, 0)
+        .await
+        .unwrap();
+    seed_vote(db, agent, 1, 90, 4).await;
+
+    db.delete_above_block(CHAIN, 100)
+        .await
+        .expect("the surviving vote keeps its member row");
+    assert_eq!(db.count(CountTable::CommitteeVotes).await.unwrap(), 1);
+    assert_eq!(
+        agent_row(db, agent).await,
+        Some((String::new(), false, 90, None)),
+        "an inactive placeholder at the surviving vote's block"
+    );
+}
+
+/// DI-8: a vault whose `VaultRegistered` block is orphaned leaves `vaults`, so
+/// it leaves the watched set and `/v1/vaults`. The replay registers it again at
+/// the block the canonical chain put it in. A vault registered below the root
+/// is untouched.
+#[tokio::test]
+async fn reorged_vault_registration_is_undone() {
+    let fx = pg_fixture().await;
+    let db = &fx.db;
+    let kept = [0x91u8; 20];
+    let orphaned = [0x92u8; 20];
+    seed_vault(db, kept, 50).await;
+    seed_vault(db, orphaned, 105).await;
+    db.update_vault_status(CHAIN, kept, 60, 0, 1, 1_700_000_060)
+        .await
+        .unwrap();
+
+    db.delete_above_block(CHAIN, 100).await.unwrap();
+
+    let vaults: Vec<(Vec<u8>, i64, i16)> = sqlx::query_as(
+        "SELECT vault_address, registered_block, status FROM vaults \
+         WHERE chain_id = $1 ORDER BY vault_address",
+    )
+    .bind(CHAIN)
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        vaults,
+        vec![(kept.to_vec(), 50, 1)],
+        "only the vault registered at or below the root survives, with its status"
+    );
+
+    // The replay registers the vault again, at the block it landed in.
+    seed_vault(db, orphaned, 103).await;
+    let registered_block: i64 = sqlx::query_scalar(
+        "SELECT registered_block FROM vaults WHERE chain_id = $1 AND vault_address = $2",
+    )
+    .bind(CHAIN)
+    .bind(&orphaned[..])
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(registered_block, 103);
 }
 
 // ─── #1283: block-scoped rollback coverage ───────────────────────────────────
@@ -371,11 +622,12 @@ async fn seed_committee_activity(
     block: i64,
     vote_id: i64,
 ) {
-    db.upsert_committee_agent(CHAIN, agent, "agent-1283", 1)
+    db.upsert_committee_agent(CHAIN, agent, "agent-1283", 1, 0)
         .await
         .unwrap();
     db.insert_committee_vote(
         CHAIN,
+        [0xCCu8; 20],
         vote_id,
         block,
         0,
@@ -492,6 +744,37 @@ async fn rollback_set_equals_live_block_scoped_schema() {
             "{required} (migration 0014) must be rolled back by a reorg"
         );
     }
+    // QA plan X7: the committee membership history (0021) and the exclusion
+    // records (0022).
+    for required in [
+        "committee_agent_events",
+        "exclusion_records",
+        "exclusion_recoveries",
+        "exclusion_finalizations",
+        "exclusion_claims",
+        "exclusion_holder_balances",
+    ] {
+        assert!(
+            rollback.contains(required),
+            "{required} (QA plan X7) must be rolled back by a reorg"
+        );
+    }
+    // Core 1810: the proxies' upgrade and freeze events are `admin_events` rows (0019).
+    assert!(
+        rollback.iter().any(|t| t == "admin_events"),
+        "admin_events (proxy upgrade and freeze history, core 1810) must be rolled back by a reorg"
+    );
+    // Security round 1: each vault's ExclusionLedger as read from the chain (0025). A read above
+    // the root is dropped, and the next tick reads the vault again.
+    assert!(
+        rollback.iter().any(|t| t == "vault_exclusion_ledgers"),
+        "vault_exclusion_ledgers (security round 1) must be rolled back by a reorg"
+    );
+    // Security round 2: how far the snapshot pass read each record (0027) goes with the record.
+    assert!(
+        rollback.iter().any(|t| t == "exclusion_snapshot_progress"),
+        "exclusion_snapshot_progress (security round 2) must be rolled back by a reorg"
+    );
     // Every table the pre-#1283 literal named must still be covered.
     for required in [
         "wallet_positions",
@@ -499,8 +782,8 @@ async fn rollback_set_equals_live_block_scoped_schema() {
         "vault_status_events",
         "agent_deposits",
         "agent_policies",
-        "governance_votes",
-        "governance_proposals",
+        // governance_votes and governance_proposals were here until migration
+        // 0024 dropped them (issue 1698): RouterGovernance has no voting.
         "router_weight_snapshots",
         "router_deposit_legs",
         "adapter_allocations",
@@ -655,42 +938,55 @@ async fn reorg_rollback_exclusions_are_documented_and_live() {
     );
 }
 
-/// The derived deletion order must respect the live foreign keys.
-/// `governance_votes` references `governance_proposals` and both are
-/// block-scoped: deleting the proposals first raises a foreign-key violation.
-/// A set derived in name order would do exactly that, so this asserts the
-/// FK-aware ordering, not just the membership.
+/// The derived deletion order must respect the live foreign keys. A
+/// block-scoped child that references a block-scoped parent must be deleted
+/// first: deleting the parent first raises a foreign-key violation. The live
+/// schema held one such pair (`governance_votes` → `governance_proposals`)
+/// until migration 0025 dropped it (issue 1698), so the test creates its own
+/// pair. The parent's name sorts first, so a set derived in name order would
+/// delete it first: this asserts the FK-aware ordering, not just membership.
 #[tokio::test]
 async fn rollback_order_deletes_children_before_parents() {
     let fx = pg_fixture().await;
+    let pool = raw_pool(&fx).await;
     let db = &fx.db;
     db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
 
-    // Seeded with raw SQL: the indexer no longer writes either table
-    // (issue #1698), but both still exist and still carry the FK.
     sqlx::query(
-        "INSERT INTO governance_proposals \
-         (chain_id, proposal_id, block_number, log_index, tx_hash, proposer, description, \
-          created_at, deadline_block) \
-         VALUES ($1, 1, 105, 0, $2, $3, 'orphaned proposal', 1700000000, 200)",
+        "CREATE TABLE fk_probe_a_parent ( \
+             chain_id     BIGINT NOT NULL, \
+             id           BIGINT NOT NULL, \
+             block_number BIGINT NOT NULL, \
+             PRIMARY KEY (chain_id, id) \
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("create synthetic parent table");
+    sqlx::query(
+        "CREATE TABLE fk_probe_b_child ( \
+             chain_id     BIGINT NOT NULL, \
+             parent_id    BIGINT NOT NULL, \
+             block_number BIGINT NOT NULL, \
+             PRIMARY KEY (chain_id, parent_id, block_number), \
+             FOREIGN KEY (chain_id, parent_id) REFERENCES fk_probe_a_parent (chain_id, id) \
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("create synthetic child table");
+    sqlx::query("INSERT INTO fk_probe_a_parent (chain_id, id, block_number) VALUES ($1, 1, 105)")
+        .bind(CHAIN)
+        .execute(&pool)
+        .await
+        .expect("seed synthetic parent");
+    sqlx::query(
+        "INSERT INTO fk_probe_b_child (chain_id, parent_id, block_number) VALUES ($1, 1, 106)",
     )
     .bind(CHAIN)
-    .bind(&[0xC1u8; 32][..])
-    .bind(&[0x71u8; 20][..])
-    .execute(db.pool())
+    .execute(&pool)
     .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO governance_votes \
-         (chain_id, proposal_id, voter, block_number, log_index, tx_hash, support, weight) \
-         VALUES ($1, 1, $2, 106, 0, $3, true, 42)",
-    )
-    .bind(CHAIN)
-    .bind(&[0x72u8; 20][..])
-    .bind(&[0xC2u8; 32][..])
-    .execute(db.pool())
-    .await
-    .unwrap();
+    .expect("seed synthetic child");
 
     let order = db.block_scoped_rollback_tables().await.unwrap();
     let pos = |name: &str| {
@@ -700,8 +996,8 @@ async fn rollback_order_deletes_children_before_parents() {
             .unwrap_or_else(|| panic!("{name} missing from rollback order: {order:?}"))
     };
     assert!(
-        pos("governance_votes") < pos("governance_proposals"),
-        "governance_votes references governance_proposals, so it must be deleted \
+        pos("fk_probe_b_child") < pos("fk_probe_a_parent"),
+        "fk_probe_b_child references fk_probe_a_parent, so it must be deleted \
          first; order was {order:?}"
     );
 
@@ -709,6 +1005,6 @@ async fn rollback_order_deletes_children_before_parents() {
     db.delete_above_block(CHAIN, 100)
         .await
         .expect("rollback must not violate a foreign key");
-    assert_eq!(db.count(CountTable::GovernanceVotes).await.unwrap(), 0);
-    assert_eq!(db.count(CountTable::GovernanceProposals).await.unwrap(), 0);
+    assert_eq!(row_count(&pool, "fk_probe_b_child").await, 0);
+    assert_eq!(row_count(&pool, "fk_probe_a_parent").await, 0);
 }

@@ -8,6 +8,9 @@
 //!   balance forward into `wallet_positions`. These tests drive a synthetic
 //!   `Deposit` (then `Withdraw`) through `handle_log` and assert the resulting
 //!   balance row.
+//! - **IDX-5** — the proposal vote-power tally. Its test is gone with the
+//!   tally: RouterGovernance voting was deleted (issue 1698, QA plan C1) and
+//!   migration 0025 dropped `governance_proposals` and `governance_votes`.
 //!
 //! The file name keeps the IDX-5 vote-power half it used to carry because CI
 //! selects it by name. That half was deleted with `RouterGovernance` voting

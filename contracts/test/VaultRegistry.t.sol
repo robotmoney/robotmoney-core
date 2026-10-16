@@ -819,6 +819,110 @@ contract VaultRegistryTest is Test {
             assertTrue(IRetireVaultLinks(vaults[i]).retired(), "vault deposit-halt set");
         }
     }
+
+    // ─── ABI gate: no exactness view (QA plan D8, F11) ───────────────────────
+
+    /// @notice QA plan D8 (F11): `isVaultAllExact(address)` read `allExact()` from the vault,
+    ///         a view of the unified vault of ADR-0010 (Rejected). No shipped vault implements
+    ///         it, so the registry view reverted for every registered vault. Both selectors are
+    ///         gone: neither appears in the registry's or any vault's runtime code, and a call
+    ///         to either is refused as an unknown function (no contract here has a fallback).
+    function test_abi_noAllExactSelector() public {
+        bytes4 registryView = bytes4(keccak256("isVaultAllExact(address)"));
+        bytes4 vaultView = bytes4(keccak256("allExact()"));
+
+        TestERC20 usdc = new TestERC20();
+        address swapRouter = makeAddr("allExact-swap-router");
+        address[] memory vaults = new address[](4);
+        vaults[0] = address(
+            CoreProxies.robotMoneyVault(
+                usdc, type(uint256).max, type(uint256).max, 0, admin, admin, admin
+            )
+        );
+        vaults[1] = address(
+            CoreProxies.protocolAssetVault(
+                IERC20(address(usdc)),
+                ISwapRouter(swapRouter),
+                type(uint256).max,
+                type(uint256).max,
+                0,
+                admin,
+                admin,
+                admin
+            )
+        );
+        vaults[2] = address(
+            CoreProxies.agentTokenVault(
+                IERC20(address(usdc)),
+                ISwapRouter(swapRouter),
+                type(uint256).max,
+                type(uint256).max,
+                0,
+                admin,
+                admin,
+                admin
+            )
+        );
+        vaults[3] = address(
+            CoreProxies.rwaBasketVault(
+                IERC20(address(usdc)),
+                ISwapRouter(swapRouter),
+                type(uint256).max,
+                type(uint256).max,
+                0,
+                admin,
+                admin,
+                admin
+            )
+        );
+
+        // ADR-0014: the registry and the vaults are ERC1967Proxies; the selectors live in the
+        // implementations, so the scan reads each implementation's runtime.
+        assertFalse(
+            _codeContains(_implementationOf(address(registry)).code, registryView),
+            "registry runtime carries the isVaultAllExact selector"
+        );
+        for (uint256 i = 0; i < vaults.length; i++) {
+            vm.prank(admin);
+            registry.registerVault(vaults[i], meta1);
+            (bool regOk,) =
+                address(registry).staticcall(abi.encodeWithSelector(registryView, vaults[i]));
+            assertFalse(regOk, "registry answers isVaultAllExact");
+            assertFalse(
+                _codeContains(_implementationOf(vaults[i]).code, vaultView),
+                "vault runtime carries allExact"
+            );
+            (bool vaultOk,) = vaults[i].staticcall(abi.encodeWithSelector(vaultView));
+            assertFalse(vaultOk, "vault answers allExact");
+        }
+    }
+
+    /// @dev The ERC-1967 implementation behind `proxy`.
+    function _implementationOf(address proxy) internal view returns (address) {
+        return address(
+            uint160(
+                uint256(
+                    vm.load(
+                        proxy, 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc
+                    )
+                )
+            )
+        );
+    }
+
+    /// @dev True when the 4 bytes of `sel` appear anywhere in `code`. Both selectors checked
+    ///      above start with a non-zero byte, so a dispatcher entry for either is a PUSH4 of all
+    ///      four bytes and is always found.
+    function _codeContains(bytes memory code, bytes4 sel) internal pure returns (bool) {
+        if (code.length < 4) return false;
+        for (uint256 i = 0; i + 4 <= code.length; i++) {
+            if (
+                code[i] == sel[0] && code[i + 1] == sel[1] && code[i + 2] == sel[2]
+                    && code[i + 3] == sel[3]
+            ) return true;
+        }
+        return false;
+    }
 }
 
 interface IRetireVaultLinks {

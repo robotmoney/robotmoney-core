@@ -243,7 +243,7 @@ goes through RPC per implementation-plan.md §12."
 | `gateway.hasRole(role, account)` | `useReadContract` | Role display in AdminFlow |
 | `vault.balanceOf(address)` (all vaults) | `useReadContract` / multi-call | Registration check; portfolio position value |
 | `vault.previewDeposit(assets)` | `useReadContract` | Deposit preview; slippage safety |
-| `vault.previewRedeem(shares)` | `useReadContract` | Withdrawal preview; slippage safety |
+| `vault.previewRedeem(shares)` | `useReadContract` | Withdrawal preview; slippage safety: the Withdraw tab redeems a registered vault as a one-leg `router.redeemFor` whose `minAssetsPerLeg` is this value less 0.50%, after a share approval of exactly `shares` to the router. A direct `vault.redeem` has no floor, so the tab sends it only when no router is configured, the registry does not list the vault, or a mainnet build has no router pin, and it says so (QA plan D9, `clients/dapp/src/lib/routerRedeem.ts`). |
 | `vault.maxRedeem(owner)` | `useReadContract` | Withdrawal cap; guards submit button |
 | `vault.exitFeeBps()` | `useReadContract` | Fee disclosure in preview block |
 | `registry.listVaults()` | `useReadContract` | Authoritative vault list for deposit routing |
@@ -251,6 +251,7 @@ goes through RPC per implementation-plan.md §12."
 | `router.activeVaults()` | `useReadContract` | Weight routing for deposit split |
 | `router.previewDeposit(amount)` | `useReadContract` | Router deposit preview with per-leg splits |
 | USDC `allowance(owner, spender)` | `useReadContract` | Approve gate on deposit |
+| Router weights `getEffectiveWeights()`, `getDefaultWeights()`, `votedWeightsActive()` | `useReadContract` | Current weights in the router view. There is no proposal read: issue 1698 deleted `getProposal` with the voting path (item 7 below) |
 
 **Explorer reads (HTTP API, display only, may be stale by one indexer tick):**
 

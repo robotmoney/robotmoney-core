@@ -1,0 +1,121 @@
+{
+  "addresses": {
+    "consensus_receipt": "0xEfEe1c9881D1291460f72dA7000bA53e42eb36E2",
+    "emergency": "0x2c76f2f8753880AA88910A97f97Ae9B15b465Dab",
+    "gateway": "0x8E866418Ba2c9120753b8f9B2C5F7c33246575BE",
+    "governance": "0x59b593ab06bB5587534EfE255f6C614858b32754",
+    "ic_policy": "0x820A3874A8B44D7e1D4C67B3Bf5619CFAe06907e",
+    "registry": "0x686EbEFda732DffA988253Ecf9c012946B8066A3",
+    "router": "0xB3a8e66d9E2980B54aC0e70e0e236486D1DCb356",
+    "safe": "0xdFDea0E1AdF55a9a938bD34ead7920175b47Cb4b",
+    "timelock": "0xd65165AF0Fb4062ED0da5D119d4B56B92b15356b",
+    "vault": "0x28Bf6E6EDAD526191e8652ee631B56EAd4cE7435",
+    "vaults": [
+      "0x28Bf6E6EDAD526191e8652ee631B56EAd4cE7435",
+      "0x28C5ca4DF0107679bFcc9b0ad4c2f3F209b8f797",
+      "0x22bD48C56c34A2C1C1baC77BD7c4E636a6f10D57",
+      "0x37Be372Bd32f9E63A94C7DB3ab415996658bcd50"
+    ]
+  },
+  "cancellerPolicy": "safe-only",
+  "chain_id": 8453,
+  "code_hashes": {
+    "consensus_receipt": "0x49c8e0aeaec24803cbabcd1555a7849e23a2b228b54efab9aa90e6cb0ca6a372",
+    "gateway": "0xaa8b1de9573731550d9cbe273a76590b5339f7bc616d3879306806b09cb781dd",
+    "governance": "0xffbe549ea3984dccbd86e496e641a2f770fdca2a9be9af6be96ef4937102953c",
+    "ic_policy": "0xfb66ff9ff4e2dea4536d9225f2b84f4c87f140e0299f0bb9b6078df9c732b255",
+    "registry": "0x7e8e6aefaed38e1237c1e649bd496e88950a55837c41c67afcef80efa4c6b586",
+    "router": "0x48329ef938fb9a7bd2ce0d42b0718362f4ec736c5f05c4cfd76d757286302e26",
+    "safe": "0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c",
+    "timelock": "0x4642004028c8b48f6a5b7b9763e013289c33bf2f9460f45ac16784e18f017197",
+    "vault": "0x37575f69ed37ca97ce4bd48a86161a31a01e6d4aa500521a0f607b16ab516ce5"
+  },
+  "deployment_kind": "rehearsal",
+  "emergency": "0x2c76f2f8753880AA88910A97f97Ae9B15b465Dab",
+  "executorPolicy": "open",
+  "gateway": "0x8E866418Ba2c9120753b8f9B2C5F7c33246575BE",
+  "governance": "0x59b593ab06bB5587534EfE255f6C614858b32754",
+  "min_delay": 900,
+  "min_quorum_threshold": 2,
+  "quorum_threshold": 2,
+  "registry": "0x686EbEFda732DffA988253Ecf9c012946B8066A3",
+  "roles": {
+    "admin_role_holder": "0xd65165AF0Fb4062ED0da5D119d4B56B92b15356b",
+    "deployer_has_router_admin_role": false,
+    "deployer_has_vault_emergency_role": false,
+    "deployer_owns_a_listed_gateway_agent": false,
+    "emergency_key_has_vault_emergency_role": true,
+    "gateway_agents_listed_count": 0,
+    "governance_has_router_admin_role": true,
+    "safe_is_timelock_canceller": true,
+    "safe_is_timelock_proposer": true,
+    "timelock_executor_is_open": true,
+    "timelock_has_gateway_default_admin_role": true,
+    "timelock_has_governance_admin_role": true,
+    "timelock_has_registry_admin_role": true,
+    "timelock_has_router_admin_role": true,
+    "timelock_has_vault_admin_role": true,
+    "vaults_handed_over_count": 4
+  },
+  "router": "0xB3a8e66d9E2980B54aC0e70e0e236486D1DCb356",
+  "safe": "0xdFDea0E1AdF55a9a938bD34ead7920175b47Cb4b",
+  "timelock": "0xd65165AF0Fb4062ED0da5D119d4B56B92b15356b",
+  "timelock_owned_agents": [],
+  "vault": "0x28Bf6E6EDAD526191e8652ee631B56EAd4cE7435",
+  "vault_handover": {
+    "vault_0": {
+      "address": "0x28Bf6E6EDAD526191e8652ee631B56EAd4cE7435",
+      "admin": "0xd65165AF0Fb4062ED0da5D119d4B56B92b15356b",
+      "code_hash": "0x37575f69ed37ca97ce4bd48a86161a31a01e6d4aa500521a0f607b16ab516ce5",
+      "deployer_has_admin_role": false,
+      "deployer_has_emergency_role": false,
+      "emergency": "0x2c76f2f8753880AA88910A97f97Ae9B15b465Dab",
+      "emergency_key_has_emergency_role": true,
+      "registry": "0x686EbEFda732DffA988253Ecf9c012946B8066A3",
+      "registry_linked": true,
+      "timelock_has_admin_role": true
+    },
+    "vault_1": {
+      "address": "0x28C5ca4DF0107679bFcc9b0ad4c2f3F209b8f797",
+      "admin": "0xd65165AF0Fb4062ED0da5D119d4B56B92b15356b",
+      "code_hash": "0x6cf32003ce46eb8f8c69ccfa17d61d4b95b72fce22ae7b45b0058dfc25ff4fd8",
+      "deployer_has_admin_role": false,
+      "deployer_has_emergency_role": false,
+      "emergency": "0x2c76f2f8753880AA88910A97f97Ae9B15b465Dab",
+      "emergency_key_has_emergency_role": true,
+      "registry": "0x686EbEFda732DffA988253Ecf9c012946B8066A3",
+      "registry_linked": true,
+      "timelock_has_admin_role": true
+    },
+    "vault_2": {
+      "address": "0x22bD48C56c34A2C1C1baC77BD7c4E636a6f10D57",
+      "admin": "0xd65165AF0Fb4062ED0da5D119d4B56B92b15356b",
+      "code_hash": "0xd8e32680c955aefda70407d15e991ee5160ece35845bf75f69053417e724d530",
+      "deployer_has_admin_role": false,
+      "deployer_has_emergency_role": false,
+      "emergency": "0x2c76f2f8753880AA88910A97f97Ae9B15b465Dab",
+      "emergency_key_has_emergency_role": true,
+      "registry": "0x686EbEFda732DffA988253Ecf9c012946B8066A3",
+      "registry_linked": true,
+      "timelock_has_admin_role": true
+    },
+    "vault_3": {
+      "address": "0x37Be372Bd32f9E63A94C7DB3ab415996658bcd50",
+      "admin": "0xd65165AF0Fb4062ED0da5D119d4B56B92b15356b",
+      "code_hash": "0x806af3ca8d1d1c4462f80e5e05cb1f397d8f3fe2f40258b1c23044cfac268214",
+      "deployer_has_admin_role": false,
+      "deployer_has_emergency_role": false,
+      "emergency": "0x2c76f2f8753880AA88910A97f97Ae9B15b465Dab",
+      "emergency_key_has_emergency_role": true,
+      "registry": "0x686EbEFda732DffA988253Ecf9c012946B8066A3",
+      "registry_linked": true,
+      "timelock_has_admin_role": true
+    }
+  },
+  "vaults": [
+    "0x28Bf6E6EDAD526191e8652ee631B56EAd4cE7435",
+    "0x28C5ca4DF0107679bFcc9b0ad4c2f3F209b8f797",
+    "0x22bD48C56c34A2C1C1baC77BD7c4E636a6f10D57",
+    "0x37Be372Bd32f9E63A94C7DB3ab415996658bcd50"
+  ]
+}

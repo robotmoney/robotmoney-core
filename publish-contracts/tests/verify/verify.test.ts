@@ -3,14 +3,14 @@ import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 import { PROOF_TX_NONCES } from "../../src/counts.ts";
 import { getStageTable } from "../../src/stages.ts";
-import { RPC_REFUSED_DETAIL, verifyDeployment } from "../../src/verify/index.ts";
+import { RPC_REFUSED_DETAIL, UNWIND_GUARD_LABEL, verifyDeployment } from "../../src/verify/index.ts";
 import { keccak256, toHex } from "viem";
 import { padTopic } from "../../src/verify/logs.ts";
 import { ADMIN_ROLE, EMERGENCY_ROLE, SAFE_GUARD_SLOT, WEIGHT_SETTER_ROLE, stageManifestFile, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP } from "../../src/verify/constants.ts";
 import { USDC_ADDRESS, USDC_PROXY_CODE_HASH } from "../../src/usdc.ts";
 import { LABELS_TXT, rewriteLabelsTxt, verifySection } from "./labels-file.ts";
 import { CLAIM_LABEL } from "../../src/verify/upgradeability.ts";
-import { adoptTimelock, buildWorld, deployedWorld, failed, WORLD_CREATE2_FACTORY, IMPLS, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS, ROUTER, GOV, REC, type World } from "./world.ts";
+import { adoptTimelock, buildWorld, deployedWorld, failed, WORLD_CREATE2_FACTORY, IMPLS, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS, ROUTER, GOV, REC, UNWIND_MAX_LOSS_BPS, UNWIND_MIN_USDC_OUT, type World } from "./world.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "expected-labels.json");
 
@@ -309,7 +309,7 @@ describe("mutations fail with the expected label", () => {
 
   test("a missing sheet entry fails exactly the labels that vault kind owns (core 1695)", async () => {
     const common = ["tvlCap equals sheet", "perDepositCap equals sheet", "exitFeeBps equals sheet", "feeRecipient equals sheet", "feeRecipient is not deployer", "paused state equals sheet", "router eligibility equals sheet"];
-    const basket = ["asset config equals sheet", "navDeviationGuardBps equals sheet", "navDeviationGuardBps above zero", "pool liquidity meets the sheet floor"];
+    const basket = ["asset config equals sheet", "navDeviationGuardBps equals sheet", "navDeviationGuardBps above zero", "pool liquidity meets the sheet floor", UNWIND_GUARD_LABEL];
     const usdc = ["adapter set, caps and code-hash allowlist equal the deploy script", "seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares"];
     const want: Record<string, string[]> = {
       rmUSDC: [...common, ...usdc],
@@ -533,6 +533,164 @@ describe("rotation of the weight setter (core 1616, ADR-0002)", () => {
     rotate(w, { updateManifest: true });
     w.chain.grant(ROUTER, WEIGHT_SETTER_ROLE, GOV);
     expect(failed(await verifyDeployment(w.opts))).toEqual(["router: WEIGHT_SETTER_ROLE has exactly one holder"]);
+  });
+
+  // QA plan v1 C3 (CS-6, ADR-0002): every weight change waits the timelock delay only while the weight setter is timelock-gated. A rotation installs whatever
+  // contract the Safe chose, so the run records the current holder's gating (VerifyReport.weightSetter) and fails the gating label on any other gate.
+  describe("the current holder's gating is recorded (QA plan v1 C3, CS-6)", () => {
+    const GATING = "router: every WEIGHT_SETTER_ROLE holder is timelock-gated";
+    const FORWARDER = addr(0xf0e3);
+    const gatingOf = (r: Awaited<ReturnType<typeof verifyDeployment>>) => r.checks.find((c) => c.label === GATING)!;
+
+    test("the healthy world records RouterGovernance gated by the timelock alone and the delay each weight change waits, on mainnet and on Twin", async () => {
+      for (const [id, delay] of [[8453, 172800], [918453, 60]] as const) {
+        const r = await verifyDeployment(buildWorld(id).opts);
+        expect(r.weightSetter).toEqual({ gating: "timelock", holders: [{ address: GOV, routerGovernanceCode: true, admins: [TIMELOCK], setters: [TIMELOCK], timelockGated: true }], timelock: TIMELOCK, delaySeconds: delay });
+        expect(gatingOf(r).ok).toBe(true);
+        expect(gatingOf(r).detail).toContain(`every weight change waits the timelock delay of ${delay} s`);
+      }
+    });
+
+    test("a completed rotation to a new RouterGovernance records the new holder, still gated by the timelock", async () => {
+      const w = buildWorld();
+      rotate(w, { updateManifest: true });
+      const r = await verifyDeployment(w.opts);
+      expect(failed(r)).toEqual([]);
+      expect(r.weightSetter).toMatchObject({ gating: "timelock", holders: [{ address: NEW_GOV, routerGovernanceCode: true, admins: [TIMELOCK], setters: [TIMELOCK], timelockGated: true }] });
+    });
+
+    test("a rotation to a Safe forwarder records it as not timelock-gated and fails the gating label, with or without a manifest naming it", async () => {
+      for (const updateManifest of [false, true]) {
+        const w = buildWorld();
+        w.chain.codes.set(FORWARDER.toLowerCase(), "0x6080604052348015600f57600080fd5b50");
+        w.chain.revoke(ROUTER, WEIGHT_SETTER_ROLE, GOV);
+        w.chain.grant(ROUTER, WEIGHT_SETTER_ROLE, FORWARDER);
+        if (updateManifest) {
+          const p = join(w.manifestDir, stageManifestFile(getStageTable(), "governance"));
+          writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, "utf8")), governance: FORWARDER }));
+        }
+        const r = await verifyDeployment(w.opts);
+        expect(r.weightSetter).toMatchObject({ gating: "not-timelock", holders: [{ address: FORWARDER, routerGovernanceCode: false, timelockGated: false }] });
+        expect(failed(r)).toContain(GATING);
+        expect(gatingOf(r).detail).toContain("skip the timelock delay of 172800 s");
+      }
+    });
+
+    test("the Safe as a second ADMIN_ROLE member of the weight setter is not timelock-gated: it could move weights with no delay", async () => {
+      const w = buildWorld();
+      w.chain.grant(GOV, ADMIN_ROLE, SAFE);
+      const r = await verifyDeployment(w.opts);
+      expect(r.weightSetter).toMatchObject({ gating: "not-timelock", holders: [{ address: GOV, routerGovernanceCode: true, admins: [TIMELOCK, SAFE], timelockGated: false }] });
+      expect(failed(r)).toContain(GATING);
+      expect(failed(r)).toContain("governance: ADMIN_ROLE not held by safe");
+    });
+
+    test("the Safe as a second WEIGHT_SETTER_ROLE member of the weight setter is not timelock-gated: it could applyReceipt with no delay (issue 1698)", async () => {
+      const w = buildWorld();
+      w.chain.grant(GOV, WEIGHT_SETTER_ROLE, SAFE);
+      const r = await verifyDeployment(w.opts);
+      expect(r.weightSetter).toMatchObject({ gating: "not-timelock", holders: [{ address: GOV, routerGovernanceCode: true, setters: [TIMELOCK, SAFE], timelockGated: false }] });
+      expect(failed(r)).toContain(GATING);
+    });
+
+    test("no holder records not-timelock: an empty role gates nothing the verifier can name", async () => {
+      const w = buildWorld();
+      w.chain.revoke(ROUTER, WEIGHT_SETTER_ROLE, GOV);
+      const r = await verifyDeployment(w.opts);
+      expect(r.weightSetter).toMatchObject({ gating: "not-timelock", holders: [] });
+      expect(gatingOf(r)).toMatchObject({ ok: false, detail: "WEIGHT_SETTER_ROLE has no holder" });
+    });
+
+    test("an unreadable holder enumeration records unreadable and fails the gating label alone: it never reads as gated", async () => {
+      const w = buildWorld();
+      const read = w.chain.read.bind(w.chain);
+      w.chain.read = async (a, sig, args) => (sig.includes("getRoleMember(") ? Promise.reject(new Error("rpc down")) : read(a, sig, args));
+      const r = await verifyDeployment(w.opts);
+      expect(r.weightSetter).toMatchObject({ gating: "unreadable", holders: [], delaySeconds: 172800 });
+      expect(failed(r)).toEqual([GATING]);
+    });
+  });
+});
+
+// QA plan v1 D7 (review E5, issue 1705 Q2): before govern --row set-unwind-guard nothing set a basket's emergency unwind guard, so the oracle-free unwind and the override path
+// could not run. The stage 12 label requires a non-zero minUsdcOut on every active asset of a basket the sheet expects OPEN; a paused basket (pre-govern) passes and records the values.
+describe("the emergency unwind guard label (QA plan v1 D7)", () => {
+  const BASKETS = ["rmPROTO", "rmAGENT", "rmRWA"] as const;
+  const labelOf = (k: string) => `vault[${k}]: ${UNWIND_GUARD_LABEL}`;
+  const check = (r: Awaited<ReturnType<typeof verifyDeployment>>, k: string) => r.checks.find((c) => c.label === labelOf(k))!;
+  /** The post-govern state of one basket: the sheet expects it open and the chain reads it open. */
+  const open = (w: World, k: string) => { w.sheet.vaults[k]!.expectPaused = false; w.chain.set(VAULTS[k]!.address, "depositsPaused", false); };
+  const zeroGuards = (w: World, k: string) => w.chain.set(VAULTS[k]!.address, "emergencyUnwindGuard", () => [0n, false, 0n]);
+
+  test("every basket carries the label and rmUSDC does not (it has no unwind guard)", async () => {
+    const r = await verifyDeployment(buildWorld().opts);
+    for (const k of BASKETS) expect(check(r, k)?.ok).toBe(true);
+    expect(r.checks.some((c) => c.label === labelOf("rmUSDC"))).toBe(false);
+  });
+  test("pre-govern: a paused basket with no guard set passes and records the zero values", async () => {
+    const w = buildWorld();
+    for (const k of BASKETS) zeroGuards(w, k);
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toEqual([]);
+    expect(check(r, "rmPROTO").detail).toContain("deposits paused, no guard required until the vault opens");
+    expect(check(r, "rmPROTO").detail).toContain("minUsdcOut 0");
+  });
+  test("post-govern: an open basket whose every active asset reads a non-zero minUsdcOut passes, and the detail records overrideAllowed and maxLossBps", async () => {
+    const w = buildWorld();
+    for (const k of BASKETS) open(w, k);
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toEqual([]);
+    expect(check(r, "rmPROTO").detail).toContain(`minUsdcOut ${UNWIND_MIN_USDC_OUT} overrideAllowed true maxLossBps ${UNWIND_MAX_LOSS_BPS}`);
+  });
+  test("post-govern: an open basket with one active asset at minUsdcOut zero fails exactly its label, names the token and the govern row", async () => {
+    const w = buildWorld();
+    for (const k of BASKETS) open(w, k);
+    const token = w.sheet.vaults.rmPROTO!.assets[1]!.token;
+    w.chain.set(VAULTS.rmPROTO!.address, "emergencyUnwindGuard", (a: any[]) => (String(a[0]).toLowerCase() === token.toLowerCase() ? [0n, true, 500n] : [UNWIND_MIN_USDC_OUT, true, UNWIND_MAX_LOSS_BPS]));
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toEqual([labelOf("rmPROTO")]);
+    expect(check(r, "rmPROTO").detail).toContain(`minUsdcOut is zero for ${token}`);
+    expect(check(r, "rmPROTO").detail).toContain("govern --row set-unwind-guard");
+  });
+  test("post-govern: a basket the govern stage opened with no guard at all fails (the state before this row existed)", async () => {
+    const w = buildWorld();
+    for (const k of BASKETS) { open(w, k); zeroGuards(w, k); }
+    expect(failed(await verifyDeployment(w.opts))).toEqual(BASKETS.map(labelOf));
+  });
+  test("an inactive asset row is not required to carry a guard", async () => {
+    const w = buildWorld();
+    open(w, "rmRWA");
+    const row = w.sheet.vaults.rmRWA!.assets[0]!;
+    // a second, inactive row with no guard: the label reads only the active ones (asset config is checked by its own label)
+    w.chain.set(VAULTS.rmRWA!.address, "assets", (a: any[]) => {
+      const i = Number(a[0]);
+      if (i === 0) return [row.token, row.pool, row.swapFee, true, row.adapter, row.venue ?? 0];
+      if (i === 1) return [addr(0xdead), addr(0xf009), 500, false, row.adapter, 0];
+      throw new Error("execution reverted");
+    });
+    const r = await verifyDeployment(w.opts);
+    expect(check(r, "rmRWA").ok).toBe(true);
+    expect(check(r, "rmRWA").detail).not.toContain(addr(0xdead));
+  });
+  test("an open basket whose asset list reads empty fails closed: nothing proves an unwind floor", async () => {
+    const w = buildWorld();
+    open(w, "rmRWA");
+    w.chain.set(VAULTS.rmRWA!.address, "assets", () => { throw new Error("execution reverted"); });
+    const r = await verifyDeployment(w.opts);
+    expect(check(r, "rmRWA").ok).toBe(false);
+    expect(check(r, "rmRWA").detail).toContain("lists no active asset");
+  });
+  test("an unreadable guard is a failed check, not a pass", async () => {
+    const w = buildWorld();
+    open(w, "rmAGENT");
+    w.chain.handlers.delete(`${VAULTS.rmAGENT!.address.toLowerCase()}:emergencyUnwindGuard`);
+    expect(check(await verifyDeployment(w.opts), "rmAGENT").ok).toBe(false);
+  });
+  test("the label set is the same before and after govern (the check is always present)", async () => {
+    const before = (await verifyDeployment(buildWorld().opts)).checks.map((c) => c.label);
+    const w = buildWorld();
+    for (const k of BASKETS) open(w, k);
+    expect((await verifyDeployment(w.opts)).checks.map((c) => c.label)).toEqual(before);
   });
 });
 

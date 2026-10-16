@@ -7,6 +7,7 @@ pragma solidity ^0.8.24;
 import {Vm} from "forge-std/Vm.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
+import {ProposerFloorTimelock} from "../../ProposerFloorTimelock.sol";
 import {SafeFixture} from "./SafeFixture.sol";
 import {RoleHolders} from "./RoleHolders.sol";
 
@@ -59,9 +60,10 @@ contract SafeCallRelay {
 /// @dev Pranking the Safe address skips the quorum, so a test that uses it proves nothing about the Safe.
 ///      Every helper here signs with the owner keys behind `SafeFixture._fixtureOwners()`
 ///      (`makeAddr("safe-owner-N")` is `vm.addr(keccak256("safe-owner-N"))`).
-///      The timelock mirrors DeployTimelock: the Safe is the only proposer and so the only
-///      canceller (issue #1521, security-model.md line 89), EXECUTOR_ROLE is open, and the
-///      timelock administers itself.
+///      The timelock mirrors DeployTimelock: a ProposerFloorTimelock (the last PROPOSER_ROLE
+///      holder cannot be revoked or renounced, issue #1645), the Safe is the only proposer and
+///      so the only canceller (issue #1521, security-model.md line 89), EXECUTOR_ROLE is open,
+///      and the timelock administers itself.
 abstract contract SafeGovernance is SafeFixture {
     using RoleHolders for Vm.Log[];
 
@@ -140,9 +142,10 @@ abstract contract SafeGovernance is SafeFixture {
 
     // ─── Timelock ─────────────────────────────────────────────────────────────
 
-    /// @dev Builds the production timelock shape and proves who holds each role from the
-    ///      `RoleGranted` logs: the Safe is the only proposer and the only canceller, the
-    ///      executor role is open (address(0)), and the timelock alone administers itself.
+    /// @dev Builds the production timelock shape (ProposerFloorTimelock, as DeployTimelock
+    ///      deploys) and proves who holds each role from the `RoleGranted` logs: the Safe is
+    ///      the only proposer and the only canceller, the executor role is open (address(0)),
+    ///      and the timelock alone administers itself.
     function _newGovTimelock(address safe_, uint256 minDelay)
         internal
         returns (TimelockController tl)
@@ -152,7 +155,7 @@ abstract contract SafeGovernance is SafeFixture {
         proposers[0] = safe_;
         address[] memory executors = new address[](1);
         executors[0] = address(0);
-        tl = new TimelockController(minDelay, proposers, executors, address(0));
+        tl = new ProposerFloorTimelock(minDelay, proposers, executors, address(0));
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
         _assertOnly(logs.holders(address(tl), tl.PROPOSER_ROLE()), safe_, "proposer");

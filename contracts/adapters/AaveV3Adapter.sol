@@ -6,6 +6,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
+import {IVenueHealthAdapter} from "../interfaces/IVenueHealthAdapter.sol";
 import {IAavePool} from "../interfaces/IAavePool.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 
@@ -21,8 +22,12 @@ import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 ///      floors and a realized-value return; Aave USDC supply/redemption is
 ///      exact (1:1), so the floors are trivially satisfied but still enforced
 ///      (revert `SlippageExceeded` below the floor). `isExact()` returns true.
-contract AaveV3Adapter is IStrategyAdapter {
+contract AaveV3Adapter is IStrategyAdapter, IVenueHealthAdapter {
     using SafeERC20 for IERC20;
+
+    /// @dev Aave V3 `ReserveConfigurationMap`: bit 56 is "active", bit 60 is "paused".
+    uint256 private constant RESERVE_ACTIVE_BIT = 56;
+    uint256 private constant RESERVE_PAUSED_BIT = 60;
 
     /// @notice USDC token address used for deposits and withdrawals.
     /// @dev Stored as `address` so the auto-generated getter satisfies the
@@ -45,6 +50,19 @@ contract AaveV3Adapter is IStrategyAdapter {
     /// @param requested Amount of USDC requested for withdrawal.
     /// @param actual    Amount of USDC actually received from the pool.
     error WithdrawShortfall(uint256 requested, uint256 actual);
+    /// @notice The pool refused a `deploy(uint256)` supply while the reserve also refuses
+    ///         withdrawals (paused or inactive), so the adapter did not hand the USDC back
+    ///         (security round 3).
+    /// @param reason The pool's revert data (an Aave error code).
+    error VenueWithdrawalsClosed(bytes reason);
+
+    /// @notice The pool refused a `deploy(uint256)` supply, and the USDC went straight back to
+    ///         `VAULT`, which keeps it idle (security round 2). Aave refuses at the reserve's
+    ///         supply cap and while the reserve is frozen; a reserve that also refuses
+    ///         withdrawals (paused or inactive) reverts instead (security round 3).
+    /// @param amount USDC handed back to `VAULT`.
+    /// @param reason The pool's revert data (an Aave error code).
+    event DeployRefused(uint256 amount, bytes reason);
 
     modifier onlyVault() {
         if (msg.sender != VAULT) revert OnlyVault();
@@ -64,7 +82,8 @@ contract AaveV3Adapter is IStrategyAdapter {
         VAULT = vault_;
     }
 
-    /// @dev Shared supply choreography for the v1 and v2 `deploy` entry points.
+    /// @dev Supply choreography of the min-out `deploy`, which reverts when the pool refuses.
+    ///      `deploy(uint256)` runs the same steps but hands a refused supply back to `VAULT`.
     // ADP-5 / NC-12: set the exact allowance with `forceApprove` (which zeroes first for
     // non-standard ERC-20s) rather than the additive, non-zeroing `safeIncreaseAllowance`,
     // then unconditionally reset to zero after the call so no residual allowance can ever
@@ -76,8 +95,32 @@ contract AaveV3Adapter is IStrategyAdapter {
     }
 
     /// @inheritdoc IStrategyAdapter
+    /// @dev Security round 2: a supply the pool refuses for capacity (supply cap reached, reserve
+    ///      frozen) does not revert. The adapter sends `amount` back to `VAULT` and emits
+    ///      `DeployRefused`, and the vault leaves that USDC idle (`UnroutedDeposit`). Before this a
+    ///      full reserve reverted every rmUSDC deposit, every router deposit with an rmUSDC leg and
+    ///      keeper `rebalance`. Security round 3: a refusal while the reserve is paused or inactive
+    ///      reverts `VenueWithdrawalsClosed`. Aave then refuses withdrawals too, the vault still
+    ///      counts the aToken balance at face, and idle USDC made from this slice (or pulled from
+    ///      the other venues by a `rebalance`) would pay early exits at that NAV while any
+    ///      haircut falls on the holders who stay. The min-out overload below still reverts.
     function deploy(uint256 amount) external onlyVault {
-        _supply(amount);
+        IERC20(USDC).forceApprove(address(POOL), amount);
+        try POOL.supply(USDC, amount, address(this), 0) {}
+        catch (bytes memory reason) {
+            if (!venueWithdrawable()) revert VenueWithdrawalsClosed(reason);
+            IERC20(USDC).safeTransfer(VAULT, amount);
+            emit DeployRefused(amount, reason);
+        }
+        IERC20(USDC).forceApprove(address(POOL), 0);
+    }
+
+    /// @inheritdoc IVenueHealthAdapter
+    /// @dev Aave's `withdraw` reverts on a reserve that is inactive or paused (`RESERVE_INACTIVE`,
+    ///      `RESERVE_PAUSED`). A frozen reserve, or one at its supply cap, still pays withdrawals.
+    function venueWithdrawable() public view returns (bool) {
+        uint256 config = POOL.getConfiguration(USDC);
+        return (config >> RESERVE_ACTIVE_BIT) & 1 == 1 && (config >> RESERVE_PAUSED_BIT) & 1 == 0;
     }
 
     /// @notice Min-out variant of `deploy`: reverts `SlippageExceeded` below `minValueOut`.

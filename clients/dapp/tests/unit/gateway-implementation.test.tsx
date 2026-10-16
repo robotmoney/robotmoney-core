@@ -298,7 +298,9 @@ describe("GatewayUpgradeStatus (issue 1810)", () => {
 
   it("renders nothing before verification passes", () => {
     const { container } = render(
-      <GatewayUpgradeStatus state={{ status: "refused", reason: "unknown_revert" }} />,
+      <GatewayUpgradeStatus
+        state={{ status: "refused", reason: "unknown_revert", cause: "hash-mismatch" }}
+      />,
     );
     expect(container.querySelector('[data-testid="gateway-upgrade-status"]')).toBeNull();
   });

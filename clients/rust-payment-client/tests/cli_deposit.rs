@@ -269,6 +269,52 @@ fn deposit_base_mainnet_allows_software_signer_and_warns_first() {
     common::assert_mainnet_warning_precedes_keystore_load(logs.path());
 }
 
+/// QA plan U7, finding DR-11: a wrong passphrase exited 3 with an empty
+/// stderr, because the reason went only to the diagnostic log file. The
+/// reason must reach stderr now. Stdout stays empty (a startup failure
+/// prints no document), and the passphrase itself is never echoed.
+#[test]
+fn deposit_wrong_passphrase_prints_reason_on_stderr() {
+    let logs = tempfile::TempDir::new().unwrap();
+    // The keystore load fails before any RPC call, so no server is needed.
+    let fix = Fixture::build("http://127.0.0.1:1", 31337);
+    let wrong = "not-the-keystore-passphrase";
+    assert_ne!(wrong.as_bytes(), TEST_PASSPHRASE);
+
+    let out = rmpc()
+        .env("RMPC_LOG_DIR", logs.path())
+        .env(PASSPHRASE_ENV_VAR, wrong)
+        .args([
+            "deposit",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "--amount",
+            "1000",
+            "--order-id",
+            &format!("{ORDER_ID:#x}"),
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    assert_eq!(out.status.code(), Some(3));
+    assert!(
+        out.stdout.is_empty(),
+        "a startup failure prints nothing on stdout: {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("ErrKeystoreDecrypt"),
+        "stderr must name why the keystore did not open: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains(wrong),
+        "the passphrase must never reach stderr: {stderr:?}"
+    );
+}
+
 #[tokio::test]
 async fn deposit_chain_id_mismatch_refuses_with_named_error() {
     let mut server = mockito::Server::new_async().await;

@@ -4,7 +4,7 @@ title: "IBasketVaultViews"
 
 # IBasketVaultViews
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/lib/BasketViews.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/lib/BasketViews.sol)
 
 <i>
 
@@ -174,4 +174,46 @@ function effectiveTwapWindow(address token) external view returns (uint32);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint32` |  |
+
+<a id="asset"></a>
+
+### asset
+
+```solidity
+function asset() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="navdeviationguardbps"></a>
+
+### navDeviationGuardBps
+
+```solidity
+function navDeviationGuardBps() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="maxslippagebps"></a>
+
+### maxSlippageBps
+
+```solidity
+function maxSlippageBps() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
 

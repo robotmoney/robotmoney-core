@@ -1,4 +1,11 @@
 {
+  "enums": {
+    "enum BasketVault.Venue": [
+      "V3",
+      "V4",
+      "Aerodrome"
+    ]
+  },
   "libraries": [
     "contracts/lib/BasketAssetConfigGuard.sol:BasketAssetConfigGuard",
     "contracts/lib/BasketSwaps.sol:BasketSwaps",

@@ -132,10 +132,61 @@ jobs:
       - name: Fusion proposal / architecture close-out invariant (issue #1249)
         run: python3 .github/scripts/check_fusion_closeout_docs.py
 
-      - name: Governance docs drift (issue #1646)
-        # security-model section references resolve, governance-decisions keeps one
-        # voting-power model, manual-admin-actions names the IC policy, receipt and basket vaults.
+      - name: Self-test governance docs drift guard (issue #1698)
+        # Plants each RouterGovernance voting residue in prd.md, architecture.md and a non-model
+        # doc, drops each required phrase, cites an architecture section with no heading, strips
+        # the architecture guardrails section, and expects the guard to fire BEFORE the real check
+        # runs; residue in docs/code-review/ and the QA plan, and a robotmoney-frontend
+        # architecture reference, must pass (QA plan v1 W4).
+        run: python3 .github/scripts/check_governance_docs.py --self-test
+
+      - name: Governance docs drift (issue #1646, #1698)
+        # security-model section references resolve; governance-decisions, prd and architecture
+        # keep the no-voting applyReceipt model and none of the deleted RouterGovernance voting
+        # text; every other doc under docs/ carries none of that text and no pre-1698 two-call
+        # apply-receipt batch (QA plan v1 C1); manual-admin-actions names the IC policy, receipt
+        # and basket vaults; architecture.md section references resolve and its Guardrails
+        # section keeps both invariant lists (QA plan v1 W4).
         run: python3 .github/scripts/check_governance_docs.py
+
+      - name: Self-test shipped-issue marker gate (QA plan v1 W1, issue #1817)
+        # Plants a not-yet-implemented marker for every shipped issue (wrapped over lines, cited
+        # before the marker, as "not yet committed"), a marker that names no issue, a closed
+        # issue through a fake resolver, an executor policy the docs do not state and each stale
+        # phrase, and expects the gate to fire BEFORE the real check runs. No network.
+        run: python3 .github/scripts/check_shipped_issue_markers.py --self-test
+
+      - name: No not-yet-implemented marker cites shipped work (QA plan v1 W1, issue #1817)
+        # --verify-issue-state resolves every issue a marker cites through gh and fails on a
+        # CLOSED one, so closing an issue without deleting its doc marker turns this step red.
+        # It also checks that prd, architecture and security-model state the executor policy
+        # DeployTimelock records. The flag is always passed: no silent offline fallback.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/check_shipped_issue_markers.py --verify-issue-state
+
+      - name: Self-test doc test-citation gate (QA plan v1 W5, issue #1798)
+        # Plants a removed test behind a file, a contract and a bare name, a missing test file,
+        # a continuation that names another file's test, a prefix nothing matches, a line cite
+        # that moved and a range past the end of the file, and expects the gate to fire BEFORE
+        # the real check runs; a Rust test cited bare and defects in the records must pass.
+        run: python3 .github/scripts/check_doc_test_citations.py --self-test
+
+      - name: Every test a doc cites exists (QA plan v1 W5, issue #1798)
+        # redeem-gas-1482.md cited a fork test that never landed (core 1778). Every
+        # `File.t.sol::name`, `Contract.test_name`, bare `test_*` name and `File.t.sol:N` line
+        # cite under docs/ (records excepted) resolves to a declared test in contracts/.
+        run: python3 .github/scripts/check_doc_test_citations.py
+
+      - name: Self-test no-voting client gate (issue #1698)
+        # Plants each form of the deleted RouterGovernance voting path (doc or comment,
+        # alloy call, human-readable signature, ABI JSON entry, TS object ABI entry) in a
+        # throwaway tree and expects the gate to fail BEFORE the real check runs.
+        run: bash .github/scripts/tests/test_check_no_router_governance_voting.sh
+
+      - name: No RouterGovernance.propose in clients/ (issue #1698)
+        # The voting path is deleted; no client may name, encode or bind propose/vote/execute.
+        run: bash .github/scripts/check_no_router_governance_voting.sh
 
       - name: environments.md script-paths and env-var coverage
         run: python3 .github/scripts/check_environments_doc.py
@@ -224,6 +275,18 @@ jobs:
         # that crate's tests/ in the same job — so a crate-named job cannot
         # report green over test binaries that do not compile.
         run: python3 .github/scripts/check_rust_test_target_compile_coverage.py
+
+      - name: Self-test reusable-workflow permission guard (QA plan v1 T1)
+        # Drops the nightly's pull-requests grant on its suite-07 call (the 2026-10-07..13
+        # startup_failure), plants a called write above a caller read, a nested call, the
+        # read-all/write-all shorthands, a caller with no permissions block and an empty scan,
+        # and expects each verdict BEFORE the real check runs. Needs PyYAML, installed above.
+        run: python3 scripts/ci/check_reusable_workflow_permissions.py --self-test
+
+      - name: Reusable-workflow callers grant what called jobs ask for (QA plan v1 T1)
+        # A called job that asks for a token scope its caller does not grant makes GitHub refuse
+        # the whole run as startup_failure, so the nightly Twin fork (suite 29) never ran.
+        run: python3 scripts/ci/check_reusable_workflow_permissions.py
 
       - name: Self-test evidence-script sweep (issue #1235)
         # Seeds a compliant fixture plus both defect shapes -- a doc-named

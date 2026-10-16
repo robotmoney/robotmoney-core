@@ -14,7 +14,9 @@ import {IPoolManagerV4} from "../interfaces/IPoolManagerV4.sol";
 /// @title DeployUniswapV4PriceRecorder
 /// @notice Stage `recorder`: deploys the permissionless `UniswapV4PriceRecorder` for the Uniswap V4 pool named by the
 ///         rmAGENT config (`config/agent-token-shortlist.json`, the entry with venue UniswapV4), grows its observation
-///         ring to the 901-slot floor (1800 s window / 2 s Base block + 1) and records the first snapshot.
+///         ring to 7_201 slots and records the first snapshot. 7_201 is the 4 hour USDC sell anchor window / 2 s Base
+///         block + 1 (`BasketViews.SELL_ANCHOR_WINDOW`, core 1793): at one record per block no spammer can evict the
+///         anchor's history. It also covers the 901-slot floor `addAsset` needs for the 1800 s NAV window.
 ///
 ///         It runs EARLY (right after `libs`) so the 30 minute price history accumulates while the other stages run.
 ///         The runner then waits until the recorder holds a full window of history before it lets the `agent` stage run
@@ -30,8 +32,9 @@ contract DeployUniswapV4PriceRecorder is ExpectedChainGuard {
 
     string public constant MANIFEST_FILE = "recorder.json";
     string public constant CONFIG_FILE = "config/agent-token-shortlist.json";
-    /// @notice Ring floor for the 1800 s window: window / 2 s + 1 (BasketAssetConfigGuard.requireObservationHistory).
-    uint16 public constant RING_SLOTS = 901;
+    /// @notice Ring size: the 14_400 s sell anchor window / 2 s + 1 (core 1793, `BasketViews.SELL_ANCHOR_WINDOW`). Above the
+    ///         901-slot floor of the 1800 s NAV window (`BasketAssetConfigGuard.requireObservationHistory`).
+    uint16 public constant RING_SLOTS = 7_201;
     /// @notice Slots grown per transaction.
     uint16 public constant GROW_CHUNK = 250;
     /// @notice Fixed gas for the first `record()` transaction. forge estimates a call from a simulation that runs in the SAME block as the
@@ -118,7 +121,7 @@ contract DeployUniswapV4PriceRecorder is ExpectedChainGuard {
         // stage pokes the recorder again before `addAsset`, so a record that landed in the constructor's block cannot leave the ring narrow.
         rec.record{gas: RECORD_GAS}();
         (,,,, uint16 cardinalityNext) = rec.latest();
-        require(cardinalityNext == RING_SLOTS, "recorder ring target is not 901 slots");
+        require(cardinalityNext == RING_SLOTS, "recorder ring target is not 7201 slots");
         d = Deployed({
             recorder: address(rec),
             poolManager: poolManager,

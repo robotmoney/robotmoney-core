@@ -8,6 +8,15 @@ discovering it during an incident.
 the first migration in this service that deliberately **refuses to run** against
 a populated table. The procedure generalises to any later one that does.
 
+**Also used by** migration `0021_committee_votes_contract_scope.sql` (QA plan v1
+task X4, finding DI-10). It refuses a populated `committee_votes` table for the
+same reason: `vote_id` is an index into one InvestmentCommitteePolicy
+deployment's votes, so a redeployed policy reuses every id, and the emitting
+policy of an existing row was never recorded. Apply this procedure with
+`committee_votes` in place of `consensus_receipts`: dump it in §2, and the
+narrow clear in §5 is `TRUNCATE committee_votes;`. In §6, every distinct
+`committee_votes.contract_address` must be a policy address you deployed.
+
 ---
 
 ## 1. Why a rebuild, and why exactly once

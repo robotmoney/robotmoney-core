@@ -4,7 +4,7 @@ title: "InvestmentCommitteePolicyTest"
 
 # InvestmentCommitteePolicyTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/InvestmentCommitteePolicy.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/InvestmentCommitteePolicy.t.sol)
 
 **Inherits:** Test
 
@@ -279,7 +279,8 @@ auto-apply authority. It holds no ERC-20 interface, cannot call
 This test asserts the property structurally: any ETH sent to
 the contract reverts (no `receive`/`fallback`), and the contract
 bytecode contains none of the function selectors for
-`RouterGovernance.execute(uint256)` (0x168e3b1f),
+the deleted `RouterGovernance.execute(uint256)` (0x168e3b1f) and
+its replacement `RouterGovernance.applyReceipt(...)`,
 `RobotMoneyGateway.deposit(...)`, or ERC-20 `transfer`.
 
 ```solidity

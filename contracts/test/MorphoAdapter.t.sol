@@ -6,9 +6,12 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
+import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @dev Minimal ERC-4626 mock vault that supports both deposit and withdraw.
 ///      withdraw() sends `assets` USDC directly to `receiver` (normal behaviour).
@@ -392,6 +395,91 @@ contract MorphoAdapterTest is Test {
             abi.encodeWithSelector(MorphoAdapter.ExposureCapExceeded.selector, first, second, cap)
         );
         adapter.deploy(second);
+    }
+
+    /// @notice QA plan D8 (CS-8): `setMaxExposure` is `onlyVault`, and no vault function called
+    ///         it, so the FS-VLT-10 cap could never be set. Governance now sets it through
+    ///         `RobotMoneyVault.setAdapterMaxExposure` (`ADMIN_ROLE`). The cap set that way is
+    ///         stored on the adapter, bounds what a routed vault deposit places in Morpho (the
+    ///         rest stays idle, security round 1), and clears with 0. A non-admin caller, an
+    ///         unknown index and a removed entry are refused.
+    function test_maxExposure_settableThroughVault() public {
+        address vaultAdmin = makeAddr("vaultAdmin");
+        RobotMoneyVault rmVault = CoreProxies.robotMoneyVault(
+            IERC20(address(usdc)),
+            1_000_000 * ONE_USDC,
+            1_000_000 * ONE_USDC,
+            0,
+            makeAddr("feeRecipient"),
+            vaultAdmin,
+            vaultAdmin
+        );
+        MorphoAdapter morpho =
+            new MorphoAdapter(address(morphoVault), address(usdc), address(rmVault));
+        vm.startPrank(vaultAdmin);
+        rmVault.setAdapterAllowed(address(morpho), true);
+        rmVault.setAdapterCodeHashAllowed(address(morpho).codehash, true);
+        rmVault.addAdapter(address(morpho), 10_000);
+        vm.stopPrank();
+        uint256 cap = 100 * ONE_USDC;
+
+        // Only ADMIN_ROLE reaches the lever.
+        bytes32 adminRole = rmVault.ADMIN_ROLE();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, adminRole
+            )
+        );
+        vm.prank(stranger);
+        rmVault.setAdapterMaxExposure(0, cap);
+
+        // The vault forwards the cap to the adapter and records it.
+        vm.expectEmit(true, true, false, true, address(rmVault));
+        emit RobotMoneyVault.AdapterMaxExposureSet(0, address(morpho), cap);
+        vm.prank(vaultAdmin);
+        rmVault.setAdapterMaxExposure(0, cap);
+        assertEq(morpho.maxExposure(), cap, "cap stored on the adapter");
+
+        // The cap binds a routed deposit: up to the cap reaches Morpho. One unit more no longer
+        // reverts (security round 1): routing stops at the cap and leaves the unit idle in NAV,
+        // reported by `UnroutedDeposit`, instead of asking Morpho for more than the cap.
+        address depositor = makeAddr("depositor");
+        usdc.mint(depositor, 2 * cap);
+        vm.startPrank(depositor);
+        usdc.approve(address(rmVault), type(uint256).max);
+        rmVault.deposit(cap, depositor);
+        assertEq(morpho.totalAssets(), cap, "deposit up to the cap reaches Morpho");
+        vm.expectEmit(false, false, false, true, address(rmVault));
+        emit RobotMoneyVault.UnroutedDeposit(ONE_USDC);
+        rmVault.deposit(ONE_USDC, depositor);
+        vm.stopPrank();
+        assertEq(morpho.totalAssets(), cap, "Morpho stays at the cap");
+        assertEq(usdc.balanceOf(address(rmVault)), ONE_USDC, "the unit past the cap stays idle");
+
+        // 0 clears the cap, and the same deposit then lands.
+        vm.prank(vaultAdmin);
+        rmVault.setAdapterMaxExposure(0, 0);
+        assertEq(morpho.maxExposure(), 0, "cap cleared");
+        vm.prank(depositor);
+        rmVault.deposit(ONE_USDC, depositor);
+        assertEq(morpho.totalAssets(), cap + ONE_USDC, "uncapped deposit reaches Morpho");
+
+        // An unknown index is refused.
+        vm.prank(vaultAdmin);
+        vm.expectRevert(RobotMoneyVault.AdapterNotFound.selector);
+        rmVault.setAdapterMaxExposure(1, cap);
+
+        // A removed (inactive) entry is refused too.
+        MorphoAdapter spare =
+            new MorphoAdapter(address(morphoVault), address(usdc), address(rmVault));
+        vm.startPrank(vaultAdmin);
+        rmVault.setAdapterAllowed(address(spare), true);
+        rmVault.addAdapter(address(spare), 10_000);
+        rmVault.removeAdapter(1);
+        vm.expectRevert(RobotMoneyVault.AdapterNotFound.selector);
+        rmVault.setAdapterMaxExposure(1, cap);
+        vm.stopPrank();
+        assertEq(spare.maxExposure(), 0, "removed entry's adapter untouched");
     }
 
     // -----------------------------------------------------------------------

@@ -5,7 +5,7 @@ description: "Runs a governed call the way production does: two of the three Saf
 
 # SafeGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/helpers/SafeGovernance.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/helpers/SafeGovernance.sol)
 
 **Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
 
@@ -20,9 +20,10 @@ Runs a governed call the way production does: two of the three Safe owners sign 
 Pranking the Safe address skips the quorum, so a test that uses it proves nothing about the Safe.
 Every helper here signs with the owner keys behind `SafeFixture._fixtureOwners()`
 (`makeAddr("safe-owner-N")` is `vm.addr(keccak256("safe-owner-N"))`).
-The timelock mirrors DeployTimelock: the Safe is the only proposer and so the only
-canceller (issue #1521, security-model.md line 89), EXECUTOR_ROLE is open, and the
-timelock administers itself.
+The timelock mirrors DeployTimelock: a ProposerFloorTimelock (the last PROPOSER_ROLE
+holder cannot be revoked or renounced, issue #1645), the Safe is the only proposer and
+so the only canceller (issue #1521, security-model.md line 89), EXECUTOR_ROLE is open,
+and the timelock administers itself.
 
 </i>
 
@@ -276,9 +277,10 @@ function _safeExecWith(address safe_, address to, bytes memory data, bytes memor
 
 <i>
 
-Builds the production timelock shape and proves who holds each role from the
-`RoleGranted` logs: the Safe is the only proposer and the only canceller, the
-executor role is open (address(0)), and the timelock alone administers itself.
+Builds the production timelock shape (ProposerFloorTimelock, as DeployTimelock
+deploys) and proves who holds each role from the `RoleGranted` logs: the Safe is
+the only proposer and the only canceller, the executor role is open (address(0)),
+and the timelock alone administers itself.
 
 </i>
 

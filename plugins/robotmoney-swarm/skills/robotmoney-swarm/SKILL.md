@@ -6,11 +6,12 @@ description: >
   with target_weight_bps and confidence, posts a narrative rationale memo to a
   configured public URI, then submits a signed committee tilt via
   `rmpc committee vote-submit` (the command name only: there is no voting at all). Fails closed before any on-chain write when
-  ic_contract_address is absent from config, the agent is not registered, or
-  the rationale_uri is unreachable. Use this skill when an Investment Committee
+  ic_policy_address is absent from config, the agent does not hold
+  COMMITTEE_AGENT_ROLE (or that cannot be read), or the rationale_uri is
+  unreachable. Use this skill when an Investment Committee
   agent needs to submit a tilt for a specific vault based on the current regime
   signal. The skill MUST NOT be invoked without a valid rmpc config that includes
-  ic_contract_address.
+  ic_policy_address.
 ---
 
 # robotmoney-swarm
@@ -47,19 +48,40 @@ Do **not** invoke this skill when:
 - The operator wants to change router weights. There is no voting by anyone:
   `WEIGHT_SETTER_ROLE` submits the committee's consensus receipt, scheduled by
   the Safe through the timelock, and rmpc has no governance write command.
-- `ic_contract_address` is absent from the rmpc config — surface the
+- `ic_policy_address` is absent from the rmpc config — surface the
   `MissingICConfig` error instead.
 
 ## Preflight guards (all must pass before any on-chain write)
 
-1. **IC config present.** `ic_contract_address` must be set in the rmpc config.
-   If absent → abort with `MissingICConfig`.
-2. **Agent registered.** The configured signing address must be a registered
-   committee agent in the IC contract. If `rmpc committee vote-submit` returns
-   `AgentNotRegistered` → surface the error and do not retry.
-3. **Rationale URI reachable.** The `rationale_uri` where the memo will be posted
-   must return HTTP 200 before the tilt is submitted. If unreachable → abort
-   with `RationaleURIUnreachable`.
+Run the bundled script before every `vote-submit`. It runs the three guards in
+this order, stops at the first that fails, and exits 0 only when all pass:
+
+```bash
+plugins/robotmoney-swarm/scripts/check-preflight.sh \
+  --config <CONFIG> \
+  --rationale-uri <URI>
+```
+
+`--rmpc <RMPC_PATH>` (or `$RMPC`) names the rmpc binary when it is not on
+`PATH`.
+
+1. **IC config present.** `ic_policy_address` must be a top-level address in
+   the rmpc config: the key `rmpc committee vote-submit` reads. If absent →
+   exit 2, `MissingICConfig`.
+2. **Rationale URI reachable.** The `rationale_uri` where the memo will be posted
+   must return HTTP 200 before the tilt is submitted. If unreachable → exit 3,
+   `RationaleURIUnreachable`.
+3. **Agent registered.** The script runs `rmpc committee --config <CONFIG> check-agent`,
+   which reads `hasRole(COMMITTEE_AGENT_ROLE, agent)` on the IC policy for the
+   address `vote-submit` signs as (the keystore's cleartext `address`). It
+   signs nothing and needs no passphrase.
+   - Role not held → exit 4, `AgentNotRegistered`, followed by rmpc's
+     `ErrNotAllowlisted` JSON. Surface it and do not retry: registration is a
+     Safe action, not something this skill or rmpc can do.
+   - Role not readable (rmpc missing or older than `check-agent`, RPC down,
+     RPC on the wrong chain) → exit 5, `AgentRoleUnreadable`. Do not submit.
+     Fix the cause and rerun the preflight; an unread role is never treated as
+     registered.
 
 ## Workflow
 
@@ -68,8 +90,10 @@ Do **not** invoke this skill when:
 2. Read vault holdings (rmpc get-router --config <CONFIG> --pretty)
 3. Form per-vault tilts → produce vote JSON (form-vote.sh)
 4. ajv-validate vote JSON against schemas/committee-vote.json
-5. Post rationale memo to rationale_uri  ← abort here if unreachable
-6. rmpc committee --config <CONFIG> vote-submit \
+5. Post rationale memo to rationale_uri
+6. check-preflight.sh --config <CONFIG> --rationale-uri <URI>
+                                         ← abort on any non-zero exit
+7. rmpc committee --config <CONFIG> vote-submit \
        --vault <ADDR> \
        --stance <STANCE> \
        --weight-bps <BPS> \
@@ -83,9 +107,10 @@ Do **not** invoke this skill when:
        --pretty
 ```
 
-Step 5 (memo post) is a lightweight HTTP HEAD/GET to verify the URI is
-reachable. The memo itself is posted by the operator's rationale host before
-this skill runs; the skill only verifies reachability, it does not upload.
+Step 5 (memo post) is done by the operator's rationale host before this skill
+runs; the skill does not upload. Step 6 verifies it: guard 2 is a lightweight
+HTTP HEAD that must return 200, and guard 3 confirms the agent holds
+`COMMITTEE_AGENT_ROLE` before step 7 signs anything.
 
 ## Tilt formation
 
@@ -129,11 +154,27 @@ rmpc committee --config <CONFIG> vote-submit \
   --pretty
 ```
 
-Exit codes: 0 success, 2 refusal (fee-cap, broadcast), 3 startup failure
-(`AgentNotRegistered`, missing `ic_contract_address`).
+Exit codes: 0 success, 2 refusal (`ErrNotAllowlisted`, `ErrTxReverted`, fee
+cap, broadcast), 3 startup failure (`ErrIcContractNotConfigured` when
+`ic_policy_address` is missing, keystore, RPC).
 
-`AgentNotRegistered` is returned when the configured signer has not been
-allowlisted and registered in the IC policy contract.
+`ErrNotAllowlisted` is returned when the configured signer does not hold
+`COMMITTEE_AGENT_ROLE` on the IC policy contract. Run `check-agent` (below)
+first so that refusal happens before a transaction is signed.
+
+### committee check-agent
+
+```bash
+rmpc committee --config <CONFIG> check-agent [--agent <ADDR>] [--pretty]
+```
+
+Read-only. Reads `COMMITTEE_AGENT_ROLE()` and `hasRole(role, agent)` on
+`ic_policy_address` at one block, after checking the RPC serves the configured
+`chain_id`. `--agent` defaults to the keystore's cleartext `address`. Exit 0
+with `"has_role": true` when the role is held; exit 2 with `"has_role": false`
+and `"error": "ErrNotAllowlisted"` when it is not; exit 3 with an `error` name
+(`ErrRpcTransport`, `ErrChainIdMismatch`, `ErrIcContractNotConfigured`, ...)
+when the role could not be read. `check-preflight.sh` guard 3 is this command.
 
 ## Fetch helper (regime)
 
@@ -165,9 +206,10 @@ on invalid arguments.
 
 | Condition | Error code | On-chain write? |
 |-----------|-----------|----------------|
-| `ic_contract_address` absent from config | `MissingICConfig` | No |
-| Agent not registered in IC contract | `AgentNotRegistered` | No |
-| `rationale_uri` unreachable (HTTP error / timeout) | `RationaleURIUnreachable` | No |
+| `ic_policy_address` absent from config | `MissingICConfig` (exit 2) | No |
+| `rationale_uri` unreachable (HTTP error / timeout) | `RationaleURIUnreachable` (exit 3) | No |
+| Agent lacks `COMMITTEE_AGENT_ROLE` on the IC policy | `AgentNotRegistered` (exit 4) | No |
+| Role cannot be read (no rmpc, RPC down, wrong chain) | `AgentRoleUnreadable` (exit 5) | No |
 | Regime snapshot fetch fails | surfaced verbatim from fetch helper | No |
 | Vote JSON fails ajv schema validation | validation errors printed to stderr | No |
 

@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertOwnerExceptions } from "../src/plan.ts";
 import { UNPAUSE_ROWS } from "../src/govern.ts";
-import { releaseCalldata, checkVotedWeightsClears, checkVotedWeightsClearsOnChain, governedUpgradeProblems } from "../src/evidence-check.ts";
+import { releaseCalldata, checkVaultRedeploys, checkVaultRedeploysOnChain, checkVotedWeightsClears, checkVotedWeightsClearsOnChain, governedUpgradeProblems } from "../src/evidence-check.ts";
+import { buildRedeployCalls } from "../src/redeploy-vault.ts";
 import { clearCalldata } from "../src/clear-voted-weights.ts";
 import { VAULT_RULES } from "../src/vault-rules.ts";
 import { keccak256 } from "viem";
@@ -648,6 +649,73 @@ describe("issue 1701: --delay-floor cannot go under the 8453 floor when --rpc re
     expect(delayFloorArgProblem(899, 8453, "rehearsal")).toContain("below the chain 8453 floor 900 s");
     // not a positive integer: refused everywhere
     for (const f of [0, -1, 1.5, Number.NaN]) expect(delayFloorArgProblem(f, 918453, "production")).toContain("positive number of seconds");
+  });
+});
+
+describe("vault_redeploys: new_vault is the contract the deploy created (QA plan v1 C2, issue 1701)", () => {
+  const DEPLOYER = a(20), OLD = a(6) as Hex, NEW = a(0x3012), REG = a(21) as Hex, ROUTER = a(40) as Hex, ASSET = a(0xc0de) as Hex;
+  const FINAL = [a(5), NEW, a(7), a(8)], BPS4 = [8550, 525, 575, 350];
+  const entry = (): any => ({
+    step: "redeploy-vault", vault: "rmPROTO", key: "PROTO", ordinal: 1, status: "governed", old_vault: OLD, new_vault: NEW, registry: REG, router: ROUTER, timelock: tl, deployer: DEPLOYER, core_sha: "ab".repeat(20),
+    deploy_start_nonce: 40, deploy_end_nonce: 42, deploy_count: 2, deploy_tx_hashes: [h(0x501), h(0x502)], deploy_receipt_statuses: [1, 1], registry_name: "Robot Money Protocol", asset: ASSET,
+    vaults: FINAL, bps: BPS4, router_vault_cap: "250000000", voted_weights_active: false, effective_vaults: FINAL, effective_bps: BPS4, old_vault_status: "Retired", new_vault_status: "Active",
+    operation_id: h(0x577), schedule_tx: h(0x510), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(0x511), execute_status: 1, execute_block_timestamp: T0 + 900,
+  });
+  const ev = (r: any, over: object = {}) => ({ deployment_kind: "rehearsal", registry: { address: REG }, timelock: { address: tl }, vaults: { rmPROTO: { address: NEW } }, vault_redeploys: [r], ...over });
+  /** The chain the entry describes: deploy tx 0 is a CREATE of `created` by `creator`, deploy tx 1 a call, then the batch for the ENTRY's vaults and cap, one delay apart. */
+  const chainOf = (r: any, o: { created?: string; creator?: string } = {}): ChainReader => {
+    const want = buildRedeployCalls({ router: ROUTER, routerVaultCap: BigInt(r.router_vault_cap), registry: REG, oldVault: OLD, newVault: r.new_vault, registryName: r.registry_name, asset: ASSET, finalVaults: r.vaults, finalBps: r.bps });
+    const receipts = new Map<string, any>(); const blocks = new Map<bigint, number>(); let bn = 1n;
+    const add = (hash: string, logs: any[], ts: number, extra: object = {}) => { receipts.set(hash, { status: "success", blockNumber: bn, logs, ...extra }); blocks.set(bn++, ts); };
+    add(r.deploy_tx_hashes[0], [], 1, { from: o.creator ?? DEPLOYER, contractAddress: o.created ?? NEW });
+    add(r.deploy_tx_hashes[1], [], 1, { from: DEPLOYER, contractAddress: null });
+    add(r.schedule_tx, want.map((c, i) => log("CallScheduled", 0x577, 900n, c.target, c.data, BigInt(i))), T0);
+    add(r.execute_tx, want.map((c, i) => log("CallExecuted", 0x577, 0n, c.target, c.data, BigInt(i))), T0 + 900);
+    return {
+      getChainId: async () => 918453, getTransactionCount: async () => 0,
+      getTransactionReceipt: async ({ hash }) => { const x = receipts.get(hash); if (!x) throw new Error("not found"); return x; },
+      getBlock: async ({ blockNumber }) => ({ timestamp: BigInt(blocks.get(blockNumber)!) }),
+      readContract: async () => { throw new Error("unused"); },
+    };
+  };
+  test("an entry whose new_vault is the deployer's CREATE passes the offline and the chain check", async () => {
+    expect(checkVaultRedeploys(ev(entry()), 900)).toEqual([]);
+    expect(await checkVaultRedeploysOnChain(ev(entry()), chainOf(entry()), 900)).toEqual([]);
+  });
+  test("vault_redeploys entry whose new_vault is not the created contract is refused", async () => {
+    const e = entry();
+    // the Safe ran a batch for NEW (the entry and the batch agree), but no recorded deploy transaction created NEW: the deploy created another contract
+    const p = (await checkVaultRedeploysOnChain(ev(e), chainOf(e, { created: a(0x3013) }), 900)).join("\n");
+    expect(p).toContain(`new_vault ${NEW} is not the contract a recorded deploy transaction created`);
+    expect(p).toContain(a(0x3013));
+    // NEW was created, but by another sender than the run's deployer
+    expect((await checkVaultRedeploysOnChain(ev(e), chainOf(e, { creator: a(0xbad) }), 900)).join("\n")).toContain("not by the deployer");
+    // offline: the entry's deployer must be the run's deployer when the evidence names one
+    expect(checkVaultRedeploys(ev(e, { deployer: a(0xbad) }), 900).join("\n")).toContain("is not the run's deployer");
+    expect(checkVaultRedeploys(ev(e, { deployer: DEPLOYER }), 900)).toEqual([]);
+  });
+});
+
+describe("vault_redeploys: the verify of a round at another sha is recorded (QA plan v1 E1)", () => {
+  const SHA_A = "ab".repeat(20), SHA_B = "cd".repeat(20);
+  const OLD = a(6), NEW = a(0x3012);
+  const FINAL = [a(5), NEW, a(7), a(8)], BPS4 = [8550, 525, 575, 350];
+  const entry = (over: object = {}): any => ({
+    step: "redeploy-vault", vault: "rmPROTO", key: "PROTO", ordinal: 1, status: "governed", old_vault: OLD, new_vault: NEW, registry: a(21), router: a(40), timelock: tl, deployer: a(20), core_sha: SHA_A,
+    deploy_count: 1, deploy_tx_hashes: [h(0x501)], deploy_receipt_statuses: [1], registry_name: "Robot Money Protocol", asset: a(0xc0de),
+    vaults: FINAL, bps: BPS4, router_vault_cap: "250000000", voted_weights_active: false, effective_vaults: FINAL, effective_bps: BPS4, old_vault_status: "Retired", new_vault_status: "Active",
+    operation_id: h(0x577), schedule_tx: h(0x510), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(0x511), execute_status: 1, execute_block_timestamp: T0 + 900, ...over,
+  });
+  const ev = (r: any) => ({ deployment_kind: "rehearsal", core_sha: SHA_A, registry: { address: a(21) }, timelock: { address: tl }, vaults: { rmPROTO: { address: NEW } }, vault_redeploys: [r] });
+  test("a round at the deployment's sha needs neither field; one written alone is refused", () => {
+    expect(checkVaultRedeploys(ev(entry()), 900)).toEqual([]);
+    expect(checkVaultRedeploys(ev(entry({ prior_out_sha: SHA_A })), 900).join("\n")).toContain("written together");
+  });
+  test("a round at another sha needs the verify at that sha with --prior-out of the deployment's sha", () => {
+    expect(checkVaultRedeploys(ev(entry({ core_sha: SHA_B })), 900).join("\n")).toContain("prior_out_sha is missing");
+    expect(checkVaultRedeploys(ev(entry({ core_sha: SHA_B, prior_out_sha: SHA_A, verified_at_sha: SHA_B })), 900)).toEqual([]);
+    expect(checkVaultRedeploys(ev(entry({ core_sha: SHA_B, prior_out_sha: SHA_B, verified_at_sha: SHA_B })), 900).join("\n")).toContain("is not the evidence core_sha");
+    expect(checkVaultRedeploys(ev(entry({ core_sha: SHA_B, prior_out_sha: SHA_A, verified_at_sha: SHA_A })), 900).join("\n")).toContain(`verified_at_sha ${SHA_A} is not ${SHA_B}`);
   });
 });
 

@@ -6,13 +6,18 @@
 # macos/arm64) and attaching the resulting tar.gz archives as GitHub Release assets
 # makes distribution frictionless — no Rust toolchain required.
 #
-# WHY BUILD BEFORE TAGGING
-# The publish step only runs after every matrix build succeeds. If any target fails
-# we never push a tag and never create a Release, so we never end up with an orphan
-# tag pointing at a commit whose binaries can't be produced.
+# WHY A RELEASE IS A TAG PUSH AND NOTHING ELSE
+# A release is cut by pushing an `rmpc-vX.Y.Z` tag. The `protect-rmpc-release-tags`
+# ruleset lets only organization admins create that ref, and the tag-push run is the
+# ONLY run that attests build provenance (see the attest step). install-rmpc.sh
+# accepts an archive only with an attestation whose source ref is the tag it
+# installs and whose trigger is `push`. A dispatched run used to release too, and it
+# attested on every run, dry runs and branch dispatches included: any writer could
+# dispatch it on a branch with `commit_hash` set to a trojan and get a genuine
+# Sigstore attestation for those bytes, then swap them into a release with
+# `contents: write`. So workflow_dispatch is now a dry run only and never attests.
 #
 # WHY verify-version RUNS BEFORE build AND NOT INSIDE IT
-# That invariant only holds for the workflow_dispatch path, where WE create the tag.
 # On the `push: tags` trigger the tag already exists when the build starts, so any
 # check that can fail on tag CONTENT must run before it can strand that tag. It also
 # has to precede the matrix because `fail-fast: false` lets the surviving legs upload
@@ -20,15 +25,21 @@
 # verify-version (issue #1191) is exactly such a check — manifest version vs tag —
 # so it is a job-level precondition, not a build step. See its own comment block.
 #
-# WHY CROSS FOR ARM TARGETS
-# GitHub-hosted runners are x86_64 only. arm64 cross-compilation is handled by the
-# cross-rs/cross action which wraps cargo in a Docker container with the appropriate
-# sysroot. aarch64-apple-darwin builds natively on macos-latest (M1 runners).
+# WHY arm64 LINUX BUILDS ON A NATIVE ARM RUNNER, NOT WITH cross
+# The aarch64-unknown-linux-gnu leg used to run `cross build`, which links inside
+# the Docker image ghcr.io/cross-rs/aarch64-unknown-linux-gnu:<cross version>. That
+# is a tag, not a digest, so whoever can move it upstream chooses the linker and
+# sysroot that produce the binary, inside the job that attests it. So the leg now
+# builds natively on the GitHub-hosted `ubuntu-24.04-arm` runner (free for public
+# repositories) with the same cargo and the same steps as x86_64, and no
+# container. audit_workflow_run_splice_and_perms.py refuses a `cross` build in an
+# attesting job unless Cross.toml pins that target's image by @sha256 digest.
+# aarch64-apple-darwin builds natively on macos-latest (M1 runners).
 #
 # WHY WE STRIP BINARIES
-# Rust debug symbols roughly double binary size. strip removes them. Native targets
-# use the host strip; the aarch64 Linux cross build needs aarch64-linux-gnu-strip
-# from binutils-aarch64-linux-gnu because host x86_64 strip can't read ARM64 ELF.
+# Rust debug symbols roughly double binary size. strip removes them. Every target
+# builds on a runner of its own architecture, so the host strip reads its ELF or
+# Mach-O.
 #
 # WHY THE TAG NAMESPACE IS `rmpc-v*` AND NOT `v*` (issue #1243)
 # This workflow used to trigger on `v*.*.*` — the SAME namespace release-dapp.yml
@@ -57,16 +68,29 @@
 # opening the patch-bump PR automatically. See docs/development/releasing.md.
 #
 # DISPATCH MODES
-# - workflow_dispatch + tag=rmpc-vX.Y.Z -> build all targets, then tag + publish Release
-# - workflow_dispatch + dry_run=true -> build all targets, upload as workflow
-#                                       artifacts only (no tag, no Release). Use to
-#                                       validate the workflow from any branch.
-# - push: tags rmpc-v*.*.*          -> build all targets, attach to the existing tag
+# - push: tags rmpc-v*.*.*          -> build all targets, attest, publish the Release
+#                                       on the existing tag. The only release path.
+# - workflow_dispatch (dry_run=true) -> build all targets from the dispatched
+#                                       ref's HEAD, upload as workflow artifacts
+#                                       only (no attestation, no tag, no Release).
+#                                       Use to validate the workflow from any
+#                                       branch. dry_run=false is refused, and there
+#                                       is no commit_hash input: see "WHY THE
+#                                       ATTESTING JOB RESTORES NO CACHE".
 #
 # GOTCHAS
-# - dtolnay/rust-toolchain@stable is the pinned toolchain action already used in suite-04.
-# - cross-rs/cross requires Docker; ubuntu-latest runners include Docker by default.
-# - commit_hash may be a short or full SHA; the resolve job expands it.
+# - Every `uses:` is pinned to a full commit SHA with its version in a comment. The
+#   build job holds id-token: write and attestations: write, and publish holds
+#   contents: write, so a moved upstream tag would run inside the job that signs or
+#   publishes the archive. audit_workflow_run_splice_and_perms.py refuses an
+#   unpinned `uses:` in any job that holds a write scope. Bump a pin by resolving
+#   the new release tag to its commit (git ls-remote --tags <action repo>).
+# - dtolnay/rust-toolchain is pinned to a commit of its master branch, so the
+#   toolchain is named by the `toolchain:` input rather than by a branch ref.
+# - The build job uses no Actions cache (no rust-cache, no actions/cache). Its
+#   restore keys hold no ref, so a cache another run saved would be linked into
+#   the binary the tag push attests. audit_workflow_run_splice_and_perms.py
+#   refuses any cache step in a job that runs attest-build-provenance.
 
 name: release-rmpc
 
@@ -76,26 +100,24 @@ on:
       # rmpc's own namespace. `v*.*.*` belongs to release-dapp.yml — see the
       # "WHY THE TAG NAMESPACE IS `rmpc-v*`" block above.
       - "rmpc-v*.*.*"
+  # A dry run only (see "WHY A RELEASE IS A TAG PUSH AND NOTHING ELSE"). There is no
+  # `tag` input: a release is the push of an admin-created rmpc-vX.Y.Z tag. There is
+  # no `commit_hash` input either: a dry run builds the dispatched ref's HEAD, so it
+  # cannot run an unreviewed commit under dev's or a release tag's identity and
+  # cache scope (see "WHY THE ATTESTING JOB RESTORES NO CACHE" on the build job).
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Git tag to create on success (e.g. rmpc-v0.4.0). Required unless dry_run=true."
-        required: false
-        type: string
-      commit_hash:
-        description: "Commit SHA (short or full) to build from. Defaults to the dispatched ref's HEAD."
-        required: false
-        type: string
       dry_run:
-        description: "Build all targets and upload as workflow artifacts only — no tag, no GitHub Release."
+        description: "Must stay true: a dispatched run builds and uploads workflow artifacts only. Releases are cut by pushing an rmpc-vX.Y.Z tag."
         required: false
         type: boolean
-        default: false
+        default: true
 
 # WHY THE DEFAULT IS READ AND WRITE IS GRANTED PER JOB (issue #1237)
 # `contents: write` used to be declared here, at workflow scope, so EVERY job
 # inherited it — including the `build` matrix, which never needs it. That matrix
-# checks out `submodules: recursive` at a caller-supplied SHA and runs
+# checks out `submodules: recursive` at a caller-chosen commit (a dispatch runs
+# any branch a writer pushes) and runs
 # `cargo build`, which executes `build.rs` and proc-macro code out of that tree.
 # The token is in the job's environment the whole time. "Can dispatch a release"
 # therefore silently meant "can run arbitrary code with a repo-write token", for
@@ -136,8 +158,7 @@ env:
 jobs:
   resolve:
     name: resolve-inputs
-    # Reads the repo (full-history checkout to expand a short commit_hash) and
-    # writes nothing.
+    # Reads the run's own event (no checkout) and writes nothing.
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -148,103 +169,74 @@ jobs:
       # Every `${{ }}` below is read through step-level `env:`, never interpolated
       # into shell source. An expression spliced into a `run:` body is substituted
       # into the shell SOURCE before bash ever parses it, so quoting at the call
-      # site does not help — an actor with only `actions: write` could dispatch a
-      # tag like `v1$(...)` and reach code execution on the runner. Via `env:` the
-      # value arrives as data in a variable and is never parsed as shell.
-      # This job no longer holds `contents: write` (see the permissions block
-      # above), but the sink is the runner, not the token: the guard stands on its
-      # own. install-rmpc-selftest.sh extracts this step and RUNS it against a
-      # `$(...)` payload and a newline payload, and separately refuses any `${{ }}`
-      # other than `matrix.*` anywhere in a `run:` body in this file.
+      # site does not help — a value like `rmpc-v1$(...)` would reach code
+      # execution on the runner. Via `env:` the value arrives as data in a
+      # variable and is never parsed as shell.
+      # This job holds no write scope (see the permissions block above), but the
+      # sink is the runner, not the token: the guard stands on its own.
+      # install-rmpc-selftest.sh extracts this step and RUNS it: a non-dry-run
+      # dispatch must be refused, a dry run accepted, and a pushed tag carrying a
+      # `$(...)` payload or a newline refused without running. It separately
+      # refuses any `${{ }}` other than `matrix.*` anywhere in a `run:` body here.
       - name: Validate inputs
         env:
           EVENT_NAME: ${{ github.event_name }}
           DRY_RUN: ${{ inputs.dry_run }}
-          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if [ "${EVENT_NAME:-}" != "workflow_dispatch" ]; then
+          # A dispatched run is a dry run, never a release. Only the push of an
+          # admin-created rmpc-vX.Y.Z tag attests build provenance, and
+          # install-rmpc.sh refuses any archive whose attestation was not minted
+          # by the push of the tag it installs. A dispatch that published would
+          # therefore ship archives no operator can install, and a dispatch that
+          # attested would let any writer mint a genuine attestation for a
+          # trojan commit (see "WHY A RELEASE IS A TAG PUSH AND NOTHING ELSE").
+          if [ "${EVENT_NAME:-}" = "workflow_dispatch" ]; then
+            if [ "${DRY_RUN:-}" != "true" ]; then
+              echo "::error::a dispatched release-rmpc run is a dry run only; dry_run=false is refused. Cut a release by pushing an rmpc-vX.Y.Z tag (admin-only ruleset): that run alone attests build provenance, and install-rmpc.sh accepts only an attestation minted by the push of the tag it installs. See docs/development/releasing.md."
+              exit 1
+            fi
             exit 0
           fi
 
-          if [ "${DRY_RUN:-}" != "true" ] && [ -z "${INPUT_TAG:-}" ]; then
-            echo "::error::tag input is required when dry_run is false"
+          # push: tags rmpc-v*.*.* — shape-check the tag before anything
+          # consumes it. The trigger's glob admits `rmpc-vX.Y.Z` with anything in
+          # the X/Y/Z positions, and the tag reaches the archive filenames, the
+          # Release name, the version assertion and $GITHUB_OUTPUT. Deliberately
+          # bash's `[[ =~ ]]` and not `grep -E`: grep matches LINE-wise, so
+          # `rmpc-v1.2.3\nanything` would satisfy `^…$` on its first line and
+          # pass. bash anchors against the whole string, so an embedded newline
+          # fails the match — which is precisely the case that matters. The
+          # `rmpc-` prefix is REQUIRED (issue #1243): bare `vX.Y.Z` belongs to
+          # release-dapp.yml.
+          if [[ ! "${REF_NAME:-}" =~ ^rmpc-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tag '${REF_NAME:-}' is not an rmpc release tag. Expected rmpc-vX.Y.Z or rmpc-vX.Y.Z-prerelease. The bare 'vX.Y.Z' namespace belongs to release-dapp.yml (issue #1243)."
             exit 1
           fi
-
-          # dry_run=true AND a tag is refused, not silently reconciled.
-          # Both version assertions (verify-version, and the build's
-          # --version smoke-test) are keyed on the dispatch MODE, so they
-          # SKIP under dry_run. Combine that with an explicit tag and the
-          # run resolves VERSION to that tag, names four archives
-          # `rmpc-vX.Y.Z-*.tar.gz`, and uploads them to the 7-day
-          # workflow-artifact channel — readable by anyone with repo read —
-          # with the manifest never checked against the tag even once. The
-          # archives are then indistinguishable by name from the real
-          # release's, which is precisely the confusion issue #1191 is
-          # about. dry_run is a MODE, so it is authoritative: under it the
-          # version is always `dryrun-<sha7>` (see `Resolve sha + version`)
-          # and there is nothing for a tag to name.
-          if [ "${DRY_RUN:-}" = "true" ] && [ -n "${INPUT_TAG:-}" ]; then
-            echo "::error::dry_run=true cannot be combined with tag='${INPUT_TAG}'. A dry run publishes nothing, so its archives are always named dryrun-<sha7> and its version assertions do not run; naming a release tag here would upload release-named archives whose version was never verified. Drop the tag to dry-run, or set dry_run=false to release '${INPUT_TAG}'."
-            exit 1
-          fi
-
-          # Shape-check the tag before anything consumes it. `inputs.tag` reaches
-          # `git tag`, the archive filenames, the Release name and the version
-          # assertion; constraining it once here is the cheapest mitigation for
-          # all of those sinks at the same time. It also forecloses a tag whose
-          # value carries a newline, which would otherwise inject a second
-          # `version=` line into $GITHUB_OUTPUT below and let the version we
-          # VERIFY differ from the version we RELEASE.
-          # Deliberately bash's `[[ =~ ]]` and not `grep -E`: grep matches
-          # LINE-wise, so `v1.2.3\nanything` would satisfy `^…$` on its first
-          # line and pass. bash anchors against the whole string, so an embedded
-          # newline fails the match — which is precisely the case that matters.
-          # The `rmpc-` prefix is REQUIRED, not optional (issue #1243). A bare
-          # `vX.Y.Z` here would publish into release-dapp.yml's namespace, where
-          # this workflow cannot own the tag and the recovery advice below would
-          # tell an operator to delete somebody else's Release.
-          if [ -n "${INPUT_TAG:-}" ]; then
-            if [[ ! "${INPUT_TAG}" =~ ^rmpc-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-              echo "::error::tag input '${INPUT_TAG}' is not an rmpc release tag. Expected rmpc-vX.Y.Z or rmpc-vX.Y.Z-prerelease. The bare 'vX.Y.Z' namespace belongs to release-dapp.yml (issue #1243)."
-              exit 1
-            fi
-          fi
-
-      - name: Checkout (full history)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Resolve sha + version
         id: r
         env:
-          INPUT_COMMIT_HASH: ${{ inputs.commit_hash }}
-          INPUT_TAG: ${{ inputs.tag }}
           DRY_RUN: ${{ inputs.dry_run }}
           GITHUB_SHA_IN: ${{ github.sha }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if [ -n "${INPUT_COMMIT_HASH:-}" ]; then
-            SHA=$(git rev-parse "${INPUT_COMMIT_HASH}^{commit}")
-          else
-            SHA="${GITHUB_SHA_IN:-}"
-          fi
+          # The run's own commit: the pushed tag's commit, or the dispatched ref's
+          # HEAD. There is no caller-supplied commit (see the dispatch inputs).
+          SHA="${GITHUB_SHA_IN:-}"
 
           # dry_run is checked FIRST and wins over every other source of a
-          # version. `Validate inputs` already refuses dry_run=true together
-          # with a tag, so this branch should be unreachable — it is here so the
-          # invariant "a dry run is never named after a release" is a property of
-          # the step that RESOLVES the name, not a consequence of an earlier
-          # step's ordering. Everything downstream (archive filenames, the
-          # mode-keyed version assertions, publish's `if:`) reads this one value.
+          # version, so "a dry run is never named after a release" is a property
+          # of the step that RESOLVES the name. A release version comes only from
+          # the pushed tag: `Validate inputs` refuses every dispatch that is not
+          # a dry run, and there is no `tag` input. Everything downstream
+          # (archive filenames, the mode-keyed version assertions) reads this one
+          # value.
           if [ "${DRY_RUN:-}" = "true" ]; then
             VERSION="dryrun-$(echo "${SHA}" | cut -c1-7)"
-          elif [ -n "${INPUT_TAG:-}" ]; then
-            VERSION="${INPUT_TAG}"
           elif [ "${REF_TYPE:-}" = "tag" ]; then
             VERSION="${REF_NAME}"
           else
@@ -253,9 +245,8 @@ jobs:
 
           # $GITHUB_OUTPUT is a `key=value` file with no delimiter of its own, so
           # a value carrying a newline writes a SECOND key and silently wins.
-          # `Validate inputs` rejects such a tag on the dispatch path; this is the
-          # same guarantee for the push-tags path, where the value comes from
-          # github.ref_name rather than from inputs.
+          # `Validate inputs` already refuses such a tag; this guarantee belongs
+          # to the step that writes the file, so it stands on its own.
           for v in "${SHA}" "${VERSION}"; do
             if [ "$(printf '%s' "${v}" | wc -l)" -ne 0 ]; then
               echo "::error::resolved value contains a newline and cannot be written to \$GITHUB_OUTPUT"
@@ -292,7 +283,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.resolve.outputs.sha }}
 
@@ -365,6 +356,21 @@ jobs:
     # a workflow-level write to drop — it states the two attestation scopes this
     # job needs, alongside the `contents: read` a checkout requires. `publish` and
     # `bump-manifest` declare the write scopes they need in their own maps.
+    #
+    # WHY THE ATTESTING JOB RESTORES NO CACHE
+    # This job used to run Swatinem/rust-cache on every trigger. Its key is
+    # v0-rust-<job>-<os>-<arch>-<env hash>-<Cargo.toml/Cargo.lock hash>, with no ref
+    # and no trigger in it, it caches target/ and CARGO_HOME, and a tag-push run
+    # restores from its own ref and from dev. A writer could dispatch a dry run on
+    # dev at a commit whose build.rs rewrote a dependency rlib, let the post step
+    # save that target/ under the exact key the next release computes, and the
+    # admin's tag push would restore it, treat the rlib as fresh, link it, and
+    # attest the result as a push of refs/tags/rmpc-vX.Y.Z. So this job restores
+    # and saves no Actions cache at all, on any trigger, and the dispatch takes no
+    # commit_hash. A release build costs a few more minutes. Do not add a cache
+    # step here: audit_workflow_run_splice_and_perms.py refuses any cache step in
+    # a job that runs attest-build-provenance, and install-rmpc-selftest.sh
+    # asserts this job has none.
     permissions:
       contents: read
       id-token: write
@@ -375,69 +381,44 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
-            cross: false
             os_label: linux-amd64
 
+          # Native, not `cross`: see "WHY arm64 LINUX BUILDS ON A NATIVE ARM RUNNER".
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-latest
-            cross: true
+            runner: ubuntu-24.04-arm
             os_label: linux-arm64
 
           - target: x86_64-apple-darwin
             runner: macos-latest
-            cross: false
             os_label: macos-amd64
 
           - target: aarch64-apple-darwin
             runner: macos-latest
-            cross: false
             os_label: macos-arm64
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.resolve.outputs.sha }}
           submodules: recursive
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, toolchain named below
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
-      - name: Install cross (Linux ARM only)
-        if: matrix.cross
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cross
-
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build (native)
-        if: "!matrix.cross"
+      # No cache step: see "WHY THE ATTESTING JOB RESTORES NO CACHE" above.
+      - name: Build
         run: |
           cargo build --release --target ${{ matrix.target }} \
             --package rust-payment-client \
             --bin rmpc
 
-      - name: Build (cross — arm64 Linux)
-        if: matrix.cross
-        run: |
-          cross build --release --target ${{ matrix.target }} \
-            --package rust-payment-client \
-            --bin rmpc
-
-      - name: Strip binary (Linux native)
-        if: runner.os == 'Linux' && !matrix.cross
+      - name: Strip binary (Linux)
+        if: runner.os == 'Linux'
         run: strip target/${{ matrix.target }}/release/rmpc
-
-      - name: Strip binary (Linux aarch64 cross)
-        if: runner.os == 'Linux' && matrix.cross && matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y binutils-aarch64-linux-gnu
-          aarch64-linux-gnu-strip target/${{ matrix.target }}/release/rmpc
 
       - name: Strip binary (macOS)
         if: runner.os == 'macOS'
@@ -533,22 +514,34 @@ jobs:
       # nothing here changes what the Release holds.
       #
       # The consuming half is `gh attestation verify` in
-      # scripts/release/install-rmpc.sh, pinned to this repository AND this
-      # workflow path. scripts/release/install-rmpc-selftest.sh asserts on every
-      # PR that the installer refuses an archive whose attestation does not
-      # verify, and that this job still grants the two scopes above.
+      # scripts/release/install-rmpc.sh, pinned to this repository, this
+      # workflow path, the source ref `refs/tags/<tag>` and the `push` trigger.
+      # scripts/release/install-rmpc-selftest.sh asserts on every PR that the
+      # installer refuses an archive whose attestation does not verify, and that
+      # this job still grants the two scopes above.
       #
-      # What this does NOT prove: that the commit was reviewed. An attacker who
-      # can push a ref here can trigger this workflow and get a genuine
-      # attestation for it. Ref protection on `rmpc-v*` and review on this file
-      # are the other half, and they live in repository settings.
+      # WHY ONLY A TAG PUSH ATTESTS. Every run of this job used to attest: a dry
+      # run, and a dispatch on any branch with any `commit_hash`. Any writer could
+      # dispatch on a branch whose copy of this file they had edited, get a
+      # genuine attestation over a trojan archive, and swap that archive into an
+      # existing Release with `contents: write`; the `rmpc-v*` tag ruleset guards
+      # refs, not release assets. So the step runs only for the push of an
+      # `rmpc-v*` tag, which only an org admin can create, and the installer
+      # pins the same two facts from the certificate (source ref, trigger), so an
+      # attestation minted any other way, by any copy of this file, is refused.
+      # audit_workflow_run_splice_and_perms.py refuses an attest step without
+      # exactly this condition.
+      #
+      # What this does NOT prove: that the tagged commit was reviewed. The admin
+      # who pushes the tag vouches for that commit.
       - name: Attest build provenance for the archive
-        uses: actions/attest-build-provenance@v4
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rmpc-v')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: ${{ env.ARCHIVE }}
 
       - name: Upload archive as workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ env.ARCHIVE }}
           path: |
@@ -559,22 +552,24 @@ jobs:
 
   publish:
     name: tag-and-publish
-    # The only job that writes: `git push origin <tag>` and the Release created
-    # by softprops/action-gh-release. It runs no code from the built tree — it
-    # downloads the matrix's artifacts and attaches them.
+    # Writes the Release created by softprops/action-gh-release on the tag an
+    # admin pushed. It runs no code from the built tree — it downloads the
+    # matrix's artifacts and attaches them. A tag push is the only release path
+    # (see "WHY A RELEASE IS A TAG PUSH AND NOTHING ELSE"), so a dispatched run
+    # never reaches this job.
     permissions:
       contents: write
     needs: [resolve, build]
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rmpc-v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.resolve.outputs.sha }}
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
           merge-multiple: true
@@ -611,24 +606,12 @@ jobs:
           done
           echo "all ${#archives[@]} archives ship a matching .sha256"
 
-      # Both the tag and the Release read `needs.resolve.outputs.version`, the
-      # SAME value verify-version checked. Reading `inputs.tag` here instead was
-      # a second, independent read of the same nominal value: whatever
-      # verify-version validated, this step could still tag something else.
-      # One value is resolved once, validated once, and released.
-      - name: Create and push git tag (workflow_dispatch only)
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          VERSION: ${{ needs.resolve.outputs.version }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${VERSION}"
-          git push origin "${VERSION}"
-
+      # The Release reads `needs.resolve.outputs.version`, the SAME value
+      # verify-version checked: one value is resolved once, validated once, and
+      # released. The tag already exists (an admin pushed it), so nothing here
+      # creates a ref.
       - name: Create GitHub Release with all assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ needs.resolve.outputs.version }}
           files: |
@@ -660,14 +643,14 @@ jobs:
   bump-manifest:
     name: open-post-release-bump-pr
     needs: [resolve, publish]
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rmpc-v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
     steps:
       - name: Checkout dev
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: dev
           fetch-depth: 0

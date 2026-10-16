@@ -5,7 +5,7 @@ description: "Fork test on the Twin chain (a pinned lazy anvil fork of real Base
 
 # V4RecorderSamplingEconomicsForkTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e8e9c95cd6a04c99e0e7a2a57be04cec1176835/contracts/test/V4RecorderSamplingEconomicsFork.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/V4RecorderSamplingEconomicsFork.t.sol)
 
 **Inherits:** Test
 
@@ -26,24 +26,6 @@ inside the number. The fork has no arbitrageurs, so every cost here is a LOWER b
 
 ```solidity
 address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
-```
-
-### VAULT
-
-```solidity
-address internal constant VAULT = 0x22bD48C56c34A2C1C1baC77BD7c4E636a6f10D57;
-```
-
-### RECORDER
-
-```solidity
-address internal constant RECORDER = 0x0aDc14e6521aF213F9DCe5585D530f237831E934;
-```
-
-### ADAPTER
-
-```solidity
-address internal constant ADAPTER = 0xC1e35f6281bE5B58f0A0E7Ed012D444D4cf72030;
 ```
 
 ### KEEPER_INTERVAL
@@ -84,22 +66,47 @@ uint256 internal constant HOLDER_TVL = 80e6;
 
 ## State Variables
 
+### vaultAddr
+
+<i>
+
+Deploy 2 rmAGENT vault, recorder and V4 adapter. Read in `setUp` from the committed manifests in
+`deployments/8453/deploy-2` (the production-address gate, core 1498, forbids hard-coding them).
+
+</i>
+
+```solidity
+address internal vaultAddr;
+```
+
+### recorderAddr
+
+```solidity
+address internal recorderAddr;
+```
+
+### adapterAddr
+
+```solidity
+address internal adapterAddr;
+```
+
 ### vault
 
 ```solidity
-BasketVault internal vault = BasketVault(VAULT);
+BasketVault internal vault;
 ```
 
 ### rec
 
 ```solidity
-UniswapV4PriceRecorder internal rec = UniswapV4PriceRecorder(RECORDER);
+UniswapV4PriceRecorder internal rec;
 ```
 
 ### adapter
 
 ```solidity
-UniswapV4SwapAdapter internal adapter = UniswapV4SwapAdapter(ADAPTER);
+UniswapV4SwapAdapter internal adapter;
 ```
 
 ### rm

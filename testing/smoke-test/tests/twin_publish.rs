@@ -3,7 +3,8 @@
 //! One test boots the Twin chain (918453) through the harness. The harness has already called
 //! `publish` (deploy all four vaults, real Safe handover). This test then asserts the four
 //! manifests, runs the one verifier (which holds the router, basket and timelock role proofs), runs the stage 13 govern matrix through the real Safe,
-//! and runs the verifier again (the order is publish, verify, govern, verify: issue 1667).
+//! runs the verifier again (the order is publish, verify, govern, verify: issue 1667), then one Safe self-administration row on the real SafeL2
+//! (`govern --row safe-change-threshold` raised to the owner count and restored to the sheet's value: QA plan v1 B5, finding T5).
 //! The verifier output (SMOKE_TEST_VERIFY_OUT) and the run sheet (SMOKE_TEST_SHEET_OUT) are saved for the
 //! parity step in suite 14. Every govern row must carry a tx hash and receipt status 1 (checked by `govern_matrix`).
 //!
@@ -97,6 +98,8 @@ fn twin_chain_publish_verify_and_govern_matrix() {
             "navDeviationGuardBps equals sheet",
             "navDeviationGuardBps above zero",
             "pool liquidity meets the sheet floor",
+            // QA plan v1 D7: present before govern too (a paused basket passes it); after govern it needs the set-unwind-guard rounds below
+            "emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault",
         ] {
             let label = format!("vault[{vault}]: {what}");
             assert!(
@@ -258,6 +261,34 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         );
     }
 
+    // QA plan v1 D7: the verifier requires a non-zero emergency unwind guard on every active asset of an OPEN basket. The Safe sets it through the real timelock,
+    // one `govern --row set-unwind-guard` round per basket (token=all), as the twin-publish step does, before the post-govern verify. The baskets hold nothing yet:
+    // these values prove the row and the label on the real contracts, not a sizing (on 8453 the operator sizes min-usdc-out from each vault's holding).
+    for basket in ["PROTO", "AGENT", "RWA"] {
+        let vault_arg = format!("vault={basket}");
+        let guarded = fx
+            .published()
+            .govern(
+                "set-unwind-guard",
+                &[
+                    "--admin-arg",
+                    vault_arg.as_str(),
+                    "--admin-arg",
+                    "token=all",
+                    "--admin-arg",
+                    "min-usdc-out=1000000",
+                    "--admin-arg",
+                    "max-loss-bps=500",
+                ],
+            )
+            .expect("the Safe sets the basket's emergency unwind guard through the real timelock");
+        assert_eq!(
+            guarded.iter().map(|r| r.row.as_str()).collect::<Vec<_>>(),
+            vec!["set-unwind-guard", "set-unwind-guard"],
+            "one scheduled and one executed line for the {basket} guard"
+        );
+    }
+
     // Issue 1667: the order is publish, verify, govern, verify. The first verify above passed before govern (all four vaults paused). This second verify reads the
     // post-govern state: the unpause rows are executed, so the verifier expects those vaults open. The Twin run only checks that the scripts execute in this
     // order. The 48 hour delay and the Safe signers are proven on chain 8453 through the real Safe.
@@ -274,6 +305,77 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         labels(&verified),
         labels(&verified_after),
         "the verifier ran the same checks before and after govern"
+    );
+
+    // QA plan v1 B5 (finding T5, issue 1645): one Safe self-administration row on the REAL SafeL2, not only against the fake Safe of govern.test.ts. The matrix
+    // raises the threshold to the owner count (so the next Safe transaction needs every owner's signature), then restores the sheet's threshold: that transaction
+    // carries all three signatures and runs while the sheet is stale (the self-administration exemption). The restore keeps the rest of this test honest: the
+    // verifier's Safe threshold label and every later row compare the live roster with the sheet, and a sheet cannot carry a threshold equal to the owner count.
+    let safe_threshold = || -> u64 {
+        u64::from_str_radix(
+            &word(
+                &fx.cast_call_raw(fx.safe(), "getThreshold()", &[])
+                    .expect("read the Safe threshold"),
+                0,
+            ),
+            16,
+        )
+        .expect("Safe threshold")
+    };
+    // getOwners() returns address[]: the offset word, then the length word, then the owners.
+    let owner_count = u64::from_str_radix(
+        &word(
+            &fx.cast_call_raw(fx.safe(), "getOwners()", &[])
+                .expect("read the Safe owners"),
+            1,
+        ),
+        16,
+    )
+    .expect("Safe owner count");
+    let sheet_threshold = safe_threshold();
+    assert!(
+        sheet_threshold < owner_count,
+        "the sheet threshold {sheet_threshold} must be below the owner count {owner_count}: the self-administration pair has nothing to raise"
+    );
+    let raise_arg = format!("threshold={owner_count}");
+    let raised = fx
+        .published()
+        .govern(
+            "safe-change-threshold",
+            &["--admin-arg", raise_arg.as_str()],
+        )
+        .expect("the Safe raises its own threshold through the real SafeL2");
+    assert_eq!(
+        raised.iter().map(|r| r.row.as_str()).collect::<Vec<_>>(),
+        vec!["safe-change-threshold"],
+        "one executed line: a Safe self-administration row is one Safe transaction, no timelock round"
+    );
+    assert_eq!(
+        safe_threshold(),
+        owner_count,
+        "getThreshold must read the owner count after the raise"
+    );
+    let restore_arg = format!("threshold={sheet_threshold}");
+    let restored = fx
+        .published()
+        .govern(
+            "safe-change-threshold",
+            &["--admin-arg", restore_arg.as_str()],
+        )
+        .expect("every owner signs the restore of the sheet's threshold");
+    assert_eq!(
+        restored.iter().map(|r| r.row.as_str()).collect::<Vec<_>>(),
+        vec!["safe-change-threshold"],
+        "one executed line for the restore"
+    );
+    assert_eq!(
+        safe_threshold(),
+        sheet_threshold,
+        "the Safe reads the sheet's threshold again, so every later row and verify compares clean"
+    );
+    assert_ne!(
+        raised[0].tx_hash, restored[0].tx_hash,
+        "two Safe transactions, two run-manifest records (the calldata and the Safe nonce differ)"
     );
 
     // Core 1611: one consensus receipt is released end to end through the REAL Safe and the REAL timelock on the fork. The seed records two
@@ -384,6 +486,20 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         before,
         "the effective routing after the deploy equals the default launch vector 9500/500/0/0"
     );
+    // Issue 1698: no clear is needed before an application. The deploy leaves no active vector, and the clear row refuses (GOVERN, nothing scheduled) when
+    // there is nothing to clear: a refusal that costs no delay and sends nothing.
+    {
+        let refusal = fx
+            .published()
+            .govern("clear-voted-weights", &[])
+            .expect_err("clear-voted-weights must refuse while no active vector is set")
+            .to_string();
+        assert!(
+            refusal.contains("no voted vector to clear") || refusal.contains("nothing to clear"),
+            "the refusal must say there is nothing to clear, got: {refusal}"
+        );
+        assert!(!voted_active(&fx), "a refused clear changes nothing");
+    }
     let applied = fx
         .apply_fixture_receipt("receipt-c.json")
         .expect("the Safe applies receipt C through the timelock");
@@ -478,6 +594,8 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         before,
         "effective is the launch vector again"
     );
+    // The clear undoes the routing, never the release.
+    assert!(c_released(&fx), "the clear does not un-release receipt C");
 
     // Core 1676 (owner decision 2026-10-08): rmAGENT holds RM on the Uniswap V4 RM/USDC pool. The verifier read the venue, the V4 adapter, the
     // recorder PoolKey and the absence of any recorder admin back from the chain: each label is in the output or `verify()` above would have failed.
@@ -501,8 +619,8 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     // Issues 1485 (AC7) and 1493 (AC5): a router deposit and a router withdraw both succeed on the Twin chain after the full publish and govern run.
     // `cast_send` fails on a reverted receipt.
     //
-    // Issue 1746: the router skips every leg whose computed amount is 0 (no vault call). At this point of the run the EFFECTIVE vector is the one the applied receipt
-    // wrote (5000/3000/0/2000: rmAGENT is 0 bps). Before the fix that 0 bps rmAGENT leg reverted the whole router deposit (`rmAGENT.deposit(0)` reverts).
+    // Issue 1746: the router skips every leg whose computed amount is 0 (no vault call). At this point of the run the EFFECTIVE vector is the default launch vector
+    // again (9500/500/0/0 after the clear above: rmAGENT and rmRWA are 0 bps). Before the fix a 0 bps rmAGENT leg reverted the whole router deposit (`rmAGENT.deposit(0)` reverts).
     let user = fx.agent();
     let pk = format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY));
     let amount: u128 = 100_000_000; // 100 USDC

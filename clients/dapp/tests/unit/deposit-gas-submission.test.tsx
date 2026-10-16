@@ -7,6 +7,7 @@ import { VaultSelectorDepositTab } from "../../src/components/VaultSelectorDepos
 import { DepositWithdrawTab } from "../../src/components/DepositWithdrawTab";
 import { VaultRegistryProvider } from "../../src/lib/VaultRegistryContext";
 import { routerAbi, vaultAbi } from "../../src/lib/abi";
+import { routerDepositGasFloor } from "../../src/lib/depositGas";
 
 const VAULT = "0x1111111111111111111111111111111111111111" as Address;
 const USDC = "0x2222222222222222222222222222222222222222" as Address;
@@ -23,6 +24,8 @@ const ctx = {
 const metadata = { name: "rmUSDC", asset: USDC, registeredAt: 0n };
 const writeContract = vi.fn();
 const refetch = vi.fn();
+/** The router's effective weight vector (equal weights). Read lazily by the wagmi mock below. */
+let routerLegVaults: Address[] = [VAULT];
 
 interface ContractOptions {
   address: Address;
@@ -49,20 +52,21 @@ vi.mock("wagmi", () => ({
         data = [metadata, 0];
         break;
       case "getEffectiveWeights":
-        data = [[VAULT], [10_000n]];
+        data = [
+          routerLegVaults,
+          routerLegVaults.map(() => 10_000n / BigInt(routerLegVaults.length)),
+        ];
         break;
       case "previewDeposit":
         data =
           opts.address === ROUTER
-            ? [
-                {
-                  vault: VAULT,
-                  weightBps: 10_000n,
-                  legAmount: 1_000_000n,
-                  estShares: 1_000_000n,
-                  unavailable: false,
-                },
-              ]
+            ? routerLegVaults.map((vault) => ({
+                vault,
+                weightBps: 10_000n / BigInt(routerLegVaults.length),
+                legAmount: 1_000_000n / BigInt(routerLegVaults.length),
+                estShares: 1_000_000n / BigInt(routerLegVaults.length),
+                unavailable: false,
+              }))
             : 1_000_000n;
         break;
     }
@@ -115,15 +119,35 @@ function assertSubmission(target: Address, abi: unknown, args: readonly unknown[
 }
 
 describe("deposit gas on wallet submission", () => {
-  beforeEach(() => writeContract.mockClear());
+  beforeEach(() => {
+    writeContract.mockClear();
+    routerLegVaults = [VAULT];
+  });
 
-  it("RouterDepositTab submits the simulated router deposit with at least 6.8M gas", () => {
+  it("RouterDepositTab submits the simulated router deposit with at least its 1-leg floor", () => {
     render(<RouterDepositTab routerAddress={ROUTER} usdcAddress={USDC} ctx={ctx} />);
     fireEvent.change(screen.getByTestId("router-deposit-tab-amount"), { target: { value: "1" } });
     const submit = screen.getByTestId("router-deposit-tab-submit");
     expect(submit).toBeEnabled();
     fireEvent.click(submit);
-    assertSubmission(ROUTER, routerAbi, [1_000_000n, [995_000n]], 6_800_000n);
+    assertSubmission(ROUTER, routerAbi, [1_000_000n, [995_000n]], routerDepositGasFloor(1));
+  });
+
+  // QA plan U3: the router floor is 2.4M per effective-weight leg, so a fifth leg needs 12M. A fixed
+  // 4-leg constant reverts InsufficientGas there; the limit follows the leg count.
+  it("RouterDepositTab sends a five-leg router deposit with at least the 12M five-leg floor", () => {
+    routerLegVaults = [1, 2, 3, 4, 5].map(
+      (i) => `0x${i.toString(16).padStart(2, "0").repeat(20)}` as Address,
+    );
+    render(<RouterDepositTab routerAddress={ROUTER} usdcAddress={USDC} ctx={ctx} />);
+    fireEvent.change(screen.getByTestId("router-deposit-tab-amount"), { target: { value: "1" } });
+    const submit = screen.getByTestId("router-deposit-tab-submit");
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    assertSubmission(ROUTER, routerAbi, [1_000_000n, Array(5).fill(199_000n)], 12_000_000n);
+    const [request] = writeContract.mock.calls[0];
+    expect(request.gas).toBeGreaterThan(10_800_000n);
+    expect(routerDepositGasFloor(5)).toBe(12_000_000n);
   });
 
   it("VaultSelectorDepositTab submits the selected vault deposit with at least 1.6M gas", () => {

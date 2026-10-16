@@ -37,17 +37,33 @@ retired for rmpc: the guard treats `0.3.3` as a frozen floor constant and reads 
    else, because the tag is what the archives are named and the manifest is what the
    binary reports (`rmpc --version` prints `CARGO_PKG_VERSION`, nothing injects the
    tag).
-2. Dispatch `release-rmpc` with `tag = rmpc-vX.Y.Z` (and optionally
-   `commit_hash`). Or push the tag directly; both paths run the same jobs.
-   - To rehearse without publishing anything, dispatch with `dry_run = true` and
-     **no** tag. Archives upload as 7-day workflow artifacts named
-     `rmpc-dryrun-<sha7>-*`, and the version assertions are skipped by design —
-     which is exactly why a dry run may not be named after a release.
+2. An org admin pushes the tag `rmpc-vX.Y.Z` on the commit to release. That
+   push is the **only** release path. The `protect-rmpc-release-tags` ruleset
+   lets only org admins create the ref, and the tag-push run is the only run
+   that attests build provenance. `install-rmpc.sh` accepts an archive only
+   with an attestation whose source ref is `refs/tags/<tag>` and whose trigger
+   is `push`.
+   - To rehearse, dispatch `release-rmpc` with `dry_run = true` (the default)
+     on the branch to test. It builds that ref's HEAD: there is no
+     `commit_hash` input. Archives upload as 7-day workflow artifacts
+     named `rmpc-dryrun-<sha7>-*`. Nothing is attested, tagged or released, and
+     the version assertions are skipped by design. A dispatch with
+     `dry_run = false` is refused, and there is no `tag` input. A dispatched
+     run used to release, and every run attested, so any writer could dispatch
+     on a branch with `commit_hash` set to a trojan, get a genuine attestation,
+     and swap that archive into an existing Release (the tag ruleset guards
+     refs, not release assets).
 3. The workflow verifies manifest == tag, builds all four targets, asserts the
    built binary reports that version, packages each archive with its `.sha256`,
    attests each archive's build provenance (`actions/attest-build-provenance`,
-   which is why `build` carries its own `id-token: write` / `attestations: write`
-   map and drops the inherited `contents: write`), and creates the Release.
+   only when `github.event_name == 'push' && startsWith(github.ref,
+   'refs/tags/rmpc-v')`, which is why `build` carries its own `id-token: write`
+   / `attestations: write` map and drops the inherited `contents: write`), and
+   creates the Release on the pushed tag. Every `uses:` in the release
+   workflows is pinned to a full commit SHA, because `build` and `publish` hold
+   write scopes. `build` restores and saves no Actions cache, and every target
+   builds natively (linux-arm64 on `ubuntu-24.04-arm`), with no `cross`
+   container image.
 4. `bump-manifest` then opens **chore(rmpc): bump manifest to X.Y.Z+1** against
    `dev`. Merge it.
 
@@ -97,8 +113,8 @@ Recovery depends on the trigger, and the workflow prints the right one:
 - **Pushed tag** — the tag exists and `release-rmpc.yml` owns the `rmpc-v*`
   namespace outright, so `git push --delete origin rmpc-vX.Y.Z` destroys nothing
   else. Fix the manifest on `dev`, then re-tag.
-- **workflow_dispatch** — `verify-version` runs *before* `publish`, so no tag was
-  created. There is nothing to delete. Fix the manifest and re-dispatch.
+- **workflow_dispatch** — only a dry run, which skips `verify-version`. A
+  dispatch never creates a tag.
 
 Re-running the workflow without changing anything cannot help: it checks out the
 same commit.
@@ -111,27 +127,45 @@ tag. It touches nothing in the rmpc release train.
 ## Installing a release
 
 `scripts/release/install-rmpc.sh --tag rmpc-vX.Y.Z --dest ~/.local/bin`. It
-downloads the archive *and* its `.sha256`, refuses a checksum file that does not
-name that archive, then runs `gh attestation verify` pinned to this repository
-and to `release-rmpc.yml` as the signer workflow, and only then extracts. `gh` is
-a hard prerequisite: without it the installer exits 2 rather than installing a
-binary it could not check.
+refuses any tag outside `rmpc-vX.Y.Z` (exit 2), downloads the archive *and* its
+`.sha256`, refuses a checksum file that does not name that archive, then runs
+`gh attestation verify` pinned to this repository, to `release-rmpc.yml` as the
+signer workflow, to the source ref `refs/tags/<tag>` (`--source-ref`), and to
+the `push` trigger (it counts the verified attestations whose certificate
+`buildTrigger` is `push`), and only then extracts. `gh` is a hard prerequisite:
+without it the installer exits 2 rather than installing a binary it could not
+check. `rmpc-v0.3.4` was dispatched from `dev`, so its attestation names
+`refs/heads/dev` and fails both pins; the first release that installs is the
+first one cut by a tag push.
 
 The two checks answer different questions and both are needed. The `.sha256`
 shares a trust root with the archive — same release, same host, same token — so
 it detects a tampered *download* and nothing more; anyone who can write the
 release can write a matching checksum beside a malicious archive. The attestation
 is signed with an OIDC identity GitHub issues only to an Actions run in this
-repository, so release-write alone cannot forge it. It does **not** prove the
-commit was reviewed: whoever can push a ref here can trigger this workflow and
-get a genuine attestation for it. Requiring human review on `release-rmpc.yml`
+repository, so release-write alone cannot forge it. Repository write alone
+cannot either: the installer requires the attestation's source ref to be the
+installed tag and its trigger to be `push`, and only an org admin can push an
+`rmpc-v*` tag. That holds only while the tag-push run builds from the tagged
+tree alone. Its `build` job therefore restores no Actions cache (a cache key
+holds no ref, and a tag-push run restores from `dev`'s scope, where a writer's
+run could save a poisoned `target/`), and it pulls no container image by tag
+(the arm64 leg used to link inside `cross`'s `ghcr.io/cross-rs` image).
+`audit_workflow_run_splice_and_perms.py` refuses a cache step, or a `cross`
+build whose image Cross.toml does not pin by digest, in any job that attests. It does **not** prove the commit was reviewed: the admin who
+pushes the tag vouches for that commit. Requiring human review on `release-rmpc.yml`
 itself would close that residual gap but was decided against (#1342): it
 would put a human reviewer in a merge loop that runs fully automated today,
 and the repo owner chose to keep it that way. Ref protection on `rmpc-v*` is
 done, and it's the sharper of the two: the `protect-rmpc-release-tags`
 repository ruleset restricts creating, updating, or deleting any
 `refs/tags/rmpc-v*` ref to organization admins, so minting a hostile release
-tag now requires that privilege level, not merely `contents: write`.
+tag now requires that privilege level, not merely `contents: write`. The
+ruleset protects the ref, not the Release's assets, which any writer can
+replace. That is why the attestation is pinned to the tag ref and the `push`
+trigger, and why only the tag push attests. Turning on GitHub immutable
+releases for this repository would also stop asset replacement; it is a
+repository setting this change cannot make.
 
 Legacy `vX.Y.Z` tags still resolve — the archive name has one `rmpc-` prefix
 either way — but releases up to and including `v0.3.3` predate #1204 and ship no
@@ -165,10 +199,10 @@ audited on every PR by `install-rmpc-selftest.sh`:
 
 | Job | `contents` | Why |
 |---|---|---|
-| `resolve` | `read` | full-history checkout to expand a short `commit_hash` |
+| `resolve` | `read` | resolves the run's own sha and version; no checkout |
 | `verify-version` | `read` | checks out and reads `Cargo.toml` |
-| `build` | `read` | checks out `submodules: recursive` at a caller-supplied SHA and runs cargo, so `build.rs` and every proc macro in that tree execute here; archives leave via `actions/upload-artifact`, which does not use the `contents` scope |
-| `publish` | `write` | `git push origin <tag>` and the GitHub Release |
+| `build` | `read` | checks out `submodules: recursive` at the run's own sha and runs cargo, so `build.rs` and every proc macro in that tree execute here; archives leave via `actions/upload-artifact`, which does not use the `contents` scope |
+| `publish` | `write` | the GitHub Release on the admin-pushed tag (it creates no ref) |
 | `bump-manifest` | `write` (+ `pull-requests: write`) | pushes the post-release bump and opens its PR |
 
 `contents: write` used to sit at workflow scope, so `build` inherited it and

@@ -13,7 +13,13 @@
 //!   Postgres-required mode this fixture always runs in, never relax it.
 //! - `StubRpcServer` is an in-process tokio TCP listener that returns
 //!   canned JSON-RPC responses keyed by method name, plus a forced-failure
-//!   knob. Used to exercise the failure path without a real chain.
+//!   knob. Used to exercise the failure path without a real chain. By default
+//!   `eth_getLogs` answers every request with the whole canned list; a test that
+//!   depends on which addresses the indexer asks for turns on
+//!   `honour_log_filter(true)` so it answers like a node (DI-1). An
+//!   `eth_getTransactionReceipt` no test programmed is answered from the canned
+//!   logs ([`receipt_from_logs`]), since the indexer reads one receipt per
+//!   log-bearing transaction and a `null` receipt fails the tick (X6).
 
 #![allow(dead_code)]
 
@@ -161,18 +167,27 @@ pub struct StubRpcServer {
     pub url: String,
     handlers: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     fail: Arc<AtomicBool>,
+    /// When set, `eth_getLogs` answers only with the canned logs the request's filter selects (see
+    /// [`apply_log_filter`]). Off by default, so tests written against the whole-list answer keep
+    /// their meaning; turning it on for every test needs each canned log checked against its filter.
+    log_filter: Arc<AtomicBool>,
     /// Every JSON-RPC request body received, in arrival order. Lets tests assert
     /// what the indexer actually requested (e.g. the `eth_getLogs` address set).
     requests: Arc<Mutex<Vec<serde_json::Value>>>,
     /// Optional per-calldata answer for `eth_call` (issue 1731): `Ok(result hex)` or `Err(message)` for a
     /// JSON-RPC error. When unset, `eth_call` answers from the fixed `handlers` table like every other method.
-    call_hook: Arc<Mutex<Option<CallHook>>>,
+    call_hook: Arc<Mutex<Option<CallHookAt>>>,
     shutdown: tokio::sync::oneshot::Sender<()>,
 }
 
 /// Answers one `eth_call` from its target (`0x...` lower-case address) and calldata (`0x...`): the result hex,
 /// or an error message.
 pub type CallHook = Arc<dyn Fn(&str, &str) -> Result<String, String> + Send + Sync>;
+
+/// A [`CallHook`] that also sees the block the call reads at (security round 3: a vault's
+/// `exclusionLedger()` names a different ledger before and after a reinitializer). `u64::MAX`
+/// stands for a block tag such as `latest`.
+pub type CallHookAt = Arc<dyn Fn(&str, &str, u64) -> Result<String, String> + Send + Sync>;
 
 impl StubRpcServer {
     pub async fn start() -> Self {
@@ -181,12 +196,14 @@ impl StubRpcServer {
         let url = format!("http://{addr}");
         let handlers: Arc<Mutex<HashMap<String, serde_json::Value>>> = Arc::default();
         let fail = Arc::new(AtomicBool::new(false));
+        let log_filter = Arc::new(AtomicBool::new(false));
         let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
-        let call_hook: Arc<Mutex<Option<CallHook>>> = Arc::default();
+        let call_hook: Arc<Mutex<Option<CallHookAt>>> = Arc::default();
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
         let h2 = handlers.clone();
         let f2 = fail.clone();
+        let lf2 = log_filter.clone();
         let r2 = requests.clone();
         let c2 = call_hook.clone();
         tokio::spawn(async move {
@@ -197,6 +214,7 @@ impl StubRpcServer {
                         let Ok((mut sock, _)) = accept else { break; };
                         let h = h2.clone();
                         let f = f2.clone();
+                        let lf = lf2.clone();
                         let r = r2.clone();
                         let ch = c2.clone();
                         tokio::spawn(async move {
@@ -217,8 +235,12 @@ impl StubRpcServer {
                             let hooked = if method == "eth_call" {
                                 let data = req["params"][0]["data"].as_str().unwrap_or("").to_string();
                                 let to = req["params"][0]["to"].as_str().unwrap_or("").to_lowercase();
+                                let block = req["params"][1]
+                                    .as_str()
+                                    .and_then(|b| u64::from_str_radix(b.trim_start_matches("0x"), 16).ok())
+                                    .unwrap_or(u64::MAX);
                                 let hook = ch.lock().unwrap().clone();
-                                hook.map(|h| h(&to, &data))
+                                hook.map(|h| h(&to, &data, block))
                             } else {
                                 None
                             };
@@ -242,7 +264,23 @@ impl StubRpcServer {
                                     "error": { "code": -32000, "message": "stub forced failure" }
                                 })
                             } else {
-                                let result = h.lock().unwrap().get(method).cloned().unwrap_or(serde_json::Value::Null);
+                                let canned = h.lock().unwrap().get(method).cloned();
+                                let result = match canned {
+                                    Some(v) => v,
+                                    None if method == "eth_getTransactionReceipt" => {
+                                        let logs = h.lock().unwrap().get("eth_getLogs").cloned();
+                                        receipt_from_logs(
+                                            logs.as_ref(),
+                                            req["params"][0].as_str().unwrap_or(""),
+                                        )
+                                    }
+                                    None => serde_json::Value::Null,
+                                };
+                                let result = if method == "eth_getLogs" && lf.load(Ordering::SeqCst) {
+                                    apply_log_filter(result, &req["params"][0])
+                                } else {
+                                    result
+                                };
                                 serde_json::json!({
                                     "jsonrpc": "2.0",
                                     "id": req.get("id").cloned().unwrap_or(serde_json::json!(1)),
@@ -267,6 +305,7 @@ impl StubRpcServer {
             url,
             handlers,
             fail,
+            log_filter,
             requests,
             call_hook,
             shutdown: shutdown_tx,
@@ -287,6 +326,14 @@ impl StubRpcServer {
 
     /// Answer every `eth_call` from its target and calldata (see [`CallHook`]).
     pub fn set_call_hook(&self, hook: CallHook) {
+        *self.call_hook.lock().unwrap() =
+            Some(Arc::new(move |to: &str, data: &str, _block: u64| {
+                hook(to, data)
+            }));
+    }
+
+    /// Answer every `eth_call` from its target, calldata and block (see [`CallHookAt`]).
+    pub fn set_call_hook_at(&self, hook: CallHookAt) {
         *self.call_hook.lock().unwrap() = Some(hook);
     }
 
@@ -294,7 +341,96 @@ impl StubRpcServer {
         self.fail.store(on, Ordering::SeqCst);
     }
 
+    /// Answer `eth_getLogs` like a node: only the canned logs whose address, block and topic-0 the
+    /// request's filter selects. Without it a log from an address the indexer never asked for still
+    /// comes back, so no test can see a missing address in the filter (DI-1).
+    pub fn honour_log_filter(&self, on: bool) {
+        self.log_filter.store(on, Ordering::SeqCst);
+    }
+
     pub fn shutdown(self) {
         let _ = self.shutdown.send(());
     }
+}
+
+/// `from` of every receipt the stub makes up (see [`receipt_from_logs`]).
+pub const STUB_TX_FROM: &str = "0x00000000000000000000000000000000000000f1";
+
+/// The receipt a node would give for `hash` when no test programmed `eth_getTransactionReceipt`
+/// (QA plan X6): the indexer reads one receipt per transaction that carries a watched log, and a
+/// `null` receipt now fails the tick. It is made up from the first canned `eth_getLogs` entry with
+/// that `transactionHash`: its block, block hash and index, `to` = the log's address, `from` =
+/// [`STUB_TX_FROM`], status 1 (a reverted transaction emits no logs). A hash no canned log carries
+/// answers `null`, like a node that does not know the transaction.
+pub fn receipt_from_logs(canned_logs: Option<&serde_json::Value>, hash: &str) -> serde_json::Value {
+    let log = canned_logs
+        .and_then(|l| l.as_array())
+        .into_iter()
+        .flatten()
+        .find(|log| {
+            log["transactionHash"]
+                .as_str()
+                .is_some_and(|h| h.eq_ignore_ascii_case(hash))
+        });
+    match log {
+        None => serde_json::Value::Null,
+        Some(log) => serde_json::json!({
+            "transactionHash":  hash,
+            "transactionIndex": log["transactionIndex"].clone(),
+            "blockNumber":      log["blockNumber"].clone(),
+            "blockHash":        log["blockHash"].clone(),
+            "from":             STUB_TX_FROM,
+            "to":               log["address"].clone(),
+            "status":           "0x1",
+        }),
+    }
+}
+
+/// Keep the canned `eth_getLogs` entries a node would return for `filter`: block in
+/// `[fromBlock, toBlock]`, address in `address` (a list or one string), and topic-0 in
+/// `topics[0]`. A filter field that is absent or an empty list selects everything, as on a node.
+/// Anything that is not a list of logs is returned unchanged.
+pub fn apply_log_filter(
+    canned: serde_json::Value,
+    filter: &serde_json::Value,
+) -> serde_json::Value {
+    let Some(logs) = canned.as_array() else {
+        return canned;
+    };
+    let quantity = |v: &serde_json::Value| {
+        v.as_str()
+            .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+    };
+    let lower_list = |v: &serde_json::Value| -> Option<Vec<String>> {
+        match v {
+            serde_json::Value::String(s) => Some(vec![s.to_lowercase()]),
+            serde_json::Value::Array(a) => Some(
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_lowercase))
+                    .collect(),
+            ),
+            _ => None,
+        }
+    };
+    let from = quantity(&filter["fromBlock"]).unwrap_or(0);
+    let to = quantity(&filter["toBlock"]).unwrap_or(u64::MAX);
+    let addresses = lower_list(&filter["address"]);
+    let topic0 = lower_list(&filter["topics"][0]);
+    let kept = logs
+        .iter()
+        .filter(|log| {
+            let block = quantity(&log["blockNumber"]).unwrap_or(0);
+            let address = log["address"].as_str().unwrap_or("").to_lowercase();
+            let first_topic = log["topics"][0].as_str().unwrap_or("").to_lowercase();
+            (from..=to).contains(&block)
+                && addresses
+                    .as_ref()
+                    .is_none_or(|a| a.is_empty() || a.contains(&address))
+                && topic0
+                    .as_ref()
+                    .is_none_or(|t| t.is_empty() || t.contains(&first_topic))
+        })
+        .cloned()
+        .collect();
+    serde_json::Value::Array(kept)
 }

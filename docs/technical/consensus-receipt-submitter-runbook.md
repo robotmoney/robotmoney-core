@@ -4,7 +4,7 @@ Canonical: `docs/architecture.md` §4.9 — Consensus Recommendation Receipt Con
 Canonical: `docs/product/20260623-product-proposal-investment-committee-v0.md` §2.1
 Implements: issue #1247 tasks 4.11, 4.12, 4.13 and acceptance criteria 7, 8
 
-Investment Committee signals are advisory only. The gateway signal endpoint does not authenticate the member until core issue 1790 lands. Consensus receipts are caller bound and ADMIN released; receipts are the only rebalance input, applied by the Safe through the timelock.
+Investment Committee signals are advisory only. The gateway signal endpoint binds the member to the caller: `committeeVoteSubmit` reverts `CommitteeAgentNotCaller` unless the vote's `agent` is `msg.sender` (core issue 1790, PR 1818). Consensus receipts are caller bound and ADMIN released; receipts are the only rebalance input, applied by the Safe through the timelock.
 
 ---
 
@@ -63,6 +63,15 @@ submitter can and cannot do holds unchanged for a contract account: the contract
 - **What the tooling pins** (`publish-contracts/src/submitter-safe.ts`): the canonical SafeProxy 1.4.1 code hash, the SafeL2 singleton in slot 0, `VERSION` 1.4.1, threshold 2 or more,
   no module, no guard, the canonical fallback handler. It is never the governing Safe, the timelock, admin (= the deployer), the pauser or the emergency address.
 - **Register it:** `govern --row register-committee --submitter 0x<Safe>`. The checks run before the timelock round is scheduled.
+- **Registration has no public window (QA plan v1 B6, security review CS-2).** The row works in two halves.
+  - **Private half, first.** The submitter Safe authorizes itself on the gateway in three Safe transactions. Its owners sign with `--owner-signer` and `--signer` pays the gas.
+    1. `commitAuthorization(keccak256(abi.encode(safe, safe, salt)))` with a random salt. The commit does not name the agent.
+    2. `revealAuthorization(safe, salt, policy)` at least one block later. The Safe reveals for itself, so it needs no consent commitment (issue 1791 asks for one only when the agent is not the caller). The Safe now owns its own agent.
+    3. `transferAgentOwnership(safe, timelock)`. The timelock now owns the agent.
+  - **Public half, second.** Only then does the governing Safe schedule the timelock batch: `gateway.setPolicy` (the 1-unit signalling-only policy, shares to the timelock) and `gateway.committeeRegister`.
+  - **Why the order matters.** The old batch scheduled `authorizeAgent(safe)` in public for the whole delay. A squatter could commit and reveal an authorization for the published address first. The batch then reverted `AgentAlreadyOwned`, and the squatter could `revokeAgent` at will, because the gateway has no seize path. Two layers now close it. The gateway refuses a stranger's reveal for another address unless that address first committed its consent from its own account (issue 1791, `OwnerConsentMissing`), and for a Safe that takes a transaction its owners sign. The new batch also carries no first-time authorization, so nothing a stranger does can break it (`contracts/test/ConsensusReceiptSafeSubmitter.t.sol::test_publicRegisterBatchCannotBeFrontRun`).
+  - **If the address is already owned.** The tool refuses with `GOVERN` and schedules nothing. Create a new submitter Safe and run the row with it. Against a gateway with the issue 1791 consent check a stranger cannot own a Safe's address at all. Against an older gateway a stranger could claim a published address in advance, such as the old governance Safe below, or win the one-block race between the commit and the reveal. The tool catches both before any timelock round is spent.
+  - **A row that stops part-way resumes from the chain.** The agent owner shows which steps are done. A stored commitment is revealed while its 256-block window lasts. After that the tool commits again with a new salt.
 - **Record with it:** `record-receipt --submitter 0x<Safe> --signer <deployer> --owner-signer <owner> ...`. The verb proposes `consensusRecordReceipt` through the Safe, `threshold` owners
   sign, the deployer executes and pays the gas. It refuses fewer owner signers than the threshold, a Safe that differs from `--submitter`, and a Safe transaction without
   `ExecutionSuccess`. It reads the receipt back and requires the stored submitter to be the Safe.
@@ -105,12 +114,13 @@ was ever material you could copy, it is a devnet key.
 For devnet, the submitter is an ordinary `rmpc` software keystore, loaded the
 same way every other `rmpc` write command loads one: the passphrase comes
 strictly from `$RMPC_KEYSTORE_PASSPHRASE`, never from stdin and never from a
-CLI flag. `rmpc receipt` (like `committee`) refuses a software
-signer for production-grade chain ids (`require_production_grade_for_write`),
-which is the mechanical guard keeping the devnet arrangement devnet-only.
-Only depositor writes (`deposit`, `withdraw`, `withdraw-router`) may use a
-software keystore on Base mainnet (owner decision 2026-10-06, issue #1545);
-the submitter is not a depositor, so the guard stays for it.
+CLI flag. `rmpc receipt` (like `committee`) signs with a software keystore
+on every chain, Base mainnet included, after the production warning: a
+hardware wallet, HSM or KMS is optional, never required (owner decision
+2026-10-14, QA plan Decision D12; the old `require_production_grade_for_write`
+gate is gone). What keeps the single-key arrangement devnet-only is the role,
+not a signer refusal: on 8453 the submitter is the Safe, and an EOA without
+the submitter roles reverts.
 
 ---
 
@@ -120,9 +130,17 @@ Rotation is **additive then subtractive**, and it needs no contract change
 because membership is registry state.
 
 1. Provision the new key per §2 and derive its address.
-2. Via the timelock's normal schedule → delay → execute path, grant the new
-   address `COMMITTEE_AGENT_ROLE` (`gateway.committeeRegister`) and authorize
-   it as a gateway agent (`gateway.authorizeAgent`).
+2. Register the new address with `govern --row register-committee` (§1.1). The
+   new submitter first authorizes ITSELF in private, before anything is public:
+   `gateway.commitAuthorization`, one block later `gateway.revealAuthorization`
+   (its own agent, shares to itself), then
+   `gateway.transferAgentOwnership(new, timelock)`. Only then, via the
+   timelock's normal schedule → delay → execute path, one batch sets the
+   signalling-only policy (`gateway.setPolicy`, shares to the timelock) and
+   grants `COMMITTEE_AGENT_ROLE` (`gateway.committeeRegister`). Never schedule
+   a public `gateway.authorizeAgent` for the new address: during the delay
+   anyone can authorize that address first and own it for good (QA plan v1
+   B6).
 3. Submit one receipt from the new key on a real session and confirm the
    indexer ingested it with `verified = true`.
 4. Revoke the old address: `InvestmentCommitteePolicy.revokeAgent` (an
@@ -174,7 +192,7 @@ integrity of the public record.
 
    | Column | Reading |
    | --- | --- |
-   | `last_verify_error` | `GET … returned 5xx`, a timeout, or a connection error → a HOST problem, not a forgery signal. A `digest mismatch …` message is the one that matters here. |
+   | `last_verify_error` | `GET … returned 5xx`, a timeout, a connection error, `payload fetch cut by the sweep's 30s per-tick budget`, `payload fetch cut by the tick's 30s inline fetch budget`, or `not fetched at index time: …` (the tick that indexed the receipt spent its fetch budget, and the sweep fetches it later) → a HOST problem, not a forgery signal. `refused …` → the URI names a scheme other than http/https or a link-local, unspecified, broadcast or multicast address (the cloud metadata endpoint among them), which the indexer never fetches: treat the URI itself as hostile. A `digest mismatch …` message is the one that matters here. |
    | `verify_attempts` | How many times the indexer has tried. A row at the ceiling with a transport error has simply been unreachable throughout. |
    | `verified_at` | When verification last SUCCEEDED. `NULL` means it never has. |
 
@@ -302,17 +320,31 @@ trusting the exit status of the command that may have timed out.
 
 Three scripts implement the autonomous half of §5.2–5.4. None of them holds a
 key on argv, and none of them signs anything; only the Safe, through the timelock, applies a receipt.
+A fourth, `watch-released-drafts.sh`, drafted a proposal per released receipt.
+Issue 1698 retired it and QA plan v1 (leftovers L1) deleted it with its systemd
+units: a receipt is now released only inside `RouterGovernance.applyReceipt`,
+which applies its weights in the same transaction, so there is nothing left to
+draft, and `rmpc governance draft-proposal` is deleted. A host installed from an
+older checkout still runs the units and pages `fusion_draft_watcher_stalled`
+every cycle. Decommission it: `systemctl disable --now fusion-draft-watcher.service`,
+remove `fusion-draft-watcher.service` and `fusion-draft-watcher-failed.service`
+from `/etc/systemd/system/`, run `systemctl daemon-reload`, delete
+`/etc/fusion/draft-watcher.env` and `/var/lib/fusion-draft-watcher`, then resolve
+any open `fusion_draft_watcher_*` incident by hand.
 
 | Script | What it does | Idempotency / restart rule |
 |---|---|---|
 | `submit-receipt-worker.sh` | Verifies the receipt, then retries submission until the **exact** `(receiptId, payloadDigest)` pair is readable on chain. | Re-reads the chain before and after every attempt. An already-anchored id with the same digest exits `0` without broadcasting; an already-anchored id with a *different* digest is fatal and is never overwritten. |
-| `cross-repo-acceptance.sh` | The AC-E2E-05 seam: consumes a *frontend-generated* receipt, verifies the **public URL** and the local bytes and proves they agree, submits, releases, and asserts INV-4. It drafts nothing. | Both write stages are idempotent. The worker reports `already_anchored` and broadcasts nothing; the release stage reads `isReleased(bytes32)` **before** the send and records a named `already_released` no-op, so a second run still reaches the INV-4 comparison and the evidence JSON instead of aborting at a `ReceiptAlreadyReleased` revert. INV-4 witnesses come from the shared `lib/inv4.sh`. |
-| `devnet-acceptance.sh` | The AC-E2E-05 **run**: takes one frontend receipt URL and drives `verify → negative → record → index → release → dapp`, writing a machine-readable result file. Exits non-zero on any failed assertion **and on any selected-but-unconfigured stage**. | Stage selection is explicit (`--stages`, `--no-anchor`). Every `SKIP` carries a `reason`: `not_selected` (green), `unconfigured` (**not** green), `prerequisite_failed`, `delegated`. An unknown stage name and a missing witness address refuse to start. |
+| `cross-repo-acceptance.sh` | The AC-E2E-05 seam: consumes a *frontend-generated* receipt, verifies the **public URL** and the local bytes and proves they agree, requires four bucket weights totalling 10000 bps, submits, releases, and asserts INV-4. It drafts nothing. | Both write stages are idempotent. The worker reports `already_anchored` and broadcasts nothing; the release stage reads `isReleased(bytes32)` **before** the send and records a named `already_released` no-op, so a second run still reaches the INV-4 comparison and the evidence JSON instead of aborting at a `ReceiptAlreadyReleased` revert. INV-4 witnesses come from the shared `lib/inv4.sh`. |
+| `devnet-acceptance.sh` | The AC-E2E-05 **run**: takes one frontend receipt URL and drives `verify → negative → record → index → release → dapp → govern`, writing a machine-readable result file. Exits non-zero on any failed assertion **and on any selected-but-unconfigured stage**. | Stage selection is explicit (`--stages`, `--no-anchor`). Every `SKIP` carries a `reason`: `not_selected` (green), `unconfigured` (**not** green), `prerequisite_failed`, `delegated`. An unknown stage name and a missing witness address refuse to start. |
 
-**The harnesses draft nothing.** The govern stage is removed. `RouterGovernance`
-has no proposal function (issue 1698), and a released receipt is already
-applied: `RouterGovernance.applyReceipt` releases it and sets the weights in one
-call. The harnesses assert record and release only.
+**The harnesses draft nothing.** `RouterGovernance` has no proposal function
+(issue 1698), and a released receipt is already applied:
+`RouterGovernance.applyReceipt` releases it and sets the weights in one call.
+The harnesses assert record and release. The `govern` stage of
+`devnet-acceptance.sh` only proves the converse of applying: the release-only
+path it ran set no router weights, so `RouterGovernance.currentWeights()` reads
+the same before and after (AC-E2E-04).
 
 **The submitter distinguishes "no anchor" from "cannot read the chain."** The
 read RPC is a different endpoint from the write path's failover client, so those
@@ -321,6 +353,15 @@ pages after `FUSION_READ_FAILURE_ALERT` consecutive outages; it never
 re-broadcasts on an unknown anchor state, and the post-submit confirmation has
 its own bounded read loop so a transient read failure after a successful submit
 cannot report the anchor as missing.
+
+Issue 1698 retired the draft path. `RouterGovernance` has no proposal, vote or
+execute function. The weight path is the one `RouterGovernance.applyReceipt`
+call the Safe schedules through the timelock (govern row `apply-receipt`), which
+releases the receipt and writes its weights in the same transaction.
+`rmpc governance draft-proposal` is deleted with it. The digest binding it
+carried now lives in the govern row, which names the stored digest, and in
+`applyReceipt`, which reverts `PayloadDigestMismatch` on chain
+(`docs/technical/governance-decisions.md` §3.7).
 
 **Why the orchestrator is separate from `cross-repo-acceptance.sh`.** The older
 script is one straight line from artifact to release and always anchors. The
@@ -336,7 +377,16 @@ distinct outcomes and its own self-test asserts that unselected stages land as
 **An absent `weights` array is a FAILED assertion, never a skipped one.** A
 receipt with no allocation vector cannot carry a recommendation; reporting that
 as "nothing to check" is exactly how the condition stays invisible. Both
-harnesses enforce it.
+harnesses enforce it on the receipt bytes: the verify stage of
+`devnet-acceptance.sh` requires four bucket weights totalling exactly 10000 bps,
+and `cross-repo-acceptance.sh` refuses the same receipt before it submits.
+
+**The negative bundle keeps a weights-tampered case.** The weights are the one
+field that becomes treasury calldata and the one the analyst signature check
+cannot cover. The negative stage rewrites them to 10000/0/0/0 and asserts that
+the stack refuses the receipt against the anchored digest. The apply path
+carries the same binding: govern row `apply-receipt` names the stored digest,
+and `applyReceipt` reverts `PayloadDigestMismatch`.
 
 **The verdict derives from every SELECTED stage, not from the FAIL count.**
 `devnet-acceptance.sh` used to compute `ok` as "no assertion is FAIL" and exit on
@@ -370,8 +420,9 @@ blocks). The comparison itself is still exact equality — only the window narro
 
 ### 5.5.1 Paging (`FUSION_ALERT_WEBHOOK`)
 
-`FUSION_ALERT_WEBHOOK` is the PagerDuty-style Events-API endpoint both
-long-running harnesses POST to. **It is the precondition for every claim in this
+`FUSION_ALERT_WEBHOOK` is the PagerDuty-style Events-API endpoint the
+long-running submit worker POSTs to (the draft watcher, which also did, is
+deleted). **It is the precondition for every claim in this
 section that a harness "pages".** Its handling is validated at startup, the same
 way `rmpc` and `cast` are:
 
@@ -394,11 +445,14 @@ Each condition has its **own** dedup key, so two incidents are two incidents:
 round-2 guards above, an unreadable chain that must record the INV-4 assertion as
 `FAIL` (with a readable-chain control that must record `PASS`), a one-unit witness
 drift that both harnesses must reach the same verdict on, a selected-but-
-unconfigured stage that must exit non-zero with `failed == 0`, a wrong `payloadDigest` hidden behind a content-addressed
+unconfigured stage that must exit non-zero with `failed == 0`, a govern stage
+that must PASS while the weight setter's `currentWeights()` is unchanged and
+FAIL when it moves or cannot be read, a receipt with no weights array that
+`cross-repo-acceptance.sh` must refuse, a wrong `payloadDigest` hidden behind a content-addressed
 `payloadUri` in both the tuple and the API body, a second `cross-repo-acceptance.sh`
 run that must broadcast nothing and still produce its evidence JSON, and the alert
-path's startup refusal, per-condition dedup keys, resolve and delivery-failure
-logging. Every one of them has a negative control that must FAIL — against stub `rmpc` and
+path's startup refusal, resolve and delivery-failure logging, driven through the
+submit worker. Every one of them has a negative control that must FAIL — against stub `rmpc` and
 `cast` binaries — retry-then-succeed, already-anchored no-op, conflicting-digest
 refusal (including a conflicting digest whose `payloadUri` embeds the derived
 digest, which a substring comparison would wrongly accept), a submit that
@@ -414,9 +468,10 @@ stages are recorded as `SKIP`.
 > and the guard written to detect that shape
 > (`.github/scripts/check_evidence_scripts.py`, invariant B) only sweeps
 > scripts directly under its `TESTS_DIR`, so a harness here is invisible to it. Until a
-> workflow invokes it, AC-CORE-09's retry/idempotency clause is
-> **proven by local run only** and must be recorded
-> that way in the §12.6 evidence bundle — never described as CI-covered.
+> workflow invokes it, AC-CORE-09's retry/idempotency clause is **proven by
+> local run only** and must be recorded that way in the §12.6 evidence bundle —
+> never described as CI-covered. (AC-GOV-01's watcher/restart clause went with
+> the watcher, issue 1698.)
 > Follow-up: add a `bash scripts/fusion/tests/run-tests.sh` step to
 > `suite-13-doc-checks.yml` (no paths filter, cheapest host). The Fusion
 > acceptance run may not modify `.github/workflows`, so it is not done here.

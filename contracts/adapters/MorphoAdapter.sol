@@ -50,6 +50,13 @@ contract MorphoAdapter is IStrategyAdapter {
     /// @param cap       Configured maxExposure cap.
     error ExposureCapExceeded(uint256 current, uint256 amount, uint256 cap);
 
+    /// @notice `MORPHO_VAULT` refused a `deploy(uint256)` deposit, and the USDC went straight
+    ///         back to `VAULT`, which keeps it idle (security round 2). MetaMorpho refuses with
+    ///         `AllCapsReached` once every market cap in its supply queue is full.
+    /// @param amount USDC handed back to `VAULT`.
+    /// @param reason The venue's revert data.
+    event DeployRefused(uint256 amount, bytes reason);
+
     /// @notice Maximum USDC that may be deployed into Morpho at one time.
     ///         Zero means uncapped (default). Set via `setMaxExposure`.
     uint256 public maxExposure;
@@ -76,14 +83,22 @@ contract MorphoAdapter is IStrategyAdapter {
         maxExposure = cap;
     }
 
-    /// @dev Shared deposit choreography for the v1 and v2 `deploy` entry points.
-    ///      Enforces the exposure cap, then does the exact-allowance deposit.
+    /// @dev Deposit choreography of the min-out `deploy`, which reverts when the venue refuses:
+    ///      the exposure cap, then the exact-allowance deposit. `deploy(uint256)` runs the same
+    ///      steps but hands a refused deposit back to `VAULT`.
     // ADP-5 / NC-12: set the exact allowance with `forceApprove` (which zeroes first for
     // non-standard ERC-20s) rather than the additive, non-zeroing `safeIncreaseAllowance`,
     // then unconditionally reset to zero after the call so no residual allowance can ever
     // linger across deploys.
     function _deposit(uint256 amount) private {
-        // FS-VLT-10: enforce governance-configurable exposure cap when non-zero.
+        _checkExposure(amount);
+        IERC20(USDC).forceApprove(address(MORPHO_VAULT), amount);
+        MORPHO_VAULT.deposit(amount, address(this));
+        IERC20(USDC).forceApprove(address(MORPHO_VAULT), 0);
+    }
+
+    /// @dev FS-VLT-10: enforce the governance-configurable exposure cap when non-zero.
+    function _checkExposure(uint256 amount) private view {
         uint256 cap = maxExposure;
         if (cap > 0) {
             uint256 current = MORPHO_VAULT.convertToAssets(MORPHO_VAULT.balanceOf(address(this)));
@@ -91,14 +106,25 @@ contract MorphoAdapter is IStrategyAdapter {
                 revert ExposureCapExceeded(current, amount, cap);
             }
         }
-        IERC20(USDC).forceApprove(address(MORPHO_VAULT), amount);
-        MORPHO_VAULT.deposit(amount, address(this));
-        IERC20(USDC).forceApprove(address(MORPHO_VAULT), 0);
     }
 
     /// @inheritdoc IStrategyAdapter
+    /// @dev Security round 2: a deposit `MORPHO_VAULT` refuses (`AllCapsReached`, a paused or
+    ///      broken market in the supply queue) does not revert. The adapter sends `amount` back
+    ///      to `VAULT` and emits `DeployRefused`, and the vault leaves that USDC idle
+    ///      (`UnroutedDeposit`). Before this a full MetaMorpho reverted every rmUSDC deposit,
+    ///      every router deposit with an rmUSDC leg and keeper `rebalance`. The adapter's own
+    ///      exposure cap still reverts (the vault's allocator never asks past it), and so does
+    ///      the min-out overload below.
     function deploy(uint256 amount) external onlyVault {
-        _deposit(amount);
+        _checkExposure(amount);
+        IERC20(USDC).forceApprove(address(MORPHO_VAULT), amount);
+        try MORPHO_VAULT.deposit(amount, address(this)) {}
+        catch (bytes memory reason) {
+            IERC20(USDC).safeTransfer(VAULT, amount);
+            emit DeployRefused(amount, reason);
+        }
+        IERC20(USDC).forceApprove(address(MORPHO_VAULT), 0);
     }
 
     /// @notice Min-out variant of `deploy`: reverts `SlippageExceeded` below `minValueOut`.

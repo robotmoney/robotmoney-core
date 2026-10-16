@@ -19,6 +19,13 @@
  * useReadContract (AC §11). The component never calls the explorer API for
  * safety-critical fields.
  *
+ * Issue 1737 part 4 (QA plan U5): the live `getVault` read is pinned to the
+ * write guard's chain and its answer is ignored when the guard does not allow
+ * reads (a wallet on another chain answers for the OTHER chain). The handlers
+ * re-check the deposit state and the simulation's target before they send, and
+ * each write renders its refusal and receipt status (`WriteStatus`). Estimated
+ * shares print the selected vault's own symbol (issue 1773).
+ *
  * docs/architecture.md §5.3 — action layer: vault-selector deposit.
  * docs/technical/multi-vault-dapp-decisions.md §4.3.
  */
@@ -30,7 +37,7 @@ import {
   useSimulateContract,
   useWaitForTransactionReceipt,
 } from "wagmi";
-import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
+import { useGuardedWriteContract, useWriteChainGuard } from "../lib/useGuardedWriteContract";
 import type { Address, Hash } from "viem";
 import { erc20Abi, vaultAbi, registryAbi, VaultStatus } from "../lib/abi";
 import { useVaultRegistry } from "../lib/VaultRegistryContext";
@@ -41,6 +48,9 @@ import { useDepositState } from "../lib/useDepositStates";
 import { DepositsClosedNotice } from "./DepositsClosedNotice";
 import { parseUsdcAmount } from "../lib/format";
 import { formatUsdc, formatShares } from "../lib/format";
+import { depositsReadAllowed } from "../lib/useVaultsDepositsPaused";
+import { useVaultShareSymbols } from "../lib/useVaultShareSymbols";
+import { WriteStatus } from "./WriteStatus";
 
 type Props = Readonly<{
   usdcAddress: Address;
@@ -58,9 +68,18 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
   const [amountInput, setAmountInput] = useState("");
 
   const depositAssets = parseUsdcAmount(amountInput);
+  // The selected vault's own share symbol (issue 1773).
+  const symbolOf = useVaultShareSymbols(selectedVaultAddr ? [selectedVaultAddr] : []);
+  const selectedSymbol = symbolOf(selectedVaultAddr);
+
+  // The live registry read follows the write guard (issue 1737 part 4): pinned to its chain, and
+  // not made (nor trusted) when the wallet cannot answer for that chain.
+  const { state: guardState } = useWriteChainGuard();
+  const guardReadsAllowed = depositsReadAllowed(guardState);
+  const guardChainId = guardState.kind === "ok" ? guardState.targetChainId : undefined;
 
   const vaultCtx: VaultPreviewContext | null = selectedVaultAddr
-    ? { ...ctx, vault: selectedVaultAddr as Address }
+    ? { ...ctx, vault: selectedVaultAddr as Address, shareSymbol: selectedSymbol }
     : null;
 
   // -------- live getVault re-query before submit (AC §4) --------
@@ -70,8 +89,9 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
     abi: registryAbi,
     functionName: "getVault",
     args: selectedVaultAddr ? [selectedVaultAddr as Address] : undefined,
+    chainId: guardChainId,
     query: {
-      enabled: Boolean(selectedVaultAddr) && isConnected,
+      enabled: Boolean(selectedVaultAddr) && isConnected && guardReadsAllowed,
       // refetch on every block to catch a deposit pause in real-time
       refetchInterval: 12_000,
     },
@@ -83,7 +103,9 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
   // `depositsPaused()` (read pinned to the target chain behind the write guard) and the fresh explorer
   // snapshot, resolved in one place with the other deposit forms. Paused, retired and unknown disable the form.
   const liveRegistryStatus =
-    liveVaultRecord !== undefined ? (liveVaultRecord as readonly [unknown, number])[1] : undefined;
+    liveVaultRecord !== undefined && guardReadsAllowed
+      ? (liveVaultRecord as readonly [unknown, number])[1]
+      : undefined;
   const depositState = useDepositState(selectedVaultAddr || undefined, liveRegistryStatus);
   const vaultRefusesDeposits = Boolean(selectedVaultAddr) && depositsBlocked(depositState);
 
@@ -200,13 +222,22 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
     }
   }, [approveSimError]);
 
+  // Defence in depth (issue 1737 part 4): the same gates as the buttons, plus the simulation's
+  // target, so a handler reached another way with a stale simulation never sends.
+  const isSelected = (a: unknown): boolean =>
+    typeof a === "string" &&
+    selectedVaultAddr !== "" &&
+    a.toLowerCase() === selectedVaultAddr.toLowerCase();
+
   const onApprove = () => {
-    if (!approveSim) return;
+    if (!approveSim || vaultRefusesDeposits) return;
+    if (!isSelected(approveSim.request.args?.[0])) return;
     approveWrite.writeContract(approveSim.request);
   };
 
   const onDeposit = () => {
-    if (!depositSim) return;
+    if (!depositSim || !canSimDeposit) return;
+    if (!isSelected(depositSim.request.address)) return;
     depositWrite.writeContract(withGasLimit(depositSim.request, VAULT_DEPOSIT_GAS_LIMIT));
   };
 
@@ -280,7 +311,7 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
       {/* Live preview block: estimated receipts, fees, net amount (AC §3) */}
       {typeof previewDepositShares === "bigint" && depositAssets !== null && (
         <p className="hint" data-testid="vault-deposit-preview-shares">
-          Estimated receipt shares: {formatShares(previewDepositShares, "rmUSDC")}
+          Estimated receipt shares: {formatShares(previewDepositShares, selectedSymbol)}
         </p>
       )}
       {depositAssets !== null && typeof usdcBalance === "bigint" && (
@@ -326,6 +357,19 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
       >
         Sign deposit with wallet
       </button>
+
+      <WriteStatus
+        testId="vault-selector-approve"
+        label="USDC approval"
+        write={approveWrite}
+        receipt={approveReceipt}
+      />
+      <WriteStatus
+        testId="vault-selector-deposit"
+        label="Deposit"
+        write={depositWrite}
+        receipt={depositReceipt}
+      />
 
       {approveSimError && (
         <p className="hint" data-testid="vault-selector-approve-sim-error">

@@ -194,12 +194,16 @@ function test_pausedLegStillRenormalises_zeroLegStillSkipped() public;
 function test_onlyZeroBpsLegsAvailable_reverts() public;
 ```
 
-<a id="test_minsharesonskippedleg_isnotenforced"></a>
+<a id="test_minsharesonskippedleg_revertsunlesszero"></a>
 
-### test_minSharesOnSkippedLeg_isNotEnforced
+### test_minSharesOnSkippedLeg_revertsUnlessZero
+
+Security round 2: a non-zero floor on a skipped leg (here a 0-bps leg, which is
+never funded) reverts `LegSkippedWithFloor` instead of being waived. A 0 floor on
+the skipped leg, which is what a client derives from `previewDeposit`, still works.
 
 ```solidity
-function test_minSharesOnSkippedLeg_isNotEnforced() public;
+function test_minSharesOnSkippedLeg_revertsUnlessZero() public;
 ```
 
 <a id="testfuzz_zerolegs_suminvariantandnocalls-uint96-uint16-uint16-uint16"></a>

@@ -1,0 +1,10 @@
+{
+  "admin": "0xf3F582464De7BD2cBf9d2ad40429e31D0F4724A3",
+  "chain_id": 8453,
+  "execution_delay": 3600,
+  "governance": "0x59b593ab06bB5587534EfE255f6C614858b32754",
+  "quorum_threshold": 2,
+  "router": "0xB3a8e66d9E2980B54aC0e70e0e236486D1DCb356",
+  "total_voting_power": 2000,
+  "voting_period": 3600
+}

@@ -16,6 +16,13 @@
 #   7. marker text echoed mid-line by a compiler warning,
 #      the test itself never printed it (line-start
 #      anchor false-positive guard)                      -> red  (issue #1401)
+#   8. suite 05's gas marker (QA plan T3, issue #1683):
+#      the deposit line present                          -> green
+#      the deposit assertion failed (cargo exit 101)     -> red
+#      the gas test printed nothing, the slot's other
+#      tests pad N                                       -> red
+#      the deposit line glued to libtest's "test ... "
+#      prefix, so it is not at line start                -> red
 #
 # Runs in suite-14's hermetic `smoke-test-guards` job.
 
@@ -79,6 +86,46 @@ executes
 test invariant_predicates::empty_router_weights_fail_the_invariant ... ok
 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.01s"
 
+# Case 8 (QA plan T3, issue #1683). The marker is read from the suite-05 workflow, not copied, so
+# the string tested here is the string CI requires. It is a line prefix: the wrapper matches it at
+# line start, and the gas test's line goes on with the measured gas and the budget.
+SUITE05="${ROOT}/.github/workflows/suite-05-fork-integration.yml"
+GAS_TEST="${ROOT}/testing/fork-e2e-rust/tests/gas_estimate_reality_check.rs"
+GAS_MARKER="$(grep -oE '^[[:space:]]*\[gas_estimate_reality_check\] deposit gasUsed=$' "$SUITE05" \
+  | sed -E 's/^[[:space:]]+//' | head -n 1 || true)"
+
+GAS_RUN="running 1 test
+test gas_estimate_reality_check ... [gas_estimate_reality_check] chain_id=918453 fork_block=1 rpc_label=fork address_set_hash=00
+
+[gas_estimate_reality_check] approve gasUsed=55437 budget=80000
+
+${GAS_MARKER}833900 budget=920000
+
+[gas_estimate_reality_check] redeem gasUsed=702311 budget=1100000
+ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.00s"
+
+GAS_OVER_BUDGET="running 1 test
+test gas_estimate_reality_check ... [gas_estimate_reality_check] chain_id=918453 fork_block=1 rpc_label=fork address_set_hash=00
+
+[gas_estimate_reality_check] approve gasUsed=55437 budget=80000
+thread 'gas_estimate_reality_check' panicked at tests/gas_estimate_reality_check.rs:62:5:
+deposit gasUsed 1012345 exceeded budget 920000
+FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.00s"
+
+GAS_SILENT="running 4 tests
+test devnet_adapter_round_trip ... ok
+test gas_estimate_reality_check ... ok
+test landing_price_strip_fork ... ok
+test basket_vault_round_trip ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.00s"
+
+GAS_MID_LINE="running 1 test
+test gas_estimate_reality_check ... ${GAS_MARKER}833900 budget=920000
+ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.00s"
+
 FAILS=0
 
 # expect <green|red> <label> <stub-output> <stub-status> <markers>
@@ -107,6 +154,25 @@ expect green "same skipped run WITHOUT markers (the #1437 hole)" "$SKIPPED_DEVNE
 expect red   "one of two required markers present"        "$ONE_MARKER"     0 "$MARKERS"
 expect red   "cargo test itself failed"                   "$FULL_RUN"       101 "$MARKERS"
 expect red   "compiler warning echoes marker mid-line, test never ran" "$WARNING_ECHOES_MARKER" 0 "$M1"
+
+if [ "$GAS_MARKER" = '[gas_estimate_reality_check] deposit gasUsed=' ]; then
+  echo "ok   - suite 05 anvil-devnet-adapters requires the gas test's deposit marker"
+else
+  echo "FAIL - suite 05 has no required_markers line '[gas_estimate_reality_check] deposit gasUsed='"
+  FAILS=$((FAILS + 1))
+fi
+# The test prints the marker as \n<marker>{gasUsed} budget=...: the leading newline puts it at
+# line start even right after libtest's "test ... " prefix (the GAS_MID_LINE shape below).
+if grep -qF "\"\\n${GAS_MARKER}{} budget=" "$GAS_TEST"; then
+  echo "ok   - gas_estimate_reality_check.rs prints the marker on a line of its own"
+else
+  echo "FAIL - gas_estimate_reality_check.rs does not print \\n${GAS_MARKER}{} budget="
+  FAILS=$((FAILS + 1))
+fi
+expect green "gas test: deposit marker present"                      "$GAS_RUN"         0   "$GAS_MARKER"
+expect red   "gas test: deposit over budget, cargo failed"           "$GAS_OVER_BUDGET" 101 "$GAS_MARKER"
+expect red   "gas test: no deposit line, slot's other tests pad N"   "$GAS_SILENT"      0   "$GAS_MARKER"
+expect red   "gas test: deposit line glued to libtest's test prefix" "$GAS_MID_LINE"    0   "$GAS_MARKER"
 
 if [ "$FAILS" -gt 0 ]; then
   echo "test_cargo_test_require_executed: ${FAILS} case(s) failed" >&2

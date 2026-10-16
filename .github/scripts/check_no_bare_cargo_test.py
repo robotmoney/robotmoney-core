@@ -7,7 +7,20 @@ collects zero tests, so a green step can mean no assertion ran. Every such step 
 below a floor (CARGO_TEST_MIN_EXECUTED).
 
 A step that deliberately expects `cargo test` to FAIL (a proof that a skip is fatal under CI) may
-carry the marker `bare-cargo-test-allowed: <reason>` in a comment inside its `run:` block.
+carry the marker `bare-cargo-test-allowed: <reason>` as a comment-only line inside its `run:` block,
+above the command it covers.
+
+The marker is narrow (issue 1683, QA plan T3). Before, the literal text anywhere in a block exempted
+the whole block: an `echo "bare-cargo-test-allowed: ..."` string counted, and so did every sibling
+bare command in the same block. Now:
+- it counts only on a line that is nothing but a comment opening with the marker; an echo string,
+  a trailing comment after a command, or a comment that names the marker after other text does
+  not count;
+- it covers one `cargo test` invocation: the first command after it that runs `cargo test`, and only
+  when that command holds a single `cargo test` (a `&&` or `||` sibling on the same line is not
+  covered);
+- a block gets one allowance, however many markers it carries. Put a second expected-failure
+  command in a step of its own.
 
 USAGE: check_no_bare_cargo_test.py [workflows_dir]   (default: <repo>/.github/workflows)
 Self-test: .github/scripts/tests/test_check_no_bare_cargo_test.sh
@@ -19,7 +32,10 @@ import sys
 
 CARGO_TEST = re.compile(r"\bcargo\s+test\b")
 TARGET_FLAG = re.compile(r"(?<![\w-])--test(?=[\s=]|$)")
-ALLOW = "bare-cargo-test-allowed:"
+# Matched against a stripped comment-only line, so the marker must open the comment.
+ALLOW = re.compile(r"^#+\s*bare-cargo-test-allowed:")
+# Stands in, in the logical command list, for a comment-only line that carries ALLOW.
+ALLOW_LINE = object()
 RUN_BLOCK = re.compile(r"^(\s*)(?:-\s+)?run:\s*([>|])[-+]?\s*$")
 
 
@@ -51,11 +67,17 @@ def blocks(lines):
 
 
 def logical_commands(body):
-    """Join backslash-continued lines; drop comment-only lines."""
+    """Join backslash-continued lines; drop comment-only lines.
+
+    A comment-only line that carries the allow marker is kept as ALLOW_LINE, in order, so scan()
+    knows which command it sits above.
+    """
     cmds, cur = [], ""
     for raw in body:
         text = raw.strip()
         if not cur and text.startswith("#"):
+            if ALLOW.match(text):
+                cmds.append(ALLOW_LINE)
             continue
         cur += (" " if cur else "") + text.rstrip("\\").strip()
         if not raw.rstrip().endswith("\\"):
@@ -70,10 +92,21 @@ def scan(path):
     problems = []
     lines = path.read_text().splitlines()
     for first, body in blocks(lines):
-        if any(ALLOW in b for b in body):
-            continue
+        pending = False  # a marker sits above and no cargo test command has used it yet
+        spent = False  # this block has used its one allowance
         for cmd in logical_commands(body):
-            if CARGO_TEST.search(cmd) and TARGET_FLAG.search(cmd):
+            if cmd is ALLOW_LINE:
+                pending = pending or not spent
+                continue
+            runs = len(CARGO_TEST.findall(cmd))
+            if not runs:
+                continue
+            covered = False
+            if pending:
+                # The first cargo test command after the marker uses it, bare or not.
+                pending, spent = False, True
+                covered = runs == 1
+            if TARGET_FLAG.search(cmd) and not covered:
                 problems.append((path, first, cmd[:160]))
     return problems
 
@@ -94,7 +127,9 @@ def main():
     if problems:
         print(
             "ERROR: wrap every `cargo test --test` in .github/scripts/cargo_test_require_executed.sh "
-            "with CARGO_TEST_MIN_EXECUTED set to the executed count (issue 1656).",
+            "with CARGO_TEST_MIN_EXECUTED set to the executed count (issue 1656). A step that "
+            "must see cargo test FAIL puts `# bare-cargo-test-allowed: <reason>` on its own "
+            "comment line above that one command; one such command per run block (issue 1683).",
             file=sys.stderr,
         )
         return 1

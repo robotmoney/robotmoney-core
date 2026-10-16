@@ -1,0 +1,76 @@
+---
+title: "BasketVaultCeilingProbe"
+---
+
+# BasketVaultCeilingProbe
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/UpgradeCeilings.t.sol)
+
+**Inherits:** [BasketVault](/contracts/vaults/abstract.BasketVault)
+
+<i>
+
+Probe for the `internal` basket ceilings, shared by the three kinds through `BasketVault`.
+
+</i>
+
+## Functions
+
+<a id="maxassets"></a>
+
+### maxAssets
+
+Subclasses declare the maximum number of assets in the basket.
+
+```solidity
+function maxAssets() public pure override returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="maxnavdeviationbps"></a>
+
+### maxNavDeviationBps
+
+```solidity
+function maxNavDeviationBps() external pure returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="redeembasegas"></a>
+
+### redeemBaseGas
+
+```solidity
+function redeemBaseGas() external pure returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="redeemgasperasset"></a>
+
+### redeemGasPerAsset
+
+```solidity
+function redeemGasPerAsset() external pure returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

@@ -38,7 +38,9 @@ function _productionSources() internal pure returns (string[] memory paths);
 
 <i>
 
-True if `haystack` contains `needle` (naive substring scan).
+True if `haystack` contains `needle`. The scan is the `contains` cheatcode, not a byte loop in the EVM: the
+loop cost about 700M gas over 21 files and ran out of gas under `forge coverage`, whose instrumentation
+makes every opcode dearer.
 
 </i>
 

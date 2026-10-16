@@ -14,36 +14,59 @@
 //! 3. Reorg check: compare stored hash for `last_indexed_block` against
 //!    the chain's hash at the same height. On mismatch walk back, then
 //!    `DELETE WHERE block_number > root` and reset `last_indexed_block`.
-//! 4. For the range `[last+1, target]`: fetch all watched logs, fetch
-//!    each block (header+txs), upsert blocks/transactions/events.
+//!    The rows that are not block-numbered are reconciled in the same
+//!    transaction: `vaults` (a registration above the root is deleted) and
+//!    `committee_agents` (derived again from its history, X7 / DI-8).
+//! 4. For the range `[last+1, target]`: fetch all watched logs (the configured
+//!    contracts, every `vaults` row whatever its status (DI-2), and each of
+//!    those vaults' ExclusionLedger (X7)), fetch the header of each block
+//!    that has one, and the receipt of each
+//!    transaction that carries one (never the block's other transactions, X6),
+//!    upsert blocks/transactions/events. Before that fetch, the registry's
+//!    `VaultRegistered` logs of the same range are read first, so a vault
+//!    registered inside the range is in the address set and its own logs from
+//!    the registration block on are fetched in the same tick (issue 1796,
+//!    DI-1). Its ledger is read at its registration block.
 //! 5. State snapshots — for every contract whose events touched a block
 //!    in this range, take a snapshot at that block. Sampling cadence
-//!    (issue 1768): a vault with no row gets one at the target block. After
-//!    that, each tick reads the vault and writes a new row only when `total_assets`,
-//!    `total_supply`, `exit_fee_bps`, either cap or the paused flag differs
-//!    from the newest row, or when the newest row is at least
-//!    `SNAPSHOT_HEARTBEAT_BLOCKS` (7200 blocks) behind, which writes an
+//!    (issues 1768, 1781): a vault with no row gets one at the target block.
+//!    After that a tick reads the vault at the target only when it emitted a
+//!    watched log in the tick, holds nothing (zero TVL), has an unknown cap or
+//!    exit value, or its newest row is at least `SNAPSHOT_HEARTBEAT_BLOCKS` (7200 blocks)
+//!    behind ([`snapshot_read`]). A read writes a new row only when `total_assets`,
+//!    `total_supply`, `exit_fee_bps`, either cap, the paused flag or the exit value
+//!    differs from the newest row, except the heartbeat read, which writes an
 //!    identical row on purpose. So every vault has a row at least once per
 //!    heartbeat interval. A zero-TVL vault is NOT re-snapshotted every tick.
 //!    A row with unknown (NULL) caps (issue 1741) is filled by the same
 //!    per-tick read once the caps answer, without repeated identical rows.
+//!    The exit value is `previewRedeem(totalSupply())`, what redeeming every
+//!    share pays after the exit costs; the API prices a position with it
+//!    (core 1795, QA plan X8). A row without it (older than migration 0026)
+//!    is filled the same way.
+//!    Committee regime snapshots are re-derived at the target block as well,
+//!    so a signal that ages out of the freshness window leaves
+//!    `/v1/regime/feed` within one tick, with no event to trigger it (DI-3).
 //! 6. Close the run with `last_indexed_block = target`.
 //!
 //! All errors short-circuit and write to the run's `error` column;
 //! `last_indexed_block` is left at the last block we successfully
-//! committed, so the next run resumes there.
+//! committed, so the next run resumes there. A failed run still records the
+//! chain head it read in step 2, so the head-minus-cursor lag that `/health`
+//! and the watchdog read keeps growing while the indexer is wedged (DI-5).
 
 use crate::abi::{
-    IConsensusRecommendationReceiptEvents, IGatewayEvents, IGovernedUpgradeEvents,
-    IInvestmentCommitteePolicyEvents, IPortfolioRouterEvents, ITimelockEvents, IVaultEvents,
-    IVaultReads, IVaultRegistryEvents, Topics,
+    IConsensusRecommendationReceiptEvents, IExclusionLedgerEvents, IExclusionLedgerReads,
+    IGatewayEvents, IGovernedUpgradeEvents, IInvestmentCommitteePolicyEvents,
+    IPortfolioRouterEvents, IRobotMoneyVaultReads, ITimelockEvents, IVaultEvents, IVaultReads,
+    IVaultRegistryEvents, Topics,
 };
 use crate::db::{Db, DbError, ProxyBackfillProgress, ReceiptVerification};
 use crate::rpc::{JsonRpc, LogEntry, RpcError};
 use crate::{CONFIRMATIONS, SNAPSHOT_HEARTBEAT_BLOCKS};
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_sol_types::{SolCall, SolEvent};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, thiserror::Error)]
 pub enum IndexerError {
@@ -77,8 +100,8 @@ pub struct IndexerConfig {
     pub router_governance: Option<Address>,
     /// Optional PortfolioRouter contract address (may differ from
     /// `router_governance`).  When set, the indexer ingests `WeightsSet`
-    /// and `DefaultWeightsSet` events emitted by direct admin calls to
-    /// `setWeights()` / `setDefaultWeights()` (the demo-seed path), and
+    /// and `DefaultWeightsSet` events emitted by `setWeights()` (which
+    /// `RouterGovernance.applyReceipt` calls) / `setDefaultWeights()`, and
     /// watches `RouterDeposit` events to take a fresh TVL snapshot of every
     /// registered vault in any block where a router deposit is processed —
     /// ensuring deposits via the router are reflected in the TVL index without
@@ -245,6 +268,8 @@ pub struct IndexerOutcome {
     pub error: Option<String>,
     /// The chain head (`eth_blockNumber`) this tick saw. `None` when the tick failed before reading it.
     /// The explorer reports it next to the last indexed block so a reader can see how far behind the index is.
+    /// A tick that read the head and then failed records it too (DI-5): a wedged indexer's head keeps moving
+    /// while its cursor does not, so `/health` and the watchdog see the lag grow instead of a frozen one.
     pub chain_head_block: Option<i64>,
     /// True when the tick failed because an endpoint refused the request (HTTP 401 or 403). That is a final
     /// answer that retrying every tick cannot change, so the caller backs off instead of hammering.
@@ -926,16 +951,32 @@ pub async fn run_once(
     // error arm cannot persist a cursor pointing at a block this chain never
     // had.
     let mut rollback_cursor = last_indexed;
+    // The chain head `run_inner` read, published as soon as it is read so the error arm can record it
+    // (DI-5). Without it a tick that fails after `eth_blockNumber` (an FK miss, a refused `eth_getLogs`)
+    // left `chain_head_block` NULL, the newest recorded head stayed where the last good tick saw it, and a
+    // wedged indexer read as "5 blocks behind" forever.
+    let mut seen_head: Option<i64> = None;
 
     // T12: drain a bounded batch of the unverified-receipt backlog every tick.
     // Deliberately BEFORE `run_inner`, so it runs on a tick whose log scan later
     // fails: repairing a stale `verified = false` must not depend on the chain
     // being reachable, and the payload host and the RPC fail independently.
-    let repaired = sweep_unverified_receipts(db, cfg).await;
+    //
+    // Security round 3: the vote memo sweep runs after it under the same deadline, so both sweeps
+    // together cost a tick at most SWEEP_TIME_BUDGET.
+    let sweep_deadline = tokio::time::Instant::now() + SWEEP_TIME_BUDGET;
+    let repaired = sweep_unverified_receipts(db, cfg, sweep_deadline).await;
     if repaired > 0 {
         tracing::info!(
             repaired,
             "consensus receipt re-verification sweep repaired rows this tick"
+        );
+    }
+    let repaired_votes = sweep_unverified_votes(db, cfg, sweep_deadline).await;
+    if repaired_votes > 0 {
+        tracing::info!(
+            repaired_votes,
+            "committee vote re-verification sweep verified votes this tick"
         );
     }
 
@@ -946,6 +987,7 @@ pub async fn run_once(
         last_indexed,
         deploy_floor,
         &mut rollback_cursor,
+        &mut seen_head,
     )
     .await
     {
@@ -976,6 +1018,12 @@ pub async fn run_once(
             // run's cursor down to root.  Recording `rollback_cursor` here
             // keeps the failed run's audit row internally consistent with the
             // rollback.
+            //
+            // The head this tick read is recorded even though the tick failed
+            // (DI-5): it is what makes a wedged indexer's lag grow.
+            if let Some(head) = seen_head {
+                db.set_run_chain_head(run_id, head).await?;
+            }
             db.finish_run(run_id, None, rollback_cursor, 0, 0, Some(&msg))
                 .await?;
             IndexerOutcome {
@@ -986,7 +1034,7 @@ pub async fn run_once(
                 rows_inserted: 0,
                 reorg_detected: false,
                 error: Some(msg),
-                chain_head_block: None,
+                chain_head_block: seen_head,
                 refused,
             }
         }
@@ -1010,6 +1058,495 @@ pub fn tick_target(
     (from_block <= target).then_some(target)
 }
 
+/// What one `exclusionLedger()` read of a vault said.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedgerRead {
+    /// The vault's ledger: a `RobotMoneyVault`.
+    Ledger(Address),
+    /// The vault has no `exclusionLedger()` (the call reverted, or answered a word that is not an
+    /// address): a `BasketVault`. Final, and stored so the vault is not read again.
+    NoLedger,
+    /// No answer yet: no code at the read block (the configured vault before its deployment), a
+    /// proxy not yet initialized (the zero address), or a reply that did not decode. Not stored,
+    /// so the next tick reads again.
+    Unknown,
+}
+
+/// Classify the reply of `exclusionLedger()` on a vault (QA plan security round 1, core 1820).
+///
+/// A revert is a final "no ledger": `exclusionLedger()` is a plain storage getter, and only a
+/// contract without it (a `BasketVault`, also behind its proxy) reverts. Any other server error
+/// (`header not found`, `missing trie node`), a refused endpoint or a transport failure is
+/// returned as an error, so the tick fails and its cursor stays: a ledger the indexer failed to
+/// read would lose its events for the whole range.
+pub fn classify_ledger_read(reply: Result<Bytes, RpcError>) -> Result<LedgerRead, RpcError> {
+    match reply {
+        Ok(bytes) if bytes.len() >= 32 => {
+            let word = &bytes[..32];
+            if word[..12].iter().any(|b| *b != 0) {
+                return Ok(LedgerRead::NoLedger);
+            }
+            let ledger = Address::from_slice(&word[12..]);
+            Ok(if ledger == Address::ZERO {
+                LedgerRead::Unknown
+            } else {
+                LedgerRead::Ledger(ledger)
+            })
+        }
+        Ok(_) => Ok(LedgerRead::Unknown),
+        Err(RpcError::Server { message, .. })
+            if message.to_ascii_lowercase().contains("revert") =>
+        {
+            Ok(LedgerRead::NoLedger)
+        }
+        Err(RpcError::Decode { .. }) => Ok(LedgerRead::Unknown),
+        Err(e) => Err(e),
+    }
+}
+
+/// The `ExclusionLedger`s of each vault in `vaults` that has one, read from the chain (QA plan X7,
+/// core 1820; security rounds 1 to 3), oldest first.
+///
+/// Every vault is a governed proxy (ADR-0014). Its initializer creates the ledger
+/// (`contracts/RobotMoneyVault.sol`), so nothing about the vault's own address predicts it. The indexer used to derive it as the vault's
+/// CREATE address at nonce 1 (true while the vault constructor ran `new ExclusionLedger`): on a
+/// proxy that address holds no code, and no exclusion record was ever indexed.
+///
+/// The vault's own `exclusionLedger()` getter is the authority. Each entry of `vaults` is a vault
+/// and the block to read it at: the first block of the tick's range, or a new vault's registration
+/// block. A vault with no stored answer is read there once ([`read_ledger_at`]) and the answer is
+/// stored in `vault_exclusion_ledgers` as of the block it was read at. Later ticks read the table,
+/// plus one read per `Upgraded` or `Initialized` event of the vault
+/// ([`exclusion_ledgers_moved_by_upgrades`]): a reinitializer is the one way to move the ledger.
+/// Every ledger a vault ever named stays in the answer, so a late claim against an old ledger still
+/// indexes. The emitter gate of `handle_log` ([`vault_of_exclusion_ledger`]) accepts an
+/// exclusion-record event only from a ledger stored here.
+///
+/// Security round 3: the read used to be made at the tick's safe head. A rebuild from the deploy
+/// floor, or a vault discovered after a ledger move, then stored only the newest ledger, and the
+/// older ledger's records, recoveries and claims were never fetched. Read at the range's own block,
+/// the first answer is the ledger of that time, and each later move is a trigger in the range.
+pub async fn exclusion_ledgers_of(
+    db: &Db,
+    rpc: &JsonRpc,
+    chain_id: i64,
+    vaults: &[(Address, u64)],
+    safe_head: u64,
+) -> Result<BTreeMap<Address, Vec<Address>>, IndexerError> {
+    let mut stored: BTreeMap<[u8; 20], Vec<Option<[u8; 20]>>> = BTreeMap::new();
+    for (vault, ledger) in db.vault_exclusion_ledgers(chain_id).await? {
+        stored.entry(vault).or_default().push(ledger);
+    }
+    let mut out = BTreeMap::new();
+    for &(vault, read_block) in vaults {
+        let ledgers: Vec<Address> = match stored.get(&vault.into_array()) {
+            Some(answers) => answers
+                .iter()
+                .flatten()
+                .map(|l| Address::from(*l))
+                .collect(),
+            None => {
+                match read_exclusion_ledger(db, rpc, chain_id, vault, read_block, safe_head).await?
+                {
+                    LedgerRead::Ledger(ledger) => vec![ledger],
+                    LedgerRead::NoLedger | LedgerRead::Unknown => Vec::new(),
+                }
+            }
+        };
+        if !ledgers.is_empty() {
+            out.insert(vault, ledgers);
+        }
+    }
+    Ok(out)
+}
+
+/// Read `vault`'s `exclusionLedger()` at `block` (the state after that block), and say which block
+/// answered (security round 3).
+///
+/// A node that keeps no state at `block` (a pruned, non-archive node answers `missing trie node`,
+/// or a provider refuses an archive call) is asked at `safe_head` instead, which every node holds.
+/// That answer names only the vault's newest ledger, so on such a node a ledger the vault moved
+/// away from before `safe_head` is learned only by an indexer that was live before the move. A
+/// transport failure is returned as an error, so the tick fails and reads again.
+async fn read_ledger_at(
+    rpc: &JsonRpc,
+    vault: Address,
+    block: u64,
+    safe_head: u64,
+) -> Result<(LedgerRead, u64), IndexerError> {
+    let data = Bytes::from(IRobotMoneyVaultReads::exclusionLedgerCall {}.abi_encode());
+    match classify_ledger_read(rpc.eth_call_at(vault, data.clone(), block).await) {
+        Ok(read) => Ok((read, block)),
+        Err(e @ (RpcError::Server { .. } | RpcError::Refused { .. })) if block != safe_head => {
+            tracing::warn!(
+                vault = %vault,
+                block,
+                safe_head,
+                error = %e,
+                "the node holds no state to read the vault's exclusionLedger() at this block; \
+                 reading it at the safe head instead, so a ledger the vault named only before \
+                 then is not learned (use an archive RPC to index every ledger)"
+            );
+            let read = classify_ledger_read(rpc.eth_call_at(vault, data, safe_head).await)?;
+            Ok((read, safe_head))
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Read `vault`'s `exclusionLedger()` at `read_block` ([`read_ledger_at`]) and store a final
+/// answer (a ledger, or no ledger) as of the block that answered. An [`LedgerRead::Unknown`]
+/// answer (no code or no initialized ledger there yet) is not stored, and the vault is read again
+/// next tick.
+async fn read_exclusion_ledger(
+    db: &Db,
+    rpc: &JsonRpc,
+    chain_id: i64,
+    vault: Address,
+    read_block: u64,
+    safe_head: u64,
+) -> Result<LedgerRead, IndexerError> {
+    let (read, answered_at) = read_ledger_at(rpc, vault, read_block, safe_head).await?;
+    match read {
+        LedgerRead::Ledger(ledger) => {
+            db.insert_vault_exclusion_ledger(
+                chain_id,
+                vault.into_array(),
+                Some(ledger.into_array()),
+                answered_at as i64,
+            )
+            .await?;
+            tracing::info!(
+                vault = %vault,
+                ledger = %ledger,
+                read_block = answered_at,
+                "vault's ExclusionLedger read from the chain"
+            );
+        }
+        LedgerRead::NoLedger => {
+            db.insert_vault_exclusion_ledger(
+                chain_id,
+                vault.into_array(),
+                None,
+                answered_at as i64,
+            )
+            .await?;
+        }
+        LedgerRead::Unknown => {
+            tracing::debug!(
+                vault = %vault,
+                read_block = answered_at,
+                "vault named no ExclusionLedger yet; reading again next tick"
+            );
+        }
+    }
+    Ok(read)
+}
+
+/// The ledgers that the `Upgraded` and `Initialized` events in `logs` moved a vault in `vaults` to,
+/// each with the block of the first event in `logs` that named it (security rounds 2 and 3).
+///
+/// `exclusionLedger()` is a plain storage variable, and under ADR-0014 the way to fix a ledger bug
+/// is a governed upgrade whose reinitializer points the vault at a new ledger. The indexer read
+/// the getter once and kept the answer for ever, so it went on watching the old ledger and dropped
+/// every record of the new one at the emitter gate. A basket vault that gained a ledger by an
+/// upgrade kept its "no ledger" row the same way.
+///
+/// Security round 3: an upgrade installed without a call leaves its reinitializer pending
+/// (an upgrade whose call data is empty), and a later timelock operation runs it. That transaction
+/// emits `Initialized(uint64)`, not `Upgraded`, so `Initialized` is a trigger too. Each trigger is
+/// read at its own block ([`read_ledger_at`]), not at the safe head: two moves in one range, or a
+/// rebuild that reaches a move long after it happened, name each ledger in turn. A vault's own
+/// first `Initialized` names its first ledger the same way.
+///
+/// A ledger the vault has not named before is stored as of the trigger's block, so a reorg that
+/// orphans the trigger drops it too, and is returned so the tick fetches its logs from that block
+/// before the cursor moves. Earlier rows stay.
+pub async fn exclusion_ledgers_moved_by_upgrades(
+    db: &Db,
+    rpc: &JsonRpc,
+    chain_id: i64,
+    topics: &Topics,
+    logs: &[LogEntry],
+    vaults: &BTreeSet<Address>,
+    safe_head: u64,
+) -> Result<BTreeMap<Address, u64>, IndexerError> {
+    // One read per (vault, block): an `upgradeToAndCall` emits `Upgraded` and `Initialized`
+    // together.
+    let triggers: BTreeSet<(Address, u64)> = logs
+        .iter()
+        .filter(|log| {
+            matches!(
+                log.topics.first(),
+                Some(t) if *t == topics.proxy_upgraded || *t == topics.proxy_initialized
+            ) && vaults.contains(&log.address)
+        })
+        .map(|log| (log.address, log.block_number))
+        .collect();
+    if triggers.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let mut known: BTreeMap<[u8; 20], Vec<[u8; 20]>> = BTreeMap::new();
+    for (vault, ledger) in db.vault_exclusion_ledgers(chain_id).await? {
+        if let Some(ledger) = ledger {
+            known.entry(vault).or_default().push(ledger);
+        }
+    }
+    let mut moved: BTreeMap<Address, u64> = BTreeMap::new();
+    for (vault, trigger_block) in triggers {
+        let (read, answered_at) = read_ledger_at(rpc, vault, trigger_block, safe_head).await?;
+        let LedgerRead::Ledger(ledger) = read else {
+            continue;
+        };
+        let named = known.entry(vault.into_array()).or_default();
+        if named.contains(&ledger.into_array()) {
+            continue;
+        }
+        db.insert_vault_exclusion_ledger(
+            chain_id,
+            vault.into_array(),
+            Some(ledger.into_array()),
+            trigger_block as i64,
+        )
+        .await?;
+        named.push(ledger.into_array());
+        tracing::warn!(
+            vault = %vault,
+            ledger = %ledger,
+            trigger_block,
+            read_block = answered_at,
+            "an upgrade or reinitializer moved the vault to a new ExclusionLedger; watching it \
+             from that block and keeping the old one"
+        );
+        let first = moved.entry(ledger).or_insert(trigger_block);
+        *first = (*first).min(trigger_block);
+    }
+    Ok(moved)
+}
+
+/// The watched vault whose ExclusionLedger is `ledger` ([`exclusion_ledgers_of`] stored it), or
+/// `None`. Exclusion-record events are rare, so one read per event is cheap.
+async fn vault_of_exclusion_ledger(
+    db: &Db,
+    cfg: &IndexerConfig,
+    ledger: Address,
+) -> Result<Option<Address>, IndexerError> {
+    Ok(db
+        .vault_of_exclusion_ledger(cfg.chain_id, ledger.into_array())
+        .await?
+        .map(Address::from))
+}
+
+/// Read and store the snapshot balance of each holder that a claim in `logs` revealed (QA plan X7,
+/// core issue 1820). Returns the rows written.
+///
+/// `handle_log` stored the records. A claim is `recovered * balanceAt(holder, id) / snapshotSupply`,
+/// and `balanceAt` lives on the chain. The holders a record's snapshot covers are read by
+/// [`read_snapshot_balances`] under a budget (security round 2). A claim from a holder with no
+/// stored balance (one who received its shares by a plain transfer, which `wallet_positions` does
+/// not follow) reads that holder here, stored at the claim's block. One read per claim log, and a
+/// claim is a transaction that pays out, so this stays small.
+///
+/// The read is made at `read_block` (the tick's safe head), not at the log's block. `balanceAt` for an
+/// existing record never changes, and the safe head is a block every node still holds state for, also
+/// during a catch-up against a node that keeps no archive. A failed read fails the tick like a failed
+/// `eth_getLogs`, so the cursor stays and the next tick reads again; every write is idempotent.
+async fn record_exclusion_balances(
+    db: &Db,
+    rpc: &JsonRpc,
+    cfg: &IndexerConfig,
+    topics: &Topics,
+    logs: &[LogEntry],
+    read_block: u64,
+) -> Result<u64, IndexerError> {
+    let mut rows = 0u64;
+    for log in logs {
+        if log.topics.first() != Some(&topics.exclusion_claimed) {
+            continue;
+        }
+        let ledger = log.address.into_array();
+        let d = IExclusionLedgerEvents::ExclusionClaimed::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("ExclusionClaimed: {e}")))?;
+        let id: i64 = d.exclusionId.try_into().unwrap_or(i64::MAX);
+        let holder = d.holder.into_array();
+        if db
+            .exclusion_record_vault(cfg.chain_id, ledger, id)
+            .await?
+            .is_none()
+            || db
+                .has_exclusion_holder_balance(cfg.chain_id, ledger, id, holder)
+                .await?
+        {
+            continue;
+        }
+        let balance =
+            exclusion_balance_at(rpc, log.address, holder, d.exclusionId, read_block).await?;
+        if balance > U256::ZERO {
+            rows += db
+                .insert_exclusion_holder_balance(
+                    cfg.chain_id,
+                    ledger,
+                    id,
+                    holder,
+                    balance,
+                    log.block_number as i64,
+                )
+                .await?;
+        }
+    }
+    Ok(rows)
+}
+
+/// Security round 2: the wall-clock budget of one tick's snapshot-balance pass
+/// ([`read_snapshot_balances`]).
+pub const SNAPSHOT_READ_TIME_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Candidate owners the snapshot pass loads from the database at a time.
+const SNAPSHOT_READ_BATCH: i64 = 256;
+
+/// Read the snapshot balance of the holders of every exclusion record not yet fully read, under
+/// [`SNAPSHOT_READ_TIME_BUDGET`] (QA plan X7, core 1820; security round 2). Returns the rows written.
+///
+/// When a record opened, the tick used to read `balanceAt` for every depositor in the vault's
+/// history, one eth_call at a time, and one failed read failed the tick. Deposits have no minimum
+/// and take any receiver, so about $1k of gas buys 100,000 dust holders, and the tick that indexed
+/// an exclusion during an adapter incident then made 100,000 sequential reads (hours), starting
+/// over on every refused one, while the watchdog evaluated nothing.
+///
+/// Now each tick reads holders in owner order until the budget is spent, and stores how far it got
+/// (`exclusion_snapshot_progress`), so the next tick goes on from there and a zero balance is not
+/// read again. Only an owner whose latest position before the record's block holds shares, or who
+/// has a position in that block, is read ([`Db::exclusion_snapshot_candidates`]; security round 3:
+/// a holder who exited later in the record's own block still has its claim). A failed or cut read
+/// ends the pass for this tick
+/// without failing the tick; that owner is read again next tick. The dapp reads claims on chain,
+/// so a snapshot that takes several ticks only delays the explorer's copy.
+///
+/// The read is made at `read_block` (the tick's safe head), as in [`record_exclusion_balances`]. Each
+/// balance is stored at the record's block, so it rolls back with the record.
+async fn read_snapshot_balances(
+    db: &Db,
+    rpc: &JsonRpc,
+    chain_id: i64,
+    read_block: u64,
+) -> Result<u64, IndexerError> {
+    let pending = db.exclusion_snapshots_pending(chain_id).await?;
+    if pending.is_empty() {
+        return Ok(0);
+    }
+    let deadline = tokio::time::Instant::now() + SNAPSHOT_READ_TIME_BUDGET;
+    let mut rows = 0u64;
+    for rec in pending {
+        let ledger = Address::from(rec.ledger_address);
+        let id = U256::from(rec.exclusion_id as u64);
+        let mut through = rec.read_through;
+        loop {
+            let holders = db
+                .exclusion_snapshot_candidates(
+                    chain_id,
+                    rec.vault_address,
+                    rec.ledger_address,
+                    rec.exclusion_id,
+                    rec.opened_block,
+                    through,
+                    SNAPSHOT_READ_BATCH,
+                )
+                .await?;
+            if holders.is_empty() {
+                db.set_exclusion_snapshot_progress(
+                    chain_id,
+                    rec.ledger_address,
+                    rec.exclusion_id,
+                    through,
+                    true,
+                    rec.opened_block,
+                )
+                .await?;
+                break;
+            }
+            let mut stopped = false;
+            for holder in holders {
+                if tokio::time::Instant::now() >= deadline {
+                    stopped = true;
+                    break;
+                }
+                let read = tokio::time::timeout_at(
+                    deadline,
+                    exclusion_balance_at(rpc, ledger, holder, id, read_block),
+                )
+                .await;
+                let balance = match read {
+                    Ok(Ok(balance)) => balance,
+                    Ok(Err(e)) => {
+                        tracing::warn!(
+                            ledger = %ledger,
+                            exclusion_id = rec.exclusion_id,
+                            holder = %Address::from(holder),
+                            error = %e,
+                            "snapshot balance read failed; the pass goes on from this holder next tick"
+                        );
+                        stopped = true;
+                        break;
+                    }
+                    Err(_) => {
+                        stopped = true;
+                        break;
+                    }
+                };
+                if balance > U256::ZERO {
+                    rows += db
+                        .insert_exclusion_holder_balance(
+                            chain_id,
+                            rec.ledger_address,
+                            rec.exclusion_id,
+                            holder,
+                            balance,
+                            rec.opened_block,
+                        )
+                        .await?;
+                }
+                through = Some(holder);
+            }
+            db.set_exclusion_snapshot_progress(
+                chain_id,
+                rec.ledger_address,
+                rec.exclusion_id,
+                through,
+                false,
+                rec.opened_block,
+            )
+            .await?;
+            if stopped {
+                tracing::info!(
+                    ledger = %ledger,
+                    exclusion_id = rec.exclusion_id,
+                    budget_secs = SNAPSHOT_READ_TIME_BUDGET.as_secs(),
+                    "exclusion snapshot balances: this tick's pass stopped; the rest waits for the \
+                     next tick"
+                );
+                return Ok(rows);
+            }
+        }
+    }
+    Ok(rows)
+}
+
+/// `ExclusionLedger.balanceAt(holder, id)` at `block`.
+async fn exclusion_balance_at(
+    rpc: &JsonRpc,
+    ledger: Address,
+    holder: [u8; 20],
+    id: U256,
+    block: u64,
+) -> Result<U256, IndexerError> {
+    let data = IExclusionLedgerReads::balanceAtCall {
+        holder: Address::from(holder),
+        id,
+    }
+    .abi_encode();
+    call_u256(rpc, ledger, data, block).await
+}
+
 async fn run_inner(
     db: &Db,
     rpc: &JsonRpc,
@@ -1017,6 +1554,7 @@ async fn run_inner(
     last_indexed: Option<i64>,
     deploy_floor: u64,
     rollback_cursor: &mut Option<i64>,
+    seen_head: &mut Option<i64>,
 ) -> Result<IndexerOutcome, IndexerError> {
     let topics = Topics::new();
 
@@ -1047,6 +1585,8 @@ async fn run_inner(
     let from_block = first_block(last_indexed, deploy_floor);
 
     let tip = rpc.block_number().await?;
+    // Publish the head before any later step can fail, so the error arm records it (DI-5).
+    *seen_head = i64::try_from(tip).ok();
     let safe_head = tip.saturating_sub(CONFIRMATIONS);
 
     // Say out loud when this run cannot converge. The failure this guards
@@ -1110,6 +1650,13 @@ async fn run_inner(
     // (scan finding IDX-6). `get_logs` filters server-side on the address set, so
     // a registered vault that emits a withdrawal in a block where the gateway is
     // idle would otherwise be dropped entirely.
+    //
+    // Every status, not only Active (DI-2). A DepositsPaused (1) or Retired (2) vault still
+    // holds shares, and its holders still redeem from it (ADR-0009: a retired vault is
+    // withdraw-only). Dropping it here lost those `Withdraw` logs, so positions kept exited
+    // shares, the watchdog's burn volume missed them, and the vault's last snapshot (the
+    // old rmPROTO after its redeploy) stayed as its TVL forever. Status is a product
+    // question (`/v1/stats.total_tvl` leaves Retired vaults out), never an indexing one.
     let mut watched = cfg.watched_addresses();
     let mut registered_vaults: Vec<Vec<u8>> = sqlx::query_scalar(
         "SELECT vault_address FROM vaults WHERE chain_id = $1 ORDER BY vault_address",
@@ -1120,7 +1667,11 @@ async fn run_inner(
     .map_err(DbError::from)?;
     // Discover registrations in this very interval before requesting vault logs.
     // This includes standalone exits in the registration/cutover block and the
-    // interval before the next tick discovers the new generation.
+    // interval before the next tick discovers the new generation (issue 1796, DI-1).
+    // `registered_in_range` keeps the block of each newly found vault's registration: its
+    // ExclusionLedger is read there (X7), not at the range's first block, where the vault may
+    // not exist yet.
+    let mut registered_in_range: BTreeMap<Address, u64> = BTreeMap::new();
     if let Some(registry) = cfg.registry {
         let discovery = rpc
             .get_logs(
@@ -1140,6 +1691,9 @@ async fn run_inner(
             let address = event.vault.as_slice().to_vec();
             if !registered_vaults.contains(&address) {
                 registered_vaults.push(address);
+                registered_in_range.insert(event.vault, log.block_number);
+            } else if let Some(first) = registered_in_range.get_mut(&event.vault) {
+                *first = (*first).min(log.block_number);
             }
         }
     }
@@ -1149,6 +1703,36 @@ async fn run_inner(
             if !watched.contains(&address) {
                 watched.push(address);
             }
+        }
+    }
+    // The exclusion records of a vault (QA plan X7, core 1820) are events of its ExclusionLedger,
+    // which emits them from its own address. Watch the ledger of every vault watched above, as the
+    // vault's own `exclusionLedger()` names it (security round 1: a derived address holds no code
+    // on a proxy vault). A vault of another family has no ledger.
+    let ledger_vaults: Vec<Address> = std::iter::once(cfg.vault)
+        .chain(
+            registered_vaults
+                .iter()
+                .filter_map(|v| <[u8; 20]>::try_from(v.as_slice()).ok())
+                .map(Address::from),
+        )
+        .collect();
+    // Each vault with no stored answer is read at the first block of the range (security round 3),
+    // or, for a vault registered inside the range, at its registration block (DI-1).
+    let first_reads: Vec<(Address, u64)> = ledger_vaults
+        .iter()
+        .map(|&vault| {
+            let block = registered_in_range
+                .get(&vault)
+                .copied()
+                .unwrap_or(from_block as u64);
+            (vault, block)
+        })
+        .collect();
+    let ledgers = exclusion_ledgers_of(db, rpc, cfg.chain_id, &first_reads, safe_head).await?;
+    for ledger in ledgers.into_values().flatten() {
+        if !watched.contains(&ledger) {
+            watched.push(ledger);
         }
     }
     // The registry's proxy events are fetched whatever INDEXER_MULTI_VAULT_EVENTS
@@ -1165,6 +1749,48 @@ async fn run_inner(
         .await?;
     logs.retain(|log| !proxy_only.contains(&log.address) || is_proxy_log(&topics, log));
 
+    // Ledger moves (security rounds 2 and 3). A vault that emitted `Upgraded` or `Initialized` in
+    // this range is read again at that block: a reinitializer is the one way to point it at a new
+    // ExclusionLedger, and it runs either in the upgrade's own transaction or in a later timelock
+    // operation that emits only `Initialized`. The new ledger was not in the filter above, so its
+    // logs from that block to `target` are fetched now, before the cursor advances. They are
+    // appended, so `handle_log` applies the upgrade and stores nothing out of order.
+    let upgrade_vaults: BTreeSet<Address> = ledger_vaults.iter().copied().collect();
+    let moved = exclusion_ledgers_moved_by_upgrades(
+        db,
+        rpc,
+        cfg.chain_id,
+        &topics,
+        &logs,
+        &upgrade_vaults,
+        safe_head,
+    )
+    .await?;
+    let moved: BTreeMap<Address, u64> = moved
+        .into_iter()
+        .filter(|(ledger, _)| !watched.contains(ledger))
+        .collect();
+    if let Some(&first_move) = moved.values().min() {
+        let new_ledgers: Vec<Address> = moved.keys().copied().collect();
+        let mut late = rpc
+            .get_logs(first_move, target, &new_ledgers, &topic0)
+            .await?;
+        late.retain(|l| {
+            moved
+                .get(&l.address)
+                .is_some_and(|&from| l.block_number >= from)
+        });
+        tracing::info!(
+            ledgers = new_ledgers.len(),
+            first_move,
+            target,
+            late_logs = late.len(),
+            "vaults moved to a new ExclusionLedger in this tick; fetched its logs before \
+             advancing the cursor"
+        );
+        logs.extend(late);
+    }
+
     // Group logs by (block_number, contract) so we know which blocks
     // need state snapshots per ADR §3.5 trigger 1.
     let mut event_blocks_per_contract: BTreeSet<(u64, Address)> = BTreeSet::new();
@@ -1176,15 +1802,39 @@ async fn run_inner(
 
     let mut rows_inserted: i64 = 0;
 
-    // Ingest blocks (and their txs) for every block we touch — only
-    // those with at least one watched event for now, so we don't pull
-    // every tx on Base. The §11 acceptance criterion says "each row
-    // carries chain_id and block_number"; non-event blocks aren't
-    // required by the schema.
+    // Ingest a `blocks` row for every block we touch — only those with at least one watched event,
+    // so we don't pull every block on Base. The §11 acceptance criterion says "each row carries
+    // chain_id and block_number"; non-event blocks aren't required by the schema.
+    //
+    // `transactions` holds only the transactions that carry a watched log (QA plan X6, DI-6). The
+    // hash, the block and the index come from the log; one receipt per transaction adds from, to and
+    // status. The header is fetched without its transactions. Pulling every transaction of the block
+    // with a serial receipt for each cost one request per Base transaction in every event block and
+    // dominated a catch-up (issue 1780). Every read of a block happens before its rows are written, so
+    // a null receipt (an error, see `JsonRpc::tx_receipt`) fails the tick with nothing half-written.
     let mut created: Vec<(alloy_primitives::B256, Address)> = Vec::new();
+    let mut log_txs: BTreeMap<u64, BTreeMap<alloy_primitives::B256, u32>> = BTreeMap::new();
+    for log in &logs {
+        log_txs
+            .entry(log.block_number)
+            .or_default()
+            .entry(log.tx_hash)
+            .or_insert(log.tx_index);
+    }
     for &bn in &blocks_with_events {
-        let (header, txs) = rpc.block_with_txs(bn).await?;
-        created.extend(created_contracts(&txs));
+        let header = rpc
+            .block_header(bn)
+            .await?
+            .ok_or_else(|| RpcError::Server {
+                method: "eth_getBlockByNumber".into(),
+                message: format!("block {bn} missing"),
+            })?;
+        let mut txs = Vec::new();
+        for (hash, index) in log_txs.get(&bn).into_iter().flatten() {
+            let receipt = rpc.tx_receipt(*hash).await?;
+            created.extend(receipt.contract_address.map(|c| (*hash, c)));
+            txs.push((*hash, *index, receipt));
+        }
         let r = db
             .insert_block(
                 cfg.chain_id,
@@ -1195,16 +1845,16 @@ async fn run_inner(
             )
             .await?;
         rows_inserted += r as i64;
-        for t in txs {
+        for (hash, index, receipt) in txs {
             let r = db
                 .insert_transaction(
                     cfg.chain_id,
-                    t.tx_hash.0,
+                    hash.0,
                     bn as i64,
-                    t.tx_index as i32,
-                    t.from.into_array(),
-                    t.to.map(|a| a.into_array()),
-                    t.status as i16,
+                    index as i32,
+                    receipt.from.into_array(),
+                    receipt.to.map(|a| a.into_array()),
+                    i16::from(receipt.status),
                 )
                 .await?;
             rows_inserted += r as i64;
@@ -1231,14 +1881,39 @@ async fn run_inner(
         }
     }
 
-    // Decode + insert events.
+    // Decode + insert events. The payload fetches of the receipts among them and the memo fetches
+    // of the votes share one budget (security rounds 2 and 3), so a tick full of receipts or votes
+    // whose hosts never answer cannot stall it.
+    let inline_fetch_deadline = tokio::time::Instant::now() + INLINE_FETCH_TIME_BUDGET;
     for log in &logs {
-        rows_inserted += handle_log_in_range(db, cfg, &topics, log, &created).await? as i64;
+        rows_inserted +=
+            handle_log_within(db, cfg, &topics, log, Some(inline_fetch_deadline), &created).await?
+                as i64;
+    }
+
+    // Each holder's share balance at the snapshot of every exclusion record (X7, core 1820).
+    // `handle_log` stored the records; the balances need a chain read.
+    rows_inserted +=
+        record_exclusion_balances(db, rpc, cfg, &topics, &logs, safe_head).await? as i64;
+    // The holders of each record's snapshot, under a per-tick budget (security round 2).
+    rows_inserted += read_snapshot_balances(db, rpc, cfg.chain_id, safe_head).await? as i64;
+
+    // Committee regime snapshots at the tick's target (DI-3). A committee signal stops counting
+    // once it is older than COMMITTEE_VOTE_FRESHNESS_BLOCKS, and no log announces that, so the
+    // event-time refresh in `handle_log` never sees it. Re-deriving the tilt here writes a row only
+    // for a vault whose aggregate changed (a zero-count row when nobody counts any more), so
+    // `/v1/regime/feed` agrees with `/v1/committee/tilts` at the cursor this tick advances to.
+    if cfg.investment_committee.is_some() {
+        rows_inserted += db
+            .refresh_regime_snapshots(cfg.chain_id, target as i64, None)
+            .await? as i64;
     }
 
     // Reuse the registered-vault set gathered above for the watched-address
     // union; it drives both the event-driven snapshot (router-deposit path) and
-    // the heartbeat.
+    // the heartbeat. Like the watched set it holds every status (DI-2): a retired
+    // vault's TVL and supply keep moving while its holders exit, and its supply is
+    // the operator's open-obligation signal (retired-v1-vault-maintenance.md).
     let mut heartbeat_vaults = vec![cfg.vault];
     for vault in &registered_vaults {
         if let Ok(bytes) = <[u8; 20]>::try_from(vault.as_slice()) {
@@ -1294,15 +1969,24 @@ async fn run_inner(
     }
 
     // Heartbeat snapshots — cover the legacy configured vault and every
-    // vault learned from VaultRegistry events, including retired holder exits. The PK on
+    // vault learned from VaultRegistry events, whatever its status. The PK on
     // (chain_id, contract, block_number) deduplicates against event-driven
     // snapshots.
+    //
+    // A vault is read at `target` only when `snapshot_read` says so (issue 1781): it has no row, its
+    // heartbeat is due, it is zero-TVL, a cap or its exit value is unknown, or it emitted a watched log
+    // in this tick. Reading every vault every tick cost seven `eth_call`s per vault per tick, which
+    // dominated a catch-up with four vaults. A quiet vault's state moves only through its own events (deposits,
+    // withdrawals, cap, fee, pause, shutdown, in-kind exits, all watched) or through yield and prices,
+    // which the heartbeat samples.
+    let vaults_with_logs: BTreeSet<Address> = logs.iter().map(|l| l.address).collect();
 
     for vault in heartbeat_vaults {
         // The newest stored row decides whether a heartbeat read is worth a new row (issue 1768).
-        let last_snap: Option<(i64, VaultState)> = sqlx::query_as::<_, (i64, String, String, i64, Option<String>, Option<String>, bool)>(
+        let last_snap: Option<(i64, VaultState)> = sqlx::query_as::<_, (i64, String, String, i64, Option<String>, Option<String>, bool, Option<String>)>(
             "SELECT block_number, CAST(total_assets AS text), CAST(total_supply AS text), exit_fee_bps, \
-                    CAST(tvl_cap AS text), CAST(per_deposit_cap AS text), paused \
+                    CAST(tvl_cap AS text), CAST(per_deposit_cap AS text), paused, \
+                    CAST(preview_redeem_total AS text) \
              FROM vault_snapshots \
              WHERE chain_id = $1 AND contract = $2 \
              ORDER BY block_number DESC LIMIT 1",
@@ -1312,30 +1996,31 @@ async fn run_inner(
         .fetch_optional(db.pool())
         .await
         .map_err(DbError::from)?
-        .map(|(bn, total_assets, total_supply, exit_fee_bps, tvl_cap, per_deposit_cap, paused)| {
+        .map(|(bn, total_assets, total_supply, exit_fee_bps, tvl_cap, per_deposit_cap, paused, preview_redeem_total)| {
             (
                 bn,
-                VaultState { total_assets, total_supply, exit_fee_bps, tvl_cap, per_deposit_cap, paused },
+                VaultState {
+                    total_assets,
+                    total_supply,
+                    exit_fee_bps,
+                    tvl_cap,
+                    per_deposit_cap,
+                    paused,
+                    preview_redeem_total,
+                },
             )
         });
-        match &last_snap {
-            None => {
-                rows_inserted +=
-                    snapshot_vault_or_skip(db, rpc, cfg.chain_id, vault, target, None).await;
-            }
-            Some((prev, state)) => {
-                let due = (target as i64 - prev) >= SNAPSHOT_HEARTBEAT_BLOCKS as i64;
-                // Every tick reads the vault, so a change that no watched event announced (a direct
-                // deposit, a cap change, a pause) is caught within one tick. The read writes a row only
-                // when the state differs from the newest row or the heartbeat is due (issue 1768). A row
-                // whose caps are unknown (issue 1741) is filled by the same read once the caps answer, and
-                // while they stay unreadable the unchanged state writes nothing.
-                let skip_if_equal = if due { None } else { Some(state) };
-                rows_inserted +=
-                    snapshot_vault_or_skip(db, rpc, cfg.chain_id, vault, target, skip_if_equal)
-                        .await;
-            }
-        }
+        let newest = last_snap.as_ref().map(|(bn, state)| (*bn, state));
+        // A read writes a row only when the state differs from the newest row or the heartbeat is due
+        // (issue 1768). A row whose caps are unknown (issue 1741) is filled by the same read once the
+        // caps answer, and while they stay unreadable the unchanged state writes nothing.
+        let skip_if_equal = match snapshot_read(newest, target, vaults_with_logs.contains(&vault)) {
+            SnapshotRead::Skip => continue,
+            SnapshotRead::Write => None,
+            SnapshotRead::WriteIfChanged => newest.map(|(_, state)| state),
+        };
+        rows_inserted +=
+            snapshot_vault_or_skip(db, rpc, cfg.chain_id, vault, target, skip_if_equal).await;
     }
 
     Ok(IndexerOutcome {
@@ -1476,6 +2161,17 @@ pub fn admin_event_of(
     if topic0 == topics.proxy_upgrades_frozen {
         let d = IGovernedUpgradeEvents::UpgradesFrozen::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("UpgradesFrozen: {e}")))?;
+        // GovernedUUPS always names the proxy itself (`address(this)` under DELEGATECALL), so a
+        // freeze that names another proxy than its emitter is not one of ours and is not recorded.
+        if d.proxy != log.address {
+            tracing::warn!(
+                log_address = %log.address,
+                named_proxy = %d.proxy,
+                block_number = log.block_number,
+                "ignoring an UpgradesFrozen log that names another proxy than its emitter"
+            );
+            return Ok(None);
+        }
         return Ok(Some(AdminEvent {
             contract_kind: "proxy",
             event_name: "UpgradesFrozen",
@@ -1499,26 +2195,18 @@ pub struct AdminEvent {
     pub detail: serde_json::Value,
 }
 
-/// Contracts created at top level in a range: `(transaction, created contract)`
-/// from each receipt's `contractAddress`.
+/// Contracts created at top level in a range: `(transaction, created contract)` from each stored
+/// receipt's `contractAddress`.
 pub type CreatedContracts = [(alloy_primitives::B256, Address)];
 
-/// Is this proxy event its contract's deployment? Only when its transaction
-/// created THIS proxy (the receipt's `contractAddress` is the emitter), issue
-/// 1840. A bare contract-creation transaction is not enough: the timelock's
-/// executor role is open, so anyone can execute a ready upgrade from a
+/// Is this proxy event its contract's deployment? Only when its transaction created THIS proxy (the
+/// receipt's `contractAddress` is the emitter), issue 1840. A bare contract-creation transaction is
+/// not enough: the timelock's executor role is open, so anyone can execute a ready upgrade from a
 /// throwaway contract's constructor, and that upgrade must still page.
 pub fn is_proxy_deployment(created: &CreatedContracts, log: &LogEntry) -> bool {
     created
         .iter()
         .any(|(tx, contract)| *tx == log.tx_hash && *contract == log.address)
-}
-
-/// Contracts the given transactions created.
-fn created_contracts(txs: &[crate::rpc::TxRow]) -> Vec<(alloy_primitives::B256, Address)> {
-    txs.iter()
-        .filter_map(|t| t.contract_address.map(|c| (t.tx_hash, c)))
-        .collect()
 }
 
 async fn handle_admin_log(
@@ -1768,35 +2456,65 @@ pub async fn backfill_proxy_events(
     while from <= slice_end {
         let to = from.saturating_add(span - 1).min(slice_end);
         let logs = rpc.get_logs(from, to, &proxies, &proxy_topics).await?;
-        for log in logs.iter().filter(|l| {
-            proxies.contains(&l.address)
-                && is_proxy_log(&topics, l)
-                && (from..=to).contains(&l.block_number)
-        }) {
-            if stored_blocks.insert(log.block_number) {
-                let (header, txs) = rpc.block_with_txs(log.block_number).await?;
-                db.insert_block(
+        let proxy_logs: Vec<&LogEntry> = logs
+            .iter()
+            .filter(|l| {
+                proxies.contains(&l.address)
+                    && is_proxy_log(&topics, l)
+                    && (from..=to).contains(&l.block_number)
+            })
+            .collect();
+        // Each event block's header and the transactions that carry a proxy log (QA plan X6, DI-6:
+        // the log gives the hash, the block and the index, one receipt adds from, to and status).
+        // The receipt's `contractAddress` is how a deployment is told from an upgrade (issue 1840).
+        // Every read of a block happens before its rows are written.
+        let mut block_txs: BTreeMap<u64, BTreeMap<alloy_primitives::B256, u32>> = BTreeMap::new();
+        for log in &proxy_logs {
+            if !stored_blocks.contains(&log.block_number) {
+                block_txs
+                    .entry(log.block_number)
+                    .or_default()
+                    .entry(log.tx_hash)
+                    .or_insert(log.tx_index);
+            }
+        }
+        for (bn, txs) in block_txs {
+            let header = rpc
+                .block_header(bn)
+                .await?
+                .ok_or_else(|| RpcError::Server {
+                    method: "eth_getBlockByNumber".into(),
+                    message: format!("block {bn} missing"),
+                })?;
+            let mut receipts = Vec::new();
+            for (hash, index) in txs {
+                let receipt = rpc.tx_receipt(hash).await?;
+                created.extend(receipt.contract_address.map(|c| (hash, c)));
+                receipts.push((hash, index, receipt));
+            }
+            db.insert_block(
+                cfg.chain_id,
+                bn as i64,
+                header.hash.0,
+                header.parent_hash.0,
+                header.timestamp as i64,
+            )
+            .await?;
+            for (hash, index, receipt) in receipts {
+                db.insert_transaction(
                     cfg.chain_id,
-                    log.block_number as i64,
-                    header.hash.0,
-                    header.parent_hash.0,
-                    header.timestamp as i64,
+                    hash.0,
+                    bn as i64,
+                    index as i32,
+                    receipt.from.into_array(),
+                    receipt.to.map(|a| a.into_array()),
+                    i16::from(receipt.status),
                 )
                 .await?;
-                created.extend(created_contracts(&txs));
-                for t in txs {
-                    db.insert_transaction(
-                        cfg.chain_id,
-                        t.tx_hash.0,
-                        log.block_number as i64,
-                        t.tx_index as i32,
-                        t.from.into_array(),
-                        t.to.map(|a| a.into_array()),
-                        t.status as i16,
-                    )
-                    .await?;
-                }
             }
+            stored_blocks.insert(bn);
+        }
+        for log in proxy_logs {
             inserted += handle_admin_log(db, cfg, &topics, log, &created)
                 .await?
                 .unwrap_or(0);
@@ -1921,23 +2639,40 @@ async fn walk_back_to_match(
 /// Dispatch a single decoded log to its writer(s).  Public so integration
 /// tests can drive one synthetic event through the full handler-wiring path
 /// (IDX-3 regression coverage) without booting a chain.
+///
+/// A receipt's payload or a vote's memo is fetched with no tick budget here;
+/// the tick itself calls [`handle_log_within`] with one.
 pub async fn handle_log(
     db: &Db,
     cfg: &IndexerConfig,
     topics: &Topics,
     log: &LogEntry,
 ) -> Result<u64, IndexerError> {
-    handle_log_in_range(db, cfg, topics, log, &[]).await
+    handle_log_within(db, cfg, topics, log, None, &[]).await
 }
 
-/// [`handle_log`] with the contracts the range's transactions created, so a
-/// proxy event is marked as the deployment only when its transaction created
-/// that proxy (issue 1840).
-pub async fn handle_log_in_range(
+/// Security round 2: the wall-clock budget a tick may spend fetching the payloads of the receipts
+/// and the memos of the votes it indexes ([`handle_log_within`]).
+///
+/// One `ReceiptRecorded` whose payload host accepts and never answers costs
+/// [`PAYLOAD_FETCH_ATTEMPTS`] timeouts plus the backoff, about 23 s, and any committee agent can
+/// record receipts with an arbitrary URI. A hundred of them in one block held the tick for about
+/// 40 minutes, and the watchdog's evaluation behind it. Past this budget a receipt is stored
+/// unfetched (`verified = false`, no attempt counted) and the re-verification sweep, under its own
+/// budget, fetches it on a later tick. Security round 3: a `VoteSubmitted` memo fetch (up to 10 s
+/// of DNS plus 10 s of request) shares this budget the same way, and [`sweep_unverified_votes`]
+/// fetches a vote stored past it.
+pub const INLINE_FETCH_TIME_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// [`handle_log`] under the tick's inline fetch deadline: a `ReceiptRecorded` or a `VoteSubmitted`
+/// past `inline_fetch_deadline` is stored without a fetch, and the fetch in flight at the deadline
+/// is cut (security rounds 2 and 3). `None` fetches without a deadline.
+async fn handle_log_within(
     db: &Db,
     cfg: &IndexerConfig,
     topics: &Topics,
     log: &LogEntry,
+    inline_fetch_deadline: Option<tokio::time::Instant>,
     created: &CreatedContracts,
 ) -> Result<u64, IndexerError> {
     let topic0 = match log.topics.first() {
@@ -2506,13 +3241,20 @@ pub async fn handle_log_in_range(
             true,
         )
         .map_err(|e| IndexerError::Decode(format!("IC AgentRegistered: {e}")))?;
-        let r = db
+        let mut r = db
             .upsert_committee_agent(
                 cfg.chain_id,
                 decoded.agent.into_array(),
                 &decoded.agentId,
                 log.block_number as i64,
+                log.log_index as i32,
             )
+            .await?;
+        // `registerAgent` on a member that is already registered only relabels it on chain, but
+        // the tilt then counts none of its earlier signals (they predate its latest
+        // registration), so every vault it voted on can move (DI-3).
+        r += db
+            .refresh_regime_snapshots(cfg.chain_id, log.block_number as i64, None)
             .await?;
         return Ok(r);
     }
@@ -2521,12 +3263,19 @@ pub async fn handle_log_in_range(
         let decoded =
             IInvestmentCommitteePolicyEvents::AgentRevoked::decode_log(&into_alloy_log(log), true)
                 .map_err(|e| IndexerError::Decode(format!("IC AgentRevoked: {e}")))?;
-        let r = db
+        let mut r = db
             .revoke_committee_agent(
                 cfg.chain_id,
                 decoded.agent.into_array(),
                 log.block_number as i64,
+                log.log_index as i32,
             )
+            .await?;
+        // The revoked member's signals stop counting on every vault it voted on. Write the new
+        // aggregate now, a zero-count row where it was the last member, so `/v1/regime/feed`
+        // drops it in the same block `/v1/committee/tilts` does (DI-3).
+        r += db
+            .refresh_regime_snapshots(cfg.chain_id, log.block_number as i64, None)
             .await?;
         return Ok(r);
     }
@@ -2543,26 +3292,87 @@ pub async fn handle_log_in_range(
         // Memo fetch + keccak256 verification.
         // If rationaleUri is empty or the fetch fails, store with verified=false.
         // If the memo's keccak256 matches voteJsonHash, store with verified=true.
-        let verified = if decoded.rationaleUri.is_empty() {
-            false
-        } else {
-            match fetch_and_verify_memo(&decoded.rationaleUri, vote_json_hash).await {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!(
-                        vote_id,
-                        rationale_uri = %decoded.rationaleUri,
-                        error = %e,
-                        "memo fetch/verify failed; storing vote with verified=false"
-                    );
-                    false
+        //
+        // Security round 3: the fetch shares the tick's INLINE_FETCH_TIME_BUDGET with the receipts'
+        // payload fetches. It had no deadline: up to 10 s of DNS plus 10 s of request per vote, and
+        // any committee agent key can submit unlimited votes with any URI, so 1,000 votes at a
+        // blackholed host held the tick for hours and the watchdog's evaluation behind it. Past the
+        // budget the vote is stored unfetched, and `sweep_unverified_votes` fetches it later.
+        let (verified, attempts, last_error): (bool, i32, Option<String>) =
+            if decoded.rationaleUri.is_empty() {
+                (false, 0, Some("rationale_uri is empty".to_string()))
+            } else if inline_fetch_deadline.is_some_and(|d| tokio::time::Instant::now() >= d) {
+                (
+                    false,
+                    0,
+                    Some(format!(
+                        "not fetched at index time: the tick's {}s inline fetch budget was spent; \
+                         the vote re-verification sweep fetches it",
+                        INLINE_FETCH_TIME_BUDGET.as_secs()
+                    )),
+                )
+            } else {
+                let fetch = fetch_and_verify_memo(&decoded.rationaleUri, vote_json_hash);
+                let outcome = match inline_fetch_deadline {
+                    Some(deadline) => tokio::time::timeout_at(deadline, fetch)
+                        .await
+                        .unwrap_or_else(|_| {
+                            Err(format!(
+                                "memo fetch cut by the tick's {}s inline fetch budget",
+                                INLINE_FETCH_TIME_BUDGET.as_secs()
+                            ))
+                        }),
+                    None => fetch.await,
+                };
+                match outcome {
+                    Ok(true) => (true, 1, None),
+                    Ok(false) => (
+                        false,
+                        1,
+                        Some("memo keccak256 does not match voteJsonHash".to_string()),
+                    ),
+                    Err(e) => {
+                        tracing::warn!(
+                            vote_id,
+                            rationale_uri = %decoded.rationaleUri,
+                            error = %e,
+                            "memo fetch/verify failed; storing vote with verified=false \
+                             (the vote re-verification sweep retries it)"
+                        );
+                        (false, 1, Some(e))
+                    }
                 }
-            }
-        };
+            };
 
+        // A member registered before the indexed range has no `committee_agents` row, and the
+        // vote's foreign key used to fail this tick on every retry (DI-4). Write an inactive
+        // placeholder first, so the vote is stored, tilts nothing, and the cursor moves on.
         let mut r = db
+            .insert_committee_agent_placeholder(
+                cfg.chain_id,
+                agent,
+                log.block_number as i64,
+                log.log_index as i32,
+            )
+            .await?;
+        if r > 0 {
+            tracing::warn!(
+                vote_id,
+                agent = %decoded.agent,
+                block_number = log.block_number,
+                "VoteSubmitted from a committee member with no indexed AgentRegistered; \
+                 stored an inactive placeholder agent row, so this vote does not count \
+                 toward the tilt (set INDEXER_START_BLOCK at or below the IC deploy block \
+                 to index the registration)"
+            );
+        }
+
+        // The emitting policy is part of the vote key: a redeployed policy restarts `voteId`
+        // (DI-10, migration 0023).
+        let inserted = db
             .insert_committee_vote(
                 cfg.chain_id,
+                log.address.into_array(),
                 vote_id,
                 log.block_number as i64,
                 log.log_index as i32,
@@ -2578,14 +3388,121 @@ pub async fn handle_log_in_range(
                 verified,
             )
             .await?;
-
-        // Refresh the regime snapshot for this vault (verified votes only).
-        if verified {
-            r += db
-                .refresh_regime_snapshot(cfg.chain_id, vault, log.block_number as i64)
-                .await?;
+        r += inserted;
+        // The sweep's state for a vote this tick stored unverified (migration 0029). A re-index of
+        // a stored vote inserts nothing and keeps its attempt count.
+        if inserted > 0 && !verified {
+            db.note_vote_verification(
+                cfg.chain_id,
+                log.address.into_array(),
+                vote_id,
+                attempts,
+                last_error.as_deref(),
+            )
+            .await?;
         }
 
+        // Refresh the regime snapshot for this vault on every vote, verified or not (DI-3). An
+        // unverified vote still replaces the member's older signal, so its newest view no longer
+        // counts and the aggregate can drop.
+        r += db
+            .refresh_regime_snapshots(cfg.chain_id, log.block_number as i64, Some(vault))
+            .await?;
+
+        return Ok(r);
+    }
+
+    // ─── ExclusionLedger event handlers ───────────────────────────────────────────
+    // Implements: QA plan v1 task X7, core issue 1820 (indexer half). Migration 0025.
+    //
+    // Four events, each one append-only row: ExclusionOpened (the record and its snapshot
+    // supply), ExclusionRecoveryCredited, ExclusionFinalized, ExclusionClaimed. The holders'
+    // snapshot balances need a chain read, which `handle_log` cannot make; `run_inner` reads them
+    // after this loop (`record_exclusion_balances`).
+    //
+    // GATED ON THE EMITTING CONTRACT, as the receipt handlers below are: dispatch is on topic-0
+    // over every watched address, so only the ExclusionLedger of a watched vault may write the
+    // exclusion tables.
+    if topic0 == topics.exclusion_opened
+        || topic0 == topics.exclusion_recovery_credited
+        || topic0 == topics.exclusion_finalized
+        || topic0 == topics.exclusion_claimed
+    {
+        let Some(vault) = vault_of_exclusion_ledger(db, cfg, log.address).await? else {
+            tracing::warn!(
+                address = %log.address,
+                block_number = log.block_number,
+                "exclusion-record event from a contract that is not the ExclusionLedger of a \
+                 watched vault; ignored"
+            );
+            return Ok(0);
+        };
+        let ledger = log.address.into_array();
+        let block = log.block_number as i64;
+        let log_index = log.log_index as i32;
+        let tx = log.tx_hash.0;
+        let al = into_alloy_log(log);
+        let r = if topic0 == topics.exclusion_opened {
+            let d = IExclusionLedgerEvents::ExclusionOpened::decode_log(&al, true)
+                .map_err(|e| IndexerError::Decode(format!("ExclusionOpened: {e}")))?;
+            db.insert_exclusion_record(
+                cfg.chain_id,
+                ledger,
+                d.exclusionId.try_into().unwrap_or(i64::MAX),
+                vault.into_array(),
+                d.adapterIndex.try_into().unwrap_or(i64::MAX),
+                d.adapter.into_array(),
+                d.snapshotSupply,
+                d.adapterValue,
+                block,
+                log_index,
+                tx,
+            )
+            .await?
+        } else if topic0 == topics.exclusion_recovery_credited {
+            let d = IExclusionLedgerEvents::ExclusionRecoveryCredited::decode_log(&al, true)
+                .map_err(|e| IndexerError::Decode(format!("ExclusionRecoveryCredited: {e}")))?;
+            db.insert_exclusion_recovery(
+                cfg.chain_id,
+                block,
+                log_index,
+                tx,
+                ledger,
+                d.exclusionId.try_into().unwrap_or(i64::MAX),
+                i16::from(d.source),
+                d.amount,
+                d.recoveredUsdc,
+            )
+            .await?
+        } else if topic0 == topics.exclusion_finalized {
+            let d = IExclusionLedgerEvents::ExclusionFinalized::decode_log(&al, true)
+                .map_err(|e| IndexerError::Decode(format!("ExclusionFinalized: {e}")))?;
+            db.insert_exclusion_finalization(
+                cfg.chain_id,
+                ledger,
+                d.exclusionId.try_into().unwrap_or(i64::MAX),
+                i16::from(d.reason),
+                d.recoveredUsdc,
+                block,
+                log_index,
+                tx,
+            )
+            .await?
+        } else {
+            let d = IExclusionLedgerEvents::ExclusionClaimed::decode_log(&al, true)
+                .map_err(|e| IndexerError::Decode(format!("ExclusionClaimed: {e}")))?;
+            db.insert_exclusion_claim(
+                cfg.chain_id,
+                block,
+                log_index,
+                tx,
+                ledger,
+                d.exclusionId.try_into().unwrap_or(i64::MAX),
+                d.holder.into_array(),
+                d.amount,
+            )
+            .await?
+        };
         return Ok(r);
     }
 
@@ -2646,6 +3563,9 @@ pub async fn handle_log_in_range(
         // that `sweep_unverified_receipts` (below) and any re-index both
         // converge out of — it is not the permanent verdict it used to be.
         //
+        // Security round 2: every fetch of the tick shares INLINE_FETCH_TIME_BUDGET. Past it the
+        // receipt is stored unfetched and the sweep fetches it later.
+        //
         // SCOPE: this verifies the payload DIGEST only.  Per-analyst ed25519
         // verification of the signatures embedded in the payload is `rmpc`'s job
         // at submit time (architecture §4.9.1 answer 1: rmpc refuses to submit a
@@ -2659,8 +3579,36 @@ pub async fn handle_log_in_range(
                 attempts: 0,
                 last_error: Some("payload_uri is empty".to_string()),
             }
+        } else if inline_fetch_deadline.is_some_and(|d| tokio::time::Instant::now() >= d) {
+            // Security round 2: the tick's inline fetch budget is spent. Store the commitment
+            // unfetched; the sweep's working set holds it (no attempt counted against it).
+            ReceiptVerification {
+                verified: false,
+                payload_bytes: None,
+                attempts: 0,
+                last_error: Some(format!(
+                    "not fetched at index time: the tick's {}s inline fetch budget was spent; \
+                     the re-verification sweep fetches it",
+                    INLINE_FETCH_TIME_BUDGET.as_secs()
+                )),
+            }
         } else {
-            let outcome = fetch_and_verify_payload(&decoded.payloadUri, payload_digest).await;
+            let fetch = fetch_and_verify_payload(&decoded.payloadUri, payload_digest);
+            let outcome = match inline_fetch_deadline {
+                Some(deadline) => match tokio::time::timeout_at(deadline, fetch).await {
+                    Ok(outcome) => outcome,
+                    Err(_) => ReceiptVerification {
+                        verified: false,
+                        payload_bytes: None,
+                        attempts: 1,
+                        last_error: Some(format!(
+                            "payload fetch cut by the tick's {}s inline fetch budget",
+                            INLINE_FETCH_TIME_BUDGET.as_secs()
+                        )),
+                    },
+                },
+                None => fetch.await,
+            };
             if let Some(err) = outcome.last_error.as_deref() {
                 tracing::warn!(
                     receipt_id = %alloy_primitives::hex::encode(receipt_id),
@@ -2726,6 +3674,20 @@ const PAYLOAD_FETCH_BACKOFF: [u64; 2] = [2, 6];
 
 /// T12: how many receipts one tick's re-verification sweep may re-fetch.
 const SWEEP_BATCH: i64 = 16;
+/// Security round 1: the wall-clock budget of one tick's re-verification sweeps.
+///
+/// The sweep runs before the tick indexes anything. One receipt can take
+/// [`PAYLOAD_FETCH_ATTEMPTS`] timeouts plus the backoff (about 23 s), so a batch
+/// of [`SWEEP_BATCH`] payload hosts that never answer held every tick for about
+/// six minutes, and the watchdog's volume evaluation behind it. Past this budget
+/// the sweep starts no further fetch and cuts the one in flight; the cut attempt
+/// still counts toward [`SWEEP_MAX_ATTEMPTS`], and the rest waits for the next tick.
+/// Security round 3: the receipt sweep and the vote memo sweep
+/// ([`sweep_unverified_votes`]) share one deadline of this width per tick.
+pub const SWEEP_TIME_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+/// Security round 1: the most bytes a payload or memo fetch reads. The body is
+/// streamed and the fetch fails once it passes this, before it is all buffered.
+const MAX_FETCH_BODY: usize = 1024 * 1024;
 /// T12: attempts after which the sweep gives up on a receipt.
 ///
 /// This is what makes the sweep TERMINATE. Without a ceiling, a receipt whose
@@ -2754,8 +3716,13 @@ const SWEEP_MAX_ATTEMPTS: i32 = 12;
 /// the on-chain `payload_digest`, so convergence cannot admit a wrong preimage.
 ///
 /// A sweep failure is never fatal to the tick: the receipts are already stored,
-/// and the next tick tries again.
-async fn sweep_unverified_receipts(db: &Db, cfg: &IndexerConfig) -> u64 {
+/// and the next tick tries again. It starts no fetch past `deadline` and cuts the one in
+/// flight at it ([`SWEEP_TIME_BUDGET`]).
+async fn sweep_unverified_receipts(
+    db: &Db,
+    cfg: &IndexerConfig,
+    deadline: tokio::time::Instant,
+) -> u64 {
     if cfg.consensus_receipt.is_none() {
         return 0;
     }
@@ -2782,7 +3749,34 @@ async fn sweep_unverified_receipts(db: &Db, cfg: &IndexerConfig) -> u64 {
         }
         digest.copy_from_slice(&row.payload_digest);
 
-        let outcome = fetch_and_verify_payload(&row.payload_uri, digest).await;
+        // Security round 1: the sweep runs before the tick indexes, so it gets a fixed budget.
+        if tokio::time::Instant::now() >= deadline {
+            tracing::info!(
+                budget_secs = SWEEP_TIME_BUDGET.as_secs(),
+                "consensus receipt re-verification sweep: time budget spent; the rest waits for \
+                 the next tick"
+            );
+            break;
+        }
+        let outcome = match tokio::time::timeout_at(
+            deadline,
+            fetch_and_verify_payload(&row.payload_uri, digest),
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            // Recorded as an attempt, so a payload host that never answers reaches
+            // SWEEP_MAX_ATTEMPTS and stops taking the budget of every tick.
+            Err(_) => ReceiptVerification {
+                verified: false,
+                payload_bytes: None,
+                attempts: 1,
+                last_error: Some(format!(
+                    "payload fetch cut by the sweep's {}s per-tick budget",
+                    SWEEP_TIME_BUDGET.as_secs()
+                )),
+            },
+        };
         match db
             .repair_receipt_verification(
                 cfg.chain_id,
@@ -2806,6 +3800,102 @@ async fn sweep_unverified_receipts(db: &Db, cfg: &IndexerConfig) -> u64 {
                 error = %e,
                 receipt_id = %alloy_primitives::hex::encode(&row.receipt_id),
                 "consensus receipt re-verification sweep: repair write failed"
+            ),
+        }
+    }
+    repaired
+}
+
+/// Security round 3: the vote memo re-verification sweep, [`sweep_unverified_receipts`] for
+/// `committee_votes` (migration 0029).
+///
+/// A vote's memo is fetched inline under the tick's [`INLINE_FETCH_TIME_BUDGET`]. A vote stored
+/// past it, or whose memo host was briefly unreachable, used to stay `verified = false` for ever,
+/// and a tilt counts only verified votes. Each tick this re-fetches a bounded batch of unverified
+/// votes, newest first, until `deadline` (shared with the receipt sweep, [`SWEEP_TIME_BUDGET`]),
+/// and marks the ones whose memo now hashes to `voteJsonHash`. The digest is still compared with
+/// the on-chain hash, the write never downgrades, and every attempt (a cut one included) counts
+/// toward [`SWEEP_MAX_ATTEMPTS`], so a host that never answers stops taking the budget. The tick's
+/// regime refresh at its target counts a vote verified here (DI-3).
+///
+/// A sweep failure is never fatal to the tick: the votes are already stored.
+async fn sweep_unverified_votes(
+    db: &Db,
+    cfg: &IndexerConfig,
+    deadline: tokio::time::Instant,
+) -> u64 {
+    if cfg.investment_committee.is_none() || tokio::time::Instant::now() >= deadline {
+        return 0;
+    }
+    let pending = match db
+        .list_unverified_votes(cfg.chain_id, SWEEP_MAX_ATTEMPTS, SWEEP_BATCH)
+        .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "committee vote re-verification sweep: query failed");
+            return 0;
+        }
+    };
+
+    let mut repaired = 0u64;
+    for row in pending {
+        let Ok(expected) = <[u8; 32]>::try_from(row.vote_json_hash.as_slice()) else {
+            tracing::warn!(
+                vote_id = row.vote_id,
+                "committee vote re-verification sweep: vote_json_hash is not 32 bytes; skipping"
+            );
+            continue;
+        };
+        if tokio::time::Instant::now() >= deadline {
+            tracing::info!(
+                budget_secs = SWEEP_TIME_BUDGET.as_secs(),
+                "committee vote re-verification sweep: time budget spent; the rest waits for \
+                 the next tick"
+            );
+            break;
+        }
+        let outcome = tokio::time::timeout_at(
+            deadline,
+            fetch_and_verify_memo(&row.rationale_uri, expected),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(format!(
+                "memo fetch cut by the sweep's {}s per-tick budget",
+                SWEEP_TIME_BUDGET.as_secs()
+            ))
+        });
+        let (verified, last_error) = match outcome {
+            Ok(true) => (true, None),
+            Ok(false) => (
+                false,
+                Some("memo keccak256 does not match voteJsonHash".to_string()),
+            ),
+            Err(e) => (false, Some(e)),
+        };
+        match db
+            .repair_vote_verification(
+                cfg.chain_id,
+                &row.contract_address,
+                row.vote_id,
+                verified,
+                last_error.as_deref(),
+            )
+            .await
+        {
+            Ok(_) if verified => {
+                repaired += 1;
+                tracing::info!(
+                    vote_id = row.vote_id,
+                    "committee vote re-verification sweep: memo verified"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(
+                error = %e,
+                vote_id = row.vote_id,
+                "committee vote re-verification sweep: repair write failed"
             ),
         }
     }
@@ -2872,18 +3962,17 @@ async fn fetch_and_verify_payload(
     }
 }
 
-/// One HTTP attempt at the payload. Transport-level errors only.
-async fn fetch_payload_once(payload_uri: &str) -> Result<Vec<u8>, String> {
-    // 1 MiB body cap, as `fetch_and_verify_memo`.
-    const MAX_BODY: usize = 1024 * 1024;
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(PAYLOAD_FETCH_TIMEOUT_SECS))
-        .build()
-        .map_err(|e| format!("build client: {e}"))?;
+/// One HTTP attempt at the payload. Transport-level errors only, plus a URI the
+/// indexer refuses to fetch ([`guarded_fetch_client`]).
+pub async fn fetch_payload_once(payload_uri: &str) -> Result<Vec<u8>, String> {
+    let (client, url) = guarded_fetch_client(
+        payload_uri,
+        std::time::Duration::from_secs(PAYLOAD_FETCH_TIMEOUT_SECS),
+    )
+    .await?;
 
     let resp = client
-        .get(payload_uri)
+        .get(url)
         .send()
         .await
         .map_err(|e| format!("GET {payload_uri}: {e}"))?;
@@ -2892,15 +3981,152 @@ async fn fetch_payload_once(payload_uri: &str) -> Result<Vec<u8>, String> {
         return Err(format!("GET {payload_uri} returned {}", resp.status()));
     }
 
-    let body = resp.bytes().await.map_err(|e| format!("read body: {e}"))?;
+    read_capped_body(resp, MAX_FETCH_BODY)
+        .await
+        .map_err(|e| format!("receipt payload {e}"))
+}
 
-    if body.len() > MAX_BODY {
+/// AWS's IPv6 instance metadata endpoint. It sits in the unique-local range,
+/// which the indexer otherwise allows (a devnet can serve from it).
+const AWS_IMDS_V6: std::net::Ipv6Addr =
+    std::net::Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x254);
+
+/// Whether the indexer refuses to fetch an on-chain URI from `ip` (security
+/// round 1): link-local (the cloud metadata endpoint 169.254.169.254 is one),
+/// unspecified, broadcast and multicast addresses, AWS's IPv6 metadata address,
+/// and the IPv4-mapped form of each. No payload host is ever one of them.
+///
+/// Loopback and private ranges are allowed on purpose: a devnet and the tests
+/// serve receipts from them, and their responses reveal no more than a public
+/// host's (a verified flag; [`fetch_payload_once`] streams at most 1 MiB, and the
+/// explorer serves the size of a verified payload only).
+pub fn is_forbidden_fetch_ip(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_link_local() || v4.is_unspecified() || v4.is_broadcast() || v4.is_multicast()
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_forbidden_fetch_ip(IpAddr::V4(v4));
+            }
+            v6.is_unspecified()
+                || v6.is_multicast()
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+                || v6 == AWS_IMDS_V6
+        }
+    }
+}
+
+/// A client for one GET of an on-chain URI (a receipt's `payloadUri`, a vote's
+/// `rationaleUri`), and the parsed URL (security round 1).
+///
+/// An allowlisted receipt submitter or a committee member picks the URI, and the
+/// indexer fetches it from its own network position. So the scheme must be http
+/// or https, and the host must not be (or resolve to) an address
+/// [`is_forbidden_fetch_ip`] refuses. The client connects only to the addresses
+/// that were checked, so a second DNS answer cannot move it, and it follows a
+/// redirect (at most 5) only to the same host.
+pub async fn guarded_fetch_client(
+    uri: &str,
+    timeout: std::time::Duration,
+) -> Result<(reqwest::Client, reqwest::Url), String> {
+    let url = reqwest::Url::parse(uri).map_err(|e| format!("invalid URI {uri:?}: {e}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
         return Err(format!(
-            "receipt payload too large: {} bytes (max {MAX_BODY})",
-            body.len()
+            "refused {uri}: only http and https URIs are fetched"
         ));
     }
-    Ok(body.to_vec())
+    let host = url
+        .host_str()
+        .ok_or_else(|| format!("refused {uri}: no host"))?
+        .to_owned();
+    let port = url.port_or_known_default().unwrap_or(443);
+    let mut builder = reqwest::Client::builder().timeout(timeout);
+    let literal = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<std::net::IpAddr>()
+        .ok();
+    match literal {
+        Some(ip) => {
+            if is_forbidden_fetch_ip(ip) {
+                return Err(format!("refused {uri}: {ip} is not a payload host"));
+            }
+        }
+        None => {
+            let addrs = resolve_within(
+                &host,
+                timeout,
+                tokio::net::lookup_host((host.as_str(), port)),
+            )
+            .await?;
+            if addrs.is_empty() {
+                return Err(format!("resolve {host}: no address"));
+            }
+            if let Some(bad) = addrs.iter().find(|a| is_forbidden_fetch_ip(a.ip())) {
+                return Err(format!(
+                    "refused {uri}: {host} resolves to {}, not a payload host",
+                    bad.ip()
+                ));
+            }
+            builder = builder.resolve_to_addrs(&host, &addrs);
+        }
+    }
+    let same_host = host.clone();
+    builder = builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= 5 {
+            attempt.error("too many redirects")
+        } else if attempt.url().host_str() == Some(same_host.as_str()) {
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
+    }));
+    let client = builder.build().map_err(|e| format!("build client: {e}"))?;
+    Ok((client, url))
+}
+
+/// Await `lookup` (a DNS resolution of `host`) for at most `timeout` (security round 2).
+///
+/// The fetch's `timeout` bounds the request reqwest makes, and the resolution runs before the
+/// client exists, so it was unbounded: a name whose authoritative server never answers added the
+/// system resolver's own timeout (tens of seconds with retries) to every attempt. The resolution
+/// now shares the attempt's budget.
+pub async fn resolve_within<I, F>(
+    host: &str,
+    timeout: std::time::Duration,
+    lookup: F,
+) -> Result<Vec<std::net::SocketAddr>, String>
+where
+    I: Iterator<Item = std::net::SocketAddr>,
+    F: std::future::Future<Output = std::io::Result<I>>,
+{
+    match tokio::time::timeout(timeout, lookup).await {
+        Ok(Ok(addrs)) => Ok(addrs.collect()),
+        Ok(Err(e)) => Err(format!("resolve {host}: {e}")),
+        Err(_) => Err(format!("resolve {host}: no answer within {timeout:?}")),
+    }
+}
+
+/// Read `resp`'s body, failing once it passes `max` bytes: a declared
+/// `Content-Length` over the cap fails before any byte is read, and a streamed
+/// body fails at the chunk that crosses it. Never buffers more than `max` plus
+/// one chunk.
+async fn read_capped_body(mut resp: reqwest::Response, max: usize) -> Result<Vec<u8>, String> {
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            return Err(format!("too large: {len} bytes (max {max})"));
+        }
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| format!("read body: {e}"))? {
+        if body.len() + chunk.len() > max {
+            return Err(format!("too large: over {max} bytes"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 /// Compare a fetched body against the on-chain digest.
@@ -2973,17 +4199,14 @@ async fn fetch_and_verify_memo(
     rationale_uri: &str,
     expected_hash: [u8; 32],
 ) -> Result<bool, String> {
-    // Use a one-off reqwest client — the indexer is single-tick so no pool needed.
-    // Limit body to 1 MiB to prevent runaway allocations on malicious URIs.
-    const MAX_BODY: usize = 1024 * 1024;
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("build client: {e}"))?;
+    // A one-off client: the indexer is single-tick, so no pool is needed. The URI
+    // is checked and the body streamed with a 1 MiB cap (security round 1), as
+    // `fetch_payload_once`.
+    let (client, url) =
+        guarded_fetch_client(rationale_uri, std::time::Duration::from_secs(10)).await?;
 
     let resp = client
-        .get(rationale_uri)
+        .get(url)
         .send()
         .await
         .map_err(|e| format!("GET {rationale_uri}: {e}"))?;
@@ -2992,25 +4215,21 @@ async fn fetch_and_verify_memo(
         return Err(format!("GET {rationale_uri} returned {}", resp.status()));
     }
 
-    let body = resp.bytes().await.map_err(|e| format!("read body: {e}"))?;
-
-    if body.len() > MAX_BODY {
-        return Err(format!(
-            "memo body too large: {} bytes (max {MAX_BODY})",
-            body.len()
-        ));
-    }
+    let body = read_capped_body(resp, MAX_FETCH_BODY)
+        .await
+        .map_err(|e| format!("memo body {e}"))?;
 
     let actual = alloy_primitives::keccak256(&body);
     Ok(actual.0 == expected_hash)
 }
 
 /// IDX-3: persist the owner's resulting `wallet_positions` share balance after
-/// an ERC-4626 mint/burn event.  Reads the owner's prior balance for this
-/// vault (`contract = log.address`), applies the `shares` delta (`add = true`
-/// for a deposit/mint, `false` for a withdraw/burn, saturating at zero), and
-/// writes the new block-numbered balance snapshot.  Returns the number of rows
-/// inserted (0 when the row already exists, via the writer's `ON CONFLICT`).
+/// an ERC-4626 mint/burn event.  Applies the `shares` delta (`add = true` for a
+/// deposit/mint, `false` for a withdraw/burn, saturating at zero) to the owner's
+/// balance in this vault (`contract = log.address`) just before this log, and
+/// writes the block's balance ([`Db::apply_wallet_position_delta`]). A second
+/// share change of the same owner in the same block updates that block's row
+/// (security round 1). Returns the rows written (0 for a log already applied).
 async fn persist_wallet_position(
     db: &Db,
     cfg: &IndexerConfig,
@@ -3019,19 +4238,16 @@ async fn persist_wallet_position(
     shares: U256,
     add: bool,
 ) -> Result<u64, IndexerError> {
-    let contract = log.address.into_array();
-    let block = log.block_number as i64;
-    let prior = db
-        .latest_wallet_position(cfg.chain_id, contract, owner, block)
-        .await?
-        .unwrap_or(U256::ZERO);
-    let new_balance = if add {
-        prior.saturating_add(shares)
-    } else {
-        prior.saturating_sub(shares)
-    };
     let r = db
-        .insert_wallet_position(cfg.chain_id, contract, owner, block, new_balance)
+        .apply_wallet_position_delta(
+            cfg.chain_id,
+            log.address.into_array(),
+            owner,
+            log.block_number as i64,
+            log.log_index as i32,
+            shares,
+            add,
+        )
         .await?;
     Ok(r)
 }
@@ -3055,9 +4271,61 @@ pub struct VaultState {
     pub tvl_cap: Option<String>,
     pub per_deposit_cap: Option<String>,
     pub paused: bool,
+    /// `previewRedeem(totalSupply())`: what redeeming every share pays after the exit costs (core 1795).
+    pub preview_redeem_total: Option<String>,
 }
 
-/// Read totalAssets / totalSupply / exitFeeBps / tvlCap / depositsPaused from a
+/// What a tick does with one vault at its target block (issue 1781, QA plan X6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotRead {
+    /// No `eth_call`s for this vault in this tick.
+    Skip,
+    /// Read the vault and write a row whatever its state.
+    Write,
+    /// Read the vault and write a row only when the state differs from the newest row.
+    WriteIfChanged,
+}
+
+/// Decide whether a tick ending at `target` reads a vault whose newest `vault_snapshots` row is
+/// `newest` (block and state), and whether an unchanged read writes a row (issue 1781).
+///
+/// - No row yet: read and write, so every vault has a first row in the tick that first sees it.
+/// - A row at `target` already (an event-driven snapshot in this tick): no read.
+/// - The newest row is `SNAPSHOT_HEARTBEAT_BLOCKS` or more behind: read and write, an identical row on
+///   purpose (issue 1768).
+/// - Otherwise read, writing only a change, when the vault emitted a watched log in this tick
+///   (`emitted_log`), holds nothing (`total_assets` 0, so its first deposit shows within a tick),
+///   has an unknown cap (the issue 1741 retry), or has no exit value (a row older than migration 0026,
+///   or a failed `previewRedeem` read; core 1795).
+/// - Any other vault is not read. Its state changes only through its own watched events, or through
+///   yield and prices, which the heartbeat samples.
+pub fn snapshot_read(
+    newest: Option<(i64, &VaultState)>,
+    target: u64,
+    emitted_log: bool,
+) -> SnapshotRead {
+    let Some((block, state)) = newest else {
+        return SnapshotRead::Write;
+    };
+    let target = i64::try_from(target).unwrap_or(i64::MAX);
+    if block >= target {
+        return SnapshotRead::Skip;
+    }
+    if target - block >= SNAPSHOT_HEARTBEAT_BLOCKS as i64 {
+        return SnapshotRead::Write;
+    }
+    let zero_tvl = state.total_assets == "0";
+    let unknown_cap = state.tvl_cap.is_none() || state.per_deposit_cap.is_none();
+    let unknown_exit_value = state.preview_redeem_total.is_none();
+    if emitted_log || zero_tvl || unknown_cap || unknown_exit_value {
+        SnapshotRead::WriteIfChanged
+    } else {
+        SnapshotRead::Skip
+    }
+}
+
+/// Read totalAssets / totalSupply / previewRedeem(totalSupply) / exitFeeBps / tvlCap /
+/// perDepositCap / depositsPaused from a
 /// vault at `block` and write a `vault_snapshots` row. The `paused` column
 /// keeps its historical name but stores `depositsPaused()` (a deposit-only
 /// pause; withdrawals are never frozen).
@@ -3111,6 +4379,22 @@ async fn snapshot_vault_address(
         block,
     )
     .await?;
+    // What redeeming the whole supply pays after the exit costs the vault prices itself: the exit fee on both
+    // families and the `maxSlippageBps` floor on a BasketVault (core 1795). The API scales it to a holder's
+    // shares, so a position is shown at `previewRedeem`, never at the gross `convertToAssets`. A failed read is
+    // `None` (stored NULL, served as an unknown value) and the vault is read again next tick.
+    let preview_redeem_total = call_u256(
+        rpc,
+        vault,
+        IVaultReads::previewRedeemCall {
+            shares: total_supply,
+        }
+        .abi_encode(),
+        block,
+    )
+    .await
+    .map_err(|e| tracing::warn!(vault = %vault, block, error = %e, "previewRedeem(totalSupply) read failed; stored as unknown"))
+    .ok();
     let exit_fee_bps = call_u256(
         rpc,
         vault,
@@ -3154,6 +4438,7 @@ async fn snapshot_vault_address(
             tvl_cap: tvl_cap.map(|c| c.to_string()),
             per_deposit_cap: per_deposit_cap.map(|c| c.to_string()),
             paused: deposits_paused,
+            preview_redeem_total: preview_redeem_total.map(|v| v.to_string()),
         };
         if now == *prev {
             return Ok(0);
@@ -3169,6 +4454,7 @@ async fn snapshot_vault_address(
         tvl_cap,
         per_deposit_cap,
         deposits_paused,
+        preview_redeem_total,
     )
     .await
     .map_err(IndexerError::Db)
@@ -3731,6 +5017,85 @@ mod tests {
             configured_start_floor(&cfg),
             None,
             "unset keeps the getCode derivation"
+        );
+    }
+
+    // ── issue 1781 (QA plan X6): which vaults a tick reads ───────────────────
+
+    fn vault_state(total_assets: &str, caps: Option<&str>) -> VaultState {
+        VaultState {
+            total_assets: total_assets.into(),
+            total_supply: total_assets.into(),
+            exit_fee_bps: 0,
+            tvl_cap: caps.map(Into::into),
+            per_deposit_cap: caps.map(Into::into),
+            paused: false,
+            preview_redeem_total: Some(total_assets.into()),
+        }
+    }
+
+    #[test]
+    fn a_tick_reads_only_new_due_touched_zero_tvl_or_unknown_cap_vaults() {
+        let funded = vault_state("5", Some("100"));
+        let target = 2_000u64;
+        let recent = 1_999i64;
+        // A vault that holds value, has known caps and emitted nothing costs no read.
+        assert_eq!(
+            snapshot_read(Some((recent, &funded)), target, false),
+            SnapshotRead::Skip
+        );
+        // Its own watched log reads it; only a change writes a row.
+        assert_eq!(
+            snapshot_read(Some((recent, &funded)), target, true),
+            SnapshotRead::WriteIfChanged
+        );
+        // No row yet: read and write.
+        assert_eq!(snapshot_read(None, target, false), SnapshotRead::Write);
+        // Zero TVL and an unknown cap keep the per-tick read.
+        assert_eq!(
+            snapshot_read(
+                Some((recent, &vault_state("0", Some("100")))),
+                target,
+                false
+            ),
+            SnapshotRead::WriteIfChanged
+        );
+        let mut one_unknown = funded.clone();
+        one_unknown.per_deposit_cap = None;
+        assert_eq!(
+            snapshot_read(Some((recent, &one_unknown)), target, false),
+            SnapshotRead::WriteIfChanged
+        );
+        assert_eq!(
+            snapshot_read(Some((recent, &vault_state("5", None))), target, false),
+            SnapshotRead::WriteIfChanged
+        );
+        // A row without an exit value (older than migration 0026, or a failed previewRedeem read) is
+        // read on the next tick too, so the positions API is not left without a value (core 1795).
+        let mut no_exit_value = funded.clone();
+        no_exit_value.preview_redeem_total = None;
+        assert_eq!(
+            snapshot_read(Some((recent, &no_exit_value)), target, false),
+            SnapshotRead::WriteIfChanged
+        );
+        // The heartbeat writes an identical row once the interval elapses, and not a block earlier.
+        let heartbeat = SNAPSHOT_HEARTBEAT_BLOCKS as i64;
+        assert_eq!(
+            snapshot_read(Some((target as i64 - heartbeat, &funded)), target, false),
+            SnapshotRead::Write
+        );
+        assert_eq!(
+            snapshot_read(
+                Some((target as i64 - heartbeat + 1, &funded)),
+                target,
+                false
+            ),
+            SnapshotRead::Skip
+        );
+        // A row at the target already (an event-driven snapshot in this tick) is never read again.
+        assert_eq!(
+            snapshot_read(Some((target as i64, &funded)), target, true),
+            SnapshotRead::Skip
         );
     }
 

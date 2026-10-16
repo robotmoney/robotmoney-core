@@ -46,50 +46,30 @@ use tracing::{error, info};
 
 use watchdog::{
     alert::{
+        dispatch_indexer_behind_alert, dispatch_indexer_behind_resolve,
         dispatch_missing_receipt_alert, dispatch_missing_receipt_resolve,
-        dispatch_no_baseline_alert, dispatch_no_baseline_resolve, missing_receipt_dedup_key,
-        no_baseline_dedup_key,
+        dispatch_no_baseline_alert, dispatch_no_baseline_resolve,
+        dispatch_weight_setter_path_alert, dispatch_weight_setter_path_resolve,
+        indexer_behind_dedup_key, missing_receipt_dedup_key, no_baseline_dedup_key,
+        weight_setter_path_dedup_key,
     },
     config::Config,
-    pager_state::{ensure_pager_state_table, load_pager_state, save_pager_state},
+    governance::{check_weight_setter_path, WeightSetterStatus},
+    liveness::read_indexer_progress,
+    pager_state::{commit_page, ensure_pager_state_table, load_pager_state},
     receipt_liveness::{
         check_receipt_liveness_status, AlertPager, PageAction, ReceiptLivenessStatus,
     },
     upgrade_monitor::{alert_new_proxy_changes, proxy_change_baseline},
     watchdog::{latest_indexed_block, run_cycles_since_cursor, CycleResult},
-    WatchdogError,
 };
 
-/// Commit the outcome of one dispatch and persist the pager's durable state.
-///
-/// Task T08: nothing is committed before the receiver confirmed. On a failed
-/// delivery the pager stays armed and refuses to retry before its failure
-/// floor, so a hard-down receiver is neither hammered at the 12 s poll rate nor
-/// silenced for a whole publishing cadence.
-async fn commit_page(
-    pool: &sqlx::PgPool,
-    pager: &mut AlertPager,
-    chain_id: i64,
-    dedup_key: &str,
-    now: i64,
-    action: PageAction,
-    sent: Result<(), WatchdogError>,
-) {
-    let ok = match &sent {
-        Ok(()) => true,
-        Err(e) => {
-            error!(dedup_key, "alert dispatch failed, pager stays armed: {e}");
-            false
-        }
-    };
-    if pager.on_page_result(now, action, ok) {
-        if let Err(e) = save_pager_state(pool, chain_id, dedup_key, pager.state()).await {
-            // Durability is best-effort: losing the write must not take the
-            // monitor off-line, but it must never be silent, because the next
-            // restart is then the one that forgets an open incident.
-            error!(dedup_key, "pager state persist failed: {e}");
-        }
-    }
+/// Wall-clock Unix seconds for pager bookkeeping and the receipt-gap check.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or_default()
 }
 
 /// Reconstruct a pager from whatever the previous process durably recorded.
@@ -252,8 +232,27 @@ async fn main() {
     let cadence = config.consensus_receipts.expected_cadence_secs;
     let gap_key = missing_receipt_dedup_key(chain_id);
     let baseline_key = no_baseline_dedup_key(chain_id);
+    let weight_setter_key = weight_setter_path_dedup_key(chain_id);
     let mut gap_pager = restore_pager(&pool, chain_id, &gap_key, cadence).await;
     let mut baseline_pager = restore_pager(&pool, chain_id, &baseline_key, cadence).await;
+    let mut weight_setter_pager = restore_pager(
+        &pool,
+        chain_id,
+        &weight_setter_key,
+        config.governance.repage_secs,
+    )
+    .await;
+    // DI-5: the indexer this daemon reads is behind its budget, so what the
+    // daemon evaluates is not current. One incident, resolved once the indexer
+    // is back within budget.
+    let indexer_key = indexer_behind_dedup_key(chain_id);
+    let mut indexer_pager = restore_pager(
+        &pool,
+        chain_id,
+        &indexer_key,
+        config.indexer_lag.repage_secs,
+    )
+    .await;
 
     // Main poll loop.
     loop {
@@ -273,8 +272,20 @@ async fn main() {
                     Ok(CycleResult::Breached(kinds)) => {
                         info!(?kinds, "cycle: breach actions dispatched");
                     }
+                    Ok(CycleResult::BreachUndelivered(kinds)) => {
+                        // run_cycle logged each failed delivery; the cursor
+                        // holds the block, so the next poll is the retry.
+                        error!(
+                            ?kinds,
+                            "cycle: breach alert not delivered; retrying the same block next poll"
+                        );
+                    }
                     Ok(CycleResult::NoData) => {
                         info!("cycle: no new indexed data since cursor, waiting…");
+                    }
+                    Ok(CycleResult::IndexerBehind(_)) => {
+                        // run_cycles_since_cursor logged the numbers; the
+                        // page is below.
                     }
                     Err(e) => {
                         error!("cycle error: {e}");
@@ -289,15 +300,76 @@ async fn main() {
             }
         }
 
-        // Consensus-receipt anchoring gap (issue #1247 task 4.13). Deliberately
-        // a separate path from the volume cycle above: a quiet swarm must never
-        // pause the gateway, and a missing receipt must never be dropped
-        // silently — a gap in the public record is exactly where someone would
-        // look for suppression.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or_default();
+        // Read after the volume cycle, which may have spent up to its SLA
+        // budget.
+        let now = unix_now();
+
+        // Explorer-indexer lag (DI-5). Read every poll, not only when the
+        // volume cycle found nothing new: during a long catch-up the cycle
+        // alternates between new blocks and none, and keying the incident on
+        // the cycle result would open and resolve it every tick. One incident
+        // while the indexer is behind its budget, resolved once it is not.
+        // Alert-only: it never pauses the gateway.
+        match read_indexer_progress(&pool, chain_id).await {
+            Ok(progress) if progress.is_behind(&config.indexer_lag) => {
+                match config.action.webhook_url.as_deref() {
+                    Some(url) => {
+                        let action = indexer_pager.on_firing(now);
+                        if action == PageAction::Trigger {
+                            let sent = dispatch_indexer_behind_alert(
+                                &client,
+                                url,
+                                chain_id,
+                                &progress,
+                                &config.indexer_lag,
+                            )
+                            .await;
+                            commit_page(
+                                &pool,
+                                &mut indexer_pager,
+                                chain_id,
+                                &indexer_key,
+                                now,
+                                action,
+                                sent,
+                            )
+                            .await;
+                        }
+                    }
+                    // Never silent: the stale heartbeat still pages through
+                    // watchdog-liveness, but say here that this daemon could not.
+                    None => error!(
+                        "explorer indexer is behind but action.webhook_url is unset — \
+                         the alert had nowhere to go"
+                    ),
+                }
+            }
+            Ok(_) => {
+                if let Some(url) = config.action.webhook_url.as_deref() {
+                    let action = indexer_pager.on_clear(now);
+                    if action == PageAction::Resolve {
+                        let sent = dispatch_indexer_behind_resolve(&client, url, chain_id).await;
+                        let ok = sent.is_ok();
+                        commit_page(
+                            &pool,
+                            &mut indexer_pager,
+                            chain_id,
+                            &indexer_key,
+                            now,
+                            action,
+                            sent,
+                        )
+                        .await;
+                        if ok {
+                            info!(chain_id, "indexer-behind alert resolved");
+                        }
+                    }
+                }
+            }
+            // A failed read is not health, and not a page of its own: the
+            // volume path above shares the database and is already failing.
+            Err(e) => error!(chain_id, "explorer indexer progress read failed: {e}"),
+        }
 
         // Consensus-receipt anchoring gap (issue #1247 task 4.13). Deliberately
         // a separate path from the volume cycle above: a quiet swarm must never
@@ -452,6 +524,84 @@ async fn main() {
                     }
                 }
                 Err(e) => error!("consensus receipt liveness check failed: {e}"),
+            }
+        }
+
+        // Standing weight-setter path (issue 1698). Router weights change only
+        // through RouterGovernance.applyReceipt on a Safe-scheduled timelock
+        // operation. The verifier checks the three role sets that make that true
+        // once, at deploy; this catches a grant executed after it. It replaced
+        // the quorumThreshold() floor check, whose view issue 1698 deleted.
+        // Read-only; it never pauses.
+        if config.governance.enabled {
+            match check_weight_setter_path(&client, &config.governance, chain_id).await {
+                Ok(WeightSetterStatus::Drifted(breach)) => {
+                    error!(
+                        chain_id,
+                        weight_setter_role_count = breach.weight_setter_role.count,
+                        weight_setter_role_holders = ?breach.weight_setter_role.members,
+                        apply_receipt_role_count = breach.weight_setter_appliers.count,
+                        apply_receipt_role_holders = ?breach.weight_setter_appliers.members,
+                        weight_setter_admin_count = breach.weight_setter_admins.count,
+                        weight_setter_admins = ?breach.weight_setter_admins.members,
+                        "router weight-setter path is not the configured one — weights can \
+                         change outside applyReceipt or without the timelock delay"
+                    );
+                    match config.action.webhook_url.as_deref() {
+                        Some(url) => {
+                            let action = weight_setter_pager.on_firing(now);
+                            if action == PageAction::Trigger {
+                                let sent =
+                                    dispatch_weight_setter_path_alert(&client, url, &breach).await;
+                                commit_page(
+                                    &pool,
+                                    &mut weight_setter_pager,
+                                    chain_id,
+                                    &weight_setter_key,
+                                    now,
+                                    action,
+                                    sent,
+                                )
+                                .await;
+                            }
+                        }
+                        None => error!(
+                            "the weight-setter path drifted but action.webhook_url is unset \
+                             — the alert had nowhere to go"
+                        ),
+                    }
+                }
+                Ok(WeightSetterStatus::Ok) => {
+                    if let Some(url) = config.action.webhook_url.as_deref() {
+                        let action = weight_setter_pager.on_clear(now);
+                        if action == PageAction::Resolve {
+                            let sent =
+                                dispatch_weight_setter_path_resolve(&client, url, chain_id).await;
+                            let ok = sent.is_ok();
+                            commit_page(
+                                &pool,
+                                &mut weight_setter_pager,
+                                chain_id,
+                                &weight_setter_key,
+                                now,
+                                action,
+                                sent,
+                            )
+                            .await;
+                            if ok {
+                                info!(chain_id, "weight-setter path alert resolved");
+                            }
+                        }
+                    }
+                }
+                // A failed read is not health: it is logged loudly every cycle.
+                // It is deliberately NOT a page of its own — an RPC outage is
+                // already the volume path's problem — but it must never be
+                // mistaken for role sets that were read and found correct.
+                Err(e) => error!(
+                    chain_id,
+                    "weight-setter path check could not read the role sets: {e}"
+                ),
             }
         }
 

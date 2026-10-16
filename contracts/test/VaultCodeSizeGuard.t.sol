@@ -99,18 +99,68 @@ contract VaultCodeSizeGuard is Test {
         _assertUnderLimit("UniswapV4PriceRecorder.sol:UniswapV4PriceRecorder");
     }
 
-    /// @notice Core 1676 changes no vault logic: the vault family keeps its recorded headroom. The headroom floors are
-    ///         the measured sizes after core 1673 and 1666 (AgentTokenVault 65 bytes, ProtocolAssetVault and
-    ///         RwaBasketVault 107 bytes), lowered by the 10 bytes the core 1778 dust-sell floor costs (AgentTokenVault
-    ///         55 bytes, ProtocolAssetVault and RwaBasketVault 97 bytes). A change that eats them fails here before it fails an EIP-170 deploy.
-    function test_vaultFamily_keepsItsMeasuredHeadroom() public {
+    // ─── ADR-0014: proxied implementations, the exclusion ledger, the linked libraries ──
+    //
+    // Every proxied implementation is a direct on-chain deployment (behind its ERC1967Proxy), and so
+    // is each CREATE2-linked library, the exclusion ledger and the timelock, so each must fit EIP-170
+    // on its own. The ledger is created by the vault, one per exclusion record (core 1820).
+
+    function test_RobotMoneyGateway_underEip170() public {
+        _assertUnderLimit("RobotMoneyGateway.sol:RobotMoneyGateway");
+    }
+
+    function test_PortfolioRouter_underEip170() public {
+        _assertUnderLimit("PortfolioRouter.sol:PortfolioRouter");
+    }
+
+    function test_RouterGovernance_underEip170() public {
+        _assertUnderLimit("RouterGovernance.sol:RouterGovernance");
+    }
+
+    function test_VaultRegistry_underEip170() public {
+        _assertUnderLimit("VaultRegistry.sol:VaultRegistry");
+    }
+
+    function test_InvestmentCommitteePolicy_underEip170() public {
+        _assertUnderLimit("InvestmentCommitteePolicy.sol:InvestmentCommitteePolicy");
+    }
+
+    function test_ConsensusRecommendationReceipt_underEip170() public {
+        _assertUnderLimit("ConsensusRecommendationReceipt.sol:ConsensusRecommendationReceipt");
+    }
+
+    function test_ExclusionLedger_underEip170() public {
+        _assertUnderLimit("ExclusionLedger.sol:ExclusionLedger");
+    }
+
+    function test_ProposerFloorTimelock_underEip170() public {
+        _assertUnderLimit("ProposerFloorTimelock.sol:ProposerFloorTimelock");
+    }
+
+    function test_linkedLibraries_underEip170() public {
+        _assertUnderLimit("BasketAssetConfigGuard.sol:BasketAssetConfigGuard");
+        _assertUnderLimit("BasketViews.sol:BasketViews");
+    }
+
+    /// @notice The proxied implementations keep their recorded runtime headroom under EIP-170. The floors are the
+    ///         margins measured with `forge build --sizes` after the governed-UUPS base (core 1808) and the exclusion
+    ///         recovery (core 1820, QA plan D3) landed, rounded down: AgentTokenVault 909 bytes, ProtocolAssetVault 956,
+    ///         RwaBasketVault 963, RobotMoneyVault 3,604, RobotMoneyGateway 293. A change that eats them fails here
+    ///         before it fails an EIP-170 deploy.
+    function test_proxiedImplementations_keepTheirMeasuredHeadroom() public {
         assertGe(
-            EIP170_LIMIT - vm.getDeployedCode("AgentTokenVault.sol:AgentTokenVault").length, 55
+            EIP170_LIMIT - vm.getDeployedCode("AgentTokenVault.sol:AgentTokenVault").length, 900
         );
         assertGe(
             EIP170_LIMIT - vm.getDeployedCode("ProtocolAssetVault.sol:ProtocolAssetVault").length,
-            97
+            950
         );
-        assertGe(EIP170_LIMIT - vm.getDeployedCode("RwaBasketVault.sol:RwaBasketVault").length, 97);
+        assertGe(EIP170_LIMIT - vm.getDeployedCode("RwaBasketVault.sol:RwaBasketVault").length, 950);
+        assertGe(
+            EIP170_LIMIT - vm.getDeployedCode("RobotMoneyVault.sol:RobotMoneyVault").length, 3_500
+        );
+        assertGe(
+            EIP170_LIMIT - vm.getDeployedCode("RobotMoneyGateway.sol:RobotMoneyGateway").length, 290
+        );
     }
 }

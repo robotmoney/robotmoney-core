@@ -294,6 +294,7 @@ async fn a_snapshot_with_unknown_caps_is_retaken_on_the_next_tick_not_after_the_
             None,
             None,
             false,
+            None,
         )
         .await
         .unwrap();

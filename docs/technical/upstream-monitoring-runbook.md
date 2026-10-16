@@ -240,3 +240,11 @@ If the secret is absent on the scheduled run, the `Require BASE_RPC_URL on the n
 schedule` preflight step (`scripts/monitor-require-rpc.sh`) fails the job with `::error`, so
 the nightly never reports success while running no monitors. On `workflow_dispatch` without the
 secret it only warns and the live-check steps are skipped.
+
+The same workflow holds the job `recorder-keeper-fork` (core 1779, QA plan v1 E10). It runs
+only on schedule and on `workflow_dispatch`, never on a pull request or a push. It runs
+`scripts/ops/test-recorder-keeper-fork.sh` on an isolated Base fork against Deploy 2's rmAGENT
+and its recorder, whose addresses it reads from `deployments/8453/deploy-2`. It uses the
+`BASE_UPSTREAM_RPC` secret, with `https://mainnet.base.org` when the secret is unset. It fails,
+never skips, when the fork or a deployed contract is missing. See "Recorder keeper" in
+`docs/operations/contract-release-runbooks.md`.

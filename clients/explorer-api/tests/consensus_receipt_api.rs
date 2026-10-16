@@ -24,7 +24,7 @@ use explorer_api::{router, AppState};
 
 const PRIMARY_CHAIN_ID: i64 = 8453;
 
-/// All migrations in order. The consensus receipt migration (0015) is last.
+/// All migrations in order (the consensus receipt migrations are 0015 and 0016).
 const MIGRATIONS: &[&str] = &[
     include_str!("../../../services/explorer-indexer/migrations/0001_minimum_tables.sql"),
     include_str!("../../../services/explorer-indexer/migrations/0002_add_vaults_table.sql"),
@@ -63,6 +63,31 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../../services/explorer-indexer/migrations/0019_proxy_upgrade_events.sql"),
     // Issue 1856: the proxy upgrade backfill checkpoint.
     include_str!("../../../services/explorer-indexer/migrations/0020_proxy_backfill_progress.sql"),
+    // DI-10 (QA plan v1 X4): committee_votes keyed by the emitting policy.
+    include_str!(
+        "../../../services/explorer-indexer/migrations/0021_committee_votes_contract_scope.sql"
+    ),
+    // DI-8 (QA plan v1 X7): append-only committee registration history.
+    include_str!("../../../services/explorer-indexer/migrations/0022_committee_agent_events.sql"),
+    // QA plan v1 X7, core issue 1820: exclusion records.
+    include_str!("../../../services/explorer-indexer/migrations/0023_exclusion_records.sql"),
+    // QA plan v1 X8, core issue 1795: vault_snapshots.preview_redeem_total.
+    include_str!(
+        "../../../services/explorer-indexer/migrations/0024_vault_snapshot_preview_redeem.sql"
+    ),
+    // Issue 1698: RouterGovernance voting tables dropped.
+    include_str!("../../../services/explorer-indexer/migrations/0025_drop_governance_voting.sql"),
+    // Security rounds 1-3: exclusion ledgers, position log index, snapshot progress, vote retries.
+    include_str!("../../../services/explorer-indexer/migrations/0026_vault_exclusion_ledgers.sql"),
+    include_str!(
+        "../../../services/explorer-indexer/migrations/0027_wallet_position_log_index.sql"
+    ),
+    include_str!(
+        "../../../services/explorer-indexer/migrations/0028_exclusion_snapshot_progress.sql"
+    ),
+    include_str!(
+        "../../../services/explorer-indexer/migrations/0029_committee_votes_verify_attempts.sql"
+    ),
 ];
 
 /// The `MIGRATIONS` list above is hand-maintained, and a migration missing from
@@ -179,8 +204,8 @@ fn hex_bytes(s: &str) -> Vec<u8> {
 /// Three receipts:
 ///   receipt_1 — submitter A, block 300, verified, released at block 305.
 ///   receipt_2 — submitter A, block 310, verified, NOT released.
-///   receipt_3 — submitter B, block 200, NOT verified (payload unfetchable),
-///               NOT released.
+///   receipt_3 — submitter B, block 200, NOT verified (the fetched body did not
+///               hash to the digest; 4096 bytes stored), NOT released.
 async fn seed_receipt_fixture(pool: &sqlx::PgPool) {
     let rows: &[FixtureRow] = &[
         (
@@ -194,7 +219,17 @@ async fn seed_receipt_fixture(pool: &sqlx::PgPool) {
             Some(1_700_000_305),
         ),
         (RECEIPT_2, 1, SUBMITTER_A, 310, true, Some(600), false, None),
-        (RECEIPT_3, 2, SUBMITTER_B, 200, false, None, false, None),
+        // The indexer fetched 4096 bytes that did not hash to the digest.
+        (
+            RECEIPT_3,
+            2,
+            SUBMITTER_B,
+            200,
+            false,
+            Some(4096),
+            false,
+            None,
+        ),
     ];
 
     for (receipt_id, index, submitter, block, verified, payload_bytes, released, released_at) in
@@ -376,6 +411,19 @@ async fn unverified_and_unreleased_receipts_are_still_listed() {
     );
     assert_eq!(unverified[0]["receipt_id"], RECEIPT_3);
     assert_eq!(unverified[0]["released"], false);
+    // Security round 1: the size of an unverified body is not served (the URI is chosen on
+    // chain and fetched from the indexer's network), while a verified one's is.
+    assert!(
+        unverified[0]["payload_bytes"].is_null(),
+        "an unverified receipt serves no payload size: {}",
+        unverified[0]
+    );
+    let verified_sizes: Vec<i64> = receipts
+        .iter()
+        .filter(|r| r["verified"].as_bool() == Some(true))
+        .filter_map(|r| r["payload_bytes"].as_i64())
+        .collect();
+    assert_eq!(verified_sizes.len(), 2, "verified receipts keep their size");
     assert!(
         unverified[0]["released_at"].is_null(),
         "released_at must be null on an unreleased receipt"

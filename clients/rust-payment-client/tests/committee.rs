@@ -10,6 +10,10 @@
 //! - `test_committee_vote_submit_unauthorized_rejected`: A non-allowlisted
 //!   agent attempts to call vote-submit; the JSON-RPC returns a revert and
 //!   the command exits non-zero.
+//! - `committee_check_agent_*`: the read-only `check-agent` preflight the
+//!   swarm skill's `check-preflight.sh` runs (review finding DR-1). A held
+//!   role exits 0, a missing one exits 2 with `ErrNotAllowlisted`, and an
+//!   unreachable RPC exits 3: never 0.
 //!
 //! The write tests mock the JSON-RPC server with mockito. No live chain is
 //! required.
@@ -36,7 +40,8 @@ use tempfile::TempDir;
 
 // ─── Test constants ───────────────────────────────────────────────────────────
 
-/// Use local devnet chain ID so software signer passes the production-grade check.
+/// Local devnet chain id. A software keystore signs on every chain (owner
+/// decision 2026-10-14); `committee_vote_submit_base_mainnet_*` covers 8453.
 const CHAIN_ID: u64 = 31337;
 
 /// Fake IC policy contract address for tests.
@@ -63,11 +68,19 @@ struct CommitteeFixture {
 
 impl CommitteeFixture {
     fn build(rpc_url: &str) -> Self {
-        Self::build_with(rpc_url, "")
+        Self::build_full(rpc_url, CHAIN_ID, "")
+    }
+
+    fn build_on(rpc_url: &str, chain_id: u64) -> Self {
+        Self::build_full(rpc_url, chain_id, "")
     }
 
     /// [`Self::build`] with `extra` top-level TOML lines.
     fn build_with(rpc_url: &str, extra: &str) -> Self {
+        Self::build_full(rpc_url, CHAIN_ID, extra)
+    }
+
+    fn build_full(rpc_url: &str, chain_id: u64, extra: &str) -> Self {
         use alloy_primitives::keccak256;
         use rust_payment_client::signer::software::SoftwareSigner;
 
@@ -89,7 +102,7 @@ impl CommitteeFixture {
 
         let config_path = tmp.path().join("rmpc.toml");
         let toml = format!(
-            r#"chain_id              = {CHAIN_ID}
+            r#"chain_id              = {chain_id}
 rpc_url               = "{rpc_url}"
 gateway_address       = "{GATEWAY:#x}"
 usdc_address          = "0x0000000000000000000000000000000000000c00"
@@ -153,6 +166,62 @@ fn simple_receipt_body() -> String {
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+
+/// Owner decision 2026-10-14 (QA plan U7, Decision D12): a committee write on
+/// Base mainnet signs with the software keystore. The old gate refused it
+/// with `ErrProductionSignerRequired` before the keystore was read. Now the
+/// production warning prints and the command goes on to load the keystore;
+/// with no passphrase in the environment that load is the startup failure
+/// (exit 3), never a hardware refusal.
+#[test]
+fn committee_vote_submit_base_mainnet_signs_with_software_keystore() {
+    let logs = TempDir::new().unwrap();
+    let fix = CommitteeFixture::build_on("http://127.0.0.1:1", 8453);
+    let vote_hash = format!("{VOTE_JSON_HASH:#x}");
+    let prompt = format!("{PROMPT_HASH:#x}");
+    let inputs = format!("{INPUTS_DIGEST:#x}");
+
+    let output = rmpc()
+        .env("RMPC_LOG_DIR", logs.path())
+        .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
+        .env_remove(PASSPHRASE_ENV_VAR)
+        .args([
+            "committee",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "vote-submit",
+            "--vault",
+            "0x2222222222222222222222222222222222222222",
+            "--stance",
+            "neutral",
+            "--weight-bps",
+            "2500",
+            "--confidence",
+            "50",
+            "--rationale-uri",
+            "https://gist.github.com/robotmoney/mainnet",
+            "--vote-json-hash",
+            &vote_hash,
+            "--prompt-hash",
+            &prompt,
+            "--inputs-digest",
+            &inputs,
+            "--timestamp",
+            "1750000000",
+            "--order-id",
+            "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        ])
+        .output()
+        .expect("rmpc ran");
+
+    assert_eq!(output.status.code(), Some(3), "keystore load is the stop");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("ErrProductionSignerRequired"),
+        "no hardware refusal on 8453: {stdout}"
+    );
+    common::assert_mainnet_warning_precedes_keystore_load(logs.path());
+}
 
 #[tokio::test]
 async fn test_committee_vote_submit_happy_path() {
@@ -838,12 +907,15 @@ async fn test_committee_vote_submit_discards_the_signed_vote_when_the_implementa
 /// `committee register`, `propose` and `vote` signed as an EOA against
 /// `onlyRole(ADMIN_ROLE)` / governance entry points that belong to the Safe
 /// after handover. They must not exist, so no operator reaches for them.
+/// `governance draft-proposal` built proposal calldata for a voting function
+/// issue 1698 deleted; it is gone too (QA plan C1).
 #[test]
 fn test_rmpc_has_no_governance_signing_commands() {
     for argv in [
         vec!["committee", "--config", "x.toml", "register"],
         vec!["propose", "--config", "x.toml"],
         vec!["vote", "--config", "x.toml"],
+        vec!["governance", "--config", "x.toml", "draft-proposal"],
     ] {
         let output = rmpc().args(&argv).output().expect("rmpc ran");
         assert!(
@@ -859,4 +931,281 @@ fn test_rmpc_has_no_governance_signing_commands() {
             argv.join(" ")
         );
     }
+}
+
+// ─── check-agent · the swarm preflight's role read (review finding DR-1) ──────
+//
+// `plugins/robotmoney-swarm/scripts/check-preflight.sh` guard 3 used to run
+// `vote-submit --dry-run` (no such flag) and grep `AgentNotRegistered` (no such
+// error), so it passed for every agent. It now runs `committee check-agent`,
+// and these tests pin the three answers the script maps: held (0), not held
+// (2, `ErrNotAllowlisted`) and unknown (3). The third is the one that matters:
+// a read that did not happen must never look like a registered agent.
+
+/// `keccak256("COMMITTEE_AGENT_ROLE")`, the constant
+/// `InvestmentCommitteePolicy.COMMITTEE_AGENT_ROLE()` returns.
+fn committee_agent_role() -> B256 {
+    alloy_primitives::keccak256("COMMITTEE_AGENT_ROLE")
+}
+
+/// Wire `eth_chainId`, `eth_blockNumber`, `COMMITTEE_AGENT_ROLE()` and a
+/// `hasRole(role, agent)` answer. Both calls must target the IC policy, and
+/// `hasRole` must carry the deployed role and exactly `agent`: a request that
+/// misses these matchers gets mockito's 501 and the command exits 3.
+async fn install_check_agent_mocks(server: &mut mockito::Server, agent: Address, has_role: bool) {
+    use rust_payment_client::gateway::InvestmentCommitteePolicy;
+
+    let to_ic = Matcher::Regex(format!(r#"(?i)"to":"{IC_POLICY:#x}""#));
+    let role = committee_agent_role();
+
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_chainId"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{CHAIN_ID:x}")))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_blockNumber"})))
+        .with_status(200)
+        .with_body(jrpc_result("0x2a"))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(vec![
+            common::match_eth_call_selector(&common::selector_hex_of::<
+                InvestmentCommitteePolicy::COMMITTEE_AGENT_ROLECall,
+            >()),
+            to_ic.clone(),
+        ]))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("{role:#x}")))
+        .expect(1)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(vec![
+            common::match_eth_call_selector_with_first_arg(
+                &common::selector_hex_of::<InvestmentCommitteePolicy::hasRoleCall>(),
+                &format!("{}{}", ahex::encode(role), common::abi_addr_hex(agent)),
+            ),
+            to_ic,
+        ]))
+        .with_status(200)
+        .with_body(jrpc_result(&common::enc_bool(has_role)))
+        .expect(1)
+        .create_async()
+        .await;
+}
+
+fn run_check_agent(config_path: &std::path::Path, extra: &[&str]) -> std::process::Output {
+    let mut args = vec![
+        "committee",
+        "--config",
+        config_path.to_str().unwrap(),
+        "check-agent",
+    ];
+    args.extend_from_slice(extra);
+    // No passphrase in the environment: the read must not need one.
+    rmpc()
+        .env_remove(PASSPHRASE_ENV_VAR)
+        .args(&args)
+        .output()
+        .expect("rmpc ran")
+}
+
+fn stdout_json(output: &std::process::Output) -> serde_json::Value {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    eprintln!("STDOUT: {stdout}");
+    eprintln!("STDERR: {}", String::from_utf8_lossy(&output.stderr));
+    serde_json::from_str(stdout.trim()).expect("valid JSON on stdout")
+}
+
+/// The default agent is the keystore's cleartext address, and a held role
+/// exits 0 with the deployed role hash echoed back.
+#[tokio::test]
+async fn committee_check_agent_reports_a_registered_agent() {
+    let mut server = mockito::Server::new_async().await;
+    let fix = CommitteeFixture::build(&server.url());
+    install_check_agent_mocks(&mut server, SIGNER_ADDRESS, true).await;
+
+    let output = run_check_agent(&fix.config_path, &[]);
+    let v = stdout_json(&output);
+
+    assert_eq!(output.status.code(), Some(0), "a held role exits 0");
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["action"], "check-agent");
+    assert_eq!(v["has_role"], true);
+    assert_eq!(v["block_number"], 42);
+    assert_eq!(v["chain_id"], CHAIN_ID);
+    assert_eq!(
+        v["agent"].as_str().unwrap().to_lowercase(),
+        format!("{SIGNER_ADDRESS:#x}").to_lowercase(),
+        "the default agent is the keystore address vote-submit signs as"
+    );
+    assert_eq!(
+        v["committee_agent_role"],
+        format!("{:#x}", committee_agent_role())
+    );
+    assert!(v.get("error").is_none(), "no error on a held role: {v}");
+}
+
+/// A role the policy says is not held is a refusal under the same name
+/// `vote-submit` uses, and `--agent` names the address that is read.
+#[tokio::test]
+async fn committee_check_agent_refuses_an_unregistered_agent_as_not_allowlisted() {
+    let other = address!("00000000000000000000000000000000000000a1");
+    let mut server = mockito::Server::new_async().await;
+    let fix = CommitteeFixture::build(&server.url());
+    install_check_agent_mocks(&mut server, other, false).await;
+
+    let output = run_check_agent(&fix.config_path, &["--agent", &format!("{other:#x}")]);
+    let v = stdout_json(&output);
+
+    assert_eq!(output.status.code(), Some(2), "a missing role exits 2");
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["has_role"], false);
+    assert_eq!(v["error"], "ErrNotAllowlisted");
+    assert!(
+        v["message"]
+            .as_str()
+            .unwrap()
+            .contains("COMMITTEE_AGENT_ROLE"),
+        "the refusal names the role: {v}"
+    );
+}
+
+/// The DR-1 regression. An RPC nobody answers is not a registered agent: the
+/// read exits 3 with a transport error and prints no `has_role` at all.
+#[tokio::test]
+async fn committee_check_agent_unreachable_rpc_is_unknown_not_registered() {
+    // Port 1 (tcpmux) has no listener on a CI runner: connection refused.
+    let fix = CommitteeFixture::build("http://127.0.0.1:1");
+
+    let output = run_check_agent(&fix.config_path, &[]);
+    let v = stdout_json(&output);
+
+    assert_eq!(output.status.code(), Some(3), "an unknown answer exits 3");
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["error"], "ErrRpcTransport");
+    assert!(
+        v.get("has_role").is_none(),
+        "an unread role must not be reported: {v}"
+    );
+}
+
+/// A config without `ic_policy_address` cannot be asked the question.
+#[test]
+fn committee_check_agent_without_ic_policy_address_is_unknown() {
+    let fix = CommitteeFixture::build("http://127.0.0.1:1");
+    let body = std::fs::read_to_string(&fix.config_path).unwrap();
+    let without_ic: String = body
+        .lines()
+        .filter(|l| !l.starts_with("ic_policy_address"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    std::fs::write(&fix.config_path, without_ic).unwrap();
+
+    let output = run_check_agent(&fix.config_path, &[]);
+    let v = stdout_json(&output);
+
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(v["error"], "ErrIcContractNotConfigured");
+}
+
+// ─── Issue 1810: the gateway is checked before a committee write signs ──────
+
+/// The gateway is an ERC-1967 proxy and the config pins no implementation.
+/// `vote-submit` refuses with `ErrImplementationNotApproved` (exit 2) after
+/// checks 1 and 2 pass, and no transaction is signed or sent.
+#[tokio::test]
+async fn committee_vote_submit_refuses_an_unpinned_gateway_implementation() {
+    let mut server = mockito::Server::new_async().await;
+    let fix = CommitteeFixture::build(&server.url());
+    let implementation = address!("00000000000000000000000000000000000001a1");
+    install_committee_mocks(&mut server, &simple_receipt_body()).await;
+    // Registered after the direct-gateway set, so these answer.
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_getStorageAt"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!(
+            "0x{}",
+            common::abi_addr_hex(implementation)
+        )))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_getCode"})),
+            Matcher::Regex(format!(r#"(?i)"params":\["{implementation:#x}""#)),
+        ]))
+        .with_status(200)
+        .with_body(jrpc_result("0x6001600055"))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let send = server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("{TX_HASH:#x}")))
+        .expect(0)
+        .create_async()
+        .await;
+
+    let vote_hash = format!("{VOTE_JSON_HASH:#x}");
+    let prompt = format!("{PROMPT_HASH:#x}");
+    let inputs = format!("{INPUTS_DIGEST:#x}");
+    let output = rmpc()
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
+        .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
+        .args([
+            "committee",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "vote-submit",
+            "--vault",
+            "0x1111111111111111111111111111111111111111",
+            "--stance",
+            "neutral",
+            "--weight-bps",
+            "2500",
+            "--confidence",
+            "50",
+            "--rationale-uri",
+            "https://gist.github.com/robotmoney/pin",
+            "--vote-json-hash",
+            &vote_hash,
+            "--prompt-hash",
+            &prompt,
+            "--inputs-digest",
+            &inputs,
+            "--timestamp",
+            "1750000000",
+            "--order-id",
+            "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        ])
+        .output()
+        .expect("rmpc ran");
+
+    assert_eq!(output.status.code(), Some(2), "a refusal, not a send");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ErrImplementationNotApproved"),
+        "names the refusal: {stdout}"
+    );
+    send.assert_async().await;
 }

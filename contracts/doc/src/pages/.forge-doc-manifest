@@ -5,7 +5,9 @@ contracts/adapters/contract.MorphoAdapter.mdx
 contracts/adapters/contract.UniswapV3SwapAdapter.mdx
 contracts/adapters/contract.UniswapV4PriceRecorder.mdx
 contracts/adapters/contract.UniswapV4SwapAdapter.mdx
+contracts/contract.ExclusionLedger.mdx
 contracts/contract.PortfolioRouter.mdx
+contracts/contract.ProposerFloorTimelock.mdx
 contracts/contract.RobotMoneyVault.mdx
 contracts/contract.RouterGovernance.mdx
 contracts/contract.VaultRegistry.mdx
@@ -17,7 +19,7 @@ contracts/gateway/interfaces/interface.IConsensusRecommendationReceipt.mdx
 contracts/gateway/interfaces/interface.IGateway.mdx
 contracts/gateway/interfaces/interface.IInvestmentCommitteePolicy.mdx
 contracts/gateway/interfaces/interface.IPortfolioRouter.mdx
-contracts/interface.IExactnessVault.mdx
+contracts/interface.IExclusionLedgerVault.mdx
 contracts/interface.IMinDelay.mdx
 contracts/interface.IRetirableVault.mdx
 contracts/interface.IRouterDefaultWeights.mdx
@@ -28,6 +30,7 @@ contracts/interfaces/interface.IAerodromeRouter.mdx
 contracts/interfaces/interface.IAerodromeSlipstreamRouter.mdx
 contracts/interfaces/interface.IBasketSwapAdapter.mdx
 contracts/interfaces/interface.IComet.mdx
+contracts/interfaces/interface.IExposureCappedAdapter.mdx
 contracts/interfaces/interface.IObservablePool.mdx
 contracts/interfaces/interface.IPoolManagerV4.mdx
 contracts/interfaces/interface.IStrategyAdapter.mdx
@@ -37,12 +40,15 @@ contracts/interfaces/interface.IUniswapV4PriceRecorder.mdx
 contracts/interfaces/interface.IUnlockCallbackV4.mdx
 contracts/interfaces/interface.IUpstreamMonitor.mdx
 contracts/interfaces/interface.IVault.mdx
+contracts/interfaces/interface.IVenueHealthAdapter.mdx
 contracts/lib/abstract.AdminFloorAccessControl.mdx
 contracts/lib/abstract.AdminFloorAccessControlCounter.mdx
 contracts/lib/abstract.GovernedUUPS.mdx
 contracts/lib/interface.IBasketSwapsVault.mdx
 contracts/lib/interface.IBasketVaultViews.mdx
+contracts/lib/interface.IDustPricedVault.mdx
 contracts/lib/interface.IInKindVault.mdx
+contracts/lib/interface.IRecorderHistory.mdx
 contracts/lib/library.BasketAssetConfigGuard.mdx
 contracts/lib/library.BasketSwaps.mdx
 contracts/lib/library.BasketViews.mdx
@@ -97,6 +103,7 @@ contracts/test/contract.B20Stand.mdx
 contracts/test/contract.BadTickMathVault.mdx
 contracts/test/contract.BasketDeployHarness.mdx
 contracts/test/contract.BasketVaultAerodromeTest.mdx
+contracts/test/contract.BasketVaultCeilingProbe.mdx
 contracts/test/contract.BasketVaultHarness.mdx
 contracts/test/contract.BasketVaultHarnessForGuards.mdx
 contracts/test/contract.BasketVaultRebalanceTest.mdx
@@ -185,6 +192,7 @@ contracts/test/contract.GovernedUpgradeTest.mdx
 contracts/test/contract.GovernedVaultSafeTimelockTest.mdx
 contracts/test/contract.GuardHarness.mdx
 contracts/test/contract.ICGatewayIntegration.mdx
+contracts/test/contract.IlliquidMockAdapter.mdx
 contracts/test/contract.InterlockMockVault.mdx
 contracts/test/contract.InterruptedRedeploy.mdx
 contracts/test/contract.InvForeignToken.mdx
@@ -223,7 +231,10 @@ contracts/test/contract.MorphoAdapterTest.mdx
 contracts/test/contract.NaiveAgentGateway.mdx
 contracts/test/contract.NoYieldTestAdapterTest.mdx
 contracts/test/contract.PartialAcceptVault.mdx
+contracts/test/contract.PartlyLiquidMockAdapter.mdx
+contracts/test/contract.PortfolioRouterLegAvailabilityTest.mdx
 contracts/test/contract.PortfolioRouterPausedLegTest.mdx
+contracts/test/contract.PortfolioRouterRedeemFloorTest.mdx
 contracts/test/contract.PortfolioRouterRuntimeEligibilityTest.mdx
 contracts/test/contract.PortfolioRouterTest.mdx
 contracts/test/contract.PortfolioRouterZeroLegInvariantTest.mdx
@@ -237,9 +248,12 @@ contracts/test/contract.ProtocolAssetVaultScriptGuardsTest.mdx
 contracts/test/contract.ProtocolAssetVaultShortlistTest.mdx
 contracts/test/contract.ProtocolDeployHarness.mdx
 contracts/test/contract.ProtocolGuardHarness.mdx
+contracts/test/contract.QuoteCeilingVault.mdx
 contracts/test/contract.ReadCountingAdapter.mdx
 contracts/test/contract.ReceiptRoleStub.mdx
 contracts/test/contract.RecorderDeployHarness.mdx
+contracts/test/contract.RecorderManipulationForkTest.mdx
+contracts/test/contract.RecorderSellAnchorTest.mdx
 contracts/test/contract.RecordingSwapRouter.mdx
 contracts/test/contract.RedeemGasGuardsTest.mdx
 contracts/test/contract.RedeployLegVault.mdx
@@ -251,10 +265,12 @@ contracts/test/contract.RevertingRetireVault.mdx
 contracts/test/contract.RevisionCommitteeAssessment.mdx
 contracts/test/contract.RevisionRecorderAssessment.mdx
 contracts/test/contract.RevisionVaultAssessment.mdx
+contracts/test/contract.RobotMoneyGatewayCeilingProbe.mdx
 contracts/test/contract.RobotMoneyGatewayTest.mdx
 contracts/test/contract.RobotMoneyRouterRedeemGasRootCauseTest.mdx
 contracts/test/contract.RobotMoneyVault4626Conformance.mdx
 contracts/test/contract.RobotMoneyVault4626ConformanceWithFee.mdx
+contracts/test/contract.RobotMoneyVaultCeilingProbe.mdx
 contracts/test/contract.RobotMoneyVaultRedeemGasForkTest.mdx
 contracts/test/contract.RobotMoneyVaultRedeemGasMechanismTest.mdx
 contracts/test/contract.RobotMoneyVaultRedeemGasRootCauseTest.mdx
@@ -301,6 +317,7 @@ contracts/test/contract.UnprotectedStubVault.mdx
 contracts/test/contract.UpgradeAuthorityHarness.mdx
 contracts/test/contract.UpgradeAuthorityPredictionTest.mdx
 contracts/test/contract.UpgradeAuthorityStagesTest.mdx
+contracts/test/contract.UpgradeCeilingsTest.mdx
 contracts/test/contract.UpgradeLifecycleForkTest.mdx
 contracts/test/contract.V2MigrationIntegrationTest.mdx
 contracts/test/contract.V4RecorderSamplingEconomicsForkTest.mdx
@@ -337,6 +354,8 @@ contracts/test/helpers/abstract.SafeFixture.mdx
 contracts/test/helpers/abstract.SafeGovernance.mdx
 contracts/test/helpers/constants.UpgradeV2.mdx
 contracts/test/helpers/contract.AgentTokenVaultV2.mdx
+contracts/test/helpers/contract.CappedAavePool.mdx
+contracts/test/helpers/contract.CappedMetaMorpho.mdx
 contracts/test/helpers/contract.ConsensusRecommendationReceiptV2.mdx
 contracts/test/helpers/contract.ConstPool.mdx
 contracts/test/helpers/contract.CoreStages.mdx
@@ -348,6 +367,7 @@ contracts/test/helpers/contract.MockV4PoolManager.mdx
 contracts/test/helpers/contract.MockVault.mdx
 contracts/test/helpers/contract.NoYieldTestAdapter.mdx
 contracts/test/helpers/contract.NotUUPS.mdx
+contracts/test/helpers/contract.PausableComet.mdx
 contracts/test/helpers/contract.PortfolioRouterV2.mdx
 contracts/test/helpers/contract.ProtocolAssetVaultV2.mdx
 contracts/test/helpers/contract.RobotMoneyGatewayV2.mdx
@@ -371,6 +391,8 @@ contracts/test/helpers/library.ForkSelect.mdx
 contracts/test/helpers/library.RoleHolders.mdx
 contracts/test/helpers/library.VaultTestParams.mdx
 contracts/test/helpers/library.VenueEtcher.mdx
+contracts/test/interface.IAaveAddressesProvider.mdx
+contracts/test/interface.IAavePoolConfigurable.mdx
 contracts/test/interface.IDepositsPaused.mdx
 contracts/test/interface.ILendingMinOutSurface.mdx
 contracts/test/interface.IMarker.mdx

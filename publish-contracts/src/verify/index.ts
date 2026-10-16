@@ -19,9 +19,9 @@ import { padTopic, scanLogs, topicToAddress } from "./logs.ts";
 import { safeChecks } from "./safe-checks.ts";
 import { CODE_LABEL, finishUpgradeability, manifestDataOf, upgradeabilityChecks } from "./upgradeability.ts";
 import { USDC_ADDRESS, checkUsdcCode } from "../usdc.ts";
-import type { Address, ChainReader, ExpectedAsset, Hex, VaultSheet, VerifyOptions, VerifyReport } from "./types.ts";
+import type { Address, ChainReader, DeployReceipt, ExpectedAsset, Hex, VaultSheet, VerifyOptions, VerifyReport, WeightSetterGating, WeightSetterHolder } from "./types.ts";
 
-export type { VerifyOptions, VerifyReport, Check, VerifySheet, VaultSheet, ChainReader } from "./types.ts";
+export type { VerifyOptions, VerifyReport, Check, VerifySheet, VaultSheet, ChainReader, WeightSetterGating, WeightSetterHolder } from "./types.ts";
 export { viemReader } from "./reader.ts";
 export { loadFrozenCounts, sumFrozenCounts } from "./frozen.ts";
 export { verifySources } from "./sources.ts";
@@ -81,6 +81,9 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     return { ok: true, detail: `${chainVaults.length} vaults on chain` };
   });
   const redeploys = opts.redeploys ?? [];
+  // QA plan v1 E1 (DT-2): after a redeploy the checkout's build (artifactsDir) is the redeploy sha's, and only the replacing vault runs it. Every contract the original
+  // deployment created runs the build of the original sha (priorArtifactsDir, --prior-out). No redeploy, or no --prior-out (every round at the original sha): one build.
+  const originalDir = redeploys.length > 0 ? opts.priorArtifactsDir : undefined;
   if (opts.appliedReceipt && redeploys.length) opts = { ...opts, appliedReceipt: { ...opts.appliedReceipt, vaults: opts.appliedReceipt.vaults.map((v) => redeploys.find((r) => lc(r.oldVault) === lc(v))?.newVault ?? v) } };
   const manifestSet = man.vaults.map((v) => lc(v.address));
   // Issue 1796: a vault the registry still lists after a redeploy is the retired one. The label stays the same: the manifests plus the retired vaults equal the registry.
@@ -154,6 +157,10 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   for (const [who, addr] of [["safe", safe], ["deployer", D], ["governance", byName.governance!], ["pauser", sheet.pauser], ["emergency", sheet.emergency]] as Array<[string, Address]>) {
     await c.runEq(`router: WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE not held by ${who}`, () => hasRole(chain, router, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, addr), false);
   }
+  // QA plan v1 C3 (CS-6, ADR-0002): the timelock delay on a weight change holds only while the weight setter is timelock-gated. A rotation installs whatever
+  // contract the Safe chose, so the run records the current holder's gating (VerifyReport.weightSetter, the verify stage record) and fails on any other gate.
+  const weightSetter = await weightSetterGating(chain, { router, timelock: tl, artifactsDir: originalDir ?? opts.artifactsDir, governanceArtifact: core.find((x) => x.name === "governance")!.artifact });
+  c.push(WEIGHT_SETTER_GATING_LABEL, weightSetter.gating === "timelock", gatingDetail(weightSetter));
   await c.runEq("gateway: not paused", () => chain.read(gateway, "function depositsPaused() view returns (bool)"), false);
   // The router-first split (core 1493): the gateway and the registry both name the router the router stage deployed.
   await c.runEq("gateway: router() equals the deployed router", async () => lc((await chain.read(gateway, "function router() view returns (address)")) as string), lc(router));
@@ -242,22 +249,23 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   for (const n of libNames) await c.run(`library[${n}]: has code`, async () => (await chain.getCode(man.libraries[n])).length > 2);
 
   // ---- code hashes against the build, immutables and links masked
-  // Issue 1796: after a redeploy only the new vault runs the current build. The others (and the retired vault, below) run the build of the original deployment sha.
+  // Issue 1796, QA plan v1 E1: after a redeploy only the replacing vault (and an adapter its manifest names) runs the checkout's build, the redeploy sha's. Every other
+  // contract (core, libraries, the other adapters, the vaults not replaced, and the retired vault below) was created by the original deployment and runs its build.
   const redeployed = new Set(redeploys.map((r) => r.vault));
   const priorDir = opts.priorArtifactsDir;
   // Issue 1859: a proxy upgraded by govern --row upgrade-proxy runs the build its upgrade named (opts.proxyBuildDirs), whatever build the release deployed.
   const upgradedDir = (label: string): { implDir?: string } => (opts.proxyBuildDirs?.[label] ? { implDir: opts.proxyBuildDirs[label] } : {});
-  const codeTargets: { label: string; address: Address; artifact: string; dir?: string; implDir?: string }[] = [
-    ...core.map((x) => ({ label: x.name, address: x.address, artifact: x.artifact, ...upgradedDir(x.name) })),
-    ...man.vaults.map((v) => ({ label: `vault[${v.key}]`, address: v.address, artifact: sheet.vaults[v.key]?.contract ?? v.artifact, ...(redeploys.length > 0 && !redeployed.has(v.key) ? { dir: priorDir } : {}), ...upgradedDir(`vault[${v.key}]`) })),
-    ...v4Adapters.map((a) => ({ label: `adapter[V4:${a.vault}]`, address: a.address, artifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY]! })),
-    ...libNames.map((n) => ({ label: `library[${n}]`, address: man.libraries[n], artifact: man.libraryArtifacts[n]! })),
+  const codeTargets: { label: string; address: Address; artifact: string; dir?: string; implDir?: string; original: boolean }[] = [
+    ...core.map((x) => ({ label: x.name, address: x.address, artifact: x.artifact, dir: originalDir, original: true, ...upgradedDir(x.name) })),
+    ...man.vaults.map((v) => ({ label: `vault[${v.key}]`, address: v.address, artifact: sheet.vaults[v.key]?.contract ?? v.artifact, dir: redeployed.has(v.key) ? undefined : originalDir, original: !redeployed.has(v.key), ...upgradedDir(`vault[${v.key}]`) })),
+    ...v4Adapters.map((a) => ({ label: `adapter[V4:${a.vault}]`, address: a.address, artifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY]!, dir: redeployed.has(a.vault) ? undefined : originalDir, original: !redeployed.has(a.vault) })),
+    ...libNames.map((n) => ({ label: `library[${n}]`, address: man.libraries[n], artifact: man.libraryArtifacts[n]!, dir: originalDir, original: true })),
   ];
   for (const t of codeTargets) {
     await c.run(`${t.label}: ${CODE_LABEL}`, async () => {
       // Issue 1808: a core contract behind an ERC-1967 proxy is checked through the implementation its slot names.
       const r = await compareDeployedCode(chain, t.address, loadArtifact(t.implDir ?? t.dir ?? opts.artifactsDir, t.artifact), tryLoadArtifact(t.dir ?? opts.artifactsDir, ERC1967_PROXY_ARTIFACT));
-      return { ok: r.ok, detail: `${t.artifact}${t.implDir ? ` (${t.implDir})` : ""}: ${r.detail}${!r.ok && redeploys.length > 0 && t.dir === undefined && t.label.startsWith("vault[") ? " (after a redeploy the vaults it did not replace run the original build: pass --prior-out <forge out/ of the original sha>)" : ""}` };
+      return { ok: r.ok, detail: `${t.artifact}${t.implDir ? ` (${t.implDir})` : ""}: ${r.detail}${!r.ok && redeploys.length > 0 && t.original && originalDir === undefined ? " (after a redeploy at another sha the contracts it did not replace run the original build: pass --prior-out <forge out/ of a checkout at the original sha>)" : ""}` };
     });
   }
 
@@ -285,7 +293,55 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
 
   // ---- the immutability claim (issue 1809), last: it needs every other check of the run
   finishUpgradeability(c, table, upgradeability);
-  return { ...c.report(), upgradeability };
+  return { ...c.report(), upgradeability, weightSetter };
+}
+
+export const WEIGHT_SETTER_GATING_LABEL = "router: every WEIGHT_SETTER_ROLE holder is timelock-gated";
+const ROLE_MEMBER_COUNT = "function getRoleMemberCount(bytes32 role) view returns (uint256)";
+const ROLE_MEMBER = "function getRoleMember(bytes32 role, uint256 index) view returns (address)";
+const roleMembers = async (ch: ChainReader, at: Address, r: Hex): Promise<Address[]> => {
+  const n = Number((await ch.read(at, ROLE_MEMBER_COUNT, [r])) as bigint);
+  const out: Address[] = [];
+  for (let i = 0; i < n; i++) out.push((await ch.read(at, ROLE_MEMBER, [r, BigInt(i)])) as Address);
+  return out;
+};
+
+/**
+ * QA plan v1 C3 (CS-6, ADR-0002 "Why the 1522 bypass stays closed"). Reads every router `WEIGHT_SETTER_ROLE` holder and what gates its weight writes. A holder is
+ * timelock-gated when its logic code (the implementation behind its ERC-1967 proxy, issue 1808) is the RouterGovernance build, and the timelock is its only
+ * `ADMIN_ROLE` member (setDefaultWeights, clearVotedWeights) and its only `WEIGHT_SETTER_ROLE` member (applyReceipt, issue 1698). Any other contract is not: its
+ * code is not the reviewed build, so nothing says the timelock stands in front of it. A failed router or code read is "unreadable", never "timelock". The delay is
+ * recorded only: the timelock labels own its floor.
+ */
+async function weightSetterGating(chain: ChainReader, at: { router: Address; timelock: Address; artifactsDir: string; governanceArtifact: string }): Promise<WeightSetterGating> {
+  const delaySeconds = await chain.read(at.timelock, "function getMinDelay() view returns (uint256)").then((d) => Number(d as bigint), () => null);
+  const base = { timelock: at.timelock, delaySeconds };
+  const only = (xs: Address[] | null): boolean => xs !== null && xs.length === 1 && lc(xs[0]!) === lc(at.timelock);
+  try {
+    const art = loadArtifact(at.artifactsDir, at.governanceArtifact);
+    const proxyArt = tryLoadArtifact(at.artifactsDir, ERC1967_PROXY_ARTIFACT);
+    const holders: WeightSetterHolder[] = [];
+    for (const h of await roleMembers(chain, at.router, WEIGHT_SETTER_ROLE)) {
+      const routerGovernanceCode = (await compareDeployedCode(chain, h, art, proxyArt)).ok;
+      const admins = await roleMembers(chain, h, ADMIN_ROLE).catch(() => null); // no AccessControlEnumerable: no gate this verifier can read
+      const setters = await roleMembers(chain, h, WEIGHT_SETTER_ROLE).catch(() => null);
+      holders.push({ address: h, routerGovernanceCode, admins, setters, timelockGated: routerGovernanceCode && only(admins) && only(setters) });
+    }
+    return { gating: holders.length > 0 && holders.every((h) => h.timelockGated) ? "timelock" : "not-timelock", holders, ...base };
+  } catch {
+    return { gating: "unreadable", holders: [], ...base };
+  }
+}
+
+function gatingDetail(g: WeightSetterGating): string {
+  const delay = g.delaySeconds === null ? "the timelock delay (unreadable)" : `the timelock delay of ${g.delaySeconds} s`;
+  if (g.gating === "unreadable") return "the WEIGHT_SETTER_ROLE holders, their code or the RouterGovernance build could not be read: the gating is unknown";
+  if (g.holders.length === 0) return "WEIGHT_SETTER_ROLE has no holder";
+  const list = (xs: Address[] | null): string => (xs === null ? "unreadable" : `[${xs.join(", ")}]`);
+  const each = g.holders.map((h) => `${h.address} (${h.routerGovernanceCode ? "RouterGovernance build" : "not the RouterGovernance build"}, ADMIN_ROLE ${list(h.admins)}, WEIGHT_SETTER_ROLE ${list(h.setters)})`).join("; ");
+  return g.gating === "timelock"
+    ? `${each}: every weight change waits ${delay}`
+    : `${each}: a holder that is not the RouterGovernance build gated by the timelock ${g.timelock} alone lets weight changes skip ${delay} (ADR-0002, security-model section 7)`;
 }
 
 async function deployTimeChecks(
@@ -373,7 +429,7 @@ async function vaultChecks(
   });
   if (!vs) {
     for (const l of ["tvlCap equals sheet", "perDepositCap equals sheet", "exitFeeBps equals sheet", "feeRecipient equals sheet", "feeRecipient is not deployer", "paused state equals sheet", "router eligibility equals sheet"]) c.fail(`${p}: ${l}`, "no sheet entry for this vault");
-    if (v.kind !== "usdc") for (const l of ["asset config equals sheet", ...BASKET_GUARD_LABELS]) c.fail(`${p}: ${l}`, "no sheet entry for this vault");
+    if (v.kind !== "usdc") for (const l of ["asset config equals sheet", ...BASKET_GUARD_LABELS, UNWIND_GUARD_LABEL]) c.fail(`${p}: ${l}`, "no sheet entry for this vault");
     if (v.kind !== "usdc") c.fail(`${p}: ${SLIPPAGE_LABEL}`, "no sheet entry for this vault");
     if (v.kind === "usdc") { for (const l of ["seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares"]) c.fail(`${p}: ${l}`, "no sheet entry for this vault"); }
     return;
@@ -398,6 +454,7 @@ async function vaultChecks(
   } else {
     await c.run(`${p}: asset config equals sheet`, async () => assetReadBack(chain, a, vs.assets));
     await basketGuardChecks(c, chain, a, p, vs);
+    await unwindGuardCheck(c, chain, a, p, vs);
     // rmAGENT launches holding RM only (core 1554). "asset config equals sheet" ties the chain to the sheet, so this ties the sheet to RM.
     if (v.kind === "agent") await c.run(`${p}: holds RM as its one asset`, async () => ({ ok: vs.assets.length === 1 && lc(vs.assets[0]!.token) === lc(RM_TOKEN), detail: `sheet lists [${vs.assets.map((a) => a.token).join(", ")}], expected only ${RM_TOKEN}` }));
     // core 1676: every UniswapV4 asset is wired to the permissionless price recorder, the V4 adapter and the configured PoolKey.
@@ -589,6 +646,15 @@ const V4_LABELS = [
   "V4 adapter codehash is allowed",
   "V4 adapter is bound to the recorder, the PoolManager and the pool key",
 ] as const;
+/**
+ * Core 1793 (QA plan D5): the live ring the recorder must hold. The USDC sell anchor reads the recorder over `BasketViews.SELL_ANCHOR_WINDOW`
+ * (14,400 s). At one `record()` per 2 s block the ring keeps that window only with 14,400 / 2 + 1 = 7,201 slots
+ * (`DeployUniswapV4PriceRecorder.RING_SLOTS`). A 901-slot ring (the 1800 s NAV floor, Deploy 2's recorder) lets a spammer evict the anchor's
+ * history down to about 1,800 s, so the anchor gives no protection. The live `observationCardinality` is read, not `cardinalityNext`: a ring
+ * grown with `grow(7201)` stays at its old size until its index wraps.
+ */
+export const RECORDER_RING_SLOTS = 7_201;
+
 const RECORDER_LABELS = [
   "recorder: PoolKey and PoolManager equal config",
   "recorder: observation ring holds the full window floor",
@@ -671,7 +737,13 @@ async function v4AssetChecks(
   });
   await c.run(RECORDER_LABELS[1], async () => {
     const [, , , cardinality] = (await chain.read(ctx.recorder, "function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality)")) as readonly [bigint, number, number, number];
-    return { ok: Number(cardinality) >= 901, detail: `observationCardinality ${cardinality}, the 1800 s window needs 901` };
+    const ok = Number(cardinality) >= RECORDER_RING_SLOTS;
+    return {
+      ok,
+      detail: ok
+        ? `observationCardinality ${cardinality}, the 14,400 s sell anchor window needs ${RECORDER_RING_SLOTS}`
+        : `observationCardinality ${cardinality}, the 14,400 s sell anchor window needs ${RECORDER_RING_SLOTS} (core 1793): a spammer can evict the anchor's history from a smaller ring. Call grow(${RECORDER_RING_SLOTS}) and record until the index wraps, or deploy a new recorder`,
+    };
   });
   await c.run(RECORDER_LABELS[2], async () => {
     const code = (await chain.getCode(ctx.recorder)).slice(2).toLowerCase();
@@ -707,6 +779,43 @@ async function basketGuardChecks(c: Collector, chain: ChainReader, vault: Addres
       if (liq < floor) short.push(`${asset.pool} has ${liq}`);
     }
     return { ok: short.length === 0, detail: short.length ? `below the floor ${floor}: ${short.join(", ")}` : `${vs.assets.length} pools at or above ${floor}` };
+  });
+}
+
+/** QA plan v1 D7: the label unwindGuardCheck pushes on every basket vault. */
+export const UNWIND_GUARD_LABEL = "emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault";
+const UNWIND_GUARD_SIG = "function emergencyUnwindGuard(address token) view returns (uint256 minUsdcOut, bool overrideAllowed, uint256 maxLossBps)";
+
+/**
+ * QA plan v1 D7 (review E5, issue 1705 Q2). Before `govern --row set-unwind-guard` no stage or row set a basket's emergency unwind guard, so every guard read zero: emergencyUnwind
+ * reverted EmergencyFloorUnavailable whenever a TWAP read failed, and emergencyUnwindWithOverride reverted EmergencyUnwindOverrideDisabled. A vault the sheet expects OPEN (its
+ * unpause row executed) takes deposits, so each of its active assets (read from the chain) must read a non-zero minUsdcOut. A vault expected paused takes no deposit: the label
+ * passes and records the values. Only the Safe, through the timelock, sets the guard (the row), so the pre-govern verify sees zeros and passes; the post-govern verify needs the row
+ * run for every unpaused basket. The detail records overrideAllowed and maxLossBps too (QA plan v1 Decisions D3: override allowed, Safe-only), but only minUsdcOut is asserted.
+ */
+async function unwindGuardCheck(c: Collector, chain: ChainReader, vault: Address, p: string, vs: VaultSheet): Promise<void> {
+  await c.run(`${p}: ${UNWIND_GUARD_LABEL}`, async () => {
+    const active: Address[] = [];
+    for (let i = 0; i < 64; i++) {
+      let r: any;
+      try { r = await chain.read(vault, ASSET_SIG, [BigInt(i)]); } catch { break; }
+      const x = Array.isArray(r) ? r : [r.token, r.pool, r.swapFee, r.active, r.adapter, r.venue];
+      if (Boolean(x[3])) active.push(x[0] as Address);
+    }
+    const guards: { token: Address; min: bigint; text: string }[] = [];
+    for (const token of active) {
+      const g = (await chain.read(vault, UNWIND_GUARD_SIG, [token])) as any;
+      const [min, allowed, loss] = Array.isArray(g) ? g : [g.minUsdcOut, g.overrideAllowed, g.maxLossBps];
+      guards.push({ token, min: BigInt(min), text: `${token} minUsdcOut ${BigInt(min)} overrideAllowed ${Boolean(allowed)} maxLossBps ${BigInt(loss)}` });
+    }
+    const values = guards.map((g) => g.text).join("; ");
+    if (vs.expectPaused) return { ok: true, detail: `deposits paused, no guard required until the vault opens${values ? `: ${values}` : ""}` };
+    if (active.length === 0) return { ok: false, detail: "the vault is open and lists no active asset: nothing proves an unwind floor" };
+    const zero = guards.filter((g) => g.min === 0n).map((g) => g.token);
+    return {
+      ok: zero.length === 0,
+      detail: zero.length === 0 ? values : `the vault is open and minUsdcOut is zero for ${zero.join(", ")}: an unwind whose TWAP read fails reverts and the override path is unusable. Run govern --row set-unwind-guard for this vault (${values})`,
+    };
   });
 }
 
@@ -892,6 +1001,9 @@ async function redeployChecks(
   ctx: { registry: Address; router: Address; tl: Address; emergency: Address; vaults: ManifestVault[]; priorDir?: string; artifactsDir: string; artifact?: string },
 ): Promise<void> {
   const p = `retired[${r.vault}]`;
+  // QA plan v1 E1: the build that created this vault. A first round's old vault is the original deployment's (--prior-out); a later round's was deployed by the round before.
+  const fromRedeploy = r.oldBuild === "redeploy";
+  const oldDir = fromRedeploy ? ctx.artifactsDir : ctx.priorDir ?? ctx.artifactsDir;
   const status = async (v: Address): Promise<number> => Number(((await chain.read(ctx.registry, "function getVault(address vault) view returns ((string name, address asset, uint256 registeredAt) metadata, uint8 status)", [v])) as [unknown, number])[1]);
   await c.run(`${p}: has code`, async () => (await chain.getCode(r.oldVault)).length > 2);
   await c.runEq(`${p}: registry status is Retired`, () => status(r.oldVault), 2);
@@ -903,14 +1015,13 @@ async function redeployChecks(
   await c.run(`${p}: runtime code serves redeemInKind`, async () => {
     const sel = toFunctionSelector("function redeemInKind(uint256 shares, address receiver, address owner)").slice(2);
     // Issue 1808: behind an ERC-1967 proxy the selector is in the implementation's code.
-    const code = (await logicCode(chain, r.oldVault, tryLoadArtifact(ctx.priorDir ?? ctx.artifactsDir, ERC1967_PROXY_ARTIFACT))).toLowerCase();
+    const code = (await logicCode(chain, r.oldVault, tryLoadArtifact(oldDir, ERC1967_PROXY_ARTIFACT))).toLowerCase();
     return { ok: code.includes(sel), detail: `selector ${sel}` };
   });
   await c.run(`${p}: runtime code equals the original build artifact (masked)`, async () => {
     if (!ctx.artifact) return { ok: false, detail: "no artifact name for the vault" };
-    const dir = ctx.priorDir ?? ctx.artifactsDir;
-    const res = await compareDeployedCode(chain, r.oldVault, loadArtifact(dir, ctx.artifact), tryLoadArtifact(dir, ERC1967_PROXY_ARTIFACT));
-    return { ok: res.ok, detail: `${ctx.artifact}: ${res.detail}${!res.ok && ctx.priorDir === undefined ? " (pass --prior-out <forge out/ of the original sha>)" : ""}` };
+    const res = await compareDeployedCode(chain, r.oldVault, loadArtifact(oldDir, ctx.artifact), tryLoadArtifact(oldDir, ERC1967_PROXY_ARTIFACT));
+    return { ok: res.ok, detail: `${ctx.artifact} (${fromRedeploy ? "the redeploy build" : "the original build"}): ${res.detail}${!res.ok && !fromRedeploy && ctx.priorDir === undefined ? " (pass --prior-out <forge out/ of a checkout at the original sha>)" : ""}` };
   });
   const q = `redeploy[${r.vault}]`;
   await c.run(`${q}: the vault manifest names the replacing vault`, async () => {

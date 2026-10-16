@@ -91,6 +91,9 @@ export const SIG_CODEHASH_ALLOWED = "AdapterCodeHashAllowedSet(bytes32,bool)";
 
 /** Issue 1666: the guard every basket carries, and the in-range liquidity of every pool against the sheet floor. */
 export const NAV_GUARD_BPS = 100n;
+/** QA plan v1 D7: the emergency unwind guard of every basket asset (minUsdcOut in USDC units, and the override loss cap). */
+export const UNWIND_MIN_USDC_OUT = 1_000_000n;
+export const UNWIND_MAX_LOSS_BPS = 500n;
 export const POOL_LIQUIDITY = 10n ** 18n;
 export const POOL_LIQUIDITY_FLOOR = 10n ** 12n;
 const DEFAULT_BPS = [9500, 500, 0, 0];
@@ -134,6 +137,13 @@ export class FakeChain implements ChainReader {
     const A = a.toLowerCase();
     if (name === "hasRole") return this.has(a, args[0] as Hex, args[1] as Address);
     if (name === "getRoleMemberCount") return BigInt([...this.roles].filter((k) => k.startsWith(`${A}|${(args[0] as string).toLowerCase()}|`) || k.startsWith(`${A}|${args[0] as string}|`)).length);
+    // QA plan v1 C3: AccessControlEnumerable's getRoleMember, in grant order (the weight setter's gating enumerates the router's holders and each holder's ADMIN_ROLE and WEIGHT_SETTER_ROLE)
+    if (name === "getRoleMember") {
+      const members = [...this.roles].filter((k) => k.startsWith(`${A}|${(args[0] as string).toLowerCase()}|`) || k.startsWith(`${A}|${args[0] as string}|`)).map((k) => k.split("|")[2] as Address);
+      const i = Number(args[1] as bigint);
+      if (i >= members.length) throw new Error(`execution reverted: no role member ${i} on ${a}`);
+      return members[i];
+    }
     if (name === "getOwners" && A === SAFE.toLowerCase()) return this.owners;
     if (name === "getThreshold" && A === SAFE.toLowerCase()) return BigInt(this.threshold);
     if (name === "getModulesPaginated" && A === SAFE.toLowerCase()) return { array: this.modules, next: addr(1) };
@@ -353,6 +363,11 @@ export function buildWorld(chainId = 8453): World {
       if (!x) throw new Error("execution reverted");
       return [x.token, x.pool, x.swapFee, true, x.adapter, x.venue];
     });
+    // QA plan v1 D7: every basket asset carries an emergency unwind guard (the Safe sets it through the timelock with govern --row set-unwind-guard). A test zeroes one.
+    if (v.kind !== "usdc") {
+      const guards = new Map(assets.map((x) => [x.token.toLowerCase(), [UNWIND_MIN_USDC_OUT, true, UNWIND_MAX_LOSS_BPS] as const]));
+      ch.set(v.address, "emergencyUnwindGuard", (a: any[]) => guards.get(String(a[0]).toLowerCase()) ?? [0n, false, 0n]);
+    }
     // core 1676: the vault allowlists the codehash of the V4 adapter it was deployed with
     ch.set(v.address, "adapterCodeHashAllowed", (a: any[]) => String(a[0]).toLowerCase() === keccak256(ch.codes.get(V4_ADAPTER.toLowerCase())!).toLowerCase());
     if (v.kind === "usdc") {
@@ -372,7 +387,8 @@ export function buildWorld(chainId = 8453): World {
     };
   }
 
-  // core 1676: the recorder and the V4 adapter read back the configured PoolKey. The recorder keeps a ring of 901 slots and holds no admin.
+  // core 1676: the recorder and the V4 adapter read back the configured PoolKey. The recorder keeps a live ring of 7,201 slots (core 1793,
+  // the 4 h sell anchor window) and holds no admin.
   ch.set(RECORDER, "POOL_MANAGER", POOL_MANAGER);
   ch.set(RECORDER, "POOL_ID", RM_POOL_ID);
   ch.set(RECORDER, "token0", RM_POOL_KEY.currency0);
@@ -380,7 +396,7 @@ export function buildWorld(chainId = 8453): World {
   ch.set(RECORDER, "fee", RM_POOL_KEY.fee);
   ch.set(RECORDER, "tickSpacing", RM_POOL_KEY.tickSpacing);
   ch.set(RECORDER, "hooks", ZERO);
-  ch.set(RECORDER, "slot0", [1n << 96n, -403009, 3, 901]);
+  ch.set(RECORDER, "slot0", [1n << 96n, -403009, 3, 7201]);
   ch.set(V4_ADAPTER, "POOL_MANAGER", POOL_MANAGER);
   ch.set(V4_ADAPTER, "RECORDER", RECORDER);
   ch.set(V4_ADAPTER, "POOL_ID", RM_POOL_ID);
@@ -407,7 +423,7 @@ export function buildWorld(chainId = 8453): World {
   });
   w("safe.json", { chain_id: chainId, safe: SAFE });
   w(file("libs"), { chain_id: chainId, tick_math: LIBS.tick_math });
-  w(file("recorder"), { chain_id: chainId, recorder: RECORDER, pool_manager: POOL_MANAGER, pool_id: RM_POOL_ID, ring_slots: 901 });
+  w(file("recorder"), { chain_id: chainId, recorder: RECORDER, pool_manager: POOL_MANAGER, pool_id: RM_POOL_ID, ring_slots: 7201 });
   for (const v of table.vaults) if (v.key !== "USDC") {
     const vkey = ({ PROTO: "rmPROTO", AGENT: "rmAGENT", RWA: "rmRWA" } as Record<string, string>)[v.key]!;
     w(basename(v.manifest), { chain_id: chainId, vault: VAULTS[vkey]!.address, implementation: IMPLS[`vault[${vkey}]`], ...up, ...(v.key === "AGENT" ? { adapter: ZERO, adapter_v4: V4_ADAPTER, recorder: RECORDER } : {}) });

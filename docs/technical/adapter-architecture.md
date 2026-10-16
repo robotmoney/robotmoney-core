@@ -105,7 +105,16 @@ emergency procedures.
 Behavior:
 
 - `deploy` approves the Aave Pool, calls `POOL.supply`, then clears any
-  residual allowance.
+  residual allowance. A supply the pool refuses for capacity (the
+  reserve's supply cap is reached, or the reserve is frozen) does not
+  revert: the adapter sends the USDC back to the vault and emits
+  `DeployRefused(amount, reason)` (security round 2, see "A venue that
+  refuses a supply" below). A refusal while the reserve is paused or
+  inactive, so Aave refuses withdrawals too, reverts
+  `VenueWithdrawalsClosed(reason)` (security round 3).
+- `venueWithdrawable()` reads the reserve's configuration bitmap
+  (`POOL.getConfiguration`): false while the reserve is paused (bit 60)
+  or inactive (bit 56 clear).
 - The adapter holds aBasUSDC / aToken exposure.
 - `totalAssets` returns `A_TOKEN.balanceOf(address(this))`, which is
   expected to include accrued interest.
@@ -124,7 +133,11 @@ Protected tokens:
 Behavior:
 
 - `deploy` approves Comet, calls `COMET.supply`, then clears any
-  residual allowance.
+  residual allowance. A supply Comet refuses (supply paused) is sent back
+  to the vault with `DeployRefused(amount, reason)` (security round 2),
+  unless Comet's `isWithdrawPaused` is set too: then it reverts
+  `VenueWithdrawalsClosed(reason)` (security round 3).
+- `venueWithdrawable()` is `!COMET.isWithdrawPaused()`.
 - The adapter holds the Comet account balance.
 - `totalAssets` returns `COMET.balanceOf(address(this))`, which is
   expected to represent live USDC value with interest.
@@ -144,7 +157,10 @@ ERC-4626 vault on Base.
 Behavior:
 
 - `deploy` approves the Morpho vault, calls `MORPHO_VAULT.deposit`,
-  then clears any residual allowance.
+  then clears any residual allowance. A deposit the Morpho vault refuses
+  (`AllCapsReached` once every market cap in its supply queue is full) is
+  sent back to the vault with `DeployRefused(amount, reason)` (security
+  round 2). The adapter's own exposure cap below still reverts.
 - The adapter holds Morpho vault shares.
 - `totalAssets` converts held Morpho shares to USDC value using
   `MORPHO_VAULT.convertToAssets`.
@@ -164,6 +180,12 @@ Exposure cap:
 - The cap is set via `setMaxExposure(uint256 cap)`, restricted to the
   owning vault by the `onlyVault` modifier — the same authority gate as
   `deploy` and `withdraw`.
+- Governance reaches it through the vault:
+  `RobotMoneyVault.setAdapterMaxExposure(uint256 index, uint256 cap)`
+  (`ADMIN_ROLE`, the timelock in production) forwards the call to the active
+  entry at `index` and emits `AdapterMaxExposureSet(index, adapter, cap)`.
+  Read the live value back with the adapter's `maxExposure()` (FS-VLT-10, QA
+  plan D8).
 - A cap of `0` means uncapped (the default), so a deployment keeps its
   prior behavior until a vault sets a non-zero cap.
 - When the cap is non-zero, `deploy(amount)` reads the adapter's live
@@ -173,6 +195,60 @@ Exposure cap:
   `current + amount` would exceed the cap. The check uses the live
   converted balance rather than a stored counter, so accrued yield is
   reflected in the exposure measurement.
+- The vault's allocator respects the cap, so it bounds Morpho only and
+  never stops vault deposits (security round 1). Both routing passes read
+  `maxExposure()` (a `staticcall`; an adapter without it counts as
+  uncapped) and fill Morpho at most to the cap. The rest goes to the other
+  adapters up to their `capBps`, and what none can take stays idle in NAV
+  with `UnroutedDeposit`. Before this, a cap below Morpho's equal-weight
+  slice, or yield accrual alone pushing Morpho near the cap, made every
+  vault deposit, keeper `rebalance` and router deposit with an rmUSDC leg
+  revert. `adminRebalance` still reverts on an explicit target above the
+  cap.
+
+A venue that refuses a supply (security round 2):
+
+- The exposure cap is the adapter's own limit. The venue has limits of
+  its own: an Aave reserve's supply cap and its frozen or paused flags,
+  MetaMorpho's market caps (`AllCapsReached`), Comet's supply pause. Any
+  of them used to revert `deploy`, and with it every rmUSDC deposit,
+  every router deposit with an rmUSDC leg and keeper `rebalance`. Anyone
+  with enough USDC could fill an Aave reserve's remaining cap room to
+  cause that on purpose.
+- The single-argument `deploy` of all three lending adapters now catches
+  the venue's revert, sends the USDC back to the vault and emits
+  `DeployRefused(amount, reason)`. The vault measures what each adapter
+  kept by its own USDC balance (`RobotMoneyVaultOps._allocate`), reports only
+  that with `Allocated`, does not ask a refusing adapter again in the
+  same routing call, and leaves what no adapter takes idle in NAV with
+  `UnroutedDeposit`. The next deposit or `rebalance` routes it once the
+  venue accepts again. `adminRebalance` leaves a refused slice idle too.
+- The min-out `deploy(usdcIn, minValueOut)` overload still reverts on a
+  refusal.
+
+A venue that shuts withdrawals too (security round 3):
+
+- An Aave reserve that is paused or inactive, or a Comet whose
+  `isWithdrawPaused` is set, refuses the supply AND the withdrawal, while
+  the vault still counts the position at face in NAV. Handing the slice
+  back there let a deposit mint at that NAV and left its slice idle, and
+  a redeem no larger than idle was paid at full NAV while any later
+  haircut fell on the holders who stayed (the FS-VLT-8 outcome).
+- The Aave and Compound adapters implement
+  `IVenueHealthAdapter.venueWithdrawable()`. While any active adapter
+  reports false, `RobotMoneyVault.maxDeposit` and `maxMint` read 0
+  (`RobotMoneyVaultOps.anyActiveBlocked`), so a deposit reverts and the
+  router skips the rmUSDC leg. A missing or reverting view reads as
+  open. Deposits reopen with the venue, or once the adapter leaves the
+  active set.
+- The adapter's own `deploy` does not hand a slice back while its venue
+  is shut: it reverts `VenueWithdrawalsClosed(reason)`. So a keeper
+  `rebalance` cannot pull a healthy venue's excess into idle and leave
+  it there either.
+- MetaMorpho has no pause, so `MorphoAdapter` has no such view; its
+  `AllCapsReached` refusal still hands back.
+- The operator response stays exclude first: `EMERGENCY_ROLE` runs
+  `emergencyExcludeAdapter` before any drain.
 
 ## 5. Vault Controls
 
@@ -183,6 +259,8 @@ Admin controls:
 - `addAdapter(address adapter, uint16 capBps)`.
 - `removeAdapter(uint256 index)` when the adapter holds zero assets.
 - `setAdapterCap(uint256 index, uint16 capBps)`.
+- `setAdapterMaxExposure(uint256 index, uint256 cap)` for an adapter with an
+  exposure cap (Morpho). Other adapters revert the call.
 - `adminRebalance(uint256[] targetBalances)`.
 
 Keeper/admin rebalance:
@@ -198,8 +276,24 @@ Emergency controls:
   active adapters. Withdrawals stay open (core 1494).
 - `emergencyWithdrawAdapter(index)` pauses deposits and attempts to
   drain one adapter. Withdrawals stay open.
+- `emergencyExcludeAdapter(index)` revokes one active adapter's allowance
+  and opens its exclusion record (a snapshot of the share supply) in one
+  call. It is exclude-only: `setAdapterAllowed(adapter, true)` (ADMIN_ROLE)
+  restores the entry and drains it into the record first. For an illiquid
+  adapter, exclude first and then run `emergencyWithdraw`, so the holders
+  who redeem from idle and the holders who stay bear the haircut alike
+  (security round 1).
 - `forceRemoveAdapter(index)` marks an adapter inactive without
-  withdrawing. Assets left there are treated as lost.
+  withdrawing. Its balance leaves NAV but stays owed to the holders of the
+  moment: a funded entry keeps an open exclusion record, and a later
+  `addAdapter` of the same address pays the balance into that record
+  before the new entry counts (security round 1).
+- `recoverRemovedAdapter(index, amount)` withdraws up to `amount` from a
+  force-removed adapter straight into its open exclusion record, and
+  closes the record once the adapter reports an empty balance. Use it when
+  the venue can repay only part of the position: the re-add asks for the
+  whole balance in one call and reverts `AdapterNotEmpty` until the venue
+  can pay all of it (security round 2).
 - `shutdownVault()` disables deposits by setting shutdown and zeroing
   the TVL cap. It is recoverable: `restoreVault(newTvlCap)` (ADMIN_ROLE)
   clears the shutdown flag and re-opens deposits under a fresh cap.
@@ -268,8 +362,10 @@ Therefore:
 - A Portfolio Router weight is a weight across vaults.
 - An adapter cap is a cap inside one vault.
 - RouterGovernance currently controls active Portfolio Router weights only.
-  The timelock may set default weights only (not yet implemented: core
-  #1522).
+  The timelock sets default weights directly. It changes active weights
+  only through `RouterGovernance.applyReceipt`: only RouterGovernance holds
+  `WEIGHT_SETTER_ROLE`, so a direct `setWeights` from the timelock reverts
+  (core #1522).
 - RouterGovernance does not currently control adapter selection,
   adapter caps, or per-vault strategy internals.
 
@@ -279,8 +375,8 @@ ADR-0010 proposed generalizing this layer into a single `Vault` with position
 adapters. It was Rejected and its code is deleted (see
 `docs/adr/ADR-0010-unified-vault-architecture.md`). The adapter layer in this document
 (`IStrategyAdapter` for lending, `IBasketSwapAdapter` for basket swaps) is the shipped
-design. The basket swap adapters on this branch are `UniswapV3SwapAdapter` and
-`AerodromeSwapAdapter`. The deploy scripts wire only venue `UniswapV3`; no deploy script
-registers `AerodromeSwapAdapter`. The Uniswap V4 adapters were deleted on core PR 1505.
-Restoring a V4 swap adapter is a decided option for RM's venue (not yet implemented; core
-issue to be filed).
+design. The basket swap adapters on this branch are `UniswapV3SwapAdapter`,
+`UniswapV4SwapAdapter` and `AerodromeSwapAdapter`. The deploy scripts wire venues `UniswapV3`
+and `UniswapV4` (rmAGENT's RM leg); no deploy script registers `AerodromeSwapAdapter`. The
+first Uniswap V4 adapters were deleted on core PR 1505. Core 1676 restored a rewritten
+`UniswapV4SwapAdapter` for RM's venue (ADR-0005 amendment of 2026-10-08).

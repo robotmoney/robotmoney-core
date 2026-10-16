@@ -2,11 +2,11 @@
 // HTTP route table.
 //
 // Endpoints are exactly the §11 list plus the vault registry additions (issue #296),
-// the governance additions (issue #307), and the multi-vault protocol stats
+// the router-weight and admin-event additions (issue #307), and the multi-vault protocol stats
 // additions (issue #316):
 //   GET /health
-//   GET /v1/chains/:chain_id/contracts
-//   GET /v1/vault/snapshot/latest
+//   GET /v1/chains/:chain_id/contracts               (only the served chain, X7)
+//   GET /v1/vault/snapshot/latest?contract=          (required, X7)
 //   GET /v1/vault/snapshots?from_block=&to_block=
 //   GET /v1/agents/:address
 //   GET /v1/agents/:address/deposits
@@ -21,6 +21,7 @@
 //   GET /v1/accounts/:address/positions
 //   GET /v1/accounts/:address/history
 //   GET /v1/accounts/:address/policies
+//   GET /v1/accounts/:address/exclusion-claims       (core 1820, QA plan X7)
 //
 // Consensus recommendation receipts (issue #1247, docs/architecture.md §4.9 / §5.0):
 //   GET /v1/consensus-receipts                        (protocol scope, ?limit=)
@@ -55,17 +56,18 @@ use serde::Deserialize;
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
-    dec_to_string, headroom_of, AccountHistoryEntry, AccountHistoryResponse,
+    dec_to_string, exclusion_finalize_reason_label, headroom_of, position_exit_value,
+    AccountExclusionClaimsResponse, AccountHistoryEntry, AccountHistoryResponse,
     AccountPoliciesResponse, AccountPolicy, AccountPositionsResponse, ActivityEvent,
     AdapterAllocationEntry, AdminEventEntry, AdminEventsResponse, AgentPolicy, AgentResponse,
     CommitteeAgent, CommitteeAgentsResponse, CommitteeTilt, CommitteeTiltsResponse,
     CommitteeTrackRecordResponse, CommitteeVoteEntry, ConsensusReceipt, ConsensusReceiptResponse,
     ConsensusReceiptsResponse, Contract, ContractsResponse, Deposit, DepositResponse,
-    DepositsResponse, EventKind, Freshness, Health, ProxyBackfillHealth, RegimeFeedResponse,
-    RegimeSnapshot, RouterStateResponse, RouterWeightsResponse, StatsResponse, Transaction,
-    TransactionResponse, UpgradeState, Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry,
-    VaultPosition, VaultSnapshot, VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint,
-    VaultWeight, VaultsResponse, WeightHistoryEntry,
+    DepositsResponse, EventKind, ExclusionClaim, Freshness, Health, ProxyBackfillHealth,
+    RegimeFeedResponse, RegimeSnapshot, RouterStateResponse, RouterWeightsResponse, StatsResponse,
+    Transaction, TransactionResponse, UpgradeState, Vault, VaultDetail, VaultDetailResponse,
+    VaultFeeEntry, VaultPosition, VaultSnapshot, VaultSnapshotsResponse, VaultTransferEntry,
+    VaultTvlPoint, VaultWeight, VaultsResponse, WeightHistoryEntry,
 };
 use crate::state::AppState;
 
@@ -119,7 +121,7 @@ type VaultSnapshotRow = (
 // (block_number, total_assets, total_supply, indexed_at)
 type TvlPointRow = (i64, BigDecimal, BigDecimal, DateTime<Utc>);
 
-// Row types for governance queries.
+// Row type for router weight queries.
 // (router_address BYTEA, block_number, log_index, tx_hash BYTEA, vault_addresses BYTEA[], bps_values BIGINT[], indexed_at)
 type WeightSnapshotRow = (
     Vec<u8>,
@@ -168,7 +170,7 @@ type VaultFeeRow = (
 
 // Row types for the new multi-vault endpoints.
 
-// (chain_id, vault_address, block_number, shares, total_assets, total_supply, indexed_at)
+// (chain_id, vault_address, block_number, shares, preview_redeem_total, total_supply, indexed_at)
 // Used by get_account_positions to join wallet_positions with vault_snapshots.
 type PositionRow = (
     i64,
@@ -230,7 +232,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/deposits/:deposit_id", get(get_deposit))
         .route("/v1/vaults", get(list_vaults))
         .route("/v1/vaults/:address", get(get_vault))
-        // Governance endpoints (issue #307).
+        // Router weights and governed-change admin events (issues #307, #1731). There is no
+        // proposals route: RouterGovernance voting was deleted (issue 1698, migration 0027).
         .route("/v1/router/weights", get(get_router_weights))
         .route("/v1/governance/admin-events", get(list_admin_events))
         // Multi-vault protocol stats endpoints (issue #316).
@@ -239,6 +242,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/accounts/:address/positions", get(get_account_positions))
         .route("/v1/accounts/:address/history", get(get_account_history))
         .route("/v1/accounts/:address/policies", get(get_account_policies))
+        // Exclusion-record claims — core issue 1820, QA plan X7.
+        .route("/v1/accounts/:address/exclusion-claims", get(get_account_exclusion_claims))
         // Investment Committee — issue #1053.
         .route("/v1/committee/agents", get(list_committee_agents))
         .route(
@@ -275,6 +280,36 @@ async fn health(State(state): State<AppState>) -> ApiResult<Json<Health>> {
     .fetch_optional(&state.pool)
     .await?;
     let progress = indexer_progress(&state).await?;
+    let last_indexed_block = progress.map(|(b, _)| b);
+    let chain_head_block = chain_head_block(&state).await?;
+    // DI-5: `/health` used to say `ok` with a cursor that had not moved for hours, because nothing in it
+    // showed that every tick was failing. The newest FINISHED run is the indexer's current verdict: the run
+    // in flight has no outcome yet, and an older error that a later tick recovered from is history.
+    let last_run_error: Option<String> = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT error FROM indexer_runs \
+         WHERE chain_id = $1 AND finished_at IS NOT NULL \
+         ORDER BY run_id DESC LIMIT 1",
+    )
+    .bind(state.chain_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .flatten();
+    // Security round 1: a stopped indexer writes no run at all, so the newest run keeps its old
+    // verdict and the head keeps its old lag, and both read healthy forever. The age of the last
+    // good run is what shows it. Measured on the database clock, like the watchdog's
+    // `[indexer_lag].max_silence_secs`, and with the same row: the newest successful run with a
+    // cursor.
+    let since_success_secs: Option<i64> = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT GREATEST(EXTRACT(EPOCH FROM now() - COALESCE(finished_at, started_at))::BIGINT, 0) \
+         FROM indexer_runs \
+         WHERE chain_id = $1 AND error IS NULL AND last_indexed_block IS NOT NULL \
+         ORDER BY run_id DESC LIMIT 1",
+    )
+    .bind(state.chain_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .flatten();
+    let silent = since_success_secs.is_some_and(|s| s > HEALTH_MAX_SILENCE_SECS);
     // Issue 1856. A database the indexer has not migrated to 0020 yet has no
     // such table (42P01): report null rather than turn the probe red.
     let proxy_backfill: Option<ProxyBackfillHealth> = match sqlx::query_as(
@@ -290,13 +325,28 @@ async fn health(State(state): State<AppState>) -> ApiResult<Json<Health>> {
         Err(e) => return Err(e.into()),
     };
     Ok(Json(Health {
-        status: "ok",
-        last_indexed_block: progress.map(|(b, _)| b),
-        chain_head_block: chain_head_block(&state).await?,
+        status: if last_run_error.is_some() || silent {
+            "degraded"
+        } else {
+            "ok"
+        },
+        last_indexed_block,
+        chain_head_block,
+        lag_blocks: chain_head_block
+            .zip(last_indexed_block)
+            .map(|(head, cursor)| head - cursor),
+        last_run_error,
+        since_success_secs,
         reorg_count: reorg_count.unwrap_or(0),
         proxy_backfill,
     }))
 }
+
+/// Seconds since the last good indexer run after which `/health` says `degraded` (security round
+/// 1). The watchdog's default `[indexer_lag].max_silence_secs` (`DEFAULT_MAX_INDEXER_SILENCE_SECS`
+/// in `services/watchdog/src/liveness.rs`), so the two surfaces call the same indexer stopped. A
+/// healthy indexer finishes a run every poll, a few seconds apart.
+pub const HEALTH_MAX_SILENCE_SECS: i64 = 300;
 
 /// (address, kind, newest `Upgraded` detail, first `UpgradesFrozen` block, first `UpgradesFrozen` detail).
 type ContractRow = (Vec<u8>, String, Option<String>, Option<i64>, Option<String>);
@@ -310,10 +360,21 @@ fn detail_implementation(detail: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// GET /v1/chains/:chain_id/contracts
+///
+/// This service serves one chain (`state.chain_id`), and so does this route (QA
+/// plan X7, DI-9). It used to bind the path's chain id, so `/v1/chains/1/contracts`
+/// on the Base service listed another chain's rows from a shared database. A path
+/// chain that is not the served one is 404, like any resource this service does
+/// not have.
 async fn list_contracts(
     State(state): State<AppState>,
     Path(chain_id): Path<i64>,
 ) -> ApiResult<Json<ContractsResponse>> {
+    if chain_id != state.chain_id {
+        return Err(ApiError::NotFound);
+    }
+    let chain_id = state.chain_id;
     // The canonical schema has no `label` column on `contracts`; surface
     // it as null so the wire format stays stable for existing clients.
     //
@@ -365,13 +426,40 @@ async fn list_contracts(
     }))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct LatestSnapshotQuery {
+    /// The vault whose latest snapshot to return. Required.
+    pub contract: Option<String>,
+}
+
+/// GET /v1/vault/snapshot/latest?contract=0x…
+///
+/// The newest `vault_snapshots` row of one vault on the served chain (QA plan
+/// X7, DI-9). It used to read the newest row of the whole table, with no chain
+/// and no vault, so with several vaults (and several chains in one database) it
+/// answered whichever vault was read last. `multi-vault-explorer-decisions.md`
+/// §3.2 named the fix: a required vault parameter, 400 without it. The
+/// parameter is `contract`, the name `/v1/vault/snapshots` already uses. A vault
+/// with no snapshot on this chain is 404.
 async fn latest_vault_snapshot(
     State(state): State<AppState>,
+    Query(q): Query<LatestSnapshotQuery>,
 ) -> ApiResult<Json<VaultSnapshotsResponse>> {
+    let Some(contract) = q.contract.as_deref() else {
+        return Err(ApiError::BadRequest(
+            "contract query parameter is required: the vault whose latest snapshot to return"
+                .into(),
+        ));
+    };
+    let contract = decode_address_param(contract)?;
     let row: Option<SnapshotRow> = sqlx::query_as(
         "SELECT chain_id, contract, block_number, total_assets, total_supply, indexed_at \
-         FROM vault_snapshots ORDER BY block_number DESC LIMIT 1",
+         FROM vault_snapshots \
+         WHERE chain_id = $1 AND contract = $2 \
+         ORDER BY block_number DESC LIMIT 1",
     )
+    .bind(state.chain_id)
+    .bind(&contract[..])
     .fetch_optional(&state.pool)
     .await?;
     match row {
@@ -404,10 +492,19 @@ pub struct SnapshotsQuery {
     pub contract: Option<String>,
 }
 
+/// GET /v1/vault/snapshots?from_block=&to_block=&contract=&chain_id=
+///
+/// Snapshots of the served chain only (`state.chain_id`, security round 1). The query's `chain_id`
+/// used to be the only chain filter, so without it the route returned every chain's rows from a
+/// shared database, mixed, and took its freshness from whichever row came last. A `chain_id` that
+/// is not the served chain is 404, as on `/v1/chains/:chain_id/contracts`.
 async fn list_vault_snapshots(
     State(state): State<AppState>,
     Query(q): Query<SnapshotsQuery>,
 ) -> ApiResult<Json<VaultSnapshotsResponse>> {
+    if q.chain_id.is_some_and(|c| c != state.chain_id) {
+        return Err(ApiError::NotFound);
+    }
     let from_block = q.from_block.unwrap_or(0);
     let to_block = q.to_block.unwrap_or(i64::MAX);
     if to_block < from_block {
@@ -425,14 +522,14 @@ async fn list_vault_snapshots(
         "SELECT chain_id, contract, block_number, total_assets, total_supply, indexed_at \
          FROM vault_snapshots \
          WHERE block_number BETWEEN $1 AND $2 \
-           AND ($3::BIGINT IS NULL OR chain_id = $3) \
+           AND chain_id = $3 \
            AND ($4::BYTEA  IS NULL OR contract = $4) \
          ORDER BY block_number ASC \
          LIMIT 500",
     )
     .bind(from_block)
     .bind(to_block)
-    .bind(q.chain_id)
+    .bind(state.chain_id)
     .bind(contract_bytes.as_deref())
     .fetch_all(&state.pool)
     .await?;
@@ -853,7 +950,7 @@ async fn get_vault(
     }))
 }
 
-// ─── Governance handlers (issue #307) ──────────────────────────────────────
+// ─── Router weight and admin-event handlers (issues #307, #1731) ───────────
 
 /// GET /v1/router/weights — current weight vector and history of WeightsSet
 /// events for the PortfolioRouter.
@@ -1008,27 +1105,42 @@ const UNIQUE_DEPOSITORS_SQL: &str = "\
         WHERE addr NOT IN (SELECT owner FROM latest) \
     ) holders";
 
+/// `total_tvl` of `/v1/stats`: the sum of the latest `vault_snapshots.total_assets` per contract,
+/// across the active vaults (architecture.md, Protocol stats).
+///
+/// The indexer snapshots every `vaults` row whatever its status, so a Retired vault's newest row
+/// tracks its holders' exits (DI-2). The status filter lives here, in the product view: a
+/// Retired (2) vault is left out, so the old rmPROTO stops counting toward protocol TVL once it is
+/// retired, while `/v1/vaults` still shows its own live `total_assets`. A DepositsPaused (1) vault
+/// still counts: the pause is temporary and its assets stay deployed. A snapshotted contract with
+/// no `vaults` row (the pinned vault of a deployment without a registry) still counts.
+const TOTAL_TVL_SQL: &str = "\
+    SELECT SUM(latest.total_assets) \
+    FROM ( \
+        SELECT DISTINCT ON (s.chain_id, s.contract) s.total_assets \
+        FROM vault_snapshots s \
+        WHERE s.chain_id = $1 \
+          AND NOT EXISTS ( \
+              SELECT 1 FROM vaults v \
+              WHERE v.chain_id = s.chain_id AND v.vault_address = s.contract AND v.status = 2 \
+          ) \
+        ORDER BY s.chain_id, s.contract, s.block_number DESC \
+    ) AS latest";
+
 /// GET /v1/stats — aggregate TVL, unique depositor count, and global activity feed.
 ///
-/// TVL = sum of the latest total_assets snapshot per registered vault.
+/// TVL = sum of the latest total_assets snapshot per vault, leaving out every
+/// vault whose registry status is Retired (see [`TOTAL_TVL_SQL`]).
 /// Depositor count = distinct addresses currently holding vault shares
 /// (see [`UNIQUE_DEPOSITORS_SQL`]).
 /// Activity feed = last 50 deposit events across all vaults (descending by block).
 /// Chain-scoped to state.chain_id.
 async fn get_stats(State(state): State<AppState>) -> ApiResult<Json<StatsResponse>> {
-    // Aggregate TVL: sum of the most recent total_assets per vault.
-    let tvl_row: (Option<BigDecimal>,) = sqlx::query_as(
-        "SELECT SUM(latest.total_assets) \
-         FROM ( \
-             SELECT DISTINCT ON (chain_id, contract) total_assets \
-             FROM vault_snapshots \
-             WHERE chain_id = $1 \
-             ORDER BY chain_id, contract, block_number DESC \
-         ) AS latest",
-    )
-    .bind(state.chain_id)
-    .fetch_one(&state.pool)
-    .await?;
+    // Aggregate TVL: sum of the most recent total_assets per non-retired vault.
+    let tvl_row: (Option<BigDecimal>,) = sqlx::query_as(TOTAL_TVL_SQL)
+        .bind(state.chain_id)
+        .fetch_one(&state.pool)
+        .await?;
     let total_tvl = tvl_row
         .0
         .as_ref()
@@ -1097,9 +1209,9 @@ async fn get_stats(State(state): State<AppState>) -> ApiResult<Json<StatsRespons
     }))
 }
 
-/// GET /v1/router/state — current PortfolioRouter weights and WeightsSet history.
+/// GET /v1/router/state — current PortfolioRouter weights and weight-change history.
 ///
-/// Reads router_weight_snapshots (added in migration 0003).  Returns an empty
+/// Reads router_weight_snapshots (added in migration 0004).  Returns an empty
 /// current_weights and empty history when no WeightsSet events have been
 /// indexed yet (table exists but is empty). Chain-scoped to state.chain_id.
 async fn get_router_state(State(state): State<AppState>) -> ApiResult<Json<RouterStateResponse>> {
@@ -1159,8 +1271,12 @@ async fn get_router_state(State(state): State<AppState>) -> ApiResult<Json<Route
 ///
 /// For each vault where the address holds a non-zero share balance (latest
 /// wallet_positions row), computes:
-///   usdc_value = shares * total_assets / total_supply
-/// using the most recent vault_snapshot for that vault.
+///   usdc_value = shares * preview_redeem_total / total_supply
+/// using the most recent vault_snapshot for that vault. `preview_redeem_total`
+/// is the vault's `previewRedeem(totalSupply())` at the snapshot block, so the
+/// value is what a redeem of `shares` pays after the exit fee and (BasketVault)
+/// the slippage floor, never the gross `convertToAssets` value (core 1795, QA
+/// plan X8). A snapshot without it (older than migration 0026) gives `null`.
 /// Chain-scoped to state.chain_id.
 async fn get_account_positions(
     State(state): State<AppState>,
@@ -1169,10 +1285,10 @@ async fn get_account_positions(
     let address_bytes = decode_address_param(&address)?;
 
     // Latest wallet_position per vault for this owner, joined with the
-    // most recent vault_snapshot per vault for the share-price computation.
+    // most recent vault_snapshot per vault for the exit-value computation.
     let rows: Vec<PositionRow> = sqlx::query_as(
         "SELECT wp.chain_id, wp.contract, wp.block_number, wp.shares, \
-                s.total_assets, s.total_supply, wp.indexed_at \
+                s.preview_redeem_total, s.total_supply, wp.indexed_at \
          FROM ( \
              SELECT DISTINCT ON (chain_id, contract) \
                     chain_id, contract, block_number, shares, indexed_at \
@@ -1181,7 +1297,7 @@ async fn get_account_positions(
              ORDER BY chain_id, contract, block_number DESC \
          ) AS wp \
          LEFT JOIN LATERAL ( \
-             SELECT total_assets, total_supply \
+             SELECT preview_redeem_total, total_supply \
              FROM vault_snapshots \
              WHERE chain_id = wp.chain_id AND contract = wp.contract \
              ORDER BY block_number DESC \
@@ -1197,16 +1313,21 @@ async fn get_account_positions(
     let positions: Vec<VaultPosition> = rows
         .into_iter()
         .map(
-            |(_, contract, block_number, shares, total_assets, total_supply, indexed_at)| {
-                // usdc_value = shares * total_assets / total_supply
-                // Use BigDecimal arithmetic; guard against zero supply.
-                let usdc_value = match (total_assets.as_ref(), total_supply.as_ref()) {
-                    (Some(ta), Some(ts)) if ts != &BigDecimal::from(0) => {
-                        let val = &shares * ta / ts;
-                        Some(dec_to_string(&val.with_scale(0)))
-                    }
-                    _ => None,
-                };
+            |(
+                _,
+                contract,
+                block_number,
+                shares,
+                preview_redeem_total,
+                total_supply,
+                indexed_at,
+            )| {
+                let usdc_value = position_exit_value(
+                    &shares,
+                    preview_redeem_total.as_ref(),
+                    total_supply.as_ref(),
+                )
+                .map(|v| dec_to_string(&v));
                 VaultPosition {
                     vault: addr_to_hex(&contract),
                     shares: dec_to_string(&shares),
@@ -1233,11 +1354,145 @@ async fn get_account_positions(
     }))
 }
 
+// (vault, ledger, exclusion_id, adapter, adapter_index, opened_block, snapshot_supply, balance_at,
+//  recovered, claimed, claimable, finalize_reason)
+type ExclusionClaimRow = (
+    Vec<u8>,
+    Vec<u8>,
+    i64,
+    Vec<u8>,
+    i64,
+    i64,
+    BigDecimal,
+    BigDecimal,
+    BigDecimal,
+    BigDecimal,
+    BigDecimal,
+    Option<i16>,
+);
+
+/// GET /v1/accounts/:address/exclusion-claims — this address's claim on every
+/// exclusion record it held vault shares at (core issue 1820, QA plan X7).
+///
+/// A `RobotMoneyVault` that excludes a funded adapter opens a record in its
+/// `ExclusionLedger`. Recovered USDC goes to the record, not to the vault, and
+/// belongs pro rata to the holders at the record's snapshot, also those who
+/// have since exited. Per record the claim is
+/// `floor(recovered * balance_at / snapshot_supply) - claimed`, never below 0,
+/// the same formula and rounding as `ExclusionLedger.claimable`:
+///
+/// - `recovered` is the record's newest `recoveredUsdc` (credit or close event),
+/// - `balance_at` is the holder's `balanceAt(holder, id)` the indexer read,
+/// - `claimed` is the sum of this holder's `ExclusionClaimed` amounts.
+///
+/// Records with no stored balance for this address are left out. The indexer
+/// reads the balance of every address whose latest deposit-or-withdrawal
+/// position in the vault before the snapshot's block holds shares, of every
+/// address with a deposit or withdrawal in that block, and of any other address
+/// once it claims. A holder whose followed position is zero while it still
+/// holds shares (shares received by transfer, then partly withdrawn) and who
+/// never claimed is not listed here, nor is one that only received shares by
+/// transfer. The ledger's `claimable(id, holder)` is the authority.
+/// Chain-scoped to `state.chain_id`, freshness is the index cursor.
+async fn get_account_exclusion_claims(
+    State(state): State<AppState>,
+    Path(address): Path<String>,
+) -> ApiResult<Json<AccountExclusionClaimsResponse>> {
+    let address_bytes = decode_address_param(&address)?;
+
+    let rows: Vec<ExclusionClaimRow> = sqlx::query_as(
+        "SELECT vault_address, ledger_address, exclusion_id, adapter_address, adapter_index, \
+                opened_block, snapshot_supply, balance_at, recovered, claimed, \
+                GREATEST( \
+                    COALESCE(div(recovered * balance_at, NULLIF(snapshot_supply, 0)), 0) - claimed, \
+                    0) AS claimable, \
+                reason \
+         FROM ( \
+             SELECT r.vault_address, r.ledger_address, r.exclusion_id, r.adapter_address, \
+                    r.adapter_index, r.block_number AS opened_block, r.snapshot_supply, \
+                    b.balance_at, \
+                    GREATEST(COALESCE(rec.recovered, 0), COALESCE(f.recovered_total, 0)) \
+                        AS recovered, \
+                    COALESCE(paid.claimed, 0) AS claimed, \
+                    f.reason \
+             FROM exclusion_holder_balances b \
+             JOIN exclusion_records r \
+               ON r.chain_id = b.chain_id AND r.ledger_address = b.ledger_address \
+              AND r.exclusion_id = b.exclusion_id \
+             LEFT JOIN LATERAL ( \
+                 SELECT MAX(x.recovered_total) AS recovered FROM exclusion_recoveries x \
+                 WHERE x.chain_id = r.chain_id AND x.ledger_address = r.ledger_address \
+                   AND x.exclusion_id = r.exclusion_id \
+             ) rec ON TRUE \
+             LEFT JOIN LATERAL ( \
+                 SELECT SUM(c.amount) AS claimed FROM exclusion_claims c \
+                 WHERE c.chain_id = b.chain_id AND c.ledger_address = b.ledger_address \
+                   AND c.exclusion_id = b.exclusion_id AND c.holder = b.holder \
+             ) paid ON TRUE \
+             LEFT JOIN exclusion_finalizations f \
+               ON f.chain_id = r.chain_id AND f.ledger_address = r.ledger_address \
+              AND f.exclusion_id = r.exclusion_id \
+             WHERE b.chain_id = $1 AND b.holder = $2 \
+         ) t \
+         ORDER BY vault_address, ledger_address, exclusion_id",
+    )
+    .bind(state.chain_id)
+    .bind(&address_bytes[..])
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut total = BigDecimal::from(0);
+    let claims: Vec<ExclusionClaim> = rows
+        .into_iter()
+        .map(
+            |(
+                vault,
+                ledger,
+                exclusion_id,
+                adapter,
+                adapter_index,
+                opened_block,
+                snapshot_supply,
+                balance_at,
+                recovered,
+                claimed,
+                claimable,
+                reason,
+            )| {
+                total += &claimable;
+                ExclusionClaim {
+                    vault: addr_to_hex(&vault),
+                    exclusion_ledger: addr_to_hex(&ledger),
+                    exclusion_id,
+                    adapter: addr_to_hex(&adapter),
+                    adapter_index,
+                    opened_block,
+                    snapshot_supply: dec_to_string(&snapshot_supply),
+                    balance_at: dec_to_string(&balance_at),
+                    recovered_usdc: dec_to_string(&recovered),
+                    claimed_usdc: dec_to_string(&claimed),
+                    claimable_usdc: dec_to_string(&claimable),
+                    finalized: reason.is_some(),
+                    finalize_reason: reason.map(|r| exclusion_finalize_reason_label(r).to_string()),
+                }
+            },
+        )
+        .collect();
+
+    Ok(Json(AccountExclusionClaimsResponse {
+        address: addr_to_hex(&address_bytes),
+        claims,
+        total_claimable_usdc: dec_to_string(&total),
+        freshness: latest_freshness(&state).await?,
+    }))
+}
+
 /// GET /v1/accounts/:address/history — chronological event log (issue #654).
 ///
 /// Returns all events from `account_history_events` where `account = address`,
-/// covering the architecture §5.4 event types: deposits, withdrawals,
-/// fee events, and policy changes.  Ordered by block
+/// covering the four architecture §5.4 event types: deposits, withdrawals,
+/// fee events and policy changes. There is no governance-vote kind
+/// (RouterGovernance voting was deleted, issue 1698).  Ordered by block
 /// ascending (chronological).  Includes up to 500 rows.  Chain-scoped to
 /// state.chain_id.
 ///
@@ -1513,6 +1768,11 @@ type CommitteeAgentRow = (Vec<u8>, String, bool, i64, Option<i64>);
 /// GET /v1/committee/agents
 ///
 /// Returns all registered committee agents (active and revoked).
+///
+/// A member whose `AgentRegistered` lies below the indexed range shows up once
+/// it votes, with an empty `agent_id`, `active = false` and no `revoked_at`.
+/// That is the indexer's placeholder row (DI-4): it knows the address voted,
+/// not when or under what label it was registered.
 async fn list_committee_agents(
     State(state): State<AppState>,
 ) -> ApiResult<Json<CommitteeAgentsResponse>> {
@@ -1541,8 +1801,9 @@ async fn list_committee_agents(
     Ok(Json(CommitteeAgentsResponse { agents, freshness }))
 }
 
-// (vote_id, vault_address, stance, target_weight_bps, confidence, rationale_uri, verified, block_number, timestamp_secs)
-type TrackRecordRow = (i64, Vec<u8>, i16, i16, i16, String, bool, i64, i64);
+// (contract_address, vote_id, vault_address, stance, target_weight_bps, confidence, rationale_uri, verified,
+//  block_number, timestamp_secs)
+type TrackRecordRow = (Vec<u8>, i64, Vec<u8>, i16, i16, i16, String, bool, i64, i64);
 
 /// GET /v1/committee/agents/:address/track-record
 ///
@@ -1554,7 +1815,7 @@ async fn get_committee_track_record(
     let addr_bytes = decode_address_param(&address)?;
 
     let rows: Vec<TrackRecordRow> = sqlx::query_as(
-        "SELECT vote_id, vault_address, stance, target_weight_bps, confidence, \
+        "SELECT contract_address, vote_id, vault_address, stance, target_weight_bps, confidence, \
                 rationale_uri, verified, block_number, timestamp_secs \
          FROM committee_votes \
          WHERE chain_id = $1 AND agent_address = $2 \
@@ -1568,16 +1829,19 @@ async fn get_committee_track_record(
     let votes = rows
         .into_iter()
         .map(
-            |(vote_id, vault, stance, weight, conf, uri, verified, block, ts)| CommitteeVoteEntry {
-                vote_id,
-                vault: format!("0x{}", hex::encode(vault)),
-                stance,
-                target_weight_bps: weight,
-                confidence: conf,
-                rationale_uri: uri,
-                verified,
-                block_number: block,
-                timestamp_secs: ts,
+            |(contract, vote_id, vault, stance, weight, conf, uri, verified, block, ts)| {
+                CommitteeVoteEntry {
+                    contract_address: format!("0x{}", hex::encode(contract)),
+                    vote_id,
+                    vault: format!("0x{}", hex::encode(vault)),
+                    stance,
+                    target_weight_bps: weight,
+                    confidence: conf,
+                    rationale_uri: uri,
+                    verified,
+                    block_number: block,
+                    timestamp_secs: ts,
+                }
             },
         )
         .collect();
@@ -1627,13 +1891,27 @@ type RegimeSnapshotRow = (Vec<u8>, BigDecimal, i32, i64, DateTime<Utc>);
 /// GET /v1/regime/feed
 ///
 /// Returns the latest regime snapshot per vault (most recent block_number).
+///
+/// The indexer writes a new snapshot whenever a vault's tilt changes: on every
+/// committee vote, registration and revocation, and at each tick when a signal
+/// ages out of the freshness window (DI-3). When no member counts any more it
+/// writes a zero-count row. A vault whose latest row is that zero-count row is
+/// left out here, as `/v1/committee/tilts` leaves out a vault with no counted
+/// signal: an `avg_weight_bps` of 0 from nobody would read as a committee view
+/// of 0 bps. The filter runs after the latest row is picked, so an older
+/// non-zero row never comes back.
 async fn get_regime_feed(State(state): State<AppState>) -> ApiResult<Json<RegimeFeedResponse>> {
     let rows: Vec<RegimeSnapshotRow> = sqlx::query_as(
-        "SELECT DISTINCT ON (vault_address) \
-                vault_address, avg_weight_bps, vote_count, block_number, indexed_at \
-         FROM regime_snapshots \
-         WHERE chain_id = $1 \
-         ORDER BY vault_address, block_number DESC",
+        "SELECT vault_address, avg_weight_bps, vote_count, block_number, indexed_at \
+         FROM ( \
+             SELECT DISTINCT ON (vault_address) \
+                    vault_address, avg_weight_bps, vote_count, block_number, indexed_at \
+             FROM regime_snapshots \
+             WHERE chain_id = $1 \
+             ORDER BY vault_address, block_number DESC \
+         ) latest \
+         WHERE vote_count > 0 \
+         ORDER BY vault_address",
     )
     .bind(state.chain_id)
     .fetch_all(&state.pool)
@@ -1746,7 +2024,10 @@ fn receipt_from_row(row: ConsensusReceiptRow) -> ConsensusReceipt {
         block_number,
         tx_hash: format!("0x{}", hex::encode(tx_hash)),
         verified,
-        payload_bytes,
+        // Security round 1: the size of what an unverified URI answered is not served. The URI is
+        // chosen on chain and the indexer fetches it from its own network, so the size of an
+        // unverified body would publish what an internal host returned.
+        payload_bytes: if verified { payload_bytes } else { None },
         released,
         released_at,
     }

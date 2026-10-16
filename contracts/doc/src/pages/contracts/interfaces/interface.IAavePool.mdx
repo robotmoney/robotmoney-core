@@ -5,7 +5,7 @@ description: "Minimal Aave V3 Pool interface used by AaveV3Adapter."
 
 # IAavePool
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/interfaces/IAavePool.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/interfaces/IAavePool.sol)
 
 Minimal Aave V3 Pool interface used by AaveV3Adapter.
 
@@ -53,4 +53,28 @@ function withdraw(address asset, uint256 amount, address to) external returns (u
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | actual | `uint256` | The actual amount of underlying asset withdrawn. |
+
+<a id="getconfiguration-address"></a>
+
+### getConfiguration
+
+The reserve's configuration bitmap. Aave returns `ReserveConfigurationMap`, a
+struct of one `uint256`, which ABI-decodes as this `uint256`. Bit 56 is "active"
+and bit 60 is "paused"; `withdraw` reverts unless the reserve is active and not paused.
+
+```solidity
+function getConfiguration(address asset) external view returns (uint256 data);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` | The reserve's underlying asset. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `uint256` | The configuration bitmap. |
 

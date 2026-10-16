@@ -9,15 +9,22 @@
 // SAFE_SALT_NONCE, and the deployer is NOT fresh (one self-transfer before publish moves its nonce, so the relative nonce accounting runs). After govern and the second verify it
 // runs the receipt path with a REAL recorded receipt, not a fixture. The SUBMITTER is a SECOND Safe (issue 1750, owner decision 2026-10-10: the submitter is a multisig, never a key): this script
 // creates it with the Safe tool (the same three owners, threshold 2, a different salt), registers it through the governing Safe and the timelock (govern --row register-committee --submitter),
-// two of its owners sign the record and the deployer pays the gas (the record-receipt verb with --submitter), the Safe applies it (govern --row apply-receipt: releaseReceipt plus the router weights), then verify a third time and check the run manifest's receipt path (evidence-check).
-// The order is publish, verify, govern, verify (issue 1667): the second verify runs only with both VERIFY_IN and GOVERN_IN.
+// two of its owners sign the record and the deployer pays the gas (the record-receipt verb with --submitter), the Safe applies it (govern --row apply-receipt: ONE RouterGovernance.applyReceipt call, which releases the receipt and writes the router weights in one transaction, issue 1698), then verify a third time and check the run manifest's receipt path (evidence-check).
+// The order is publish, verify, govern, verify (issue 1667): the second verify runs only with both VERIFY_IN and GOVERN_IN. Between govern and that verify, one set-unwind-guard
+// round per basket stage 13 opened (QA plan v1 D7: the verifier requires the emergency unwind guard on an open basket). With GOVERN_IN the govern matrix then runs
+// one Safe self-administration row on the REAL SafeL2 (QA plan v1 B5, finding T5): `govern --row safe-change-threshold` raises the threshold to the owner count, then
+// restores the sheet's threshold (that second transaction carries every owner's signature and runs while the sheet is stale), before the receipt path.
 // Tests replace the tools with stubs: TWIN_CLI (default src/cli.ts), TWIN_EVIDENCE_CHECK (default src/evidence-check.ts), TWIN_REHEARSAL_CLI (src/rehearsal/cli.ts), TWIN_MERGE_SHEET (src/ci/merge-sheet.ts), CAST (cast).
 // Any tool that exits non-zero fails this script. The only Twin environment steps are fund-gas and fund-usdc (the RM/USDC pool is never funded: the Twin forks the live pool, owner decision 2026-10-09); the govern time warp is inside the CLI.
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { receiptIdOfBytes, receiptPayloadDigest } from "../receipt-digest.ts";
 import { TWIN_CHAIN_ID } from "../chains.ts";
+import { BASKET_KEYS, parseSheetText } from "../sheet.ts";
+import { twinUnwindGuardArgs } from "../unwind-guard.ts";
 
+/** The one Safe self-administration row the Twin govern matrix runs on the real SafeL2 (QA plan v1 B5): one Safe transaction to the Safe itself, no timelock round. */
+const SELF_ADMIN_MATRIX_ROW = "safe-change-threshold";
 const env = (k: string, d = ""): string => process.env[k] ?? d;
 const fail = (m: string): never => { console.error(`twin-publish: ${m}`); process.exit(1); };
 /** Issue 1846: the Twin rehearsal freeze deadline, the pin block timestamp (seconds) plus 365 days, in ISO 8601 UTC without milliseconds. */
@@ -109,12 +116,33 @@ if (env("GOVERN_IN") === "true") {
   // Stage 13 (the four vault unpauses through the real Safe and timelock). On the Twin fork the 48 hour wait is one time warp.
   stage("govern", join(rh, "govern-rows.txt"));
   exportVar("TWIN_GOVERN_ROWS", join(rh, "govern-rows.txt"));
+  // QA plan v1 D7: one set-unwind-guard round per basket the sheet's GOVERN_UNPAUSE_VAULTS opened, through the real Safe and timelock (one warp each), before the post-govern verify.
+  const unpaused = (parseSheetText(readFileSync(sheet, "utf8")).GOVERN_UNPAUSE_VAULTS ?? fail("the merged sheet has no GOVERN_UNPAUSE_VAULTS")).split(",").map((x) => x.trim());
+  const guarded = BASKET_KEYS.filter((k) => unpaused.includes(k));
+  const guardRows = guarded.map((k) => stage("govern", join(rh, `unwind-guard-${k}.txt`), twinUnwindGuardArgs(k)));
+  writeFileSync(join(rh, "unwind-guard-rows.txt"), guardRows.join(""));
+  exportVar("TWIN_UNWIND_GUARD_ROWS", join(rh, "unwind-guard-rows.txt"));
   // Issue 1667: verify, govern, verify. The second verify reads the post-govern state (all four vaults unpaused). The Twin run only proves the scripts execute in this
   // order: the 48 hour delay and the Safe signers are proven on 8453 through the real Safe.
   if (env("VERIFY_IN") === "true") {
     stage("verify", join(rh, "verify-labels-post-govern.txt"));
     exportVar("TWIN_VERIFY_LABELS_POST_GOVERN", join(rh, "verify-labels-post-govern.txt"));
   }
+  // QA plan v1 B5 (finding T5, issue 1645): one Safe self-administration row on the REAL SafeL2, not only against the fake Safe of govern.test.ts. The matrix raises
+  // the threshold to the owner count (so the next Safe transaction needs every owner's signature), then restores the sheet's threshold: that transaction carries all
+  // three signatures and runs while the sheet is stale (the self-administration exemption of B4), and the run manifest holds two records (two calldata, two Safe nonces).
+  // The restore is what keeps the rest of the run honest: the verifier's Safe threshold label and every later row (register-committee, apply-receipt) compare the live
+  // roster with the sheet, and the sheet parser refuses a threshold equal to the owner count, so the sheet cannot be rewritten to the raised value instead (runbook section 9).
+  // The owner count and the threshold come from the merged sheet, the one the CLI reads: nothing here is hard-coded.
+  const merged = parseSheetText(readFileSync(sheet, "utf8"));
+  const safeOwners = (merged.SAFE_OWNERS ?? fail("the merged sheet has no SAFE_OWNERS")).split(",").map((x) => x.trim()).filter(Boolean);
+  const sheetThreshold = merged.SAFE_THRESHOLD ?? fail("the merged sheet has no SAFE_THRESHOLD");
+  if (!(Number(sheetThreshold) < safeOwners.length)) fail(`the sheet threshold ${sheetThreshold} is not below the owner count ${safeOwners.length}: the self-administration pair has nothing to raise`);
+  const selfAdmin = (threshold: string, stdoutTo: string) => stage("govern", stdoutTo, ["--row", SELF_ADMIN_MATRIX_ROW, "--admin-arg", `threshold=${threshold}`]);
+  const raised = selfAdmin(String(safeOwners.length), join(rh, "self-admin-raise.txt"));
+  const restored = selfAdmin(sheetThreshold, join(rh, "self-admin-restore.txt"));
+  writeFileSync(join(rh, "self-admin-rows.txt"), raised + restored);
+  exportVar("TWIN_SELF_ADMIN_ROWS", join(rh, "self-admin-rows.txt"));
 }
 
 // ---- the receipt path of a rehearsal (issue 1727): a REAL recorded receipt, registered submitter, applied by the Safe ----

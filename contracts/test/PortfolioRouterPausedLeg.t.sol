@@ -12,12 +12,13 @@ import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {TestUSDC, MockAdapter} from "./RobotMoneyVault.t.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
 
-/// @notice The router's availability check reads the REGISTRY status and eligibility only. A vault
-///         whose own `depositsPaused()` reads true is still Active and eligible, so:
+/// @notice The router's availability check reads the REGISTRY status and eligibility, then the vault's
+///         own `maxDeposit` (QA plan D4). A vault whose own `depositsPaused()` reads true is still Active
+///         and eligible in the registry, but its `maxDeposit` is 0, so:
 ///         - at 0 bps its leg gets amount 0 and is skipped (issue 1746): the router deposit succeeds;
-///         - above 0 bps the router calls the vault, which reverts `DepositsArePaused`; the router
-///           wraps it as `UsdcLegTransferFailed(vault)` and the whole router deposit reverts (fails
-///           closed, no funds move, no USDC stays in the router).
+///         - above 0 bps the leg is marked unavailable and skipped as well: the router splits the
+///           amount over the remaining legs in proportion to their bps and the deposit succeeds
+///           (this replaces the earlier fail-closed `UsdcLegTransferFailed` behaviour of issue 1705 Q3 (c)).
 ///         Direct deposits into the open vaults and every redeem, the paused vault's included, are
 ///         unaffected. The four legs are real RobotMoneyVault instances, each with one mock adapter.
 contract PortfolioRouterPausedLegTest is Test {
@@ -99,31 +100,45 @@ contract PortfolioRouterPausedLegTest is Test {
         assertEq(usdc.balanceOf(address(router)), 0, "router holds nothing");
     }
 
-    function test_pausedLegAboveZeroBps_revertsTheWholeRouterDeposit() public {
+    function test_pausedLegAboveZeroBps_isSkippedAndTheRestIsRenormalised() public {
         _pause(1); // rmPROTO at 500 bps
-        // previewDeposit does not see the vault pause: the leg reads available
+        // The vault's own maxDeposit reads 0, so preview marks the leg unavailable and gives its share to the open leg.
         PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(10_000 * ONE_USDC);
-        assertFalse(legs[1].unavailable, "a vault-paused leg is not marked unavailable");
-        assertEq(legs[1].legAmount, 500 * ONE_USDC);
+        assertTrue(legs[1].unavailable, "a vault-paused leg previews unavailable");
+        assertEq(legs[1].legAmount, 0);
+        assertEq(legs[0].legAmount, 10_000 * ONE_USDC, "the open leg absorbs the whole amount");
 
-        uint256 before = usdc.balanceOf(depositor);
-        // the vault reverts DepositsArePaused inside the leg; the router wraps it as UsdcLegTransferFailed(vault)
+        vm.expectCall(address(v[1]), abi.encodeWithSelector(v[1].deposit.selector), 0);
         vm.prank(depositor);
-        vm.expectRevert(
-            abi.encodeWithSelector(PortfolioRouter.UsdcLegTransferFailed.selector, address(v[1]))
-        );
-        router.deposit(10_000 * ONE_USDC, new uint256[](0));
-        assertEq(usdc.balanceOf(depositor), before, "fails closed: no USDC moved");
-        assertEq(v[0].totalAssets(), 0, "the open leg got nothing either");
+        uint256[] memory shares = router.deposit(10_000 * ONE_USDC, new uint256[](0));
+        assertGt(shares[0], 0);
+        assertEq(shares[1], 0, "paused leg skipped, not reverted");
+        assertEq(v[0].totalAssets(), 10_000 * ONE_USDC);
+        assertEq(v[1].totalAssets(), 0);
+        assertEq(usdc.balanceOf(address(router)), 0, "router holds nothing");
     }
 
-    function test_pausedLegAboveZeroBps_revertsForTheBaseLegToo() public {
+    function test_pausedBaseLeg_isSkippedAndTheOtherLegAbsorbsTheAmount() public {
         _pause(0); // rmUSDC at 9500 bps
         vm.prank(depositor);
+        uint256[] memory shares = router.deposit(10_000 * ONE_USDC, new uint256[](0));
+        assertEq(shares[0], 0, "paused base leg skipped");
+        assertGt(shares[1], 0);
+        assertEq(v[0].totalAssets(), 0);
+        assertEq(v[1].totalAssets(), 10_000 * ONE_USDC);
+        assertEq(usdc.balanceOf(address(router)), 0, "router holds nothing");
+    }
+
+    function test_pausedLegWithACallerFloor_revertsLegSkippedWithFloor() public {
+        _pause(1);
+        uint256[] memory floors = new uint256[](4);
+        floors[1] = 1; // the caller expects shares from rmPROTO
+        vm.prank(depositor);
         vm.expectRevert(
-            abi.encodeWithSelector(PortfolioRouter.UsdcLegTransferFailed.selector, address(v[0]))
+            abi.encodeWithSelector(PortfolioRouter.LegSkippedWithFloor.selector, address(v[1]))
         );
-        router.deposit(10_000 * ONE_USDC, new uint256[](0));
+        router.deposit(10_000 * ONE_USDC, floors);
+        assertEq(v[0].totalAssets(), 0, "fails closed: the open leg got nothing either");
     }
 
     function test_directDepositsAndEveryRedeemAreUnaffected() public {

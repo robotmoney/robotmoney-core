@@ -3,9 +3,9 @@
 > Scope: dev-scout decision record for the multi-vault explorer phase of
 > `Plan tracking issue #109`. Resolves all open schema questions that gate
 > any indexer code change or migration file: the `vault_snapshots`
-> generalization strategy, the new `router_weight_snapshots` table (the
-> `governance_proposals` and `governance_votes` tables are no longer written:
-> `RouterGovernance` has no voting, issue 1698), the `account_positions` query
+> generalization strategy, three new tables (`router_weight_snapshots`,
+> `governance_proposals`, `governance_votes`; migration 0025 later dropped the
+> last two with the voting path, issue 1698), the `account_positions` query
 > shape, which existing API queries break after migration, and the indexer
 > poll-loop extension points. No schema migration SQL or indexer code changes
 > are produced by this scout.
@@ -165,8 +165,10 @@ migration path is:
 
 ### 5.1 `router_weight_snapshots`
 
-Captures the active weight vector on `PortfolioRouter` at each block where a
-`WeightsSet` (or `WeightsApplied`) event is emitted.
+Captures a weight vector on `PortfolioRouter` at each block where the router
+emits `WeightsSet` (the active vector, written by the weight setter's
+`applyReceipt`) or `DefaultWeightsSet` (the deploy-time fallback, written by
+`setDefaultWeights`).
 
 ```sql
 -- Canonical: docs/technical/multi-vault-explorer-decisions.md §5.1
@@ -197,9 +199,12 @@ CREATE INDEX IF NOT EXISTS router_weight_snapshots_router_block_idx
     ON router_weight_snapshots(chain_id, router_address, block_number DESC);
 ```
 
-**Trigger.** The indexer writes a row when it decodes a `WeightsSet` event from
-`PortfolioRouter.sol` (per `docs/technical/portfolio-router-decisions.md` §3.1
-the contract emits `WeightsApplied` alongside `PortfolioRouter.WeightsSet`).
+**Trigger.** The indexer writes a row when it decodes a `WeightsSet` or a
+`DefaultWeightsSet` event from `PortfolioRouter.sol`
+(`services/explorer-indexer/src/indexer.rs`, the `topics.weights_set` and
+`topics.default_weights_set` arms). The `WeightsApplied` event this record
+first named belonged to the `RouterGovernance` voting path that issue 1698
+deleted; nothing emits it now.
 The `PortfolioRouter` address must be registered in `contracts` with
 `kind = 'portfolio_router'` before the FK insert.
 
@@ -209,17 +214,18 @@ snapshot is sufficient. A heartbeat snapshot would add rows without data value.
 ### 5.2 `governance_proposals`
 
 The indexer no longer writes this table. `RouterGovernance` has no voting, so
-it emits no proposal events (issue 1698). The table from migration 0005 stays
-in the schema and stays empty. Weight history comes from the router's
-`WeightsSet` and `DefaultWeightsSet` events (§5.1). `RouterGovernance` emits
-`ReceiptApplied` when the Safe applies a receipt, which ties an active vector to
-its receipt.
+it emits no proposal events (issue 1698). Migration
+`0025_drop_governance_voting.sql` drops the table that migration 0005 created
+(QA plan v1 C1), and explorer-api no longer serves `/v1/governance/proposals`.
+Weight history comes from the router's `WeightsSet` and `DefaultWeightsSet`
+events (§5.1). `RouterGovernance` emits `ReceiptApplied` when the Safe applies
+a receipt, which ties an active vector to its receipt.
 
 ### 5.3 `governance_votes`
 
 The indexer no longer writes this table, for the same reason as §5.2: there is
-no vote event to index (issue 1698). The table stays in the schema and stays
-empty.
+no vote event to index (issue 1698). Migration
+`0025_drop_governance_voting.sql` drops it with `governance_proposals`.
 
 ---
 
@@ -314,12 +320,19 @@ is the schema stub that unblocks the implementation issue.
 let registered_vaults: Vec<Address> = db.list_active_vault_addresses(cfg.chain_id).await?;
 ```
 
-`list_active_vault_addresses` reads:
+The query reads every registered vault, whatever its status (QA plan X2, DI-2):
 
 ```sql
 SELECT vault_address FROM vaults
-WHERE chain_id = $1 AND status = 0  -- 0 = Active
+WHERE chain_id = $1  -- Active, DepositsPaused and Retired alike
 ```
+
+A DepositsPaused or Retired vault still has holders who redeem from it (ADR-0009), so its
+`Withdraw` logs, positions and snapshots must keep coming. An Active-only set lost them, and a
+retired vault's last snapshot stayed as its TVL forever. Status is filtered only in product views:
+`/v1/stats.total_tvl` leaves Retired vaults out, and `/v1/vaults` lists every vault with its
+`status` ([indexer.rs `run_inner`](../../services/explorer-indexer/src/indexer.rs), test
+`multi_vault::retired_vault_withdrawals_still_index_and_snapshot`).
 
 The list is used to:
 
@@ -335,15 +348,17 @@ batch accordingly.
 
 ### 8.2 Portfolio Router snapshot trigger
 
-`PortfolioRouter.sol` emits `WeightsSet` when weights change (per
-`docs/technical/portfolio-router-decisions.md` §3.1). The indexer must:
+`PortfolioRouter.sol` emits `WeightsSet` when the active weights change and
+`DefaultWeightsSet` when the default vector changes. The indexer:
 
-1. Add `cfg.router: Option<Address>` to `IndexerConfig` (analogous to
+1. Adds `cfg.router: Option<Address>` to `IndexerConfig` (analogous to
    `cfg.registry`).
-2. Register the router in `contracts` with `kind = 'portfolio_router'`.
-3. Add `topics.weights_set` to `Topics::new()` from the `WeightsApplied`
-   event ABI.
-4. In `handle_log`, decode `WeightsApplied` and call `db.insert_router_weight_snapshot(…)`.
+2. Registers the router in `contracts` with `kind = 'portfolio_router'`.
+3. Adds `topics.weights_set` and `topics.default_weights_set` to
+   `Topics::new()` from the `PortfolioRouter` `WeightsSet` and
+   `DefaultWeightsSet` event ABIs.
+4. In `handle_log`, decodes either event and calls
+   `db.insert_router_weight_snapshot(…)`.
 
 No heartbeat is needed for router weights (see §5.1).
 
@@ -402,11 +417,11 @@ the same or separate PRs but must not land before step 2.
 
 - `docs/technical/explorer-schema-decisions.md` — Phase 5 ADR (DB engine,
   cadence, reorg handling, per-table PKs, ingestion model).
-- `docs/technical/portfolio-router-decisions.md` — `WeightsSet` / `WeightsApplied`
-  event source for `router_weight_snapshots`.
+- `docs/technical/portfolio-router-decisions.md` — the router's `WeightsSet` and
+  `DefaultWeightsSet`, the event source for `router_weight_snapshots`.
 - `docs/technical/governance-decisions.md` — the receipt application path.
-  `RouterGovernance` has no voting, so the `governance_proposals` /
-  `governance_votes` tables are not written.
+  Migration `0025_drop_governance_voting.sql` dropped the `governance_proposals`
+  and `governance_votes` tables with the voting path (issue 1698).
 - `services/explorer-indexer/src/indexer.rs` — Single-vault hardcoding audit
   (§3.1).
 - `services/explorer-indexer/migrations/0001_minimum_tables.sql` — Current schema.

@@ -12,6 +12,12 @@
 #   GATEWAY = 0x0000000000000000000000000000000000000b00
 #   USDC    = 0x0000000000000000000000000000000000000c00
 #   VAULT   = 0x0000000000000000000000000000000000000d00
+#   SHARE_RECEIVER = 0x00000000000000000000000000000000000000ee
+#
+# share_receiver and agent_owner are the binding pins the export writes once
+# the authorizing wallet is connected (QA plan U6, the rmpc half of D2). A
+# wallet without ADMIN_ROLE names itself as share receiver, so both are the
+# same address. The preflight refuses a binding that disagrees with either.
 #
 # gateway_runtime_hash is the keccak256 of GATEWAY_CODE (the canned bytes
 # used by the test harness); it is a non-zero placeholder that the round-trip
@@ -19,7 +25,9 @@
 #
 # When clients/dapp/src/lib/configExport.ts changes, regenerate this
 # fixture by running the TS export with the unit-test base config and
-# overwriting this file.
+# overwriting this file. The [signer] comment block is the export's
+# SOFTWARE_KEYSTORE_COMMENT, line for line; dapp_toml_roundtrip.rs reads
+# that array from configExport.ts and fails if a line here drifts.
 
 chain_id             = 31337
 rpc_url              = "http://127.0.0.1:8545"
@@ -27,7 +35,13 @@ gateway_address      = "0x0000000000000000000000000000000000000b00"
 usdc_address         = "0x0000000000000000000000000000000000000c00"
 vault_address        = "0x0000000000000000000000000000000000000d00"
 gateway_runtime_hash = "0xabababababababababababababababababababababababababababababababababab"
+share_receiver       = "0x00000000000000000000000000000000000000ee"
+agent_owner          = "0x00000000000000000000000000000000000000ee"
 
 [signer]
+# Software keystore: rmpc deposit, withdraw and withdraw-router sign with it on every
+# chain, Base mainnet included, after a production warning (owner decision 2026-10-06).
+# A hardware wallet, HSM or KMS is optional, never required (owner decision 2026-10-14).
+# rmpc decrypts the key in memory: keep the keystore 0600 and the passphrase out of argv.
 allow_software_fallback = true
 keystore_path = "./agent.keystore.json"

@@ -23,8 +23,8 @@ library FeatureFlags {
     ///      indexing in the explorer-indexer.
     uint8 public constant MULTI_VAULT_ENABLED = 0;
 
-    /// @dev Gates the PortfolioRouter deposit path and the RouterGovernance
-    ///      panel in the dapp.
+    /// @dev Gates the PortfolioRouter deposit path and the router allocation
+    ///      surface in the dapp.
     uint8 public constant PORTFOLIO_ROUTER_ENABLED = 1;
 
     /// @dev Gates VaultRegistered / VaultStatusChanged event ingestion in the

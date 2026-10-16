@@ -328,9 +328,9 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
         }
         Err(err) => {
             // Salvage what we can: chain_id from config (since on mismatch
-            // we don't have an authoritative value), and the per-check flags
-            // the failing step implies (the same table the write commands
-            // use for their refusal snapshot).
+            // we don't have an authoritative value). Which checks passed
+            // depends on which step tripped; `from_err_partial` is the one
+            // owner of that per-error table, shared with the write commands.
             let checks = ChecksOutput::from_err_partial(&err);
             (false, checks, cfg.chain_id, Some(err.name().to_string()))
         }
@@ -381,10 +381,15 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
     }
 }
 
+/// The message states the signer decisions (QA plan U7, finding DR-12):
+/// every rmpc write signs with the software keystore on every chain (owner
+/// decision 2026-10-06 for depositor writes), and hardware is optional,
+/// never required (owner decision 2026-10-14, QA plan Decision D12 for
+/// `committee` and `receipt`).
 fn backend_operator_message(backend: SignerBackendKind) -> &'static str {
     match backend {
         SignerBackendKind::Software => {
-            "software keystore is non-production; use an HSM/KMS/device-bound signer for Base mainnet writes"
+            "software keystore: every rmpc write signs with it on every chain; a hardware wallet, HSM or KMS is optional, never required"
         }
         SignerBackendKind::Hsm | SignerBackendKind::Kms => {
             "production-grade signer backend selected"
@@ -407,6 +412,8 @@ mod tests {
             deposits_paused: false,
             agent_active: true,
             agent_valid_until: 9_999_999_999,
+            share_receiver: alloy_primitives::Address::repeat_byte(0xee),
+            asset_recipient: alloy_primitives::Address::ZERO,
             max_per_payment: U256::from(1_000_000u64),
             max_per_window: U256::from(100_000_000u64),
             window_gross: U256::from(0u64),
@@ -423,6 +430,11 @@ mod tests {
         assert_eq!(c.window_gross, "0");
         assert!(c.chain_id_match);
         assert!(c.gateway_code_hash_match);
+        assert!(c.gateway_implementation_match);
+        assert!(
+            c.gateway_implementation.is_none(),
+            "a direct gateway has none"
+        );
         assert!(!c.deposits_paused);
         assert!(c.agent_active);
     }

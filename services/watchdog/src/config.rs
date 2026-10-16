@@ -33,6 +33,15 @@
 //! # Recorded in the plan and asserted at runtime.
 //! max_response_secs = 300   # 5 minutes
 //!
+//! # Optional. How far the explorer indexer may trail before a poll that finds
+//! # no new block stops refreshing the liveness heartbeat and pages
+//! # `indexer_behind:<chain>` (DI-5). These are the defaults.
+//! [indexer_lag]
+//! max_lag_blocks = 150      # chain head minus indexed head
+//! max_silence_secs = 300    # since the newest indexer run without an error
+//! repage_secs = 3600
+//! max_cursor_lag_blocks = 150  # indexed head minus the watchdog's own cursor
+//!
 //! # Optional per-vault overrides (keyed by lowercase hex address without 0x prefix).
 //! # Vaults not listed here inherit the global limits.
 //! [vault."abcdef1234567890abcdef1234567890abcdef12"]
@@ -67,6 +76,8 @@ use std::fmt;
 use std::path::Path;
 use zeroize::Zeroizing;
 
+use crate::governance::WeightSetterMonitorConfig;
+use crate::liveness::IndexerLagBudget;
 use crate::pause::PauserSigningKey;
 use crate::receipt_liveness::ReceiptLivenessConfig;
 use crate::WatchdogError;
@@ -135,6 +146,18 @@ pub struct Config {
     /// Absent means disabled, so pre-existing configs keep parsing unchanged.
     #[serde(default)]
     pub consensus_receipts: ReceiptLivenessConfig,
+    /// Standing weight-setter-path check (issue 1698): the router's
+    /// `WEIGHT_SETTER_ROLE` has exactly the weight setter, and the weight
+    /// setter's `WEIGHT_SETTER_ROLE` and `ADMIN_ROLE` exactly the timelock. It
+    /// replaced the deleted `quorumThreshold()` floor check. Absent means
+    /// disabled, so pre-existing configs keep parsing unchanged.
+    #[serde(default)]
+    pub governance: WeightSetterMonitorConfig,
+    /// How far the explorer indexer may trail before a poll with no new block
+    /// stops counting as watching (DI-5). Absent means the defaults in
+    /// [`IndexerLagBudget`], so pre-existing configs keep parsing unchanged.
+    #[serde(default)]
+    pub indexer_lag: IndexerLagBudget,
 }
 
 /// Global per-block and per-hour mint/burn volume limits (USDC units, 6-decimal integer strings).
@@ -305,6 +328,13 @@ impl Config {
         // A zero receipt cadence would page on every poll; refuse it rather
         // than silently disable the control (issue #1247 task 4.13).
         self.consensus_receipts.validate()?;
+
+        // An enabled weight-setter-path check with nowhere to read from would
+        // log an error every cycle and page never (issue 1698).
+        self.governance.validate()?;
+
+        // A zero indexer-lag budget would page on every poll (DI-5).
+        self.indexer_lag.validate()?;
 
         // Validate global thresholds.
         validate_threshold(

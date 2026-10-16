@@ -3,7 +3,7 @@
 /**
  * AdminFlow — orchestrates the wallet-scoped My Account tabs.
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useAccount, useChainId, useDisconnect, useReadContract } from "wagmi";
 import type { Address } from "viem";
 import { gatewayAbi } from "../lib/abi";
@@ -12,6 +12,10 @@ import { Tabs } from "./Tabs";
 import type { VerificationState } from "../lib/useGatewayVerifier";
 import { buildAdminTabs } from "./buildAdminTabs";
 import { resolveExplorerApiUrl } from "../lib/explorerApi";
+import { useCodeTargetVerification } from "../lib/useVerifiedCodeTargets";
+import { describeVerificationCause } from "../lib/gatewayVerifier";
+import { useRuntimeConfig } from "../lib/RuntimeConfigContext";
+import { parseImplementationPinMap } from "../lib/codePins";
 import { GatewayWriteCheck } from "../lib/gatewayWriteCheck";
 
 type Props = Readonly<{
@@ -55,11 +59,43 @@ export function AdminFlow(props: Props) {
   const [shareReceiver, setShareReceiver] = useState("");
 
   const { gatewayVerificationState } = props;
+  // Vaults and the router whose code and implementation matched their build-time pins (QA plan
+  // U5, ADR-0014). Their previews badge the target "[bytecode verified]" only when they are in
+  // `verified`; a router in `refused` is not offered a share approval.
+  const { verified: verifiedTargets, refused: refusedTargets } = useCodeTargetVerification();
   const ctx: PreviewContext = {
     gateway: props.gatewayAddress,
     gatewayCodeHashVerified: gatewayVerificationState.status === "verified",
     envClass: props.envClass,
+    verifiedTargets,
+    refusedTargets,
+    // A vault or router preview refused on the gateway names the gateway's actual cause.
+    gatewayRefusalDetail:
+      gatewayVerificationState.status === "refused"
+        ? describeVerificationCause(gatewayVerificationState.cause)
+        : gatewayVerificationState.status === "verified"
+          ? undefined
+          : "The gateway's code has not been verified yet.",
   };
+
+  // The vaults and the router are proxies too (issue 1808): rmpc then needs
+  // `proxy_implementation_hashes`. The export takes the reviewed implementation hashes this build
+  // pins for them, never the live ones (security review 009). Without such pins it names the key
+  // and the release-record fields to copy. A deployment whose gateway is a verified proxy is a
+  // proxied deployment, so its vault is taken to be a proxy too.
+  const deploymentIsProxied =
+    gatewayVerificationState.status === "verified" &&
+    gatewayVerificationState.implementation !== undefined &&
+    gatewayVerificationState.implementation !== null;
+  const runtimeEnv = useRuntimeConfig();
+  const proxyImplementationHashes = useMemo(() => {
+    const gateway = props.gatewayAddress.toLowerCase();
+    const hashes = new Set<string>();
+    for (const [address, list] of parseImplementationPinMap(runtimeEnv)) {
+      if (address !== gateway) list.forEach((h) => hashes.add(h));
+    }
+    return [...hashes];
+  }, [runtimeEnv, props.gatewayAddress]);
 
   const tabs = buildAdminTabs({
     gatewayAddress: props.gatewayAddress,
@@ -76,6 +112,7 @@ export function AdminFlow(props: Props) {
     // multi-wallet onboarding lands we widen this list. The Faucet tab
     // gracefully renders "(no wallets connected)" when empty.
     faucetWalletAddresses: address ? [address] : [],
+    walletAddress: address,
     now: props.now,
     registryAddress: props.registryAddress,
     routerAddress: props.routerAddress,
@@ -96,6 +133,8 @@ export function AdminFlow(props: Props) {
       gatewayVerificationState.status === "verified"
         ? gatewayVerificationState.implementationCodeHash
         : undefined,
+    vaultIsProxy: deploymentIsProxied,
+    proxyImplementationHashes,
   });
 
   return (

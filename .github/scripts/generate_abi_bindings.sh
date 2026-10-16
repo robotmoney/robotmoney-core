@@ -138,6 +138,7 @@ registry_abi     = load_abi(f"{out_dir}/VaultRegistry.sol/VaultRegistry.json")
 router_abi       = load_abi(f"{out_dir}/PortfolioRouter.sol/PortfolioRouter.json")
 agent_vault_abi  = load_abi(f"{out_dir}/AgentTokenVault.sol/AgentTokenVault.json")
 proto_vault_abi  = load_abi(f"{out_dir}/ProtocolAssetVault.sol/ProtocolAssetVault.json")
+exclusion_abi    = load_abi(f"{out_dir}/ExclusionLedger.sol/ExclusionLedger.json")
 
 content = f"""\
 // THIS FILE IS AUTO-GENERATED — DO NOT EDIT BY HAND.
@@ -223,6 +224,16 @@ export const agentTokenVaultAbiGenerated = {abi_to_ts(agent_vault_abi)} as const
  * fails CI instead of degrading quietly.
  */
 export const protocolAssetVaultAbiGenerated = {abi_to_ts(proto_vault_abi)} as const;
+
+/**
+ * Full ExclusionLedger ABI — generated from Foundry artifact (core 1820).
+ *
+ * Each RobotMoneyVault deploys one ledger that holds USDC recovered from an
+ * excluded adapter for the holders at the moment of exclusion. The canonical
+ * counterpart of `abi.ts`'s `EXCLUSION_LEDGER_ABI`, which the position card
+ * reads (QA plan U5); `abi-parity.test.ts` compares the two.
+ */
+export const exclusionLedgerAbiGenerated = {abi_to_ts(exclusion_abi)} as const;
 """
 
 with open(dest, "w") as f:

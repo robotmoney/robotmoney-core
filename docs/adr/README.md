@@ -6,12 +6,18 @@ old ADR with a new one rather than rewriting history.
 
 File names follow `ADR-NNNN-short-kebab-title.md`.
 
+Number 0003 was given twice on 2026-06-02: to the basket-vault preview ADR
+(PR 572) and to the rebalancing-model ADR (PR 575). Both keep their file
+names, because contract NatSpec, generated pages and other ADRs link them.
+Cite either one by its full file name, never by the number alone. A new
+ADR takes the next number after the highest one in the table.
+
 | # | Title | Status |
 | --- | --- | --- |
 | 0001 | [MVP agent-token shortlist is hand-picked, not quant-filtered](ADR-0001-mvp-agent-token-shortlist.md) | Accepted (amended 2026-10-05) |
 | 0002 | [Router default weights live on-chain, not derived from the front-end](ADR-0002-router-default-weights-on-chain.md) | Accepted (amended 2026-10-05) |
-| 0003 | [Slippage-adjusted basket-vault previewRedeem/previewDeposit (worst-case floor)](ADR-0003-slippage-adjusted-basket-vault-preview.md) | Accepted |
-| 0003 | [BasketVault rebalancing model — trigger, target weights, cost disclosure](ADR-0003-basketvault-rebalancing-model.md) | Accepted |
+| 0003 (preview) | [Slippage-adjusted basket-vault previewRedeem/previewDeposit (worst-case floor)](ADR-0003-slippage-adjusted-basket-vault-preview.md) | Accepted |
+| 0003 (rebalancing) | [BasketVault rebalancing model — trigger, target weights, cost disclosure](ADR-0003-basketvault-rebalancing-model.md) | Accepted |
 | 0004 | [Agent-token shortlist governance mechanism enabling rmAGENT router-eligibility](ADR-0004-agent-token-shortlist-governance.md) | Accepted (amended 2026-10-05) |
 | 0005 | [BasketVault multi-DEX routing — per-asset venue abstraction for Aerodrome and Uniswap V4](ADR-0005-basketvault-multi-dex-routing.md) | Accepted (amended 2026-10-05) |
 | 0006 | [deSPXA RWA vault — asset, Chronicle oracle, Aerodrome swap-only entry/exit, freeze risk](ADR-0006-despxa-rwa-vault-design.md) | Superseded in part (amended 2026-10-05) |

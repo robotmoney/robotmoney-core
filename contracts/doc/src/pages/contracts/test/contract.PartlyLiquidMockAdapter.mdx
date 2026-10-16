@@ -1,0 +1,202 @@
+---
+title: "PartlyLiquidMockAdapter"
+---
+
+# PartlyLiquidMockAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/RobotMoneyVault.t.sol)
+
+**Inherits:** [IStrategyAdapter](/contracts/interfaces/interface.IStrategyAdapter)
+
+<i>
+
+A venue that can pay out only part of the position: `withdraw` pays up to `liquid` and
+reverts above it (a MetaMorpho whose markets sit at high utilization, or carry bad debt in
+one market). `totalAssets` keeps reporting the whole balance, as `MorphoAdapter` does.
+
+</i>
+
+## Constants
+
+### USDC
+
+```solidity
+IERC20 public immutable USDC;
+```
+
+### VAULT
+
+```solidity
+address public immutable VAULT;
+```
+
+## State Variables
+
+### liquid
+
+```solidity
+uint256 public liquid;
+```
+
+## Functions
+
+<a id="constructor-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address usdc_, address vault_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `address` |  |
+| vault_ | `address` |  |
+
+<a id="setliquid-uint256"></a>
+
+### setLiquid
+
+```solidity
+function setLiquid(uint256 liquid_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| liquid_ | `uint256` |  |
+
+<a id="deploy-uint256"></a>
+
+### deploy
+
+Receive `amount` USDC from the vault and deploy it into the underlying protocol.
+
+<i>
+
+The in-tree lending adapters (Aave, Morpho, Compound) hand `amount` straight back to
+the vault, without reverting, when their venue refuses the supply (security round 2):
+a reserve at its supply cap, a frozen reserve, MetaMorpho `AllCapsReached`, a Comet
+supply-only pause. A venue that refuses withdrawals too (Aave reserve paused or
+inactive, Comet withdraw pause) reverts `VenueWithdrawalsClosed` instead (security
+round 3, `IVenueHealthAdapter`). The vault measures what the adapter kept by its own
+USDC balance, never by a return value, and leaves the rest idle
+(`RobotMoneyVaultOps._allocate`).
+
+</i>
+
+```solidity
+function deploy(uint256) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` | Amount of USDC (6-decimal units) to deploy into the protocol. |
+
+<a id="withdraw-uint256"></a>
+
+### withdraw
+
+Withdraw `amount` USDC from the underlying protocol and return it to the vault.
+
+```solidity
+function withdraw(uint256 amount) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` | Amount of USDC to withdraw; pass `type(uint256).max` to withdraw all. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | The amount of USDC actually withdrawn (may be ≤ amount on shortfall). |
+
+<a id="totalassets"></a>
+
+### totalAssets
+
+Live USDC value held by this adapter (principal + accrued interest).
+
+```solidity
+function totalAssets() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="sweepforeigntoken-address"></a>
+
+### sweepForeignToken
+
+Permissionlessly sweep a NON-protected foreign token to the fixed
+quarantine address (custody invariants INV-1/INV-2). Anyone may
+call; the destination is a hardcoded constant, never caller-supplied.
+Reverts when `token` is USDC or the adapter's strategy/share token.
+
+```solidity
+function sweepForeignToken(address) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` | Address of the foreign ERC-20 to quarantine. |
+
+<a id="harvestrewards"></a>
+
+### harvestRewards
+
+Claim any underlying-protocol reward tokens and forward them as
+USDC to the owning vault (custody invariant INV-2 — no emissions
+stranded on the adapter or router). Permissionless: anyone may
+trigger the harvest; the destination is always the vault, never a
+caller-supplied address (INV-1).
+
+<i>
+
+Adapters that have no on-chain claimable rewards (e.g. Aave
+interest accrues automatically in the aToken balance) implement
+this as a no-op. Adapters with discrete reward tokens claim them
+here, swap to USDC, and credit the vault. This function MUST NOT
+revert when there are no rewards to claim.
+
+</i>
+
+```solidity
+function harvestRewards() external;
+```
+
+## Errors
+
+### OnlyVault
+
+```solidity
+error OnlyVault();
+```
+
+### VenueIlliquid
+
+```solidity
+error VenueIlliquid(uint256 requested, uint256 liquid);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requested | `uint256` |  |
+| liquid | `uint256` |  |
+

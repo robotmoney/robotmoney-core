@@ -103,7 +103,8 @@
 //! ## B2. IDX-5 — vote tally counted voters, not voting power (Med)
 //!
 //! *Historical: `insert_vote`, its tally and the `VoteCast` branch were deleted
-//! with `RouterGovernance` voting (issue #1698).*
+//! with `RouterGovernance` voting (issue #1698), and migration 0025 dropped
+//! `governance_votes` and `governance_proposals`.*
 //!
 //! `Db::insert_vote` inserted the `governance_votes` row (which
 //! stores the per-vote `weight: U256`) and updated the running tally on

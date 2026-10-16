@@ -6,8 +6,9 @@ import { PROOF_TX_NONCES } from "../src/counts.ts";
 import { EXIT_CODES } from "../src/errors.ts";
 import { STAGE_NAMES, getStageTable } from "../src/stages.ts";
 import { predictCoreTimelock } from "../src/timelock-pin.ts";
-import { COUNTS, exampleText } from "./fixtures.ts";
-import { LOCAL_RPC, SCRIPT, world } from "./harness.ts";
+import { COUNTS, SHA, exampleText, tmp } from "./fixtures.ts";
+import { ADMIN, LOCAL_RPC, SCRIPT, world } from "./harness.ts";
+import { realGovernApi, resumeCommand } from "../src/govern.ts";
 
 const sheetValue = (name: string): string => new RegExp(`^${name}=(\\S+)`, "m").exec(exampleText())![1]!;
 const DEPLOY = STAGE_NAMES.slice(0, STAGE_NAMES.indexOf("timelock") + 1);
@@ -120,7 +121,9 @@ describe("the stage runner on stub forge and cast", () => {
 
   test("a missing frozen file on 8453 fails before any chain work (hard error)", async () => {
     const w = world({ chainId: 8453, startNonce: 0, writeFrozen: false });
-    expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.COUNTS_MISSING);
+    // one owner spec per sheet owner, so the pre-stage-1 owner check (qa-plan B1) passes and the release gate (QA plan v1 E4) is what refuses the missing file
+    const owners = ["A", "B", "C"].flatMap((o) => ["--owner-signer", `keystore:/k/OWNER_${o}`]);
+    expect(await w.run(["--stage", "deploy", ...owners])).toBe(EXIT_CODES.COUNTS_MISSING);
     expect(forgeScripts(w).length).toBe(0);
   });
 
@@ -206,6 +209,24 @@ describe("the stage runner on stub forge and cast", () => {
     expect(w.safeCalls).toContain("verifyCreatedSafe");
     expect(w.safeCalls.filter((c) => c === "createSafe").length).toBe(1);
     expect(JSON.parse(readFileSync(join(w.coreDir, "deployments", "918453", "safe.json"), "utf8")).adopted).toBe(true);
+  });
+
+  // Security round 1 (as QA plan v1 E2 for the redeploy): the predicted Safe address was saved BEFORE the typed confirmation, so a refused confirmation left a `started`
+  // record of a Safe that was never created, and every --resume went into the adoption of it (NOT_A_SAFE against a real chain).
+  test("a refused confirmation at the safe stage leaves no record: the --resume creates the Safe normally instead of adopting one that was never created", async () => {
+    const w = world({ startNonce: 0 });
+    expect(await w.run(["--stage", "safe"], { prompt: async () => "nope" })).toBe(EXIT_CODES.REFUSED);
+    expect(w.safeCalls).toEqual(["createSafe"]);
+    expect(existsSync(join(w.evidence, "publish-run.json")) ? manifest(w).stages.safe : undefined).toBeUndefined();
+    expect(await w.run(["--stage", "safe", "--resume"])).toBe(0);
+    expect(w.safeCalls).toEqual(["createSafe", "createSafe"]);
+    expect(w.safeCalls).not.toContain("connectSafe");
+    expect(manifest(w).stages.safe).toMatchObject({ status: "done", safe: "0x00000000000000000000000000000000000050fe" });
+    expect(JSON.parse(readFileSync(join(w.coreDir, "deployments", "918453", "safe.json"), "utf8")).adopted).toBeUndefined();
+    // a rerun without --resume after a refusal is not refused either: there is no earlier stage
+    const fresh = world({ startNonce: 0 });
+    expect(await fresh.run(["--stage", "safe"], { prompt: async () => "nope" })).toBe(EXIT_CODES.REFUSED);
+    expect(await fresh.run(["--stage", "safe"])).toBe(0);
   });
 
   test("--measure writes the frozen counts file for the SHA and refuses to run without a file otherwise", async () => {
@@ -352,11 +373,52 @@ describe("a failed broadcast says why (core 1505)", () => {
   });
 });
 
+// Security round 1 (the issue 1686 interlock): a govern run against a fresh run manifest knew no pause-all entry, adopted the scheduled unpause from the chain and executed it.
+describe("security round 1: follow-on runs continue the deployment's own run manifest", () => {
+  /** A govern api whose connectSafe records that it ran: a refusal before it leaves `connected` false. */
+  const spy = () => { const s = { connected: false }; return { s, api: { ...realGovernApi, connectSafe: (async () => { s.connected = true; throw new Error("stop: the Safe was read"); }) as never } }; };
+  const seed = (w: ReturnType<typeof world>, stages: Record<string, unknown>) => {
+    mkdirSync(w.evidence, { recursive: true });
+    writeFileSync(join(w.evidence, "publish-run.json"), JSON.stringify({ version: 1, chainId: 918453, coreSha: SHA, deployer: ADMIN, environment: "local", startedAt: "t", stages }));
+  };
+  test("govern with an --evidence dir that holds no publish-run.json exits RESUME before the Safe is read", async () => {
+    const w = world({ writeSafeManifest: true });
+    const g = spy();
+    expect(await w.run(["govern", "--evidence", tmp("pc-other-evidence-")], { govern: { api: g.api } })).toBe(EXIT_CODES.RESUME);
+    expect(g.s.connected).toBe(false);
+    expect(lastError(w).message).toContain("no run manifest in");
+    expect(lastError(w).message).toContain("--evidence");
+    // the same for --stage verify,govern and for verify alone
+    expect(await w.run(["--stage", "verify,govern", "--evidence", tmp("pc-other-evidence-")], { govern: { api: g.api } })).toBe(EXIT_CODES.RESUME);
+    expect(await w.run(["verify", "--evidence", tmp("pc-other-evidence-")])).toBe(EXIT_CODES.RESUME);
+    expect(g.s.connected).toBe(false);
+  });
+  test("govern on a run manifest with no finished timelock stage exits RESUME; with it, the run goes on to the Safe", async () => {
+    const before = world({ writeSafeManifest: true });
+    seed(before, { safe: { status: "done", startedAt: "t" } });
+    const g = spy();
+    expect(await before.run(["govern"], { govern: { api: g.api } })).toBe(EXIT_CODES.RESUME);
+    expect(lastError(before).message).toContain("no finished timelock stage");
+    expect(g.s.connected).toBe(false);
+    // mutation: the handover is done, so the RESUME refusal is not what stops the run
+    const after = world({ writeSafeManifest: true });
+    seed(after, { safe: { status: "done", startedAt: "t" }, timelock: { status: "done", startedAt: "t" } });
+    expect(await after.run(["govern"], { govern: { api: g.api } })).not.toBe(EXIT_CODES.RESUME);
+  });
+  test("the printed resume command names the run's absolute --evidence dir and its counts flags", () => {
+    const next = resumeCommand({ chainId: 8453, coreSha: SHA, evidenceDir: join("evidence", "publish-8453-x"), countsDir: "/c/deployments/frozen-counts", countsRequireOriginDev: true }, "unpause-PROTO");
+    expect(next).toContain(`--evidence ${join(process.cwd(), "evidence", "publish-8453-x")}`);
+    expect(next).toContain("--counts-dir /c/deployments/frozen-counts --counts-require-origin-dev");
+    // a caller with no evidence dir in its context still tells the operator to pass one
+    expect(resumeCommand({ chainId: 8453, coreSha: SHA })).toContain("--evidence DIR");
+  });
+});
+
 describe("the core timelock: pinned at the first proxy stage, adopted when someone deployed it first (issue 1835)", () => {
   const OUT = join(import.meta.dir, "fixtures", "build-out");
   const SAFE = "0x00000000000000000000000000000000000050fe"; // the Safe the fake Safe API creates
   const TL = predictCoreTimelock(getStageTable().upgradeAuthority!, OUT, SAFE, 60n);
-  const RUNTIME: string = JSON.parse(readFileSync(join(OUT, "TimelockController.sol", "TimelockController.json"), "utf8")).deployedBytecode.object;
+  const RUNTIME: string = JSON.parse(readFileSync(join(OUT, "ProposerFloorTimelock.sol", "ProposerFloorTimelock.json"), "utf8")).deployedBytecode.object;
   const A = "0x000000000000000000000000000000000000a001";
   const sum = Object.values(COUNTS).reduce((a, b) => a + b, 0);
   /** A griefer deployed the timelock at its prediction once the proxies were public: the stage script reuses it and plans one transaction fewer. */
@@ -386,7 +448,7 @@ describe("the core timelock: pinned at the first proxy stage, adopted when someo
     expect(lastError(w)).toBeUndefined();
     const t = manifest(w).stages.timelock;
     expect(t).toMatchObject({ status: "done", adopted: true, count: COUNTS.timelock, dryRunCount: COUNTS.timelock! - 1, broadcastCount: COUNTS.timelock! - 1 });
-    expect(t.adoption).toEqual({ libraries: [{ name: "TimelockController", artifact: "TimelockController", address: TL.address, codeHash: TL.runtimeHash }], factory: getStageTable().upgradeAuthority!.factory, deployerTxs: COUNTS.timelock! - 1 });
+    expect(t.adoption).toEqual({ libraries: [{ name: "ProposerFloorTimelock", artifact: "ProposerFloorTimelock", address: TL.address, codeHash: TL.runtimeHash }], factory: getStageTable().upgradeAuthority!.factory, deployerTxs: COUNTS.timelock! - 1 });
     // the end-of-deploy nonce check counts the transactions the deployer really sent
     expect(w.state().nonces[A]).toBe(sum - 1 + PROOF_TX_NONCES);
     expect(w.logs().some((l) => l.event === "run.nonce_ok" && l.nonce === sum - 1 + PROOF_TX_NONCES)).toBe(true);
@@ -420,7 +482,7 @@ describe("the core timelock: pinned at the first proxy stage, adopted when someo
 
   test("another build between the first proxy stage and the timelock stage (other CBOR metadata) moves the prediction: the timelock stage refuses, nothing sent", async () => {
     const { w, code } = await resumeTimelock((w) => {
-      const f = join(w.coreDir, "out", "TimelockController.sol", "TimelockController.json");
+      const f = join(w.coreDir, "out", "ProposerFloorTimelock.sol", "ProposerFloorTimelock.json");
       const j = JSON.parse(readFileSync(f, "utf8"));
       j.bytecode.object = `${j.bytecode.object.slice(0, -4)}0034`; // the CBOR length suffix of another compiler run
       writeFileSync(f, JSON.stringify(j));
@@ -439,9 +501,9 @@ describe("the core timelock: pinned at the first proxy stage, adopted when someo
     f(m.stages.vault);
     writeFileSync(p, JSON.stringify(m));
   };
-  /** Another build of the TimelockController (the CBOR length suffix of another compiler run). */
+  /** Another build of the ProposerFloorTimelock (the CBOR length suffix of another compiler run). */
   const rebuildTimelock = (w: ReturnType<typeof world>) => {
-    const f = join(w.coreDir, "out", "TimelockController.sol", "TimelockController.json");
+    const f = join(w.coreDir, "out", "ProposerFloorTimelock.sol", "ProposerFloorTimelock.json");
     const j = JSON.parse(readFileSync(f, "utf8"));
     j.bytecode.object = `${j.bytecode.object.slice(0, -4)}0034`;
     writeFileSync(f, JSON.stringify(j));
@@ -472,7 +534,7 @@ describe("the core timelock: pinned at the first proxy stage, adopted when someo
     expect(manifest(w).stages.registry).toBeUndefined();
   };
 
-  test("issue 1853: the TimelockController artifact changed since the vault stage: the registry stage refuses before its broadcast", async () => {
+  test("issue 1853: the ProposerFloorTimelock artifact changed since the vault stage: the registry stage refuses before its broadcast", async () => {
     const { w, code } = await resumeRegistry(rebuildTimelock);
     refusedBeforeRegistry(w, code);
     expect(lastError(w).message).toContain("stage registry: the core timelock prediction changed since stage vault");

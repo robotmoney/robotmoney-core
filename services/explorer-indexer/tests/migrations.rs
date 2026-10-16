@@ -1,10 +1,11 @@
 //! Schema sanity: bring up Postgres in a container, apply migrations,
-//! confirm all nine §11 tables plus vaults and governance tables exist
+//! confirm all nine §11 tables plus vaults and router weight snapshots exist
 //! with `chain_id` and (where applicable) `block_number` columns.
 //!
 //! Also covers issue #315 acceptance criteria:
-//!   - Migration 0003 creates router_weight_snapshots, governance_proposals,
-//!     governance_votes tables and the account_positions view.
+//!   - Migration 0003 creates router_weight_snapshots and the
+//!     account_positions view. (It also created governance_proposals and
+//!     governance_votes; migration 0025 dropped them, issue 1698.)
 //!   - vault_address column is added to vault_snapshots and backfilled.
 //!
 //! Issue #1359 adds the two `migrate_only_mode_*` tests, which drive the
@@ -27,7 +28,7 @@ use alloy_primitives::U256;
 use common::{pg_fixture, raw_pg};
 use explorer_indexer::db::{
     assert_migrations_are_transactional, compare_schema, embedded_schema_version,
-    first_non_transactional, AppliedMigration, CountTable, DbError, SchemaDivergence,
+    first_non_transactional, AppliedMigration, CountTable, DbError, SchemaDivergence, MIGRATOR,
 };
 use explorer_indexer::Db;
 use sqlx::migrate::{Migration, MigrationType};
@@ -460,9 +461,7 @@ async fn migrations_create_all_tables() {
         CountTable::IndexerRuns,
         // migration 0002
         CountTable::Vaults,
-        // migration 0003 — governance tables (issue #307)
-        CountTable::GovernanceProposals,
-        CountTable::GovernanceVotes,
+        // migrations 0004/0005 — router weight history (issue #307)
         CountTable::RouterWeightSnapshots,
     ] {
         let n = fx.db.count(t).await.unwrap_or_else(|e| panic!("{e}"));
@@ -472,19 +471,21 @@ async fn migrations_create_all_tables() {
     }
 }
 
-/// Issue #315 AC — Migration 0003 creates the three new tables and the
-/// account_positions view.
+/// Issue #315 AC — the multi-vault migrations create router_weight_snapshots
+/// and the account_positions view. The two governance tables they also created
+/// are gone since migration 0025 (issue 1698).
 #[tokio::test]
 async fn migration_0003_creates_multi_vault_tables() {
     let fx = pg_fixture().await;
-    for t in [
-        CountTable::RouterWeightSnapshots,
-        CountTable::GovernanceProposals,
-        CountTable::GovernanceVotes,
-    ] {
-        let n = fx.db.count(t).await.unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(n, 0, "table {t:?} must exist and be empty after migration");
-    }
+    let n = fx
+        .db
+        .count(CountTable::RouterWeightSnapshots)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        n, 0,
+        "router_weight_snapshots must exist and be empty after migration"
+    );
 
     // account_positions is a VIEW — verify it exists by selecting from it.
     let row: (i64,) = sqlx::query_as("SELECT COUNT(*)::BIGINT FROM account_positions")
@@ -536,6 +537,7 @@ async fn migration_0003_preserves_vault_snapshots_with_vault_address_backfilled(
             Some(U256::ZERO),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -580,9 +582,7 @@ async fn every_row_has_chain_id_and_block_number() {
         "agent_policies",
         "vault_snapshots",
         "wallet_positions",
-        // migration 0003
-        "governance_proposals",
-        "governance_votes",
+        // migration 0004
         "router_weight_snapshots",
     ];
     let needs_chain_id = [
@@ -597,9 +597,7 @@ async fn every_row_has_chain_id_and_block_number() {
         "indexer_runs",
         // migration 0002
         "vaults",
-        // migration 0003
-        "governance_proposals",
-        "governance_votes",
+        // migration 0004
         "router_weight_snapshots",
     ];
     for t in needs_chain_id {
@@ -622,6 +620,118 @@ async fn every_row_has_chain_id_and_block_number() {
         .unwrap();
         assert_eq!(row.0, 1, "{t} must have a block_number column");
     }
+}
+
+// ─── QA plan C1 — migration 0025 drops RouterGovernance voting ────────────────
+
+/// Migration `0025` (QA plan C1, core issue 1698) removes what the deleted
+/// RouterGovernance voting events fed. On a database that ran 0001..0023 and
+/// holds a proposal, a vote and a `governance_vote` history row, it must drop
+/// `governance_votes` and `governance_proposals`, delete the `governance_vote`
+/// history row, and keep every other history row and `router_weight_snapshots`.
+#[tokio::test]
+async fn migration_0024_drops_governance_voting_tables_and_history_rows() {
+    let pg = raw_pg().await;
+    let pool = sqlx::PgPool::connect(&pg.url)
+        .await
+        .expect("connect to the raw database");
+
+    // The pre-0024 world: every embedded migration below 24, in order.
+    for m in MIGRATOR.iter().filter(|m| m.version < 24) {
+        sqlx::raw_sql(m.sql.as_ref())
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("apply migration {}: {e}", m.version));
+    }
+
+    let db = Db::from_pool(pool.clone());
+    db.upsert_chain(8453, "base", "stub").await.unwrap();
+    sqlx::query(
+        "INSERT INTO governance_proposals \
+           (chain_id, proposal_id, block_number, log_index, tx_hash, proposer, created_at) \
+         VALUES (8453, 1, 9, 0, $1, $2, 9)",
+    )
+    .bind(vec![0x66u8; 32])
+    .bind(vec![0x44u8; 20])
+    .execute(&pool)
+    .await
+    .expect("seed one pre-0024 proposal");
+    sqlx::query(
+        "INSERT INTO governance_votes \
+           (chain_id, proposal_id, voter, block_number, log_index, tx_hash, support, weight) \
+         VALUES (8453, 1, $1, 10, 0, $2, TRUE, 1)",
+    )
+    .bind(vec![0x33u8; 20])
+    .bind(vec![0x77u8; 32])
+    .execute(&pool)
+    .await
+    .expect("seed one pre-0024 vote");
+    db.insert_history_event(
+        8453,
+        10,
+        0,
+        [0x77u8; 32],
+        [0x33u8; 20],
+        "governance_vote",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    db.insert_history_event(
+        8453,
+        11,
+        0,
+        [0x88u8; 32],
+        [0x33u8; 20],
+        "deposit",
+        Some([0x22u8; 20]),
+        Some([0x11u8; 20]),
+        Some(U256::from(1_000_000u64)),
+    )
+    .await
+    .unwrap();
+
+    sqlx::raw_sql(include_str!(
+        "../migrations/0025_drop_governance_voting.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("0024 must apply to a populated governance schema");
+
+    for table in ["governance_proposals", "governance_votes"] {
+        let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+            .bind(table)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(!exists, "0024 must drop {table}");
+    }
+    let snapshots_exist: bool =
+        sqlx::query_scalar("SELECT to_regclass('router_weight_snapshots') IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        snapshots_exist,
+        "router_weight_snapshots is the router's weight history and must survive 0024"
+    );
+    let kinds: Vec<String> =
+        sqlx::query_scalar("SELECT kind FROM account_history_events ORDER BY block_number")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        kinds,
+        vec!["deposit".to_string()],
+        "0024 must delete the governance_vote row and keep every other kind"
+    );
+    assert!(
+        CountTable::try_from("governance_votes").is_err()
+            && CountTable::try_from("governance_proposals").is_err(),
+        "the count allowlist must not name a dropped table"
+    );
 }
 
 // ─── T20/T12 — migration 0016 must REFUSE rather than fabricate provenance ────
@@ -709,6 +819,170 @@ async fn migration_0016_refuses_a_populated_consensus_receipts_table() {
     assert_eq!(
         pk, "chain_id,contract_address,receipt_id",
         "T20: the emitting contract must be part of the primary key"
+    );
+}
+
+// ─── DI-10 — migration 0021 must REFUSE rather than fabricate provenance ──────
+
+/// Migration `0021` puts the emitting policy `contract_address` into the
+/// `committee_votes` primary key, for the reason `0016` did it for receipts: a
+/// redeployed InvestmentCommitteePolicy numbers its votes from 0 again. The
+/// emitting address of an existing row was never recorded, so the migration
+/// raises on a populated table instead of guessing it. The operator remedy is
+/// `docs/operations/explorer-db-rebuild.md`.
+#[tokio::test]
+async fn migration_0020_refuses_a_populated_committee_votes_table() {
+    let pg = raw_pg().await;
+    let pool = sqlx::PgPool::connect(&pg.url)
+        .await
+        .expect("connect to the raw database");
+
+    // The pre-0020 world: 0014's committee tables, which reference nothing
+    // outside the file.
+    sqlx::raw_sql(include_str!("../migrations/0014_committee_tables.sql"))
+        .execute(&pool)
+        .await
+        .expect("apply 0014");
+
+    sqlx::query(
+        "INSERT INTO committee_agents (chain_id, agent_address, agent_id, active, registered_at) \
+         VALUES (8453, $1, 'member', TRUE, 1)",
+    )
+    .bind(vec![0x22u8; 20])
+    .execute(&pool)
+    .await
+    .expect("seed one member");
+    // One vote whose emitting policy is unknowable, the real situation.
+    sqlx::query(
+        "INSERT INTO committee_votes \
+           (chain_id, vote_id, block_number, log_index, tx_hash, agent_address, vault_address, \
+            stance, target_weight_bps, confidence, rationale_uri, vote_json_hash, \
+            timestamp_secs, verified) \
+         VALUES (8453, 0, 2, 0, $1, $2, $3, 0, 5000, 50, 'ipfs://memo', $1, 1, FALSE)",
+    )
+    .bind(vec![0x11u8; 32])
+    .bind(vec![0x22u8; 20])
+    .bind(vec![0x33u8; 20])
+    .execute(&pool)
+    .await
+    .expect("seed one pre-migration vote");
+
+    let err = sqlx::raw_sql(include_str!(
+        "../migrations/0021_committee_votes_contract_scope.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect_err(
+        "0020 MUST refuse a populated committee_votes table: silently backfilling \
+         contract_address fabricates provenance",
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("cannot backfill committee_votes.contract_address"),
+        "the refusal must say what it refused: {msg}"
+    );
+    assert!(
+        msg.contains("explorer-db-rebuild.md"),
+        "the refusal must name the operator remedy runbook: {msg}"
+    );
+
+    // On an EMPTY table it applies cleanly, so the refusal is a real guard.
+    sqlx::query("TRUNCATE committee_votes")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../migrations/0021_committee_votes_contract_scope.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("0020 must apply cleanly to an empty table");
+
+    let (pk,): (String,) = sqlx::query_as(
+        "SELECT string_agg(a.attname, ',' ORDER BY k.ord) \
+         FROM pg_constraint c \
+         JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) ON TRUE \
+         JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum \
+         WHERE c.conrelid = 'committee_votes'::regclass AND c.contype = 'p'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        pk, "chain_id,contract_address,vote_id",
+        "DI-10: the emitting policy must be part of the primary key"
+    );
+}
+
+// ─── DI-8 (QA plan X7) — migration 0022 backfills the membership history ─────
+
+/// Migration `0022` adds `committee_agent_events`, the block-numbered history
+/// `committee_agents` is derived from, so a reorg can undo a revoke. Unlike
+/// 0016 and 0020 it has a sound backfill: `registered_at` and `revoked_at` are
+/// the blocks of the events that wrote them. Each existing row gets the entries
+/// that reproduce it: a registration (or, for an inactive row with no revoke,
+/// the DI-4 placeholder) at `registered_at`, and a revoke at `revoked_at`. The
+/// unknown log index is negative (-2, then -1), which no real log has.
+#[tokio::test]
+async fn migration_0021_backfills_the_history_that_reproduces_each_member() {
+    let pg = raw_pg().await;
+    let pool = sqlx::PgPool::connect(&pg.url)
+        .await
+        .expect("connect to the raw database");
+
+    sqlx::raw_sql(include_str!("../migrations/0014_committee_tables.sql"))
+        .execute(&pool)
+        .await
+        .expect("apply 0014");
+    for (agent, agent_id, active, registered_at, revoked_at) in [
+        (0xA1u8, "alpha", true, 10i64, None::<i64>),
+        (0xB2u8, "beta", false, 20, Some(30i64)),
+        (0xC3u8, "", false, 40, None),
+    ] {
+        sqlx::query(
+            "INSERT INTO committee_agents \
+               (chain_id, agent_address, agent_id, active, registered_at, revoked_at) \
+             VALUES (8453, $1, $2, $3, $4, $5)",
+        )
+        .bind(vec![agent; 20])
+        .bind(agent_id)
+        .bind(active)
+        .bind(registered_at)
+        .bind(revoked_at)
+        .execute(&pool)
+        .await
+        .expect("seed one member");
+    }
+
+    let migration = include_str!("../migrations/0022_committee_agent_events.sql");
+    sqlx::raw_sql(migration)
+        .execute(&pool)
+        .await
+        .expect("0021 applies to a populated committee_agents table");
+    // Re-applying is a no-op, like every other explorer migration.
+    sqlx::raw_sql(migration)
+        .execute(&pool)
+        .await
+        .expect("0021 is re-runnable");
+
+    let events: Vec<(Vec<u8>, i64, i32, i16, String)> = sqlx::query_as(
+        "SELECT agent_address, block_number, log_index, kind, agent_id \
+         FROM committee_agent_events WHERE chain_id = 8453 \
+         ORDER BY agent_address, block_number, log_index",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        events,
+        vec![
+            (vec![0xA1u8; 20], 10, -2, 0, "alpha".to_string()),
+            (vec![0xB2u8; 20], 20, -2, 0, "beta".to_string()),
+            (vec![0xB2u8; 20], 30, -1, 1, String::new()),
+            (vec![0xC3u8; 20], 40, -2, 2, String::new()),
+        ],
+        "an active member, a revoked member and a DI-4 placeholder each get the \
+         history that derives their row"
     );
 }
 

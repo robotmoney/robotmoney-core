@@ -181,7 +181,11 @@ describe("admin writes re-verify the gateway at the latest block (issue 1840)", 
   });
 
   it("AdminFlow refuses a gateway write when the cached state is not verified", async () => {
-    const refused: VerificationState = { status: "refused", reason: "unknown_revert" };
+    const refused: VerificationState = {
+      status: "refused",
+      reason: "unknown_revert",
+      cause: "hash-mismatch",
+    };
     render(<AdminFlow {...common} gatewayVerificationState={refused} flagEnv={{}} />);
     fireEvent.change(screen.getByTestId("agent-input"), { target: { value: AGENT } });
     fireEvent.click(screen.getByTestId("tab-revoke"));
@@ -217,7 +221,11 @@ function writeInside(state: VerificationState, target: Address) {
 }
 
 describe("the gateway write check fails closed for admin targets (issue 1840)", () => {
-  const refused: VerificationState = { status: "refused", reason: "unknown_revert" };
+  const refused: VerificationState = {
+    status: "refused",
+    reason: "unknown_revert",
+    cause: "hash-mismatch",
+  };
 
   it.each([
     ["the Timelock", TIMELOCK],

@@ -5,7 +5,9 @@
 > `docs/technical/smart-contracts.md`, and accepted ADRs under
 > `docs/technical/`. This document describes how Robot Money is built.
 > Product promises and user workflows live in the PRD; delivery order
-> lives on the Plan tracking issue (#109).
+> lives on the GitHub Phase issues (label `phase-plan`) under the release
+> tracking issue (core 1418, Release 0.4.0). The old Plan issue (#109)
+> closed on 2026-08-26.
 
 ## 1. Overview
 
@@ -98,11 +100,13 @@ router weights, and `RouterGovernance.sol` is the contract that holds it.
 The weight setter submits the Investment Committee's consensus receipt, and
 that submission is the rebalance: one timelock operation releases the
 receipt and applies its weight vector (govern row `apply-receipt`, core
-1696). That operation is one call,
-`RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)`. It sets
-the router's active vector. The default vector stays the fallback. The timelock
-holds `ADMIN_ROLE` and `RouterGovernance`'s own `WEIGHT_SETTER_ROLE`, so the
-role ends with the timelock.
+1696). The operation is one call,
+`RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)`: it
+refuses a receipt that is not recorded, already released, or recorded with a
+different payload digest, then calls `releaseReceipt` on the receipt register
+and `setWeights` on the router in the same transaction (issue 1698). A vector
+the router refuses releases nothing. The timelock holds `ADMIN_ROLE` and
+`RouterGovernance`'s own `WEIGHT_SETTER_ROLE`, so the role ends with the timelock.
 Router-weight governance controls Portfolio Router target weights across
 active vaults and nothing else. It does not govern vault onboarding, vault
 retirement, per-vault asset selection, per-vault strategy internals,
@@ -290,7 +294,10 @@ Router requirements:
 - a leg that is not eligible for routing at deposit time is skipped and
   its share is renormalised across the remaining legs (§4.2.1); the
   preview surfaces the skipped legs before signing so the user can decide
-  whether to proceed or wait;
+  whether to proceed or wait. A leg that turns unavailable after signing
+  is skipped only when the signed `minSharesPerLeg` floor for it is 0: a
+  non-zero floor reverts the deposit `LegSkippedWithFloor(vault)`, so the
+  user's decision is never overridden (security round 2);
 - receipt tokens remain visible as underlying vault receipts;
 - router caps and vault caps both apply;
 - router state, weights, governance execution, and history are publicly
@@ -307,9 +314,12 @@ per-vault withdrawal caps over a fixed window and depends on
 replaces the previous in-contract `isPrototype()` /
 `prototypeOverride` / `nonPrototypeAttested` machinery (issue #475) so
 the same contracts ship into every environment with no per-environment
-code variant. The router is not yet on the production mainnet
-deployment manifest; the contract surface is in place, audit and
-mainnet onboarding remain planned work on the Plan tracking issue (#109).
+code variant. The router is on every deployment manifest: the `router`
+stage of `scripts/deploy/stage-table.json` deploys it and writes
+`router.json`, and Deploy 2 on Base 8453 recorded it
+(`deployments/8453/deploy-2/router.json`). Its post-audit changes wait for
+the external audit before the final deployment (`docs/audits.md`, the
+`PortfolioRouter.sol` row).
 
 #### 4.2.1 What "eligible for routing" means
 
@@ -332,10 +342,15 @@ Readers that compare against the live vector treat a missing vault as 0 bps
 (the consensus receipt "applied" rule, §4.9.3).
 
 **Deposit time.** `_depositTo` runs `_availabilityAndAmounts`, whose
-`_isDepositable` requires registry status `Active` and `isRouterEligible`.
-A leg that fails it is skipped. The full amount is split pro rata across the
+`_isDepositable` requires registry status `Active`, `isRouterEligible`, and a
+non-zero `maxDeposit` from the vault itself (a reverting `maxDeposit` counts
+as 0). A leg that fails it is skipped. The full amount is split pro rata across the
 remaining legs, by each leg's share of the available bps, and the rounding
-remainder goes to the last available leg with non-zero bps. A leg whose
+remainder goes to the last available leg with non-zero bps. Each funded leg
+is then quoted with the vault's `previewDeposit` at its split amount. A leg
+whose quote reverts (for example rmAGENT on a stale price recorder) is
+skipped too, and the split reruns over the survivors until every funded leg
+quotes (QA plan D4). A leg whose
 computed amount is 0 is skipped like an unavailable leg (issue 1746). No USDC is left with the router
 and none is returned to the user (`_executeLegs` checks the router's USDC
 balance against its pre-deposit snapshot). `previewDeposit` runs the same
@@ -349,14 +364,28 @@ it.
 `_executeLeg` reverts `VaultCapExceeded` when a leg's renormalised amount is
 over its cap, and the whole deposit reverts.
 
-**Known gap: a vault's own deposit pause is not read.** `_isDepositable`
-checks registry status and router eligibility only. It does not read the
-vault's own deposit pause: `BasketVault.depositsPaused`, the `EMERGENCY_ROLE`
-`pauseDeposits()`, `shutdown`, or `maxDeposit(...) == 0` (`RobotMoneyVault` has the
-same kind of flags). A registry-Active, router-eligible vault with deposits
-paused therefore stays in the available set. Its `vault.deposit` reverts
-inside `_executeLeg`, and the whole routed deposit reverts
-`UsdcLegTransferFailed(vault)`. This is not fixed yet.
+**A vault's own deposit gate is read (QA plan D4).** A vault's own deposit
+pause (`BasketVault.depositsPaused`, the `EMERGENCY_ROLE` `pauseDeposits()`),
+`shutdown`, retirement, a full TVL cap or an open `RobotMoneyVault` exclusion
+makes its `maxDeposit` 0, so the router skips that leg even while the
+registry says `Active`. A basket whose spot price sits outside its ORA-4
+band around the TWAP is skipped too: `BasketVault.previewDeposit` runs the
+same spot-versus-TWAP guard as its `deposit` (security round 1), so the
+quote pass drops the leg. A leg whose views pass but whose `deposit` reverts
+still reverts the whole routed deposit `UsdcLegTransferFailed(vault)`; the
+case left is a basket's realised-swap slippage floor. The rmUSDC allocator
+stops at a Morpho adapter's exposure cap, so that cap never reverts the
+rmUSDC leg. A lending venue that refuses a supply (Aave supply cap or
+frozen reserve, MetaMorpho `AllCapsReached`, Comet supply pause) does not
+revert it either: the lending adapter hands the slice back and rmUSDC keeps
+it idle with `UnroutedDeposit` (security round 2). A venue that shuts
+withdrawals too (Aave reserve paused or inactive, Comet withdraw pause) is
+not handed back: rmUSDC's `maxDeposit` reads 0, so the router skips the
+leg, and the adapter's `deploy` reverts `VenueWithdrawalsClosed` (security
+round 3). The basket deploy script refuses a `NAV_DEVIATION_BPS` at or
+below any configured pool fee in bps, and the rmAGENT sheet value is 400
+against the RM pool's 291 bps fee, so ordinary drift inside the fee band
+does not take rmAGENT out of routing.
 
 ### 4.3 Vault Adapters
 
@@ -421,22 +450,27 @@ background implementation details.
 
 ### 4.5 Protocol Admin Authority
 
-All five protocol contracts (`RobotMoneyVault`, `RobotMoneyGateway`,
-`VaultRegistry`, `PortfolioRouter`, `RouterGovernance`) use OpenZeppelin
-`AccessControl` with an `ADMIN_ROLE` that governs privileged operations:
-adapter add/remove, cap and fee changes, vault registration and
-deregistration, pause-role grants, governance parameter changes, and
-`ADMIN_ROLE` membership changes.
+Every protocol contract uses OpenZeppelin `AccessControl` with an
+`ADMIN_ROLE`. A deployment has ten of them: the four vaults
+(`RobotMoneyVault` for rmUSDC, and the `BasketVault` kinds
+`ProtocolAssetVault`, `AgentTokenVault` and `RwaBasketVault`) and six
+singletons, `RobotMoneyGateway`, `VaultRegistry`, `PortfolioRouter`,
+`RouterGovernance`, `InvestmentCommitteePolicy` (§4.8) and
+`ConsensusRecommendationReceipt` (§4.9). `ADMIN_ROLE` governs privileged
+operations: adapter and basket-asset add/remove, cap and fee changes, vault
+registration and deregistration, pause-role grants, governance and
+committee parameter changes, and `ADMIN_ROLE` membership changes.
 
-On-chain enforcement requirement: `ADMIN_ROLE` on all five contracts
+On-chain enforcement requirement: `ADMIN_ROLE` on all ten contracts
 must be held by a deployed `TimelockController`. Every privileged action
 is Safe → `TimelockController` → target. The Safe is a canonical SafeL2
 1.4.1 proxy from the canonical factory with threshold ≥ 2, created by the
 deploy's stage 0 (`safe`). It holds `PROPOSER_ROLE` and CANCELLER_ROLE on
 the controller. EXECUTOR_ROLE is open (`address(0)`) so any address can
-execute an already-authorized operation after the delay (not yet
-implemented: core #1521; `DeployTimelock` still sets the Safe as
-executor). `rmpc` is not a governance signer. No EOA may hold
+execute an already-authorized operation after the delay (core #1521:
+`DeployTimelock` grants `EXECUTOR_ROLE` to `address(0)` only and records
+`executorPolicy` `open` in `timelock.json`; the stage 12 verifier checks
+both). `rmpc` is not a governance signer. No EOA may hold
 `ADMIN_ROLE` directly in production. All high-risk admin operations must
 pass through the schedule → delay → execute flow. The minimum delay has a
 48-hour (172800 s) floor on Base (chain id 8453), enforced by
@@ -584,8 +618,8 @@ depositor principal is the depositor's own signed action alone.
 | Action | Tier |
 |---|---|
 | sweep foreign token, trigger harvest | permissionless |
-| `pauseDeposits`, `shutdownVault`, `emergencyWithdraw` (→ vault only), `forceRemoveAdapter` | emergency (hot key, `EMERGENCY_ROLE`) |
-| `unpauseDeposits`, `restoreVault`, `retire`, `reactivate`, `setFeeRecipient`, adapter add/allowlist/caps, quarantine set + recover | governance (multisig + timelock) |
+| `pauseDeposits`, `shutdownVault`, `emergencyWithdraw` (→ vault only), `emergencyExcludeAdapter` (exclude-only), `forceRemoveAdapter`, `recoverRemovedAdapter` (→ exclusion record only) | emergency (hot key, `EMERGENCY_ROLE`) |
+| `unpauseDeposits`, `restoreVault`, `retire`, `reactivate`, `setFeeRecipient`, adapter add/allowlist/caps, restoring an excluded adapter, quarantine set + recover | governance (multisig + timelock) |
 | `redeem` / move depositor principal | depositor only |
 
 **No assisted migration.** At no point does the protocol move a
@@ -598,8 +632,8 @@ line of this lifecycle authorises forced or admin-driven migration.
 
 ### 4.8 Investment Committee Policy Contract
 
-The IC policy contract is a **signalling-only registry** — a sixth
-protocol contract alongside the five in §4.5 — separate from
+The IC policy contract is a **signalling-only registry** — one of the
+ten timelock-governed protocol contracts in §4.5 — separate from
 `RouterGovernance` (see the boundary in §2.4).
 
 **State.** Metadata only — no USDC, share tokens, or basket assets. Two
@@ -621,8 +655,8 @@ treasury-moving role on another contract. Its only outputs are storage
 writes and events. This is the on-chain expression of `docs/prd.md` §12
 INV-4 and is mandatory (§8).
 
-**Roles and authority.** Follow the conventions the five protocol
-contracts already use: OpenZeppelin `AccessControl` with a self-administered
+**Roles and authority.** Follow the conventions the other protocol
+contracts in §4.5 use: OpenZeppelin `AccessControl` with a self-administered
 `ADMIN_ROLE`, the last-admin floor (`AdminFloorAccessControl`, so the sole
 admin cannot be removed), and role separation (an address that allowlists
 agents must not also be a committee agent). `ADMIN_ROLE` is held by the
@@ -652,12 +686,12 @@ per-agent track record (§5.4) — never reading `rmpc` output.
 **Governance linkage.** Committee output feeds RouterGovernance as an
 upstream signal only, with **no on-chain coupling**: the IC contract never
 calls and is never called by RouterGovernance, which stays the sole
-`setWeights` caller (§2.4). An admin (via timelock) reads the committee's
-tilts — aggregated off-chain over the hash-verified memos — and proposes
-router weights through RouterGovernance's existing path, informed by but
-not driven by committee output. Because the link is off-chain and
-admin-applied, RouterGovernance is unchanged and no governance-interface
-refactor is required.
+`setWeights` caller (§2.4). The committee's tilts, aggregated off-chain over
+the hash-verified memos, become the weight vector of a consensus receipt
+(§4.9). The Safe, through the timelock, applies a receipt it chooses with
+`RouterGovernance.applyReceipt`, which releases the receipt and sets its
+weights in one call (§2.3). Weights are informed by committee output but
+never driven by it: a receipt the Safe does not schedule changes nothing.
 
 ### 4.9 Consensus Recommendation Receipt Contract
 
@@ -862,7 +896,8 @@ state; explorer indexer for history and aggregated fee data.
 Both scopes are read-only and require no signing. The account scope
 requires only an address, not a signature — a watched address is
 sufficient. Signing is required only for writes (deposits, withdrawals,
-policy management, governance votes).
+policy management, committee tilts and receipts). Governance writes are
+Safe-signed timelock operations, never client writes.
 
 Safety-critical values used for signing (fee bounds, cap headroom,
 policy state, allowances, code hash) must always come from live chain
@@ -908,9 +943,9 @@ if a future ADR adds that path.
 - `get-router` — Portfolio Router: active vault addresses, current
   weight bps per vault, pending timelock weight operation if any, and
   router cap.
-- `get-governance` — governance state: the last applied weights and the
-  constructor parameters of today's `RouterGovernance` bytecode (unused;
-  there are no proposals, because nobody holds a voter key).
+- `get-governance` — governance state: the router weights the weight
+  setter last applied and the receipt register it applies receipts from.
+  There is no proposal or voter state to read (issue 1698).
 
 **Account-scope reads** (address argument required):
 
@@ -929,17 +964,18 @@ protocol reads from a read-only deployment without any key material.
 
 **Committee commands.** `rmpc` exposes committee write subcommands that
 follow the same write-command path as `deposit`
-and `vote` (issue #632): load config → enforce the
-production-signer gate (software keystores rejected on Base mainnet;
-HSM/KMS required for committee operators; depositor writes `deposit`,
-`withdraw` and `withdraw-router` are exempt, see issue #1545) → build known calldata for the configured IC contract →
+(issue #632): load config → print the production warning on Base mainnet
+(a software keystore signs on every chain; a hardware wallet, HSM or KMS is
+optional, never required, owner decision 2026-10-14, QA plan Decision D12)
+→ build known calldata for the configured IC contract →
 sign the EIP-1559 envelope through the `AgentSigner` backend → route the
 call through `RobotMoneyGateway` → broadcast → decode the event → emit a
 stable JSON envelope.
 
-- There is no `committee register` and no `propose`: both are governance
-  calls, and rmpc is not a governance signer (issue #1447, workstream K).
-  Agent registration is an `ADMIN_ROLE` Safe action.
+- There is no `committee register` and no governance write or draft
+  command: agent registration and receipt application are Safe actions
+  through the timelock, and rmpc is not a governance signer (issue #1447,
+  workstream K; issue 1698).
 - `committee vote-submit` — submit a signed per-vault tilt (stance,
   `target_weight_bps`, `confidence`, `rationale_uri`, `prompt_hash`,
   `inputs_digest`).
@@ -1093,7 +1129,11 @@ explorer API plus live chain reads for vault state. It contains:
   get back?": it shows the receipt token plus the underlying basket
   assets — live `shortlist()` entries for VOLATILE and active-SPECULATIVE
   basket vaults, and static labels for STABLE_YIELD and inactive
-  SPECULATIVE vaults.
+  SPECULATIVE vaults. An Upgrades section (`UpgradeStatePanel`, ADR-0014,
+  QA plan P3) discloses whether the vault is a direct deployment or a
+  proxy, and for a proxy the live ERC-1967 implementation, its code hash,
+  the upgrade authority (the timelock) and whether it is upgradeable or
+  frozen. It reads these from the chain, never from the explorer.
 - Portfolio Router view: active vaults, current target weights, pending
   timelock weight operation (if any), and historical weight changes.
 - Protocol stats: total TVL across all active vaults, number of unique
@@ -1111,8 +1151,8 @@ for read-only portfolio inspection (watched address mode).
   composite portfolio total. Positions from direct vault deposits and
   Portfolio Router deposits are both shown, broken down by vault.
 - Transaction history: chronological list of deposits, withdrawals, fee
-  events, and governance votes for the address, sourced from the
-  explorer indexer.
+  events, and policy changes for the address, sourced from the explorer
+  indexer.
 - Agent policies: all active agent policies the address owns — each
   showing allowed destinations, max per payment, max per window, window
   usage, share receiver, asset recipient, and expiry.
@@ -1131,8 +1171,8 @@ render a preview before invoking the wallet.
 - Agent policy management: authorize a new agent, update or revoke an
   existing policy, and export the resulting `rmpc` config file.
 - Governance: view the pending timelock weight operation, the applied
-  consensus receipts, and execution state. The proposal surfaces render
-  nothing on mainnet because there are no proposals.
+  consensus receipts, and execution state. There is no proposal or vote
+  surface, because there is no voting (§2.3).
 
 Credential boundary:
 
@@ -1192,9 +1232,12 @@ to the live address. No test needs to hold RM. `RouterGovernance` reads no RM
 balance: router weights are applied by the weight setter through the
 timelock, and nothing in governance reads a token balance. rmAGENT
 launches paused and holding RM: `config/agent-token-shortlist.json` lists RM
-only, on the owner-funded Uniswap V3 RM/USDC pool at fee 10000. The owner
-funds the pool and raises its observation cardinality before the deploy,
-because `BasketVault.addAsset` refuses a pool below those floors (core 1554).
+only, on the Uniswap V4 RM/USDC pool with fee 2.91% (§4.1; owner decision
+2026-10-08, which replaced the V3 RM/USDC pool at fee 10000 because that
+pool has no in-range liquidity). rmAGENT registers `UniswapV4PriceRecorder`
+as RM's pool, and `BasketVault.addAsset` refuses it below the observation
+floors (core 1554), so the deploy waits for a full TWAP window of recorded
+history before the `agent` stage (core 1676).
 
 ### 5.4 Explorer Indexer and API
 
@@ -1231,7 +1274,8 @@ integrators who need activity feeds without running their own indexer.
   for a given address, derived from indexed transfer events and current
   share price.
 - Account history: chronological event log for the address — deposits,
-  withdrawals, fee events, policy changes, and governance votes.
+  withdrawals, fee events, and policy changes. There is no governance-vote
+  kind, because there is no voting (§2.3).
 - Account agent policies: all gateway policy states for policies owned
   by the address, including window usage history.
 
@@ -1244,13 +1288,31 @@ same reorg-rewrite handling. Because the structured tilt is off-chain
 the memo at `rationale_uri`, verifies `keccak256(memo) == vote_digest`, and
 stores the per-vault tilts only when the hash matches — a memo that is
 missing or fails the digest check is recorded as an unverified commitment,
-never as tilt data. The per-vault tilt aggregate counts one signal per
+never as tilt data. The memo fetch shares the tick's 30 s inline fetch budget
+with the receipt payload fetches; a vote past it is stored unfetched. A
+budgeted sweep re-fetches unverified votes, newest first and at most 12 times
+each, and a vote counts from the tick it verifies (security round 3,
+migration 0029). The per-vault tilt aggregate counts one signal per
 member: each active member's latest vote on the vault in chain order, only if
 that vote verified, only if it was cast after the member's latest
 registration, and only if it sits within the freshness window (7 days of
 blocks) of the indexed block. A flood of votes from one member moves the
 aggregate by one vote. The indexer's regime snapshots and the API's tilt read
 share this one query (`explorer_indexer::db::committee_tilts`, issue 1790).
+The indexer stores a new regime snapshot whenever that aggregate changes:
+after every `VoteSubmitted` (verified or not), `AgentRegistered` and
+`AgentRevoked`, and once per tick at the tick's last block, which is how a
+signal that ages out of the freshness window drops out with no event to
+announce it. A vault where no member counts any more gets a zero-count
+snapshot, and the regime feed leaves that vault out as the tilt read does,
+so the two reads agree at the indexed block (QA plan v1, task X3).
+Votes are keyed by `(chain_id, contract_address, vote_id)` (migration
+0020), because `voteId` is an index into one policy deployment's votes and a
+redeployed policy reuses every id. A vote from a member whose
+`AgentRegistered` lies below the indexed range gets a placeholder member row
+(`active = false`, empty `agent_id`), so the vote is stored, tilts nothing,
+and never stops the tick; an indexed registration later replaces the
+placeholder (QA plan v1, task X4).
 The API then exposes protocol-scope committee reads
 (registered agents, recent votes across all agents, per-vault tilt
 aggregate, per-agent track record) and an account-scope read (the votes
@@ -1371,6 +1433,19 @@ and discovering that mid-incident is worse than at boot. The committed
 Because the exit costs alerting too, it must be caught by the liveness
 mechanism below; it is (issue #1378).
 
+**Standing weight-setter-path check (issue 1698).** When `[governance]
+enabled = true`, each poll reads three role sets with `eth_call` and pages
+`weight_setter_path_drift:<chain>` when any differs from the config: the
+router's `WEIGHT_SETTER_ROLE` must be held only by `weight_setter_address`
+(`RouterGovernance`), and the weight setter's own `WEIGHT_SETTER_ROLE` (the
+only role that may call `applyReceipt`) and `ADMIN_ROLE` only by
+`timelock_address`. Another holder could change router weights without a
+consensus receipt or without the timelock delay. The stage 12 verifier checks
+the same sets once at deploy; this check catches a grant executed later. It
+resolves when all three sets match again, and it never pauses. It replaced the
+quorum-floor check, whose view issue 1698 deleted. Verified by
+`services/watchdog/tests/governance_weight_setter_rpc.rs`.
+
 #### Watchdog liveness and deployment
 
 In a calm market the watchdog's healthy output is *no output at all*, which is
@@ -1379,7 +1454,19 @@ apart is the heartbeat `watchdog_cursor.updated_at`: the daemon refreshes it
 after every successful poll, both when it advances the cursor past an evaluated
 block and when a poll finds no newly indexed block (`touch_cursor`, which never
 moves the cursor). A stopped, hung, crash-looping, or startup-failed watchdog
-stops refreshing it.
+stops refreshing it. A poll with no new block refreshes it only while the
+explorer indexer is within its `[indexer_lag]` budget (head-minus-cursor lag and
+time since its last good run); behind a wedged or stopped indexer the watchdog
+pages `indexer_behind:<chain>` and lets the heartbeat age (QA plan X5, DI-5).
+Advancing the cursor refreshes it only while the cursor is within
+`[indexer_lag] max_cursor_lag_blocks` (default 150) of the indexed head, so a
+watchdog that evaluates blocks slower than the chain makes them reads `stale`
+instead of live (security round 2). A
+breach alert the webhook does not accept holds the cursor on its block until a
+later poll delivers it (DI-7). Each such poll also sends the block's pause
+again unless the gateway's `depositsPaused()` already reads true: a submitted
+pause can sit under-priced in the mempool, and while the cursor is held no later
+block sends its fee-bumped replacement (security round 1).
 
 `watchdog-liveness` is the read-only checker, built by the same
 `cargo build -p watchdog` as the daemon (`src/bin/watchdog-liveness.rs`). It
@@ -1634,10 +1721,16 @@ canonicalization or signature failure refuses submission; an unreachable URI or
 digest mismatch remains visible as an unverified indexed record; and an
 unreleased or stale receipt is non-actionable.
 
-## 8. Security Constraints
+## 8. Guardrails (Security Constraints)
 
 These constraints are mandatory for implementation plans derived from
-this architecture:
+this architecture. Each is a checkable claim: an invariant must always
+hold, and a negative invariant must never happen. This section summarises
+`docs/technical/security-model.md`, which is canonical for the attack
+taxonomy and the required control for each attack. The section number
+stays §8 because other documents cite it by number.
+
+### Invariants
 
 - Users and agents must call vaults or the Portfolio Router, not
   adapters or raw underlying venues.
@@ -1647,14 +1740,10 @@ this architecture:
   asset to a caller-supplied recipient (INV-1, the arbitrary-recipient
   `rescueTokens`/`rescueUsdc` functions are deleted); every protocol or
   depositor asset is redeemable or absorbed into NAV, with non-whitelisted
-  foreign tokens getting a permissionless `sweepForeignToken` to a single
-  hardcoded quarantine address (INV-2); and the fee recipient, fee
-  parameters, and quarantine address change only through the
+  foreign tokens getting a permissionless `sweepForeignToken` to a
+  quarantine address no caller chooses (INV-2); and the fee recipient, fee
+  parameters, and the governed quarantine address change only through the
   `TimelockController` (INV-3).
-- The permissionless `sweepForeignToken` must move only NON-protected
-  tokens (never USDC, the share token, a basket asset, or a protected
-  receipt token) and only to the fixed `ForeignTokenQuarantine.QUARANTINE`
-  address — never a caller-supplied recipient.
 - Vaults and router legs must enforce caps before accepting deposits.
 - Any router leg with slippage, oracle, liquidity, or quote-freshness
   risk must surface bounds before signing.
@@ -1665,12 +1754,21 @@ this architecture:
   assets out, and policy-configured recipient before signing and before
   execution.
 - `rmpc` must verify chain id, configured addresses, code hash, role,
-  policy, cap usage, allowance, balance, and fee caps before signing.
+  policy, cap usage, allowance, balance, and fee caps before signing. For a
+  proxied gateway the code hash check covers the live implementation too:
+  its code hash must be in `gateway_implementation_hashes`, read at one block
+  (`ErrImplementationNotApproved`, ADR-0014, QA plan P3). Every gateway write
+  runs it, the committee `vote-submit` and `receipt submit` included. The
+  vault a deposit lands in or a withdraw redeems from, the router and every
+  router leg are checked the same way against `proxy_implementation_hashes`
+  (issue 1810).
 - The dapp must decode transaction effects before wallet invocation.
-- Explorer data must not be used as the source of truth for signing or
-  safety decisions.
-- Software-backed credentials are development or low-value fallbacks and
-  must be explicit in config and UI.
+- Software-backed credentials must be explicit in config and UI: `rmpc`
+  signs with its software keystore only when
+  `[signer].allow_software_fallback` is true (else
+  `ErrSoftwareSignerDisallowed`), and prints the production warning first
+  on Base mainnet. A hardware wallet, HSM or KMS is optional, never
+  required (§10 "Production signer vendor").
 - `ADMIN_ROLE` on all protocol contracts must be held by the deployed
   `TimelockController` in production; no EOA may hold `ADMIN_ROLE`
   directly. All high-risk admin operations must pass through the
@@ -1685,6 +1783,18 @@ this architecture:
   release must record and verify its freeze choice. Adapter no-proxy and
   codehash checks continue to apply. See ADR-0014 and the contract
   upgradeability plan.
+
+### Negative Invariants
+
+- The permissionless `sweepForeignToken` never moves a protected token
+  (USDC, the share token, a basket asset, or a protected receipt token)
+  and never sends to a caller-supplied recipient. Its destination is the
+  timelock-governed `quarantineAddress` on `RobotMoneyVault` and
+  `PortfolioRouter` (the vault's `ExclusionLedger` reads the vault's), and
+  the fixed `ForeignTokenQuarantine.QUARANTINE` address on the basket
+  vaults and the adapters.
+- Explorer data must not be used as the source of truth for signing or
+  safety decisions.
 - The IC policy contract (§4.8) is signalling-only (custody invariant
   INV-4, `docs/prd.md` §12): it must hold no asset, expose no payable
   path, never call a vault or `PortfolioRouter.setWeights`, and grant no
@@ -1705,7 +1815,7 @@ this architecture:
 | Compound V3 Comet | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
 | Postgres | Explorer database | Accepted for every environment that runs the indexer. | `docs/technical/explorer-schema-decisions.md` §3.1 |
 | JSON-RPC providers | Chain data transport | Required; specific production provider is not selected. | `docs/technical/explorer-schema-decisions.md` §3.5 |
-| HSM / Secure Enclave / TPM / KMS | Production signer class | Preferred signer classes; exact vendor not selected. | Plan tracking issue #109 §0 (git history) |
+| HSM / Secure Enclave / TPM / KMS | Production signer class | Optional signer classes, never required: a software keystore signs on every chain (owner decisions 2026-10-06 and 2026-10-14). Exact vendor not selected. | §10 "Production signer vendor"; closed Plan issue #109 §0 (git history) |
 | GitHub Actions | CI/CD | Existing documented CI environment. | `docs/development/ci-suites.md` |
 | Committee memo store | Off-chain rationale store | Host-agnostic by design: the IC contract stores any public `rationale_uri` and binds it with an on-chain `vote_digest` (§4.8, §7.4), so a GitHub gist, IPFS, or any reachable URL is acceptable — tamper-evidence comes from the hash, not the host. | `docs/prd.md` §"Committee"; proposal doc §4 |
 
@@ -1713,15 +1823,15 @@ this architecture:
 
 | Decision | Tradeoff | Recommended default |
 | --- | --- | --- |
-| Portfolio Router contract design | Resolved: `contracts/PortfolioRouter.sol` is shipped. Execution model is all-or-revert; contract API, preview call signatures, cap enforcement across legs, and weight-execution path are all implemented. `VaultRegistry.isRouterEligible` expresses production readiness as registry state (see §4.2). The router is not yet on the production mainnet deployment manifest; mainnet onboarding remains planned work on the Plan tracking issue (#109). | — |
+| Portfolio Router contract design | Resolved: `contracts/PortfolioRouter.sol` is shipped. Execution model is all-or-revert; contract API, preview call signatures, cap enforcement across legs, and weight-execution path are all implemented. `VaultRegistry.isRouterEligible` expresses production readiness as registry state (see §4.2). The `router` stage deploys it on every chain and Deploy 2 on Base 8453 recorded it in `router.json` (§4.2). | — |
 | Vault registry contract | Resolved: `contracts/VaultRegistry.sol` is shipped with stable read methods and event history, indexed by the explorer. Router eligibility is expressed as `setRouterEligible(vault, eligible)` on the registry. | — |
 | Router-weight governance implementation | Resolved: `contracts/RouterGovernance.sol` holds `WEIGHT_SETTER_ROLE` on the Portfolio Router and the timelock holds `ADMIN_ROLE` on it, so the Safe, through the timelock, is the only body that changes router weights. A weight change is one timelock call, `RouterGovernance.applyReceipt`, that releases the Investment Committee's consensus receipt and applies its vector (govern row `apply-receipt`, core 1696). `contracts/script/DeployRouterGovernance.s.sol` grants the deployed `RouterGovernance` the router roles it needs to reach `setWeights` and `setDefaultWeights`, and the receipt register's `ADMIN_ROLE` it needs to release a receipt. `RouterGovernance` has no voting function (issue 1698). There is no voting by token holders or anyone else. | The Safe through the timelock is the only governance body. |
 | Protocol-asset and agent-token vault execution | Resolved (contracts shipped): `contracts/vaults/ProtocolAssetVault.sol` (wETH/cbBTC at launch; wSOL has no usable pool) and `contracts/vaults/AgentTokenVault.sol` (admin-curated agent-economy tokens) are in the source tree. Router eligibility for each vault remains ADMIN_ROLE-gated via `VaultRegistry.setRouterEligible`: both vaults stay ineligible by default until pool cardinality, per-asset TWAP windows, and the intra-vault rebalancing model are certified (see `docs/development/open-questions.md` §3.15). | Flip `isRouterEligible` only after TWAP windows, pool cardinality, and the rebalancing model are certified per §4.1. |
 | Management fee and swap-fee-share mechanism | Resolved: deferred to a future phase. Current phase ships exit-fee-only disclosure. | Require a separate ADR and contract design before management fee or swap-fee-share are implemented. |
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |
-| On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All five protocol contracts must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all five contracts to it; configure the stage 0 SafeL2 (threshold ≥ 2) as proposer and canceller; executor open (`address(0)`; not yet implemented: core #1521). See §4.5 and issue #414. |
+| On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All ten protocol contracts of §4.5 (four vaults and six singletons) must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all ten contracts to it (stage 11); configure the stage 0 SafeL2 (threshold ≥ 2) as proposer and canceller; executor open (`address(0)`, core #1521). See §4.5 and issue #414. |
 | Production JSON-RPC provider | Resolved: automatic failover shipped in issue #667 through the ordered `rpc_urls` array in `clients/rust-payment-client/src/config.rs` and endpoint rotation in `clients/rust-payment-client/src/rpc/mod.rs`. Safety-critical reads depend on provider correctness and availability; cross-provider consensus checking remains a separate, deferred decision. | Configure the ordered `rpc_urls` list so `rmpc` rotates to the next endpoint on transport failure. Multi-RPC consensus comparison for high-value reads stays deferred until a specific risk justifies it. |
-| Production signer vendor | Architecture requires a production-grade HSM/KMS/device-bound signer for Base mainnet committee-operator writes, but no vendor is chosen. | Keep signer backend trait stable. Depositor writes (`deposit`, `withdraw`, `withdraw-router`) may sign with the software keystore on Base mainnet and print the production warning first (owner decision 2026-10-06, issue #1545); HSM/KMS stays optional for them. `committee`, `propose`, `receipt` and `vote` keep refusing software-keystore signing on Base mainnet until a production operator picks HSM/KMS. |
+| Production signer vendor | No HSM/KMS/device-bound signer vendor is chosen, and none is required: every rmpc write, `committee` and `receipt` included, signs with the software keystore on every chain and prints the production warning first on Base mainnet (owner decisions 2026-10-06, issue #1545, and 2026-10-14, QA plan Decision D12). | Keep the signer backend trait stable so an operator who picks HSM/KMS can add it. Hardware stays optional, never required. |
 | Dapp hosting and CSP | Resolved: strict CSP shipped in PR #735 via `clients/dapp/src/lib/csp.ts` Vite plugin and `clients/dapp/scripts/check-csp.sh` CI check. | Maintain strict CSP policy; enforce via CI `check-csp.sh`; require static hosting with pinned dependencies and release provenance before public mainnet use. |
 | Email/notification provider | No product or technical doc selects one. | Leave out until a concrete notification workflow is specified. |
 
@@ -1741,4 +1851,4 @@ this architecture:
 | `docs/technical/dapp-browser-keygen-review.md` | Fork/devnet-only browser keygen gate and no-go conditions. | Mainnet production credential generation. |
 | `docs/technical/mcp-decision.md` | MCP is **not supported** in Robot Money (org-wide decision, 2026-07); agent harnesses invoke `rmpc` as process-per-call. | — (decision closed, not deferred; no MCP implementation). |
 | `docs/development/testing-strategy-ethereum.md` and the testing docs under `docs/development/` (ci-suites, smoke-test-design, suite-05-audit, headless-opencode-tests) | Devnet, fork, smoke, CI, and dapp test boundaries. | Product behavior and vendor selection beyond tests. |
-| Plan tracking issue #109 (GitHub) | Shipped component status and phase sequencing used as implementation context only. Delivery order is intentionally not reproduced here; the live plan is the canonical source. | Implementation-plan file references; those were retired 2026-06-09. |
+| GitHub Phase issues (label `phase-plan`) under the release tracking issue (core 1418) | Shipped component status and phase sequencing used as implementation context only. Delivery order is intentionally not reproduced here; the open Phase issues are the canonical source. The old Plan issue (#109) closed on 2026-08-26. | Implementation-plan file references; those were retired 2026-06-09. |

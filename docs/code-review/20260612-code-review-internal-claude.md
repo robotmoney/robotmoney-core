@@ -248,7 +248,7 @@ The original GIZA scenario came from `config/dex-pools.json`, but the active `co
 **File:** `contracts/adapters/MorphoAdapter.sol:62-78`; `contracts/interfaces/IStrategyAdapter.sol:13` · **Status:** Open (latent — current vault never passes max). Translate max to `redeem(balanceOf(...))`.
 
 ### SR-L12 — 1-wei donation permanently blocks `removeAsset` (griefing)
-**File:** `contracts/vaults/BasketVault.sol:744-749` · **Status:** Open. After an unwind, anyone donates 1 wei of the token; `removeAsset` reverts `AssetStillHeld` forever and the only clearance path is a full-pause emergency unwind (SR-M18). Allow removal below a dust threshold or sweep residual via the swap path.
+**File:** `contracts/vaults/BasketVault.sol:744-749` · **Status:** Fixed on `qa/test-merge-v1` (QA plan v1 D6): a balance whose TWAP sale floor rounds to zero USDC units is dust; `removeAsset` accepts it, and `redeem`, `emergencyUnwind` and the USDC sell anchor skip it (`BasketVaultV4Venue.t.sol::test_V4_dustDonationDoesNotBlockRemoveAssetOrUnwind`). After an unwind, anyone donates 1 wei of the token; `removeAsset` reverts `AssetStillHeld` forever and the only clearance path is a full-pause emergency unwind (SR-M18). Allow removal below a dust threshold or sweep residual via the swap path.
 
 ### SR-L13 — `redeemFor` has no slippage / minimum-assets-out protection
 **File:** `contracts/PortfolioRouter.sol:470-503` · **Status:** Open. Add `minAssetsPerLeg[]` or aggregate `minTotalAssets`.

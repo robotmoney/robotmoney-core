@@ -1,17 +1,26 @@
 // Floors: the plaintext refusal on a non-loopback RPC is a CLI behavior,
 // and core's stage signer string passes where it should. (devops 65)
 import { describe, expect, test } from "bun:test";
+import { ACTIONS_TOKEN_ENV, ACTIONS_URL_ENV, type ActionsProof } from "../src/actions-proof.ts";
+import { ownerSignerShortfall } from "../src/cli.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
 import { assertFloors, assertOwnerSignerSpec, passphraseFileReason, plaintextKeyReason, plaintextSignerReason } from "../src/floors.ts";
+import { publishLogger } from "../src/log.ts";
+import { confirmStage, type RunContext } from "../src/runner.ts";
 import { callerInputs, parseSheet } from "../src/sheet.ts";
 import { sheetText } from "./fixtures.ts";
-import { world } from "./harness.ts";
+import { PROVE_OWNERS, PROVE_SIGNERS, world } from "./harness.ts";
 
 const GOOD = { TIMELOCK_MIN_DELAY: "172800", GOVERN_NEW_DELAY: "172800" };
 const sheetFor = (chain: number, extra: Record<string, string | null> = {}) => parseSheet(sheetText({ CHAIN_ID: String(chain), EXPECTED_CHAIN_ID: String(chain), ...extra }));
 const input = (chain: number, o: Record<string, unknown> = {}) =>
   ({ rpcChainId: chain, rpc: "https://mainnet.base.org", sheet: sheetFor(chain, chain === 8453 ? GOOD : {}), caller: callerInputs({}), signerSpec: "keystore:/dev/shm/k/DEPLOYER", env: {}, environment: "mainnet", githubActions: false, ...o }) as Parameters<typeof assertFloors>[0];
 const refusal = (f: () => void): string | undefined => { try { f(); } catch (e) { return (e as PublishError).kind + ": " + (e as Error).message; } return undefined; };
+const quiet = async (f: () => Promise<number>) => { const l = console.log; console.log = () => {}; try { return await f(); } finally { console.log = l; } };
+/** `--owner-signer keystore:/k/OWNER_0 ...`: n software owners, the digit at the end indexes PROVE_SIGNERS in the tests that build them. */
+const ownerArgs = (n: number) => Array.from({ length: n }, (_, i) => ["--owner-signer", `keystore:/k/OWNER_${i}`]).flat();
+const forgeCalls = (w: ReturnType<typeof world>) => w.state().calls.filter((c: { tool: string }) => c.tool === "forge").length;
+const lastFailure = (w: ReturnType<typeof world>) => String(w.logs().filter((l) => l.event === "run.failed").pop()?.message ?? "");
 
 describe("plaintext refusal on a non-loopback RPC (any chain)", () => {
   const forms = ["--private-key 0x01", "plaintext:KEY", "0x" + "11".repeat(32)];
@@ -78,5 +87,238 @@ describe("Safe owner signers: hardware is optional on every chain (core 1668)", 
   });
   test("software owners stay allowed on the Twin chain", () => {
     for (const spec of ["keystore:/k/OWNER", "keystore:/k/OWNER:/k/pw", "env:signer", "ledger"]) expect(owner(spec, 918453, "https://twin.example")).toBeUndefined();
+  });
+});
+
+describe("8453 refuses a short --owner-signer list before stage 1 (qa-plan B1)", () => {
+  const sheet = { safeOwners: [`0x${"a1".repeat(20)}`, `0x${"a2".repeat(20)}`, `0x${"a3".repeat(20)}`] as `0x${string}`[] };
+  const two = ["keystore:/k/A", "keystore:/k/B"];
+  const three = [...two, `ledger:m/44'/60'/0'/0/0@${sheet.safeOwners[2]}`];
+  const kind = (e: PublishError | undefined) => e?.kind;
+  test("ownerSignerShortfall: publish, the default stage set, deploy, all and a list naming prove-control need every sheet owner", () => {
+    expect(kind(ownerSignerShortfall({ chainId: 8453, verb: "publish", dryRun: false, specs: two, sheet }))).toBe("CONTROL_NOT_PROVEN");
+    expect(kind(ownerSignerShortfall({ chainId: 8453, dryRun: false, specs: [], sheet }))).toBe("CONTROL_NOT_PROVEN");
+    for (const stage of ["deploy", "all", "safe,prove-control,timelock"]) expect(kind(ownerSignerShortfall({ chainId: 8453, stage, dryRun: false, specs: two, sheet })), stage).toBe("CONTROL_NOT_PROVEN");
+    expect(ownerSignerShortfall({ chainId: 8453, verb: "publish", dryRun: false, specs: three, sheet })).toBeUndefined();
+    const e = ownerSignerShortfall({ chainId: 8453, verb: "publish", dryRun: false, specs: two, sheet })!;
+    expect(e.message).toContain("before stage 1");
+    expect(e.details).toMatchObject({ have: 2, need: 3, stage: "prove-control" });
+    expect(e.exitCode).toBe(EXIT_CODES.CONTROL_NOT_PROVEN);
+  });
+  test("ownerSignerShortfall: exempt are the Twin chain, a dry run, the plan, verify, govern, pause-all, record-receipt, redeploy-vault and a stage list without prove-control", () => {
+    expect(ownerSignerShortfall({ chainId: 918453, verb: "publish", dryRun: false, specs: [], sheet })).toBeUndefined();
+    expect(ownerSignerShortfall({ chainId: 8453, verb: "publish", dryRun: true, specs: [], sheet })).toBeUndefined();
+    expect(ownerSignerShortfall({ chainId: 8453, stage: "plan", dryRun: false, specs: [], sheet })).toBeUndefined();
+    for (const verb of ["verify", "govern", "pause-all", "record-receipt", "redeploy-vault"] as const) expect(ownerSignerShortfall({ chainId: 8453, verb, dryRun: false, specs: [], sheet }), verb).toBeUndefined();
+    expect(ownerSignerShortfall({ chainId: 8453, stage: "libs,vault", dryRun: false, specs: [], sheet })).toBeUndefined();
+  });
+  test("main(): two owner specs for a three-owner sheet exit CONTROL_NOT_PROVEN before stage 1: no signer, no forge call, no Safe, no checks_ok", async () => {
+    const w = world({ chainId: 8453 });
+    let signerMade = false;
+    const code = await quiet(() => w.run(["publish", "--environment", "base-mainnet", ...ownerArgs(2)], { makeSigner: () => { signerMade = true; throw new Error("no signer"); } }));
+    expect(code).toBe(EXIT_CODES.CONTROL_NOT_PROVEN);
+    expect(signerMade).toBe(false);
+    expect(forgeCalls(w)).toBe(0);
+    expect(w.safeCalls).toEqual([]);
+    expect(lastFailure(w)).toContain("before stage 1");
+    expect(w.logs().some((l) => l.event === "run.checks_ok")).toBe(false);
+  });
+  test("main(): no owner spec at all on 8453 is the same refusal (the Twin default never applies there)", async () => {
+    const w = world({ chainId: 8453 });
+    const code = await quiet(() => w.run(["publish", "--environment", "base-mainnet"], { makeSigner: () => { throw new Error("no signer"); } }));
+    expect(code).toBe(EXIT_CODES.CONTROL_NOT_PROVEN);
+    expect(forgeCalls(w)).toBe(0);
+    expect(lastFailure(w)).toContain("0 --owner-signer specs for a Safe of 3 owners");
+  });
+  // Security round 1: the count alone let the same owner twice, or a stale non-owner device, through to stage 11 after stages 1-10 had broadcast.
+  test("ownerSignerShortfall: the same spec twice, two specs that claim one owner, or a claim outside SAFE_OWNERS is refused; an unreadable claim is left to prove-control", () => {
+    const [o0, , o2] = sheet.safeOwners;
+    const hw = (i: number, owner: string) => `ledger:m/44'/60'/0'/0/${i}@${owner}`;
+    const refused = (specs: string[], claimOf?: (s: string) => string | undefined) => ownerSignerShortfall({ chainId: 8453, verb: "publish", dryRun: false, specs, sheet, claimOf });
+    expect(refused(["keystore:/k/A", "keystore:/k/A", "keystore:/k/C"])?.message).toContain("is given twice");
+    expect(refused([hw(0, o0!), hw(1, o0!), hw(2, o2!)])?.message).toContain(`both name the owner ${o0}`);
+    expect(refused([hw(0, o0!), hw(1, `0x${"bb".repeat(20)}`), hw(2, o2!)])?.message).toContain("is not one of the sheet's SAFE_OWNERS");
+    for (const e of [refused(["keystore:/k/A", "keystore:/k/A", "keystore:/k/C"]), refused([hw(0, o0!), hw(1, o0!), hw(2, o2!)])]) {
+      expect(e?.kind).toBe("CONTROL_NOT_PROVEN");
+      expect(e?.message).toContain("before stage 1");
+    }
+    // a keystore's unencrypted address is a claim too
+    const ks: Record<string, string> = { "keystore:/k/A": o0!, "keystore:/k/B": o0!, "keystore:/k/C": o2! };
+    expect(refused(Object.keys(ks), (s) => ks[s])?.message).toContain("both name the owner");
+    // mutation: three distinct owners pass, and so does a spec whose claim cannot be read before the passphrase
+    expect(refused([hw(0, sheet.safeOwners[0]!), hw(1, sheet.safeOwners[1]!), hw(2, o2!)])).toBeUndefined();
+    expect(refused(["keystore:/k/A", hw(1, sheet.safeOwners[1]!), hw(2, o2!)], () => undefined)).toBeUndefined();
+  });
+  test("main(): an 8453 publish whose specs name one owner twice, or a non-owner, exits CONTROL_NOT_PROVEN before any signer or forge call", async () => {
+    for (const second of [PROVE_OWNERS[0]!, `0x${"bb".repeat(20)}`]) {
+      const w = world({ chainId: 8453 });
+      let signerMade = false;
+      const specs = [PROVE_OWNERS[0]!, second, PROVE_OWNERS[2]!].flatMap((o, i) => ["--owner-signer", `ledger:m/44'/60'/0'/0/${i}@${o}`]);
+      const code = await quiet(() => w.run(["publish", "--environment", "base-mainnet", ...specs], { makeSigner: () => { signerMade = true; throw new Error("no signer"); } }));
+      expect([second, code]).toEqual([second, EXIT_CODES.CONTROL_NOT_PROVEN]);
+      expect(signerMade).toBe(false);
+      expect(forgeCalls(w)).toBe(0);
+      expect(w.safeCalls).toEqual([]);
+      expect(lastFailure(w)).toContain("before stage 1");
+    }
+  });
+  test("main(): three owner specs pass the pre-stage-1 check (the run reaches run.checks_ok and no refusal names stage 1)", async () => {
+    const w = world({ chainId: 8453 });
+    await quiet(() => w.run(["publish", "--environment", "base-mainnet", ...ownerArgs(3)], { ownerSigner: async (s: string) => PROVE_SIGNERS[Number(s.slice(-1))]! }));
+    expect(w.logs().some((l) => l.event === "run.checks_ok")).toBe(true);
+    expect(lastFailure(w)).not.toContain("before stage 1");
+  });
+});
+
+// qa-plan B2 (DT-3): CONFIRM=environment GITHUB_ACTIONS=true on a laptop used to skip the typed prompts on 8453. The flag is a string anyone
+// exports; the proof is the job's GitHub OIDC token, fetched and verified by the CLI (actions-proof.ts) for --environment. The floor sees the
+// proof, never the flag alone; off 8453 nothing changes.
+describe("CONFIRM=environment on 8453 needs an Actions-only proof (qa-plan B2, DT-3)", () => {
+  const c = callerInputs({ CONFIRM: "environment" });
+  const ENV = "base-mainnet";
+  const PROOF: ActionsProof = { repository: "robotmoney/release-driver", repositoryOwner: "robotmoney", environment: ENV, sub: `repo:robotmoney/release-driver:environment:${ENV}`, workflow: "publish", runId: "42" };
+  /** What the Actions runner sets for a job with id-token: write; a laptop has GITHUB_ACTIONS at most. */
+  const inActions = { GITHUB_ACTIONS: "true", [ACTIONS_TOKEN_ENV]: "runner-request-token", [ACTIONS_URL_ENV]: "https://pipelines.actions.githubusercontent.com/x/idtoken?api-version=2.0" };
+  const floors = (o: Record<string, unknown>) => refusal(() => assertFloors(input(8453, { caller: c, environment: ENV, ...o })));
+
+  test("CONFIRM=environment GITHUB_ACTIONS=true outside Actions (no id-token request token) is refused on 8453, by name", () => {
+    const r = floors({ githubActions: true, env: { GITHUB_ACTIONS: "true" } });
+    expect(r).toContain("FLOOR");
+    expect(r).toContain(ACTIONS_TOKEN_ENV);
+    expect(r).toContain("GITHUB_ACTIONS=true alone is not the proof");
+  });
+  test("without GITHUB_ACTIONS it is refused as before", () => {
+    expect(floors({ githubActions: false })).toContain("only inside GitHub Actions");
+  });
+  test("the runner's request token alone is not the proof: with no verified OIDC token it is refused", () => {
+    const r = floors({ githubActions: true, env: inActions });
+    expect(r).toContain("FLOOR");
+    expect(r).toContain("without a verified GitHub OIDC token");
+  });
+  test("--environment local or missing is refused even with a proof", () => {
+    expect(floors({ githubActions: true, env: inActions, environment: "local", actionsProof: PROOF })).toContain("--environment");
+    expect(floors({ githubActions: true, env: inActions, environment: undefined, actionsProof: PROOF })).toContain("--environment");
+  });
+  test("a verified token for another Environment is refused and the message names both", () => {
+    const r = floors({ githubActions: true, env: inActions, actionsProof: { ...PROOF, environment: "base-rehearsal" } });
+    expect(r).toContain("FLOOR");
+    expect(r).toContain("'base-rehearsal'");
+    expect(r).toContain(ENV);
+  });
+  test("a verified token for --environment passes the floor", () => {
+    expect(floors({ githubActions: true, env: inActions, actionsProof: PROOF })).toBeUndefined();
+  });
+  test("the flag, the token and the proof lift nothing else on 8453: YES=1 stays refused next to a valid proof", () => {
+    expect(floors({ caller: callerInputs({ CONFIRM: "environment", YES: "1" }), githubActions: true, env: inActions, actionsProof: PROOF })).toContain("YES=1 is refused");
+  });
+  test("off 8453 nothing changes: CONFIRM=environment is not a floor on the Twin chain", () => {
+    expect(refusal(() => assertFloors(input(918453, { caller: c, environment: ENV, githubActions: true, env: { GITHUB_ACTIONS: "true" } })))).toBeUndefined();
+    expect(refusal(() => assertFloors(input(918453, { caller: c, environment: ENV, githubActions: false })))).toBeUndefined();
+  });
+
+  test("through main(): CONFIRM=environment GITHUB_ACTIONS=true on a laptop exits FLOOR before any proof request, signer or forge call", async () => {
+    const w = world({ chainId: 8453 });
+    let signerMade = false;
+    let proofAsked = false;
+    const code = await quiet(() => w.run(["publish", "--environment", ENV, ...ownerArgs(3)], {
+      env: { CONFIRM: "environment", GITHUB_ACTIONS: "true" },
+      makeSigner: () => { signerMade = true; throw new Error("no signer"); },
+      actionsProof: async () => { proofAsked = true; return PROOF; },
+    }));
+    expect(code).toBe(EXIT_CODES.FLOOR);
+    expect(proofAsked).toBe(false);
+    expect(signerMade).toBe(false);
+    expect(forgeCalls(w)).toBe(0);
+    expect(lastFailure(w)).toContain(ACTIONS_TOKEN_ENV);
+    expect(w.logs().some((l) => l.event === "run.checks_ok")).toBe(false);
+  });
+  test("through main(): inside Actions the proof is requested once, for --environment, and a token that verifies passes the floors (run.checks_ok)", async () => {
+    const w = world({ chainId: 8453 });
+    const asked: { environment: string; hasToken: boolean }[] = [];
+    const code = await quiet(() => w.run(["publish", "--environment", ENV, ...ownerArgs(3)], {
+      env: { ...inActions, CONFIRM: "environment" },
+      ownerSigner: async (s: string) => PROVE_SIGNERS[Number(s.slice(-1))]!,
+      actionsProof: async (env, o) => { asked.push({ environment: o.environment, hasToken: env[ACTIONS_TOKEN_ENV] === inActions[ACTIONS_TOKEN_ENV] }); return PROOF; },
+    }));
+    expect(code).not.toBe(EXIT_CODES.FLOOR);
+    expect(asked).toEqual([{ environment: ENV, hasToken: true }]);
+    expect(w.logs().some((l) => l.event === "run.checks_ok")).toBe(true);
+    const proofLine = w.logs().find((l) => l.event === "run.actions_proof") as Record<string, unknown> | undefined;
+    expect(proofLine).toBeDefined();
+    expect(proofLine).toMatchObject({ repository: PROOF.repository, environment: ENV, run_id: "42" });
+    expect(JSON.stringify(proofLine)).not.toContain(inActions[ACTIONS_TOKEN_ENV]);
+  });
+  test("through main(): a token that does not verify is a FLOOR exit, never a skip, before any signer or forge call", async () => {
+    const w = world({ chainId: 8453 });
+    let signerMade = false;
+    const code = await quiet(() => w.run(["publish", "--environment", ENV, ...ownerArgs(3)], {
+      env: { ...inActions, CONFIRM: "environment" },
+      makeSigner: () => { signerMade = true; throw new Error("no signer"); },
+      actionsProof: async () => { throw new PublishError("FLOOR", "CONFIRM=environment: the OIDC token signature does not verify against GitHub's key"); },
+    }));
+    expect(code).toBe(EXIT_CODES.FLOOR);
+    expect(signerMade).toBe(false);
+    expect(forgeCalls(w)).toBe(0);
+    expect(lastFailure(w)).toContain("does not verify");
+  });
+  test("through main(): a verified token for another Environment is refused by the floor (the proof seam is not the gate, the floor is)", async () => {
+    const w = world({ chainId: 8453 });
+    const code = await quiet(() => w.run(["publish", "--environment", ENV, ...ownerArgs(3)], {
+      env: { ...inActions, CONFIRM: "environment" },
+      makeSigner: () => { throw new Error("no signer"); },
+      actionsProof: async () => ({ ...PROOF, environment: "base-rehearsal" }),
+    }));
+    expect(code).toBe(EXIT_CODES.FLOOR);
+    expect(forgeCalls(w)).toBe(0);
+    expect(lastFailure(w)).toContain("'base-rehearsal'");
+  });
+  test("through main(): on the Twin chain CONFIRM=environment never asks for a proof", async () => {
+    const w = world({ chainId: 918453 });
+    let proofAsked = false;
+    await quiet(() => w.run(["--stage", "plan", "--environment", ENV], { env: { ...inActions, CONFIRM: "environment" }, actionsProof: async () => { proofAsked = true; return PROOF; } }));
+    expect(proofAsked).toBe(false);
+  });
+
+  // The broadcast-time re-check: confirmStage runs before every stage that sends. A context built without the proof (or for another
+  // Environment) never confirms a stage on 8453, whatever the Actions flag says; off 8453 the flag stays the whole rule.
+  describe("confirmStage re-checks the proof at every broadcast on 8453", () => {
+    const ctxFor = (o: Partial<RunContext>, lines: string[] = []): RunContext =>
+      ({ chainId: 8453, environment: ENV, caller: c, githubActions: true, baseEnv: inActions, log: publishLogger((l) => lines.push(l)), ...o }) as unknown as RunContext;
+    const refused = async (ctx: RunContext): Promise<PublishError> => { try { await confirmStage(ctx, "libs", "1 tx"); } catch (e) { return e as PublishError; } throw new Error("confirmStage did not refuse"); };
+    test("no proof on 8453: FLOOR naming the stage, and nothing confirmed", async () => {
+      const lines: string[] = [];
+      const e = await refused(ctxFor({}, lines));
+      expect(e.kind).toBe("FLOOR");
+      expect(e.message).toContain("without a verified GitHub OIDC token");
+      expect(e.message).toContain("stage libs");
+      expect(lines.some((l) => l.includes("confirm.environment"))).toBe(false);
+    });
+    test("GITHUB_ACTIONS=true on a laptop (no request token) on 8453: FLOOR by name", async () => {
+      const e = await refused(ctxFor({ baseEnv: { GITHUB_ACTIONS: "true" }, actionsProof: PROOF }));
+      expect(e.kind).toBe("FLOOR");
+      expect(e.message).toContain(ACTIONS_TOKEN_ENV);
+    });
+    test("a proof for another Environment on 8453: FLOOR naming both", async () => {
+      const e = await refused(ctxFor({ actionsProof: { ...PROOF, environment: "base-rehearsal" } }));
+      expect(e.kind).toBe("FLOOR");
+      expect(e.message).toContain("'base-rehearsal'");
+      expect(e.message).toContain(ENV);
+    });
+    test("without the Actions flag it is REFUSED as before, on every chain", async () => {
+      expect((await refused(ctxFor({ githubActions: false, actionsProof: PROOF }))).kind).toBe("REFUSED");
+      expect((await refused(ctxFor({ chainId: 918453, githubActions: false }))).kind).toBe("REFUSED");
+    });
+    test("a proof for --environment confirms the stage and logs the claims, never a token", async () => {
+      const lines: string[] = [];
+      await confirmStage(ctxFor({ actionsProof: PROOF }, lines), "libs", "1 tx");
+      const line = lines.map((l) => JSON.parse(l) as Record<string, unknown>).find((l) => l.event === "confirm.environment");
+      expect(line).toMatchObject({ stage: "libs", environment: ENV, proof: { repository: PROOF.repository, environment: ENV, run_id: "42" } });
+      expect(JSON.stringify(line)).not.toContain(inActions[ACTIONS_TOKEN_ENV]);
+    });
+    test("off 8453 the Actions flag confirms without a proof (nothing changes on the Twin chain)", async () => {
+      const lines: string[] = [];
+      await confirmStage(ctxFor({ chainId: 918453, baseEnv: { GITHUB_ACTIONS: "true" } }, lines), "libs", "1 tx");
+      expect(lines.some((l) => l.includes("confirm.environment"))).toBe(true);
+    });
   });
 });

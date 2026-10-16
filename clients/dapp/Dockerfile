@@ -19,6 +19,17 @@ ARG VITE_GATEWAY_EXPECTED_CODE_HASH=
 # Build-time-only pins. Empty: a proxied gateway refuses admin writes.
 ARG VITE_GATEWAY_EXPECTED_IMPLEMENTATION=
 ARG VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH=
+# QA plan U5 (issue 1737): build-time vault and router code-hash pins. JSON map
+# {"<vault address>":"<runtime code hash>"} and the router's runtime code hash.
+# On the mainnet class a deposit or approve is refused unless the target matches
+# its pin. Empty: no pin, so those writes are refused on mainnet.
+ARG VITE_VAULT_EXPECTED_CODE_HASH=
+ARG VITE_ROUTER_EXPECTED_CODE_HASH=
+# ADR-0014: behind a proxy the code-hash pins above are the generic ERC1967Proxy. These pin the
+# reviewed implementation behind each proxied vault (JSON map {"<vault address>":"<hash>[,<hash>]"})
+# and the router (comma-separated hashes). A proxy with no implementation pin is refused on mainnet.
+ARG VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH=
+ARG VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH=
 ARG VITE_GATEWAY_CODE_HASH_VERIFIED=false
 ARG VITE_ENV_CLASS=fork
 # Optional. 1 or 8453 requires VITE_ENV_CLASS=mainnet (buildEnvValidation.ts, issue 1729).
@@ -57,6 +68,10 @@ ENV VITE_EXPLORER_API_URL=$VITE_EXPLORER_API_URL \
     VITE_GATEWAY_EXPECTED_CODE_HASH=$VITE_GATEWAY_EXPECTED_CODE_HASH \
     VITE_GATEWAY_EXPECTED_IMPLEMENTATION=$VITE_GATEWAY_EXPECTED_IMPLEMENTATION \
     VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH=$VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH \
+    VITE_VAULT_EXPECTED_CODE_HASH=$VITE_VAULT_EXPECTED_CODE_HASH \
+    VITE_ROUTER_EXPECTED_CODE_HASH=$VITE_ROUTER_EXPECTED_CODE_HASH \
+    VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH=$VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH \
+    VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH=$VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH \
     VITE_GATEWAY_CODE_HASH_VERIFIED=$VITE_GATEWAY_CODE_HASH_VERIFIED \
     VITE_ENV_CLASS=$VITE_ENV_CLASS \
     VITE_CHAIN_ID=$VITE_CHAIN_ID \

@@ -230,6 +230,26 @@ describe("stage 12 after govern: the unpause rows are linked to the paused reads
     await runVerifyStage({ ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext, stageByName("verify"), manifest as never, deps as never);
     expect(out).toEqual(["[verify]", "chain: id equals sheet", "manifest: vault.json present"]);
   });
+
+  // QA plan v1 C3 (CS-6): the run records the current weight setter's gating in the verify stage record and on the log (stderr), never on stdout.
+  test("the stage record and the log carry the weight setter's gating, also when the gate is wrong and verify fails", async () => {
+    const TL = "0x000000000000000000000000000000000071e10c", GOVERNANCE = "0x000000000000000000000000000000000000060b", SAFE_ADDR = "0x00000000000000000000000000000000000050fe";
+    const gated = { gating: "timelock", holders: [{ address: GOVERNANCE, routerGovernanceCode: true, admins: [TL], setters: [TL], timelockGated: true }], timelock: TL, delaySeconds: 60 };
+    const open = { ...gated, gating: "not-timelock", holders: [{ address: GOVERNANCE, routerGovernanceCode: true, admins: [TL, SAFE_ADDR], setters: [TL], timelockGated: false }] };
+    const label = "router: every WEIGHT_SETTER_ROLE holder is timelock-gated";
+    for (const [weightSetter, ok] of [[gated, true], [open, false]] as const) {
+      const { ctx, lines } = setup();
+      const manifest = { ...newManifest(ctx, "0xa"), firstBlock: 5 };
+      const out: string[] = [];
+      const deps = { verifyDeployment: async () => ({ ok, checks: [{ label, ok, detail: "" }], weightSetter }), verifySources: async () => ({ ok: true, checks: [] }), emit: (l: string) => out.push(l) };
+      const run = runVerifyStage({ ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext, stageByName("verify"), manifest as never, deps as never);
+      if (ok) await run; else await expect(run).rejects.toMatchObject({ kind: "VERIFY" });
+      expect(manifest.stages[stageByName("verify").name]).toMatchObject({ status: ok ? "done" : "started", weightSetterGating: weightSetter });
+      const logged = lines.map((l) => JSON.parse(l)).find((j) => j.event === "verify.weight_setter_gating");
+      expect(logged).toMatchObject({ level: ok ? "info" : "error", gating: weightSetter.gating, holders: weightSetter.holders, timelock: TL, delay_seconds: 60 });
+      expect(out).toEqual(["[verify]", label]);
+    }
+  });
 });
 
 describe("stage 12 on 8453: verify runs before govern and after it, and refuses while govern is part-way (issue 1667)", () => {

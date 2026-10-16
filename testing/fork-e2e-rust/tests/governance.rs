@@ -24,7 +24,8 @@
 //! - `governance_apply_receipt_non_weight_setter_reverts` — a caller without
 //!   `WEIGHT_SETTER_ROLE` reverts `AccessControlUnauthorizedAccount`.
 //! - `governance_apply_receipt_duplicate_vault_reverts` — a vector naming a
-//!   vault twice reverts `DuplicateVault` and leaves the receipt unreleased.
+//!   vault twice reverts `DuplicateVault` and leaves the receipt unreleased;
+//!   the same receipt then applies with a valid vector.
 //!
 //! Each failure scenario asserts the revert selector through `eth_call`, then
 //! sends the transaction and asserts it reverted on chain and changed nothing.
@@ -719,5 +720,20 @@ fn governance_apply_receipt_duplicate_vault_reverts() {
         "a refused vector must not leave the receipt released"
     );
     assert!(!s.voted_weights_active(), "no vector may be set");
+
+    // Nothing was consumed (QA plan v1 C1): the same receipt then applies with a valid vector.
+    let r = s
+        .admin
+        .send(
+            s.governance,
+            &s.apply_call(receipt_id, digest, vec![s.vault_b], &[10_000]),
+            U256::ZERO,
+            1_000_000,
+        )
+        .expect("applyReceipt with a valid vector after the refusal");
+    assert_eq!(r.status, 1, "the valid vector must apply");
+    assert!(s.is_released(receipt_id), "the receipt is released now");
+    let (w_vaults, _) = s.router_weights();
+    assert_eq!(w_vaults, vec![s.vault_b], "the valid vector was applied");
     eprintln!("[{tag}] passed");
 }

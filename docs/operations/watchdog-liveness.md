@@ -14,8 +14,39 @@ is how you tell the two apart, what pages you, and what to do about each page.
 ## The signal
 
 Every successful watchdog poll refreshes `watchdog_cursor.updated_at` for its
-chain. That includes a poll that finds no new block. A running watchdog keeps it
-fresh. A stopped, hung, crash-looping, or startup-failed watchdog lets it age.
+chain. That includes a poll that finds no new block, but only while the explorer
+indexer is keeping up (QA plan X5, DI-5). A running watchdog keeps it fresh. A
+stopped, hung, crash-looping, or startup-failed watchdog lets it age.
+
+A poll with no new block has two causes: a quiet market, or an indexer that has
+stopped. The watchdog tells them apart from `indexer_runs`. The indexer is
+behind when the chain head it last recorded is more than `max_lag_blocks`
+(default 150) ahead of its cursor, or when its last good run is more than
+`max_silence_secs` (default 300) old. These are the `[indexer_lag]` keys of the
+watchdog config. While the indexer is behind, a poll that finds no new block
+does not refresh the heartbeat, and the watchdog pages `indexer_behind:<chain>`
+once per `repage_secs` (default 3600). It resolves that page once the indexer
+is back within budget. A long indexer catch-up pages too: until it ends, the
+watchdog evaluates blocks older than its response SLA.
+
+The watchdog evaluates every indexed block in order and advances its cursor
+after each one. That write refreshes the heartbeat only while the cursor is
+within `max_cursor_lag_blocks` (default 150, also an `[indexer_lag]` key) of the
+indexed head (security round 2). A watchdog that evaluates blocks slower than
+the chain makes them keeps going, but its heartbeat ages and
+`watchdog-liveness` reports `stale` until it catches up.
+
+A breach alert that the webhook does not accept (non-2xx or timeout) holds the
+watchdog cursor on that block. The next poll sends the undelivered alert again
+under the same `dedup_key`. It sends the pause again too, unless the gateway's
+`depositsPaused()` reads true (security round 1). An operator who unpauses
+deposits while the cursor is held sees the watchdog pause them again on the
+next poll, until the alert is delivered. Later blocks wait until it is
+delivered, so a held cursor also lets the heartbeat age.
+
+A catch-up does not trip the per-hour limits on the backlog. The per-hour
+volume of a block counts the hour that ends at that block, never a later block
+that is already indexed (security round 3).
 
 Check it by hand from any host that can reach the explorer database:
 
@@ -31,7 +62,7 @@ echo $?
 | Exit | Output starts with | Meaning |
 |------|--------------------|---------|
 | `0` | `watchdog liveness healthy` | Last successful poll is within the limit. |
-| `1` | `watchdog liveness stale` | The watchdog stopped polling. |
+| `1` | `watchdog liveness stale` | The watchdog stopped polling, the indexer it reads is behind, the watchdog is more than `max_cursor_lag_blocks` behind the indexed head, or a breach alert is undelivered. The line ends with `indexer_lag_blocks`, `indexer_since_success_secs` and `indexer_last_run_failed`. |
 | `1` | `watchdog liveness missing` | The watchdog never polled this chain, or the chain id is wrong. |
 | `2` | `watchdog liveness unknown` | The check itself failed (database down, bad arguments). Treat as down. |
 
@@ -84,9 +115,15 @@ installer refuses to run if that binary is missing.
 3. `database connect failed` or a `watchdog_liveness_unknown` page means the
    explorer database is unreachable. Fix the database first. The watchdog
    cannot watch without it.
-4. `watchdog_cursor_stale` while the process is still running means the poll
-   loop is stuck or every poll is failing. Look for repeated `cycle error`
-   lines. Restart with `systemctl restart fusion-watchdog.service`.
+4. `watchdog_cursor_stale` while the process is still running: read the end of
+   the page. A large `indexer_lag_blocks` or `indexer_since_success_secs`
+   means the explorer indexer stopped, not the watchdog. Its `/health` shows
+   `last_run_error`; fix the indexer, and the page clears on its own. An
+   `indexer_behind:<chain>` page from the watchdog says the same thing. A
+   `breach alert(s) not delivered` line in the journal means the alert webhook
+   refuses the watchdog's posts; fix the webhook. Otherwise the poll loop is
+   stuck or every poll is failing: look for repeated `cycle error` lines and
+   restart with `systemctl restart fusion-watchdog.service`.
 5. `missing` right after a fresh install means the watchdog has not seen an
    indexed block yet. Check that the explorer indexer is running for the same
    chain id.
@@ -142,12 +179,16 @@ The indexer reports the backfill's own state in the explorer's `/health` as
 
 ## Proving it works
 
-Two tests in suite 20 run this whole path:
+These tests in suite 20 run this whole path:
 
 - `services/watchdog/tests/liveness.rs` runs the real `watchdog` and
   `watchdog-liveness` binaries against Postgres. It checks that the signal stays
   healthy through a quiet market, goes stale after the watchdog is killed, and
-  reads `missing` after an invalid-key exit.
+  reads `missing` after an invalid-key exit. `stale_indexer_cursor_is_not_healthy`
+  checks that a quiet poll behind a wedged indexer does not refresh it.
+- `services/watchdog/tests/threshold_breach.rs`
+  `failed_webhook_is_retried_next_cycle` checks that an alert the webhook
+  refused is sent again on the next poll, and that the cursor waits for it.
 - `scripts/stage/test-fusion-watchdog-supervisor.sh` runs the real supervisor
   against stub binaries. It checks that the supervisor pages a crash loop, a
   hung watchdog, and a missing checker, and stays silent in a quiet market.

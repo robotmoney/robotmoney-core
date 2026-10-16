@@ -13,7 +13,7 @@ import { parseCli } from "../src/cli.ts";
 import { logsRpc, type LogsRpcOpts } from "./logs-rpc.ts";
 import { localSafeTxHash, ownerHardwareSigner, signTx, type SafeTxBundle } from "../src/safe/index.ts";
 import { privateKeyToAccount } from "viem/accounts";
-import { ADMIN, PROVE_OWNERS, PROVE_SIGNERS, fakeProveApi, keySigner, world } from "./harness.ts";
+import { ADMIN, PROVE_OWNERS, PROVE_SIGNERS, fakeProveApi, keySigner, typedPrompt, world } from "./harness.ts";
 import { OWNERS, OWNER_KEYS, SAFE, buildWorld, failed, proofInput } from "./verify/world.ts";
 import { verifyDeployment } from "../src/verify/index.ts";
 
@@ -471,7 +471,23 @@ describe("hardware owner signers in prove-control (a simulated cast, no device)"
     };
     const prompt = async (r: { owner: string; phase: string }) => { events.push(`prompt:${r.phase}:${accts.findIndex((a) => a.address === r.owner)}`); };
     const signers = (claimed: number[]) => claimed.map((c, i) => ownerHardwareSigner(`ledger:${path(i)}@${accts[c]!.address}`, { runner, prompt }));
-    return { events, signers };
+    return { events, signers, runner };
+  }
+  /** The same devices through main(): the CLI's own device prompt (recorded like `rig`'s) and cast runner (QA plan v1 A5, the 1693 hunk). */
+  function cliRig(w: ReturnType<typeof world>, attached: () => number[]) {
+    const r = rig(attached);
+    const typed = typedPrompt();
+    const prompt = async (q: string): Promise<string> => {
+      const m = /for Safe owner (0x[0-9a-fA-F]{40}) \([^)]*\) to (read its address|sign|send)/.exec(q);
+      if (!m) return typed(q);
+      r.events.push(`prompt:${m[2] === "read its address" ? "address" : m[2]}:${accts.findIndex((a) => a.address === m[1])}`);
+      return "";
+    };
+    const api = fakeProveApi(w);
+    const spy = { ...api, connectSafe: async (...a: Parameters<typeof api.connectSafe>) => { r.events.push("safe:connect"); return api.connectSafe(...a); } };
+    const args = (claimed: number[]) => claimed.flatMap((c, i) => ["--owner-signer", `ledger:${path(i)}@${accts[c]!.address}`]);
+    const deps = { prove: { api: spy }, castRunner: r.runner, prompt };
+    return { events: r.events, args, deps };
   }
 
   test("a prompt before each address read and before each signature, in owner order, and the proof lands", async () => {
@@ -500,6 +516,31 @@ describe("hardware owner signers in prove-control (a simulated cast, no device)"
     expect(await w.run(["--stage", PROOF_STAGE], { prove: { api: fakeProveApi(w), ownerSigners: r.signers([0, 0, 2]) } })).toBe(EXIT_CODES.CONTROL_NOT_PROVEN);
     expect(lastError(w).message).toContain("same address");
     expect(w.safeCalls).not.toContain("proposeTx");
+  });
+
+  // Through main() (QD-8, the hunk the 1693 merge dropped): the CLI builds the owner signers one at a time, in the order given.
+  test("main() builds the --owner-signer devices in order, one at a time, every one read before the Safe is connected, and the proof lands", async () => {
+    const w = world({ writeSafeManifest: true });
+    const r = cliRig(w, () => [0, 1, 2]);
+    expect(await w.run(["--stage", PROOF_STAGE, ...r.args([0, 1, 2])], r.deps)).toBe(0);
+    // construction: prompt, read, next device; all three devices before prove-control touches the Safe
+    expect(r.events.slice(0, 7)).toEqual(["prompt:address:0", "cast:address:0", "prompt:address:1", "cast:address:1", "prompt:address:2", "cast:address:2", "safe:connect"]);
+    // the address read at construction is cached: no second address prompt, then one sign prompt per owner in owner order
+    expect(r.events.filter((e) => e.startsWith("prompt:"))).toEqual(["prompt:address:0", "prompt:address:1", "prompt:address:2", "prompt:sign:0", "prompt:sign:1", "prompt:sign:2"]);
+    expect(r.events.indexOf("prompt:sign:0")).toBe(r.events.indexOf("cast:sign:0") - 2);
+    expect(w.safeCalls).toContain("executeTx:3:all");
+    expect(w.safeNonce).toBe(1);
+  });
+
+  test("main(): a wrong device stops while the signers are built: the next device is never asked for and the Safe is never connected", async () => {
+    const w = world({ writeSafeManifest: true });
+    const r = cliRig(w, () => [0, 2, 2]);
+    expect(await w.run(["--stage", PROOF_STAGE, ...r.args([0, 1, 2])], r.deps)).not.toBe(0);
+    expect(lastError(w).message).toContain("HARDWARE_ADDRESS_MISMATCH");
+    expect(r.events).toEqual(["prompt:address:0", "cast:address:0", "prompt:address:1", "cast:address:1"]);
+    expect(w.safeCalls).not.toContain("connectSafe:prove");
+    expect(w.safeCalls).not.toContain("proposeTx");
+    expect(executed(w)).toEqual([]);
   });
 });
 

@@ -12,10 +12,19 @@
 //! - testnet runs against the live Base public testnet RPC named by
 //!   `BASE_TESTNET_RPC_URL`, funded from `BASE_TESTNET_FUNDER_KEY`.
 //!
-//! Each network whose RPC endpoint is unset is **skipped gracefully** (never a
-//! failure), matching every other fork-e2e test. So `cargo test` on a laptop
-//! with no testnet secret passes, while CI that sets the secret exercises the
-//! live testnet path.
+//! The macro makes one test per network: `adapters_against_live_services::robot_money_devnet`
+//! and `adapters_against_live_services::base_testnet` (QA plan v1 T5). A leg whose RPC endpoint
+//! or testnet funder is unset skips on a laptop and **panics under CI**. It used to skip under CI
+//! too, so suite 5 passed on the devnet leg alone while the Base testnet leg never ran. Suite 5
+//! now runs the devnet leg with `--skip base_testnet`, runs the testnet leg in its own step only
+//! when the testnet secrets are set, and proves the refusal with `CI=true` and no testnet env.
+//!
+//! The vault-stack part on Base's public testnet is its own test, `vault_stack_base_testnet`. It
+//! needs `RM_TESTNET_VAULT_ADDR`, a Robot Money deploy on Base's public testnet, which is out of
+//! scope (#839). Without it the test skips on a laptop and panics under CI, like every other leg.
+//! No deploy exists there today, so suite 5 leaves that test out by name (`--skip
+//! vault_stack_base_testnet`) and the `adapters_against_live_services::base_testnet` leg runs the
+//! Uniswap and Aave parts with no skip at all (QA plan v1 T5).
 //!
 //! ## Adapter coverage (grep-able names in `--nocapture` output)
 //! - **Uniswap** V3 swap — USDC -> WETH `exactInputSingle` on the live router.
@@ -31,8 +40,8 @@
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::{sol, SolCall};
 use rmpc_fork_e2e::{
-    base_testnet_addresses, parameterized_e2e, scenarios, Account, ForkFixture, HarnessError,
-    Network, IERC20,
+    base_testnet_addresses, parameterized_e2e, run_network_leg, scenarios, skip_network_or_refuse,
+    Account, ForkFixture, HarnessError, Network, IERC20,
 };
 
 sol! {
@@ -89,8 +98,8 @@ const SUPPLY_USDC: u64 = 5_000_000; // 5 USDC into Aave
 ///
 /// Devnet uses the existing `ephemeral` path (anvil/devnet seeding). Testnet
 /// uses `ephemeral_testnet` (seeded transfers from `BASE_TESTNET_FUNDER_KEY`).
-/// Returns `Err(SkipNoRpc)` when testnet funding is not provisioned, so the
-/// body skips that network gracefully.
+/// Returns `Err(SkipNoRpc)` when testnet funding is not provisioned. The
+/// caller hands that to [`skip_unfunded_leg`].
 fn funded_account<'a>(
     fx: &'a ForkFixture,
     network: Network,
@@ -101,6 +110,18 @@ fn funded_account<'a>(
         Network::RobotMoneyDevnet => fx.ephemeral(eth_wei, usdc_units),
         Network::BaseTestnet => fx.ephemeral_testnet(network.usdc(), eth_wei, usdc_units),
     }
+}
+
+/// A leg whose account cannot be funded (no `BASE_TESTNET_FUNDER_KEY`). It skips locally and
+/// panics under CI (QA plan v1 T5), so a Base testnet run without a funder is red, not a pass that
+/// asserted nothing.
+fn skip_unfunded_leg(leg: &str, network: Network) -> Result<(), HarnessError> {
+    skip_network_or_refuse(
+        "multi_network_adapters",
+        network,
+        &format!("the funder for the {leg} leg (BASE_TESTNET_FUNDER_KEY)"),
+    );
+    Ok(())
 }
 
 fn read_erc20_balance(
@@ -124,13 +145,7 @@ fn exercise_uniswap(fx: &ForkFixture, network: Network) -> Result<(), HarnessErr
     let amount = U256::from(SWAP_USDC);
     let user = match funded_account(fx, network, one_eth(), amount) {
         Ok(u) => u,
-        Err(e) if e.is_skip() => {
-            eprintln!(
-                "[multi_network_adapters] Uniswap on {}: skipped (no funder)",
-                network.name()
-            );
-            return Ok(());
-        }
+        Err(e) if e.is_skip() => return skip_unfunded_leg("Uniswap", network),
         Err(e) => return Err(e),
     };
 
@@ -178,13 +193,7 @@ fn exercise_aave(fx: &ForkFixture, network: Network) -> Result<(), HarnessError>
     let amount = U256::from(SUPPLY_USDC);
     let user = match funded_account(fx, network, one_eth(), amount) {
         Ok(u) => u,
-        Err(e) if e.is_skip() => {
-            eprintln!(
-                "[multi_network_adapters] Aave on {}: skipped (no funder)",
-                network.name()
-            );
-            return Ok(());
-        }
+        Err(e) if e.is_skip() => return skip_unfunded_leg("Aave", network),
         Err(e) => return Err(e),
     };
 
@@ -245,36 +254,21 @@ fn exercise_aave(fx: &ForkFixture, network: Network) -> Result<(), HarnessError>
 
 // ── Adapters: Compound / Morpho / Curve via the vault round-trip ──────────────
 
-/// Deposit USDC into the `RobotMoneyVault` for `network`, which routes funds
-/// into every registered strategy adapter (Aave / Compound / Morpho, plus any
-/// Curve-routed basket leg). Asserts shares are minted, proving the full
-/// adapter stack mediates the deposit. Skips when no vault is configured for the
-/// network (testnet vault deploy is a prerequisite, out of scope for #839).
-fn exercise_vault_adapter_stack(fx: &ForkFixture, network: Network) -> Result<(), HarnessError> {
-    let vault = match network {
-        // Clean room rule (core 1498): the vault this test deploys itself through the vault stage.
-        Network::RobotMoneyDevnet => Some(fx.deployed()?.vault),
-        Network::BaseTestnet => base_testnet_addresses::robotmoney_vault(),
-    };
-    let Some(vault) = vault else {
-        eprintln!(
-            "[multi_network_adapters] Compound/Morpho/Curve via vault on {}: \
-             skipped — no RobotMoneyVault deployed (set RM_TESTNET_VAULT_ADDR after deploy)",
-            network.name()
-        );
-        return Ok(());
-    };
-
+/// Deposit USDC into `vault`, the `RobotMoneyVault` on `network`, which routes
+/// funds into every registered strategy adapter (Aave / Compound / Morpho, plus
+/// any Curve-routed basket leg). Asserts shares are minted, proving the full
+/// adapter stack mediates the deposit. The caller names the vault: the devnet
+/// leg deploys its own, and `vault_stack_base_testnet` reads
+/// `RM_TESTNET_VAULT_ADDR` (a testnet vault deploy is out of scope for #839).
+fn exercise_vault_adapter_stack(
+    fx: &ForkFixture,
+    network: Network,
+    vault: Address,
+) -> Result<(), HarnessError> {
     let deposit = U256::from(50_000_000u64); // 50 USDC
     let user = match funded_account(fx, network, one_eth() * U256::from(5u64), deposit) {
         Ok(u) => u,
-        Err(e) if e.is_skip() => {
-            eprintln!(
-                "[multi_network_adapters] vault stack on {}: skipped (no funder)",
-                network.name()
-            );
-            return Ok(());
-        }
+        Err(e) if e.is_skip() => return skip_unfunded_leg("vault stack", network),
         Err(e) => return Err(e),
     };
 
@@ -358,6 +352,39 @@ parameterized_e2e!(
 
         exercise_uniswap(&fx, network).expect("Uniswap adapter");
         exercise_aave(&fx, network).expect("Aave adapter");
-        exercise_vault_adapter_stack(&fx, network).expect("Compound/Morpho/Curve vault stack");
+        // The vault-stack part runs here on devnet only. On Base's public testnet it is the
+        // separate test below, so this leg has no part that skips (QA plan v1 T5).
+        if network == Network::RobotMoneyDevnet {
+            // Clean room rule (core 1498): the vault this test deploys itself through the vault stage.
+            let vault = fx.deployed().expect("devnet vault stage").vault;
+            exercise_vault_adapter_stack(&fx, network, vault)
+                .expect("Compound/Morpho/Curve vault stack");
+        }
     }
 );
+
+/// The Compound/Morpho/Curve vault stack on Base's public testnet. It needs a Robot Money deploy
+/// there (`RM_TESTNET_VAULT_ADDR`), which is out of scope for #839 and does not exist today.
+/// Without it the test skips on a laptop and panics under CI, so a CI run cannot pass it without
+/// running it. Suite 5 leaves it out by name (`--skip vault_stack_base_testnet`) until that deploy
+/// exists; the name carries `base_testnet`, so the devnet step's `--skip base_testnet` drops it too.
+#[test]
+fn vault_stack_base_testnet() {
+    let network = Network::BaseTestnet;
+    let Some(vault) = base_testnet_addresses::robotmoney_vault() else {
+        skip_network_or_refuse(
+            "vault_stack_base_testnet",
+            network,
+            "RM_TESTNET_VAULT_ADDR (a Robot Money vault deployed on Base's public testnet)",
+        );
+        return;
+    };
+    run_network_leg(
+        "vault_stack_base_testnet",
+        network,
+        &|network: Network, fx: ForkFixture| {
+            exercise_vault_adapter_stack(&fx, network, vault)
+                .expect("Compound/Morpho/Curve vault stack");
+        },
+    );
+}

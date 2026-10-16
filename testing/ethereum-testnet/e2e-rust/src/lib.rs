@@ -147,6 +147,10 @@ impl Fixture {
     pub fn gateway_implementation_hex(&self) -> &str {
         self.devnet.gateway_implementation_hex()
     }
+    /// The vault and router implementation code hashes rmpc pins (issue 1810).
+    pub fn proxy_implementation_hashes(&self) -> &[String] {
+        self.devnet.proxy_implementation_hashes()
+    }
     pub fn tempdir(&self) -> &Path {
         self.devnet.tempdir()
     }
@@ -343,7 +347,7 @@ vault_address         = "{vault}"
 gateway_runtime_hash  = "{hash}"
 gateway_implementation = "{implementation}"
 gateway_implementation_runtime_hash = "{implementation_hash}"
-max_fee_per_gas_cap   = 100000000000
+{proxy_pin}max_fee_per_gas_cap   = 100000000000
 gateway_from_block    = {from_block}
 
 [signer]
@@ -359,6 +363,20 @@ keystore_path           = "{keystore}"
         hash = devnet.gateway_runtime_hash(),
         implementation = devnet.gateway_implementation_hex(),
         implementation_hash = devnet.gateway_implementation_runtime_hash(),
+        // Issue 1810: the vaults and the router are proxies too; rmpc pins their logic as well.
+        proxy_pin = if devnet.proxy_implementation_hashes().is_empty() {
+            String::new()
+        } else {
+            format!(
+                "proxy_implementation_hashes = [{}]\n",
+                devnet
+                    .proxy_implementation_hashes()
+                    .iter()
+                    .map(|h| format!("\"{h}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        },
         keystore = keystore_path.display(),
     );
     std::fs::write(&config_path, toml)?;

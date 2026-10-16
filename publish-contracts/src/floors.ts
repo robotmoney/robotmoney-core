@@ -1,8 +1,10 @@
 // Chain-id keyed floors. One rule: guards apply on 8453 and nothing else changes. No flag or env switch lifts a floor on 8453.
 // The ONE exception (issue 1727, owner decision 2026-10-10): the sheet line DEPLOYMENT_KIND=rehearsal lowers the timelock delay floor to 900 s for a Base mainnet rehearsal. Every other floor stays.
 // Plan principles 4, 5, 6, 18, 19; issue devops 55 (S6). The chain id comes from the RPC (`cast chain-id`), never from a hostname.
+// CONFIRM=environment on 8453 (qa-plan B2, DT-3) is accepted on one proof only: the job's GitHub OIDC token, verified for --environment (actions-proof.ts).
 import { PublishError } from "./errors.ts";
 import { isLoopbackRpc } from "./safe/chain.ts";
+import { actionsProofReason, type ActionsProof } from "./actions-proof.ts";
 import type { Sheet, CallerInputs } from "./sheet.ts";
 
 import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID, MAINNET_DELAY_FLOOR, REHEARSAL_DELAY_FLOOR, isMainnet, delayFloor, rehearsalDelayProblem, type DeploymentKind } from "./chains.ts";
@@ -65,6 +67,11 @@ export interface FloorInput {
   env?: Record<string, string | undefined>;
   environment?: string;
   githubActions?: boolean;
+  /**
+   * qa-plan B2 (DT-3): the verified GitHub OIDC token of the job, obtained by the CLI (actions-proof.ts) when CONFIRM=environment on 8453.
+   * Undefined when none could be obtained: the floor then refuses CONFIRM=environment on 8453, whatever GITHUB_ACTIONS says.
+   */
+  actionsProof?: ActionsProof;
   /** Frozen counts are being measured (rehearsal only). */
   measure?: boolean;
 }
@@ -102,8 +109,10 @@ export function assertFloors(i: FloorInput): void {
     const why = plaintextSignerReason(i.signerSpec ?? "", i.env ?? {});
     if (why) throw floor(`plaintext signing is refused on chain 8453: ${why}`);
     if (i.caller.confirm === "environment") {
-      if (!i.githubActions) throw floor("CONFIRM=environment is valid only inside GitHub Actions, behind an Environment with required reviewers");
-      if (!i.environment || i.environment === "local") throw floor("CONFIRM=environment needs --environment set to the GitHub Environment name");
+      // qa-plan B2 (DT-3): GITHUB_ACTIONS=true is a string anyone exports. On 8453 the proof is the job's GitHub OIDC token, verified for
+      // this Environment (actions-proof.ts); without it, or for another Environment, CONFIRM=environment is refused and the prompt stands.
+      const why = actionsProofReason({ githubActions: !!i.githubActions, env: i.env ?? {}, environment: i.environment, proof: i.actionsProof });
+      if (why) throw floor(why, { chainId, environment: i.environment });
     }
   }
 }

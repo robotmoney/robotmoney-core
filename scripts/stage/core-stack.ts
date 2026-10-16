@@ -60,6 +60,9 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+// These two modules have no dependency: this file must run where publish-contracts has no node_modules (CI jobs, an operator's checkout), so it never imports sheet.ts or unwind-guard.ts (viem).
+import { twinUnwindGuardArgs } from "../../publish-contracts/src/unwind-guard-twin.ts";
+import { BASKET_KEYS } from "../../publish-contracts/src/vault-keys.ts";
 import { checkRows, parseRows } from "./govern-rows.ts";
 import { labelParity, sheetParity } from "./parity.ts";
 import { parseSheet } from "./sheet-diff.ts";
@@ -822,12 +825,26 @@ async function governRun(s: Stack, extra: string[] = []): Promise<void> {
   s.log("govern rows ok", { rows: rows.length });
 }
 
+/**
+ * QA plan v1 D7: the stage 12 verifier fails "emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault" for a basket stage 13 opened and nothing
+ * guarded, and `governance verify` runs after `governance ensure` unpaused them. So ensure sets one guard round (`set-unwind-guard`, token=all, the Twin values) per basket
+ * the stage sheet's GOVERN_UNPAUSE_VAULTS opens, through the real Safe and timelock, before the verifier runs. The stage baskets hold nothing, so the values prove the row
+ * and the label, never a sizing. A guard already in effect is skipped by the row, so a rerun of ensure is safe. 8453 is untouched: the runbook runs the row there.
+ */
+async function governUnwindGuards(s: Stack): Promise<void> {
+  const unpaused = parseSheet(readFileSync(s.sv("sheet_path"), "utf8")).get("GOVERN_UNPAUSE_VAULTS");
+  if (unpaused === undefined) throw fail(`the stage sheet (${s.sv("sheet_path")}) has no GOVERN_UNPAUSE_VAULTS: cannot tell which baskets stage 13 opened`, EXIT.INPUT);
+  const opened = unpaused.split(",").map((x) => x.trim());
+  for (const k of BASKET_KEYS.filter((b) => opened.includes(b))) await governRun(s, twinUnwindGuardArgs(k));
+}
+
 async function governanceVerb(s: Stack, verb: string): Promise<void> {
   switch (verb) {
     case "preflight":
       return governancePreflight(s);
     case "ensure":
-      return governRun(s);
+      await governRun(s);
+      return governUnwindGuards(s);
     case "verify":
       return s.passthrough(await s.publishContracts("verify"));
     case "apply":

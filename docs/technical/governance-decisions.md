@@ -8,7 +8,7 @@
 > Closes the open question listed under `docs/architecture.md` §10
 > ("Router-weight governance implementation").
 
-Investment Committee signals are advisory only. The gateway signal endpoint does not authenticate the member until core issue 1790 lands. Consensus receipts are caller bound and ADMIN released; receipts are the only rebalance input, applied by the Safe through the timelock.
+Investment Committee signals are advisory only. The gateway signal endpoint binds the member to the caller: `committeeVoteSubmit` reverts `CommitteeAgentNotCaller` unless the vote's `agent` is `msg.sender` (core issue 1790, PR 1818). The explorer's tilt aggregate counts one signal per member, its latest verified vote. Consensus receipts are caller bound and ADMIN released; receipts are the only rebalance input, applied by the Safe through the timelock.
 
 ---
 
@@ -92,8 +92,17 @@ releases the receipt and applies its weight vector:
   `isReleased(receiptId)` and the router's active and effective weights back,
   failing on any difference.
 
-Release and weights are one call, so a released receipt whose weights were
-not applied, or applied weights whose receipt is unreleased, cannot exist.
+Inside `applyReceipt`, release and weights are one call: applied weights whose
+receipt is unreleased cannot exist, and `applyReceipt` never releases a
+receipt without its weights. A receipt can still be released WITHOUT weights.
+The timelock holds `ADMIN_ROLE` on the receipt register directly (the timelock
+stage grants it), and the standalone `release-receipt` govern row calls
+`releaseReceipt` alone. A receipt released that way can never be applied: a
+later `applyReceipt` for it reverts `ReceiptAlreadyReleased` at execute,
+after its own delay, and the committee records a new receipt instead
+(`RouterGovernanceApplyReceipt.t.sol::test_applyReceipt_revertsOnReleasedReceipt`).
+So "released" does not mean "applied"; a reader checks `ReceiptApplied` (or the
+router's weights) for that (security review 2026-10-15, review-security-023).
 `applyReceipt` sets the router's active vector. The router's default vector is
 untouched and stays the fallback (ADR-0002).
 Admin discretion (D5 in the product proposal) is the Safe's choice of which
@@ -114,7 +123,9 @@ unused and every one was attack surface on the weight path (security review
 2026-10-12, finding 4: one voter met quorum). The final deployment's verifier
 asserts that the deployed runtime code dispatches none of the deleted voting
 selectors. The mainnet test deployment ran the earlier bytecode with voter
-addresses nobody holds keys for. rmpc has no vote command.
+addresses nobody holds keys for. rmpc has no vote command, and no client builds
+a call to the deleted functions (CI gate
+`.github/scripts/check_no_router_governance_voting.sh`).
 
 The IC agent's `committee vote-submit` is a signed tilt the agent sends to the
 committee session. It is not a vote on anything: it changes no contract state
@@ -299,8 +310,8 @@ Replacing the weight-setter contract uses the rotation in §3.6. The runbook is
 ### 6.6 No outer share token
 
 `RouterGovernance.sol` must not introduce any token minting, wrapping, or LP
-mechanics. Its only on-chain side effects are router weight calls
-(`docs/architecture.md` §2.2).
+mechanics. Its only on-chain side effects are router weight calls and the
+receipt release inside `applyReceipt` (`docs/architecture.md` §2.2).
 
 ---
 

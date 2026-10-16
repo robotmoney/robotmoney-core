@@ -33,6 +33,9 @@ rmpc deposit --config <CONFIG> \
   [--deadline-secs <N>] \
   [--receipt-timeout-secs <N>] \
   [--gas-limit <N>] \
+  [--destination <0x...>] \
+  [--min-shares-per-leg <N>] \
+  [--allow-unavailable-legs] \
   [--pretty]
 ```
 
@@ -58,9 +61,33 @@ Optional flags:
   (the gateway's `MAX_DEADLINE_SKEW`). Default 300.
 - `--receipt-timeout-secs <N>` — maximum seconds to wait for the receipt.
   Default 60.
-- `--gas-limit <N>` — gas limit for the deposit envelope. Default 350_000;
-  the happy-path deposit is ~150k. The cushion covers cold-storage vault
-  writes on first interaction.
+- `--gas-limit <N>` — gas limit for the deposit envelope. Omit it: the
+  client derives it from the gateway's entry floor. Vault path: 3_000_000
+  (floor 2_000_000). Router path (`--destination <router>`): 400_000 +
+  2_550_000 per `getEffectiveWeights()` leg plus 150_000, read from the
+  router before signing (10_750_000 for a 4-leg router). A value below the
+  floor is refused with `ErrGasLimitBelowFloor` before anything is signed,
+  because the gateway would revert `InsufficientGas` and burn the gas.
+- `--destination <0x...>` — route the deposit through the PortfolioRouter at
+  this address (`gateway.depositTo`). Without it the deposit goes to the
+  gateway's single vault (`gateway.deposit`).
+- `--min-shares-per-leg <N>` — per-leg minimum shares for a router deposit,
+  repeatable or comma-separated, one per router leg. Omit it: rmpc reads
+  `router.previewDeposit(amount)` and uses each funded leg's `estShares`
+  less 0.50%. A non-zero floor means "this leg must be funded". If the leg
+  turns unavailable before the deposit lands (rmUSDC reaches its TVL cap, a
+  pause, a basket leaves its price band), the router reverts
+  `LegSkippedWithFloor` instead of moving that leg's share onto the other
+  legs. A single `0` sends no floor on any leg. Pass it only on purpose.
+  The on-chain `paymentId` of a router deposit also binds the destination
+  and these floors, so to retry and have the chain dedupe, pass the
+  `min_shares_per_leg` the first run printed.
+- `--allow-unavailable-legs` — router deposit only. Before signing, rmpc
+  refuses with `ErrLegUnavailable` when `router.previewDeposit` marks a leg
+  with weight above 0 unavailable: the router would skip that leg and put
+  its whole share into the other legs, so the split would not be the
+  governed weights. This flag accepts that split. Use it only with the
+  user's approval.
 
 ### Output (success)
 
@@ -70,15 +97,20 @@ JSON on stdout including:
 - `txHash` — 32-byte hex of the broadcast transaction.
 - `blockNumber` — receipt block.
 - `sharesMinted` — vault shares minted to the agent's pre-registered
-  `shareReceiver` (the agent never receives `rmUSDC` directly).
+  `shareReceiver` (the agent never receives `rmUSDC` directly). On a router
+  deposit this is `null`, and `router` plus `shares_per_leg` (one entry per
+  router leg, from the `AgentDepositRouted` log) are set instead, with
+  `min_shares_per_leg`, the floors the call carried.
 - `windowId` — `uint64(block.timestamp / 86400)`.
 - Standard envelope: `chain_id`, `block_number`, `source: "json_rpc"`.
 
 ### Output (refusal / error)
 
-Non-zero exit, structured JSON on stderr, with a stable error `code` field.
-See `safety.md` for the full list. The client never broadcasts a transaction
-it has not first proven to satisfy every preflight check.
+Exit 2, one JSON document on stdout with `"status": "refused"` and a stable
+`error` field. See `safety.md` for the full list. The client never broadcasts
+a transaction it has not first proven to satisfy every preflight check, and
+it simulates the exact call first: a known revert such as
+`ErrSlippageBoundExceeded` or `ErrLegUnavailable` is refused before signing.
 
 ### Single-flight invariant
 
@@ -146,6 +178,7 @@ rmpc withdraw --config <CONFIG> \
   --shares <SHARES> \
   --source-vault <0x...> \
   --order-id <0x...> \
+  [--min-assets <N>] \
   [--idempotency-key <0x...>] \
   [--deadline-secs <N>] \
   [--receipt-timeout-secs <N>] \
@@ -153,11 +186,20 @@ rmpc withdraw --config <CONFIG> \
   [--pretty]
 ```
 
-Redeem vault shares through the gateway (agent-initiated redemption). Performs
-the same preflight discipline as `deposit` (chain id, code hash, agent policy)
-plus withdraw-specific checks: vault share allowance(agent, gateway) and vault
-share balance. A gateway or vault with deposits paused never refuses a
-withdrawal (core 1494). The preflight only reports `deposits_paused`.
+Redeem vault shares from one vault through the gateway (agent-initiated
+redemption). Performs the same preflight discipline as `deposit` (chain id,
+code hash, agent policy) plus withdraw-specific checks: the vault share
+allowance(share holder, gateway) and the share holder's vault share balance. A
+gateway or vault with deposits paused never refuses a withdrawal (core 1494).
+The preflight only reports `deposits_paused`.
+
+The redemption carries a minimum-out floor (QA plan D9). On a gateway with a
+Portfolio Router, rmpc signs the one-leg `gateway.withdrawFromRouter` call, and
+the router reverts it when the vault pays less than the floor. The share holder
+is then the policy's `shareReceiver`. `gateway.withdraw` calls `vault.redeem`,
+which has no floor. A gateway without a router (single-vault mode) only has
+that call: rmpc uses it, with the agent as share holder, only for
+`--min-assets 0`, and refuses otherwise with `ErrConfig`.
 
 Required flags:
 
@@ -175,7 +217,13 @@ Optional flags:
   Default 300.
 - `--receipt-timeout-secs <N>` — maximum seconds to wait for the receipt.
   Default 60.
-- `--gas-limit <N>` — gas limit. Default 350_000.
+- `--min-assets <N>` — minimum USDC (base units) the redemption must pay.
+  Omitted: the vault's `previewRedeem(shares)`, read before signing, less
+  0.50%. Pass `0` to send no floor, and only when the user asked for that.
+- `--gas-limit <N>` — gas limit. Default 3_000_000: a redeem reads every
+  adapter and pulls from them. The gateway requires 2_250_000 at entry for the
+  one-leg router call (2_000_000 for `gateway.withdraw`). A lower value is
+  refused with `ErrGasLimitBelowFloor`.
 
 ### Output (success)
 
@@ -188,13 +236,70 @@ JSON on stdout including:
 - `assetRecipient` — address that received the redeemed USDC assets.
 - `sourceVault` — vault address the shares were redeemed from.
 - `shares` — shares redeemed (decimal string).
+- `route` — `router` (`withdrawFromRouter`, with the floor) or `vault`
+  (`gateway.withdraw`, no floor).
+- `min_assets` — the floor the call carried; `0` is no floor.
+- `share_holder` — whose shares were redeemed.
 
 ### Output (refusal / error)
 
 Non-zero exit, structured JSON on stdout, with a stable `error` field. Hard
 refusals include: `ErrShareAllowanceInsufficient`,
-`ErrShareBalanceInsufficient`, `ErrAgentNotAuthorized`. A pause never refuses
-a withdrawal: it stops new deposits only.
+`ErrShareBalanceInsufficient`, `ErrAgentNotAuthorized`, `ErrPolicyExpired`,
+`ErrWithdrawCapExceeded`, `ErrSlippageBoundExceeded` (the simulated redeem pays
+less than the floor) and `ErrGasLimitBelowFloor`. A pause never refuses a
+withdrawal: it stops new deposits only.
+
+---
+
+## `withdraw-router`
+
+```bash
+rmpc withdraw-router --config <CONFIG> \
+  --vaults <0x...,0x...> \
+  --shares-per-leg <N,N> \
+  --min-assets-per-leg <N,N> \
+  --order-id <0x...> \
+  [--idempotency-key <0x...>] \
+  [--deadline-secs <N>] \
+  [--receipt-timeout-secs <N>] \
+  [--gas-limit <N>] \
+  [--confirm] \
+  [--pretty]
+```
+
+Redeem shares from several vaults in one call
+(`gateway.withdrawFromRouter`). `--shares-per-leg[i]` is redeemed from
+`--vaults[i]`. The gateway pulls the shares from the policy's
+`shareReceiver`, and USDC lands at its `assetRecipient`. Run
+`rmpc get-router` first to see the router's vaults.
+
+Required flags:
+
+- `--vaults <0x...,...>` — vaults to redeem from, one per leg.
+- `--shares-per-leg <N,...>` — shares per leg, parallel to `--vaults`.
+- `--min-assets-per-leg <N,...>` — minimum USDC per leg, parallel to
+  `--vaults`. A leg that returns less reverts the whole call. Pass a single
+  `0` to send no floor at all, and only when the user asked for that.
+  Omitting the flag is refused with `ErrMinAssetsPerLegRequired`.
+- `--order-id <0x...>` — 32-byte order id.
+
+Optional flags:
+
+- `--confirm` — sign and send. Without it rmpc signs nothing: it exits 2
+  with `ErrConfirmNotProvided` and a JSON `preview` listing each vault with
+  its shares and floor, the share holder, the `assetRecipient`, the gas
+  limit and the gateway's gas floor. Show the preview to the user first.
+- `--gas-limit <N>` — default 400_000 + 1_850_000 per leg + 150_000. A value
+  below the gateway floor for the non-zero legs is refused with
+  `ErrGasLimitBelowFloor`.
+- `--idempotency-key`, `--deadline-secs`, `--receipt-timeout-secs` — as for
+  `withdraw`.
+
+Refusals add `ErrMinAssetsPerLegRequired`, `ErrConfirmNotProvided`,
+`ErrVaultDisabled` (a named vault is not registered) and
+`ErrSlippageBoundExceeded` (a leg would return less than its floor) to the
+`withdraw` list.
 
 ---
 

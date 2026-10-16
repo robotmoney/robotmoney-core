@@ -11,7 +11,7 @@ import { parseArgs } from "node:util";
 /** The nine core suites of the publish contracts package. Each file must pass at least one test. */
 export const SUITES: Record<string, string[]> = {
   sheet: ["tests/sheet.test.ts", "tests/merge-sheet.test.ts"],
-  "chain-id": ["tests/chain-id.test.ts", "tests/chain-floors.test.ts", "tests/floors.test.ts"],
+  "chain-id": ["tests/chain-id.test.ts", "tests/chain-floors.test.ts", "tests/floors.test.ts", "tests/actions-proof.test.ts"],
   counts: ["tests/counts.test.ts"],
   stages: ["tests/stages.test.ts", "tests/preflight.test.ts", "tests/runner.test.ts", "tests/core-harness-contract.test.ts"],
   // src/safe/e2e.test.ts needs a real SafeL2 on the Twin chain: it runs in the safe-e2e job of publish-contracts.yml, not here

@@ -9,7 +9,7 @@
 // The test doubles (stub forge and cast, a fake Safe API and timelock) stand in for tools and the chain. They prove the CLI surface only.
 // They are no evidence for the Safe, its signers or governance: that is proven on the real deployment (repo CLAUDE.md, item b).
 import { describe, expect, test } from "bun:test";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EXIT_CODES } from "../src/errors.ts";
 import { GOVERN_ROWS, TWIN_ONLY_ROWS, UNPAUSE_ROWS } from "../src/govern.ts";
@@ -70,6 +70,17 @@ async function runCli(c: Case, verb: string, extra: string[] = []): Promise<{ co
   return { code, stdout, stderr };
 }
 
+/**
+ * The deployment run core's harness has already made when it calls govern: `publish` in the same working directory, which leaves the run manifest with its finished handover
+ * stage in the default evidence directory. Since QA plan v1 (security round 1, issue 1686) govern refuses to start without that manifest. The test then replaces the stage
+ * manifests with the ones the govern world reads, as before.
+ */
+async function deployFirst(c: Case): Promise<void> {
+  const r = await runCli(c, "publish");
+  if (r.code !== 0) console.error(r.stderr.split("\n").slice(-8).join("\n"));
+  expect(r.code).toBe(0);
+}
+
 describe("core harness contract: the argument vector and environment core builds", () => {
   test("publish: exit 0, every stage manifest in PUBLISH_MANIFEST_DIR, none in the core checkout, forge told the manifest dir", async () => {
     const c = boot();
@@ -101,6 +112,7 @@ describe("core harness contract: the argument vector and environment core builds
 
   test("govern: exit 0, one {row, phase, txHash, status:1, readyAt} stdout line per round event, equal to the recorded sample core parses", async () => {
     const c = boot();
+    await deployFirst(c);
     writeGovernManifests(c.manifestDir);
     const r = await runCli(c, "govern");
     if (r.code !== 0) console.error(r.stderr.split("\n").slice(-8).join("\n"));
@@ -126,6 +138,7 @@ describe("core harness contract: the argument vector and environment core builds
   test("govern --row by name and by number runs one round and prints its two lines", async () => {
     for (const row of ["unpause-USDC", "1"]) {
       const c = boot();
+      await deployFirst(c);
       writeGovernManifests(c.manifestDir);
       const r = await runCli(c, "govern", ["--row", row]);
       expect(r.code).toBe(0);
@@ -135,7 +148,9 @@ describe("core harness contract: the argument vector and environment core builds
   });
 
   test("a stage that fails exits with its own non-zero code and prints no row", async () => {
-    const c = boot(); // no manifests in PUBLISH_MANIFEST_DIR: govern has nothing to read
+    const c = boot();
+    await deployFirst(c);
+    for (const f of readdirSync(c.manifestDir)) rmSync(join(c.manifestDir, f)); // no manifests in PUBLISH_MANIFEST_DIR: govern has nothing to read
     const r = await runCli(c, "govern");
     expect(r.code).toBe(EXIT_CODES.INPUT_MISSING);
     expect(parseGovernOutput(r.stdout)).toEqual([]);

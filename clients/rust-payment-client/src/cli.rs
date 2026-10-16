@@ -57,17 +57,20 @@ pub enum Command {
         /// Maximum seconds to wait for the receipt. Default 60.
         #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
         receipt_timeout_secs: u64,
-        /// Gas limit for the deposit tx envelope. Default 3_000_000 — a
-        /// deposit allocates across the three real yield adapters and reads
-        /// `totalAssets()` on each, including the Moonwell Flagship USDC (Morpho)
-        /// vault whose `convertToAssets` iterates its multi-market supply
-        /// queue (per-market `idToMarketParams`/`extSloads`/`market` reads
-        /// plus AdaptiveCurveIRM accrual). On a real-adapter vault this path
-        /// costs ~1.55M gas, so the historical 750_000 default ran out of gas
-        /// once the now-removed no-yield test adapter no longer
-        /// short-circuited `totalAssets()` (issue #912).
-        #[arg(long = "gas-limit", default_value_t = 3_000_000)]
-        gas_limit: u64,
+        /// Gas limit for the deposit tx envelope. When omitted the client
+        /// derives it from the gateway's entry floor. Vault path: 3_000_000
+        /// (floor 2_000_000) — a deposit allocates across the three real
+        /// yield adapters and reads `totalAssets()` on each, including the
+        /// Moonwell Flagship USDC (Morpho) vault whose `convertToAssets`
+        /// iterates its multi-market supply queue; on a real-adapter vault
+        /// this path costs ~1.55M gas (issue #912). Router path
+        /// (`--destination <router>`): 400_000 + 2_550_000 per
+        /// `getEffectiveWeights()` leg plus a 150_000 margin, read from the
+        /// router before signing. A value below the floor is refused with
+        /// `ErrGasLimitBelowFloor` before signing: the gateway would revert
+        /// `InsufficientGas` and burn the gas and the nonce.
+        #[arg(long = "gas-limit")]
+        gas_limit: Option<u64>,
         /// Optional override for `max_fee_per_gas_cap` in wei (issue #93).
         /// When set, this beats both the TOML `max_fee_per_gas_cap`
         /// field and the per-chain default for any chain id.
@@ -75,14 +78,26 @@ pub enum Command {
         fee_cap: Option<u64>,
         /// Router-deposit destination: 0x-prefixed address of the
         /// PortfolioRouter to route through. When provided the command
-        /// calls `gateway.depositTo()` instead of `gateway.deposit()`.
+        /// calls `gateway.depositTo()` instead of `gateway.deposit()`, and
+        /// the default `--gas-limit` scales with the router's leg count.
         #[arg(long)]
         destination: Option<String>,
         /// Per-leg minimum shares for the router deposit (repeatable or
-        /// comma-separated decimal U256 values). Only meaningful together
-        /// with `--destination`; defaults to an empty slice when omitted.
+        /// comma-separated decimal U256 values, one per router leg). Only
+        /// meaningful together with `--destination`. When omitted, rmpc reads
+        /// `router.previewDeposit(amount)` and uses each funded leg's
+        /// `estShares` less 0.50%, so a leg that turns unavailable before
+        /// inclusion reverts `LegSkippedWithFloor` instead of moving its
+        /// share onto the other legs. A single `0` sends no floor.
         #[arg(long = "min-shares-per-leg", value_delimiter = ',', num_args = 0..)]
         min_shares_per_leg: Vec<String>,
+        /// Router deposit only: sign even when `router.previewDeposit` marks
+        /// a leg with weight above 0 unavailable (paused, at its TVL cap,
+        /// outside its price band). The router then skips that leg and
+        /// deposits its share into the other legs. Without this flag that
+        /// is refused with `ErrLegUnavailable` before signing.
+        #[arg(long = "allow-unavailable-legs")]
+        allow_unavailable_legs: bool,
         /// Pretty-print the JSON output (multi-line, indented).
         #[arg(long)]
         pretty: bool,
@@ -251,10 +266,14 @@ pub enum Command {
     /// Redeem vault shares through the gateway (agent-initiated redemption).
     ///
     /// Performs preflight reads (agent policy, share allowance, share
-    /// balance) then builds and broadcasts a
-    /// `gateway.withdraw(orderId, shares, sourceVault, deadline, idempotencyKey)`
-    /// call. Emits a stable JSON result with `assetsOut`, `assetRecipient`,
-    /// `txHash`, and `blockNumber` on success; exits non-zero on any refusal.
+    /// balance) then builds and broadcasts a one-leg
+    /// `gateway.withdrawFromRouter(orderId, [sourceVault], [shares],
+    /// [minAssets], deadline, idempotencyKey)` call, so the redemption
+    /// carries a minimum-out floor (QA plan D9: a direct `vault.redeem` has
+    /// none). On a gateway without a router it calls `gateway.withdraw`,
+    /// and only with `--min-assets 0`. Emits a stable JSON result with
+    /// `assetsOut`, `assetRecipient`, `route`, `minAssets`, `txHash`, and
+    /// `blockNumber` on success; exits non-zero on any refusal.
     Withdraw {
         /// Path to the operator config TOML.
         #[arg(long, short = 'c')]
@@ -265,6 +284,13 @@ pub enum Command {
         /// Source vault address to redeem from (0x-prefixed hex).
         #[arg(long = "source-vault")]
         source_vault: String,
+        /// Minimum USDC (6-decimal base units) the redemption must pay. The
+        /// router reverts the call below it (QA plan D9). When omitted the
+        /// floor is the vault's `previewRedeem(shares)`, read before
+        /// signing, less 0.50%. `0` sends no floor; it is the only value a
+        /// gateway without a router (single-vault mode) accepts.
+        #[arg(long = "min-assets")]
+        min_assets: Option<String>,
         /// 32-byte order id, 0x-prefixed hex.
         #[arg(long = "order-id")]
         order_id: String,
@@ -284,7 +310,9 @@ pub enum Command {
         /// `convertToAssets` loop) AND performs the real adapter withdrawal,
         /// so it is at least as expensive as a deposit. The historical
         /// 350_000 default was sized for the now-removed no-yield test
-        /// adapter (issue #912).
+        /// adapter (issue #912). A value below the gateway's entry floor
+        /// (2_250_000 for the one-leg router call, 2_000_000 for
+        /// `gateway.withdraw`) is refused with `ErrGasLimitBelowFloor`.
         #[arg(long = "gas-limit", default_value_t = 3_000_000)]
         gas_limit: u64,
         /// Optional override for `max_fee_per_gas_cap` in wei.
@@ -297,14 +325,16 @@ pub enum Command {
     /// Redeem vault shares via the Portfolio Router (multi-vault proportional
     /// redemption, agent-initiated).
     ///
-    /// Reads the router's effective weight vector, distributes the requested
-    /// per-leg shares across the caller-supplied vaults, and calls
-    /// `gateway.withdrawFromRouter(orderId, vaults, sharesPerLeg, deadline, idempotencyKey)`.
-    /// USDC lands at the policy-configured `assetRecipient`; no shares pass
-    /// through the gateway. Re-run with `--get-router` first to preview the
-    /// router's current vault order.
+    /// Redeems `--shares-per-leg[i]` from `--vaults[i]` and calls
+    /// `gateway.withdrawFromRouter(orderId, vaults, sharesPerLeg,
+    /// minAssetsPerLeg, deadline, idempotencyKey)`. Shares are pulled from the
+    /// policy's `shareReceiver`; USDC lands at the policy-configured
+    /// `assetRecipient`. Run `rmpc get-router` first to see the router's
+    /// vaults.
     ///
-    /// Requires `--confirm` to proceed past the preview.
+    /// Requires `--confirm` to proceed past the preview. Without it the
+    /// command prints the preview (every vault, shares, floor, share holder,
+    /// `assetRecipient`, gas limit and gas floor) and exits 2.
     WithdrawRouter {
         /// Path to the operator config TOML.
         #[arg(long, short = 'c')]
@@ -321,12 +351,11 @@ pub enum Command {
         #[arg(long = "vaults", value_delimiter = ',')]
         vaults: Vec<String>,
         /// Per-leg minimum USDC out (slippage floor), decimal, parallel to
-        /// `--shares-per-leg`. The gateway forwards this floor to the router,
-        /// which reverts a leg whose realized proceeds fall below it (GW-5 /
-        /// F-11). Length must equal `--shares-per-leg`; a leg value of 0
-        /// disables the floor for that leg. When omitted entirely the client
-        /// sends an all-zero floor of the same length (back-compat), but a real
-        /// off-chain-computed minimum is strongly recommended.
+        /// `--shares-per-leg`. Required. The gateway forwards this floor to the
+        /// router, which reverts a leg whose realized proceeds fall below it
+        /// (GW-5 / F-11). Give one value per leg (0 disables that leg's floor),
+        /// or a single `0` to send no floor at all. Omitting the flag is
+        /// refused with `ErrMinAssetsPerLegRequired`.
         /// Example: `--min-assets-per-leg 59700000,39800000`
         #[arg(long = "min-assets-per-leg", value_delimiter = ',', num_args = 0..)]
         min_assets_per_leg: Vec<String>,
@@ -346,7 +375,8 @@ pub enum Command {
         /// Gas limit for the withdraw-router tx. When omitted the client
         /// derives it from the gateway entry floor (400_000 + 1_850_000 per
         /// leg) plus a margin, so the default is never below the floor
-        /// (issue #1512).
+        /// (issue #1512). A value below the floor for the non-zero legs is
+        /// refused with `ErrGasLimitBelowFloor` before signing.
         #[arg(long = "gas-limit")]
         gas_limit: Option<u64>,
         /// Optional override for `max_fee_per_gas_cap` in wei.
@@ -514,6 +544,9 @@ pub enum CommitteeIdentitySubcommand {
 }
 
 /// Subcommands for `rmpc committee`.
+// `VoteSubmit` carries every vote field and `CheckAgent` one optional address.
+// The enum is parsed once per process, so boxing the large variant buys nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 pub enum CommitteeSubcommand {
     /// Submit a signed allocation vote for a vault. Sent to
@@ -570,5 +603,21 @@ pub enum CommitteeSubcommand {
         /// Optional override for `max_fee_per_gas_cap` in wei.
         #[arg(long = "fee-cap")]
         fee_cap: Option<u64>,
+    },
+    /// Read-only preflight for `vote-submit`: does the agent hold
+    /// `COMMITTEE_AGENT_ROLE` on the IC policy contract? Reads
+    /// `COMMITTEE_AGENT_ROLE()` and `hasRole(role, agent)` on
+    /// `ic_policy_address`, both at one block. Signs nothing, takes no lock
+    /// and needs no passphrase.
+    ///
+    /// Exit 0 when the agent holds the role, 2 (`ErrNotAllowlisted`) when the
+    /// read says it does not, 3 when the read could not run. Treat 3 as
+    /// unknown, never as registered.
+    CheckAgent {
+        /// Address to check (0x-prefixed hex). Default: the cleartext
+        /// `address` field of `[signer].keystore_path`, which is the address
+        /// `vote-submit` signs as.
+        #[arg(long)]
+        agent: Option<String>,
     },
 }

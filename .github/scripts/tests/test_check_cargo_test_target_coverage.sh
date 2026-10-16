@@ -10,10 +10,11 @@
 # the real one, in the one arrangement that passes. Every branch that matters --
 # a dark target, an allowlist entry with no reason, a stale entry, an entry
 # naming a file that no longer exists, `--no-run` mistaken for execution, a
-# `--lib` run mistaken for integration coverage, and a `--test <name>` credited
-# to the wrong package -- is unreachable in CI. A guard whose failure paths
-# never execute is a guard nobody has checked, and this checker's entire value
-# is in those paths.
+# `--lib` run mistaken for integration coverage, a `--test <name>` credited
+# to the wrong package, a `--lib` run hidden inside `out="$(...)"`, an echo that
+# merely mentions `cargo test`, and a run that is expected to fail -- is
+# unreachable in CI. A guard whose failure paths never execute is a guard
+# nobody has checked, and this checker's entire value is in those paths.
 #
 # THE PACKAGE-SCOPING CASE IS THE REASON THIS FILE WAS WRITTEN AND NOT ASSUMED.
 # suite-05 runs `--test governance` from `testing/fork-e2e-rust`. A name-only
@@ -41,7 +42,7 @@ fi
 # A case that stops being REACHED is indistinguishable from one that passes, so
 # the count of assertions actually executed is asserted too. Raise this together
 # with any case you add; lowering it is how coverage disappears quietly.
-MIN_EXPECTED_ASSERTIONS=16
+MIN_EXPECTED_ASSERTIONS=20
 
 PASS=0
 FAIL=0
@@ -280,7 +281,72 @@ PYEOF
 expect "$T" 0 "matrix include: entries expand into --test flags -> green"
 
 # ---------------------------------------------------------------------------
-# 10. THE NEGATIVE SELF-TEST ON THE REAL TREE (issue #1282 test plan).
+# 10. COMMAND SUBSTITUTION — the false-green case of QA plan T2.
+#     suite-27 runs `out="$(cargo test --lib 2>&1)"` from the rmpc crate. shlex
+#     keeps that assignment as ONE token, so no `--lib` was seen, the line fell
+#     through to the bare-`cargo test` branch, and every rmpc integration target
+#     was credited by a run that builds none of them. write_seam_reverted_anvil
+#     hid behind it. The `$(...)` body must be expanded before tokenising.
+# ---------------------------------------------------------------------------
+# quoted_subshell_lib_is_not_bare: the exact suite-27 shape, beside a fully
+# named beta. alpha is covered by nothing and must be red.
+QUOTED_SUBSHELL_LIB="$(cat <<'EOF'
+      - working-directory: crates/alpha
+        run: |
+          set -uo pipefail
+          out="$(cargo test --lib 2>&1)"
+          echo "$out"
+      - run: cargo test -p beta --test shared --test only_beta
+EOF
+)"
+T="$(make_tree "$QUOTED_SUBSHELL_LIB")"
+expect "$T" 1 "quoted_subshell_lib_is_not_bare: out=\"\$(cargo test --lib)\" credits no target -> red" "alpha::only_alpha"
+
+# The expansion must not simply drop substitutions: a `$(...)` or backtick body
+# that DOES run integration targets is still a run, and is still credited.
+SUBSHELL_RUNS_TARGETS="$(cat <<'EOF'
+      - working-directory: crates/alpha
+        run: |
+          out="$(cargo test --test shared --test only_alpha 2>&1)"
+      - run: |
+          log=`cargo test -p beta --tests`
+EOF
+)"
+T="$(make_tree "$SUBSHELL_RUNS_TARGETS")"
+expect "$T" 0 "a \$(...) or backtick body that runs --test targets is credited -> green"
+
+# Prose is not a run. suite-27 and suite-14 both print
+# `echo "::error::cargo test ... "` from a package directory; with the words
+# `cargo test` anywhere in the line, the old checker credited every target.
+PROSE_ONLY="$(cat <<'EOF'
+      - working-directory: crates/alpha
+        run: |
+          echo "::error::cargo test -p alpha ran 0 tests, floor is 5"
+      - run: cargo test -p beta --test shared --test only_beta
+EOF
+)"
+T="$(make_tree "$PROSE_ONLY")"
+expect "$T" 1 "an echo that mentions cargo test runs nothing -> red" "alpha::shared"
+
+# A step that EXPECTS cargo test to fail (suite-05's skip-refusal proof, marked
+# `bare-cargo-test-allowed:`) runs the target only to watch it refuse. No
+# assertion passes, so it is not coverage. Once substitutions are expanded the
+# suite-05 form would otherwise be credited.
+EXPECTED_FAILURE="$(cat <<'EOF'
+      - working-directory: crates/alpha
+        run: |
+          # bare-cargo-test-allowed: this step expects cargo test to FAIL (the skip refusal).
+          set +e
+          out="$(env -u FORK_URL CI=true cargo test --test shared --test only_alpha 2>&1)"
+          test $? -ne 0
+      - run: cargo test -p beta --test shared --test only_beta
+EOF
+)"
+T="$(make_tree "$EXPECTED_FAILURE")"
+expect "$T" 1 "a run marked bare-cargo-test-allowed (expected to fail) is not coverage -> red" "alpha::shared"
+
+# ---------------------------------------------------------------------------
+# 11. THE NEGATIVE SELF-TEST ON THE REAL TREE (issue #1282 test plan).
 #     A synthetic tests/*.rs file added to a real workspace member must turn
 #     the checker red on this repository as it actually stands.
 # ---------------------------------------------------------------------------

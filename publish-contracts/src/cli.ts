@@ -9,12 +9,13 @@ import { join, resolve } from "node:path";
 import { dirname } from "node:path";
 import { parseArgs } from "node:util";
 import { exitCodeOf, isPublishError, PublishError } from "./errors.ts";
-import { assertFloors, assertOwnerSignerSpec, assertSignerSpec, readRpcChainId, MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./floors.ts";
+import { assertFloors, assertOwnerSignerSpec, assertSignerSpec, readRpcChainId, isMainnet, MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./floors.ts";
+import { ACTIONS_TOKEN_ENV, proveActions, proofLogFields, type ActionsProof } from "./actions-proof.ts";
 import { kindLabel } from "./chains.ts";
 import { REGISTER_ROW, assertAgentLabel, assertSubmitter } from "./committee-register.ts";
 import { assertRecordInputs, recordReceipt, type RecordApi } from "./record-receipt.ts";
 import { FROZEN_DIR, assertSha, loadFrozen, resolveCounts, writeFrozen, type FrozenFile } from "./counts.ts";
-import { siblingEmergencySpec, siblingOwnerSpecs } from "./owner-signers.ts";
+import { claimedOwnerOf, siblingEmergencySpec, siblingOwnerSpecs } from "./owner-signers.ts";
 import { buildIsomorphismReport, dirtyTreeLines, readGitHead, writeReport } from "./isomorphism.ts";
 import { scrubGitEnv } from "./git-env.ts";
 import { publishLogger, type Logger } from "./log.ts";
@@ -25,13 +26,15 @@ import { buildLibraryArtifacts } from "./libs-build.ts";
 import { DEPLOYER_STAGES, STAGE_NAMES, getStageTable, useStageTable } from "./stages.ts";
 import { TABLE_REL, loadStageTable } from "./stage-table.ts";
 import { adoptedTxs, finalNonceCheck, loadRunManifest, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
-import { callerInputs, parseSheet } from "./sheet.ts";
+import { callerInputs, parseSheet, type Sheet } from "./sheet.ts";
 import { assertVaultRulesMatch } from "./vault-rules.ts";
 import { makeSigner, type PublishSigner } from "./signer.ts";
+import { PROOF_STAGE } from "./control-proof.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
 import { APPLY_ROW } from "./apply-receipt.ts";
 import { CLEAR_ROW } from "./clear-voted-weights.ts";
-import { REDEPLOY_ROW, REDEPLOY_VERB, REDEPLOY_KEYS, isRedeployKey, redeployRefusal, runRedeployVault } from "./redeploy-vault.ts";
+import { UNWIND_GUARD_KEYS, UNWIND_GUARD_ROW, parseUnwindGuardArgs } from "./unwind-guard.ts";
+import { REDEPLOY_ROW, REDEPLOY_VERB, REDEPLOY_KEYS, isRedeployKey, redeployRefusal, redeployShaPath, redeployShaRun, runRedeployVault } from "./redeploy-vault.ts";
 import { FREEZE_ROW, UPGRADE_ROW } from "./upgrade-rows.ts";
 import { DEPLOY_IMPL_VERB, runDeployImplementation } from "./deploy-implementation.ts";
 import { RECEIPT_ROW, SELF_ADMIN_ROWS, assertReceiptId, assertSelfAdminAllowed, govRowRefusal, isSelfAdminRow, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
@@ -59,6 +62,8 @@ export const USAGE = `publish contracts
                        redeploy-vault = REDEPLOY ONE VAULT into the live deployment (issue 1796, an experiment on a Base mainnet REHEARSAL: refused on 8453 in production): --vault PROTO. The DEPLOYER (--signer) deploys a NEW rmPROTO from the
                                  release tag that holds the fix: closed, unregistered, linked to the registry, ADMIN_ROLE on the timelock and EMERGENCY_ROLE on the emergency key. The old vault is not touched. --evidence is the run that deployed
                                  the deployment. Then run 'govern --row redeploy-vault' (the Safe, through the timelock, registers it, moves router eligibility, retires the old vault and opens the new one). --dry-run simulates only.
+                                 SHA MODEL (QA plan v1 E1): --core-sha is the REDEPLOY sha (the fix's tag), recorded as the round's core_sha; the run manifest keeps the ORIGINAL sha. The govern row and the
+                                 verify after it run at that redeploy sha (the row also at the original sha), with no frozen counts file for it: see --row redeploy-vault and --prior-out.
                        deploy-implementation = step 2 of a governed upgrade (issue 1861): --proxy NAME [--upgrade-build DIR]. The DEPLOYER (--signer) deploys a new implementation of the proxy
                                  from DIR/out (default the DEPLOY_SHA checkout), every library link filled with the address the LIVE implementation links. Refused (nothing sent) when the proxy
                                  reads upgradesFrozen() true, when DIR's layout snapshot does not extend the deployed one append-only, or when the build and the live implementation do not link
@@ -88,17 +93,27 @@ export const USAGE = `publish contracts
                      registry order. Not part of stage 13. After the delay the same command executes it and reads isReleased and the router weights back.
                      --row release-receipt --receipt-id 0x<bytes32> is refused with USAGE once RouterGovernance holds the receipt ADMIN_ROLE (every deploy since issue 1698):
                      a release alone would burn the receipt, so use --row apply-receipt (issue 1831).
-                     --row clear-voted-weights (no other argument) clears the router's VOTED weight vector (issue 1743): ONE timelock call, RouterGovernance.clearVotedWeights(), so routing
-                     falls back to the default vector. Refused (nothing scheduled) when no voted vector is active. apply-receipt refuses while one is active. Production and rehearsal, never part of stage 13.
-                     --row register-committee --submitter 0x<address> [--agent-label NAME] registers the consensus receipt submitter (issue 1727): ONE timelock batch,
-                     gateway.authorizeAgent (AGENT_ROLE, a 1-unit signalling-only policy owned by the timelock) plus gateway.committeeRegister (COMMITTEE_AGENT_ROLE). Not part of stage 13.
+                     --row clear-voted-weights (no other argument) clears the router's ACTIVE (applied receipt) weight vector (issue 1743): ONE timelock call, RouterGovernance.clearVotedWeights(),
+                     so routing falls back to the default vector: the emergency lever. Refused (nothing scheduled) when no active vector is in effect. Production and rehearsal, never part of stage 13.
+                     --row set-unwind-guard --admin-arg vault=PROTO|AGENT|RWA --admin-arg token=0x<address>|all --admin-arg min-usdc-out=N --admin-arg max-loss-bps=N
+                     [--admin-arg override-allowed=true|false] (QA plan v1 D7) sets a basket vault's emergency unwind guard: ONE timelock operation, BasketVault.setEmergencyUnwindGuard(token,
+                     minUsdcOut, overrideAllowed, maxLossBps) for the one token or for every active asset (all). min-usdc-out is USDC (6 decimals) for the vault's whole balance of the token,
+                     above zero; override-allowed defaults to true (Safe-only, issue 1705 Q2). Refused (nothing scheduled) for a token that is not an active asset; a guard already in effect is
+                     recorded as skipped. Production and rehearsal, never part of stage 13. The stage 12 verifier requires it on every active asset of an open basket: run it with the unpauses.
+                     --row register-committee --submitter 0x<address> [--agent-label NAME] registers the consensus receipt submitter (issue 1727, QA plan v1 B6): first, in
+                     private, the submitter Safe authorizes itself on the gateway (commitAuthorization, a block later revealAuthorization, then transferAgentOwnership to the
+                     timelock; its owners sign through --owner-signer), then ONE timelock batch, gateway.setPolicy (the 1-unit signalling-only policy, shares to the timelock)
+                     plus gateway.committeeRegister (COMMITTEE_AGENT_ROLE). The address is owned by the timelock before the batch is public, so no squatter can break it.
+                     A submitter another account already owns is refused (GOVERN, nothing scheduled): use a new submitter Safe. Not part of stage 13.
                      Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only; refused on 8453 in production. Same two-step wait as every on-demand row.
                       --row safe-add-owner|safe-remove-owner|safe-swap-owner|safe-change-threshold|timelock-grant-role|timelock-revoke-role --admin-arg K=V (Twin chain 918453 only, refused on 8453) runs a Safe or timelock self-administration row (issue 1645):
                       the four safe-* rows are one Safe transaction to the Safe, the two timelock-* rows are a Safe -> Timelock round. Keys: owner, old-owner, new-owner, threshold, role, account.
                      In a REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) update-delay, batch and cancel also run on 8453, as explicit --row runs after the unpauses, in that order.
-                     --row redeploy-vault (no other argument) replaces the vault the redeploy-vault verb deployed (issue 1796): ONE timelock batch of five calls, registry.registerVault(new), registry.migrateEligibility(new, true, five legs),
-                     registry.migrateEligibility(old, false, four legs), registry.retire(old), new.unpauseDeposits(). The old vault keeps its shares, redeem and redeemInKind. Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only, refused
+                     --row redeploy-vault (no other argument) replaces the vault the redeploy-vault verb deployed (issue 1796): ONE timelock batch of six calls, registry.registerVault(new),
+                     router.setVaultCap(new, the old vault's approved cap), registry.migrateEligibility(new, true, five legs), registry.migrateEligibility(old, false, four legs), registry.retire(old),
+                     new.unpauseDeposits(). The old vault keeps its shares, redeem and redeemInKind. Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only, refused
                      on 8453 in production. Refused (nothing scheduled) unless the old vault is Active and router-eligible, no voted vector is active and the new vault is the closed, linked, timelock-governed one the verb left.
+                     --core-sha is the round's core_sha (the sha the verb ran at) or the original deployment sha: neither needs a frozen counts file of its own (QA plan v1 E1).
                      --row freeze-upgrades (no other argument, issue 1842) freezes every unfrozen core proxy: ONE timelock batch of freezeUpgrades(implementation, implementation_code_hash), both
                      taken from the latest deployments/<chain>/upgradeability.json (run verify first). Prints a preview per proxy. Refused (nothing scheduled) while an upgrade operation is
                      pending on the timelock, or when the record is stale. Production and rehearsal, never part of stage 13. Run verify after it.
@@ -109,7 +124,11 @@ export const USAGE = `publish contracts
   --implementation A govern --row upgrade-proxy only: the new implementation, already deployed (linked to the live libraries): the address deploy-implementation printed.
   --upgrade-build D  govern --row upgrade-proxy and deploy-implementation: a core checkout at the commit the new implementation was built from, after forge build. Default: the DEPLOY_SHA checkout.
   --vault KEY        redeploy-vault only: the vault to redeploy. PROTO is the only one.
-  --prior-out DIR    verify, after a redeploy: the forge out/ directory of a checkout built at the ORIGINAL deployment sha. The vaults the redeploy did not replace (and the retired one) run the code of that build, so their code hashes are compared with it.
+  --prior-out DIR    verify, after a redeploy: the forge out/ directory of a git checkout built at the ORIGINAL deployment sha (its HEAD must be that sha). Every contract the redeploy did not replace
+                     (core, libraries, adapters, the other vaults, the retired one) runs the code of that build, so its code hash is compared with it; the replacing vault is compared with the
+                     build of the --core-sha checkout. After a round deployed at another sha (QA plan v1 E1) the verify runs ALONE at --core-sha <the round's core_sha> WITH --prior-out: at the
+                     original sha, or without --prior-out, it is refused (USAGE) before any signer, so it never fails and pauses the four vaults. The counts are the original sha's (its frozen
+                     file in the counts dir, else the run manifest's per-stage counts): no frozen file for the redeploy sha.
   --receipt-id ID    govern with --row release-receipt or --row apply-receipt, and the record-receipt verb: the bytes32 receipt id.
   --payload-digest D record-receipt only: the bytes32 payload_digest of 'rmpc receipt verify' = keccak256("robotmoney:consensus-receipt:v1\n" + the canonical receipt bytes). A plain keccak256 of the served canonical file is WRONG.
   --payload-uri URL  record-receipt only: the public route that serves exactly those bytes.
@@ -124,14 +143,18 @@ export const USAGE = `publish contracts
                      (no fork). Nothing is broadcast, nothing is sent to --rpc, the checkout is left as found.
   --core-dir DIR     core checkout (default: the repo root that holds scripts/deploy/stage-table.json, found by walking up; use it only for a checkout elsewhere)
   --evidence DIR     evidence directory (run manifest, isomorphism report)
-  --counts-dir DIR   frozen counts directory (default: deployments/frozen-counts in the working directory if present, else this repo's)
+  --counts-dir DIR   frozen counts directory (default: deployments/frozen-counts in the working directory if present, else this repo's). On 8453 the plan and every run that can
+                     broadcast (publish, a deployer stage, safe, prove-control, govern, redeploy-vault) pass the release gate first (issue 1816): <sha>.json must be committed and clean in its git work
+                     tree (COUNTS_UNTRACKED); a reconstructed baseline needs the stricter clean-checkout proof of issue 1740 (COUNTS_MISSING).
   --counts-require-origin-dev  8453, reconstructed baseline: also refuse unless HEAD of the counts checkout is reachable from its local origin/dev (git fetch origin dev first). Required by the release runbook.
   --measure          rehearsal only: measure per-stage counts and write the frozen file for this SHA
   --logs-rpc URL     prove-control --resume only: a separate RPC for eth_getLogs (the scan for a landed proof). Every other read stays on --rpc.
   --logs-window N    prove-control --resume: blocks per eth_getLogs call (default 2000), halved on a range-limit error
   --logs-tries N     prove-control --resume: tries of one throttled eth_getLogs call (HTTP 429), with exponential backoff (default 6)
   --owner-signer S   prove-control and govern: a Safe owner signer spec (repeat for each owner: prove-control needs EVERY owner, govern the threshold). On chain 918453 with none given: the SAFE_OWNER_A/B/C keystores
-                     beside the DEPLOYER keystore, under the same passphrase file (the rehearsal key layout). Never on 8453.
+                     beside the DEPLOYER keystore, under the same passphrase file (the rehearsal key layout). Never on 8453: there every owner is named, as keystore:PATH (passphrase typed at the hidden
+                     prompt) or a device bound to its owner, ledger:PATH@0xOWNER / trezor:PATH@0xOWNER. Hardware is optional, never required. A run on 8453 that reaches prove-control with fewer
+                     specs than the sheet has owners, the same spec twice, two specs claiming one owner, or a spec claiming an address outside SAFE_OWNERS is refused before stage 1 (exit 24).
   --emergency-signer S  pause-all, and the automatic pause after a failed verify: the EMERGENCY key signer spec, needed once the handover has begun. On the Twin chain with none given: the EMERGENCY keystore beside the DEPLOYER keystore. Never defaulted on mainnet.
   --compare-sheet F  a second sheet for the sheet diff in the isomorphism report
   --call-label L --call-target ADDR --call-data 0x..   govern, Twin chain 918453 only (refused on 8453): one generic Safe -> Timelock call (schedule, wait by warp, execute),
@@ -165,6 +188,8 @@ export interface CliDeps {
   chainReader?: RunContext["chainReader"];
   /** Injected for tests: the poll and the longest wait of the recorder gate before the agent stage (core 1676). */
   recorderWait?: RunContext["recorderWait"];
+  /** Test seam (issue 1723, QA plan v1 E6): the sleep and the bound of the reads after a landed transaction. Default: the shared read-after-write bound. */
+  readRetry?: RunContext["readRetry"];
   /** Test seam: core's own config-check (bun scripts/ci/config-check.ts, read-only against live Base). Default: the real spawn. */
   coreConfigCheck?: CoreConfigCheck;
   /** Test seam only: the pinned FiatTokenProxy code hash. Production uses the pin in usdc.ts. */
@@ -189,6 +214,8 @@ export interface CliDeps {
   recordApi?: RecordApi;
   /** Test seam: the blank local chain a --dry-run simulates on. Default: anvil, when installed. */
   startChain?: ChainStarter;
+  /** Test seam (qa-plan B2): the Actions-only proof behind CONFIRM=environment on 8453. Default: fetch and verify the job's GitHub OIDC token. */
+  actionsProof?: typeof proveActions;
 }
 
 export interface Parsed {
@@ -204,7 +231,7 @@ export interface Parsed {
   /** record-receipt only. */
   payloadDigest?: string;
   payloadUri?: string;
-  /** With a self-administration row only: the key=value pairs of --admin-arg. */
+  /** With a self-administration row or --row set-unwind-guard (QA plan v1 D7) only: the key=value pairs of --admin-arg. */
   adminArgs?: Record<string, string>;
   /** redeploy-vault only: the vault key. */
   vault?: string;
@@ -250,7 +277,7 @@ export function parseCli(argv: string[]): Parsed {
     if (!(verb === "govern" || stageNames === "govern")) throw new PublishError("USAGE", `--row applies to the govern verb (or --stage govern) only\n${USAGE}`);
     // An unknown row fails here, before any work. Whether update-delay, batch and cancel may run on 8453 depends on the sheet's DEPLOYMENT_KIND, so runGovern decides that.
     if (isSelfAdminRow(row)) assertSelfAdminAllowed(Number(chainRaw), row);
-    else if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW && row !== REDEPLOY_ROW && row !== FREEZE_ROW && row !== UPGRADE_ROW) resolveGovernRow(row);
+    else if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW && row !== REDEPLOY_ROW && row !== UNWIND_GUARD_ROW && row !== FREEZE_ROW && row !== UPGRADE_ROW) resolveGovernRow(row);
   }
   const vaultArg = v.vault as string | undefined;
   if (verb === REDEPLOY_VERB) {
@@ -258,7 +285,9 @@ export function parseCli(argv: string[]): Parsed {
     if (!isRedeployKey(vaultArg)) throw new PublishError("USAGE", `--vault '${vaultArg}' cannot be redeployed: only ${REDEPLOY_KEYS.join(", ")}\n${USAGE}`);
   } else if (vaultArg !== undefined) throw new PublishError("USAGE", `--vault goes with the ${REDEPLOY_VERB} verb only\n${USAGE}`);
   const priorOut = v["prior-out"] as string | undefined;
-  if (priorOut !== undefined && !(verb === "verify" || stage === "verify" || stage === "all" || verb === undefined)) throw new PublishError("USAGE", `--prior-out goes with the verify verb (or --stage verify) only\n${USAGE}`);
+  // --prior-out is read by the verify stage only: a run whose stages include verify (the verify verb, the default set, all, or a --stage list naming verify; QA plan v1 E1).
+  const reachesVerify = verb === "verify" || (verb === undefined && (stage === undefined || stage === "all" || stage.split(",").map((x) => x.trim()).includes("verify")));
+  if (priorOut !== undefined && !reachesVerify) throw new PublishError("USAGE", `--prior-out goes with the verify verb (or --stage verify) only\n${USAGE}`);
   const receiptIdRaw = v["receipt-id"] as string | undefined;
   let receiptId: string | undefined;
   const submitter = v.submitter as string | undefined;
@@ -291,15 +320,24 @@ export function parseCli(argv: string[]): Parsed {
   if (implementation !== undefined && !/^0x[0-9a-fA-F]{40}$/.test(implementation)) throw new PublishError("USAGE", `--implementation must be an address, got '${implementation}'`);
   let adminArgs: Record<string, string> | undefined;
   const adminRaw = v["admin-arg"] as string[] | undefined;
-  if (adminRaw !== undefined) {
-    if (row === undefined || !isSelfAdminRow(row)) throw new PublishError("USAGE", `--admin-arg goes with a self-administration row only (${SELF_ADMIN_ROWS.join(", ")})\n${USAGE}`);
+  if (adminRaw !== undefined && row === UNWIND_GUARD_ROW) {
+    // QA plan v1 D7: the row's own keys. They are checked here, before any signer or passphrase prompt.
+    adminArgs = {};
+    for (const kv of adminRaw) {
+      const m = /^([a-z-]+)=(.+)$/.exec(kv);
+      if (!m || !(UNWIND_GUARD_KEYS as readonly string[]).includes(m[1]!)) throw new PublishError("USAGE", `--row ${UNWIND_GUARD_ROW}: --admin-arg takes key=value with key ${UNWIND_GUARD_KEYS.join(", ")}, got '${kv}'`);
+      adminArgs[m[1]!] = m[2]!;
+    }
+    parseUnwindGuardArgs(adminArgs);
+  } else if (adminRaw !== undefined) {
+    if (row === undefined || !isSelfAdminRow(row)) throw new PublishError("USAGE", `--admin-arg goes with a self-administration row (${SELF_ADMIN_ROWS.join(", ")}) or --row ${UNWIND_GUARD_ROW} only\n${USAGE}`);
     adminArgs = {};
     for (const kv of adminRaw) {
       const m = /^(owner|old-owner|new-owner|threshold|role|account)=(.+)$/.exec(kv);
       if (!m) throw new PublishError("USAGE", `--admin-arg takes key=value with key owner, old-owner, new-owner, threshold, role or account, got '${kv}'`);
       adminArgs[m[1]!] = m[2]!;
     }
-  }
+  } else if (row === UNWIND_GUARD_ROW) parseUnwindGuardArgs(undefined); // USAGE: the row needs its --admin-arg values
   let call: Parsed["call"];
   if (v["call-label"] !== undefined || v["call-target"] !== undefined || v["call-data"] !== undefined) {
     if (!(verb === "govern" || stage === "govern")) throw new PublishError("USAGE", `--call-label, --call-target and --call-data apply to the govern verb only\n${USAGE}`);
@@ -342,6 +380,58 @@ export function selectVerbStages(verb: Verb): string[] {
   return [verb];
 }
 
+/**
+ * The owner-signer shortfall of a run on 8453, decided BEFORE stage 1 (owner decision 2026-10-14, qa-plan B1). prove-control needs a signer
+ * for EVERY sheet owner (core 1618), and it runs after stages 1-10: with too few `--owner-signer` specs a publish used to broadcast those ten
+ * stages and die at CONTROL_NOT_PROVEN with the deployer holding every role. So a run whose stages include prove-control is refused here,
+ * with the same kind, when fewer specs than sheet owners are given. Not checked: the Twin chain (its owners default from the rehearsal keys,
+ * owner-signers.ts), a dry run (it skips prove-control, runner.ts), the plan (no signer) and the verbs that have no proof stage. A govern run
+ * keeps its own in-run refusal (GOVERN, before any send): it broadcasts nothing before the Safe's signature count is checked.
+ * Security round 1 (review-security-031): counting was not enough. The same spec twice, two specs that claim the same owner, or a spec that claims an address outside
+ * SAFE_OWNERS passed here and failed at prove-control after stages 1-10. Every claim that can be read before stage 1 (owner-signers.ts claimedOwnerOf: a device's
+ * @0xOWNER, a keystore's unencrypted address; `claimOf` is the test seam) must be a sheet owner, and no owner may be claimed twice. A claim that cannot be read yet
+ * is left to prove-control.
+ */
+export function ownerSignerShortfall(i: { chainId: number; verb?: Verb; stage?: string; dryRun: boolean; specs: string[]; sheet: Pick<Sheet, "safeOwners">; claimOf?: (spec: string) => string | undefined }): PublishError | undefined {
+  if (i.chainId !== MAINNET_CHAIN_ID || i.dryRun || i.stage === "plan") return undefined;
+  if (i.verb === "pause-all" || i.verb === "record-receipt" || i.verb === REDEPLOY_VERB) return undefined;
+  const names = i.verb ? selectVerbStages(i.verb) : selectStages(i.stage);
+  if (!names.includes(PROOF_STAGE)) return undefined;
+  const have = i.specs.length, need = i.sheet.safeOwners.length;
+  const pass = "Pass --owner-signer for each owner of the sheet (keystore:PATH, ledger:PATH@0xOWNER or trezor:PATH@0xOWNER).";
+  if (have < need) return new PublishError("CONTROL_NOT_PROVEN", `${have} --owner-signer spec${have === 1 ? "" : "s"} for a Safe of ${need} owners: ${PROOF_STAGE} needs a signer for EVERY owner, so the run is refused before stage 1 and nothing was sent. ${pass}`, { have, need, stage: PROOF_STAGE });
+  const refuse = (why: string, details: Record<string, unknown>) => new PublishError("CONTROL_NOT_PROVEN", `${why}: ${PROOF_STAGE} needs a signer for EVERY owner of the sheet exactly once, so the run is refused before stage 1 and nothing was sent. ${pass}`, { ...details, stage: PROOF_STAGE });
+  const twice = i.specs.find((x, k) => i.specs.indexOf(x) !== k);
+  if (twice !== undefined) return refuse(`--owner-signer ${twice} is given twice`, { spec: twice });
+  const owners = new Set(i.sheet.safeOwners.map((x) => x.toLowerCase()));
+  const byOwner = new Map<string, string>();
+  for (const spec of i.specs) {
+    const owner = (i.claimOf ?? claimedOwnerOf)(spec);
+    if (owner === undefined) continue;
+    if (!owners.has(owner)) return refuse(`--owner-signer ${spec} names ${owner}, which is not one of the sheet's SAFE_OWNERS`, { spec, owner });
+    const other = byOwner.get(owner);
+    if (other !== undefined) return refuse(`--owner-signer ${other} and ${spec} both name the owner ${owner}`, { spec, other, owner });
+    byOwner.set(owner, spec);
+  }
+  return undefined;
+}
+
+/**
+ * QA plan v1 E4 (issue 1816, review T7): the runs on 8453 that pass the release gate (release-gate.ts assertReleaseGate) before any signer exists. Before, only
+ * `--stage plan` did, so a publish, prove-control or govern at an untagged sha, or with a hand-edited counts file, reached forge. Gated: the plan, and every run that
+ * can broadcast: the publish verb, the default stage set, deploy, all, any stage list naming a stage other than verify (a deployer stage, safe, prove-control, govern),
+ * the govern verb (every row) and the redeploy-vault verb (as before, dry run included). Not gated: the Twin chain, a --measure run (refused on 8453 by the floors), a dry
+ * run of the stages (nothing is broadcast), verify alone (it reads; a failed verify's automatic pause-all must never wait on GitHub), pause-all (the emergency lever)
+ * and record-receipt (it deploys and governs no contract of the sha; a Base mainnet rehearsal only). The stage table must be loaded (selectStages reads it).
+ */
+export function releaseGated(i: { chainId: number; verb?: Verb; stage?: string; dryRun: boolean; measure: boolean }): boolean {
+  if (i.chainId !== MAINNET_CHAIN_ID || i.measure) return false;
+  if (i.stage === "plan" || i.verb === REDEPLOY_VERB) return true;
+  if (i.dryRun || i.verb === "pause-all" || i.verb === "record-receipt") return false;
+  const names = i.verb ? selectVerbStages(i.verb) : selectStages(i.stage);
+  return names.some((n) => n !== "verify");
+}
+
 /** `--stage` to stage names. Default: everything through verify. govern is explicit (or `all`). */
 export function selectStages(stage: string | undefined): string[] {
   const through = (last: string) => STAGE_NAMES.slice(0, STAGE_NAMES.indexOf(last) + 1);
@@ -369,6 +459,14 @@ export function defaultCoreDir(cwd: string): string {
     if (dirname(d) === d) break;
   }
   return resolve(import.meta.dir, "..", "..");
+}
+
+/** QA plan v1 E1: the HEAD sha of the git checkout that holds `dir` (the build --prior-out names), found by walking up from it. Undefined outside a git checkout. */
+export function checkoutShaOf(dir: string): string | undefined {
+  for (let d = resolve(dir); ; d = dirname(d)) {
+    if (existsSync(join(d, ".git"))) return readGitHead(d);
+    if (dirname(d) === d) return undefined;
+  }
 }
 
 /** No --counts-dir: deployments/frozen-counts under the working directory when it has one, else this repo's own (the caller may run from core). */
@@ -418,13 +516,26 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     });
     if (rpcChainId !== MAINNET_CHAIN_ID && rpcChainId !== TWIN_CHAIN_ID) throw new PublishError("CHAIN", `chain ${rpcChainId} is not supported: publish contracts runs on ${TWIN_CHAIN_ID} (rehearsal) and ${MAINNET_CHAIN_ID} (mainnet)`);
     for (const spec of a.ownerSigners) assertOwnerSignerSpec(spec, { rpcChainId, rpc: a.rpc, env });
-    assertFloors({ rpcChainId, rpc: a.rpc, sheet, argChainId: a.chain, caller, signerSpec: a.signer, env, environment: a.environment, githubActions: env.GITHUB_ACTIONS === "true", measure: a.measure });
+    // qa-plan B2 (DT-3): CONFIRM=environment on 8453 is accepted on one proof only, the job's GitHub OIDC token verified for --environment. It is
+    // fetched HERE, before any floor or signer, and only when the runner's request token is present: a laptop with GITHUB_ACTIONS=true has none,
+    // and the floor below refuses it by name. A token that does not verify is a FLOOR exit, never a skip.
+    const githubActions = env.GITHUB_ACTIONS === "true";
+    let actionsProof: ActionsProof | undefined;
+    if (caller.confirm === "environment" && isMainnet(rpcChainId) && githubActions && env[ACTIONS_TOKEN_ENV]) {
+      actionsProof = await (deps.actionsProof ?? proveActions)(env, { environment: a.environment });
+      log.log("info", "run.actions_proof", { chain_id: rpcChainId, ...proofLogFields(actionsProof) });
+    }
+    assertFloors({ rpcChainId, rpc: a.rpc, sheet, argChainId: a.chain, caller, signerSpec: a.signer, env, environment: a.environment, githubActions, actionsProof, measure: a.measure });
     if (sheet.kind === "rehearsal") log.log("warn", "run.deployment_kind", { deployment_kind: sheet.kind, label: kindLabel(sheet.kind, sheet.timelockMinDelay), note: "a REHEARSAL with a short timelock delay: never a production deployment" });
     // A row this chain and kind refuse is refused HERE, before any signer exists: no passphrase prompt for a row that can never run (production update-delay, batch, cancel, register-committee on 8453).
     const rowRefusal = govRowRefusal(a.row, rpcChainId, sheet.kind);
     if (rowRefusal !== undefined) throw new PublishError("USAGE", rowRefusal);
     // The single-vault redeploy is refused on 8453 in production HERE, before any signer or passphrase exists (issue 1796).
     if (a.verb === REDEPLOY_VERB) { const why = redeployRefusal(rpcChainId, sheet.kind); if (why !== undefined) throw new PublishError("USAGE", why); }
+    // Too few owner signers for a run that reaches prove-control on 8453 is refused HERE, before any signer, forge call or stage 1 (qa-plan B1, review-security-031):
+    // the proof needs every owner, and finding that out at stage 11 left stages 1-10 broadcast with the deployer holding every role.
+    const shortfall = ownerSignerShortfall({ chainId: rpcChainId, verb: a.verb, stage: a.stage, dryRun: a.dryRun, specs: a.ownerSigners, sheet, claimOf: (spec) => claimedOwnerOf(spec, cwd) });
+    if (shortfall !== undefined) throw shortfall;
     log.log("info", "run.checks_ok", { deployment_kind: sheet.kind, chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
 
     const coreDir = a.coreDir ? resolve(cwd, a.coreDir) : defaultCoreDir(cwd);
@@ -454,8 +565,10 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return {
         chainId: rpcChainId, rpc: a.rpc, sheet, coreDir, coreSha: a.coreSha, evidenceDir,
         environment: a.environment, signer, caller, frozen, measure, dryCounts: a.dryRun ? {} : undefined, resume: a.resume, dryRun: a.dryRun, run, log,
-        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions: env.GITHUB_ACTIONS === "true", baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, recorderWait: deps.recorderWait, coreConfigCheck: deps.coreConfigCheck,
+        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions, actionsProof, baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, recorderWait: deps.recorderWait, readRetry: deps.readRetry, coreConfigCheck: deps.coreConfigCheck,
         manifestOut, startChain: a.dryRun && a.verb !== REDEPLOY_VERB ? (deps.startChain ?? startAnvil) : undefined, priorArtifactsDir: a.priorOut ? resolve(cwd, a.priorOut) : undefined,
+        // security round 1 (review-security-033): a printed resume command names the absolute counts dir and --counts-require-origin-dev (govern.ts resumeCommand)
+        countsDir: a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd), countsRequireOriginDev: a.countsRequireOriginDev,
       };
     };
     // The EMERGENCY key (core 1619): --emergency-signer, else on the Twin chain the EMERGENCY keystore beside the DEPLOYER keystore. Never defaulted on mainnet.
@@ -479,7 +592,6 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       log.log("info", "run.done", { ran: ["pause-all"], skipped: [] });
       return 0;
     }
-    // Safe owner signers: --owner-signer, else on the Twin chain the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts).
     // Safe owner signers: --owner-signer, else on the Twin chain the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts).
     const ownerSigners = async (c: RunContext): Promise<Signer[]> => {
       // A hardware owner asks the operator for its device before every read and every signature; keystore specs need no device.
@@ -515,7 +627,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       const usdc = await run("cast", ["code", USDC_ADDRESS], { env: castEnv });
       if (usdc.code !== 0) throw new PublishError("CHAIN", `cast code ${USDC_ADDRESS} failed: ${usdc.stderr.trim().split("\n").slice(-1)[0] ?? ""}`);
       assertUsdcCode(usdc.stdout.trim(), deps.usdcCodeHash);
-      if (rpcChainId === MAINNET_CHAIN_ID) {
+      if (releaseGated({ chainId: rpcChainId, verb: a.verb, stage: a.stage, dryRun: a.dryRun, measure: a.measure })) {
         const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir: defaultCountsDir(cwd), env, kind: sheet.kind, requireCounts: false, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag });
         log.log("info", "redeploy.release_gate", { ok: true, tag, core_sha: a.coreSha });
       }
@@ -535,15 +647,26 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     };
     const realAnchorCommitted = (anchorPath: string, hash: string): Promise<void> => gitAnchorCommitted(anchorPath, hash);
     const countsDir = a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd);
-    // the contracts-freeze gate (core 1524, issue 1816): on 8453 the plan AND every non-dry run that broadcasts (publish, govern, --stage prove-control, deploy, all: any
-    // stage but verify) run only at a release-tagged SHA with committed, clean counts and green CI. No signer exists yet. pause-all, record-receipt and redeploy-vault returned above.
+    // QA plan v1 E1 (review DT-2, QD-6, issue 1796): the single-vault redeploy's sha model. `govern --row redeploy-vault` and `verify --prior-out` may name the sha the
+    // redeploy-vault verb ran at although the run manifest names the original deployment sha (redeploy-vault.ts redeployShaRun). A verify the model cannot check
+    // (the original sha after a round at another sha, the redeploy sha without --prior-out, a --prior-out that is not a checkout of the original sha) is refused HERE,
+    // before any signer, frozen counts or forge: a failed verify would pause all four vaults. A stage set that reaches verify never names the redeploy sha.
+    // Every run that reaches the verify stage is covered, not only the verify verb: the default stage set, --stage all and a list naming verify ("stage-set").
+    const shaPath = a.stage === "plan" ? undefined : redeployShaPath({ verb: a.verb, stage: a.stage, row: a.row, dryRun: a.dryRun });
+    const priorRun = shaPath ? loadRunManifest(evidenceDir) : undefined;
+    const priorOutSha = a.priorOut ? checkoutShaOf(resolve(cwd, a.priorOut)) : undefined;
+    const shaRun = redeployShaRun(priorRun, { coreSha: a.coreSha, path: shaPath, priorOut: a.priorOut, priorOutSha });
+    if (shaRun) log.log("info", "run.redeploy_sha", { path: shaPath, original_sha: shaRun.originalSha, redeploy_sha: shaRun.redeploySha, ...(priorOutSha ? { prior_out_sha: priorOutSha } : {}) });
+    // The contracts-freeze gate (core 1524; QA plan v1 E4, issue 1816): on 8453 the plan AND every run that can broadcast (releaseGated) run only at a release-tagged SHA of
+    // the sheet's kind, whose frozen counts file is committed and clean in its git work tree (COUNTS_UNTRACKED; a reconstructed baseline gets the whole-dir proof of issue 1740), with green CI. No signer exists yet, no forge has run.
+    // The govern row at a redeploy round's sha has no frozen file of its own (E1): like the redeploy-vault verb, it is gated on the tag and CI only.
     const names = a.stage === "plan" ? [] : a.verb ? selectVerbStages(a.verb) : selectStages(a.stage);
-    const broadcasts = names.some((n) => n !== "verify");
-    if (rpcChainId === MAINNET_CHAIN_ID && !a.measure && (a.stage === "plan" || (broadcasts && !a.dryRun))) {
-      const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, kind: sheet.kind, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag,
+    const gated = releaseGated({ chainId: rpcChainId, verb: a.verb, stage: a.stage, dryRun: a.dryRun, measure: a.measure });
+    if (gated) {
+      const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, kind: sheet.kind, requireCounts: !shaRun, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag,
         verifyReconstructed: deps.verifyReconstructed ?? realVerifyReconstructed, anchorCommitted: deps.anchorCommitted ?? realAnchorCommitted, frozenDirCommitted: deps.frozenDirCommitted ?? realFrozenDirCommitted,
         run, runEnv: scrubGitEnv(castEnv) });
-      log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha, stage: a.stage ?? a.verb ?? "default" });
+      log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha, stage: a.stage ?? a.verb ?? "default", counts: shaRun ? "none (redeploy sha)" : "committed" });
     }
     // deploy-implementation (issue 1861): the release gate above ran on 8453 as for govern. No counts, no stages: one CREATE from the deployer and its implementation_deploys entry.
     if (a.verb === DEPLOY_IMPL_VERB) {
@@ -553,10 +676,11 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       log.log("info", "run.done", { ran: [DEPLOY_IMPL_VERB], skipped: [] });
       return 0;
     }
-    // plan is a gate: it needs the frozen file. Every other run resolves the counts (frozen, measure, dry-run measure) by counts.ts resolveCounts.
+    // plan is a gate: it needs the frozen file. Every other run resolves the counts (frozen, measure, dry-run measure) by counts.ts resolveCounts; a run at a redeploy sha
+    // uses the original sha's counts and needs no file for the redeploy sha (QA plan v1 E1).
     const counts = a.stage === "plan"
       ? { frozen: a.measure ? undefined : loadFrozen(countsDir, a.coreSha).counts, measure: a.measure, mode: (a.measure ? "measure-flag" : "frozen") as "measure-flag" | "frozen", file: "" }
-      : resolveCounts({ dir: countsDir, sha: a.coreSha, measureFlag: a.measure, dryRun: a.dryRun, chainId: rpcChainId, warn: (ev, f) => log.log("warn", ev, f) });
+      : resolveCounts({ dir: countsDir, sha: a.coreSha, measureFlag: a.measure, dryRun: a.dryRun, chainId: rpcChainId, warn: (ev, f) => log.log("warn", ev, f), ...(shaRun && priorRun ? { redeploy: { originalSha: shaRun.originalSha, recorded: measuredCounts(priorRun) } } : {}) });
     const frozen = counts.frozen;
 
     // P12: the token at the constant USDC address must be the pinned FiatTokenProxy. A mock fails here, before any send.
@@ -576,15 +700,17 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return 0;
     }
     // Issue 1733: the plan is not the only place a reconstructed baseline is re-verified against the build and the chain. A run that sends deployer transactions on 8453 does it too,
-    // before any signer exists, so the order plan then publish is not something an operator can get wrong.
-    if (rpcChainId === MAINNET_CHAIN_ID && !counts.measure && names.some((n) => DEPLOYER_STAGES.some((s) => s.name === n))) {
+    // before any signer exists, so the order plan then publish is not something an operator can get wrong. Since QA plan v1 E4 the release gate above already did it for every
+    // gated run (once: the re-verification is not repeated), so only a dry run of the deployer stages on 8453 reaches this block.
+    if (!gated && rpcChainId === MAINNET_CHAIN_ID && !counts.measure && names.some((n) => DEPLOYER_STAGES.some((s) => s.name === n))) {
       const f = loadFrozen(countsDir, a.coreSha);
       if (f.measured.reconstructed) {
         await (deps.verifyReconstructed ?? realVerifyReconstructed)(f);
         await assertBaselineCommitted({ countsDir, sha: a.coreSha, frozen: f, frozenDirCommitted: deps.frozenDirCommitted ?? realFrozenDirCommitted, anchorCommitted: deps.anchorCommitted ?? realAnchorCommitted });
       }
     }
-    const ctx = buildCtx(frozen, counts.measure);
+    // QA plan v1 E1: a run at a redeploy round's sha continues the run manifest of the original sha; the verify records the sha of the --prior-out checkout.
+    const ctx: RunContext = { ...buildCtx(frozen, counts.measure), ...(shaRun ? { originalSha: shaRun.originalSha } : {}), ...(priorOutSha ? { priorArtifactsSha: priorOutSha } : {}) };
     // A failed verify (stage 12) or postflight pauses deposits on all four vaults (core 1619) and then fails the run as before.
     let postflight: PauseTrigger | undefined;
     let result: Awaited<ReturnType<typeof runStages>>;
@@ -597,14 +723,15 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
         },
         verify: async (c, row, m) => {
           try { await runVerifyStage(c, row, m, { ...realVerifyDeps, ...(deps.verify ?? {}) }); } catch (e) {
-            // A part-way govern run (GOVERN_PENDING, issue 1667) is not a failed verify: nothing was checked, so nothing is paused.
+            // A part-way govern run (GOVERN_PENDING, issue 1667) is not a failed verify: nothing was checked, so nothing is paused. Neither is a verify refused before
+            // the verifier ran because it would compare a contract with the wrong build (QA plan v1 E1, redeploy-vault.ts verifyBuildRefusal).
             // Neither is a verify whose only failures are reads the RPC refused (RPC_REFUSED, issue 1851): an RPC without the data is not an incident.
-            if (!isPublishError(e, "GOVERN_PENDING") && !isPublishError(e, "RPC_REFUSED")) postflight = "verify";
+            if (!isPublishError(e, "GOVERN_PENDING") && !isPublishError(e, "RPC_REFUSED") && !(isPublishError(e, "USAGE") && e.details.refused_before_verify === true)) postflight = "verify";
             throw e;
           }
         },
         govern: async (c, row, m) => {
-          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, ...(a.noWarp ? { warp: false as const } : {}), row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, agentLabel: a.agentLabel, proxy: a.proxy, implementation: a.implementation, upgradeBuild: a.upgradeBuild, ...(a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
+          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, ...(a.noWarp ? { warp: false as const } : {}), row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, agentLabel: a.agentLabel, proxy: a.proxy, implementation: a.implementation, upgradeBuild: a.upgradeBuild, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
         },
       });
       try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { postflight = "postflight"; throw e; }
@@ -613,12 +740,14 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       throw e;
     }
     if (a.dryRun && counts.mode === "dry-run-measure") log.log("warn", "dry_run.counts_measured", { counts: ctx.dryCounts, note: "measured by the dry run, not frozen: nothing was written" });
-    if ((a.measure || counts.mode === "twin-measure") && DEPLOYER_STAGES.every((s) => result.manifest.stages[s.name]?.status === "done")) {
+    if (!shaRun && (a.measure || counts.mode === "twin-measure") && DEPLOYER_STAGES.every((s) => result.manifest.stages[s.name]?.status === "done")) {
       const forge = (await run("forge", ["--version"], { env: castEnv })).stdout.trim().split("\n")[0];
       const p = writeFrozen(countsDir, a.coreSha, measuredCounts(result.manifest), { chainId: rpcChainId, at: new Date().toISOString(), forge, ...(Object.keys(adoptedTxs(result.manifest)).length ? { adopted: Object.keys(adoptedTxs(result.manifest)) } : {}) });
       log.log("info", "run.counts_measured", { file: p });
     }
-    if (!a.dryRun && existsSync(ctx.evidenceDir)) {
+    // QA plan v1 E1: the isomorphism report describes the deployment at its own sha. A run at a redeploy sha leaves it as the original run wrote it.
+    if (shaRun) log.log("info", "run.isomorphism_kept", { original_sha: shaRun.originalSha, note: "a run at a redeploy sha does not rewrite the deployment's isomorphism report" });
+    else if (!a.dryRun && existsSync(ctx.evidenceDir)) {
       const cmp = a.compareSheet ? { path: a.compareSheet, sheet: parseSheet(readFileSync(resolve(cwd, a.compareSheet), "utf8"), sheetOpts) } : undefined;
       const report = await buildIsomorphismReport(ctx, { compareTo: cmp });
       writeReport(join(ctx.evidenceDir, `isomorphism-${rpcChainId}.json`), report);

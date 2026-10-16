@@ -63,6 +63,52 @@ pub fn rmpc_path() -> &'static Path {
     })
 }
 
+/// Build the `rmpc-keystore-import` helper once per process and return its
+/// path. It writes the software keystore `rmpc` signs with, from a raw key.
+pub fn rmpc_keystore_import_path() -> &'static Path {
+    static CACHED: OnceLock<PathBuf> = OnceLock::new();
+    CACHED.get_or_init(|| {
+        let manifest = rmpc_manifest();
+        let status = Command::new("cargo")
+            .args(["build", "--bin", "rmpc-keystore-import", "--manifest-path"])
+            .arg(&manifest)
+            .status()
+            .expect("spawn cargo build for rmpc-keystore-import");
+        assert!(
+            status.success(),
+            "cargo build of rmpc-keystore-import failed"
+        );
+        let bin = manifest_dir()
+            .join("..")
+            .join("..")
+            .join("target")
+            .join("debug")
+            .join("rmpc-keystore-import");
+        assert!(
+            bin.exists(),
+            "rmpc-keystore-import binary missing at {} after build",
+            bin.display()
+        );
+        bin
+    })
+}
+
+/// Write an `rmpc` keystore for `private_key_hex` at `path`, encrypted
+/// under `passphrase`. The key travels in the environment, never argv.
+pub fn write_keystore(path: &Path, private_key_hex: &str, passphrase: &str) {
+    let out = Command::new(rmpc_keystore_import_path())
+        .arg(path)
+        .env("RMPC_IMPORT_PRIVKEY_HEX", private_key_hex)
+        .env("RMPC_KEYSTORE_PASSPHRASE", passphrase)
+        .output()
+        .expect("spawn rmpc-keystore-import");
+    assert!(
+        out.status.success(),
+        "rmpc-keystore-import failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 /// Write a temporary `rmpc.toml` pointing at `rpc_url` with
 /// `chain_id` baked in. Uses the supplied USDC + gateway addresses;
 /// the read commands under test only read `usdc_address` (for

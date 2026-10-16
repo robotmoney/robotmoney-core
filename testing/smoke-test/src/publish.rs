@@ -872,6 +872,23 @@ mod tests {
     }
 
     #[test]
+    fn legacy_voting_names_are_not_overridable() {
+        // Issue 1698 deleted the voting path. An override of a name nothing
+        // reads would change nothing, so the harness refuses it by name.
+        let id = BTreeMap::new();
+        for k in ["QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"] {
+            assert!(
+                !OVERRIDABLE_SHEET_KEYS.contains(&k),
+                "{k} is still overridable"
+            );
+            assert!(
+                render_sheet("", &id, &[(k, "1")]).is_err(),
+                "{k} override was accepted"
+            );
+        }
+    }
+
+    #[test]
     fn run_state_lives_in_the_work_dir_not_the_checkout() {
         let a = run_dir_args(Path::new("/w/manifests"));
         assert_eq!(

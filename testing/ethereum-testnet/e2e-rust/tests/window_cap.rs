@@ -78,8 +78,9 @@ fn deposit_args(amount: u128, oid: &str) -> [String; 6] {
 /// Second deposit whose cumulative gross exceeds `maxPerWindow`
 /// reverts. Two deposits both within `maxPerPayment` but whose sum
 /// crosses the lowered 200-USDC `AGENT_MAX_PER_WINDOW`. The first leg
-/// must succeed, the second leg must refuse with `ErrConfig`
-/// (preflight) or `ErrTxReverted` (gateway revert).
+/// must succeed, the second leg must refuse with `ErrDepositCapExceeded`
+/// (preflight, or the pre-sign simulation of a `WindowCapExceeded`
+/// revert; QA plan U6) or `ErrTxReverted` (gateway revert).
 #[test]
 fn over_window_cap_rejected() {
     require_prereqs("over_window_cap_rejected");
@@ -127,8 +128,8 @@ fn over_window_cap_rejected() {
         assert_eq!(v2["status"], "refused", "stdout={}", second.stdout);
         let err = v2["error"].as_str().unwrap_or("");
         assert!(
-            err == "ErrConfig" || err == "ErrTxReverted",
-            "expected ErrConfig (preflight) or ErrTxReverted (gateway revert); got {err}; stdout={}",
+            err == "ErrDepositCapExceeded" || err == "ErrTxReverted",
+            "expected ErrDepositCapExceeded (preflight) or ErrTxReverted (gateway revert); got {err}; stdout={}",
             second.stdout
         );
         let msg = v2["message"].as_str().unwrap_or("");

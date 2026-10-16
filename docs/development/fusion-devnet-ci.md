@@ -32,13 +32,15 @@ Neither workflow trusts an exit code.
 `-e`, so a truncated file or a block that aborts early still prints
 "42 passed, 0 failed" and exits 0. It therefore:
 
-- declares `MIN_EXPECTED_ASSERTIONS` (currently **55**) and ends at
+- declares `MIN_EXPECTED_ASSERTIONS` (currently **135**, after issue 1698 took
+  the 41 draft-watcher assertions with the watcher) and ends at
   `[[ "$FAIL" -eq 0 && "$PASS" -ge "$MIN_EXPECTED_ASSERTIONS" ]]`;
 - prints a machine-readable `FUSION_SELFTESTS_EXECUTED=$PASS` line;
-- asserts, as one of its own assertions, that suite-25's independent floor
+- asserts, as one of its own assertions, that suite-27's independent floor
   literal **equals** `MIN_EXPECTED_ASSERTIONS`.
 
-suite-25 re-derives the count from that contract line against its own literal.
+suite-27 re-derives the count from that contract line against its own literal;
+suite-25 keeps its older, lower literal as a true lower bound.
 The two numbers move together, in one commit; lowering one alone is red. This is
 the `suite-17` / `plugins/robotmoney-swarm` convention.
 
@@ -67,14 +69,14 @@ no workflow creates a key.**
 | `FUSION_RECEIPT_URL` | default receipt URL the nightly run accepts |
 | `FUSION_GATEWAY_ADDRESS` | `RobotMoneyGateway` |
 | `FUSION_RECEIPT_ADDRESS` | `ConsensusRecommendationReceipt` |
-| `FUSION_GOVERNANCE_ADDRESS` | `RouterGovernance` (INV-4 witness) |
+| `FUSION_GOVERNANCE_ADDRESS` | `RouterGovernance`, the weight setter (govern stage: `receiptContract()` binding and the `applyReceipt` probes) |
 | `FUSION_ROUTER_ADDRESS` | `PortfolioRouter` (INV-4 witness) |
 | `FUSION_VAULT_ADDRESSES` | `rmUSDC,rmPROTO,rmAGENT,rmRWA` in canonical bucket order |
 | `FUSION_SUBMITTER_ADDRESS` | the authorized submitter (positive control) |
-| `FUSION_TIMELOCK_ADDRESS` | the `TimelockController`, the only `ADMIN_ROLE` holder on the receipt contract after handover, used as `--from` for the duplicate-release probe (`cast call releaseReceipt`, which passes the role check and must revert `ReceiptAlreadyReleased`, not `AccessControlUnauthorizedAccount`) |
+| `FUSION_TIMELOCK_ADDRESS` | the `TimelockController`, the only `ADMIN_ROLE` holder on the receipt contract and on the weight setter after handover, used as `--from` for the duplicate-release probe (`cast call releaseReceipt`, which passes the role check and must revert `ReceiptAlreadyReleased`, not `AccessControlUnauthorizedAccount`) and for the govern stage's one-shot probe (`cast call applyReceipt` on a released receipt, which must revert `ReceiptAlreadyReleased`) |
 | `FUSION_GOVERN_CMD` | the govern apply command, `bun scripts/stage/core-stack.ts governance apply`; the script appends `--receipt-id ID --payload FILE` (FILE is the bytes served at the receipt URL) and it runs publish contracts govern row `apply-receipt` (`--row apply-receipt --receipt-id ID --payload FILE`) through the real Safe and the `TimelockController`. Only `apply-receipt` rows with status 1 and a 32-byte tx hash pass. Row `release-receipt` is refused since issue 1831, so `governance release` exits 64 (issue 1849) |
 | `FUSION_UNAUTHORIZED_SUBMITTER` | EOA with neither `AGENT_ROLE` nor submit rights |
-| `FUSION_UNAUTHORIZED_RELEASER` | EOA **without** `ADMIN_ROLE` on the receipt |
+| `FUSION_UNAUTHORIZED_RELEASER` | EOA **without** `ADMIN_ROLE` on the receipt or on the weight setter; the govern stage sends its `applyReceipt` authority probe from it |
 
 The two `UNAUTHORIZED_*` entries are the negative controls. Without them the
 negative stage proves nothing, so suite-26 refuses to run rather than skipping

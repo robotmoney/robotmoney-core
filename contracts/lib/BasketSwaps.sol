@@ -97,7 +97,9 @@ library BasketSwaps {
 
     /// @notice `BasketVault.emergencyUnwind` after the deposit halt: swap every active asset's
     ///         balance to USDC. The per-leg floor is max(TWAP-derived, configured minUsdcOut).
-    ///         With the oracle unavailable a non-zero configured floor is required.
+    ///         With the oracle unavailable a non-zero configured floor is required. A leg whose
+    ///         TWAP floor rounds to zero USDC units is dust and is skipped (QA plan D6, SR-L12):
+    ///         one donated wei cannot block the unwind.
     // slither-disable-next-line reentrancy-balance
     function unwindAll(
         BasketAssetConfigGuard.AssetInfo[] storage assets,
@@ -111,7 +113,8 @@ library BasketSwaps {
             BasketAssetConfigGuard.AssetInfo memory a = assets[i];
             uint256 bal = IERC20(a.token).balanceOf(address(this));
             if (bal == 0) continue;
-            _swapToUsdc(a, bal, _emergencyFloor(a, bal, slippageBps), usdc, router);
+            (uint256 floor, bool dust) = _emergencyFloor(a, bal, slippageBps);
+            if (!dust) _swapToUsdc(a, bal, floor, usdc, router);
         }
     }
 
@@ -148,7 +151,8 @@ library BasketSwaps {
     ///         floor, which must not undercut the caller's `minUsdcOut` (AZ-BSK-5). When the
     ///         pool is degraded (the TWAP read reverts) the balance is swept to the fixed
     ///         quarantine address instead of being stranded (LIFE-6). No caller-supplied
-    ///         recipient (INV-1). Panics on an out-of-range `index`.
+    ///         recipient (INV-1). A dust balance, whose floor rounds to zero USDC units, is left in
+    ///         place and the call is a no-op (QA plan D6). Panics on an out-of-range `index`.
     // slither-disable-next-line reentrancy-balance
     function reabsorb(
         BasketAssetConfigGuard.AssetInfo[] storage assets,
@@ -164,7 +168,7 @@ library BasketSwaps {
         try self.emergencyTwapUsdcValue(a, bal) returns (uint256 twapValue) {
             uint256 floor = twapValue * (MAX_BPS - self.maxSlippageBps()) / MAX_BPS;
             if (floor < minUsdcOut) revert SlippageExceeded();
-            if (bal != 0) _swapToUsdc(a, bal, floor, usdc, router);
+            if (bal != 0 && floor != 0) _swapToUsdc(a, bal, floor, usdc, router);
         } catch {
             ForeignTokenQuarantine.sweep(a.token, msg.sender);
         }
@@ -172,19 +176,23 @@ library BasketSwaps {
 
     /// @dev max(TWAP-derived floor, configured minUsdcOut). With the oracle unavailable (the
     ///      self-only `emergencyTwapUsdcValue` reverts) a non-zero configured floor is required.
+    ///      `dust` is true when the TWAP floor rounds to zero (QA plan D6): its sale can pay zero,
+    ///      which the V4 adapter refuses, so the leg stays put whatever the configured minimum.
+    ///      `removeAsset` accepts such a balance.
     function _emergencyFloor(
         BasketAssetConfigGuard.AssetInfo memory a,
         uint256 bal,
         uint256 slippageBps
-    ) private view returns (uint256) {
+    ) private view returns (uint256 floor, bool dust) {
         IBasketSwapsVault self = IBasketSwapsVault(address(this));
         (uint256 configuredMin,,) = self.emergencyUnwindGuard(a.token);
         try self.emergencyTwapUsdcValue(a, bal) returns (uint256 twapValue) {
             uint256 twapFloor = twapValue * (MAX_BPS - slippageBps) / MAX_BPS;
-            return twapFloor > configuredMin ? twapFloor : configuredMin;
+            if (twapFloor == 0) return (0, true);
+            return (twapFloor > configuredMin ? twapFloor : configuredMin, false);
         } catch {
             if (configuredMin == 0) revert EmergencyFloorUnavailable(a.token);
-            return configuredMin;
+            return (configuredMin, false);
         }
     }
 

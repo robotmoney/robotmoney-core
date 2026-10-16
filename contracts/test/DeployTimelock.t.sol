@@ -9,8 +9,10 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 
 import {DeployTimelock} from "../script/DeployTimelock.s.sol";
+import {ProposerFloorTimelock} from "../ProposerFloorTimelock.sol";
 import {CoreStages} from "./helpers/CoreStages.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
@@ -401,6 +403,81 @@ contract DeployTimelockTest is SafeGovernance {
         );
         d.timelock.cancel(bytes32(uint256(1)));
         vm.stopPrank();
+    }
+
+    // ─── Issue #1645 question 1 / CS-3: the last proposer floor ───────────────
+
+    /// @notice The deployed timelock is a ProposerFloorTimelock. With the Safe as the only
+    ///         proposer, `revokeRole(PROPOSER_ROLE, safe)` scheduled through the delay is refused
+    ///         at execute with `LastProposerFloor`, and the Safe's instant `renounceRole` is
+    ///         refused the same way, so the governed contracts can never lose every proposer.
+    ///         After a second proposer is granted through the delay the Safe's role can go, and
+    ///         the floor then protects the remaining holder. Every Safe step is a real
+    ///         two-signature execTransaction; the exact inner reason is read on the open
+    ///         executor path and through the Safe's own simulateAndRevert.
+    function test_lastProposerCannotBeRevokedOrRenounced() public {
+        ProposerFloorTimelock tl = ProposerFloorTimelock(payable(address(d.timelock)));
+        bytes32 proposer = tl.PROPOSER_ROLE();
+        assertEq(tl.proposerCount(), 1, "the Safe is the only proposer after the handover");
+
+        // 1. revokeRole through the delay: the Safe schedules it, execute is refused.
+        bytes memory revokeSafe = abi.encodeCall(IAccessControl.revokeRole, (proposer, safe));
+        bytes32 salt = keccak256("last-proposer-revoke");
+        _govSchedule(safe, d.timelock, address(d.timelock), revokeSafe, salt, MIN_DELAY);
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        // EXECUTOR_ROLE is open, so the exact inner reason shows on a direct execute...
+        vm.expectRevert(ProposerFloorTimelock.LastProposerFloor.selector);
+        d.timelock.execute(address(d.timelock), 0, revokeSafe, bytes32(0), salt);
+        // ...and the Safe's own execute is refused with GS013 (the Safe hides the inner error).
+        bytes memory exec = abi.encodeCall(
+            d.timelock.execute, (address(d.timelock), 0, revokeSafe, bytes32(0), salt)
+        );
+        bytes memory sigs = _twoOwnerSignatures(_safeDigest(safe, address(d.timelock), exec));
+        vm.expectRevert(bytes(GS013));
+        _safeExecWith(safe, address(d.timelock), exec, sigs);
+        assertTrue(tl.hasRole(proposer, safe), "the Safe lost PROPOSER_ROLE");
+        assertEq(tl.proposerCount(), 1, "proposer count changed on a refused revoke");
+
+        // 2. renounceRole: an instant Safe transaction, refused by the contract.
+        bytes memory renounce = abi.encodeCall(IAccessControl.renounceRole, (proposer, safe));
+        _assertSafeCallReverts(
+            safe,
+            address(d.timelock),
+            renounce,
+            abi.encodeWithSelector(ProposerFloorTimelock.LastProposerFloor.selector)
+        );
+        sigs = _twoOwnerSignatures(_safeDigest(safe, address(d.timelock), renounce));
+        vm.expectRevert(bytes(GS013));
+        _safeExecWith(safe, address(d.timelock), renounce, sigs);
+        assertTrue(tl.hasRole(proposer, safe), "the Safe renounced PROPOSER_ROLE");
+        assertEq(tl.proposerCount(), 1, "proposer count changed on a refused renounce");
+
+        // 3. A second proposer first: then the Safe's role goes through the delay, and the
+        //    floor moves to the remaining holder.
+        _govRun(
+            safe,
+            d.timelock,
+            address(d.timelock),
+            abi.encodeCall(IAccessControl.grantRole, (proposer, newAdmin)),
+            keccak256("second-proposer-grant"),
+            MIN_DELAY
+        );
+        assertEq(tl.proposerCount(), 2, "second proposer not counted");
+        _govRun(
+            safe,
+            d.timelock,
+            address(d.timelock),
+            revokeSafe,
+            keccak256("safe-revoke-with-second-proposer"),
+            MIN_DELAY
+        );
+        assertFalse(tl.hasRole(proposer, safe), "the Safe still holds PROPOSER_ROLE");
+        assertEq(tl.proposerCount(), 1, "the remaining proposer is not counted");
+        // The remaining proposer is an EOA here, so its own renounce is a plain call.
+        vm.expectRevert(ProposerFloorTimelock.LastProposerFloor.selector);
+        vm.prank(newAdmin);
+        tl.renounceRole(proposer, newAdmin);
+        assertTrue(tl.hasRole(proposer, newAdmin), "the last proposer renounced");
     }
 
     // ─── AC3: Direct ADMIN_ROLE call from Safe EOA reverts ────────────────────
@@ -1290,6 +1367,45 @@ contract DeployTimelockManifestTest is SafeGovernance {
         assertEq(routerHash, manifest.readAddress(".addresses.router").codehash);
         assertTrue(manifest.readBytes32(".code_hashes.governance") != bytes32(0));
         assertTrue(manifest.readBytes32(".code_hashes.timelock") != bytes32(0));
+    }
+
+    /// @notice ADR-0014 (security round 1): behind a proxy `.codehash` is the generic ERC1967Proxy, the
+    ///         same for every proxy, so the dapp's code-hash pins prove nothing about the logic. The
+    ///         manifest also records keccak256 of the code of each proxy's live implementation (zero
+    ///         for a direct contract): the dapp's implementation pins (scripts/stage/mainnet-dapp.ts).
+    function test_manifestRecordsImplementationCodeHashes() public view {
+        address router = manifest.readAddress(".addresses.router");
+        assertEq(
+            manifest.readBytes32(".code_hashes.router_implementation"),
+            _implementationCodeHashOf(router),
+            "router implementation code hash"
+        );
+        address[] memory vaults = manifest.readAddressArray(".addresses.vaults");
+        assertGt(vaults.length, 0, "no vault in the manifest");
+        for (uint256 i = 0; i < vaults.length; i++) {
+            string memory key = string.concat(
+                ".vault_handover.vault_", vm.toString(i), ".implementation_code_hash"
+            );
+            assertEq(manifest.readBytes32(key), _implementationCodeHashOf(vaults[i]), key);
+        }
+    }
+
+    function _implementationCodeHashOf(address proxy) internal view returns (bytes32) {
+        address impl = address(uint160(uint256(vm.load(proxy, ERC1967Utils.IMPLEMENTATION_SLOT))));
+        if (impl == address(0)) return bytes32(0);
+        assertTrue(impl.code.length > 0, "implementation has no code");
+        return keccak256(impl.code);
+    }
+
+    /// @notice Issue #1698: the manifest records the receipt register the weight setter applies
+    ///         from, read back from the governance contract (`receipts()` is immutable).
+    function test_manifestRecordsTheReceiptRegisterGovernanceAppliesFrom() public view {
+        address governance = manifest.readAddress(".addresses.governance");
+        assertEq(
+            manifest.readAddress(".governance_receipt"),
+            address(RouterGovernance(governance).receipts())
+        );
+        assertTrue(manifest.readAddress(".governance_receipt") != address(0), "no register");
     }
 
     /// @notice The two R7 conditions, recorded as booleans an auditor can grep.

@@ -23,7 +23,7 @@
 //!    idempotencyKey)` caught by local replay cache, surfaced as
 //!    `ErrOrderIdAlreadySubmitted`.
 //! 5. `over_per_payment_cap_rejected` — `amount > maxPerPayment`
-//!    refused by preflight (`ErrConfig`).
+//!    refused by preflight (`ErrDepositCapExceeded`, QA plan U6).
 //! 6. `deposits_paused_blocks_deposit_not_withdraw` — with
 //!    `depositsPaused() == true` a deposit is refused by preflight
 //!    (`ErrDepositsPaused`) and a withdrawal is never refused for the
@@ -425,8 +425,8 @@ fn idempotent_replay_rejected() {
 // ------------------------------------------------------------- scenario 5
 
 /// `amount > maxPerPayment` is rejected by preflight before any
-/// signature is produced. The daemon maps this onto `ErrConfig` with a
-/// message mentioning `maxPerPayment`.
+/// signature is produced. The daemon maps this onto
+/// `ErrDepositCapExceeded` with a message mentioning `maxPerPayment`.
 #[test]
 fn over_per_payment_cap_rejected() {
     require_prereqs("over_per_payment_cap_rejected");
@@ -450,8 +450,8 @@ fn over_per_payment_cap_rejected() {
         assert_eq!(v["status"], "refused");
         let err = v["error"].as_str().unwrap_or("");
         assert!(
-            err == "ErrConfig" || err == "ErrAgentNotAuthorized" || err.contains("ErrConfig"),
-            "expected ErrConfig (per-payment cap), got {err}; stdout={}",
+            err == "ErrDepositCapExceeded",
+            "expected ErrDepositCapExceeded (per-payment cap), got {err}; stdout={}",
             run.stdout
         );
         let msg = v["message"].as_str().unwrap_or("");

@@ -1,20 +1,21 @@
 ---
 title: "PortfolioRouterPausedLegTest"
-description: "The router's availability check reads the REGISTRY status and eligibility only. A vault whose own `depositsPaused()` reads true is still Active and eligible, so: - at 0 bps its leg gets amount 0 and is skipped (issue 1746): the router deposit succeeds; - above 0 bps the router calls the vault, which reverts `DepositsArePaused`; the router wraps it as `UsdcLegTransferFailed(vault)` and the whole router deposit reverts (fails closed, no funds move, no USDC stays in the router). Direct deposits into the open vaults and every redeem, the paused vault's included, are unaffected. The four legs are real RobotMoneyVault instances, each with one mock adapter."
+description: "The router's availability check reads the REGISTRY status and eligibility, then the vault's own `maxDeposit` (QA plan D4). A vault whose own `depositsPaused()` reads true is still Active and eligible in the registry, but its `maxDeposit` is 0, so: - at 0 bps its leg gets amount 0 and is skipped (issue 1746): the router deposit succeeds; - above 0 bps the leg is marked unavailable and skipped as well: the router splits the amount over the remaining legs in proportion to their bps and the deposit succeeds (this replaces the earlier fail-closed `UsdcLegTransferFailed` behaviour of issue 1705 Q3 (c)). Direct deposits into the open vaults and every redeem, the paused vault's included, are unaffected. The four legs are real RobotMoneyVault instances, each with one mock adapter."
 ---
 
 # PortfolioRouterPausedLegTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5e8d7ba6023ed2e0672e3841daf7b7ba268ac6ed/contracts/test/PortfolioRouterPausedLeg.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/PortfolioRouterPausedLeg.t.sol)
 
 **Inherits:** Test
 
-The router's availability check reads the REGISTRY status and eligibility only. A vault
-whose own `depositsPaused()` reads true is still Active and eligible, so:
+The router's availability check reads the REGISTRY status and eligibility, then the vault's
+own `maxDeposit` (QA plan D4). A vault whose own `depositsPaused()` reads true is still Active
+and eligible in the registry, but its `maxDeposit` is 0, so:
 - at 0 bps its leg gets amount 0 and is skipped (issue 1746): the router deposit succeeds;
-- above 0 bps the router calls the vault, which reverts `DepositsArePaused`; the router
-wraps it as `UsdcLegTransferFailed(vault)` and the whole router deposit reverts (fails
-closed, no funds move, no USDC stays in the router).
+- above 0 bps the leg is marked unavailable and skipped as well: the router splits the
+amount over the remaining legs in proportion to their bps and the deposit succeeds
+(this replaces the earlier fail-closed `UsdcLegTransferFailed` behaviour of issue 1705 Q3 (c)).
 Direct deposits into the open vaults and every redeem, the paused vault's included, are
 unaffected. The four legs are real RobotMoneyVault instances, each with one mock adapter.
 
@@ -113,20 +114,28 @@ function _pause(uint256 i) internal;
 function test_pausedLegAtZeroBps_isSkipped_routerDepositSucceeds() public;
 ```
 
-<a id="test_pausedlegabovezerobps_revertsthewholerouterdeposit"></a>
+<a id="test_pausedlegabovezerobps_isskippedandtherestisrenormalised"></a>
 
-### test_pausedLegAboveZeroBps_revertsTheWholeRouterDeposit
+### test_pausedLegAboveZeroBps_isSkippedAndTheRestIsRenormalised
 
 ```solidity
-function test_pausedLegAboveZeroBps_revertsTheWholeRouterDeposit() public;
+function test_pausedLegAboveZeroBps_isSkippedAndTheRestIsRenormalised() public;
 ```
 
-<a id="test_pausedlegabovezerobps_revertsforthebaselegtoo"></a>
+<a id="test_pausedbaseleg_isskippedandtheotherlegabsorbstheamount"></a>
 
-### test_pausedLegAboveZeroBps_revertsForTheBaseLegToo
+### test_pausedBaseLeg_isSkippedAndTheOtherLegAbsorbsTheAmount
 
 ```solidity
-function test_pausedLegAboveZeroBps_revertsForTheBaseLegToo() public;
+function test_pausedBaseLeg_isSkippedAndTheOtherLegAbsorbsTheAmount() public;
+```
+
+<a id="test_pausedlegwithacallerfloor_revertslegskippedwithfloor"></a>
+
+### test_pausedLegWithACallerFloor_revertsLegSkippedWithFloor
+
+```solidity
+function test_pausedLegWithACallerFloor_revertsLegSkippedWithFloor() public;
 ```
 
 <a id="test_directdepositsandeveryredeemareunaffected"></a>

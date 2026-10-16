@@ -58,7 +58,7 @@ pub const ROUTER_WEIGHT_SNAPSHOTS_MIGRATION: &str = include_str!(
 /// the `router_weight_snapshots` table (issue #307 and #316).
 /// Renumbered from 0003 to resolve version conflict with migrations 0003
 /// (multi-vault schema) and 0004 (router weight snapshots) added by issues
-/// #315 and #316 respectively.
+/// #315 and #316 respectively. Migration 0027 drops the two governance tables.
 pub const GOVERNANCE_MIGRATION: &str =
     include_str!("../../../../services/explorer-indexer/migrations/0005_add_governance_tables.sql");
 
@@ -112,6 +112,24 @@ pub const PROXY_UPGRADE_EVENTS_MIGRATION: &str =
 /// which `/health` reports as `proxy_backfill`.
 pub const PROXY_BACKFILL_PROGRESS_MIGRATION: &str = include_str!(
     "../../../../services/explorer-indexer/migrations/0020_proxy_backfill_progress.sql"
+);
+
+/// Migration 0025 (QA plan X7, core issue 1820): the exclusion-record tables that
+/// `/v1/accounts/:address/exclusion-claims` reads. It references only `chains`.
+pub const EXCLUSION_RECORDS_MIGRATION: &str =
+    include_str!("../../../../services/explorer-indexer/migrations/0023_exclusion_records.sql");
+
+/// Migration 0026 (QA plan X8, core issue 1795): `vault_snapshots.preview_redeem_total`, the
+/// `previewRedeem(totalSupply())` reading that `/v1/accounts/:address/positions` prices a position with.
+pub const PREVIEW_REDEEM_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0024_vault_snapshot_preview_redeem.sql"
+);
+
+/// Migration 0027 (QA plan C1, core issue 1698): drops the proposal and vote tables
+/// and deletes the vote history rows. RouterGovernance voting was deleted, so the
+/// API serves against a schema without them.
+pub const DROP_GOVERNANCE_VOTING_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0025_drop_governance_voting.sql"
 );
 
 /// Primary chain used by the API instance under test.
@@ -230,6 +248,18 @@ pub async fn apply_migrations(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("apply proxy backfill progress migration (0020)");
+    sqlx::raw_sql(EXCLUSION_RECORDS_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply exclusion records migration (0023)");
+    sqlx::raw_sql(PREVIEW_REDEEM_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply vault snapshot preview redeem migration (0024)");
+    sqlx::raw_sql(DROP_GOVERNANCE_VOTING_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply drop governance voting migration (0025)");
 }
 
 /// Decode a 0x-prefixed hex string into raw bytes for BYTEA columns.
@@ -290,13 +320,16 @@ async fn seed_fixture(pool: &PgPool) {
     }
 
     // --- indexer_runs ---
+    // Finished now: the fixture's indexer is live. `/health` reads a last good run older than
+    // 300 s as a stopped indexer (security round 1).
+    let run_finished_at = Utc::now();
     for cid in [PRIMARY_CHAIN_ID, SHADOW_CHAIN_ID] {
         sqlx::query(
             "INSERT INTO indexer_runs (chain_id, started_at, finished_at, from_block, to_block, last_indexed_block, reorg_count, rows_inserted) \
              VALUES ($1, $2, $2, $3, $4, $4, 0, 0)",
         )
         .bind(cid)
-        .bind(indexed_at)
+        .bind(run_finished_at)
         .bind(900_i64)
         .bind(1000_i64)
         .execute(pool)
@@ -461,10 +494,12 @@ async fn seed_fixture(pool: &PgPool) {
     // Use block 500 so this snapshot does not interfere with the existing
     // test `list_vault_snapshots_filters_by_block_range` which expects
     // exactly 1 snapshot in the 999-1001 range (the gateway snapshot at 1000).
+    // `preview_redeem_total` is `previewRedeem(totalSupply())` with the 25 bps exit fee
+    // (migration 0026): 99999999 - floor(99999999 * 25 / 10000) = 99750000.
     sqlx::query(
         "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, \
-                                       exit_fee_bps, tvl_cap, paused, indexed_at) \
-         VALUES ($1, $2, $3, $4::NUMERIC, $5::NUMERIC, $6, $7::NUMERIC, $8, $9)",
+                                       exit_fee_bps, tvl_cap, paused, indexed_at, preview_redeem_total) \
+         VALUES ($1, $2, $3, $4::NUMERIC, $5::NUMERIC, $6, $7::NUMERIC, $8, $9, $10::NUMERIC)",
     )
     .bind(PRIMARY_CHAIN_ID)
     .bind(&vault_a_addr[..])
@@ -475,14 +510,15 @@ async fn seed_fixture(pool: &PgPool) {
     .bind("1000000000")
     .bind(false)
     .bind(indexed_at)
+    .bind("99750000")
     .execute(pool)
     .await
     .unwrap();
 
     // --- wallet_positions (issue #316 suite-08 fixture) ---
     // Seed a share balance for `agent` on vault_a so account positions tests pass.
-    // shares = 50000000, same block as the vault_a snapshot (500) for clean math:
-    //   usdc_value = 50000000 * 99999999 / 99999999 = 50000000.
+    // shares = 50000000, same block as the vault_a snapshot (500), priced at previewRedeem (core 1795):
+    //   usdc_value = floor(50000000 * 99750000 / 99999999) = 49875000.
     sqlx::query(
         "INSERT INTO wallet_positions (chain_id, contract, owner, block_number, shares, indexed_at) \
          VALUES ($1, $2, $3, $4, $5::NUMERIC, $6)",
@@ -530,6 +566,9 @@ async fn seed_fixture(pool: &PgPool) {
     //
     // Scenario:
     //   router_weight_snapshots: 1 WeightsSet at block 800 (50/50 vault_a/vault_b).
+    //
+    // There is no proposal or vote fixture: RouterGovernance voting was deleted
+    // (issue 1698) and migration 0027 dropped those tables.
     //
     // The router_address reuses the gateway bytes for simplicity.
     let router_addr = gateway.clone();

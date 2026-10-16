@@ -55,8 +55,11 @@ fn config() -> Config {
         timelock_from_block: None,
         gateway_from_block: None,
         ic_policy_address: None,
+        share_receiver: None,
+        agent_owner: None,
         gateway_implementation: None,
         gateway_implementation_runtime_hash: None,
+        proxy_implementation_hashes: None,
         signer: SignerConfig {
             allow_software_fallback: true,
             keystore_path: PathBuf::from("/tmp/ks.enc"),
@@ -533,6 +536,8 @@ async fn inactive_agent_refuses() {
     );
 }
 
+/// An expired policy is `ErrPolicyExpired`, the `expired_policy` reason
+/// code, not `ErrAgentNotAuthorized` (QA plan U6).
 #[tokio::test]
 async fn expired_agent_refuses() {
     let mut server = mockito::Server::new_async().await;
@@ -557,10 +562,7 @@ async fn expired_agent_refuses() {
     let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf.run(inputs(100)).await.unwrap_err();
-    assert!(
-        matches!(err, RmpcError::ErrAgentNotAuthorized),
-        "got {err:?}"
-    );
+    assert!(matches!(err, RmpcError::ErrPolicyExpired), "got {err:?}");
 }
 
 #[tokio::test]
@@ -588,8 +590,8 @@ async fn over_per_payment_cap_refuses() {
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf.run(inputs(1_000)).await.unwrap_err();
     match err {
-        RmpcError::ErrConfig(m) => assert!(m.contains("maxPerPayment"), "m = {m}"),
-        other => panic!("expected ErrConfig (maxPerPayment), got {other:?}"),
+        RmpcError::ErrDepositCapExceeded(m) => assert!(m.contains("maxPerPayment"), "m = {m}"),
+        other => panic!("expected ErrDepositCapExceeded (maxPerPayment), got {other:?}"),
     }
 }
 
@@ -614,8 +616,8 @@ async fn over_window_cap_refuses() {
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf.run(inputs(1_000)).await.unwrap_err();
     match err {
-        RmpcError::ErrConfig(m) => assert!(m.contains("maxPerWindow"), "m = {m}"),
-        other => panic!("expected ErrConfig (maxPerWindow), got {other:?}"),
+        RmpcError::ErrDepositCapExceeded(m) => assert!(m.contains("maxPerWindow"), "m = {m}"),
+        other => panic!("expected ErrDepositCapExceeded (maxPerWindow), got {other:?}"),
     }
 }
 
@@ -785,11 +787,11 @@ async fn withdraw_gateway_rejects_when_deposit_caps_high_withdraw_caps_low() {
         .await
         .unwrap_err();
     match err {
-        RmpcError::ErrConfig(m) => assert!(
+        RmpcError::ErrWithdrawCapExceeded(m) => assert!(
             m.contains("maxWithdrawPerPayment"),
             "expected maxWithdrawPerPayment in msg, got: {m}"
         ),
-        other => panic!("expected ErrConfig(maxWithdrawPerPayment), got {other:?}"),
+        other => panic!("expected ErrWithdrawCapExceeded(maxWithdrawPerPayment), got {other:?}"),
     }
 }
 
@@ -897,6 +899,174 @@ async fn withdraw_gateway_passes_when_deposits_paused_read_fails() {
     assert!(result.is_ok(), "expected ok, got {result:?}");
 }
 
+// ── Agent binding (QA plan D2, finding CS-1) ───────────────────────────
+//
+// A squatter can bind a fresh agent address first, naming itself as
+// `shareReceiver`. The agent's own preflight then saw an active policy and
+// signed deposits whose shares went to the squatter. With `share_receiver` /
+// `agent_owner` pinned in the config, the preflight refuses instead.
+
+/// The happy-path `agents()` mock names this share receiver.
+const ON_CHAIN_RECEIVER: Address = address!("00000000000000000000000000000000000000ee");
+/// The operator's own address, pinned in the config.
+const OPERATOR: Address = address!("00000000000000000000000000000000000000ef");
+
+/// Mock `agentOwner(SIGNER)` to return `owner`.
+async fn mock_agent_owner(server: &mut mockito::ServerGuard, owner: Address) -> mockito::Mock {
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::agentOwnerCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_address(owner)))
+        .expect_at_least(1)
+        .create_async()
+        .await
+}
+
+#[tokio::test]
+async fn preflight_refuses_foreign_share_receiver() {
+    let mut server = mockito::Server::new_async().await;
+    let mut cfg = config();
+    cfg.share_receiver = Some(format!("{OPERATOR:#x}"));
+    install_happy_path_mocks(&mut server, &cfg).await;
+    // Registered last, so it would serve any allowance read the preflight made.
+    let usdc_reads = server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            Erc20::allowanceCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_u256(U256::from(u128::MAX))))
+        .expect(0)
+        .create_async()
+        .await;
+
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let err = Preflight::new(&rpc, &cfg)
+        .run(inputs(100))
+        .await
+        .unwrap_err();
+    match &err {
+        RmpcError::ErrAgentBindingMismatch {
+            field,
+            on_chain,
+            configured,
+        } => {
+            assert_eq!(*field, "agents(self).shareReceiver");
+            assert_eq!(on_chain, &format!("{ON_CHAIN_RECEIVER:#x}"));
+            assert_eq!(configured, &format!("{OPERATOR:#x}"));
+        }
+        other => panic!("expected ErrAgentBindingMismatch, got {other:?}"),
+    }
+    assert_eq!(err.name(), "ErrAgentBindingMismatch");
+    // Refused at check 6b: the USDC reads after it never ran.
+    usdc_reads.assert_async().await;
+
+    // The withdraw preflight reads the same binding and refuses the same way.
+    let err = Preflight::new(&rpc, &cfg)
+        .run_withdraw_gateway(inputs(100))
+        .await
+        .unwrap_err();
+    assert_eq!(err.name(), "ErrAgentBindingMismatch", "got {err:?}");
+}
+
+#[tokio::test]
+async fn preflight_refuses_foreign_agent_owner() {
+    let mut server = mockito::Server::new_async().await;
+    let mut cfg = config();
+    cfg.share_receiver = Some(format!("{ON_CHAIN_RECEIVER:#x}"));
+    cfg.agent_owner = Some(format!("{OPERATOR:#x}"));
+    let squatter = address!("000000000000000000000000000000000000dead");
+    let owner_read = mock_agent_owner(&mut server, squatter).await;
+    install_happy_path_mocks(&mut server, &cfg).await;
+
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let err = Preflight::new(&rpc, &cfg)
+        .run(inputs(100))
+        .await
+        .unwrap_err();
+    match &err {
+        RmpcError::ErrAgentBindingMismatch {
+            field, on_chain, ..
+        } => {
+            assert_eq!(*field, "agentOwner(self)");
+            assert_eq!(on_chain, &format!("{squatter:#x}"));
+        }
+        other => panic!("expected ErrAgentBindingMismatch, got {other:?}"),
+    }
+    owner_read.assert_async().await;
+}
+
+/// A binding that matches the config passes, and an unpinned config never
+/// reads `agentOwner` (configs written before D2 keep working unchanged).
+#[tokio::test]
+async fn preflight_passes_when_binding_matches_config() {
+    let mut server = mockito::Server::new_async().await;
+    let mut cfg = config();
+    cfg.share_receiver = Some(format!("{ON_CHAIN_RECEIVER:#x}"));
+    cfg.agent_owner = Some(format!("{OPERATOR:#x}"));
+    let owner_read = mock_agent_owner(&mut server, OPERATOR).await;
+    install_happy_path_mocks(&mut server, &cfg).await;
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let report = Preflight::new(&rpc, &cfg)
+        .run(inputs(100))
+        .await
+        .expect("a matching binding passes");
+    assert_eq!(report.share_receiver, ON_CHAIN_RECEIVER);
+    owner_read.assert_async().await;
+
+    let mut server = mockito::Server::new_async().await;
+    let cfg = config();
+    let no_owner_read = server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::agentOwnerCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_address(OPERATOR)))
+        .expect(0)
+        .create_async()
+        .await;
+    install_happy_path_mocks(&mut server, &cfg).await;
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    Preflight::new(&rpc, &cfg)
+        .run(inputs(100))
+        .await
+        .expect("an unpinned config passes");
+    no_owner_read.assert_async().await;
+}
+
+/// The withdraw preflight names a rolling-window breach with its reason
+/// code, not `ErrConfig` (QA plan U6).
+#[tokio::test]
+async fn withdraw_gateway_names_window_cap_breach() {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = config();
+    install_withdraw_gateway_mocks(
+        &mut server,
+        &cfg,
+        U256::from(10_000u64),
+        U256::from(100_000u64),
+        U256::from(10_000u64),
+        U256::from(500u64),
+        U256::from(450u64),
+    )
+    .await;
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let err = Preflight::new(&rpc, &cfg)
+        .run_withdraw_gateway(inputs(100))
+        .await
+        .unwrap_err();
+    match err {
+        RmpcError::ErrWithdrawCapExceeded(m) => {
+            assert!(m.contains("maxWithdrawPerWindow"), "m = {m}")
+        }
+        other => panic!("expected ErrWithdrawCapExceeded, got {other:?}"),
+    }
+}
+
 #[test]
 fn parse_b256_hex_round_trip() {
     let h = B256::from(keccak256(b"ok"));
@@ -921,6 +1091,8 @@ fn parse_b256_hex_rejects_wrong_length() {
 /// allowance/balance reads, plain ERC-20 calls against the vault. It never
 /// reads `depositsPaused()` (core 1494).
 async fn install_vault_mocks(server: &mut mockito::ServerGuard, allowance: U256, balance: U256) {
+    // The vault's ERC-1967 slot read (check 5c): empty, a direct vault.
+    install_direct_gateway_code_mocks(server).await;
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
@@ -1326,4 +1498,104 @@ fn approved_implementation_must_be_configured_as_a_pair() {
         implementation::approved_gateway_implementation(&config()).unwrap(),
         None
     );
+}
+
+// ─── The vault behind the gateway is a proxy too ────────────────────────────
+//
+// `vault_address` and `gateway.vault()` pin the vault's address, not the logic
+// behind it. Check 5c (deposit) and the withdraw vault preflight read the
+// vault's implementation at the pinned block and refuse unless its code hash
+// is in `proxy_implementation_hashes` (QA plan P3, review-security-008/-016).
+
+const VAULT_IMPL: Address = address!("00000000000000000000000000000000000002b1");
+const VAULT_IMPL_CODE: &[u8] = &[0x60, 0x03, 0x60, 0x00, 0xfe];
+
+fn vault_pinned(cfg: Config, approved: &[&[u8]]) -> Config {
+    Config {
+        proxy_implementation_hashes: Some(
+            approved
+                .iter()
+                .map(|c| format!("0x{}", ahex::encode(keccak256(c))))
+                .collect(),
+        ),
+        ..cfg
+    }
+}
+
+/// The slot of `proxy` names `implementation`, whose code is `code`, both
+/// served only at the pinned block. Register AFTER the happy-path mocks.
+async fn install_proxy_slot_for(
+    server: &mut mockito::ServerGuard,
+    proxy: Address,
+    implementation: Address,
+    code: &[u8],
+) {
+    server
+        .mock("POST", "/")
+        .match_body(match_method_at("eth_getStorageAt", proxy))
+        .with_status(200)
+        .with_body(jrpc_result(&slot_word(implementation)))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(match_method_at("eth_getCode", implementation))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{}", ahex::encode(code))))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+}
+
+#[tokio::test]
+async fn deposit_refuses_a_proxied_vault_whose_implementation_is_not_pinned() {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = vault_pinned(config(), &[IMPL_A_CODE]);
+    install_happy_path_mocks(&mut server, &cfg).await;
+    install_proxy_slot_for(&mut server, VAULT, VAULT_IMPL, VAULT_IMPL_CODE).await;
+
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let err = Preflight::new(&rpc, &cfg)
+        .run(inputs(100))
+        .await
+        .unwrap_err();
+    match &err {
+        RmpcError::ErrImplementationNotApproved(m) => {
+            assert!(m.starts_with(&format!("vault {VAULT:#x}")), "{m}");
+            assert!(m.contains("proxy_implementation_hashes"), "{m}");
+        }
+        other => panic!("expected ErrImplementationNotApproved, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn deposit_passes_with_the_vault_implementation_pinned() {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = vault_pinned(config(), &[VAULT_IMPL_CODE]);
+    install_happy_path_mocks(&mut server, &cfg).await;
+    install_proxy_slot_for(&mut server, VAULT, VAULT_IMPL, VAULT_IMPL_CODE).await;
+
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    Preflight::new(&rpc, &cfg)
+        .run(inputs(100))
+        .await
+        .expect("a pinned vault implementation passes");
+}
+
+#[tokio::test]
+async fn withdraw_vault_refuses_a_proxied_vault_without_a_pin() {
+    let mut server = mockito::Server::new_async().await;
+    install_vault_mocks(&mut server, U256::from(u128::MAX), U256::from(u128::MAX)).await;
+    install_proxy_slot_for(&mut server, VAULT, VAULT_IMPL, VAULT_IMPL_CODE).await;
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let cfg = config();
+    let err = Preflight::new(&rpc, &cfg)
+        .run_withdraw_vault(VAULT, GATEWAY, SIGNER, U256::from(100u64), PINNED_BLOCK)
+        .await
+        .unwrap_err();
+    match err {
+        RmpcError::ErrImplementationNotApproved(m) => assert!(m.contains("not set"), "{m}"),
+        other => panic!("expected ErrImplementationNotApproved, got {other:?}"),
+    }
 }

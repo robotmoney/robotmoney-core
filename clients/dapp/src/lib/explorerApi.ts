@@ -158,7 +158,11 @@ export interface VaultDetailResponse {
 
 /**
  * Per-vault receipt-token balance entry from
- * `GET /v1/accounts/:address/positions`.
+ * `GET /v1/accounts/:address/positions`, in the dapp's shape.
+ *
+ * The API serialises the vault address as `vault` and sends no name or risk label
+ * (clients/explorer-api/src/model.rs `VaultPosition`); `fetchAccountPositions` maps it here,
+ * the same fix as `usePositions.ts` (issue #1038). A row without a name shows its address.
  */
 export interface AccountPosition {
   readonly vault_address: string;
@@ -167,6 +171,11 @@ export interface AccountPosition {
   /** Raw share balance as a decimal string (NUMERIC(78,0)). */
   readonly shares: string;
   readonly block_number: number;
+  /**
+   * USDC a redeem of `shares` pays at the explorer's latest snapshot (`previewRedeem` semantics,
+   * net of exit costs; core 1795), raw 6-decimal integer string. `null` or absent: unknown.
+   */
+  readonly usdc_value?: string | null;
 }
 
 export interface AccountPositionsResponse {
@@ -198,15 +207,28 @@ export interface RouterWeightsResponse {
 }
 
 /**
+ * The kinds of event in the per-account history feed, as the API serializes
+ * `EventKind` (clients/explorer-api/src/model.rs). There is no governance-vote
+ * kind: issue 1698 deleted RouterGovernance voting and its indexed rows.
+ */
+export type AccountEventKind = "deposit" | "withdrawal" | "fee_charged" | "policy_change";
+
+/**
  * A single event in a watched address's history from
- * `GET /v1/accounts/:address/history`.
+ * `GET /v1/accounts/:address/history`. The field names are the API's
+ * `AccountHistoryEntry` (clients/explorer-api/src/model.rs).
  */
 export interface AccountEvent {
-  /** "deposit" | "withdrawal" */
-  readonly event_type: string;
+  readonly kind: AccountEventKind;
+  readonly chain_id: number;
   readonly block_number: number;
+  readonly log_index: number;
   readonly tx_hash: string;
-  readonly vault_address: string | null;
+  /** Vault for deposit, withdrawal and fee_charged events; null for policy_change. */
+  readonly vault: string | null;
+  /** Agent for deposit and policy_change events; null for withdrawal and fee_charged. */
+  readonly agent: string | null;
+  /** USDC base units for deposit, withdrawal and fee_charged; null for policy_change. */
   readonly amount: string | null;
   readonly indexed_at: string;
 }
@@ -347,7 +369,44 @@ export async function fetchAccountPositions(
   if (!res.ok) {
     throw new Error(`explorer API ${res.status}`);
   }
-  return (await res.json()) as AccountPositionsResponse;
+  const body = (await res.json()) as Omit<AccountPositionsResponse, "positions"> & {
+    positions?: readonly RawAccountPosition[];
+  };
+  const raw = Array.isArray(body.positions) ? body.positions : [];
+  return {
+    ...body,
+    positions: raw.map(normaliseAccountPosition).filter((p): p is AccountPosition => p !== null),
+  };
+}
+
+/** A position row as the API sends it (`vault`), or in the dapp's own shape (`vault_address`). */
+interface RawAccountPosition {
+  readonly vault?: unknown;
+  readonly vault_address?: unknown;
+  readonly vault_name?: unknown;
+  readonly risk_label?: unknown;
+  readonly shares?: unknown;
+  readonly block_number?: unknown;
+  readonly usdc_value?: unknown;
+}
+
+/**
+ * Map one API row onto `AccountPosition`. The API's `vault` key wins; `vault_address` is accepted
+ * so fixtures in the dapp shape keep working. A row with no address or share string is dropped, so
+ * no render calls `.toLowerCase()` on `undefined` (the #1038 crash, here in PortfolioPosition).
+ */
+function normaliseAccountPosition(raw: RawAccountPosition): AccountPosition | null {
+  const address = typeof raw.vault === "string" ? raw.vault : raw.vault_address;
+  if (typeof address !== "string" || address.length === 0) return null;
+  if (typeof raw.shares !== "string") return null;
+  return {
+    vault_address: address,
+    vault_name: typeof raw.vault_name === "string" ? raw.vault_name : address,
+    risk_label: typeof raw.risk_label === "string" ? raw.risk_label : "",
+    shares: raw.shares,
+    block_number: typeof raw.block_number === "number" ? raw.block_number : 0,
+    usdc_value: typeof raw.usdc_value === "string" ? raw.usdc_value : null,
+  };
 }
 
 /**

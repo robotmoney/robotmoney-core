@@ -63,12 +63,13 @@ The complete surface (mirrors `rmpc --help`):
 ```text
 rmpc deposit        Sign and broadcast a USDC deposit through the gateway
 rmpc withdraw       Redeem vault shares through the gateway (agent-initiated redemption)
+rmpc withdraw-router Redeem shares from several vaults in one call (preview without --confirm)
 rmpc status         Look up a previously submitted payment by its on-chain `paymentId`
 rmpc self-check     Print the signer-backend self-check report (v0 §9.2 JSON)
 rmpc get-vault      Read vault state directly from chain
 rmpc get-vaults     List all vaults registered in the VaultRegistry
 rmpc get-router     Read PortfolioRouter state: vault addresses, weight bps, and router cap
-rmpc get-governance Read RouterGovernance state: constructor params and last applied weights
+rmpc get-governance Read RouterGovernance state: last applied weights and receipt register
 rmpc get-gateway    Read gateway state directly from chain
 rmpc get-agent      Read an agent's authorization + window usage
 rmpc get-roles      Read role membership on the gateway for a target address
@@ -105,11 +106,27 @@ agent does not edit it at runtime.
 
 The agent must surface — not suppress — these refusals:
 
-- **Preflight (§4.4):** gateway deposits paused (deposit only), agent inactive or expired, allowance
-  or balance below `--amount`, chain id mismatch, gateway runtime code-hash
-  mismatch.
+- **Preflight (§4.4):** gateway deposits paused (`ErrDepositsPaused`, deposit
+  only), agent inactive (`ErrAgentNotAuthorized`) or expired
+  (`ErrPolicyExpired`), agent bound to another owner or share receiver
+  (`ErrAgentBindingMismatch`), allowance or balance below `--amount`
+  (`ErrAllowanceInsufficient`, `ErrBalanceInsufficient`), chain id mismatch,
+  gateway runtime code-hash mismatch.
 - **Caps (gateway):** `--amount > maxPerPayment` or
-  `windowGross + amount > maxPerWindow`.
+  `windowGross + amount > maxPerWindow` (`ErrDepositCapExceeded`); the
+  withdraw caps (`ErrWithdrawCapExceeded`).
+- **Router legs:** a router deposit reads `router.previewDeposit` first. A
+  leg with weight above 0 that the router would skip is refused as
+  `ErrLegUnavailable` unless the user approves `--allow-unavailable-legs`.
+  Without `--min-shares-per-leg`, each funded leg gets a floor of its
+  quoted shares less 0.50%.
+- **Simulation:** the exact call is simulated before signing; a router leg
+  that is disabled, unavailable (including `LegSkippedWithFloor`) or below
+  its slippage floor is refused as `ErrVaultDisabled`, `ErrLegUnavailable`
+  or `ErrSlippageBoundExceeded`.
+- **withdraw-router:** `--min-assets-per-leg` is required
+  (`ErrMinAssetsPerLegRequired`; `0` sends no floor), and without
+  `--confirm` the command only prints its preview (`ErrConfirmNotProvided`).
 - **Nonce lock (§4.6):** another `rmpc deposit` is in flight for the same
   agent address (`ErrConcurrentInvocation`).
 - **Fee cap (§4.7):** computed `maxFeePerGas` exceeds `max_fee_per_gas_cap`

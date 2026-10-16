@@ -7,6 +7,9 @@ import { currentGeneration, type MigrationOverlay } from "../../publish-contract
 // passed as an argument, never a path baked in here) and holds every refusal:
 //   - a signing key, passphrase, keystore or deploy-sheet variable in the environment,
 //   - a manifest from another chain, a missing manifest, an address that is not an address,
+//   - a vault or the router with no recorded runtime code hash (the dapp's build-time pins, QA plan U5),
+//   - a proxied vault or router (its stage manifest names an implementation) with no recorded implementation
+//     code hash (the dapp's implementation pins, ADR-0014), or a recorded one for a contract that is not a proxy,
 //   - a compose file that publishes a port off loopback, joins the host network or defines the deploy job.
 // The explorer indexer and the dapp read through a public Base RPC. The RPC URL may carry an API key, so
 // it is only ever logged as its origin.
@@ -40,8 +43,13 @@ const ZERO = /^0x0{40}$/;
 const BYTES32 = /^0x[0-9a-fA-F]{64}$/;
 
 // ─── refusals on the environment ─────────────────────────────────────────────
-/** Variable names that mean a signing key, a key store or a deploy step. Matched on the NAME, case-insensitive. */
-export const SECRET_ENV_NAME = /(PRIVATE_KEY|SECRET_KEY|MNEMONIC|SEED_PHRASE|PASSPHRASE|KEYSTORE|SIGNER|DEPLOYER|FAUCET|^STAGE_SHEET$|^PUBLISH_|^DEPLOY_ONLY$)/i;
+/**
+ * Variable names that mean a signing key, a key store, a seed or a deploy step. Matched on the NAME,
+ * case-insensitive. Issue 1737 item 6 (QA plan U5) widened it: `PRIVATEKEY`, a bare or `_`-delimited `PK`,
+ * `ETH_KEY`, `WALLET_KEY`, any `SECRET`, any `SEED`, and every `STAGE_SHEET*` (so `STAGE_SHEET_PATH` too).
+ */
+export const SECRET_ENV_NAME =
+  /(PRIVATE_?KEY|SECRET|MNEMONIC|SEED|PASSPHRASE|KEYSTORE|SIGNER|DEPLOYER|FAUCET|ETH_KEY|WALLET_KEY|(^|_)PK($|_)|^STAGE_SHEET|^PUBLISH_|^DEPLOY_ONLY$)/i;
 
 /**
  * Refuses when the process environment holds anything that could sign or deploy. A set-but-empty variable is fine:
@@ -158,8 +166,25 @@ export interface MainnetAddresses {
   gatewayImplementationHash: string;
   registry: string;
   router: string;
+  /** keccak256 of the router's runtime code, as the timelock manifest read it from the chain (`code_hashes.router`). */
+  routerCodeHash: string;
+  /** keccak256 of each vault's runtime code, keyed like `vaults` (`vault_handover.vault_<i>.code_hash`). */
+  vaultCodeHashes: Record<(typeof VAULT_KEYS)[number], string>;
+  /**
+   * ADR-0014: keccak256 of the implementation behind the router proxy (`code_hashes.router_implementation`).
+   * Behind a proxy `routerCodeHash` is the generic `ERC1967Proxy` code, so only this pin says which logic is
+   * reviewed. Empty for a direct router (its stage manifest names no `router_implementation`).
+   */
+  routerImplementationHash: string;
+  /** The same for each vault (`vault_handover.vault_<i>.implementation_code_hash`); empty for a direct vault. */
+  vaultImplementationHashes: Record<(typeof VAULT_KEYS)[number], string>;
   governance: string;
   consensusReceipt: string;
+  /**
+   * The InvestmentCommitteePolicy proxy (`timelock.json` `addresses.ic_policy`). Security round 1: one of the proxied core contracts (ADR-0014 §1), so the indexer must
+   * watch it, or its Upgraded and UpgradesFrozen events never reach proxy_upgrade_events and the watchdog's upgrade page stays silent for it.
+   */
+  icPolicy: string;
   timelock: string;
   safe: string;
   vaults: Record<(typeof VAULT_KEYS)[number], string>;
@@ -184,7 +209,34 @@ function addr(file: string, field: string, v: unknown): string {
   return v;
 }
 
+/** A recorded runtime code hash: a non-zero bytes32, else a refusal (the dapp would build without that pin). */
+function codeHash(file: string, field: string, v: unknown): string {
+  if (typeof v !== "string" || !BYTES32.test(v) || /^0x0{64}$/.test(v)) {
+    throw new MainnetDappError("manifest-field", `${file} ${field} is not a non-zero bytes32 runtime code hash`);
+  }
+  return v;
+}
+
 const same = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
+
+/** A stage manifest's implementation address: the contract is a proxy. Absent or zero: a direct contract. */
+function isProxyManifest(v: unknown): boolean {
+  return typeof v === "string" && ADDR.test(v) && !ZERO.test(v);
+}
+
+/**
+ * The implementation pin of one contract (ADR-0014): required when its stage manifest names an implementation,
+ * refused when the timelock manifest records one for a contract that is not a proxy (the dapp would then refuse
+ * every write to it as `implementation-unexpected`). Empty for a direct contract.
+ */
+function implementationHash(file: string, field: string, proxy: boolean, v: unknown): string {
+  const recorded = typeof v === "string" && BYTES32.test(v) && !/^0x0{64}$/.test(v);
+  if (proxy) return codeHash(file, field, v);
+  if (recorded) {
+    throw new MainnetDappError("manifest-mismatch", `${file} ${field} is set but the stage manifest names no implementation: it is not a proxy`);
+  }
+  return "";
+}
 
 /**
  * Reads the rehearsal manifests from `dir` (a copy given by the caller; this function only reads) and returns the
@@ -235,6 +287,7 @@ export function readMainnetManifests(dir: string, read: (p: string) => string = 
   const timelock = addr(files.timelock, "addresses.timelock", ta.timelock);
   const safe = addr(files.timelock, "addresses.safe", ta.safe);
   const consensusReceipt = addr(files.timelock, "addresses.consensus_receipt", ta.consensus_receipt);
+  const icPolicy = addr(files.timelock, "addresses.ic_policy", ta.ic_policy);
   for (const [field, want] of [["registry", registry], ["router", router], ["governance", governance], ["gateway", gateway]] as const) {
     if (!same(addr(files.timelock, `addresses.${field}`, ta[field]), want)) {
       throw new MainnetDappError("manifest-mismatch", `${files.timelock} addresses.${field} differs from its own manifest`);
@@ -245,18 +298,85 @@ export function readMainnetManifests(dir: string, read: (p: string) => string = 
     throw new MainnetDappError("manifest-field", `${files.timelock} addresses.vaults is not a list of ${VAULT_KEYS.length} vaults`);
   }
   const vaults = {} as MainnetAddresses["vaults"];
+  /** The deploy-time vault of each key, before the migration overlay names a later generation (issue 1796). */
+  const deployedVaults = {} as MainnetAddresses["vaults"];
   VAULT_KEYS.forEach((key, i) => {
     const file = vaultFiles[key]!;
     const a = addr(file, "vault", docs[file]!.vault);
     if (!same(a, addr(files.timelock, `addresses.vaults[${i}]`, timelockVaults[i]))) {
       throw new MainnetDappError("manifest-mismatch", `${file} vault differs from ${files.timelock} addresses.vaults[${i}] (${key})`);
     }
+    deployedVaults[key] = a;
     vaults[key] = overlay ? currentGeneration(overlay, MAINNET_CHAIN_ID, key, a) : a;
+  });
+  /**
+   * A vault the migration overlay moved to a later generation (issue 1796): the overlay's verified runtime hash of the
+   * current generation. The timelock manifest records only the deploy-time vault, so its hashes no longer apply.
+   */
+  const movedRuntimeHash = (key: (typeof VAULT_KEYS)[number]): string | undefined => {
+    if (!overlay || same(vaults[key], deployedVaults[key])) return undefined;
+    const gen = overlay.generations.find((r) => r.vault === key && same(r.current_address, vaults[key]));
+    return codeHash("current-vaults.json", `generations[${key}].current_runtime_hash`, gen?.current_runtime_hash);
+  };
+  // QA plan U5 (issue 1737 item 1): the dapp's build-time code-hash pins. DeployTimelock reads every vault's and
+  // the router's runtime code hash back from the chain into the timelock manifest. A vault or router with no
+  // recorded hash refuses the build: a bundle without its pin would refuse every deposit into it anyway.
+  const routerCodeHash = codeHash(files.timelock, "code_hashes.router", ((t.code_hashes ?? {}) as Json).router);
+  const handover = (t.vault_handover ?? {}) as Json;
+  const vaultCodeHashes = {} as MainnetAddresses["vaultCodeHashes"];
+  VAULT_KEYS.forEach((key, i) => {
+    const entry = (handover[`vault_${i}`] ?? {}) as Json;
+    if (!same(addr(files.timelock, `vault_handover.vault_${i}.address`, entry.address), deployedVaults[key])) {
+      throw new MainnetDappError("manifest-mismatch", `${files.timelock} vault_handover.vault_${i}.address is not the ${key} vault`);
+    }
+    const deployedHash = codeHash(files.timelock, `vault_handover.vault_${i}.code_hash`, entry.code_hash);
+    vaultCodeHashes[key] = movedRuntimeHash(key) ?? deployedHash;
+  });
+  // ADR-0014: behind a proxy the code hashes above are the generic ERC1967Proxy, the same for every proxy and
+  // unchanged by an upgrade. The implementation pins say which logic was reviewed. DeployTimelock reads each
+  // proxy's ERC-1967 implementation and hashes its code into the timelock manifest.
+  const routerImplementationHash = implementationHash(
+    files.timelock,
+    "code_hashes.router_implementation",
+    isProxyManifest(docs[files.router]!.router_implementation),
+    ((t.code_hashes ?? {}) as Json).router_implementation,
+  );
+  const vaultImplementationHashes = {} as MainnetAddresses["vaultImplementationHashes"];
+  VAULT_KEYS.forEach((key, i) => {
+    const entry = (handover[`vault_${i}`] ?? {}) as Json;
+    // DeployVault names the implementation `vault_implementation`; the basket vault deploys name it `implementation`.
+    const vaultDoc = docs[vaultFiles[key]!]!;
+    const deployed = implementationHash(
+      files.timelock,
+      `vault_handover.vault_${i}.implementation_code_hash`,
+      isProxyManifest(vaultDoc.vault_implementation ?? vaultDoc.implementation),
+      entry.implementation_code_hash,
+    );
+    // A vault the overlay moved has no recorded implementation hash: no pin, so the dapp refuses deposits into it
+    // (exits are never gated by a pin) until a pin for its implementation is recorded.
+    vaultImplementationHashes[key] = movedRuntimeHash(key) === undefined ? deployed : "";
   });
   if (!same(vaults.rmUSDC, addr(files.gateway, "vault", g.vault))) {
     throw new MainnetDappError("manifest-mismatch", `${files.gateway} vault is not the rmUSDC vault`);
   }
-  return { gateway, gatewayCodeHash: hash, gatewayImplementation, gatewayImplementationHash, registry, router, governance, consensusReceipt, timelock, safe, vaults };
+  return {
+    gateway,
+    gatewayCodeHash: hash,
+    gatewayImplementation,
+    gatewayImplementationHash,
+    registry,
+    router,
+    routerCodeHash,
+    routerImplementationHash,
+    governance,
+    consensusReceipt,
+    icPolicy,
+    timelock,
+    safe,
+    vaults,
+    vaultCodeHashes,
+    vaultImplementationHashes,
+  };
 }
 
 // ─── the environment ─────────────────────────────────────────────────────────
@@ -314,9 +434,13 @@ export function buildMainnetDappEnv(input: MainnetDappInput, read?: (p: string) 
   if (input.publicDappUrl) checkRpcUrl("--public-dapp-url", input.publicDappUrl);
   if (input.publicExplorerUrl) checkRpcUrl("--public-explorer-url", input.publicExplorerUrl);
   const origin = (u: string): string => u.replace(/\/+$/, "");
+  const reader = read ?? ((p: string) => readFileSync(p, "utf8"));
   const overlayPath = join(input.manifestsDir, "current-vaults.json");
-  const overlay = existsSync(overlayPath) ? JSON.parse(read(overlayPath)) as MigrationOverlay : undefined;
-  const a = readMainnetManifests(input.manifestsDir, read, overlay);
+  const overlay = existsSync(overlayPath) ? JSON.parse(reader(overlayPath)) as MigrationOverlay : undefined;
+  const a = readMainnetManifests(input.manifestsDir, reader, overlay);
+  // ADR-0014: the reviewed implementation behind each proxied vault; a direct contract has none, and neither has a vault the
+  // migration overlay moved (the overlay records the new generation's runtime hash only, see readMainnetManifests).
+  const vaultPins = Object.fromEntries(VAULT_KEYS.map((k) => [a.vaults[k], a.vaultImplementationHashes[k]]).filter(([, h]) => h !== ""));
   const env: Record<string, string> = {
     COMPOSE_PROFILES: "",
     DAPP_PORT: String(dappPort),
@@ -330,8 +454,16 @@ export function buildMainnetDappEnv(input: MainnetDappInput, read?: (p: string) 
     VITE_GATEWAY_ADDRESS: a.gateway,
     VITE_VAULT_ADDRESS: a.vaults.rmUSDC,
     VITE_GATEWAY_EXPECTED_CODE_HASH: a.gatewayCodeHash,
+    // Issue 1810: the approved implementation behind the gateway proxy and its code hash; empty for a direct gateway.
     VITE_GATEWAY_EXPECTED_IMPLEMENTATION: a.gatewayImplementation,
     VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH: a.gatewayImplementationHash,
+    // Build-time vault and router pins (QA plan U5): vault address -> runtime code hash, and the router's hash.
+    VITE_VAULT_EXPECTED_CODE_HASH: JSON.stringify(Object.fromEntries(VAULT_KEYS.map((k) => [a.vaults[k], a.vaultCodeHashes[k]]))),
+    VITE_ROUTER_EXPECTED_CODE_HASH: a.routerCodeHash,
+    // ADR-0014 (security review 2026-10-15, review-security-007/010): behind a proxy the code-hash pins above are the generic
+    // ERC1967Proxy, so the reviewed implementation behind each proxied vault and the router is pinned too. A direct contract has none.
+    VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH: JSON.stringify(vaultPins),
+    VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH: a.routerImplementationHash,
     VITE_REGISTRY_ADDRESS: a.registry,
     VITE_ROUTER_ADDRESS: a.router,
     VITE_TIMELOCK_ADDRESS: a.timelock,
@@ -343,6 +475,9 @@ export function buildMainnetDappEnv(input: MainnetDappInput, read?: (p: string) 
     INDEXER_PORTFOLIO_ROUTER: a.router,
     INDEXER_ROUTER_GOVERNANCE: a.governance,
     INDEXER_CONSENSUS_RECEIPT: a.consensusReceipt,
+    // Security round 1: the IC policy proxy is watched too. Without it its Upgraded and UpgradesFrozen events never reach proxy_upgrade_events (the watchdog's upgrade
+    // page), and /v1/committee/* and /v1/regime/feed stay empty.
+    INDEXER_INVESTMENT_COMMITTEE: a.icPolicy,
     // The indexer watches only the addresses it is given. Without these two the Safe and the timelock are
     // absent from /v1/chains/8453/contracts and their governance events are never read (issue 1731).
     INDEXER_TIMELOCK: a.timelock,

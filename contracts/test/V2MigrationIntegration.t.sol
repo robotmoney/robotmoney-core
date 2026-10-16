@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/adr/ADR-0010-unified-vault-architecture.md,
+// Canonical: docs/architecture.md §4.7 — Vault Deprecation/Retirement Lifecycle,
 //            docs/adr/ADR-0009-vault-retirement-no-assisted-migration.md,
 //            docs/adr/ADR-0002-router-default-weights-on-chain.md,
 //            docs/technical/unified-vault-open-questions-resolution.md
@@ -87,6 +87,12 @@ contract MigVault is ERC20 {
 
     function previewDeposit(uint256 assets) external pure returns (uint256) {
         return assets; // 1:1
+    }
+
+    /// @dev ERC-4626 `maxDeposit`: 0 while retired, uncapped otherwise. The router skips a leg
+    ///      whose `maxDeposit` is 0 or reverts (QA plan D4), so a router-leg mock must answer it.
+    function maxDeposit(address) external view returns (uint256) {
+        return retired ? 0 : type(uint256).max;
     }
 
     /// @dev IRetirableVault deposit-halt hooks. Registry-gated in production; the
@@ -382,15 +388,16 @@ contract V2MigrationIntegrationTest is Test {
         router.setDefaultWeights(_vaults2(address(v1a), address(v2a)), _bps2(5000, 5000));
     }
 
-    // ─── Router-weight (voted) migration also spans the v2 set ──────────────
+    // ─── Router-weight (applied) migration also spans the v2 set ────────────
 
-    /// @notice Beyond the default (below-quorum) vector, the governance-voted
-    ///         weight vector migrates to the v2 set too: after `setWeights` on
-    ///         the v2 set, the router routes a deposit by the voted weights.
+    /// @notice Beyond the default (fallback) vector, the applied weight vector
+    ///         (the one `RouterGovernance.applyReceipt` writes) migrates to the v2
+    ///         set too: after `setWeights` on the v2 set, the router routes a
+    ///         deposit by the applied weights.
     function test_migration_votedWeightsSpanV2Set() public {
         _migrateToV2();
 
-        // Governance votes an (asymmetric) weight vector over the v2 set.
+        // The weight setter applies an (asymmetric) weight vector over the v2 set.
         vm.prank(admin);
         router.setWeights(_vaults2(address(v2a), address(v2b)), _bps2(3000, 7000));
         assertTrue(router.votedWeightsActive(), "voted vector active");

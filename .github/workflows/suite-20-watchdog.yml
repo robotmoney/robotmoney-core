@@ -171,9 +171,10 @@ jobs:
 
       - name: Alert webhook integration test
         env:
-          # Floor = the executed count in the last green dev run (7), less the
-          # quorum-floor page test deleted with RouterGovernance voting (issue 1698).
-          CARGO_TEST_MIN_EXECUTED: 6
+          # Floor = the target's test count (7). Issue 1698 deleted the quorum-floor
+          # page test with RouterGovernance voting; the weight-setter path drift page
+          # test (QA plan v1 C1) took its place.
+          CARGO_TEST_MIN_EXECUTED: 7
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             -p watchdog \
@@ -190,11 +191,22 @@ jobs:
 
       # Two more targets that landed on fusion/deployment-workflow with no job
       # naming them — same cause as the indexer pair above.
+      - name: Weight-setter path RPC integration test
+        env:
+          # Floor = the target's test count (5). Issue 1698 replaced the
+          # quorumThreshold() check (governance_quorum_rpc, 4) with this one.
+          CARGO_TEST_MIN_EXECUTED: 5
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p watchdog \
+            --test governance_weight_setter_rpc -- --nocapture
+
       - name: Watchdog profiles integration test
         env:
-          # Floor = the executed count in the last green dev run (5), less the
-          # quorum-check startup test deleted with RouterGovernance voting (issue 1698).
-          CARGO_TEST_MIN_EXECUTED: 4
+          # Floor = the target's test count (5). Issue 1698 deleted the quorum-check
+          # startup test with RouterGovernance voting; the weight-setter check's
+          # startup refusal test (QA plan v1 C1) took its place.
+          CARGO_TEST_MIN_EXECUTED: 5
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             -p watchdog \

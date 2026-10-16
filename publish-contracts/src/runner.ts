@@ -8,6 +8,7 @@ import { basename, dirname, join } from "node:path";
 import { decodeErrorResult, type Abi, type Hex } from "viem";
 import { PublishError, isPublishError } from "./errors.ts";
 import { PLAINTEXT_ENV, isMainnet } from "./floors.ts";
+import { actionsProofReason, proofLogFields, type ActionsProof } from "./actions-proof.ts";
 import type { DeploymentKind } from "./chains.ts";
 import { countFor, sumCounts, checkNonce, effectiveCounts, type AdoptedTxs, type FrozenCounts } from "./counts.ts";
 import { CREATE2_FACTORY, buildCreate2Libraries, create2ArtifactsPresent, verifyAdoptedCreate2, verifyAdoptedLibraries, type AdoptedLibrary, type AdoptionRecord } from "./libs-adopt.ts";
@@ -28,7 +29,7 @@ import type { RedeployRecord } from "./redeploy-vault.ts";
 import type { ImplementationDeploy } from "./deploy-implementation.ts";
 import { httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import type { CallerInputs } from "./sheet.ts";
-import { createSafe, impersonatedSender, connectSafe, verifyCreatedSafe, type CreateSafePlan, type SafeManifest } from "./safe/index.ts";
+import { createSafe, impersonatedSender, connectSafe, verifyCreatedSafe, type CreateSafePlan, type SafeManifest, type StaleReadRetry } from "./safe/index.ts";
 
 // ---- spawning: forge, cast and a read-only git status only -----------------------------------------------------------------------------------------
 
@@ -119,6 +120,8 @@ export interface RunManifest {
   receipt_applications?: unknown[];
   /** One entry per executed `govern --row clear-voted-weights` round (issue 1743). */
   voted_weights_clears?: unknown[];
+  /** QA plan v1 D7: one entry per executed `govern --row set-unwind-guard` round (a basket vault's emergency unwind guard). A record: the verifier reads the guards from the chain. */
+  unwind_guards?: unknown[];
   /** Issue 1796: one entry per single-vault redeploy (`redeploy-vault` verb, then govern `--row redeploy-vault`): the deploy transactions, the new and the old vault, the operation and the read-back (the evidence `vault_redeploys` shape). */
   vault_redeploys?: RedeployRecord[];
   /** Issue 1861: one entry per new proxy implementation the `deploy-implementation` verb deployed (step 2 of a governed upgrade), before `govern --row upgrade-proxy` names it. */
@@ -289,6 +292,8 @@ export interface RunContext {
   /** Typed confirmation. Returns what the operator typed. Throws REFUSED when no human can answer. */
   prompt?: (question: string) => Promise<string>;
   githubActions: boolean;
+  /** qa-plan B2 (DT-3): the verified GitHub OIDC token of this job, when CONFIRM=environment on 8453 (actions-proof.ts). Undefined: no proof, so no environment confirmation on 8453. */
+  actionsProof?: ActionsProof;
   /** Process environment, filtered before it reaches a child. */
   baseEnv: Record<string, string | undefined>;
   /** Injected for tests. Defaults to the real Safe tool. */
@@ -300,6 +305,11 @@ export interface RunContext {
   chainReader?: (rpc: string) => ChainReader;
   /** Injected for tests: the sleep, the poll and the longest wait of the recorder gate (core 1676). Defaults to a 15 s poll for up to 40 minutes. */
   recorderWait?: RecorderWaitDeps;
+  /**
+   * Injected for tests: how a read that checks what a landed transaction left is read again on a load-balanced RPC (issue 1723, safe/read-after-write.ts; the redeploy
+   * verb's reads after its broadcast, QA plan v1 E6). Defaults to the shared bound (STALE_READ_TRIES reads, STALE_READ_DELAY_MS apart).
+   */
+  readRetry?: StaleReadRetry;
   /** Injected for tests: core's own config-check (bun scripts/ci/config-check.ts). Defaults to the real spawn. */
   coreConfigCheck?: CoreConfigCheck;
   /** Set by runStages in a dry run: the RPC forge simulates on (a local anvil) and the record of manifest files to restore. */
@@ -307,8 +317,18 @@ export interface RunContext {
   dryFiles?: DryRunFiles;
   /** Issue 1796, verify after a redeploy: the forge out/ of a checkout at the ORIGINAL deployment sha, for the code hashes of the vaults the redeploy did not replace and of the retired one. */
   priorArtifactsDir?: string;
+  /** QA plan v1 E1: the HEAD sha of the git checkout that holds `priorArtifactsDir`. The verify stage records it (the stage record and each governed redeploy entry). */
+  priorArtifactsSha?: string;
+  /**
+   * QA plan v1 E1 (DT-2, issue 1796): set only for a run at a single-vault redeploy's sha (`govern --row redeploy-vault`, `verify --prior-out`; redeploy-vault.ts
+   * redeployShaRun). It is the sha of the ORIGINAL deployment: the run manifest names it, `coreSha` names the redeploy sha, and runStages accepts that manifest.
+   */
+  originalSha?: string;
   /** Absolute manifest directory chosen by the caller (env PUBLISH_MANIFEST_DIR). Undefined: deployments/<chainId>/ in the core checkout. */
   manifestOut?: string;
+  /** Security round 1 (review-security-033): the absolute counts dir and --counts-require-origin-dev of this run, so a printed resume command names them (govern.ts resumeCommand). */
+  countsDir?: string;
+  countsRequireOriginDev?: boolean;
 }
 
 export interface SafeApi {
@@ -467,7 +487,13 @@ export async function deployerNonce(ctx: RunContext, who: string): Promise<numbe
 export async function confirmStage(ctx: RunContext, stage: string, summary: string): Promise<void> {
   if (ctx.caller.confirm === "environment") {
     if (!ctx.githubActions) throw new PublishError("REFUSED", "CONFIRM=environment is valid only inside GitHub Actions, behind an Environment with required reviewers");
-    ctx.log.log("info", "confirm.environment", { stage, environment: ctx.environment });
+    // qa-plan B2 (DT-3): on 8453 the Actions flag is not the proof. The verified OIDC token for this Environment is, and it is checked again
+    // here, at every broadcast, so a context built without one (or for another Environment) never confirms a stage on 8453.
+    if (isMainnet(ctx.chainId)) {
+      const why = actionsProofReason({ githubActions: ctx.githubActions, env: ctx.baseEnv, environment: ctx.environment, proof: ctx.actionsProof });
+      if (why) throw new PublishError("FLOOR", `${why} (stage ${stage} on chain ${ctx.chainId}; nothing was sent)`, { stage, chainId: ctx.chainId });
+    }
+    ctx.log.log("info", "confirm.environment", { stage, environment: ctx.environment, ...(ctx.actionsProof ? { proof: proofLogFields(ctx.actionsProof) } : {}) });
     return;
   }
   if (ctx.caller.yes) {
@@ -1073,11 +1099,13 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
     expectDeployerNonce: nonce0, logger: ctx.log, dryRun: ctx.dryRun,
     confirm: async (plan: CreateSafePlan) => {
       await assertFreshSafeAddress(ctx, prior, plan.predictedAddress);
-      // record the predicted address BEFORE anything is sent: a resume adopts it
+      // Security round 1 (review-security-042, as QA plan v1 E2 did for the redeploy): confirm FIRST. A refused confirmation sends nothing, so it must leave no `started`
+      // record: a saved predicted address sent every --resume into the adoption of a Safe that was never created (NOT_A_SAFE). Once confirmed, the predicted address is
+      // recorded BEFORE anything is sent, so a creation that dies after the send is adopted by --resume.
+      await confirmStage(ctx, "safe", `a ${plan.threshold}-of-${plan.owners.length} Safe v${plan.version} at ${plan.predictedAddress}`);
       rec.safe = plan.predictedAddress;
       manifest.stages.safe = rec;
       saveRunManifest(ctx.evidenceDir, manifest);
-      await confirmStage(ctx, "safe", `a ${plan.threshold}-of-${plan.owners.length} Safe v${plan.version} at ${plan.predictedAddress}`);
       return true;
     },
   });
@@ -1157,13 +1185,31 @@ export async function runStages(ctx: RunContext, names: string[], handlers: Hand
   let manifest = loadRunManifest(ctx.evidenceDir);
   if (manifest) {
     if (!ctx.resume && Object.keys(manifest.stages).length > 0 && !ctx.dryRun) throw new PublishError("RESUME", `${manifestPath(ctx.evidenceDir)} exists with earlier stages: pass --resume to continue, or use a fresh evidence directory`);
-    if (manifest.chainId !== ctx.chainId || manifest.coreSha !== ctx.coreSha || manifest.deployer.toLowerCase() !== deployer.toLowerCase()) throw new PublishError("RESUME", "the run manifest belongs to a different chain, core SHA or deployer");
+    // QA plan v1 E1: a run at a redeploy round's sha (govern --row redeploy-vault, verify --prior-out) continues the run manifest of the ORIGINAL sha (ctx.originalSha).
+    const manifestSha = ctx.originalSha ?? ctx.coreSha;
+    if (manifest.chainId !== ctx.chainId || manifest.coreSha !== manifestSha || manifest.deployer.toLowerCase() !== deployer.toLowerCase()) {
+      const why = manifest.coreSha !== manifestSha ? `: it was written at core SHA ${manifest.coreSha}, this run names ${ctx.coreSha}. Only govern --row redeploy-vault and verify (with --prior-out) may name the sha a redeploy-vault round was deployed at` : "";
+      throw new PublishError("RESUME", `the run manifest belongs to a different chain, core SHA or deployer${why}`);
+    }
     if ((manifest.deploymentKind ?? "production") !== ctx.sheet.kind) throw new PublishError("RESUME", `the run manifest is a ${manifest.deploymentKind ?? "production"} run, the sheet says DEPLOYMENT_KIND ${ctx.sheet.kind}: a run never changes kind`);
     if (manifest.deploymentKind === undefined) manifest.deploymentKind = "production";
     const runMode = manifest.upgradeMode ?? "frozen";
     if (ctx.sheet.upgrade && runMode !== ctx.sheet.upgrade.mode) throw new PublishError("RESUME", `the run manifest deployed its proxies with UPGRADE_MODE ${runMode}, the sheet says ${ctx.sheet.upgrade.mode}: a run never changes its release mode (a resume would leave some proxies frozen and others upgradeable). Resume with the run's own sheet, or start a fresh run`, { run_mode: runMode, sheet_mode: ctx.sheet.upgrade.mode });
     manifest.upgradeMode = runMode;
-  } else manifest = newManifest(ctx, deployer);
+  }
+  // Security round 1 (review-security-033, the issue 1686 interlock): a run of follow-on stages only (verify, govern) continues a deployment's run manifest, never a fresh
+  // one. The pause-all entries that stop a scheduled unpause from executing live in that manifest: a govern run from another working directory (the default evidence dir
+  // is relative to it) or with another --evidence used to start an empty manifest, adopt the scheduled operation from the chain and execute it past a recorded pause.
+  // govern also needs the finished handover stage: before it the Safe governs nothing.
+  if (!ctx.dryRun) {
+    const kinds = names.map((n) => stageByName(n).kind);
+    if (kinds.length > 0 && kinds.every((k) => k === "verify" || k === "govern")) {
+      const handover = DEPLOYER_STAGES[DEPLOYER_STAGES.length - 1]!.name;
+      if (!manifest) throw new PublishError("RESUME", `no run manifest in ${ctx.evidenceDir}: ${names.join(", ")} continue${names.length === 1 ? "s" : ""} the run that deployed the contracts, and its pause-all entries live in that run manifest (issue 1686). Pass that run's own --evidence directory as an absolute path (the default is relative to the working directory). Nothing was read or sent.`, { evidence: ctx.evidenceDir });
+      if (kinds.includes("govern") && manifest.stages[handover]?.status !== "done") throw new PublishError("RESUME", `the run manifest in ${ctx.evidenceDir} has no finished ${handover} stage: govern runs only after the handover, on the run manifest of the run that made it. Pass that run's own --evidence directory. Nothing was sent.`, { evidence: ctx.evidenceDir, stage: handover });
+    }
+  }
+  if (!manifest) manifest = newManifest(ctx, deployer);
   const ran: string[] = [], skipped: string[] = [];
   let stop = async () => {};
   if (ctx.dryRun) {

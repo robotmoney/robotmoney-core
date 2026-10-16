@@ -45,8 +45,11 @@ fn config(max_fee_cap: u64) -> Config {
         timelock_from_block: None,
         gateway_from_block: None,
         ic_policy_address: None,
+        share_receiver: None,
+        agent_owner: None,
         gateway_implementation: None,
         gateway_implementation_runtime_hash: None,
+        proxy_implementation_hashes: None,
         signer: SignerConfig {
             allow_software_fallback: true,
             keystore_path: std::path::PathBuf::from("/tmp/unused.enc"),
@@ -277,13 +280,14 @@ fn refusal_documents_share_one_field_set() {
         .agent(GATEWAY)
         .order_id(B256::repeat_byte(0xaa))
         .tx_hash("0xdead")
-        .checks(ChecksOutput::unknown());
+        .checks(ChecksOutput::unknown())
+        .preview(serde_json::json!({"legs": []}));
     let v = serde_json::to_value(&full).unwrap();
     let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(|k| k.as_str()).collect();
     keys.sort_unstable();
     assert_eq!(
         keys,
-        ["agent", "checks", "error", "message", "order_id", "status", "tx_hash"],
+        ["agent", "checks", "error", "message", "order_id", "preview", "status", "tx_hash"],
     );
     assert_eq!(v["status"], "refused");
 

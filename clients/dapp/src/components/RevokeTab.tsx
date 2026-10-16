@@ -1,11 +1,12 @@
 // Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
 
-import { useAccount, useSimulateContract } from "wagmi";
+import { useAccount, useSimulateContract, useWaitForTransactionReceipt } from "wagmi";
 import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
 import { isAddress, type Address } from "viem";
 import { gatewayAbi } from "../lib/abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "../lib/preview";
 import { TxPreview } from "./TxPreview";
+import { WriteStatus } from "./WriteStatus";
 
 type Props = Readonly<{
   gatewayAddress: Address;
@@ -15,7 +16,12 @@ type Props = Readonly<{
 
 export function RevokeTab(props: Props) {
   const { isConnected } = useAccount();
-  const { writeContract, isPending } = useGuardedWriteContract();
+  const write = useGuardedWriteContract();
+  const { writeContract, isPending } = write;
+  const receipt = useWaitForTransactionReceipt({
+    hash: write.data,
+    query: { enabled: Boolean(write.data) },
+  });
 
   const action: AdminAction | null = isAddress(props.agent)
     ? { kind: "revokeAgent", agent: props.agent as Address }
@@ -47,6 +53,8 @@ export function RevokeTab(props: Props) {
       >
         Sign revokeAgent with wallet
       </button>
+      {/* Refusal, wallet error and receipt status (QA plan U5, finding DR-9). */}
+      <WriteStatus testId="revoke" label="Revoke" write={write} receipt={receipt} />
     </section>
   );
 }

@@ -64,3 +64,30 @@ jobs:
             exit 0
           fi
           bash scripts/monitor-usdc-upgrade.sh
+
+  # Core 1779, QA plan v1 E10: the recorder keeper on an isolated Base fork against Deploy 2's
+  # rmAGENT and its recorder, read from the committed manifests in deployments/8453/deploy-2
+  # (clean room rule, core 1490). It reads live Base state, so it runs nightly and on manual
+  # dispatch only, never on a pull request. It fails loudly when the RPC, anvil, forge or a
+  # deployed contract is missing; the public endpoint is the fallback when the secret is unset.
+  recorder-keeper-fork:
+    name: recorder-keeper-fork
+    env:
+      CI_CLASS: heavy
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Base fork keeper NAV guard and deposit
+        env:
+          BASE_FORK_RPC_URL: ${{ secrets.BASE_UPSTREAM_RPC || 'https://mainnet.base.org' }}
+        run: bash scripts/ops/test-recorder-keeper-fork.sh

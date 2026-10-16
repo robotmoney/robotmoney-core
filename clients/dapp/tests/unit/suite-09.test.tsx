@@ -459,6 +459,18 @@ describe("RouterView", () => {
     expect(queryByTestId("router-view-weights-table")).toBeNull();
   });
 
+  it("shows no proposal section and never calls the deleted proposals route (issue 1698)", async () => {
+    const fetchImpl = makeRouterFetch();
+    const { getByTestId, queryByTestId } = render(
+      <RouterView apiUrl="http://api" fetchImpl={fetchImpl} />,
+    );
+    await waitFor(() => expect(getByTestId("router-view-history-table")).toBeTruthy());
+    expect(queryByTestId("router-view-pending-proposal")).toBeNull();
+    expect(queryByTestId("router-view-no-proposal")).toBeNull();
+    const urls = vi.mocked(fetchImpl).mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes("/v1/governance"))).toBe(false);
+  });
+
   it("renders weight history rows", async () => {
     const { getByTestId, getAllByTestId } = render(
       <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch()} />,

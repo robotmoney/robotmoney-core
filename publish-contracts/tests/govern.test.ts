@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { receiptPayloadDigest } from "../src/receipt-digest.ts";
-import { decodeFunctionData, encodeFunctionData, keccak256, pad, parseAbi, toBytes, toFunctionSelector } from "viem";
+import { decodeFunctionData, encodeFunctionData, keccak256, pad, parseAbi, toBytes, toFunctionSelector, type Address } from "viem";
 import { GOVERNED_PROXY_ABI, rerecordProxyManifest, upgradeRecordKey } from "../src/upgrade-rows.ts";
 import { upgradeCalldata } from "../src/upgrade-lifecycle.ts";
 import { layoutId, proxySpecs } from "../src/verify/upgradeability.ts";
@@ -14,12 +14,13 @@ import { getStageTable } from "../src/stages.ts";
 import { manifestBase } from "../src/stage-table.ts";
 import { APPLY_ROW, GOVERNANCE_APPLY_ABI, applyRecordKey } from "../src/apply-receipt.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
-import { GOVERN_ROWS, govRowRefusal, SAFE_ADMIN_ROWS, SELF_ADMIN_ROWS, TIMELOCK_ADMIN_ROWS, buildSelfAdminCall, refuseSafeConfigChange, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, VAULT_ABI, roundKey, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
+import { GOVERN_ROWS, govRowRefusal, SAFE_ADMIN_ABI, SAFE_ADMIN_ROWS, SELF_ADMIN_ROWS, TIMELOCK_ADMIN_ROWS, assertNotLastProposer, buildSelfAdminCall, parseSafeAdminArgs, refuseSafeConfigChange, resumeCommand, safeAdminEffect, safeRuleProblem, selfAdminRecordKey, sheetRosterProblems, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, VAULT_ABI, roundKey, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
 import { beginPauseEntry, loadRunManifest, newManifest, nextManifestSeq, reserveManifestSeq, saveRunManifest, updatePauseEntry } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { stageByName } from "../src/stages.ts";
 import { REPO, SHA, sheetText } from "./fixtures.ts";
-import { A, addr, fakeTimelock, sender, setup, signers } from "./govern-world.ts";
+import { A, CANCELLER_ROLE_ID, PROPOSER_ROLE_ID, addr, fakeTimelock, sender, setup, signerFor, signers } from "./govern-world.ts";
+import { UNWIND_GUARD_ROW, VAULT_UNWIND_GUARD_ABI, buildUnwindGuardCalls, parseUnwindGuardArgs, unwindGuardRecordKey, type UnwindGuardArgs } from "../src/unwind-guard.ts";
 
 const ALL = {
   ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA",
@@ -1455,15 +1456,17 @@ describe("issue 1645: Safe and timelock self-administration rows (Twin-only by d
     const manifest = newManifest(ctx, addr(0xa001));
     const out: string[] = [];
     const o0 = sheet.safeOwners[0]!;
+    // the fake Safe's roster is live (B4): once o0 is swapped out it can no longer sign, so the later rows need signers for the owners the rows added
+    const ownerSigners = [...signers(sheet), signerFor(NEW), signerFor(NEW2)];
     await run(ctx, manifest, sheet, tl, { row: "safe-add-owner", selfAdmin: { owner: NEW, threshold: 3 }, emit: (l: string) => out.push(l) });
     expect(tl.s.owners).toContain(NEW);
     expect(tl.s.threshold).toBe(3n);
-    await run(ctx, manifest, sheet, tl, { row: "safe-swap-owner", selfAdmin: { oldOwner: o0, newOwner: NEW2 }, emit: (l: string) => out.push(l) });
+    await run(ctx, manifest, sheet, tl, { ownerSigners, row: "safe-swap-owner", selfAdmin: { oldOwner: o0, newOwner: NEW2 }, emit: (l: string) => out.push(l) });
     expect(tl.s.owners).not.toContain(o0);
     expect(tl.s.owners).toContain(NEW2);
-    await run(ctx, manifest, sheet, tl, { row: "safe-remove-owner", selfAdmin: { owner: NEW, threshold: 2 }, emit: (l: string) => out.push(l) });
+    await run(ctx, manifest, sheet, tl, { ownerSigners, row: "safe-remove-owner", selfAdmin: { owner: NEW, threshold: 2 }, emit: (l: string) => out.push(l) });
     expect(tl.s.owners).not.toContain(NEW);
-    await run(ctx, manifest, sheet, tl, { row: "safe-change-threshold", selfAdmin: { threshold: 3 }, emit: (l: string) => out.push(l) });
+    await run(ctx, manifest, sheet, tl, { ownerSigners, row: "safe-change-threshold", selfAdmin: { threshold: 3 }, emit: (l: string) => out.push(l) });
     expect(tl.s.threshold).toBe(3n);
     expect(out.map((l) => JSON.parse(l).row)).toEqual(["safe-add-owner", "safe-swap-owner", "safe-remove-owner", "safe-change-threshold"]);
     expect(tl.s.events.filter((e) => e.startsWith("schedule"))).toEqual([]);
@@ -1498,7 +1501,9 @@ describe("issue 1645: Safe and timelock self-administration rows (Twin-only by d
     await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-grant-role", selfAdmin: { role: ROLE, account: NEW }, emit: (l: string) => out.push(l) });
     expect(tl.s.roles.has(`${roleHash}:${NEW.toLowerCase()}`)).toBe(true);
     await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: ROLE, account: NEW }, emit: (l: string) => out.push(l) });
-    expect(tl.s.roles.size).toBe(0);
+    expect(tl.s.roles.has(`${roleHash}:${NEW.toLowerCase()}`)).toBe(false);
+    // the Safe's own proposer and canceller roles (seeded, as after the timelock stage) are untouched
+    expect(tl.s.roles.has(`${roleHash}:${A.safe.toLowerCase()}`)).toBe(true);
     expect(out.map((l) => JSON.parse(l).phase)).toEqual(["scheduled", "executed", "scheduled", "executed"]);
     expect(tl.s.events).toEqual(["schedule:timelock-grant-role", "execute:timelock-grant-role", "schedule:timelock-revoke-role", "execute:timelock-revoke-role"]);
   });
@@ -1507,6 +1512,294 @@ describe("issue 1645: Safe and timelock self-administration rows (Twin-only by d
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
     await expect(run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row: "unpause-PROTO", selfAdmin: { threshold: 3 } })).rejects.toMatchObject({ kind: "USAGE" });
+  });
+
+  // B3 / CS-3: the last-proposer floor. The deployed timelock (ProposerFloorTimelock) reverts a revoke or renounce of the last PROPOSER_ROLE holder; the tool refuses first.
+  test("timelock-revoke-role PROPOSER_ROLE for the last holder (the Safe) is refused with GOVERN before anything is scheduled", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const err = await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: ROLE, account: A.safe } }).then(() => { throw new Error("expected a rejection"); }, (e) => e as PublishError);
+    expect(err.kind).toBe("GOVERN");
+    expect(err.message).toContain("last proposer");
+    expect(err.message).toContain("timelock-grant-role");
+    expect(tl.s.events).toEqual([]);
+    expect(tl.s.roles.has(`${roleHash}:${A.safe.toLowerCase()}`)).toBe(true);
+    expect(Object.keys(manifest.govern ?? {})).toEqual([]);
+  });
+
+  test("with a second proposer granted the Safe's own PROPOSER_ROLE goes through the delay, and the floor then protects the remaining holder", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-grant-role", selfAdmin: { role: ROLE, account: NEW } });
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: ROLE, account: A.safe } });
+    expect(tl.s.roles.has(`${roleHash}:${A.safe.toLowerCase()}`)).toBe(false);
+    expect(tl.s.roles.has(`${roleHash}:${NEW.toLowerCase()}`)).toBe(true);
+    expect(tl.s.events).toEqual(["schedule:timelock-grant-role", "execute:timelock-grant-role", "schedule:timelock-revoke-role", "execute:timelock-revoke-role"]);
+    // NEW is the last proposer now
+    await expect(run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: ROLE, account: NEW } })).rejects.toMatchObject({ kind: "GOVERN" });
+    expect(tl.s.events.length).toBe(4);
+  });
+
+  test("the floor is PROPOSER_ROLE only, and only for a holder: a CANCELLER_ROLE revoke and a revoke of a non-holder reach the timelock", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const rd = (async (address: Address, abi: readonly unknown[], functionName: string, args: unknown[] = []) => tl.handle.client.readContract({ address, abi, functionName, args })) as never;
+    await expect(assertNotLastProposer(rd, A.timelock, keccak256(toBytes("CANCELLER_ROLE")), A.safe)).resolves.toBeUndefined();
+    await expect(assertNotLastProposer(rd, A.timelock, roleHash, NEW)).resolves.toBeUndefined();
+    await expect(assertNotLastProposer(rd, A.timelock, roleHash, A.safe)).rejects.toMatchObject({ kind: "GOVERN" });
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: "CANCELLER_ROLE", account: A.safe } });
+    expect(tl.s.events).toEqual(["schedule:timelock-revoke-role", "execute:timelock-revoke-role"]);
+    expect(tl.s.roles.has(`${roleHash}:${A.safe.toLowerCase()}`)).toBe(true);
+  });
+});
+
+// QA plan v1 B4 (QD-5, DT-7, T5): the self-administration rows after a Safe change. The sheet compare exempts them (they read back against their own arguments),
+// the executed record is keyed on calldata plus the Safe nonce, the fake connectSafe returns the live roster, and the fake Safe enforces the Safe's own rules.
+describe("QA plan v1 B4: self-administration rows after the Safe changes", () => {
+  const NEW = addr(0x9001), NEW2 = addr(0x9002), ROLE = "PROPOSER_ROLE";
+  const roleHash = keccak256(toBytes(ROLE));
+  /** The signers a run needs once the rows added owners: the sheet's plus the added ones (what `--owner-signer` names for them). */
+  const withNew = (sheet: ReturnType<typeof parseSheet>) => ({ ownerSigners: [...signers(sheet), signerFor(NEW), signerFor(NEW2)] });
+  const rejection = (p: Promise<unknown>) => p.then(() => { throw new Error("expected a rejection"); }, (e) => e as PublishError);
+
+  test("the fake connectSafe returns the live owner set and threshold, not the sheet's", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const before = await tl.api.connectSafe({} as never);
+    expect(before.owners).toEqual(sheet.safeOwners);
+    expect(before.threshold).toBe(sheet.safeThreshold);
+    await run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row: "safe-add-owner", selfAdmin: { owner: NEW, threshold: 3 } });
+    const after = await tl.api.connectSafe({} as never);
+    expect(after.owners).toEqual([...sheet.safeOwners, NEW]);
+    expect(after.threshold).toBe(3);
+  });
+
+  test("second owner row after safe-add-owner", async () => {
+    // after safe-add-owner the live roster differs from the sheet: the next self-administration rows still run (a read-back against their own arguments),
+    // a stage row is refused until the operator updates SAFE_OWNERS / SAFE_THRESHOLD (runbook section 9), then it runs
+    const { ctx, sheet, lines } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const out: string[] = [];
+    await run(ctx, manifest, sheet, tl, { row: "safe-add-owner", selfAdmin: { owner: NEW, threshold: 3 }, emit: (l: string) => out.push(l) });
+    expect(tl.s.owners).toEqual([...sheet.safeOwners, NEW]);
+    expect(sheetRosterProblems(tl.handle, sheet).length).toBe(2);
+    await run(ctx, manifest, sheet, tl, { ...withNew(sheet), row: "safe-add-owner", selfAdmin: { owner: NEW2, threshold: 3 }, emit: (l: string) => out.push(l) });
+    expect(tl.s.owners).toEqual([...sheet.safeOwners, NEW, NEW2]);
+    await run(ctx, manifest, sheet, tl, { ...withNew(sheet), row: "safe-change-threshold", selfAdmin: { threshold: 4 }, emit: (l: string) => out.push(l) });
+    expect(tl.s.threshold).toBe(4n);
+    expect(out.map((l) => JSON.parse(l).row)).toEqual(["safe-add-owner", "safe-add-owner", "safe-change-threshold"]);
+    expect(tl.s.events).toEqual(["propose:safe-add-owner", "propose:safe-add-owner", "propose:safe-change-threshold"]);
+    expect(lines.some((l) => l.includes("govern.sheet_stale"))).toBe(true);
+    expect(lines.some((l) => l.includes("govern.sheet_update_needed"))).toBe(true);
+    // a stage row is refused while the sheet is stale; the refusal names the sheet keys and the runbook section, and nothing is sent
+    const err = await rejection(run(ctx, manifest, sheet, tl, { ...withNew(sheet), row: "unpause-PROTO", warp: warpTo(tl) }));
+    expect(err.kind).toBe("GOVERN");
+    expect(err.message).toContain("SAFE_OWNERS");
+    expect(err.message).toContain("SAFE_THRESHOLD");
+    expect(err.message).toContain("section 9");
+    expect(tl.s.events.length).toBe(3);
+    // the runbook step: the sheet updated to what the chain reads, the stage row runs against the same Safe
+    const updated = setup({ ...ALL, SAFE_OWNERS: [...sheet.safeOwners, NEW, NEW2].join(","), SAFE_THRESHOLD: "4" });
+    expect(sheetRosterProblems(tl.handle, updated.sheet)).toEqual([]);
+    await run(updated.ctx, newManifest(updated.ctx, addr(0xa001)), updated.sheet, tl, { ...withNew(sheet), row: "unpause-PROTO", warp: warpTo(tl) });
+    expect(tl.s.paused.has(A.vaults.PROTO)).toBe(false);
+    expect(tl.s.events.slice(3)).toEqual(["schedule:unpause-PROTO", "execute:unpause-PROTO"]);
+  });
+
+  test("safe-change-threshold above owner count refused", async () => {
+    // the Safe's own rules (GS201, GS203, GS204) are checked before anything is proposed: USAGE, nothing sent, the roster unchanged
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const refused = (row: string, selfAdmin: object) => rejection(run(ctx, manifest, sheet, tl, { ...withNew(sheet), row, selfAdmin }));
+    const n = sheet.safeOwners.length;
+    let err = await refused("safe-change-threshold", { threshold: n + 1 });
+    expect(err.kind).toBe("USAGE");
+    expect(err.message).toContain("GS201");
+    err = await refused("safe-add-owner", { owner: NEW, threshold: n + 2 }); // the owner count after the change is n + 1
+    expect(err.kind).toBe("USAGE");
+    expect(err.message).toContain("GS201");
+    err = await refused("safe-remove-owner", { owner: sheet.safeOwners[0], threshold: n }); // the owner count after the change is n - 1
+    expect(err.kind).toBe("USAGE");
+    expect(err.message).toContain("GS201");
+    err = await refused("safe-add-owner", { owner: addr(0), threshold: 2 });
+    expect(err.message).toContain("GS203");
+    err = await refused("safe-swap-owner", { oldOwner: sheet.safeOwners[0], newOwner: sheet.safeOwners[1] });
+    expect(err.message).toContain("GS204");
+    // an owner change already in effect whose threshold differs: the Safe would revert the add (GS204), the tool names the row that does what is left
+    err = await refused("safe-add-owner", { owner: sheet.safeOwners[1], threshold: 3 });
+    expect(err.kind).toBe("USAGE");
+    expect(err.message).toContain("safe-change-threshold");
+    expect(tl.s.events).toEqual([]);
+    expect(tl.s.threshold).toBe(2n);
+    expect(tl.s.owners).toEqual(sheet.safeOwners);
+    expect(Object.keys(manifest.govern ?? {})).toEqual([]);
+  });
+
+  test("the fake Safe enforces the Safe's own rules: threshold above owner count, wrong prevOwner, an owner added twice, a cancel below threshold, a cancel without CANCELLER_ROLE", async () => {
+    const { sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const sigs = sheet.safeOwners.slice(0, 2);
+    const send = (action: string, data: string, signatures: unknown[] = sigs) => tl.api.executeTx(tl.handle, { action, data, signatures, timelock_operation_id: `0x${"1".repeat(64)}` } as never, sender);
+    const enc = (functionName: string, args: unknown[]) => encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: functionName as never, args: args as never });
+    await expect(send("safe-change-threshold", enc("changeThreshold", [4n]))).rejects.toThrow("GS201");
+    await expect(send("safe-remove-owner", enc("removeOwner", [sheet.safeOwners[0], sheet.safeOwners[2], 2n]))).rejects.toThrow("GS205"); // the predecessor of owner 2 is owner 1
+    await expect(send("safe-swap-owner", enc("swapOwner", [sheet.safeOwners[0], sheet.safeOwners[2], NEW]))).rejects.toThrow("GS205");
+    await expect(send("safe-add-owner", enc("addOwnerWithThreshold", [sheet.safeOwners[1], 2n]))).rejects.toThrow("GS204");
+    await expect(send("safe-add-owner", enc("addOwnerWithThreshold", [A.safe, 2n]))).rejects.toThrow("GS203");
+    await expect(send("safe-add-owner", enc("addOwnerWithThreshold", [NEW, 2n]), sigs.slice(0, 1))).rejects.toThrow("GS020");
+    expect(tl.s.owners).toEqual(sheet.safeOwners);
+    expect(tl.s.threshold).toBe(2n);
+    expect(tl.s.nonce).toBe(0);
+    // a cancel below threshold, then a cancel and a schedule by a Safe that no longer holds the timelock role
+    await expect(send("cancel", "0x", sigs.slice(0, 1))).rejects.toThrow("GS020");
+    tl.s.roles.delete(`${CANCELLER_ROLE_ID}:${A.safe.toLowerCase()}`);
+    await expect(send("cancel", "0x")).rejects.toThrow("CANCELLER_ROLE");
+    tl.s.roles.delete(`${PROPOSER_ROLE_ID}:${A.safe.toLowerCase()}`);
+    await expect(send("schedule", "0x")).rejects.toThrow("PROPOSER_ROLE");
+    expect(tl.s.nonce).toBe(0);
+    // the well-formed call goes through: the right predecessor, a threshold the owner count allows
+    await send("safe-remove-owner", enc("removeOwner", [sheet.safeOwners[1], sheet.safeOwners[2], 2n]));
+    expect(tl.s.owners).toEqual(sheet.safeOwners.slice(0, 2));
+    expect(tl.s.nonce).toBe(1);
+  });
+
+  test("add X, remove X, add X is three Safe transactions: the record is keyed on the calldata and the Safe nonce, so the third is not skipped as the first", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const x = (row: string, selfAdmin: object, out: string[] = []) => run(ctx, manifest, sheet, tl, { ...withNew(sheet), row, selfAdmin, emit: (l: string) => out.push(l) });
+    await x("safe-add-owner", { owner: NEW, threshold: 2 });
+    await x("safe-remove-owner", { owner: NEW, threshold: 2 });
+    await x("safe-add-owner", { owner: NEW, threshold: 2 });
+    expect(tl.s.events).toEqual(["propose:safe-add-owner", "propose:safe-remove-owner", "propose:safe-add-owner"]);
+    expect(tl.s.owners).toEqual([...sheet.safeOwners, NEW]);
+    const records = manifest.govern as Record<string, any>;
+    const keys = Object.keys(records);
+    expect(keys.length).toBe(3);
+    const addData = encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "addOwnerWithThreshold", args: [NEW, 2n] });
+    const removeData = encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "removeOwner", args: [sheet.safeOwners[2]!, NEW, 2n] });
+    expect(keys).toContain(selfAdminRecordKey("safe-add-owner", addData, 0));
+    expect(keys).toContain(selfAdminRecordKey("safe-remove-owner", removeData, 1));
+    expect(keys).toContain(selfAdminRecordKey("safe-add-owner", addData, 2));
+    for (const k of keys) {
+      expect(records[k].admin.nonce).toBe(Number(k.slice(k.lastIndexOf("-n") + 2)));
+      expect(records[k].executed.tx_hash).toBeDefined();
+    }
+    expect(records[selfAdminRecordKey("safe-add-owner", addData, 0)].admin.want).toBe(records[selfAdminRecordKey("safe-add-owner", addData, 2)].admin.want);
+    // a rerun of the change still in effect reprints the newest record and sends nothing
+    const again: string[] = [];
+    await x("safe-add-owner", { owner: NEW, threshold: 2 }, again);
+    expect(tl.s.events.length).toBe(3);
+    expect(again.length).toBe(1);
+    expect(JSON.parse(again[0]!).txHash).toBe(records[selfAdminRecordKey("safe-add-owner", addData, 2)].executed.tx_hash);
+    expect(Object.keys(records).length).toBe(3);
+  });
+
+  test("grant X, revoke X, grant X is three timelock rounds with three operation ids; a rerun of a role in effect sends nothing; a revoke of a non-holder is a skip", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const x = (row: string, account = NEW) => run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row, selfAdmin: { role: ROLE, account } });
+    await x("timelock-grant-role");
+    await x("timelock-revoke-role");
+    await x("timelock-grant-role");
+    expect(tl.s.events).toEqual(["schedule:timelock-grant-role", "execute:timelock-grant-role", "schedule:timelock-revoke-role", "execute:timelock-revoke-role", "schedule:timelock-grant-role", "execute:timelock-grant-role"]);
+    expect(tl.s.roles.has(`${roleHash}:${NEW.toLowerCase()}`)).toBe(true);
+    const records = manifest.govern as Record<string, any>;
+    const grants = Object.keys(records).filter((k) => k.startsWith("timelock-grant-role-"));
+    expect(grants.length).toBe(2);
+    expect(new Set(grants.map((k) => records[k].scheduled.operation_id)).size).toBe(2);
+    expect(grants.map((k) => records[k].admin.nonce).sort()).toEqual([0, 4]);
+    await x("timelock-grant-role");
+    expect(tl.s.events.length).toBe(6);
+    const r = await x("timelock-revoke-role", NEW2);
+    expect(r.skipped.length).toBe(1);
+    expect(records[r.rows[0]!].skipped.reason).toContain("already in effect");
+    expect(tl.s.events.length).toBe(6);
+  });
+
+  test("a timelock round scheduled by an earlier run resumes under its own key: no second schedule, one execute", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const x = (extra: object) => run(ctx, manifest, sheet, tl, { row: "timelock-grant-role", selfAdmin: { role: ROLE, account: NEW }, ...extra });
+    // no warp on a non-mainnet chain with a long delay: the run exits GOVERN_PENDING after the schedule (the crash-between-phases shape)
+    await expect(x({ warp: false, maxWaitSeconds: 1 })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    const keys = Object.keys(manifest.govern ?? {});
+    expect(keys.length).toBe(1);
+    expect(tl.s.events).toEqual(["schedule:timelock-grant-role"]);
+    await x({ warp: warpTo(tl) });
+    expect(tl.s.events).toEqual(["schedule:timelock-grant-role", "execute:timelock-grant-role"]);
+    expect(Object.keys(manifest.govern ?? {})).toEqual(keys);
+    expect(tl.s.roles.has(`${roleHash}:${NEW.toLowerCase()}`)).toBe(true);
+  });
+
+  test("a change already in effect with no record is recorded as skipped and sends nothing (another tool made it, or a crash between the execute and the save)", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    tl.s.threshold = 3n;
+    const r = await run(ctx, manifest, sheet, tl, { row: "safe-change-threshold", selfAdmin: { threshold: 3 } });
+    expect(r.skipped.length).toBe(1);
+    expect(tl.s.events).toEqual([]);
+    expect((manifest.govern as Record<string, any>)[r.rows[0]!].skipped.reason).toContain("already in effect");
+    // the same again: the skip record is the prior record of this change, nothing is sent and no second record is written
+    const r2 = await run(ctx, manifest, sheet, tl, { row: "safe-change-threshold", selfAdmin: { threshold: 3 } });
+    expect(r2.rows).toEqual(r.rows);
+    expect(Object.keys(manifest.govern ?? {}).length).toBe(1);
+  });
+
+  test("cancel below threshold: after safe-change-threshold raises the threshold, a run with fewer owner signers than the live threshold sends nothing", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    await run(ctx, manifest, sheet, tl, { row: "safe-change-threshold", selfAdmin: { threshold: 3 } });
+    expect(tl.handle.threshold).toBe(3);
+    const err = await rejection(run(ctx, manifest, sheet, tl, { ownerSigners: signers(sheet, 2), warp: warpTo(tl), row: "timelock-grant-role", selfAdmin: { role: ROLE, account: NEW } }));
+    expect(err.kind).toBe("GOVERN");
+    expect(err.message).toContain("2 of the 3");
+    // The schedule bundle is built, then signing refuses: no Safe transaction executes and the timelock holds no operation.
+    expect(tl.s.events).toEqual(["propose:safe-change-threshold", "schedule:timelock-grant-role"]);
+    expect(tl.s.ops.size).toBe(0);
+    // with three signers the same row goes through the Safe at its new threshold
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-grant-role", selfAdmin: { role: ROLE, account: NEW } });
+    expect(tl.s.events).toEqual(["propose:safe-change-threshold", "schedule:timelock-grant-role", "schedule:timelock-grant-role", "execute:timelock-grant-role"]);
+  });
+
+  test("the roster helpers: sheetRosterProblems names the sheet key that differs, safeAdminEffect reads a row's arguments back, safeRuleProblem is the Safe's rule", () => {
+    const { sheet } = setup(ALL);
+    const live = { owners: sheet.safeOwners, threshold: 2n };
+    expect(sheetRosterProblems(live, sheet)).toEqual([]);
+    expect(sheetRosterProblems({ owners: [...sheet.safeOwners].reverse(), threshold: 2 }, sheet)).toEqual([]); // order does not matter
+    expect(sheetRosterProblems({ owners: [...sheet.safeOwners, NEW], threshold: 2n }, sheet).join()).toContain("SAFE_OWNERS");
+    expect(sheetRosterProblems({ owners: sheet.safeOwners, threshold: 3 }, sheet).join()).toContain("SAFE_THRESHOLD");
+    const add = parseSafeAdminArgs("safe-add-owner", { owner: NEW, threshold: 3 });
+    expect(safeAdminEffect(add, live)).toMatchObject({ owner: false, threshold: false });
+    expect(safeAdminEffect(add, { owners: [...sheet.safeOwners, NEW], threshold: 3n })).toMatchObject({ owner: true, threshold: true, problems: [] });
+    expect(safeAdminEffect(add, { owners: [...sheet.safeOwners, NEW], threshold: 2n })).toMatchObject({ owner: true, threshold: false });
+    const swap = parseSafeAdminArgs("safe-swap-owner", { oldOwner: sheet.safeOwners[0], newOwner: NEW });
+    expect(safeAdminEffect(swap, live).owner).toBe(false);
+    expect(safeAdminEffect(swap, { owners: [NEW, ...sheet.safeOwners.slice(1)], threshold: 2n }).problems).toEqual([]);
+    expect(safeRuleProblem(add, live, A.safe)).toBeUndefined();
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-add-owner", { owner: NEW, threshold: 5 }), live, A.safe)).toContain("GS201");
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-add-owner", { owner: A.safe, threshold: 2 }), live, A.safe)).toContain("GS203");
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-add-owner", { owner: sheet.safeOwners[0], threshold: 2 }), live, A.safe)).toContain("GS204");
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-remove-owner", { owner: sheet.safeOwners[0], threshold: 3 }), live, A.safe)).toContain("GS201");
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-remove-owner", { owner: sheet.safeOwners[0], threshold: 2 }), live, A.safe)).toBeUndefined();
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-swap-owner", { oldOwner: sheet.safeOwners[0], newOwner: sheet.safeOwners[1] }), live, A.safe)).toContain("GS204");
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-change-threshold", { threshold: 3 }), live, A.safe)).toBeUndefined();
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-change-threshold", { threshold: 4 }), live, A.safe)).toContain("GS201");
+  });
+
+  test("the resume command of a self-administration record names the row and the --admin-arg values, never the calldata hash", () => {
+    const next = resumeCommand({ chainId: 918453, coreSha: SHA }, selfAdminRecordKey("timelock-grant-role", "0x1234", 7));
+    expect(next).toContain("--row timelock-grant-role --admin-arg");
+    expect(next).not.toContain("-n7");
   });
 });
 
@@ -1522,6 +1815,192 @@ describe("issue 1701: payloadVector looks a bucket up as an own key only", () =>
       expect((err as PublishError).kind).toBe("USAGE");
       expect((err as PublishError).message).toContain(`bucket '${bucket}' is not one of`);
     }
+  });
+});
+
+// ---- QA plan v1 D7 (review E5, issue 1705 Q2): the emergency unwind guard row ----
+describe("QA plan v1 D7: set-unwind-guard sets a basket vault's emergency unwind guard through the Safe and the timelock", () => {
+  const noWarp = async () => { throw new Error("no anvil_ or evm_ method on 8453"); };
+  const TOK = { a: addr(0x7001), b: addr(0x7002), off: addr(0x7003) };
+  /** rmPROTO lists a, an INACTIVE row, then b; rmAGENT lists a. The timelock holds ADMIN_ROLE on the three baskets (the handover). */
+  const world = (chainId = 918453, sheetOver: Record<string, string> = {}) => {
+    const { ctx, sheet } = setup({ ...ALL, ...sheetOver }, chainId);
+    const tl = fakeTimelock(sheet, DELAY);
+    for (const k of BASKETS) tl.s.governed.add(A.vaults[k]);
+    tl.s.assetRows.set(A.vaults.PROTO, [{ token: TOK.a, active: true }, { token: TOK.off, active: false }, { token: TOK.b, active: true }]);
+    tl.s.assetRows.set(A.vaults.AGENT, [{ token: TOK.a, active: true }]);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const out: string[] = [];
+    const guard = (args: UnwindGuardArgs, extra: object = {}) => runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { row: UNWIND_GUARD_ROW, unwindGuard: args, warp: warpTo(tl), emit: (l: string) => out.push(l), ...extra }));
+    return { ctx, sheet, tl, manifest, out, guard };
+  };
+  const ONE: UnwindGuardArgs = { vault: "PROTO", token: TOK.b, "min-usdc-out": "2000000", "max-loss-bps": "500" };
+  const callOf = (token: `0x${string}`, min: bigint, allowed: boolean, loss: bigint) =>
+    encodeFunctionData({ abi: VAULT_UNWIND_GUARD_ABI, functionName: "setEmergencyUnwindGuard", args: [token, min, allowed, loss] });
+  const guardOf = (tl: ReturnType<typeof fakeTimelock>, vault: string, token: string) => tl.s.guards.get(`${vault.toLowerCase()}|${token.toLowerCase()}`);
+
+  test("the row is on demand: in no default run, no numbered --row and no stage run; accepted on 8453 in production and in a rehearsal and on the Twin chain", () => {
+    expect([...GOVERN_ROWS]).not.toContain(UNWIND_GUARD_ROW);
+    for (const chain of [8453, 918453]) expect([...stageRows(chain)]).not.toContain(UNWIND_GUARD_ROW);
+    expect(() => resolveGovernRow(UNWIND_GUARD_ROW)).toThrow("on-demand");
+    for (const kind of ["production", "rehearsal"] as const) for (const chain of [8453, 918453]) expect(govRowRefusal(UNWIND_GUARD_ROW, chain, kind)).toBeUndefined();
+  });
+
+  test("bad arguments are USAGE and nothing is read or sent: rmUSDC, an unknown vault, no token, a bad token, a zero floor, a loss cap above 10000, an override floor that rounds to zero, a bad override flag", async () => {
+    const bad: [UnwindGuardArgs | undefined, string][] = [
+      [undefined, "vault="],
+      [{ ...ONE, vault: "USDC" }, "rmUSDC has no emergency unwind guard"],
+      [{ ...ONE, vault: "BTC" }, "vault must be one of"],
+      [{ ...ONE, token: undefined }, "token=0x<address>"],
+      [{ ...ONE, token: "0x1234" }, "token must be an address or 'all'"],
+      [{ ...ONE, "min-usdc-out": "0" }, "min-usdc-out 0 is the unset guard"],
+      [{ ...ONE, "min-usdc-out": "1.5" }, "whole number"],
+      [{ ...ONE, "max-loss-bps": undefined }, "max-loss-bps=N"],
+      [{ ...ONE, "max-loss-bps": "10001" }, "InvalidParam"],
+      [{ ...ONE, "max-loss-bps": "10000" }, "override floor zero"],
+      [{ ...ONE, "min-usdc-out": "1" }, "override floor zero"],
+      [{ ...ONE, "override-allowed": "yes" }, "true or false"],
+    ];
+    for (const [args, msg] of bad) {
+      expect(() => parseUnwindGuardArgs(args)).toThrow(msg);
+      const w = world();
+      let connected = 0;
+      const connect = w.tl.api.connectSafe;
+      w.tl.api.connectSafe = (async (...x: unknown[]) => { connected++; return (connect as (...y: unknown[]) => unknown)(...x); }) as never;
+      await expect(w.guard(args as UnwindGuardArgs)).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining(msg) });
+      expect(connected).toBe(0);
+      expect(w.tl.s.events).toEqual([]);
+    }
+    // a 10000 cap, or a floor of one unit, is allowed with the override off: the override floor is never used
+    expect(parseUnwindGuardArgs({ ...ONE, "max-loss-bps": "10000", "override-allowed": "false" })).toMatchObject({ maxLossBps: 10000n, overrideAllowed: false });
+    expect(parseUnwindGuardArgs({ ...ONE, "min-usdc-out": "1", "override-allowed": "false" })).toMatchObject({ minUsdcOut: 1n, overrideAllowed: false });
+    // the row's --admin-arg values go with the row only
+    const w = world();
+    await expect(runGovern(w.ctx, stageByName("govern"), w.manifest, opts(w.sheet, w.tl, { row: "unpause-PROTO", unwindGuard: ONE }))).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining(`--row ${UNWIND_GUARD_ROW} only`) });
+  });
+
+  test("one token: ONE setEmergencyUnwindGuard call, scheduled with `schedule` and executed after the delay, read back; the line carries the row; the evidence records the values", async () => {
+    const w = world();
+    const res = await w.guard(ONE);
+    const name = unwindGuardRecordKey("PROTO", [{ data: callOf(TOK.b, 2_000_000n, true, 500n) }]);
+    expect(res.rows).toEqual([name]);
+    expect(w.tl.s.events).toEqual([`schedule:${UNWIND_GUARD_ROW}`, `execute:${UNWIND_GUARD_ROW}`]);
+    const sc = w.tl.s.scheduled.get(UNWIND_GUARD_ROW)!;
+    expect(sc.form).toBe("single");
+    expect(sc.calls).toEqual([{ target: A.vaults.PROTO, data: callOf(TOK.b, 2_000_000n, true, 500n) }]);
+    // the Safe transaction names the vault and the guard before and after
+    expect(sc.description).toContain(`rmPROTO ${A.vaults.PROTO} from ${TOK.b} (0, false, 0)`);
+    expect(sc.description).toContain(`rmPROTO.setEmergencyUnwindGuard(${TOK.b}, 2000000, true, 500)`);
+    expect(guardOf(w.tl, A.vaults.PROTO, TOK.b)).toEqual([2_000_000n, true, 500n]);
+    expect(guardOf(w.tl, A.vaults.PROTO, TOK.a)).toBeUndefined();
+    const lines = w.out.map((l) => JSON.parse(l));
+    expect(lines.map((l) => `${l.row}:${l.phase}:${l.status}`)).toEqual([`${UNWIND_GUARD_ROW}:scheduled:1`, `${UNWIND_GUARD_ROW}:executed:1`]);
+    const e = (w.manifest as { unwind_guards?: any[] }).unwind_guards!;
+    expect(e.length).toBe(1);
+    expect(e[0]).toMatchObject({ step: UNWIND_GUARD_ROW, key: name, round: 1, vault: "PROTO", vault_address: A.vaults.PROTO, tokens: [TOK.b], min_usdc_out: "2000000", override_allowed: true, max_loss_bps: 500, timelock: A.timelock, schedule_status: 1, execute_status: 1 });
+    // never part of stage 13
+    expect(w.manifest.stages.govern).toBeUndefined();
+    expect(Object.keys(w.manifest.govern!)).toEqual([name]);
+  });
+
+  test("token=all: ONE scheduleBatch with one call per ACTIVE asset, in the vault's order (the inactive row gets none)", async () => {
+    const w = world();
+    await w.guard({ ...ONE, token: "all" });
+    const sc = w.tl.s.scheduled.get(UNWIND_GUARD_ROW)!;
+    expect(sc.form).toBe("batch");
+    expect(sc.calls).toEqual([TOK.a, TOK.b].map((t) => ({ target: A.vaults.PROTO, data: callOf(t, 2_000_000n, true, 500n) })));
+    expect(w.tl.s.log).toEqual(["scheduleBatch", "executeBatch"]);
+    for (const t of [TOK.a, TOK.b]) expect(guardOf(w.tl, A.vaults.PROTO, t)).toEqual([2_000_000n, true, 500n]);
+    expect(guardOf(w.tl, A.vaults.PROTO, TOK.off)).toBeUndefined();
+    expect((w.manifest as { unwind_guards?: any[] }).unwind_guards![0].tokens).toEqual([TOK.a, TOK.b]);
+  });
+
+  test("override-allowed defaults to true (QA plan v1 Decisions D3: allowed, Safe-only), and false is sent as false", async () => {
+    expect(parseUnwindGuardArgs(ONE).overrideAllowed).toBe(true);
+    const w = world();
+    await w.guard({ ...ONE, vault: "AGENT", token: TOK.a, "override-allowed": "false", "max-loss-bps": "0" });
+    expect(guardOf(w.tl, A.vaults.AGENT, TOK.a)).toEqual([2_000_000n, false, 0n]);
+    expect(w.tl.s.scheduled.get(UNWIND_GUARD_ROW)!.calls).toEqual([{ target: A.vaults.AGENT, data: callOf(TOK.a, 2_000_000n, false, 0n) }]);
+  });
+
+  test("a token that is not an active asset, a vault with no active asset and a vault whose ADMIN_ROLE the timelock does not hold are refused with GOVERN before anything is scheduled", async () => {
+    const inactive = world();
+    await expect(inactive.guard({ ...ONE, token: TOK.off })).rejects.toMatchObject({ kind: "GOVERN", exitCode: EXIT_CODES.GOVERN, message: expect.stringContaining("is not an active asset of rmPROTO") });
+    expect(inactive.tl.s.events).toEqual([]);
+    const empty = world();
+    await expect(empty.guard({ ...ONE, vault: "RWA", token: "all" })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("rmRWA lists no active asset") });
+    expect(empty.tl.s.events).toEqual([]);
+    const ungoverned = world();
+    ungoverned.tl.s.governed.delete(A.vaults.PROTO);
+    await expect(ungoverned.guard(ONE)).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("does not hold ADMIN_ROLE on rmPROTO") });
+    expect(ungoverned.tl.s.events).toEqual([]);
+  });
+
+  test("a guard already in effect is recorded as skipped and nothing is sent; a rerun of an executed run reprints its lines and sends nothing", async () => {
+    const pre = world();
+    pre.tl.s.guards.set(`${A.vaults.PROTO.toLowerCase()}|${TOK.b.toLowerCase()}`, [2_000_000n, true, 500n]);
+    const res = await pre.guard(ONE);
+    expect(res.skipped).toEqual(res.rows);
+    expect(pre.tl.s.events).toEqual([]);
+    expect(pre.manifest.govern![res.rows[0]!]).toMatchObject({ skipped: { reason: expect.stringContaining("already in effect on chain") } });
+    const w = world();
+    await w.guard(ONE);
+    w.out.length = 0;
+    const again = await w.guard(ONE);
+    expect(again.skipped).toEqual([]);
+    expect(w.tl.s.events.length).toBe(2);
+    expect(w.out.map((l) => JSON.parse(l).phase)).toEqual(["scheduled", "executed"]);
+    expect((w.manifest as { unwind_guards?: any[] }).unwind_guards!.length).toBe(1);
+  });
+
+  test("other values are another operation, and setting the first values again after a change opens round 2 of their record (a new operation id)", async () => {
+    const w = world();
+    await w.guard(ONE);
+    const first = w.tl.s.ids.get(UNWIND_GUARD_ROW);
+    const name = unwindGuardRecordKey("PROTO", [{ data: callOf(TOK.b, 2_000_000n, true, 500n) }]);
+    await w.guard({ ...ONE, "min-usdc-out": "3000000" });
+    expect(guardOf(w.tl, A.vaults.PROTO, TOK.b)).toEqual([3_000_000n, true, 500n]);
+    expect(w.tl.s.ids.get(UNWIND_GUARD_ROW)).not.toBe(first);
+    await w.guard(ONE);
+    expect(guardOf(w.tl, A.vaults.PROTO, TOK.b)).toEqual([2_000_000n, true, 500n]);
+    expect(w.tl.s.events.length).toBe(6);
+    expect(w.manifest.govern![name]).toMatchObject({ round: 2 });
+    expect(w.manifest.govern![roundKey(name, 1)]).toMatchObject({ round: 1, executed: expect.anything() });
+    const ids = new Set((w.manifest as { unwind_guards?: any[] }).unwind_guards!.map((x) => x.operation_id));
+    expect(ids.size).toBe(3);
+  });
+
+  test("on 8453 (production) the row schedules and exits GOVERN_PENDING with a resume command that spells out its --admin-arg values; the resume after the delay executes it; a cancelled operation is scheduled again in the same round", async () => {
+    const w = world(8453);
+    let err: unknown;
+    try { await w.guard(ONE, { warp: noWarp }); } catch (e) { err = e; }
+    const e = err as PublishError;
+    expect(e.kind).toBe("GOVERN_PENDING");
+    expect(String(e.details.next_command)).toContain(`--row ${UNWIND_GUARD_ROW} --admin-arg vault=PROTO --admin-arg token=${TOK.b} --admin-arg min-usdc-out=2000000 --admin-arg max-loss-bps=500 --admin-arg override-allowed=true`);
+    expect(String(e.details.next_command)).toContain("--chain 8453");
+    expect(w.tl.s.events).toEqual([`schedule:${UNWIND_GUARD_ROW}`]);
+    // the operator cancels the operation through the Safe on the timelock, then names the row again: the same round is scheduled again
+    const name = unwindGuardRecordKey("PROTO", [{ data: callOf(TOK.b, 2_000_000n, true, 500n) }]);
+    w.tl.s.ops.delete(w.tl.s.ids.get(UNWIND_GUARD_ROW)!);
+    await expect(w.guard(ONE, { warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    expect(w.tl.s.events).toEqual([`schedule:${UNWIND_GUARD_ROW}`, `schedule:${UNWIND_GUARD_ROW}`]);
+    expect(w.manifest.govern![`${roundKey(name, 1)}:cancelled-1`]).toBeDefined();
+    w.tl.s.clock += DELAY;
+    await w.guard(ONE, { warp: noWarp });
+    expect(w.tl.s.events).toEqual([`schedule:${UNWIND_GUARD_ROW}`, `schedule:${UNWIND_GUARD_ROW}`, `execute:${UNWIND_GUARD_ROW}`]);
+    expect(guardOf(w.tl, A.vaults.PROTO, TOK.b)).toEqual([2_000_000n, true, 500n]);
+    expect(w.manifest.stages.govern).toBeUndefined();
+  });
+
+  test("buildUnwindGuardCalls: one call per token on the vault, labelled with the vault name and the values", () => {
+    const want = parseUnwindGuardArgs({ ...ONE, token: "all" });
+    const calls = buildUnwindGuardCalls(A.vaults.RWA, { ...want, vault: "RWA" }, [TOK.a, TOK.b]);
+    expect(calls.map((c) => c.target)).toEqual([A.vaults.RWA, A.vaults.RWA]);
+    expect(calls[0]!.label).toBe(`rmRWA.setEmergencyUnwindGuard(${TOK.a}, 2000000, true, 500)`);
+    expect(decodeFunctionData({ abi: VAULT_UNWIND_GUARD_ABI, data: calls[1]!.data }).args).toEqual([TOK.b, 2_000_000n, true, 500n]);
+    // the record key names the row and the vault, and differs with the values
+    expect(unwindGuardRecordKey("RWA", calls)).toMatch(new RegExp(`^${UNWIND_GUARD_ROW}-RWA-[0-9a-f]{8}$`));
+    expect(unwindGuardRecordKey("RWA", calls)).not.toBe(unwindGuardRecordKey("RWA", calls.slice(0, 1)));
   });
 });
 

@@ -45,10 +45,13 @@ test("watched address — portfolio position and transaction history render from
     address: watchedAddress,
     events: [
       {
-        event_type: "deposit",
+        kind: "deposit",
+        chain_id: 918453,
         block_number: 100,
+        log_index: 0,
         tx_hash: "0x" + "ab".repeat(32),
-        vault_address: endpoints.vault_addr,
+        vault: endpoints.vault_addr,
+        agent: null,
         amount: "1000000",
         indexed_at: "2026-05-10T12:00:00Z",
       },

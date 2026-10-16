@@ -5,7 +5,7 @@ description: "The router's weight setter. It holds the Portfolio Router's `WEIGH
 
 # RouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7947a8e6f43a743f5ba2aa35912426cbfda6b46c/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ef707305749eb5814ddb4ffa65dab0e0f435b360/contracts/RouterGovernance.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
@@ -34,6 +34,13 @@ therefore names the digest it was built from; `applyReceipt` reverts
 unless it equals the stored digest, and `ReceiptApplied` records the
 digest and the vector together so anyone can re-derive the vector
 from the public payload and compare.
+
+Released is not applied (security review 2026-10-15, finding 023): the
+timelock also holds the register's `ADMIN_ROLE` and can release a
+receipt directly (the standalone `release-receipt` govern row). A
+receipt released that way carries no weights, and `applyReceipt`
+refuses it forever (`ReceiptAlreadyReleased`); the committee must
+record a new receipt. Read `ReceiptApplied` to learn what was applied.
 
 Design constraints (docs/architecture.md §2.3):
 - Controls router weights only; cannot govern vault internals,
@@ -267,7 +274,9 @@ error ReceiptNotRecorded(bytes32 receiptId);
 
 ### ReceiptAlreadyReleased
 
-`receiptId` is already released, so it was already applied.
+`receiptId` is already released: applied earlier, or released
+directly by the timelock without weights. Either way it can never
+be applied (again).
 
 ```solidity
 error ReceiptAlreadyReleased(bytes32 receiptId);

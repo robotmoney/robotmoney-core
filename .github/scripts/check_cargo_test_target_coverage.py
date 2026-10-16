@@ -31,6 +31,19 @@ package of every `cargo test` invocation from `-p` / `--package`,
 `--manifest-path`, or the step's effective `working-directory`, and only credits
 targets in that package.
 
+WHY COMMAND SUBSTITUTIONS ARE EXPANDED FIRST (QA plan T2)
+---------------------------------------------------------
+suite-27 runs `out="$(cargo test --lib 2>&1)"` from clients/rust-payment-client.
+shlex keeps that whole assignment as ONE token, so no `--lib` token was seen,
+the line fell through to the bare-`cargo test` branch, and every rmpc
+integration target was credited by a run that builds none of them. The
+`echo "::error::cargo test --lib printed no ..."` line beside it did the same.
+That is how `write_seam_reverted_anvil` looked covered while nothing ran it.
+So every `$(...)` and backtick body is now cut out and scanned as its own
+command, and only a real `cargo` `test` token pair (or the executed-count
+wrapper invoked by path) counts as a run. Prose that merely mentions
+`cargo test` credits nothing.
+
 USAGE
     python3 .github/scripts/check_cargo_test_target_coverage.py [--repo-root DIR]
                                                                [--allowlist FILE]
@@ -64,6 +77,19 @@ NON_INTEGRATION_SELECTORS = {"--lib", "--bins", "--bin", "--doc", "--example", "
 ALL_INTEGRATION_SELECTORS = {"--tests", "--all-targets"}
 
 MATRIX_REF = re.compile(r"\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}")
+
+# The executed-count wrapper. Invoked by path it is a `cargo test` run whose
+# arguments follow the script name.
+REQUIRE_EXECUTED_WRAPPER = "cargo_test_require_executed.sh"
+# What a cut-out command substitution leaves behind in the outer command. It
+# must not look like a selector, a package, or the word `cargo`.
+SUBST_PLACEHOLDER = "__cmd_subst__"
+# Bash starts a comment only at a `#` that begins a word.
+_WORD_BREAK = frozenset(" \t\n;&|()<>")
+# A step whose `run:` carries this comment expects `cargo test` to FAIL (a proof
+# that a skip is fatal under CI; see check_no_bare_cargo_test.py). It runs the
+# target to watch it refuse, so it proves no assertion passes and is not coverage.
+EXPECTED_FAILURE_MARKER = re.compile(r"#\s*bare-cargo-test-allowed:")
 
 
 def load_workspace_members(repo_root: Path) -> list[Path]:
@@ -156,6 +182,24 @@ def resolve_package(tokens: list[str], workdir: str, dir_to_pkg: dict[str, str])
     return dir_to_pkg.get(os.path.normpath(workdir)) if workdir else None
 
 
+def cargo_test_args(tokens: list[str]) -> list[str] | None:
+    """Return the arguments of the `cargo test` run in `tokens`, or None.
+
+    A run starts only at a real `cargo` token followed by a `test` token, or at
+    the executed-count wrapper invoked by path. A substring match is not enough:
+    `echo "cargo test --lib printed nothing"` and an unexpanded
+    `out="$(cargo test --lib)"` both contain the words while neither token list
+    is a cargo invocation, and crediting them is a false green.
+    """
+    for i, tok in enumerate(tokens):
+        name = os.path.basename(tok)
+        if name == "cargo" and tokens[i + 1 : i + 2] == ["test"]:
+            return tokens[i + 2 :]
+        if name == REQUIRE_EXECUTED_WRAPPER:
+            return tokens[i + 1 :]
+    return None
+
+
 def scan_command(cmd: str, workdir: str, dir_to_pkg: dict[str, str], pkg_targets: dict[str, set[str]]):
     """Yield (package, target) pairs a single shell command executes.
 
@@ -163,12 +207,16 @@ def scan_command(cmd: str, workdir: str, dir_to_pkg: dict[str, str], pkg_targets
     a compiled-but-never-run binary is exactly the silent-skip this check
     exists to expose.
     """
-    if "cargo test" not in cmd and "cargo_test_require_executed" not in cmd:
+    if "cargo test" not in cmd and REQUIRE_EXECUTED_WRAPPER not in cmd:
         return
     try:
         tokens = shlex.split(cmd, comments=True)
     except ValueError:
         tokens = cmd.split()
+    args = cargo_test_args(tokens)
+    if args is None:
+        return
+    tokens = args
     if "--no-run" in tokens:
         return
     # Everything after the libtest `--` separator is a name filter, not a
@@ -202,16 +250,89 @@ def scan_command(cmd: str, workdir: str, dir_to_pkg: dict[str, str], pkg_targets
         yield (pkg, t)
 
 
+def _cut_substitutions(s: str, i: int, nested: bool) -> tuple[int, str, list[str]]:
+    """Walk `s` from `i`, cutting out every command substitution.
+
+    Returns (index after the level ends, the level's own text with each
+    `$(...)` or backtick body replaced by SUBST_PLACEHOLDER, every body found
+    at any depth). A nested walk is the body of a `$(` and ends at its matching
+    `)`. Single quotes make `$(` and backticks literal, as in bash. Comments are
+    dropped here, so a backtick quoted in a comment is never taken for a
+    command. A body that never closes runs to the end of the text: its
+    commands are still scanned, and nothing is lost from view.
+    """
+    out: list[str] = []
+    bodies: list[str] = []
+    depth = 0
+    quote = ""
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if quote == "'":
+            if c == "'":
+                quote = ""
+            out.append(c)
+            i += 1
+            continue
+        if c == "\\":
+            out.append(s[i : i + 2])
+            i += 2
+            continue
+        if s.startswith("$(", i):
+            i, body, inner = _cut_substitutions(s, i + 2, nested=True)
+            bodies.append(body)
+            bodies.extend(inner)
+            out.append(SUBST_PLACEHOLDER)
+            continue
+        if c == "`":
+            j = i + 1
+            while j < n and s[j] != "`":
+                j += 2 if s[j] == "\\" else 1
+            _, body, inner = _cut_substitutions(s[i + 1 : j], 0, nested=False)
+            bodies.append(body)
+            bodies.extend(inner)
+            out.append(SUBST_PLACEHOLDER)
+            i = j + 1
+            continue
+        if quote == '"':
+            if c == '"':
+                quote = ""
+        elif c in "'\"":
+            quote = c
+        elif c == "#" and (i == 0 or s[i - 1] in _WORD_BREAK):
+            j = s.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        elif nested and c == "(":
+            depth += 1
+        elif nested and c == ")":
+            if depth == 0:
+                return i + 1, "".join(out), bodies
+            depth -= 1
+        out.append(c)
+        i += 1
+    return n, "".join(out), bodies
+
+
 def split_commands(script: str) -> list[str]:
     """Flatten a `run:` block into individual shell commands.
 
     Backslash-newline continuations are joined first so a multi-line
     `cargo_test_require_executed.sh \\ -p x \\ --test y` invocation is seen as
     one command rather than three fragments.
+
+    Command substitutions are expanded BEFORE tokenising (QA plan T2). Each
+    `$(...)` or backtick body becomes a command of its own, and the outer
+    command keeps a placeholder. `out="$(cargo test --lib 2>&1)"` is therefore
+    seen as `cargo test --lib 2>&1`, which credits no integration target.
     """
     script = re.sub(r"\\\s*\n\s*", " ", script)
-    parts = re.split(r"[\n;]|&&|\|\|", script)
-    return [p.strip() for p in parts if p.strip()]
+    _, outer, bodies = _cut_substitutions(script, 0, nested=False)
+    commands: list[str] = []
+    for text in (outer, *bodies):
+        parts = re.split(r"[\n;]|&&|\|\|", text)
+        commands.extend(p.strip() for p in parts if p.strip())
+    return commands
 
 
 def executed_pairs(repo_root: Path, pkg_targets: dict[str, set[str]], dir_to_pkg: dict[str, str]):
@@ -231,6 +352,8 @@ def executed_pairs(repo_root: Path, pkg_targets: dict[str, set[str]], dir_to_pkg
             combos = matrix_combinations(job)
             for step in job.get("steps") or []:
                 if not isinstance(step, dict) or "run" not in step:
+                    continue
+                if EXPECTED_FAILURE_MARKER.search(str(step["run"])):
                     continue
                 wd = step.get("working-directory", job_wd) or ""
                 for combo in combos:

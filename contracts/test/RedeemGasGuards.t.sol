@@ -262,6 +262,9 @@ contract RedeemGasGuardsTest is Test {
     uint256 internal constant GATEWAY_WITHDRAW = 2_000_000;
     uint256 internal constant GATEWAY_ROUTER_BASE = 400_000;
     uint256 internal constant GATEWAY_ROUTER_PER_LEG = 1_850_000;
+    /// @dev The deposit side runs the availability pass before any vault (QA plan D4), so its per-leg floors are above the redeem ones.
+    uint256 internal constant ROUTER_DEPOSIT_PER_LEG = 2_400_000;
+    uint256 internal constant GATEWAY_ROUTER_DEPOSIT_PER_LEG = 2_550_000;
     uint256 internal constant VAULT_FLOOR = 1_600_000;
 
     function test_router_redeemFor_belowFloor_revertsInsufficientGas() public {
@@ -522,7 +525,7 @@ contract RedeemGasGuardsTest is Test {
                 _sel(ret), PortfolioRouter.InsufficientGas.selector, "expected InsufficientGas"
             );
             (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
-            assertEq(required, k * ROUTER_PER_LEG, "router deposit floor per weighted leg");
+            assertEq(required, k * ROUTER_DEPOSIT_PER_LEG, "router deposit floor per weighted leg");
         }
     }
 
@@ -562,7 +565,11 @@ contract RedeemGasGuardsTest is Test {
                 _sel(ret), RobotMoneyGateway.InsufficientGas.selector, "expected InsufficientGas"
             );
             (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
-            assertEq(required, 400_000 + k * GATEWAY_ROUTER_PER_LEG, "gateway deposit router floor");
+            assertEq(
+                required,
+                400_000 + k * GATEWAY_ROUTER_DEPOSIT_PER_LEG,
+                "gateway deposit router floor"
+            );
         }
     }
 }

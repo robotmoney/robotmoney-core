@@ -11,14 +11,16 @@
 //! and run the preflight against the same fork that the dapp drove.
 //!
 //! Exit codes mirror `rmpc self-check` startup-fail semantics:
-//!   0  — keystore written.
-//!   2  — bad input (missing argv, malformed hex, wrong key length).
+//!   0  — keystore written (mode 0600 on Unix).
+//!   2  — bad input (missing argv, empty passphrase, malformed hex, wrong
+//!        key length). Nothing is written.
 //!   3  — io / encryption failure.
 //!
 //! Inputs:
 //!   argv[1]                   — output keystore path.
 //!   $RMPC_IMPORT_PRIVKEY_HEX  — 64-hex-char (optionally 0x-prefixed) secp256k1 private key.
-//!   $RMPC_KEYSTORE_PASSPHRASE — passphrase used to encrypt the keystore.
+//!   $RMPC_KEYSTORE_PASSPHRASE — passphrase used to encrypt the keystore. Must
+//!                               be non-empty.
 //!
 //! The private-key hex is read from the environment, never from argv,
 //! so `ps` does not leak it. The helper unsets the env var on entry to
@@ -56,6 +58,15 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // An empty passphrase encrypts the key under a key anyone can derive
+    // (QA plan U7, finding DR-11). Refuse it as bad input, before any
+    // file is touched.
+    if passphrase.is_empty() {
+        eprintln!(
+            "rmpc-keystore-import: ${PASSPHRASE_ENV_VAR} is set but empty; a keystore needs a non-empty passphrase"
+        );
+        return ExitCode::from(2);
+    }
 
     let trimmed = privkey_hex.trim().trim_start_matches("0x");
     let bytes = match hex::decode(trimmed) {

@@ -1,6 +1,8 @@
 # Canonical: docs/development/ci-suites.md (check-sha-green), core 1502.
 # Runs the fixture tests of scripts/ci/check-sha-green.ts. The devops publish plan job
-# calls that script with DEPLOY_SHA before any approval.
+# calls that script with DEPLOY_SHA before any approval. The same file derives the deploy-gate
+# job set from .github/workflows (scripts/ci/deploy-gate-jobs.ts) and fails when
+# scripts/ci/required-checks.json differs from it (QA plan v1 T4).
 name: check-sha-green-tests
 
 on:

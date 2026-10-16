@@ -4,8 +4,9 @@ WHAT THIS FILE GUARDS
 
 `robotmoney-frontend` expresses an allocation as `[0,1]` floats over four named
 buckets. This repo expresses it as `target_weight_bps` over four vault
-addresses, and `RouterGovernance.propose` HARD-REJECTS any vector that does not
-sum to `BPS_DENOMINATOR` exactly (`contracts/gateway/RouterGovernance.sol`).
+addresses, and `RouterGovernance.applyReceipt` HARD-REJECTS any vector that does
+not sum to `BPS_DENOMINATOR` exactly (`contracts/RouterGovernance.sol`, through
+`PortfolioRouter.setWeights`).
 Nothing converted between them before #1246, so the rounding rule was whatever
 each side reached for first — and two roundings that agree on the fixtures
 agree right up until the session that lands on a boundary.

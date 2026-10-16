@@ -15,6 +15,7 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
+import {ProposerFloorTimelock} from "../ProposerFloorTimelock.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
 import {ForkSelect} from "./helpers/ForkSelect.sol";
@@ -1852,14 +1853,52 @@ contract SafeIntegrationTest is Test {
         assertFalse(d.timelock.hasRole(role, proposer));
     }
 
-    /// @notice Owner decision 1, default (b): the Safe gives up its timelock role through the delay.
-    ///         The route is revokeRole as a timelock self-call. After it the Safe cannot schedule.
+    /// @dev The Safe schedules `data` on the timelock itself, the delay passes, and the Safe's
+    ///      execute is refused: GS013 through the Safe, and exactly `reason` on the open-executor
+    ///      path (EXECUTOR_ROLE is address(0), so the test calls execute itself).
+    function _timelockSelfCallRefusedAtExecute(bytes memory data, bytes32 salt, bytes4 reason)
+        internal
+    {
+        assertTrue(
+            _safeCall(
+                address(d.timelock),
+                abi.encodeCall(
+                    d.timelock.schedule,
+                    (address(d.timelock), 0, data, bytes32(0), salt, d.timelock.getMinDelay())
+                )
+            ),
+            "schedule failed"
+        );
+        vm.warp(block.timestamp + d.timelock.getMinDelay() + 1);
+        vm.expectRevert(reason);
+        d.timelock.execute(address(d.timelock), 0, data, bytes32(0), salt);
+        _safeCallReverts(
+            address(d.timelock),
+            abi.encodeCall(d.timelock.execute, (address(d.timelock), 0, data, bytes32(0), salt))
+        );
+    }
+
+    /// @notice Owner decision 1, default (b), and the last-proposer floor (issue #1645, CS-3):
+    ///         the Safe gives up its timelock role through the delay, and never as the last
+    ///         proposer. `revokeRole(PROPOSER_ROLE, safe)` as a timelock self-call is refused at
+    ///         execute with `LastProposerFloor` while the Safe is the only proposer. Once a second
+    ///         proposer holds the role the same self-call goes through, and the Safe cannot
+    ///         schedule any more.
     function test_selfAdmin_safeProposerRoleRevoked_throughTheDelay() public withSnap {
         bytes32 role = d.timelock.PROPOSER_ROLE();
         assertTrue(d.timelock.hasRole(role, address(safe)));
-        _timelockSelfCall(
-            abi.encodeCall(IAccessControl.revokeRole, (role, address(safe))), keccak256("rv")
+        bytes memory revokeSafe = abi.encodeCall(IAccessControl.revokeRole, (role, address(safe)));
+        // the last proposer: scheduled, then refused at execute
+        _timelockSelfCallRefusedAtExecute(
+            revokeSafe, keccak256("rv-last"), ProposerFloorTimelock.LastProposerFloor.selector
         );
+        assertTrue(d.timelock.hasRole(role, address(safe)), "the last proposer was revoked");
+        // a second proposer first, then the Safe's role goes through the delay
+        _timelockSelfCall(
+            abi.encodeCall(IAccessControl.grantRole, (role, makeAddr("second-proposer"))),
+            keccak256("g2")
+        );
+        _timelockSelfCall(revokeSafe, keccak256("rv"));
         assertFalse(d.timelock.hasRole(role, address(safe)));
         _safeCallReverts(
             address(d.timelock),
@@ -1870,17 +1909,23 @@ contract SafeIntegrationTest is Test {
         );
     }
 
-    /// @notice The contract cannot force the delay on a renounce: the timelock's renounceRole only
-    ///         accepts the role holder as caller, and a Safe transaction is instant. The tool never
-    ///         builds a renounce (default (b)), and this test pins that the contract would allow it.
+    /// @notice The contract forces nothing on a renounce except the floor: the timelock's
+    ///         renounceRole only accepts the role holder as caller, a Safe transaction is
+    ///         instant, and ProposerFloorTimelock refuses it only for the last proposer. With a
+    ///         second proposer the Safe's renounce goes through at once, so the tool never
+    ///         builds a renounce (default (b)). This test pins both facts.
     function test_selfAdmin_directRenounceIsInstant_soTheToolMustNotBuildIt() public withSnap {
         bytes32 role = d.timelock.PROPOSER_ROLE();
-        assertTrue(
-            _safeCall(
-                address(d.timelock),
-                abi.encodeCall(IAccessControl.renounceRole, (role, address(safe)))
-            )
+        bytes memory renounce = abi.encodeCall(IAccessControl.renounceRole, (role, address(safe)));
+        // the last proposer: refused by the contract, instantly
+        _safeCallReverts(address(d.timelock), renounce);
+        assertTrue(d.timelock.hasRole(role, address(safe)), "the last proposer renounced");
+        // not the last proposer: instant
+        _timelockSelfCall(
+            abi.encodeCall(IAccessControl.grantRole, (role, makeAddr("second-proposer"))),
+            keccak256("g2")
         );
+        assertTrue(_safeCall(address(d.timelock), renounce));
         assertFalse(d.timelock.hasRole(role, address(safe)));
     }
 }

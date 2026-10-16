@@ -239,6 +239,11 @@ pub struct Fixture {
     published: publish::Published,
     /// keccak256 of the gateway's runtime code on this chain.
     gateway_runtime_hash: String,
+    /// keccak256 of the implementation code behind every other proxy an rmpc write reaches through
+    /// the gateway (the four vaults and the router), deduplicated, for rmpc's
+    /// `proxy_implementation_hashes` (issue 1810). The gateway itself is pinned by
+    /// `gateway_implementation` + `gateway_implementation_runtime_hash`. Empty when none is a proxy.
+    proxy_implementation_hashes: Vec<String>,
     repo_root: PathBuf,
     /// Harness-owned nonce source of truth for every EOA this devnet sends
     /// from (issue #1241, extended to the funding path by issue #1374).
@@ -637,6 +642,18 @@ impl Fixture {
             logging::error("smoke-test", format!("manifest read failed: {err}"));
         })?;
         let gateway_runtime_hash = runtime_code_hash(&rpc_url, &topology.gateway)?;
+        let mut proxy_implementation_hashes = Vec::new();
+        for addr in topology
+            .vaults
+            .values()
+            .chain(std::iter::once(&topology.router))
+        {
+            if let Some(h) = implementation_code_hash(&rpc_url, addr)? {
+                if !proxy_implementation_hashes.contains(&h) {
+                    proxy_implementation_hashes.push(h);
+                }
+            }
+        }
         let chain_id = publish::TWIN_CHAIN_ID;
 
         let work_dir = tmp.path().to_path_buf();
@@ -650,6 +667,7 @@ impl Fixture {
             topology,
             published,
             gateway_runtime_hash,
+            proxy_implementation_hashes,
             repo_root,
             nonce_tracker,
         };
@@ -754,6 +772,11 @@ impl Fixture {
     /// gateway manifest (issue 1810).
     pub fn gateway_implementation_runtime_hash(&self) -> &str {
         &self.topology.gateway_implementation_runtime_hash
+    }
+    /// keccak256 of the implementations behind the vaults and the router, for rmpc's
+    /// `proxy_implementation_hashes` (issue 1810). Empty when none of them is a proxy.
+    pub fn proxy_implementation_hashes(&self) -> &[String] {
+        &self.proxy_implementation_hashes
     }
     /// Raw string form of the gateway address (for TOML/config templating).
     pub fn gateway_hex(&self) -> &str {
@@ -2385,6 +2408,42 @@ fn purge_stale_dapp_compose_state(
     }
 }
 
+/// `bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1)`.
+const ERC1967_IMPLEMENTATION_SLOT: &str =
+    "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+
+/// keccak256 of the code of the implementation the proxy at `addr` delegates to (issue 1808), or
+/// `None` when its ERC-1967 implementation slot is empty (a direct deployment).
+fn implementation_code_hash(rpc_url: &str, addr: &str) -> Result<Option<String>, HarnessError> {
+    let out = Command::new("cast")
+        .args([
+            "storage",
+            addr,
+            ERC1967_IMPLEMENTATION_SLOT,
+            "--rpc-url",
+            rpc_url,
+        ])
+        .output()?;
+    if !out.status.success() {
+        return Err(HarnessError::other(format!(
+            "cast storage {addr} (ERC-1967 implementation slot) failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    let word = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let hex_word = word.trim_start_matches("0x");
+    if hex_word.len() != 64 || !hex_word.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(HarnessError::other(format!(
+            "cast storage {addr} returned {word:?}, not one 32-byte word"
+        )));
+    }
+    let implementation = &hex_word[24..];
+    if implementation.chars().all(|c| c == '0') {
+        return Ok(None);
+    }
+    runtime_code_hash(rpc_url, &format!("0x{implementation}")).map(Some)
+}
+
 /// keccak256 of the runtime code at `addr`, read with `cast code`.
 fn runtime_code_hash(rpc_url: &str, addr: &str) -> Result<String, HarnessError> {
     let out = Command::new("cast")
@@ -2987,11 +3046,17 @@ fn dapp_compose_env(
         kv("INDEXER_REGISTRY", &d.registry),
         // WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter (issue #615).
         kv("INDEXER_PORTFOLIO_ROUTER", &d.router),
-        // Issue 1647: ProposalCreated/VoteCast/ProposalExecuted from RouterGovernance, so the dapp governance e2e
-        // reads proposals the real Safe and timelock created.
+        // The weight setter, registered in the explorer's contracts list. Issue 1698 deleted its
+        // voting path, so it emits no event the indexer stores (an applied receipt is a WeightsSet).
         kv("INDEXER_ROUTER_GOVERNANCE", &d.governance),
         // Issue #1294: ReceiptRecorded/ReceiptReleased events from ConsensusRebalanceReceipt.
         kv("INDEXER_CONSENSUS_RECEIPT", &d.consensus_receipt),
+        // Security round 2: the IC policy proxy (committee events, and its Upgraded / UpgradesFrozen
+        // that the watchdog pages on), the timelock and the Safe (governance admin events), as the
+        // 8453 stack watches them. docker-compose.dapp.yaml maps each; an unset one was never watched.
+        kv("INDEXER_INVESTMENT_COMMITTEE", &d.ic_policy),
+        kv("INDEXER_TIMELOCK", &d.timelock),
+        kv("INDEXER_SAFE", &d.safe),
         // Issue #1294: fixed port for the receipt-fixtures compose service.
         kv("RECEIPT_FIXTURES_PORT", &RECEIPT_FIXTURES_PORT.to_string()),
         kv("INDEXER_RPC_URL", indexer_rpc_url),
@@ -3023,6 +3088,8 @@ struct DappDeployed {
     governance: String,
     timelock: String,
     safe: String,
+    /// The InvestmentCommitteePolicy proxy.
+    ic_policy: String,
     consensus_receipt: String,
     vault_addresses_json: String,
 }
@@ -3042,6 +3109,7 @@ impl DappDeployed {
             governance: fixture.governance_hex().to_string(),
             timelock: fixture.timelock_hex().to_string(),
             safe: fixture.safe_hex().to_string(),
+            ic_policy: fixture.ic_policy_hex().to_string(),
             consensus_receipt: fixture.consensus_receipt_hex().to_string(),
             vault_addresses_json: fixture.vault_address_map_json(),
         }
@@ -4122,6 +4190,7 @@ ccc333\t\teth-beacon
             governance: a(6),
             timelock: a(7),
             safe: a(8),
+            ic_policy: a(11),
             consensus_receipt: a(9),
             vault_addresses_json: "{\"rmUSDC\":\"0x01\"}".to_string(),
         }
@@ -4201,6 +4270,39 @@ ccc333\t\teth-beacon
         );
         assert_eq!(get("DAPP_PORT"), Some("5173"));
         assert_eq!(get("EXPLORER_API_PORT"), Some("18546"));
+    }
+
+    /// Security round 2: the stage stack's indexer watches the InvestmentCommitteePolicy proxy, the
+    /// timelock and the Safe, as the 8453 stack does. Without them an `Upgraded` of the IC policy
+    /// proxy never reached the indexed proxy admin events, the watchdog's upgrade page stayed silent for it,
+    /// and `/v1/committee/*` and `/v1/governance/admin-events` stayed empty on the rehearsal chain.
+    #[test]
+    fn dapp_compose_env_watches_the_ic_policy_timelock_and_safe() {
+        let env = sample_env();
+        let deployed = sample_deployed();
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(
+            get("INDEXER_INVESTMENT_COMMITTEE"),
+            Some(deployed.ic_policy.as_str())
+        );
+        assert_eq!(get("INDEXER_TIMELOCK"), Some(deployed.timelock.as_str()));
+        assert_eq!(get("INDEXER_SAFE"), Some(deployed.safe.as_str()));
+        // Each is a variable the compose file hands the indexer container.
+        let root = locate_repo_root().expect("repo root");
+        let compose = std::fs::read_to_string(
+            root.join("testing/ethereum-testnet/config/docker-compose.dapp.yaml"),
+        )
+        .expect("compose file");
+        for name in [
+            "INDEXER_INVESTMENT_COMMITTEE",
+            "INDEXER_TIMELOCK",
+            "INDEXER_SAFE",
+        ] {
+            assert!(
+                compose.contains(&format!("{name}: ${{{name}")),
+                "docker-compose.dapp.yaml must map {name} into the indexer"
+            );
+        }
     }
 
     /// The JSON the stage deploy job writes: a flat string object that carries `COMPOSE_PROFILES`, which

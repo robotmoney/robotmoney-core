@@ -246,7 +246,14 @@ describe("the registration batch and the rehearsal rows on chain", () => {
     }, { "1": T0, "2": T0 + gap, "3": T0 + gap }), readContract: async () => threshold };
   };
   const run = (c: ChainReader, f: (e: any) => void = () => {}) => { const e = regEvidence(); f(e); return checkReceiptPathOnChain(e, c, 900).then((p) => p.join("\n")); };
-  test("a registration whose calls are exactly authorizeAgent and committeeRegister for the recorded submitter, label and validity passes", async () => expect(await run(chain())).toBe(""));
+  test("a registration whose calls are exactly setPolicy and committeeRegister for the recorded submitter, label and validity passes", async () => expect(await run(chain())).toBe(""));
+  test("QA plan v1 B6: the recorded private hand-over must be in a block before the schedule (mutation: one block after the schedule is refused)", async () => {
+    const withHandOver = (block: bigint): ChainReader => { const c = chain(); const base = c.getTransactionReceipt; return { ...c, getTransactionReceipt: async ({ hash }) => (hash === h(209) ? { status: "success", blockNumber: block, logs: [] } : base({ hash })) }; };
+    const set = (e: any) => { e.committee_registrations[0].self_authorization = { commit_tx: h(207), reveal_tx: h(208), hand_over_tx: h(209) }; };
+    expect(await run(withHandOver(0n), set)).toBe("");
+    expect(await run(withHandOver(1n), set)).toContain("not before the batch was scheduled");
+    expect(await run(withHandOver(2n), set)).toContain("the address was public while unowned");
+  });
   test("a different label or submitter in the evidence than in the scheduled calldata is refused", async () => {
     expect(await run(chain(), (e) => { e.committee_registrations[0].agent_label = "other"; })).toContain("calldata is not");
     expect(await run(chain(), (e) => { e.committee_registrations[0].submitter = a(0x5ab2); })).toContain("calldata is not");

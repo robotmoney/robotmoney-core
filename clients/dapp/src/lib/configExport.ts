@@ -22,12 +22,60 @@
  *   allow_software_fallback = true
  *   keystore_path
  *
- * Encrypted-keystore exports are explicitly non-production. `rmpc` refuses
- * software signing for Base mainnet write commands; production operators
- * should use an HSM/KMS/device-bound backend when those fields are available.
+ * Binding pins (QA plan D2/U6): `share_receiver` and `agent_owner`. The
+ * dapp knows both at authorize time: the connected wallet reveals, so it is
+ * the agent's owner, and a wallet without ADMIN_ROLE must name itself as
+ * share receiver. With both set, every `rmpc` deposit and withdraw preflight
+ * refuses (`ErrAgentBindingMismatch`) when the gateway shows another owner or
+ * receiver for the agent, so a binding someone else made first never
+ * receives the agent's shares unnoticed. The panel always passes them once a
+ * wallet is connected.
+ *
+ * Gateway implementation pin (issue 1810): the panel passes the
+ * implementation and its code hash only after the dapp verified them against
+ * the build's pin (`VITE_GATEWAY_EXPECTED_IMPLEMENTATION` + `_HASH`), so the
+ * export never pins whatever is live at export time. A direct gateway gets no
+ * such lines.
+ *
+ * The vaults and the router are proxies too, and rmpc checks every one a write
+ * reaches against `proxy_implementation_hashes` (a deposit the vault, a
+ * withdraw the router and the vault, a router deposit the router and every
+ * leg). The panel passes the reviewed vault and router implementation hashes
+ * this build pins (`VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH`,
+ * `VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH`, from the release manifests), and
+ * the export writes them as values. A build without those pins writes the key
+ * commented out with the release-record fields to copy, never a command that
+ * hashes whatever implementation is live (that would approve the very code
+ * the check exists to refuse).
+ *
+ * Encrypted-keystore exports sign on every chain. `rmpc deposit`, `withdraw`
+ * and `withdraw-router` sign with the software keystore on Base mainnet too,
+ * after a production warning (owner decision 2026-10-06, issue #1545). A
+ * hardware wallet, HSM or KMS is optional, never required (owner decision
+ * 2026-10-14). The exported comment block says so: see
+ * `SOFTWARE_KEYSTORE_COMMENT`.
  */
 
 export type SignerKind = "encrypted_keystore" | "hardware" | "kms";
+
+/**
+ * Comment lines emitted above `allow_software_fallback = true` in an
+ * encrypted-keystore export. They state the signer decisions of 2026-10-06
+ * and 2026-10-14 (QA plan U7, finding DR-12); the old lines said a software
+ * keystore was "devnet/test use only" and that Base mainnet required an
+ * HSM/KMS/device-bound signer, which rmpc has not enforced for depositor
+ * writes since 2026-10-06.
+ *
+ * `clients/rust-payment-client/tests/dapp_toml_roundtrip.rs` reads this array
+ * from this file and checks that its fixture carries every line verbatim and
+ * still loads through rmpc's `Config::from_str`. Keep one string per line.
+ */
+export const SOFTWARE_KEYSTORE_COMMENT: readonly string[] = [
+  "# Software keystore: rmpc deposit, withdraw and withdraw-router sign with it on every",
+  "# chain, Base mainnet included, after a production warning (owner decision 2026-10-06).",
+  "# A hardware wallet, HSM or KMS is optional, never required (owner decision 2026-10-14).",
+  "# rmpc decrypts the key in memory: keep the keystore 0600 and the passphrase out of argv.",
+];
 
 interface SignerSpec {
   kind: SignerKind;
@@ -56,6 +104,20 @@ interface RmpcExportInputs {
    */
   gateway_implementation?: string;
   gateway_implementation_runtime_hash?: string;
+  /**
+   * The vault is an ERC-1967 proxy: rmpc needs `proxy_implementation_hashes`. Without reviewed
+   * hashes below, the export writes the key commented out with where to copy them from.
+   */
+  vault_is_proxy?: boolean;
+  /**
+   * Reviewed implementation code hashes of the vaults and the router, from this build's pins
+   * (never read live). Non-empty: written as `proxy_implementation_hashes`.
+   */
+  proxy_implementation_hashes?: readonly string[];
+  /** The share receiver the depositor authorized: rmpc refuses a binding with another (QA plan D2). */
+  share_receiver?: string;
+  /** The wallet that revealed the authorization: rmpc refuses a binding owned by another. */
+  agent_owner?: string;
   signer: SignerSpec;
 }
 
@@ -81,6 +143,31 @@ export function exportRmpcConfig(inputs: RmpcExportInputs): string {
           `gateway_implementation_runtime_hash = ${tomlStr(inputs.gateway_implementation_runtime_hash)}`,
         ]
       : []),
+    ...(inputs.proxy_implementation_hashes !== undefined &&
+    inputs.proxy_implementation_hashes.length > 0
+      ? [
+          `# The reviewed vault and router implementations this dapp build pins (release manifests).`,
+          `# rmpc refuses to sign when a vault or the router runs any other: approve a reviewed`,
+          `# upgrade by adding its hash from the release record.`,
+          `proxy_implementation_hashes = [${inputs.proxy_implementation_hashes
+            .map(tomlStr)
+            .join(", ")}]`,
+        ]
+      : inputs.vault_is_proxy === true
+        ? [
+            `# The vault and the router are upgradeable proxies. rmpc refuses to deposit or withdraw`,
+            `# until the reviewed implementation code hash of each is listed here. Copy them from the`,
+            `# release record (timelock.json vault_handover.vault_<i>.implementation_code_hash and`,
+            `# code_hashes.router_implementation), never from the live chain.`,
+            `# proxy_implementation_hashes = ["0x<reviewed vault implementation code hash>", "0x<reviewed router implementation code hash>"]`,
+          ]
+        : []),
+    ...(inputs.share_receiver !== undefined
+      ? [`share_receiver       = ${tomlStr(inputs.share_receiver)}`]
+      : []),
+    ...(inputs.agent_owner !== undefined
+      ? [`agent_owner          = ${tomlStr(inputs.agent_owner)}`]
+      : []),
     ``,
     `[signer]`,
     ...buildSignerLines(inputs.signer),
@@ -91,11 +178,7 @@ export function exportRmpcConfig(inputs: RmpcExportInputs): string {
 
 function buildSignerLines(signer: SignerSpec): string[] {
   if (signer.kind === "encrypted_keystore") {
-    const lines = [
-      `# UNSAFE FOR PRODUCTION: software keystore is for devnet/test use only.`,
-      `# Base mainnet write commands require an HSM/KMS/device-bound signer.`,
-      `allow_software_fallback = true`,
-    ];
+    const lines = [...SOFTWARE_KEYSTORE_COMMENT, `allow_software_fallback = true`];
     if (signer.keystore_path !== undefined) {
       lines.push(`keystore_path = ${tomlStr(signer.keystore_path)}`);
     }

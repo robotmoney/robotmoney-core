@@ -23,7 +23,7 @@ contract CustodyInvariantGuardTest is Test {
     ///      contracts/doc). Kept as an explicit list so the guard is
     ///      deterministic and a newly-added contract is a deliberate edit here.
     function _productionSources() internal pure returns (string[] memory paths) {
-        paths = new string[](15);
+        paths = new string[](21);
         paths[0] = "contracts/PortfolioRouter.sol";
         paths[1] = "contracts/RobotMoneyVault.sol";
         paths[2] = "contracts/VaultRegistry.sol";
@@ -39,24 +39,24 @@ contract CustodyInvariantGuardTest is Test {
         paths[12] = "contracts/adapters/AerodromeSwapAdapter.sol";
         paths[13] = "contracts/adapters/UniswapV3SwapAdapter.sol";
         paths[14] = "contracts/interfaces/IStrategyAdapter.sol";
+        // ADR-0014: the upgrade base, the exclusion ledger that holds recovered USDC, and the
+        // linked libraries that move vault or gateway assets as the vault or the gateway.
+        paths[15] = "contracts/lib/GovernedUUPS.sol";
+        paths[16] = "contracts/ExclusionLedger.sol";
+        paths[17] = "contracts/lib/RobotMoneyVaultOps.sol";
+        paths[18] = "contracts/lib/BasketSwaps.sol";
+        paths[19] = "contracts/lib/GatewayWindows.sol";
+        paths[20] = "contracts/ProposerFloorTimelock.sol";
     }
 
-    /// @dev True if `haystack` contains `needle` (naive substring scan).
+    /// @dev True if `haystack` contains `needle`. The scan is the `contains` cheatcode, not a byte loop in the EVM: the
+    ///      loop cost about 700M gas over 21 files and ran out of gas under `forge coverage`, whose instrumentation
+    ///      makes every opcode dearer.
     function _contains(string memory haystack, string memory needle) internal pure returns (bool) {
-        bytes memory h = bytes(haystack);
-        bytes memory n = bytes(needle);
-        if (n.length == 0 || n.length > h.length) return false;
-        for (uint256 i = 0; i + n.length <= h.length; i++) {
-            bool matched = true;
-            for (uint256 j = 0; j < n.length; j++) {
-                if (h[i + j] != n[j]) {
-                    matched = false;
-                    break;
-                }
-            }
-            if (matched) return true;
+        if (bytes(needle).length == 0 || bytes(needle).length > bytes(haystack).length) {
+            return false;
         }
-        return false;
+        return vm.contains(haystack, needle);
     }
 
     /// @notice INV-1: no production source declares an arbitrary-recipient

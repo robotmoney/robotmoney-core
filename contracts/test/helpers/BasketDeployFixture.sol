@@ -69,7 +69,8 @@ abstract contract BasketDeployFixture is Test {
 
     uint256 internal constant TVL_CAP = 50_000 * 1e6;
     uint256 internal constant PER_DEPOSIT_CAP = 5_000 * 1e6;
-    uint256 internal constant NAV_DEVIATION_BPS = 100;
+    /// @dev The sheet value for rmAGENT (QA plan D10): above the 291 bps RM V4 pool fee, which the deploy script requires (D4).
+    uint256 internal constant NAV_DEVIATION_BPS = 400;
     /// @dev Below the ConstPool double liquidity of 1e18.
     uint256 internal constant MIN_POOL_LIQUIDITY = 1e12;
 
@@ -116,7 +117,7 @@ abstract contract BasketDeployFixture is Test {
             "5000000000",
             vm.toString(feeRecipient),
             "0",
-            "100",
+            "400",
             "1000000000000"
         ];
         for (uint256 i = 0; i < names.length; i++) {

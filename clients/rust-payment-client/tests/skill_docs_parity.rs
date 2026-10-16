@@ -22,6 +22,16 @@
 //!     skill, the SKILL.md path resolves, the YAML-style frontmatter is
 //!     present and well-formed, and every `references/*.md` file linked
 //!     from SKILL.md exists on disk.
+//!
+//!   * error-name parity (QA plan U6, finding DR-7) — every `Err…` name in
+//!     any plugin's skill docs is a name rmpc can print, and the user
+//!     skill's refusal table lists every named preflight refusal. The docs
+//!     once told agents to match `ErrAgentExpired` and
+//!     `ErrPerPaymentCapExceeded`, which rmpc never emitted.
+//!
+//!   * passphrase hygiene (QA plan U7, finding DR-11) — no shell fence in
+//!     any plugin's skill docs sets a passphrase variable to a literal or
+//!     fills a passphrase file from anything but a hidden `read -s` prompt.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -567,4 +577,242 @@ fn cargo_metadata_resolves_repo_root() {
         fs::canonicalize(&resolved).unwrap(),
         "repo_root() walker disagreed with `git rev-parse --show-toplevel`"
     );
+}
+
+// ---------------------------------------------------------------------
+// (C) Error-name parity across every plugin's skill docs (QA plan U6).
+// ---------------------------------------------------------------------
+
+/// Every markdown file under `plugins/*/skills/`, sorted.
+fn all_plugin_skill_docs() -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+            .filter_map(Result::ok)
+        {
+            let p = entry.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().and_then(|s| s.to_str()) == Some("md") {
+                out.push(p);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for plugin in fs::read_dir(repo_root().join("plugins"))
+        .expect("read plugins/")
+        .filter_map(Result::ok)
+    {
+        let skills = plugin.path().join("skills");
+        if skills.is_dir() {
+            walk(&skills, &mut out);
+        }
+    }
+    out.sort();
+    out
+}
+
+/// `Err`-prefixed identifiers in `text`: `Err` then an uppercase letter,
+/// then letters and digits.
+fn err_names_in(text: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for tok in text.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let is_name = tok.len() > 3
+            && tok.starts_with("Err")
+            && tok[3..].starts_with(|c: char| c.is_ascii_uppercase());
+        if is_name {
+            out.insert(tok.to_string());
+        }
+    }
+    out
+}
+
+/// Every error name rmpc can print: the `"Err…` string literals in the
+/// crate's sources. That covers `RmpcError::name()`, every `#[error("Err…:`
+/// display prefix, and the command-local refusal names such as
+/// `ErrConfirmNotProvided`. `ErrUnknown` is excluded: it appears only as the
+/// fallback `errors.rs` tests forbid.
+fn rmpc_error_names() -> BTreeSet<String> {
+    fn walk(dir: &Path, out: &mut BTreeSet<String>) {
+        for entry in fs::read_dir(dir).unwrap().filter_map(Result::ok) {
+            let p = entry.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().and_then(|s| s.to_str()) == Some("rs") {
+                let src = fs::read_to_string(&p).unwrap();
+                for (i, _) in src.match_indices("\"Err") {
+                    // `i` is the quote, so `i + 1` is a char boundary.
+                    let name: String = src[i + 1..]
+                        .chars()
+                        .take_while(char::is_ascii_alphanumeric)
+                        .collect();
+                    out.extend(err_names_in(&name));
+                }
+            }
+        }
+    }
+    let mut out = BTreeSet::new();
+    walk(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut out,
+    );
+    out.remove("ErrUnknown");
+    out
+}
+
+#[test]
+fn every_documented_error_name_is_one_rmpc_prints() {
+    let real = rmpc_error_names();
+    assert!(
+        real.contains("ErrPolicyExpired") && real.contains("ErrConfirmNotProvided"),
+        "the source scraper drifted; it found {real:?}"
+    );
+    let mut fake: Vec<String> = Vec::new();
+    for path in all_plugin_skill_docs() {
+        let text = fs::read_to_string(&path).unwrap();
+        for name in err_names_in(&text) {
+            if !real.contains(&name) {
+                fake.push(format!("{}: {name}", path.display()));
+            }
+        }
+    }
+    assert!(
+        fake.is_empty(),
+        "plugin skill docs name errors rmpc never prints:\n{}\nreal names: {real:?}",
+        fake.join("\n"),
+    );
+}
+
+/// The user skill's refusal table lists every named refusal the write
+/// preflight, the pre-sign simulation and `withdraw-router` raise, so an
+/// agent can look up any refusal it is shown.
+#[test]
+fn safety_doc_lists_every_named_write_refusal() {
+    let safety =
+        repo_root().join("plugins/robotmoney-user/skills/robotmoney-user/references/safety.md");
+    let text = fs::read_to_string(&safety).expect("read safety.md");
+    let listed = err_names_in(&text);
+    let missing: Vec<&str> = [
+        "ErrChainIdMismatch",
+        "ErrCodeHashMismatch",
+        "ErrImplementationNotApproved",
+        "ErrDepositsPaused",
+        "ErrAgentNotAuthorized",
+        "ErrAgentBindingMismatch",
+        "ErrPolicyExpired",
+        "ErrDepositCapExceeded",
+        "ErrWithdrawCapExceeded",
+        "ErrAllowanceInsufficient",
+        "ErrBalanceInsufficient",
+        "ErrShareAllowanceInsufficient",
+        "ErrShareBalanceInsufficient",
+        "ErrVaultDisabled",
+        "ErrLegUnavailable",
+        "ErrSlippageBoundExceeded",
+        "ErrMinAssetsPerLegRequired",
+        "ErrConfirmNotProvided",
+        "ErrGasLimitBelowFloor",
+        "ErrFeeCapExceeded",
+        "ErrConcurrentInvocation",
+        "ErrOrderIdAlreadySubmitted",
+        "ErrTxReverted",
+    ]
+    .into_iter()
+    .filter(|n| !listed.contains(*n))
+    .collect();
+    assert!(
+        missing.is_empty(),
+        "{} does not list: {missing:?}",
+        safety.display()
+    );
+}
+
+// ---------------------------------------------------------------------
+// (D) No skill fence writes a literal passphrase (QA plan U7, DR-11).
+// ---------------------------------------------------------------------
+
+/// `(line number, line)` for every line inside a shell code fence (info
+/// string empty, `bash`, `sh`, `shell` or `console`).
+fn shell_fence_lines(text: &str) -> Vec<(usize, &str)> {
+    let mut out = Vec::new();
+    let mut lang: Option<String> = None;
+    for (i, line) in text.lines().enumerate() {
+        if let Some(rest) = line.trim_start().strip_prefix("```") {
+            lang = match lang {
+                None => Some(rest.trim().to_ascii_lowercase()),
+                Some(_) => None,
+            };
+            continue;
+        }
+        if let Some(l) = &lang {
+            if matches!(l.as_str(), "" | "bash" | "sh" | "shell" | "console") {
+                out.push((i + 1, line));
+            }
+        }
+    }
+    out
+}
+
+/// A line that sets a `…PASSPHRASE` variable (not `…PASSPHRASE_FILE`) to
+/// anything but an expansion: `RMPC_KEYSTORE_PASSPHRASE="hunter2"`.
+fn sets_literal_passphrase(line: &str) -> bool {
+    line.split_whitespace().any(|tok| {
+        let Some((name, value)) = tok.split_once('=') else {
+            return false;
+        };
+        let value = value.trim_start_matches(['"', '\'']);
+        name.ends_with("PASSPHRASE") && !value.is_empty() && !value.starts_with('$')
+    })
+}
+
+/// A line that redirects into a file whose name says it holds a passphrase,
+/// spaced (`> ~/.x-pass`) or not (`>~/.x-pass`).
+fn writes_passphrase_file(line: &str) -> bool {
+    let toks: Vec<&str> = line.split_whitespace().collect();
+    let spaced = toks
+        .windows(2)
+        .any(|w| matches!(w[0], ">" | ">>") && w[1].to_ascii_lowercase().contains("pass"));
+    let joined = toks.iter().any(|t| {
+        let target = t.trim_start_matches('>');
+        t.starts_with('>') && !target.is_empty() && target.to_ascii_lowercase().contains("pass")
+    });
+    spaced || joined
+}
+
+/// The line takes the passphrase from a hidden prompt: `read -s…`.
+fn reads_hidden_prompt(line: &str) -> bool {
+    let toks: Vec<&str> = line.split_whitespace().collect();
+    toks.windows(2)
+        .any(|w| w[0] == "read" && w[1].starts_with('-') && w[1].contains('s'))
+}
+
+/// A skill fence is copied and run by agents, so its text lands in shell
+/// history and in the agent transcript. The robotmoney-cli skill once
+/// told owners to run `printf '%s' '<passphrase>' > ~/.rmpc-committee-pass`.
+/// A passphrase file must be filled from a hidden `read -s` prompt, and no
+/// `…PASSPHRASE` variable may be set to a literal.
+#[test]
+fn no_skill_fence_writes_a_literal_passphrase() {
+    let mut bad: Vec<String> = Vec::new();
+    let mut passphrase_files = 0;
+    for path in all_plugin_skill_docs() {
+        let text = fs::read_to_string(&path).unwrap();
+        for (n, line) in shell_fence_lines(&text) {
+            let at = format!("{}:{n}", path.display());
+            if sets_literal_passphrase(line) {
+                bad.push(format!("{at}: sets a literal passphrase: {line}"));
+            }
+            if writes_passphrase_file(line) {
+                passphrase_files += 1;
+                if !reads_hidden_prompt(line) {
+                    bad.push(format!("{at}: passphrase file not from `read -s`: {line}"));
+                }
+            }
+        }
+    }
+    assert!(
+        passphrase_files > 0,
+        "the scan found no passphrase-file fence; the robotmoney-cli skill documents one"
+    );
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }

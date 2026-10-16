@@ -5,14 +5,15 @@
  *  - composeRotationPreview error (same old/new address) surfaces in
  *    the rotation-preview-error element.
  *  - Step button gating: revoke-submit enabled only in `idle` step
- *    (when previews are ready); authorize-submit enabled only in
- *    `revoke-sent` step.
+ *    (when previews are ready); authorize-submit enabled only once the
+ *    wallet accepted the revoke (`revoke-sent`).
  *
  * Both previews being ready (`previewsOk`) requires simulate to return
  * data. We set the step machine state via address inputs, and gate the
  * simulate mock so the error path and disable conditions are exercised.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { act } from "react";
 import { render, screen, fireEvent } from "../helpers/render";
 import { RotationTab } from "../../../src/components/RotationTab";
 import type { PreviewContext } from "../../../src/lib/preview";
@@ -20,7 +21,9 @@ import type { PreviewContext } from "../../../src/lib/preview";
 // Per-test wagmi state. Default: not connected, no reads, no simulate data
 // → buttons stay disabled.
 const wagmiState = vi.hoisted(() => {
-  const account: { isConnected: boolean; address?: `0x${string}` } = { isConnected: false };
+  const account: { isConnected: boolean; address?: `0x${string}`; chainId?: number } = {
+    isConnected: false,
+  };
   return {
     account,
     hasAdmin: undefined as boolean | undefined,
@@ -131,7 +134,7 @@ describe("RotationTab — depositor path (wallet without ADMIN_ROLE)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetWagmi();
-    wagmiState.account = { isConnected: true, address: DEPOSITOR };
+    wagmiState.account = { isConnected: true, address: DEPOSITOR, chainId: 918453 };
     wagmiState.hasAdmin = false;
     wagmiState.agentOwner = ZERO;
     // revokeAgent simulate succeeds (the depositor owns OLD).
@@ -179,13 +182,19 @@ describe("RotationTab — depositor path (wallet without ADMIN_ROLE)", () => {
     expect(screen.getByTestId("rotation-revoke-submit")).toBeDisabled();
   });
 
-  it("step 2 signs commitAuthorization (not authorizeAgent) after step 1", () => {
+  it("step 2 signs commitAuthorization (not authorizeAgent) once the wallet accepted step 1", async () => {
     renderTab();
     fill(DEPOSITOR);
     fireEvent.click(screen.getByTestId("rotation-revoke-submit"));
+    const write = vi.mocked(wagmiState.writeContract);
+    // Sent is not accepted: step 2 waits for the wallet to return the revoke's hash (QA plan U5).
+    expect(screen.getByTestId("rotation-authorize-submit")).toBeDisabled();
+    const opts = write.mock.calls[0][1] as { onSuccess: (hash: `0x${string}`) => void };
+    await act(async () => {
+      opts.onSuccess(`0x${"de".repeat(32)}`);
+    });
     expect(screen.getByTestId("rotation-authorize-submit")).toBeEnabled();
     fireEvent.click(screen.getByTestId("rotation-authorize-submit"));
-    const write = vi.mocked(wagmiState.writeContract);
     const calls = write.mock.calls.map((c) => (c[0] as { functionName?: string }).functionName);
     expect(calls).toEqual(["revokeAgent", "commitAuthorization"]);
   });

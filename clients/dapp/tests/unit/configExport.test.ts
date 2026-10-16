@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { parse } from "smol-toml";
-import { exportRmpcConfig } from "../../src/lib/configExport";
+import { exportRmpcConfig, SOFTWARE_KEYSTORE_COMMENT } from "../../src/lib/configExport";
 
 const baseInputs = {
   chain_id: 31337,
@@ -32,8 +32,17 @@ describe("exportRmpcConfig", () => {
 
     // Must parse as valid TOML
     const parsed = parse(toml) as Record<string, unknown>;
-    expect(toml).toContain("UNSAFE FOR PRODUCTION");
-    expect(toml).toContain("HSM/KMS/device-bound signer");
+    // QA plan U7 (DR-12): the comment states the 2026-10-06 and 2026-10-14
+    // signer decisions. It must not claim mainnet needs an HSM/KMS signer.
+    for (const line of SOFTWARE_KEYSTORE_COMMENT) {
+      expect(line.startsWith("# ")).toBe(true);
+      expect(toml).toContain(`${line}\n`);
+    }
+    expect(toml).toContain("Base mainnet included");
+    expect(toml).toContain("optional, never required");
+    expect(toml).not.toContain("UNSAFE FOR PRODUCTION");
+    expect(toml).not.toContain("devnet/test use only");
+    expect(toml).not.toMatch(/require[s]? an HSM/);
 
     // All required top-level fields must be present and correct
     expect(parsed.chain_id).toBe(31337);
@@ -60,6 +69,33 @@ describe("exportRmpcConfig", () => {
     ]);
   });
 
+  // QA plan U6 (rmpc half of D2): the dapp knows the agent's owner and share receiver at
+  // authorize time, so its export pins both. rmpc's preflight then refuses a binding that
+  // someone else made first (ErrAgentBindingMismatch); without the keys it skipped the check.
+  it("pins share_receiver and agent_owner when the wallet is known", () => {
+    const owner = "0x5555555555555555555555555555555555555555";
+    const toml = exportRmpcConfig({
+      ...baseInputs,
+      share_receiver: owner,
+      agent_owner: owner,
+      signer: { kind: "encrypted_keystore", keystore_path: "./agent.keystore.json" },
+    });
+    const parsed = parse(toml) as Record<string, unknown>;
+    expect(parsed.share_receiver).toBe(owner);
+    expect(parsed.agent_owner).toBe(owner);
+    const topLevelKeys = Object.keys(parsed).filter((k) => k !== "signer");
+    expect(topLevelKeys).toEqual([
+      "chain_id",
+      "rpc_url",
+      "gateway_address",
+      "usdc_address",
+      "vault_address",
+      "gateway_runtime_hash",
+      "share_receiver",
+      "agent_owner",
+    ]);
+  });
+
   it("gateway_runtime_hash must be non-zero in the exported config", () => {
     const nonZeroHash = "0x" + "ab".repeat(32);
     const toml = exportRmpcConfig({
@@ -79,6 +115,48 @@ describe("exportRmpcConfig", () => {
     });
     const parsed = parse(toml) as Record<string, unknown>;
     expect(parsed.usdc_address).toBe("0x2222222222222222222222222222222222222222");
+  });
+
+  // Issue 1810: a proxied vault needs proxy_implementation_hashes in rmpc, and so does the router
+  // a withdraw or router deposit reaches. A build without reviewed implementation pins names the
+  // key commented out, with the release-record fields for the vault AND the router, and never a
+  // command that hashes the live implementation: that would approve whatever is deployed (no
+  // trust on first use).
+  it("names proxy_implementation_hashes for a proxied vault without a live-read command", () => {
+    const toml = exportRmpcConfig({
+      ...baseInputs,
+      vault_is_proxy: true,
+      signer: { kind: "encrypted_keystore", keystore_path: "./agent.keystore.json" },
+    });
+    expect(toml).toContain("# proxy_implementation_hashes = ");
+    expect(toml).not.toContain("cast implementation");
+    expect(toml).not.toContain("cast code");
+    expect(toml).toContain("vault_handover.vault_<i>.implementation_code_hash");
+    expect(toml).toContain("code_hashes.router_implementation");
+    expect(toml).toMatch(/reviewed router implementation code hash/);
+    const parsed = parse(toml) as Record<string, unknown>;
+    expect(parsed.proxy_implementation_hashes).toBeUndefined();
+    const direct = exportRmpcConfig({
+      ...baseInputs,
+      signer: { kind: "encrypted_keystore", keystore_path: "./agent.keystore.json" },
+    });
+    expect(direct).not.toContain("proxy_implementation_hashes");
+  });
+
+  // ADR-0014: a build that pins the reviewed vault and router implementations exports them as
+  // values, so rmpc refuses an implementation nobody reviewed from its first write.
+  it("exports the reviewed vault and router implementation hashes the build pins as values", () => {
+    const vaultImpl = "0x" + "a1".repeat(32);
+    const routerImpl = "0x" + "b2".repeat(32);
+    const toml = exportRmpcConfig({
+      ...baseInputs,
+      vault_is_proxy: true,
+      proxy_implementation_hashes: [vaultImpl, routerImpl],
+      signer: { kind: "encrypted_keystore", keystore_path: "./agent.keystore.json" },
+    });
+    expect(toml).not.toContain("cast implementation");
+    const parsed = parse(toml) as Record<string, unknown>;
+    expect(parsed.proxy_implementation_hashes).toEqual([vaultImpl, routerImpl]);
   });
 
   it("hardware signer: emits a TOML file with no allow_software_fallback", () => {

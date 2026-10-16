@@ -354,3 +354,59 @@ async fn the_no_baseline_page_reports_no_gap_numbers_it_never_measured() {
     }
     server.shutdown();
 }
+
+/// The weight-setter-path page is its own incident with the holders on it
+/// (issue 1698).
+#[tokio::test]
+async fn a_weight_setter_path_drift_pages_with_the_observed_holders() {
+    use watchdog::alert::dispatch_weight_setter_path_alert;
+    use watchdog::governance::{RoleMembers, WeightSetterBreach};
+
+    let server = MockWebhookServer::start().await;
+    let client = Client::new();
+    let setter = format!("0x{}", "ab".repeat(20));
+    let stranger = format!("0x{}", "11".repeat(20));
+    let timelock = format!("0x{}", "cd".repeat(20));
+    let breach = WeightSetterBreach {
+        chain_id: 918_453,
+        router_address: format!("0x{}", "ef".repeat(20)),
+        weight_setter_address: setter.clone(),
+        timelock_address: timelock.clone(),
+        weight_setter_role: RoleMembers {
+            count: 2,
+            members: vec![setter.clone(), stranger.clone()],
+        },
+        weight_setter_appliers: RoleMembers {
+            count: 1,
+            members: vec![timelock.clone()],
+        },
+        weight_setter_admins: RoleMembers {
+            count: 1,
+            members: vec![timelock.clone()],
+        },
+    };
+    dispatch_weight_setter_path_alert(&client, &server.url, &breach)
+        .await
+        .expect("dispatch");
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    let caps = server.drain_captures();
+    assert_eq!(caps.len(), 1);
+    let v: serde_json::Value = serde_json::from_slice(&caps[0].body).unwrap();
+    assert_eq!(v["event_action"], "trigger");
+    assert_eq!(v["dedup_key"], "weight_setter_path_drift:918453");
+    let d = &v["payload"]["custom_details"];
+    assert_eq!(d["alert_kind"], "weight_setter_path_drift");
+    assert_eq!(d["weight_setter_role_count"], 2);
+    assert_eq!(d["weight_setter_role_holders"][1], stranger);
+    assert_eq!(d["apply_receipt_role_count"], 1);
+    assert_eq!(d["apply_receipt_role_holders"][0], timelock);
+    assert_eq!(d["expected_weight_setter"], setter);
+    assert_eq!(d["expected_timelock"], timelock);
+    assert_eq!(d["router_address"], breach.router_address);
+    assert!(v["payload"]["summary"]
+        .as_str()
+        .unwrap()
+        .contains("without a consensus receipt"));
+    server.shutdown();
+}

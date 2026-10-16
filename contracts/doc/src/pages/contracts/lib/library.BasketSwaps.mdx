@@ -5,7 +5,7 @@ description: "The basket vault's one swap executor and its two emergency unwinds
 
 # BasketSwaps
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/lib/BasketSwaps.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/lib/BasketSwaps.sol)
 
 **Title:** BasketSwaps
 
@@ -71,7 +71,9 @@ function swap(
 
 `BasketVault.emergencyUnwind` after the deposit halt: swap every active asset's
 balance to USDC. The per-leg floor is max(TWAP-derived, configured minUsdcOut).
-With the oracle unavailable a non-zero configured floor is required.
+With the oracle unavailable a non-zero configured floor is required. A leg whose
+TWAP floor rounds to zero USDC units is dust and is skipped (QA plan D6, SR-L12):
+one donated wei cannot block the unwind.
 
 ```solidity
 function unwindAll(
@@ -125,7 +127,8 @@ function unwindWithOverride(
 floor, which must not undercut the caller's `minUsdcOut` (AZ-BSK-5). When the
 pool is degraded (the TWAP read reverts) the balance is swept to the fixed
 quarantine address instead of being stranded (LIFE-6). No caller-supplied
-recipient (INV-1). Panics on an out-of-range `index`.
+recipient (INV-1). A dust balance, whose floor rounds to zero USDC units, is left in
+place and the call is a no-op (QA plan D6). Panics on an out-of-range `index`.
 
 ```solidity
 function reabsorb(
@@ -155,6 +158,9 @@ function reabsorb(
 
 max(TWAP-derived floor, configured minUsdcOut). With the oracle unavailable (the
 self-only `emergencyTwapUsdcValue` reverts) a non-zero configured floor is required.
+`dust` is true when the TWAP floor rounds to zero (QA plan D6): its sale can pay zero,
+which the V4 adapter refuses, so the leg stays put whatever the configured minimum.
+`removeAsset` accepts such a balance.
 
 </i>
 
@@ -163,7 +169,7 @@ function _emergencyFloor(
         BasketAssetConfigGuard.AssetInfo memory a,
         uint256 bal,
         uint256 slippageBps
-    ) private view returns (uint256);
+    ) private view returns (uint256 floor, bool dust);
 ```
 
 **Parameters**
@@ -178,7 +184,8 @@ function _emergencyFloor(
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
+| floor | `uint256` |  |
+| dust | `bool` |  |
 
 <a id="_swaptousdc-basketassetconfigguard-assetinfo-uint256-uint256-address-iswaprouter"></a>
 

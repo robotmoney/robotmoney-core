@@ -76,7 +76,15 @@ rmpc get-timelock --config <CONFIG> [--pretty]
 
 ### `rmpc get-gateway`
 
-Read gateway state directly from chain.
+Read gateway state directly from chain. For a proxied gateway (ADR-0014) the
+output also carries the live `implementation` and its `implementation_code_hash`,
+the approved pair from the config (`configured_implementation`,
+`configured_implementation_code_hash`), `upgrades_frozen` and `upgrade_timelock`.
+A direct gateway reports `null` for all of them. Every write, the committee
+`vote-submit` and `receipt submit` included, checks the gateway's
+implementation against that pair before it signs, and refuses with
+`ErrImplementationNotApproved` on a mismatch. Writes also check the vault, the
+router and each router leg they reach against `proxy_implementation_hashes`.
 
 ```
 rmpc get-gateway --config <CONFIG> [--pretty]
@@ -136,38 +144,69 @@ rmpc get-tx --config <CONFIG> --tx-hash <HASH> [--pretty]
 
 Sign and broadcast a USDC deposit through the gateway.
 
+`--destination <ROUTER>` routes it through the Portfolio Router
+(`gateway.depositTo`). rmpc then reads `router.previewDeposit(amount)`. A leg
+with weight above 0 that the router would skip is refused with
+`ErrLegUnavailable` unless `--allow-unavailable-legs` is passed. With
+`--min-shares-per-leg` omitted, each funded leg's floor is its quoted shares
+less 0.50%, so a leg that turns unavailable before inclusion reverts
+`LegSkippedWithFloor` instead of moving its share onto the other legs. A
+single `--min-shares-per-leg 0` sends no floor.
+
 ```
 rmpc deposit --config <CONFIG> --amount <UNITS> --order-id <HEX>
   [--idempotency-key <HEX>] [--deadline-secs <N>]
   [--receipt-timeout-secs <N>] [--gas-limit <N>] [--fee-cap <WEI>]
-  [--pretty]
+  [--destination <ADDR>] [--min-shares-per-leg <N>]
+  [--allow-unavailable-legs] [--pretty]
 ```
 
 ### `rmpc withdraw`
 
-Redeem vault shares through the gateway (agent-initiated redemption).
+Redeem vault shares from one vault through the gateway (agent-initiated
+redemption). On a gateway with a Portfolio Router this signs the one-leg
+`gateway.withdrawFromRouter(orderId, [sourceVault], [shares], [minAssets],
+deadline, idempotencyKey)`, so the redemption reverts when the vault pays less
+than `minAssets` (QA plan D9: a direct `vault.redeem` has no minimum-out). The
+shares are pulled from the policy's `shareReceiver`.
+
+`--min-assets` is the floor in USDC base units. When omitted, rmpc reads the
+vault's `previewRedeem(shares)` before signing and uses it less 0.50%.
+`--min-assets 0` sends no floor. A gateway without a router (single-vault mode)
+can only call `gateway.withdraw`, which has no floor: rmpc uses it only with
+`--min-assets 0` and refuses otherwise with `ErrConfig`. A `--gas-limit` below
+the gateway's entry floor is refused with `ErrGasLimitBelowFloor`. The output
+adds `route` (`router` or `vault`), `min_assets` and `share_holder`.
 
 ```
 rmpc withdraw --config <CONFIG> --shares <N> --source-vault <ADDR>
-  --order-id <HEX> [--idempotency-key <HEX>] [--deadline-secs <N>]
-  [--receipt-timeout-secs <N>] [--gas-limit <N>] [--fee-cap <WEI>]
-  [--pretty]
+  --order-id <HEX> [--min-assets <N>] [--idempotency-key <HEX>]
+  [--deadline-secs <N>] [--receipt-timeout-secs <N>] [--gas-limit <N>]
+  [--fee-cap <WEI>] [--pretty]
 ```
 
 ### `rmpc withdraw-router`
 
-Redeem vault shares via the Portfolio Router (multi-vault proportional
-redemption, agent-initiated). Calls
-`gateway.withdrawFromRouter(orderId, sharesPerLeg, deadline, idempotencyKey)`.
-USDC lands at the policy-configured `assetRecipient`; no shares pass through
-the gateway. Requires `--confirm` to proceed past the preview.
+Redeem vault shares via the Portfolio Router (multi-vault redemption,
+agent-initiated). Calls `gateway.withdrawFromRouter(orderId, vaults,
+sharesPerLeg, minAssetsPerLeg, deadline, idempotencyKey)`: `--shares-per-leg[i]`
+is redeemed from `--vaults[i]`, pulled from the policy's `shareReceiver`, and
+the USDC lands at the policy-configured `assetRecipient`.
+
+`--min-assets-per-leg` is required: one USDC floor per leg, or a single `0` to
+send no floor. Omitting it is refused with `ErrMinAssetsPerLegRequired`.
+Without `--confirm` nothing is signed: the command exits 2 with
+`ErrConfirmNotProvided` and a JSON `preview` of each vault with its shares and
+floor, the share holder, the `assetRecipient`, the gas limit and the gas floor.
+A `--gas-limit` below that floor is refused with `ErrGasLimitBelowFloor`.
 
 Run `rmpc get-router` first to inspect the router's current vault order and
 decide per-leg share amounts.
 
 ```
 rmpc withdraw-router --config <CONFIG>
-  --shares-per-leg <N,N,...> --order-id <HEX>
+  --vaults <ADDR,ADDR,...> --shares-per-leg <N,N,...>
+  --min-assets-per-leg <N,N,...> --order-id <HEX>
   [--idempotency-key <HEX>] [--deadline-secs <N>]
   [--receipt-timeout-secs <N>] [--gas-limit <N>] [--fee-cap <WEI>]
   --confirm [--pretty]
@@ -212,6 +251,28 @@ weight-bps, confidence, rationale-uri, vote-json-hash, prompt-hash,
 inputs-digest, timestamp.
 Common options: schema-version, gas-limit, fee-cap,
 receipt-timeout-secs, pretty.
+
+### `rmpc committee check-agent`
+
+Read-only preflight for `vote-submit`. Reads `COMMITTEE_AGENT_ROLE()` and
+`hasRole(role, agent)` on `ic_policy_address`, both at one block, after
+checking that the RPC serves the configured `chain_id`. Signs nothing, takes no
+nonce lock and needs no passphrase.
+
+```
+rmpc committee --config <CONFIG> check-agent [--agent <ADDR>]
+```
+
+`--agent` defaults to the cleartext `address` field of
+`[signer].keystore_path`, the address `vote-submit` signs as.
+
+| Exit | stdout | Meaning |
+|---|---|---|
+| 0 | `{"ok":true,"has_role":true,...}` | the agent holds the role |
+| 2 | `{"ok":false,"has_role":false,"error":"ErrNotAllowlisted",...}` | the agent does not; `vote-submit` would revert |
+| 3 | `{"ok":false,"error":"<name>",...}` | the role was not read (`ErrIcContractNotConfigured`, `ErrKeystoreIo`, `ErrKeystoreFormat`, `ErrChainIdMismatch`, `ErrRpcTransport`, ...) |
+
+Treat 3 as unknown, never as registered.
 
 ## Consensus receipt commands
 
@@ -316,10 +377,12 @@ from the first of these that applies:
    passphrase. The file must be a regular file owned by the current user
    with mode `0600` or stricter, or the command refuses. Trailing newlines
    are trimmed. This is the channel to use when an agent runs the command:
-   the operator writes the file, the agent only ever passes its path.
+   the operator writes the file, the agent only ever passes its path. The
+   operator types the passphrase at a hidden prompt, so it never appears in
+   a command line, shell history or an agent transcript:
 
    ```bash
-   umask 077 && printf '%s' 'your passphrase' > ~/.rmpc-committee-pass
+   ( umask 077; IFS= read -rsp 'Passphrase: ' p && echo && printf '%s' "$p" > ~/.rmpc-committee-pass )
    export RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE=~/.rmpc-committee-pass
    ```
 

@@ -25,6 +25,7 @@ import {TestERC20, MockSwapRouter, MockPool} from "./BasketVault.t.sol";
 import {StubSwapRouter} from "./DeployProtocolAssetVault.t.sol";
 import {MockAdapter, TestUSDC} from "./RobotMoneyVault.t.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
 
 /// @dev Deliberately unprotected mock "vault": bare `AccessControl` with a
 ///      self-administered `ADMIN_ROLE`, mirroring the shape every real family

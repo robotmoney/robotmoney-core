@@ -3,6 +3,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { PublishError } from "../src/errors.ts";
 import { REQUIRED_NAMES, VAULT_KEYS, callerInputs, diffSheets, eligibilityBps, eligibleInOrder, parseSheet, parseSheetText, vaultSheetNames } from "../src/sheet.ts";
+import { STAGE13_UNPAUSE_VAULTS } from "../src/vault-rules.ts";
 import { REPO, exampleText, sheetText } from "./fixtures.ts";
 
 const refused = (text: string): PublishError => {
@@ -49,6 +50,19 @@ describe("whitelist parser", () => {
     expect(s.eligibleVaults).toEqual(["PROTO", "AGENT", "RWA"]);
     expect(s.weights).toEqual([{ key: "USDC", bps: 9500 }, { key: "PROTO", bps: 500 }, { key: "AGENT", bps: 0 }, { key: "RWA", bps: 0 }]);
     expect(eligibilityBps(s, "AGENT")).toEqual([9500, 500, 0]);
+  });
+
+  // Issue 1705 rule b (Q4 (a)): eligibility, the router vector and the unpause set are not among the differences governance isomorphism section 1.1
+  // allows between a rehearsal and production (chain, keys, custody, delay). The stage table records no exception for them, so the two sheets agree,
+  // and the unpause set is the table's stage 13 set.
+  test("rule b twin sheet: the Twin sheet and the 8453 example sheet carry equal ELIGIBLE_VAULTS, ROUTER_WEIGHTS and GOVERN_UNPAUSE_VAULTS (issue 1705)", () => {
+    const twin = parseSheet(readFileSync(join(REPO, "deployments", "twin-918453", "stage-sheet.env"), "utf8"));
+    const base = parseSheet(readFileSync(join(REPO, "deployments", "base-8453-rehearsal", "stage-sheet.example.env"), "utf8"));
+    expect([twin.chainId, base.chainId]).toEqual([918453, 8453]);
+    expect(twin.eligibleVaults).toEqual(base.eligibleVaults);
+    expect(twin.weights).toEqual(base.weights);
+    expect(twin.govern.unpauseVaults).toEqual(base.govern.unpauseVaults);
+    expect(twin.govern.unpauseVaults).toEqual([...STAGE13_UNPAUSE_VAULTS]);
   });
 
   test("REHEARSAL=1 is refused", () => {

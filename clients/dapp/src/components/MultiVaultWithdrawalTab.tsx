@@ -21,6 +21,11 @@
  *
  * All preview values sourced exclusively from useReadContract (AC §11).
  *
+ * The withdraw handler re-checks its gates and the simulation's target before it
+ * sends, and the write renders its refusal and receipt status (`WriteStatus`,
+ * QA plan U5, finding DR-9). Share counts print each vault's own symbol
+ * (issue 1773).
+ *
  * docs/architecture.md §5.3 — action layer: multi-vault withdrawal.
  * docs/technical/multi-vault-dapp-decisions.md §4.3.
  */
@@ -39,6 +44,8 @@ import { vaultAbi } from "../lib/abi";
 import { useVaultRegistry } from "../lib/VaultRegistryContext";
 import { buildVaultPreview, type VaultPreviewContext } from "../lib/vaultPreview";
 import { TxPreview } from "./TxPreview";
+import { WriteStatus } from "./WriteStatus";
+import { useVaultShareSymbols } from "../lib/useVaultShareSymbols";
 import {
   formatUsdc,
   formatShares,
@@ -64,6 +71,9 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
   const [sharesInput, setSharesInput] = useState("");
 
   const withdrawShares = parseSharesAmount(sharesInput);
+  // Each vault's own share symbol (issue 1773), never a hardcoded unit.
+  const symbolOf = useVaultShareSymbols(vaults.map((v) => v.vault));
+  const selectedSymbol = symbolOf(selectedVault);
 
   // -------- batched balanceOf reads across all registered vaults (AC §8) --------
   // One eth_call batch rather than N independent reads.
@@ -128,7 +138,7 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
 
   // -------- redeem simulation --------
   const vaultCtx: VaultPreviewContext | null = selectedVault
-    ? { ...ctx, vault: selectedVault as Address }
+    ? { ...ctx, vault: selectedVault as Address, shareSymbol: selectedSymbol }
     : null;
 
   const redeemAction =
@@ -179,8 +189,15 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
     }
   }, [redeemSimError]);
 
+  // Defence in depth: the same gates as the button, and only a simulation built for the selected,
+  // registered vault is sent.
   const onWithdraw = () => {
-    if (!redeemSim) return;
+    if (!redeemSim || redeemPreview?.ok !== true || hasInsufficientBalance || maxRedeemIsZero) {
+      return;
+    }
+    const target = (redeemSim.request as { address?: unknown }).address;
+    if (typeof target !== "string" || target.toLowerCase() !== selectedVault.toLowerCase()) return;
+    if (!vaults.some((v) => v.vault.toLowerCase() === target.toLowerCase())) return;
     withdrawWrite.writeContract(redeemSim.request);
   };
 
@@ -221,7 +238,7 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
                         setSharesInput("");
                       }}
                     />{" "}
-                    {v.name || shorten(v.vault)} — {formatShares(bal, "rmUSDC")}
+                    {v.name || shorten(v.vault)} — {formatShares(bal, symbolOf(v.vault))}
                   </label>
                 );
               })}
@@ -243,7 +260,7 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
       )}
 
       <label>
-        Shares to redeem (rmUSDC)
+        Shares to redeem ({selectedSymbol})
         <input
           data-testid="multi-vault-withdraw-amount"
           value={sharesInput}
@@ -256,14 +273,14 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
 
       {selectedVault && (
         <p className="hint" data-testid="multi-vault-selected-balance">
-          Balance: {formatShares(selectedBalance, "rmUSDC")}
+          Balance: {formatShares(selectedBalance, selectedSymbol)}
         </p>
       )}
 
       {hasInsufficientBalance && (
         <p className="hint" data-testid="multi-vault-insufficient-balance" style={{ color: "red" }}>
-          Insufficient balance: you hold {formatShares(selectedBalance, "rmUSDC")} but entered{" "}
-          {withdrawShares !== null ? formatShares(withdrawShares, "rmUSDC") : ""}.
+          Insufficient balance: you hold {formatShares(selectedBalance, selectedSymbol)} but entered{" "}
+          {withdrawShares !== null ? formatShares(withdrawShares, selectedSymbol) : ""}.
         </p>
       )}
 
@@ -299,6 +316,13 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
       >
         Sign withdraw with wallet
       </button>
+
+      <WriteStatus
+        testId="multi-vault-withdraw"
+        label="Withdraw"
+        write={withdrawWrite}
+        receipt={withdrawReceipt}
+      />
 
       {redeemSimError && (
         <p className="hint" data-testid="multi-vault-redeem-sim-error">

@@ -8,11 +8,15 @@
 //             while the deployer EOA must not be able to call setWeights at all.
 // Implements: issue #1698 — that path is applyReceipt, driven by the Safe through
 //             the timelock; there is no voting.
+// Implements: issue #1447 (QA plan v1 B6) — the recovery procedures of core 1788 (a quarantined,
+//             excluded adapter) and core 1789 (a duplicate adapter) through the real Safe and
+//             timelock, not through an impersonated admin
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 
 import {DeployRouterGovernance} from "../script/DeployRouterGovernance.s.sol";
 import {DeployTimelock} from "../script/DeployTimelock.s.sol";
@@ -27,6 +31,7 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockUsdc, MockGovVault} from "./RouterGovernance.t.sol";
 import {ISafe, ISafeProxyFactory, _ISafeSetup} from "./SafeIntegration.t.sol";
 import {ForkSelect} from "./helpers/ForkSelect.sol";
+import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
 import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
@@ -407,6 +412,297 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         vm.expectRevert(bytes("GS020"));
         safe.execTransaction(
             address(timelock), 0, data, 0, 0, 0, 0, address(0), payable(address(0)), oneSig
+        );
+    }
+
+    // ─── Recovery procedures for core 1788 and core 1789 (issue #1447) ───────
+    //
+    // The 2026-10-12 security review exercised these recoveries with an impersonated admin
+    // (vm.prank). Here every ADMIN_ROLE step takes the production route: the Safe schedules on
+    // the timelock with two owner signatures, the delay passes, the Safe executes. The steps of
+    // the EMERGENCY_ADDRESS key are direct calls from that key: in production it is a single hot
+    // key (an EOA), so a call from it is the real path, not a stand-in for a quorum.
+
+    NoYieldTestAdapter internal adapterA;
+    NoYieldTestAdapter internal adapterB;
+    address internal holder = makeAddr("recovery-holder");
+    address internal latecomer = makeAddr("recovery-latecomer");
+    uint256 internal constant HOLDER_DEPOSIT = 2_000e6;
+
+    /// @notice core 1788, the documented recovery (`setAdapterAllowed` NatSpec). The Safe
+    ///         quarantines a funded adapter through the timelock: its balance leaves NAV and
+    ///         deposits close at once. The emergency key drains it into the exclusion record
+    ///         (core 1820), which also pauses deposits. The Safe removes the empty entry and
+    ///         reopens deposits in ONE timelock batch. The holder who stayed keeps the full
+    ///         claim and nobody minted in between.
+    function test_recovery1788_quarantineDrainRemoveReopenThroughSafeAndTimelock() public {
+        _onboardTwoFundedAdapters();
+        uint256 shares = vault.balanceOf(holder);
+        uint256 inA = adapterA.totalAssets();
+        bytes memory quarantine =
+            abi.encodeCall(RobotMoneyVault.setAdapterAllowed, (address(adapterA), false));
+
+        // No shortcut: neither the Safe on its own nor the deployer holds the vault's ADMIN_ROLE.
+        _safeExecExpectRevert(address(vault), quarantine, bytes("GS013"));
+        vm.prank(deployer);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, deployer, ADMIN_ROLE
+            )
+        );
+        vault.setAdapterAllowed(address(adapterA), false);
+
+        // 1. Quarantine through the Safe and the timelock.
+        _govVault(quarantine, keccak256("quarantine-a"));
+        assertEq(vault.totalAssets(), HOLDER_DEPOSIT - inA, "the quarantined balance left NAV");
+        assertEq(vault.maxDeposit(latecomer), 0, "deposits close while it stays active");
+        usdc.mint(latecomer, 1_000e6);
+        vm.startPrank(latecomer);
+        usdc.approve(address(vault), 1_000e6);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ERC4626.ERC4626ExceededMaxDeposit.selector, latecomer, 1_000e6, 0
+            )
+        );
+        vault.deposit(1_000e6, latecomer);
+        vm.stopPrank();
+
+        // 2. Drain: the emergency key pulls the quarantined balance into the exclusion record.
+        vm.prank(emergency);
+        vault.emergencyWithdrawAdapter(0);
+        assertEq(adapterA.totalAssets(), 0, "drained");
+        assertTrue(vault.depositsPaused(), "the drain pauses deposits");
+
+        // 3. Remove the empty entry and reopen deposits: one timelock batch through the Safe.
+        bytes[] memory p = new bytes[](2);
+        p[0] = abi.encodeCall(RobotMoneyVault.removeAdapter, (0));
+        p[1] = abi.encodeCall(RobotMoneyVault.unpauseDeposits, ());
+        _govVaultBatch(p, keccak256("remove-a-and-reopen"));
+
+        // 4. core 1820: the drained value sits in the exclusion record, not in NAV. The holder
+        //    who stayed keeps the full claim: the shares plus the record claim.
+        assertEq(vault.totalAssets(), HOLDER_DEPOSIT - inA, "the recovery stays out of NAV");
+        assertApproxEqAbs(
+            vault.convertToAssets(shares) + vault.exclusionLedger().claimable(1, holder),
+            HOLDER_DEPOSIT,
+            1,
+            "full claim"
+        );
+        assertEq(vault.openExclusionOf(0), 0, "removing the entry closed the record");
+        assertEq(vault.activeAdapterCount(), 1, "the quarantined entry is inactive");
+        assertFalse(vault.depositsPaused(), "deposits unpaused");
+        assertGt(vault.maxDeposit(latecomer), 0, "deposits reopen");
+    }
+
+    /// @notice core 1788, the ADMIN-only recovery: `adminRebalance` stays the explicit recovery
+    ///         path for a quarantined adapter. ONE timelock batch through the Safe drains it into
+    ///         the exclusion record (core 1820) and removes its entry, so the accounting repair
+    ///         is atomic and needs no emergency key. The eligible adapter is untouched.
+    function test_recovery1788_adminRebalanceDrainsAndRemovesInOneTimelockBatch() public {
+        _onboardTwoFundedAdapters();
+        uint256 shares = vault.balanceOf(holder);
+        uint256 inB = adapterB.totalAssets();
+        _govVault(
+            abi.encodeCall(RobotMoneyVault.setAdapterAllowed, (address(adapterA), false)),
+            keccak256("quarantine-a")
+        );
+        assertEq(vault.maxDeposit(latecomer), 0, "deposits close while it stays active");
+
+        uint256[] memory drain = new uint256[](2);
+        drain[1] = inB;
+        bytes[] memory p = new bytes[](2);
+        p[0] = abi.encodeCall(RobotMoneyVault.adminRebalance, (drain));
+        p[1] = abi.encodeCall(RobotMoneyVault.removeAdapter, (0));
+        _govVaultBatch(p, keccak256("drain-and-remove-a"));
+
+        assertEq(adapterA.totalAssets(), 0, "drained");
+        assertEq(adapterB.totalAssets(), inB, "the eligible adapter is untouched");
+        // core 1820: the drain is credited to the exclusion record, not to NAV.
+        assertEq(vault.totalAssets(), inB, "the recovery stays out of NAV");
+        assertApproxEqAbs(
+            vault.convertToAssets(shares) + vault.exclusionLedger().claimable(1, holder),
+            HOLDER_DEPOSIT,
+            1,
+            "full claim"
+        );
+        assertGt(vault.maxDeposit(latecomer), 0, "no ineligible active adapter: deposits reopen");
+    }
+
+    /// @notice core 1788, recovery by restored eligibility: the Safe allows the adapter again
+    ///         through the timelock and the excluded value returns to the holder who stayed.
+    ///         Since core 1820 the restore realises the adapter's balance into the exclusion
+    ///         record first, so the value reaches the holder as a record claim.
+    function test_recovery1788_restoredEligibilityReturnsTheValueThroughSafeAndTimelock() public {
+        _onboardTwoFundedAdapters();
+        uint256 shares = vault.balanceOf(holder);
+        uint256 inA = adapterA.totalAssets();
+        _govVault(
+            abi.encodeCall(RobotMoneyVault.setAdapterAllowed, (address(adapterA), false)),
+            keccak256("quarantine-a")
+        );
+        assertApproxEqAbs(vault.convertToAssets(shares), HOLDER_DEPOSIT - inA, 1, "excluded");
+
+        _govVault(
+            abi.encodeCall(RobotMoneyVault.setAdapterAllowed, (address(adapterA), true)),
+            keccak256("restore-a")
+        );
+        assertEq(adapterA.totalAssets(), 0, "the residual was realised into the record");
+        assertEq(vault.totalAssets(), HOLDER_DEPOSIT - inA, "the restored entry re-enters empty");
+        assertApproxEqAbs(
+            vault.convertToAssets(shares) + vault.exclusionLedger().claimable(1, holder),
+            HOLDER_DEPOSIT,
+            1,
+            "full claim"
+        );
+        assertGt(vault.maxDeposit(latecomer), 0, "deposits reopen");
+    }
+
+    /// @notice core 1789 through the production route: the Safe schedules a second `addAdapter`
+    ///         for an address an active entry holds; after the delay the execute reverts
+    ///         `AdapterAlreadyActive` (GS013 through the Safe). No duplicate entry exists to
+    ///         repair, and NAV counts the balance once.
+    function test_recovery1789_duplicateAddIsRefusedAtExecuteThroughSafeAndTimelock() public {
+        _onboardTwoFundedAdapters();
+        bytes memory dup = abi.encodeCall(RobotMoneyVault.addAdapter, (address(adapterA), 5_000));
+        bytes32 salt = keccak256("duplicate-a");
+        _safeExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.schedule, (address(vault), 0, dup, bytes32(0), salt, MIN_DELAY)
+            )
+        );
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+
+        // The exact reason, straight on the open-executor timelock.
+        vm.expectRevert(
+            abi.encodeWithSelector(RobotMoneyVault.AdapterAlreadyActive.selector, address(adapterA))
+        );
+        timelock.execute(address(vault), 0, dup, bytes32(0), salt);
+        // Through the Safe the inner reason is hidden as GS013.
+        _safeExecExpectRevert(
+            address(timelock),
+            abi.encodeCall(TimelockController.execute, (address(vault), 0, dup, bytes32(0), salt)),
+            bytes("GS013")
+        );
+
+        assertEq(vault.adapterCount(), 2, "no duplicate entry");
+        assertEq(vault.totalAssets(), HOLDER_DEPOSIT, "the balance is counted once");
+    }
+
+    /// @notice core 1789, the legal re-registration (review finding 2: drain, remove, re-add,
+    ///         exercised through the actual governance path). The emergency key pauses deposits,
+    ///         then ONE atomic timelock batch through the Safe drains the adapter to idle, removes
+    ///         its entry, adds it again as a NEW entry, refills it and reopens deposits. The
+    ///         balance is counted once throughout and the holder is paid at par. The new active
+    ///         entry still refuses a duplicate.
+    function test_recovery1789_drainRemoveReAddIsOneAtomicTimelockBatch() public {
+        _onboardTwoFundedAdapters();
+        uint256 shares = vault.balanceOf(holder);
+        uint256 inA = adapterA.totalAssets();
+        uint256 inB = adapterB.totalAssets();
+        vm.prank(emergency);
+        vault.pauseDeposits();
+
+        uint256[] memory drain = new uint256[](2);
+        drain[1] = inB;
+        uint256[] memory refill = new uint256[](3);
+        refill[1] = inB;
+        refill[2] = inA;
+        bytes[] memory p = new bytes[](5);
+        p[0] = abi.encodeCall(RobotMoneyVault.adminRebalance, (drain));
+        p[1] = abi.encodeCall(RobotMoneyVault.removeAdapter, (0));
+        p[2] = abi.encodeCall(RobotMoneyVault.addAdapter, (address(adapterA), 10_000));
+        p[3] = abi.encodeCall(RobotMoneyVault.adminRebalance, (refill));
+        p[4] = abi.encodeCall(RobotMoneyVault.unpauseDeposits, ());
+        _govVaultBatch(p, keccak256("re-register-a"));
+
+        assertEq(vault.adapterCount(), 3, "the re-add appended a new entry");
+        assertEq(vault.activeAdapterCount(), 2, "one active entry per address");
+        assertEq(adapterA.totalAssets(), inA, "refilled");
+        assertEq(vault.totalAssets(), HOLDER_DEPOSIT, "counted once");
+        assertApproxEqAbs(vault.convertToAssets(shares), HOLDER_DEPOSIT, 1, "paid at par");
+        assertFalse(vault.depositsPaused(), "deposits unpaused");
+
+        bytes memory dup = abi.encodeCall(RobotMoneyVault.addAdapter, (address(adapterA), 10_000));
+        bytes32 salt = keccak256("duplicate-a-after-re-add");
+        _safeExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.schedule, (address(vault), 0, dup, bytes32(0), salt, MIN_DELAY)
+            )
+        );
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(RobotMoneyVault.AdapterAlreadyActive.selector, address(adapterA))
+        );
+        timelock.execute(address(vault), 0, dup, bytes32(0), salt);
+    }
+
+    /// @dev Two funded adapters onboarded through the Safe and the timelock in ONE batch (allow
+    ///      both instances and their code hashes, add both at a 100 % cap), then a holder whose
+    ///      deposit the vault routes across them.
+    function _onboardTwoFundedAdapters() internal {
+        adapterA = new NoYieldTestAdapter(address(usdc), address(vault));
+        adapterB = new NoYieldTestAdapter(address(usdc), address(vault));
+        bytes[] memory p = new bytes[](6);
+        p[0] = abi.encodeCall(RobotMoneyVault.setAdapterAllowed, (address(adapterA), true));
+        p[1] = abi.encodeCall(RobotMoneyVault.setAdapterAllowed, (address(adapterB), true));
+        p[2] = abi.encodeCall(
+            RobotMoneyVault.setAdapterCodeHashAllowed, (address(adapterA).codehash, true)
+        );
+        p[3] = abi.encodeCall(
+            RobotMoneyVault.setAdapterCodeHashAllowed, (address(adapterB).codehash, true)
+        );
+        p[4] = abi.encodeCall(RobotMoneyVault.addAdapter, (address(adapterA), 10_000));
+        p[5] = abi.encodeCall(RobotMoneyVault.addAdapter, (address(adapterB), 10_000));
+        _govVaultBatch(p, keccak256("onboard-two-adapters"));
+
+        usdc.mint(holder, HOLDER_DEPOSIT);
+        vm.startPrank(holder);
+        usdc.approve(address(vault), HOLDER_DEPOSIT);
+        vault.deposit(HOLDER_DEPOSIT, holder);
+        vm.stopPrank();
+        assertGt(adapterA.totalAssets(), 0, "adapter A holds part of the deposit");
+        assertGt(adapterB.totalAssets(), 0, "adapter B holds part of the deposit");
+        assertEq(vault.totalAssets(), HOLDER_DEPOSIT, "NAV is the deposit");
+    }
+
+    /// @dev One vault ADMIN_ROLE call: Safe -> timelock.schedule, the delay, Safe -> execute.
+    function _govVault(bytes memory data, bytes32 salt) internal {
+        _safeExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.schedule, (address(vault), 0, data, bytes32(0), salt, MIN_DELAY)
+            )
+        );
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        _safeExec(
+            address(timelock),
+            abi.encodeCall(TimelockController.execute, (address(vault), 0, data, bytes32(0), salt))
+        );
+    }
+
+    /// @dev Several vault ADMIN_ROLE calls as ONE atomic timelock operation: Safe ->
+    ///      scheduleBatch, the delay, Safe -> executeBatch.
+    function _govVaultBatch(bytes[] memory payloads, bytes32 salt) internal {
+        address[] memory targets = new address[](payloads.length);
+        uint256[] memory values = new uint256[](payloads.length);
+        for (uint256 i = 0; i < payloads.length; i++) {
+            targets[i] = address(vault);
+        }
+        _safeExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.scheduleBatch,
+                (targets, values, payloads, bytes32(0), salt, MIN_DELAY)
+            )
+        );
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        _safeExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.executeBatch, (targets, values, payloads, bytes32(0), salt)
+            )
         );
     }
 

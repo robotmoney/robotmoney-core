@@ -59,7 +59,8 @@ Success is measured by:
   approval;
 - percentage of failed operations that return a clear product reason;
 - autonomous-agent activity that remains within depositor-defined limits;
-- governance participation in allocation-weight votes;
+- consensus receipts recorded, and the share the Safe applies to router
+  weights through the timelock;
 - user visibility into allocation, performance, fees, and state changes;
 - number of registered committee agents and of third-party agents
   producing live allocation output, plus the visibility and continuity of
@@ -102,8 +103,7 @@ Access expectations:
 - There is no protocol agent key. An agent belongs to a depositor, runs
   `rmpc` with that depositor's key, and is authorized by that depositor
   through commit and reveal. The protocol deploy authorizes no agent
-  (deploy-time agent removal not yet implemented: tracked in the mainnet
-  plan).
+  (core 1527).
 - Any user can view allocation-weight governance history: the consensus
   receipts the Safe applied through the timelock and the resulting
   weights. There is no voting by token holders or anyone else.
@@ -202,8 +202,8 @@ voting function (issue 1698): the weight setter's one call is `applyReceipt`. Th
 
 1. The Investment Committee records a consensus receipt with a weight
    vector over the router-eligible vaults.
-2. The Safe schedules `apply-receipt` through the timelock: release the
-   receipt and apply its weights, as one operation.
+2. The Safe schedules `apply-receipt` through the timelock: one
+   `applyReceipt` call that releases the receipt and applies its weights.
 3. The timelock delay elapses and the Safe executes the operation.
 4. The product publishes the released receipt, the execution state, and
    the resulting allocation weights.
@@ -212,7 +212,7 @@ voting function (issue 1698): the weight setter's one call is `applyReceipt`. Th
 
 Committee allocation tilts (see the Committee Vote workflow) are an
 upstream, signalling-only input to this flow: aggregated committee output
-informs proposed target weights, but applying weights remains
+informs the consensus receipt's weight vector, but applying weights remains
 admin-applied. The committee never sets weights directly.
 
 ### Committee Vote
@@ -280,9 +280,11 @@ Common edge cases:
   Any migration to a successor vault is user-initiated and user-signed at the app
   layer (redeem, then deposit) — the protocol never moves a depositor's funds
   without that depositor's own transaction.
-- **Portfolio Router allocation.** Draft weights -> active vote ->
-  approved weights -> applied weights; active vote -> rejected or
-  expired.
+- **Portfolio Router allocation.** Default weights -> applied weights (a
+  consensus receipt applied through the timelock) -> replaced by the next
+  applied receipt; applied weights -> default weights when the Safe clears
+  them through the timelock. A weight operation the Safe cancels before
+  execution changes nothing.
 - **Depositor position.** No position -> previewed deposit -> active
   position -> previewed withdrawal -> reduced or closed position.
 - **Agent policy.** Draft -> active -> updated -> paused or revoked;
@@ -309,8 +311,8 @@ Common edge cases:
 ## 7. Integration Needs
 
 - **Wallet or account authorization.** Triggered when a depositor
-  connects, approves a deposit or withdrawal, manages an agent policy, or
-  votes.
+  connects, approves a deposit or withdrawal, or manages an agent policy,
+  and when a Safe signer signs a timelock operation.
 - **Digital asset transfer and settlement.** Triggered by deposits,
   withdrawals, fee collection, allocation changes, and buyback activity.
 - **Market access and valuation.** Triggered when vaults need asset
@@ -488,7 +490,8 @@ governance, one timelock operation per vault, executed after the timelock
 delay (stage 13: four unpause rows, core #1710).
 The timelock's proposer and canceller is the Safe (2-of-3), any address may
 execute a ready operation after the delay, and the delay floor on Base is
-48 hours (open executor not yet implemented: core #1521). All products are
+48 hours (core #1521: `DeployTimelock` opens `EXECUTOR_ROLE` to
+`address(0)` and the stage 12 verifier checks it). All products are
 eligible for Portfolio Router allocation — four initially, extensible to
 more — weighted by recommendation, once each passes its readiness review.
 The router default weights at
@@ -511,7 +514,7 @@ the shortfall from the remaining strategies before reverting.
 | Risk label | VOLATILE |
 | Exposure | Basket of protocol assets via Uniswap V3 swaps: wETH and cbBTC at launch; wSOL is added later through the timelock |
 | Allocation model | Equal-weight target across basket assets at deposit time; not actively rebalanced |
-| Exit fee | Configurable 0–1%; the live rmUSDC vault charges 25 bps (0.25%) |
+| Exit fee | Configurable 0–1% for rmPROTO on its own; the rmUSDC rate does not apply. The rate is set at deploy and changes only through the timelock; its current value must be disclosed before approval |
 | Withdrawal | Holders redeem shares for current value in a single transaction, subject to available liquidity within the stated limit |
 | Status | Router-eligible after readiness review (see below) |
 
@@ -561,15 +564,15 @@ Router allocation.
 | Exposure | Admin-curated basket of agent-economy tokens via per-asset DEX routing (one venue per asset) — see [ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md) |
 | MVP shortlist | BNKR, JUNO, RM (Base-chain only) — hand-picked per [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md); RM at launch, BNKR and JUNO added later through the timelock; current membership and per-asset swap venue in `config/agent-token-shortlist.json` |
 | Allocation model | Equal-weight target across shortlisted tokens at deposit time; not actively rebalanced |
-| Exit fee | Configurable 0–1%; the live rmUSDC vault charges 25 bps (0.25%) |
+| Exit fee | Configurable 0–1% for rmAGENT on its own; the rmUSDC rate does not apply. The rate is set at deploy and changes only through the timelock; its current value must be disclosed before approval |
 | Withdrawal | Holders redeem shares for current value in a single transaction, subject to available liquidity within the stated limit |
 | Status | Router-eligible after readiness review (see below) |
 
 Shortlist curation is admin-controlled for the MVP, with an
 equal-weighted target basket drawn from BNKR, JUNO, RM (Base-chain
 only). rmAGENT launches holding RM only: the existing ROBOTMONEY token on
-Base at `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (not yet implemented:
-core #1491). BNKR and JUNO are added later through the timelock. Each token
+Base at `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (core #1491).
+BNKR and JUNO are added later through the timelock. Each token
 routes through one venue under the per-asset venue abstraction in
 [ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md). RM's venue is
 decided (owner, 2026-10-08; supersedes 2026-10-06): the Uniswap V4 RM/USDC pool with fee 2.91%
@@ -715,5 +718,5 @@ EOA can release a receipt or set weights. The policy contract is reached only
 through the gateway entrypoint, and registration and tilt submission are
 restricted to admin-allowlisted agents. A committee agent's `vote-submit` is a
 signed allocation tilt, not a vote on anything. The receipt contract itself
-cannot call the router: release and weight application are two calls of the
-same timelock batch.
+cannot call the router: the weight setter's `applyReceipt` releases the
+receipt and applies its weights in one call (issue 1698).

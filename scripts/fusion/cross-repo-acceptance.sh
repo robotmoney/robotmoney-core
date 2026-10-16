@@ -74,6 +74,17 @@ url_digest="$(jq -er '.payload_digest' <<<"$verify_url")"
 [[ "$url_receipt_id" == "$receipt_id" ]] \
   || fail "the URL being anchored derives receipt_id $url_receipt_id, file derives $receipt_id"
 
+# T15, AC-FMT-03. THE WEIGHTS ARE THE ALLOCATION. A receipt with no weights
+# array, or one that does not total 10000 bps over the four buckets, cannot
+# carry a recommendation, and runbook §5.5 says an absent `weights` array is a
+# FAILED assertion, never a skipped one. Issue 1698 deleted the draft step that
+# used to check this, so it is checked here on the bytes being submitted,
+# before anything is anchored.
+jq -e '[.weights[]?.weight_bps] | length == 4 and add == 10000' \
+  "$FUSION_FRONTEND_RECEIPT_FILE" >/dev/null 2>&1 \
+  || fail "the receipt must carry four bucket weights totalling exactly 10000 bps: \
+$(jq -c '[.weights[]?.weight_bps]' "$FUSION_FRONTEND_RECEIPT_FILE" 2>/dev/null || echo '<no weights array>')"
+
 IFS=',' read -r -a VAULTS <<<"$FUSION_VAULT_ADDRESSES"
 (( ${#VAULTS[@]} > 0 )) || fail "FUSION_VAULT_ADDRESSES is empty"
 
@@ -171,6 +182,19 @@ released="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'isReleased(bytes32)(bool
   "$receipt_id" --rpc-url "$FUSION_RPC_URL")"
 [[ "$released" == "true" ]] || fail "receipt is anchored but not released"
 
+# THE APPLY-PATH BINDING (issue 1698). A receipt moves router weights only
+# through RouterGovernance.applyReceipt, which releases a receipt recorded on
+# the weight setter's own register (`receipts()`). The apply above went through
+# that path, so assert the weight setter reads THIS register: the receipt just
+# anchored is one the apply path can act on. An eth_call: nothing moves.
+bound="$("$CAST_BIN" call "$FUSION_GOVERNANCE_ADDRESS" 'receipts()(address)' \
+  --rpc-url "$FUSION_RPC_URL")" || fail "could not read receipts() on the weight setter $FUSION_GOVERNANCE_ADDRESS"
+bound="$(tr -d '[:space:]' <<<"$bound")"
+[[ "${bound,,}" == "${FUSION_RECEIPT_ADDRESS,,}" ]] \
+  || fail "the weight setter applies receipts from $bound, not from the receipt contract \
+$FUSION_RECEIPT_ADDRESS that holds this receipt"
+record "apply-path-receipt-contract.txt" "$bound"
+
 witnesses_json() { # `key=value` lines -> {"key":"value"}
   jq -Rn '[inputs | select(length>0) | (index("=")) as $i |
            {key:.[0:$i], value:.[$i+1:]}] | from_entries'
@@ -178,14 +202,15 @@ witnesses_json() { # `key=value` lines -> {"key":"value"}
 
 jq -n --arg receipt_id "$receipt_id" --arg payload_digest "$digest" \
   --arg receipt_url "$FUSION_FRONTEND_RECEIPT_URL" --arg url_digest "$url_digest" \
-  --arg release_action "$release_action" \
+  --arg release_action "$release_action" --arg receipt_contract "$bound" \
   --argjson witnesses_before "$(witnesses_json <<<"$witnesses_before")" \
   --argjson witnesses_after "$(witnesses_json <<<"$witnesses_after")" \
   '{ok:true,
-    stages:["frontend_artifact","core_verify_file","core_verify_url","submit",
-            ("release:" + $release_action),"inv4_unchanged"],
+    stages:["frontend_artifact","core_verify_file","core_verify_url","receipt_weights","submit",
+            ("release:" + $release_action),"apply_path_bound","inv4_unchanged"],
     release:{action:$release_action,
              broadcast:($release_action == "sent")},
+    apply_path:{weight_setter_receipt_contract:$receipt_contract},
     receipt_id:$receipt_id,payload_digest:$payload_digest,
     anchored_url:{url:$receipt_url,payload_digest:$url_digest,matches_submitted_bytes:true},
     inv4:{witnesses_before:$witnesses_before,

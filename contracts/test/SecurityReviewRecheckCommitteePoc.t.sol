@@ -88,7 +88,8 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
         InvestmentCommitteePolicy.Vote memory v = ic.getVote(realId);
         assertEq(v.agent, committeeAgent);
         assertEq(uint8(v.stance), uint8(InvestmentCommitteePolicy.Stance.Overweight));
-        assertEq(ic.voteCount(), 1);
+        assertEq(v.targetWeightBps, 6000);
+        assertEq(ic.voteCount(), 1, "only the member's own vote is recorded");
     }
 
     // ── Q4: flood under a member's name is refused on-chain ─────────────────
@@ -108,6 +109,26 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
             gateway.committeeVoteSubmit(spoof);
         }
         assertEq(ic.voteCount(), 0, "no spoofed row may be recorded");
+    }
+
+    // ── Q4b: the self-registered agent has no vote path under its own name ──
+
+    /// @dev With the spoof closed, the only address the attacker may put in
+    ///      `p.agent` is itself, and the IC contract refuses that because the
+    ///      attacker holds AGENT_ROLE on the gateway but not
+    ///      COMMITTEE_AGENT_ROLE on the policy. Together with Q5/Q4 this shows
+    ///      the permissionless gateway tier has no route into the vote log.
+    function test_selfRevealedAgentCannotVoteUnderOwnAddress() public {
+        _selfReveal(attacker, attacker, keccak256("f3-own"));
+        bytes32 committeeRole = ic.COMMITTEE_AGENT_ROLE();
+        assertFalse(ic.hasRole(committeeRole, attacker));
+
+        IInvestmentCommitteePolicy.VoteParams memory own = _defaultVoteParams();
+        own.agent = attacker;
+        vm.prank(attacker);
+        vm.expectRevert(InvestmentCommitteePolicy.AgentNotAllowlisted.selector);
+        gateway.committeeVoteSubmit(own);
+        assertEq(ic.voteCount(), 0);
     }
 
     // ── Q3: receipt anchoring is NOT spoofable (confirms report) ────────────
@@ -150,7 +171,8 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
         // The victim stays free to onboard through the admin path.
         vm.prank(admin);
         gateway.authorizeAgent(victim, _selfPolicy(victim));
-        assertEq(gateway.agentOwner(victim), admin);
+        assertEq(gateway.agentOwner(victim), admin, "admin onboarding blocked");
+        assertTrue(gateway.hasRole(gateway.AGENT_ROLE(), victim), "victim not onboarded");
     }
 
     /// A consent names one owner and one exact reveal: another owner cannot use it.

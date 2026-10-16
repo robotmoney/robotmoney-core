@@ -173,6 +173,10 @@ services:
       # the explorer's contract list. It is not watched for logs: issue 1698 deleted its voting,
       # so it emits no proposal or vote events. Weight changes are indexed from the router.
       INDEXER_ROUTER_GOVERNANCE: ${INDEXER_ROUTER_GOVERNANCE:-}
+      # Security round 1: INDEXER_INVESTMENT_COMMITTEE puts the InvestmentCommitteePolicy proxy in the
+      # watched set: its committee events, and its Upgraded / UpgradesFrozen events that the watchdog
+      # pages on (admin_events, contract_kind 'proxy'). Without this mapping an exported value never reached the container.
+      INDEXER_INVESTMENT_COMMITTEE: ${INDEXER_INVESTMENT_COMMITTEE:-}
       # Issue 1731: INDEXER_TIMELOCK and INDEXER_SAFE put the TimelockController and the Safe in the
       # watched set. The explorer then lists both in /v1/chains/{id}/contracts and serves their
       # CallScheduled, CallExecuted, Cancelled, MinDelayChange and Safe execution and owner events at
@@ -261,6 +265,16 @@ services:
         # Issue 1810: the gateway is an ERC-1967 proxy; admin writes need its approved implementation.
         VITE_GATEWAY_EXPECTED_IMPLEMENTATION: ${VITE_GATEWAY_EXPECTED_IMPLEMENTATION:-}
         VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH: ${VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH:-}
+        # QA plan U5 (issue 1737): vault and router code-hash pins, set by the 8453
+        # stack builder (scripts/stage/mainnet-dapp.ts). Single-quoted: the vault pin
+        # is a raw JSON object. Empty elsewhere; only the mainnet class enforces them.
+        VITE_VAULT_EXPECTED_CODE_HASH: '${VITE_VAULT_EXPECTED_CODE_HASH:-}'
+        VITE_ROUTER_EXPECTED_CODE_HASH: ${VITE_ROUTER_EXPECTED_CODE_HASH:-}
+        # Issue 1810: the vaults and the router are ERC-1967 proxies too, so the code-hash pins
+        # above only prove the proxy. The reviewed implementation behind each proxied vault
+        # (JSON map, single-quoted) and the router. Set by the 8453 stack builder; empty elsewhere.
+        VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH: '${VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH:-}'
+        VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH: ${VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH:-}
         VITE_GATEWAY_CODE_HASH_VERIFIED: "false"
         VITE_ENV_CLASS: fork
         VITE_BROWSER_KEYGEN: "false"

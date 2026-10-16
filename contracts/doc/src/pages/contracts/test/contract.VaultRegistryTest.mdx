@@ -4,7 +4,7 @@ title: "VaultRegistryTest"
 
 # VaultRegistryTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/VaultRegistry.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/VaultRegistry.t.sol)
 
 **Inherits:** Test
 
@@ -482,4 +482,73 @@ the vault ADMIN exactly as `DeployTimelock` does.
 ```solidity
 function test_retire_succeedsOnEachOfTheFourRealVaults() public;
 ```
+
+<a id="test_abi_noallexactselector"></a>
+
+### test_abi_noAllExactSelector
+
+QA plan D8 (F11): `isVaultAllExact(address)` read `allExact()` from the vault,
+a view of the unified vault of ADR-0010 (Rejected). No shipped vault implements
+it, so the registry view reverted for every registered vault. Both selectors are
+gone: neither appears in the registry's or any vault's runtime code, and a call
+to either is refused as an unknown function (no contract here has a fallback).
+
+```solidity
+function test_abi_noAllExactSelector() public;
+```
+
+<a id="_implementationof-address"></a>
+
+### _implementationOf
+
+<i>
+
+The ERC-1967 implementation behind `proxy`.
+
+</i>
+
+```solidity
+function _implementationOf(address proxy) internal view returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_codecontains-bytes-bytes4"></a>
+
+### _codeContains
+
+<i>
+
+True when the 4 bytes of `sel` appear anywhere in `code`. Both selectors checked
+above start with a non-zero byte, so a dispatcher entry for either is a PUSH4 of all
+four bytes and is always found.
+
+</i>
+
+```solidity
+function _codeContains(bytes memory code, bytes4 sel) internal pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| code | `bytes` |  |
+| sel | `bytes4` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
 

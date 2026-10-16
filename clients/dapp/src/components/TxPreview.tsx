@@ -23,6 +23,8 @@ export function TxPreview({ preview }: { preview: Preview }) {
       <section data-testid="tx-preview" data-ok="false" className="tx-preview tx-preview--refusal">
         <h3>Refusing to sign</h3>
         <p data-testid="refusal-reason">{productReasonDisplay(preview.reason)}</p>
+        {/* The actual cause behind a catch-all reason (QA plan U5, finding DR-9). */}
+        {preview.detail && <p data-testid="refusal-detail">{preview.detail}</p>}
         {preview.calldata && (
           <details>
             <summary>Raw calldata (for external verification only)</summary>
@@ -45,10 +47,19 @@ export function TxPreview({ preview }: { preview: Preview }) {
         </span>
       </header>
 
+      {/* A caution that does not refuse, such as an exit built while the gateway is unverified. */}
+      {preview.warning && (
+        <p className="hint" data-testid="tx-preview-warning" style={{ color: "#ed6c02" }}>
+          {preview.warning}
+        </p>
+      )}
+
       <dl>
         <dt>Target</dt>
         <dd data-testid="tx-preview-target">
           {preview.target}{" "}
+          {/* The target's OWN pin: a vault or router without one reads UNVERIFIED even when
+              the gateway hash matched (QA plan U4, preview.ts `verifiedTargets`). */}
           <span data-testid="tx-preview-codehash">
             {preview.targetCodeHashKnown ? "[bytecode verified]" : "[bytecode UNVERIFIED]"}
           </span>

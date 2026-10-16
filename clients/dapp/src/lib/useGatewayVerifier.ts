@@ -25,7 +25,7 @@
  */
 import { useAccount, useChainId } from "wagmi";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { computeVerificationState, ZERO_ADDRESS } from "./gatewayVerifier";
+import { computeVerificationState, refusedVerification, ZERO_ADDRESS } from "./gatewayVerifier";
 import type { ImplementationPin, VerificationState } from "./gatewayVerifier";
 import { verifyGatewayAt, type Eip1193Provider } from "./verifyGatewayAt";
 import { resolveTargetChainId } from "./wagmi";
@@ -85,19 +85,13 @@ export function useGatewayVerifier(
       return;
     }
     if (targetChainId !== undefined && chainId !== targetChainId) {
-      setState({
-        status: "refused",
-        reason: "unknown_revert",
-      });
+      setState(refusedVerification("wrong-chain"));
       return;
     }
 
     const provider = getInjectedProvider();
     if (!provider) {
-      setState({
-        status: "refused",
-        reason: "unknown_revert",
-      });
+      setState(refusedVerification("no-wallet"));
       return;
     }
 
@@ -129,11 +123,9 @@ export function useGatewayVerifier(
         }
       }
       if (!token.cancelled) {
-        setState({
-          status: "refused",
-          reason: "unknown_revert",
-          detail: "a gateway code or implementation read kept failing",
-        });
+        setState(
+          refusedVerification("rpc-failed", "a gateway code or implementation read kept failing"),
+        );
       }
     }
 

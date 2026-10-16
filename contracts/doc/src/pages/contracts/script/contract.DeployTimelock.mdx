@@ -5,7 +5,7 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
@@ -46,6 +46,11 @@ switch (core 1521).
 AccessControlUnauthorizedAccount.
 - Admin operations must be routed through
 TimelockController.schedule → delay → execute.
+
+- The timelock is a ProposerFloorTimelock (issue #1645 question 1,
+CS-3): the last PROPOSER_ROLE holder cannot be revoked through the
+delay or renounced in an instant Safe transaction. The Safe gives
+up the role only after a second proposer holds it.
 
 Required env vars:
 VAULT_ADDRESS          — RobotMoneyVault
@@ -926,6 +931,36 @@ function _serializeCodeHashSection(Deployed memory d) internal returns (string m
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `string` |  |
+
+<a id="_implementationcodehash-address"></a>
+
+### _implementationCodeHash
+
+<i>
+
+ADR-0014: keccak256 of the code of `proxy`'s ERC-1967 implementation, or zero when the
+slot is empty (a direct contract). Behind a proxy `proxy.codehash` is the generic
+ERC1967Proxy, the same for every proxy and unchanged by an upgrade, so this is the hash
+that names the reviewed logic: the dapp's implementation pin (scripts/stage/mainnet-dapp.ts)
+and rmpc's `proxy_implementation_hashes`.
+
+</i>
+
+```solidity
+function _implementationCodeHash(address proxy) internal view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
 
 <a id="_serializevaulthandovers-deployed"></a>
 

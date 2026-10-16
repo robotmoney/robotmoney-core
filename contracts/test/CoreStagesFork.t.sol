@@ -81,7 +81,7 @@ contract CoreStagesFork is Test {
     // ---- Deposit gas floors (core 1777) ------------------------------------------------------
 
     /// @dev Four-leg router like the live one: the real vault plus three mock vaults. The router
-    ///      floor is legs * DEPOSIT_GAS_PER_LEG = 4 * 1,700,000 = 6,800,000.
+    ///      floor is legs * DEPOSIT_GAS_PER_LEG = 4 * 2,400,000 = 9,600,000.
     function _fourLegRouter() internal {
         address[] memory all = new address[](4);
         all[0] = address(s.vault);
@@ -112,7 +112,7 @@ contract CoreStagesFork is Test {
         vm.stopPrank();
     }
 
-    function test_fork_routerDeposit_below6p8M_revertsInsufficientGasWithTheFloor() public {
+    function test_fork_routerDeposit_below9p6M_revertsInsufficientGasWithTheFloor() public {
         _fourLegRouter();
         address user = makeAddr("user");
         deal(BASE_USDC, user, 1e6);
@@ -126,17 +126,17 @@ contract CoreStagesFork is Test {
         assertFalse(ok, "deposit at 6M gas reverts");
         assertEq(bytes4(ret), PortfolioRouter.InsufficientGas.selector, "typed InsufficientGas");
         (, uint256 required) = abi.decode(_tail(ret), (uint256, uint256));
-        assertEq(required, 6_800_000, "router floor is 6.8M for four legs");
+        assertEq(required, 9_600_000, "router floor is 9.6M for four legs");
     }
 
-    function test_fork_routerDeposit_at8M_succeeds() public {
+    function test_fork_routerDeposit_at10p8M_succeeds() public {
         _fourLegRouter();
         address user = makeAddr("user");
         deal(BASE_USDC, user, 1e6);
         vm.startPrank(user);
         IERC20(BASE_USDC).approve(address(s.router), 1e6);
         uint256[] memory noMin = new uint256[](0);
-        uint256[] memory minted = s.router.deposit{gas: 8_000_000}(1e6, noMin);
+        uint256[] memory minted = s.router.deposit{gas: 10_800_000}(1e6, noMin);
         vm.stopPrank();
         assertEq(minted.length, 4, "four legs minted");
         assertGt(s.vault.balanceOf(user), 0, "rmUSDC leg minted shares");

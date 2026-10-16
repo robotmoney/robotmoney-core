@@ -69,6 +69,12 @@
  *          built for its deployment. One built without a pin fails closed
  *          (`computeVerificationState` refuses on an empty hash) rather than
  *          accepting one from a runtime document.
+ *   - `VITE_VAULT_EXPECTED_CODE_HASH` and `VITE_ROUTER_EXPECTED_CODE_HASH`
+ *     (codePins.ts, QA plan U5) stay build-time-only for the same reason:
+ *     they decide whether a deposit or approve may be sent on the mainnet
+ *     class, so a runtime document must never supply them. So do the
+ *     implementation pins behind them (`VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH`,
+ *     `VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH`, ADR-0014).
  *
  * Keys outside the allowlist are dropped with a warning rather than merged,
  * so a mistaken or hostile `/config.json` cannot reach either surface.

@@ -5,7 +5,7 @@ description: "Minimal interface every Robot Money strategy adapter must implemen
 
 # IStrategyAdapter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/interfaces/IStrategyAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/interfaces/IStrategyAdapter.sol)
 
 Minimal interface every Robot Money strategy adapter must implement.
 
@@ -22,6 +22,19 @@ All mutating functions are restricted to onlyVault inside implementations.
 ### deploy
 
 Receive `amount` USDC from the vault and deploy it into the underlying protocol.
+
+<i>
+
+The in-tree lending adapters (Aave, Morpho, Compound) hand `amount` straight back to
+the vault, without reverting, when their venue refuses the supply (security round 2):
+a reserve at its supply cap, a frozen reserve, MetaMorpho `AllCapsReached`, a Comet
+supply-only pause. A venue that refuses withdrawals too (Aave reserve paused or
+inactive, Comet withdraw pause) reverts `VenueWithdrawalsClosed` instead (security
+round 3, `IVenueHealthAdapter`). The vault measures what the adapter kept by its own
+USDC balance, never by a return value, and leaves the rest idle
+(`RobotMoneyVaultOps._allocate`).
+
+</i>
 
 ```solidity
 function deploy(uint256 amount) external;

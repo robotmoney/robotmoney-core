@@ -46,11 +46,14 @@ REPO_ROOT="$(cd "$FUSION_DIR/../.." && pwd)"
 # check (issue 1647) makes it 171. Issue 1698 deleted the draft watcher and every
 # draft-proposal assertion; with the govern-stage weight-setter checks that
 # replace the draft checks, the full count is 117. Issue 1849 moved the release
-# step to the apply-receipt row and its checks make it 129. Raise it whenever
+# step to the apply-receipt row and its checks make it 129. The QA reconcile onto
+# dev (QA plan v1 leftovers L1) adds six: the cross-repo receipt-weights refusal
+# and apply-path binding (three), and the submit worker's no-rmpc-before-refusal
+# and outage-resolve checks (three), which makes it 135. Raise it whenever
 # assertions are added; lowering it is a deliberate, reviewable act and the
 # workflow re-checks the same number independently (see below), so lowering it
 # here alone buys nothing.
-MIN_EXPECTED_ASSERTIONS=129
+MIN_EXPECTED_ASSERTIONS=135
 
 # The workflow that runs this suite re-asserts the same floor against the
 # machine-readable FUSION_SELFTESTS_EXECUTED line, precisely so a silently
@@ -93,6 +96,7 @@ check(){ if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (want: $3, got: $2)";
 # STUB_DIR/weights            — what getWeights and currentWeights report
 # STUB_DIR/setter_weights_drift — non-empty: currentWeights reports a new vector
 #                               on every read after the first (a weight change)
+# STUB_DIR/receipt_contract   — what the weight setter's receipts() returns
 # STUB_DIR/submit_refuses_tampered — non-empty: rmpc receipt submit refuses neg-* files
 # STUB_DIR/api_json           — body curl returns for an explorer-API GET
 # STUB_DIR/alert_posts        — one line per webhook POST body
@@ -123,6 +127,7 @@ new_stubs() {
   : >"$STUB_DIR/submit_refuses_tampered"
   : >"$STUB_DIR/setter_weights_drift"
   : >"$STUB_DIR/setter_weight_reads"
+  echo 0x0000000000000000000000000000000000000002 >"$STUB_DIR/receipt_contract"
   echo "([0xaa],[10000])" >"$STUB_DIR/weights"
 
   cat >"$STUB_DIR/bin/rmpc" <<'STUB'
@@ -244,6 +249,7 @@ case "$1" in
         fi
         exit 0 ;;
       getWeights*)        cat "$STUB_DIR/weights"; exit 0 ;;
+      "receipts()"*)      cat "$STUB_DIR/receipt_contract"; exit 0 ;;
       totalAssets*)
         # One unit of drift per read when asked for: the accrual shape INV-4 has
         # to distinguish from a signalling-path asset movement, and the shape
@@ -836,11 +842,28 @@ export FUSION_UNAUTHORIZED_SUBMITTER=0x00000000000000000000000000000000000000ee
 check "a stack that accepts tampered weights FAILS the refusal assertion" "$(assertion_result 'rewritten to 10000/0/0/0')" "FAIL"
 unset FUSION_UNAUTHORIZED_SUBMITTER FUSION_SUBMITTER_ADDRESS
 
-# cross-repo-acceptance.sh has no draft step either (issue 1698).
+# cross-repo-acceptance.sh has no draft step either (issue 1698). It checks the
+# receipt's own weights and that the weight setter applies receipts from this
+# register (receipts()).
 new_stubs; cross_repo_env; new_curl_stub; receipt_fixture
 "$FUSION_DIR/cross-repo-acceptance.sh" >/dev/null 2>&1
 check "cross-repo-acceptance passes with the apply-receipt path and unchanged witnesses up to the apply" "$?" "0"
 check "…and never calls rmpc governance" "$(grep -c '^governance' "$STUB_DIR/rmpc_calls")" "0"
+
+new_stubs; cross_repo_env; new_curl_stub
+printf '{"schema_version":"1.0"}' >"$STUB_DIR/receipt.json"
+"$FUSION_DIR/cross-repo-acceptance.sh" >/dev/null 2>&1
+check "cross-repo-acceptance REFUSES a receipt with no weights array (an absent weights array is a FAIL)" "$?" "1"
+
+new_stubs; cross_repo_env; new_curl_stub; receipt_fixture
+echo 0x00000000000000000000000000000000000000ff >"$STUB_DIR/receipt_contract"
+err="$("$FUSION_DIR/cross-repo-acceptance.sh" 2>&1 >/dev/null)"
+check "cross-repo-acceptance refuses a weight setter bound to another register" "$?" "1"
+if grep -q "applies receipts from 0x00000000000000000000000000000000000000ff" <<<"$err"; then
+  ok "the cross-repo binding failure names the register the weight setter reads"
+else
+  bad "the cross-repo binding failure was not diagnosable: $err"
+fi
 
 # ─── T16: the anchored digest is compared FIELD-EXACTLY ─────────────────────
 # The orchestrator did `grep -qi -- "${PAYLOAD_DIGEST#0x}"` against the whole
@@ -949,6 +972,7 @@ export FUSION_MAX_ATTEMPTS=1
 printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"
 err="$(PATH="$NOCURL" bash "$FUSION_DIR/submit-receipt-worker.sh" 2>&1 >/dev/null)"; rc=$?
 check "the worker refuses to start when the webhook is set but curl is missing" "$rc" "1"
+check "…and calls rmpc not at all first" "$(wc -l <"$STUB_DIR/rmpc_calls" | tr -d ' ')" "0"
 if grep -q "curl is not on PATH" <<<"$err"; then
   ok "the undeliverable alert path is named at startup"
 else
@@ -1007,6 +1031,36 @@ if grep -q "ALERT DELIVERY FAILED" <<<"$err"; then
 else
   ok "a delivered page logs no delivery failure"
 fi
+
+# AN OUTAGE THAT RECOVERS MUST RESOLVE. The open-incident flag lives in the
+# worker's memory, so the outage and the recovery happen in ONE process: the
+# chain answers again after a few cycles, the anchor is already there, and the
+# worker must send the resolve before it exits 0. (These alert-path tests drove
+# the draft watcher until issue 1698 deleted it; the submit worker is the
+# harness that pages now, through the same lib/alert.sh.)
+new_stubs; worker_env; new_curl_stub
+export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
+export FUSION_MAX_ATTEMPTS=1
+printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"
+echo 1 >"$STUB_DIR/rpc_down"
+( sleep 3; : >"$STUB_DIR/rpc_down" ) &
+recover_pid=$!
+timeout 12 "$FUSION_DIR/submit-receipt-worker.sh" >/dev/null 2>&1
+wait "$recover_pid" 2>/dev/null
+if jq -e 'select(.event_action=="resolve" and .dedup_key=="fusion_submit_worker_chain_reads_down")' \
+     "$STUB_DIR/alert_posts" >/dev/null 2>&1; then
+  ok "the read-outage key is RESOLVED once the chain answers again"
+else
+  bad "the recovered outage left an incident open forever: $(cat "$STUB_DIR/alert_posts")"
+fi
+# NEGATIVE CONTROL: an outage that never recovers must NOT resolve.
+new_stubs; worker_env; new_curl_stub
+export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
+export FUSION_MAX_ATTEMPTS=1
+echo 1 >"$STUB_DIR/rpc_down"
+timeout 8 "$FUSION_DIR/submit-receipt-worker.sh" >/dev/null 2>&1
+check "an outage that never recovers sends no resolve" \
+  "$(jq -r 'select(.event_action=="resolve")|.dedup_key' "$STUB_DIR/alert_posts" 2>/dev/null | wc -l | tr -d ' ')" "0"
 unset FUSION_ALERT_WEBHOOK
 
 # ─── T24: the one envelope-unwrap rule, driven by the SHARED fixture ─────────

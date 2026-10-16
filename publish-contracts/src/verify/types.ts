@@ -20,6 +20,39 @@ export interface VerifyReport {
   checks: Check[];
   /** Issue 1809: what the upgradeability labels read (proxies, implementations, code hashes, layout ids, authority, delay, initialization, freeze state) and the immutability claim. */
   upgradeability?: UpgradeabilityRecord;
+  /** QA plan v1 C3 (CS-6): what gates the router's weight setter, as the chain reads it. Absent when the run stopped before the router was read. */
+  weightSetter?: WeightSetterGating;
+}
+
+/**
+ * QA plan v1 C3 (CS-6, ADR-0002 "Why the 1522 bypass stays closed"): every weight change waits the timelock delay only while each `WEIGHT_SETTER_ROLE` holder is
+ * timelock-gated. A rotation installs whatever contract the Safe chose, so a holder that forwards Safe calls would make weight changes undelayed. The stage 12
+ * verifier records this for the current holder(s) and fails "router: every WEIGHT_SETTER_ROLE holder is timelock-gated" on anything but "timelock".
+ */
+export interface WeightSetterGating {
+  /** "timelock": every holder is timelock-gated. "not-timelock": the role has no holder, or a holder is not timelock-gated. "unreadable": a read failed, the gating is unknown. */
+  gating: "timelock" | "not-timelock" | "unreadable";
+  /** Every `WEIGHT_SETTER_ROLE` holder, in the router's enumeration order. Empty when the role is unreadable. */
+  holders: WeightSetterHolder[];
+  /** The timelock the gate must be: the timelock stage manifest's address. */
+  timelock: Address;
+  /** The timelock's `getMinDelay()` in seconds: the delay every weight change waits while `gating` is "timelock". Null when unreadable. */
+  delaySeconds: number | null;
+}
+
+export interface WeightSetterHolder {
+  address: Address;
+  /**
+   * The holder's logic code (the implementation behind its ERC-1967 proxy, issue 1808) equals the RouterGovernance build (masked): its weight writes are
+   * `applyReceipt` (`onlyRole(WEIGHT_SETTER_ROLE)`, issue 1698), `setDefaultWeights` and `clearVotedWeights` (`onlyRole(ADMIN_ROLE)`).
+   */
+  routerGovernanceCode: boolean;
+  /** The holder's `ADMIN_ROLE` members. Null when the holder does not answer `getRoleMemberCount`/`getRoleMember` (it is no AccessControlEnumerable contract). */
+  admins: Address[] | null;
+  /** The holder's own `WEIGHT_SETTER_ROLE` members (the `applyReceipt` gate, issue 1698). Null when unreadable. */
+  setters: Address[] | null;
+  /** The holder runs the RouterGovernance build and the timelock is its only `ADMIN_ROLE` and its only `WEIGHT_SETTER_ROLE` member, so nothing but a timelock operation moves weights through it. */
+  timelockGated: boolean;
 }
 
 export type VaultKind = "usdc" | "basket" | "agent";
@@ -150,10 +183,15 @@ export interface VerifyOptions {
    * Issue 1796: the single-vault redeploys the run has finished (deployed AND governed): per redeploy the vault, the vault it replaced (now retired) and the vault that replaced it (the
    * address the vault manifest names). The vault set check then expects registry.listVaults() to be the manifests plus the retired vaults, and the retired vaults get their own labels.
    */
-  redeploys?: { vault: string; oldVault: Address; newVault: Address; replacementManifest?: string; routerVaultCap?: string }[];
   /**
-   * Issue 1796: forge out/ of a checkout at the ORIGINAL deployment sha. With redeploys, the vaults the redeploy did not replace (and the retired ones) run the code of that build, so their
-   * code hashes are compared with this directory. Absent: the current `artifactsDir` is used for every vault.
+   * `oldBuild` (QA plan v1 E1): the build the retired vault runs. "original" (the default): the first round's old vault, a contract of the original deployment, compared with
+   * `priorArtifactsDir`. "redeploy": a later round's old vault, deployed by an earlier round at the redeploy sha, compared with `artifactsDir`.
+   */
+  redeploys?: { vault: string; oldVault: Address; newVault: Address; replacementManifest?: string; routerVaultCap?: string; oldBuild?: "original" | "redeploy" }[];
+  /**
+   * Issue 1796, QA plan v1 E1: forge out/ of a checkout at the ORIGINAL deployment sha (--prior-out). With redeploys, `artifactsDir` is the build of the redeploy sha and only the
+   * replacing vaults run it: every contract the original deployment created (core, libraries, adapters, the vaults not replaced, a first round's retired vault) runs the code of
+   * this build, so its code hash is compared with this directory. Absent (every round ran at the original sha, one build): `artifactsDir` is used for every contract.
    */
   priorArtifactsDir?: string;
   /**

@@ -9,6 +9,7 @@ import {console2} from "forge-std/console2.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
+import {ProposerFloorTimelock} from "../ProposerFloorTimelock.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
@@ -80,6 +81,11 @@ interface IGatewayAgentOwnership {
 ///           AccessControlUnauthorizedAccount.
 ///         - Admin operations must be routed through
 ///           TimelockController.schedule → delay → execute.
+///
+///         - The timelock is a ProposerFloorTimelock (issue #1645 question 1,
+///           CS-3): the last PROPOSER_ROLE holder cannot be revoked through the
+///           delay or renounced in an instant Safe transaction. The Safe gives
+///           up the role only after a second proposer holds it.
 ///
 ///         Required env vars:
 ///           VAULT_ADDRESS          — RobotMoneyVault
@@ -915,6 +921,13 @@ contract DeployTimelock is UpgradeAuthority {
             require(ok && predicted.code.length != 0, "timelock CREATE2 deployment failed");
         }
         timelock = TimelockController(payable(predicted));
+        // The core timelock is a ProposerFloorTimelock (issue #1645 question 1, CS-3). The floor
+        // counted the one proposer the constructor granted: a count of 1 is what makes the Safe's
+        // own PROPOSER_ROLE irrevocable until a second proposer exists.
+        require(
+            ProposerFloorTimelock(payable(predicted)).proposerCount() == 1,
+            "timelock proposer floor did not count the Safe"
+        );
         require(
             timelock.getMinDelay() == minDelay, "timelock minDelay differs from TIMELOCK_MIN_DELAY"
         );
@@ -980,7 +993,9 @@ contract DeployTimelock is UpgradeAuthority {
     }
 
     function _logResult(Deployed memory d) internal pure {
-        console2.log("TimelockController deployed and ADMIN_ROLE transferred on all five contracts");
+        console2.log(
+            "ProposerFloorTimelock (TimelockController with the last-proposer floor) deployed and ADMIN_ROLE transferred on all five contracts"
+        );
         console2.log("  timelock    :", address(d.timelock));
         console2.log("  safe        :", d.safe);
         console2.log("  emergency   :", d.emergency);
@@ -1030,6 +1045,11 @@ contract DeployTimelock is UpgradeAuthority {
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeUint(obj, "min_delay", d.minDelay);
         vm.serializeString(obj, "deployment_kind", d.rehearsal ? "rehearsal" : "production");
+        // Issue #1698: the receipt register the weight setter applies from, as the chain reads
+        // it back.
+        vm.serializeAddress(
+            obj, "governance_receipt", address(RouterGovernance(d.governance).receipts())
+        );
         // Kept flat as well as inside `addresses`: existing readers (the
         // smoke-test fixture, the explorer env writer) index this file by these
         // top-level keys, and a manifest that breaks them is a manifest nobody
@@ -1085,9 +1105,20 @@ contract DeployTimelock is UpgradeAuthority {
         vm.serializeBytes32(hashes, "gateway", d.gateway.codehash);
         vm.serializeBytes32(hashes, "registry", d.registry.codehash);
         vm.serializeBytes32(hashes, "router", d.router.codehash);
+        vm.serializeBytes32(hashes, "router_implementation", _implementationCodeHash(d.router));
         vm.serializeBytes32(hashes, "ic_policy", d.icPolicy.codehash);
         vm.serializeBytes32(hashes, "consensus_receipt", d.consensusReceipt.codehash);
         return vm.serializeBytes32(hashes, "governance", d.governance.codehash);
+    }
+
+    /// @dev ADR-0014: keccak256 of the code of `proxy`'s ERC-1967 implementation, or zero when the
+    ///      slot is empty (a direct contract). Behind a proxy `proxy.codehash` is the generic
+    ///      ERC1967Proxy, the same for every proxy and unchanged by an upgrade, so this is the hash
+    ///      that names the reviewed logic: the dapp's implementation pin (scripts/stage/mainnet-dapp.ts)
+    ///      and rmpc's `proxy_implementation_hashes`.
+    function _implementationCodeHash(address proxy) internal view returns (bytes32) {
+        address impl = _implementationOf(proxy);
+        return impl == address(0) ? bytes32(0) : keccak256(impl.code);
     }
 
     /// @dev The per-vault handover record: one object per vault in VAULT_ADDRESSES,
@@ -1101,6 +1132,7 @@ contract DeployTimelock is UpgradeAuthority {
             string memory k = string.concat("manifest_vault_handover_", vm.toString(i));
             vm.serializeAddress(k, "address", vault_);
             vm.serializeBytes32(k, "code_hash", vault_.codehash);
+            vm.serializeBytes32(k, "implementation_code_hash", _implementationCodeHash(vault_));
             vm.serializeAddress(k, "registry", IRetirableVaultLink(vault_).registry());
             vm.serializeBool(
                 k, "registry_linked", IRetirableVaultLink(vault_).registry() == d.registry
@@ -1177,6 +1209,13 @@ contract DeployTimelock is UpgradeAuthority {
             roles,
             "timelock_has_governance_admin_role",
             IAccessControl(d.governance).hasRole(ADMIN_ROLE, address(d.timelock))
+        );
+        // Issue #1698: the weight setter can release the receipt it applies.
+        vm.serializeBool(
+            roles,
+            "governance_has_receipt_admin_role",
+            d.consensusReceipt != address(0)
+                && IAccessControl(d.consensusReceipt).hasRole(ADMIN_ROLE, d.governance)
         );
         // Aggregates over every vault; the per-vault rows are in `vault_handover`.
         // Computed in helpers so this function stays inside the non-viaIR stack

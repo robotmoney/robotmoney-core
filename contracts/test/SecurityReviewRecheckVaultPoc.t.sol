@@ -2,11 +2,19 @@
 pragma solidity ^0.8.24;
 
 import {RobotMoneyVaultTest, MockAdapter} from "./RobotMoneyVault.t.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
+import {ExclusionLedger} from "../ExclusionLedger.sol";
 
 /// @dev Adversarial re-check of docs/code-review/20261012-security-review.md, vault side.
 ///      Fixture facts (RobotMoneyVaultTest.setUp): `admin` holds ADMIN_ROLE and EMERGENCY_ROLE,
 ///      `adapter` is registry index 0 at a 100% cap, no exit fee.
+///      Finding 2 (duplicate adapter entry): at baseline the `test_f2_*` PoCs proved the
+///      duplicate landed and double counted NAV. Issue #1789 added the `addAdapter` active-entry
+///      scan (`AdapterAlreadyActive`), so the same paths now pin the refusal and assert each
+///      holder is paid at par. The baseline recovery PoCs (`adminRebalance` drain then
+///      `removeAdapter`, or `forceRemoveAdapter` of the duplicate) have no duplicate to repair
+///      any more; they now pin the legal re-add after removal instead.
 contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
     address internal emergency = makeAddr("emergency");
     address internal keeper = makeAddr("keeper");
@@ -25,15 +33,16 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         vault.addAdapter(address(second), 10_000);
     }
 
-    /// Core 1789: a second registry entry for an already-active adapter reverts.
-    function _addDuplicate() internal {
+    /// @dev Issue #1789: the duplicate add (index 1 -> same contract as index 0) is refused,
+    ///      so the registry keeps one active entry for `adapter`.
+    function _addDuplicateRefused() internal {
         vm.prank(admin);
         vm.expectRevert(
             abi.encodeWithSelector(RobotMoneyVault.AdapterAlreadyActive.selector, address(adapter))
         );
         vault.addAdapter(address(adapter), 10_000);
-        assertEq(vault.adapterCount(), 1, "no second registry entry");
-        assertEq(vault.activeAdapterCount(), 1, "still one active");
+        assertEq(vault.adapterCount(), 1, "one registry entry");
+        assertEq(vault.activeAdapterCount(), 1, "one active entry");
     }
 
     // ─── Finding 1: adapter exclusion window ─────────────────────────────
@@ -62,11 +71,11 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "excluded value stays out of NAV");
     }
 
-    /// A holder exiting during exclusion loses its share-based recovery entitlement.
-    /// After restoration at zero supply, an ordinary new deposit does not capture the surplus.
-    /// This does not prove unconditional permanent lock: further ADMIN eligibility changes
-    /// can redistribute it, as SecurityReviewRevisionAssessment demonstrates.
-    function test_f1_holderExitDuringWindowStrandsSurplusBehindVirtualShares() public {
+    /// Was: a holder exiting during exclusion lost its share-based recovery entitlement, and
+    /// after restoration at zero supply the surplus sat orphaned behind the virtual shares.
+    /// Remediated by core 1820: the exiter keeps the claim, restoration realises the excluded
+    /// balance into the exclusion record first, and a later depositor neither gains nor loses.
+    function test_f1_holderExitDuringWindowKeepsRecoveryClaim() public {
         MockAdapter second = _secondAdapter();
         vm.prank(alice);
         vault.deposit(2_000 * ONE_USDC, alice);
@@ -78,34 +87,36 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         vm.prank(alice);
         vault.redeem(aliceShares, alice, alice);
         assertApproxEqAbs(
-            usdc.balanceOf(alice) - aliceBefore, 1_000 * ONE_USDC, 1, "alice lost 1000"
+            usdc.balanceOf(alice) - aliceBefore, 1_000 * ONE_USDC, 1, "exit at the reduced NAV"
         );
         assertEq(vault.totalSupply(), 0, "supply zero");
         assertEq(
-            usdc.balanceOf(address(second)), 1_000 * ONE_USDC, "surplus still in revoked adapter"
+            usdc.balanceOf(address(second)), 1_000 * ONE_USDC, "excluded balance still in adapter"
         );
 
         vm.prank(admin);
         vault.setAdapterAllowed(address(second), true);
-        assertApproxEqAbs(vault.totalAssets(), 1_000 * ONE_USDC, 1, "orphaned NAV with zero supply");
+        assertEq(usdc.balanceOf(address(second)), 0, "restoration realised it into the record");
+        assertEq(vault.totalAssets(), 0, "nothing orphaned in NAV");
+        ExclusionLedger ledger = vault.exclusionLedger();
+        assertEq(ledger.claimable(1, alice), 1_000 * ONE_USDC, "the exiter owns the recovery");
 
         vm.prank(bob);
-        vault.deposit(1_000 * ONE_USDC, bob);
-        uint256 bobClaim = vault.convertToAssets(vault.balanceOf(bob));
-        emit log_named_uint("bob claim after depositing into orphaned NAV", bobClaim);
-        assertApproxEqAbs(
-            bobClaim, 1_000 * ONE_USDC, 2, "orphaned 1000 is locked behind virtual shares"
-        );
+        uint256 bobShares = vault.deposit(1_000 * ONE_USDC, bob);
+        assertApproxEqAbs(vault.convertToAssets(bobShares), 1_000 * ONE_USDC, 2, "bob's own 1000");
+        assertEq(ledger.claimable(1, bob), 0, "bob has no claim on the recovery");
 
-        vm.prank(admin);
-        vault.emergencyWithdraw();
-        assertApproxEqAbs(vault.maxWithdraw(bob), 1_000 * ONE_USDC, 2, "still only bob's own 1000");
+        ledger.claim(1, alice);
+        assertApproxEqAbs(
+            usdc.balanceOf(alice) - aliceBefore, 2_000 * ONE_USDC, 1, "alice is made whole"
+        );
         vm.expectRevert();
         vault.sweepForeignToken(address(usdc));
     }
 
-    /// Remediated by core 1788 (PR 1814): with no window depositor, `emergencyWithdrawAdapter`
-    /// on a revoked adapter returns the recovered value to the holders who funded it.
+    /// Remediated by core 1788 (PR 1814) and core 1820: with no window depositor,
+    /// `emergencyWithdrawAdapter` on a revoked adapter returns the recovered value to the
+    /// holders who funded it, through the exclusion record (not idle NAV).
     function test_f1_emergencyWithdrawAdapterOnRevokedAdapterRecoversToExistingHolders() public {
         MockAdapter second = _secondAdapter();
         vm.prank(alice);
@@ -120,9 +131,14 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         vault.emergencyWithdrawAdapter(1);
         assertTrue(vault.depositsPaused(), "emergency drain pauses deposits");
         assertEq(usdc.balanceOf(address(second)), 0, "revoked adapter drained");
-        assertEq(vault.totalAssets(), 2_000 * ONE_USDC, "idle recovery re-enters NAV");
+        assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "the recovery stays out of NAV");
+        ExclusionLedger ledger = vault.exclusionLedger();
+        assertEq(usdc.balanceOf(address(ledger)), 1_000 * ONE_USDC, "the record holds it");
         assertApproxEqAbs(
-            vault.convertToAssets(vault.balanceOf(alice)), 2_000 * ONE_USDC, 2, "alice keeps it all"
+            vault.convertToAssets(vault.balanceOf(alice)) + ledger.claimable(1, alice),
+            2_000 * ONE_USDC,
+            2,
+            "alice keeps it all"
         );
     }
 
@@ -141,37 +157,155 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         assertEq(vault.maxDeposit(bob), 0);
     }
 
-    // ─── Finding 2: duplicate adapter entry (fixed by core 1789) ─────────
+    // ─── Finding 2: duplicate adapter entry (refused since #1789) ────────
 
-    /// The duplicate add that doubled NAV now reverts, so a partial redeem pays par.
-    function test_f2_partialRedeemPaysDoubledPriceAndEmptiesVault() public {
+    /// Was: a PARTIAL redemption was paid at the doubled share price and emptied the vault.
+    /// Now the duplicate is refused, NAV is counted once and half the shares take half.
+    function test_f2_partialRedeemPaysParAfterDuplicateRefused() public {
         vm.prank(alice);
         vault.deposit(1_000 * ONE_USDC, alice);
-        _addDuplicate();
-        assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "NAV not double-counted");
+        _addDuplicateRefused();
+        assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "NAV counted once");
 
         uint256 half = vault.balanceOf(alice) / 2;
         uint256 before = usdc.balanceOf(alice);
         vm.prank(alice);
         vault.redeem(half, alice, alice);
-        assertApproxEqAbs(usdc.balanceOf(alice) - before, 500 * ONE_USDC, 2, "half pays half");
+        uint256 proceeds = usdc.balanceOf(alice) - before;
+        emit log_named_uint("Alice proceeds for HALF her shares (USDC units)", proceeds);
+
+        assertApproxEqAbs(proceeds, 500 * ONE_USDC, 2, "half the shares take half the deposit");
+        assertGt(vault.balanceOf(alice), 0, "Alice still holds half her shares");
+        assertApproxEqAbs(
+            vault.previewRedeem(vault.balanceOf(alice)),
+            500 * ONE_USDC,
+            2,
+            "remaining shares keep their backing"
+        );
     }
 
-    /// The first redeemer can no longer take the second holder's backing.
-    function test_f2_firstRedeemerTakesSecondHoldersBacking() public {
+    /// Was: with two holders the FIRST full redeemer took the second holder's backing and the
+    /// second holder's exit reverted. Now each holder redeems exactly their own deposit.
+    function test_f2_eachHolderRedeemsOwnBackingAfterDuplicateRefused() public {
         vm.prank(alice);
         vault.deposit(1_000 * ONE_USDC, alice);
         vm.prank(bob);
         vault.deposit(1_000 * ONE_USDC, bob);
-        _addDuplicate();
-        assertEq(vault.totalAssets(), 2_000 * ONE_USDC, "NAV not double-counted");
+        _addDuplicateRefused();
+        assertEq(vault.totalAssets(), 2_000 * ONE_USDC, "NAV counted once");
 
-        uint256 before = usdc.balanceOf(alice);
         uint256 aliceShares = vault.balanceOf(alice);
+        uint256 before = usdc.balanceOf(alice);
+        vm.prank(alice);
+        vault.redeem(aliceShares, alice, alice);
+        uint256 aliceProceeds = usdc.balanceOf(alice) - before;
+        emit log_named_uint("Alice proceeds (deposited 1,000)", aliceProceeds);
+        assertApproxEqAbs(aliceProceeds, 1_000 * ONE_USDC, 2, "Alice is paid her deposit");
+
+        assertApproxEqAbs(vault.maxWithdraw(bob), 1_000 * ONE_USDC, 2, "Bob's backing intact");
+        uint256 bobShares = vault.balanceOf(bob);
+        before = usdc.balanceOf(bob);
+        vm.prank(bob);
+        vault.redeem(bobShares, bob, bob);
+        assertApproxEqAbs(usdc.balanceOf(bob) - before, 1_000 * ONE_USDC, 2, "Bob at par");
+        assertLe(vault.totalAssets(), 2, "vault empty after both exit");
+    }
+
+    /// Was (the revert face): after a partial extraction a later holder's FULL redemption
+    /// reverted `InsufficientAdapterLiquidity`. Now the later claim stays fully backed.
+    function test_f2_laterFullRedemptionSucceedsAfterDuplicateRefused() public {
+        vm.prank(alice);
+        vault.deposit(1_000 * ONE_USDC, alice);
+        vm.prank(bob);
+        vault.deposit(1_000 * ONE_USDC, bob);
+        _addDuplicateRefused();
+
+        uint256 aliceHalf = vault.balanceOf(alice) / 2;
+        vm.prank(alice);
+        vault.redeem(aliceHalf, alice, alice);
+        uint256 realLeft = adapter.totalAssets();
+        assertApproxEqAbs(realLeft, 1_500 * ONE_USDC, 2);
+
+        uint256 bobShares = vault.balanceOf(bob);
+        uint256 gross = vault.previewRedeem(bobShares);
+        assertLe(gross, realLeft, "Bob's claim is within the real backing");
+        uint256 before = usdc.balanceOf(bob);
+        vm.prank(bob);
+        vault.redeem(bobShares, bob, bob);
+        assertApproxEqAbs(usdc.balanceOf(bob) - before, 1_000 * ONE_USDC, 2, "Bob at par");
+    }
+
+    /// Was: a deposit AFTER the duplicate was minted at the inflated price (about half the
+    /// shares). Now the same deposit mints the same shares. Routing places the full deposit.
+    function test_f2_depositAfterDuplicateRefusedMintsAtPar() public {
+        vm.prank(alice);
+        vault.deposit(1_000 * ONE_USDC, alice);
+        _addDuplicateRefused();
+        vm.prank(bob);
+        vault.deposit(1_000 * ONE_USDC, bob);
+
+        uint256 aliceShares = vault.balanceOf(alice);
+        uint256 bobShares = vault.balanceOf(bob);
+        emit log_named_uint("Alice shares", aliceShares);
+        emit log_named_uint("Bob shares (same deposit)", bobShares);
+        assertApproxEqRel(bobShares, aliceShares, 1e12, "Bob minted at the same price");
+        assertEq(adapter.totalAssets(), 2_000 * ONE_USDC, "fully routed");
+        assertEq(usdc.balanceOf(address(vault)), 0, "no idle leftover");
+    }
+
+    /// Was: `removeAdapter` could not undo the duplicate because both entries read the same
+    /// balance. Now there is no second entry; the one real entry still refuses a funded removal.
+    function test_f2_noDuplicateEntryToRemoveAfterRefusal() public {
+        vm.prank(alice);
+        vault.deposit(1_000 * ONE_USDC, alice);
+        _addDuplicateRefused();
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyVault.AdapterNotFound.selector);
+        vault.removeAdapter(1);
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyVault.AdapterNotEmpty.selector);
+        vault.removeAdapter(0);
+    }
+
+    /// Was: ADMIN-only recovery of the duplicate (drain, remove the duplicate, reallocate).
+    /// Now the legal ADMIN path is drain -> `removeAdapter(0)` -> re-add the same address.
+    /// The re-add appends a new entry, NAV is counted once and no deposit pause is needed.
+    function test_f2_reAddAfterRemoveAdapterCountsBalanceOnce() public {
+        vm.prank(alice);
+        vault.deposit(1_000 * ONE_USDC, alice);
+        vm.prank(bob);
+        vault.deposit(1_000 * ONE_USDC, bob);
+        _addDuplicateRefused();
+        assertEq(vault.totalAssets(), 2_000 * ONE_USDC);
+
+        uint256[] memory drain = new uint256[](1);
+        vm.prank(admin);
+        vault.adminRebalance(drain);
+        assertEq(adapter.totalAssets(), 0, "adapter drained to idle");
+        assertEq(vault.totalAssets(), 2_000 * ONE_USDC, "NAV correct while idle");
+
+        vm.prank(admin);
+        vault.removeAdapter(0);
+        assertEq(vault.activeAdapterCount(), 0, "entry deactivated");
+
+        vm.prank(admin);
+        vault.addAdapter(address(adapter), 10_000);
+        assertEq(vault.adapterCount(), 2, "re-add appends index 1");
+        assertEq(vault.activeAdapterCount(), 1, "only the new entry is active");
+
+        uint256[] memory redeploy = new uint256[](2);
+        redeploy[1] = 2_000 * ONE_USDC;
+        vm.prank(admin);
+        vault.adminRebalance(redeploy);
+        assertEq(adapter.totalAssets(), 2_000 * ONE_USDC, "funds back in the adapter");
+        assertEq(vault.totalAssets(), 2_000 * ONE_USDC, "NAV counted once after re-add");
+        assertFalse(vault.depositsPaused(), "no deposit pause was needed");
+
+        uint256 aliceShares = vault.balanceOf(alice);
+        uint256 before = usdc.balanceOf(alice);
         vm.prank(alice);
         vault.redeem(aliceShares, alice, alice);
         assertApproxEqAbs(usdc.balanceOf(alice) - before, 1_000 * ONE_USDC, 2, "Alice at par");
-
         uint256 bobShares = vault.balanceOf(bob);
         before = usdc.balanceOf(bob);
         vm.prank(bob);
@@ -179,33 +313,20 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         assertApproxEqAbs(usdc.balanceOf(bob) - before, 1_000 * ONE_USDC, 2, "Bob at par");
     }
 
-    /// A later holder's full redemption succeeds because no duplicate inflates the claim.
-    function test_f2_laterFullRedemptionRevertsAfterPartialExtraction() public {
+    /// Was: EMERGENCY `forceRemoveAdapter(1)` fixed the duplicate's NAV but paused deposits and
+    /// emitted a misleading full-balance loss. Now there is no duplicate index to write off,
+    /// so no pause and no misreported loss.
+    function test_f2_noDuplicateToForceRemoveAfterRefusal() public {
         vm.prank(alice);
         vault.deposit(1_000 * ONE_USDC, alice);
-        vm.prank(bob);
-        vault.deposit(1_000 * ONE_USDC, bob);
-        _addDuplicate();
+        _addDuplicateRefused();
 
-        uint256 aliceHalf = vault.balanceOf(alice) / 2;
-        vm.prank(alice);
-        vault.redeem(aliceHalf, alice, alice);
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyVault.AdapterNotFound.selector);
+        vault.forceRemoveAdapter(1);
 
-        uint256 bobShares = vault.balanceOf(bob);
-        uint256 before = usdc.balanceOf(bob);
-        vm.prank(bob);
-        vault.redeem(bobShares, bob, bob);
-        assertApproxEqAbs(usdc.balanceOf(bob) - before, 1_000 * ONE_USDC, 2, "Bob at par");
-    }
-
-    /// A deposit after the rejected duplicate mints at the true price.
-    function test_f2_depositAfterDuplicateMintsAtInflatedPrice() public {
-        vm.prank(alice);
-        vault.deposit(1_000 * ONE_USDC, alice);
-        _addDuplicate();
-        vm.prank(bob);
-        vault.deposit(1_000 * ONE_USDC, bob);
-        assertApproxEqAbs(vault.balanceOf(bob), vault.balanceOf(alice), 2, "same price");
+        assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "NAV correct, nothing to repair");
+        assertFalse(vault.depositsPaused(), "no pause side effect");
     }
 
     /// Reactivating a deliberately removed (inactive) adapter still works.
@@ -214,7 +335,6 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         vm.prank(admin);
         vault.removeAdapter(1);
         assertEq(vault.activeAdapterCount(), 1);
-
         vm.prank(admin);
         vault.addAdapter(address(second), 10_000);
         assertEq(vault.activeAdapterCount(), 2, "re-added");
@@ -226,69 +346,98 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         vault.addAdapter(address(second), 10_000);
     }
 
-    // ─── Omitted: EMERGENCY write-off reprices exits ─────────────────────
+    // ─── SR-1012-5 (issue 1705 finding 5): EMERGENCY force-remove keeps exit claims ──
 
-    /// EMERGENCY force-removes the only funded adapter. NAV -> 0. `maxRedeem` still promises
-    /// the full balance while `redeem` burns every share for 0 USDC. The USDC stays in the
-    /// adapter; only ADMIN `addAdapter` brings it back, and with zero supply the ERC4626
-    /// virtual shares then own it.
-    function test_O1a_forceRemoveAllFunded_redeemBurnsSharesForZero() public {
+    /// Was: EMERGENCY force-removed the only funded adapter, NAV went to 0, `redeem` burned every
+    /// share for 0 USDC, and the ADMIN re-add later handed the stranded USDC to whoever held
+    /// shares then (with zero supply, to the ERC4626 virtual shares). Remediated in security
+    /// round 1: the force-remove opens an exclusion record for the funded entry, the exiter
+    /// keeps a pro-rata claim, and the re-add realises the adapter's balance into that record,
+    /// never into NAV.
+    function test_O1a_forceRemoveAllFunded_exiterKeepsFullRecoveryClaim() public {
         _grantHotKeys();
         vm.prank(alice);
         uint256 shares = vault.deposit(1_000 * ONE_USDC, alice);
+        ExclusionLedger ledger = vault.exclusionLedger();
 
         vm.prank(emergency);
         vault.forceRemoveAdapter(0);
+        assertEq(vault.totalAssets(), 0, "the balance left NAV");
+        assertEq(vault.openExclusionOf(0), 1, "but it is owed to the holders of the moment");
 
-        assertEq(vault.totalAssets(), 0, "NAV written off");
-        assertEq(vault.maxRedeem(alice), shares, "view promises the full balance");
-        assertEq(vault.previewRedeem(shares), 0, "but it is worth 0");
-
+        // Alice exits at the written-down NAV and keeps her claim.
         uint256 before = usdc.balanceOf(alice);
         vm.prank(alice);
         uint256 out = vault.redeem(shares, alice, alice);
-        assertEq(out, 0, "redeem pays nothing");
+        assertEq(out, 0, "nothing left in NAV to pay");
         assertEq(usdc.balanceOf(alice) - before, 0);
-        assertEq(vault.balanceOf(alice), 0, "shares are gone");
+        assertEq(ledger.balanceAt(alice, 1), shares, "the exiter keeps her snapshot");
         assertEq(adapter.totalAssets(), 1_000 * ONE_USDC, "the USDC is still in the adapter");
 
+        // ADMIN re-adds the adapter: the balance goes to the record, not to NAV.
         vm.prank(admin);
         vault.addAdapter(address(adapter), 10_000);
+        assertEq(vault.totalAssets(), 0, "the re-add does not lift NAV");
+        assertEq(
+            ledger.claimable(1, alice), 1_000 * ONE_USDC, "the exiter's claim is the whole recovery"
+        );
+        ledger.claim(1, alice);
+        assertEq(usdc.balanceOf(alice) - before, 1_000 * ONE_USDC, "alice is made whole");
+
+        // A later depositor buys at par and has no claim.
         vm.prank(admin);
         vault.unpauseDeposits();
-        assertEq(vault.totalAssets(), 1_000 * ONE_USDC);
         vm.prank(bob);
         uint256 bobShares = vault.deposit(1 * ONE_USDC, bob);
-        assertApproxEqAbs(
-            vault.previewRedeem(bobShares), 1 * ONE_USDC, 2, "orphan stays behind virtual shares"
-        );
+        assertApproxEqAbs(vault.previewRedeem(bobShares), 1 * ONE_USDC, 2, "nothing orphaned");
+        assertEq(ledger.claimable(1, bob), 0, "no claim for a later depositor");
     }
 
-    /// Partial force-remove: exits during the exclusion are under-paid; stayers are over-paid
-    /// after ADMIN re-adds. Mirror image of finding 1, triggerable by the EMERGENCY key alone
-    /// and NOT closed by the deposit pause.
-    function test_O1b_forceRemovePartial_exitsUnderpaidStayersOverpaid() public {
+    /// Was: a partial force-remove underpaid the holders who exited during the write-off and
+    /// overpaid the ones who stayed once ADMIN re-added the adapter (the mirror image of finding
+    /// 1, triggerable by the EMERGENCY key alone). Now the exiter's record claim equals its
+    /// pro-rata share of the recovered balance, and exiter and stayer end level.
+    function test_O1b_forceRemovePartial_exiterAndStayerShareRecoveryProRata() public {
         _grantHotKeys();
         MockAdapter second = _secondAdapter();
+        ExclusionLedger ledger = vault.exclusionLedger();
 
         vm.prank(alice);
         uint256 aliceShares = vault.deposit(1_000 * ONE_USDC, alice);
         vm.prank(bob);
-        vault.deposit(1_000 * ONE_USDC, bob);
+        uint256 bobShares = vault.deposit(1_000 * ONE_USDC, bob);
         assertEq(second.totalAssets(), 1_000 * ONE_USDC);
+        uint256 supply = vault.totalSupply();
 
         vm.prank(emergency);
         vault.forceRemoveAdapter(1);
         assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "half of NAV excluded");
+        assertEq(vault.openExclusionOf(1), 1, "record 1 holds the excluded half");
 
         uint256 before = usdc.balanceOf(alice);
         vm.prank(alice);
         vault.redeem(aliceShares, alice, alice);
-        assertLe(usdc.balanceOf(alice) - before, 500 * ONE_USDC, "alice exits at half value");
+        uint256 alicePaid = usdc.balanceOf(alice) - before;
+        assertApproxEqAbs(alicePaid, 500 * ONE_USDC, 1, "alice exits at half value");
 
         vm.prank(admin);
         vault.addAdapter(address(second), 10_000);
-        assertGe(vault.maxWithdraw(bob), 1_499 * ONE_USDC, "bob now owns alice's 500");
+        assertEq(usdc.balanceOf(address(ledger)), 1_000 * ONE_USDC, "the recovery is in record 1");
+        assertApproxEqAbs(vault.maxWithdraw(bob), 500 * ONE_USDC, 1, "bob gains nothing in NAV");
+
+        uint256 recovered = 1_000 * ONE_USDC;
+        assertEq(
+            ledger.claimable(1, alice),
+            Math.mulDiv(recovered, aliceShares, supply),
+            "the exiter's claim is her pro-rata share of the recovery"
+        );
+        assertEq(ledger.claimable(1, bob), Math.mulDiv(recovered, bobShares, supply));
+        assertApproxEqAbs(
+            alicePaid + ledger.claimable(1, alice),
+            vault.maxWithdraw(bob) + ledger.claimable(1, bob),
+            2,
+            "exiter and stayer end level"
+        );
     }
 
     /// SR-M10, remediated by core 1788 (PR 1814): KEEPER `rebalance()` reverts while
@@ -322,7 +471,8 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
     }
 
     /// Force-removed funded adapter plus some idle: redeem does not revert but pays out only
-    /// the idle share.
+    /// the idle share. Since security round 1 the holder also keeps the record claim on the
+    /// adapter's balance.
     function test_O4_forceRemoveWithIdle_payoutIsIdleOnly() public {
         _grantHotKeys();
         vm.prank(alice);
@@ -337,5 +487,10 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         vm.prank(alice);
         vault.redeem(shares, alice, alice);
         assertApproxEqAbs(usdc.balanceOf(alice) - before, 100 * ONE_USDC, 1, "1,000 in, 100 out");
+        assertEq(
+            vault.exclusionLedger().balanceAt(alice, 1),
+            shares,
+            "the rest is owed through the record"
+        );
     }
 }

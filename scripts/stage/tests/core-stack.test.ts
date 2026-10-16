@@ -97,7 +97,7 @@ beforeEach(() => {
   rmSync(OUT, { recursive: true, force: true });
   mkdirSync(join(OUT, "manifests"), { recursive: true });
   mkdirSync(join(OUT, "keys"), { recursive: true });
-  writeFileSync(join(OUT, "sheet.env"), "");
+  writeFileSync(join(OUT, "sheet.env"), "GOVERN_UNPAUSE_VAULTS=USDC,PROTO,AGENT,RWA\n");
   writeFileSync(join(OUT, "pw"), "x".repeat(48), { mode: 0o600 });
   writeFileSync(join(OUT, "core-smoke.log"), summary());
   calls = { cmds: [] };
@@ -207,6 +207,55 @@ describe("governance", () => {
   test("ensure fails when the run printed no rows", async () => {
     nextResult = { code: 0, stdout: "govern finished with no rows\n", stderr: "" };
     expect((await run("governance", "ensure")).code).toBe(66);
+  });
+  // QA plan v1 D7: ensure opens the baskets (stage 13), so it also sets each opened basket's emergency unwind guard before `governance verify` can run.
+  describe("ensure sets the emergency unwind guards the verifier label requires", () => {
+    const okRow = (row: string) => rows({ row, txHash: h(1), status: 1 });
+    const govern = () => calls.cmds.filter((c) => c.cmd[2] === "govern").map((c) => c.cmd.slice(2).join(" "));
+    test("stage 13 first, then one set-unwind-guard round per opened basket (token=all, the Twin values), and no verify in between", async () => {
+      nextResult = { code: 0, stdout: okRow("unpause-USDC"), stderr: "" };
+      const r = await run("governance", "ensure");
+      expect(r.code).toBe(0);
+      const g = govern();
+      expect(g).toHaveLength(4);
+      expect(g[0]).not.toContain("--row");
+      for (const [i, k] of ["PROTO", "AGENT", "RWA"].entries()) {
+        expect(g[i + 1]).toContain(`--row set-unwind-guard --admin-arg vault=${k} --admin-arg token=all --admin-arg min-usdc-out=1000000 --admin-arg max-loss-bps=500`);
+      }
+      expect(calls.cmds.some((c) => c.cmd[2] === "verify")).toBe(false);
+    });
+    test("only the baskets the sheet's GOVERN_UNPAUSE_VAULTS opens are guarded", async () => {
+      writeFileSync(join(OUT, "sheet.env"), "GOVERN_UNPAUSE_VAULTS=USDC,RWA # the rest stay paused\n");
+      nextResult = { code: 0, stdout: okRow("unpause-USDC"), stderr: "" };
+      expect((await run("governance", "ensure")).code).toBe(0);
+      const g = govern();
+      expect(g).toHaveLength(2);
+      expect(g[1]).toContain("vault=RWA");
+    });
+    test("rmUSDC alone opens no basket, so no guard round runs", async () => {
+      writeFileSync(join(OUT, "sheet.env"), "GOVERN_UNPAUSE_VAULTS=USDC\n");
+      nextResult = { code: 0, stdout: okRow("unpause-USDC"), stderr: "" };
+      expect((await run("governance", "ensure")).code).toBe(0);
+      expect(govern()).toHaveLength(1);
+    });
+    test("a sheet without GOVERN_UNPAUSE_VAULTS is refused (65) after stage 13, before any guard row", async () => {
+      writeFileSync(join(OUT, "sheet.env"), "");
+      nextResult = { code: 0, stdout: okRow("unpause-USDC"), stderr: "" };
+      const r = await run("governance", "ensure");
+      expect(r.code).toBe(65);
+      expect(govern()).toHaveLength(1);
+    });
+    test("a guard row with receipt status 0 fails ensure (66) and stops the later baskets", async () => {
+      handler = (cmd) => cmd.includes("set-unwind-guard") ? { code: 0, stdout: rows({ row: "set-unwind-guard", txHash: h(2), status: 0 }), stderr: "" } : undefined;
+      nextResult = { code: 0, stdout: okRow("unpause-USDC"), stderr: "" };
+      expect((await run("governance", "ensure")).code).toBe(66);
+      expect(govern()).toHaveLength(2);
+    });
+    test("a guard round that exits non-zero passes its code through", async () => {
+      handler = (cmd) => cmd.includes("set-unwind-guard") ? { code: 9, stdout: "", stderr: "" } : undefined;
+      nextResult = { code: 0, stdout: okRow("unpause-USDC"), stderr: "" };
+      expect((await run("governance", "ensure")).code).toBe(9);
+    });
   });
   // Issue 1849: govern refuses row release-receipt since issue 1831, so `governance release` refuses before calling publish contracts.
   test("release is refused with 64, names governance apply and never calls publish contracts", async () => {

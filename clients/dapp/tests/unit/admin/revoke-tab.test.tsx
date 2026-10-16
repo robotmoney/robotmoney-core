@@ -14,6 +14,8 @@ vi.mock("wagmi", () => ({
   useAccount: () => ({ isConnected: false }),
   useSimulateContract: () => ({ data: undefined }),
   useWriteContract: () => ({ writeContract: vi.fn(), isPending: false }),
+  // RevokeTab shows the revoke's receipt status (QA plan U5).
+  useWaitForTransactionReceipt: () => ({ data: undefined, isFetching: false, error: null }),
 }));
 
 const GATEWAY = "0x1111111111111111111111111111111111111111" as const;

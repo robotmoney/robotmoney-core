@@ -96,6 +96,12 @@ contract FvRetirableVault is ERC20 {
         return assets; // 1:1
     }
 
+    /// @dev ERC-4626 `maxDeposit`: 0 while retired, uncapped otherwise. The router skips a leg
+    ///      whose `maxDeposit` is 0 or reverts (QA plan D4), so a router-leg mock must answer it.
+    function maxDeposit(address) external view returns (uint256) {
+        return retired ? 0 : type(uint256).max;
+    }
+
     function deposit(uint256 assets, address receiver) external returns (uint256 shares) {
         if (retired) revert VaultRetired();
         assetToken.safeTransferFrom(msg.sender, address(this), assets);

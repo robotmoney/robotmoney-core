@@ -4,7 +4,7 @@ title: "RevisionVaultAssessment"
 
 # RevisionVaultAssessment
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3947c43df9ec474f93f6d8b7d737de51425029c7/contracts/test/SecurityReviewRevisionAssessment.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/SecurityReviewRevisionAssessment.t.sol)
 
 **Inherits:** [SecurityReviewRecheckVaultPoc](/contracts/test/contract.SecurityReviewRecheckVaultPoc)
 
@@ -16,6 +16,8 @@ title: "RevisionVaultAssessment"
 
 The pre-1788 counterexample (re-exclude both adapters, deposit, restore) is closed by
 core 1788 (PR 1814): the deposit leg reverts while any active adapter is ineligible.
+Since core 1820 there is also nothing orphaned to redistribute: restoration realises the
+excluded balance into the exclusion record of alice, the holder at the snapshot.
 
 ```solidity
 function test_assessment_orphanRedistributionSequenceBlocked() public;

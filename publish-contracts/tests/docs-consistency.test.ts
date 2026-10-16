@@ -33,11 +33,13 @@ test("no supersession trails", () => {
   }
 });
 
-test("signals remain advisory until member authentication lands", () => {
+// Core issue 1790 (PR 1818) landed: the gateway binds the vote's agent to the caller, so the docs state that check, not the gap.
+test("signals are advisory and the signal endpoint binds the member to the caller", () => {
   for (const file of ["docs/technical/governance-decisions.md", "docs/technical/consensus-receipt-submitter-runbook.md"]) {
     const text = read(file);
     expect(text).toContain("signals are advisory only");
-    expect(text).toContain("does not authenticate the member until core issue 1790 lands");
+    expect(text).toContain("reverts `CommitteeAgentNotCaller` unless the vote's `agent` is `msg.sender`");
+    expect(text).not.toContain("does not authenticate the member");
     expect(text).toContain("caller bound and ADMIN released");
     expect(text).toContain("receipts are the only rebalance input");
   }

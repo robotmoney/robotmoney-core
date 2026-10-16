@@ -5,7 +5,7 @@ description: "Asserts every deployable vault's runtime bytecode stays under the 
 
 # VaultCodeSizeGuard
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/VaultCodeSizeGuard.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/VaultCodeSizeGuard.t.sol)
 
 **Inherits:** Test
 
@@ -155,16 +155,89 @@ function test_UniswapV4SwapAdapter_underEip170() public;
 function test_UniswapV4PriceRecorder_underEip170() public;
 ```
 
-<a id="test_vaultfamily_keepsitsmeasuredheadroom"></a>
+<a id="test_robotmoneygateway_undereip170"></a>
 
-### test_vaultFamily_keepsItsMeasuredHeadroom
-
-Core 1676 changes no vault logic: the vault family keeps its recorded headroom. The headroom floors are
-the measured sizes after core 1673 and 1666 (AgentTokenVault 65 bytes, ProtocolAssetVault and
-RwaBasketVault 107 bytes), lowered by the 10 bytes the core 1778 dust-sell floor costs (AgentTokenVault
-55 bytes, ProtocolAssetVault and RwaBasketVault 97 bytes). A change that eats them fails here before it fails an EIP-170 deploy.
+### test_RobotMoneyGateway_underEip170
 
 ```solidity
-function test_vaultFamily_keepsItsMeasuredHeadroom() public;
+function test_RobotMoneyGateway_underEip170() public;
+```
+
+<a id="test_portfoliorouter_undereip170"></a>
+
+### test_PortfolioRouter_underEip170
+
+```solidity
+function test_PortfolioRouter_underEip170() public;
+```
+
+<a id="test_routergovernance_undereip170"></a>
+
+### test_RouterGovernance_underEip170
+
+```solidity
+function test_RouterGovernance_underEip170() public;
+```
+
+<a id="test_vaultregistry_undereip170"></a>
+
+### test_VaultRegistry_underEip170
+
+```solidity
+function test_VaultRegistry_underEip170() public;
+```
+
+<a id="test_investmentcommitteepolicy_undereip170"></a>
+
+### test_InvestmentCommitteePolicy_underEip170
+
+```solidity
+function test_InvestmentCommitteePolicy_underEip170() public;
+```
+
+<a id="test_consensusrecommendationreceipt_undereip170"></a>
+
+### test_ConsensusRecommendationReceipt_underEip170
+
+```solidity
+function test_ConsensusRecommendationReceipt_underEip170() public;
+```
+
+<a id="test_exclusionledger_undereip170"></a>
+
+### test_ExclusionLedger_underEip170
+
+```solidity
+function test_ExclusionLedger_underEip170() public;
+```
+
+<a id="test_proposerfloortimelock_undereip170"></a>
+
+### test_ProposerFloorTimelock_underEip170
+
+```solidity
+function test_ProposerFloorTimelock_underEip170() public;
+```
+
+<a id="test_linkedlibraries_undereip170"></a>
+
+### test_linkedLibraries_underEip170
+
+```solidity
+function test_linkedLibraries_underEip170() public;
+```
+
+<a id="test_proxiedimplementations_keeptheirmeasuredheadroom"></a>
+
+### test_proxiedImplementations_keepTheirMeasuredHeadroom
+
+The proxied implementations keep their recorded runtime headroom under EIP-170. The floors are the
+margins measured with `forge build --sizes` after the governed-UUPS base (core 1808) and the exclusion
+recovery (core 1820, QA plan D3) landed, rounded down: AgentTokenVault 909 bytes, ProtocolAssetVault 956,
+RwaBasketVault 963, RobotMoneyVault 3,604, RobotMoneyGateway 293. A change that eats them fails here
+before it fails an EIP-170 deploy.
+
+```solidity
+function test_proxiedImplementations_keepTheirMeasuredHeadroom() public;
 ```
 

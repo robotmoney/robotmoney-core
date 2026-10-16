@@ -9,8 +9,8 @@
 # integration and that breakage reaching users.
 #
 # WHY A PARALLEL MATRIX (issue #607)
-# Running all test files with --test-threads=1 against one chain took ~60 min because
-# governance tests each wait on a voting period. Splitting into independent matrix slots,
+# Running all test files with --test-threads=1 against one chain took ~60 min because the
+# pre-1698 governance tests each waited on a voting period. Splitting into independent matrix slots,
 # each on its own runner with its own chain, cuts wall-clock to the heaviest slot.
 # fail-fast: false keeps every slot's signal independent.
 #
@@ -23,8 +23,9 @@
 # - The three twin-* slots run the tests straight on the Twin fork (RMPC_TESTNET_RPC_URL).
 # - The goldens and governance slots point RMPC_FORK_RPC_URL at the Twin fork, so each test forks
 #   the Twin again at the pin (RMPC_FORK_BLOCK) and may move time and rewind state without
-#   touching the shared Twin chain. Governance scenarios advance the EVM clock with
-#   evm_increaseTime: no real waiting.
+#   touching the shared Twin chain. The governance scenarios deploy their own receipt-path stack
+#   and drive the one-call RouterGovernance.applyReceipt (issue 1698): there is no voting period
+#   to wait for.
 #
 # WHY --test-threads=1
 # Within a slot, ephemeral accounts are funded through the anvil admin RPCs (fund gas, fund USDC).
@@ -34,6 +35,11 @@
 # WHY forge build RUNS IN EVERY SLOT
 # tests/registry.rs reads the VaultRegistry.json artefact. The twin-fork action installs foundry
 # and bun first.
+#
+# EXECUTED FLOORS (issue 1656, QA plan v1 T5)
+# Every wrapped step names its floor, and the floor is the number of tests the step selects, so
+# one test fewer is red. .github/scripts/check_executed_floors.py (suite 14) counts the tests each
+# step selects and fails when a floor differs: a new test means a new floor in the same PR.
 #
 # GOTCHAS
 # - The pinned block must be recent for a non-archive upstream, so the slots start right after the
@@ -112,10 +118,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # QA plan U3: the sixth test drives the shipping rmpc through a five-leg router deposit and
+          # prints the marker only after the gas-floor assertions passed.
           - group: twin-router
             cargo_tests: --test router
             mode: shared
-            min_executed: 5
+            min_executed: 6
+            required_markers: |
+              [deposit_router_default_gas_clears_gateway_floor] passed
           - group: twin-withdrawal-registry
             cargo_tests: --test withdrawal --test registry
             mode: shared
@@ -150,6 +160,9 @@ jobs:
           # and anvil. Under mode shared that variable is empty, so they silently skipped (and counted
           # as passed) in twin-light. mode fork sets it, so they now run, and the macro panics under CI
           # if the fork is ever absent.
+          # Issue 1683 (QA plan T3): the deposit gas ceiling was 920,000 (measured 833,900 plus about
+          # 10%) and is 1,060,000 since the QA merge measured 964,197 (see the test). The test prints the marker below only after the deposit assertion passed; the
+          # wrapper matches it as a line prefix, so the line's gasUsed and budget values may vary.
           - group: anvil-devnet-adapters
             cargo_tests: >-
               --test devnet_adapter_round_trip
@@ -158,10 +171,12 @@ jobs:
               --test basket_vault_round_trip
             mode: fork
             min_executed: 5
+            required_markers: |
+              [gas_estimate_reality_check] deposit gasUsed=
           - group: anvil-governance
             cargo_tests: --test governance
             mode: fork
-            min_executed: 3
+            min_executed: 5
 
     steps:
       - uses: actions/checkout@v4
@@ -223,13 +238,14 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     env:
       CI_CLASS: system-correctness
-      # Live Base public testnet RPC + faucet-funded EOA key. Absent ⇒ tests skip.
+      # Live Base public testnet RPC + faucet-funded EOA key. Absent: the steps that need them do
+      # not run (a skipped step, visible in the run), and the tests refuse to skip under CI.
       BASE_TESTNET_RPC_URL: ${{ secrets.BASE_TESTNET_RPC_URL }}
       BASE_TESTNET_FUNDER_KEY: ${{ secrets.BASE_TESTNET_FUNDER_KEY }}
       BASE_TESTNET_FUNDER_ADDR: ${{ secrets.BASE_TESTNET_FUNDER_ADDR }}
       # Robot Money contracts deployed to Base's public testnet (deploy is a prerequisite,
-      # out of scope for #839). Absent ⇒ the vault-stack adapter sub-test skips
-      # while the live Aave/Uniswap legs still run.
+      # out of scope for #839). Only the separate vault_stack_base_testnet test reads it, and
+      # every step below leaves that test out by name (QA plan v1 T5).
       RM_TESTNET_VAULT_ADDR: ${{ secrets.RM_TESTNET_VAULT_ADDR }}
     steps:
       - uses: actions/checkout@v4
@@ -242,10 +258,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       # The crate's #[cfg(test)] unit tests (src/**) are hermetic (no chain) and were never run by
-      # the per-binary `--test` invocations (issue #1471). The wrapper fails RED if zero tests ran.
+      # the per-binary `--test` invocations (issue #1471). Floor 26: every lib test, the three
+      # network skip gate tests of QA plan v1 T5 included.
       - name: fork-e2e-rust lib unit tests (cargo test --lib)
         run: |
-          bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=28 bash .github/scripts/cargo_test_require_executed.sh \
             --manifest-path testing/fork-e2e-rust/Cargo.toml --release --lib -- --nocapture
 
       # Issue 1643: skip_if_no_fork! must be RED in CI when no fork is available, never a quiet pass.
@@ -307,13 +324,64 @@ jobs:
       - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
         uses: ./.github/actions/publish-contracts-setup
 
-      - name: Base testnet multi-network adapter e2e (fork-e2e)
+      # QA plan v1 T5: parameterized_e2e! makes one test per network. This step runs the devnet leg
+      # on the Twin fork and leaves the Base testnet leg out by name. Before T5 both legs were one
+      # test, and the devnet leg met the floor of 1 while the testnet leg skipped on every run. The
+      # markers are printed only after each adapter's assertions passed on the devnet leg.
+      - name: Multi-network adapter e2e, devnet leg on the Twin fork (fork-e2e)
         working-directory: testing/fork-e2e-rust
         env:
           RMPC_TESTNET_RPC_URL: ${{ steps.twin.outputs.rpc-url }}
+          REQUIRE_EXECUTED_MARKERS: |
+            [multi_network_adapters] Uniswap on Robot Money Devnet: OK
+            [multi_network_adapters] Aave on Robot Money Devnet: OK
+            [multi_network_adapters] Compound/Morpho/Curve via vault on Robot Money Devnet: OK
         run: |
           CARGO_TEST_MIN_EXECUTED=1 bash ../../.github/scripts/cargo_test_require_executed.sh \
-            --release --test multi_network_adapters -- --test-threads=1 --nocapture
+            --release --test multi_network_adapters -- --test-threads=1 --nocapture --skip base_testnet
+
+      # The Base testnet leg talks to Base's public testnet, so it needs the RPC and a funded key.
+      # Like the funding assertion above, it runs only when both secrets are set, and the leg
+      # panics under CI when either is missing. The leg runs Uniswap and Aave and skips nothing.
+      # The vault-stack part is its own test, vault_stack_base_testnet, which this step leaves out
+      # by name: no Robot Money deploy exists on Base's public testnet (RM_TESTNET_VAULT_ADDR,
+      # #839), and that test panics under CI without one (QA plan v1 T5). Drop the --skip when the
+      # deploy exists.
+      - name: Multi-network adapter e2e, Base testnet leg (needs the testnet secrets)
+        if: ${{ env.BASE_TESTNET_RPC_URL != '' && env.BASE_TESTNET_FUNDER_KEY != '' }}
+        working-directory: testing/fork-e2e-rust
+        env:
+          REQUIRE_EXECUTED_MARKERS: |
+            [multi_network_adapters] Uniswap on Base testnet: OK
+            [multi_network_adapters] Aave on Base testnet: OK
+        run: |
+          CARGO_TEST_MIN_EXECUTED=1 bash ../../.github/scripts/cargo_test_require_executed.sh \
+            --release --test multi_network_adapters -- --test-threads=1 --nocapture base_testnet \
+            --skip vault_stack_base_testnet
+
+      # A ref without the testnet secrets does not run the leg above. Say so in the run summary
+      # instead of letting a skipped step pass unnoticed.
+      - name: Report the Base testnet leg as not run (no testnet secrets on this ref)
+        if: ${{ env.BASE_TESTNET_RPC_URL == '' || env.BASE_TESTNET_FUNDER_KEY == '' }}
+        run: |
+          echo "::warning title=Base testnet leg not run::BASE_TESTNET_RPC_URL or BASE_TESTNET_FUNDER_KEY is not set on this ref, so adapters_against_live_services::base_testnet did not run. Only the devnet leg was tested."
+
+      # QA plan v1 T5: the Base testnet leg must be RED in CI without its env, never a quiet pass.
+      # Runs the leg with CI=true and the testnet env unset and requires a non-zero exit that names
+      # the refusal. If the leg ever goes back to skipping, this step goes red.
+      - name: Base testnet leg refuses to skip without testnet env when CI is set (QA plan v1 T5)
+        working-directory: testing/fork-e2e-rust
+        run: |
+          # bare-cargo-test-allowed: this step expects cargo test to FAIL (the skip refusal).
+          set +e
+          out="$(env -u BASE_TESTNET_RPC_URL -u BASE_TESTNET_FUNDER_KEY CI=true \
+            cargo test --release --test multi_network_adapters base_testnet \
+            -- --skip vault_stack_base_testnet 2>&1)"
+          status=$?
+          set -e
+          echo "$out" | tail -25
+          [ "$status" -ne 0 ] || { echo "ERROR: the Base testnet leg exited 0 with CI=true and no testnet env" >&2; exit 1; }
+          echo "$out" | grep -q "Refusing to skip" || { echo "ERROR: failure was not the skip refusal" >&2; exit 1; }
 
       - name: Stop the Twin fork and save its RPC cache
         if: always()

@@ -11,4 +11,11 @@ interface IAavePool {
     /// @param amount Use type(uint256).max to withdraw the full aToken balance.
     /// @return actual The actual amount of underlying asset withdrawn.
     function withdraw(address asset, uint256 amount, address to) external returns (uint256 actual);
+
+    /// @notice The reserve's configuration bitmap. Aave returns `ReserveConfigurationMap`, a
+    ///         struct of one `uint256`, which ABI-decodes as this `uint256`. Bit 56 is "active"
+    ///         and bit 60 is "paused"; `withdraw` reverts unless the reserve is active and not paused.
+    /// @param asset The reserve's underlying asset.
+    /// @return data The configuration bitmap.
+    function getConfiguration(address asset) external view returns (uint256 data);
 }
