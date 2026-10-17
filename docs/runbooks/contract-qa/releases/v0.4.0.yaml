@@ -982,7 +982,7 @@ steps:
     writes: ["preview-USDC", "shares-USDC"]
   - id: "P6.11-deposit-rmproto"
     standing: ["4.3", "4.4"]
-    description: "1 USDC into rmPROTO; the shares equal previewDeposit within 0.5 percent"
+    description: "1 USDC into rmPROTO; the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut"
     host: "control"
     phase: 6
     cmds:
@@ -990,16 +990,18 @@ steps:
       - ["cast", "send", "{m:vault.usdc}", "approve(address,uint256)", "{m:protocol-asset-vault.vault}", "1000000", "{cast}"]
       - ["cast", "send", "{m:protocol-asset-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
       - ["bash", "-c", 'cast call "{m:protocol-asset-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-PROTO']
-      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-PROTO}", "{state:preview-PROTO}", "50"]
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-PROTO}", "{state:preview-PROTO}"]
+      - ["bash", "-c", 'b=$(cast call "{m:protocol-asset-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-PROTO']
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-PROTO}", "{state:preview-PROTO}", "{state:share-bound-PROTO}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
     receipts: []
     irreversible: false
-    writes: ["preview-PROTO", "shares-PROTO"]
+    writes: ["preview-PROTO", "shares-PROTO", "share-bound-PROTO"]
   - id: "P6.12-deposit-rmagent"
     standing: ["4.3", "4.4"]
-    description: "1 USDC into rmAGENT right after record() makes the price recorder fresh (else StaleRecorder); the shares equal previewDeposit within 0.5 percent"
+    description: "1 USDC into rmAGENT right after record() makes the price recorder fresh (else StaleRecorder); the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut"
     host: "control"
     phase: 6
     cmds:
@@ -1009,17 +1011,19 @@ steps:
       - ["cast", "send", "{m:vault.usdc}", "approve(address,uint256)", "{m:agent-token-vault.vault}", "1000000", "{cast}"]
       - ["cast", "send", "{m:agent-token-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
       - ["bash", "-c", 'cast call "{m:agent-token-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-AGENT']
-      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-AGENT}", "{state:preview-AGENT}", "50"]
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-AGENT}", "{state:preview-AGENT}"]
+      - ["bash", "-c", 'b=$(cast call "{m:agent-token-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-AGENT']
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-AGENT}", "{state:preview-AGENT}", "{state:share-bound-AGENT}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
     receipts: []
     irreversible: false
     triage: true
-    writes: ["preview-AGENT", "shares-AGENT"]
+    writes: ["preview-AGENT", "shares-AGENT", "share-bound-AGENT"]
   - id: "P6.13-deposit-rmrwa"
     standing: ["4.3", "4.4"]
-    description: "1 USDC into rmRWA; the shares equal previewDeposit within 0.5 percent"
+    description: "1 USDC into rmRWA; the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut"
     host: "control"
     phase: 6
     cmds:
@@ -1027,13 +1031,15 @@ steps:
       - ["cast", "send", "{m:vault.usdc}", "approve(address,uint256)", "{m:rwa-basket-vault.vault}", "1000000", "{cast}"]
       - ["cast", "send", "{m:rwa-basket-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
       - ["bash", "-c", 'cast call "{m:rwa-basket-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-RWA']
-      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-RWA}", "{state:preview-RWA}", "50"]
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-RWA}", "{state:preview-RWA}"]
+      - ["bash", "-c", 'b=$(cast call "{m:rwa-basket-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-RWA']
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-RWA}", "{state:preview-RWA}", "{state:share-bound-RWA}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
     receipts: []
     irreversible: false
-    writes: ["preview-RWA", "shares-RWA"]
+    writes: ["preview-RWA", "shares-RWA", "share-bound-RWA"]
   - id: "P6.20-redeem-rmusdc"
     standing: ["4.4"]
     description: "Full redeem of rmUSDC to USDC; the deployer's share balance is zero afterwards"
