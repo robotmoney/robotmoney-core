@@ -67,7 +67,7 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 ```
 
-`--mainnet-fees` passes anvil `--disable-min-priority-fee`: without it anvil adds a 1 gwei minimum tip, so a fork quotes about 170 times Base mainnet's fee and a run on real balances fails the publish fee guard. The contract QA runbook (P0.12) always sets it.
+`--mainnet-fees` passes anvil `--disable-min-priority-fee`: without it anvil adds a 1 gwei minimum tip, so a fork quotes about 170 times Base mainnet's fee and a run on real balances fails the publish fee guard. Not yet usable for a Safe run: anvil still suggests a 1 gwei tip (eth_maxPriorityFeePerGas), above the fee cap viem builds from the lowered gas price, so viem refuses the send.
 
 `--host 0.0.0.0` lets the dapp stack containers on the host reach the fork, and `--block-time 1` keeps the tip moving for the explorer-indexer (its safe head is tip minus 5). Drop both for a fork that nothing but loopback tests use. The harness and `scripts/stage/core-stack.ts` reuse this service when `TWIN_RPC_URL` names it.
 
