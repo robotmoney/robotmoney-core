@@ -1221,11 +1221,12 @@ steps:
     added: "v0.5.0"
   - id: "P6.55-gateway-deposit-vault"
     standing: ["4.4"]
-    description: "rmpc deposits 1 USDC through the gateway into the single vault (3,000,000 gas by default, above the 2,000,000 gateway floor)"
+    description: "The agent approves the gateway for 1 USDC (rmpc refuses ErrAllowanceInsufficient otherwise, it sends no approval itself), then rmpc deposits 1 USDC through the gateway into the single vault (3,000,000 gas by default, above the 2,000,000 gateway floor)"
     host: "control"
     phase: 6
     cmds:
       - ["bash", "-c", 'cast keccak "qa-vault-$(date +%s%N)" > {runDir}/state/order-vault']
+      - ["cast", "send", "{m:vault.usdc}", "approve(address,uint256)", "{m:gateway.gateway}", "1000000", "{cast}"]
       - ["target/debug/rmpc", "deposit", "-c", "{rmpcConfig}", "--amount", "1000000", "--order-id", "{state:order-vault}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1236,11 +1237,12 @@ steps:
     added: "v0.5.0"
   - id: "P6.56-gateway-deposit-router"
     standing: ["4.4"]
-    description: "rmpc deposits 1 USDC through the gateway into the router; the gas limit follows the router's effective legs (400,000 + 2,550,000 per leg + 150,000) and rmpc refuses one below the floor before signing"
+    description: "The agent approves the gateway for 1 USDC, then rmpc deposits 1 USDC through the gateway into the router; the gas limit follows the router's effective legs (400,000 + 2,550,000 per leg + 150,000) and rmpc refuses one below the floor before signing"
     host: "control"
     phase: 6
     cmds:
       - ["bash", "-c", 'cast keccak "qa-router-$(date +%s%N)" > {runDir}/state/order-router']
+      - ["cast", "send", "{m:vault.usdc}", "approve(address,uint256)", "{m:gateway.gateway}", "1000000", "{cast}"]
       - ["target/debug/rmpc", "deposit", "-c", "{rmpcConfig}", "--amount", "1000000", "--order-id", "{state:order-router}", "--destination", "{m:router.router}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
