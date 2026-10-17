@@ -1290,7 +1290,7 @@ steps:
     phase: 7
     cmds:
       - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--proxy", "gateway", "{common}", "{gate}"]
-      - ["bash", "-c", "grep deploy_implementation {journal:P7.50-deploy-implementation} | head -n 1 | jq -r .implementation > {runDir}/state/new-implementation"]
+      - ["bash", "-c", "jq -er '[.implementation_deploys[] | select(.proxy_name == \"gateway\")][-1].implementation' {evidenceDir}/publish-run.json > {runDir}/state/new-implementation"]
     env:
       PUBLISH_MANIFEST_DIR: "{manifestDir}"
       YES: "{yes}"

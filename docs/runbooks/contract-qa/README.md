@@ -36,7 +36,7 @@ A whole-element list placeholder expands to several argv elements: `{common}`, `
 
 ## Run it
 
-Until a runner is ported, an operator or an agent follows the YAML by hand. Each step's commands run in order from the root of the core checkout at the deploy sha. Pipe every command through `tee {runDir}/journal/<id>.out`. Write receipts to the paths the step names.
+Until a runner is ported, an operator or an agent follows the YAML by hand. Each step's commands run in order from the root of the core checkout at the deploy sha. Pipe every command's stdout through `tee -a {runDir}/journal/<id>.out` (the verifier labels the later steps grep). Keep stderr, the JSON logs, apart in `{runDir}/journal/<id>.err`: a log field named `label` is not a verifier label, and the label parity check (P2.03) reads every `label` it finds. Write receipts to the paths the step names.
 
 Check before any run:
 
