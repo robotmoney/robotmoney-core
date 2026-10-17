@@ -970,8 +970,8 @@ steps:
     phase: 6
     cmds:
       - ["bash", "-c", 'cast call "{m:vault.vault}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/preview-USDC']
-      - ["cast", "send", "{m:vault.usdc}", "approve(address,uint256)", "{m:vault.vault}", "1000000", "{cast}"]
-      - ["cast", "send", "{m:vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "2500000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "2500000", "{cast}"]
       - ["bash", "-c", 'cast call "{m:vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-USDC']
       - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-USDC}", "{state:preview-USDC}", "50"]
     env:
@@ -987,8 +987,8 @@ steps:
     phase: 6
     cmds:
       - ["bash", "-c", 'cast call "{m:protocol-asset-vault.vault}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/preview-PROTO']
-      - ["cast", "send", "{m:vault.usdc}", "approve(address,uint256)", "{m:protocol-asset-vault.vault}", "1000000", "{cast}"]
-      - ["cast", "send", "{m:protocol-asset-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:protocol-asset-vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:protocol-asset-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
       - ["bash", "-c", 'cast call "{m:protocol-asset-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-PROTO']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-PROTO}", "{state:preview-PROTO}"]
       - ["bash", "-c", 'b=$(cast call "{m:protocol-asset-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-PROTO']
@@ -1005,11 +1005,11 @@ steps:
     host: "control"
     phase: 6
     cmds:
-      - ["cast", "send", "{m:recorder.recorder}", "record()", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:recorder.recorder}", "record()", "{cast}"]
       - ["bash", "-c", 'test "$(cast call "{m:recorder.recorder}" "isFresh()(bool)")" = true']
       - ["bash", "-c", 'cast call "{m:agent-token-vault.vault}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/preview-AGENT']
-      - ["cast", "send", "{m:vault.usdc}", "approve(address,uint256)", "{m:agent-token-vault.vault}", "1000000", "{cast}"]
-      - ["cast", "send", "{m:agent-token-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:agent-token-vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:agent-token-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
       - ["bash", "-c", 'cast call "{m:agent-token-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-AGENT']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-AGENT}", "{state:preview-AGENT}"]
       - ["bash", "-c", 'b=$(cast call "{m:agent-token-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-AGENT']
@@ -1028,8 +1028,8 @@ steps:
     phase: 6
     cmds:
       - ["bash", "-c", 'cast call "{m:rwa-basket-vault.vault}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/preview-RWA']
-      - ["cast", "send", "{m:vault.usdc}", "approve(address,uint256)", "{m:rwa-basket-vault.vault}", "1000000", "{cast}"]
-      - ["cast", "send", "{m:rwa-basket-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:rwa-basket-vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:rwa-basket-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
       - ["bash", "-c", 'cast call "{m:rwa-basket-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-RWA']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-RWA}", "{state:preview-RWA}"]
       - ["bash", "-c", 'b=$(cast call "{m:rwa-basket-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-RWA']
@@ -1046,7 +1046,7 @@ steps:
     host: "control"
     phase: 6
     cmds:
-      - ["cast", "send", "{m:vault.vault}", "redeem(uint256,address,address)", "{state:shares-USDC}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "3000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.vault}", "redeem(uint256,address,address)", "{state:shares-USDC}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "3000000", "{cast}"]
       - ["bash", "-c", 'test "$(cast call "{m:vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1059,7 +1059,7 @@ steps:
     host: "control"
     phase: 6
     cmds:
-      - ["cast", "send", "{m:protocol-asset-vault.vault}", "redeemInKind(uint256,address,address)", "{state:shares-PROTO}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:protocol-asset-vault.vault}", "redeemInKind(uint256,address,address)", "{state:shares-PROTO}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
       - ["bash", "-c", 'test "$(cast call "{m:protocol-asset-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1072,7 +1072,7 @@ steps:
     host: "control"
     phase: 6
     cmds:
-      - ["cast", "send", "{m:agent-token-vault.vault}", "redeemInKind(uint256,address,address)", "{state:shares-AGENT}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:agent-token-vault.vault}", "redeemInKind(uint256,address,address)", "{state:shares-AGENT}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
       - ["bash", "-c", 'test "$(cast call "{m:agent-token-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1085,7 +1085,7 @@ steps:
     host: "control"
     phase: 6
     cmds:
-      - ["cast", "send", "{m:rwa-basket-vault.vault}", "redeem(uint256,address,address)", "{state:shares-RWA}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:rwa-basket-vault.vault}", "redeem(uint256,address,address)", "{state:shares-RWA}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
       - ["bash", "-c", 'test "$(cast call "{m:rwa-basket-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1117,7 +1117,7 @@ steps:
     host: "control"
     phase: 6
     cmds:
-      - ["cast", "send", "{m:gateway.gateway}", "commitAuthorization(bytes32)", "{state:agent-commit-stranger}", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:gateway.gateway}", "commitAuthorization(bytes32)", "{state:agent-commit-stranger}", "{cast}"]
       - ["sleep", "5"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1131,7 +1131,7 @@ steps:
     host: "control"
     phase: 6
     cmds:
-      - ["cast", "send", "{m:gateway.gateway}", "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))", "0x000000000000000000000000000000000000bEEF", "{state:agent-salt-stranger}", "{state:agent-policy}", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:gateway.gateway}", "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))", "0x000000000000000000000000000000000000bEEF", "{state:agent-salt-stranger}", "{state:agent-policy}", "{cast}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 1
@@ -1144,7 +1144,7 @@ steps:
     host: "control"
     phase: 6
     cmds:
-      - ["cast", "send", "{m:gateway.gateway}", "commitAuthorization(bytes32)", "{state:agent-commit-self}", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:gateway.gateway}", "commitAuthorization(bytes32)", "{state:agent-commit-self}", "{cast}"]
       - ["sleep", "5"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1158,7 +1158,7 @@ steps:
     host: "control"
     phase: 6
     cmds:
-      - ["cast", "send", "{m:gateway.gateway}", "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))", "{sheet:ADMIN_ADDRESS}", "{state:agent-salt-self}", "{state:agent-policy}", "--gas-limit", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:gateway.gateway}", "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))", "{sheet:ADMIN_ADDRESS}", "{state:agent-salt-self}", "{state:agent-policy}", "--gas-limit", "1000000", "{cast}"]
       - ["bash", "-c", 'test "$(cast call "{m:gateway.gateway}" "agentOwner(address)(address)" "{sheet:ADMIN_ADDRESS}" | tr A-F a-f)" = "$(echo "{sheet:ADMIN_ADDRESS}" | tr A-F a-f)"']
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1219,7 +1219,7 @@ steps:
     host: "control"
     phase: 6
     cmds:
-      - ["cast", "send", "{m:router.router}", "deposit(uint256,uint256[])", "1000000", "[]", "--gas-limit", "9000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:router.router}", "deposit(uint256,uint256[])", "1000000", "[]", "--gas-limit", "9000000", "{cast}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 1
@@ -1327,8 +1327,8 @@ steps:
     host: "control"
     phase: 7
     cmds:
-      - ["cast", "send", "{usdc}", "approve(address,uint256)", "{m:vault.vault}", "1000000", "{cast}"]
-      - ["cast", "send", "{m:vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "2500000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{usdc}", "approve(address,uint256)", "{m:vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "2500000", "{cast}"]
       - ["bash", "-c", 'cast call "{m:vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-hold']
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1444,7 +1444,7 @@ steps:
     host: "control"
     phase: 7
     cmds:
-      - ["cast", "send", "{m:vault.vault}", "redeem(uint256,address,address)", "{state:shares-hold}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "3000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.vault}", "redeem(uint256,address,address)", "{state:shares-hold}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "3000000", "{cast}"]
       - ["bash", "-c", 'test "$(cast call "{m:vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1693,7 +1693,7 @@ steps:
     phase: 9
     cmds:
       - ["bash", "-c", 'cast call "{m:vault.vault}" "getAdapterInfo(uint256)(address,uint16,bool,uint256,uint256)" 0 | head -n 1 > {runDir}/state/adapter-0']
-      - ["cast", "send", "{m:vault.vault}", "emergencyExcludeAdapter(uint256)", "0", "--keystore", "{runDir}/keys/EMERGENCY", "--password-file", "{runDir}/passphrase", "--gas-limit", "2000000"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.vault}", "emergencyExcludeAdapter(uint256)", "0", "--keystore", "{runDir}/keys/EMERGENCY", "--password-file", "{runDir}/passphrase", "--gas-limit", "2000000"]
       - ["bash", "-c", 'cast call "{m:vault.vault}" "openExclusionOf(uint256)(uint256)" 0 | cut -d" " -f1 > {runDir}/state/exclusion-record']
     env:
       ETH_RPC_URL: "{rpcUrl}"

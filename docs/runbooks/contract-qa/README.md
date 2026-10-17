@@ -10,6 +10,7 @@ One runbook checks every deploy, governance and deposit step of a contract relea
 | `releases/<release>.yaml` | A full copy of the template steps, unchanged and in order. Plus only the steps that release adds, each marked `added: <release>`. |
 | `../../../scripts/runbook/validate-contract-qa.ts` | The checker. Run it with no arguments for the template and every release file. |
 | `../../../scripts/runbook/qa-assert.ts` | The small assertions a step makes between two commands. |
+| `../../../scripts/runbook/cast-send.sh` | `cast send` that fails on a mined revert: cast exits 0 when a send with `--gas-limit` is mined with status 0. Every step sends through it. |
 | `../../../scripts/runbook/run-record.ts` | Writes the run's own records: the publish go, the Twin freeze go, the rollout report and the sign-off. |
 
 A release file also holds its `decisions:` (owner decisions, open or decided), its `recovery:` decision, its `notes:` and its `scope:` (every PR the release ships, each tied to a check or a reason for none).

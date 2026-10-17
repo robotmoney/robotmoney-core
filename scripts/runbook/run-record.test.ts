@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { VAULT_MANIFESTS, main } from "./run-record.ts";
 
 const SHA = "84952e18";
-type Run = { run: string; ev: string; man: string; sheet: string; paused: (v: string) => void };
+type Run = { run: string; ev: string; man: string; sheet: string; setDepositsPaused: (v: string) => void };
 /** A run directory with four vault manifests and a fake `cast` on PATH that answers depositsPaused() with the value `paused` sets. */
 function withRun(fn: (d: Run) => void): void {
   const root = mkdtempSync(join(tmpdir(), "run-record-"));
@@ -22,7 +22,7 @@ function withRun(fn: (d: Run) => void): void {
     writeFileSync(sheet, "CHAIN_ID=918453\n");
     writeFileSync(join(run, "journal", "P0.03-tools.out"), "ok\n");
     writeFileSync(join(ev, "evidence.json"), "{}\n");
-    fn({ run, ev, man, sheet, paused: (v) => writeFileSync(answer, `${v}\n`) });
+    fn({ run, ev, man, sheet, setDepositsPaused: (v) => writeFileSync(answer, `${v}\n`) });
   } finally { process.env.PATH = path; rmSync(root, { recursive: true, force: true }); }
 }
 const base = (d: Pick<Run, "run" | "sheet">, target = "twin") => ["--run-dir", d.run, "--sha", SHA, "--target", target, "--sheet", d.sheet];
@@ -59,7 +59,7 @@ test("a pause drill's report is listed, and the run still signs off once the vau
 
 test("no sign-off while a vault is still paused", () => withRun((d) => {
   expect(main(["go", "--kind", "publish", ...base(d)])).toBe(0);
-  d.paused("true");
+  d.setDepositsPaused("true");
   expect(report(d)).toBe(0);
   expect(readFileSync(join(d.run, "rollout-report.md"), "utf8")).toContain("depositsPaused() is true at report time");
   expect(main(["signoff", ...base(d)])).toBe(1);
