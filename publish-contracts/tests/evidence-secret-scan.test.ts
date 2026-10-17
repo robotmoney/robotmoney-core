@@ -59,6 +59,19 @@ describe("secret scan over the evidence folder", () => {
     writeFileSync(join(oneLine, "iso.json"), JSON.stringify({ configHashes: { "config/a.json": `sha256:${h}` } }) + "\n");
     expect(scanEvidenceFolder(oneLine).join()).toContain("64-hex");
   });
+  test("a code hash or pool id a config check report labels is public, the same value unlabelled or off a detail line is flagged", () => {
+    const h = "0x" + "7c".repeat(32);
+    const ok = scratch();
+    mkdirSync(join(ok, "core-config-check"));
+    const details = [`proxyCodeHash=${h}`, `implementationCodeHash=${h}`, `configured=${h} hash-of-poolKey=${h} pinned=${h}`, `pinned=${h} live=${h}`, `live=${h} config=${h}`, `hash(poolKey)=${h} poolId=${h}`];
+    writeFileSync(join(ok, "core-config-check", "config-check-block-1.json"), JSON.stringify({ checks: details.map((detail) => ({ name: "x", detail })) }, null, 2) + "\n");
+    expect(scanEvidenceFolder(ok)).toEqual([]);
+    for (const line of [`      "detail": "key=${h}"`, `      "detail": "pinned=${h} ${h}"`, `      "note": "pinned=${h}"`, `pinned=${h}`]) {
+      const d = scratch();
+      writeFileSync(join(d, "r.json"), line + "\n");
+      expect(scanEvidenceFolder(d).join()).toContain("64-hex");
+    }
+  });
   test("a pool_id value in a compact manifest is public, the same value under another key still is flagged", () => {
     const id = `0x${"f2".repeat(32)}`;
     const ok = scratch();

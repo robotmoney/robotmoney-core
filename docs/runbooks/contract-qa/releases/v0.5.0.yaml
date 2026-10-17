@@ -205,6 +205,17 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+  - id: "P0.53-foundry-version"
+    standing: ["4.2"]
+    description: "forge, cast and anvil are the Foundry version CI pins (v1.8.5, .github/actions/twin-fork/action.yml). Foundry 1.8.1 anvil refuses an eth_call from an address with no balance, which breaks the Safe probes"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bash", "-c", 'for t in forge cast anvil; do "$t" --version | head -n 1 | grep -Eq "Version: 1\\.8\\.5([^0-9]|$)" || { echo "$t is not Foundry 1.8.5" >&2; exit 1; }; done']
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    added: "v0.5.0"
   - id: "P0.04-checkout"
     standing: ["4.1"]
     description: "The core checkout is clean and its HEAD is the DEPLOY_SHA (the CLI refuses anything else)"

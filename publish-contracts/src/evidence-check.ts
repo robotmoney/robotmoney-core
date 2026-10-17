@@ -1123,6 +1123,10 @@ const SECRET_PATTERNS: [string, RegExp][] = [
 const B32 = "0x[0-9a-fA-F]{64}(?![0-9a-fA-F])";
 /** The log events whose operation id is a public timelock operation id (govern.ts, safe/timelock.ts). */
 const OPERATION_ID_EVENTS = new Set(["govern.waiting", "timelock.effect"]);
+/** A `"detail": "…"` line of a core config check report (scripts/ci/config-check.ts, written under evidence/core-config-check/ by verify). */
+const CONFIG_CHECK_DETAIL = /^\s*"detail"\s*:\s*"/;
+/** The labels config-check.ts gives a public on-chain hash: code hashes, pinned and live pool ids, hash(poolKey). */
+const CONFIG_CHECK_HASH_LABELS = ["proxyCodeHash", "implementationCodeHash", "configured", "hash-of-poolKey", "hash\\(poolKey\\)", "poolId", "pinned", "live", "config"].join("|");
 
 /**
  * Removes the known public 0x bytes32 shapes from one line, so the 64-hex rule sees only what is left. Never a general 64-hex allowance:
@@ -1130,10 +1134,13 @@ const OPERATION_ID_EVENTS = new Set(["govern.waiting", "timelock.effect"]);
  * 2. on a `govern.waiting` or `timelock.effect` JSON log line only: the `"id"`/`"ids"` operation id values and `operation 0x<id>` in the detail text;
  * 3. the value of a `"pool_id"` key, anywhere in a line: a Uniswap V4 pool id (or the zero id of a V3 pool) is a public on-chain identifier. A compact deployment manifest
  *    (one JSON object on one line) holds it, and such a file is committed verbatim, never re-formatted (deployments/8453/deploy-2/README.md).
+ * 4. on a `"detail": "…"` line only (the core config check report verify writes): a value after one of the fixed labels of scripts/ci/config-check.ts that name
+ *    a public on-chain hash (`proxyCodeHash=`, `implementationCodeHash=`, `pinned=`, `live=`, `poolId=`, `hash(poolKey)=` and the rest of CONFIG_CHECK_HASH_LABELS).
  * A bare 0x64-hex, an env or keystore shaped value, or the same shapes on any other line stay in the line and are flagged.
  */
 export function stripPublicContexts(line: string): string {
   let out = line.replace(new RegExp(`apply-receipt-${B32}`, "g"), "apply-receipt-").replace(new RegExp(`("pool_id"\\s*:\\s*)"${B32}"`, "g"), '$1"pool"');
+  if (CONFIG_CHECK_DETAIL.test(out)) out = out.replace(new RegExp(`(?<![A-Za-z0-9_()-])(${CONFIG_CHECK_HASH_LABELS})=${B32}`, "g"), "$1=hash");
   if (out.startsWith("{")) {
     let event: unknown;
     try { event = JSON.parse(out).event; } catch { /* not a JSON log line */ }
