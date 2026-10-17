@@ -972,21 +972,25 @@ steps:
     onlyFor: ["twin", "rehearsal"]
     notBefore: {"afterStep": "P5.54-apply-receipt-execute", "hours": 0}
     added: "v0.5.0"
-  - id: "P5.57-applied-twice-refused"
+  - id: "P5.57-applied-twice-sends-nothing"
     standing: ["4.9"]
-    description: "The applied receipt is released, so applying it again is refused with USAGE"
+    description: "Applying the applied receipt again sends nothing: the run manifest records the round done, the command exits 0 and the governing Safe's nonce does not move"
     host: "control"
     phase: 5
     cmds:
+      - ["bash", "-c", 'cast call "{m:safe.safe}" "nonce()(uint256)" | cut -d" " -f1 > {runDir}/state/safe-nonce-before']
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "apply-receipt", "--receipt-id", "{state:receipt-b-id}", "--payload", "{runDir}/receipt-b.json", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bash", "-c", 'test "$(cast call "{m:safe.safe}" "nonce()(uint256)" | cut -d" " -f1)" = "$(cat {runDir}/state/safe-nonce-before)"']
     env:
       PUBLISH_MANIFEST_DIR: "{manifestDir}"
       YES: "{yes}"
-    expectExit: 2
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
     receipts: []
     irreversible: false
     onlyFor: ["twin", "rehearsal"]
     notBefore: {"afterStep": "P5.54-apply-receipt-execute", "hours": 0}
+    writes: ["safe-nonce-before"]
     added: "v0.5.0"
   - id: "P5.58-receipt-applications-evidence"
     standing: ["4.9", "4.10"]
