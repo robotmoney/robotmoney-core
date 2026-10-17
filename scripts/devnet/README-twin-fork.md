@@ -7,7 +7,7 @@ Environment steps that may differ from production: fund gas, fund USDC, warp tim
 ## Usage
 
 ```
-bun scripts/devnet/twin-fork.ts start|serve [--port 8545] [--host 127.0.0.1] [--block-time SECS] [--chain-id 918453] [--upstream URL]
+bun scripts/devnet/twin-fork.ts start|serve [--port 8545] [--host 127.0.0.1] [--block-time SECS] [--mainnet-fees] [--chain-id 918453] [--upstream URL]
     [--pin-block N|auto] [--cache-dir DIR] [--pin-file pin.json] [--state-dir DIR]
     [--repin-on-stale | --no-repin-on-stale] [--stop-timeout 90000] [--retries 10] [--fork-retry-backoff 1000] [--compute-units-per-second 50]
 bun scripts/devnet/twin-fork.ts wait-ready [--pin-block N]
@@ -66,6 +66,8 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 ```
+
+`--mainnet-fees` passes anvil `--disable-min-priority-fee`: without it anvil adds a 1 gwei minimum tip, so a fork quotes about 170 times Base mainnet's fee and a run on real balances fails the publish fee guard. Not yet usable for a Safe run: anvil still suggests a 1 gwei tip (eth_maxPriorityFeePerGas), above the fee cap viem builds from the lowered gas price, so viem refuses the send.
 
 `--host 0.0.0.0` lets the dapp stack containers on the host reach the fork, and `--block-time 1` keeps the tip moving for the explorer-indexer (its safe head is tip minus 5). Drop both for a fork that nothing but loopback tests use. The harness and `scripts/stage/core-stack.ts` reuse this service when `TWIN_RPC_URL` names it.
 

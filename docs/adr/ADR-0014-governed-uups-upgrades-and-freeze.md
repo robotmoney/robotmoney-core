@@ -1,8 +1,8 @@
 # ADR-0014: Governed per-instance UUPS proxies with a one-way, target-bound freeze for the core contracts
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-16)
 - **Date:** 2026-10-15
-- **Deciders:** Product owner (pending review)
+- **Deciders:** Product owner (accepted 2026-10-16: Deploy 3 launches as an upgradeable proving period, which this ADR governs)
 - **Related:**
   - `docs/technical/contract-upgradeability-plan.md` — the policy this ADR implements (stage 1 of 4)
   - Issue 1808 (this stage: contracts and lifecycle tests); upgradeability stages 2 to 4 (publish-contracts,

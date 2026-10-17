@@ -502,6 +502,14 @@ jobs:
           bun test scripts/ci/check-no-devops-dependency.test.ts --timeout 60000
           bun scripts/ci/check-no-devops-dependency.ts
 
+      # The contract QA runbook (docs/runbooks/contract-qa/): the template and every release file parse, a release
+      # keeps every template step unchanged and in order, and every command names a verb and flag the real CLIs
+      # have. The unit test plants each drift first. Runs on every PR, so a CLI change cannot strand the runbook.
+      - name: Contract QA runbook is valid (self-test, then the check)
+        run: |
+          bun test scripts/runbook/validate-contract-qa.test.ts scripts/runbook/run-record.test.ts --timeout 60000
+          bun scripts/runbook/validate-contract-qa.ts
+
       # Core 1496, 1498: the Twin chain CI wiring. The nightly calls suites 5, 7, 8, 10, 11b and 14 with
       # ONE pin from its pin job. Each suite has a pin input, a pin job and takes the pin in every
       # twin-fork step. Nothing still names the retired geth+lighthouse devnet, the genesis alloc, the

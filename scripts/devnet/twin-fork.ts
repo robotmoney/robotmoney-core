@@ -29,6 +29,7 @@ const opts = {
   "start-attempts": { type: "string", default: "4" },
   host: { type: "string", default: "127.0.0.1" },
   "block-time": { type: "string" },
+  "mainnet-fees": { type: "boolean" },
   "rpc-url": { type: "string" },
   // Stale pin handling: default on in CI, off locally.
   "repin-on-stale": { type: "boolean" },
@@ -66,7 +67,7 @@ async function start() {
     port, chainId: Number(v["chain-id"]), upstream, pinBlock: pin.block, host: v.host,
     retries: Number(v.retries), forkRetryBackoffMs: Number(v["fork-retry-backoff"]),
     computeUnitsPerSecond: Number(v["compute-units-per-second"]), timeoutMs: Number(v.timeout),
-    blockTimeSec: v["block-time"] ? Number(v["block-time"]) : undefined,
+    blockTimeSec: v["block-time"] ? Number(v["block-time"]) : undefined, mainnetFees: Boolean(v["mainnet-fees"]),
   });
   log(`anvil ${redactArgv(argv).join(" ")}`);
   // Anvil keeps its fork RPC cache under $HOME/.foundry/cache/rpc, so a cache dir is a HOME override.
@@ -106,7 +107,7 @@ async function start() {
           port, chainId: Number(v["chain-id"]), upstream, pinBlock: pin.block, host: v.host,
           retries: Number(v.retries), forkRetryBackoffMs: Number(v["fork-retry-backoff"]),
           computeUnitsPerSecond: Number(v["compute-units-per-second"]), timeoutMs: Number(v.timeout),
-          blockTimeSec: v["block-time"] ? Number(v["block-time"]) : undefined,
+          blockTimeSec: v["block-time"] ? Number(v["block-time"]) : undefined, mainnetFees: Boolean(v["mainnet-fees"]),
         }));
       }
       await sleep(2000 * a);
