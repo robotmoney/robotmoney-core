@@ -282,7 +282,7 @@ steps:
     host: "control"
     phase: 0
     cmds:
-      - ["bun", "scripts/devnet/twin-fork.ts", "start", "--port", "8545", "--state-dir", "{runDir}/twin"]
+      - ["bun", "scripts/devnet/twin-fork.ts", "start", "--port", "8545", "--state-dir", "{runDir}/twin", "--mainnet-fees"]
       - ["bun", "scripts/devnet/twin-fork.ts", "wait-ready", "--port", "8545", "--state-dir", "{runDir}/twin"]
     env:
       BASE_UPSTREAM_RPC: "{env:BASE_UPSTREAM_RPC}"
