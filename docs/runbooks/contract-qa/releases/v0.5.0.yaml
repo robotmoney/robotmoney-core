@@ -1366,17 +1366,19 @@ steps:
     added: "v0.5.0"
   - id: "P7.53-impl-slot"
     standing: ["4.12"]
-    description: "The gateway proxy's ERC-1967 implementation slot reads the new implementation"
+    description: "The gateway proxy's ERC-1967 implementation slot reads the new implementation; the first implementation is kept for the refused upgrade after the freeze (P7.61)"
     host: "control"
     phase: 7
     cmds:
       - ["bash", "-c", 'test "$(cast implementation "{m:gateway.gateway}" | tr A-F a-f)" = "$(tr A-F a-f < {runDir}/state/new-implementation)"']
+      - ["bash", "-c", "jq -er '[.implementation_deploys[] | select(.proxy_name == \"gateway\")][-1].live_implementation' {evidenceDir}/publish-run.json > {runDir}/state/old-implementation"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
     receipts: []
     irreversible: false
     sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    writes: ["old-implementation"]
     added: "v0.5.0"
   - id: "P7.54-verify-after-upgrade"
     standing: ["4.12"]
@@ -1493,11 +1495,11 @@ steps:
     added: "v0.5.0"
   - id: "P7.61-upgrade-refused"
     standing: ["4.12"]
-    description: "After the freeze the upgrade row is refused (GOVERN, exit 14) and nothing is scheduled"
+    description: "After the freeze, an upgrade of the gateway back to its first implementation (a new upgrade-proxy row; re-running the executed row is a no-op that exits 0) is refused GOVERN before anything is scheduled: the proxy reads upgradesFrozen() true"
     host: "control"
     phase: 7
     cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "upgrade-proxy", "--proxy", "gateway", "--implementation", "{state:new-implementation}", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "upgrade-proxy", "--proxy", "gateway", "--implementation", "{state:old-implementation}", "{common}", "{owners}", "{gate}", "{wait}"]
     env:
       PUBLISH_MANIFEST_DIR: "{manifestDir}"
       YES: "{yes}"
