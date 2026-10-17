@@ -94,6 +94,12 @@ decisions:
     answer: "Deploy 3 is released as v0.5.0, from this file (releases/v0.5.0.yaml)."
     decidedOn: 2026-10-16
     ref: "owner decision session deploy3-runbook, 2026-10-16"
+  - id: rc-tag-and-branch-counts
+    question: "Must Deploy 3 wait for a merge to dev: the frozen counts on a reviewed commit merged to dev (runbook 3, step 5) and the runbook branch merged first"
+    status: decided
+    answer: "No. Deploy 3 runs from the branch qa/contract-qa-runbook. The deploy checkout is the release candidate tag release/v0.5.0-rc.N-rehearsal. The frozen counts for that sha are committed on the same branch in a later commit, and the counts checkout is that later commit. The {gate} list placeholder expands to nothing for this run: --counts-require-origin-dev would refuse a counts commit that is not on origin/dev. The gate still proves the counts file is committed and clean in the counts checkout. The branch merges to dev only after Deploy 3 succeeds. This is a deviation from runbook 3 step 5 for this rehearsal only, never for a production run."
+    decidedOn: 2026-10-17
+    ref: "owner instruction in the Deploy 3 session, 2026-10-17"
 recovery: |
   Contracts are immutable; there is no in-place rollback (runbook 4.6). What to do depends on how far the run got.
   - Before P1.02-publish (phase 0 and the go): nothing was sent. Fix on dev, take the new tip, tag it again,
