@@ -7,6 +7,8 @@
 //       writes D/rollout-report.md from the run itself: the sha, the network, the sheet hash, the tag, the journal of every step and the
 //       evidence files with their sha256. A vault whose deposits are still paused at report time (read with cast from the four vault
 //       manifests in M) is an issue. A pause report (rollout-report-<chain>.json) is listed, not an issue: the pause drills write one.
+//       Each step's outcome is D/journal/<id>.result: "pass", "skip <reason>" or "fail exit <n>". A failed step, or a journaled step with
+//       no result, is an issue. --step names the report's own step, which is still running and has no result yet. A skip is listed.
 //   bun scripts/runbook/run-record.ts signoff --run-dir D --sha S --target T --sheet F
 //       writes D/go/signoff.json when the report exists, lists no issue and matches the publish go. Exit 1 otherwise.
 // A record that exists is kept when it matches and refused when it differs. Exit 1 is a refusal, exit 2 a usage error. No secret is read or written.
@@ -16,7 +18,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from "node:path";
 
 export const VERBS = ["go", "report", "signoff"] as const;
-export const FLAGS = ["kind", "run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag"] as const;
+export const FLAGS = ["kind", "run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag", "step"] as const;
 export const VAULT_MANIFESTS = ["vault", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault"] as const;
 const TARGETS = ["twin", "rehearsal", "production"];
 
@@ -63,6 +65,15 @@ const sameBasis = (b: Record<string, unknown>) => (old: Record<string, unknown>)
 export function issuesOf(paused: { manifest: string; vault: string; read: string }[]): string[] {
   return paused.filter((p) => p.read !== "false").map((p) => `${p.manifest} ${p.vault}: depositsPaused() is ${p.read === "true" ? "true at report time" : `unreadable (${p.read})`}`);
 }
+/** PURE. The issues in the step results: a step that did not pass or skip, and a journaled step with no result (`self` is the report's own step). */
+export function stepIssuesOf(journaled: string[], results: Record<string, string>, self?: string): string[] {
+  const missing = journaled.filter((id) => id !== self && results[id] === undefined).map((id) => `${id}: no result recorded`);
+  const failed = Object.entries(results).filter(([, r]) => r !== "pass" && !/^skip( |$)/.test(r)).map(([id, r]) => `${id}: ${r || "empty result"}`);
+  return [...failed, ...missing].sort();
+}
+/** PURE. The skipped steps and their reasons: listed, not an issue (a dress run skips the throwaway-key and funding steps). */
+export const skipsOf = (results: Record<string, string>): string[] => Object.entries(results).filter(([, r]) => /^skip( |$)/.test(r)).map(([id, r]) => `${id}: ${r}`).sort();
+
 /** PURE. The pause reports in an evidence folder listing: listed, never an issue by themselves (the pause drills write one). */
 export const pauseReportsOf = (evidenceFiles: string[]): string[] => evidenceFiles.filter((f) => /^rollout-report-[0-9]+\.json$/.test(f));
 
@@ -78,13 +89,14 @@ function vaultReads(manifestDir: string, rpc: string): { manifest: string; vault
 }
 
 /** PURE. The rollout report text. */
-export function reportText(r: { coreSha: string; target: string; chainId: string; sheetSha256: string; tag: string; journal: { id: string; lines: number; last: string }[]; evidence: { file: string; sha256: string }[]; issues: string[]; pauseReports: string[] }): string {
+export function reportText(r: { coreSha: string; target: string; chainId: string; sheetSha256: string; tag: string; journal: { id: string; lines: number; last: string }[]; evidence: { file: string; sha256: string }[]; issues: string[]; skips: string[]; pauseReports: string[] }): string {
   const out = [
     `# Rollout report`, ``,
     `Written by scripts/runbook/run-record.ts from the run directory. Nothing in it is typed by hand.`, ``,
     `| Field | Value |`, `| --- | --- |`,
     `| Core sha | ${r.coreSha} |`, `| Target | ${r.target} |`, `| Chain id | ${r.chainId} |`, `| Sheet sha256 | ${r.sheetSha256} |`, `| Release tag | ${r.tag} |`, ``,
     `## Issues`, ``, ...(r.issues.length ? r.issues.map((i) => `- ${i}`) : ["None."]), ``,
+    `## Skipped steps`, ``, ...(r.skips.length ? r.skips.map((s) => `- ${s}`) : ["None."]), ``,
     `## Pause reports`, ``, ...(r.pauseReports.length ? r.pauseReports.map((f) => `- ${f} (a pause drill or a failed verify; the vault reads above decide whether it is still open)`) : ["None."]), ``,
     `## Steps (journal)`, ``, `| Step | Lines | Last line |`, `| --- | --- | --- |`,
     ...r.journal.map((j) => `| ${j.id} | ${j.lines} | ${j.last.replace(/\|/g, "\\|").slice(0, 160)} |`), ``,
@@ -119,9 +131,11 @@ export function main(argv: string[]): number {
         const lines = readFileSync(join(journalDir, x), "utf8").split("\n").filter((l) => l.trim() !== "");
         return { id: x.replace(/\.out$/, ""), lines: lines.length, last: lines.at(-1) ?? "" };
       });
+      const results = Object.fromEntries(listFiles(journalDir).filter((x) => x.endsWith(".result")).map((x) => [x.replace(/\.result$/, ""), readFileSync(join(journalDir, x), "utf8").trim()]));
+      const stepIssues = stepIssuesOf(journal.map((j) => j.id), results, f.step);
       const files = listFiles(evidenceDir);
       const names = files.map((x) => x.split("/").at(-1)!);
-      const text = reportText({ ...b, chainId: need(f, "chain-id"), tag: need(f, "tag"), journal, evidence: files.map((x) => ({ file: x, sha256: sha256(join(evidenceDir, x)) })), issues: issuesOf(vaultReads(need(f, "manifest-dir"), need(f, "rpc"))), pauseReports: pauseReportsOf(names) });
+      const text = reportText({ ...b, chainId: need(f, "chain-id"), tag: need(f, "tag"), journal, evidence: files.map((x) => ({ file: x, sha256: sha256(join(evidenceDir, x)) })), issues: [...stepIssues, ...issuesOf(vaultReads(need(f, "manifest-dir"), need(f, "rpc")))], skips: skipsOf(results), pauseReports: pauseReportsOf(names) });
       writeFileSync(join(runDir, "rollout-report.md"), text);
       return 0;
     }

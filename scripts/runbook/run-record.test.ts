@@ -21,6 +21,7 @@ function withRun(fn: (d: Run) => void): void {
     process.env.PATH = `${bin}:${path}`;
     writeFileSync(sheet, "CHAIN_ID=918453\n");
     writeFileSync(join(run, "journal", "P0.03-tools.out"), "ok\n");
+    writeFileSync(join(run, "journal", "P0.03-tools.result"), "pass\n");
     writeFileSync(join(ev, "evidence.json"), "{}\n");
     fn({ run, ev, man, sheet, setDepositsPaused: (v) => writeFileSync(answer, `${v}\n`) });
   } finally { process.env.PATH = path; rmSync(root, { recursive: true, force: true }); }
@@ -68,4 +69,33 @@ test("no sign-off while a vault is still paused", () => withRun((d) => {
 test("no sign-off without a publish go", () => withRun((d) => {
   expect(report(d)).toBe(0);
   expect(main(["signoff", ...base(d)])).toBe(1);
+}));
+
+test("no sign-off when a step failed, even with every vault open", () => withRun((d) => {
+  expect(main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  writeFileSync(join(d.run, "journal", "P9.01-pause-all.out"), "\n");
+  writeFileSync(join(d.run, "journal", "P9.01-pause-all.result"), "fail exit 25\n");
+  expect(report(d)).toBe(0);
+  expect(readFileSync(join(d.run, "rollout-report.md"), "utf8")).toContain("- P9.01-pause-all: fail exit 25");
+  expect(main(["signoff", ...base(d)])).toBe(1);
+}));
+
+test("a journaled step with no result is an issue, except the report's own step", () => withRun((d) => {
+  expect(main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  writeFileSync(join(d.run, "journal", "P10.51-write-rollout-report.out"), "\n");
+  expect(main(["report", ...base(d), "--evidence-dir", d.ev, "--manifest-dir", d.man, "--rpc", "http://127.0.0.1:8545", "--chain-id", "918453", "--tag", "release/v0.5.0-rehearsal", "--step", "P10.51-write-rollout-report"])).toBe(0);
+  expect(main(["signoff", ...base(d)])).toBe(0);
+  writeFileSync(join(d.run, "journal", "P9.02-paused-read.out"), "\n");
+  expect(report(d)).toBe(0);
+  const text = readFileSync(join(d.run, "rollout-report.md"), "utf8");
+  expect(text).toContain("- P9.02-paused-read: no result recorded");
+  expect(text).toContain("- P10.51-write-rollout-report: no result recorded");
+}));
+
+test("a skipped step is listed, not an issue", () => withRun((d) => {
+  expect(main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  writeFileSync(join(d.run, "journal", "P0.13-twin-keys.result"), "skip dress: real keys\n");
+  expect(report(d)).toBe(0);
+  expect(readFileSync(join(d.run, "rollout-report.md"), "utf8")).toContain("## Skipped steps\n\n- P0.13-twin-keys: skip dress: real keys");
+  expect(main(["signoff", ...base(d)])).toBe(0);
 }));
