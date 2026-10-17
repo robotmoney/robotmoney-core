@@ -1460,24 +1460,6 @@ steps:
     notBefore: {"afterStep": "P7.56-freeze-schedule", "hours": "timelockDelay"}
     maxMinutes: 60
     added: "v0.5.0"
-  - id: "P7.58-verify-after-freeze"
-    standing: ["4.12"]
-    description: "Verify passes, and the full core set verifying frozen makes the immutability claim: core_immutable is true"
-    host: "control"
-    phase: 7
-    cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "verify", "{common}", "{gate}"]
-      - ["jq", "-e", ".core_immutable == true", "{manifestDir}/upgradeability.json"]
-    env:
-      PUBLISH_MANIFEST_DIR: "{manifestDir}"
-      YES: "{yes}"
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    sheetIs: {"UPGRADE_MODE": "upgradeable"}
-    go: "freeze"
-    maxMinutes: 60
-    added: "v0.5.0"
   - id: "P7.59-all-frozen"
     standing: ["4.12"]
     description: "Every proxy in the record reads upgradesFrozen() true on the chain"
@@ -1542,6 +1524,24 @@ steps:
     added: "v0.5.0"
 
   # ── Phase 8, observability: what the stack shows must equal the chain. ──
+  - id: "P7.58-verify-after-freeze"
+    standing: ["4.12"]
+    description: "After the held position is withdrawn (P7.62: the verifier refuses a deployer holding shares), verify passes, and the full core set verifying frozen makes the immutability claim: core_immutable is true"
+    host: "control"
+    phase: 7
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{common}", "{gate}"]
+      - ["jq", "-e", ".core_immutable == true", "{manifestDir}/upgradeability.json"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    go: "freeze"
+    maxMinutes: 60
+    added: "v0.5.0"
   - id: "P8.01-rmpc-check"
     standing: ["4.4"]
     description: "rmpc and rmpc-keystore-import are built from this checkout and keep their exit-code contracts"
