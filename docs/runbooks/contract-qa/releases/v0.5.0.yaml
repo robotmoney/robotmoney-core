@@ -462,19 +462,21 @@ steps:
     writes: ["deployer-eth", "deployer-usdc"]
   - id: "P0.54-funding-measured"
     standing: ["4.2"]
-    description: "The v0.5.0 run's measured funding: the deployer holds 7 USDC, because the rc.3 dress run with the real keys had 6.0 USDC out at once (8.32 at the start, 2.32 at the low after P6.57), plus 1 USDC of margin"
+    description: "The v0.5.0 run's measured funding. The deployer holds 7 USDC, because the rc.3 dress run with the real keys had 6.0 USDC out at once (8.32 at the start, 2.32 at the low after P6.57), plus 1 USDC of margin. The emergency key holds 0.0001 ETH: on 8453 it sends pause-all (P9.01) and, if verify fails, the auto-pause, 8 sends of about 35k gas, measured at about 0.0000017 ETH at 0.006 gwei; with no ETH every pause it sends fails"
     host: "control"
     phase: 0
     cmds:
       - ["bash", "-c", 'cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/deployer-usdc-measured']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-usdc-measured}", "7000000"]
+      - ["bash", "-c", 'cast balance "{sheet:EMERGENCY_ADDRESS}" > {runDir}/state/emergency-eth']
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:emergency-eth}", "100000000000000"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
     receipts: []
     irreversible: false
     onlyFor: ["rehearsal", "production"]
-    writes: ["deployer-usdc-measured"]
+    writes: ["deployer-usdc-measured", "emergency-eth"]
     added: "v0.5.0"
   - id: "P0.20-plan"
     standing: ["3", "4.3"]
