@@ -28,6 +28,20 @@ The environment is chosen at run time with `--target twin|rehearsal|production`.
 
 The RPC URL itself is never written down.
 
+## Hosts
+
+Every step names its `host`. There are two.
+
+| Host | What it is | What runs there |
+| --- | --- | --- |
+| `control` | The operator machine. It holds the keys. | The runbook driver and every signing command (`publish-contracts`, `cast send`, `rmpc`). |
+| `stage` | The stage host, `rm-core-stage-1`, reached with the ssh config alias. | Every chain and service of a rehearsal: the Twin fork, the stage stack, the dapp. |
+
+- No rehearsal chain runs on the operator machine. That covers the Twin fork, any anvil and any fork of Base. A Twin run starts its fork on the stage host (P0.12 runs there over ssh).
+- The operator machine drives the whole run over ssh. A `control` step on the Twin target reaches the stage fork through an ssh tunnel (`ssh -N -L <port>:127.0.0.1:<port> rm-core-stage-1`), and `{rpcUrl}` is the local end of that tunnel.
+- Keys, passphrase files and keyed RPC URLs never leave the operator machine. Nothing on the stage host signs (`docs/development/stage-deployment.md`).
+- A mainnet run (`rehearsal` or `production`) sends from the operator machine to `BASE_RPC_URL`. Its `stage` steps (P8, P10.06) run the read-only dapp on the stage host.
+
 ## Placeholders
 
 `{name}` is resolved at run time from the target, the sheet or the run. `{sheet:NAME}` reads a sheet line. `{m:file.key}` reads a deployment manifest. `{state:name}` reads a file an earlier step wrote under `{runDir}/state/`. `{journal:id}` reads an earlier step's journaled output.
