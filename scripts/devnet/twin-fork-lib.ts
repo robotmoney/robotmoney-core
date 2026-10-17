@@ -125,6 +125,8 @@ export interface StartOptions {
   timeoutMs?: number;
   /** Seconds between blocks (anvil --block-time). Unset means mine on transaction only. */
   blockTimeSec?: number;
+  /** anvil --disable-min-priority-fee: drop anvil's 1 gwei minimum tip, so the fork quotes Base mainnet fees (about 0.006 gwei) and a run on real balances measures real costs. */
+  mainnetFees?: boolean;
 }
 export function buildAnvilArgv(o: StartOptions): string[] {
   if (!Number.isInteger(o.pinBlock) || o.pinBlock <= 0) throw new Error("pinBlock must be a positive integer");
@@ -142,6 +144,7 @@ export function buildAnvilArgv(o: StartOptions): string[] {
   ];
   if (o.timeoutMs) argv.push("--timeout", String(o.timeoutMs));
   if (o.blockTimeSec) argv.push("--block-time", String(o.blockTimeSec));
+  if (o.mainnetFees) argv.push("--disable-min-priority-fee");
   return argv;
 }
 /** The same argv with the upstream replaced by its host, safe to print. */

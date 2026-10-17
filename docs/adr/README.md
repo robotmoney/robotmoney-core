@@ -28,4 +28,4 @@ ADR takes the next number after the highest one in the table.
 | 0011 | [Fork tests run against checked-in golden fixtures on every merge](ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md) | Superseded by the Twin chain, a pinned lazy fork (core 1495, 1496, 1498) |
 | 0012 | [Ed25519 is the default identity algorithm; secp256k1 is confined to the EVM boundary; one keystore primitive serves both curves](ADR-0012-dual-curve-identity-policy.md) | Accepted |
 | 0013 | [Verify deploy tooling and dapp integration against the Robot Money Devnet ("Twin"), not public Base Sepolia](ADR-0013-twin-devnet-over-base-sepolia-for-testnet-verification.md) | Accepted |
-| 0014 | [Governed per-instance UUPS proxies with a one-way, target-bound freeze for the core contracts](ADR-0014-governed-uups-upgrades-and-freeze.md) | Proposed |
+| 0014 | [Governed per-instance UUPS proxies with a one-way, target-bound freeze for the core contracts](ADR-0014-governed-uups-upgrades-and-freeze.md) | Accepted |
