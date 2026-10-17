@@ -1298,6 +1298,21 @@ steps:
     receipts: []
     irreversible: false
     added: "v0.5.0"
+  - id: "P6.60-agent-revoke"
+    standing: ["4.4"]
+    description: "The deployer, the agent owner since P6.54, revokes itself as a gateway agent and AGENT_ROLE is read back gone; else every later verify fails 'deployer: holds no role on any contract' and pauses all four vaults"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["cast", "send", "{m:gateway.gateway}", "revokeAgent(address)", "{sheet:ADMIN_ADDRESS}", "{cast}"]
+      - ["bash", "-c", 'test "$(cast call "{m:gateway.gateway}" "hasRole(bytes32,address)(bool)" "$(cast keccak AGENT_ROLE)" "{sheet:ADMIN_ADDRESS}")" = false']
+      - ["bash", "-c", 'test "$(cast call "{m:gateway.gateway}" "agentOwner(address)(address)" "{sheet:ADMIN_ADDRESS}")" = 0x0000000000000000000000000000000000000000']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    added: "v0.5.0"
   - id: "P7.50-deploy-implementation"
     standing: ["4.12"]
     description: "The deployer deploys a second gateway implementation from the build, linked to the live libraries, and the verb records it; nothing governs it yet"
