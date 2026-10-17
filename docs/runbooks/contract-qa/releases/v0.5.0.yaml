@@ -1270,17 +1270,20 @@ steps:
     added: "v0.5.0"
   - id: "P6.58-router-below-floor-reverts"
     standing: ["4.4"]
-    description: "Twin only: a router deposit at 9,000,000 gas, below the 9,600,000 floor, reverts InsufficientGas with the floor in the error instead of failing silently"
+    description: "Twin only: a router deposit at 9,000,000 gas, below the 9,600,000 floor, reverts InsufficientGas with the floor in the error instead of failing silently; cast send exits 0 on a mined revert, so the receipt status (0) and the error selector are read back"
     host: "control"
     phase: 6
     cmds:
-      - ["cast", "send", "{m:router.router}", "deposit(uint256,uint256[])", "1000000", "[]", "--gas-limit", "9000000", "{cast}"]
+      - ["bash", "-c", 'cast send "{m:router.router}" "deposit(uint256,uint256[])" 1000000 "[]" --gas-limit 9000000 {castFlagsInline} > {runDir}/state/below-floor.txt']
+      - ["grep", "-Eq", "^status +0 ", "{runDir}/state/below-floor.txt"]
+      - ["bash", "-c", 'grep -qF "custom error $(cast sig "InsufficientGas(uint256,uint256)")" {runDir}/state/below-floor.txt']
     env:
       ETH_RPC_URL: "{rpcUrl}"
-    expectExit: 1
+    expectExit: 0
     receipts: []
     irreversible: false
     onlyFor: "twin"
+    writes: ["below-floor.txt"]
     added: "v0.5.0"
   - id: "P6.59-sweep-positions"
     standing: ["4.4"]
