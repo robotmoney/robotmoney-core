@@ -516,6 +516,18 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: ["rehearsal", "production"]
+  - id: "P0.57-dry-run-manifest-dir"
+    standing: ["4.3"]
+    description: "{runDir}/manifests-dry, where P0.21 writes its simulated manifests, is a link to {manifestDir}-dry: forge writes only under ./deployments or /tmp (foundry.toml fs_permissions), and the run directory is outside the checkout (Deploy 3 rc.8 probe: P0.21 stopped at libs on vm.writeJson). Git ignores deployments/qa-runs/"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bash", "-c", "mkdir -p \"{manifestDir}-dry\" && ln -sfn \"$(cd \"{manifestDir}-dry\" && pwd)\" \"{runDir}/manifests-dry\" && test -d \"{runDir}/manifests-dry/\""]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["rehearsal", "production"]
+    added: "v0.5.0"
   - id: "P0.21-dry-run"
     standing: ["4.3"]
     description: "Every deployer stage simulates in order on a blank local anvil and sends nothing"
