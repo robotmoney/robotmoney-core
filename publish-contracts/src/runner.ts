@@ -1036,7 +1036,9 @@ export function runStartNonce(ctx: Pick<RunContext, "sheet" | "dryRun" | "eviden
   if (firstRec?.startNonce !== undefined && firstRec.startNonce !== recorded) {
     throw new PublishError("NONCE", `the recorded start nonce ${recorded} differs from the start nonce ${firstRec.startNonce} of stage ${first} in the same run manifest: the recorded start is never rewritten`, { recorded, stage: first, stageStart: firstRec.startNonce });
   }
-  if (firstRec === undefined && nonce0 !== recorded) {
+  // A dry run saves no stage record, and its nonce is the local simulation chain's, moved by the stages it applied there (the Safe first). Each stage
+  // still checks that nonce against the frozen counts from the recorded start (expectedStartNonce).
+  if (firstRec === undefined && nonce0 !== recorded && !ctx.dryRun) {
     throw new PublishError("NONCE", `the deployer nonce is ${nonce0}, the run manifest recorded start nonce ${recorded} and no stage has started: a transaction left the deployer since the start was recorded`, { nonce: nonce0, recorded });
   }
   return recorded;

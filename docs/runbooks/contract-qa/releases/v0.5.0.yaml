@@ -265,6 +265,19 @@ steps:
     irreversible: false
     maxMinutes: 30
     added: "v0.5.0"
+  - id: "P0.56-counts-build"
+    standing: ["4.2"]
+    description: "The counts checkout is built before P0.08: its preflight guards read the contract artifacts under {countsCheckout}/out, which P0.06 builds only in the core checkout (Deploy 3 rc.7 stopped at P0.08 on a missing RouterGovernance artifact)"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["forge", "build", "--root", "{countsCheckout}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["rehearsal", "production"]
+    maxMinutes: 30
+    added: "v0.5.0"
   - id: "P0.08-dependency-manifest"
     standing: ["4.2"]
     description: "The third-party dependency manifest for this release is recorded at the deploy block; run from the dev checkout, because it writes a file under deployments/ that would dirty the DEPLOY_SHA checkout"
