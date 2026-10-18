@@ -253,6 +253,18 @@ steps:
     receipts: []
     irreversible: false
     maxMinutes: 30
+  - id: "P0.55-rmpc-build"
+    standing: ["4.1"]
+    description: "rmpc and rmpc-keystore-import are built at the DEPLOY_SHA before any step runs them (P5.01 is the first); on a fresh checkout target/debug does not exist"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["cargo", "build", "-p", "rust-payment-client", "--bins"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    maxMinutes: 30
+    added: "v0.5.0"
   - id: "P0.08-dependency-manifest"
     standing: ["4.2"]
     description: "The third-party dependency manifest for this release is recorded at the deploy block; run from the dev checkout, because it writes a file under deployments/ that would dirty the DEPLOY_SHA checkout"
