@@ -27,6 +27,8 @@ interface Cfg {
                                            // (QA plan v1 E6, issue 1723: a load-balanced RPC node behind the broadcast block)
   gitDirty?: string[];                     // `git status --porcelain` lines the stub git prints (default: a clean tree)
   gitCountsDirty?: string[];               // issue 1816: the lines it prints for the path-limited status of the frozen counts file (default: committed and clean)
+  gitAncestor?: boolean;                   // tooling-sha.ts: `git merge-base --is-ancestor` answers 0 (default: not an ancestor)
+  gitInputsChanged?: string[];             // tooling-sha.ts: the deployed-input paths `git diff --name-only` prints (default: none)
   manifestMode?: Record<string, string>;   // script file -> the upgrade_mode its manifest records instead of the UPGRADE_MODE it read (issue 1809: a stage that came back in another mode)
   upgradeTimelock?: Record<string, string>; // script file -> the upgrade_timelock its manifest records instead of the prediction (issue 1835: a stage built with another toolchain)
 }
@@ -47,7 +49,9 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
   const out = (s: string, code = 0): never => { save(); process.stdout.write(s + "\n"); process.exit(code); };
 
   if (tool === "git") {
-    // only the read-only status of the core checkout is ever asked: anything else is an error the test sees
+    // only the read-only status of the core checkout and the tooling-sha reads are ever asked: anything else is an error the test sees
+    if (args[0] === "-C" && args[2] === "merge-base" && args[3] === "--is-ancestor") out("", cfg.gitAncestor ? 0 : 1);
+    if (args[0] === "-C" && args[2] === "diff" && args[3] === "--name-only") out((cfg.gitInputsChanged ?? []).join("\n"));
     if (args[0] !== "-C" || args[2] !== "status" || args[3] !== "--porcelain") out(`stub git: unsupported ${args.join(" ")}`, 1);
     out(((args.includes("--") ? cfg.gitCountsDirty : cfg.gitDirty) ?? []).join("\n"));
   }

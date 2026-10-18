@@ -107,6 +107,11 @@ recovery: |
   - A failed P1.02-publish: rerun the same command with --resume (never mark a stage done by hand). A stage that
     died part-way stays started. Before the timelock handover the deployer still holds the roles: pause-all or
     abandon the deployment and redeploy at new addresses.
+  - A tool fix found during a rehearsal (Deploy 3, 2026-10-18): commit it, cut the next rc, run the Twin pair, commit
+    its frozen counts, get CI green and move the release tag, then rerun phase 0 at the new sha and the failed step
+    with --resume. The run continues the deployment's run manifest only when the new sha descends from the deployed one
+    and contracts/, lib/, config/, the build settings and the stage table are byte-identical (publish-contracts
+    src/tooling-sha.ts); any other change is refused before a signer exists.
   - After the handover (P1.02 done): the EMERGENCY key pauses deposits (pause-all, P9.01); withdrawals stay open.
     A failed verify (P2.01, P4.01) pauses all four vaults by itself and exits 13: read rollout-report-<chain>.json,
     fix on dev, and plan a NEW deployment, because a live vault's state cannot be moved onto fixed code. A vault

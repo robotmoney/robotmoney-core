@@ -36,6 +36,7 @@ import { CLEAR_ROW } from "./clear-voted-weights.ts";
 import { UNWIND_GUARD_KEYS, UNWIND_GUARD_ROW, parseUnwindGuardArgs } from "./unwind-guard.ts";
 import { REDEPLOY_ROW, REDEPLOY_VERB, REDEPLOY_KEYS, isRedeployKey, redeployRefusal, redeployShaPath, redeployShaRun, runRedeployVault } from "./redeploy-vault.ts";
 import { FREEZE_ROW, UPGRADE_ROW } from "./upgrade-rows.ts";
+import { toolingShaRun } from "./tooling-sha.ts";
 import { DEPLOY_IMPL_VERB, runDeployImplementation } from "./deploy-implementation.ts";
 import { RECEIPT_ROW, SELF_ADMIN_ROWS, assertReceiptId, assertSelfAdminAllowed, govRowRefusal, isSelfAdminRow, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { isHardwareSpecLike, ownerHardwareSigner, parseOwnerHardwareSpec, signerFromSpec, type CastRunner, type Signer } from "./safe/index.ts";
@@ -657,6 +658,9 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     const priorOutSha = a.priorOut ? checkoutShaOf(resolve(cwd, a.priorOut)) : undefined;
     const shaRun = redeployShaRun(priorRun, { coreSha: a.coreSha, path: shaPath, priorOut: a.priorOut, priorOutSha });
     if (shaRun) log.log("info", "run.redeploy_sha", { path: shaPath, original_sha: shaRun.originalSha, redeploy_sha: shaRun.redeploySha, ...(priorOutSha ? { prior_out_sha: priorOutSha } : {}) });
+    // Deploy 3 (tooling-sha.ts): a descendant of the run manifest's sha whose deployed inputs are byte-identical continues that run manifest, as a redeploy round does.
+    const toolRun = shaRun || a.stage === "plan" || a.dryRun ? undefined : await toolingShaRun(priorRun ?? loadRunManifest(evidenceDir), { coreSha: a.coreSha, coreDir, run, env: scrubGitEnv(castEnv) });
+    if (toolRun) log.log("info", "run.tooling_sha", { original_sha: toolRun.originalSha, tooling_sha: toolRun.toolingSha, note: "the deployed inputs are byte-identical: this run continues the original run manifest" });
     // The contracts-freeze gate (core 1524; QA plan v1 E4, issue 1816): on 8453 the plan AND every run that can broadcast (releaseGated) run only at a release-tagged SHA of
     // the sheet's kind, whose frozen counts file is committed and clean in its git work tree (COUNTS_UNTRACKED; a reconstructed baseline gets the whole-dir proof of issue 1740), with green CI. No signer exists yet, no forge has run.
     // The govern row at a redeploy round's sha has no frozen file of its own (E1): like the redeploy-vault verb, it is gated on the tag and CI only.
@@ -710,7 +714,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       }
     }
     // QA plan v1 E1: a run at a redeploy round's sha continues the run manifest of the original sha; the verify records the sha of the --prior-out checkout.
-    const ctx: RunContext = { ...buildCtx(frozen, counts.measure), ...(shaRun ? { originalSha: shaRun.originalSha } : {}), ...(priorOutSha ? { priorArtifactsSha: priorOutSha } : {}) };
+    const ctx: RunContext = { ...buildCtx(frozen, counts.measure), ...(shaRun ? { originalSha: shaRun.originalSha } : toolRun ? { originalSha: toolRun.originalSha } : {}), ...(priorOutSha ? { priorArtifactsSha: priorOutSha } : {}) };
     // A failed verify (stage 12) or postflight pauses deposits on all four vaults (core 1619) and then fails the run as before.
     let postflight: PauseTrigger | undefined;
     let result: Awaited<ReturnType<typeof runStages>>;
@@ -740,13 +744,13 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       throw e;
     }
     if (a.dryRun && counts.mode === "dry-run-measure") log.log("warn", "dry_run.counts_measured", { counts: ctx.dryCounts, note: "measured by the dry run, not frozen: nothing was written" });
-    if (!shaRun && (a.measure || counts.mode === "twin-measure") && DEPLOYER_STAGES.every((s) => result.manifest.stages[s.name]?.status === "done")) {
+    if (!shaRun && !toolRun && (a.measure || counts.mode === "twin-measure") && DEPLOYER_STAGES.every((s) => result.manifest.stages[s.name]?.status === "done")) {
       const forge = (await run("forge", ["--version"], { env: castEnv })).stdout.trim().split("\n")[0];
       const p = writeFrozen(countsDir, a.coreSha, measuredCounts(result.manifest), { chainId: rpcChainId, at: new Date().toISOString(), forge, ...(Object.keys(adoptedTxs(result.manifest)).length ? { adopted: Object.keys(adoptedTxs(result.manifest)) } : {}) });
       log.log("info", "run.counts_measured", { file: p });
     }
     // QA plan v1 E1: the isomorphism report describes the deployment at its own sha. A run at a redeploy sha leaves it as the original run wrote it.
-    if (shaRun) log.log("info", "run.isomorphism_kept", { original_sha: shaRun.originalSha, note: "a run at a redeploy sha does not rewrite the deployment's isomorphism report" });
+    if (shaRun || toolRun) log.log("info", "run.isomorphism_kept", { original_sha: (shaRun ?? toolRun)!.originalSha, note: "a run at a redeploy or tooling sha does not rewrite the deployment's isomorphism report" });
     else if (!a.dryRun && existsSync(ctx.evidenceDir)) {
       const cmp = a.compareSheet ? { path: a.compareSheet, sheet: parseSheet(readFileSync(resolve(cwd, a.compareSheet), "utf8"), sheetOpts) } : undefined;
       const report = await buildIsomorphismReport(ctx, { compareTo: cmp });

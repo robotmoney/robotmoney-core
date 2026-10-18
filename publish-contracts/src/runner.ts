@@ -29,9 +29,10 @@ import type { RedeployRecord } from "./redeploy-vault.ts";
 import type { ImplementationDeploy } from "./deploy-implementation.ts";
 import { httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import type { CallerInputs } from "./sheet.ts";
+import { isReadOnlyGitAncestry, isReadOnlyGitInputsDiff } from "./tooling-sha.ts";
 import { createSafe, impersonatedSender, connectSafe, verifyCreatedSafe, type CreateSafePlan, type SafeManifest, type StaleReadRetry } from "./safe/index.ts";
 
-// ---- spawning: forge, cast and a read-only git status only -----------------------------------------------------------------------------------------
+// ---- spawning: forge, cast and read-only git reads only -----------------------------------------------------------------------------------------
 
 export type Tool = "forge" | "cast" | "git";
 export interface SpawnOpts { env: Record<string, string>; cwd?: string; interactive?: boolean }
@@ -51,9 +52,9 @@ export const isReadOnlyGitStatus = (args: string[]): boolean => {
   return flags.every((a) => a === "--untracked-files=all" || a === "--ignored") && paths.length <= 1;
 };
 
-/** The real runner. Anything but forge, cast and the read-only git status is refused before a process starts. */
+/** The real runner. Anything but forge, cast and the read-only git reads (status, and the tooling-sha ancestry and deployed-inputs diff) is refused before a process starts. */
 export const spawnTool: ProcessRunner = async (tool, args, opts) => {
-  if (tool === "git" && !isReadOnlyGitStatus(args)) throw new PublishError("TOOL", `refusing to spawn git ${args.join(" ")}: the only git command is the read-only 'git -C DIR status --porcelain'`);
+  if (tool === "git" && !isReadOnlyGitStatus(args) && !isReadOnlyGitAncestry(args) && !isReadOnlyGitInputsDiff(args)) throw new PublishError("TOOL", `refusing to spawn git ${args.join(" ")}: the only git commands are the read-only 'git -C DIR status --porcelain', 'merge-base --is-ancestor' and the deployed-inputs 'diff --name-only' (tooling-sha.ts)`);
   if (tool !== "forge" && tool !== "cast" && tool !== "git") throw new PublishError("TOOL", `refusing to spawn '${String(tool)}': publish contracts spawns forge, cast and a read-only git status only`);
   let p: ReturnType<typeof Bun.spawn>;
   try {
@@ -64,6 +65,16 @@ export const spawnTool: ProcessRunner = async (tool, args, opts) => {
   const [stdout, stderr, code] = await Promise.all([new Response(p.stdout as ReadableStream).text(), new Response(p.stderr as ReadableStream).text(), p.exited]);
   return { code, stdout, stderr };
 };
+
+// ---- the fee guard ---------------------------------------------------------------------------------------------------------
+
+/**
+ * The balance a stage needs before it broadcasts: forge's estimated L2 cost times FEE_GUARD_MULTIPLE, plus 0.0001 ETH for the L1 data fee forge does not price.
+ * Deploy 3 (2026-10-18): 3x stopped the 31-transaction recorder stage on 8453 with about 4.5 times the real cost of the whole run in the deployer; 2x is the owner's margin.
+ */
+export const FEE_GUARD_MULTIPLE = 2;
+export const L1_FEE_ALLOWANCE_WEI = 100_000_000_000_000n;
+export const feeGuardNeedWei = (estimatedEth: number): bigint => BigInt(Math.ceil(estimatedEth * FEE_GUARD_MULTIPLE * 1e18)) + L1_FEE_ALLOWANCE_WEI;
 
 // ---- the run manifest ----------------------------------------------------------------------------------------------------
 
@@ -939,12 +950,12 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   }
   rmSync(outPath, { force: true }); // a simulation also writes the manifest; the real run rewrites it
 
-  // fee guard: forge prices L2 execution only, so allow 3x plus 0.0001 ETH for the L1 data fee
+  // fee guard: forge prices L2 execution only, so allow FEE_GUARD_MULTIPLE times it plus 0.0001 ETH for the L1 data fee
   const est = estimatedEthFrom(sim.stdout);
   if (est !== undefined) {
-    const need = BigInt(Math.ceil(est * 3 * 1e18)) + 100_000_000_000_000n;
+    const need = feeGuardNeedWei(est);
     const bal = BigInt(await castOut(ctx, ["balance", deployer]));
-    if (bal < need) throw new PublishError("SIMULATION", `the deployer balance ${bal} wei is below ${need} wei (3x the simulated cost plus the L1 allowance). Fund it.`, { stage: row.name });
+    if (bal < need) throw new PublishError("SIMULATION", `the deployer balance ${bal} wei is below ${need} wei (${FEE_GUARD_MULTIPLE}x the simulated cost plus the L1 allowance). Fund it.`, { stage: row.name });
   }
 
   manifest.stages[row.name] = rec;
@@ -1211,7 +1222,7 @@ export async function runStages(ctx: RunContext, names: string[], handlers: Hand
     // QA plan v1 E1: a run at a redeploy round's sha (govern --row redeploy-vault, verify --prior-out) continues the run manifest of the ORIGINAL sha (ctx.originalSha).
     const manifestSha = ctx.originalSha ?? ctx.coreSha;
     if (manifest.chainId !== ctx.chainId || manifest.coreSha !== manifestSha || manifest.deployer.toLowerCase() !== deployer.toLowerCase()) {
-      const why = manifest.coreSha !== manifestSha ? `: it was written at core SHA ${manifest.coreSha}, this run names ${ctx.coreSha}. Only govern --row redeploy-vault and verify (with --prior-out) may name the sha a redeploy-vault round was deployed at` : "";
+      const why = manifest.coreSha !== manifestSha ? `: it was written at core SHA ${manifest.coreSha}, this run names ${ctx.coreSha}. Only a descendant with byte-identical deployed inputs (tooling-sha.ts), govern --row redeploy-vault and verify (with --prior-out) may name the sha a redeploy-vault round was deployed at` : "";
       throw new PublishError("RESUME", `the run manifest belongs to a different chain, core SHA or deployer${why}`);
     }
     if ((manifest.deploymentKind ?? "production") !== ctx.sheet.kind) throw new PublishError("RESUME", `the run manifest is a ${manifest.deploymentKind ?? "production"} run, the sheet says DEPLOYMENT_KIND ${ctx.sheet.kind}: a run never changes kind`);

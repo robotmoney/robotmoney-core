@@ -21,7 +21,7 @@ import { PublishError } from "./errors.ts";
 import { BASE_CHAIN_ID } from "./rehearsal/twin.ts";
 import { SafeToolError, readAfterWrite, rpcHost, type StaleReadRetry } from "./safe/index.ts";
 import {
-  broadcastFile, castOut, childEnv, confirmStage, deployerNonce, forgeFailureTail, failedBroadcastDetail, libraryArgs, loadRunManifest, manifestDir, manifestFilePath,
+  FEE_GUARD_MULTIPLE, broadcastFile, castOut, childEnv, confirmStage, deployerNonce, feeGuardNeedWei, forgeFailureTail, failedBroadcastDetail, libraryArgs, loadRunManifest, manifestDir, manifestFilePath,
   outputSecrets, readTxCount, saveRunManifest, stageEnv, vaultConfigGate, type RunContext, type RunManifest,
 } from "./runner.ts";
 import { VAULT_NAME, type VaultKey } from "./sheet.ts";
@@ -575,9 +575,9 @@ export async function runRedeployVault(ctx: RunContext, key: RedeployKey): Promi
   rmSync(tmpPath, { force: true }); // a simulation also writes the manifest; the real run rewrites it
   const est = /Estimated amount required:\s*([0-9]+\.[0-9]+)/.exec(sim.stdout);
   if (est) {
-    const need = BigInt(Math.ceil(Number(est[1]) * 3 * 1e18)) + 100_000_000_000_000n;
+    const need = feeGuardNeedWei(Number(est[1]));
     const bal = BigInt(await castOut(ctx, ["balance", deployer]));
-    if (bal < need) throw new PublishError("SIMULATION", `the deployer balance ${bal} wei is below ${need} wei (3x the simulated cost plus the L1 allowance). Fund it.`, { stage: row.name });
+    if (bal < need) throw new PublishError("SIMULATION", `the deployer balance ${bal} wei is below ${need} wei (${FEE_GUARD_MULTIPLE}x the simulated cost plus the L1 allowance). Fund it.`, { stage: row.name });
   }
 
   // QA plan v1 E2 (review DT-4): confirm FIRST, then save the `started` record, then broadcast. A refused confirmation sends nothing, so it must leave no open
