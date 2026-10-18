@@ -56,6 +56,11 @@ From v0.5.0 (owner decision 2026-10-16) the version tag of a Base mainnet
 production deployment is `vA.B.C` with no network suffix. A rehearsal-kind
 deployment (§4.10, Deploy 3 included) cuts no version tag: its record is the
 `release/<version>-rehearsal` tag and its evidence. Earlier tags keep their old names (`release/v0.4.0-base`).
+The release gate only needs an annotated tag of the sheet's kind at the sha a run names (`release-tag.ts`: a rehearsal tag ends in
+`-rehearsal`), so each run of a rehearsal is gated on its release candidate tag `release/<version>-rc.N-rehearsal`. The record tag
+`release/<version>-rehearsal` is cut once, at the sha the run manifest names (the sha the deployment started at), and is never moved.
+A rehearsal that continues at a later tool-only commit (`publish-contracts/src/tooling-sha.ts`) keeps its record tag where the
+deployment started; the rc tags mark every commit a run ran at.
 A Devnet (Twin chain) verification pass is not tagged: its record is the CI
 run and the evidence folder.
 
@@ -572,7 +577,7 @@ Owner decision 2026-10-10 (reverses the 2026-10-02 rule that a short-delay run i
 | Safe tool `updateDelay` | floor 172800 on 8453 | floor 900, below 172800 |
 | verifier | delay at least 172800 on 8453, label `deployment kind: the timelock delay agrees with the kind` | delay 900 to 172799 (a rehearsal verify against 172800 fails, a production verify against 900 fails) |
 | `evidence-check` | floor 172800, kind production | `--deployment-kind rehearsal`: floor 900. Rehearsal evidence checked as production fails, and the reverse |
-| release tag | annotated `release/<version>` (no `rehearsal` in the name) | annotated `release/<version>-rehearsal`. A mismatch fails `RELEASE_TAG_KIND` (exit 28) before any signer exists |
+| release tag | annotated `release/<version>` (no `rehearsal` in the name) | annotated `release/<version>-rehearsal`, or the run's rc tag `release/<version>-rc.N-rehearsal` (any annotated tag ending in `-rehearsal` at the sha). A mismatch fails `RELEASE_TAG_KIND` (exit 28) before any signer exists |
 
 **What records the kind.** The run manifest (`deploymentKind`), the evidence (`deployment_kind`), the verifier label detail and the `verify.deployment_kind` log event (`[rehearsal 900s]`), the isomorphism notes, `timelock.json` (`deployment_kind`), the tag name, and the timelock `minDelay` itself on chain (900).
 

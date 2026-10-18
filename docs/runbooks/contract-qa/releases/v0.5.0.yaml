@@ -13,7 +13,9 @@ notes: |
   next deployment of the line, Deploy 3: a NEW deployment of governed UUPS proxies at new addresses. Deploy 2
   predates the proxies and cannot be upgraded in place (ADR-0009: no assisted migration; the legacy vaults stay
   redeemable). Deploy 3 is a REHEARSAL-kind deployment on 8453 (DEPLOYMENT_KIND=rehearsal), as Deploy 2 was
-  (owner, 2026-10-16). Its release tag is release/v0.5.0-rehearsal (runbook 4.10). The version tag step P10.05
+  (owner, 2026-10-16). Its record tag is release/v0.5.0-rehearsal (runbook 4.10), at 57fbe618 (rc.9), the sha its run
+  manifest names; it is never moved. Each run is gated on its rc tag ({releaseTag} = release/v0.5.0-rc.N-rehearsal at
+  {coreSha}). The run continued at rc.10 (004b8c97, tools only) after the fee guard stop. The version tag step P10.05
   runs only for --target production, so a rehearsal run cuts no version tag. A version tag is v0.5.0 with no
   network suffix (owner, 2026-10-16); pushing it also builds and publishes the dApp image v0.5.0
   (release-dapp.yml), so no dApp release may have used v0.5.0 first.

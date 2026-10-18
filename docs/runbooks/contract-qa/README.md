@@ -49,6 +49,8 @@ Every step names its `host`. There are two.
 
 `{manifestDir}` is `deployments/qa-runs/<run name>` in the core checkout. Forge may write manifests only under `./deployments` or `/tmp` (`fs_permissions` in `foundry.toml`). Git ignores `deployments/qa-runs/`, so verify (P2.01), which refuses a checkout with untracked files, still passes. Any other folder under `deployments/` fails P2.01, and a folder outside the checkout fails publish (P1.02). The dry run (P0.21) writes to `{runDir}/manifests-dry`, which P0.57 links to `{manifestDir}-dry` for the same reason.
 
+`{releaseTag}` is the release candidate tag at `{coreSha}` (`release/<version>-rc.N-rehearsal` on a rehearsal): the release gate (P0.09) needs an annotated tag of the sheet's kind at that sha, nothing more. The record tag `release/<version>-rehearsal` is cut once, at the sha the deployment's run manifest names, and never moved (policy `docs/operations/contract-release-runbooks.md`, version tags).
+
 A whole-element list placeholder expands to several argv elements: `{common}`, `{owners}`, `{gate}`, `{wait}`, `{emergency}`, `{cast}`. The definitions are `LIST_PLACEHOLDERS` in the validator. The scalar names are `SCALARS` in the same file.
 
 ## Run it
