@@ -33,7 +33,7 @@ export const SCRIPT: Record<string, string> = scriptFiles();
 export interface World {
   dir: string; coreDir: string; sheetPath: string; countsDir: string; evidence: string; statePath: string; cfgPath: string; lines: string[];
   cfg: {
-    counts: Record<string, number>; sent?: Record<string, number>; failBroadcast?: string; simFails?: string; zeroTx?: string; zeroTxBumps?: number; codeAt?: Record<string, string>; creates?: Record<string, string[]>; libsAddress?: string; chainId: number; gitDirty?: string[]; gitCountsDirty?: string[];
+    counts: Record<string, number>; sent?: Record<string, number>; failBroadcast?: string; simFails?: string; zeroTx?: string; zeroTxBumps?: number; codeAt?: Record<string, string>; creates?: Record<string, string[]>; libsAddress?: string; chainId: number; gitDirty?: string[]; gitCountsDirty?: string[]; gitAncestor?: boolean; gitInputsChanged?: string[];
     emptyCode?: string[];
     vaultOut?: Record<string, string>; createdOut?: Record<string, string>; revertedReceipt?: Record<string, number>;
     /** QA plan v1 E6: script file -> how many `cast nonce` reads after its broadcast answer the nonce from before it (a load-balanced RPC node behind the block). */
