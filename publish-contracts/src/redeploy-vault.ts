@@ -13,15 +13,15 @@
 // QA plan v1 additions on top of the issue 1796 design: the sha model of the govern row and the verify after a round at another sha (E1), the `started` record saved
 // only after the confirmation (E2), the timelock's router admin checked before the round (E3), the new vault bound to the deploy's CREATE receipt (C2, issue 1701)
 // and the post-broadcast reads re-read on a load-balanced RPC (E6, issue 1723, with dev's safe/read-after-write.ts).
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { encodeFunctionData, parseAbi, type Address, type Hex } from "viem";
 import type { DeploymentKind } from "./chains.ts";
 import { PublishError } from "./errors.ts";
 import { BASE_CHAIN_ID } from "./rehearsal/twin.ts";
-import { SafeToolError, readAfterWrite, rpcHost, type StaleReadRetry } from "./safe/index.ts";
+import { SafeToolError, readAfterWrite } from "./safe/index.ts";
 import {
-  FEE_GUARD_MULTIPLE, broadcastFile, castOut, childEnv, confirmStage, deployerNonce, feeGuardNeedWei, forgeFailureTail, failedBroadcastDetail, libraryArgs, loadRunManifest, manifestDir, manifestFilePath,
+  FEE_GUARD_MULTIPLE, broadcastFile, readRetryOf, rpcHostOf, castOut, childEnv, confirmStage, deployerNonce, feeGuardNeedWei, forgeFailureTail, failedBroadcastDetail, libraryArgs, loadRunManifest, manifestDir, manifestFilePath,
   outputSecrets, readTxCount, saveRunManifest, stageEnv, vaultConfigGate, type RunContext, type RunManifest,
 } from "./runner.ts";
 import { VAULT_NAME, type VaultKey } from "./sheet.ts";
@@ -502,10 +502,6 @@ export function redeployStageRow(key: RedeployKey): StageRow {
 }
 
 const readJson = (p: string): Record<string, unknown> => JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>;
-/** The RPC host for a message (a URL may carry an API key in its path). Never throws: a message is not where a bad URL is refused. */
-const rpcHostOf = (url: string): string => { try { return rpcHost(url); } catch { return "the RPC"; } };
-/** The bound of the reads right after the broadcast (QA plan v1 E6, issue 1723): the run's `readRetry` (a test passes a sleep that does not wait), else the default bound. */
-const readRetryOf = (ctx: RunContext): StaleReadRetry => ctx.readRetry ?? {};
 
 /**
  * The `redeploy-vault` verb. Needs the run manifest of the live deployment (its timelock stage done) and a signer that is the deployer (ADMIN_ADDRESS).
@@ -559,6 +555,9 @@ export async function runRedeployVault(ctx: RunContext, key: RedeployKey): Promi
   const base = ["script", script, "--chain", String(ctx.chainId), ...signerArgs, "--slow", ...libraryArgs(ctx, row)];
   const fenv = childEnv(ctx, env);
   mkdirSync(dir, { recursive: true });
+  // Deploy 3 (2026-10-18), as runner.ts runForgeStage: a resumed round keeps the manifest its own broadcast wrote. `forge script --resume` never runs the script
+  // again, and the simulation below writes the addresses of the CURRENT nonce, so the manifest is put back before the broadcast.
+  const kept = open && existsSync(tmpPath) ? readFileSync(tmpPath, "utf8") : undefined;
   rmSync(tmpPath, { force: true });
   rmSync(dirname(broadcastFile(ctx, script, true)), { recursive: true, force: true });
   ctx.log.log("info", "stage.start", { stage: row.name, script, start_nonce: nonce0, resume: !!open });
@@ -572,7 +571,8 @@ export async function runRedeployVault(ctx: RunContext, key: RedeployKey): Promi
     ctx.log.log("info", "stage.dry_run_done", { stage: row.name, dry_run_count: dry.count, simulated_on: "target-rpc (read only, nothing sent)" });
     return undefined;
   }
-  rmSync(tmpPath, { force: true }); // a simulation also writes the manifest; the real run rewrites it
+  rmSync(tmpPath, { force: true }); // a simulation also writes the manifest; the real run rewrites it, a resumed one keeps its own
+  if (kept !== undefined) writeFileSync(tmpPath, kept);
   const est = /Estimated amount required:\s*([0-9]+\.[0-9]+)/.exec(sim.stdout);
   if (est) {
     const need = feeGuardNeedWei(Number(est[1]));

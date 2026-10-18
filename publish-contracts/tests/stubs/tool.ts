@@ -92,7 +92,9 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
     const [{ loadStageTable }, { predictCoreTimelock }] = await Promise.all([import("../../src/stage-table.ts"), import("../../src/timelock-pin.ts")]);
     return predictCoreTimelock(loadStageTable(".").upgradeAuthority!, "out", process.env.SAFE_ADDRESS as `0x${string}`, BigInt(process.env.TIMELOCK_MIN_DELAY)).address;
   };
-  const writeFiles = async (n: number, dry: boolean) => {
+  // Like real forge: `forge script --broadcast` runs the script (which writes its manifest) and then sends; `--resume` only sends what is missing from the
+  // broadcast cache and never runs the script, so it writes no manifest (Deploy 3, 2026-10-18).
+  const writeFiles = async (n: number, dry: boolean, manifest = true) => {
     if (cfg.zeroTx === file) n = -1; // zero planned transactions: forge writes no broadcast file, only the script's own manifest
     const dir = join("broadcast", file, chain, ...(dry ? ["dry-run"] : []));
     if (n >= 0) {
@@ -109,7 +111,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
       }));
     }
     const outPath = process.env.DEPLOYMENT_OUT;
-    if (outPath) {
+    if (outPath && manifest) {
       mkdirSync(dirname(outPath), { recursive: true });
       writeFileSync(outPath, JSON.stringify({
         vault: cfg.vaultOut?.[file] ?? addr(0x1001), registry: addr(0x1002), router: addr(0x1003), gateway: addr(0x1004), governance: addr(0x1005), policy: addr(0x1006),
@@ -135,6 +137,8 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
   if (cfg.failBroadcast === file && !resume && !(st.resumed ?? []).includes(file)) {
     st.broadcastStart = { ...(st.broadcastStart ?? {}), [file]: st.nonces[sender] ?? 0 };
     st.nonces[sender] = (st.nonces[sender] ?? 0) + Math.max(1, Math.floor(count / 2));
+    const outPath = process.env.DEPLOYMENT_OUT;
+    if (outPath) { mkdirSync(dirname(outPath), { recursive: true }); await writeFiles(-1, false); } // the script ran before the send failed: its manifest is on disk
     if (cfg.failBroadcastOutput) { process.stderr.write(cfg.failBroadcastOutput.stderr ?? ""); out(cfg.failBroadcastOutput.stdout ?? "", 1); }
     out("Error: RPC connection dropped", 1);
   }
@@ -144,6 +148,6 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
   st.broadcastStart = { ...(st.broadcastStart ?? {}), [file]: startNonce };
   st.nonces[sender] = startNonce + sent;
   if (cfg.staleNonceReads?.[file]) st.stale = { who: sender, nonce: startNonce, left: cfg.staleNonceReads[file] };
-  await writeFiles(sent, false);
+  await writeFiles(sent, false, !resume);
   out("ONCHAIN EXECUTION COMPLETE & SUCCESSFUL.");
 }
