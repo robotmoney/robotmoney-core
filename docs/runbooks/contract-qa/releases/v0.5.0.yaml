@@ -110,8 +110,11 @@ recovery: |
     died part-way stays started. Before the timelock handover the deployer still holds the roles: pause-all or
     abandon the deployment and redeploy at new addresses.
   - A tool fix found during a rehearsal (Deploy 3, 2026-10-18): commit it, cut the next rc, run the Twin pair, commit
-    its frozen counts, get CI green and move the release tag, then rerun phase 0 at the new sha and the failed step
-    with --resume. The run continues the deployment's run manifest only when the new sha descends from the deployed one
+    its frozen counts and get CI green, then rerun phase 0 at the new sha and the failed step with --resume. The
+    dry run (P0.21) is skipped on that rerun, with the reason in its .result: it simulates a FRESH deployment from
+    the Safe stage and refuses once the deployment's Safe exists ("Safe already deployed"), and the resumed publish
+    simulates every remaining stage before it broadcasts, sending nothing when one fails. The record tag is not
+    moved (runbook 4.10). The run continues the deployment's run manifest only when the new sha descends from the deployed one
     and contracts/, lib/, config/, the build settings and the stage table are byte-identical (publish-contracts
     src/tooling-sha.ts); any other change is refused before a signer exists.
   - After the handover (P1.02 done): the EMERGENCY key pauses deposits (pause-all, P9.01); withdrawals stay open.
