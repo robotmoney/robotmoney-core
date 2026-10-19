@@ -27,6 +27,8 @@ interface Cfg {
                                            // (QA plan v1 E6, issue 1723: a load-balanced RPC node behind the broadcast block)
   gitDirty?: string[];                     // `git status --porcelain` lines the stub git prints (default: a clean tree)
   gitCountsDirty?: string[];               // issue 1816: the lines it prints for the path-limited status of the frozen counts file (default: committed and clean)
+  gitAncestor?: boolean;                   // tooling-sha.ts: `git merge-base --is-ancestor` answers 0 (default: not an ancestor)
+  gitInputsChanged?: string[];             // tooling-sha.ts: the deployed-input paths `git diff --name-only` prints (default: none)
   manifestMode?: Record<string, string>;   // script file -> the upgrade_mode its manifest records instead of the UPGRADE_MODE it read (issue 1809: a stage that came back in another mode)
   upgradeTimelock?: Record<string, string>; // script file -> the upgrade_timelock its manifest records instead of the prediction (issue 1835: a stage built with another toolchain)
 }
@@ -47,7 +49,9 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
   const out = (s: string, code = 0): never => { save(); process.stdout.write(s + "\n"); process.exit(code); };
 
   if (tool === "git") {
-    // only the read-only status of the core checkout is ever asked: anything else is an error the test sees
+    // only the read-only status of the core checkout and the tooling-sha reads are ever asked: anything else is an error the test sees
+    if (args[0] === "-C" && args[2] === "merge-base" && args[3] === "--is-ancestor") out("", cfg.gitAncestor ? 0 : 1);
+    if (args[0] === "-C" && args[2] === "diff" && args[3] === "--name-only") out((cfg.gitInputsChanged ?? []).join("\n"));
     if (args[0] !== "-C" || args[2] !== "status" || args[3] !== "--porcelain") out(`stub git: unsupported ${args.join(" ")}`, 1);
     out(((args.includes("--") ? cfg.gitCountsDirty : cfg.gitDirty) ?? []).join("\n"));
   }
@@ -88,7 +92,9 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
     const [{ loadStageTable }, { predictCoreTimelock }] = await Promise.all([import("../../src/stage-table.ts"), import("../../src/timelock-pin.ts")]);
     return predictCoreTimelock(loadStageTable(".").upgradeAuthority!, "out", process.env.SAFE_ADDRESS as `0x${string}`, BigInt(process.env.TIMELOCK_MIN_DELAY)).address;
   };
-  const writeFiles = async (n: number, dry: boolean) => {
+  // Like real forge: `forge script --broadcast` runs the script (which writes its manifest) and then sends; `--resume` only sends what is missing from the
+  // broadcast cache and never runs the script, so it writes no manifest (Deploy 3, 2026-10-18).
+  const writeFiles = async (n: number, dry: boolean, manifest = true) => {
     if (cfg.zeroTx === file) n = -1; // zero planned transactions: forge writes no broadcast file, only the script's own manifest
     const dir = join("broadcast", file, chain, ...(dry ? ["dry-run"] : []));
     if (n >= 0) {
@@ -105,7 +111,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
       }));
     }
     const outPath = process.env.DEPLOYMENT_OUT;
-    if (outPath) {
+    if (outPath && manifest) {
       mkdirSync(dirname(outPath), { recursive: true });
       writeFileSync(outPath, JSON.stringify({
         vault: cfg.vaultOut?.[file] ?? addr(0x1001), registry: addr(0x1002), router: addr(0x1003), gateway: addr(0x1004), governance: addr(0x1005), policy: addr(0x1006),
@@ -131,6 +137,8 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
   if (cfg.failBroadcast === file && !resume && !(st.resumed ?? []).includes(file)) {
     st.broadcastStart = { ...(st.broadcastStart ?? {}), [file]: st.nonces[sender] ?? 0 };
     st.nonces[sender] = (st.nonces[sender] ?? 0) + Math.max(1, Math.floor(count / 2));
+    const outPath = process.env.DEPLOYMENT_OUT;
+    if (outPath) { mkdirSync(dirname(outPath), { recursive: true }); await writeFiles(-1, false); } // the script ran before the send failed: its manifest is on disk
     if (cfg.failBroadcastOutput) { process.stderr.write(cfg.failBroadcastOutput.stderr ?? ""); out(cfg.failBroadcastOutput.stdout ?? "", 1); }
     out("Error: RPC connection dropped", 1);
   }
@@ -140,6 +148,6 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
   st.broadcastStart = { ...(st.broadcastStart ?? {}), [file]: startNonce };
   st.nonces[sender] = startNonce + sent;
   if (cfg.staleNonceReads?.[file]) st.stale = { who: sender, nonce: startNonce, left: cfg.staleNonceReads[file] };
-  await writeFiles(sent, false);
+  await writeFiles(sent, false, !resume);
   out("ONCHAIN EXECUTION COMPLETE & SUCCESSFUL.");
 }

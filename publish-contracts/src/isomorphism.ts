@@ -48,7 +48,8 @@ export function readGitHead(dir: string): string | undefined {
 export async function dirtyTreeLines(run: ProcessRunner, dir: string, chainId: number, env: Record<string, string> = {}): Promise<string[]> {
   const r = await run("git", ["-C", dir, "status", "--porcelain", "--untracked-files=all"], { env: scrubGitEnv(env) });
   if (r.code !== 0) throw new PublishError("USAGE", `git status failed in ${dir}: ${(r.stderr || "").trim().split("\n").slice(-1)[0] ?? "unknown error"}`);
-  return r.stdout.split("\n").filter((l) => l.trim() !== "" && !l.startsWith(`?? deployments/${chainId}/`));
+  // The CLI's own outputs do not count: the deployed manifests, and the release dependency manifest the 8453 verify records (record-dependencies.ts).
+  return r.stdout.split("\n").filter((l) => l.trim() !== "" && !l.startsWith(`?? deployments/${chainId}/`) && !l.startsWith(`?? deployments/dependency-manifests/${chainId}/`));
 }
 
 function readdirSafe(p: string): boolean { try { readdirSync(p); return true; } catch { return false; } }

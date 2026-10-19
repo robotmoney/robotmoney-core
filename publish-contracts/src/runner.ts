@@ -29,9 +29,10 @@ import type { RedeployRecord } from "./redeploy-vault.ts";
 import type { ImplementationDeploy } from "./deploy-implementation.ts";
 import { httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import type { CallerInputs } from "./sheet.ts";
-import { createSafe, impersonatedSender, connectSafe, verifyCreatedSafe, type CreateSafePlan, type SafeManifest, type StaleReadRetry } from "./safe/index.ts";
+import { isReadOnlyGitAncestry, isReadOnlyGitInputsDiff } from "./tooling-sha.ts";
+import { SafeToolError, createSafe, impersonatedSender, connectSafe, readAfterWrite, rpcHost, verifyCreatedSafe, type CreateSafePlan, type SafeManifest, type StaleReadRetry } from "./safe/index.ts";
 
-// ---- spawning: forge, cast and a read-only git status only -----------------------------------------------------------------------------------------
+// ---- spawning: forge, cast and read-only git reads only -----------------------------------------------------------------------------------------
 
 export type Tool = "forge" | "cast" | "git";
 export interface SpawnOpts { env: Record<string, string>; cwd?: string; interactive?: boolean }
@@ -51,9 +52,9 @@ export const isReadOnlyGitStatus = (args: string[]): boolean => {
   return flags.every((a) => a === "--untracked-files=all" || a === "--ignored") && paths.length <= 1;
 };
 
-/** The real runner. Anything but forge, cast and the read-only git status is refused before a process starts. */
+/** The real runner. Anything but forge, cast and the read-only git reads (status, and the tooling-sha ancestry and deployed-inputs diff) is refused before a process starts. */
 export const spawnTool: ProcessRunner = async (tool, args, opts) => {
-  if (tool === "git" && !isReadOnlyGitStatus(args)) throw new PublishError("TOOL", `refusing to spawn git ${args.join(" ")}: the only git command is the read-only 'git -C DIR status --porcelain'`);
+  if (tool === "git" && !isReadOnlyGitStatus(args) && !isReadOnlyGitAncestry(args) && !isReadOnlyGitInputsDiff(args)) throw new PublishError("TOOL", `refusing to spawn git ${args.join(" ")}: the only git commands are the read-only 'git -C DIR status --porcelain', 'merge-base --is-ancestor' and the deployed-inputs 'diff --name-only' (tooling-sha.ts)`);
   if (tool !== "forge" && tool !== "cast" && tool !== "git") throw new PublishError("TOOL", `refusing to spawn '${String(tool)}': publish contracts spawns forge, cast and a read-only git status only`);
   let p: ReturnType<typeof Bun.spawn>;
   try {
@@ -64,6 +65,16 @@ export const spawnTool: ProcessRunner = async (tool, args, opts) => {
   const [stdout, stderr, code] = await Promise.all([new Response(p.stdout as ReadableStream).text(), new Response(p.stderr as ReadableStream).text(), p.exited]);
   return { code, stdout, stderr };
 };
+
+// ---- the fee guard ---------------------------------------------------------------------------------------------------------
+
+/**
+ * The balance a stage needs before it broadcasts: forge's estimated L2 cost times FEE_GUARD_MULTIPLE, plus 0.0001 ETH for the L1 data fee forge does not price.
+ * Deploy 3 (2026-10-18): 3x stopped the 31-transaction recorder stage on 8453 with about 4.5 times the real cost of the whole run in the deployer; 2x is the owner's margin.
+ */
+export const FEE_GUARD_MULTIPLE = 2;
+export const L1_FEE_ALLOWANCE_WEI = 100_000_000_000_000n;
+export const feeGuardNeedWei = (estimatedEth: number): bigint => BigInt(Math.ceil(estimatedEth * FEE_GUARD_MULTIPLE * 1e18)) + L1_FEE_ALLOWANCE_WEI;
 
 // ---- the run manifest ----------------------------------------------------------------------------------------------------
 
@@ -310,6 +321,13 @@ export interface RunContext {
    * verb's reads after its broadcast, QA plan v1 E6). Defaults to the shared bound (STALE_READ_TRIES reads, STALE_READ_DELAY_MS apart).
    */
   readRetry?: StaleReadRetry;
+  /**
+   * Deploy 3 (2026-10-18): where the verifier sends eth_getLogs and how many blocks per call (--logs-rpc, --logs-window). mainnet.base.org throttled the role
+   * scan with HTTP 429 for an hour; the canon's 8453 logs endpoint allows 1000 blocks per call. Absent: every read on --rpc, 2000 blocks per call.
+   */
+  logs?: { logsRpc?: string; window?: bigint };
+  /** --check-sources: the verify stage also checks explorer source verification (Blockscout, Sourcify). Off by default: publishing, not a gate (2026-10-19). */
+  checkSources?: boolean;
   /** Injected for tests: core's own config-check (bun scripts/ci/config-check.ts). Defaults to the real spawn. */
   coreConfigCheck?: CoreConfigCheck;
   /** Set by runStages in a dry run: the RPC forge simulates on (a local anvil) and the record of manifest files to restore. */
@@ -475,6 +493,11 @@ export async function castOut(ctx: RunContext, args: string[]): Promise<string> 
   if (r.code !== 0) throw new PublishError("TOOL", `cast ${args[0]} failed: ${r.stderr.trim().split("\n").slice(-2).join(" ")}`);
   return r.stdout.trim();
 }
+
+/** The RPC host for a message (a URL may carry an API key in its path). Never throws: a message is not where a bad URL is refused. */
+export const rpcHostOf = (url: string): string => { try { return rpcHost(url); } catch { return "the RPC"; } };
+/** The bound of the reads right after a broadcast (QA plan v1 E6, issue 1723): the run's `readRetry` (a test passes a sleep that does not wait), else the default bound. */
+export const readRetryOf = (ctx: RunContext): StaleReadRetry => ctx.readRetry ?? {};
 
 export async function deployerNonce(ctx: RunContext, who: string): Promise<number> {
   const out = await castOut(ctx, ["nonce", who]);
@@ -902,6 +925,10 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   // simulate: nothing is sent
   rmSync(dirname(broadcastFile(ctx, script, true)), { recursive: true, force: true });
   let sim: Awaited<ReturnType<RunContext["run"]>>, dry: NonNullable<ReturnType<typeof readTxCount>>, adoptedLibs: AdoptedLibrary[];
+  // Deploy 3 (2026-10-18): a resumed stage keeps the manifest its own broadcast wrote. The simulation below rewrites outPath with the addresses of the CURRENT
+  // nonce, and `forge script --resume` never runs the script again, so without this a stage whose transactions all landed lost its manifest.
+  const kept = resuming && existsSync(outPath) ? readFileSync(outPath, "utf8") : undefined;
+  const restoreKept = () => { if (kept !== undefined) writeFileSync(outPath, kept); };
   // Issue 1866: the simulation writes the stage manifest (outPath). Any refusal or error from here to the broadcast removes it again on a fresh, real run (outPath did not
   // exist before: checked above), so fixing the cause and running the same command again works. A resumed stage keeps its manifest; a dry run restores it in runStages.
   try {
@@ -935,16 +962,18 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
     }
   } catch (e) {
     if (!resuming && !ctx.dryRun) rmSync(outPath, { force: true });
+    restoreKept();
     throw e;
   }
-  rmSync(outPath, { force: true }); // a simulation also writes the manifest; the real run rewrites it
+  // a simulation also writes the manifest; the real run rewrites it, and a resumed one keeps the manifest of the broadcast it resumes
+  if (kept !== undefined) restoreKept(); else rmSync(outPath, { force: true });
 
-  // fee guard: forge prices L2 execution only, so allow 3x plus 0.0001 ETH for the L1 data fee
+  // fee guard: forge prices L2 execution only, so allow FEE_GUARD_MULTIPLE times it plus 0.0001 ETH for the L1 data fee
   const est = estimatedEthFrom(sim.stdout);
   if (est !== undefined) {
-    const need = BigInt(Math.ceil(est * 3 * 1e18)) + 100_000_000_000_000n;
+    const need = feeGuardNeedWei(est);
     const bal = BigInt(await castOut(ctx, ["balance", deployer]));
-    if (bal < need) throw new PublishError("SIMULATION", `the deployer balance ${bal} wei is below ${need} wei (3x the simulated cost plus the L1 allowance). Fund it.`, { stage: row.name });
+    if (bal < need) throw new PublishError("SIMULATION", `the deployer balance ${bal} wei is below ${need} wei (${FEE_GUARD_MULTIPLE}x the simulated cost plus the L1 allowance). Fund it.`, { stage: row.name });
   }
 
   manifest.stages[row.name] = rec;
@@ -953,7 +982,7 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
 
   ctx.log.log("info", "stage.broadcast", { stage: row.name, resume: resuming });
   const run = await ctx.run("forge", [...base, "--broadcast", ...(resuming ? ["--resume"] : [])], { env: fenv, cwd: ctx.coreDir, interactive: true });
-  const nonce1 = await deployerNonce(ctx, deployer);
+  let nonce1 = await deployerNonce(ctx, deployer);
   if (run.code !== 0 || !run.stdout.includes("ONCHAIN EXECUTION COMPLETE")) {
     // forge's own words (scrubbed of the RPC and any secret), then what the chain says about the transaction forge names as failed
     const forgeSaid = forgeFailureTail(run.stdout, run.stderr, outputSecrets(ctx));
@@ -964,6 +993,20 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   }
   const sent = readTxCount(broadcastFile(ctx, script, false));
   if (!sent) throw new PublishError("MANIFEST", `forge wrote no broadcast file for ${row.name}`, { stage: row.name });
+  // QA plan v1 E6, as the redeploy round does (redeploy-vault.ts): forge saw every receipt, but a load-balanced RPC may answer `cast nonce` from a node behind the
+  // last block (Deploy 3: libs and recorder on mainnet.base.org). Read again, bounded, until the nonce shows the broadcast; a nonce above it is returned at once.
+  if (nonce1 < startNonce + sent.count) {
+    const target = startNonce + sent.count;
+    try {
+      nonce1 = await readAfterWrite({
+        what: `the deployer ${deployer} nonce after ${row.name}`, expected: String(target), rpcUrl: ctx.rpc, read: () => deployerNonce(ctx, deployer),
+        judge: (n) => (n === target ? "fresh" : n < target ? "stale" : "wrong"), logger: ctx.log,
+      }, readRetryOf(ctx));
+    } catch (e) {
+      if (!(e instanceof SafeToolError) || e.code !== "STALE_READ_TIMEOUT") throw e;
+      throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: broadcast count ${sent.count}, and the deployer nonce never showed ${target} (RPC ${rpcHostOf(ctx.rpc)}): ${e.message} The chain has changed or the RPC is behind: stop and read it, then continue with --resume.`, { stage: row.name, broadcast: sent.count, expected_nonce: target, last: e.details.last });
+    }
+  }
   rec.broadcastCount = sent.count;
   rec.txHashes = sent.hashes;
   rec.firstBlock = sent.firstBlock;
@@ -1036,7 +1079,9 @@ export function runStartNonce(ctx: Pick<RunContext, "sheet" | "dryRun" | "eviden
   if (firstRec?.startNonce !== undefined && firstRec.startNonce !== recorded) {
     throw new PublishError("NONCE", `the recorded start nonce ${recorded} differs from the start nonce ${firstRec.startNonce} of stage ${first} in the same run manifest: the recorded start is never rewritten`, { recorded, stage: first, stageStart: firstRec.startNonce });
   }
-  if (firstRec === undefined && nonce0 !== recorded) {
+  // A dry run saves no stage record, and its nonce is the local simulation chain's, moved by the stages it applied there (the Safe first). Each stage
+  // still checks that nonce against the frozen counts from the recorded start (expectedStartNonce).
+  if (firstRec === undefined && nonce0 !== recorded && !ctx.dryRun) {
     throw new PublishError("NONCE", `the deployer nonce is ${nonce0}, the run manifest recorded start nonce ${recorded} and no stage has started: a transaction left the deployer since the start was recorded`, { nonce: nonce0, recorded });
   }
   return recorded;
@@ -1209,7 +1254,7 @@ export async function runStages(ctx: RunContext, names: string[], handlers: Hand
     // QA plan v1 E1: a run at a redeploy round's sha (govern --row redeploy-vault, verify --prior-out) continues the run manifest of the ORIGINAL sha (ctx.originalSha).
     const manifestSha = ctx.originalSha ?? ctx.coreSha;
     if (manifest.chainId !== ctx.chainId || manifest.coreSha !== manifestSha || manifest.deployer.toLowerCase() !== deployer.toLowerCase()) {
-      const why = manifest.coreSha !== manifestSha ? `: it was written at core SHA ${manifest.coreSha}, this run names ${ctx.coreSha}. Only govern --row redeploy-vault and verify (with --prior-out) may name the sha a redeploy-vault round was deployed at` : "";
+      const why = manifest.coreSha !== manifestSha ? `: it was written at core SHA ${manifest.coreSha}, this run names ${ctx.coreSha}. Only a descendant with byte-identical deployed inputs (tooling-sha.ts), govern --row redeploy-vault and verify (with --prior-out) may name the sha a redeploy-vault round was deployed at` : "";
       throw new PublishError("RESUME", `the run manifest belongs to a different chain, core SHA or deployer${why}`);
     }
     if ((manifest.deploymentKind ?? "production") !== ctx.sheet.kind) throw new PublishError("RESUME", `the run manifest is a ${manifest.deploymentKind ?? "production"} run, the sheet says DEPLOYMENT_KIND ${ctx.sheet.kind}: a run never changes kind`);

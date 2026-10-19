@@ -20,7 +20,7 @@ import { PROOF_STAGE } from "./control-proof.ts";
 import { loadConfigAssets, loadExpectedMaxSlippageBps } from "./asset-config.ts";
 import { manifestBase } from "./stage-table.ts";
 import { DEPLOYER_STAGES, VAULT_STAGES, getStageTable, manifestRef, type StageRow } from "./stages.ts";
-import { RPC_REFUSED_DETAIL, verifyDeployment, verifySources, viemReader, type VerifyReport, type VerifySheet, type VerifyOptions, type VaultSheet } from "./verify/index.ts";
+import { RPC_REFUSED_DETAIL, verifyDeployment, verifySources, viemReader, type ChainReader, type VerifyReport, type VerifySheet, type VerifyOptions, type VaultSheet } from "./verify/index.ts";
 import { recordDependencyManifest, type RecorderSpawn } from "./record-dependencies.ts";
 import { contractsFromManifests } from "./verify/sources.ts";
 import { REDEPLOY_ROW, oldVaultBuild, redeploysOf, verifyBuildRefusal } from "./redeploy-vault.ts";
@@ -193,6 +193,12 @@ const readDepositsPaused = async (rpc: string, vault: `0x${string}`): Promise<bo
   (await createPublicClient({ transport: http(rpc) }).readContract({ address: vault, abi: PAUSED_ABI, functionName: "depositsPaused" })) as boolean;
 export const realVerifyDeps: VerifyDeps = { verifyDeployment, verifySources, depositsPaused: readDepositsPaused };
 
+/** The verifier's chain reader: every read on --rpc, eth_getLogs on --logs-rpc when it is given (Deploy 3: the public RPC throttled the role scan). */
+export function verifyReader(ctx: Pick<RunContext, "rpc" | "logs">, make: (url: string) => ChainReader = viemReader): ChainReader {
+  const reader = make(ctx.rpc);
+  return ctx.logs?.logsRpc ? { ...reader, getLogs: make(ctx.logs.logsRpc).getLogs } : reader;
+}
+
 export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: RunManifest, deps: VerifyDeps = realVerifyDeps): Promise<VerifyReport> {
   const frozenFile = ctx.frozen ?? (ctx.measure ? measuredCounts(manifest) : undefined);
   if (!frozenFile) throw new PublishError("COUNTS_MISSING", "the verifier needs the frozen counts for this DEPLOY_SHA");
@@ -228,9 +234,9 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   const unpaused = mode ? (mode === "post-govern" ? [...MAINNET_UNPAUSE_VAULTS] : []) : unpausedByGovern(manifest, ctx.sheet);
   ctx.log.log("info", "stage.start", { stage: row.name });
   const report = await deps.verifyDeployment({
-    chain: viemReader(ctx.rpc), manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildVerifySheet(ctx, safe, unpaused, expectedTimelockDelay(manifest, ctx.sheet)), fromBlock: BigInt(manifest.firstBlock),
+    chain: verifyReader(ctx), manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildVerifySheet(ctx, safe, unpaused, expectedTimelockDelay(manifest, ctx.sheet)), fromBlock: BigInt(manifest.firstBlock),
     deployTxs: runDeployTxs(manifest), adoptedContracts: runAdoptedContracts(manifest),
-    logChunk: 2000, frozenCounts: frozen, artifactsDir: join(ctx.coreDir, "out"), coreDir: ctx.coreDir,
+    logChunk: ctx.logs?.window !== undefined ? Number(ctx.logs.window) : 2000, frozenCounts: frozen, artifactsDir: join(ctx.coreDir, "out"), coreDir: ctx.coreDir,
     ...proxyBuildDirsOf(manifest, join(ctx.coreDir, "out")),
     deployerNonceAtDeployEnd: deployEndNonce(manifest),
     ...(ctx.sheet.kind === "rehearsal" ? { deployerStartNonce: manifest.deployerStartNonce } : {}),
@@ -271,9 +277,14 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
       if (problems.length) report.checks.push({ label: "govern post-govern: receipt_applications are backed by their timelock batches on chain", ok: false, detail: `the run manifest's applied receipt vector is not backed by the chain, so the router weight check cannot trust it: ${problems.join("; ")}` });
     }
     report.ok = report.checks.every((c) => c.ok);
-    const s = await deps.verifySources({ chainId: ctx.chainId, contracts: contractsFromManifests(manifestDir(ctx), getStageTable()) });
-    report.checks.push(...s.checks);
-    report.ok = report.ok && s.ok;
+    // Owner decision 2026-10-19 (Deploy 3): explorer source verification (Blockscout, Sourcify) is publishing, not a gate. It depends on third-party vendors
+    // (Blockscout answers scripted reads with a bot challenge), and the `runtime code equals build artifact (masked)` labels above already prove from the chain
+    // that every address runs the tagged build. --check-sources still runs it.
+    if (ctx.checkSources) {
+      const s = await deps.verifySources({ chainId: ctx.chainId, contracts: contractsFromManifests(manifestDir(ctx), getStageTable()) });
+      report.checks.push(...s.checks);
+      report.ok = report.ok && s.ok;
+    } else ctx.log.log("info", "verify.sources_not_gated", { note: "explorer source verification is publishing, not a gate (--check-sources runs it)" });
   }
   // Issue 1727: the kind and the delay go to the log (stderr), never to stdout: stdout is the label contract core's harness parses and the Twin and mainnet label sets must compare equal.
   ctx.log.log("info", "verify.deployment_kind", { deployment_kind: ctx.sheet.kind, label: kindLabel(ctx.sheet.kind, expectedTimelockDelay(manifest, ctx.sheet)) });

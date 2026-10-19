@@ -59,6 +59,8 @@ describe("argv", () => {
     expect(buildAnvilArgv(o)).not.toContain("--block-time");
     const t = buildAnvilArgv({ ...o, blockTimeSec: 1 });
     expect(t[t.indexOf("--block-time") + 1]).toBe("1");
+    expect(buildAnvilArgv(o)).not.toContain("--disable-min-priority-fee");
+    expect(buildAnvilArgv({ ...o, mainnetFees: true })).toContain("--disable-min-priority-fee");
     expect(() => buildAnvilArgv({ ...o, pinBlock: 0 })).toThrow();
     expect(() => buildAnvilArgv({ ...o, port: 70000 })).toThrow();
   });

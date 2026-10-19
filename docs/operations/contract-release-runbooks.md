@@ -4,7 +4,9 @@
 > release-runbook policy that every per-release contract-deployment runbook
 > must follow. It is not itself a runnable checklist; concrete deployments
 > are executed from per-release runbooks committed under `docs/runbooks/`
-> (see §5). An example is [`docs/runbooks/v0.1.0-devnet-verification.md`](../runbooks/v0.1.0-devnet-verification.md).
+> (see §5). A contract release's runbook is a YAML file under
+> [`docs/runbooks/contract-qa/`](../runbooks/contract-qa/README.md). An older
+> Markdown example is [`docs/runbooks/v0-1-0-devnet-verification.md`](../runbooks/v0-1-0-devnet-verification.md).
 >
 > Modeled on the sibling frontend repo's `docs/technical/release-runbooks.md`
 > policy, currently written for direct Solidity contract deployments rather than a
@@ -50,12 +52,25 @@ deploy to every target network. The version tag `vA.B.C` is cut on `dev` at
 the exact commit that was deployed and verified — there is no cherry-pick
 dance, because there is no long-lived release branch to keep in sync.
 
-A version tag is **network-scoped**: `vA.B.C` alone always means the Robot
-Money Devnet (§8's default target), and a network suffix names anything
-else — `vA.B.C-base` (mainnet). A given `vA.B.C` may
-exist for multiple networks (a Devnet verification pass, later followed by a
-Base mainnet deployment of the identical commit), and each network's tag is
-its own go/no-go cycle through §4.
+From v0.5.0 (owner decision 2026-10-16) the version tag of a Base mainnet
+production deployment is `vA.B.C` with no network suffix. A rehearsal-kind
+deployment (§4.10, Deploy 3 included) cuts no version tag: its record is the
+`release/<version>-rehearsal` tag and its evidence. Earlier tags keep their old names (`release/v0.4.0-base`).
+The release gate only needs an annotated tag of the sheet's kind at the sha a run names (`release-tag.ts`: a rehearsal tag ends in
+`-rehearsal`), so each run of a rehearsal is gated on its release candidate tag `release/<version>-rc.N-rehearsal`. The record tag
+`release/<version>-rehearsal` is cut once, at the sha the run manifest names (the sha the deployment started at), and is never moved.
+A rehearsal that continues at a later tool-only commit (`publish-contracts/src/tooling-sha.ts`) keeps its record tag where the
+deployment started; the rc tags mark every commit a run ran at. A rehearsal that continues at such a tool-only commit is gated
+at the sha the deployment started at: the tag, the green CI and the frozen counts of that sha cover it (owner decision 2026-10-19,
+`publish-contracts/src/cli.ts`). A production run is always gated at its own sha.
+A Devnet (Twin chain) verification pass is not tagged: its record is the CI
+run and the evidence folder.
+
+`v*.*.*` is also the dApp's release namespace (`release-dapp.yml`, issue 1243).
+Pushing `vA.B.C` builds the dApp image at that commit, pushes it to GHCR as
+`vA.B.C` and `:latest`, and starts the release-tag suite dispatch. One tag
+therefore names the contracts and the dApp of a release. Do not push a
+contract version tag whose number a dApp release already used.
 
 ## 3. Version tags and rehearsal candidates
 
@@ -124,7 +139,7 @@ This section covers two different tags. Do not confuse them.
   - **Optional hardening (owner action, defense in depth).** A GitHub tag ruleset stops a pusher from creating or moving a
     release tag at all. Settings: target `Tags`, pattern `release/*`, enforcement `Active`, rules `Restrict creations`,
     `Restrict updates` and `Restrict deletions`, bypass list only the release owners. The gate does not depend on it.
-- The **version tag** (`vA.B.C[-network]`) is the post-deploy record
+- The **version tag** (`vA.B.C`) is the post-deploy record
   described in the rest of this section.
 
 A version tag is **never** cut before **both** a completed preflight and a
@@ -146,7 +161,7 @@ The cycle:
    failure after broadcast means either the deployed contracts are
    unusable (redeploy fresh addresses) or a mitigating admin action (deposit pause,
    role revocation) contains the issue while a fix lands (§4.6).
-5. **Postflight clean** → tag `vA.B.C[-network]` at the exact commit that was
+5. **Postflight clean** → tag `vA.B.C` at the exact commit that was
    deployed and verified.
 
 Two consequences, stated outright because each one looks unusual and neither
@@ -394,6 +409,10 @@ minimum:
    deposit and withdrawal events from step 2 are visible there — this is the
    check that the deployment is observable, not just functional.
 
+The contract QA runbook (§5) carries these checks as its phase 2 (verify), 4
+(verify again), 6 (deposits) and 8 (observability). A contract release runs
+those phases instead of writing its own postflight list.
+
 The postflight gate is satisfied only when every check above passes and the
 operator has signed off. Write the results into the stage rehearsal or
 production rollout report (§4.5/§4.9).
@@ -560,7 +579,7 @@ Owner decision 2026-10-10 (reverses the 2026-10-02 rule that a short-delay run i
 | Safe tool `updateDelay` | floor 172800 on 8453 | floor 900, below 172800 |
 | verifier | delay at least 172800 on 8453, label `deployment kind: the timelock delay agrees with the kind` | delay 900 to 172799 (a rehearsal verify against 172800 fails, a production verify against 900 fails) |
 | `evidence-check` | floor 172800, kind production | `--deployment-kind rehearsal`: floor 900. Rehearsal evidence checked as production fails, and the reverse |
-| release tag | annotated `release/<version>` (no `rehearsal` in the name) | annotated `release/<version>-rehearsal`. A mismatch fails `RELEASE_TAG_KIND` (exit 28) before any signer exists |
+| release tag | annotated `release/<version>` (no `rehearsal` in the name) | annotated `release/<version>-rehearsal`, or the run's rc tag `release/<version>-rc.N-rehearsal` (any annotated tag ending in `-rehearsal` at the sha). A mismatch fails `RELEASE_TAG_KIND` (exit 28) before any signer exists |
 
 **What records the kind.** The run manifest (`deploymentKind`), the evidence (`deployment_kind`), the verifier label detail and the `verify.deployment_kind` log event (`[rehearsal 900s]`), the isomorphism notes, `timelock.json` (`deployment_kind`), the tag name, and the timelock `minDelay` itself on chain (900).
 
@@ -747,22 +766,41 @@ The record `upgrade-lifecycle.json` is checked by `bun publish-contracts/src/evi
 
 ## 5. Per-release runbook format
 
-Each release has an operator runbook committed under `docs/runbooks/`. The
-runbook must:
+A contract release is executed from YAML under `docs/runbooks/contract-qa/`,
+in the shape of the frontend repo's release runbooks:
 
-- state the release identity (`vA.B.C[-network]`) and the delta it
-  introduces,
-- list go/no-go gates that map directly to §4,
-- provide a preflight script or checklist,
-- provide step-by-step cutover commands, with destructive or irreversible
-  steps explicitly marked,
-- provide post-cutover manual QA steps (§4.4),
-- be written so it can be executed top to bottom, every command
-  copy-pasteable, every claim verified against a specific commit SHA rather
-  than described from memory.
+- **One template**, `template.yaml`: every step a contract release runs, in
+  order. It is general and names no release.
+- **One add-only file per release**, `releases/<release>.yaml`: a full copy of
+  the template steps, unchanged and in order, plus only the steps that release
+  adds (each marked `added: <release>`). It also holds the release's owner
+  `decisions:`, its `recovery:` decision, its `notes:` and its `scope:` (every
+  PR the release ships, tied to a check or a reason for none).
+- **The environment is chosen at run time** (`--target twin|rehearsal|production`).
+  There are no per-environment files. Only the sheet and the arguments differ.
+- **The validator is the gate.** `bun scripts/runbook/validate-contract-qa.ts`
+  refuses a release file that drops, edits or reorders a template step, a step
+  that reads state no step writes, and a command the real CLIs do not accept.
+  CI runs it on every pull request (`docs/development/ci-suites.md`, suite 13).
+- **A production run is refused** while an owner decision is open or the
+  release is not marked `productionReady`.
 
-Filenames under `docs/runbooks/` are kebab-case, matching the frontend
-repo's convention: `vA-B-C-<network>-<short-description>.md`.
+Each release runbook must still:
+
+- state the release identity (`vA.B.C`) and the delta it introduces,
+- map its go/no-go gates to §4,
+- mark destructive or irreversible steps (`irreversible`, with `notBefore`,
+  `onlyFor` or `go`),
+- be executable top to bottom, with every claim verified against a specific
+  commit SHA rather than described from memory.
+
+A new release adds `releases/<next>.yaml`. It never edits the template steps.
+The format, the placeholders and the run procedure are in
+`docs/runbooks/contract-qa/README.md`.
+
+Markdown runbooks under `docs/runbooks/` stay valid for work that is not a
+contract release (for example the devnet verification). Their filenames are
+kebab-case: `vA-B-C-<network>-<short-description>.md`.
 
 ## 6. Per-release GitHub tracking issue
 
@@ -772,7 +810,9 @@ contracts, on which network, with what role wiring) — not just a list of
 merged PRs.
 
 The issue carries two GitHub-checkbox checklists mirroring the runbook's
-preflight and postflight gates. Checking a box is a claim that the
+preflight and postflight gates. For a contract release these are the phases of
+the release's YAML runbook (§5): phase 0 for preflight, phases 1 to 10 for
+the cutover and postflight. Checking a box is a claim that the
 corresponding gate was actually executed and passed.
 
 For a final Base mainnet release the preflight checklist always contains the
@@ -792,7 +832,7 @@ no release branch to backport from, since every deployment runs the same
 
 | Network | Chain id | Default per ADR-0013 | Notes |
 | --- | --- | --- | --- |
-| Robot Money Devnet | `918453` | **Yes — the default verification target.** | The Twin chain: a pinned lazy anvil fork of real Base at the upstream head minus 2 per CI run (`scripts/devnet/twin-fork.ts`, `docs/technical/full-stack-devnet.md`). Tests deploy their own vault (clean room). Full production-parity for all three yield adapters (Aave V3, Compound V3, Morpho). No lasting address record; a version tag against the Devnet documents a verification pass, not a persistent deployment. |
+| Robot Money Devnet | `918453` | **Yes — the default verification target.** | The Twin chain: a pinned lazy anvil fork of real Base at the upstream head minus 2 per CI run (`scripts/devnet/twin-fork.ts`, `docs/technical/full-stack-devnet.md`). Tests deploy their own vault (clean room). Full production-parity for all three yield adapters (Aave V3, Compound V3, Morpho). No lasting address record and no version tag: a verification pass is recorded by its CI run and evidence folder (§3). |
 | Base mainnet | `8453` | The eventual real target — a separate, deliberately-costed decision (D9). | Requires an audit pass, Safe owners signing with encrypted keystores (passphrase typed) or, at each owner's choice, hardware wallets (optional, never required), and a funded submitter key. |
 
 ## 9. Safe and timelock self-administration (Twin-only)

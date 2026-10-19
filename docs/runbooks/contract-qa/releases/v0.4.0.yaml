@@ -1,0 +1,1586 @@
+# docs/runbooks/contract-qa/releases/v0.4.0.yaml: the contract QA runbook of the v0.4.0 contracts line, for the
+# governed-proxy release (Deploy 3). A full copy of template.yaml's steps, unchanged and in order, plus the steps
+# this release adds since Deploy 2 (each carries `added: v0.4.0`). scripts/runbook/validate-contract-qa.ts checks
+# it; the next release adds releases/<next>.yaml with its own additions. The policy is
+# docs/runbooks/contract-qa/README.md and docs/operations/contract-release-runbooks.md.
+release: v0.4.0
+template: contract-qa
+productionReady: false
+notes: |
+  Identity. The contracts line is v0.4.0. Its tags so far: release/v0.4.0-base (Deploy 1, 9a768bb9) and
+  release/v0.4.0-base.3-rehearsal (Deploy 2, 78c50cbd, a rehearsal-kind deployment). This file QA-checks the
+  next deployment of the line, Deploy 3: a NEW deployment of governed UUPS proxies at new addresses. Deploy 2
+  predates the proxies and cannot be upgraded in place (ADR-0009: no assisted migration; the legacy vaults stay
+  redeemable). The release tag of a production Deploy 3 is release/<version> with no "rehearsal" in it; whether
+  the line is bumped to v0.5.0 for it is open decision version-line.
+
+  What this release adds to the Deploy 2 flow (everything marked added: v0.4.0): governed proxies and the
+  freeze (P2.50 to P2.52, P7.50 to P7.62), the ProposerFloorTimelock check (P2.51), set-unwind-guard and its
+  verifier label (P3.51, P3.52, P4.50), the one-call apply-receipt and its ordering rule (P5.51 to P5.58), agent
+  consent by commit then reveal (P6.50 to P6.54), the router leg skipping and the new deposit gas limits
+  (P6.55 to P6.58), the release gate re-read at later stages (P3.50), proxy-aware observability (P8.50, P8.51),
+  the Safe self-administration pair on the Twin chain (P4.51, P4.52) and the failure and exclusion drills
+  (P9.50 to P9.55).
+
+  Environments. The same file runs on the Twin chain (--target twin), as the Base mainnet rehearsal with a 900 s
+  timelock (--target rehearsal, runbook 4.10) and as Deploy 3 (--target production). Steps for one environment say
+  so with onlyFor. The lifecycle steps (P7) run only when the run sheet says UPGRADE_MODE=upgradeable. The freeze
+  steps (P7.56 to P7.61) run only when the owner has recorded {runDir}/go/freeze.json: the freeze is OFF by
+  default on 8453.
+
+  Not exercised here, and why. (1) The Twin-only rows update-delay, batch and cancel: the default Twin govern
+  run (P3.01) already runs them, the rehearsal rows are optional demonstrations of the Safe tool. (2) Twin-only
+  safe-add-owner and timelock-grant-role and revoke rows: the CI Twin job covers safe-change-threshold, this file
+  runs the threshold pair (P4.51, P4.52) and leaves the others to publish-contracts/tests/govern.test.ts.
+  (3) A committee signal (rmpc committee vote-submit): the registered submitter is a Safe, which rmpc cannot
+  sign for, so P5.50 proves the role with the read-only check-agent. (4) The emergency unwind itself: the baskets
+  hold nothing at the guard rounds, the verifier label (P4.50) proves the guard is set. (5) The single-vault
+  redeploy (runbook 4.11) has its own procedure.
+
+  Exceptions to the README. None recorded.
+
+  Open owner decisions are the decisions: list below. A production run (validate with --target production
+  --runnable) refuses while any is open, and so does productionReady: true.
+decisions:
+  - id: adr-0014-accepted
+    question: "Accept ADR-0014 (governed UUPS proxies with a one-way, target-bound freeze), which is Proposed"
+    status: decided
+    answer: "Yes. Follows from freeze-policy: an upgradeable proving period needs ADR-0014 accepted. The ADR file itself still says Proposed and must be updated to Accepted."
+    decidedOn: 2026-10-16
+    ref: "owner decision session deploy3-runbook, 2026-10-16"
+  - id: freeze-policy
+    question: "Is Deploy 3 frozen at launch (UPGRADE_MODE=frozen), or an upgradeable proving period with UPGRADE_FREEZE_DEADLINE and a named release owner, signers and backups (4.12)"
+    status: decided
+    answer: "No. Deploy 3 does not launch frozen: it is an upgradeable proving period (UPGRADE_MODE=upgradeable). It needs UPGRADE_FREEZE_DEADLINE and a named release owner, signers and backups (4.12), still to be set."
+    decidedOn: 2026-10-16
+    ref: "owner decision session deploy3-runbook, 2026-10-16"
+  - id: emergency-levers
+    question: "Confirm or narrow the two hot-key levers the security fixes added to EMERGENCY_ROLE (emergencyExcludeAdapter, recoverRemovedAdapter), issue 1705"
+    status: open
+    answer: null
+    decidedOn: null
+    ref: null
+  - id: queued-operations
+    question: "What a timelock operation queued before an upgrade does after it (bound to the implementation version, or invalidated), docs/development/open-questions.md, issue 1810"
+    status: open
+    answer: null
+    decidedOn: null
+    ref: null
+  - id: external-review
+    question: "The external security review of the proxy form and the four new libraries at the release sha is complete and recorded in docs/audits.md (runbook 4.1 item 3, required for a final mainnet release)"
+    status: open
+    answer: null
+    decidedOn: null
+    ref: null
+  - id: production-receipt-surface
+    question: "How a production deployment registers a receipt submitter and records receipts: register-committee and record-receipt are refused on 8453 in production, so P3.03 to P3.05 and P5.01 to P5.58 are skipped until this is decided"
+    status: decided
+    answer: "Yes. Rebalancing works on 8453 from launch. The CLI must stop refusing register-committee and record-receipt in production; the change is not yet made."
+    decidedOn: 2026-10-16
+    ref: "owner decision session deploy3-runbook, 2026-10-16"
+  - id: version-line
+    question: "The version line and tag of Deploy 3: release/v0.4.0-base.N or a bump to v0.5.0"
+    status: decided
+    answer: "Deploy 3 is released as v0.5.0 from releases/v0.5.0.yaml, which supersedes this file for Deploy 3."
+    decidedOn: 2026-10-16
+    ref: "owner decision session deploy3-runbook, 2026-10-16"
+recovery: |
+  Contracts are immutable; there is no in-place rollback (runbook 4.6). What to do depends on how far the run got.
+  - Before P1.02-publish (phase 0 and the go): nothing was sent. Fix on dev, take the new tip, tag it again,
+    commit its frozen counts and restart at P0.01.
+  - A failed P1.02-publish: rerun the same command with --resume (never mark a stage done by hand). A stage that
+    died part-way stays started. Before the timelock handover the deployer still holds the roles: pause-all or
+    abandon the deployment and redeploy at new addresses.
+  - After the handover (P1.02 done): the EMERGENCY key pauses deposits (pause-all, P9.01); withdrawals stay open.
+    A failed verify (P2.01, P4.01) pauses all four vaults by itself and exits 13: read rollout-report-<chain>.json,
+    fix on dev, and plan a NEW deployment, because a live vault's state cannot be moved onto fixed code. A vault
+    pause-all paused comes back only through a new unpause round of the Safe (P9.03); cancel any pending unpause
+    through the Safe first.
+  - A queued upgrade or freeze that must not run is cancelled through the Safe on the timelock (cancel). Rolling
+    back an upgrade is another governed upgrade, with the same layout review; never assume it is safe after a
+    migrating upgrade.
+  - After P7.57-freeze-execute: upgrades are gone for good. Only a new deployment and a voluntary cutover (ADR-0009)
+    change logic. The legacy vaults stay redeemable.
+  - After P5.54-apply-receipt-execute: the receipt is burned; govern --row clear-voted-weights returns routing to
+    the default vector (never on the live Deploy 2 router).
+  - The version tag (P10.05) is cut only after a clean postflight and is never moved or withheld by a later failure.
+scope:
+  - {pr: 1873, what: "follow-ups from 1863: a refused timelock pin leaves the stage manifest behind so the rerun refuses 'already ran'", check: "P1.02-publish"}
+  - {pr: 1845, what: "hardening, exclusion recovery and security fixes", check: "P9.54-exclusion-adapter"}
+  - {pr: 1871, what: "verify follow-ups from 1862: wrapper-created timelock fails the adopted creation proof, a missing deploy tx exits RPC_REFUSED", check: "P2.01-verify-pre-govern"}
+  - {pr: 1869, what: "an operator command deploys an upgrade implementation linked to the live libraries (deploy-implementation)", check: "P7.50-deploy-implementation"}
+  - {pr: 1867, what: "upgrade-row follow-ups: a rerun of an older upgrade-proxy row re-records a stale implementation", check: "P7.52-upgrade-execute"}
+  - {pr: 1865, what: "indexer, watchdog and rmpc proxy backfill follow-ups", check: "P8.50-indexer-upgrade-state"}
+  - {pr: 1863, what: "check the timelock pin before every proxy stage broadcasts; honest or backfilled pin for older run manifests", check: "P1.02-publish"}
+  - {pr: 1862, what: "vault-rules startup check refuses emergency pause-all; verify's creation proof; a failure auto-pauses all vaults", check: "P9.51-verify-failure"}
+  - {pr: 1860, what: "core-stack governance release and the Fusion release steps drove the refused release-receipt row", check: "P5.53-apply-receipt-schedule"}
+  - {pr: 1858, what: "Twin upgrade rehearsal follow-ups: one required-check policy for the lifecycle job, derived rehearsal freeze deadline", check: "P0.20-plan"}
+  - {pr: 1857, what: "govern rows for freeze and governed upgrade, verify deadline warnings, fail-closed proxy pins", check: "P7.56-freeze-schedule"}
+  - {pr: 1855, what: "watchdog never pages an upgrade executed from a constructor; gateway-admin writes when the gateway is unverified", none: "watchdog paging and dapp admin-write gating, covered by their CI unit tests; no run step observes a constructor upgrade"}
+  - {pr: 1852, what: "upgradeability stage 3 follow-ups: late-watched proxy first upgrade paged, cached gateway check, proxy topics backfill", check: "P8.50-indexer-upgrade-state"}
+  - {pr: 1850, what: "adopt a pre-deployed core timelock, pin the timelock prediction across stages, finish FrozenAtDeploy initialization", check: "P1.02-publish"}
+  - {pr: 1848, what: "per-vault rule table follow-ups: old sheets, emergency pause-all, log scans", check: "P2.01-verify-pre-govern"}
+  - {pr: 1847, what: "two ready apply-receipt operations executed out of order make the older vector active", check: "P5.56-older-receipt-refused"}
+  - {pr: 1844, what: "on 8453 every broadcasting stage runs the release gate and the frozen counts file must be committed and clean", check: "P3.50-gate-recheck"}
+  - {pr: 1841, what: "Twin rehearsal of governed deployment, upgrade, freeze and rejected post-freeze upgrade", check: "P7.57-freeze-execute"}
+  - {pr: 1839, what: "deployment, verification and evidence tooling for governed proxies and freeze", check: "P2.52-upgradeability-record"}
+  - {pr: 1838, what: "rmpc, ABI consumers, dapp, explorer and indexer disclose implementation and freeze state", check: "P8.51-client-pins"}
+  - {pr: 1837, what: "prove-control adoption scans eth_getLogs over the whole Safe history", check: "P1.02-publish"}
+  - {pr: 1836, what: "post-broadcast reads in the Safe tool and prove-control are read-after-write safe", check: "P1.02-publish"}
+  - {pr: 1834, what: "--dry-run of an 8453 sheet at the safe stage", check: "P0.21-dry-run"}
+  - {pr: 1832, what: "governed UUPS upgrades and the irreversible freeze for approved core contracts", check: "P2.50-proxy-labels"}
+  - {pr: 1830, what: "plan: deployment and governance consistent across the four vaults", check: "P2.01-verify-pre-govern"}
+  - {pr: 1827, what: "the weight setter applies a consensus receipt in one call; RouterGovernance voting deleted", check: "P5.54-apply-receipt-execute"}
+  - {pr: 1829, what: "apply-receipt verification no longer trusts the editable run manifest", check: "P5.58-receipt-applications-evidence"}
+  - {pr: 1828, what: "evidence secret scan hash exemption tightened", check: "P10.02-secret-scan"}
+  - {pr: 1824, what: "measurement test of V4 recorder sampling against BasketVault NAV", none: "a forge measurement test, no deployment behavior"}
+  - {pr: 1797, what: "redeploy one vault (rmPROTO) into an existing deployment", none: "the single-vault redeploy is its own procedure (runbook 4.11), not part of a QA run of a fresh deployment"}
+  - {pr: 1799, what: "docs: single-vault redeploy into a live deployment", none: "docs only"}
+  - {pr: 1826, what: "bump rustls for RUSTSEC-2026-0346..0349", none: "dependency bump, covered by the audit CI jobs"}
+  - {pr: 1693, what: "owner signers on several hardware wallets of one type in one run", check: "P1.02-publish"}
+  - {pr: 1785, what: "a keeper calls the rmAGENT price recorder record() every few minutes", none: "an operations script with its own CI self-test; P6.12-deposit-rmagent refreshes the recorder by hand"}
+  - {pr: 1823, what: "any caller can squat an unowned agent address's policy ownership", check: "P6.52-agent-consent-stranger-reveal-refused"}
+  - {pr: 1822, what: "RobotMoneyVault.addAdapter accepts an already-active adapter and double counts NAV", none: "contract unit tests; not reachable from a deployed run"}
+  - {pr: 1818, what: "a self-registered gateway agent can submit a committee signal under another member's address", check: "P5.50-committee-agent-role"}
+  - {pr: 1821, what: "hardware signing is optional for Safe owner signers on 8453", check: "P0.17-check-sheet"}
+  - {pr: 1690, what: "Safe and timelock self-administration procedure and tests", check: "P4.51-safe-threshold-raise"}
+  - {pr: 1787, what: "docs: finalize smart contract security review", none: "docs only"}
+  - {pr: 1783, what: "PortfolioRouter.deposit needs at least 6.8M gas, enforced in the dapp", check: "P6.57-router-deposit"}
+  - {pr: 1691, what: "owner signers hardware only (reverted by 1821) and the verifier enumerates every role holder", check: "P2.01-verify-pre-govern"}
+  - {pr: 1814, what: "vault deposits stay open while a funded adapter is excluded from NAV", check: "P9.55-exclusion-restore"}
+  - {pr: 1714, what: "docs: the Safe applies consensus receipts through the weight setter", none: "docs only"}
+  - {pr: 1800, what: "docs: plan governed contract upgrades and permanent freeze", none: "docs only"}
+  - {pr: 1784, what: "rmPROTO USDC redeem reverted once after a router deposit", check: "P6.21-redeem-in-kind-rmproto"}
+  - {pr: 1794, what: "bump quinn-proto for the cargo-audit advisories", none: "dependency bump, covered by the audit CI jobs"}
+  - {pr: 1774, what: "zero-TVL vaults get a new identical vault_snapshots row every tick", none: "explorer indexer tests"}
+  - {pr: 1776, what: "docs: stage-deployment.md names manifests that do not exist", none: "docs only"}
+  - {pr: 1775, what: "indexer catch-up retry, backoff and chunking policy", none: "indexer policy; client checks are not part of the rehearsal deploy runbook"}
+  - {pr: 1772, what: "dapp vault detail share symbol", none: "dapp unit tests"}
+  - {pr: 1771, what: "home page Depositors counts only gateway agent deposits", none: "explorer API tests"}
+  - {pr: 1770, what: "the rmRWA issuer freeze-control disclosure shown on every speculative vault", none: "dapp unit tests"}
+  - {pr: 1763, what: "rehearsal secret scan flags public 64-hex values", check: "P10.02-secret-scan"}
+  - {pr: 1761, what: "dapp redeem gas workaround, stale price recorder gate with record() refresh", check: "P6.12-deposit-rmagent"}
+  - {pr: 1762, what: "root-cause the pending-tag Panic(0x11) on rmUSDC redeem", none: "forge tests only"}
+  - {pr: 1757, what: "commit the reconstructed baseline frozen counts for 78c50cbd", none: "data for the previous deployment; the new sha has its own file, P0.11-frozen-counts"}
+steps:
+  - id: "P0.01-runbook-valid"
+    standing: ["4.1"]
+    description: "The release runbook is the template plus additions, the sheet and target make sense, and a production run has no open owner decision"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "scripts/runbook/validate-contract-qa.ts", "--release", "{release}", "--target", "{target}", "--runnable"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P0.02-run-dirs"
+    standing: ["4.3"]
+    description: "The run directory layout every later receipt and state file lives in; the run directory is outside the core checkout, which must stay clean"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["mkdir", "-p", "{runDir}/state", "{runDir}/journal", "{runDir}/go", "{runDir}/evidence", "{runDir}/manifests", "{runDir}/counts"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "state", "required": true}
+    irreversible: false
+  - id: "P0.04-checkout"
+    standing: ["4.1"]
+    description: "The core checkout is clean and its HEAD is the DEPLOY_SHA (the CLI refuses anything else)"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bash", "-c", 'test -z "$(git status --porcelain)" && test "$(git rev-parse HEAD)" = "{coreSha}"']
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P0.05-install"
+    standing: ["4.1"]
+    description: "publish-contracts dependencies come from the committed lockfile"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "install", "--frozen-lockfile", "--cwd", "publish-contracts"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P0.06-forge-build"
+    standing: ["4.1"]
+    description: "forge build succeeds at the DEPLOY_SHA"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["forge", "build"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    maxMinutes: 30
+  - id: "P0.08-dependency-manifest"
+    standing: ["4.2"]
+    description: "The third-party dependency manifest for this release is recorded at the deploy block; run from the dev checkout, because it writes a file under deployments/ that would dirty the DEPLOY_SHA checkout"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bash", "{countsCheckout}/scripts/release/preflight-guards.sh", "--dependency-manifest", "8453:{release}"]
+    env:
+      DEPENDENCY_MANIFEST_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{countsCheckout}/deployments/dependency-manifests/8453", "pattern": "{release}.json", "required": true}
+    irreversible: false
+    onlyFor: ["rehearsal", "production"]
+  - id: "P0.12-twin-fork"
+    standing: ["9"]
+    description: "The Twin chain (918453), a pinned lazy fork of Base, answers on the RPC the run uses"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "scripts/devnet/twin-fork.ts", "start", "--port", "8545", "--state-dir", "{runDir}/twin"]
+      - ["bun", "scripts/devnet/twin-fork.ts", "wait-ready", "--port", "8545", "--state-dir", "{runDir}/twin"]
+    env:
+      BASE_UPSTREAM_RPC: "{env:BASE_UPSTREAM_RPC}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/twin", "pattern": "anvil.json", "required": true}
+    irreversible: false
+    onlyFor: "twin"
+    maxMinutes: 15
+  - id: "P0.13-twin-keys"
+    standing: ["4.3"]
+    description: "Throwaway keystores for the deployer, pauser, emergency key and three Safe owners; the passphrase stays in a 0600 file; the public addresses become the sheet fragment"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bash", "-c", "umask 077 && head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \\n' > {runDir}/passphrase"]
+      - ["bash", "-c", "bun publish-contracts/src/rehearsal/cli.ts keys --dir {runDir}/keys --password-file {runDir}/passphrase --chain-id 918453 > {runDir}/fragment.env"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "fragment.env", "required": true}
+    irreversible: false
+    onlyFor: "twin"
+    gateAbsent: "{runDir}/fragment.env"
+  - id: "P0.15-sheet-merge"
+    standing: ["4.3"]
+    description: "The run sheet is the environment's committed sheet with the fragment's lines, through the real sheet parser"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "publish-contracts/src/ci/merge-sheet.ts", "--template", "{sheetTemplate}", "--fragment", "{runDir}/fragment.env", "--out", "{sheet}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "sheet.env", "required": true}
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+  - id: "P0.50-twin-upgrade-overlay"
+    standing: ["4.12"]
+    description: "The Twin sheet deploys the proxies upgradeable (UPGRADE_MODE=upgradeable) so the lifecycle phase can run; the overlay names no deadline"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "publish-contracts/src/ci/merge-sheet.ts", "--template", "{sheet}", "--fragment", "deployments/twin-918453/upgrade-rehearsal.env", "--out", "{sheet}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
+    added: "v0.4.0"
+
+  - id: "P0.17-check-sheet"
+    standing: ["4.2", "4.10"]
+    description: "The sheet agrees with the environment: chain id, deployment kind, timelock delay band, 1 USDC seed, caps, and as many owner signer specs as Safe owners"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "scripts/runbook/validate-contract-qa.ts", "--check-sheet", "{sheet}", "--target", "{target}", "--owner-signers", "{ownerSignerCount}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P0.07-preflight-guards"
+    standing: ["4.2"]
+    description: "EIP-170 size gate and the zero timelock delay guard pass on the exact build artifacts"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bash", "scripts/release/preflight-guards.sh"]
+    env:
+      TIMELOCK_MIN_DELAY: "{sheet:TIMELOCK_MIN_DELAY}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P0.18-twin-fund"
+    standing: ["9"]
+    description: "Gas for every throwaway key and the real FiatToken balance of the deployer, on the Twin fork only"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "publish-contracts/src/rehearsal/cli.ts", "fund-gas", "--rpc", "{rpcUrl}", "--sheet", "{sheet}"]
+      - ["bun", "publish-contracts/src/rehearsal/cli.ts", "fund-usdc", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--usdc-units", "2000000000"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
+  - id: "P0.19-funding"
+    standing: ["4.2"]
+    description: "The deployer holds 0.005 ETH and 5 USDC (1 seed plus 4 test deposits). The gas the run burns is about 0.003 ETH; every send goes through cast at the network fee"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bash", "-c", 'cast balance "{sheet:ADMIN_ADDRESS}" > {runDir}/state/deployer-eth']
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-eth}", "5000000000000000"]
+      - ["bash", "-c", 'cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/deployer-usdc']
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-usdc}", "5000000"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["rehearsal", "production"]
+    writes: ["deployer-eth", "deployer-usdc"]
+  - id: "P0.20-plan"
+    standing: ["3", "4.3"]
+    description: "The plan job: sheet, floors, chain id, release tag of the sheet's kind, committed frozen counts, green CI and core's config-check, with no signer"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "--stage", "plan", "--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--environment", "{environmentName}", "--core-sha", "{coreSha}", "--counts-dir", "{countsDir}", "--evidence", "{evidenceDir}", "{gate}"]
+    env:
+      GITHUB_TOKEN: "{env:GITHUB_TOKEN}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["rehearsal", "production"]
+  - id: "P0.21-dry-run"
+    standing: ["4.3"]
+    description: "Every deployer stage simulates in order on a blank local anvil and sends nothing"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "publish", "--dry-run", "--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--signer", "address:{sheet:ADMIN_ADDRESS}", "--environment", "{environmentName}", "--core-sha", "{coreSha}", "--counts-dir", "{countsDir}", "--evidence", "{runDir}/evidence-dry", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{runDir}/manifests-dry"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["rehearsal", "production"]
+    maxMinutes: 60
+
+  # ── Phase 1, publish: stages 0 to 11. The first send of the run. ──
+  - id: "P1.50-record-go"
+    standing: ["4.3"]
+    description: "The publish go is written by the run: the sha, the environment and the hash of the merged sheet it proceeds with. Starting the run is the go"
+    host: "control"
+    phase: 1
+    cmds:
+      - ["bun", "scripts/runbook/run-record.ts", "go", "--kind", "publish", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/go", "pattern": "publish.json", "required": true}
+    irreversible: false
+  - id: "P1.02-publish"
+    standing: ["4.3"]
+    description: "Safe, libs, recorder, vault, registry, router, gateway, ic-policy, governance, proto, agent, rwa, prove-control signed by every owner, then the timelock handover; each stage matches its frozen count"
+    host: "control"
+    phase: 1
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "publish", "{common}", "{owners}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{evidenceDir}", "pattern": "publish-run.json", "required": true}
+      - {"dir": "{manifestDir}", "pattern": "timelock.json", "required": true}
+    irreversible: true
+    notBefore: {"afterStep": "P1.50-record-go", "hours": 0}
+    maxMinutes: 180
+  - id: "P1.04-twin-counts"
+    standing: ["3"]
+    description: "The Twin run measured and wrote the per-stage counts for the sha"
+    host: "control"
+    phase: 1
+    cmds:
+      - ["test", "-s", "{countsDir}/{coreSha}.json"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
+
+  # ── Phase 2, verify: the pre-govern state. All four vaults deploy paused. ──
+  - id: "P2.01-verify-pre-govern"
+    standing: ["4.3"]
+    description: "Stage 12 reads the chain, not the manifests: roles, Safe, timelock, per-vault rules, recorder ring, the deployer nonce. A failure pauses all four vaults and exits 13"
+    host: "control"
+    phase: 2
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{common}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{evidenceDir}", "pattern": "isomorphism-{chainId}.json", "required": true}
+    irreversible: false
+    maxMinutes: 60
+  - id: "P2.50-proxy-labels"
+    standing: ["4.12"]
+    description: "Every governed contract is the build's ERC-1967 proxy with no admin and no beacon, names the manifest's implementation, links the build's libraries, names the deployed timelock as its only upgrade authority, is initialized once, and agrees with the release mode"
+    host: "control"
+    phase: 2
+    cmds:
+      - ["bash", "-c", 'for n in "vault[rmUSDC]" registry router gateway icpolicy receipt governance "vault[rmPROTO]" "vault[rmAGENT]" "vault[rmRWA]"; do for l in "is the build''s proxy with no admin and no beacon" "implementation slot equals the manifest" "implementation links the build''s libraries" "upgradeTimelock() is the deployed timelock" "initialized once and not initializing" "upgradesFrozen() agrees with the release mode" "manifest upgrade_mode equals the release sheet" "storage layout identifier recorded"; do grep -qxF "$n: $l" {journal:P2.01-verify-pre-govern} || { echo "missing label: $n: $l"; exit 1; }; done; done']
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    added: "v0.4.0"
+  - id: "P2.51-timelock-build"
+    standing: ["4.12", "9"]
+    description: "The timelock is the build's ProposerFloorTimelock: its code equals the artifact and it counts exactly one proposer, the Safe, so the last proposer can never be revoked"
+    host: "control"
+    phase: 2
+    cmds:
+      - ["grep", "-qxF", "timelock: runtime code equals build artifact (masked)", "{journal:P2.01-verify-pre-govern}"]
+      - ["bash", "-c", 'test "$(cast call "{m:timelock.timelock}" "proposerCount()(uint256)")" = 1']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    added: "v0.4.0"
+  - id: "P2.52-upgradeability-record"
+    standing: ["4.12"]
+    description: "Verify wrote upgradeability.json: ten proxies, the release mode equals the sheet, and the immutability claim is made only for a frozen release"
+    host: "control"
+    phase: 2
+    cmds:
+      - ["jq", "-e", "--arg", "mode", "{sheet:UPGRADE_MODE}", '(.proxies | length) == 10 and .mode == $mode and (.core_immutable == ($mode == "frozen"))', "{manifestDir}/upgradeability.json"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{manifestDir}", "pattern": "upgradeability.json", "required": true}
+    irreversible: false
+    added: "v0.4.0"
+
+  # ── Phase 3, govern: stage 13. The Safe, through the timelock, is the only way anything changes after the handover. ──
+  - id: "P3.01-govern-schedule"
+    standing: ["4.3"]
+    description: "Stage 13 schedules the four vault unpauses through the real Safe, one timelock operation each, in one sitting; on 8453 it exits 15 with the resume command"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: [0, 15]
+    receipts:
+      - {"dir": "{evidenceDir}", "pattern": "publish-run.json", "required": true}
+    irreversible: false
+    maxMinutes: 60
+  - id: "P3.50-gate-recheck"
+    standing: ["3"]
+    description: "The release gate holds again at the later stage: green CI at the sha is re-read before the delayed stage executes; every broadcasting 8453 run repeats the whole gate, so a GitHub outage holds the stage"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "scripts/ci/check-sha-green.ts", "{gateSha}", "--repo", "robotmoney/robotmoney-core"]
+    env:
+      GITHUB_TOKEN: "{env:GITHUB_TOKEN}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["rehearsal", "production"]
+    added: "v0.4.0"
+  - id: "P3.51-unwind-guard-schedule"
+    standing: ["4.9"]
+    description: "In the same sitting as the unpauses, one set-unwind-guard round per basket: the Safe sets a non-zero emergency unwind floor on every active asset, sized from the vault's holding (the Twin proves the row with 1000000 and 500)"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "set-unwind-guard", "--admin-arg", "vault=PROTO", "--admin-arg", "token=all", "--admin-arg", "min-usdc-out={unwindMinUsdcOut}", "--admin-arg", "max-loss-bps={unwindMaxLossBps}", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "set-unwind-guard", "--admin-arg", "vault=AGENT", "--admin-arg", "token=all", "--admin-arg", "min-usdc-out={unwindMinUsdcOut}", "--admin-arg", "max-loss-bps={unwindMaxLossBps}", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "set-unwind-guard", "--admin-arg", "vault=RWA", "--admin-arg", "token=all", "--admin-arg", "min-usdc-out={unwindMinUsdcOut}", "--admin-arg", "max-loss-bps={unwindMaxLossBps}", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: [0, 15]
+    receipts: []
+    irreversible: false
+    maxMinutes: 60
+    added: "v0.4.0"
+
+  - id: "P3.02-govern-execute"
+    standing: ["4.3"]
+    description: "After the timelock delay the same command executes the four unpauses and reads depositsPaused back; every printed row has a transaction hash and status 1"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{evidenceDir}", "pattern": "publish-run.json", "required": true}
+    irreversible: false
+    notBefore: {"afterStep": "P3.01-govern-schedule", "hours": "timelockDelay"}
+    maxMinutes: 60
+  - id: "P3.52-unwind-guard-execute"
+    standing: ["4.9"]
+    description: "After the delay the three guard rounds execute and the guard reads back non-zero"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "set-unwind-guard", "--admin-arg", "vault=PROTO", "--admin-arg", "token=all", "--admin-arg", "min-usdc-out={unwindMinUsdcOut}", "--admin-arg", "max-loss-bps={unwindMaxLossBps}", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "set-unwind-guard", "--admin-arg", "vault=AGENT", "--admin-arg", "token=all", "--admin-arg", "min-usdc-out={unwindMinUsdcOut}", "--admin-arg", "max-loss-bps={unwindMaxLossBps}", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "set-unwind-guard", "--admin-arg", "vault=RWA", "--admin-arg", "token=all", "--admin-arg", "min-usdc-out={unwindMinUsdcOut}", "--admin-arg", "max-loss-bps={unwindMaxLossBps}", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    notBefore: {"afterStep": "P3.51-unwind-guard-schedule", "hours": "timelockDelay"}
+    maxMinutes: 60
+    added: "v0.4.0"
+
+  - id: "P3.03-submitter-safe"
+    standing: ["4.10"]
+    description: "The consensus receipt submitter is a second SafeL2 1.4.1 multisig, with the governing Safe's owners and a different salt, never a key"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/safe/cli.ts", "create", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--owners", "{sheet:SAFE_OWNERS}", "--threshold", "2", "--signer", "{signer}", "--salt-nonce", "{submitterSaltNonce}", "--yes", "--out", "{runDir}/submitter-safe.json"]
+      - ["bash", "-c", "jq -r .safe {runDir}/submitter-safe.json > {runDir}/state/submitter-safe"]
+    env:
+      ADMIN_ADDRESS: "{sheet:ADMIN_ADDRESS}"
+      PAUSER_ADDRESS: "{sheet:PAUSER_ADDRESS}"
+      EMERGENCY_ADDRESS: "{sheet:EMERGENCY_ADDRESS}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "submitter-safe.json", "required": true}
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    gateAbsent: "{runDir}/state/submitter-safe"
+    writes: ["submitter-safe"]
+  - id: "P3.04-register-committee-schedule"
+    standing: ["4.10"]
+    description: "The submitter Safe authorizes itself privately (commit, a block later reveal, hand the agent to the timelock), then the governing Safe schedules one batch: setPolicy and committeeRegister"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "register-committee", "--submitter", "{state:submitter-safe}", "--agent-label", "qa-submitter", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: [0, 15]
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    maxMinutes: 60
+  - id: "P3.05-register-committee-execute"
+    standing: ["4.10"]
+    description: "After the delay the batch executes and AGENT_ROLE, COMMITTEE_AGENT_ROLE, the label, the agent owner and the share receiver read back"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "register-committee", "--submitter", "{state:submitter-safe}", "--agent-label", "qa-submitter", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P3.04-register-committee-schedule", "hours": "timelockDelay"}
+    maxMinutes: 60
+
+  # ── Phase 4, verify again: the post-govern state. ──
+  - id: "P4.01-verify-post-govern"
+    standing: ["4.3"]
+    description: "Stage 12 again: all four unpause rows executed, all four vaults read depositsPaused false; a manifest that disagrees with the chain fails closed"
+    host: "control"
+    phase: 4
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{common}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    maxMinutes: 60
+  - id: "P4.50-unwind-guard-labels"
+    standing: ["4.9"]
+    description: "The post-govern verify requires the emergency unwind guard on every active asset of every open basket"
+    host: "control"
+    phase: 4
+    cmds:
+      - ["grep", "-qxF", "vault[rmPROTO]: emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault", "{journal:P4.01-verify-post-govern}"]
+      - ["grep", "-qxF", "vault[rmAGENT]: emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault", "{journal:P4.01-verify-post-govern}"]
+      - ["grep", "-qxF", "vault[rmRWA]: emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault", "{journal:P4.01-verify-post-govern}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    added: "v0.4.0"
+  - id: "P4.51-safe-threshold-raise"
+    standing: ["9"]
+    description: "Twin only: a Safe self-administration row on the real SafeL2 raises the threshold to the owner count; it is one Safe transaction, no timelock round"
+    host: "control"
+    phase: 4
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "safe-change-threshold", "--admin-arg", "threshold={sheetOwnerCount}", "{common}", "{owners}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
+    added: "v0.4.0"
+  - id: "P4.52-safe-threshold-restore"
+    standing: ["9"]
+    description: "Twin only: the threshold goes back to the sheet's value, signed by every owner while the sheet is stale; every later row and the verifier compare the live roster with the sheet"
+    host: "control"
+    phase: 4
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "safe-change-threshold", "--admin-arg", "threshold={sheet:SAFE_THRESHOLD}", "{common}", "{owners}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
+    added: "v0.4.0"
+
+  # ── Phase 5, receipt: a REAL consensus receipt anchored through the gateway by the registered submitter Safe. ──
+  - id: "P5.01-receipt-offline"
+    standing: ["4.10"]
+    description: "The receipt id and the payload digest come from the one shared definition, never a plain keccak256 of the file"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bash", "-c", "bun scripts/runbook/qa-assert.ts receipt-id {receiptFile} > {runDir}/state/receipt-id"]
+      - ["bash", "-c", "bun scripts/runbook/qa-assert.ts receipt-digest {receiptFile} > {runDir}/state/receipt-digest"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["receipt-id", "receipt-digest"]
+  - id: "P5.02-record-receipt"
+    standing: ["4.10"]
+    description: "The submitter Safe records the receipt through the gateway: threshold owners sign, the deployer pays; the stored submitter reads back as the Safe. A receipt id is unique, so a wrong digest cannot be corrected"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "record-receipt", "{common}", "{owners}", "{gate}", "--receipt-id", "{state:receipt-id}", "--payload-digest", "{state:receipt-digest}", "--payload", "{receiptFile}", "--payload-uri", "{receiptUri}", "--submitter", "{state:submitter-safe}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: true
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P4.01-verify-post-govern", "hours": 0}
+  - id: "P5.50-committee-agent-role"
+    standing: ["4.10"]
+    description: "The registered submitter Safe holds COMMITTEE_AGENT_ROLE on the IC policy (a read-only rmpc preflight; a committee signal binds the caller to the signing agent, so the Safe cannot post one through rmpc)"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["target/debug/rmpc", "committee", "-c", "{rmpcConfig}", "check-agent", "--agent", "{state:submitter-safe}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    added: "v0.4.0"
+  - id: "P5.51-receipt-b-prepare"
+    standing: ["4.9"]
+    description: "A second receipt, the same weights under a new session id, recorded after the first; it is the newer one, so the ordering rule can be shown on the older"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bash", "-c", "sed -e 's/5015526d-27f6-478a-86e9-ac768e310af1/00000000-0000-4000-8000-000000000b01/' {receiptFile} > {runDir}/receipt-b.json"]
+      - ["bash", "-c", "bun scripts/runbook/qa-assert.ts receipt-id {runDir}/receipt-b.json > {runDir}/state/receipt-b-id"]
+      - ["bash", "-c", "bun scripts/runbook/qa-assert.ts receipt-digest {runDir}/receipt-b.json > {runDir}/state/receipt-b-digest"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "receipt-b.json", "required": true}
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["receipt-b-id", "receipt-b-digest"]
+    added: "v0.4.0"
+  - id: "P5.52-record-receipt-b"
+    standing: ["4.10"]
+    description: "The submitter Safe records the second receipt"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "record-receipt", "{common}", "{owners}", "{gate}", "--receipt-id", "{state:receipt-b-id}", "--payload-digest", "{state:receipt-b-digest}", "--payload", "{runDir}/receipt-b.json", "--payload-uri", "{receiptUri}-b", "--submitter", "{state:submitter-safe}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: true
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P5.02-record-receipt", "hours": 0}
+    added: "v0.4.0"
+  - id: "P5.53-apply-receipt-schedule"
+    standing: ["4.9"]
+    description: "The Safe schedules ONE timelock call, RouterGovernance.applyReceipt, which releases the receipt and sets the router's active weights together"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "apply-receipt", "--receipt-id", "{state:receipt-b-id}", "--payload", "{runDir}/receipt-b.json", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: [0, 15]
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P5.52-record-receipt-b", "hours": 0}
+    maxMinutes: 60
+    added: "v0.4.0"
+  - id: "P5.54-apply-receipt-execute"
+    standing: ["4.9"]
+    description: "After the delay the same command executes the application; isReleased, getWeights, getEffectiveWeights and votedWeightsActive read back"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "apply-receipt", "--receipt-id", "{state:receipt-b-id}", "--payload", "{runDir}/receipt-b.json", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: true
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P5.53-apply-receipt-schedule", "hours": "timelockDelay"}
+    maxMinutes: 60
+    added: "v0.4.0"
+  - id: "P5.55-router-split"
+    standing: ["4.9"]
+    description: "The router's effective split is the receipt's vector (agent 575, conservative 8550, protocol 525, rwa 350 bps) and the active vector is on"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bash", "-c", 'test "$(cast call "{m:router.router}" "votedWeightsActive()(bool)")" = true']
+      - ["bash", "-c", 'cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])" | tail -n 1 > {runDir}/state/effective-bps']
+      - ["grep", "-qF", "8550", "{runDir}/state/effective-bps"]
+      - ["grep", "-qF", "525", "{runDir}/state/effective-bps"]
+      - ["grep", "-qF", "575", "{runDir}/state/effective-bps"]
+      - ["grep", "-qF", "350", "{runDir}/state/effective-bps"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["effective-bps"]
+    added: "v0.4.0"
+  - id: "P5.56-older-receipt-refused"
+    standing: ["4.9"]
+    description: "The first receipt was recorded before the one just applied, so applying it is refused with USAGE before anything is scheduled (ReceiptNotNewerThanApplied); no delay is spent"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "apply-receipt", "--receipt-id", "{state:receipt-id}", "--payload", "{receiptFile}", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 2
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P5.54-apply-receipt-execute", "hours": 0}
+    added: "v0.4.0"
+  - id: "P5.57-applied-twice-refused"
+    standing: ["4.9"]
+    description: "The applied receipt is released, so applying it again is refused with USAGE"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "apply-receipt", "--receipt-id", "{state:receipt-b-id}", "--payload", "{runDir}/receipt-b.json", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 2
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P5.54-apply-receipt-execute", "hours": 0}
+    added: "v0.4.0"
+  - id: "P5.58-receipt-applications-evidence"
+    standing: ["4.9", "4.10"]
+    description: "The run manifest's receipt path (registration, recorded receipts, application) is traced on the chain: the schedule and execute transactions, the one applyReceipt call and the delay"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--receipt-applications", "{evidenceDir}/publish-run.json", "--deployment-kind", "{deploymentKind}", "--consensus-receipt", "{m:ic-policy.consensus_receipt}", "--governance", "{m:governance.governance}", "--timelock", "{m:timelock.timelock}", "--delay-floor", "{sheet:TIMELOCK_MIN_DELAY}", "--rpc", "{rpcUrl}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    added: "v0.4.0"
+
+  # ── Phase 6, deposits: the standing rule is 1 USDC per deposit, from the deployer, after the handover. ──
+  - id: "P6.10-deposit-rmusdc"
+    standing: ["4.3", "4.4"]
+    description: "1 USDC into rmUSDC at the 2,500,000 gas limit; the shares equal previewDeposit within 0.5 percent"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'cast call "{m:vault.vault}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/preview-USDC']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "2500000", "{cast}"]
+      - ["bash", "-c", 'cast call "{m:vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-USDC']
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-USDC}", "{state:preview-USDC}", "50"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    writes: ["preview-USDC", "shares-USDC"]
+  - id: "P6.11-deposit-rmproto"
+    standing: ["4.3", "4.4"]
+    description: "1 USDC into rmPROTO; the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'cast call "{m:protocol-asset-vault.vault}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/preview-PROTO']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:protocol-asset-vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:protocol-asset-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "-c", 'cast call "{m:protocol-asset-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-PROTO']
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-PROTO}", "{state:preview-PROTO}"]
+      - ["bash", "-c", 'b=$(cast call "{m:protocol-asset-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-PROTO']
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-PROTO}", "{state:preview-PROTO}", "{state:share-bound-PROTO}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    writes: ["preview-PROTO", "shares-PROTO", "share-bound-PROTO"]
+  - id: "P6.12-deposit-rmagent"
+    standing: ["4.3", "4.4"]
+    description: "1 USDC into rmAGENT right after record() makes the price recorder fresh (else StaleRecorder); the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:recorder.recorder}", "record()", "{cast}"]
+      - ["bash", "-c", 'test "$(cast call "{m:recorder.recorder}" "isFresh()(bool)")" = true']
+      - ["bash", "-c", 'cast call "{m:agent-token-vault.vault}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/preview-AGENT']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:agent-token-vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:agent-token-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "-c", 'cast call "{m:agent-token-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-AGENT']
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-AGENT}", "{state:preview-AGENT}"]
+      - ["bash", "-c", 'b=$(cast call "{m:agent-token-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-AGENT']
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-AGENT}", "{state:preview-AGENT}", "{state:share-bound-AGENT}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    triage: true
+    writes: ["preview-AGENT", "shares-AGENT", "share-bound-AGENT"]
+  - id: "P6.13-deposit-rmrwa"
+    standing: ["4.3", "4.4"]
+    description: "1 USDC into rmRWA; the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'cast call "{m:rwa-basket-vault.vault}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/preview-RWA']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:rwa-basket-vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:rwa-basket-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "-c", 'cast call "{m:rwa-basket-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-RWA']
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-RWA}", "{state:preview-RWA}"]
+      - ["bash", "-c", 'b=$(cast call "{m:rwa-basket-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-RWA']
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-RWA}", "{state:preview-RWA}", "{state:share-bound-RWA}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    writes: ["preview-RWA", "shares-RWA", "share-bound-RWA"]
+  - id: "P6.20-redeem-rmusdc"
+    standing: ["4.4"]
+    description: "Full redeem of rmUSDC to USDC; the deployer's share balance is zero afterwards"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.vault}", "redeem(uint256,address,address)", "{state:shares-USDC}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "3000000", "{cast}"]
+      - ["bash", "-c", 'test "$(cast call "{m:vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P6.21-redeem-in-kind-rmproto"
+    standing: ["4.4"]
+    description: "Full redeemInKind of rmPROTO, which reads no oracle and always pays in the underlying assets"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:protocol-asset-vault.vault}", "redeemInKind(uint256,address,address)", "{state:shares-PROTO}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "-c", 'test "$(cast call "{m:protocol-asset-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P6.22-redeem-in-kind-rmagent"
+    standing: ["4.4"]
+    description: "Full redeemInKind of rmAGENT, which stays open while the recorder is stale"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:agent-token-vault.vault}", "redeemInKind(uint256,address,address)", "{state:shares-AGENT}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "-c", 'test "$(cast call "{m:agent-token-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P6.23-redeem-rmrwa"
+    standing: ["4.4"]
+    description: "Full redeem of rmRWA to USDC"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:rwa-basket-vault.vault}", "redeem(uint256,address,address)", "{state:shares-RWA}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "-c", 'test "$(cast call "{m:rwa-basket-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P6.50-agent-policy"
+    standing: ["4.4"]
+    description: "The commit hashes, salts and the signalling-free deposit policy the consent steps use; validUntil is chain time plus a day, because the Twin clock is warped"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'echo $(( $(cast block latest --field timestamp) + 86400 )) > {runDir}/state/agent-valid-until']
+      - ["bash", "-c", 'cast keccak "qa-self-$(date +%s%N)" > {runDir}/state/agent-salt-self']
+      - ["bash", "-c", 'cast keccak "qa-stranger-$(date +%s%N)" > {runDir}/state/agent-salt-stranger']
+      - ["bash", "-c", 'cast keccak "$(cast abi-encode "f(address,address,bytes32)" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" "$(cat {runDir}/state/agent-salt-self)")" > {runDir}/state/agent-commit-self']
+      - ["bash", "-c", 'cast keccak "$(cast abi-encode "f(address,address,bytes32)" "0x000000000000000000000000000000000000bEEF" "{sheet:ADMIN_ADDRESS}" "$(cat {runDir}/state/agent-salt-stranger)")" > {runDir}/state/agent-commit-stranger']
+      - ["bash", "-c", 'echo "(true,$(cat {runDir}/state/agent-valid-until),1000000,3000000,{sheet:ADMIN_ADDRESS},[{m:router.router}],{sheet:ADMIN_ADDRESS},0,0,[])" > {runDir}/state/agent-policy']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    writes: ["agent-valid-until", "agent-salt-self", "agent-salt-stranger", "agent-commit-self", "agent-commit-stranger", "agent-policy"]
+    added: "v0.4.0"
+  - id: "P6.51-agent-consent-stranger-commit"
+    standing: ["4.4"]
+    description: "The deployer commits an authorization naming an address that has not consented; a commit alone changes nothing"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:gateway.gateway}", "commitAuthorization(bytes32)", "{state:agent-commit-stranger}", "{cast}"]
+      - ["sleep", "5"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    added: "v0.4.0"
+  - id: "P6.52-agent-consent-stranger-reveal-refused"
+    standing: ["4.4"]
+    description: "The reveal for an address that never committed its own consent reverts (OwnerConsentMissing, issue 1791); the simulation fails before anything is sent"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:gateway.gateway}", "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))", "0x000000000000000000000000000000000000bEEF", "{state:agent-salt-stranger}", "{state:agent-policy}", "{cast}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 1
+    receipts: []
+    irreversible: false
+    added: "v0.4.0"
+  - id: "P6.53-agent-self-commit"
+    standing: ["4.4"]
+    description: "The depositor commits its own authorization (agent and committer are the same key, so it consents by calling)"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:gateway.gateway}", "commitAuthorization(bytes32)", "{state:agent-commit-self}", "{cast}"]
+      - ["sleep", "5"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    added: "v0.4.0"
+  - id: "P6.54-agent-self-reveal"
+    standing: ["4.4"]
+    description: "At least a block later the reveal authorizes the agent, with the router as its only destination; the gateway records the depositor as its owner"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:gateway.gateway}", "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))", "{sheet:ADMIN_ADDRESS}", "{state:agent-salt-self}", "{state:agent-policy}", "--gas-limit", "1000000", "{cast}"]
+      - ["bash", "-c", 'test "$(cast call "{m:gateway.gateway}" "agentOwner(address)(address)" "{sheet:ADMIN_ADDRESS}" | tr A-F a-f)" = "$(echo "{sheet:ADMIN_ADDRESS}" | tr A-F a-f)"']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    added: "v0.4.0"
+  - id: "P6.55-gateway-deposit-vault"
+    standing: ["4.4"]
+    description: "rmpc deposits 1 USDC through the gateway into the single vault (3,000,000 gas by default, above the 2,000,000 gateway floor)"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'cast keccak "qa-vault-$(date +%s%N)" > {runDir}/state/order-vault']
+      - ["target/debug/rmpc", "deposit", "-c", "{rmpcConfig}", "--amount", "1000000", "--order-id", "{state:order-vault}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    writes: ["order-vault"]
+    added: "v0.4.0"
+  - id: "P6.56-gateway-deposit-router"
+    standing: ["4.4"]
+    description: "rmpc deposits 1 USDC through the gateway into the router; the gas limit follows the router's effective legs (400,000 + 2,550,000 per leg + 150,000) and rmpc refuses one below the floor before signing"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'cast keccak "qa-router-$(date +%s%N)" > {runDir}/state/order-router']
+      - ["target/debug/rmpc", "deposit", "-c", "{rmpcConfig}", "--amount", "1000000", "--order-id", "{state:order-router}", "--destination", "{m:router.router}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    writes: ["order-router"]
+    added: "v0.4.0"
+  - id: "P6.57-router-deposit"
+    standing: ["4.4"]
+    description: "1 USDC straight into the router at 10,800,000 gas (the 4-leg floor is 9,600,000): one RouterDeposit event per leg with a non-zero amount, and none for a zero-weight leg, which the router skips"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'cast send "{usdc}" "approve(address,uint256)" "{m:router.router}" 1000000 {castFlagsInline}']
+      - ["bash", "-c", 'cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])" | tail -n 1 | grep -oE "[0-9]+" | grep -vxc 0 > {runDir}/state/router-legs || true']
+      - ["bash", "-c", 'cast send "{m:router.router}" "deposit(uint256,uint256[])" 1000000 "[]" --gas-limit 10800000 --json {castFlagsInline} > {runDir}/state/router-deposit.json']
+      - ["bash", "-c", 'jq -e --arg t "$(cast sig-event "RouterDeposit(address,address,uint256,uint256,uint256)")" --argjson n "$(cat {runDir}/state/router-legs)" ''.status == "0x1" and ([.logs[] | select(.topics[0] == $t)] | length) == $n'' {runDir}/state/router-deposit.json']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    writes: ["router-legs", "router-deposit.json"]
+    added: "v0.4.0"
+  - id: "P6.58-router-below-floor-reverts"
+    standing: ["4.4"]
+    description: "Twin only: a router deposit at 9,000,000 gas, below the 9,600,000 floor, reverts InsufficientGas with the floor in the error instead of failing silently"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:router.router}", "deposit(uint256,uint256[])", "1000000", "[]", "--gas-limit", "9000000", "{cast}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 1
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
+    added: "v0.4.0"
+  - id: "P6.59-sweep-positions"
+    standing: ["4.4"]
+    description: "The gateway and router deposits are redeemed in full: rmUSDC by redeem, each basket by redeemInKind, so no test position is left behind"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'for pair in "{m:vault.vault}:redeem" "{m:protocol-asset-vault.vault}:redeemInKind" "{m:agent-token-vault.vault}:redeemInKind" "{m:rwa-basket-vault.vault}:redeemInKind"; do v=${pair%%:*}; fn=${pair##*:}; s=$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$s" != 0 ]; then cast send "$v" "$fn(uint256,address,address)" "$s" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" --gas-limit 5000000 {castFlagsInline} || exit 1; fi; done']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    added: "v0.4.0"
+  - id: "P7.50-deploy-implementation"
+    standing: ["4.12"]
+    description: "The deployer deploys a second gateway implementation from the build, linked to the live libraries, and the verb records it; nothing governs it yet"
+    host: "control"
+    phase: 7
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--proxy", "gateway", "{common}", "{gate}"]
+      - ["bash", "-c", "grep deploy_implementation {journal:P7.50-deploy-implementation} | head -n 1 | jq -r .implementation > {runDir}/state/new-implementation"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{evidenceDir}", "pattern": "publish-run.json", "required": true}
+    irreversible: false
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    writes: ["new-implementation"]
+    added: "v0.4.0"
+  - id: "P7.51-upgrade-schedule"
+    standing: ["4.12"]
+    description: "The Safe schedules ONE timelock call, upgradeToAndCall(new, empty), after the layout and library checks; the preview shows the old and new implementation and code hashes"
+    host: "control"
+    phase: 7
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "upgrade-proxy", "--proxy", "gateway", "--implementation", "{state:new-implementation}", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: [0, 15]
+    receipts: []
+    irreversible: false
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    maxMinutes: 60
+    added: "v0.4.0"
+  - id: "P7.52-upgrade-execute"
+    standing: ["4.12"]
+    description: "After the delay the same command executes the upgrade, reads the implementation slot back and re-records the stage manifest and the gateway runtime pins; an upgrade can still be rolled back by another governed upgrade until the freeze"
+    host: "control"
+    phase: 7
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "upgrade-proxy", "--proxy", "gateway", "--implementation", "{state:new-implementation}", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    notBefore: {"afterStep": "P7.51-upgrade-schedule", "hours": "timelockDelay"}
+    maxMinutes: 60
+    added: "v0.4.0"
+  - id: "P7.53-impl-slot"
+    standing: ["4.12"]
+    description: "The gateway proxy's ERC-1967 implementation slot reads the new implementation"
+    host: "control"
+    phase: 7
+    cmds:
+      - ["bash", "-c", 'test "$(cast implementation "{m:gateway.gateway}" | tr A-F a-f)" = "$(tr A-F a-f < {runDir}/state/new-implementation)"']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    added: "v0.4.0"
+  - id: "P7.54-verify-after-upgrade"
+    standing: ["4.12"]
+    description: "Verify passes against the upgraded gateway: its code is compared with the build the upgrade came from, every other contract with the DEPLOY_SHA build"
+    host: "control"
+    phase: 7
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{common}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    maxMinutes: 60
+    added: "v0.4.0"
+  - id: "P7.55-hold-position"
+    standing: ["4.12"]
+    description: "1 USDC sits in rmUSDC across the freeze, so a withdrawal on a frozen proxy can be shown"
+    host: "control"
+    phase: 7
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{usdc}", "approve(address,uint256)", "{m:vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "2500000", "{cast}"]
+      - ["bash", "-c", 'cast call "{m:vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-hold']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    writes: ["shares-hold"]
+    added: "v0.4.0"
+  - id: "P7.56-freeze-schedule"
+    standing: ["4.12"]
+    description: "Only on a recorded freeze go: the Safe schedules ONE batch of freezeUpgrades(implementation, code hash) for every proxy, both values from the verify record, refused while any upgrade is still queued. The freeze is OFF unless the owner records it"
+    host: "control"
+    phase: 7
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "freeze-upgrades", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: [0, 15]
+    receipts: []
+    irreversible: false
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    go: "freeze"
+    maxMinutes: 60
+    added: "v0.4.0"
+  - id: "P7.57-freeze-execute"
+    standing: ["4.12"]
+    description: "IRREVERSIBLE. After the delay the batch executes: upgrades are frozen for good and the proxies read upgradesFrozen() true; only a new deployment changes logic afterwards"
+    host: "control"
+    phase: 7
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "freeze-upgrades", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: true
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    go: "freeze"
+    notBefore: {"afterStep": "P7.56-freeze-schedule", "hours": "timelockDelay"}
+    maxMinutes: 60
+    added: "v0.4.0"
+  - id: "P7.58-verify-after-freeze"
+    standing: ["4.12"]
+    description: "Verify passes, and the full core set verifying frozen makes the immutability claim: core_immutable is true"
+    host: "control"
+    phase: 7
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{common}", "{gate}"]
+      - ["jq", "-e", ".core_immutable == true", "{manifestDir}/upgradeability.json"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    go: "freeze"
+    maxMinutes: 60
+    added: "v0.4.0"
+  - id: "P7.59-all-frozen"
+    standing: ["4.12"]
+    description: "Every proxy in the record reads upgradesFrozen() true on the chain"
+    host: "control"
+    phase: 7
+    cmds:
+      - ["bash", "-c", 'for a in $(jq -r ".proxies[].proxy" {manifestDir}/upgradeability.json); do test "$(cast call "$a" "upgradesFrozen()(bool)")" = true || exit 1; done']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    go: "freeze"
+    added: "v0.4.0"
+  - id: "P7.60-deploy-implementation-refused"
+    standing: ["4.12"]
+    description: "After the freeze a new implementation is refused (REFUSED, exit 17) and nothing is sent"
+    host: "control"
+    phase: 7
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--proxy", "gateway", "{common}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 17
+    receipts: []
+    irreversible: false
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    go: "freeze"
+    added: "v0.4.0"
+  - id: "P7.61-upgrade-refused"
+    standing: ["4.12"]
+    description: "After the freeze the upgrade row is refused (GOVERN, exit 14) and nothing is scheduled"
+    host: "control"
+    phase: 7
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "upgrade-proxy", "--proxy", "gateway", "--implementation", "{state:new-implementation}", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 14
+    receipts: []
+    irreversible: false
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    go: "freeze"
+    added: "v0.4.0"
+  - id: "P7.62-withdrawal-open"
+    standing: ["4.12"]
+    description: "A withdrawal works on the frozen proxy: freezing never pauses or alters withdrawals"
+    host: "control"
+    phase: 7
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.vault}", "redeem(uint256,address,address)", "{state:shares-hold}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "3000000", "{cast}"]
+      - ["bash", "-c", 'test "$(cast call "{m:vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    added: "v0.4.0"
+
+  # ── Phase 8, observability: what the stack shows must equal the chain. ──
+  - id: "P8.50-indexer-upgrade-state"
+    standing: ["4.12"]
+    description: "The indexer reports each proxied contract's upgrade_state as the chain says: frozen when every proxy reads frozen, upgradeable otherwise"
+    host: "stage"
+    phase: 8
+    cmds:
+      - ["bash", "-c", 'want=$(jq -r "if ([.proxies[].upgrades_frozen] | all) then \"frozen\" else \"upgradeable\" end" {manifestDir}/upgradeability.json); curl -sf http://127.0.0.1:18547/v1/chains/8453/contracts | jq -e --arg w "$want" "[.. | objects | select(has(\"upgrade_state\") and .upgrade_state == \$w)] | length >= 7"']
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["rehearsal", "production"]
+    triage: true
+    added: "v0.4.0"
+  - id: "P8.51-client-pins"
+    standing: ["4.12"]
+    description: "The gateway manifest carries both runtime hash pins the signing clients check fail-closed, and its implementation is the live one; the dapp build and the rmpc config take these pins from the manifest"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["jq", "-e", "(.gateway_runtime_hash | length) > 2 and (.gateway_implementation_runtime_hash | length) > 2 and (.gateway_implementation | length) > 2", "{manifestDir}/gateway.json"]
+      - ["bash", "-c", 'test "$(cast implementation "{m:gateway.gateway}" | tr A-F a-f)" = "$(jq -r .gateway_implementation {manifestDir}/gateway.json | tr A-F a-f)"']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    added: "v0.4.0"
+
+  # ── Phase 9, failure drills: a paused vault must come back only through the Safe. Never on production. ──
+  - id: "P9.01-pause-all"
+    standing: ["4.5", "4.6"]
+    description: "pause-all pauses deposits on all four vaults with the emergency key, reads each back and writes the rollout report; withdrawals stay open"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "pause-all", "{common}", "{emergency}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{evidenceDir}", "pattern": "rollout-report-{chainId}.json", "required": true}
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+  - id: "P9.03-resume-schedule"
+    standing: ["4.5"]
+    description: "Each paused vault comes back through a new numbered unpause round of the Safe; the four are scheduled together"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-USDC", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-PROTO", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-AGENT", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-RWA", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: [0, 15]
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+  - id: "P9.04-resume-execute"
+    standing: ["4.5"]
+    description: "After the delay the same four commands execute the unpauses"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-USDC", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-PROTO", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-AGENT", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-RWA", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P9.03-resume-schedule", "hours": "timelockDelay"}
+  - id: "P9.05-verify-after-resume"
+    standing: ["4.5"]
+    description: "Verify passes again with all four vaults open"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{common}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+  - id: "P9.50-sheet-tamper"
+    standing: ["4.5"]
+    description: "Twin only: a copy of the sheet whose rmRWA TVL cap is one unit off, so verify must fail"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["cp", "{sheet}", "{runDir}/sheet-tampered.env"]
+      - ["bash", "-c", "sed -i -E 's/^(VAULT_RWA_TVL_CAP=)([0-9]+)$/\\1999999999999/' {runDir}/sheet-tampered.env"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "sheet-tampered.env", "required": true}
+    irreversible: false
+    onlyFor: "twin"
+    added: "v0.4.0"
+  - id: "P9.51-verify-failure"
+    standing: ["4.5", "4.6"]
+    description: "Twin only: verify against the tampered sheet exits 13 and pauses deposits on all four vaults on its own, with the emergency key"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{runDir}/sheet-tampered.env", "--signer", "{signer}", "--environment", "{environmentName}", "--core-sha", "{coreSha}", "--counts-dir", "{countsDir}", "--evidence", "{evidenceDir}", "{emergency}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 13
+    receipts:
+      - {"dir": "{evidenceDir}", "pattern": "rollout-report-{chainId}.json", "required": true}
+    irreversible: false
+    onlyFor: "twin"
+    added: "v0.4.0"
+  - id: "P9.52-auto-paused"
+    standing: ["4.6"]
+    description: "Twin only: all four vaults read depositsPaused true after the failed verify"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["bash", "-c", 'for v in "{m:vault.vault}" "{m:protocol-asset-vault.vault}" "{m:agent-token-vault.vault}" "{m:rwa-basket-vault.vault}"; do test "$(cast call "$v" "depositsPaused()(bool)")" = true || exit 1; done']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
+    added: "v0.4.0"
+  - id: "P9.53-resume-after-failure"
+    standing: ["4.5"]
+    description: "Twin only: the four vaults come back through new unpause rounds (the Twin warp passes the delay) and verify passes again"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-USDC", "{common}", "{owners}", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-PROTO", "{common}", "{owners}", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-AGENT", "{common}", "{owners}", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-RWA", "{common}", "{owners}", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{common}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
+    maxMinutes: 60
+    added: "v0.4.0"
+  - id: "P9.54-exclusion-adapter"
+    standing: ["4.12"]
+    description: "Twin only: the emergency key excludes rmUSDC's first adapter from NAV (a pro-rata claim for the holders of the moment, no value moved); the record id, 0 when the adapter held nothing, is read"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["bash", "-c", 'cast call "{m:vault.vault}" "getAdapterInfo(uint256)(address,uint16,bool,uint256,uint256)" 0 | head -n 1 > {runDir}/state/adapter-0']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.vault}", "emergencyExcludeAdapter(uint256)", "0", "--keystore", "{runDir}/keys/EMERGENCY", "--password-file", "{runDir}/passphrase", "--gas-limit", "2000000"]
+      - ["bash", "-c", 'cast call "{m:vault.vault}" "openExclusionOf(uint256)(uint256)" 0 | cut -d" " -f1 > {runDir}/state/exclusion-record']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
+    writes: ["adapter-0", "exclusion-record"]
+    added: "v0.4.0"
+  - id: "P9.55-exclusion-restore"
+    standing: ["4.12"]
+    description: "Twin only: the Safe, through the timelock, makes the adapter eligible again (setAdapterAllowed true); any open record is settled first and no record is open afterwards"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["bash", "-c", 'cast calldata "setAdapterAllowed(address,bool)" "$(cat {runDir}/state/adapter-0)" true > {runDir}/state/restore-calldata']
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--call-label", "restore-adapter", "--call-target", "{m:vault.vault}", "--call-data", "{state:restore-calldata}", "{common}", "{owners}", "{gate}"]
+      - ["bash", "-c", 'test "$(cast call "{m:vault.vault}" "openExclusionOf(uint256)(uint256)" 0 | cut -d" " -f1)" = 0']
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
+    writes: ["restore-calldata"]
+    added: "v0.4.0"
+
+  # ── Phase 10, evidence and teardown. ──
+  - id: "P10.01-evidence-check"
+    standing: ["4.7"]
+    description: "The evidence file is checked against the frozen counts and the chain: nonce, every receipt status, the unpause operations and their delay, the registry, the secret scan"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--evidence", "{evidenceDir}/evidence.json", "--frozen", "{countsDir}/{gateSha}.json", "--deploy-sha", "{gateSha}", "--deployment-kind", "{deploymentKind}", "--rpc", "{rpcUrl}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{evidenceDir}", "pattern": "evidence.json", "required": true}
+    irreversible: false
+    onlyFor: ["rehearsal", "production"]
+  - id: "P10.02-secret-scan"
+    standing: ["4.7"]
+    description: "No key, passphrase or keystore path is in the run's evidence folder"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bun", "publish-contracts/src/ci/scan-rehearsal-secrets.ts", "--evidence", "{evidenceDir}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P10.50-upgradeability-evidence"
+    standing: ["4.12"]
+    description: "The upgradeability record verify wrote is copied into the evidence, where evidence-check reads every proxy fact back from the chain"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["cp", "{manifestDir}/upgradeability.json", "{evidenceDir}/upgradeability.json"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{evidenceDir}", "pattern": "upgradeability.json", "required": true}
+    irreversible: false
+    added: "v0.4.0"
+
+
+  - id: "P10.51-write-rollout-report"
+    standing: ["4.7"]
+    description: "The rollout report is written from the run: sha, network, sheet hash, tag, every step's journal, every evidence file's sha256; a failed step, a journaled step with no result and a vault still paused at report time are issues, a pause report from a drill is listed only"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--step", "P10.51-write-rollout-report"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}
+    irreversible: false
+  - id: "P10.52-record-signoff"
+    standing: ["4.4"]
+    description: "The sign-off is written by the run, and only when the report lists no issue and matches the publish go"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bun", "scripts/runbook/run-record.ts", "signoff", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/go", "pattern": "signoff.json", "required": true}
+    irreversible: false
+  - id: "P10.07-twin-teardown"
+    standing: ["9"]
+    description: "The Twin fork stops and the throwaway keystores and the passphrase file are destroyed"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bun", "scripts/devnet/twin-fork.ts", "stop", "--port", "8545", "--state-dir", "{runDir}/twin"]
+      - ["shred", "-u", "{runDir}/passphrase"]
+      - ["rm", "-rf", "{runDir}/keys"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
+
+  # ── Phase 0, gate: nothing is sent. The same checks the 8453 plan job and every broadcasting run repeat. ──

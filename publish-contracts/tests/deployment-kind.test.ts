@@ -13,7 +13,7 @@ import { assertFreshSafeAddress, childEnv, newManifest, recordedStartNonce, runS
 import { callerInputs, parseSheet } from "../src/sheet.ts";
 import { DEPLOYER_STAGES, STAGE_NAMES, expectedStartNonce } from "../src/stages.ts";
 import { COUNTS, REPO, SHA, sheetText, tmp } from "./fixtures.ts";
-import { SCRIPT, world } from "./harness.ts";
+import { LOCAL_RPC, SCRIPT, world } from "./harness.ts";
 
 const REH = { DEPLOYMENT_KIND: "rehearsal", TIMELOCK_MIN_DELAY: "900", GOVERN_NEW_DELAY: "1800", SAFE_SALT_NONCE: "20261010" };
 const sheetFor = (chain: number, extra: Record<string, string | null> = {}) => parseSheet(sheetText({ CHAIN_ID: String(chain), EXPECTED_CHAIN_ID: String(chain), ...extra }));
@@ -201,6 +201,25 @@ describe("the deployer nonce relative to the recorded start (rehearsal), absolut
     expect(await w.run(["--stage", "deploy"])).toBe(0);
     expect(manifestOf(w).deployerStartNonce).toBeUndefined();
     expect(manifestOf(w).deploymentKind).toBe("production");
+  });
+  // Deploy 3 (P0.21): the dry run records the start, then creates the Safe on the local simulation chain, which moves the deployer nonce there. A dry
+  // run saves no stage record, so the next stage must not read that local move as a stray transaction.
+  test("a rehearsal --dry-run of every stage passes: the Safe created on the local chain is not a stray transaction", async () => {
+    const w = rehearsalWorld(118);
+    expect(await w.run(["--stage", "deploy", "--dry-run"])).toBe(0);
+    expect(w.logs().filter((l) => l.event === "stage.broadcast").length).toBe(0);
+    // every broadcast is a local apply: nothing reaches the target RPC
+    const sent = w.state().calls.filter((c: any) => c.tool === "forge" && c.args.includes("--broadcast"));
+    expect(sent.length).toBeGreaterThan(0);
+    for (const c of sent) expect(c.rpcEnv).toBe(LOCAL_RPC);
+    expect(w.safeCalls).toContain("createSafe:local");
+  });
+  test("runStartNonce in a dry run: a moved nonce with no stage record is the simulation chain, never a refusal", () => {
+    const sheet = parseSheet(sheetText(REH));
+    const m = { stages: {}, deployerStartNonce: 118 } as never;
+    expect(runStartNonce({ sheet, dryRun: true, evidenceDir: "/nonexistent", log: { log() {} } } as never, m, { name: "libs" }, 119)).toBe(118);
+    // mutation: the same state in a real run is still refused
+    expect(() => runStartNonce({ sheet, dryRun: false, evidenceDir: "/nonexistent", log: { log() {} } } as never, m, { name: "libs" }, 119)).toThrow(PublishError);
   });
   test("a stray deployer transaction BEFORE the first stage after the start was recorded is refused", async () => {
     const w = rehearsalWorld(118);

@@ -6,6 +6,8 @@ Stage is the same deployment as mainnet. Only parameters differ. There is one ru
 
 ## What runs on stage
 
+Every rehearsal chain runs on the stage host `rm-core-stage-1`: the Twin fork, any anvil and any fork of Base. None runs on the operator machine. The operator machine holds the keys, drives a contract QA run over ssh and signs through an ssh tunnel to the stage fork (`docs/runbooks/contract-qa/README.md`, "Hosts").
+
 Every stage service runs in a container (core 1549). `core-stack.ts` only calls `docker compose`: it starts no host process and no container mounts the Docker socket.
 
 1. `bun scripts/stage/core-stack.ts chain up` rebuilds `rmpc` from this checkout (a build artifact the status checks compare, not a service), then starts the **Twin chain container**: the `twin-chain` service of `testing/ethereum-testnet/config/docker-compose.stage-chain.yaml` (project `robotmoney-stage-chain`). It is the pinned lazy anvil fork of real Base state (`scripts/devnet/twin-fork.ts serve`, chain id 918453, one block per second), published on `127.0.0.1:18545` and on the chain network as `twin-chain:8545`. `BASE_UPSTREAM_RPC` (optional secret) and `TWIN_PIN_BLOCK` pass through the environment. `chain up` refuses a `TWIN_RPC_URL` that names any other chain.

@@ -16,6 +16,10 @@ coverage/
 /run-qa.sh
 /devnet_acceptance_output.json
 
+# Contract QA runbook manifests ({manifestDir}, docs/runbooks/contract-qa/README.md): forge writes them under ./deployments,
+# and verify (P2.01) refuses a checkout with untracked files.
+/deployments/qa-runs/
+
 # Secrets, keystores, and credential files (security-model.md §13)
 *.pem
 *.key

@@ -36,6 +36,7 @@ import { CLEAR_ROW } from "./clear-voted-weights.ts";
 import { UNWIND_GUARD_KEYS, UNWIND_GUARD_ROW, parseUnwindGuardArgs } from "./unwind-guard.ts";
 import { REDEPLOY_ROW, REDEPLOY_VERB, REDEPLOY_KEYS, isRedeployKey, redeployRefusal, redeployShaPath, redeployShaRun, runRedeployVault } from "./redeploy-vault.ts";
 import { FREEZE_ROW, UPGRADE_ROW } from "./upgrade-rows.ts";
+import { toolingShaRun } from "./tooling-sha.ts";
 import { DEPLOY_IMPL_VERB, runDeployImplementation } from "./deploy-implementation.ts";
 import { RECEIPT_ROW, SELF_ADMIN_ROWS, assertReceiptId, assertSelfAdminAllowed, govRowRefusal, isSelfAdminRow, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { isHardwareSpecLike, ownerHardwareSigner, parseOwnerHardwareSpec, signerFromSpec, type CastRunner, type Signer } from "./safe/index.ts";
@@ -148,8 +149,10 @@ export const USAGE = `publish contracts
                      tree (COUNTS_UNTRACKED); a reconstructed baseline needs the stricter clean-checkout proof of issue 1740 (COUNTS_MISSING).
   --counts-require-origin-dev  8453, reconstructed baseline: also refuse unless HEAD of the counts checkout is reachable from its local origin/dev (git fetch origin dev first). Required by the release runbook.
   --measure          rehearsal only: measure per-stage counts and write the frozen file for this SHA
-  --logs-rpc URL     prove-control --resume only: a separate RPC for eth_getLogs (the scan for a landed proof). Every other read stays on --rpc.
-  --logs-window N    prove-control --resume: blocks per eth_getLogs call (default 2000), halved on a range-limit error
+  --logs-rpc URL     prove-control --resume and the verify stage: a separate RPC for eth_getLogs (the scan for a landed proof, the verifier's role and
+                     creation scans). Every other read stays on --rpc.
+  --logs-window N    prove-control --resume and the verify stage: blocks per eth_getLogs call (default 2000); prove-control halves it on a range-limit error
+  --check-sources    verify: also check explorer source verification (Blockscout, Sourcify); publishing, not a gate, so off by default
   --logs-tries N     prove-control --resume: tries of one throttled eth_getLogs call (HTTP 429), with exponential backoff (default 6)
   --owner-signer S   prove-control and govern: a Safe owner signer spec (repeat for each owner: prove-control needs EVERY owner, govern the threshold). On chain 918453 with none given: the SAFE_OWNER_A/B/C keystores
                      beside the DEPLOYER keystore, under the same passphrase file (the rehearsal key layout). Never on 8453: there every owner is named, as keystore:PATH (passphrase typed at the hidden
@@ -239,6 +242,8 @@ export interface Parsed {
   priorOut?: string;
   /** prove-control --resume (issue 1724): --logs-rpc, --logs-window, --logs-tries. Absent when none is given. */
   logs?: LogScanOpts;
+  /** --check-sources: the verify stage also checks explorer source verification. */
+  checkSources?: boolean;
   /** With --row upgrade-proxy only (issue 1842): the proxy name, the new implementation and the core checkout it was built from. */
   proxy?: string;
   implementation?: string;
@@ -255,7 +260,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" }, "counts-require-origin-dev": { type: "boolean" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "no-warp": { type: "boolean" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, proxy: { type: "string" }, implementation: { type: "string" }, "upgrade-build": { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "no-warp": { type: "boolean" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "check-sources": { type: "boolean" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, proxy: { type: "string" }, implementation: { type: "string" }, "upgrade-build": { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -368,7 +373,7 @@ export function parseCli(argv: string[]): Parsed {
   }
   return {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
-    coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
+    checkSources: !!v["check-sources"], coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, countsRequireOriginDev: !!v["counts-require-origin-dev"], measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
     maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, noWarp: !!v["no-warp"], call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri, adminArgs, vault: vaultArg, priorOut, logs, proxy, implementation, upgradeBuild: upgradeBuild === undefined ? undefined : resolve(upgradeBuild),
   };
@@ -565,7 +570,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return {
         chainId: rpcChainId, rpc: a.rpc, sheet, coreDir, coreSha: a.coreSha, evidenceDir,
         environment: a.environment, signer, caller, frozen, measure, dryCounts: a.dryRun ? {} : undefined, resume: a.resume, dryRun: a.dryRun, run, log,
-        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions, actionsProof, baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, recorderWait: deps.recorderWait, readRetry: deps.readRetry, coreConfigCheck: deps.coreConfigCheck,
+        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions, actionsProof, baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, recorderWait: deps.recorderWait, readRetry: deps.readRetry, coreConfigCheck: deps.coreConfigCheck, logs: a.logs, checkSources: a.checkSources,
         manifestOut, startChain: a.dryRun && a.verb !== REDEPLOY_VERB ? (deps.startChain ?? startAnvil) : undefined, priorArtifactsDir: a.priorOut ? resolve(cwd, a.priorOut) : undefined,
         // security round 1 (review-security-033): a printed resume command names the absolute counts dir and --counts-require-origin-dev (govern.ts resumeCommand)
         countsDir: a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd), countsRequireOriginDev: a.countsRequireOriginDev,
@@ -657,16 +662,23 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     const priorOutSha = a.priorOut ? checkoutShaOf(resolve(cwd, a.priorOut)) : undefined;
     const shaRun = redeployShaRun(priorRun, { coreSha: a.coreSha, path: shaPath, priorOut: a.priorOut, priorOutSha });
     if (shaRun) log.log("info", "run.redeploy_sha", { path: shaPath, original_sha: shaRun.originalSha, redeploy_sha: shaRun.redeploySha, ...(priorOutSha ? { prior_out_sha: priorOutSha } : {}) });
+    // Deploy 3 (tooling-sha.ts): a descendant of the run manifest's sha whose deployed inputs are byte-identical continues that run manifest, as a redeploy round does.
+    const toolRun = shaRun || a.stage === "plan" || a.dryRun ? undefined : await toolingShaRun(priorRun ?? loadRunManifest(evidenceDir), { coreSha: a.coreSha, coreDir, run, env: scrubGitEnv(castEnv) });
+    if (toolRun) log.log("info", "run.tooling_sha", { original_sha: toolRun.originalSha, tooling_sha: toolRun.toolingSha, note: "the deployed inputs are byte-identical: this run continues the original run manifest" });
     // The contracts-freeze gate (core 1524; QA plan v1 E4, issue 1816): on 8453 the plan AND every run that can broadcast (releaseGated) run only at a release-tagged SHA of
     // the sheet's kind, whose frozen counts file is committed and clean in its git work tree (COUNTS_UNTRACKED; a reconstructed baseline gets the whole-dir proof of issue 1740), with green CI. No signer exists yet, no forge has run.
     // The govern row at a redeploy round's sha has no frozen file of its own (E1): like the redeploy-vault verb, it is gated on the tag and CI only.
     const names = a.stage === "plan" ? [] : a.verb ? selectVerbStages(a.verb) : selectStages(a.stage);
     const gated = releaseGated({ chainId: rpcChainId, verb: a.verb, stage: a.stage, dryRun: a.dryRun, measure: a.measure });
     if (gated) {
-      const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, kind: sheet.kind, requireCounts: !shaRun, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag,
+      // Owner decision 2026-10-19 (Deploy 3): a REHEARSAL that continues at a tool-only commit (tooling-sha.ts: a descendant whose deployed inputs are
+      // byte-identical) is gated at the sha the deployment started at, which carries the tag, the green CI and the frozen counts. Production keeps its own sha.
+      const gateSha = toolRun && sheet.kind === "rehearsal" ? toolRun.originalSha : a.coreSha;
+      if (gateSha !== a.coreSha) log.log("info", "plan.release_gate_original_sha", { gate_sha: gateSha, core_sha: a.coreSha });
+      const tag = await assertReleaseGate({ sha: gateSha, coreDir, countsDir, env, kind: sheet.kind, requireCounts: !shaRun, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag,
         verifyReconstructed: deps.verifyReconstructed ?? realVerifyReconstructed, anchorCommitted: deps.anchorCommitted ?? realAnchorCommitted, frozenDirCommitted: deps.frozenDirCommitted ?? realFrozenDirCommitted,
         run, runEnv: scrubGitEnv(castEnv) });
-      log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha, stage: a.stage ?? a.verb ?? "default", counts: shaRun ? "none (redeploy sha)" : "committed" });
+      log.log("info", "plan.release_gate", { ok: true, tag, core_sha: gateSha, stage: a.stage ?? a.verb ?? "default", counts: shaRun ? "none (redeploy sha)" : "committed" });
     }
     // deploy-implementation (issue 1861): the release gate above ran on 8453 as for govern. No counts, no stages: one CREATE from the deployer and its implementation_deploys entry.
     if (a.verb === DEPLOY_IMPL_VERB) {
@@ -680,7 +692,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     // uses the original sha's counts and needs no file for the redeploy sha (QA plan v1 E1).
     const counts = a.stage === "plan"
       ? { frozen: a.measure ? undefined : loadFrozen(countsDir, a.coreSha).counts, measure: a.measure, mode: (a.measure ? "measure-flag" : "frozen") as "measure-flag" | "frozen", file: "" }
-      : resolveCounts({ dir: countsDir, sha: a.coreSha, measureFlag: a.measure, dryRun: a.dryRun, chainId: rpcChainId, warn: (ev, f) => log.log("warn", ev, f), ...(shaRun && priorRun ? { redeploy: { originalSha: shaRun.originalSha, recorded: measuredCounts(priorRun) } } : {}) });
+      : resolveCounts({ dir: countsDir, sha: a.coreSha, measureFlag: a.measure, dryRun: a.dryRun, chainId: rpcChainId, warn: (ev, f) => log.log("warn", ev, f), ...(shaRun && priorRun ? { redeploy: { originalSha: shaRun.originalSha, recorded: measuredCounts(priorRun) } } : toolRun ? { redeploy: { originalSha: toolRun.originalSha, recorded: measuredCounts(loadRunManifest(evidenceDir)!) } } : {}) });
     const frozen = counts.frozen;
 
     // P12: the token at the constant USDC address must be the pinned FiatTokenProxy. A mock fails here, before any send.
@@ -710,7 +722,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       }
     }
     // QA plan v1 E1: a run at a redeploy round's sha continues the run manifest of the original sha; the verify records the sha of the --prior-out checkout.
-    const ctx: RunContext = { ...buildCtx(frozen, counts.measure), ...(shaRun ? { originalSha: shaRun.originalSha } : {}), ...(priorOutSha ? { priorArtifactsSha: priorOutSha } : {}) };
+    const ctx: RunContext = { ...buildCtx(frozen, counts.measure), ...(shaRun ? { originalSha: shaRun.originalSha } : toolRun ? { originalSha: toolRun.originalSha } : {}), ...(priorOutSha ? { priorArtifactsSha: priorOutSha } : {}) };
     // A failed verify (stage 12) or postflight pauses deposits on all four vaults (core 1619) and then fails the run as before.
     let postflight: PauseTrigger | undefined;
     let result: Awaited<ReturnType<typeof runStages>>;
@@ -740,17 +752,21 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       throw e;
     }
     if (a.dryRun && counts.mode === "dry-run-measure") log.log("warn", "dry_run.counts_measured", { counts: ctx.dryCounts, note: "measured by the dry run, not frozen: nothing was written" });
-    if (!shaRun && (a.measure || counts.mode === "twin-measure") && DEPLOYER_STAGES.every((s) => result.manifest.stages[s.name]?.status === "done")) {
+    if (!shaRun && !toolRun && (a.measure || counts.mode === "twin-measure") && DEPLOYER_STAGES.every((s) => result.manifest.stages[s.name]?.status === "done")) {
       const forge = (await run("forge", ["--version"], { env: castEnv })).stdout.trim().split("\n")[0];
       const p = writeFrozen(countsDir, a.coreSha, measuredCounts(result.manifest), { chainId: rpcChainId, at: new Date().toISOString(), forge, ...(Object.keys(adoptedTxs(result.manifest)).length ? { adopted: Object.keys(adoptedTxs(result.manifest)) } : {}) });
       log.log("info", "run.counts_measured", { file: p });
     }
     // QA plan v1 E1: the isomorphism report describes the deployment at its own sha. A run at a redeploy sha leaves it as the original run wrote it.
-    if (shaRun) log.log("info", "run.isomorphism_kept", { original_sha: shaRun.originalSha, note: "a run at a redeploy sha does not rewrite the deployment's isomorphism report" });
+    // A tooling-sha run writes it only when the original run never did (it failed before its end, Deploy 3): the deployed inputs are byte-identical, so the
+    // report is the deployment's, filed under the original sha (coreHead names the checkout it was read from).
+    const isoPath = join(ctx.evidenceDir, `isomorphism-${rpcChainId}.json`);
+    if (shaRun || (toolRun && existsSync(isoPath))) log.log("info", "run.isomorphism_kept", { original_sha: (shaRun ?? toolRun)!.originalSha, note: "a run at a redeploy or tooling sha does not rewrite the deployment's isomorphism report" });
     else if (!a.dryRun && existsSync(ctx.evidenceDir)) {
       const cmp = a.compareSheet ? { path: a.compareSheet, sheet: parseSheet(readFileSync(resolve(cwd, a.compareSheet), "utf8"), sheetOpts) } : undefined;
       const report = await buildIsomorphismReport(ctx, { compareTo: cmp });
-      writeReport(join(ctx.evidenceDir, `isomorphism-${rpcChainId}.json`), report);
+      writeReport(isoPath, toolRun ? { ...report, coreSha: toolRun.originalSha } : report);
+      if (toolRun) log.log("info", "run.isomorphism_written", { original_sha: toolRun.originalSha, tooling_sha: toolRun.toolingSha, note: "the deployment had no isomorphism report: written from the tooling sha, whose deployed inputs are byte-identical" });
     }
     log.log("info", "run.done", { ran: result.ran, skipped: result.skipped });
     return 0;
