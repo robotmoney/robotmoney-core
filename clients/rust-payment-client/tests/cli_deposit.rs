@@ -930,3 +930,38 @@ async fn deposit_is_not_a_success_when_it_executed_under_another_implementation(
     assert_eq!(v["error"], "ErrImplementationChanged");
     assert_eq!(v["tx_hash"], format!("{TX_HASH:#x}"));
 }
+
+/// The receipt comes back, then the first read of its block hits a node that
+/// has not reached it ("block not found", Deploy 3 P6.55). The read is
+/// retried and the write is a success, not a refusal of a mined deposit.
+#[tokio::test]
+async fn deposit_retries_the_executed_block_read_when_the_node_is_behind() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_post_preflight_mocks(
+        &mut server,
+        &receipt_with_agent_deposit_body(U256::from(1000u64), U256::from(1000u64)),
+    )
+    .await;
+    let behind = server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_getStorageAt"})),
+            common::at_block(RECEIPT_BLOCK_TAG),
+        ]))
+        .with_status(200)
+        .with_body(
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"block not found: 0x42"}}"#,
+        )
+        .expect(1)
+        .create_async()
+        .await;
+    install_gateway_implementation(&mut server, IMPL_A, IMPL_A_CODE, None).await;
+
+    let fix = Fixture::build_proxied(&server.url(), chain_id, IMPL_A, IMPL_A_CODE);
+    let (code, v) = run_deposit(&fix);
+    assert_eq!(code, Some(0), "{v}");
+    assert_eq!(v["status"], "success");
+    behind.assert_async().await;
+}

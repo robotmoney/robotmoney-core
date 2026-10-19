@@ -204,11 +204,19 @@ pub async fn reverify_gateway_after_signing(
     verify_gateway_code(rpc, cfg, "latest").await.map(|_| ())
 }
 
+/// Reads of the executed block: a load-balanced RPC can return the receipt
+/// from one node and answer the next read from a node that has not reached
+/// its block yet ("block not found", Deploy 3 P6.55 on mainnet.base.org). A
+/// failed read is retried this many times, one second apart, before it
+/// refuses.
+pub const EXECUTED_BLOCK_READ_ATTEMPTS: u32 = 10;
+
 /// After a write executed: `Ok` when the gateway implementation in the
 /// transaction's block is the `bound` one it was signed against. Otherwise
 /// `ErrImplementationChanged` (or `ErrImplementationUnverified` when the slot
-/// cannot be read or the receipt has no block), so the caller never reports
-/// a write that ran under another implementation as a success.
+/// cannot be read after [`EXECUTED_BLOCK_READ_ATTEMPTS`] tries, or the
+/// receipt has no block), so the caller never reports a write that ran under
+/// another implementation as a success.
 pub async fn check_executed_under(
     rpc: &FailoverRpcClient,
     gateway: Address,
@@ -221,7 +229,19 @@ pub async fn check_executed_under(
             "the receipt of {tx_hash} has no block number"
         ))
     })?;
-    let live = read_implementation(rpc, gateway, &format!("0x{block:x}")).await?;
+    let tag = format!("0x{block:x}");
+    let mut attempt = 1;
+    let live = loop {
+        match read_implementation(rpc, gateway, &tag).await {
+            Ok(live) => break live,
+            Err(e) if attempt >= EXECUTED_BLOCK_READ_ATTEMPTS => return Err(e),
+            Err(e) => {
+                log::warn!("implementation read at the executed block {block} failed (attempt {attempt}), retrying: {e}");
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        }
+    };
     if live == bound {
         return Ok(());
     }
