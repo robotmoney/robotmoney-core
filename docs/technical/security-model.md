@@ -44,6 +44,38 @@ codebase, deploy scripts, or operational procedures that would
 invalidate a required control must update this document first and
 go through explicit approval.
 
+### 1.1 Two systems and their trust boundaries
+
+Owner decision, 2026-10-19. Robot Money is two separate systems. Each is deployed in its own run and tested on its own. The attack families below cover both. This section groups the trust boundaries by system.
+
+**Vaults system** (the treasury product): the vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), their adapters and libraries, the rmAGENT price recorder, VaultRegistry, PortfolioRouter, RouterGovernance, InvestmentCommitteePolicy and ConsensusRecommendationReceipt. Its trust boundaries:
+
+| Boundary | Who crosses it | What the vaults system trusts |
+|---|---|---|
+| Governance | The Safe multisig through the TimelockController | Every `ADMIN_ROLE`, every upgrade and freeze, and every router weight change (`RouterGovernance.applyReceipt`, `setDefaultWeights`). Delayed, observable and cancellable (§4, §7). |
+| Emergency | The independent emergency key (`EMERGENCY_ROLE`) | De-risking only: pause deposits, drain to idle, exclude an adapter. Never an exit block (§4). |
+| Public vault and router surface | Any caller: a human wallet, a script, or the gateway | Nothing. Caps, pause state, slippage floors and share accounting are enforced on every call (§2, §3). |
+| Rebalancing input | Committee members, who register and submit to InvestmentCommitteePolicy and ConsensusRecommendationReceipt directly | Nothing on its own. A recorded receipt moves no weight until the Safe applies it through the timelock. |
+| Upstream protocols | Morpho, Aave, Compound, Uniswap, Aerodrome, USDC | Accepted upstream trust, monitored (§8). |
+
+**Vaults-system invariant: the dependency rule.** The vaults system has no dependency on the gateway. No vaults-system contract names the gateway, takes it as a constructor or initializer argument, or accepts writes only from it. Rebalancing works with no gateway deployed. So a gateway compromise reaches the vaults system only as one more untrusted caller of its public surface. This is `SYS-1` in `docs/technical/smart-contract-invariants.md`.
+
+**rmpc gateway system** (the agent permission and safety layer): RobotMoneyGateway and the `rmpc` client. It decides whether an agent may act, for how much, until when, for which depositor and share receiver, into which allowed destination. It then forwards the permitted deposit or withdrawal to a vault or the router. It is deployed in its own run after the vaults system. Its trust boundaries:
+
+| Boundary | Who crosses it | What the gateway system trusts |
+|---|---|---|
+| Depositor authority | The depositor, through `commitAuthorization` / `revealAuthorization` and `setPolicy` | The depositor alone sets an agent's policy. Operator authority never replaces it (§10). |
+| Agent authority | The agent key (`AGENT_ROLE`) | Only what the depositor's policy allows: caps, windows, deadline, receiver and allowed destination (§10). |
+| Client host | The `rmpc` planner and signer | The planner never signs. The signer accepts only known calldata shapes (§10). |
+| Vaults system | The gateway as a client of the vaults system | The vaults-system addresses it reads for its allowed destinations, checked against their code hashes. It uses the same public surface a human wallet uses. |
+| Gateway governance | Not decided | Who governs the gateway is an open question for its own release. |
+
+**Code that still couples the systems (as of core 57fbe618).** These are known gaps that break the dependency rule today. They are not the design.
+- ConsensusRecommendationReceipt accepts writes only from the gateway (`onlyGateway`, set once at initialization).
+- InvestmentCommitteePolicy takes the gateway at initialization. Committee registration and vote submission route through RobotMoneyGateway (`committeeRegister`, `committeeVoteSubmit`, `consensusRecordReceipt`, `setICPolicy`, `setConsensusReceipt`).
+- The IC policy and receipt contracts and their interfaces live under `contracts/gateway/`. RouterGovernance imports `contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol`.
+- publish-contracts deploys the gateway in the same stage table and run as the vaults. One verify checks both.
+
 ---
 
 ## 2. Smart contract — execution & state ordering
@@ -101,6 +133,8 @@ go through explicit approval.
 | Role separation drift | At deploy and at every admin operation, an off-chain assertion must confirm that admin, pause, emergency, agent, proposer, canceller, and executor authorities satisfy their documented separation rules. No account may hold more than one of gateway `ADMIN_ROLE`, `DEPOSIT_PAUSER_ROLE`, or `AGENT_ROLE`. |
 
 ### 4.1 Deploy-time governance record
+
+> Note (2026-10-19): Deploy 2 below deployed both systems in one run. The vaults system and the rmpc gateway system now deploy in separate runs (§1.1). The Deploy 2 column stays as recorded.
 
 Every Base 8453 deployment fills a column of this table from its stage 11 manifests (`safe.json`, `timelock.json`, `gateway.json`) and its stage 12 verifier output. The live column is Deploy 2: devops run 2, release `release/v0.4.0-base.3-rehearsal`, core `78c50cbd`. Its manifests are committed byte for byte in `deployments/8453/deploy-2/`, and its verifier output is in run 2's evidence folder on the operator machine (`docs/development/stage-deployment.md`, "Deploy 2"). Two rows differ from the production policy: the delay is 900 s because Deploy 2 is a rehearsal-kind deployment, and its timelock predates `ProposerFloorTimelock`. The final production deployment adds its own column.
 
@@ -243,7 +277,7 @@ source. The manipulation-resistance posture is:
 
 ## 10. Off-chain — agent access layer (`rmpc` and gateway)
 
-This section maps onto `docs/architecture.md` §5.1 (`rmpc`), §5.2 (Agent Permissions Gateway), §6 (Data and Trust Boundaries) and §8 (Guardrails).
+This section covers the rmpc gateway system (§1.1). It maps onto `docs/architecture.md` §5.1 (`rmpc`), §5.2 (Agent Permissions Gateway), §6 (Data and Trust Boundaries) and §8 (Guardrails).
 
 | Attack | Required control |
 |---|---|

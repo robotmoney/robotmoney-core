@@ -17,6 +17,8 @@
 
 ## 1. Status
 
+> **Note (2026-10-19).** Historical review, kept as written. The vaults system and the rmpc gateway system are now separate systems; the agent credentials reviewed here belong to the gateway system (see `docs/technical/dapp-credential-decisions.md` §2).
+
 Accepted. Authored 2026-05-07 against
 `Plan tracking issue #109` §12 on branch
 `feat/84-dev-scout-browser-keygen-security-review-adr`.

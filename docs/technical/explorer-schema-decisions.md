@@ -31,6 +31,8 @@ Companion ADR: `docs/technical/rmpc-read-output-contract.md` §3.3 and §5 alrea
 
 A binding constraint applies: per `docs/technical/security-model.md` and §11's own "Boundaries" subsection, **the explorer is never the source of truth for signing or safety decisions**. Every decision below is anchored to that constraint plus the §11 acceptance criteria (clearly distinguish indexed data from live chain reads; mark stale data with block number and indexed-at time; Phase 6 dapp can use the API for display while sensitive actions still go through `rmpc`).
 
+**Two systems (owner decision 2026-10-19).** The indexer reads two separate systems and keeps their tables apart. The vaults system (vaults, `VaultRegistry`, `PortfolioRouter`, `RouterGovernance`, `InvestmentCommitteePolicy`, `ConsensusRecommendationReceipt`) fills `vaults`, `vault_snapshots`, `wallet_positions`, the router weight tables and the committee, regime and receipt tables. The rmpc gateway system (`RobotMoneyGateway`) fills `agent_deposits` and `agent_policies`. The gateway depends on the vaults system, never the reverse, so the vaults-system tables must fill with no gateway deployed. `rmpc` belongs to the gateway system; §3.5 keeps it off the indexer's input path. *Code that still couples them:* `IndexerConfig.gateway` is required, so the indexer cannot start without a gateway address; committee and receipt writes still reach their contracts only through the gateway.
+
 A second binding constraint from user memory applies: **no fast-feedback optimization in the test harness**. The indexer's local-dev story should not invent a faster substitute for the production stack just to shave seconds off contributor iteration.
 
 ## 3. Decisions
@@ -113,7 +115,7 @@ A second binding constraint from user memory applies: **no fast-feedback optimiz
   - **Trigger 2 (heartbeat):** if no snapshot has been written for a watched contract in the last `SNAPSHOT_HEARTBEAT_BLOCKS = 7200` blocks (~4 h on Base), the indexer takes one anyway.
   - **Per-tick reads (issues 1768, 1781).** A registry vault whose own watched log (deposit, withdrawal, cap, exit fee, pause, shutdown, in-kind exit) lands in a tick is read once at the tick's last block. A vault with no snapshot yet is read at once, and one with zero `total_assets` or an unknown cap is read every tick. Every other vault is read only by trigger 2, so yield and price moves of a quiet vault show at the heartbeat ([indexer.rs `snapshot_read`](../../services/explorer-indexer/src/indexer.rs), test `vault_snapshot_cadence::a_vault_with_value_and_known_caps_is_not_read_in_a_quiet_tick`).
   Both triggers write to the same table with the same `(chain_id, contract, block_number)` key, so heartbeat snapshots are no-ops if an event-driven snapshot already covered that block.
-- **Watched event set (initial).** From the contracts in this repo:
+- **Watched event set (initial).** From the contracts in this repo. The `IGateway` events belong to the rmpc gateway system; the `RobotMoneyVault` events belong to the vaults system:
   - `IGateway.AgentAuthorized` → `agent_policies` upsert.
   - `IGateway.AgentOwnershipTransferred` → `agent_policies` row naming the new owner, with the policy fields carried from the agent's latest earlier row (issue #1476).
   - `IGateway.AgentRevoked` → `agent_policies` upsert (with a tombstone column).

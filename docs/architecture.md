@@ -12,27 +12,53 @@
 ## 1. Overview
 
 Robot Money is a USDC treasury system for human depositors and autonomous
-agents, governed by a Safe multisig through a TimelockController. The product architecture has three on-chain
-allocation layers: the Portfolio Router at the outer product layer,
-individual Robot Money vaults at the exposure layer, and vault adapters
-inside each vault for venue-specific strategy execution. Agent access has
-a separate permission and safety layer: the gateway. Human and agent
-clients share the same read-before-write safety model: chain state is the
-authority for signing and execution, while indexed data is used only for
-display, history, and public observability.
+agents. It is built as **two separate systems** (owner decision,
+2026-10-19):
+
+- **The vaults system** is the treasury product. It holds the Robot Money
+  vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), their adapters and libraries,
+  the rmAGENT price recorder, `VaultRegistry`, `PortfolioRouter`,
+  `RouterGovernance`, and the rebalancing input contracts
+  `InvestmentCommitteePolicy` and `ConsensusRecommendationReceipt`. A Safe
+  multisig governs it through a TimelockController. It is deployed in its
+  own run (the rehearsal deploy runbook, `docs/runbooks/contract-qa/`) and
+  tested on its own.
+- **The rmpc gateway system** is the agent permission and safety layer.
+  It holds `RobotMoneyGateway` and the `rmpc` client. It is a client of
+  the vaults system: it calls the same public vault and router surfaces a
+  human wallet uses. It is deployed in its own run, after the vaults
+  system, and reads the vaults system's addresses for its allowed
+  destinations. It is tested on its own, with its own runbook and CI. Who
+  governs the gateway is an open question for its own release (§10).
+
+**Dependency rule.** The gateway depends on the vaults system. The vaults
+system has no dependency on the gateway. No vaults-system contract names
+the gateway, takes it as a constructor or initializer argument, or accepts
+writes only from it. Rebalancing works with no gateway deployed. The code
+does not meet this rule yet; the known gaps are listed in §2.5.
+
+The vaults system has three on-chain allocation layers: the Portfolio
+Router at the outer product layer, individual Robot Money vaults at the
+exposure layer, and vault adapters inside each vault for venue-specific
+strategy execution. Human and agent clients share the same
+read-before-write safety model: chain state is the authority for signing
+and execution, while indexed data is used only for display, history, and
+public observability.
 
 The Safe multisig, through the TimelockController, is the only body that
-changes any Robot Money contract configuration, router weights included.
-Router weights change only when the weight setter applies the Investment
-Committee's consensus receipt as one timelock operation. There is no voting
-by token holders or anyone else. See §2.3 and `docs/prd.md`
-§"Allocation Governance".
+changes any vaults-system contract configuration, router weights included.
+Router weights change in one of two ways, each one timelock operation: the
+Safe applies the Investment Committee's consensus receipt with
+`RouterGovernance.applyReceipt`, or the Safe sets default weights directly
+with `setDefaultWeights`. There is no voting by token holders or anyone
+else. See §2.3 and `docs/prd.md` §"Allocation Governance".
 
 A fourth surface, the agentic **Investment Committee**, sits upstream of
-governance: admin-allowlisted agents register an on-chain identity and
-submit signed per-vault allocation tilts that feed weight governance as a
-**signalling-only** input — they never move funds or set router weights.
-Canonical scope:
+governance inside the vaults system: admin-allowlisted agents register an
+on-chain identity and submit signed per-vault allocation tilts that feed
+weight governance as a **signalling-only** input — they never move funds
+or set router weights. Committee members submit to the IC policy and receipt
+contracts directly, not through the gateway. Canonical scope:
 `docs/product/20260623-product-proposal-investment-committee-v0.md`,
 `docs/prd.md` §"Committee", and issue #1044. See §2.4, §4.8, §5.1, §5.3,
 §5.4, and §5.5.
@@ -42,41 +68,57 @@ Canonical scope:
 ### 2.1 Allocation Layers
 
 ```text
-Human wallet
-  -> direct vault deposit
-  -> or Portfolio Router deposit
-
-Agent client / rmpc
-  -> gateway permission and safety checks
-  -> allowed vault or Portfolio Router action
-
-Portfolio Router
-  -> active underlying Robot Money vaults by RM-governed weights
-
-Robot Money vault
-  -> internal strategy adapters by vault-controlled routing/caps
-
-Vault adapter
-  -> external venue or strategy
+            +---------------- rmpc gateway system ----------------+
+            |  Agent client / rmpc                                |
+            |    -> RobotMoneyGateway permission and safety checks|
+            |    -> forwards the permitted deposit or withdrawal  |
+            +--------------------------|--------------------------+
+                                       | calls public surfaces only
+                                       v
++------------------------------- vaults system ----------------------------+
+|  Human wallet                                                            |
+|    -> direct vault deposit                                               |
+|    -> or Portfolio Router deposit                                        |
+|                                                                          |
+|  Committee member wallet                                                 |
+|    -> InvestmentCommitteePolicy (registration, signed tilts)             |
+|    -> ConsensusRecommendationReceipt (recorded consensus receipt)        |
+|                                                                          |
+|  Safe -> TimelockController                                              |
+|    -> RouterGovernance.applyReceipt or setDefaultWeights                 |
+|                                                                          |
+|  Portfolio Router                                                        |
+|    -> active underlying Robot Money vaults by RM-governed weights        |
+|                                                                          |
+|  Robot Money vault                                                       |
+|    -> internal strategy adapters by vault-controlled routing/caps        |
+|                                                                          |
+|  Vault adapter                                                           |
+|    -> external venue or strategy                                         |
++--------------------------------------------------------------------------+
 ```
+
+Arrows into the vaults system come from outside callers. No arrow leaves
+the vaults system toward the gateway.
 
 The Portfolio Router allocates across vaults. Vaults allocate internally
 through adapters. Users, agents, and the Portfolio Router consume vault
 surfaces; they do not call adapters directly.
 
-The gateway is not an allocation layer. It is the on-chain permission and
-agent-safety layer in front of agent-initiated writes. It answers whether
-the agent may act, for how much, until when, on behalf of which depositor,
-to which share receiver, and into which allowed destination. After those
-checks pass, the gateway forwards the permitted action to a vault or the
-Portfolio Router.
+The gateway is not an allocation layer and is not part of the vaults
+system. It is the on-chain permission and agent-safety layer in front of
+agent-initiated deposits and withdrawals. It answers whether the agent may
+act, for how much, until when, on behalf of which depositor, to which
+share receiver, and into which allowed destination. After those checks
+pass, the gateway forwards the permitted action to a vault or the
+Portfolio Router. It reaches them through the same public surfaces a human
+wallet uses.
 
 Human wallets and agent clients use different permission paths, but they
-terminate at the same product surfaces: vaults, the Portfolio Router,
-governance reads/writes, and public observability. Architecture should
-avoid parallel product semantics for humans and agents; the difference is
-who is allowed to sign and which safety checks run before the product
-surface is called.
+terminate at the same product surfaces: vaults, the Portfolio Router, and
+public observability. Architecture should avoid parallel product semantics
+for humans and agents; the difference is who is allowed to sign and which
+safety checks run before the product surface is called.
 
 ### 2.2 Receipts and Portfolio Positions
 
@@ -94,7 +136,7 @@ weight, and unavailable leg.
 ### 2.3 Governance Boundary
 
 The Safe multisig, through the TimelockController, is the only body that
-changes any Robot Money contract configuration, router weights included.
+changes any vaults-system contract configuration, router weights included.
 `WEIGHT_SETTER_ROLE` on the Portfolio Router is the only authority over
 router weights, and `RouterGovernance.sol` is the contract that holds it.
 The weight setter submits the Investment Committee's consensus receipt, and
@@ -105,7 +147,10 @@ receipt and applies its weight vector (govern row `apply-receipt`, core
 refuses a receipt that is not recorded, already released, or recorded with a
 different payload digest, then calls `releaseReceipt` on the receipt register
 and `setWeights` on the router in the same transaction (issue 1698). A vector
-the router refuses releases nothing. The timelock holds `ADMIN_ROLE` and
+the router refuses releases nothing. The Safe can also set the router's
+default weights directly with `RouterGovernance.setDefaultWeights`, again
+as one timelock operation. Neither path involves the gateway. Rebalancing
+works with no gateway deployed. The timelock holds `ADMIN_ROLE` and
 `RouterGovernance`'s own `WEIGHT_SETTER_ROLE`, so the role ends with the timelock.
 Router-weight governance controls Portfolio Router target weights across
 active vaults and nothing else. It does not govern vault onboarding, vault
@@ -141,24 +186,50 @@ Three boundary properties are load-bearing and are enforced architecturally:
 - **Signalling-only.** The IC contract grants no treasury-spend and no
   auto-apply authority (custody invariant INV-4, `docs/prd.md` §12). It is
   metadata-only storage.
-- **Gateway-routed.** Committee registration and vote submission are
-  agent-initiated writes and route through `RobotMoneyGateway` like every
-  other agent action (§5.2) — there is no committee side channel.
+- **Direct calls, no gateway.** The Safe allowlists committee members on
+  `InvestmentCommitteePolicy` through the timelock. Members submit tilts
+  to it directly, and the submitter records
+  a consensus receipt on `ConsensusRecommendationReceipt` directly. Both
+  contracts belong to the vaults system and do not depend on the gateway
+  (§1 dependency rule). The current code still routes these writes
+  through the gateway; see §2.5.
 - **Admin-gated membership.** Only `ADMIN_ROLE` allowlists an agent;
   membership is registry state, not a code variant (§7.3), mirroring
   `VaultRegistry.isRouterEligible`.
+
+### 2.5 Code that still couples the systems
+
+The design in §1 is the target. As of core 57fbe618 the code still couples
+the vaults system to the gateway in these places. Each one is a known gap
+to remove, not part of the design:
+
+- `ConsensusRecommendationReceipt` accepts writes only from the gateway
+  (`onlyGateway`, set once at initialization).
+- `InvestmentCommitteePolicy` takes the gateway at initialization, and
+  its `submitVote` is `onlyGateway`. Committee registration and vote
+  submission route through
+  `RobotMoneyGateway` (`committeeRegister`, `committeeVoteSubmit`,
+  `consensusRecordReceipt`, `setICPolicy`, `setConsensusReceipt`).
+- The IC policy and receipt contracts and their interfaces live under
+  `contracts/gateway/`. `RouterGovernance` imports
+  `contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol`.
+- `publish-contracts` deploys the gateway in the same stage table and run
+  as the vaults, and one verify checks both.
+
+Sections below that describe current code paths through the gateway
+(§4.5, §4.8, §4.9.2, §5.1, §5.2, §7.5) point back here.
 
 ## 3. Technology Stack
 
 | Layer | Choice | Rationale | Source |
 | --- | --- | --- | --- |
 | Chain | Base mainnet, chain id 8453; forked Base for integration tests | Current verified deployments and test strategy are Base-oriented. | `docs/technical/smart-contracts.md` §2; `docs/development/testing-strategy-ethereum.md` § Forked Base mainnet harness |
-| Smart contracts | Solidity 0.8.24, EVM Cancun, Foundry | Existing vault, gateway, adapter, and tests use this toolchain. | `foundry.toml`; `docs/technical/smart-contracts.md` §1 |
+| Smart contracts | Solidity 0.8.24, EVM Cancun, Foundry | Existing vault, gateway, adapter, and tests use this toolchain. The vaults system and the gateway system share the toolchain but deploy and test separately (§1). | `foundry.toml`; `docs/technical/smart-contracts.md` §1 |
 | Contract libraries | OpenZeppelin v5 ERC-4626, ERC-20, AccessControl, ReentrancyGuard | Standardizes vault accounting, role separation and reentrancy protection. The deposit pause is each contract's own `depositsPaused` flag, not OZ Pausable (core 1494). | `docs/technical/smart-contracts.md` §3.1 |
 | Primary asset | USDC, 6 decimals | Product accepts USDC as the treasury input asset. | `docs/prd.md` §1; `docs/technical/smart-contracts.md` §1 |
 | Vault standard | ERC-4626 for individual vaults | Standard deposit, withdraw, redeem, preview, conversion, and `totalAssets()` surface. | `docs/technical/adapter-architecture.md` §1 |
 | Stable-yield venues | Moonwell Flagship USDC, Aave V3, Compound V3 through vault adapters | Current deployed stable-yield vault normalizes these venues behind adapters. | `docs/technical/adapter-architecture.md` §4; `docs/technical/smart-contracts.md` §4 |
-| IC policy contract | Solidity 0.8.24, OpenZeppelin AccessControl + admin-floor, same Foundry toolchain | Signalling-only registry of committee agents and signed tilts; mirrors `RouterGovernance`/`VaultRegistry` role and event conventions; routed via the gateway. | `docs/prd.md` §"Committee", §12 INV-4; proposal doc; issue #1044 |
+| IC policy contract | Solidity 0.8.24, OpenZeppelin AccessControl + admin-floor, same Foundry toolchain | Signalling-only registry of committee agents and signed tilts; mirrors `RouterGovernance`/`VaultRegistry` role and event conventions; called directly by committee members, not via the gateway (current code still routes via the gateway, §2.5). | `docs/prd.md` §"Committee", §12 INV-4; proposal doc; issue #1044 |
 | Committee vote schema | Fixed-shape JSON schema committed to the repo, validated in CI | Committee votes are the core auditable signal; a valid fixture must pass and an invalid fixture must fail a CI schema job. | `docs/prd.md` §"Committee" (constraints); issue #1044 |
 | Committee agent plugin | Skill/plugin extending `robotmoney-analyst` | Reuses the analyst's regime/market datasources, adds form-tilt → sign → submit tilt (`vote-submit`, not a vote on anything); proprietary methods stay out of the published surface. | `plugins/robotmoney-analyst/`; proposal doc §3 |
 | Agent command client | Rust binary `rmpc` | Builds known calldata, signs through constrained backends, performs direct JSON-RPC reads, and emits stable JSON. | `docs/technical/rmpc-read-output-contract.md` §3 |
@@ -451,18 +522,20 @@ background implementation details.
 ### 4.5 Protocol Admin Authority
 
 Every protocol contract uses OpenZeppelin `AccessControl` with an
-`ADMIN_ROLE`. A deployment has ten of them: the four vaults
+`ADMIN_ROLE`. A vaults-system deployment has nine of them: the four vaults
 (`RobotMoneyVault` for rmUSDC, and the `BasketVault` kinds
-`ProtocolAssetVault`, `AgentTokenVault` and `RwaBasketVault`) and six
-singletons, `RobotMoneyGateway`, `VaultRegistry`, `PortfolioRouter`,
-`RouterGovernance`, `InvestmentCommitteePolicy` (§4.8) and
-`ConsensusRecommendationReceipt` (§4.9). `ADMIN_ROLE` governs privileged
+`ProtocolAssetVault`, `AgentTokenVault` and `RwaBasketVault`) and five
+singletons, `VaultRegistry`, `PortfolioRouter`, `RouterGovernance`,
+`InvestmentCommitteePolicy` (§4.8) and `ConsensusRecommendationReceipt`
+(§4.9). `RobotMoneyGateway` also has an `ADMIN_ROLE`, but it belongs to
+the gateway system. Who governs it is an open question for the gateway's
+own release (§10). `ADMIN_ROLE` governs privileged
 operations: adapter and basket-asset add/remove, cap and fee changes, vault
 registration and deregistration, pause-role grants, governance and
 committee parameter changes, and `ADMIN_ROLE` membership changes.
 
-On-chain enforcement requirement: `ADMIN_ROLE` on all ten contracts
-must be held by a deployed `TimelockController`. Every privileged action
+On-chain enforcement requirement: `ADMIN_ROLE` on all nine vaults-system
+contracts must be held by a deployed `TimelockController`. Every privileged action
 is Safe → `TimelockController` → target. The Safe is a canonical SafeL2
 1.4.1 proxy from the canonical factory with threshold ≥ 2, created by the
 deploy's stage 0 (`safe`). It holds `PROPOSER_ROLE` and CANCELLER_ROLE on
@@ -475,8 +548,10 @@ both). `rmpc` is not a governance signer. No EOA may hold
 pass through the schedule → delay → execute flow. The minimum delay has a
 48-hour (172800 s) floor on Base (chain id 8453), enforced by
 `DeployTimelock`. Deploy stage 11 (`timelock`) hands every role on every
-vault, the gateway, registry, router, governance, IC policy and receipt
-to the timelock and revokes the deployer. The stage sequence is in
+vault, the registry, router, governance, IC policy and receipt to the
+timelock and revokes the deployer. The current stage table also deploys
+the gateway and hands it to the same timelock in that run. That is a known
+gap, not the design (§2.5). The stage sequence is in
 `docs/operations/contract-release-runbooks.md` §4.3.
 
 The `TimelockController` address, proposer set, executor policy, min
@@ -633,7 +708,7 @@ line of this lifecycle authorises forced or admin-driven migration.
 ### 4.8 Investment Committee Policy Contract
 
 The IC policy contract is a **signalling-only registry** — one of the
-ten timelock-governed protocol contracts in §4.5 — separate from
+nine timelock-governed vaults-system contracts in §4.5 — separate from
 `RouterGovernance` (see the boundary in §2.4).
 
 **State.** Metadata only — no USDC, share tokens, or basket assets. Two
@@ -666,12 +741,14 @@ is a registered agent's own action and is not timelocked. It is not a vote
 on anything.
 
 **Identity model.** A committee agent's identity is its registered EOA: it
-submits its own vote through the gateway, so `msg.sender` is the
-authorization, the same identity model the gateway uses for agent actions
-(§5.2). `committeeVoteSubmit` enforces it: the vote's `agent` field must equal
-`msg.sender`, or the gateway reverts `CommitteeAgentNotCaller` (issue 1790). On-chain signature recovery and EIP-712 structured-vote domains are
-not used — the codebase has no EIP-712 path, and `msg.sender`-via-gateway
-is sufficient when the agent submits its own vote. (Structured-data
+submits its own vote directly to the IC policy contract, so `msg.sender`
+is the authorization. The vote's `agent` field must equal `msg.sender`.
+In the current code the vote still routes through the gateway, whose
+`committeeVoteSubmit` enforces this rule and reverts
+`CommitteeAgentNotCaller` (issue 1790; gap listed in §2.5). On-chain
+signature recovery and EIP-712 structured-vote domains are not used — the
+codebase has no EIP-712 path, and `msg.sender` is sufficient when the
+agent submits its own vote. (Structured-data
 signatures would only be needed to authenticate a vote authored by one
 party and relayed by another, which the committee does not do.)
 
@@ -695,10 +772,12 @@ never driven by it: a receipt the Safe does not schedule changes nothing.
 
 ### 4.9 Consensus Recommendation Receipt Contract
 
-`contracts/gateway/ConsensusRecommendationReceipt.sol` is a **seventh protocol
-contract** and a **signalling-only commitment register** for the swarm's
+`ConsensusRecommendationReceipt` is a **vaults-system protocol contract**
+and a **signalling-only commitment register** for the swarm's
 consensus recommendation receipts. It anchors the `keccak256` of a receipt's
 canonical bytes on chain, next to the public URI serving those exact bytes.
+Its source currently sits at `contracts/gateway/ConsensusRecommendationReceipt.sol`
+and accepts writes only from the gateway. Both are known gaps (§2.5).
 
 **Why the anchor exists.** A signed receipt published only at an
 RM-controlled URL can still be silently suppressed by RM, which is exactly
@@ -773,9 +852,7 @@ signatures.
 
 | Call | Site | Authority |
 |---|---|---|
-| `setConsensusReceipt(address)` | `RobotMoneyGateway` | `ADMIN_ROLE` on the gateway |
-| `consensusRecordReceipt(bytes32 receiptId, bytes32 payloadDigest, string payloadUri)` | `RobotMoneyGateway` | `AGENT_ROLE` on the gateway **and** `COMMITTEE_AGENT_ROLE` on the IC policy |
-| `recordReceipt(address submitter, …)` | `ConsensusRecommendationReceipt` | `onlyGateway` |
+| `recordReceipt(…)` | `ConsensusRecommendationReceipt` | the submitter calls it directly; it must hold `COMMITTEE_AGENT_ROLE` on the IC policy |
 | `releaseReceipt(bytes32 receiptId)` | `ConsensusRecommendationReceipt` | `ADMIN_ROLE`, held by the `TimelockController` and by `RouterGovernance` |
 | `applyReceipt(bytes32 receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps)` | `RouterGovernance` | `WEIGHT_SETTER_ROLE`, held by the `TimelockController` |
 
@@ -785,10 +862,19 @@ refusing an existing id enforces **one receipt per session per subject**.
 `payloadUri` must be the stable backend route
 `/api/swarm/receipts/{session_id}` on the configured frontend origin.
 
-**Why release is not a gateway entrypoint.** Routing release through the
-gateway would require granting the gateway `ADMIN_ROLE` on the receipt
-contract — the pattern `committeeRegister` uses. INV-3 requires that role
-to stay under the `TimelockController`, so the gateway never holds it.
+**Current code (gap, §2.5).** Recording still goes through the gateway.
+The submitter calls `RobotMoneyGateway.consensusRecordReceipt(bytes32
+receiptId, bytes32 payloadDigest, string payloadUri)`, which needs
+`AGENT_ROLE` on the gateway and `COMMITTEE_AGENT_ROLE` on the IC policy.
+The gateway then calls `recordReceipt(address submitter, …)`, which is
+`onlyGateway`. The gateway's `ADMIN_ROLE` sets the receipt address with
+`setConsensusReceipt(address)`.
+
+**Who can release.** Release never involves the gateway. INV-3 requires
+`ADMIN_ROLE` on the receipt contract to stay under the
+`TimelockController`, so the gateway never holds it. (In the current code
+`committeeRegister` works by granting the gateway `ADMIN_ROLE` on the IC
+policy; that is one of the gaps in §2.5.)
 `ADMIN_ROLE` on the receipt contract has two holders: the
 `TimelockController` and `RouterGovernance` (granted by the governance
 stage, issue 1698). `RouterGovernance` holds it so `applyReceipt` can
@@ -907,6 +993,9 @@ not be the source of values presented in a signing prompt.
 ### 5.1 `rmpc`
 
 `rmpc` is the constrained Rust command client for agents and operators.
+It belongs to the rmpc gateway system (§1). Its reads and its committee
+and receipt commands call vaults-system contracts as a client, the same
+way any wallet would.
 Its signing path builds only known calldata for configured contracts on a
 configured chain. It performs direct JSON-RPC preflight reads before any
 write and emits stable JSON envelopes for read commands:
@@ -968,9 +1057,10 @@ follow the same write-command path as `deposit`
 (a software keystore signs on every chain; a hardware wallet, HSM or KMS is
 optional, never required, owner decision 2026-10-14, QA plan Decision D12)
 → build known calldata for the configured IC contract →
-sign the EIP-1559 envelope through the `AgentSigner` backend → route the
-call through `RobotMoneyGateway` → broadcast → decode the event → emit a
-stable JSON envelope.
+sign the EIP-1559 envelope through the `AgentSigner` backend → send the
+call to the IC contract directly → broadcast → decode the event → emit a
+stable JSON envelope. The current code still routes the call through
+`RobotMoneyGateway` (gap, §2.5).
 
 - There is no `committee register` and no governance write or draft
   command: agent registration and receipt application are Safe actions
@@ -994,10 +1084,11 @@ recommendation receipt of §4.9 (issue #1247).
   `tests/fixtures/consensus-receipt.canonicalization.json`, print the
   derived `payload_digest` and `receipt_id`, and report per-analyst
   Ed25519 verification. Read-only: no signer, no nonce lock, no RPC.
-- `receipt submit` — the same checks, then
+- `receipt submit` — the same checks, then records the receipt on the
+  receipt contract directly. The current code still sends
   `RobotMoneyGateway.consensusRecordReceipt(receiptId, payloadDigest,
-  payloadUri)` sent **to the gateway address** (the receipt contract is
-  `onlyGateway`).
+  payloadUri)` **to the gateway address**, because the receipt contract is
+  `onlyGateway` (gap, §2.5).
 
 The canonicalizer lives in `clients/rust-payment-client/src/consensus_receipt.rs`
 and is a second implementation of bytes the frontend already produces, so it
@@ -1020,6 +1111,15 @@ The gateway is the permissions and agent-safety layer for autonomous
 access. It is not a vault, not the Portfolio Router, and not an adapter.
 It sits between `rmpc`/agent keys and product write surfaces so an agent
 can only execute allowed actions under a depositor-owned policy.
+
+The gateway and `rmpc` form the rmpc gateway system, separate from the
+vaults system (§1). The gateway depends on the vaults system; the vaults
+system never depends on the gateway. The gateway is deployed in its own
+run, after the vaults system, and reads the vaults system's addresses for
+its allowed destinations. It has its own runbook and CI. Who governs the
+gateway is an open question for its own release (§10). The committee and
+receipt calls the current gateway still carries are gaps (§2.5), not part
+of its job.
 
 The depositor owns the policy: valid-until, max per payment, max per
 window, share receiver, and allowed destinations. The Robot Money team
@@ -1057,7 +1157,7 @@ Agent ownership and policy rules (issue #1476):
   given an agent; it cannot take one;
 - the deploy authorizes no agent. Agents belong to depositors, who
   authorize them through `commitAuthorization` + `revealAuthorization`.
-  At deployment handover `DeployTimelock` transfers every agent listed in
+  In the current combined deploy (§2.5), at handover `DeployTimelock` transfers every agent listed in
   `AGENT_ADDRESSES` to the `TimelockController`, so after handover
   `setPolicy` and `revokeAgent` on those agents go Safe -> Timelock ->
   gateway. The list is a required input (a comma-separated list, or
@@ -1068,7 +1168,9 @@ Agent ownership and policy rules (issue #1476):
   the gateway has no `AgentAuthorized` or `AgentOwnershipTransferred`
   log up to the handover block, the timelock manifest lists zero agents
   and nobody holds `AGENT_ROLE` from a grant before it. Agents depositors
-  authorize after the handover are theirs and are not checked.
+  authorize after the handover are theirs and are not checked. Where this
+  handover lands once the gateway deploys in its own run depends on who
+  governs the gateway, which is still open.
 
 The current gateway implementation gates agent deposits into a vault. The
 product architecture uses the same safety boundary for agent deposits and
@@ -1207,7 +1309,8 @@ chain reads for current state):
   events, §5.4). The account layer shows a connected committee agent its
   own vote history. The action layer is the vote-submission flow
   (select vault → stance/weight → `rationale_uri` → preview → sign),
-  routed through the gateway like every other write. Committee votes are
+  sent directly to the IC policy contract, not through the gateway (the
+  current code still routes it through the gateway, §2.5). Committee votes are
   signalling-only: the preview must make clear the vote records a tilt and
   does not move funds or set weights.
 
@@ -1542,7 +1645,8 @@ Protocol authority is limited to contract upgrade where applicable,
 configuration of protocol-level controls, deposit pause, and permanent shutdown.
 Depositor-owned agent policies are controlled by the depositor. Agent
 keys must not hold admin or pause authority. The deploy authorizes no
-agent; each depositor authorizes its own. Every agent listed in
+agent; each depositor authorizes its own. In the current combined deploy
+(§2.5), every agent listed in
 `DeployTimelock`'s required `AGENT_ADDRESSES` input is owned by the
 `TimelockController` after handover, not by the deployer EOA; the deploy
 passes `none` (§5.2, invariant `ACL-8`).
@@ -1661,6 +1765,13 @@ fork of real Base at the upstream head minus 2, pinned once per CI run.
 Tests deploy their own vault every time (clean room). The stage sequence
 is in `docs/operations/contract-release-runbooks.md` §4.3.
 
+The vaults system and the rmpc gateway system deploy in separate runs
+(§1). The vaults system deploys first, through the rehearsal deploy
+runbook in `docs/runbooks/contract-qa/`. The gateway deploys after it, in
+its own run, and reads the vaults system's addresses. Each system is
+tested on its own. The current stage table still deploys the gateway in
+the same run as the vaults, and one verify checks both (gap, §2.5).
+
 On the stage host every service runs in a container (core 1549): the Twin chain
 (the pinned lazy fork), the one-shot deploy job that runs the same publish
 contracts ceremony against it, and the dapp stack. `scripts/stage/core-stack.ts`
@@ -1707,8 +1818,9 @@ as a committee vote, while preserving the extra off-chain signature check that
 the EVM cannot perform. `rmpc receipt verify` canonicalizes the receipt and
 verifies every embedded analyst Ed25519 signature before reporting the derived
 digest and receipt id (§5.1). `rmpc receipt submit` repeats those checks before
-loading a signer, taking a nonce lock, or calling
-`RobotMoneyGateway.consensusRecordReceipt`; a tampered or unsupported receipt
+loading a signer, taking a nonce lock, or recording the receipt (the
+current code records it through `RobotMoneyGateway.consensusRecordReceipt`,
+§2.5); a tampered or unsupported receipt
 therefore never reaches the chain.
 
 The receipt is a protocol-scope public record once indexed (§5.4). It exposes
@@ -1758,7 +1870,8 @@ stays §8 because other documents cite it by number.
   proxied gateway the code hash check covers the live implementation too:
   its code hash must be in `gateway_implementation_hashes`, read at one block
   (`ErrImplementationNotApproved`, ADR-0014, QA plan P3). Every gateway write
-  runs it, the committee `vote-submit` and `receipt submit` included. The
+  runs it. The committee `vote-submit` and `receipt submit` run it too
+  while they still route through the gateway (§2.5). The
   vault a deposit lands in or a withdraw redeems from, the router and every
   router leg are checked the same way against `proxy_implementation_hashes`
   (issue 1810).
@@ -1769,8 +1882,9 @@ stays §8 because other documents cite it by number.
   `ErrSoftwareSignerDisallowed`), and prints the production warning first
   on Base mainnet. A hardware wallet, HSM or KMS is optional, never
   required (§10 "Production signer vendor").
-- `ADMIN_ROLE` on all protocol contracts must be held by the deployed
-  `TimelockController` in production; no EOA may hold `ADMIN_ROLE`
+- `ADMIN_ROLE` on all vaults-system contracts must be held by the deployed
+  `TimelockController` in production (who governs the gateway is open,
+  §10); no EOA may hold `ADMIN_ROLE`
   directly. All high-risk admin operations must pass through the
   schedule → delay → execute flow. See §4.5.
 - For proxy deployments (implemented in the source, issue 1808), only the
@@ -1795,11 +1909,14 @@ stays §8 because other documents cite it by number.
   vaults and the adapters.
 - Explorer data must not be used as the source of truth for signing or
   safety decisions.
+- No vaults-system contract names the gateway, takes it as a constructor
+  or initializer argument, or accepts writes only from it. Rebalancing
+  never requires a deployed gateway (§1 dependency rule). The current
+  code still breaks this in the places listed in §2.5.
 - The IC policy contract (§4.8) is signalling-only (custody invariant
   INV-4, `docs/prd.md` §12): it must hold no asset, expose no payable
   path, never call a vault or `PortfolioRouter.setWeights`, and grant no
-  agent a treasury-moving role. Committee registration and vote submission
-  must route through `RobotMoneyGateway`, not a side channel. Agent
+  agent a treasury-moving role. Agent
   allowlisting and IC parameter changes are `ADMIN_ROLE` operations and
   must route through the admin timelock in production.
 
@@ -1829,18 +1946,19 @@ stays §8 because other documents cite it by number.
 | Protocol-asset and agent-token vault execution | Resolved (contracts shipped): `contracts/vaults/ProtocolAssetVault.sol` (wETH/cbBTC at launch; wSOL has no usable pool) and `contracts/vaults/AgentTokenVault.sol` (admin-curated agent-economy tokens) are in the source tree. Router eligibility for each vault remains ADMIN_ROLE-gated via `VaultRegistry.setRouterEligible`: both vaults stay ineligible by default until pool cardinality, per-asset TWAP windows, and the intra-vault rebalancing model are certified (see `docs/development/open-questions.md` §3.15). | Flip `isRouterEligible` only after TWAP windows, pool cardinality, and the rebalancing model are certified per §4.1. |
 | Management fee and swap-fee-share mechanism | Resolved: deferred to a future phase. Current phase ships exit-fee-only disclosure. | Require a separate ADR and contract design before management fee or swap-fee-share are implemented. |
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |
-| On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All ten protocol contracts of §4.5 (four vaults and six singletons) must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all ten contracts to it (stage 11); configure the stage 0 SafeL2 (threshold ≥ 2) as proposer and canceller; executor open (`address(0)`, core #1521). See §4.5 and issue #414. |
+| On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All nine vaults-system contracts of §4.5 (four vaults and five singletons) must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all nine contracts to it (stage 11); configure the stage 0 SafeL2 (threshold ≥ 2) as proposer and canceller; executor open (`address(0)`, core #1521). See §4.5 and issue #414. |
 | Production JSON-RPC provider | Resolved: automatic failover shipped in issue #667 through the ordered `rpc_urls` array in `clients/rust-payment-client/src/config.rs` and endpoint rotation in `clients/rust-payment-client/src/rpc/mod.rs`. Safety-critical reads depend on provider correctness and availability; cross-provider consensus checking remains a separate, deferred decision. | Configure the ordered `rpc_urls` list so `rmpc` rotates to the next endpoint on transport failure. Multi-RPC consensus comparison for high-value reads stays deferred until a specific risk justifies it. |
 | Production signer vendor | No HSM/KMS/device-bound signer vendor is chosen, and none is required: every rmpc write, `committee` and `receipt` included, signs with the software keystore on every chain and prints the production warning first on Base mainnet (owner decisions 2026-10-06, issue #1545, and 2026-10-14, QA plan Decision D12). | Keep the signer backend trait stable so an operator who picks HSM/KMS can add it. Hardware stays optional, never required. |
 | Dapp hosting and CSP | Resolved: strict CSP shipped in PR #735 via `clients/dapp/src/lib/csp.ts` Vite plugin and `clients/dapp/scripts/check-csp.sh` CI check. | Maintain strict CSP policy; enforce via CI `check-csp.sh`; require static hosting with pinned dependencies and release provenance before public mainnet use. |
 | Email/notification provider | No product or technical doc selects one. | Leave out until a concrete notification workflow is specified. |
+| Gateway governance | Open. The gateway is a separate system from the vaults (owner decision, 2026-10-19, §1). Who holds its `ADMIN_ROLE` is decided in the gateway's own release. | Not chosen. Decide in the gateway release. |
 
 ## 11. Source Coverage
 
 | Source doc | Rules applied | Rules not applicable |
 | --- | --- | --- |
 | `docs/prd.md` | Problem statement, success metrics, user roles, user stories, workflows, entity lifecycles, integration needs, constraints, out-of-scope boundaries, and the Investment Committee capability (roles, Committee Vote workflow, lifecycle, constraints, INV-4). | Implementation sequencing. |
-| `docs/product/20260623-product-proposal-investment-committee-v0.md` | Investment Committee scope: extend `rmpc`/analyst/dapp, a signalling-only IC policy contract feeding RouterGovernance, gateway-routed signed votes, admin-gated membership, and local-devnet consensus receipt anchoring. Used for §2.4, §4.8/§4.9, §5.1/§5.3/§5.4/§5.5, §7.4/§7.5. | Product positioning and GTM framing; committee capabilities the proposal excludes from scope (inter-agent debate, retail conversion, network-effect mechanics, engineered Sybil resistance). |
+| `docs/product/20260623-product-proposal-investment-committee-v0.md` | Investment Committee scope: extend `rmpc`/analyst/dapp, a signalling-only IC policy contract feeding RouterGovernance, signed votes (the proposal's gateway routing is superseded by the 2026-10-19 system split, §1), admin-gated membership, and local-devnet consensus receipt anchoring. Used for §2.4, §4.8/§4.9, §5.1/§5.3/§5.4/§5.5, §7.4/§7.5. | Product positioning and GTM framing; committee capabilities the proposal excludes from scope (inter-agent debate, retail conversion, network-effect mechanics, engineered Sybil resistance). |
 | `docs/technical/definitions.md` | Canonical meanings for vault, underlying vault, adapter, receipt, router, portfolio position, composite view, router weights, governance, and agent policy. | None. |
 | `docs/technical/adapter-architecture.md` | Adapter interface, vault flow, implemented adapters, adapter controls, risk model, router-vs-adapter separation. | Portfolio Router implementation details; the doc explicitly excludes router design. |
 | `docs/technical/smart-contracts.md` | Current Base deployments, ERC-4626 vault behavior, roles, caps, fees, emergency paths, adapter source behavior, share-scale mitigation, VaultRegistry, PortfolioRouter, RouterGovernance, and basket-vault family (BasketVault base class and ProtocolAssetVault/AgentTokenVault/RwaBasketVault subclasses). | None. |

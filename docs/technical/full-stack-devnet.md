@@ -9,6 +9,13 @@ chain boot through `Fixture::new()` in `testing/smoke-test`, which starts (or re
 fork, funds keys, deploys a vault of its own through the deploy scripts and reads every address
 from the manifests.
 
+**Two systems.** The vaults system and the rmpc gateway system are separate systems (owner
+decision 2026-10-19, `docs/technical/smart-contracts.md` §1.1). The target devnet deploys them in
+two runs: the vaults system first, then the gateway, which reads the vaults system's addresses
+for its allowed destinations. A vaults-system test needs no gateway. Today the fixture's
+publish run still deploys the gateway in the same run as the vaults and reads it from the
+gateway manifest, a known coupling to remove.
+
 ```
 anvil --fork-url <upstream> --fork-block-number <pin> --chain-id 918453
 ```

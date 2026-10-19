@@ -61,7 +61,34 @@
         └────────────────────────────────────────────────────────────────┘
 ```
 
-**Allocation flow**: Humans and agents deposit USDC either directly to a vault (RobotMoneyVault or a BasketVault) or through PortfolioRouter, which splits the deposit across multiple vaults by the router weight vector. VaultRegistry provides the single source of truth for vault discovery and router eligibility. RouterGovernance holds `WEIGHT_SETTER_ROLE` on the router and applies the weights the Safe schedules through the timelock from a consensus receipt.
+**Allocation flow**: Human wallets deposit USDC either directly to a vault (RobotMoneyVault or a BasketVault) or through PortfolioRouter, which splits the deposit across multiple vaults by the router weight vector. Agents reach the same public surfaces through the rmpc gateway system (§1.1). VaultRegistry provides the single source of truth for vault discovery and router eligibility. RouterGovernance holds `WEIGHT_SETTER_ROLE` on the router and applies the weights the Safe schedules through the timelock from a consensus receipt.
+
+### 1.1 Two systems: the vaults system and the rmpc gateway system
+
+Owner decision, 2026-10-19. The contracts form two separate systems. Each is deployed in its own run and tested on its own.
+
+**Vaults system** (the treasury product):
+- The Robot Money vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), their adapters and libraries, and the rmAGENT price recorder.
+- VaultRegistry, PortfolioRouter and RouterGovernance.
+- The rebalancing input: InvestmentCommitteePolicy (committee registration and signed tilts) and ConsensusRecommendationReceipt (the recorded consensus receipt). The Safe applies a receipt with `RouterGovernance.applyReceipt` through the timelock. The Safe can also set default weights directly (`setDefaultWeights`).
+- Governance: the Safe multisig through the TimelockController.
+- Users: human wallets deposit into a vault or the router directly. Committee members register and submit to the IC policy and receipt contracts directly, not through the gateway.
+- Deployed by the rehearsal deploy runbook (`docs/runbooks/contract-qa/`).
+
+**rmpc gateway system** (the agent permission and safety layer):
+- RobotMoneyGateway and the `rmpc` client (Rust payment client).
+- It answers whether an agent may act, for how much, until when, for which depositor and share receiver, into which allowed destination. It then forwards the permitted deposit or withdrawal to a vault or the router.
+- It is a client of the vaults system. It calls the same public surfaces a human wallet uses.
+- Deployed in its own run after the vaults system. It reads the vaults system's addresses for its allowed destinations. It has its own runbook and CI.
+- Who governs the gateway is an open question for its own release.
+
+**Dependency rule.** The gateway depends on the vaults system. The vaults system has no dependency on the gateway. No vaults-system contract names the gateway, takes it as a constructor or initializer argument, or accepts writes only from it. Rebalancing works with no gateway deployed.
+
+**Code that still couples them (as of core 57fbe618).** These are known gaps to remove, not the design:
+- ConsensusRecommendationReceipt accepts writes only from the gateway (`onlyGateway`, set once at initialization).
+- InvestmentCommitteePolicy takes the gateway at initialization. Committee registration and vote submission route through RobotMoneyGateway (`committeeRegister`, `committeeVoteSubmit`, `consensusRecordReceipt`, `setICPolicy`, `setConsensusReceipt`).
+- The IC policy and receipt contracts and their interfaces live under `contracts/gateway/`. RouterGovernance imports `contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol`.
+- publish-contracts deploys the gateway in the same stage table and run as the vaults. One verify checks both.
 
 ---
 
@@ -115,8 +142,8 @@
 
 **Notes:**
 - RobotMoneyVault and its adapters are direct (non-proxy) deployments on mainnet. CompoundV3Adapter was compiled with `viaIR: true`; the others were not. Every address in this section is a direct deployment and cannot be upgraded in place.
-- From issue 1808 the source deploys every core contract (rmUSDC, the three basket vaults, VaultRegistry, PortfolioRouter, RobotMoneyGateway, InvestmentCommitteePolicy, ConsensusRecommendationReceipt, RouterGovernance) behind its own ERC-1967 proxy ([ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md)). No proxied deployment is on 8453 yet. When one is, this section lists the proxy address (the address users and clients call), the implementation address and code hash, the upgrade timelock and the freeze state, and keeps the direct addresses above as the legacy deployment.
-- VaultRegistry, PortfolioRouter, RouterGovernance, and basket vaults are deployed to Base mainnet by the publish-contracts CLI (`publish-contracts/`). The demo deploy path is retired.
+- From issue 1808 the source deploys every core contract (the vaults system: rmUSDC, the three basket vaults, VaultRegistry, PortfolioRouter, InvestmentCommitteePolicy, ConsensusRecommendationReceipt, RouterGovernance; the rmpc gateway system: RobotMoneyGateway; §1.1) behind its own ERC-1967 proxy ([ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md)). No proxied deployment is on 8453 yet. When one is, this section lists the proxy address (the address users and clients call), the implementation address and code hash, the upgrade timelock and the freeze state, and keeps the direct addresses above as the legacy deployment.
+- VaultRegistry, PortfolioRouter, RouterGovernance, and basket vaults are deployed to Base mainnet by the publish-contracts CLI (`publish-contracts/`). The demo deploy path is retired. The gateway is deployed in its own later run (§1.1). Today publish-contracts still deploys it in the same run as the vaults, a known gap listed in §1.1.
 - Basket vault mainnet addresses are intentionally excluded here (out of scope); they will be added once they reach production status and mainnet deployment.
 
 ---
@@ -333,7 +360,7 @@ Additional read-only helpers: `getAdapterDrift()`, `isRebalanceAvailable()`, `ne
 
 ### 3.11 Upgrade and freeze (every proxied contract)
 
-RobotMoneyVault, the three basket kinds, VaultRegistry, PortfolioRouter, RobotMoneyGateway, InvestmentCommitteePolicy, ConsensusRecommendationReceipt and RouterGovernance each inherit `GovernedUUPS` (`contracts/lib/GovernedUUPS.sol`) and run behind their own `ERC1967Proxy` ([ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md) §1). The upgrade and freeze rules live once, in the linked `GovernedUpgrade` library, which runs by DELEGATECALL in the proxy's storage (ERC-7201 namespace `robotmoney.storage.GovernedUUPS`). The storage-layout gate (`scripts/ci/check-core-storage-layout.sh`, ADR-0014 §5) pins each contract's layout. The surface is the same on all ten:
+RobotMoneyVault, the three basket kinds, VaultRegistry, PortfolioRouter, InvestmentCommitteePolicy, ConsensusRecommendationReceipt and RouterGovernance (the vaults system), and RobotMoneyGateway (the rmpc gateway system, §1.1), each inherit `GovernedUUPS` (`contracts/lib/GovernedUUPS.sol`) and run behind their own `ERC1967Proxy` ([ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md) §1). The upgrade and freeze rules live once, in the linked `GovernedUpgrade` library, which runs by DELEGATECALL in the proxy's storage (ERC-7201 namespace `robotmoney.storage.GovernedUUPS`). The storage-layout gate (`scripts/ci/check-core-storage-layout.sh`, ADR-0014 §5) pins each contract's layout. The surface is the same on all ten:
 
 | Function | Caller | Notes |
 |---|---|---|
@@ -655,7 +682,7 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 
 ### 9.2.2 Applying a receipt
 
-1. **Record**: the committee submitter records the consensus receipt through the gateway (`ConsensusRecommendationReceipt.recordReceipt`).
+1. **Record**: the committee submitter records the consensus receipt directly on `ConsensusRecommendationReceipt.recordReceipt`. No gateway takes part (§1.1). Today the receipt contract still accepts writes only from the gateway (`onlyGateway`), a known gap listed in §1.1.
 2. **Schedule**: the Safe schedules one timelock call: `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)` with the receipt's weight vector. The govern row checks before sending that the receipt is recorded, its digest equals `keccak256` of the payload, it is not yet released, the bps sum to 10000 and the vault list equals the registry's router-eligible list in order.
 3. **Delay**: the timelock delay elapses (172800 s on 8453).
 4. **Execute**: the Safe executes the call. `applyReceipt` checks that the receipt is recorded, not released and that `payloadDigest` equals the stored digest. It then calls `releaseReceipt(receiptId)` and `PortfolioRouter.setWeights(vaults, bps)` and emits `ReceiptApplied`. Release and weights land in one call; partial state is impossible.
@@ -679,6 +706,7 @@ Errors: `ZeroAddress` (a zero constructor argument), `ReceiptNotRecorded(receipt
 - **One path to weights**: only the holder of `WEIGHT_SETTER_ROLE` can call `PortfolioRouter.setWeights`, and only the timelock can reach `RouterGovernance.applyReceipt` and its admin calls.
 - **Atomic rebalance**: a receipt's release and its weights are one call.
 - **Timelock delay enforcement**: no weight change lands before the timelock delay elapses.
+- **No gateway dependency**: recording a receipt, applying it and setting default weights need no gateway deployed (§1.1).
 
 ---
 

@@ -3,6 +3,11 @@
 > Canonical: `docs/architecture.md` §5.2 — Agent Permissions Gateway
 > Issue: #310 — dev-scout: map gateway withdrawal seams, receipt-allowance model, and rmpc signing path
 > Status: **Accepted**
+> System: **rmpc gateway system** (owner decision 2026-10-19). This ADR
+> belongs to the gateway system (`RobotMoneyGateway` and `rmpc`), not the
+> vaults system. The gateway is a client of the vaults system. It calls the
+> same public vault and router surfaces a human wallet uses. No vault, router
+> or registry contract depends on the gateway, and nothing here changes one.
 
 This ADR resolves the design questions that must be settled before any
 implementation issue for gateway agent withdrawal begins. It covers four
@@ -260,6 +265,9 @@ Router-position withdrawal is implemented as
 `withdrawFromRouter` applies all existing gateway policy checks (agent active, valid-until, per-payment cap, rolling window cap,
 `allowedSourceVaults` whitelist, idempotency key) then delegates
 execution to `PortfolioRouter.redeemFor(shareHolder, assetRecipient, sharesPerLeg)`.
+`redeemFor` is a public router surface. Its caller must be the share holder
+or hold the holder's share allowance. A holder calls it directly too (QA plan
+D9). The router does not depend on the gateway.
 
 Key invariants:
 

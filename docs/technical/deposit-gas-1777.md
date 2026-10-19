@@ -23,7 +23,7 @@ The check reads `gasleft()` after the transaction's intrinsic cost and the code 
 ## Who must comply
 - **Dapp:** `clients/dapp/src/lib/depositGas.ts` sets the limit on every deposit write. Router deposits send `legs * 2,400,000 + 1,200,000` from the effective leg count (10,800,000 for 4 legs, 13,200,000 for 5). Vault deposits send 2,500,000. Unused gas is refunded.
 - **rmpc:** `rmpc deposit --destination <router>` reads `router.getEffectiveWeights()` and sends the gateway floor (400,000 + 2,550,000 per leg) plus 150,000. It refuses a `--gas-limit` below the floor with `ErrGasLimitBelowFloor` before signing. The vault path sends 3,000,000 (gateway floor 2,000,000).
-- **Gateway callers and other integrators:** the gateway has its own floors (`docs/technical/redeem-gas-1482.md`, Deposit paths). A direct call to the router or a vault must set `gas` explicitly. Do not rely on a wallet estimate, since it can land below the floor in another block state.
+- **Gateway callers and other integrators:** the gateway belongs to the rmpc gateway system, a client of the vaults system. It has its own, higher floors (`docs/technical/redeem-gas-1482.md`, Deposit paths). A direct call to the router or a vault must set `gas` explicitly. Do not rely on a wallet estimate, since it can land below the floor in another block state.
 
 ## Tests
 - **Fork** (`contracts/test/CoreStagesFork.t.sol`, job `forge-fork-vault-regressions`):

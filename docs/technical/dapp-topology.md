@@ -10,6 +10,28 @@ user's own wallet and the chain?
 
 ---
 
+## Which system each surface touches
+
+Robot Money is two systems, deployed and tested apart. The dapp is a
+client of both, and it treats them as two separate sets of contracts
+(owner decision 2026-10-19).
+
+- **Vaults system.** The vaults, `VaultRegistry`, `PortfolioRouter` and
+  `RouterGovernance`. The dapp reads them, and a human wallet writes to
+  them directly: approve, deposit, redeem. Their pins are the vault and
+  router pins below (`VITE_VAULT_EXPECTED_*`, `VITE_ROUTER_EXPECTED_*`).
+- **rmpc gateway system.** `RobotMoneyGateway`. The dapp reads it, and
+  the depositor's wallet writes to it: agent registration, policy,
+  revoke, pause. Its pins are the gateway pins below
+  (`VITE_GATEWAY_EXPECTED_*`).
+
+The gateway depends on the vaults system. The vaults system never
+depends on the gateway. So a vaults-system write is gated by the
+vaults-system pins of the contract it reaches. "Admin writes" in this
+document means writes to the gateway.
+
+---
+
 ## Load-bearing insight
 
 When the dapp calls `signer.sendTransaction(...)` via the injected

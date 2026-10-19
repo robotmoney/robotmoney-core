@@ -15,6 +15,19 @@ stage table in `scripts/deploy/stage-table.json`). The runbook that deploys it,
 "publish contracts", and the acceptance driver that grades it live in the `devops`
 repo. Requirements in section 4 bind both.
 
+**Scope: the vaults system.** Owner decision, 2026-10-19: the vaults system and
+the rmpc gateway system are separate systems, each deployed in its own run and
+tested on its own (`docs/technical/smart-contracts.md` §1.1). The Safe through
+the TimelockController governs the vaults system. That is the topology this
+document specifies. The gateway is deployed in its own run after the vaults
+system. Who governs it is an open question for its own release. Code that still
+couples the two (as of core 57fbe618), known gaps to remove: the consensus
+receipt contract accepts writes only from the gateway; the IC policy takes the
+gateway at initialization and committee writes route through it; the IC policy
+and receipt contracts live under `contracts/gateway/`, and RouterGovernance
+imports a receipt interface from there; publish-contracts deploys the gateway in
+the same stage table and run as the vaults, and `DeployTimelock` hands both over.
+
 ---
 
 ## 1. The principle
@@ -235,7 +248,7 @@ Normative. "Must" is binding; a violation is a release blocker.
   negative control proves nothing — this mirrors how `propose-negative` already
   makes `propose` meaningful.
 - **R14.** Any assertion that a single key drives the Safe must not exist.
-- **R15.** (issue #1476) Gateway agent ownership is governance authority too:
+- **R15.** (issue #1476; rmpc gateway system) Gateway agent ownership is governance authority too:
   the recorded owner alone can call `setPolicy` and `revokeAgent`. The handover
   must leave no gateway agent owned by the deployer. `DeployTimelock` hands
   every agent in `AGENT_ADDRESSES` to the TimelockController with
@@ -246,6 +259,8 @@ Normative. "Must" is binding; a violation is a release blocker.
   verifier fails `AC-CORE-05 no agent authorized by the deployer is still
   deployer-owned` when an agent an `AgentAuthorized` or
   `AgentOwnershipTransferred` log gives the deployer is still deployer-owned.
+  Today this runs in the shared handover. After the split it belongs to the
+  gateway system's own run.
 
 ---
 
@@ -258,7 +273,7 @@ Normative. "Must" is binding; a violation is a release blocker.
    `approveHash`. This is strictly more isomorphic and should be revisited after the
    first mainnet deployment.
 2. **Scope of R9.** This document covers the Safe to TimelockController path, and
-   that path is the whole of governance: a router-weight change is the same Safe
+   that path is the whole of the vaults system's governance: a router-weight change is the same Safe
    scheduling the same timelock (`apply-receipt`). There is no separate governing
-   body.
+   body. Gateway governance is open for the gateway's own release.
 3. **No saved fixture.** The Twin chain is a lazy fork of real Base, so there is no snapshot to re-pin and no implementation contract to warm. (This item was about the retired `snapshot-fork.ts`.)

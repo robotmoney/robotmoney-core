@@ -26,6 +26,44 @@ sets router weights directly. It gives depositors a transparent,
 multi-party, reproducible allocation rationale and gives third-party
 organizations a way to contribute visible allocation signals.
 
+### Product Systems
+
+Robot Money is two separate systems (owner decision, 2026-10-19).
+
+- **Vaults system.** The treasury product. It holds the Robot Money
+  vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), the vault registry, the
+  Portfolio Router and router-weight governance. Its rebalancing input is
+  the Investment Committee: the committee policy contract (agent
+  registration and signed tilts) and the consensus receipt contract (the
+  recorded consensus receipt). The Safe, through the TimelockController,
+  applies a receipt to router weights. Human wallets deposit into a vault
+  or the router directly. The Safe, through the TimelockController,
+  registers committee agents on the committee policy contract. Registered
+  agents submit votes to that contract directly, and the receipt
+  submitter records receipts on the receipt contract directly.
+- **rmpc gateway system.** The agent permission and safety layer and its
+  client: the Agent Permissions Gateway and the `rmpc` client. It decides
+  whether an agent may act, for how much, until when, for which depositor
+  and share receiver, and into which allowed destination. It then
+  forwards the permitted deposit or withdrawal to a vault or the router.
+
+The gateway system is a client of the vaults system. It calls the same
+public vault and router surfaces a human wallet uses. The vaults system
+never depends on the gateway: no vaults-system contract names the
+gateway or accepts writes only from it, and rebalancing works with no
+gateway deployed. Each system is deployed in its own run and tested on
+its own. The gateway is deployed after the vaults system and reads its
+addresses for the allowed destinations. Who governs the gateway is an
+open question for the gateway's own release.
+
+Known gap: the current code still couples the two systems. The consensus
+receipt contract accepts writes only from the gateway. The committee
+policy contract takes the gateway at initialization, and committee
+registration and tilt submission route through it. The committee
+contracts live under `contracts/gateway/`. The contract publish tooling
+deploys and verifies the gateway in the same run as the vaults. These
+are gaps to remove, not the design.
+
 ## 2. Goals and Success Metrics
 
 - Depositors can deposit USDC into a selected vault or a Portfolio
@@ -43,8 +81,8 @@ organizations a way to contribute visible allocation signals.
   performance, fees, governance state, and execution results.
 - Product failures are explicit: users receive a product-level reason
   when an operation cannot proceed or only partially succeeds.
-- Admin-allowlisted committee agents can register an on-chain identity
-  and submit signed, fixed-shape allocation-tilt votes over the vaults,
+- Committee agents registered by the Safe, through the timelock, hold an
+  on-chain identity and submit signed, fixed-shape allocation-tilt votes over the vaults,
   each referencing a public rationale memo; any user can inspect
   registered agents, their votes, and their per-agent track record.
 - Consensus sessions can additionally publish one subject-scoped receipt with
@@ -109,10 +147,11 @@ Access expectations:
   weights. There is no voting by token holders or anyone else.
 - Integrators can read public product state and submit user-authorized
   actions.
-- Committee agents can register an identity and submit signed votes only
-  while admin-allowlisted; their votes are signalling-only and cannot move
-  funds or set router weights. All committee actions route through the same
-  gateway entrypoint as other product actions, with no side channel.
+- Committee agents hold an identity only once the Safe registers them
+  through the timelock, and submit signed votes only while registered; their votes are signalling-only and cannot move
+  funds or set router weights. Committee actions go directly to the
+  committee policy and receipt contracts of the vaults system, not
+  through the gateway.
 - Protocol operators can use product-wide safety controls, but cannot
   create, expand, or redirect an individual depositor's agent policy.
 - Authorization depends on relationship: a depositor controls only their
@@ -177,6 +216,9 @@ Access expectations:
 
 ### Autonomous Treasury Sweep
 
+This workflow belongs to the rmpc gateway system. The gateway forwards
+each permitted action to the vaults system's public surfaces.
+
 1. A depositor authorizes an agent and defines allowed destinations,
    maximum amounts, recipients, and expiration.
 2. The agent observes available balance, policy limits, destination
@@ -188,6 +230,9 @@ Access expectations:
 5. Approved activity settles and is reported to the depositor and agent.
 
 ### Allocation Governance
+
+This workflow and the Committee Vote workflow belong to the vaults
+system. Neither needs the gateway.
 
 The Safe multisig, through the TimelockController, is the only body that
 changes any Robot Money contract configuration, router weights included.
@@ -225,14 +270,15 @@ committee output never auto-applies to router weights — it remains an
 upstream signal.
 
 1. An admin allowlists a participating organization's agent; the agent
-   registers a signed on-chain identity through the gateway entrypoint.
+   registers a signed on-chain identity directly with the committee
+   policy contract.
 2. The agent reads the shared market-regime feed and current holdings.
 3. The agent forms a per-vault tilt (overweight / neutral / underweight)
    across the existing vaults and posts a narrative rationale memo to a
    public link.
 4. The agent signs and submits a fixed-shape vote — referencing the memo
-   and the inputs it consumed — routed through the gateway and registered
-   on-chain. Votes from non-allowlisted agents are refused.
+   and the inputs it consumed — directly to the committee policy
+   contract, where it is registered on-chain. Votes from non-allowlisted agents are refused.
 5. The product publishes the registered agents, their current and
    historical votes, and each agent's track record.
 6. Aggregated committee tilts become a signalling input to allocation
@@ -322,7 +368,8 @@ Common edge cases:
   cancelling or executing a timelock operation, weight publication, and
   execution reporting.
 - **Committee participation.** Triggered by agent allowlisting, on-chain
-  identity registration, vote signing and submission through the gateway,
+  identity registration, vote signing and direct submission to the
+  committee policy contract,
   publication of the shared market-regime feed, and posting of off-chain
   rationale memos to public links referenced by each vote.
 - **Public state indexing and reporting.** Triggered by deposits,
@@ -371,13 +418,17 @@ Common edge cases:
   redirect user funds or expand an individual agent's permissions.
 - The Portfolio Router must expose target weights, active weights,
   governance state, and historical outcomes.
-- Committee actions must route through the gateway entrypoint with no side
-  channel; committee votes are signalling-only and must not move funds or
-  set router weights directly; committee membership is admin-gated; the
+- Committee actions must go directly to the committee policy and receipt
+  contracts of the vaults system, never through the gateway; committee
+  votes are signalling-only and must not move funds or set router
+  weights directly; committee membership is admin-gated; the
   committee vote payload is a fixed, schema-validated shape; and committee
   provenance is established by a registered, signed on-chain identity tied
   to a participating organization. Each registered vote must reference a
   publicly readable rationale memo.
+- The vaults system must not depend on the rmpc gateway system. Deposits,
+  withdrawals, committee writes and rebalancing must work with no gateway
+  deployed. The gateway may call only the vaults system's public surfaces.
 - Vault and Portfolio Router fee structures are limited to three
   classes: management fee, swap-fee share, and exit fee. Each fee
   class, its rate, and its recipient must be disclosed before user
@@ -714,9 +765,9 @@ committee's consensus receipt reaches live weights on exactly one path: the
 Safe, through the TimelockController, schedules one operation that releases
 the receipt and applies its weight vector through `WEIGHT_SETTER_ROLE`
 (govern row `apply-receipt`, core 1696). No committee agent, submitter or
-EOA can release a receipt or set weights. The policy contract is reached only
-through the gateway entrypoint, and registration and tilt submission are
-restricted to admin-allowlisted agents. A committee agent's `vote-submit` is a
+EOA can release a receipt or set weights. Committee agents call the policy
+contract directly, not through the gateway, and registration and tilt
+submission are restricted to admin-allowlisted agents. A committee agent's `vote-submit` is a
 signed allocation tilt, not a vote on anything. The receipt contract itself
 cannot call the router: the weight setter's `applyReceipt` releases the
 receipt and applies its weights in one call (issue 1698).

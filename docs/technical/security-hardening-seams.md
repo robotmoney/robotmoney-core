@@ -13,6 +13,8 @@
 Accepted for implementation planning. Authored 2026-05-19 against the current
 contracts, dapp, and `rmpc` surfaces.
 
+> Note (2026-10-19): the vaults system and the rmpc gateway system are now separate systems, deployed and tested on their own (`docs/technical/smart-contracts.md` §1.1). The gateway seams below (#429, #430) belong to the rmpc gateway system. This report is kept as written.
+
 ## 2. Shared-file pressure
 
 | Downstream issue | Primary files | Shared pressure |

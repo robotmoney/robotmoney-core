@@ -10,6 +10,13 @@
 >
 > Closes the open question gate listed under `Plan tracking issue #109`
 > §"Phase: Portfolio Router contract" item 1.
+>
+> **Note 2026-10-19 (system split).** The router belongs to the vaults system.
+> The rmpc gateway system is a separate client that calls the router's public
+> `deposit`/`depositFor`/`redeemFor`, the same surfaces a wallet uses. The
+> router never names the gateway. Read §3.5 and the §4 "router + gateway
+> registration" row that way: the gateway registers the router as a
+> destination in the gateway system's own deploy run.
 
 ---
 

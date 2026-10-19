@@ -4,6 +4,8 @@
 >
 > **Demo path retired.** `DemoBasketToken`, `DeployRmToken` and `DeployDemoExtraVaults` are deleted. The RM test token contract is deleted too (core 1489): RM is the live ROBOTMONEY token on Base (`0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`), and the faucet no longer drips RM. Contracts are deployed only by the publish-contracts CLI (`publish-contracts/`).
 
+> **Note (2026-10-19).** The vaults system and the rmpc gateway system are separate systems, each deployed and tested on its own; the joint vault-plus-gateway deploy below is a historical record, not the design.
+
 > Scope: dev-scout report for issue #472, covering the **Demo seeding** phase
 > of the implementation plan. This document is documentation only: no seed
 > script, dapp balance, RM-token, or faucet behaviour is introduced or

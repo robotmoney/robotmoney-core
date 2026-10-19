@@ -30,6 +30,9 @@ outer layer splits USDC across individual `RobotMoneyVault` contracts, each of
 which routes internally through `IStrategyAdapter` implementations. Vaults are
 the stable interface; adapters are internal and swappable. The gateway sits
 outside both layers as a permission and safety boundary for agent-signed writes.
+It is a separate system, the rmpc gateway system. It is a client of the vaults
+system and calls the same public surfaces a human wallet uses. The vaults system
+never depends on it (`docs/technical/smart-contracts.md` §1.1).
 The vault-plus-adapter pattern is modeled directly on Yearn V3: a single
 ERC-4626 contract routes assets across pluggable strategy adapters, with a
 keeper-triggered rebalance correcting drift. The asymmetric pause model
@@ -103,7 +106,7 @@ entire deposit.
 Gateway path (agents): `rmpc` reads chain state, then calls
 `gateway.deposit(...)` → gateway enforces policy (valid-until, per-payment cap,
 per-window cap, allowed destinations, share receiver) → forwards to vault or
-router. Withdrawn assets go only to the policy-configured recipient; the agent
+router. The gateway is deployed and tested on its own, after the vaults system. Withdrawn assets go only to the policy-configured recipient; the agent
 cannot redirect proceeds to itself.
 
 **Enzyme Finance**

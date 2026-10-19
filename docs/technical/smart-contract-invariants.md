@@ -49,6 +49,35 @@ exhaustive, so never tag such tests `symbolic`).
 
 ---
 
+## Two systems
+
+Owner decision, 2026-10-19. The on-chain code forms two separate systems. Each is deployed in its own run and tested on its own. This catalog groups its invariants by system.
+
+| System | What it holds | Sections |
+|---|---|---|
+| **Vaults system** (Part A) | rmUSDC, rmPROTO, rmAGENT, rmRWA, their adapters and libraries, the rmAGENT price recorder, VaultRegistry, PortfolioRouter, RouterGovernance, InvestmentCommitteePolicy, ConsensusRecommendationReceipt. Governed by the Safe through the TimelockController. | §0–§6, §8–§10 |
+| **rmpc gateway system** (Part B) | RobotMoneyGateway and the `rmpc` client. It decides whether an agent may act and forwards the permitted deposit or withdrawal to a vault or the router. | §11 |
+
+ACL-1, ACL-2 and ACL-3 apply in both systems. Some Part A entries name a gateway path (for example `LIFE-4`, `RTR-3`, `ADP-5`). That clause describes the gateway as a client of the vault surface. Part A never relies on it.
+
+**Code that still couples the systems (as of core 57fbe618).** These are known gaps that violate `SYS-1` today. They are not the design.
+- ConsensusRecommendationReceipt accepts writes only from the gateway (`onlyGateway`, set once at initialization).
+- InvestmentCommitteePolicy takes the gateway at initialization. Committee registration and vote submission route through RobotMoneyGateway (`committeeRegister`, `committeeVoteSubmit`, `consensusRecordReceipt`, `setICPolicy`, `setConsensusReceipt`).
+- The IC policy and receipt contracts and their interfaces live under `contracts/gateway/`. RouterGovernance imports `contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol`.
+- publish-contracts deploys the gateway in the same stage table and run as the vaults. One verify checks both.
+
+---
+
+# Part A — Vaults system
+
+## 0. System boundary (SYS)
+
+**`SYS-1` — No vaults-system contract ever depends on the rmpc gateway: none names the gateway, takes it as a constructor or initializer argument, or accepts writes only from it; rebalancing works with no gateway deployed.**
+🔴 VIOLATED (as of core 57fbe618) · the four couplings listed under [Two systems](#two-systems) · static-guard (no vaults-system source names `RobotMoneyGateway`, `IGateway` or `onlyGateway`, and none imports from `contracts/gateway/`) + deploy-assertion (the vaults-system rehearsal deploys, records a receipt, applies it and sets default weights with no gateway deployed).
+*Not yet in the coverage registry.* This entry is written without the `> **` heading form on purpose. `CoverageMap.t.sol` parses every such heading and fails when an ID has no `InvariantRegistry` entry. Switch it to the heading form in the same PR that adds the registry entry and its red test.
+
+---
+
 ## 1. Custody & solvency (INV-1/2/3)
 
 These three are canonical in `docs/prd.md` §12 and pinned by
@@ -126,6 +155,8 @@ Sub-invariants that decompose the above and are individually worth proving:
 
 ## 4. Access control & roles (ACL)
 
+ACL-1, ACL-2 and ACL-3 hold in both systems: each system's handover must satisfy them for its own contracts. ACL-4, ACL-7 and ACL-8 are about gateway agents. They now sit in Part B, [§11.1](#111-gateway-access-control-acl). The IDs are unchanged.
+
 > **`ACL-1` — In production, no EOA ever holds any privileged role (`DEFAULT_ADMIN_ROLE`, `ADMIN_ROLE`, `EMERGENCY_ROLE`, `DEPOSIT_PAUSER_ROLE`) after deployment handover.**
 > ✅ PROVEN · REMEDIATED (#965, **F-01**): `DeployTimelock` now hands the Gateway `DEFAULT_ADMIN_ROLE` (alongside `ADMIN_ROLE`) to the Timelock and moves every vault `EMERGENCY_ROLE` to an independent hot key, revoking all four privileged roles from the deployer EOA; the Gateway constructor redirects `AGENT_ROLE`'s admin to `ADMIN_ROLE` and `authorizeAgent` is now `ADMIN_ROLE`-gated, so the revoke does not brick agent onboarding (fix-interaction warning) · deploy-assertion (`DeployAssertions.t.sol::test_ACL1_*`, `DeployTimelock.t.sol::test_ACL1_*` — EOA holds *no* role; negative test pins the naked-revoke regression).
 
@@ -135,21 +166,11 @@ Sub-invariants that decompose the above and are individually worth proving:
 > **`ACL-3` — `ADMIN_ROLE` membership on any fund-holding contract never reaches zero (no permanent governance brick).**
 > ✅ HOLDS (fixed #966, F-06; consolidated #1284) · a manual last-admin floor (`adminCount`, `LastAdminFloor`) lives in one shared base, `lib/AdminFloorAccessControlCounter.sol`, inherited by `RobotMoneyVault` (which had no such protection before #1284) and by `BasketVault`, so `AgentTokenVault`, `ProtocolAssetVault` and `RwaBasketVault` carry it too; `RobotMoneyGateway._revokeRole` enforces the same floor for both `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE`. (Lightweight counters, not `AccessControlEnumerable`, to respect the vault family's EIP-170 limit and the gateway's storage layout.) · symbolic (`VaultFamilyInvariants.t.sol::test_lastAdminFloor_holdsAcrossVaultFamily` deploys every vault type, with `::test_lastAdminFloor_negativeSelfTest_unprotectedStubHasNoFloor`; `BasketVault.t.sol::test_lastAdminFloor_*`; `RobotMoneyVault.t.sol::test_lastAdminFloor_*`; `RobotMoneyGateway.t.sol::test_lastAdminFloor_*`).
 
-> **`ACL-4` — An agent's owner is reassigned only by that owner, and only to an `ADMIN_ROLE` holder; no other caller can take an existing agent.**
-> ✅ PROVEN-by-code · `_authorizeAgentInternal` reverts `AgentAlreadyOwned`; `revealAuthorization` for another address reverts `OwnerConsentMissing` unless that address consented through `commitAuthorization` (issue #1791); `setPolicy`/`revokeAgent`/`transferAgentOwnership` require `agentOwner[agent]==msg.sender`; `transferAgentOwnership` reverts `NewAgentOwnerNotAdmin` for a destination without `ADMIN_ROLE`, so governance can be given an agent but cannot take one (issue #1476) · behavioural (`GatewayAgentPolicyAuthorization.t.sol::test_nonOwner_setPolicy_revokeAgent_transfer_revertNotAgentOwner`, `::test_transferAgentOwnership_*`) · symbolic recommended.
-
 > **`ACL-5` — An emergency-role action can only de-risk; it never moves value to an external party or settles at an unverifiable price.**
 > ✅ HOLDS (fixed #966, F-08; M-S5) · every `EMERGENCY_ROLE` lever keeps value inside the protocol. `BasketVault.emergencyUnwind` sells each active leg to USDC held by the vault, at the higher of the TWAP floor and the ADMIN-set `minUsdcOut`, and reverts `EmergencyFloorUnavailable` when the TWAP cannot be read and no floor is set. `BasketVault.emergencyUnwindWithOverride` skips the TWAP only for a token whose guard has `overrideAllowed`, and refuses a fill below `minUsdcOut * (MAX_BPS - maxLossBps) / MAX_BPS` (`EmergencyUnwindLossCapExceeded`). That guard is written only by `setEmergencyUnwindGuard`, which is `ADMIN_ROLE` (the timelock), so the hot key can de-risk but cannot choose its own price. `RobotMoneyVault.emergencyWithdraw`/`emergencyWithdrawAdapter` pull adapter balances into the vault, or into the entry's open exclusion record, which pays the holders at the moment of exclusion (core 1820). `emergencyExcludeAdapter` (security round 1) revokes one adapter's allowance and opens its exclusion record in the same call; it is exclude-only, and only `ADMIN_ROLE` `setAdapterAllowed(adapter, true)` restores the entry, draining it into the record first. `forceRemoveAdapter` moves no value between holders either (fixed in security round 1, SR-1012-5 / issue 1705 finding 5, which this entry had wrongly marked as holding): a funded entry gets an exclusion record, the record stays open while the adapter still reports a balance, `recoverRemovedAdapter` (EMERGENCY, security round 2) credits it tranche by tranche as the venue can pay, and a later `addAdapter` of the same address realises whatever is left into the record instead of into NAV. Before the fix a write-off underpaid the holders who exited and handed their share to the holders of the day once ADMIN re-added the adapter. `pauseDeposits` and `shutdownVault` move no value. The Chronicle stale-price override this entry used to cite is deleted (core 1492) · static-guard + stateful-invariant (`BasketVault.t.sol::test_setEmergencyUnwindGuard_requiresAdminRole`, `::test_emergencyUnwindWithOverride_requiresEmergencyRole`, `::test_emergencyUnwindWithOverride_revertsWhenBelowUpperLossCap`, `::test_emergencyUnwind_usesConfiguredFloorWhenOracleUnavailable`; `RobotMoneyVault.t.sol::test_exclusionRecoveryPaidProRataToSnapshot`, `::test_forceRemovedExcludedAdapter_reAddCreditsSnapshotRecord`, `::test_forceRemovedPartlyLiquidAdapter_recoversTrancheByTranche`, `::test_emergencyExcludeAdapter_excludeOnlyAndAdminRestores`, `::test_illiquidAdapterEmergencyDrainKeepsExitersAndStayersAtParity`; `SecurityReviewRecheckVaultPoc.t.sol::test_O1a_forceRemoveAllFunded_exiterKeepsFullRecoveryClaim`, `::test_O1b_forceRemovePartial_exiterAndStayerShareRecoveryProRata`).
 
 > **`ACL-6` — Depositor principal is only ever moved by the depositor (or her authorized agent on her behalf); no privileged role can move a third party's funds.**
 > ✅ PROVEN · every gateway flow pulls USDC from `msg.sender`; this is why F-01 is governance-capture, not theft · stateful-invariant (already implied by GW-1/GW-3).
-
-> **`ACL-8` — After the deployment handover, no gateway agent listed in `AGENT_ADDRESSES` is owned by the deployer EOA.**
-> ✅ PROVEN (issue #1476) for the listed agents · agent ownership carries `setPolicy`/`revokeAgent` authority, so `DeployTimelock` hands every agent listed in `AGENT_ADDRESSES` to the TimelockController with `transferAgentOwnership` (after the timelock's gateway `ADMIN_ROLE` grant, before the deployer's revoke) and requires afterwards that none is still deployer-owned. The transfer does not change `AGENT_ROLE`: a listed agent that held it still holds it, and a listed agent without it (renounced, or revoked by `ADMIN_ROLE`) is handed over without it. Ownership of such an agent still carries `setPolicy`/`revokeAgent` authority over its stored policy, which applies again if the agent is later granted `AGENT_ROLE`, so it is handed over too. The gateway cannot enumerate an owner's agents, so the guarantee is only as complete as the list: the broadcast run requires `AGENT_ADDRESSES` to be set (a comma-separated list, or `none`; unset or empty reverts before any broadcast), and the manifest records `roles.gateway_agents_listed_count` so a reader can compare the list's length with the deployer-owned agents the gateway logs name. The stage ceremony derives the list from the gateway's `AgentAuthorized`/`AgentOwnershipTransferred` logs, and the publish contracts verifier fails when any agent those logs give the deployer is still deployer-owned, so on stage the claim covers every agent the deployer ever owned. A direct `DeployTimelock` run (`docs/operations/manual-admin-actions.md`) must list every deployer-owned agent the same way · deploy-assertion (`DeployTimelock.t.sol::DeployTimelockAgentHandoverTest`, `DeployTimelock.t.sol::DeployTimelockRunEntrypointTest`, `SafeIntegration.t.sol::test_handover_noDeployerOwnedAgentRemains`) + ceremony check (the publish contracts verifier and govern matrix (core `publish-contracts/`, `docs/development/stage-deployment.md`)).
-> *Mainnet plan (2026-10-05):* the deploy authorizes no agent, so `AGENT_ADDRESSES=none` at the handover and no agent is deployer-owned. Agents belong to depositors, who authorize them through `commitAuthorization`/`revealAuthorization`. `DeployGateway.s.sol` reads no `AGENT_*` input and authorizes no agent at stage 5, and the stage 12 verifier fails a run with any gateway agent log up to the handover or any `AGENT_ROLE` holder when it runs (core 1527).
-
-> **`ACL-7` — Registering an agent never blocks a future intended ADMIN/PAUSER address from being granted its role.**
-> ✅ PROVEN · the DeployTimelock handover asserts every intended ADMIN/PAUSER address is AGENT-free **before** any gateway grant, so the permissionless-registration grant-DoS becomes an explicit, typed deploy-time precondition rather than a late-stage `RoleSeparationViolated` brick — fixed by **NC-10 (#970)** · `DeployAssertions.t.sol::test_ACL7_agentRegistrationCannotBlockRoleGrant` · deploy-assertion.
 
 ---
 
@@ -201,28 +222,9 @@ Sub-invariants that decompose the above and are individually worth proving:
 
 ---
 
-## 7. Gateway / agent / idempotency (GW)
+## 7. Gateway / agent / idempotency (GW): moved
 
-> **`GW-1` — The gateway never custodies `rmUSDC` or vault shares across a call frame.**
-> ✅ PROVEN · `ShareCustodyInvariantViolated` post-call checks in `depositTo`/`_executeRouterDeposit`; `GatewayRouter.t.sol` · stateful-invariant.
-
-> **`GW-2` — A single `paymentId`/idempotency key never authorizes two materially different execution intents.**
-> ✅ PROVEN · the `depositTo` paymentId now folds in `destination` and the per-leg `minSharesPerLeg` vector, so two calls sharing `(orderId, amount, idempotencyKey)` but routing to a different destination — or carrying a different per-leg floor — yield distinct ids and never collide — fixed by **NC-9 (#970)** · `GatewayRouter.t.sol::test_GW2_depositTo_paymentIdBindsDestination` / `test_GW2_depositTo_paymentIdBindsMinSharesPerLeg` · symbolic/behavioural. *Withdraw side (F-15, verified #971):* `withdrawFromRouter`'s `_routerWithdrawPaymentId` binds the full per-leg `sharesPerLeg` vector (plus `vaults`, `totalShares`, and `keccak256(minAssetsPerLeg)`) into the hash, so two withdrawals with equal `totalShares` but different per-leg vectors yield distinct paymentIds — `FvInvariants.t.sol::test_GW2_expectedFail_idempotencyKeyBindsFullIntent`.
-
-> **`GW-3` — An agent can only move funds its owner approved, only to its owner's registered receiver, within policy caps.**
-> 🟢 HOLDS · `agents[agent]` policy + `safeTransferFrom(msg.sender,…)` · stateful-invariant.
-
-> **`GW-7` — Every policy an agent owner can set through `setPolicy` is one that owner could also have obtained through authorization.**
-> ✅ PROVEN (issue #1476) · one internal validator, `_validatePolicy(caller, p)`, carries the caller-independent shape checks and the caller-dependent rule, and every writer of `agents[...]` calls it (`_authorizeAgentInternal` behind `authorizeAgent`/`revealAuthorization`, and `setPolicy`); `revokeAgent` only deletes. The rule is judged on the caller's role at call time: a caller without `ADMIN_ROLE` must name itself as `shareReceiver` (`ShareReceiverNotAuthorized`), including an owner that held `ADMIN_ROLE` when it authorized and has since lost it. `transferAgentOwnership` writes no policy: its destination must hold `ADMIN_ROLE`, which the caller-dependent rule does not bind, so the stored policy is not checked again · fuzz (`GatewayAgentPolicyAuthorization.t.sol::testFuzz_setPolicy_matchesFreshAuthorization`: setPolicy and a fresh authorization by the same caller agree on success and revert selector) + behavioural.
-
-> **`GW-4` — An agent operation never exceeds the per-window rate-limit cap, and the rate-limit bookkeeping can never itself brick the agent.**
-> ✅ HOLDS (prior M-6 fixed; NC-7 fixed #970) · the cap is enforced by `GatewayWindows.accrue` (`WindowCapExceeded` / `WithdrawWindowCapExceeded`), and each side's window is a `GatewayWindows.RollingWindow` ring buffer (`RobotMoneyGateway._depositWindow` / `_withdrawWindow`) bounded by `MAX_WINDOW_ENTRIES` (= `WINDOW_SECONDS`): same-second entries coalesce, expired entries are pruned before every append and their slots are reused, so storage plateaus and the bookkeeping cannot grow into a gas wall. The `WindowBufferFull` guard is unreachable through the public API · behavioural (`RobotMoneyGateway.t.sol::test_rollingWindow_liveCountBoundedAcrossDistinctSeconds`); a long-horizon stateful-invariant handler is still recommended.
-
-> **`GW-5` — Every agent redemption through the gateway always carries a real, caller-meaningful per-leg slippage floor.**
-> ✅ HOLDS (fixed #969, F-11) · `RobotMoneyGateway.withdrawFromRouter` takes a `minAssetsPerLeg` vector and forwards it verbatim to `PortfolioRouter.redeemFor` (no more `new uint256[](n)` zero literal) and forwards the real agent deadline (no more `type(uint256).max`); the floor vector is folded into `paymentId` so a replay cannot weaken it · static-guard + behavioural (GatewayRouter.t.sol::test_withdrawFromRouter_realFloor_revertsBelowMinimum, ::test_withdrawFromRouter_floorIsBoundIntoPaymentId; FvInvariants.t.sol::test_GW5_agentRedeemCarriesRealFloor).
-
-> **`GW-6` — A revealed authorization or executed payment is never replayable.**
-> 🟢 HOLDS · commit/reveal + `paymentId` consumption · symbolic recommended (tie to GW-2: the replay guard is only as strong as the hash coverage).
+The GW invariants belong to the rmpc gateway system. They now sit in Part B, [§11](#11-gateway--agent--idempotency-gw). The IDs are unchanged.
 
 ---
 
@@ -292,6 +294,49 @@ Sub-invariants that decompose the above and are individually worth proving:
 
 > **`FEE-3` — Fees never reach any address other than the configured `feeRecipient` (INV-1/INV-3).**
 > 🟢 HOLDS · single recipient, timelock-gated · static-guard.
+
+---
+
+# Part B — rmpc gateway system
+
+These invariants belong to the rmpc gateway system: RobotMoneyGateway and the `rmpc` client. The gateway is a client of the vaults system. It is deployed in its own run after the vaults system and tested on its own. Its invariants hold over the gateway's own state and the calls it forwards. None of them may be met by a vaults-system contract that trusts the gateway (`SYS-1`).
+
+## 11. Gateway / agent / idempotency (GW)
+
+> **`GW-1` — The gateway never custodies `rmUSDC` or vault shares across a call frame.**
+> ✅ PROVEN · `ShareCustodyInvariantViolated` post-call checks in `depositTo`/`_executeRouterDeposit`; `GatewayRouter.t.sol` · stateful-invariant.
+
+> **`GW-2` — A single `paymentId`/idempotency key never authorizes two materially different execution intents.**
+> ✅ PROVEN · the `depositTo` paymentId now folds in `destination` and the per-leg `minSharesPerLeg` vector, so two calls sharing `(orderId, amount, idempotencyKey)` but routing to a different destination — or carrying a different per-leg floor — yield distinct ids and never collide — fixed by **NC-9 (#970)** · `GatewayRouter.t.sol::test_GW2_depositTo_paymentIdBindsDestination` / `test_GW2_depositTo_paymentIdBindsMinSharesPerLeg` · symbolic/behavioural. *Withdraw side (F-15, verified #971):* `withdrawFromRouter`'s `_routerWithdrawPaymentId` binds the full per-leg `sharesPerLeg` vector (plus `vaults`, `totalShares`, and `keccak256(minAssetsPerLeg)`) into the hash, so two withdrawals with equal `totalShares` but different per-leg vectors yield distinct paymentIds — `FvInvariants.t.sol::test_GW2_expectedFail_idempotencyKeyBindsFullIntent`.
+
+> **`GW-3` — An agent can only move funds its owner approved, only to its owner's registered receiver, within policy caps.**
+> 🟢 HOLDS · `agents[agent]` policy + `safeTransferFrom(msg.sender,…)` · stateful-invariant.
+
+> **`GW-7` — Every policy an agent owner can set through `setPolicy` is one that owner could also have obtained through authorization.**
+> ✅ PROVEN (issue #1476) · one internal validator, `_validatePolicy(caller, p)`, carries the caller-independent shape checks and the caller-dependent rule, and every writer of `agents[...]` calls it (`_authorizeAgentInternal` behind `authorizeAgent`/`revealAuthorization`, and `setPolicy`); `revokeAgent` only deletes. The rule is judged on the caller's role at call time: a caller without `ADMIN_ROLE` must name itself as `shareReceiver` (`ShareReceiverNotAuthorized`), including an owner that held `ADMIN_ROLE` when it authorized and has since lost it. `transferAgentOwnership` writes no policy: its destination must hold `ADMIN_ROLE`, which the caller-dependent rule does not bind, so the stored policy is not checked again · fuzz (`GatewayAgentPolicyAuthorization.t.sol::testFuzz_setPolicy_matchesFreshAuthorization`: setPolicy and a fresh authorization by the same caller agree on success and revert selector) + behavioural.
+
+> **`GW-4` — An agent operation never exceeds the per-window rate-limit cap, and the rate-limit bookkeeping can never itself brick the agent.**
+> ✅ HOLDS (prior M-6 fixed; NC-7 fixed #970) · the cap is enforced by `GatewayWindows.accrue` (`WindowCapExceeded` / `WithdrawWindowCapExceeded`), and each side's window is a `GatewayWindows.RollingWindow` ring buffer (`RobotMoneyGateway._depositWindow` / `_withdrawWindow`) bounded by `MAX_WINDOW_ENTRIES` (= `WINDOW_SECONDS`): same-second entries coalesce, expired entries are pruned before every append and their slots are reused, so storage plateaus and the bookkeeping cannot grow into a gas wall. The `WindowBufferFull` guard is unreachable through the public API · behavioural (`RobotMoneyGateway.t.sol::test_rollingWindow_liveCountBoundedAcrossDistinctSeconds`); a long-horizon stateful-invariant handler is still recommended.
+
+> **`GW-5` — Every agent redemption through the gateway always carries a real, caller-meaningful per-leg slippage floor.**
+> ✅ HOLDS (fixed #969, F-11) · `RobotMoneyGateway.withdrawFromRouter` takes a `minAssetsPerLeg` vector and forwards it verbatim to `PortfolioRouter.redeemFor` (no more `new uint256[](n)` zero literal) and forwards the real agent deadline (no more `type(uint256).max`); the floor vector is folded into `paymentId` so a replay cannot weaken it · static-guard + behavioural (GatewayRouter.t.sol::test_withdrawFromRouter_realFloor_revertsBelowMinimum, ::test_withdrawFromRouter_floorIsBoundIntoPaymentId; FvInvariants.t.sol::test_GW5_agentRedeemCarriesRealFloor).
+
+> **`GW-6` — A revealed authorization or executed payment is never replayable.**
+> 🟢 HOLDS · commit/reveal + `paymentId` consumption · symbolic recommended (tie to GW-2: the replay guard is only as strong as the hash coverage).
+
+### 11.1 Gateway access control (ACL)
+
+These three ACL entries moved here from §4 because they are about gateway agents.
+
+> **`ACL-4` — An agent's owner is reassigned only by that owner, and only to an `ADMIN_ROLE` holder; no other caller can take an existing agent.**
+> ✅ PROVEN-by-code · `_authorizeAgentInternal` reverts `AgentAlreadyOwned`; `revealAuthorization` for another address reverts `OwnerConsentMissing` unless that address consented through `commitAuthorization` (issue #1791); `setPolicy`/`revokeAgent`/`transferAgentOwnership` require `agentOwner[agent]==msg.sender`; `transferAgentOwnership` reverts `NewAgentOwnerNotAdmin` for a destination without `ADMIN_ROLE`, so governance can be given an agent but cannot take one (issue #1476) · behavioural (`GatewayAgentPolicyAuthorization.t.sol::test_nonOwner_setPolicy_revokeAgent_transfer_revertNotAgentOwner`, `::test_transferAgentOwnership_*`) · symbolic recommended.
+
+> **`ACL-8` — After the deployment handover, no gateway agent listed in `AGENT_ADDRESSES` is owned by the deployer EOA.**
+> ✅ PROVEN (issue #1476) for the listed agents · agent ownership carries `setPolicy`/`revokeAgent` authority, so `DeployTimelock` hands every agent listed in `AGENT_ADDRESSES` to the TimelockController with `transferAgentOwnership` (after the timelock's gateway `ADMIN_ROLE` grant, before the deployer's revoke) and requires afterwards that none is still deployer-owned. The transfer does not change `AGENT_ROLE`: a listed agent that held it still holds it, and a listed agent without it (renounced, or revoked by `ADMIN_ROLE`) is handed over without it. Ownership of such an agent still carries `setPolicy`/`revokeAgent` authority over its stored policy, which applies again if the agent is later granted `AGENT_ROLE`, so it is handed over too. The gateway cannot enumerate an owner's agents, so the guarantee is only as complete as the list: the broadcast run requires `AGENT_ADDRESSES` to be set (a comma-separated list, or `none`; unset or empty reverts before any broadcast), and the manifest records `roles.gateway_agents_listed_count` so a reader can compare the list's length with the deployer-owned agents the gateway logs name. The stage ceremony derives the list from the gateway's `AgentAuthorized`/`AgentOwnershipTransferred` logs, and the publish contracts verifier fails when any agent those logs give the deployer is still deployer-owned, so on stage the claim covers every agent the deployer ever owned. A direct `DeployTimelock` run (`docs/operations/manual-admin-actions.md`) must list every deployer-owned agent the same way · deploy-assertion (`DeployTimelock.t.sol::DeployTimelockAgentHandoverTest`, `DeployTimelock.t.sol::DeployTimelockRunEntrypointTest`, `SafeIntegration.t.sol::test_handover_noDeployerOwnedAgentRemains`) + ceremony check (the publish contracts verifier and govern matrix (core `publish-contracts/`, `docs/development/stage-deployment.md`)).
+> *Mainnet plan (2026-10-05):* the deploy authorizes no agent, so `AGENT_ADDRESSES=none` at the handover and no agent is deployer-owned. Agents belong to depositors, who authorize them through `commitAuthorization`/`revealAuthorization`. `DeployGateway.s.sol` reads no `AGENT_*` input and authorizes no agent at stage 5, and the stage 12 verifier fails a run with any gateway agent log up to the handover or any `AGENT_ROLE` holder when it runs (core 1527).
+
+> **`ACL-7` — Registering an agent never blocks a future intended ADMIN/PAUSER address from being granted its role.**
+> ✅ PROVEN · the DeployTimelock handover asserts every intended ADMIN/PAUSER address is AGENT-free **before** any gateway grant, so the permissionless-registration grant-DoS becomes an explicit, typed deploy-time precondition rather than a late-stage `RoleSeparationViolated` brick — fixed by **NC-10 (#970)** · `DeployAssertions.t.sol::test_ACL7_agentRegistrationCannotBlockRoleGrant` · deploy-assertion.
 
 ---
 

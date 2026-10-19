@@ -33,10 +33,11 @@ stronger immutability than a frozen UUPS proxy can instead use a separately
 reviewed direct-deployment architecture; that is a distinct release decision,
 not an interchangeable flag on the current constructors.
 
-Candidates for per-instance proxies are `RobotMoneyVault`, the three concrete
-`BasketVault` subclasses, `VaultRegistry`, `PortfolioRouter`,
-`RobotMoneyGateway`, `RouterGovernance`, `InvestmentCommitteePolicy`, and
-`ConsensusRecommendationReceipt`. Inventory each deployment stage before
+Candidates for per-instance proxies are, in the vaults system,
+`RobotMoneyVault`, the three concrete `BasketVault` subclasses,
+`VaultRegistry`, `PortfolioRouter`, `RouterGovernance`,
+`InvestmentCommitteePolicy`, and `ConsensusRecommendationReceipt`, and, in the
+rmpc gateway system, `RobotMoneyGateway`. Inventory each deployment stage before
 implementation; make the decision per contract and record exclusions in the
 release manifest. The strategy and swap adapters, linked libraries,
 `UniswapV4PriceRecorder`, and `TimelockController` remain direct
@@ -45,6 +46,34 @@ and verified SafeL2 singleton topology; it is not converted to a Robot Money
 UUPS proxy. Adapter address and runtime-codehash checks and the
 no-proxy scan remain mandatory. An adapter upgrade means deploying a new
 adapter and approving its address/hash through the existing governance path.
+
+## Two systems
+
+Owner decision, 2026-10-19. The proxied core is two separate systems. The
+vaults system (the vaults, VaultRegistry, PortfolioRouter, RouterGovernance,
+InvestmentCommitteePolicy and ConsensusRecommendationReceipt) is released,
+rehearsed and frozen in its own run. The rmpc gateway system
+(RobotMoneyGateway and `rmpc`) is released in its own later run and tested on
+its own. The gateway is a client of the vaults system. The vaults system has
+no dependency on the gateway: no vaults-system contract names the gateway,
+takes it as an initializer argument, or accepts writes only from it. Who
+governs the gateway, and so who upgrades and freezes its proxy, is an open
+question for its own release.
+
+Code that still couples them (as of core 57fbe618), a set of known gaps to remove:
+
+- ConsensusRecommendationReceipt accepts writes only from the gateway
+  (`onlyGateway`, set once at initialization).
+- InvestmentCommitteePolicy takes the gateway at initialization. Committee
+  registration and vote submission route through RobotMoneyGateway
+  (`committeeRegister`, `committeeVoteSubmit`, `consensusRecordReceipt`,
+  `setICPolicy`, `setConsensusReceipt`).
+- The IC policy and receipt contracts and their interfaces live under
+  `contracts/gateway/`. RouterGovernance imports
+  `contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol`.
+- publish-contracts deploys the gateway in the same stage table and run as the
+  vaults, and one verify checks both. So the stage 2 and stage 4 tooling below
+  still treats the ten proxies as one release.
 
 ## Mechanism and authority
 
@@ -164,7 +193,8 @@ Implemented by issue 1809. The operator procedure is
   against the mode, and the layout identifier (keccak256 of the committed
   snapshot and the OpenZeppelin pins). It fails a missed freeze deadline.
 - **Claim.** Core immutability is claimed only when the full proxied core set
-  of the stage table reads frozen on chain and verifies; a frozen-mode release
+  of the stage table reads frozen on chain and verifies (after the split, the
+  set of the system being released); a frozen-mode release
   fails verification otherwise. The record lists the parameters a freeze leaves
   governed and the upstream dependencies it does not control.
 - **Evidence.** `deployments/<chain>/upgradeability.json` becomes the evidence
@@ -188,7 +218,8 @@ implementation, queues a second upgrade, freezes all ten core proxies in one
 batch bound to the reviewed `upgradeability.json`, and shows the queued upgrade
 is refused after the freeze with `UpgradesAreFrozen`. Verify then claims core
 immutability. `evidence-check --upgrade-lifecycle` reads the record back from
-the chain. The release runbook (4.1 and 4.12) makes this job and an external
+the chain. This job still deploys both systems in one run (see "Two systems").
+After the split, each system's own rehearsal covers its own proxies. The release runbook (4.1 and 4.12) makes this job and an external
 security review gates of a final mainnet release, and says why a rollback is not
 assumed safe after a state migration. The rehearsal runs the operator rows
 `govern --row upgrade-proxy` and `govern --row freeze-upgrades` (issues 1842 and
@@ -197,8 +228,13 @@ library directly.
 
 ## Signing clients and disclosure (stage 3)
 
-Implemented by issue 1810. Every Robot Money write a client signs goes to the
-gateway proxy, so the gateway is the proxy the signing clients verify.
+Implemented by issue 1810. Every agent write `rmpc` signs goes to the gateway
+proxy, so the gateway is the proxy the signing clients verify. This section is
+about the rmpc gateway system. Today `committee vote-submit` and
+`receipt submit` also go through the gateway, a known coupling (see "Two
+systems"). In the target design committee members write to
+InvestmentCommitteePolicy and ConsensusRecommendationReceipt directly; which
+implementation pin those writes check is not yet specified.
 
 **Verification before signing.** `rmpc` (`deposit`, `withdraw`,
 `withdraw-router`, the committee's signed tilt `committee vote-submit`, and

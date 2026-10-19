@@ -9,6 +9,11 @@
 >
 > Closes the open question gate listed under `Plan tracking issue #109`
 > §"Phase: Vault registry" item 1.
+>
+> **Note 2026-10-19 (system split).** The registry belongs to the vaults
+> system. The rmpc gateway system is a separate client of it and deploys in
+> its own run. Read §3.3 that way: the gateway update is the gateway system's
+> step, not part of a vault deploy. The registry never names the gateway.
 
 ---
 

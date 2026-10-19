@@ -63,6 +63,13 @@ output, and asserting exit codes — without a human at a terminal. This ADR
 records the invocation contract so CI scripts and future test harnesses have a
 single source of truth.
 
+These jobs test the rmpc gateway system: `rmpc` and `RobotMoneyGateway`
+(owner decision 2026-10-19). That system is a client of the separate vaults
+system. `get-gateway` and `get-agent` read the gateway. `get-vault` reads a
+vault's public surface. `rmpc deposit` writes to the gateway, which forwards
+the deposit to the vault. The jobs need a vaults deployment to exist, but
+they do not test the vaults system.
+
 ---
 
 ## 4. Headless invocation flags

@@ -13,6 +13,8 @@
 > **Historical.** This document records the rejected unified-vault proposal (ADR-0010) and the deleted code it described. It does not describe shipped code.
 >
 > **Not implemented.** Its companion ADR-0010 is Rejected (2026-09-18). This spec is kept for history only.
+>
+> Note (2026-10-19): the vaults system and the rmpc gateway system are now separate systems. The gateway is a client of the vaults system, and no vault depends on it (`docs/technical/smart-contracts.md` §1.1). The gateway and rmpc references below are kept as written.
 
 # Unified Vault — Engineering Specification
 

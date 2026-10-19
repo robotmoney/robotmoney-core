@@ -8,7 +8,7 @@
 > Closes the open question listed under `docs/architecture.md` §10
 > ("Router-weight governance implementation").
 
-Investment Committee signals are advisory only. The gateway signal endpoint binds the member to the caller: `committeeVoteSubmit` reverts `CommitteeAgentNotCaller` unless the vote's `agent` is `msg.sender` (core issue 1790, PR 1818). The explorer's tilt aggregate counts one signal per member, its latest verified vote. Consensus receipts are caller bound and ADMIN released; receipts are the only rebalance input, applied by the Safe through the timelock.
+Investment Committee signals are advisory only. The signal endpoint binds the member to the caller (today the gateway's; see §2 for the split): `committeeVoteSubmit` reverts `CommitteeAgentNotCaller` unless the vote's `agent` is `msg.sender` (core issue 1790, PR 1818). The explorer's tilt aggregate counts one signal per member, its latest verified vote. Consensus receipts are caller bound and ADMIN released; receipts are the only rebalance input, applied by the Safe through the timelock.
 
 ---
 
@@ -29,10 +29,32 @@ asset selection, per-vault strategy internals, adapter selection, adapter caps,
 fees, or agent permissions.
 
 The Investment Committee is a set of agents holding `COMMITTEE_AGENT_ROLE` on
-`InvestmentCommitteePolicy`. The gateway records their consensus as a
+`InvestmentCommitteePolicy`. Their consensus is recorded as a
 `ConsensusRecommendationReceipt`: a receipt id, a payload digest and a payload
 URI, written on chain by `recordReceipt`. A receipt is a recommendation. It
 moves no funds and sets no weights by itself.
+
+**Two systems (owner decision, 2026-10-19).** Router-weight governance belongs
+to the vaults system: the vaults, VaultRegistry, PortfolioRouter,
+RouterGovernance, InvestmentCommitteePolicy and ConsensusRecommendationReceipt,
+governed by the Safe through the TimelockController. The rmpc gateway system
+(RobotMoneyGateway and `rmpc`) is a separate system and a client of the vaults
+system. Committee members register and submit to the IC policy and receipt
+contracts directly, not through the gateway. Rebalancing works with no gateway
+deployed. Code that still couples them (as of core 57fbe618), known gaps to
+remove:
+
+- ConsensusRecommendationReceipt accepts writes only from the gateway
+  (`onlyGateway`, set once at initialization).
+- InvestmentCommitteePolicy takes the gateway at initialization. Committee
+  registration and vote submission route through RobotMoneyGateway
+  (`committeeRegister`, `committeeVoteSubmit`, `consensusRecordReceipt`,
+  `setICPolicy`, `setConsensusReceipt`).
+- The IC policy and receipt contracts and their interfaces live under
+  `contracts/gateway/`. RouterGovernance imports
+  `contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol`.
+- publish-contracts deploys the gateway in the same stage table and run as the
+  vaults, and one verify checks both.
 
 `contracts/PortfolioRouter.sol` is deployed. `setWeights(address[], uint256[])`
 and `setDefaultWeights(address[], uint256[])` are the only functions that
@@ -56,7 +78,8 @@ Three questions had to be fixed before any router-weight tooling was written:
 ### 3.1 One body changes configuration
 
 **The Safe multisig, through the `TimelockController`, is the only body that
-changes any Robot Money contract configuration, router weights included.**
+changes any vaults-system contract configuration, router weights included.**
+Who governs the gateway is an open question for the gateway's own release.
 
 Every privileged change (roles, caps, fees, eligibility, default weights,
 receipt release, router weights) is a Safe-signed timelock operation: the Safe
@@ -153,7 +176,7 @@ A receipt has two on-chain states.
 
 | State | Entry condition | Exit conditions |
 |---|---|---|
-| **Recorded** | `recordReceipt` succeeded through the gateway from a `COMMITTEE_AGENT_ROLE` holder. | The `apply-receipt` call executes: `Released`. A receipt the Safe never schedules stays `Recorded`. |
+| **Recorded** | `recordReceipt` succeeded from a `COMMITTEE_AGENT_ROLE` holder (today only through the gateway, a known gap, §2). | The `apply-receipt` call executes: `Released`. A receipt the Safe never schedules stays `Recorded`. |
 | **Released** | `applyReceipt` released it, and applied the receipt's weights in the same call. | Terminal. |
 
 Events: `ReceiptRecorded` and `ReceiptReleased` on the receipt contract,

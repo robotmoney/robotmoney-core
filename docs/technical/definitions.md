@@ -4,6 +4,33 @@ This glossary defines product terms used across the PRD, architecture,
 implementation plan, dapp, CLI, and agent skills. When another document
 uses one of these terms, this file is the canonical meaning.
 
+## Vaults System
+
+The vaults system is the Robot Money treasury product. It holds the
+vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), their adapters, the vault
+registry, the Portfolio Router and `RouterGovernance`. Its rebalancing
+input is the Investment Committee: `InvestmentCommitteePolicy` (agent
+registration and signed tilts) and `ConsensusRecommendationReceipt` (the
+recorded consensus receipt). The Safe multisig, through the
+TimelockController, governs it.
+
+Human wallets and committee agents call the vaults system directly. The
+vaults system never depends on the rmpc gateway system. It is deployed in
+its own run and tested on its own.
+
+Known gap: the current code still ties the committee contracts to the
+gateway. The receipt contract accepts writes only from the gateway. The
+committee policy takes the gateway at initialization. Both live under
+`contracts/gateway/`. This is a gap to remove, not the design.
+
+## rmpc Gateway System
+
+The rmpc gateway system is the agent permission and safety layer and its
+client: the Agent Permissions Gateway and the `rmpc` client. It is a
+client of the vaults system. It calls the same public vault and router
+surfaces a human wallet uses. It is deployed after the vaults system, in
+its own run, and tested on its own.
+
 ## Vault
 
 A Robot Money vault is an individual strategy container. It accepts a
@@ -175,3 +202,6 @@ Agents cannot use the gateway to choose their own share receiver,
 choose their own withdrawal recipient, raise caps, expand destinations,
 change vault mandates, alter router weights, add adapters, or bypass a
 disabled vault or router path.
+
+The gateway belongs to the rmpc gateway system. It is not part of the
+vaults system. Committee writes do not go through it.

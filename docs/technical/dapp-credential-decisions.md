@@ -32,6 +32,8 @@ Binding constraints:
 - **No fast-feedback optimization in the test harness** (user memory): the dapp should not invent a shortcut signer path just to make demos faster.
 - **Software-backed key labeling** (§12): "any secret export must be explicit, encrypted where possible, and labeled as unsafe for production if it is software-backed."
 
+**Which system each flow touches (owner decision 2026-10-19).** Every flow in this ADR writes to the rmpc gateway system: agent registration, policy, revoke, gateway roles, the gateway's deposit pause, and the `rmpc` config export. The deposit, redeem and router flows write to the separate vaults system directly from the human wallet, with no gateway in the path. The gateway is a client of the vaults system, never the reverse. *Code that still couples them:* `rmpc committee` and `rmpc receipt` (§3.4 amendment) submit committee registration, votes and receipts through the gateway. In the target design committee members write to the vaults system's committee and receipt contracts directly.
+
 ## 3. Decisions
 
 ### 3.1 Credential model — **register-only; the dapp never generates or holds private keys**

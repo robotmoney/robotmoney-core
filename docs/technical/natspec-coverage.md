@@ -48,6 +48,8 @@ contracts/script/DeployVault.s.sol
 contracts/script/DeployGateway.s.sol
 ```
 
+The list spans two separate systems (`docs/technical/smart-contracts.md` §1.1). The `contracts/gateway/` files and `DeployGateway.s.sol` belong to the rmpc gateway system. The rest belong to the vaults system.
+
 **Out of scope** (not checked):
 - `lib/` — third-party dependencies.
 - `contracts/test/` — Forge test helpers.
