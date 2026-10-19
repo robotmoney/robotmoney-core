@@ -487,12 +487,12 @@ steps:
     onlyFor: "twin"
   - id: "P0.19-funding"
     standing: ["4.2"]
-    description: "The deployer holds the gas of the run (about 0.003 ETH) and 5 USDC (1 seed plus 4 test deposits)"
+    description: "The deployer holds 0.015 ETH and 5 USDC (1 seed plus 4 test deposits). The gas the run burns is about 0.003 ETH, but a send must hold its gas limit times its fee bid up front: rmpc bids at least 1 gwei of tip, so its router deposit (10,750,000 gas for four legs) needs about 0.011 ETH in the account (Deploy 3 P6.56)"
     host: "control"
     phase: 0
     cmds:
       - ["bash", "-c", 'cast balance "{sheet:ADMIN_ADDRESS}" > {runDir}/state/deployer-eth']
-      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-eth}", "3000000000000000"]
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-eth}", "15000000000000000"]
       - ["bash", "-c", 'cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/deployer-usdc']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-usdc}", "5000000"]
     env:
