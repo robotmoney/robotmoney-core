@@ -47,7 +47,7 @@ export const SCALARS = new Set([
   "coreSha", "release", "runDir", "target", "countsCheckout", "releaseTag", "versionTag", "rmpcConfig", "receiptFile", "receiptUri",
   "submitterSaltNonce", "unwindMinUsdcOut", "unwindMaxLossBps", "environmentName", "ownerSigner", "emergencySigner", "deployerKeystore",
   "chainId", "rpcUrl", "sheet", "sheetTemplate", "countsDir", "evidenceDir", "manifestDir", "signer", "yes", "usdc", "deploymentKind",
-  "ownerSignerCount", "sheetOwnerCount", "castFlagsInline",
+  "ownerSignerCount", "sheetOwnerCount", "castFlagsInline", "gateSha",
 ]);
 /** A whole-element placeholder that expands to several argv elements (empty on the Twin chain where noted). */
 export const LIST_PLACEHOLDERS: Readonly<Record<string, readonly string[]>> = {

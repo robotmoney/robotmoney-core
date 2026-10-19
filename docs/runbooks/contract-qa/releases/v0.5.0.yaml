@@ -19,9 +19,10 @@ notes: |
   verify stage's role scan with HTTP 429 at P2.01 for an hour, and the logs endpoint allows 1000 blocks per eth_getLogs.
   Explorer source verification is not a gate (owner decision 2026-10-19): P2.01 had waited its hour on Blockscout and
   Sourcify, which depend on third-party vendors. The verifier's code labels prove the build from the chain. From that
-  commit on, Deploy 3 runs verify and evidence-check at the runbook branch head; every broadcast stays at rc.12, the last
-  release-gated commit (the tool's release gate exempts verify-only runs). Each run is gated on its rc tag ({releaseTag} = release/v0.5.0-rc.N-rehearsal at
-  {coreSha}). The run continued at rc.10 (004b8c97, tools only) after the fee guard stop. The version tag step P10.05
+  commit on, a rehearsal at a tool-only commit is gated at the sha the deployment started at (owner decision
+  2026-10-19): Deploy 3 continued at 91d4604a from P2.01, and {gateSha} is 57fbe618 (rc.9), whose tag, green CI and
+  frozen counts gate P3.50 and P10.01. Each earlier run was gated on its rc tag ({releaseTag} = release/v0.5.0-rc.N-rehearsal at
+  {gateSha}). The run continued at rc.10 (004b8c97, tools only) after the fee guard stop. The version tag step P10.05
   runs only for --target production, so a rehearsal run cuts no version tag. A version tag is v0.5.0 with no
   network suffix (owner, 2026-10-16); pushing it also builds and publishes the dApp image v0.5.0
   (release-dapp.yml), so no dApp release may have used v0.5.0 first.
@@ -314,7 +315,7 @@ steps:
     host: "control"
     phase: 0
     cmds:
-      - ["bash", "-c", 'test "$(git cat-file -t "refs/tags/{releaseTag}")" = tag && test "$(git rev-list -n 1 "{releaseTag}")" = "{coreSha}"']
+      - ["bash", "-c", 'test "$(git cat-file -t "refs/tags/{releaseTag}")" = tag && test "$(git rev-list -n 1 "{releaseTag}")" = "{gateSha}"']
     expectExit: 0
     receipts: []
     irreversible: false
@@ -325,7 +326,7 @@ steps:
     host: "control"
     phase: 0
     cmds:
-      - ["bun", "scripts/ci/check-sha-green.ts", "{coreSha}", "--repo", "robotmoney/robotmoney-core"]
+      - ["bun", "scripts/ci/check-sha-green.ts", "{gateSha}", "--repo", "robotmoney/robotmoney-core"]
     env:
       GITHUB_TOKEN: "{env:GITHUB_TOKEN}"
     expectExit: 0
@@ -338,8 +339,8 @@ steps:
     host: "control"
     phase: 0
     cmds:
-      - ["git", "-C", "{countsCheckout}", "ls-files", "--error-unmatch", "deployments/frozen-counts/{coreSha}.json"]
-      - ["test", "-s", "{countsDir}/{coreSha}.json"]
+      - ["git", "-C", "{countsCheckout}", "ls-files", "--error-unmatch", "deployments/frozen-counts/{gateSha}.json"]
+      - ["test", "-s", "{countsDir}/{gateSha}.json"]
     expectExit: 0
     receipts: []
     irreversible: false
@@ -722,7 +723,7 @@ steps:
     host: "control"
     phase: 3
     cmds:
-      - ["bun", "scripts/ci/check-sha-green.ts", "{coreSha}", "--repo", "robotmoney/robotmoney-core"]
+      - ["bun", "scripts/ci/check-sha-green.ts", "{gateSha}", "--repo", "robotmoney/robotmoney-core"]
     env:
       GITHUB_TOKEN: "{env:GITHUB_TOKEN}"
     expectExit: 0
@@ -1907,7 +1908,7 @@ steps:
     host: "control"
     phase: 10
     cmds:
-      - ["bun", "publish-contracts/src/evidence-check.ts", "--evidence", "{evidenceDir}/evidence.json", "--frozen", "{countsDir}/{coreSha}.json", "--deploy-sha", "{coreSha}", "--deployment-kind", "{deploymentKind}", "--rpc", "{rpcUrl}"]
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--evidence", "{evidenceDir}/evidence.json", "--frozen", "{countsDir}/{gateSha}.json", "--deploy-sha", "{gateSha}", "--deployment-kind", "{deploymentKind}", "--rpc", "{rpcUrl}"]
     expectExit: 0
     receipts:
       - {"dir": "{evidenceDir}", "pattern": "evidence.json", "required": true}

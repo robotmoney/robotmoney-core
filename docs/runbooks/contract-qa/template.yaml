@@ -122,7 +122,7 @@ steps:
     host: "control"
     phase: 0
     cmds:
-      - ["bash", "-c", 'test "$(git cat-file -t "refs/tags/{releaseTag}")" = tag && test "$(git rev-list -n 1 "{releaseTag}")" = "{coreSha}"']
+      - ["bash", "-c", 'test "$(git cat-file -t "refs/tags/{releaseTag}")" = tag && test "$(git rev-list -n 1 "{releaseTag}")" = "{gateSha}"']
     expectExit: 0
     receipts: []
     irreversible: false
@@ -133,7 +133,7 @@ steps:
     host: "control"
     phase: 0
     cmds:
-      - ["bun", "scripts/ci/check-sha-green.ts", "{coreSha}", "--repo", "robotmoney/robotmoney-core"]
+      - ["bun", "scripts/ci/check-sha-green.ts", "{gateSha}", "--repo", "robotmoney/robotmoney-core"]
     env:
       GITHUB_TOKEN: "{env:GITHUB_TOKEN}"
     expectExit: 0
@@ -146,8 +146,8 @@ steps:
     host: "control"
     phase: 0
     cmds:
-      - ["git", "-C", "{countsCheckout}", "ls-files", "--error-unmatch", "deployments/frozen-counts/{coreSha}.json"]
-      - ["test", "-s", "{countsDir}/{coreSha}.json"]
+      - ["git", "-C", "{countsCheckout}", "ls-files", "--error-unmatch", "deployments/frozen-counts/{gateSha}.json"]
+      - ["test", "-s", "{countsDir}/{gateSha}.json"]
     expectExit: 0
     receipts: []
     irreversible: false
@@ -832,7 +832,7 @@ steps:
     host: "control"
     phase: 10
     cmds:
-      - ["bun", "publish-contracts/src/evidence-check.ts", "--evidence", "{evidenceDir}/evidence.json", "--frozen", "{countsDir}/{coreSha}.json", "--deploy-sha", "{coreSha}", "--deployment-kind", "{deploymentKind}", "--rpc", "{rpcUrl}"]
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--evidence", "{evidenceDir}/evidence.json", "--frozen", "{countsDir}/{gateSha}.json", "--deploy-sha", "{gateSha}", "--deployment-kind", "{deploymentKind}", "--rpc", "{rpcUrl}"]
     expectExit: 0
     receipts:
       - {"dir": "{evidenceDir}", "pattern": "evidence.json", "required": true}

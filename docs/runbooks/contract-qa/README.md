@@ -49,7 +49,9 @@ Every step names its `host`. There are two.
 
 `{manifestDir}` is `deployments/qa-runs/<run name>` in the core checkout. Forge may write manifests only under `./deployments` or `/tmp` (`fs_permissions` in `foundry.toml`). Git ignores `deployments/qa-runs/`, so verify (P2.01), which refuses a checkout with untracked files, still passes. Any other folder under `deployments/` fails P2.01, and a folder outside the checkout fails publish (P1.02). The dry run (P0.21) writes to `{runDir}/manifests-dry`, which P0.57 links to `{manifestDir}-dry` for the same reason.
 
-`{releaseTag}` is the release candidate tag at `{coreSha}` (`release/<version>-rc.N-rehearsal` on a rehearsal): the release gate (P0.09) needs an annotated tag of the sheet's kind at that sha, nothing more. The record tag `release/<version>-rehearsal` is cut once, at the sha the deployment's run manifest names, and never moved (policy `docs/operations/contract-release-runbooks.md`, version tags).
+`{gateSha}` is the sha whose tag, green CI and frozen counts gate the run (P0.09 to P0.11, P3.50, P10.01). It is `{coreSha}`, except on a rehearsal that continues at a tool-only commit (`publish-contracts/src/tooling-sha.ts`): there it is the sha the deployment started at, the `coreSha` of `{evidenceDir}/publish-run.json`, as the publish CLI's own release gate does (owner decision 2026-10-19). A production run is always gated at its own sha.
+
+`{releaseTag}` is the release candidate tag at `{gateSha}` (`release/<version>-rc.N-rehearsal` on a rehearsal): the release gate (P0.09) needs an annotated tag of the sheet's kind at that sha, nothing more. The record tag `release/<version>-rehearsal` is cut once, at the sha the deployment's run manifest names, and never moved (policy `docs/operations/contract-release-runbooks.md`, version tags).
 
 A whole-element list placeholder expands to several argv elements: `{common}`, `{owners}`, `{gate}`, `{wait}`, `{emergency}`, `{cast}`. The definitions are `LIST_PLACEHOLDERS` in the validator. The scalar names are `SCALARS` in the same file.
 
