@@ -60,7 +60,9 @@ The release gate only needs an annotated tag of the sheet's kind at the sha a ru
 `-rehearsal`), so each run of a rehearsal is gated on its release candidate tag `release/<version>-rc.N-rehearsal`. The record tag
 `release/<version>-rehearsal` is cut once, at the sha the run manifest names (the sha the deployment started at), and is never moved.
 A rehearsal that continues at a later tool-only commit (`publish-contracts/src/tooling-sha.ts`) keeps its record tag where the
-deployment started; the rc tags mark every commit a run ran at.
+deployment started; the rc tags mark every commit a run ran at. A rehearsal that continues at such a tool-only commit is gated
+at the sha the deployment started at: the tag, the green CI and the frozen counts of that sha cover it (owner decision 2026-10-19,
+`publish-contracts/src/cli.ts`). A production run is always gated at its own sha.
 A Devnet (Twin chain) verification pass is not tagged: its record is the CI
 run and the evidence folder.
 

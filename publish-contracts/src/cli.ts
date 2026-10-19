@@ -671,10 +671,14 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     const names = a.stage === "plan" ? [] : a.verb ? selectVerbStages(a.verb) : selectStages(a.stage);
     const gated = releaseGated({ chainId: rpcChainId, verb: a.verb, stage: a.stage, dryRun: a.dryRun, measure: a.measure });
     if (gated) {
-      const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, kind: sheet.kind, requireCounts: !shaRun, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag,
+      // Owner decision 2026-10-19 (Deploy 3): a REHEARSAL that continues at a tool-only commit (tooling-sha.ts: a descendant whose deployed inputs are
+      // byte-identical) is gated at the sha the deployment started at, which carries the tag, the green CI and the frozen counts. Production keeps its own sha.
+      const gateSha = toolRun && sheet.kind === "rehearsal" ? toolRun.originalSha : a.coreSha;
+      if (gateSha !== a.coreSha) log.log("info", "plan.release_gate_original_sha", { gate_sha: gateSha, core_sha: a.coreSha });
+      const tag = await assertReleaseGate({ sha: gateSha, coreDir, countsDir, env, kind: sheet.kind, requireCounts: !shaRun, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag,
         verifyReconstructed: deps.verifyReconstructed ?? realVerifyReconstructed, anchorCommitted: deps.anchorCommitted ?? realAnchorCommitted, frozenDirCommitted: deps.frozenDirCommitted ?? realFrozenDirCommitted,
         run, runEnv: scrubGitEnv(castEnv) });
-      log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha, stage: a.stage ?? a.verb ?? "default", counts: shaRun ? "none (redeploy sha)" : "committed" });
+      log.log("info", "plan.release_gate", { ok: true, tag, core_sha: gateSha, stage: a.stage ?? a.verb ?? "default", counts: shaRun ? "none (redeploy sha)" : "committed" });
     }
     // deploy-implementation (issue 1861): the release gate above ran on 8453 as for govern. No counts, no stages: one CREATE from the deployer and its implementation_deploys entry.
     if (a.verb === DEPLOY_IMPL_VERB) {

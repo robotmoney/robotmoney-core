@@ -90,3 +90,30 @@ describe("through the CLI: a rehearsal resumed at a tooling sha", () => {
     expect(await w.run(["--stage", "libs", "--resume", "--core-sha", SHA2])).toBe(EXIT_CODES.RESUME);
   });
 });
+
+describe("the release gate of a rehearsal at a tooling sha (owner decision 2026-10-19)", () => {
+  const REH8453 = { DEPLOYMENT_KIND: "rehearsal", TIMELOCK_MIN_DELAY: "900", GOVERN_NEW_DELAY: "1800", SAFE_SALT_NONCE: "20261019" };
+  // the tag, the green CI and the frozen counts exist at SHA only, the sha the deployment started at
+  const gateAtShaOnly = { releaseTag: async (_d: string, sha: string) => (sha === SHA ? "release/1.0.0-rehearsal" : null), checkShaGreen: async (i: { sha: string }) => (i.sha === SHA ? { code: 0, output: "GREEN" } : { code: 1, output: "NOT GREEN" }) };
+  const atSha2 = (w: ReturnType<typeof world>) => writeFileSync(join(w.coreDir, ".git", "HEAD"), SHA2 + "\n");
+  test("the resume at SHA2 (byte-identical deployed inputs) is gated at SHA: it passes with no tag, CI or counts of its own", async () => {
+    const w = world({ chainId: 8453, startNonce: 118, sheet: REH8453 });
+    expect(await w.run(["--stage", "safe"], gateAtShaOnly as never)).toBe(0);
+    atSha2(w); w.cfg.gitAncestor = true;
+    expect(await w.run(["--stage", "libs", "--resume", "--core-sha", SHA2], gateAtShaOnly as never)).toBe(0);
+    expect(w.logs().some((l) => l.event === "plan.release_gate_original_sha" && l.gate_sha === SHA && l.core_sha === SHA2)).toBe(true);
+  });
+  test("mutation: a changed deployed input at SHA2 is refused before the gate, nothing sent", async () => {
+    const w = world({ chainId: 8453, startNonce: 118, sheet: REH8453 });
+    expect(await w.run(["--stage", "safe"], gateAtShaOnly as never)).toBe(0);
+    atSha2(w); w.cfg.gitAncestor = true; w.cfg.gitInputsChanged = ["contracts/RobotMoneyVault.sol"];
+    expect(await w.run(["--stage", "libs", "--resume", "--core-sha", SHA2], gateAtShaOnly as never)).toBe(EXIT_CODES.USAGE);
+  });
+  test("mutation: SHA2 without the tooling relation is gated at its own sha and refused", async () => {
+    const w = world({ chainId: 8453, startNonce: 118, sheet: REH8453 });
+    expect(await w.run(["--stage", "safe"], gateAtShaOnly as never)).toBe(0);
+    atSha2(w); w.cfg.gitAncestor = false;
+    expect(await w.run(["--stage", "libs", "--resume", "--core-sha", SHA2], gateAtShaOnly as never)).not.toBe(0);
+    expect(w.logs().some((l) => l.event === "plan.release_gate_original_sha")).toBe(false);
+  });
+});
