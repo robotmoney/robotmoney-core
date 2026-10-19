@@ -251,6 +251,18 @@ describe("a failed verify or postflight pauses the vaults by itself", () => {
     expect(existsSync(rolloutReportPath({ evidenceDir: w.evidence, chainId: 918453 }))).toBe(false);
   });
 
+  test("Deploy 3: --logs-rpc and --logs-window reach the verifier (the role scan's eth_getLogs, 1000 blocks per call)", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    let seen: { logChunk?: number; chain?: unknown } = {};
+    const spy = { verifyDeployment: (async (o: { logChunk: number; chain: unknown }) => { seen = o; return { ok: true, checks: [{ label: "chain: id equals sheet", ok: true, detail: "" }] }; }) as never };
+    expect(await w.run(["verify", "--logs-rpc", "http://logs.test:8545", "--logs-window", "1000"], { ...deps(c), verify: spy })).toBe(0);
+    expect(seen.logChunk).toBe(1000);
+    // mutation: without the flags the scan keeps 2000 blocks per call
+    expect(await w.run(["verify"], { ...deps(c), verify: spy })).toBe(0);
+    expect(seen.logChunk).toBe(2000);
+  });
+
   test("a failure in a deploy stage is not a verify failure: nothing is paused", async () => {
     const w = world({ startNonce: 0 }), c = newChain();
     w.cfg.simFails = SCRIPT.libs;

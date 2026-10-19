@@ -321,6 +321,11 @@ export interface RunContext {
    * verb's reads after its broadcast, QA plan v1 E6). Defaults to the shared bound (STALE_READ_TRIES reads, STALE_READ_DELAY_MS apart).
    */
   readRetry?: StaleReadRetry;
+  /**
+   * Deploy 3 (2026-10-18): where the verifier sends eth_getLogs and how many blocks per call (--logs-rpc, --logs-window). mainnet.base.org throttled the role
+   * scan with HTTP 429 for an hour; the canon's 8453 logs endpoint allows 1000 blocks per call. Absent: every read on --rpc, 2000 blocks per call.
+   */
+  logs?: { logsRpc?: string; window?: bigint };
   /** Injected for tests: core's own config-check (bun scripts/ci/config-check.ts). Defaults to the real spawn. */
   coreConfigCheck?: CoreConfigCheck;
   /** Set by runStages in a dry run: the RPC forge simulates on (a local anvil) and the record of manifest files to restore. */

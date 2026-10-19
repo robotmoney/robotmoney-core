@@ -20,7 +20,7 @@ import { PROOF_STAGE } from "./control-proof.ts";
 import { loadConfigAssets, loadExpectedMaxSlippageBps } from "./asset-config.ts";
 import { manifestBase } from "./stage-table.ts";
 import { DEPLOYER_STAGES, VAULT_STAGES, getStageTable, manifestRef, type StageRow } from "./stages.ts";
-import { RPC_REFUSED_DETAIL, verifyDeployment, verifySources, viemReader, type VerifyReport, type VerifySheet, type VerifyOptions, type VaultSheet } from "./verify/index.ts";
+import { RPC_REFUSED_DETAIL, verifyDeployment, verifySources, viemReader, type ChainReader, type VerifyReport, type VerifySheet, type VerifyOptions, type VaultSheet } from "./verify/index.ts";
 import { recordDependencyManifest, type RecorderSpawn } from "./record-dependencies.ts";
 import { contractsFromManifests } from "./verify/sources.ts";
 import { REDEPLOY_ROW, oldVaultBuild, redeploysOf, verifyBuildRefusal } from "./redeploy-vault.ts";
@@ -193,6 +193,12 @@ const readDepositsPaused = async (rpc: string, vault: `0x${string}`): Promise<bo
   (await createPublicClient({ transport: http(rpc) }).readContract({ address: vault, abi: PAUSED_ABI, functionName: "depositsPaused" })) as boolean;
 export const realVerifyDeps: VerifyDeps = { verifyDeployment, verifySources, depositsPaused: readDepositsPaused };
 
+/** The verifier's chain reader: every read on --rpc, eth_getLogs on --logs-rpc when it is given (Deploy 3: the public RPC throttled the role scan). */
+export function verifyReader(ctx: Pick<RunContext, "rpc" | "logs">, make: (url: string) => ChainReader = viemReader): ChainReader {
+  const reader = make(ctx.rpc);
+  return ctx.logs?.logsRpc ? { ...reader, getLogs: make(ctx.logs.logsRpc).getLogs } : reader;
+}
+
 export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: RunManifest, deps: VerifyDeps = realVerifyDeps): Promise<VerifyReport> {
   const frozenFile = ctx.frozen ?? (ctx.measure ? measuredCounts(manifest) : undefined);
   if (!frozenFile) throw new PublishError("COUNTS_MISSING", "the verifier needs the frozen counts for this DEPLOY_SHA");
@@ -228,9 +234,9 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   const unpaused = mode ? (mode === "post-govern" ? [...MAINNET_UNPAUSE_VAULTS] : []) : unpausedByGovern(manifest, ctx.sheet);
   ctx.log.log("info", "stage.start", { stage: row.name });
   const report = await deps.verifyDeployment({
-    chain: viemReader(ctx.rpc), manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildVerifySheet(ctx, safe, unpaused, expectedTimelockDelay(manifest, ctx.sheet)), fromBlock: BigInt(manifest.firstBlock),
+    chain: verifyReader(ctx), manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildVerifySheet(ctx, safe, unpaused, expectedTimelockDelay(manifest, ctx.sheet)), fromBlock: BigInt(manifest.firstBlock),
     deployTxs: runDeployTxs(manifest), adoptedContracts: runAdoptedContracts(manifest),
-    logChunk: 2000, frozenCounts: frozen, artifactsDir: join(ctx.coreDir, "out"), coreDir: ctx.coreDir,
+    logChunk: ctx.logs?.window !== undefined ? Number(ctx.logs.window) : 2000, frozenCounts: frozen, artifactsDir: join(ctx.coreDir, "out"), coreDir: ctx.coreDir,
     ...proxyBuildDirsOf(manifest, join(ctx.coreDir, "out")),
     deployerNonceAtDeployEnd: deployEndNonce(manifest),
     ...(ctx.sheet.kind === "rehearsal" ? { deployerStartNonce: manifest.deployerStartNonce } : {}),
