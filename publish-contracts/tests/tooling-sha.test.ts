@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { DEPLOY_INPUTS, isReadOnlyGitAncestry, isReadOnlyGitInputsDiff, toolingShaRun } from "../src/tooling-sha.ts";
 import { FEE_GUARD_MULTIPLE, feeGuardNeedWei, spawnTool, type ProcessRunner } from "../src/runner.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { world } from "./harness.ts";
 import { SHA, SHA2, writeCounts } from "./fixtures.ts";
@@ -75,6 +75,19 @@ describe("through the CLI: a rehearsal resumed at a tooling sha", () => {
     expect(manifestOf(w).stages.libs.status).toBe("done");
     expect(w.logs().some((l) => l.event === "run.tooling_sha" && l.original_sha === SHA && l.tooling_sha === SHA2)).toBe(true);
   });
+  test("the isomorphism report: kept when the deployment has one, written under the original sha when it has none", async () => {
+    const w = world({ startNonce: 118, sheet: REH });
+    expect(await w.run(["--stage", "safe"])).toBe(0);
+    const iso = join(w.evidence, `isomorphism-${JSON.parse(readFileSync(join(w.evidence, "publish-run.json"), "utf8")).chainId}.json`);
+    const original = readFileSync(iso, "utf8");
+    atSha2(w); w.cfg.gitAncestor = true;
+    expect(await w.run(["--stage", "libs", "--resume", "--core-sha", SHA2])).toBe(0);
+    expect(readFileSync(iso, "utf8")).toBe(original);
+    rmSync(iso);
+    expect(await w.run(["--stage", "libs", "--resume", "--core-sha", SHA2])).toBe(0);
+    expect(JSON.parse(readFileSync(iso, "utf8")).coreSha).toBe(SHA);
+    expect(w.logs().some((l) => l.event === "run.isomorphism_written" && l.original_sha === SHA && l.tooling_sha === SHA2)).toBe(true);
+   }, 30_000);
   test("mutation: a changed contract at SHA2 is refused before anything is sent", async () => {
     const w = world({ startNonce: 118, sheet: REH });
     expect(await w.run(["--stage", "safe"])).toBe(0);

@@ -758,11 +758,15 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       log.log("info", "run.counts_measured", { file: p });
     }
     // QA plan v1 E1: the isomorphism report describes the deployment at its own sha. A run at a redeploy sha leaves it as the original run wrote it.
-    if (shaRun || toolRun) log.log("info", "run.isomorphism_kept", { original_sha: (shaRun ?? toolRun)!.originalSha, note: "a run at a redeploy or tooling sha does not rewrite the deployment's isomorphism report" });
+    // A tooling-sha run writes it only when the original run never did (it failed before its end, Deploy 3): the deployed inputs are byte-identical, so the
+    // report is the deployment's, filed under the original sha (coreHead names the checkout it was read from).
+    const isoPath = join(ctx.evidenceDir, `isomorphism-${rpcChainId}.json`);
+    if (shaRun || (toolRun && existsSync(isoPath))) log.log("info", "run.isomorphism_kept", { original_sha: (shaRun ?? toolRun)!.originalSha, note: "a run at a redeploy or tooling sha does not rewrite the deployment's isomorphism report" });
     else if (!a.dryRun && existsSync(ctx.evidenceDir)) {
       const cmp = a.compareSheet ? { path: a.compareSheet, sheet: parseSheet(readFileSync(resolve(cwd, a.compareSheet), "utf8"), sheetOpts) } : undefined;
       const report = await buildIsomorphismReport(ctx, { compareTo: cmp });
-      writeReport(join(ctx.evidenceDir, `isomorphism-${rpcChainId}.json`), report);
+      writeReport(isoPath, toolRun ? { ...report, coreSha: toolRun.originalSha } : report);
+      if (toolRun) log.log("info", "run.isomorphism_written", { original_sha: toolRun.originalSha, tooling_sha: toolRun.toolingSha, note: "the deployment had no isomorphism report: written from the tooling sha, whose deployed inputs are byte-identical" });
     }
     log.log("info", "run.done", { ran: result.ran, skipped: result.skipped });
     return 0;

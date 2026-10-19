@@ -89,6 +89,9 @@ describe("DEPLOY_SHA: the tree must be clean", () => {
     writeFileSync(join(dir, "deployments", "918453", "vault.json"), "{}");
     expect(await dirtyTreeLines(spawnTool, dir, 918453, { PATH: process.env.PATH ?? "" })).toEqual([]);
     expect((await dirtyTreeLines(spawnTool, dir, 8453, { PATH: process.env.PATH ?? "" })).length).toBe(1);
+    mkdirSync(join(dir, "deployments", "dependency-manifests", "918453"), { recursive: true });
+    writeFileSync(join(dir, "deployments", "dependency-manifests", "918453", "abc.json"), "{}");
+    expect(await dirtyTreeLines(spawnTool, dir, 918453, { PATH: process.env.PATH ?? "" })).toEqual([]);
     writeFileSync(join(dir, "a.txt"), "changed");
     expect(await dirtyTreeLines(spawnTool, dir, 918453, { PATH: process.env.PATH ?? "" })).toEqual([" M a.txt"]);
   });
