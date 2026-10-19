@@ -3,6 +3,7 @@
 > Canonical: `docs/architecture.md` §5.2 — Agent Permissions Gateway
 > Issue: #310 — dev-scout: map gateway withdrawal seams, receipt-allowance model, and rmpc signing path
 > Status: **Accepted**
+> **Superseded 2026-10-19.** The gateway withdrawal design below is deprecated (owner decision 2026-10-19: `rmpc`'s only on-chain write is an agent deposit into a single vault through the gateway; the gateway has no withdrawal or Portfolio Router path, and `rmpc` has no `withdraw`, `withdraw-router` or `receipt submit`).
 > System: **rmpc gateway system** (owner decision 2026-10-19). This ADR
 > belongs to the gateway system (`RobotMoneyGateway` and `rmpc`), not the
 > vaults system. The gateway is a client of the vaults system. It calls the

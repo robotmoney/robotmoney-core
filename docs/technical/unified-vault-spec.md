@@ -790,9 +790,9 @@ rule: its v1 `pause()` also freezes withdrawals. Never call `pause()` on v1.
 
 - **Explorer indexer** decodes `DepositsPaused` / `DepositsUnpaused` and
   reads `depositsPaused()` per vault.
-- **rmpc withdraw preflight** never refuses on a pause. It reports
-  `depositsPaused()` only. A deposit preflight refuses with
-  `ErrDepositsPaused`.
+- **rmpc deposit preflight** refuses a paused vault with
+  `ErrDepositsPaused`. `rmpc` has no withdraw command: a depositor's
+  withdrawal is a direct vault call, which never checks a pause.
 
 **Adapter emergency-arming authority (M-S5).** ACL-5's two-key split (ADMIN
 arms a guard, EMERGENCY executes the unwind) is atomic on one contract today

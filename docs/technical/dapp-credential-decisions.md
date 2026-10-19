@@ -10,6 +10,8 @@
 
 Accepted. Authored 2026-05-07 against `Plan tracking issue #109` §12 on branch `feat/59-dev-scout-dapp-credential-wallet-signing-model`. No prior ADR exists for this phase.
 
+**Amendment 2026-10-19 (owner decision):** `rmpc`'s only on-chain write is an agent deposit into a single vault through the gateway. Mentions below of `rmpc withdraw`, `withdraw-router`, router deposits by an agent or gateway withdrawals are deprecated.
+
 Companion ADRs:
 
 - `docs/technical/explorer-schema-decisions.md` — locks the explorer as a non-authoritative read source. The dapp consumes the explorer API for history only; every safety-critical read goes to JSON-RPC directly. This ADR honors that separation.

@@ -5,6 +5,8 @@
 // and one add-only file per release (docs/runbooks/contract-qa/releases/<release>.yaml). A release file holds a full copy of the
 // template's steps, unchanged and in order, plus the steps only that release adds, each marked `added: <release>`. This tool refuses
 // a release file that drops, edits or reorders a template step, and checks the commands against the real CLIs, so the YAML cannot drift.
+// The template itself may change. A finished release pins `templateSha`, the commit its template steps were copied from; it is then a
+// record and is no longer checked against the current template or CLIs.
 //
 //   bun scripts/runbook/validate-contract-qa.ts                                    the template and every release file (CI)
 //   bun scripts/runbook/validate-contract-qa.ts --release v0.4.0 --target T --runnable
@@ -74,7 +76,7 @@ export interface RunbookStep {
 }
 export interface ScopeEntry { pr: number; what: string; check?: string; none?: string }
 export interface Decision { id: string; question: string; status: "open" | "decided"; answer: string | null; decidedOn: string | null; ref: string | null }
-export interface ReleaseRunbook { release: string; template: string; productionReady: boolean; notes?: string; recovery: string; decisions: Decision[]; scope: ScopeEntry[]; steps: RunbookStep[] }
+export interface ReleaseRunbook { release: string; template: string; templateSha?: string; productionReady: boolean; notes?: string; recovery: string; decisions: Decision[]; scope: ScopeEntry[]; steps: RunbookStep[] }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
@@ -364,7 +366,7 @@ export function commandProblems(steps: RunbookStep[], model: CliModel, root: str
 
 // ─── the template and the release file ──────────────────────────────────────────────────────────────────────────
 const TEMPLATE_KEYS = new Set(["template", "steps"]);
-const RELEASE_KEYS = new Set(["release", "template", "productionReady", "notes", "recovery", "decisions", "scope", "steps"]);
+const RELEASE_KEYS = new Set(["release", "template", "templateSha", "productionReady", "notes", "recovery", "decisions", "scope", "steps"]);
 
 /** PURE. A template from its YAML text. Throws with every reason it is not one. */
 export function parseTemplate(text: string): { name: string; steps: RunbookStep[] } {
@@ -426,6 +428,9 @@ export function parseRelease(text: string, release: string): ReleaseRunbook {
   for (const k of Object.keys(doc)) if (!RELEASE_KEYS.has(k)) errors.push(`${where}: unknown key ${k}`);
   if (doc.release !== release) errors.push(`${where}: names release ${String(doc.release)}`);
   if (doc.template !== TEMPLATE_NAME) errors.push(`${where}: template is ${TEMPLATE_NAME}, got ${String(doc.template)}`);
+  if (doc.templateSha !== undefined && (typeof doc.templateSha !== "string" || !/^[0-9a-f]{40}$/.test(doc.templateSha))) {
+    errors.push(`${where}: templateSha is the full 40-character commit the release's template steps were copied from`);
+  }
   if (typeof doc.recovery !== "string" || doc.recovery.trim() === "") errors.push(`${where}: recovery is the release's recovery decision, as text`);
   if (doc.notes !== undefined && typeof doc.notes !== "string") errors.push(`${where}: notes is text`);
   if (typeof doc.productionReady !== "boolean") errors.push(`${where}: productionReady is a boolean`);
@@ -498,8 +503,11 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
     try {
       const r = parseRelease(text, name);
       releases.set(name, r);
+      // A release pinned to templateSha is a record: its steps were checked against the template and the CLIs at that
+      // commit, so a later template or CLI change does not reopen it. An unpinned release is the one being prepared.
+      if (r.templateSha !== undefined) continue;
       problems.push(...checkAddOnly(template, r));
-      problems.push(...commandProblems(r.steps, model, root).filter((p) => !template.steps.some((s) => p.startsWith(`${s.id}:`)) || true));
+      problems.push(...commandProblems(r.steps, model, root));
     } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   }
   if (releases.size === 0) problems.push(`${QA_DIR}/releases/ holds no release runbook`);

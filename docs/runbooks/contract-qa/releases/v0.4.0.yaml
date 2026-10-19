@@ -5,6 +5,7 @@
 # docs/runbooks/contract-qa/README.md and docs/operations/contract-release-runbooks.md.
 release: v0.4.0
 template: contract-qa
+templateSha: e362df0c0ad270cfc859dbc1df22140be5419278
 productionReady: false
 notes: |
   Identity. The contracts line is v0.4.0. Its tags so far: release/v0.4.0-base (Deploy 1, 9a768bb9) and

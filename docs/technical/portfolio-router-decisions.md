@@ -17,6 +17,8 @@
 > router never names the gateway. Read §3.5 and the §4 "router + gateway
 > registration" row that way: the gateway registers the router as a
 > destination in the gateway system's own deploy run.
+>
+> **Note 2026-10-19 (rmpc scope).** §3.5, the router-destination gateway extension and `rmpc deposit --destination router` are deprecated (owner decision 2026-10-19: `rmpc`'s only on-chain write is an agent deposit into a single vault through the gateway; the gateway has no withdrawal or Portfolio Router path, and `rmpc` has no `withdraw`, `withdraw-router` or `receipt submit`).
 
 ---
 

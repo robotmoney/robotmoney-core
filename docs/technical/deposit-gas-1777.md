@@ -1,5 +1,7 @@
 # Deposit gas floors (core 1777)
 
+> **Note 2026-10-19 (rmpc scope).** The `rmpc deposit --destination <router>` and gateway router floors below describe code that the design deprecates (owner decision 2026-10-19: `rmpc`'s only on-chain write is an agent deposit into a single vault through the gateway; the gateway has no withdrawal or Portfolio Router path, and `rmpc` has no `withdraw`, `withdraw-router` or `receipt submit`).
+
 Companion to `docs/technical/redeem-gas-1482.md`. That document explains why each entrypoint checks one gas floor at entry. This one lists the deposit floors that integrators and the dapp must meet.
 
 ## Minimums

@@ -17,6 +17,8 @@ A release file also holds its `decisions:` (owner decisions, open or decided), i
 
 The next release adds its own file. It never edits the template steps. The validator refuses a release file that drops, edits or reorders a template step.
 
+The template itself can change. When a release is finished, its file pins `templateSha`, the full commit its template steps were copied from. A pinned release is a record: the validator no longer checks it against the current template or the current CLIs. Only an unpinned release, the one being prepared, must match the current template.
+
 ## Targets
 
 The environment is chosen at run time with `--target twin|rehearsal|production`. There are no per-environment files. Only parameters differ. A step that exists for one environment says so with `onlyFor`.

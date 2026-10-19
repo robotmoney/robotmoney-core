@@ -1,5 +1,20 @@
 # Investment Committee — v0 Feature Proposal
 
+> **Superseded for the on-chain committee (owner decision 2026-10-19).**
+> `InvestmentCommitteePolicy` is deleted. There is no on-chain committee
+> registration, no on-chain tilt and no voting of any kind. The vaults system's
+> only rebalancing input is the consensus recommendation receipt: a submitter
+> holding `RECEIPT_SUBMITTER_ROLE` on `ConsensusRecommendationReceipt` (granted
+> by `ADMIN_ROLE`, the Safe through the timelock) records it with
+> `recordReceipt(receiptId, payloadDigest, payloadUri)`, and the Safe applies
+> it with `RouterGovernance.applyReceipt` or sets default weights with
+> `setDefaultWeights`. The receipt is still built off-chain from the analysts'
+> Ed25519 signatures. The receipt material below (payload, canonicalization,
+> signatures, anchoring, the cross-repo release process) stays current. Every
+> section about committee agents, votes, tilts, the regime feed, the committee
+> dapp surfaces or `rmpc committee vote-submit` is history. The canonical
+> design is `docs/architecture.md` §2.4, §4.8 and §4.9.
+
 > Status: **Implemented on a local devnet; not publicly deployed.** The
 > `InvestmentCommitteePolicy` contract and its gateway/indexer wiring are
 > shipped (`issue #1044`, `docs/architecture.md` §2.4, §4.8, §5.1, §5.4,

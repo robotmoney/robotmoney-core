@@ -66,8 +66,8 @@ gateway_runtime_hash  = "0x00000000000000000000000000000000000000000000000000000
 # Required once the gateway is an ERC-1967 proxy (ADR-0014; the Twin 918453 and every
 # release from this tree). Leave it out for a direct (pre-proxy) gateway: rmpc refuses it there.
 # gateway_implementation_hashes = ["0x<keccak256 of the implementation's code>"]
-# Required once the vault (or the router) is a proxy too: every write checks the logic behind
-# each vault and router it reaches (issue 1810).
+# Required once the vault is a proxy too: the deposit checks the logic behind
+# the vault it reaches (issue 1810).
 # proxy_implementation_hashes = ["0x<keccak256 of the vault implementation's code>"]
 max_fee_per_gas_cap   = 100000000000
 

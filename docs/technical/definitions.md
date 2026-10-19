@@ -9,21 +9,24 @@ uses one of these terms, this file is the canonical meaning.
 The vaults system is the Robot Money treasury product. It holds the
 vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), their adapters, the vault
 registry, the Portfolio Router and `RouterGovernance`. Its rebalancing
-input is the Investment Committee: `InvestmentCommitteePolicy` (agent
-registration and signed tilts) and `ConsensusRecommendationReceipt` (the
-recorded consensus receipt). The Safe multisig, through the
-TimelockController, governs it.
+input is the consensus recommendation receipt, recorded on
+`ConsensusRecommendationReceipt` by a submitter holding
+`RECEIPT_SUBMITTER_ROLE`. The Investment Committee's analysts sign the receipt
+off-chain. The Safe multisig, through the TimelockController, governs it.
 
-Human wallets and committee agents call the vaults system directly. The
+Human wallets and the receipt submitter call the vaults system directly. The
 vaults system never depends on the rmpc gateway system. It is deployed in
 its own run and tested on its own.
 
 ## rmpc Gateway System
 
-The rmpc gateway system is the agent permission and safety layer and its
-client: the Agent Permissions Gateway and the `rmpc` client. It is a
-client of the vaults system. It calls the same public vault and router
-surfaces a human wallet uses. It is deployed after the vaults system, in
+The rmpc gateway system is `rmpc` and the Agent Permissions Gateway it
+needs (owner decision, 2026-10-19). `rmpc` is an agentic cryptographic
+signer for end users. Its uses are off-chain: signing, keystores, the
+committee-identity Ed25519 signer, config export, and reads. Its one
+on-chain write is an agent deposit into a single vault through the
+gateway. The system is a client of the vaults system. It calls the same
+public vault deposit surface a human wallet uses. It is deployed after the vaults system, in
 its own run, and tested on its own.
 
 ## Vault
@@ -168,9 +171,8 @@ Router-weight governance does not control:
 ## Agent Policy
 
 An agent policy is the depositor-owned permission set for an autonomous
-agent. It defines what the agent can do, including spend caps, expiry,
-share receiver, withdrawal recipient, and allowed destinations
-(individual vaults and/or the Portfolio Router path).
+agent. It bounds the agent's one on-chain action, a deposit into a
+vault: spend caps, expiry, share receiver, and allowed vaults.
 
 The depositor who authorizes the agent owns the policy. The Robot Money
 team does not manage user agent policies at runtime.
@@ -181,22 +183,18 @@ The Agent Permissions Gateway is the on-chain permission and safety
 layer for autonomous-agent writes.
 
 It is not a vault, not the Portfolio Router, and not a vault adapter. It
-sits between agent keys and product write surfaces, enforces the
-depositor-owned agent policy, and forwards only allowed actions to a
-vault or the Portfolio Router.
+holds the depositor's authorization and policy
+(`commitAuthorization`/`revealAuthorization`, `setPolicy`, `revokeAgent`,
+`transferAgentOwnership`) and performs one action: the agent deposit.
+It enforces the policy and forwards accepted USDC into an allowed vault,
+with vault shares minted to the policy-configured share receiver.
 
-For deposits, the gateway enforces policy and routes accepted USDC into
-an allowed vault or the Portfolio Router, with vault receipts minted to
-the policy-configured share receiver.
+The gateway has no withdrawal path and no Portfolio Router path. The
+depositor withdraws or redeems directly on the vault.
 
-For withdrawals, the gateway is the agent-callable redemption spender.
-It enforces policy, verifies receipt allowance and balance, and sends
-withdrawn assets only to the policy-configured withdrawal recipient.
-
-Agents cannot use the gateway to choose their own share receiver,
-choose their own withdrawal recipient, raise caps, expand destinations,
-change vault mandates, alter router weights, add adapters, or bypass a
-disabled vault or router path.
+Agents cannot use the gateway to choose their own share receiver, raise
+caps, expand destinations, change vault mandates, alter router weights,
+add adapters, or bypass a disabled vault.
 
 The gateway belongs to the rmpc gateway system. It is not part of the
-vaults system. Committee writes do not go through it.
+vaults system. Receipt writes do not go through it.

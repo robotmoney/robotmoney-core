@@ -1,5 +1,7 @@
 # Redeem out-of-gas at the node estimate (core 1482)
 
+> **Note 2026-10-19 (rmpc scope).** The gateway `withdraw` and `withdrawFromRouter` measurements below describe code that the design deprecates (owner decision 2026-10-19: `rmpc`'s only on-chain write is an agent deposit into a single vault through the gateway; the gateway has no withdrawal or Portfolio Router path, and `rmpc` has no `withdraw`, `withdraw-router` or `receipt submit`).
+
 ## Status
 - Root cause: PROVEN on a Base mainnet fork (read-only RPC, in-process, no transaction sent).
 - The first guard (PR 1505) did not fix it. It changed the failure from an empty revert to a typed `InsufficientGas`, but the transaction still failed at the node estimate.

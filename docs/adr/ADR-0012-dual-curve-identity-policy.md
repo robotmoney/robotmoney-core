@@ -1,6 +1,7 @@
 # ADR-0012: Ed25519 is the default identity algorithm; secp256k1 is confined to the EVM boundary; one keystore primitive serves both curves
 
 - **Status:** Accepted
+- **Amendment 2026-10-19:** The on-chain Investment Committee and `rmpc committee vote-submit` are deleted (owner decision 2026-10-19). The Ed25519 committee identity and its off-chain receipt signatures are unchanged. The mentions of `vote-submit` below are history.
 - **Date:** 2026-07-23
 - **Deciders:** Product owner
 - **Related:**

@@ -60,7 +60,7 @@ events, and account positions.
 
 **Two systems (owner decision 2026-10-19).** Everything this ADR adds reads the
 vaults system: the vaults, `VaultRegistry`, `PortfolioRouter`,
-`RouterGovernance`, and the committee and receipt contracts that feed
+`RouterGovernance`, and the consensus receipt contract that feeds
 rebalancing. The rmpc gateway system (`RobotMoneyGateway`) is a separate
 system with its own tables (`agent_deposits`, `agent_policies`). The gateway
 depends on the vaults system, never the reverse. So the vault, router and

@@ -1,5 +1,7 @@
 # ADR — Security hardening seam map
 
+> **Note 2026-10-19 (rmpc scope).** The gateway withdrawal seams and `rmpc withdraw` below are deprecated (owner decision 2026-10-19: `rmpc`'s only on-chain write is an agent deposit into a single vault through the gateway; the gateway has no withdrawal or Portfolio Router path, and `rmpc` has no `withdraw`, `withdraw-router` or `receipt submit`).
+>
 > Scope: dev-scout report for issue #434, covering the Security hardening
 > phase in `Plan tracking issue #109`. This report is documentation only:
 > no allowlist, eligibility, unwind, dapp, or signer behaviour changes are

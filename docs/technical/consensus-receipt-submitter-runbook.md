@@ -4,14 +4,15 @@ Canonical: `docs/architecture.md` §4.9 — Consensus Recommendation Receipt Con
 Canonical: `docs/product/20260623-product-proposal-investment-committee-v0.md` §2.1
 Implements: issue #1247 tasks 4.11, 4.12, 4.13 and acceptance criteria 7, 8
 
-Investment Committee signals are advisory only. Consensus receipts are caller bound and ADMIN released; receipts are the only rebalance input, applied by the Safe through the timelock.
+The Investment Committee's only on-chain output is the consensus receipt. Consensus receipts are caller bound and ADMIN released; receipts are the only rebalance input, applied by the Safe through the timelock.
 
-**System boundary (owner decision 2026-10-19).** The receipt contract and the
-IC policy belong to the vaults system. The rmpc gateway system
-(`RobotMoneyGateway` and `rmpc`) is a separate system and a client of the
-vaults system. The vaults system never depends on it. A committee member
-is registered on `InvestmentCommitteePolicy`. The submitter writes to
-`ConsensusRecommendationReceipt` directly. Rebalancing works with no gateway
+**System boundary (owner decisions 2026-10-19).** The receipt contract
+belongs to the vaults system. The rmpc gateway system (`RobotMoneyGateway`
+and `rmpc`) is a separate system and a client of the vaults system. The
+vaults system never depends on it. There is no `InvestmentCommitteePolicy`
+and no on-chain committee membership. The submitter holds
+`RECEIPT_SUBMITTER_ROLE` on `ConsensusRecommendationReceipt` and writes to it
+directly. Rebalancing works with no gateway
 deployed. The deployed release (v0.5.0) still records through the gateway.
 Operators run the deployed-release procedure in §1 on it. The system split
 review records where the code differs (`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
@@ -37,11 +38,14 @@ registered genesis agents.
 
 The **submitter** is an account (an EOA in the original v0.1 design, a multisig Safe from issue 1750, see §1.1).
 
-**Target.** The submitter holds `COMMITTEE_AGENT_ROLE` on
-`InvestmentCommitteePolicy`. It calls
-`ConsensusRecommendationReceipt.recordReceipt` directly. The receipt contract
-checks that role on the IC policy. No gateway role and no gateway call is part
-of the path.
+**Target.** The submitter holds `RECEIPT_SUBMITTER_ROLE` on
+`ConsensusRecommendationReceipt`. `ADMIN_ROLE` on the receipt contract, held by
+the timelock, grants it: the governing Safe schedules one timelock call,
+`grantRole(RECEIPT_SUBMITTER_ROLE, submitter)` (govern row
+`register-submitter`). The submitter calls
+`recordReceipt(receiptId, payloadDigest, payloadUri)` directly. The contract
+reverts `SubmitterNotAllowlisted()` for any other caller and stores the caller
+as the submitter. No gateway role and no gateway call is part of the path.
 
 ### Deployed release: the submitter records through the gateway
 
@@ -94,7 +98,8 @@ submitter can and cannot do holds unchanged for a contract account: the contract
 
 - **What the tooling pins** (`publish-contracts/src/submitter-safe.ts`): the canonical SafeProxy 1.4.1 code hash, the SafeL2 singleton in slot 0, `VERSION` 1.4.1, threshold 2 or more,
   no module, no guard, the canonical fallback handler. It is never the governing Safe, the timelock, admin (= the deployer), the pauser or the emergency address.
-- **Register it:** `govern --row register-committee --submitter 0x<Safe>`. The checks run before the timelock round is scheduled.
+- **Register it (target):** `govern --row register-submitter --submitter 0x<Safe>` schedules one timelock call, `ConsensusRecommendationReceipt.grantRole(RECEIPT_SUBMITTER_ROLE, safe)`. The checks run before the timelock round is scheduled. Nothing runs on the gateway, so there is no private half and no public window to front-run.
+- **Register it (deployed release):** `govern --row register-committee --submitter 0x<Safe>`. The checks run before the timelock round is scheduled.
 - **Registration has no public window (QA plan v1 B6, security review CS-2).** The row works in two halves.
   - **Private half, first.** The submitter Safe authorizes itself on the gateway in three Safe transactions. Its owners sign with `--owner-signer` and `--signer` pays the gas.
     1. `commitAuthorization(keccak256(abi.encode(safe, safe, salt)))` with a random salt. The commit does not name the agent.
@@ -104,7 +109,7 @@ submitter can and cannot do holds unchanged for a contract account: the contract
   - **Why the order matters.** The old batch scheduled `authorizeAgent(safe)` in public for the whole delay. A squatter could commit and reveal an authorization for the published address first. The batch then reverted `AgentAlreadyOwned`, and the squatter could `revokeAgent` at will, because the gateway has no seize path. Two layers now close it. The gateway refuses a stranger's reveal for another address unless that address first committed its consent from its own account (issue 1791, `OwnerConsentMissing`), and for a Safe that takes a transaction its owners sign. The new batch also carries no first-time authorization, so nothing a stranger does can break it (`contracts/test/ConsensusReceiptSafeSubmitter.t.sol::test_publicRegisterBatchCannotBeFrontRun`).
   - **If the address is already owned.** The tool refuses with `GOVERN` and schedules nothing. Create a new submitter Safe and run the row with it. Against a gateway with the issue 1791 consent check a stranger cannot own a Safe's address at all. Against an older gateway a stranger could claim a published address in advance, such as the old governance Safe below, or win the one-block race between the commit and the reveal. The tool catches both before any timelock round is spent.
   - **A row that stops part-way resumes from the chain.** The agent owner shows which steps are done. A stored commitment is revealed while its 256-block window lasts. After that the tool commits again with a new salt.
-- **Record with it:** `record-receipt --submitter 0x<Safe> --signer <deployer> --owner-signer <owner> ...`. The verb proposes `consensusRecordReceipt` through the Safe, `threshold` owners
+- **Record with it:** `record-receipt --submitter 0x<Safe> --signer <deployer> --owner-signer <owner> ...`. The verb proposes `ConsensusRecommendationReceipt.recordReceipt` through the Safe (`RobotMoneyGateway.consensusRecordReceipt` on the deployed release), `threshold` owners
   sign, the deployer executes and pays the gas. It refuses fewer owner signers than the threshold, a Safe that differs from `--submitter`, and a Safe transaction without
   `ExecutionSuccess`. It reads the receipt back and requires the stored submitter to be the Safe.
 - **Plainly: the same three owner keys control BOTH Safes** (the governing Safe and the submitter Safe). Proposing and approving are separated by the multisig (two of three
@@ -131,7 +136,7 @@ Each item is a hard gate. None is satisfied by v0.1.
 | C-1 | Private key material lives in an **HSM or a cloud KMS** (non-exportable key, sign-only API). No plaintext key, no software keystore, no key in an env var or CI secret. | A software keystore's passphrase is recoverable from any host that ever ran the signer. |
 | C-2 | Signing is reachable only from a **dedicated submitter host or workload identity**, with a deny-by-default network egress allowlist covering the RPC endpoint and the swarm API only. | Limits the blast radius to one machine and makes exfiltration visible. |
 | C-3 | Every signature request is **logged with the calldata it signed** to an append-only store the submitter host cannot rewrite. | A compromise is only detectable if the tampered call is distinguishable from a legitimate one after the fact. |
-| C-4 | The submitter EOA holds **`COMMITTEE_AGENT_ROLE` and nothing else** (on the deployed release also the gateway `AGENT_ROLE` it needs to record, §1) — never `ADMIN_ROLE`, `DEPOSIT_PAUSER_ROLE`, or `DEFAULT_ADMIN_ROLE` on any contract. Verified after every deploy and every role change. | The contracts already enforce role separation (`AccessRoles`); this makes the check explicit at the operational layer too. |
+| C-4 | The submitter holds **`RECEIPT_SUBMITTER_ROLE` and nothing else** (on the deployed release, the gateway `AGENT_ROLE` and `COMMITTEE_AGENT_ROLE` it needs to record instead, §1) — never `ADMIN_ROLE`, `DEPOSIT_PAUSER_ROLE`, or `DEFAULT_ADMIN_ROLE` on any contract. Verified after every deploy and every role change. | The contracts already enforce role separation (`AccessRoles`); this makes the check explicit at the operational layer too. |
 | C-5 | The gas-funding wallet is **separate** from the submitter key and tops it up on a schedule, never the reverse. | The submitter should never hold a balance worth stealing on its own. |
 | C-6 | A **named on-call owner** and a tested rotation drill exist before the first mainnet submission. | An untested rotation procedure is not a rotation procedure. |
 
@@ -143,27 +148,24 @@ was ever material you could copy, it is a devnet key.
 
 ### 2.2 Devnet key (what exists today)
 
-For devnet, the submitter is an ordinary `rmpc` software keystore, loaded the
-same way every other `rmpc` write command loads one: the passphrase comes
-strictly from `$RMPC_KEYSTORE_PASSPHRASE`, never from stdin and never from a
-CLI flag. `rmpc receipt` (like `committee`) signs with a software keystore
-on every chain, Base mainnet included, after the production warning: a
-hardware wallet, HSM or KMS is optional, never required (owner decision
-2026-10-14, QA plan Decision D12; the old `require_production_grade_for_write`
-gate is gone). What keeps the single-key arrangement devnet-only is the role,
-not a signer refusal: on 8453 the submitter is the Safe, and an EOA without
-the submitter roles reverts.
+`rmpc` does not record receipts (owner decision 2026-10-19: `rmpc`'s one
+on-chain write is an agent deposit into a vault). A receipt is recorded only
+by the submitter Safe with publish-contracts `record-receipt` (§1.1).
+`rmpc receipt verify` stays: it is offline and needs no key. What keeps a
+single key out of the path is the role: an address without
+`RECEIPT_SUBMITTER_ROLE` reverts.
 
 ---
 
 ## 3. Rotation
 
 Rotation is **additive then subtractive**, and it needs no contract change
-because membership is registry state.
+because submitter authority is role state.
 
 1. Provision the new key per §2 and derive its address.
-2. Register the new address with `govern --row register-committee` (§1.1).
-   The deployed release routes registration through the gateway (§1). The
+2. Register the new address with `govern --row register-submitter` (§1.1):
+   one timelock call grants it `RECEIPT_SUBMITTER_ROLE`. On the deployed
+   release use `govern --row register-committee` instead. The deployed release routes registration through the gateway (§1). The
    new submitter first authorizes ITSELF in private, before anything is public:
    `gateway.commitAuthorization`, one block later `gateway.revealAuthorization`
    (its own agent, shares to itself), then
@@ -176,9 +178,11 @@ because membership is registry state.
    B6).
 3. Submit one receipt from the new key on a real session and confirm the
    indexer ingested it with `verified = true`.
-4. Revoke the old address: `InvestmentCommitteePolicy.revokeAgent` (an
-   `ADMIN_ROLE` call from the timelock). On the deployed release also call
-   `RobotMoneyGateway.revokeAgent` (§1).
+4. Revoke the old address:
+   `ConsensusRecommendationReceipt.revokeRole(RECEIPT_SUBMITTER_ROLE, old)` (an
+   `ADMIN_ROLE` call from the timelock). On the deployed release call
+   `InvestmentCommitteePolicy.revokeAgent` and `RobotMoneyGateway.revokeAgent`
+   instead (§1).
 5. Confirm on chain that the old address holds neither role.
 
 **Both keys are valid between steps 2 and 4.** That overlap is intentional — it
@@ -208,9 +212,10 @@ integrity of the public record.
 
 1. **Contain (minutes).** Disable the KMS signing grant for the key. This is
    the fastest kill switch and needs no chain transaction.
-2. **Revoke (one timelock cycle).** `InvestmentCommitteePolicy.revokeAgent`
-   to drop `COMMITTEE_AGENT_ROLE`. On the deployed release also call
-   `RobotMoneyGateway.revokeAgent` (§1). Until this lands, containment rests on step 1
+2. **Revoke (one timelock cycle).**
+   `ConsensusRecommendationReceipt.revokeRole(RECEIPT_SUBMITTER_ROLE, submitter)`.
+   On the deployed release call `InvestmentCommitteePolicy.revokeAgent` and
+   `RobotMoneyGateway.revokeAgent` instead (§1). Until this lands, containment rests on step 1
    alone.
 3. **Freeze publication.** Stop the swarm worker from producing new receipts so
    a legitimate submission does not race the incident.
@@ -261,8 +266,9 @@ a session that should have produced a receipt and did not.
 
 ### 5.2 Submission monitoring
 
-`rmpc` verifies **before** it submits and refuses on failure (issue #1247
-AC4), so these are the states worth watching:
+The operator runs `rmpc receipt verify` **before** `record-receipt`, and
+`record-receipt --payload` recomputes the digest and the id before any signer
+exists (issue #1247 AC4), so these are the states worth watching:
 
 | State | Meaning | Action |
 |---|---|---|
@@ -346,8 +352,8 @@ refuses duplicates, so a retry either lands the same commitment or reverts with
 past a **verification** failure — that is a content problem, and retrying it
 would be an attempt to anchor bytes that failed their own check.
 
-`rmpc receipt submit` itself stays one-shot on purpose — one invocation, one
-broadcast, one exit code. The retry loop is a separate process so that the
+`record-receipt` itself stays one-shot on purpose — one invocation, one
+Safe execution, one exit code. The retry loop is a separate process so that the
 "did it actually land?" question is answered by reading the chain rather than by
 trusting the exit status of the command that may have timed out.
 

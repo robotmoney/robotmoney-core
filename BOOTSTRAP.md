@@ -124,8 +124,8 @@ There are two plugins:
 
 - **`robotmoney-user`** — depositor agent: vault/gateway reads, deposit, and self-check.
   Install this unless you are setting up an investment-committee (analyst) agent.
-- **`robotmoney-analyst`** — analyst agent: regime snapshot, governance reads, and
-  proposal/vote stubs. Install this when setting up an investment-committee agent.
+- **`robotmoney-analyst`** — analyst agent: regime snapshot and governance reads.
+  Install this when setting up an investment-committee agent.
 
 The blocks below install `robotmoney-user`. Replace every occurrence of
 `robotmoney-user` with `robotmoney-analyst` in all commands and paths if you are
@@ -260,7 +260,7 @@ usdc_address         = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"   # canonica
 vault_address        = "<VAULT from deployments/918453.json>"
 gateway_runtime_hash = "<gateway_runtime_hash from deployments/918453.json>"
 gateway_implementation_hashes = ["<IMPL_HASH>"]   # approved gateway implementation(s); add the next one before its upgrade executes
-proxy_implementation_hashes   = ["<VAULT_IMPL_HASH>"]   # approved vault (and router) implementation(s), the same way
+proxy_implementation_hashes   = ["<VAULT_IMPL_HASH>"]   # approved vault implementation(s), the same way
 max_fee_per_gas_cap  = 100000000000
 
 [signer]
@@ -280,9 +280,8 @@ the old one until it has executed, then drop the old one
 
 The vault is a proxy too. `VAULT_IMPL_HASH` is
 `cast keccak "$(cast code "$(cast implementation "$VAULT" --rpc-url "$RPC")" --rpc-url "$RPC")"`.
-A deposit, a withdraw and the router commands refuse with
-`ErrImplementationNotApproved` naming the vault or router until its
-implementation's code hash is in `proxy_implementation_hashes`. The smoke-test
+A deposit refuses with `ErrImplementationNotApproved` naming the vault until
+its implementation's code hash is in `proxy_implementation_hashes`. The smoke-test
 deploy output prints both keys (`gateway_implementation_hash`,
 `proxy_implementation_hashes`).
 
