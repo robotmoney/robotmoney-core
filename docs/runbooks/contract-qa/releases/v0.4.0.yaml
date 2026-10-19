@@ -114,7 +114,7 @@ scope:
   - {pr: 1863, what: "check the timelock pin before every proxy stage broadcasts; honest or backfilled pin for older run manifests", check: "P1.02-publish"}
   - {pr: 1862, what: "vault-rules startup check refuses emergency pause-all; verify's creation proof; a failure auto-pauses all vaults", check: "P9.51-verify-failure"}
   - {pr: 1860, what: "core-stack governance release and the Fusion release steps drove the refused release-receipt row", check: "P5.53-apply-receipt-schedule"}
-  - {pr: 1858, what: "Twin upgrade rehearsal follow-ups: one required-check policy for the lifecycle job, derived rehearsal freeze deadline", check: "P0.10-ci-green"}
+  - {pr: 1858, what: "Twin upgrade rehearsal follow-ups: one required-check policy for the lifecycle job, derived rehearsal freeze deadline", check: "P0.20-plan"}
   - {pr: 1857, what: "govern rows for freeze and governed upgrade, verify deadline warnings, fail-closed proxy pins", check: "P7.56-freeze-schedule"}
   - {pr: 1855, what: "watchdog never pages an upgrade executed from a constructor; gateway-admin writes when the gateway is unverified", none: "watchdog paging and dapp admin-write gating, covered by their CI unit tests; no run step observes a constructor upgrade"}
   - {pr: 1852, what: "upgradeability stage 3 follow-ups: late-watched proxy first upgrade paged, cached gateway check, proxy topics backfill", check: "P8.50-indexer-upgrade-state"}
@@ -129,7 +129,7 @@ scope:
   - {pr: 1836, what: "post-broadcast reads in the Safe tool and prove-control are read-after-write safe", check: "P1.02-publish"}
   - {pr: 1834, what: "--dry-run of an 8453 sheet at the safe stage", check: "P0.21-dry-run"}
   - {pr: 1832, what: "governed UUPS upgrades and the irreversible freeze for approved core contracts", check: "P2.50-proxy-labels"}
-  - {pr: 1830, what: "plan: deployment and governance consistent across the four vaults", check: "P2.02-vaults-paused"}
+  - {pr: 1830, what: "plan: deployment and governance consistent across the four vaults", check: "P2.01-verify-pre-govern"}
   - {pr: 1827, what: "the weight setter applies a consensus receipt in one call; RouterGovernance voting deleted", check: "P5.54-apply-receipt-execute"}
   - {pr: 1829, what: "apply-receipt verification no longer trusts the editable run manifest", check: "P5.58-receipt-applications-evidence"}
   - {pr: 1828, what: "evidence secret scan hash exemption tightened", check: "P10.02-secret-scan"}
@@ -154,7 +154,7 @@ scope:
   - {pr: 1794, what: "bump quinn-proto for the cargo-audit advisories", none: "dependency bump, covered by the audit CI jobs"}
   - {pr: 1774, what: "zero-TVL vaults get a new identical vault_snapshots row every tick", none: "explorer indexer tests"}
   - {pr: 1776, what: "docs: stage-deployment.md names manifests that do not exist", none: "docs only"}
-  - {pr: 1775, what: "indexer catch-up retry, backoff and chunking policy", check: "P8.04-indexer-lag"}
+  - {pr: 1775, what: "indexer catch-up retry, backoff and chunking policy", none: "indexer policy; client checks are not part of the rehearsal deploy runbook"}
   - {pr: 1772, what: "dapp vault detail share symbol", none: "dapp unit tests"}
   - {pr: 1771, what: "home page Depositors counts only gateway agent deposits", none: "explorer API tests"}
   - {pr: 1770, what: "the rmRWA issuer freeze-control disclosure shown on every speculative vault", none: "dapp unit tests"}
@@ -163,7 +163,6 @@ scope:
   - {pr: 1762, what: "root-cause the pending-tag Panic(0x11) on rmUSDC redeem", none: "forge tests only"}
   - {pr: 1757, what: "commit the reconstructed baseline frozen counts for 78c50cbd", none: "data for the previous deployment; the new sha has its own file, P0.11-frozen-counts"}
 steps:
-  # ── Phase 0, gate: nothing is sent. The same checks the 8453 plan job and every broadcasting run repeat. ──
   - id: "P0.01-runbook-valid"
     standing: ["4.1"]
     description: "The release runbook is the template plus additions, the sheet and target make sense, and a production run has no open owner decision"
@@ -184,16 +183,6 @@ steps:
     expectExit: 0
     receipts:
       - {"dir": "{runDir}", "pattern": "state", "required": true}
-    irreversible: false
-  - id: "P0.03-tools"
-    standing: ["4.2"]
-    description: "Every tool the run calls is installed"
-    host: "control"
-    phase: 0
-    cmds:
-      - ["bash", "-c", "command -v git bun forge cast jq curl python3 anvil > /dev/null"]
-    expectExit: 0
-    receipts: []
     irreversible: false
   - id: "P0.04-checkout"
     standing: ["4.1"]
@@ -240,42 +229,6 @@ steps:
       - {"dir": "{countsCheckout}/deployments/dependency-manifests/8453", "pattern": "{release}.json", "required": true}
     irreversible: false
     onlyFor: ["rehearsal", "production"]
-  - id: "P0.09-release-tag"
-    standing: ["3"]
-    description: "An annotated release tag of the sheet's kind points at the DEPLOY_SHA (the gate repeats this and checks the remote)"
-    host: "control"
-    phase: 0
-    cmds:
-      - ["bash", "-c", 'test "$(git cat-file -t "refs/tags/{releaseTag}")" = tag && test "$(git rev-list -n 1 "{releaseTag}")" = "{gateSha}"']
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    onlyFor: ["rehearsal", "production"]
-  - id: "P0.10-ci-green"
-    standing: ["3", "4.1"]
-    description: "Every required check-run is green at the DEPLOY_SHA, including core-stages-twin-upgrade-lifecycle"
-    host: "control"
-    phase: 0
-    cmds:
-      - ["bun", "scripts/ci/check-sha-green.ts", "{gateSha}", "--repo", "robotmoney/robotmoney-core"]
-    env:
-      GITHUB_TOKEN: "{env:GITHUB_TOKEN}"
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    onlyFor: ["rehearsal", "production"]
-  - id: "P0.11-frozen-counts"
-    standing: ["3"]
-    description: "The frozen per-stage counts for the DEPLOY_SHA are committed in the dev checkout the run reads them from"
-    host: "control"
-    phase: 0
-    cmds:
-      - ["git", "-C", "{countsCheckout}", "ls-files", "--error-unmatch", "deployments/frozen-counts/{gateSha}.json"]
-      - ["test", "-s", "{countsDir}/{gateSha}.json"]
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    onlyFor: ["rehearsal", "production"]
   - id: "P0.12-twin-fork"
     standing: ["9"]
     description: "The Twin chain (918453), a pinned lazy fork of Base, answers on the RPC the run uses"
@@ -306,18 +259,6 @@ steps:
     irreversible: false
     onlyFor: "twin"
     gateAbsent: "{runDir}/fragment.env"
-  - id: "P0.14-fragment"
-    standing: ["4.10"]
-    description: "The public addresses of the reused deployer, pauser, emergency key and Safe owners, and a new SAFE_SALT_NONCE, are in the sheet fragment"
-    host: "control"
-    phase: 0
-    cmds:
-      - ["test", "-s", "{runDir}/fragment.env"]
-    expectExit: 0
-    receipts:
-      - {"dir": "{runDir}", "pattern": "fragment.env", "required": true}
-    irreversible: false
-    onlyFor: "rehearsal"
   - id: "P0.15-sheet-merge"
     standing: ["4.3"]
     description: "The run sheet is the environment's committed sheet with the fragment's lines, through the real sheet parser"
@@ -343,18 +284,6 @@ steps:
     onlyFor: "twin"
     added: "v0.4.0"
 
-  - id: "P0.16-sheet-copy"
-    standing: ["4.3"]
-    description: "The reviewed frozen production sheet is the run sheet, byte for byte"
-    host: "control"
-    phase: 0
-    cmds:
-      - ["cp", "{sheetTemplate}", "{sheet}"]
-    expectExit: 0
-    receipts:
-      - {"dir": "{runDir}", "pattern": "sheet.env", "required": true}
-    irreversible: false
-    onlyFor: "production"
   - id: "P0.17-check-sheet"
     standing: ["4.2", "4.10"]
     description: "The sheet agrees with the environment: chain id, deployment kind, timelock delay band, 1 USDC seed, caps, and as many owner signer specs as Safe owners"
@@ -391,12 +320,12 @@ steps:
     onlyFor: "twin"
   - id: "P0.19-funding"
     standing: ["4.2"]
-    description: "The deployer holds 0.015 ETH and 5 USDC (1 seed plus 4 test deposits). The gas the run burns is about 0.003 ETH, but a send must hold its gas limit times its fee bid up front: rmpc bids at least 1 gwei of tip, so its router deposit (10,750,000 gas for four legs) needs about 0.011 ETH in the account (Deploy 3 P6.56)"
+    description: "The deployer holds 0.005 ETH and 5 USDC (1 seed plus 4 test deposits). The gas the run burns is about 0.003 ETH; every send goes through cast at the network fee"
     host: "control"
     phase: 0
     cmds:
       - ["bash", "-c", 'cast balance "{sheet:ADMIN_ADDRESS}" > {runDir}/state/deployer-eth']
-      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-eth}", "15000000000000000"]
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-eth}", "5000000000000000"]
       - ["bash", "-c", 'cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/deployer-usdc']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-usdc}", "5000000"]
     env:
@@ -435,13 +364,13 @@ steps:
     maxMinutes: 60
 
   # ── Phase 1, publish: stages 0 to 11. The first send of the run. ──
-  - id: "P1.01-go"
+  - id: "P1.50-record-go"
     standing: ["4.3"]
-    description: "The operator's recorded go for this run: the sha, the environment and the sheet hash they approved"
+    description: "The publish go is written by the run: the sha, the environment and the hash of the merged sheet it proceeds with. Starting the run is the go"
     host: "control"
     phase: 1
     cmds:
-      - ["test", "-s", "{runDir}/go/publish.json"]
+      - ["bun", "scripts/runbook/run-record.ts", "go", "--kind", "publish", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}/go", "pattern": "publish.json", "required": true}
@@ -461,19 +390,8 @@ steps:
       - {"dir": "{evidenceDir}", "pattern": "publish-run.json", "required": true}
       - {"dir": "{manifestDir}", "pattern": "timelock.json", "required": true}
     irreversible: true
-    notBefore: {"afterStep": "P1.01-go", "hours": 0}
+    notBefore: {"afterStep": "P1.50-record-go", "hours": 0}
     maxMinutes: 180
-  - id: "P1.03-stages-done"
-    standing: ["4.3"]
-    description: "The run manifest shows every stage done, prove-control included, and the handover block recorded"
-    host: "control"
-    phase: 1
-    cmds:
-      - ["jq", "-e", '([.stages | to_entries[] | select(.value.status != "done")] | length == 0) and (.stages | has("prove-control")) and (.stages | has("timelock")) and (.stages | has("safe"))', "{evidenceDir}/publish-run.json"]
-      - ["bash", "-c", 'test "$(ls {manifestDir}/*.json | wc -l)" -ge 13']
-    expectExit: 0
-    receipts: []
-    irreversible: false
   - id: "P1.04-twin-counts"
     standing: ["3"]
     description: "The Twin run measured and wrote the per-stage counts for the sha"
@@ -502,29 +420,6 @@ steps:
       - {"dir": "{evidenceDir}", "pattern": "isomorphism-{chainId}.json", "required": true}
     irreversible: false
     maxMinutes: 60
-  - id: "P2.02-vaults-paused"
-    standing: ["4.3"]
-    description: "All four vaults read depositsPaused true before govern"
-    host: "control"
-    phase: 2
-    cmds:
-      - ["bash", "-c", 'for v in "{m:vault.vault}" "{m:protocol-asset-vault.vault}" "{m:agent-token-vault.vault}" "{m:rwa-basket-vault.vault}"; do test "$(cast call "$v" "depositsPaused()(bool)")" = true || exit 1; done']
-    env:
-      ETH_RPC_URL: "{rpcUrl}"
-    expectExit: 0
-    receipts: []
-    irreversible: false
-  - id: "P2.03-label-parity"
-    standing: ["4.3"]
-    description: "The verifier labels of this run equal the committed mainnet label set: nothing was added or dropped silently"
-    host: "control"
-    phase: 2
-    cmds:
-      - ["bun", "scripts/stage/core-stack.ts", "parity", "labels", "--mainnet", "publish-contracts/tests/fixtures/verifier-labels.txt", "--stage-labels", "{journal:P2.01-verify-pre-govern}"]
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    triage: true
   - id: "P2.50-proxy-labels"
     standing: ["4.12"]
     description: "Every governed contract is the build's ERC-1967 proxy with no admin and no beacon, names the manifest's implementation, links the build's libraries, names the deployed timelock as its only upgrade authority, is initialized once, and agrees with the release mode"
@@ -712,18 +607,6 @@ steps:
     receipts: []
     irreversible: false
     maxMinutes: 60
-  - id: "P4.02-vaults-open"
-    standing: ["4.3"]
-    description: "All four vaults read depositsPaused false on the chain"
-    host: "control"
-    phase: 4
-    cmds:
-      - ["bash", "-c", 'for v in "{m:vault.vault}" "{m:protocol-asset-vault.vault}" "{m:agent-token-vault.vault}" "{m:rwa-basket-vault.vault}"; do test "$(cast call "$v" "depositsPaused()(bool)")" = false || exit 1; done']
-    env:
-      ETH_RPC_URL: "{rpcUrl}"
-    expectExit: 0
-    receipts: []
-    irreversible: false
   - id: "P4.50-unwind-guard-labels"
     standing: ["4.9"]
     description: "The post-govern verify requires the emergency unwind guard on every active asset of every open basket"
@@ -771,11 +654,10 @@ steps:
   # ── Phase 5, receipt: a REAL consensus receipt anchored through the gateway by the registered submitter Safe. ──
   - id: "P5.01-receipt-offline"
     standing: ["4.10"]
-    description: "rmpc verifies every analyst signature of the receipt offline; the receipt id and the payload digest come from the one shared definition, never a plain keccak256 of the file"
+    description: "The receipt id and the payload digest come from the one shared definition, never a plain keccak256 of the file"
     host: "control"
     phase: 5
     cmds:
-      - ["target/debug/rmpc", "receipt", "-c", "{rmpcConfig}", "verify", "--receipt-file", "{receiptFile}"]
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts receipt-id {receiptFile} > {runDir}/state/receipt-id"]
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts receipt-digest {receiptFile} > {runDir}/state/receipt-digest"]
     expectExit: 0
@@ -798,17 +680,6 @@ steps:
     irreversible: true
     onlyFor: ["twin", "rehearsal"]
     notBefore: {"afterStep": "P4.01-verify-post-govern", "hours": 0}
-  - id: "P5.03-receipt-recorded"
-    standing: ["4.10"]
-    description: "The run manifest holds the recorded receipt with the submitter address and a transaction, and no key"
-    host: "control"
-    phase: 5
-    cmds:
-      - ["jq", "-e", '(.recorded_receipts | length) >= 1 and (.recorded_receipts[0] | has("tx") or has("transaction") or has("tx_hash"))', "{evidenceDir}/publish-run.json"]
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    onlyFor: ["twin", "rehearsal"]
   - id: "P5.50-committee-agent-role"
     standing: ["4.10"]
     description: "The registered submitter Safe holds COMMITTEE_AGENT_ROLE on the IC policy (a read-only rmpc preflight; a committee signal binds the caller to the signing agent, so the Safe cannot post one through rmpc)"
@@ -953,16 +824,6 @@ steps:
     added: "v0.4.0"
 
   # ── Phase 6, deposits: the standing rule is 1 USDC per deposit, from the deployer, after the handover. ──
-  - id: "P6.01-one-usdc-rule"
-    standing: ["4.3"]
-    description: "Every test deposit is 1 USDC (1000000 units) and below every cap; the amount is a literal in the commands below"
-    host: "control"
-    phase: 6
-    cmds:
-      - ["bun", "scripts/runbook/validate-contract-qa.ts", "--check-sheet", "{sheet}", "--target", "{target}", "--owner-signers", "{ownerSignerCount}"]
-    expectExit: 0
-    receipts: []
-    irreversible: false
   - id: "P6.10-deposit-rmusdc"
     standing: ["4.3", "4.4"]
     description: "1 USDC into rmUSDC at the 2,500,000 gas limit; the shares equal previewDeposit within 0.5 percent"
@@ -1455,67 +1316,6 @@ steps:
     added: "v0.4.0"
 
   # ── Phase 8, observability: what the stack shows must equal the chain. ──
-  - id: "P8.01-rmpc-check"
-    standing: ["4.4"]
-    description: "rmpc and rmpc-keystore-import are built from this checkout and keep their exit-code contracts"
-    host: "control"
-    phase: 8
-    cmds:
-      - ["bun", "scripts/stage/core-stack.ts", "rmpc", "check"]
-    expectExit: 0
-    receipts: []
-    irreversible: false
-  - id: "P8.02-dapp-up"
-    standing: ["4.10"]
-    description: "The read-only dapp, explorer indexer and explorer API run against the deployed contracts from a copy of the manifests; the stack holds no key and sends nothing"
-    host: "stage"
-    phase: 8
-    cmds:
-      - ["cp", "-r", "{manifestDir}", "{runDir}/manifests-copy"]
-      - ["bash", "-c", "jq -r .firstBlock {evidenceDir}/publish-run.json > {runDir}/state/first-block"]
-      - ["bun", "scripts/stage/core-stack.ts", "dapp", "up", "--chain", "8453", "--rpc", "{rpcUrl}", "--logs-rpc", "{env:BASE_LOGS_RPC_URL}", "--manifests", "{runDir}/manifests-copy", "--start-block", "{state:first-block}"]
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    onlyFor: ["rehearsal", "production"]
-    maxMinutes: 60
-    writes: ["first-block"]
-  - id: "P8.03-dapp-status"
-    standing: ["4.10"]
-    description: "The explorer API and the dapp answer on loopback"
-    host: "stage"
-    phase: 8
-    cmds:
-      - ["bun", "scripts/stage/core-stack.ts", "dapp", "status", "--chain", "8453"]
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    onlyFor: ["rehearsal", "production"]
-  - id: "P8.04-indexer-lag"
-    standing: ["4.4"]
-    description: "The indexer is at most 30 blocks behind the chain head and reports no error"
-    host: "stage"
-    phase: 8
-    cmds:
-      - ["bash", "-c", "curl -sf http://127.0.0.1:18547/health > {runDir}/state/explorer-health.json"]
-      - ["jq", "-e", "(.chain_head_block - .last_indexed_block) <= 30", "{runDir}/state/explorer-health.json"]
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    onlyFor: ["rehearsal", "production"]
-    triage: true
-    writes: ["explorer-health.json"]
-  - id: "P8.05-dapp-served"
-    standing: ["4.10"]
-    description: "The served dapp is the mainnet class: the baked bundle class is mainnet and no served config can change it"
-    host: "stage"
-    phase: 8
-    cmds:
-      - ["bun", "scripts/stage/dapp-served-check.ts", "http://127.0.0.1:15173"]
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    onlyFor: ["rehearsal", "production"]
   - id: "P8.50-indexer-upgrade-state"
     standing: ["4.12"]
     description: "The indexer reports each proxied contract's upgrade_state as the chain says: frozen when every proxy reads frozen, upgradeable otherwise"
@@ -1558,19 +1358,6 @@ steps:
     expectExit: 0
     receipts:
       - {"dir": "{evidenceDir}", "pattern": "rollout-report-{chainId}.json", "required": true}
-    irreversible: false
-    onlyFor: ["twin", "rehearsal"]
-  - id: "P9.02-vaults-paused"
-    standing: ["4.6"]
-    description: "All four vaults read depositsPaused true"
-    host: "control"
-    phase: 9
-    cmds:
-      - ["bash", "-c", 'for v in "{m:vault.vault}" "{m:protocol-asset-vault.vault}" "{m:agent-token-vault.vault}" "{m:rwa-basket-vault.vault}"; do test "$(cast call "$v" "depositsPaused()(bool)")" = true || exit 1; done']
-    env:
-      ETH_RPC_URL: "{rpcUrl}"
-    expectExit: 0
-    receipts: []
     irreversible: false
     onlyFor: ["twin", "rehearsal"]
   - id: "P9.03-resume-schedule"
@@ -1760,52 +1547,28 @@ steps:
     added: "v0.4.0"
 
 
-  - id: "P10.03-rollout-report"
+  - id: "P10.51-write-rollout-report"
     standing: ["4.7"]
-    description: "The rollout report exists: sha, network, preflight and postflight results, issues, the tag, operator sign-off"
+    description: "The rollout report is written from the run: sha, network, sheet hash, tag, every step's journal, every evidence file's sha256; a failed step, a journaled step with no result and a vault still paused at report time are issues, a pause report from a drill is listed only"
     host: "control"
     phase: 10
     cmds:
-      - ["test", "-s", "{runDir}/rollout-report.md"]
+      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--step", "P10.51-write-rollout-report"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}
     irreversible: false
-  - id: "P10.04-signoff"
+  - id: "P10.52-record-signoff"
     standing: ["4.4"]
-    description: "The operator's recorded sign-off on the postflight"
+    description: "The sign-off is written by the run, and only when the report lists no issue and matches the publish go"
     host: "control"
     phase: 10
     cmds:
-      - ["test", "-s", "{runDir}/go/signoff.json"]
+      - ["bun", "scripts/runbook/run-record.ts", "signoff", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}/go", "pattern": "signoff.json", "required": true}
     irreversible: false
-  - id: "P10.05-version-tag"
-    standing: ["3"]
-    description: "Only after a clean postflight: the version tag is cut at the exact commit that was deployed and verified, and pushed"
-    host: "control"
-    phase: 10
-    cmds:
-      - ["git", "tag", "-a", "{versionTag}", "-m", "contracts {versionTag} deployed and verified at {coreSha}", "{coreSha}"]
-      - ["git", "push", "origin", "{versionTag}"]
-    expectExit: 0
-    receipts: []
-    irreversible: true
-    onlyFor: "production"
-    notBefore: {"afterStep": "P10.04-signoff", "hours": 0}
-  - id: "P10.06-dapp-down"
-    standing: ["4.10"]
-    description: "The read-only mainnet dapp stack is removed"
-    host: "stage"
-    phase: 10
-    cmds:
-      - ["bun", "scripts/stage/core-stack.ts", "dapp", "down", "--chain", "8453"]
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    onlyFor: ["rehearsal", "production"]
   - id: "P10.07-twin-teardown"
     standing: ["9"]
     description: "The Twin fork stops and the throwaway keystores and the passphrase file are destroyed"
@@ -1819,3 +1582,5 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: "twin"
+
+  # ── Phase 0, gate: nothing is sent. The same checks the 8453 plan job and every broadcasting run repeat. ──

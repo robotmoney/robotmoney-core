@@ -30,18 +30,18 @@ test("the committed template and release runbooks are clean", () => {
 });
 
 test("a release that drops a template step fails", () => {
-  const p = problemsWith(RELEASE, (t) => t.replace(stepBlock(t, "P0.03-tools"), ""));
+  const p = problemsWith(RELEASE, (t) => t.replace(stepBlock(t, "P0.04-checkout"), ""));
   expect(p.length).toBeGreaterThan(0);
-  expect(p.join("\n")).toContain("P0.03-tools");
+  expect(p.join("\n")).toContain("P0.04-checkout");
 });
 
 test("a release that edits a template step fails", () => {
-  const p = problemsWith(RELEASE, (t) => t.replace(stepBlock(t, "P0.03-tools"), (b) => b.replace("Every tool the run calls is installed", "Some tools")));
-  expect(p.join("\n")).toContain("P0.03-tools");
+  const p = problemsWith(RELEASE, (t) => t.replace(stepBlock(t, "P0.04-checkout"), (b) => b.replace("The core checkout is clean", "The core checkout")));
+  expect(p.join("\n")).toContain("P0.04-checkout");
 });
 
 test("a sheet value read before the run sheet is written fails", () => {
-  const p = problemsWith("template.yaml", (t) => t.replace(stepBlock(t, "P0.03-tools"), (b) => `${b}    env:\n      X: "{sheet:TIMELOCK_MIN_DELAY}"\n`));
+  const p = problemsWith("template.yaml", (t) => t.replace(stepBlock(t, "P0.04-checkout"), (b) => `${b}    env:\n      X: "{sheet:TIMELOCK_MIN_DELAY}"\n`));
   expect(p.join("\n")).toContain("is read before any step writes the run sheet");
 });
 

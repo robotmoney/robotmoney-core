@@ -1,6 +1,6 @@
 # Contract QA runbook
 
-One runbook checks every deploy, governance and deposit step of a contract release. It runs in three environments. The policy is `docs/operations/contract-release-runbooks.md` (4.4 and 4.12). The format follows the frontend release runbooks.
+The rehearsal deploy runbook deploys a contract release on a network, governs it and proves it works. It runs in three environments. The policy is `docs/operations/contract-release-runbooks.md` (4.4 and 4.12). The format follows the frontend release runbooks.
 
 ## Files
 
@@ -41,7 +41,7 @@ Every step names its `host`. There are two.
 - No rehearsal chain runs on the operator machine. That covers the Twin fork, any anvil and any fork of Base. A Twin run starts its fork on the stage host (P0.12 runs there over ssh).
 - The operator machine drives the whole run over ssh. A `control` step on the Twin target reaches the stage fork through an ssh tunnel (`ssh -N -L <port>:127.0.0.1:<port> rm-core-stage-1`), and `{rpcUrl}` is the local end of that tunnel.
 - Keys, passphrase files and keyed RPC URLs never leave the operator machine. Nothing on the stage host signs (`docs/development/stage-deployment.md`).
-- A mainnet run (`rehearsal` or `production`) sends from the operator machine to `BASE_RPC_URL`. Its `stage` steps (P8, P10.06) run the read-only dapp on the stage host.
+- A mainnet run (`rehearsal` or `production`) sends from the operator machine to `BASE_RPC_URL`.
 
 ## Placeholders
 
@@ -49,15 +49,15 @@ Every step names its `host`. There are two.
 
 `{manifestDir}` is `deployments/qa-runs/<run name>` in the core checkout. Forge may write manifests only under `./deployments` or `/tmp` (`fs_permissions` in `foundry.toml`). Git ignores `deployments/qa-runs/`, so verify (P2.01), which refuses a checkout with untracked files, still passes. Any other folder under `deployments/` fails P2.01, and a folder outside the checkout fails publish (P1.02). The dry run (P0.21) writes to `{runDir}/manifests-dry`, which P0.57 links to `{manifestDir}-dry` for the same reason.
 
-`{gateSha}` is the sha whose tag, green CI and frozen counts gate the run (P0.09 to P0.11, P3.50, P10.01). It is `{coreSha}`, except on a rehearsal that continues at a tool-only commit (`publish-contracts/src/tooling-sha.ts`): there it is the sha the deployment started at, the `coreSha` of `{evidenceDir}/publish-run.json`, as the publish CLI's own release gate does (owner decision 2026-10-19). A production run is always gated at its own sha.
+`{gateSha}` is the sha whose tag, green CI and frozen counts gate the run (P0.20, P10.01). It is `{coreSha}`, except on a rehearsal that continues at a tool-only commit (`publish-contracts/src/tooling-sha.ts`): there it is the sha the deployment started at, the `coreSha` of `{evidenceDir}/publish-run.json`, as the publish CLI's own release gate does (owner decision 2026-10-19). A production run is always gated at its own sha.
 
-`{releaseTag}` is the release candidate tag at `{gateSha}` (`release/<version>-rc.N-rehearsal` on a rehearsal): the release gate (P0.09) needs an annotated tag of the sheet's kind at that sha, nothing more. The record tag `release/<version>-rehearsal` is cut once, at the sha the deployment's run manifest names, and never moved (policy `docs/operations/contract-release-runbooks.md`, version tags).
+`{releaseTag}` is the release candidate tag at `{gateSha}` (`release/<version>-rc.N-rehearsal` on a rehearsal): the release gate (P0.20) needs an annotated tag of the sheet's kind at that sha, nothing more. The record tag `release/<version>-rehearsal` is cut once, at the sha the deployment's run manifest names, and never moved (policy `docs/operations/contract-release-runbooks.md`, version tags).
 
 A whole-element list placeholder expands to several argv elements: `{common}`, `{owners}`, `{gate}`, `{wait}`, `{emergency}`, `{cast}`. The definitions are `LIST_PLACEHOLDERS` in the validator. The scalar names are `SCALARS` in the same file.
 
 ## Run it
 
-Until a runner is ported, an operator or an agent follows the YAML by hand. Each step's commands run in order from the root of the core checkout at the deploy sha. Pipe every command's stdout through `tee -a {runDir}/journal/<id>.out` (the verifier labels the later steps grep). Keep stderr, the JSON logs, apart in `{runDir}/journal/<id>.err`: a log field named `label` is not a verifier label, and the label parity check (P2.03) reads every `label` it finds. Write receipts to the paths the step names. Record each step's outcome in `{runDir}/journal/<id>.result` as one line: `pass`, `skip <reason>` or `fail exit <n>`. A retry that passes overwrites it. The rollout report (P10.51) lists a failed step, or a journaled step with no result, as an issue, and the sign-off (P10.52) is then refused.
+Until a runner is ported, an operator or an agent follows the YAML by hand. Each step's commands run in order from the root of the core checkout at the deploy sha. Pipe every command's stdout through `tee -a {runDir}/journal/<id>.out` (the verifier labels the later steps grep). Keep stderr, the JSON logs, apart in `{runDir}/journal/<id>.err`: a log field named `label` is not a verifier label. Write receipts to the paths the step names. Record each step's outcome in `{runDir}/journal/<id>.result` as one line: `pass`, `skip <reason>` or `fail exit <n>`. A retry that passes overwrites it. The rollout report (P10.51) lists a failed step, or a journaled step with no result, as an issue, and the sign-off (P10.52) is then refused.
 
 Check before any run:
 
