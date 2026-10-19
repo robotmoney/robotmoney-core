@@ -66,13 +66,6 @@ system with its own tables (`agent_deposits`, `agent_policies`). The gateway
 depends on the vaults system, never the reverse. So the vault, router and
 governance tables must fill with no gateway deployed.
 
-*Code that still couples them.* `IndexerConfig.gateway` is a required field,
-and `watched_addresses()` always starts with it. An indexer for a vaults-only
-deployment cannot start today. Committee registration, votes and receipt
-records still reach their contracts only through the gateway, so no
-committee or receipt row appears without one. Both are gaps to remove, not
-the design.
-
 ---
 
 ## 3. Single-vault hardcoding audit

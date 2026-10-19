@@ -584,6 +584,25 @@ each row still needs Phase Q. The review folded nine cross-lens duplicates, so t
 | SR-1015-68 | SR-1015 | Medium | fixed | watchdog | QA security round 1 (`qa/test-merge-v1`, uncommitted) | Held watchdog cursor starved the stuck-pause replacement. Fix: On a retry of a held block the watchdog re-sends the pause unless gateway.depositsPaused() reads true. Compile-checked only; its tests have not run (Phase Q). Residual: An admin unpause while the alert webhook still refuses is undone on the next poll (documented in round 3). |
 | SR-1015-69 | SR-1015 | Low | fixed | smoke-test stage env | QA security round 2 (`qa/test-merge-v1`, uncommitted) | Stage stack never watched the IC policy proxy. Fix: The stage stack's dapp compose env now sets the IC policy, timelock and Safe addresses for the indexer. Compile-checked only; its tests have not run (Phase Q). |
 
+### SS-1019 — System split review (2026-10-19, 10 findings)
+
+Internal review of the code that couples the vaults system to the rmpc gateway system, against the owner decision of 2026-10-19
+(`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`). Checked at release v0.5.0 (core `57fbe618`) and
+`dev` at `e362df0c`. Row `SS-1019-N` is the review's finding heading `### N.`. Every finding is open: no fix has landed.
+
+| Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |
+|---|---|---|---|---|---|---|
+| SS-1019-1 | SS-1019 | Medium | accepted-with-rationale | ConsensusRecommendationReceipt | — | Receipt contract accepts writes only from the gateway (SYS-1). Open: operators record through the gateway until the code changes. |
+| SS-1019-2 | SS-1019 | Medium | accepted-with-rationale | InvestmentCommitteePolicy | — | IC policy takes the gateway and accepts votes only from it (SYS-1). Open: land SS-1019-3 first. |
+| SS-1019-3 | SS-1019 | Medium | accepted-with-rationale | InvestmentCommitteePolicy, RobotMoneyGateway | — | Only the gateway binds a vote to its caller (SYS-2). No effect while onlyGateway stands. Open: must land before SS-1019-2 is fixed. |
+| SS-1019-4 | SS-1019 | Low | accepted-with-rationale | RobotMoneyGateway, DeployInvestmentCommitteePolicy | — | Committee writes route through gateway entrypoints, and the gateway keeps ADMIN_ROLE on the IC policy. Open. |
+| SS-1019-5 | SS-1019 | Low | accepted-with-rationale | RobotMoneyGateway, publish-contracts govern | — | Committee members and the submitter need gateway AGENT_ROLE and a gateway policy. Open: follows SS-1019-1, 2 and 4. |
+| SS-1019-6 | SS-1019 | Info | accepted-with-rationale | contracts/gateway, RouterGovernance | — | Committee contracts live under contracts/gateway/. Open. |
+| SS-1019-7 | SS-1019 | Low | accepted-with-rationale | publish-contracts stage table, DeployTimelock | — | One deploy run, handover and verify cover both systems. Open. |
+| SS-1019-8 | SS-1019 | Low | accepted-with-rationale | services/explorer-indexer | — | Indexer requires a gateway address. Open. |
+| SS-1019-9 | SS-1019 | Low | accepted-with-rationale | testing/smoke-test, suite 28 | — | Test stacks run both systems together. Open. |
+| SS-1019-10 | SS-1019 | Info | accepted-with-rationale | InvariantRegistry | — | SYS-1 and SYS-2 have no registry entry or test. Open. |
+
 ### Gap analysis — process & coverage backlog (20260607-code-review-internal-claude-gap-analysis.md)
 
 > The gap analysis enumerates 50 tracked-as-future-work items (issues #643–#692),

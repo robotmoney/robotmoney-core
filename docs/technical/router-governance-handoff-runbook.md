@@ -44,20 +44,12 @@ belongs to the vaults system: the IC policy, the receipt contract,
 system (`RobotMoneyGateway` and `rmpc`) is a separate client of the vaults
 system. The weight path works with no gateway deployed.
 
-**Current code.** As of core 57fbe618 the code still couples the two. These
-are known gaps to be removed, not the design:
-
-- `ConsensusRecommendationReceipt` accepts `recordReceipt` only from the
-  gateway (`onlyGateway`, set once at initialization). A committee agent
-  records through `RobotMoneyGateway.consensusRecordReceipt` and holds the
-  gateway `AGENT_ROLE` as well (`consensus-receipt-submitter-runbook.md` §1).
-- `InvestmentCommitteePolicy` takes the gateway at initialization.
-- The IC policy and receipt contracts live under `contracts/gateway/`.
-  `RouterGovernance` imports
-  `contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol`.
-- publish-contracts deploys the gateway in the same run as the vaults.
-
-Steps below that name the gateway follow from these gaps.
+**Deployed release (v0.5.0).** The deployed contracts still route committee
+writes through the gateway. A committee agent records through
+`RobotMoneyGateway.consensusRecordReceipt`
+(`consensus-receipt-submitter-runbook.md` §1). Both committee contracts bind
+one gateway address. Steps below marked "deployed release" apply to it. The
+system split review records where the code differs (`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
 
 ---
 
@@ -138,8 +130,8 @@ The old instance cannot set weights after step 4. Nothing on it carries over.
 **Replacing the router itself.** The rotation does not cover this. A new
 router needs a redeploy of the vaults-system pieces that bind it (steps 1, 2
 and 5). The gateway is a client that holds the router as an immutable, so the
-gateway system follows with its own redeploy (step 3). Step 4 exists only
-because of the current-code coupling in §0:
+gateway system follows with its own redeploy (step 3). Step 4 applies only
+to the deployed release (§0):
 
 1. Deploy a new `PortfolioRouter`. Do not rerun `DeployPortfolioRouter.s.sol`
    against the existing deployment. It calls `registry.setRouterEligible` and
@@ -163,15 +155,15 @@ because of the current-code coupling in §0:
 3. Gateway system, in its own run: deploy a new gateway against the new
    router. `RobotMoneyGateway.routerContract` is an immutable. Depositors must
    authorize agents on the new gateway again. Who governs the gateway is open
-   for its own release. Today its `ADMIN_ROLE` is handed to the timelock as
-   well.
-4. Current code only: deploy a new `InvestmentCommitteePolicy` and
+   for its own release. On the deployed release its `ADMIN_ROLE` is held by
+   the timelock as well.
+4. Deployed release only: deploy a new `InvestmentCommitteePolicy` and
    `ConsensusRecommendationReceipt` (`DeployInvestmentCommitteePolicy`). Both
    hold the gateway as an immutable, and the receipt also takes the IC policy
    as an immutable, so they bind the gateway address (`DeployGateway.s.sol`).
    Wire them on the new gateway with `setICPolicy` and `setConsensusReceipt`.
-   In the target design the IC policy and receipt do not name the gateway, so
-   a new router keeps them.
+   Committee contracts that do not name the gateway are kept when the router
+   changes.
 5. The Safe schedules and executes `VaultRegistry.setRouter(newRouter)` through
    the admin timelock. The deployer cannot do it: it no longer holds the
    registry `ADMIN_ROLE`. The registry does not need a redeploy because
@@ -220,8 +212,8 @@ new one. Allocation state on the old router does not carry over either.
 
 A committee agent records the consensus on the receipt contract
 (`ConsensusRecommendationReceipt.recordReceipt`, submitter gated by
-`COMMITTEE_AGENT_ROLE`; `consensus-receipt-submitter-runbook.md`). In current
-code the call goes through the gateway (§0). The receipt
+`COMMITTEE_AGENT_ROLE`; `consensus-receipt-submitter-runbook.md`). On the
+deployed release the call goes through the gateway (§0). The receipt
 stores the id, the `keccak256` digest of the payload and the payload URI. It
 moves no funds and calls no `setWeights`. Most receipts are recorded and never
 applied: the Safe applies a receipt by scheduling the call in Step 2 and
@@ -281,7 +273,7 @@ core 1696), and rerun the stage 12 verifier, which labels the applied receipt an
 
 | Compromised role | Blast radius | Response |
 |---|---|---|
-| **Submitter EOA** (recorded a receipt) | Can anchor a wrong digest, polluting the public record; cannot release, cannot set weights. | New session id + public correction (`consensus-receipt-submitter-runbook.md`); revoke `COMMITTEE_AGENT_ROLE` via timelock (and the gateway `AGENT_ROLE` in current code, §0). Never schedule `apply-receipt` for a receipt under correction. |
+| **Submitter EOA** (recorded a receipt) | Can anchor a wrong digest, polluting the public record; cannot release, cannot set weights. | New session id + public correction (`consensus-receipt-submitter-runbook.md`); revoke `COMMITTEE_AGENT_ROLE` via timelock (and the gateway `AGENT_ROLE` on the deployed release, §0). Never schedule `apply-receipt` for a receipt under correction. |
 | **One Safe signer's key** | Can sign, alone, nothing: the Safe threshold needs more than one signer. | Rotate the signer on the Safe; cancel any operation that signer helped schedule and is still pending. |
 | **Payload file on the operator host** | Cannot pass the digest check unless it is the recorded payload; cannot change what the receipt says. | Rebuild from clean state; re-fetch the payload from the receipt's URI and re-run the row. |
 | **`ADMIN_ROLE` and `WEIGHT_SETTER_ROLE` on `RouterGovernance`** (held by the timelock) | Reaches `applyReceipt`, `setDefaultWeights` and `clearVotedWeights` only after a Safe-signed schedule and the delay. | The Safe cancels the pending operation; verify the committee and weight-setter sets are still disjoint (`GovernanceSeparationInvariant.t.sol`). |

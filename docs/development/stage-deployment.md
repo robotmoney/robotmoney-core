@@ -4,6 +4,13 @@ Canonical plan: core issue 1499. Core issue 1488 (S9).
 
 Stage is the same deployment as mainnet. Only parameters differ. There is one runbook, "publish contracts" (the Bun TypeScript CLI in `publish-contracts/` in this repo, run as `bun publish-contracts/src/cli.ts`). It is the only deploy driver. Devops checks core out and runs the same CLI: core never depends on devops. It runs on the Twin chain (918453) and on Base mainnet (8453). A rehearsal and production differ only in the arguments given to it.
 
+> **System split (owner decision, 2026-10-19).** The vaults system and the
+> rmpc gateway system are separate systems (`docs/architecture.md` §1).
+> The stage stack deploys and runs both in one run, as the
+> deployed release does. The system split review
+> records the differences (`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
+
+
 ## What runs on stage
 
 Every rehearsal chain runs on the stage host `rm-core-stage-1`: the Twin fork, any anvil and any fork of Base. None runs on the operator machine. The operator machine holds the keys, drives a contract QA run over ssh and signs through an ssh tunnel to the stage fork (`docs/runbooks/contract-qa/README.md`, "Hosts").

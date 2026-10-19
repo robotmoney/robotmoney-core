@@ -60,12 +60,6 @@ Owner decision, 2026-10-19. The on-chain code forms two separate systems. Each i
 
 ACL-1, ACL-2 and ACL-3 apply in both systems. Some Part A entries name a gateway path (for example `LIFE-4`, `RTR-3`, `ADP-5`). That clause describes the gateway as a client of the vault surface. Part A never relies on it.
 
-**Code that still couples the systems (as of core 57fbe618).** These are known gaps that violate `SYS-1` today. They are not the design.
-- ConsensusRecommendationReceipt accepts writes only from the gateway (`onlyGateway`, set once at initialization).
-- InvestmentCommitteePolicy takes the gateway at initialization. Committee registration and vote submission route through RobotMoneyGateway (`committeeRegister`, `committeeVoteSubmit`, `consensusRecordReceipt`, `setICPolicy`, `setConsensusReceipt`).
-- The IC policy and receipt contracts and their interfaces live under `contracts/gateway/`. RouterGovernance imports `contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol`.
-- publish-contracts deploys the gateway in the same stage table and run as the vaults. One verify checks both.
-
 ---
 
 # Part A — Vaults system
@@ -73,8 +67,12 @@ ACL-1, ACL-2 and ACL-3 apply in both systems. Some Part A entries name a gateway
 ## 0. System boundary (SYS)
 
 **`SYS-1` — No vaults-system contract ever depends on the rmpc gateway: none names the gateway, takes it as a constructor or initializer argument, or accepts writes only from it; rebalancing works with no gateway deployed.**
-🔴 VIOLATED (as of core 57fbe618) · the four couplings listed under [Two systems](#two-systems) · static-guard (no vaults-system source names `RobotMoneyGateway`, `IGateway` or `onlyGateway`, and none imports from `contracts/gateway/`) + deploy-assertion (the vaults-system rehearsal deploys, records a receipt, applies it and sets default weights with no gateway deployed).
+🔴 VIOLATED · findings SS-1019-1 to SS-1019-9 in `docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md` · static-guard (no vaults-system source names `RobotMoneyGateway`, `IGateway` or `onlyGateway`, and none imports from `contracts/gateway/`) + deploy-assertion (the vaults-system rehearsal deploys, records a receipt, applies it and sets default weights with no gateway deployed).
 *Not yet in the coverage registry.* This entry is written without the `> **` heading form on purpose. `CoverageMap.t.sol` parses every such heading and fails when an ID has no `InvariantRegistry` entry. Switch it to the heading form in the same PR that adds the registry entry and its red test.
+
+**`SYS-2` — A committee vote is recorded only under the address that sent it: `InvestmentCommitteePolicy.submitVote` refuses a vote whose `agent` is not `msg.sender`, with no reliance on any caller to check it.**
+🟡 TRUSTED: holds only on the assumption that the gateway checks the caller · finding SS-1019-3 in `docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md` · enforced at `InvestmentCommitteePolicy.submitVote` · behavioural (a registered member calling `submitVote` directly with another member's `agent` reverts).
+*Not yet in the coverage registry.* Same reason as `SYS-1`. Switch it to the heading form with its registry entry and red test.
 
 ---
 

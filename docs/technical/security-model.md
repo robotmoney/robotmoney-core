@@ -70,12 +70,6 @@ Owner decision, 2026-10-19. Robot Money is two separate systems. Each is deploye
 | Vaults system | The gateway as a client of the vaults system | The vaults-system addresses it reads for its allowed destinations, checked against their code hashes. It uses the same public surface a human wallet uses. |
 | Gateway governance | Not decided | Who governs the gateway is an open question for its own release. |
 
-**Code that still couples the systems (as of core 57fbe618).** These are known gaps that break the dependency rule today. They are not the design.
-- ConsensusRecommendationReceipt accepts writes only from the gateway (`onlyGateway`, set once at initialization).
-- InvestmentCommitteePolicy takes the gateway at initialization. Committee registration and vote submission route through RobotMoneyGateway (`committeeRegister`, `committeeVoteSubmit`, `consensusRecordReceipt`, `setICPolicy`, `setConsensusReceipt`).
-- The IC policy and receipt contracts and their interfaces live under `contracts/gateway/`. RouterGovernance imports `contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol`.
-- publish-contracts deploys the gateway in the same stage table and run as the vaults. One verify checks both.
-
 ---
 
 ## 2. Smart contract — execution & state ordering

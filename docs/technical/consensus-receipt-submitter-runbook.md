@@ -9,11 +9,12 @@ Investment Committee signals are advisory only. Consensus receipts are caller bo
 **System boundary (owner decision 2026-10-19).** The receipt contract and the
 IC policy belong to the vaults system. The rmpc gateway system
 (`RobotMoneyGateway` and `rmpc`) is a separate system and a client of the
-vaults system. The vaults system never depends on it. In the target design a
-committee member registers on `InvestmentCommitteePolicy` and the submitter
-writes to `ConsensusRecommendationReceipt` directly. Rebalancing works with no
-gateway deployed. The code does not do this yet: see "Current code" in §1.
-Operators run the current-code procedure until the code changes.
+vaults system. The vaults system never depends on it. A committee member
+is registered on `InvestmentCommitteePolicy`. The submitter writes to
+`ConsensusRecommendationReceipt` directly. Rebalancing works with no gateway
+deployed. The deployed release (v0.5.0) still records through the gateway.
+Operators run the deployed-release procedure in §1 on it. The system split
+review records where the code differs (`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
 
 ---
 
@@ -42,11 +43,11 @@ The **submitter** is an account (an EOA in the original v0.1 design, a multisig 
 checks that role on the IC policy. No gateway role and no gateway call is part
 of the path.
 
-### Current code: the submitter records through the gateway
+### Deployed release: the submitter records through the gateway
 
-Until the code changes, operators run this procedure. As of core 57fbe618 the
-receipt contract accepts `recordReceipt` only from the gateway (`onlyGateway`,
-set once at initialization). The submitter therefore holds:
+Operators run this procedure on release v0.5.0 (core 57fbe618). There the
+receipt contract accepts `recordReceipt` only from the gateway
+(`onlyGateway`, set once at initialization). The submitter therefore holds:
 
 - `AGENT_ROLE` on `RobotMoneyGateway`, and
 - `COMMITTEE_AGENT_ROLE` on `InvestmentCommitteePolicy`.
@@ -57,8 +58,8 @@ Those two together are the entire authority needed to call
 (`committeeRegister`). Committee votes route through
 `committeeVoteSubmit`, which reverts `CommitteeAgentNotCaller` unless the
 vote's `agent` is `msg.sender` (core issue 1790, PR 1818). Every step in
-§1.1, §3 and §4 that names the gateway belongs to this current-code
-procedure. These are known gaps to be removed, not the design.
+§1.1, §3 and §4 that names the gateway belongs to this deployed-release
+procedure.
 
 **What it can do.** Anchor a `receiptId` → `payloadDigest` commitment. Because
 `receiptId` is unique per session per subject, a submitter that anchors a
@@ -82,9 +83,9 @@ verification below is load-bearing rather than cosmetic.
 
 ### 1.1 The submitter is a multisig (issue 1750, owner decision 2026-10-10)
 
-The multisig decision holds in the target design. The register and record
-steps below are the **current-code** procedure: they route through the
-gateway (see "Current code" above).
+The multisig decision holds with or without the gateway. The register and
+record steps below are the **deployed-release** procedure: they route
+through the gateway (see "Deployed release" above).
 
 Owner decision 2026-10-10: **no single key anchors a receipt.** For the Base mainnet rehearsal and every later run on the `publish-contracts` surface the submitter is not an
 EOA. It is a **second Safe**, a SafeL2 1.4.1 proxy separate from the governing Safe, that holds the two roles above and nothing else. Everything in §1 about what the
@@ -130,7 +131,7 @@ Each item is a hard gate. None is satisfied by v0.1.
 | C-1 | Private key material lives in an **HSM or a cloud KMS** (non-exportable key, sign-only API). No plaintext key, no software keystore, no key in an env var or CI secret. | A software keystore's passphrase is recoverable from any host that ever ran the signer. |
 | C-2 | Signing is reachable only from a **dedicated submitter host or workload identity**, with a deny-by-default network egress allowlist covering the RPC endpoint and the swarm API only. | Limits the blast radius to one machine and makes exfiltration visible. |
 | C-3 | Every signature request is **logged with the calldata it signed** to an append-only store the submitter host cannot rewrite. | A compromise is only detectable if the tampered call is distinguishable from a legitimate one after the fact. |
-| C-4 | The submitter EOA holds **`COMMITTEE_AGENT_ROLE` and nothing else** (in current code also the gateway `AGENT_ROLE` it needs to record, §1) — never `ADMIN_ROLE`, `DEPOSIT_PAUSER_ROLE`, or `DEFAULT_ADMIN_ROLE` on any contract. Verified after every deploy and every role change. | The contracts already enforce role separation (`AccessRoles`); this makes the check explicit at the operational layer too. |
+| C-4 | The submitter EOA holds **`COMMITTEE_AGENT_ROLE` and nothing else** (on the deployed release also the gateway `AGENT_ROLE` it needs to record, §1) — never `ADMIN_ROLE`, `DEPOSIT_PAUSER_ROLE`, or `DEFAULT_ADMIN_ROLE` on any contract. Verified after every deploy and every role change. | The contracts already enforce role separation (`AccessRoles`); this makes the check explicit at the operational layer too. |
 | C-5 | The gas-funding wallet is **separate** from the submitter key and tops it up on a schedule, never the reverse. | The submitter should never hold a balance worth stealing on its own. |
 | C-6 | A **named on-call owner** and a tested rotation drill exist before the first mainnet submission. | An untested rotation procedure is not a rotation procedure. |
 
@@ -162,7 +163,7 @@ because membership is registry state.
 
 1. Provision the new key per §2 and derive its address.
 2. Register the new address with `govern --row register-committee` (§1.1).
-   Current code routes registration through the gateway (§1). The
+   The deployed release routes registration through the gateway (§1). The
    new submitter first authorizes ITSELF in private, before anything is public:
    `gateway.commitAuthorization`, one block later `gateway.revealAuthorization`
    (its own agent, shares to itself), then
@@ -176,7 +177,7 @@ because membership is registry state.
 3. Submit one receipt from the new key on a real session and confirm the
    indexer ingested it with `verified = true`.
 4. Revoke the old address: `InvestmentCommitteePolicy.revokeAgent` (an
-   `ADMIN_ROLE` call from the timelock). In current code also call
+   `ADMIN_ROLE` call from the timelock). On the deployed release also call
    `RobotMoneyGateway.revokeAgent` (§1).
 5. Confirm on chain that the old address holds neither role.
 
@@ -208,7 +209,7 @@ integrity of the public record.
 1. **Contain (minutes).** Disable the KMS signing grant for the key. This is
    the fastest kill switch and needs no chain transaction.
 2. **Revoke (one timelock cycle).** `InvestmentCommitteePolicy.revokeAgent`
-   to drop `COMMITTEE_AGENT_ROLE`. In current code also call
+   to drop `COMMITTEE_AGENT_ROLE`. On the deployed release also call
    `RobotMoneyGateway.revokeAgent` (§1). Until this lands, containment rests on step 1
    alone.
 3. **Freeze publication.** Stop the swarm worker from producing new receipts so

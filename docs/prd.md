@@ -56,14 +56,6 @@ its own. The gateway is deployed after the vaults system and reads its
 addresses for the allowed destinations. Who governs the gateway is an
 open question for the gateway's own release.
 
-Known gap: the current code still couples the two systems. The consensus
-receipt contract accepts writes only from the gateway. The committee
-policy contract takes the gateway at initialization, and committee
-registration and tilt submission route through it. The committee
-contracts live under `contracts/gateway/`. The contract publish tooling
-deploys and verifies the gateway in the same run as the vaults. These
-are gaps to remove, not the design.
-
 ## 2. Goals and Success Metrics
 
 - Depositors can deposit USDC into a selected vault or a Portfolio
@@ -176,7 +168,7 @@ Access expectations:
   observable governance action. There is no voting by token holders or
   anyone else.
 - As a committee agent operated by a participating organization, I want to
-  register a signed on-chain identity and submit a fixed-shape per-vault
+  hold an on-chain identity registered by the Safe and submit a fixed-shape per-vault
   allocation-tilt vote referencing a public rationale memo, so that my
   allocation read is auditable, attributable to my organization, and builds
   a visible track record without my proprietary methods being exposed.
@@ -269,16 +261,19 @@ that feeds weight governance upstream. Membership is admin-gated, and
 committee output never auto-applies to router weights — it remains an
 upstream signal.
 
-1. An admin allowlists a participating organization's agent; the agent
-   registers a signed on-chain identity directly with the committee
-   policy contract.
+1. The Safe, through the timelock, registers a participating
+   organization's agent on the committee policy contract. That
+   registration is the agent's on-chain identity. The agent does not
+   register itself.
 2. The agent reads the shared market-regime feed and current holdings.
 3. The agent forms a per-vault tilt (overweight / neutral / underweight)
    across the existing vaults and posts a narrative rationale memo to a
    public link.
 4. The agent signs and submits a fixed-shape vote — referencing the memo
    and the inputs it consumed — directly to the committee policy
-   contract, where it is registered on-chain. Votes from non-allowlisted agents are refused.
+   contract, where it is registered on-chain. Votes from non-allowlisted
+   agents are refused. A vote filed under another agent's address is
+   refused: the contract accepts a vote only from the agent it names.
 5. The product publishes the registered agents, their current and
    historical votes, and each agent's track record.
 6. Aggregated committee tilts become a signalling input to allocation
@@ -367,8 +362,8 @@ Common edge cases:
 - **Governance participation.** Triggered by the Safe scheduling,
   cancelling or executing a timelock operation, weight publication, and
   execution reporting.
-- **Committee participation.** Triggered by agent allowlisting, on-chain
-  identity registration, vote signing and direct submission to the
+- **Committee participation.** Triggered by the Safe registering an
+  agent's on-chain identity through the timelock, vote signing and direct submission to the
   committee policy contract,
   publication of the shared market-regime feed, and posting of off-chain
   rationale memos to public links referenced by each vote.
@@ -766,8 +761,9 @@ Safe, through the TimelockController, schedules one operation that releases
 the receipt and applies its weight vector through `WEIGHT_SETTER_ROLE`
 (govern row `apply-receipt`, core 1696). No committee agent, submitter or
 EOA can release a receipt or set weights. Committee agents call the policy
-contract directly, not through the gateway, and registration and tilt
-submission are restricted to admin-allowlisted agents. A committee agent's `vote-submit` is a
+contract directly, not through the gateway. Only the Safe, through the
+timelock, registers an agent. Only a registered agent submits a tilt,
+and only under its own address. A committee agent's `vote-submit` is a
 signed allocation tilt, not a vote on anything. The receipt contract itself
 cannot call the router: the weight setter's `applyReceipt` releases the
 receipt and applies its weights in one call (issue 1698).

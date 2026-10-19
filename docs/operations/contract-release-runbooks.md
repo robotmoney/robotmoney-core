@@ -276,6 +276,13 @@ deployer stage on a local anvil and broadcasts nothing. A Twin-chain
 rehearsal of publish, verify and govern runs on every push to `dev`
 (`core-stages-twin-chain` in `.github/workflows/suite-28-core-stages.yml`, core #1523).
 
+> **System split (owner decision, 2026-10-19).** The vaults system and the
+> rmpc gateway system are separate systems (`docs/architecture.md` §1).
+> The stage table below is the deployed release's combined
+> run. Operators run it as written. The system split review
+> records the differences (`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
+
+
 The stage sequence. The stage table holds the forge stages 1 to 11; the CLI
 adds `safe`, `prove-control` (between stages 10 and 11), `verify` and `govern`:
 

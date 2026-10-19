@@ -915,6 +915,8 @@ invariant it restores.
 **Trigger:** `pull_request` (no path filter; the rehearsal skips drafts); `push` to `dev` and `releases-*`; tags
 `v*.*.*`; `workflow_dispatch`; `workflow_call` (the nightly Twin fork, suite 29, passes its one pin).
 
+**System split (owner decision, 2026-10-19).** The vaults system and the rmpc gateway system are separate systems (`docs/architecture.md` §1). This suite deploys, verifies and governs both in one Twin run, as the deployed release does. The system split review records the differences (`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
+
 There is one deploy driver: the publish-contracts CLI (`bun publish-contracts/src/cli.ts`). The offline job runs `bun test scripts/deploy
 scripts/ci`: the stage table (libs, vault, registry, router, gateway, governance,
 ic, the proto, agent and rwa basket vaults, timelock, read by the CLI from the repo root) and the manifest rules. It is red when zero tests

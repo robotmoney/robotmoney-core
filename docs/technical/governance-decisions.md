@@ -8,7 +8,7 @@
 > Closes the open question listed under `docs/architecture.md` §10
 > ("Router-weight governance implementation").
 
-Investment Committee signals are advisory only. The signal endpoint binds the member to the caller (today the gateway's; see §2 for the split): `committeeVoteSubmit` reverts `CommitteeAgentNotCaller` unless the vote's `agent` is `msg.sender` (core issue 1790, PR 1818). The explorer's tilt aggregate counts one signal per member, its latest verified vote. Consensus receipts are caller bound and ADMIN released; receipts are the only rebalance input, applied by the Safe through the timelock.
+Investment Committee signals are advisory only. The signal endpoint binds the member to the caller: `InvestmentCommitteePolicy.submitVote` refuses a vote whose `agent` is not `msg.sender` (core issue 1790, PR 1818; see §2 for the split). The explorer's tilt aggregate counts one signal per member, its latest verified vote. Consensus receipts are caller bound and ADMIN released; receipts are the only rebalance input, applied by the Safe through the timelock.
 
 ---
 
@@ -41,20 +41,7 @@ governed by the Safe through the TimelockController. The rmpc gateway system
 (RobotMoneyGateway and `rmpc`) is a separate system and a client of the vaults
 system. Committee members register and submit to the IC policy and receipt
 contracts directly, not through the gateway. Rebalancing works with no gateway
-deployed. Code that still couples them (as of core 57fbe618), known gaps to
-remove:
-
-- ConsensusRecommendationReceipt accepts writes only from the gateway
-  (`onlyGateway`, set once at initialization).
-- InvestmentCommitteePolicy takes the gateway at initialization. Committee
-  registration and vote submission route through RobotMoneyGateway
-  (`committeeRegister`, `committeeVoteSubmit`, `consensusRecordReceipt`,
-  `setICPolicy`, `setConsensusReceipt`).
-- The IC policy and receipt contracts and their interfaces live under
-  `contracts/gateway/`. RouterGovernance imports
-  `contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol`.
-- publish-contracts deploys the gateway in the same stage table and run as the
-  vaults, and one verify checks both.
+deployed.
 
 `contracts/PortfolioRouter.sol` is deployed. `setWeights(address[], uint256[])`
 and `setDefaultWeights(address[], uint256[])` are the only functions that
@@ -176,7 +163,7 @@ A receipt has two on-chain states.
 
 | State | Entry condition | Exit conditions |
 |---|---|---|
-| **Recorded** | `recordReceipt` succeeded from a `COMMITTEE_AGENT_ROLE` holder (today only through the gateway, a known gap, §2). | The `apply-receipt` call executes: `Released`. A receipt the Safe never schedules stays `Recorded`. |
+| **Recorded** | `recordReceipt` succeeded from a `COMMITTEE_AGENT_ROLE` holder. | The `apply-receipt` call executes: `Released`. A receipt the Safe never schedules stays `Recorded`. |
 | **Released** | `applyReceipt` released it, and applied the receipt's weights in the same call. | Terminal. |
 
 Events: `ReceiptRecorded` and `ReceiptReleased` on the receipt contract,

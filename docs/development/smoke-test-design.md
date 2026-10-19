@@ -8,6 +8,13 @@ test harness that validates the complete Robot Money service graph: the
 Twin chain (a pinned lazy anvil fork of real Base), deployed contracts, explorer indexer and API, and dapp running
 together as a single orchestrated stack.
 
+> **System split (owner decision, 2026-10-19).** The vaults system and the
+> rmpc gateway system are separate systems (`docs/architecture.md` §1).
+> This fixture deploys both on one stack, as the deployed
+> release does. The system split review
+> records the differences (`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
+
+
 ---
 
 ## The `smoke-test` crate

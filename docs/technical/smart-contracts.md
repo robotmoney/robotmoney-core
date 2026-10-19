@@ -84,12 +84,6 @@ Owner decision, 2026-10-19. The contracts form two separate systems. Each is dep
 
 **Dependency rule.** The gateway depends on the vaults system. The vaults system has no dependency on the gateway. No vaults-system contract names the gateway, takes it as a constructor or initializer argument, or accepts writes only from it. Rebalancing works with no gateway deployed.
 
-**Code that still couples them (as of core 57fbe618).** These are known gaps to remove, not the design:
-- ConsensusRecommendationReceipt accepts writes only from the gateway (`onlyGateway`, set once at initialization).
-- InvestmentCommitteePolicy takes the gateway at initialization. Committee registration and vote submission route through RobotMoneyGateway (`committeeRegister`, `committeeVoteSubmit`, `consensusRecordReceipt`, `setICPolicy`, `setConsensusReceipt`).
-- The IC policy and receipt contracts and their interfaces live under `contracts/gateway/`. RouterGovernance imports `contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol`.
-- publish-contracts deploys the gateway in the same stage table and run as the vaults. One verify checks both.
-
 ---
 
 ## 2. Deployed addresses (Base mainnet, chain id 8453)
@@ -143,7 +137,7 @@ Owner decision, 2026-10-19. The contracts form two separate systems. Each is dep
 **Notes:**
 - RobotMoneyVault and its adapters are direct (non-proxy) deployments on mainnet. CompoundV3Adapter was compiled with `viaIR: true`; the others were not. Every address in this section is a direct deployment and cannot be upgraded in place.
 - From issue 1808 the source deploys every core contract (the vaults system: rmUSDC, the three basket vaults, VaultRegistry, PortfolioRouter, InvestmentCommitteePolicy, ConsensusRecommendationReceipt, RouterGovernance; the rmpc gateway system: RobotMoneyGateway; §1.1) behind its own ERC-1967 proxy ([ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md)). No proxied deployment is on 8453 yet. When one is, this section lists the proxy address (the address users and clients call), the implementation address and code hash, the upgrade timelock and the freeze state, and keeps the direct addresses above as the legacy deployment.
-- VaultRegistry, PortfolioRouter, RouterGovernance, and basket vaults are deployed to Base mainnet by the publish-contracts CLI (`publish-contracts/`). The demo deploy path is retired. The gateway is deployed in its own later run (§1.1). Today publish-contracts still deploys it in the same run as the vaults, a known gap listed in §1.1.
+- VaultRegistry, PortfolioRouter, RouterGovernance, and basket vaults are deployed to Base mainnet by the publish-contracts CLI (`publish-contracts/`). The demo deploy path is retired. The gateway is deployed in its own later run (§1.1).
 - Basket vault mainnet addresses are intentionally excluded here (out of scope); they will be added once they reach production status and mainnet deployment.
 
 ---
@@ -682,7 +676,7 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 
 ### 9.2.2 Applying a receipt
 
-1. **Record**: the committee submitter records the consensus receipt directly on `ConsensusRecommendationReceipt.recordReceipt`. No gateway takes part (§1.1). Today the receipt contract still accepts writes only from the gateway (`onlyGateway`), a known gap listed in §1.1.
+1. **Record**: the committee submitter records the consensus receipt directly on `ConsensusRecommendationReceipt.recordReceipt`. No gateway takes part (§1.1).
 2. **Schedule**: the Safe schedules one timelock call: `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)` with the receipt's weight vector. The govern row checks before sending that the receipt is recorded, its digest equals `keccak256` of the payload, it is not yet released, the bps sum to 10000 and the vault list equals the registry's router-eligible list in order.
 3. **Delay**: the timelock delay elapses (172800 s on 8453).
 4. **Execute**: the Safe executes the call. `applyReceipt` checks that the receipt is recorded, not released and that `payloadDigest` equals the stored digest. It then calls `releaseReceipt(receiptId)` and `PortfolioRouter.setWeights(vaults, bps)` and emits `ReceiptApplied`. Release and weights land in one call; partial state is impossible.

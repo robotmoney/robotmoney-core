@@ -60,21 +60,6 @@ takes it as an initializer argument, or accepts writes only from it. Who
 governs the gateway, and so who upgrades and freezes its proxy, is an open
 question for its own release.
 
-Code that still couples them (as of core 57fbe618), a set of known gaps to remove:
-
-- ConsensusRecommendationReceipt accepts writes only from the gateway
-  (`onlyGateway`, set once at initialization).
-- InvestmentCommitteePolicy takes the gateway at initialization. Committee
-  registration and vote submission route through RobotMoneyGateway
-  (`committeeRegister`, `committeeVoteSubmit`, `consensusRecordReceipt`,
-  `setICPolicy`, `setConsensusReceipt`).
-- The IC policy and receipt contracts and their interfaces live under
-  `contracts/gateway/`. RouterGovernance imports
-  `contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol`.
-- publish-contracts deploys the gateway in the same stage table and run as the
-  vaults, and one verify checks both. So the stage 2 and stage 4 tooling below
-  still treats the ten proxies as one release.
-
 ## Mechanism and authority
 
 Each proxy delegates to its own implementation. Convert constructor setup to
@@ -218,8 +203,8 @@ implementation, queues a second upgrade, freezes all ten core proxies in one
 batch bound to the reviewed `upgradeability.json`, and shows the queued upgrade
 is refused after the freeze with `UpgradesAreFrozen`. Verify then claims core
 immutability. `evidence-check --upgrade-lifecycle` reads the record back from
-the chain. This job still deploys both systems in one run (see "Two systems").
-After the split, each system's own rehearsal covers its own proxies. The release runbook (4.1 and 4.12) makes this job and an external
+the chain. Each system's own rehearsal covers its own proxies (see "Two
+systems"). The release runbook (4.1 and 4.12) makes this job and an external
 security review gates of a final mainnet release, and says why a rollback is not
 assumed safe after a state migration. The rehearsal runs the operator rows
 `govern --row upgrade-proxy` and `govern --row freeze-upgrades` (issues 1842 and
@@ -230,11 +215,10 @@ library directly.
 
 Implemented by issue 1810. Every agent write `rmpc` signs goes to the gateway
 proxy, so the gateway is the proxy the signing clients verify. This section is
-about the rmpc gateway system. Today `committee vote-submit` and
-`receipt submit` also go through the gateway, a known coupling (see "Two
-systems"). In the target design committee members write to
-InvestmentCommitteePolicy and ConsensusRecommendationReceipt directly; which
-implementation pin those writes check is not yet specified.
+about the rmpc gateway system. Committee members write to
+InvestmentCommitteePolicy and ConsensusRecommendationReceipt directly, not
+through the gateway. Which implementation pin those writes check is an open
+decision in `docs/architecture.md` §10 ("Committee write pins").
 
 **Verification before signing.** `rmpc` (`deposit`, `withdraw`,
 `withdraw-router`, the committee's signed tilt `committee vote-submit`, and

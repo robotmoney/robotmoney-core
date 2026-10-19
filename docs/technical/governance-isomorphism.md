@@ -20,13 +20,7 @@ the rmpc gateway system are separate systems, each deployed in its own run and
 tested on its own (`docs/technical/smart-contracts.md` §1.1). The Safe through
 the TimelockController governs the vaults system. That is the topology this
 document specifies. The gateway is deployed in its own run after the vaults
-system. Who governs it is an open question for its own release. Code that still
-couples the two (as of core 57fbe618), known gaps to remove: the consensus
-receipt contract accepts writes only from the gateway; the IC policy takes the
-gateway at initialization and committee writes route through it; the IC policy
-and receipt contracts live under `contracts/gateway/`, and RouterGovernance
-imports a receipt interface from there; publish-contracts deploys the gateway in
-the same stage table and run as the vaults, and `DeployTimelock` hands both over.
+system. Who governs it is an open question for its own release.
 
 ---
 
@@ -259,8 +253,7 @@ Normative. "Must" is binding; a violation is a release blocker.
   verifier fails `AC-CORE-05 no agent authorized by the deployer is still
   deployer-owned` when an agent an `AgentAuthorized` or
   `AgentOwnershipTransferred` log gives the deployer is still deployer-owned.
-  Today this runs in the shared handover. After the split it belongs to the
-  gateway system's own run.
+  This handover belongs to the gateway system's own run.
 
 ---
 

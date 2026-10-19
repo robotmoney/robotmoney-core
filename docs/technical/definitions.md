@@ -18,11 +18,6 @@ Human wallets and committee agents call the vaults system directly. The
 vaults system never depends on the rmpc gateway system. It is deployed in
 its own run and tested on its own.
 
-Known gap: the current code still ties the committee contracts to the
-gateway. The receipt contract accepts writes only from the gateway. The
-committee policy takes the gateway at initialization. Both live under
-`contracts/gateway/`. This is a gap to remove, not the design.
-
 ## rmpc Gateway System
 
 The rmpc gateway system is the agent permission and safety layer and its

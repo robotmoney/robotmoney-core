@@ -92,7 +92,14 @@ A non-empty result confirms the gate is in place.
 **What.** Deploy `PortfolioRouter`, `RouterGovernance`, and `TimelockController`
 to **Base mainnet (chain `8453`)**, record their addresses in
 the run's deploy manifests (`deployments/<chain>/`), then hand the privileged
-roles to the `TimelockController`. `DeployTimelock.s.sol` hands over:
+roles to the `TimelockController`.
+
+> **System split (owner decision, 2026-10-19).** The vaults system and the
+> rmpc gateway system are separate systems (`docs/architecture.md` §1).
+> The list below is the deployed release's combined handover. The system split review
+> records the differences (`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
+
+`DeployTimelock.s.sol` hands over:
 
 - `ADMIN_ROLE` on the Gateway, VaultRegistry, PortfolioRouter,
   RouterGovernance, and every vault in `VAULT_ADDRESSES`.

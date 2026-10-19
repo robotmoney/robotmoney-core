@@ -25,16 +25,9 @@
 > `committeeVoteSubmit` and `consensusRecordReceipt`). Older sections that
 > still cite those entrypoints record the original design.
 >
-> **Known gap: the code still couples the committee to the gateway.** As of core
-> `57fbe618`, `ConsensusRecommendationReceipt` accepts records only from the
-> gateway (`onlyGateway`, set once at initialization).
-> `InvestmentCommitteePolicy` takes the gateway at initialization and accepts
-> votes only from it. Both contracts and their interfaces live under
-> `contracts/gateway/`, and `RouterGovernance` imports
-> `contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol`. The
-> contract publish tooling deploys and verifies the gateway in the same run as
-> the vaults. These are gaps to remove, not the design. The code references
-> below cite the current code.
+> The code references below cite the code at the time they were written.
+> Where the code still differs from this design is recorded in the system
+> split review, `docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`.
 >
 > **Close-out boundary.** The independent local-devnet components above are
 > implemented. The cross-repository acceptance test proving the full route is
@@ -455,8 +448,8 @@ These are sequenced after v0 rather than dropped. The first three are
   `:104-120`), `ADMIN_ROLE` allowlists `COMMITTEE_AGENT_ROLE` at `:164-168`,
   `onlyGateway` at `:154-157`, vote validation at `:197-246` (stance, bps, confidence,
   `voteJsonHash`, `rationaleUri`, vault). Enforced by `testSignallingOnlyBoundary`.
-- **Gateway wiring (original design; a known gap to remove, see the
-  2026-10-19 note).** `contracts/gateway/RobotMoneyGateway.sol:285-287` (`icPolicy`),
+- **Gateway wiring (original design, superseded by the 2026-10-19
+  note).** `contracts/gateway/RobotMoneyGateway.sol:285-287` (`icPolicy`),
   `1396-1446` (`setICPolicy`, `committeeRegister` at `:1419`, `committeeVoteSubmit` at
   `:1439` with `onlyRole(ADMIN_ROLE)`/`onlyRole(AGENT_ROLE)` and `ICPolicyNotSet`).
   `contracts/gateway/interfaces/IGateway.sol:379-394`, `contracts/gateway/interfaces/IInvestmentCommitteePolicy.sol:1-124`.
