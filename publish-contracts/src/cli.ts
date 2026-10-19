@@ -152,6 +152,7 @@ export const USAGE = `publish contracts
   --logs-rpc URL     prove-control --resume and the verify stage: a separate RPC for eth_getLogs (the scan for a landed proof, the verifier's role and
                      creation scans). Every other read stays on --rpc.
   --logs-window N    prove-control --resume and the verify stage: blocks per eth_getLogs call (default 2000); prove-control halves it on a range-limit error
+  --check-sources    verify: also check explorer source verification (Blockscout, Sourcify); publishing, not a gate, so off by default
   --logs-tries N     prove-control --resume: tries of one throttled eth_getLogs call (HTTP 429), with exponential backoff (default 6)
   --owner-signer S   prove-control and govern: a Safe owner signer spec (repeat for each owner: prove-control needs EVERY owner, govern the threshold). On chain 918453 with none given: the SAFE_OWNER_A/B/C keystores
                      beside the DEPLOYER keystore, under the same passphrase file (the rehearsal key layout). Never on 8453: there every owner is named, as keystore:PATH (passphrase typed at the hidden
@@ -241,6 +242,8 @@ export interface Parsed {
   priorOut?: string;
   /** prove-control --resume (issue 1724): --logs-rpc, --logs-window, --logs-tries. Absent when none is given. */
   logs?: LogScanOpts;
+  /** --check-sources: the verify stage also checks explorer source verification. */
+  checkSources?: boolean;
   /** With --row upgrade-proxy only (issue 1842): the proxy name, the new implementation and the core checkout it was built from. */
   proxy?: string;
   implementation?: string;
@@ -257,7 +260,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" }, "counts-require-origin-dev": { type: "boolean" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "no-warp": { type: "boolean" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, proxy: { type: "string" }, implementation: { type: "string" }, "upgrade-build": { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "no-warp": { type: "boolean" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "check-sources": { type: "boolean" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, proxy: { type: "string" }, implementation: { type: "string" }, "upgrade-build": { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -370,7 +373,7 @@ export function parseCli(argv: string[]): Parsed {
   }
   return {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
-    coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
+    checkSources: !!v["check-sources"], coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, countsRequireOriginDev: !!v["counts-require-origin-dev"], measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
     maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, noWarp: !!v["no-warp"], call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri, adminArgs, vault: vaultArg, priorOut, logs, proxy, implementation, upgradeBuild: upgradeBuild === undefined ? undefined : resolve(upgradeBuild),
   };
@@ -567,7 +570,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return {
         chainId: rpcChainId, rpc: a.rpc, sheet, coreDir, coreSha: a.coreSha, evidenceDir,
         environment: a.environment, signer, caller, frozen, measure, dryCounts: a.dryRun ? {} : undefined, resume: a.resume, dryRun: a.dryRun, run, log,
-        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions, actionsProof, baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, recorderWait: deps.recorderWait, readRetry: deps.readRetry, coreConfigCheck: deps.coreConfigCheck, logs: a.logs,
+        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions, actionsProof, baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, recorderWait: deps.recorderWait, readRetry: deps.readRetry, coreConfigCheck: deps.coreConfigCheck, logs: a.logs, checkSources: a.checkSources,
         manifestOut, startChain: a.dryRun && a.verb !== REDEPLOY_VERB ? (deps.startChain ?? startAnvil) : undefined, priorArtifactsDir: a.priorOut ? resolve(cwd, a.priorOut) : undefined,
         // security round 1 (review-security-033): a printed resume command names the absolute counts dir and --counts-require-origin-dev (govern.ts resumeCommand)
         countsDir: a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd), countsRequireOriginDev: a.countsRequireOriginDev,
@@ -685,7 +688,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     // uses the original sha's counts and needs no file for the redeploy sha (QA plan v1 E1).
     const counts = a.stage === "plan"
       ? { frozen: a.measure ? undefined : loadFrozen(countsDir, a.coreSha).counts, measure: a.measure, mode: (a.measure ? "measure-flag" : "frozen") as "measure-flag" | "frozen", file: "" }
-      : resolveCounts({ dir: countsDir, sha: a.coreSha, measureFlag: a.measure, dryRun: a.dryRun, chainId: rpcChainId, warn: (ev, f) => log.log("warn", ev, f), ...(shaRun && priorRun ? { redeploy: { originalSha: shaRun.originalSha, recorded: measuredCounts(priorRun) } } : {}) });
+      : resolveCounts({ dir: countsDir, sha: a.coreSha, measureFlag: a.measure, dryRun: a.dryRun, chainId: rpcChainId, warn: (ev, f) => log.log("warn", ev, f), ...(shaRun && priorRun ? { redeploy: { originalSha: shaRun.originalSha, recorded: measuredCounts(priorRun) } } : toolRun ? { redeploy: { originalSha: toolRun.originalSha, recorded: measuredCounts(loadRunManifest(evidenceDir)!) } } : {}) });
     const frozen = counts.frozen;
 
     // P12: the token at the constant USDC address must be the pinned FiatTokenProxy. A mock fails here, before any send.

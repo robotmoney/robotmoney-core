@@ -16,7 +16,11 @@ notes: |
   (owner, 2026-10-16). Its record tag is release/v0.5.0-rehearsal (runbook 4.10), at 57fbe618 (rc.9), the sha its run
   manifest names; it is never moved. On 8453 every publish CLI command of the run also gets --logs-rpc
   https://base.gateway.tenderly.co --logs-window 1000 (docs/development/stage-deployment.md): mainnet.base.org refused the
-  verify stage's role scan with HTTP 429 at P2.01 for an hour, and the logs endpoint allows 1000 blocks per eth_getLogs. Each run is gated on its rc tag ({releaseTag} = release/v0.5.0-rc.N-rehearsal at
+  verify stage's role scan with HTTP 429 at P2.01 for an hour, and the logs endpoint allows 1000 blocks per eth_getLogs.
+  Explorer source verification is not a gate (owner decision 2026-10-19): P2.01 had waited its hour on Blockscout and
+  Sourcify, which depend on third-party vendors. The verifier's code labels prove the build from the chain. From that
+  commit on, Deploy 3 runs verify and evidence-check at the runbook branch head; every broadcast stays at rc.12, the last
+  release-gated commit (the tool's release gate exempts verify-only runs). Each run is gated on its rc tag ({releaseTag} = release/v0.5.0-rc.N-rehearsal at
   {coreSha}). The run continued at rc.10 (004b8c97, tools only) after the fee guard stop. The version tag step P10.05
   runs only for --target production, so a rehearsal run cuts no version tag. A version tag is v0.5.0 with no
   network suffix (owner, 2026-10-16); pushing it also builds and publishes the dApp image v0.5.0

@@ -326,6 +326,8 @@ export interface RunContext {
    * scan with HTTP 429 for an hour; the canon's 8453 logs endpoint allows 1000 blocks per call. Absent: every read on --rpc, 2000 blocks per call.
    */
   logs?: { logsRpc?: string; window?: bigint };
+  /** --check-sources: the verify stage also checks explorer source verification (Blockscout, Sourcify). Off by default: publishing, not a gate (2026-10-19). */
+  checkSources?: boolean;
   /** Injected for tests: core's own config-check (bun scripts/ci/config-check.ts). Defaults to the real spawn. */
   coreConfigCheck?: CoreConfigCheck;
   /** Set by runStages in a dry run: the RPC forge simulates on (a local anvil) and the record of manifest files to restore. */

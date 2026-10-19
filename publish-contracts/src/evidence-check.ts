@@ -612,7 +612,7 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   if (frozenCounts && ev?.deployer_nonce_final !== finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), start) + redeployTxs(ev)) bad(`deployer_nonce_final ${ev?.deployer_nonce_final} differs from ${start ? `the start nonce ${start} plus ` : ""}the summed frozen counts plus the prove-control transaction${redeployTxs(ev) ? ` plus the ${redeployTxs(ev)} redeploy transaction(s)` : ""} ${finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), start) + redeployTxs(ev)}${Object.keys(adoptedTxsOfEvidence(ev)).length ? " (adopted stages counted at the transactions the deployer sent)" : ""}`);
   if (ev?.verifier?.exit_code !== 0) bad("the verifier did not exit 0");
   if (ev?.verifier?.registry_list_vaults_equals_manifests !== true) bad("registry listVaults was not shown equal to the manifests");
-  if (ev?.sources?.blockscout_all_verified !== true || ev?.sources?.sourcify_all_exact !== true) bad("source verification is not complete");
+  // explorer source verification is publishing, not a gate (owner decision 2026-10-19): the verifier's code labels prove the build from the chain
   p.push(...upgradeabilityEvidenceProblems(ev, opts?.proxies ?? repoProxyNames(), kind));
   p.push(...governedUpgradeProblems(ev, floor, opts?.proxies ?? repoProxyNames()));
   return p;

@@ -277,9 +277,14 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
       if (problems.length) report.checks.push({ label: "govern post-govern: receipt_applications are backed by their timelock batches on chain", ok: false, detail: `the run manifest's applied receipt vector is not backed by the chain, so the router weight check cannot trust it: ${problems.join("; ")}` });
     }
     report.ok = report.checks.every((c) => c.ok);
-    const s = await deps.verifySources({ chainId: ctx.chainId, contracts: contractsFromManifests(manifestDir(ctx), getStageTable()) });
-    report.checks.push(...s.checks);
-    report.ok = report.ok && s.ok;
+    // Owner decision 2026-10-19 (Deploy 3): explorer source verification (Blockscout, Sourcify) is publishing, not a gate. It depends on third-party vendors
+    // (Blockscout answers scripted reads with a bot challenge), and the `runtime code equals build artifact (masked)` labels above already prove from the chain
+    // that every address runs the tagged build. --check-sources still runs it.
+    if (ctx.checkSources) {
+      const s = await deps.verifySources({ chainId: ctx.chainId, contracts: contractsFromManifests(manifestDir(ctx), getStageTable()) });
+      report.checks.push(...s.checks);
+      report.ok = report.ok && s.ok;
+    } else ctx.log.log("info", "verify.sources_not_gated", { note: "explorer source verification is publishing, not a gate (--check-sources runs it)" });
   }
   // Issue 1727: the kind and the delay go to the log (stderr), never to stdout: stdout is the label contract core's harness parses and the Twin and mainnet label sets must compare equal.
   ctx.log.log("info", "verify.deployment_kind", { deployment_kind: ctx.sheet.kind, label: kindLabel(ctx.sheet.kind, expectedTimelockDelay(manifest, ctx.sheet)) });
