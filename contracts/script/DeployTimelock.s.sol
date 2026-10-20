@@ -41,13 +41,6 @@ interface IRetirableVaultLink {
     function registry() external view returns (address);
 }
 
-/// @dev Minimal gateway agent surface used to hand deployer-owned agents to
-///      the timelock (issue #1476).
-interface IGatewayAgentOwnership {
-    function agentOwner(address agent) external view returns (address);
-    function transferAgentOwnership(address agent, address newOwner) external;
-}
-
 /// @title DeployTimelock
 /// @notice Deploy an OZ TimelockController and complete the privileged-role
 ///         handover on all five Robot Money contracts (RobotMoneyVault,
@@ -57,21 +50,13 @@ interface IGatewayAgentOwnership {
 ///
 ///         After this script runs (ACL-1 / F-01):
 ///         - TimelockController holds ADMIN_ROLE on all five contracts AND the
-///           Gateway DEFAULT_ADMIN_ROLE (so it can rotate roles / authorizeAgent).
+///           Gateway DEFAULT_ADMIN_ROLE (so it can rotate roles).
 ///         - The deployer EOA holds NO privileged role of any kind:
 ///           no ADMIN_ROLE on any contract, no Gateway DEFAULT_ADMIN_ROLE, and
 ///           no vault EMERGENCY_ROLE.
-///         - Every gateway agent listed in AGENT_ADDRESSES is owned by the
-///           TimelockController, not the deployer (issue #1476). The transfer
-///           does not change AGENT_ROLE: an agent that held it still holds it,
-///           and an agent that did not hold it is handed over without it.
-///           setPolicy / revokeAgent on those agents go Safe -> Timelock ->
-///           gateway. The guarantee covers the listed agents only: the
-///           gateway cannot enumerate an owner's agents, so the list must
-///           name every agent the deployer owns (the stage ceremony derives
-///           it from the gateway's AgentAuthorized and
-///           AgentOwnershipTransferred logs, keeping agents the deployer
-///           still owns).
+///         - The deploy registers no gateway agent and hands none over. An agent
+///           is registered only by its depositor through commit/reveal consent
+///           (ACL-9), so the handover carries no agent list.
 ///         - The vault EMERGENCY_ROLE is held by the independent EMERGENCY_ADDRESS
 ///           hot key, not the deployer.
 ///         - The Safe multisig (SAFE_ADDRESS) holds PROPOSER_ROLE and
@@ -113,21 +98,6 @@ interface IGatewayAgentOwnership {
 ///                                    DEFAULT_ADMIN_ROLE move to the timelock, which then
 ///                                    holds the receipt ADMIN_ROLE alone. RouterGovernance
 ///                                    keeps only RECEIPT_RELEASER_ROLE (issue 1888).
-///           AGENT_ADDRESSES        — comma-separated gateway agents the deployer
-///                                    owns (issue #1476): the deploy agent the
-///                                    gateway stage authorizes (DeployGateway.s.sol).
-///                                    Each is handed to the timelock with
-///                                    transferAgentOwnership while the timelock
-///                                    already holds gateway ADMIN_ROLE and before
-///                                    the deployer's ADMIN_ROLE is revoked. Every
-///                                    entry must be owned by the deployer, or the
-///                                    handover reverts. An entry is handed over
-///                                    whether or not it holds AGENT_ROLE; the
-///                                    transfer leaves AGENT_ROLE unchanged.
-///                                    Required, with no default:
-///                                    an unset or empty value reverts before any
-///                                    broadcast, and the literal `none` declares
-///                                    a run whose deployer owns no gateway agent.
 ///           RECEIPT_ADMIN_ADDRESS  — the address that currently holds ADMIN_ROLE /
 ///                                    DEFAULT_ADMIN_ROLE on the receipt contract (the
 ///                                    RECEIPT_ADMIN_ADDRESS DeployConsensusRecommendation-
@@ -218,8 +188,6 @@ contract DeployTimelock is UpgradeAuthority {
         bool rehearsal;
         address consensusReceipt;
         address receiptAdmin;
-        /// Deployer-owned gateway agents handed to the timelock (issue #1476).
-        address[] agents;
     }
 
     /// @notice Broadcast entrypoint. Reads env vars, deploys timelock, and
@@ -236,8 +204,6 @@ contract DeployTimelock is UpgradeAuthority {
     ///      prefix. A test passes a prefix of its own, because env vars are
     ///      process-wide and forge runs tests in parallel.
     function _runFrom(string memory prefix) internal returns (Deployed memory d) {
-        // Read first, so a run that leaves the list out stops on that input.
-        d.agents = _readAgentList(string.concat(prefix, "AGENT_ADDRESSES"));
         d.vaults = _readVaultList(string.concat(prefix, "VAULT_ADDRESSES"));
         d.gateway = _envAddressRequired(string.concat(prefix, "GATEWAY_ADDRESS"));
         d.registry = _envAddressRequired(string.concat(prefix, "REGISTRY_ADDRESS"));
@@ -366,56 +332,6 @@ contract DeployTimelock is UpgradeAuthority {
 
         _validate(d, safeSpec_);
         d.timelock = _deployAndWire(d);
-    }
-
-    /// @notice In-process variant that also hands the listed deployer-owned
-    ///         gateway agents to the timelock (issue #1476), the in-process
-    ///         form of AGENT_ADDRESSES. Caller sets up prank context. No JSON
-    ///         is written; no env vars are read.
-    /// @param agents_ Gateway agents the deployer (the caller) owns.
-    function runInProcessWithAgents(
-        address vault_,
-        address gateway_,
-        address registry_,
-        address router_,
-        address governance_,
-        address safe_,
-        address emergency_,
-        uint256 minDelay_,
-        address[] calldata agents_,
-        SafeSpec memory safeSpec_
-    ) external returns (Deployed memory d) {
-        d.vaults = _single(vault_);
-        d.gateway = gateway_;
-        d.registry = registry_;
-        d.router = router_;
-        d.governance = governance_;
-        d.safe = safe_;
-        d.emergency = emergency_;
-        d.minDelay = minDelay_;
-        d.agents = agents_;
-
-        _validate(d, safeSpec_);
-        d.timelock = _deployAndWire(d);
-    }
-
-    /// @dev The deployer-owned gateway agent list from env var `name` (issue
-    ///      #1476). The variable must be set: a comma-separated list of
-    ///      agents, or the literal `none` for a run whose deployer owns no
-    ///      gateway agent. An unset or empty variable reverts, so a broadcast
-    ///      run never treats a missing list as an empty one.
-    function _readAgentList(string memory name) internal view returns (address[] memory) {
-        require(
-            vm.envExists(name),
-            "AGENT_ADDRESSES must be set: the deployer-owned gateway agents, comma-separated, or none"
-        );
-        string memory raw = vm.envString(name);
-        require(
-            bytes(raw).length != 0,
-            "AGENT_ADDRESSES is empty: list the deployer-owned gateway agents, or set none"
-        );
-        if (keccak256(bytes(raw)) == keccak256("none")) return new address[](0);
-        return vm.envAddress(name, ",");
     }
 
     /// @dev DEPLOYMENT_KIND (issue 1727): absent or "production" is production, "rehearsal" is the explicit rehearsal mode, anything else reverts.
@@ -631,15 +547,13 @@ contract DeployTimelock is UpgradeAuthority {
         // DEFAULT_ADMIN_ROLE at construction, and every Gateway role's admin —
         // except AGENT_ROLE, redirected to ADMIN_ROLE in the constructor — is
         // DEFAULT_ADMIN_ROLE. A naked ADMIN_ROLE-only handover would leave the
-        // deployer EOA holding the Gateway root (re-grant ADMIN, mint rogue
+        // deployer EOA holding the Gateway root (re-grant ADMIN, take over
         // agents, block the Timelock from rotating roles). So hand over BOTH
         // ADMIN_ROLE and DEFAULT_ADMIN_ROLE to the Timelock and revoke both from
         // the deployer.
         //
-        // Fix-interaction (audit F-01): the AGENT_ROLE re-admin to ADMIN_ROLE is
-        // performed in the Gateway constructor, so revoking DEFAULT_ADMIN_ROLE
-        // here does NOT brick agent onboarding — the Timelock (ADMIN_ROLE) can
-        // still `authorizeAgent` / grant AGENT_ROLE.
+        // No role can register or manage agents (ACL-9), so revoking
+        // DEFAULT_ADMIN_ROLE here cannot affect agent onboarding.
         IAccessControl(d.gateway).grantRole(ADMIN_ROLE, address(timelock));
         require(
             IAccessControl(d.gateway).hasRole(ADMIN_ROLE, address(timelock)),
@@ -650,13 +564,6 @@ contract DeployTimelock is UpgradeAuthority {
             IAccessControl(d.gateway).hasRole(DEFAULT_ADMIN_ROLE, address(timelock)),
             "Timelock missing DEFAULT_ADMIN_ROLE on gateway"
         );
-        // Issue #1476: agent ownership carries setPolicy / revokeAgent authority,
-        // so deployer-owned agents move to the timelock as part of the handover.
-        // transferAgentOwnership only accepts an ADMIN_ROLE destination, so this
-        // runs after the timelock's grant above and before the deployer's revoke
-        // below. The transfer does not change an agent's AGENT_ROLE or its
-        // stored policy.
-        bool[] memory hadAgentRole = _transferAgents(d, address(timelock));
         IAccessControl(d.gateway).revokeRole(ADMIN_ROLE, msg.sender);
         require(
             !IAccessControl(d.gateway).hasRole(ADMIN_ROLE, msg.sender),
@@ -667,20 +574,6 @@ contract DeployTimelock is UpgradeAuthority {
             !IAccessControl(d.gateway).hasRole(DEFAULT_ADMIN_ROLE, msg.sender),
             "Deployer still has DEFAULT_ADMIN_ROLE on gateway"
         );
-        // Post-condition, read after the deployer lost every gateway role: no
-        // listed agent is deployer-owned, and each holds AGENT_ROLE exactly
-        // when it held it before the transfer.
-        for (uint256 i = 0; i < d.agents.length; i++) {
-            require(
-                IGatewayAgentOwnership(d.gateway).agentOwner(d.agents[i]) != msg.sender,
-                "Deployer still owns a listed gateway agent"
-            );
-            require(
-                IAccessControl(d.gateway).hasRole(AGENT_ROLE, d.agents[i]) == hadAgentRole[i],
-                "Handover changed a listed gateway agent's AGENT_ROLE"
-            );
-        }
-
         // VaultRegistry
         IAccessControl(d.registry).grantRole(ADMIN_ROLE, address(timelock));
         require(
@@ -928,33 +821,6 @@ contract DeployTimelock is UpgradeAuthority {
         );
     }
 
-    /// @dev Hand every listed agent from the deployer (msg.sender) to `timelock`.
-    ///      A listed agent the deployer does not own is an input error and
-    ///      reverts before any transfer of it is attempted. Ownership does not
-    ///      depend on AGENT_ROLE, so an agent without the role is handed over
-    ///      too. Returns, per listed agent, whether it held AGENT_ROLE before
-    ///      its transfer, for the caller's post-condition.
-    function _transferAgents(Deployed memory d, address timelock)
-        internal
-        returns (bool[] memory hadAgentRole)
-    {
-        hadAgentRole = new bool[](d.agents.length);
-        for (uint256 i = 0; i < d.agents.length; i++) {
-            address agent = d.agents[i];
-            require(agent != address(0), "AGENT_ADDRESSES entry is address(0)");
-            require(
-                IGatewayAgentOwnership(d.gateway).agentOwner(agent) == msg.sender,
-                "AGENT_ADDRESSES entry is not owned by the deployer"
-            );
-            hadAgentRole[i] = IAccessControl(d.gateway).hasRole(AGENT_ROLE, agent);
-            IGatewayAgentOwnership(d.gateway).transferAgentOwnership(agent, timelock);
-            require(
-                IGatewayAgentOwnership(d.gateway).agentOwner(agent) == timelock,
-                "Timelock does not own a listed gateway agent after transfer"
-            );
-        }
-    }
-
     function _logResult(Deployed memory d) internal pure {
         console2.log(
             "ProposerFloorTimelock (TimelockController with the last-proposer floor) deployed and ADMIN_ROLE transferred on all five contracts"
@@ -972,9 +838,6 @@ contract DeployTimelock is UpgradeAuthority {
         console2.log("  governance  :", d.governance);
         if (d.consensusReceipt != address(0)) {
             console2.log("  consensus_receipt :", d.consensusReceipt);
-        }
-        for (uint256 i = 0; i < d.agents.length; i++) {
-            console2.log("  agent -> timelock :", d.agents[i]);
         }
     }
 
@@ -1029,8 +892,6 @@ contract DeployTimelock is UpgradeAuthority {
         vm.serializeAddress(obj, "governance", d.governance);
         vm.serializeString(obj, "addresses", addrsJson);
         vm.serializeString(obj, "code_hashes", hashesJson);
-        // Issue #1476: the gateway agents this run handed to the timelock.
-        vm.serializeAddress(obj, "timelock_owned_agents", d.agents);
         // One handover entry per vault in VAULT_ADDRESSES, read back from the chain.
         vm.serializeString(obj, "vault_handover", _serializeVaultHandovers(d));
         string memory json = vm.serializeString(obj, "roles", rolesJson);
@@ -1129,15 +990,6 @@ contract DeployTimelock is UpgradeAuthority {
         }
     }
 
-    /// @dev True when the deployer still owns any gateway agent in `d.agents`.
-    function _deployerOwnsListedAgent(Deployed memory d) internal view returns (bool owns) {
-        for (uint256 i = 0; i < d.agents.length; i++) {
-            if (IGatewayAgentOwnership(d.gateway).agentOwner(d.agents[i]) == msg.sender) {
-                owns = true;
-            }
-        }
-    }
-
     /// @dev The role table, read back from the chain after the handover.
     ///      Every entry is a live `hasRole` read, so a manifest that records
     ///      the intended topology instead of the actual one cannot be written.
@@ -1209,16 +1061,6 @@ contract DeployTimelock is UpgradeAuthority {
         );
         vm.serializeBool(roles, "emergency_key_has_vault_emergency_role", allEmergencyKey);
         vm.serializeBool(roles, "deployer_has_vault_emergency_role", deployerHoldsVaultRole);
-        // Issue #1476: read from the gateway like the rows above. run() writes
-        // the manifest only after _deployAndWire requires every listed agent to
-        // have left the deployer, so a manifest run() writes records false; it
-        // is a record for the reader, not a check.
-        bool deployerOwnsListedAgent = _deployerOwnsListedAgent(d);
-        vm.serializeBool(roles, "deployer_owns_a_listed_gateway_agent", deployerOwnsListedAgent);
-        // The bool above covers the listed agents only; the count says how many
-        // that is, so an empty list does not read as a checked one.
-        vm.serializeUint(roles, "gateway_agents_listed_count", d.agents.length);
-
         // The Safe's standing on the timelock itself.
         vm.serializeBool(
             roles,

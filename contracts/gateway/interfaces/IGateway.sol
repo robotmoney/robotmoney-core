@@ -11,30 +11,28 @@ import {IConsensusRecommendationReceipt} from "./IConsensusRecommendationReceipt
 /// @dev Per the MVP plan (`Plan tracking issue #109` §2.2), the gateway
 ///      exposes state-mutating entrypoints for agents (`deposit` and
 ///      friends), an owner-gated agent lifecycle surface
-///      (`commitAuthorization`/`revealAuthorization`, `authorizeAgent`,
-///      `setPolicy`, `transferAgentOwnership`, `revokeAgent`), and a
+///      (`commitAuthorization`/`revealAuthorization`,
+///      `setPolicy`, `revokeAgent`), and a
 ///      deposit-pause asymmetry (DEPOSIT_PAUSER pauses deposits, ADMIN
 ///      resumes them). A pause stops new deposits only; withdrawals are never
 ///      frozen (owner decision 2026-10-05, core 1494).
 ///
-/// Authority model (issues #269, #1476). First-time authorization records
-/// `msg.sender` as the agent's owner: any account through
-/// `commitAuthorization` + `revealAuthorization`, an `ADMIN_ROLE` holder
-/// also through `authorizeAgent`. Only the recorded owner can update the
-/// policy, hand the agent to an `ADMIN_ROLE` holder, or revoke it.
-/// `ADMIN_ROLE` grants no authority over an agent it does not own.
+/// Authority model (issues #269, #1476, ACL-9). Registration records
+/// `msg.sender` as the agent's owner, only through `commitAuthorization` +
+/// `revealAuthorization`. The owner never changes within a registration.
+/// Only the owner can update the policy. The owner or the agent can revoke.
+/// No role can grant, revoke or renounce `AGENT_ROLE` through the public
+/// role methods. `ADMIN_ROLE` grants no authority over any agent.
 ///
-/// Policy rule (issue #1476). Every call that writes a policy applies the
-/// same validator: the caller-independent shape checks plus one
-/// caller-dependent rule, judged on the caller's role at call time — a
-/// caller without `ADMIN_ROLE` must name itself as `shareReceiver`.
+/// Policy rule. Every call that writes a policy applies the same validator,
+/// and every caller must name itself as `shareReceiver`.
 interface IGateway {
     // -------------------------------------------------------------------
     // Types
     // -------------------------------------------------------------------
 
     /// @notice Per-agent policy. Set by the agent's recorded owner via
-    ///         `authorizeAgent` (first time) or `setPolicy` (subsequent
+    ///         `revealAuthorization` (first time) or `setPolicy` (subsequent
     ///         updates).
     /// @param active                  Policy is enabled.
     /// @param validUntil              Unix-seconds expiry; deposits revert at/after.
@@ -95,7 +93,7 @@ interface IGateway {
     /// @notice Emitted when an agent's policy is created or updated.
     /// @param agent          Agent address whose policy was set.
     /// @param owner          The agent's recorded owner, which is `msg.sender`
-    ///                       of the `authorizeAgent`, `revealAuthorization` or
+    ///                       of the `revealAuthorization` or
     ///                       `setPolicy` call that emitted it.
     /// @param validUntil     Policy expiry timestamp (Unix seconds).
     /// @param maxPerPayment  Maximum USDC per single deposit call.
@@ -109,18 +107,10 @@ interface IGateway {
         uint256 maxPerWindow,
         address shareReceiver
     );
-    /// @notice Emitted when an agent's recorded owner hands it to another
-    ///         owner through `transferAgentOwnership`. The agent keeps its
-    ///         `AGENT_ROLE` and its stored policy.
-    /// @param agent         Agent address whose owner changed.
-    /// @param previousOwner Owner before the call (`msg.sender`).
-    /// @param newOwner      Owner after the call; holds `ADMIN_ROLE`.
-    event AgentOwnershipTransferred(
-        address indexed agent, address indexed previousOwner, address indexed newOwner
-    );
     /// @notice Emitted when an agent's policy and role are revoked.
     /// @param agent Agent address whose policy was removed.
-    /// @param owner Depositor EOA that revoked (must equal the recorded owner).
+    /// @param owner The registration's owner. Also emitted when a reveal replaces an
+    ///              expired registration, before the new `AgentAuthorized`.
     event AgentRevoked(address indexed agent, address indexed owner);
     /// @notice Emitted when gateway deposits are paused. Withdrawals stay open.
     /// @param by Address that called `pauseDeposits()`.
@@ -365,55 +355,28 @@ interface IGateway {
     ///         caller and this exact call through `commitAuthorization`.
     /// @dev    Must be called at least one block after `commitAuthorization`.
     ///         The policy is checked by the same validator as `setPolicy`:
-    ///         a caller without `ADMIN_ROLE` must name itself as
+    ///         every caller must name itself as
     ///         `shareReceiver` (`ShareReceiverNotAuthorized`).
     /// @param agent  The agent address to authorize (must not already be owned).
     /// @param salt   The caller-chosen salt used when building `commitHash`.
     /// @param p      Initial policy parameters.
     function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external;
 
-    /// @notice First-time authorization for `agent`. Admin-only — only callable
-    ///         by `ADMIN_ROLE` (so the TimelockController retains agent-onboarding
-    ///         authority after the deploy handover revokes the deployer's
-    ///         `DEFAULT_ADMIN_ROLE`; see F-01 / ACL-1). Regular users must use
-    ///         `commitAuthorization` + `revealAuthorization` instead.
-    ///         `msg.sender` is recorded as the agent's owner. Reverts if
-    ///         `agent` already has a recorded owner; that owner must call
-    ///         `setPolicy` to update or `revokeAgent` to release. The caller
-    ///         holds `ADMIN_ROLE`, so the validator accepts any `shareReceiver`.
-    /// @param agent The agent address to authorize (must not already be owned).
-    /// @param p     Initial policy parameters.
-    function authorizeAgent(address agent, AgentPolicy calldata p) external;
-
     /// @notice Update the policy for an agent the caller already owns.
     ///         Reverts `NotAgentOwner` if `msg.sender` is not the recorded
     ///         owner of `agent`. The new policy passes the same validator as
-    ///         first-time authorization, with the rule judged on the caller's
-    ///         role at call time: a caller without `ADMIN_ROLE` must name
-    ///         itself as `shareReceiver` (`ShareReceiverNotAuthorized`),
-    ///         whatever role it held when the agent was authorized. Any
-    ///         policy an owner can set here is one it could also have
-    ///         obtained through authorization. Emits `AgentAuthorized`.
+    ///         registration: the caller must name itself as `shareReceiver`
+    ///         (`ShareReceiverNotAuthorized`). Reverts `AgentPolicyExpired`
+    ///         once the stored `validUntil` has passed, so an expired
+    ///         registration cannot be revived. Emits `AgentAuthorized`.
     /// @param agent The agent address whose policy to update.
     /// @param p     New policy parameters.
     function setPolicy(address agent, AgentPolicy calldata p) external;
 
-    /// @notice Hand an agent the caller owns to `newOwner`. Only the recorded
-    ///         owner can call it (`NotAgentOwner`), and `newOwner` must hold
-    ///         `ADMIN_ROLE` (`NewAgentOwnerNotAdmin`), so an agent can be given
-    ///         to governance but never taken by it. That destination rule is
-    ///         the whole rule for a transfer: the caller-dependent
-    ///         `shareReceiver` rule does not bind an `ADMIN_ROLE` holder, so
-    ///         the stored policy is not checked again. The agent keeps
-    ///         `AGENT_ROLE` and its stored policy. Reverts `ZeroAddress`
-    ///         when `agent` or `newOwner` is `address(0)`.
-    ///         Emits `AgentOwnershipTransferred`.
-    /// @param agent    The agent address whose ownership moves.
-    /// @param newOwner The new recorded owner; must hold `ADMIN_ROLE`.
-    function transferAgentOwnership(address agent, address newOwner) external;
-
-    /// @notice Revoke an agent. Reverts if `msg.sender` is not the recorded
-    ///         owner. Clears policy, role, and owner record.
+    /// @notice End an agent registration. The recorded owner or the agent
+    ///         itself (self-revoke) can call it (`NotAgentOwner` otherwise).
+    ///         Clears policy, role, owner record and the agent's rolling
+    ///         deposit window. Emits `AgentRevoked(agent, owner)`.
     /// @param agent The agent address whose policy and role are revoked.
     function revokeAgent(address agent) external;
 
@@ -457,8 +420,7 @@ interface IGateway {
     /// @notice Recorded owner for `agent`, or `address(0)` if no policy is
     ///         recorded.
     /// @param agent The agent address whose recorded owner to look up.
-    /// @return The account that authorized `agent` or received it through
-    ///         `transferAgentOwnership`, or zero if none.
+    /// @return The account that registered `agent`, or zero if none.
     function agentOwner(address agent) external view returns (address);
 
     /// @notice Cumulative vault shares the agent has redeemed in the current

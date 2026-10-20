@@ -78,7 +78,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
     error DepositsArePaused();
     /// @notice `unpauseDeposits()` called while deposits were not paused.
     error DepositsNotPaused();
-    /// @notice Deposit amount is zero, or `authorizeAgent` policy has zero/inverted per-payment vs per-window caps.
+    /// @notice Deposit amount is zero, or registration policy has zero/inverted per-payment vs per-window caps.
     error InvalidAmount();
     /// @notice Deposit amount exceeds the agent's `maxPerPayment` cap.
     error AmountExceedsPerPaymentCap();
@@ -98,20 +98,18 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
     error FeeOnTransferDetected();
     /// @notice Pre/post-call invariant: gateway must never custody vault shares or leftover USDC across the call frame.
     error ShareCustodyInvariantViolated();
-    /// @notice `authorizeAgent` policy specifies `shareReceiver == address(0)`.
+    /// @notice Retired: a policy can no longer name a zero `shareReceiver`, because
+    ///         the receiver must equal the (non-zero) caller. Kept for ABI stability.
     error InvalidShareReceiver();
-    /// @notice `authorizeAgent` policy is inactive or `validUntil` is already in the past.
+    /// @notice registration policy is inactive or `validUntil` is already in the past.
     error InvalidValidUntil();
     /// @notice Caller is not the recorded owner of the target agent. Raised by
-    ///         `setPolicy`, `revokeAgent` and `transferAgentOwnership` when
-    ///         `msg.sender != agentOwner[agent]`.
+    ///         `setPolicy` when `msg.sender != agentOwner[agent]`, and by
+    ///         `revokeAgent` when the caller is neither the owner nor the agent.
     error NotAgentOwner();
-    /// @notice `transferAgentOwnership` named a destination that does not hold
-    ///         `ADMIN_ROLE`. An agent can only be handed to an `ADMIN_ROLE` holder.
-    error NewAgentOwnerNotAdmin();
-    /// @notice `authorizeAgent` called on an agent that already has a recorded
-    ///         owner. The existing owner must call `setPolicy` to update or
-    ///         `revokeAgent` to release the address before a new authorization.
+    /// @notice `revealAuthorization` named an agent whose registration is still
+    ///         live (`validUntil` not passed). The owner or the agent must call
+    ///         `revokeAgent`, or the policy must expire, before a new registration.
     error AgentAlreadyOwned();
     /// @notice `revealAuthorization` named an `agent` other than the caller, and the
     ///         agent has not consented to the caller as owner for this exact call.
@@ -135,11 +133,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
     /// @notice `revealAuthorization` called in the same block as the commitment.
     ///         Must wait at least one block before revealing.
     error CommitmentTooRecent();
-    /// @notice A caller without `ADMIN_ROLE` named a `shareReceiver` other than
-    ///         itself. Raised by `revealAuthorization` and `setPolicy`: every
-    ///         policy writer applies the same caller-dependent rule, judged on
-    ///         the caller's role at call time (`authorizeAgent` callers hold
-    ///         `ADMIN_ROLE`, so it never raises it).
+    /// @notice A caller named a `shareReceiver` other than itself. Raised by
+    ///         `revealAuthorization` and `setPolicy`: every policy writer applies
+    ///         the same rule to every caller, whatever its role (ACL-9).
     error ShareReceiverNotAuthorized();
     /// @notice `depositTo` was called with a destination not in the agent's
     ///         `allowedDestinations` list (when the list is non-empty), or the
@@ -207,7 +203,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
 
     /// @notice Pending authorization commitment. Stored by commitHash to allow
     ///         the depositor to reveal in a subsequent block, defeating
-    ///         mempool front-running of `authorizeAgent`.
+    ///         mempool front-running of `revealAuthorization`.
     /// @param committer   EOA that submitted the commitment (`msg.sender` at commit time).
     /// @param blockNumber Block number at which the commitment was submitted.
     struct Commitment {
@@ -225,7 +221,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
     mapping(address => AgentPolicy) public agents;
 
     /// @notice Recorded owner (depositor EOA) for each agent. Set on the
-    ///         first `authorizeAgent` call; cleared on `revokeAgent`. Used to
+    ///         `revealAuthorization`; cleared when the registration ends. Used to
     ///         gate `setPolicy` and `revokeAgent` so each depositor is the
     ///         sole authority over her own agent (issue #269).
     mapping(address => address) public agentOwner;
@@ -395,14 +391,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
         vaultContract = vault_;
         routerContract = IPortfolioRouter(router_);
 
-        // Redirect AGENT_ROLE administration to ADMIN_ROLE (F-01 fix-interaction
-        // warning). Without this, AGENT_ROLE's admin defaults to
-        // DEFAULT_ADMIN_ROLE; once the deploy handover revokes the deployer's
-        // Gateway DEFAULT_ADMIN_ROLE (ACL-1), any account holding only ADMIN_ROLE
-        // — i.e. the TimelockController after handover — could no longer authorize
-        // agents, permanently bricking agent onboarding. Pinning AGENT_ROLE's
-        // admin to ADMIN_ROLE (and gating `authorizeAgent` on ADMIN_ROLE) keeps
-        // agents grantable by whoever holds ADMIN_ROLE post-handover.
+        // Historical role-admin pin. The public grant/revoke/renounce methods
+        // revert for AGENT_ROLE whatever the stored admin is (ACL-9), so this
+        // only keeps `getRoleAdmin(AGENT_ROLE)` stable for existing readers.
         _setRoleAdmin(AGENT_ROLE, ADMIN_ROLE);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
@@ -473,21 +464,17 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
     }
 
     // -------------------------------------------------------------------
-    // Agent lifecycle — owner-gated
+    // Agent lifecycle — owner-consented (ACL-9)
     //
-    // First-time authorization records `msg.sender` as the agent's owner
-    // (`revealAuthorization` for anyone, `authorizeAgent` for ADMIN_ROLE).
-    // After that only the recorded owner can call setPolicy, revokeAgent
-    // or transferAgentOwnership (issue #269, docs/architecture.md §6).
+    // The only way to register an agent is commitAuthorization +
+    // revealAuthorization. The caller of the reveal becomes the agent's owner
+    // for that registration and is always the share receiver. No role can
+    // grant, revoke or renounce AGENT_ROLE through the public methods.
     //
-    // Writers of `agents[...]` / `agentOwner[...]` (issue #1476):
-    //   _authorizeAgentInternal  writes both; runs _validatePolicy(caller, p)
-    //   setPolicy                writes agents; runs _validatePolicy(caller, p)
-    //   transferAgentOwnership   writes agentOwner only; the destination
-    //                            must hold ADMIN_ROLE, which the caller-
-    //                            dependent shareReceiver rule does not bind,
-    //                            so the stored policy is not checked again
-    //   revokeAgent              deletes both; writes no policy, so no check
+    // Writers of `agents[...]` / `agentOwner[...]`:
+    //   _register        writes both; runs _validatePolicy(caller, p)
+    //   setPolicy        writes agents; runs _validatePolicy(caller, p)
+    //   _endRegistration deletes both, the role and the deposit window
     // -------------------------------------------------------------------
 
     /// @inheritdoc IGateway
@@ -507,51 +494,55 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
         // 1. Commitment must exist.
         if (c.committer == address(0)) revert CommitmentNotFound();
 
-        // 3. Must wait at least one block (front-running protection).
+        // 2. Must wait at least one block (front-running protection).
         if (block.number <= uint256(c.blockNumber)) revert CommitmentTooRecent();
 
-        // 4. Commitment must not be expired.
+        // 3. Commitment must not be expired.
         if (block.number > uint256(c.blockNumber) + COMMIT_EXPIRY_BLOCKS) {
             revert CommitmentExpired();
         }
 
-        // 5. Clear the commitment before the authorization logic (CEI).
+        // 4. Clear the commitment before the authorization logic (CEI).
         delete commitments[storageKey];
 
         emit CommitRevealed(msg.sender, commitHash, agent);
 
-        // 6. Perform the authorization (same logic as authorizeAgent).
-        _authorizeAgentInternal(agent, p);
-        // 7. The agent must have consented to this caller and this exact policy
+        // 5. Register the agent.
+        _register(agent, p);
+        // 6. The agent must have consented to this caller and this exact policy
         //    (core 1791), checked after the policy rules so their errors keep
         //    their order. The consent is a `commitAuthorization` the agent made from
-        //    its own key; it is cleared here. An agent that reveals for itself
-        //    consents by calling.
+        //    its own key; it is cleared here and expires like the owner's commitment.
+        //    An agent that reveals for itself consents by calling.
         if (agent != msg.sender) {
             bytes32 ck =
                 _commitmentKey(keccak256(abi.encode(msg.sender, keccak256(msg.data))), agent);
-            if (commitments[ck].committer != agent) revert OwnerConsentMissing();
+            Commitment storage consent = commitments[ck];
+            if (consent.committer != agent) revert OwnerConsentMissing();
+            if (block.number > uint256(consent.blockNumber) + COMMIT_EXPIRY_BLOCKS) {
+                revert CommitmentExpired();
+            }
             delete commitments[ck];
         }
     }
 
-    /// @inheritdoc IGateway
-    function authorizeAgent(address agent, AgentPolicy calldata p) external onlyRole(ADMIN_ROLE) {
-        _authorizeAgentInternal(agent, p);
-    }
-
-    /// @dev Shared authorization logic for both `authorizeAgent` (direct) and
-    ///      `revealAuthorization` (commit/reveal path).
-    function _authorizeAgentInternal(address agent, AgentPolicy calldata p) internal {
+    /// @dev Registration logic for `revealAuthorization`. An agent whose policy
+    ///      `validUntil` has passed is treated as unowned: the old registration
+    ///      is ended (emitting `AgentRevoked(old)`) before the new one starts.
+    function _register(address agent, AgentPolicy calldata p) internal {
         if (agent == address(0)) revert ZeroAddress();
-        if (agentOwner[agent] != address(0)) revert AgentAlreadyOwned();
+        address oldOwner = agentOwner[agent];
+        if (oldOwner != address(0)) {
+            if (agents[agent].validUntil >= block.timestamp) revert AgentAlreadyOwned();
+            _endRegistration(agent, oldOwner);
+        }
         _validatePolicy(msg.sender, p);
 
         agentOwner[agent] = msg.sender;
         agents[agent] = p;
 
-        // First-time grant. The role-separation override in AccessRoles
-        // will revert if the candidate already holds ADMIN/DEPOSIT_PAUSER.
+        // The role-separation override in AccessRoles reverts if the candidate
+        // already holds ADMIN/DEPOSIT_PAUSER.
         _grantRole(AGENT_ROLE, agent);
         _assertRoleSeparation(agent);
 
@@ -564,6 +555,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
     function setPolicy(address agent, AgentPolicy calldata p) external {
         if (agent == address(0)) revert ZeroAddress();
         if (agentOwner[agent] != msg.sender) revert NotAgentOwner();
+        // An expired registration cannot be revived: the agent is open to a new owner.
+        if (agents[agent].validUntil < block.timestamp) revert AgentPolicyExpired();
         _validatePolicy(msg.sender, p);
 
         agents[agent] = p;
@@ -574,46 +567,35 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
     }
 
     /// @inheritdoc IGateway
-    function transferAgentOwnership(address agent, address newOwner) external {
-        if (agent == address(0) || newOwner == address(0)) revert ZeroAddress();
-        address owner = agentOwner[agent];
-        if (owner != msg.sender) revert NotAgentOwner();
-        // The destination must hold ADMIN_ROLE. The caller-dependent
-        // shareReceiver rule does not bind an ADMIN_ROLE holder, so the
-        // stored policy is not checked again.
-        if (!hasRole(ADMIN_ROLE, newOwner)) revert NewAgentOwnerNotAdmin();
-
-        agentOwner[agent] = newOwner;
-        emit AgentOwnershipTransferred(agent, owner, newOwner);
-    }
-
-    /// @inheritdoc IGateway
     function revokeAgent(address agent) external {
         if (agent == address(0)) revert ZeroAddress();
         address owner = agentOwner[agent];
-        if (owner != msg.sender) revert NotAgentOwner();
+        if (owner == address(0) || (msg.sender != owner && msg.sender != agent)) {
+            revert NotAgentOwner();
+        }
+        _endRegistration(agent, owner);
+    }
 
+    /// @dev Ends a registration: clears policy, owner, role and the deposit
+    ///      budget, then emits `AgentRevoked`.
+    function _endRegistration(address agent, address owner) internal {
         delete agents[agent];
         delete agentOwner[agent];
-        if (hasRole(AGENT_ROLE, agent)) {
-            _revokeRole(AGENT_ROLE, agent);
-        }
+        _revokeRole(AGENT_ROLE, agent);
+        GatewayWindows.RollingWindow storage w = _depositWindow[agent];
+        w.head = 0;
+        w.count = 0;
+        w.total = 0;
+        delete agentDepositWindow[agent];
         emit AgentRevoked(agent, owner);
     }
 
     /// @dev The one policy validator every writer of `agents[...]` calls, so
-    ///      the rules for first-time authorization and for later updates
-    ///      cannot drift apart. It applies the caller-dependent rule, judged
-    ///      on `caller`'s role at call time (a caller without `ADMIN_ROLE`
-    ///      must name itself as `shareReceiver`; an `ADMIN_ROLE` caller may
-    ///      name any receiver), and then the caller-independent shape rules.
-    ///      Custom errors match the previous public surface so downstream
-    ///      clients (rmpc, dapp) keep the same revert vocabulary.
+    ///      the rules for first-time registration and for later updates
+    ///      cannot drift apart. Every caller must name itself as
+    ///      `shareReceiver`, whatever its role (ACL-9).
     function _validatePolicy(address caller, AgentPolicy calldata p) internal view {
-        if (!hasRole(ADMIN_ROLE, caller) && p.shareReceiver != caller) {
-            revert ShareReceiverNotAuthorized();
-        }
-        if (p.shareReceiver == address(0)) revert InvalidShareReceiver();
+        if (p.shareReceiver != caller) revert ShareReceiverNotAuthorized();
         if (!p.active) revert InvalidValidUntil();
         if (p.validUntil < block.timestamp) revert InvalidValidUntil();
         if (p.maxPerPayment == 0 || p.maxPerWindow == 0) revert InvalidAmount();
@@ -674,7 +656,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
         // 3. policy active and not expired.
         //
         // Note: the `!p.active` branch is defensive and unreachable through
-        // the current public API — `authorizeAgent` requires `p.active==true`
+        // the current public API — registration requires `p.active==true`
         // and `revokeAgent` `delete`s the policy AND revokes `AGENT_ROLE`,
         // so any caller reaching this point with the role granted has
         // `p.active==true`. Kept for defense-in-depth against future storage
