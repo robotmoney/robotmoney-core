@@ -17,7 +17,7 @@ import { keccak256, type Address, type Hex } from "viem";
 import { AdminFlow } from "../../src/components/AdminFlow";
 import { AgentsPanel } from "../../src/components/AgentsPanel";
 import type { VerificationState } from "../../src/lib/useGatewayVerifier";
-import { GatewayWriteCheck } from "../../src/lib/gatewayWriteCheck";
+import { GatewayWriteCheck, useGatewayWriteCheck } from "../../src/lib/gatewayWriteCheck";
 import { useGuardedWriteContract } from "../../src/lib/useGuardedWriteContract";
 
 const GATEWAY = "0x1111111111111111111111111111111111111111" as Address;
@@ -215,11 +215,7 @@ function writeInside(state: VerificationState, target: Address) {
     return null;
   }
   render(
-    <GatewayWriteCheck
-      gatewayAddress={GATEWAY}
-      verification={state}
-      adminTargets={[TIMELOCK, SAFE]}
-    >
+    <GatewayWriteCheck gatewayAddress={GATEWAY} verification={state}>
       <Probe />
     </GatewayWriteCheck>,
   );
@@ -227,37 +223,131 @@ function writeInside(state: VerificationState, target: Address) {
   write!.writeContract(variables as never);
 }
 
-describe("the gateway write check fails closed for admin targets (issue 1840)", () => {
-  const refused: VerificationState = {
+/** A Timelock schedule that forwards a call to `inner`. */
+function scheduleInside(state: VerificationState, inner: Address) {
+  let write: ReturnType<typeof useGuardedWriteContract> | undefined;
+  function Probe() {
+    write = useGuardedWriteContract();
+    return null;
+  }
+  render(
+    <GatewayWriteCheck gatewayAddress={GATEWAY} verification={state}>
+      <Probe />
+    </GatewayWriteCheck>,
+  );
+  write!.writeContract({
+    address: TIMELOCK,
+    abi: [],
+    functionName: "schedule",
+    args: [inner, 0n, "0x", "0x00", "0x00", 1n],
+  } as never);
+}
+
+/** Calls the check the way the Safe proposal panel does before it signs. */
+async function safeSignature(state: VerificationState, nested: Address) {
+  let check: ReturnType<typeof useGatewayWriteCheck>;
+  function Probe() {
+    check = useGatewayWriteCheck();
+    return null;
+  }
+  render(
+    <GatewayWriteCheck gatewayAddress={GATEWAY} verification={state}>
+      <Probe />
+    </GatewayWriteCheck>,
+  );
+  return check!({
+    target: SAFE,
+    nestedTarget: nested,
+    provider: (window as unknown as { ethereum: never }).ethereum,
+    chainId: 918453,
+  });
+}
+
+const gatewayReads = () => reads.filter((r) => r.params?.[0] === GATEWAY);
+const nap = () => act(() => new Promise((r) => setTimeout(r, 100)));
+
+describe("gateway-write-reverify: only gateway operations need the gateway (issue 1892)", () => {
+  const unverified: VerificationState = {
     status: "refused",
     reason: "unknown_revert",
     cause: "hash-mismatch",
   };
+  const absent: VerificationState = { status: "idle" };
 
-  it.each([
-    ["the Timelock", TIMELOCK],
-    ["the Safe", SAFE],
-  ])("refuses a write to %s when the gateway is not verified", async (_name, target) => {
-    writeInside(refused, target);
-    await act(() => new Promise((r) => setTimeout(r, 100)));
-    expect(writeSpy).not.toHaveBeenCalled();
+  // Absent, unverified and changed (the live implementation differs) gateways.
+  const states: Array<[string, VerificationState, Address]> = [
+    ["absent", absent, IMPL],
+    ["unverified", unverified, IMPL],
+    ["changed", verified, UPGRADED_IMPL],
+  ];
+
+  describe.each(states)("with a %s gateway", (_n, state, live) => {
+    beforeEach(() => {
+      liveImplementation = live;
+    });
+
+    it.each([
+      ["the Timelock", TIMELOCK],
+      ["the Safe", SAFE],
+      ["a vault", VAULT],
+      ["a token (approve)", USDC],
+    ])("sends a write to %s and reads nothing at the gateway", async (_name, target) => {
+      writeInside(state, target);
+      await waitFor(() => expect(writeSpy).toHaveBeenCalledTimes(1));
+      expect(gatewayReads()).toEqual([]);
+    });
+
+    it("signs a Safe proposal for a vaults-system target and reads nothing at the gateway", async () => {
+      await expect(safeSignature(state, VAULT)).resolves.toBeUndefined();
+      expect(gatewayReads()).toEqual([]);
+    });
   });
 
-  it("lets a non-admin write (an approve) through when the gateway is not verified", async () => {
-    writeInside(refused, USDC);
+  it("makes no gateway read when the wallet provider cannot read the gateway", async () => {
+    (window as unknown as { ethereum: { request: () => Promise<never> } }).ethereum = {
+      request: () => Promise.reject(new Error("rpc down")),
+    };
+    writeInside(verified, VAULT);
     await waitFor(() => expect(writeSpy).toHaveBeenCalledTimes(1));
   });
 
-  it("refuses when the wallet provider answers for another chain", async () => {
-    providerChain = "0x1";
-    writeInside(verified, TIMELOCK);
-    await act(() => new Promise((r) => setTimeout(r, 100)));
+  it("refuses a gateway send when the gateway is not verified", async () => {
+    writeInside(unverified, GATEWAY);
+    await nap();
     expect(writeSpy).not.toHaveBeenCalled();
   });
 
-  it("sends a Timelock write when the gateway is verified and unchanged", async () => {
-    writeInside(verified, TIMELOCK);
+  it("refuses a gateway send when the gateway changed", async () => {
+    liveImplementation = UPGRADED_IMPL;
+    writeInside(verified, GATEWAY);
+    await waitFor(() => expect(slotWasReread()).toBe(true));
+    await nap();
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("sends a gateway write when the gateway is verified and unchanged", async () => {
+    writeInside(verified, GATEWAY);
     await waitFor(() => expect(writeSpy).toHaveBeenCalledTimes(1));
     expect(slotWasReread()).toBe(true);
+  });
+
+  it("refuses a Timelock schedule that targets the gateway when the gateway changed", async () => {
+    liveImplementation = UPGRADED_IMPL;
+    scheduleInside(verified, GATEWAY);
+    await nap();
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("refuses a gateway-targeted Safe signature when the gateway changed or is unverified", async () => {
+    liveImplementation = UPGRADED_IMPL;
+    await expect(safeSignature(verified, GATEWAY)).rejects.toThrow();
+    await expect(safeSignature(unverified, GATEWAY)).rejects.toThrow();
+  });
+
+  it("refuses a gateway write when the wallet provider answers for another chain", async () => {
+    providerChain = "0x1";
+    writeInside(verified, GATEWAY);
+    await nap();
+    expect(writeSpy).not.toHaveBeenCalled();
   });
 });

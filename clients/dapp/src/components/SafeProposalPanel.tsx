@@ -260,7 +260,13 @@ function ActiveSafeProposal(props: ActiveProps) {
       const provider = (await connector.getProvider()) as Eip1193;
       // Issue 1840: the owner signature authorizes a gateway admin action, so the gateway is
       // re-verified at the latest block first, exactly as before a write.
-      if (gatewayCheck) await gatewayCheck({ target: safeAddress, provider, chainId });
+      if (gatewayCheck)
+        await gatewayCheck({
+          target: safeAddress,
+          nestedTarget: request.target,
+          provider,
+          chainId,
+        });
       const raw = await provider.request({
         method: "eth_signTypedData_v4",
         params: [address, m.build.typedDataJson],
