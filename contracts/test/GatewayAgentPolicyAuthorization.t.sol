@@ -32,7 +32,7 @@ abstract contract GatewayAgentPolicyFixture is Test {
 
     bytes32 internal ADMIN_ROLE;
     bytes32 internal AGENT_ROLE;
-    bytes32 internal PAUSER_ROLE;
+    bytes32 internal DEPOSIT_PAUSER_ROLE;
 
     address internal admin = makeAddr("admin");
     address internal pauser = makeAddr("pauser");
@@ -55,7 +55,7 @@ abstract contract GatewayAgentPolicyFixture is Test {
         );
         ADMIN_ROLE = gateway.ADMIN_ROLE();
         AGENT_ROLE = gateway.AGENT_ROLE();
-        PAUSER_ROLE = gateway.DEPOSIT_PAUSER_ROLE();
+        DEPOSIT_PAUSER_ROLE = gateway.DEPOSIT_PAUSER_ROLE();
         vm.startPrank(admin);
         gateway.grantRole(ADMIN_ROLE, adminOwner);
         gateway.grantRole(ADMIN_ROLE, adminB);
@@ -467,7 +467,7 @@ contract GatewayAgentRoleImmunityTest is GatewayAgentPolicyFixture {
         _setRoleAdmin(AGENT_ROLE, AGENT_ROLE);
         _assertImmune("self admin");
         // The role admin points at the pauser role.
-        _setRoleAdmin(AGENT_ROLE, PAUSER_ROLE);
+        _setRoleAdmin(AGENT_ROLE, DEPOSIT_PAUSER_ROLE);
         _assertImmune("pauser admin");
     }
 
@@ -488,8 +488,10 @@ contract GatewayAgentRoleImmunityTest is GatewayAgentPolicyFixture {
         // other role is DEFAULT_ADMIN_ROLE, held by `admin`.
         address newPauser = makeAddr("newPauser");
         vm.prank(admin);
-        gateway.grantRole(PAUSER_ROLE, newPauser);
-        assertTrue(gateway.hasRole(PAUSER_ROLE, newPauser), "admin could not grant the pauser role");
+        gateway.grantRole(DEPOSIT_PAUSER_ROLE, newPauser);
+        assertTrue(
+            gateway.hasRole(DEPOSIT_PAUSER_ROLE, newPauser), "admin could not grant the pauser role"
+        );
 
         vm.prank(stranger);
         vm.expectRevert(
@@ -497,15 +499,15 @@ contract GatewayAgentRoleImmunityTest is GatewayAgentPolicyFixture {
                 IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, bytes32(0)
             )
         );
-        gateway.grantRole(PAUSER_ROLE, stranger);
+        gateway.grantRole(DEPOSIT_PAUSER_ROLE, stranger);
 
         vm.prank(admin);
-        gateway.revokeRole(PAUSER_ROLE, newPauser);
-        assertFalse(gateway.hasRole(PAUSER_ROLE, newPauser), "admin could not revoke");
+        gateway.revokeRole(DEPOSIT_PAUSER_ROLE, newPauser);
+        assertFalse(gateway.hasRole(DEPOSIT_PAUSER_ROLE, newPauser), "admin could not revoke");
 
         vm.prank(pauser);
-        gateway.renounceRole(PAUSER_ROLE, pauser);
-        assertFalse(gateway.hasRole(PAUSER_ROLE, pauser), "pauser could not renounce");
+        gateway.renounceRole(DEPOSIT_PAUSER_ROLE, pauser);
+        assertFalse(gateway.hasRole(DEPOSIT_PAUSER_ROLE, pauser), "pauser could not renounce");
     }
 }
 
