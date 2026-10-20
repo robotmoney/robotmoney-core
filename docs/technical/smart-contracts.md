@@ -367,7 +367,7 @@ RobotMoneyVault, the three basket kinds, VaultRegistry, PortfolioRouter, Consens
 
 A freeze never pauses or alters `redeem`, `withdraw` or `redeemInKind` (ADR-0014 §4; the freeze invariants in `smart-contract-invariants.md`).
 
-**Retired storage slots.** Proxy layouts are append-only, so storage that lost its use stays in place under its original label and type. It is `internal`, never read and never written. `RobotMoneyGateway` keeps `icPolicy` (typed by an empty `IInvestmentCommitteePolicy` interface that exists only for this slot), `consensusReceipt` and `routerContract` (slot 2). The `AgentPolicy` struct keeps its withdraw fields (`assetRecipient`, `maxWithdrawPerPayment`, `maxWithdrawPerWindow`, `allowedSourceVaults`) as retired, unused members (owner decision 2026-10-20). `ConsensusRecommendationReceipt` keeps `gateway` and `icPolicy`. The layout snapshots for both contracts stay unchanged.
+**Retired storage slots.** Proxy layouts are append-only, so storage that lost its use stays in place under its original label and type. It is `internal`, never read and never written. `RobotMoneyGateway` keeps `icPolicy` (typed by an empty `IInvestmentCommitteePolicy` interface that exists only for this slot), `consensusReceipt` and `routerContract` (slot 2). The `AgentPolicy` struct keeps its withdraw fields (`assetRecipient`, `maxWithdrawPerPayment`, `maxWithdrawPerWindow`, `allowedSourceVaults`) as retired, unused members (owner decision 2026-10-20). The policy validator rejects any non-zero retired withdraw field: `assetRecipient`, `maxWithdrawPerPayment` and `maxWithdrawPerWindow` must be zero, `allowedSourceVaults` must be empty. No client reads the retired getters. `ConsensusRecommendationReceipt` keeps `gateway` and `icPolicy`. The layout snapshots for both contracts stay unchanged.
 
 ---
 
@@ -674,7 +674,7 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 - Controls router weights only; cannot govern vault internals, agent permissions, or protocol admin operations.
 - Exposes the resulting weights for rmpc and dapp reads.
 - `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE` (both self-administered) are held by the timelock after stage 11; the deployer holds nothing.
-- `RouterGovernance` holds router `ADMIN_ROLE`, router `WEIGHT_SETTER_ROLE` and the receipt register's `ADMIN_ROLE`, so it can release a receipt in the same call that applies it.
+- `RouterGovernance` holds router `ADMIN_ROLE`, router `WEIGHT_SETTER_ROLE` and a narrow release role on the receipt register (`RECEIPT_RELEASER_ROLE` or equivalent), so it can release a receipt in the same call that applies it. The receipt's `ADMIN_ROLE` is held by the timelock alone, which alone grants or revokes `RECEIPT_SUBMITTER_ROLE` (owner decision 2026-10-20; the deployed release v0.5.0 grants `RouterGovernance` the receipt `ADMIN_ROLE` instead).
 
 ### 9.2.2 Applying a receipt
 

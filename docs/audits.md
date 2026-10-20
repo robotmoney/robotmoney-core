@@ -624,18 +624,18 @@ and `dev` at `e362df0c`. Row `IC-1019-N` is the review's finding heading `### N.
 | IC-1019-8 | IC-1019 | Low | accepted-with-rationale | rmpc | — | rmpc keeps committee writes; receipt submit goes to the gateway. Open. |
 | IC-1019-9 | IC-1019 | Low | accepted-with-rationale | services/explorer-indexer, clients/explorer-api | — | Indexer and API serve committee and regime data. Open. |
 | IC-1019-10 | IC-1019 | Info | accepted-with-rationale | clients/dapp | — | Dapp ships committee and regime-feed components. Open. |
-| IC-1019-11 | IC-1019 | Info | accepted-with-rationale | plugins/robotmoney-swarm | — | Swarm plugin forms and submits tilts. Open. |
+| IC-1019-11 | IC-1019 | Info | accepted-with-rationale | plugins/robotmoney-swarm | — | Swarm plugin forms and submits tilts. Open. Cross-repo action before the plugin is deleted: robotmoney-frontend ships the swarm skill URL and its check-skill-url-reachability script monitors it; the frontend team retires that URL first, or the deletion breaks their check. |
 | IC-1019-12 | IC-1019 | Info | accepted-with-rationale | contracts/test, CI | — | Tests, the vote schema check and CI floors still cover the IC policy. Open. |
 | IC-1019-13 | IC-1019 | Low | accepted-with-rationale | docs/runbooks/contract-qa/template.yaml | — | Rehearsal runbook still runs the committee steps; changes with the tooling. Open. |
-| IC-1019-14 | IC-1019 | Low | accepted-with-rationale | scripts/runbook/validate-contract-qa.ts | #1887 (open) | Validator forbids editing a template step, so no step can be retired. Fix is in PR 1887, unmerged: a finished release pins templateSha and is then a record, so the template can change; v0.4.0 and v0.5.0 pinned to e362df0c. Open until it merges. |
+| IC-1019-14 | IC-1019 | Low | accepted-with-rationale | scripts/runbook/validate-contract-qa.ts | — | Validator forbids editing a template step, so no step can be retired. Fix is in PR 1887, unmerged, see the ledger rules in the header: a finished release pins templateSha and is then a record checked against the template at that commit, so the template can change; v0.4.0 and v0.5.0 pinned to e362df0c. Open until it merges. |
 | IC-1019-15 | IC-1019 | Info | accepted-with-rationale | plugins/robotmoney-analyst, publish-contracts evidence-check, suites 07/08/13/16, explorer-indexer, smoke-test | — | Surfaces the other findings do not list: the analyst skill text, the register-committee evidence shape, the ABI drift pins, the committee CI steps and floors, the indexer IC input, the public icPolicy/consensusReceipt getters, the IC_POLICY_ADDRESS wiring. Open. |
 
-### RS-1019 — rmpc scope review (2026-10-19, 13 findings)
+### RS-1019 — rmpc scope review (2026-10-19, 15 findings)
 
 Internal review of the code that still gives rmpc and the gateway jobs beyond an agent vault deposit, against the owner rule of
 2026-10-19 that rmpc is an end-user signer whose one on-chain write is a vault deposit through the gateway
 (`docs/code-review/20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md`). Checked at release v0.5.0 (core `57fbe618`) and
-`dev` at `e362df0c`. Row `RS-1019-N` is the review's finding heading `### N.`. Findings 10 to 13 were added 2026-10-20 from the owner decisions of that day. Every finding is open: no fix has landed.
+`dev` at `e362df0c`. Row `RS-1019-N` is the review's finding heading `### N.`. Findings 10 to 15 were added 2026-10-20 from the owner decisions of that day. Every finding is open: no fix has landed.
 
 | Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |
 |---|---|---|---|---|---|---|
@@ -652,6 +652,8 @@ Internal review of the code that still gives rmpc and the gateway jobs beyond an
 | RS-1019-11 | RS-1019 | Medium | accepted-with-rationale | RobotMoneyGateway, DeployTimelock, publish-contracts committee-register | — | ADMIN_ROLE may name any share receiver; transferAgentOwnership hands agents to admins. Open. |
 | RS-1019-12 | RS-1019 | Medium | accepted-with-rationale | RobotMoneyGateway | — | No self-revoke (revokeAgent is owner-only), an expired policy keeps the agent owned (AgentAlreadyOwned), and the reveal consent check has no expiry. Open. |
 | RS-1019-13 | RS-1019 | Info | accepted-with-rationale | publish-contracts ops and verify, suites 05/07, clients/dapp commitReveal | — | Surfaces the other findings do not list: derive-agents, the agent manifest fields verify requires, the AGENT_ADDRESSES wiring, the withdraw and router CI floors, the authorizeAgent comment. Open. |
+| RS-1019-14 | RS-1019 | Low | accepted-with-rationale | DeployRouterGovernance, RouterGovernance, ConsensusRecommendationReceipt | — | RouterGovernance holds the receipt's ADMIN_ROLE, the role admin of RECEIPT_SUBMITTER_ROLE; the target gives it a narrow release role and leaves ADMIN_ROLE with the timelock alone. Open. |
+| RS-1019-15 | RS-1019 | Low | accepted-with-rationale | RobotMoneyGateway | — | Gateway pins one vault and the router at initialize, and an empty allowedDestinations opens both; the target pins no list, requires a non-empty policy list of vaults and never the router. Open. |
 
 ### Gap analysis — process & coverage backlog (20260607-code-review-internal-claude-gap-analysis.md)
 

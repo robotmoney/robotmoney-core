@@ -23,7 +23,7 @@ SUBMITTER (records a receipt: id, payload digest, payload URI)
 SAFE schedules ONE timelock call                                   ← govern row `apply-receipt`
    │  RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)
    ▼
-timelock delay (172800 s on 8453)
+timelock delay (172800 s on 8453; 900 to 172799 s in a rehearsal, release runbook 4.10)
    ▼
 SAFE executes the call → receipt released, router weights applied
    ▼
@@ -99,7 +99,7 @@ grant. Only the rotation moves it.
    Never schedule them separately. The execute call does not touch `ADMIN_ROLE`,
    so the old `RouterGovernance` would keep it (caps, quarantine, default
    weights) between operations. The batch runs once the timelock delay has
-   passed (172800 s on 8453), counted from the proposal in step 2 and from the
+   passed (172800 s on 8453; 900 to 172799 s in a rehearsal, release runbook 4.10), counted from the proposal in step 2 and from the
    schedule. Anyone may then run the ready batch. To abort before execution, the
    Safe calls `router.cancelWeightSetterRotation()` and cancels the scheduled
    batch. The timelock cannot cancel.
@@ -148,8 +148,8 @@ immutable, so steps 3 and 4 apply to the deployed release only (§0):
    The deployer's `WEIGHT_SETTER_ROLE` on the new router must be dropped too.
    Step 2 covers it.
 2. Deploy a new `RouterGovernance` against it. `RouterGovernance.router` is an
-   immutable. The new instance starts empty. Run the stage 6 and 11 handoff
-   again for the new pair.
+   immutable. The new instance starts empty. Run the governance stage (7 on
+   v0.5.0) and the timelock stage (11) again for the new pair.
 3. The gateway has no router binding in the target: the `routerContract`
    slot is retired (owner decision 2026-10-20). A router change needs no
    gateway redeploy. The gateway keeps serving deposits into its allowed
@@ -214,7 +214,9 @@ The receipt submitter records the committee's consensus on the receipt
 contract (`ConsensusRecommendationReceipt.recordReceipt`, gated by
 `RECEIPT_SUBMITTER_ROLE`; `consensus-receipt-submitter-runbook.md`). On the
 deployed release the call goes through the gateway (§0). The receipt
-stores the id, the `keccak256` digest of the payload and the payload URI. It
+stores the id, the payload digest and the payload URI. The digest is
+`keccak256("robotmoney:consensus-receipt:v1\n" || compact JSON || "\n")`,
+never a plain `keccak256` of the file (`publish-contracts/src/receipt-digest.ts`). It
 moves no funds and calls no `setWeights`. Most receipts are recorded and never
 applied: the Safe applies a receipt by scheduling the call in Step 2 and
 declines one by doing nothing (D5 admin discretion,
@@ -231,7 +233,7 @@ bun publish-contracts/src/cli.ts govern --row apply-receipt \
 Before anything is sent the row checks, and exits `USAGE` on any failure:
 
 - the receipt is recorded on chain,
-- its stored digest equals `keccak256` of the payload bytes,
+- its stored digest equals `keccak256("robotmoney:consensus-receipt:v1\n" || payload bytes)` (the payload file as the canonical route serves it, with its trailing newline; `publish-contracts/src/receipt-digest.ts`),
 - the receipt is not yet released,
 - the payload's weight vector sums to 10 000 bps,
 - the vault set and order equal the registry's router-eligible list.
@@ -241,14 +243,14 @@ It then schedules ONE timelock call through the real Safe (`schedule`):
 Safe's signers sign one transaction. The CLI exits `GOVERN_PENDING` (exit 15)
 with the ready time and the exact resume command. On 8453 the row runs only
 when named with `--row apply-receipt` and a receipt id, as a post-launch action
-with its own 172800 s delay; it is never part of stage 13 (the four vault
+with its own 172800 s delay (900 to 172799 s in a rehearsal, release runbook 4.10); it is never part of stage 13 (the four vault
 unpauses). The Twin rehearsal runs the same row after the unpause rows and
 warps the delay. A Twin run proves the row executes on the real contracts; it
 is not evidence that mainnet governance works.
 
 ### Step 3 — the delay passes
 
-The timelock enforces its real delay (172800 s on 8453). To abort, the Safe
+The timelock enforces its real delay (172800 s on 8453; 900 to 172799 s in a rehearsal, release runbook 4.10). To abort, the Safe
 cancels the scheduled operation on the timelock before the delay passes.
 Nothing else can stop or speed up the operation.
 
@@ -273,7 +275,7 @@ core 1696), and rerun the stage 12 verifier, which labels the applied receipt an
 
 | Compromised role | Blast radius | Response |
 |---|---|---|
-| **Submitter EOA** (recorded a receipt) | Can anchor a wrong digest, polluting the public record; cannot release, cannot set weights. | New session id + public correction (`consensus-receipt-submitter-runbook.md`); revoke `RECEIPT_SUBMITTER_ROLE` via timelock (and the gateway `AGENT_ROLE` on the deployed release, §0). Never schedule `apply-receipt` for a receipt under correction. |
+| **Submitter Safe** (recorded a receipt) | Can anchor a wrong digest, polluting the public record; cannot release, cannot set weights. | New session id + public correction (`consensus-receipt-submitter-runbook.md`). Target: `revokeRole(RECEIPT_SUBMITTER_ROLE, safe)` via the timelock. Deployed release (v0.5.0): no `RECEIPT_SUBMITTER_ROLE` exists there; revoke with `InvestmentCommitteePolicy.revokeAgent` plus `RobotMoneyGateway.revokeAgent` (the timelock owns the agent, so both are timelock calls). Never schedule `apply-receipt` for a receipt under correction. |
 | **One Safe signer's key** | Can sign, alone, nothing: the Safe threshold needs more than one signer. | Rotate the signer on the Safe; cancel any operation that signer helped schedule and is still pending. |
 | **Payload file on the operator host** | Cannot pass the digest check unless it is the recorded payload; cannot change what the receipt says. | Rebuild from clean state; re-fetch the payload from the receipt's URI and re-run the row. |
 | **`ADMIN_ROLE` and `WEIGHT_SETTER_ROLE` on `RouterGovernance`** (held by the timelock) | Reaches `applyReceipt`, `setDefaultWeights` and `clearVotedWeights` only after a Safe-signed schedule and the delay. | The Safe cancels the pending operation; verify the submitter and weight-setter sets are still disjoint (`GovernanceSeparationInvariant.t.sol`). |

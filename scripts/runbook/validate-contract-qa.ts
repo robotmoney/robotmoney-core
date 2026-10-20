@@ -6,7 +6,7 @@
 // template's steps, unchanged and in order, plus the steps only that release adds, each marked `added: <release>`. This tool refuses
 // a release file that drops, edits or reorders a template step, and checks the commands against the real CLIs, so the YAML cannot drift.
 // The template itself may change. A finished release pins `templateSha`, the commit its template steps were copied from; it is then a
-// record and is no longer checked against the current template or CLIs.
+// record: it is checked add-only against the template at that commit (read from git), never against the current template or CLIs.
 //
 //   bun scripts/runbook/validate-contract-qa.ts                                    the template and every release file (CI)
 //   bun scripts/runbook/validate-contract-qa.ts --release v0.4.0 --target T --runnable
@@ -15,6 +15,7 @@
 //   bun scripts/runbook/validate-contract-qa.ts --check-sheet FILE --target T [--owner-signers N]
 //                                                                                   the run sheet agrees with the environment (chain, kind, delay, 1 USDC seed, caps, owners)
 // Exit 0: valid. Exit 1: problems (one per line on stderr). Exit 2: usage. No secret is read or written.
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -484,9 +485,17 @@ export function secretProblems(text: string, what: string): string[] {
   return out;
 }
 
+/** The template as committed at `sha`, read from this repo's history (the template's history lives here, whatever `root` is a copy of);
+ *  undefined when the commit or the file is not there. */
+export function templateAtCommit(sha: string): string | undefined {
+  try {
+    return execFileSync("git", ["-C", ROOT, "show", `${sha}:${QA_DIR}/template.yaml`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch { return undefined; }
+}
+
 export interface Loaded { template: { name: string; steps: RunbookStep[] }; releases: Map<string, ReleaseRunbook>; problems: string[] }
 /** Everything in docs/runbooks/contract-qa/: the template, every release file against it, and the commands against the real CLIs. */
-export function validateAll(root: string = ROOT, model: CliModel = loadModel(root)): Loaded {
+export function validateAll(root: string = ROOT, model: CliModel = loadModel(root), pinnedTemplate: (sha: string) => string | undefined = templateAtCommit): Loaded {
   const problems: string[] = [];
   const tplPath = join(root, QA_DIR, "template.yaml");
   const tplText = readFileSync(tplPath, "utf8");
@@ -503,9 +512,16 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
     try {
       const r = parseRelease(text, name);
       releases.set(name, r);
-      // A release pinned to templateSha is a record: its steps were checked against the template and the CLIs at that
-      // commit, so a later template or CLI change does not reopen it. An unpinned release is the one being prepared.
-      if (r.templateSha !== undefined) continue;
+      // A release pinned to templateSha is a record: its steps are checked against the template AT that commit, never the
+      // current one, and its commands were checked against the CLIs at that commit, so a later template or CLI change does
+      // not reopen it. The pin is read from git, so an edited record or a made-up commit is refused. An unpinned release is
+      // the one being prepared: it must match the current template and the current CLIs.
+      if (r.templateSha !== undefined) {
+        const pinned = pinnedTemplate(r.templateSha);
+        if (pinned === undefined) { problems.push(`releases/${f}: templateSha ${r.templateSha} has no ${QA_DIR}/template.yaml in git`); continue; }
+        try { problems.push(...checkAddOnly(parseTemplate(pinned), r)); } catch (e) { problems.push(`releases/${f}: template at ${r.templateSha}: ${(e as Error).message}`); }
+        continue;
+      }
       problems.push(...checkAddOnly(template, r));
       problems.push(...commandProblems(r.steps, model, root));
     } catch (e) { problems.push(...(e as Error).message.split("\n")); }

@@ -153,5 +153,5 @@ Until the code changes, operators run the gateway-routed procedures in
 **Committee write pins.** Today `rmpc committee vote-submit` and
 `rmpc receipt submit` sign to the gateway, so they check the gateway
 implementation pin. Once they call the committee contracts directly, no
-pin covers those proxies in the signing path. Recorded in
-`docs/architecture.md` §10.
+pin covers those proxies in the signing path. Raised in this review; it is
+not yet a row of `docs/architecture.md` §10.

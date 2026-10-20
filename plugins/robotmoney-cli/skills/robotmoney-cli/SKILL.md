@@ -5,11 +5,10 @@ description: >
   surface for the Robot Money Rust payment client, including read commands
   (get-vault, get-gateway, get-agent, get-roles, get-balance, get-allowance,
   get-deposit, get-tx, get-vaults, get-router, get-governance, get-timelock),
-  write commands (deposit, withdraw, status, self-check),
-  Investment Committee commands (committee
-  vote-submit), consensus recommendation receipt commands
-  (receipt verify, receipt submit), and the Investment Swarm signing
-  identity commands (committee-identity create, show-public-key, sign).
+  the one write command (deposit) with status and self-check, the read-only
+  consensus recommendation receipt command (receipt verify), and the
+  Investment Swarm signing identity commands (committee-identity create,
+  show-public-key, sign).
   Covers all flags, output shapes and preflight rules. rmpc is not a governance
   signer: it has no vote, propose or committee register command, and router
   weights change only through the Safe and the timelock.

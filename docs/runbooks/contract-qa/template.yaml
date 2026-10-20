@@ -539,7 +539,7 @@ steps:
     receipts: []
     irreversible: false
 
-  # ── Phase 8, observability: what the stack shows must equal the chain. ──
+  # ── Phase 9, failure drills: the pause path and the recovery path run on real contracts. ──
   - id: "P9.01-pause-all"
     standing: ["4.5", "4.6"]
     description: "pause-all pauses deposits on all four vaults with the emergency key, reads each back and writes the rollout report; withdrawals stay open"
@@ -663,5 +663,3 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: "twin"
-
-  # ── Phase 0, gate: nothing is sent. The same checks the 8453 plan job and every broadcasting run repeat. ──

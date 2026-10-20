@@ -10,12 +10,10 @@ description: >
   run the signer self-check before any write
   ("Is my signing backend ready?");
   submit a guarded USDC deposit through the gateway
-  ("Deposit 100 USDC for order 0x...");
-  submit a guarded gateway redemption (agent-initiated vault share withdrawal)
-  ("Withdraw 1000 shares from vault 0x... for order 0x...").
+  ("Deposit 100 USDC for order 0x..."). The deposit is the only write.
   Always run reads first, run `self-check` before any write, and refuse to
   proceed when preflight (caps, allowance, code-hash, fee cap, role,
-  deposit pause for a deposit) does not pass. A pause never blocks a withdraw.
+  deposit pause) does not pass.
 ---
 
 # robotmoney-user (`rmpc`)

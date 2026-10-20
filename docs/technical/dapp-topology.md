@@ -22,7 +22,9 @@ client of both, and it treats them as two separate sets of contracts
   router pins below (`VITE_VAULT_EXPECTED_*`, `VITE_ROUTER_EXPECTED_*`).
 - **rmpc gateway system.** `RobotMoneyGateway`. The dapp reads it, and
   the depositor's wallet writes to it: agent registration, policy,
-  revoke. Pause is `DEPOSIT_PAUSER_ROLE`, not the depositor. Its pins are the gateway pins below
+  revoke. A connected agent wallet has one write, its own self-revoke
+  (`revokeAgent` from the agent key, owner decision 2026-10-20). Pause is
+  `DEPOSIT_PAUSER_ROLE`, not the depositor. Its pins are the gateway pins below
   (`VITE_GATEWAY_EXPECTED_*`).
 
 The gateway depends on the vaults system. The vaults system never

@@ -9,7 +9,7 @@ uses one of these terms, this file is the canonical meaning.
 The vaults system is the Robot Money treasury product. It holds the
 vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), their adapters, the vault
 registry, the Portfolio Router and `RouterGovernance`. Its rebalancing
-input is the consensus recommendation receipt, recorded on
+signal is the consensus recommendation receipt, recorded on
 `ConsensusRecommendationReceipt` by a submitter holding
 `RECEIPT_SUBMITTER_ROLE`. The Investment Committee's analysts sign the receipt
 off-chain. The Safe multisig, through the TimelockController, governs it.
@@ -112,8 +112,8 @@ operation and expands that vault's security and audit surface.
 A vault receipt is the token issued by an individual vault to represent
 a depositor's claim on that vault.
 
-Vault receipts are held by the depositor (the agent's owner is always the
-share receiver). The Portfolio Router does not turn them into a separate
+Vault receipts are held by the depositor (shares from an agent deposit
+are minted to the owner). The Portfolio Router does not turn them into a separate
 outer share token.
 
 ## Portfolio Router

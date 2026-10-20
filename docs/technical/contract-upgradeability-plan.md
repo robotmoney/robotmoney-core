@@ -208,7 +208,10 @@ SHA on the Twin chain with `UPGRADE_MODE=upgradeable`
 timelock it upgrades the gateway proxy to a second copy of the release
 implementation, queues a second upgrade, freezes all nine core proxies in one
 batch bound to the reviewed `upgradeability.json`, and shows the queued upgrade
-is refused after the freeze with `UpgradesAreFrozen`. Verify then claims core
+is refused after the freeze with `UpgradesAreFrozen` (deployed release,
+v0.5.0). The target rehearsal covers the eight vaults-system proxies; the
+gateway proxy is upgraded and frozen in its own rehearsal, under its own
+upgrade timelock. Verify then claims core
 immutability. `evidence-check --upgrade-lifecycle` reads the record back from
 the chain. Each system's own rehearsal covers its own proxies (see "Two
 systems"). The release runbook (4.1 and 4.12) makes this job and an external

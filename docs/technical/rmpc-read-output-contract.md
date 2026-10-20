@@ -123,7 +123,8 @@ Before U6 none of the first four was raised anywhere, a cap breach printed
 DR-7). Two refusals that are not reason codes were added with them:
 `ErrAgentBindingMismatch` (the preflight's `agents(self).shareReceiver` or
 `agentOwner(self)` differs from the config's `share_receiver` / `agent_owner`,
-QA plan D2) and `ErrMinAssetsPerLegRequired` (`withdraw-router` without a
+QA plan D2; `share_receiver` must equal `agent_owner`, or is derived from it,
+because the share receiver is always the owner, owner decision 2026-10-20) and `ErrMinAssetsPerLegRequired` (`withdraw-router` without a
 floor; retired in the target with `withdraw-router`, see the note above).
 
 QA plan P3 (issue 1810) added `ErrImplementationNotApproved`. Every write

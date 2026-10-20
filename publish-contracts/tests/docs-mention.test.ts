@@ -132,12 +132,15 @@ describe("the CLI help and architecture 4.9 describe the one-call apply and both
     expect(paragraph).toContain("lastAppliedRecordedAt");
     expect(paragraph).toMatch(/--row release-receipt .*is refused with USAGE/);
   });
-  test("docs/architecture.md section 4.9 names both ADMIN_ROLE holders and no longer says exactly one holder", () => {
+  // Owner decision 2026-10-20: RouterGovernance holds a narrow release role on the receipt; the receipt ADMIN_ROLE stays with the timelock alone.
+  test("docs/architecture.md section 4.9 gives RouterGovernance a release role and the timelock alone the receipt ADMIN_ROLE", () => {
     const arch = readFileSync(join(ROOT, "docs", "architecture.md"), "utf8");
     const s49 = arch.slice(arch.indexOf("### 4.9 "), arch.indexOf("\n## 5. "));
     expect(s49.length).toBeGreaterThan(0);
     expect(s49).not.toContain("exactly one holder");
-    expect(s49).toContain("has two holders: the\n`TimelockController` and `RouterGovernance`");
+    expect(s49).not.toContain("has two holders");
+    expect(s49).toContain("RECEIPT_RELEASER_ROLE");
+    expect(s49).toContain("held by the `TimelockController` alone");
     expect(s49).toContain("ReceiptNotNewerThanApplied");
     expect(s49).toMatch(/`release-receipt` is refused with USAGE/);
   });

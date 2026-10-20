@@ -20,7 +20,7 @@ agents. It is built as **two separate systems** (owner decision,
   (every library in `contracts/lib/` except `GatewayWindows`, which is the
   gateway's rolling-window library),
   the rmAGENT price recorder, `VaultRegistry`, `PortfolioRouter`,
-  `RouterGovernance`, and the rebalancing input contract
+  `RouterGovernance`, and the rebalancing signal contract
   `ConsensusRecommendationReceipt`. A Safe
   multisig governs it through a TimelockController. It is deployed in its
   own run (the rehearsal deploy runbook, `docs/runbooks/contract-qa/`) and
@@ -689,14 +689,18 @@ line of this lifecycle authorises forced or admin-driven migration.
 
 ### 4.8 Receipt Submitter Authority
 
-The vaults system has one rebalancing input: the consensus recommendation
-receipt (§4.9). Nothing else on chain carries an allocation signal. There is
+The vaults system has one rebalancing signal: the consensus recommendation
+receipt (§4.9). The vector the Safe schedules through `applyReceipt` is the
+input. Nothing else on chain carries an allocation signal. There is
 no committee registry contract, no on-chain committee membership, and no
 on-chain tilt or vote record.
 
 **Submitter role.** `ConsensusRecommendationReceipt` defines
 `RECEIPT_SUBMITTER_ROLE`. Its role admin is `ADMIN_ROLE` on the same
-contract, which the `TimelockController` holds in production (§4.5). A
+contract, which the `TimelockController` alone holds in production (§4.5).
+The timelock alone grants or revokes `RECEIPT_SUBMITTER_ROLE`.
+`RouterGovernance` holds no receipt `ADMIN_ROLE`; it holds only a narrow
+release role (owner decision 2026-10-20, §4.9.2). A
 submitter is granted only by a Safe-scheduled timelock call,
 `grantRole(RECEIPT_SUBMITTER_ROLE, submitter)` (publish-contracts govern row
 `register-submitter`). Revoking a submitter is the matching `revokeRole`
@@ -797,7 +801,7 @@ signatures.
 | Call | Site | Authority |
 |---|---|---|
 | `recordReceipt(bytes32 receiptId, bytes32 payloadDigest, string payloadUri)` | `ConsensusRecommendationReceipt` | the submitter calls it directly; it must hold `RECEIPT_SUBMITTER_ROLE` on the receipt contract |
-| `releaseReceipt(bytes32 receiptId)` | `ConsensusRecommendationReceipt` | `ADMIN_ROLE`, held by the `TimelockController` and by `RouterGovernance` |
+| `releaseReceipt(bytes32 receiptId)` | `ConsensusRecommendationReceipt` | `RECEIPT_RELEASER_ROLE` (or an equivalent single-purpose release role), held by `RouterGovernance`; its role admin is the receipt's `ADMIN_ROLE`, held by the `TimelockController` alone (target; the deployed release v0.5.0 gates release on `ADMIN_ROLE`) |
 | `applyReceipt(bytes32 receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps)` | `RouterGovernance` | `WEIGHT_SETTER_ROLE`, held by the `TimelockController` |
 
 `receiptId` is
@@ -809,14 +813,17 @@ refusing an existing id enforces **one receipt per session per subject**.
 **Who can release.** Release never involves the gateway. INV-3 requires
 `ADMIN_ROLE` on the receipt contract to stay under the
 `TimelockController`, so the gateway never holds it.
-`ADMIN_ROLE` on the receipt contract has two holders: the
-`TimelockController` and `RouterGovernance` (granted by the governance
-stage, issue 1698). `RouterGovernance` holds it so `applyReceipt` can
-release a receipt in the same call that sets its vector on the router.
-`applyReceipt` itself is gated by `WEIGHT_SETTER_ROLE`, which only the
-timelock holds, so every release still passes through the Safe and the
-timelock delay. The stage 12 verifier asserts both holders ("receipt:
-ADMIN_ROLE held by timelock" and "receipt: ADMIN_ROLE held by governance").
+The `TimelockController` is the only holder of the receipt's `ADMIN_ROLE`.
+It alone grants or revokes `RECEIPT_SUBMITTER_ROLE`. `RouterGovernance`
+holds a narrow release role on the receipt (`RECEIPT_RELEASER_ROLE`, or an
+equivalent single-purpose role) so `applyReceipt` can release a receipt in
+the same call that sets its vector on the router. It holds no receipt
+`ADMIN_ROLE` (owner decision 2026-10-20). `applyReceipt` itself is gated by
+`WEIGHT_SETTER_ROLE`, which only the timelock holds, so every release still
+passes through the Safe and the timelock delay. The verifier asserts both
+facts ("receipt: ADMIN_ROLE held by timelock only" and "receipt: release
+role held by governance"). The deployed release (v0.5.0) instead grants
+`RouterGovernance` the receipt's `ADMIN_ROLE`; there
 `testAdminRoleHeldByTimelock` and
 `testReleaseRevertsUnlessRoutedThroughTimelock` assert that no EOA, admin
 or gateway holds the role.
@@ -829,7 +836,7 @@ publish-contracts/src/cli.ts govern --row apply-receipt --receipt-id
 Safe executes it. On Base mainnet (8453) it is a standalone post-launch
 action with its own 48-hour delay, never part of stage 13. The row
 `release-receipt` is refused with USAGE once `RouterGovernance` holds the
-receipt `ADMIN_ROLE` (issue 1831). A release alone would burn the receipt:
+receipt release role (issue 1831). A release alone would burn the receipt:
 `applyReceipt` then reverts `ReceiptAlreadyReleased`, so its vector could
 never be applied. The evidence check still parses historical
 `receipt_releases` entries.
@@ -1022,21 +1029,28 @@ never agreed to.
 
 The gateway is the permissions and agent-safety layer for autonomous
 access. It is not a vault, not the Portfolio Router, and not an adapter.
-It sits between `rmpc`/agent keys and the vault deposit surface so an
-agent can only deposit into an allowed vault under a depositor-owned
+It sits between `rmpc`/agent keys and the ERC-4626 deposit surface so an
+agent can only deposit into an allowed destination under a depositor-owned
 policy.
 
 The gateway and `rmpc` form the rmpc gateway system, separate from the
-vaults system (§1). The gateway depends on the vaults system; the vaults
-system never depends on the gateway. The gateway is deployed in its own
-run, after the vaults system, and reads the vaults system's addresses for
-its allowed destinations. It has its own runbook and CI. Who governs the
-gateway is an open question for its own release (§10). The gateway never
-touches committee or receipt state.
+vaults system (§1). The gateway is a general-purpose tool, decoupled from
+the Robot Money vaults (owner decision 2026-10-20). It pins no vault list.
+It depends on the vaults system only through the public ERC-4626 deposit
+surface; the vaults system never depends on the gateway (`SYS-1`). The
+depositor's policy `allowedDestinations` names the contracts the agent may
+deposit into. The list must be non-empty. The gateway validates only that
+a deposit's destination is in that list. Choosing the right contracts is
+the owner's job, done offline, with `rmpc`'s config naming them at setup.
+The router is never a destination. The gateway is deployed in its own
+run, after the vaults system. It has its own runbook and CI. Who governs
+the gateway is an open question for its own release (§10). The gateway
+never touches committee or receipt state.
 
 The depositor owns the policy: valid-until, max per payment, max per
-window, share receiver (always the owner), and allowed vaults. The Robot Money team
-does not manage individual depositor agent policies at runtime.
+window, share receiver (always the owner), and allowed destinations. The
+Robot Money team does not manage individual depositor agent policies at
+runtime.
 
 Agent ownership and policy rules (issue #1476):
 
@@ -1044,7 +1058,7 @@ Agent ownership and policy rules (issue #1476):
   only way to authorize an agent is `commitAuthorization` +
   `revealAuthorization`. The gateway has no admin shortcut: there is no
   `authorizeAgent` (owner decision 2026-10-20). No role can register an
-  agent without the agent's consent;
+  agent. Only the depositor can, with the agent's consent;
 - an agent address must consent before another account becomes its owner
   (issue #1791). For a reveal naming an `agent` other than the caller, the
   agent first submits, from its own key through `commitAuthorization`,
@@ -1057,9 +1071,30 @@ Agent ownership and policy rules (issue #1476):
   `commitAuthorization` transaction before the depositor reveals;
 - only the recorded owner can call `setPolicy` or `revokeAgent` on that
   agent. `ADMIN_ROLE` grants no authority over any agent;
-- an agent's owner never changes. There is no ownership transfer. To move
-  an agent to a new owner, the owner revokes it and the new owner
-  authorizes it again with the agent's consent (owner decision 2026-10-20);
+- an agent's owner never changes within one registration. There is no
+  ownership transfer. To move an agent to a new owner, the owner revokes
+  it and the new owner authorizes it again with the agent's consent (owner
+  decision 2026-10-20). Indexers key agents on (address, registration);
+- expiry frees the address. A reveal naming an agent whose policy
+  `validUntil` has passed treats it as unowned: the gateway clears the old
+  owner and policy, resets the agent's rolling deposit window, emits
+  `AgentRevoked(old)`, then registers the new owner. `setPolicy` by the
+  old owner after expiry reverts. The race where the old owner extends
+  `validUntil` before the new reveal lands is accepted by the owner (owner
+  decision 2026-10-20);
+- `AGENT_ROLE` is ungrantable and unrevokable by any role, in code. The
+  gateway overrides `grantRole`, `revokeRole` and `renounceRole` to revert
+  for `AGENT_ROLE` regardless of the stored role admin, so
+  `DEFAULT_ADMIN_ROLE` cannot reach it through an unset role admin. The
+  only exits are the owner's `revokeAgent` and the agent's own
+  `revokeAgent` (self-revoke). Both clear `agents[]`, `agentOwner` and the
+  role, and reset the agent's rolling deposit window (owner decision
+  2026-10-20);
+- the agent's consent expires. The consent commitment lapses after
+  `COMMIT_EXPIRY_BLOCKS` (256 blocks), like the depositor's commitment, as
+  a code requirement. The order is: agent consent first, then the
+  depositor's commit, then the reveal within 256 blocks of both. Today's
+  reveal checks no consent expiry (finding 12 in `docs/code-review/20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md`);
 - the share receiver is always the owner. Every write of a policy
   (`revealAuthorization`, `setPolicy`) runs one shared validator, and that
   validator requires `shareReceiver == msg.sender` for every caller. No
@@ -1086,20 +1121,24 @@ depositor's authorization and policy calls above (`commitAuthorization`,
 - the agent cannot raise caps or expand destinations;
 - the agent cannot add vaults, change mandates, alter router weights, or
   bypass disabled vaults;
-- the gateway enforces amount, expiry, window usage, allowed vault,
+- the gateway enforces amount, expiry, window usage, allowed destination,
   idempotency, deposit pause, and share receiver on-chain;
 - the client must read registry, vault status, policy, allowance, balance,
   and projected cap usage before signing.
 
 For a deposit, the gateway pulls USDC from the agent, enforces policy, and
-forwards the allowed deposit to an allowed vault. The resulting vault
-shares are minted to the policy-configured share receiver. The gateway has
+forwards the allowed deposit to an allowed destination. The resulting
+shares are minted to the owner. The gateway has
 no withdrawal path and no Portfolio Router path. The depositor withdraws
 or redeems those shares directly on the vault, like any human wallet.
 Retired storage stays in place: the gateway keeps its `routerContract`
 slot (slot 2) and the `AgentPolicy` struct keeps its withdraw fields
 (`assetRecipient`, `maxWithdrawPerPayment`, `maxWithdrawPerWindow`,
-`allowedSourceVaults`) as unused members (owner decision 2026-10-20).
+`allowedSourceVaults`) as unused members (owner decision 2026-10-20). The
+policy validator rejects any non-zero retired withdraw field:
+`assetRecipient`, `maxWithdrawPerPayment` and `maxWithdrawPerWindow` must
+be zero, `allowedSourceVaults` must be empty. No client reads the retired
+getters.
 
 ### 5.3 Human Dapp
 
@@ -1464,8 +1503,8 @@ Non-authoritative sources:
 ### 6.2 Custody
 
 Robot Money does not custody user private keys. Vault assets are held by
-vaults or adapters. Vault receipts are held by the depositor or the
-depositor's configured share receiver. The Portfolio Router does not
+vaults or adapters. Vault receipts are held by the depositor. Shares from an agent deposit
+are minted to the owner. The Portfolio Router does not
 custody an outer share position under the current product definition.
 
 ### 6.3 Role Separation
@@ -1744,7 +1783,7 @@ stays §8 because other documents cite it by number.
 | --- | --- | --- |
 | Portfolio Router contract design | Resolved: `contracts/PortfolioRouter.sol` is shipped. Execution model is all-or-revert; contract API, preview call signatures, cap enforcement across legs, and weight-execution path are all implemented. `VaultRegistry.isRouterEligible` expresses production readiness as registry state (see §4.2). The `router` stage deploys it on every chain and Deploy 2 on Base 8453 recorded it in `router.json` (§4.2). | — |
 | Vault registry contract | Resolved: `contracts/VaultRegistry.sol` is shipped with stable read methods and event history, indexed by the explorer. Router eligibility is expressed as `setRouterEligible(vault, eligible)` on the registry. | — |
-| Router-weight governance implementation | Resolved: `contracts/RouterGovernance.sol` holds `WEIGHT_SETTER_ROLE` on the Portfolio Router and the timelock holds `ADMIN_ROLE` on it, so the Safe, through the timelock, is the only body that changes router weights. A weight change is one timelock call, `RouterGovernance.applyReceipt`, that releases the Investment Committee's consensus receipt and applies its vector (govern row `apply-receipt`, core 1696). `contracts/script/DeployRouterGovernance.s.sol` grants the deployed `RouterGovernance` the router roles it needs to reach `setWeights` and `setDefaultWeights`, and the receipt register's `ADMIN_ROLE` it needs to release a receipt. `RouterGovernance` has no voting function (issue 1698). There is no voting by token holders or anyone else. | The Safe through the timelock is the only governance body. |
+| Router-weight governance implementation | Resolved: `contracts/RouterGovernance.sol` holds `WEIGHT_SETTER_ROLE` on the Portfolio Router and the timelock holds `ADMIN_ROLE` on it, so the Safe, through the timelock, is the only body that changes router weights. A weight change is one timelock call, `RouterGovernance.applyReceipt`, that releases the Investment Committee's consensus receipt and applies its vector (govern row `apply-receipt`, core 1696). `contracts/script/DeployRouterGovernance.s.sol` grants the deployed `RouterGovernance` the router roles it needs to reach `setWeights` and `setDefaultWeights`, and the narrow receipt release role (`RECEIPT_RELEASER_ROLE` or equivalent) it needs to release a receipt. The receipt's `ADMIN_ROLE` stays with the timelock alone (owner decision 2026-10-20; the deployed release v0.5.0 grants `RouterGovernance` the receipt `ADMIN_ROLE` instead). `RouterGovernance` has no voting function (issue 1698). There is no voting by token holders or anyone else. | The Safe through the timelock is the only governance body. |
 | Protocol-asset and agent-token vault execution | Resolved (contracts shipped): `contracts/vaults/ProtocolAssetVault.sol` (wETH/cbBTC at launch; wSOL has no usable pool) and `contracts/vaults/AgentTokenVault.sol` (admin-curated agent-economy tokens) are in the source tree. Router eligibility for each vault remains ADMIN_ROLE-gated via `VaultRegistry.setRouterEligible`: both vaults stay ineligible by default until pool cardinality, per-asset TWAP windows, and the intra-vault rebalancing model are certified (see `docs/development/open-questions.md` §3.15). | Flip `isRouterEligible` only after TWAP windows, pool cardinality, and the rebalancing model are certified per §4.1. |
 | Management fee and swap-fee-share mechanism | Resolved: deferred to a future phase. Current phase ships exit-fee-only disclosure. | Require a separate ADR and contract design before management fee or swap-fee-share are implemented. |
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |
@@ -1753,7 +1792,7 @@ stays §8 because other documents cite it by number.
 | Production signer vendor | No HSM/KMS/device-bound signer vendor is chosen, and none is required: the rmpc deposit signs with the software keystore on every chain and prints the production warning first on Base mainnet (owner decisions 2026-10-06, issue #1545, and 2026-10-14, QA plan Decision D12). | Keep the signer backend trait stable so an operator who picks HSM/KMS can add it. Hardware stays optional, never required. |
 | Dapp hosting and CSP | Resolved: strict CSP shipped in PR #735 via `clients/dapp/src/lib/csp.ts` Vite plugin and `clients/dapp/scripts/check-csp.sh` CI check. | Maintain strict CSP policy; enforce via CI `check-csp.sh`; require static hosting with pinned dependencies and release provenance before public mainnet use. |
 | Email/notification provider | No product or technical doc selects one. | Leave out until a concrete notification workflow is specified. |
-| Gateway governance | Open. The gateway is a separate system from the vaults (owner decision, 2026-10-19, §1). Who holds its `ADMIN_ROLE` is decided in the gateway's own release. | Not chosen. Decide in the gateway release. |
+| Gateway governance | Open. The gateway is a separate system from the vaults (owner decision, 2026-10-19, §1). Who holds its `ADMIN_ROLE` is decided in the gateway's own release. The gateway release must name its own upgrade timelock (`GovernedUpgrade.init` refuses zero). Reusing the vaults timelock is a decision, not a default. Every gateway upgrade re-runs the `ACL-9` static guard on the upgrade artifact (owner decision 2026-10-20). | Not chosen. Decide in the gateway release. |
 
 ## 11. Source Coverage
 

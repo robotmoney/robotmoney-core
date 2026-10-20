@@ -6,8 +6,8 @@
 - **Commits checked:** release v0.5.0 at core `57fbe618` (tag
   `release/v0.5.0-rehearsal`, branch `releases-0.5.x`) and `dev` at
   `e362df0c`.
-- **Reviewed at:** 2026-10-19. Findings 10 to 13 added 2026-10-20. Findings
-  1, 2, 5, 6, 9, 10 and 11 corrected 2026-10-20 after an adversarial check
+- **Reviewed at:** 2026-10-19. Findings 10 to 15 added 2026-10-20. Findings
+  1, 2, 5, 6, 9, 10, 11 and 12 corrected 2026-10-20 after an adversarial check
   against the code.
 - **Design under test:** the owner rule of 2026-10-19, extended 2026-10-20.
   `rmpc` is an agentic cryptographic signer for end users. Its uses are
@@ -42,8 +42,10 @@ recording. Each one has contract code, client commands, tests, CI, plugin
 text and dapp or indexer surfaces. None is needed for the vault deposit.
 Beyond those four jobs, the gateway gives admins three powers over agents that
 the design denies: registering one, revoking one and owning one. It also
-denies an agent the exit the design grants it. Thirteen findings: five
-Medium, five Low, three Info.
+denies an agent the exit the design grants it. The governance deploy gives
+`RouterGovernance` the receipt's `ADMIN_ROLE`, and the gateway pins one
+vault and the router at initialization. Fifteen findings: five Medium,
+seven Low, three Info.
 
 ## Findings
 
@@ -64,6 +66,12 @@ Medium, five Low, three Info.
   (`scripts/ci/check-core-storage-layout.sh`) rejects a struct member
   removal. Only the validation that reads them and the withdraw code go. The
   ABI tuple keeps the four fields. Callers pass zero values.
+- **Still open in `_validatePolicy`:** the validator accepts non-zero
+  withdraw fields today (`RobotMoneyGateway.sol:633-639` checks the
+  recipient and the window cap when `maxWithdrawPerPayment > 0`). The
+  target rejects any non-zero value in the four retired fields (owner
+  decision 2026-10-20), so a policy that still asks for a withdrawal cannot
+  be stored.
 
 ### 2. The gateway still deposits into the Portfolio Router
 
@@ -180,6 +188,14 @@ Medium, five Low, three Info.
     `_revokeRole` override (`RobotMoneyGateway.sol:363-375`) only floors the
     `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` counts. It does not refuse
     `AGENT_ROLE`. An admin can strip any agent.
+  - `renounceRole(AGENT_ROLE, agent)` is a third path. OpenZeppelin's
+    `renounceRole` lets the holder drop the role itself. It calls the
+    internal `_revokeRole` only, so `agents[agent]` and `agentOwner[agent]`
+    stay set while the role is gone: a half-revoked agent the owner link
+    still claims.
+  - Removing the `_setRoleAdmin(AGENT_ROLE, ADMIN_ROLE)` line is no fix. A
+    role whose admin is never set falls back to `DEFAULT_ADMIN_ROLE`, whose
+    holder can then grant it. Only an override closes the path.
 - **Risk:** a compromised or mistaken admin can create agents that deposit
   under a policy the admin wrote. The same admin can cut off any depositor's
   agent. End users never need any of the three paths.
@@ -200,13 +216,15 @@ Medium, five Low, three Info.
     validator writer list) and the generated contract docs.
 - **Fix:**
   - Delete `authorizeAgent` from the gateway and `IGateway`.
-  - Override `grantRole` and `revokeRole` to revert for `AGENT_ROLE`. Both
-    are `public virtual` in OpenZeppelin `AccessControlUpgradeable`. Do not
-    override `_grantRole` or `_revokeRole` for this: `revealAuthorization`
-    grants through the internal `_grantRole`, and `revokeAgent` revokes
-    through the internal `_revokeRole`. An internal override would break
-    both. The role admin is proxy storage written by `initialize`, so a
-    live proxy keeps it. The override is what makes it harmless.
+  - Override `grantRole`, `revokeRole` and `renounceRole` to revert for
+    `AGENT_ROLE`, for every caller (owner decision 2026-10-20: the role is
+    ungrantable and unrevokable by any role). All three are `public virtual`
+    in OpenZeppelin `AccessControlUpgradeable`. Do not override `_grantRole`
+    or `_revokeRole` for this: `revealAuthorization` grants through the
+    internal `_grantRole`, and `revokeAgent` revokes through the internal
+    `_revokeRole`. An internal override would break both. The role admin is
+    proxy storage written by `initialize`, so a live proxy keeps it. The
+    override is what makes it harmless.
   - `revokeAgent` stays the only revoke path. Finding 12 widens its callers.
   - Move test setup to commit and reveal. Delete the dapp button and preview.
   - This adds no storage, so the layout gate is unaffected.
@@ -304,6 +322,14 @@ Medium, five Low, three Info.
     agent made long ago still passes. The consent is consumed on reveal
     (`delete commitments[ck];`, line 546), so it does not survive a reveal
     or a later revoke.
+  - `revokeAgent` deletes `agents[agent]` and `agentOwner[agent]` only
+    (`RobotMoneyGateway.sol:608-609`). It does not reset
+    `_depositWindow[agent]` (line 309). An address registered again inside
+    the window inherits the old agent's spent deposit budget.
+  - Expiry frees nothing on reveal. `_authorizeAgentInternal` reads only
+    `agentOwner[agent] != address(0)` (line 559), never `validUntil`, so a
+    reveal for an address whose policy has lapsed still reverts
+    `AgentAlreadyOwned`.
 - **Risk:** an agent cannot leave a depositor it no longer trusts. A key
   owner cannot re-register an address after the old policy lapses. A stale
   consent lets the owner bind the agent to a policy the agent agreed to
@@ -311,8 +337,13 @@ Medium, five Low, three Info.
 - **Fix:**
   - `revokeAgent` accepts `msg.sender == agent` as well as the owner.
   - `_authorizeAgentInternal` treats an owner link whose policy has expired
-    (`agents[agent].validUntil < block.timestamp`) as free. Either clear the
-    link on the next registration, or add a permissionless `clearExpired`.
+    (`agents[agent].validUntil < block.timestamp`) as free: the reveal
+    clears the old link and the old windows, then stores the new policy
+    (owner decision 2026-10-20: expiry frees the address on reveal; the
+    race between a renewal by the old owner and a reveal by a new one is
+    accepted, first reveal wins).
+  - `revokeAgent` also deletes `_depositWindow[agent]`, so a re-registered
+    address starts with a fresh budget.
   - The step-7 check rejects a consent whose `blockNumber` is older than
     `COMMIT_EXPIRY_BLOCKS`, with the same rule as step 4.
   - These add no storage. The layout gate is unaffected. Add red tests for
@@ -344,6 +375,58 @@ Medium, five Low, three Info.
     `the same address normalisation authorizeAgent uses`. The comment goes
     with finding 10. The tuple stays, because the struct keeps its fields
     (finding 1).
+
+### 14. `RouterGovernance` holds the receipt's `ADMIN_ROLE`
+
+- **Severity:** Low.
+- **Design:** the timelock holds the receipt contract's `ADMIN_ROLE` and
+  alone grants or revokes `RECEIPT_SUBMITTER_ROLE`. `RouterGovernance`
+  needs only to release the receipt it applies (owner decision 2026-10-20).
+- **Code:**
+  - `DeployRouterGovernance.s.sol` grants the deployed `RouterGovernance`
+    the receipt register's `ADMIN_ROLE`
+    (`contracts/script/DeployRouterGovernance.s.sol:26` in the header,
+    `RECEIPT_ADMIN_ROLE` at line 50).
+  - `RouterGovernance.sol:44` documents the same: the timelock and the
+    governance contract both hold the register's `ADMIN_ROLE`.
+  - `ADMIN_ROLE` on the receipt is the role admin of
+    `RECEIPT_SUBMITTER_ROLE`. A `RouterGovernance` with that role can
+    grant a submitter, and the rotation in
+    `docs/technical/router-governance-handoff-runbook.md` §1 step 3 moves
+    that power to each new instance.
+- **Risk:** a weight-setting contract holds a role whose reach is wider than
+  the release it needs. A bug or a replacement instance can register or
+  revoke submitters without a timelock vote on that question.
+- **Fix:** add a narrow release role on `ConsensusRecommendationReceipt`
+  (for example `RECEIPT_RELEASER_ROLE`, admin `ADMIN_ROLE`), gate
+  `releaseReceipt` on it, grant it to `RouterGovernance` in the governance
+  stage, and grant `ADMIN_ROLE` to the timelock only. The rotation batch
+  moves the release role, not `ADMIN_ROLE`. Update the verifier labels
+  `receipt: ADMIN_ROLE held by governance (applyReceipt releases)` and the
+  `release-receipt` refusal in `publish-contracts/src/cli.ts`, which keys on
+  `RouterGovernance` holding `ADMIN_ROLE`.
+
+### 15. The gateway pins one vault and the router at `initialize`
+
+- **Severity:** Low.
+- **Design:** the gateway is a general tool. It pins no vault list. The
+  depositor's policy names the allowed destination contracts
+  (`allowedDestinations`, non-empty), and the owner picks them offline. The
+  router is never a destination (owner decision 2026-10-20).
+- **Code:**
+  - `initialize` stores one `vaultContract` and one `routerContract`
+    (`contracts/gateway/RobotMoneyGateway.sol:388-409`).
+  - `_validateDestination` (lines 909-927) accepts only those two
+    addresses. An empty `allowedDestinations` means any pinned
+    destination, the router included.
+- **Risk:** every gateway serves exactly one vault, so a second vault needs
+  a second gateway. An empty policy list silently opens the router leg.
+- **Fix:** drop the vault and router pins from `initialize` (the slots stay
+  retired for the layout gate, as finding 2 says). `_validatePolicy`
+  requires a non-empty `allowedDestinations` and rejects the router or any
+  address that is not a vault the registry lists. `_validateDestination`
+  checks the destination against the policy list only. The verifier label
+  `gateway: router() equals the deployed router` goes with the pin.
 
 ## Open questions for the owner
 

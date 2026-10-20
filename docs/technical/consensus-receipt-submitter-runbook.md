@@ -1,6 +1,6 @@
 # Consensus receipt submitter — custody, operations, and compromise runbook
 
-Canonical: `docs/architecture.md` §4.9 — Consensus Recommendation Receipt Contract
+Canonical: `docs/architecture.md` §4.8 and §4.9 — Consensus Recommendation Receipt Contract
 Canonical: `docs/product/20260623-product-proposal-investment-committee-v0.md` §2.1
 Implements: issue #1247 tasks 4.11, 4.12, 4.13 and acceptance criteria 7, 8
 
@@ -21,16 +21,21 @@ review records where the code differs (`docs/code-review/20261019-code-review-in
 
 ## 0. Status — read this first
 
-**v0.1 is devnet only.** The submitter key described here is a devnet key held
-in a software keystore. **No production submission may happen until every
-requirement in §2 is met**, and none of them is met today. This document
-exists so the gap is *recorded* rather than forgotten, which is the whole of
-what issue #1247 task 4.11 asks for.
+**Current status.** The submitter is a Safe (§1.1). On a Base mainnet
+deployment of the rehearsal kind (8453, `DEPLOYMENT_KIND=rehearsal`) the
+Safe records receipts through the publish-contracts `record-receipt` verb;
+two Deploy 2 receipts were recorded that way. On the production kind today's
+tooling refuses the verb (`publish-contracts/src/cli.ts` line 617,
+`src/record-receipt.ts` line 166). The target allows it on every chain,
+Base production included (owner decision 2026-10-20; RS-1019 finding 5
+lifts the refusal). No single key records a receipt anywhere. `ADMIN_ROLE`
+on the receipt contract is held by the timelock after the handover stage;
+the timelock alone grants and revokes `RECEIPT_SUBMITTER_ROLE`.
+`RouterGovernance` holds only a narrow release role on the receipt
+contract in the target (today it holds `ADMIN_ROLE`, RS-1019 finding 14).
 
-Out of scope for v0.1, and each a separate decision: mainnet deployment, a Safe
-whose owners sign with encrypted keystores, `ADMIN_ROLE` transfer to a deployed
-`TimelockController` on mainnet, an audit pass, a funded submitter key, and
-registered genesis agents.
+Still open, each a separate decision: an audit pass before a production
+submission, and the §2 custody items for the Safe owners' keys.
 
 ---
 
@@ -92,15 +97,15 @@ record steps below are the **deployed-release** procedure: they route
 through the gateway (see "Deployed release" above).
 
 Owner decision 2026-10-10: **no single key anchors a receipt.** For the Base mainnet rehearsal and every later run on the `publish-contracts` surface the submitter is not an
-EOA. It is a **Safe** (a SafeL2 1.4.1 proxy with threshold 2 or more; it may be the governing Safe, owner decision 2026-10-20) that holds the submitter role and nothing else. The submitter Safe and the governing Safe may share owners; separate multisigs are not required. Everything in §1 about what the
+EOA. It is a **Safe** (a SafeL2 1.4.1 proxy with threshold 2 or more; it may be the governing Safe, owner decision 2026-10-20) that holds the submitter role and nothing else on the vaults-system contracts. A governing Safe that doubles as submitter also holds the timelock proposer and canceller roles. The submitter Safe and the governing Safe may share owners; separate multisigs are not required. Everything in §1 about what the
 submitter can and cannot do holds unchanged for a contract account: the contracts check only the roles, never `msg.sender`, `tx.origin`, `isContract` or a signature
 (`contracts/test/ConsensusReceiptSafeSubmitter.t.sol` proves it with a real Safe, including the 1-raw-unit deposit cap and the disabled withdrawals).
 
 - **What the tooling pins** (`publish-contracts/src/submitter-safe.ts`): the canonical SafeProxy 1.4.1 code hash, the SafeL2 singleton in slot 0, `VERSION` 1.4.1, threshold 2 or more,
-  no module, no guard, the canonical fallback handler. It may be the governing Safe (owner decision 2026-10-20). It is never the timelock, admin (= the deployer), the pauser or the emergency address.
+  no module, no guard, the canonical fallback handler. It may be the governing Safe (owner decision 2026-10-20; v0.5.0 tooling refuses it, `forbiddenSubmitters`). It is never the timelock, admin (= the deployer), the pauser or the emergency address.
 - **Register it (target):** `govern --row register-submitter --submitter 0x<Safe>` schedules one timelock call, `ConsensusRecommendationReceipt.grantRole(RECEIPT_SUBMITTER_ROLE, safe)`. The checks run before the timelock round is scheduled. Nothing runs on the gateway, so there is no private half and no public window to front-run.
 - **Register it (deployed release):** `govern --row register-committee --submitter 0x<Safe>`. The checks run before the timelock round is scheduled.
-- **Registration has no public window (QA plan v1 B6, security review CS-2).** The row works in two halves.
+- **Deployed release (v0.5.0): registration has no public window (QA plan v1 B6, security review CS-2).** The `register-committee` row works in two halves. None of this exists in the target: there is no commit, reveal, `transferAgentOwnership`, `committeeRegister` or `authorizeAgent` on the receipt path.
   - **Private half, first.** The submitter Safe authorizes itself on the gateway in three Safe transactions. Its owners sign with `--owner-signer` and `--signer` pays the gas.
     1. `commitAuthorization(keccak256(abi.encode(safe, safe, salt)))` with a random salt. The commit does not name the agent.
     2. `revealAuthorization(safe, salt, policy)` at least one block later. The Safe reveals for itself, so it needs no consent commitment (issue 1791 asks for one only when the agent is not the caller). The Safe now owns its own agent.
@@ -136,8 +141,8 @@ Each item is a hard gate. None is satisfied by v0.1.
 | C-1 | Private key material lives in an **HSM or a cloud KMS** (non-exportable key, sign-only API). No plaintext key, no software keystore, no key in an env var or CI secret. | A software keystore's passphrase is recoverable from any host that ever ran the signer. |
 | C-2 | Signing is reachable only from a **dedicated submitter host or workload identity**, with a deny-by-default network egress allowlist covering the RPC endpoint and the swarm API only. | Limits the blast radius to one machine and makes exfiltration visible. |
 | C-3 | Every signature request is **logged with the calldata it signed** to an append-only store the submitter host cannot rewrite. | A compromise is only detectable if the tampered call is distinguishable from a legitimate one after the fact. |
-| C-4 | The submitter holds **`RECEIPT_SUBMITTER_ROLE` and nothing else** (on the deployed release, the gateway `AGENT_ROLE` and `COMMITTEE_AGENT_ROLE` it needs to record instead, §1) — never `ADMIN_ROLE`, `DEPOSIT_PAUSER_ROLE`, or `DEFAULT_ADMIN_ROLE` on any contract. Verified after every deploy and every role change. | The contracts already enforce role separation (`AccessRoles`); this makes the check explicit at the operational layer too. |
-| C-5 | The gas-funding wallet is **separate** from the submitter key and tops it up on a schedule, never the reverse. | The submitter should never hold a balance worth stealing on its own. |
+| C-4 | The submitter holds **`RECEIPT_SUBMITTER_ROLE` and nothing else on the vaults-system contracts** (on the deployed release, the gateway `AGENT_ROLE` and `COMMITTEE_AGENT_ROLE` it needs to record instead, §1) — never `ADMIN_ROLE`, `DEPOSIT_PAUSER_ROLE`, or `DEFAULT_ADMIN_ROLE` on any contract. A governing Safe that doubles as submitter also holds the timelock proposer and canceller roles. Verified after every deploy and every role change. | The contracts already enforce role separation (`AccessRoles`); this makes the check explicit at the operational layer too. |
+| C-5 | The submitter Safe holds **no ETH**. The deployer pays the gas of every `record-receipt` execution (`--signer`). Nothing tops the Safe up. | A Safe with no balance is nothing to steal, and a Safe transaction needs no balance to execute. |
 | C-6 | A **named on-call owner** and a tested rotation drill exist before the first mainnet submission. | An untested rotation procedure is not a rotation procedure. |
 
 ### 2.1 Key generation
@@ -162,16 +167,18 @@ single key out of the path is the role: an address without
 Rotation is **additive then subtractive**, and it needs no contract change
 because submitter authority is role state.
 
-1. Provision the new key per §2 and derive its address.
-2. Register the new address with `govern --row register-submitter` (§1.1):
+1. Create the new submitter Safe with the Safe tool (§1.1; a new salt, the
+   owners' keys per their own custody runbook) and note its address.
+2. Register the new Safe with `govern --row register-submitter` (§1.1):
    one timelock call grants it `RECEIPT_SUBMITTER_ROLE`.
 3. Record one receipt from the new Safe on a real session through the
    `record-receipt` row and confirm the indexer ingested it with
    `verified = true`.
-4. Revoke the old address:
+4. Revoke the old Safe:
    `ConsensusRecommendationReceipt.revokeRole(RECEIPT_SUBMITTER_ROLE, old)` (an
-   `ADMIN_ROLE` call from the timelock).
-5. Confirm on chain that the old address holds no role.
+   `ADMIN_ROLE` call from the timelock; the timelock alone grants and revokes
+   this role, `RouterGovernance` cannot).
+5. Confirm on chain that the old Safe holds no role.
 
 > **Deployed release (v0.5.0) only.** On release v0.5.0 the steps above
 > differ as follows. Step 2 uses `govern --row register-committee` instead,
@@ -186,13 +193,15 @@ because submitter authority is role state.
 > a public `gateway.authorizeAgent` for the new address: during the delay
 > anyone can authorize that address first and own it for good (QA plan v1
 > B6). Step 4 calls `InvestmentCommitteePolicy.revokeAgent` and
-> `RobotMoneyGateway.revokeAgent` instead (§1). Step 5 checks both roles.
+> `RobotMoneyGateway.revokeAgent` instead (§1). The timelock, as the
+> agent's owner on v0.5.0, schedules the gateway `revokeAgent`. Step 5
+> checks both roles.
 > None of this exists in the target: there is no IC policy, no
 > `transferAgentOwnership` and no `committeeRegister` (owner decisions
 > 2026-10-19 and 2026-10-20).
 
-**Both keys are valid between steps 2 and 4.** That overlap is intentional — it
-is what makes a rotation safe to abort. Never revoke before the new key has
+**Both Safes are valid between steps 2 and 4.** That overlap is intentional — it
+is what makes a rotation safe to abort. Never revoke before the new Safe has
 successfully anchored.
 
 **Cadence.** Rotate at least every 180 days, and immediately on any of: an
@@ -216,8 +225,11 @@ exfiltration suspected on the submitter host.
 **Severity is high even though no funds can move.** The asset at risk is the
 integrity of the public record.
 
-1. **Contain (minutes).** Disable the KMS signing grant for the key. This is
-   the fastest kill switch and needs no chain transaction.
+1. **Contain (minutes).** Freeze the Safe's owner keys: no owner signs a
+   Safe transaction until the incident is scoped. Where an owner key is
+   itself suspect, the remaining owners remove it from the Safe
+   (`removeOwner`, one Safe transaction, no delay). This needs no timelock
+   transaction.
 2. **Revoke (one timelock cycle).**
    `ConsensusRecommendationReceipt.revokeRole(RECEIPT_SUBMITTER_ROLE, submitter)`.
    The revocation lands only after `getMinDelay()` has passed on the
@@ -229,7 +241,8 @@ integrity of the public record.
 
    > **Deployed release (v0.5.0) only.** Call
    > `InvestmentCommitteePolicy.revokeAgent` and
-   > `RobotMoneyGateway.revokeAgent` instead (§1).
+   > `RobotMoneyGateway.revokeAgent` instead (§1). The timelock, as the
+   > agent's owner on v0.5.0, schedules the gateway `revokeAgent`.
 3. **Freeze publication.** Stop the swarm worker from producing new receipts so
    a legitimate submission does not race the incident.
 4. **Scope it.** From the indexer, list every `ReceiptRecorded` from the
@@ -257,10 +270,10 @@ integrity of the public record.
    the contract refuses a duplicate `receiptId`. Re-anchor the affected
    sessions under new session ids from a clean key, and publish a public
    incident note listing the forged `receiptId`s. Do not attempt to overwrite.
-6. **Rotate** per §3, starting from a freshly provisioned key — never the
-   compromised one, and never a key that shared a host with it.
-7. **Post-incident.** Record how the key was reached, and add the detection
-   that would have caught it earlier to §5.
+6. **Rotate** per §3, starting from a fresh Safe with fresh owner keys —
+   never the compromised one, and never a key that shared a host with it.
+7. **Post-incident.** Record how the owner keys were reached, and add the
+   detection that would have caught it earlier to §5.
 
 ---
 
@@ -268,13 +281,14 @@ integrity of the public record.
 
 ### 5.1 Gas funding
 
-The submitter needs native-token balance to anchor. It is funded from a
-separate wallet (C-5) and monitored with two thresholds:
+The submitter Safe holds no ETH (C-5). The deployer executes every
+`record-receipt` Safe transaction and pays its gas (`--signer`). Monitor the
+deployer's balance with two thresholds:
 
 - **Warn** at fewer than ~20 anchoring transactions' worth of balance.
 - **Page** at fewer than ~5.
 
-An unfunded submitter produces exactly the failure mode §5.3 exists to prevent:
+An unfunded deployer produces exactly the failure mode §5.3 exists to prevent:
 a session that should have produced a receipt and did not.
 
 ### 5.2 Submission monitoring
@@ -516,16 +530,9 @@ that must fail rather than pass vacuously, the negative control that
 `--no-anchor` reaches no write subcommand, and the assertion that unselected
 stages are recorded as `SKIP`.
 
-> **CI coverage, stated honestly.** `grep -rn "scripts/fusion" .github/` returns
-> nothing: no workflow runs this harness. It is the failure shape
-> `docs/development/false-green-shapes.md` calls `uninvoked-evidence-script`,
-> and the guard written to detect that shape
-> (`.github/scripts/check_evidence_scripts.py`, invariant B) only sweeps
-> scripts directly under its `TESTS_DIR`, so a harness here is invisible to it. Until a
-> workflow invokes it, AC-CORE-09's retry/idempotency clause is **proven by
-> local run only** and must be recorded that way in the §12.6 evidence bundle —
-> never described as CI-covered. (AC-GOV-01's watcher/restart clause went with
-> the watcher, issue 1698.)
-> Follow-up: add a `bash scripts/fusion/tests/run-tests.sh` step to
-> `suite-13-doc-checks.yml` (no paths filter, cheapest host). The Fusion
-> acceptance run may not modify `.github/workflows`, so it is not done here.
+**CI coverage.** Two workflows run this harness:
+`.github/workflows/fusion-cross-repo-drift.yml` runs
+`scripts/fusion/tests/run-tests.sh`, and
+`.github/workflows/suite-27-fusion-assertion-floor.yml` holds the assertion
+floor the same script asserts. (AC-GOV-01's watcher/restart clause went with
+the watcher, issue 1698.)

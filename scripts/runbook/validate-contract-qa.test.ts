@@ -47,6 +47,21 @@ test("the template can change while every committed release is pinned", () => {
   expect(p).toEqual([]);
 });
 
+test("a pinned release that edits a template step fails against the template at its pin", () => {
+  const p = problemsWith(RELEASE, (t) => t.replace(stepBlock(t, "P0.04-checkout"), (b) => b.replace("The core checkout is clean", "The core checkout")));
+  expect(p.join("\n")).toContain("P0.04-checkout");
+});
+
+test("a pinned release that drops a template step fails against the template at its pin", () => {
+  const p = problemsWith(RELEASE, (t) => t.replace(stepBlock(t, "P0.04-checkout"), ""));
+  expect(p.join("\n")).toContain("P0.04-checkout");
+});
+
+test("a templateSha with no template in git fails", () => {
+  const p = problemsWith(RELEASE, (t) => t.replace(/^templateSha: .*$/m, "templateSha: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"));
+  expect(p.join("\n")).toContain("has no docs/runbooks/contract-qa/template.yaml in git");
+});
+
 test("a templateSha that is not a full commit fails", () => {
   const p = problemsWith(RELEASE, (t) => t.replace(/^templateSha: .*$/m, "templateSha: e362df0c"));
   expect(p.join("\n")).toContain("templateSha is the full 40-character commit");

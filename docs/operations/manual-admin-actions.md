@@ -51,13 +51,13 @@ insufficient to land changes to the contract or deploy-script surface.
 Inspect current protection on `dev`:
 
 ```bash
-gh api repos/lucky-tensor/robotmoney-monorepo/branches/dev/protection
+gh api repos/robotmoney/robotmoney-monorepo/branches/dev/protection
 ```
 
 Apply protection (adjust the JSON to the agreed policy):
 
 ```bash
-gh api -X PUT repos/lucky-tensor/robotmoney-monorepo/branches/dev/protection \
+gh api -X PUT repos/robotmoney/robotmoney-monorepo/branches/dev/protection \
   --input - <<'JSON'
 {
   "required_status_checks": null,
@@ -77,7 +77,7 @@ repeat the `PUT` for `main`.
 **Verify.**
 
 ```bash
-gh api repos/lucky-tensor/robotmoney-monorepo/branches/dev/protection \
+gh api repos/robotmoney/robotmoney-monorepo/branches/dev/protection \
   --jq '.required_pull_request_reviews
         | select(.required_approving_review_count >= 2
                  and .require_code_owner_reviews == true)'
@@ -107,9 +107,13 @@ The vaults system's handover covers its eight contracts (`docs/architecture.md`
   `RECEIPT_SUBMITTER_ROLE`, so after handover a submitter grant goes
   Safe -> Timelock -> receipt.
 
-`CONSENSUS_RECEIPT_ADDRESS` and `RECEIPT_ADMIN_ADDRESS` are required on every
-chain. The script reverts when one is unset. There is no on-chain committee
-contract to hand over.
+The script's inputs, on every chain (it reverts when one is unset):
+
+- Target: `CONSENSUS_RECEIPT_ADDRESS` and `RECEIPT_ADMIN_ADDRESS` (from
+  `receipt.json`), with the vault, registry, router and governance addresses.
+  There is no on-chain committee contract to hand over.
+- Deployed release (v0.5.0): the same, plus `GATEWAY_ADDRESS`,
+  `IC_POLICY_ADDRESS` and `AGENT_ADDRESSES` (the CLI sets it to `none`).
 
 The gateway belongs to the rmpc gateway system. Its handover is part of its
 own release. Who governs it is open (`docs/architecture.md` §10).
@@ -131,10 +135,13 @@ contract-enforced rather than operational convention.
 
 **Manual steps.**
 
-1. Deploy the router stack using the existing script
-   `contracts/script/DeployPortfolioRouter.s.sol` against the Base mainnet RPC,
-   broadcasting with the production deployer key.
-2. Deploy and migrate using `contracts/script/DeployTimelock.s.sol`, which deploys
+1. Run the publish-contracts CLI, the only deploy driver
+   (`docs/operations/contract-release-runbooks.md` §4, the stage table). Its
+   `router` stage runs `DeployPortfolioRouter.s.sol` and its `governance`
+   stage runs `DeployRouterGovernance.s.sol`. Never run a forge script by
+   hand against 8453: the CLI checks the nonce, the frozen counts and the
+   release tag before each stage.
+2. The CLI's `timelock` stage runs `contracts/script/DeployTimelock.s.sol`, which deploys
    the `TimelockController` and performs the per-contract `ADMIN_ROLE` transfer
    with role-acceptance verification. There is no agent handover: the deploy
    owns no agent, agents belong to depositors, and an agent's owner never
@@ -170,8 +177,12 @@ contract-enforced rather than operational convention.
    > check left to you is the list itself: `roles.gateway_agents_listed_count`
    > in the manifest must equal the number of agents found above. None of
    > this exists in the target.
-3. Record the resulting `portfolio_router`, `router_governance`, and
-   `timelock_controller` addresses in the run's deploy manifests (`deployments/<chain>/`).
+3. The stages write the manifests themselves: `router.json` (`router`),
+   `governance.json` (`governance`) and `timelock.json`
+   (`addresses.timelock`, `addresses.safe`, `addresses.consensus_receipt`),
+   under `deployments/<chain>/` or `PUBLISH_MANIFEST_DIR`
+   (`docs/development/stage-deployment.md`, the overlay key table). Nothing
+   is typed by hand.
 
 **Verify.** For each of the eight vaults-system contracts of `docs/architecture.md`
 §4.5 (rmUSDC and each basket vault, the registry, router, governance and the
@@ -184,11 +195,17 @@ cast call "$CONTRACT" "hasRole(bytes32,address)(bool)" \
   --rpc-url "$BASE_RPC"   # expect: true
 ```
 
-Also confirm the run's merged deploy manifest carries the three new addresses:
+Deployed release (v0.5.0): also check `RobotMoneyGateway` and
+`InvestmentCommitteePolicy` with the same call. The governance check
+keeps its three literals: `ConsensusRecommendationReceipt`,
+`RECEIPT_SUBMITTER_ROLE` and the basket vaults.
+
+Also confirm the stage manifests carry the three addresses:
 
 ```bash
-jq 'has("portfolio_router") and has("router_governance") and has("timelock_controller")' \
-  deployments/<chain>/<merged manifest>.json   # expect: true
+jq 'has("router")' deployments/<chain>/router.json           # expect: true
+jq 'has("governance")' deployments/<chain>/governance.json   # expect: true
+jq '.addresses | has("timelock")' deployments/<chain>/timelock.json   # expect: true
 ```
 
 **If verify (stage 12) or the postflight fails.** The publish-contracts CLI

@@ -35,8 +35,9 @@ Robot Money is two separate systems (owner decision, 2026-10-19).
 - **Vaults system.** The treasury product. It holds the Robot Money
   vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), the vault registry, the
   Portfolio Router and router-weight governance. Its only rebalancing
-  input is the consensus recommendation receipt, recorded on the consensus
-  receipt contract. The Safe, through the TimelockController, grants the
+  signal is the consensus recommendation receipt, recorded on the consensus
+  receipt contract. The vector the Safe schedules through `applyReceipt`
+  is the input. The Safe, through the TimelockController, grants the
   receipt submitter role. The submitter records receipts on the receipt
   contract directly. The Safe, through the TimelockController, applies a
   receipt to router weights or sets default weights. Human wallets deposit
@@ -223,10 +224,11 @@ system. Neither needs the gateway.
 
 The Safe multisig, through the TimelockController, is the only body that
 changes any Robot Money contract configuration, router weights included.
-`WEIGHT_SETTER_ROLE` is the only authority over router weights. It
-submits the Investment Committee's consensus receipt, and that submission
-is the rebalance: one timelock operation releases the receipt and applies
-its weights (govern row `apply-receipt`, core 1696). There is no voting by
+`WEIGHT_SETTER_ROLE` is the only authority over router weights. The Safe
+schedules `applyReceipt` through the timelock; `RouterGovernance` holds
+`WEIGHT_SETTER_ROLE` and that one call is the rebalance. It releases the
+Investment Committee's consensus receipt and applies its weights in one
+timelock operation (govern row `apply-receipt`, core 1696). There is no voting by
 token holders or anyone else: no voter set, no voting power, no quorum,
 no voting period, no propose, vote or execute. `RouterGovernance` has no
 voting function (issue 1698): the weight setter's one call is `applyReceipt`. There is no tier system
