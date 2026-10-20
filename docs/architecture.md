@@ -1069,8 +1069,9 @@ Agent ownership and policy rules (issue #1476):
   can squat an address that never agreed. An agent that reveals for itself
   consents by calling. A depositor's distinct agent key therefore signs one
   `commitAuthorization` transaction before the depositor reveals;
-- only the recorded owner can call `setPolicy` or `revokeAgent` on that
-  agent. `ADMIN_ROLE` grants no authority over any agent;
+- only the recorded owner of a live registration can call `setPolicy`.
+  The owner or the agent itself can call `revokeAgent`. `ADMIN_ROLE` grants
+  no authority over any agent;
 - an agent's owner never changes within one registration. There is no
   ownership transfer. To move an agent to a new owner, the owner revokes
   it and the new owner authorizes it again with the agent's consent (owner
@@ -1195,6 +1196,13 @@ for read-only portfolio inspection (watched address mode).
 Actions are available only with a connected wallet. Every action must
 render a preview before invoking the wallet.
 
+Verification follows the action's system and actual target. Human vault
+deposits, router actions and withdrawals, and vaults-system Safe/timelock
+operations, must work without a configured or verified gateway (`SYS-1`).
+They retain their own chain, target and implementation checks. Gateway
+verification gates gateway operations only; a shared dapp wrapper must not
+make unrelated wallet actions depend on a gateway read (SS-1019-11).
+
 - Deposit: vault selection or Portfolio Router path, amount entry,
   preview (destination weights, estimated receipts, fees, net amount,
   unavailable legs), and sign.
@@ -1203,7 +1211,8 @@ render a preview before invoking the wallet.
   sign.
 - Agent policy management: authorize a new agent, update or revoke an
   existing policy, and export the resulting `rmpc` config file. An agent's
-  only on-chain action is a deposit into a vault through the gateway.
+  only product action is a deposit into a vault through the gateway;
+  its consent and self-revoke calls bound that permission (§5.2).
 - Governance: view the pending timelock weight operation, the applied
   consensus receipts, and execution state. There is no proposal or vote
   surface, because there is no voting (§2.3).
@@ -1211,10 +1220,16 @@ render a preview before invoking the wallet.
 Credential boundary:
 
 - the dapp registers agent public addresses and policy settings;
-- it does not persist production private keys;
-- browser-generated software credentials are fork/devnet-only,
-  feature-gated, immediately exported, clearly labeled unsafe for
-  production, and rejected by `rmpc` for Base mainnet write commands.
+- it never generates, receives or persists an agent private key, on any
+  chain; the operator creates the key in the agent's signer backend and
+  brings its public address;
+- config export carries public settings and a pointer to an existing
+  signer backend, never a keystore generated or encrypted in the browser;
+- a software keystore may sign the agent deposit on every chain, Base
+  included, after the production warning. Hardware, HSM or KMS custody is
+  optional. The retired `unsafe_for_production` config key and
+  `--allow-unsafe` flag are not part of the client contract
+  (`docs/technical/dapp-credential-decisions.md` §3.1, §3.4).
 
 Every admin or policy signing prompt must decode target, function,
 arguments, role/policy effect, and risk class before invoking the
@@ -1711,7 +1726,8 @@ stays §8 because other documents cite it by number.
 - `rmpc` must verify chain id, configured addresses, code hash, role,
   policy, cap usage, allowance, balance, and fee caps before signing. For a
   proxied gateway the code hash check covers the live implementation too:
-  its code hash must be in `gateway_implementation_hashes`, read at one block
+  its address must match `gateway_implementation` and its code hash must
+  match `gateway_implementation_runtime_hash`, read at one block
   (`ErrImplementationNotApproved`, ADR-0014, QA plan P3). The deposit
   runs it. The vault the deposit lands in is checked the same way against
   `proxy_implementation_hashes` (issue 1810).

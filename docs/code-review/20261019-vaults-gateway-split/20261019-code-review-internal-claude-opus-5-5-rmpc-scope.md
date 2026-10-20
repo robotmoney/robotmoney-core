@@ -30,6 +30,21 @@
     asserts no separation between them.
 - **Method:** read the gateway, rmpc, the dapp, the indexer, the plugins, the
   fusion scripts and CI. Compile and test runs were not part of this review.
+- **Correctness follow-up (2026-10-20):** checked canon and code at
+  `48923e37`, extending findings 5, 12 and 15, qualifying finding 14 and
+  adding findings 16 and 17. The three targeted gateway tests for admin
+  authorization, arbitrary admin share receivers and transfer to an admin
+  passed. All 18 receipt-submission tests passed; they preserve the old
+  behavior rather than prove conformance to the target. Findings 16 and 17
+  are source-traced gaps, not newly executed exploit reproductions. This
+  review does not establish that all migration or security issues are found.
+- **Second correctness follow-up (2026-10-20):** extends findings 12 and 15
+  with consent ordering and the dapp's empty destination lists, clarifies
+  event preservation in finding 13, and adds registration identity in
+  finding 18. These are source-traced at `48923e37`; dapp tests could not run
+  because Vitest is not installed. The canonical credential and explorer
+  ADRs are amended alongside this review; their superseded text is not an
+  alternative implementation target.
 - **Related:** `20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md`
   covers the committee writes (`rmpc committee`, the IC policy) and is not
   repeated here.
@@ -44,8 +59,9 @@ Beyond those four jobs, the gateway gives admins three powers over agents that
 the design denies: registering one, revoking one and owning one. It also
 denies an agent the exit the design grants it. The governance deploy gives
 `RouterGovernance` the receipt's `ADMIN_ROLE`, and the gateway pins one
-vault and the router at initialization. Fifteen findings: five Medium,
-seven Low, three Info.
+vault and the router at initialization. The legacy deposit bypasses the
+destination policy, and receipt recording can skip payload-byte checks.
+Eighteen findings: seven Medium, eight Low, three Info.
 
 ## Findings
 
@@ -56,8 +72,11 @@ seven Low, three Info.
   ship, with withdraw windows, withdraw caps and asset recipient fields in
   the agent policy (`contracts/gateway/RobotMoneyGateway.sol`,
   `contracts/gateway/interfaces/IGateway.sol`).
-- **Effect:** an agent can still redeem a depositor's shares, a power the
-  design no longer grants.
+- **Effect:** agent withdrawal remains callable, contrary to the deposit-only
+  design. The single-vault path pulls shares from the agent, not an arbitrary
+  depositor (`RobotMoneyGateway.sol:1109`). The router path pulls from the
+  policy's share receiver and requires its allowance. This is a scope
+  violation; it does not demonstrate withdrawal without holder approval.
 - **Fix:** remove both functions. The four withdraw fields of the
   `AgentPolicy` struct stay: `assetRecipient`, `maxWithdrawPerPayment`,
   `maxWithdrawPerWindow` and `allowedSourceVaults`
@@ -113,9 +132,16 @@ seven Low, three Info.
   decision. The decision names the submitter Safe through `record-receipt`
   as the only path, on every chain.
 - **Fix:** keep `rmpc receipt verify`, which is offline. Delete `receipt
-  submit`. Lift the production refusal at `cli.ts:617` and reword line 62.
+  submit`. Lift both production refusals: `cli.ts:617` and the independent
+  guard in `publish-contracts/src/record-receipt.ts:165-166`. Changing only
+  the CLI still leaves the implementation refusing Base production.
+  Require Safe mode on every chain: the CLI requires `--submitter` only
+  on Base (`cli.ts:619`), and `recordReceipt` still accepts a dedicated EOA
+  elsewhere (`record-receipt.ts:170,188-195`). Reject a missing submitter
+  Safe before loading any signer, at both entrypoints. Reword the usage
+  text and update tests that currently require the old behavior.
   The fusion worker hands its payload to the Safe flow instead of calling
-  rmpc.
+  rmpc. Payload verification is a separate gap (finding 17).
 
 ### 6. The dapp still carries agent withdraw and router paths
 
@@ -131,8 +157,11 @@ seven Low, three Info.
 - `DepositWithdrawTab.tsx`, `routerPreview.ts` and `productReasonCode.ts`
   are human-wallet surfaces. They stay.
 - **Fix:** drop the withdraw and router comment lines from the TOML export.
-  Drop the agent withdraw and router fields from `preview.ts`. Human wallet
-  deposits, withdrawals and redeems stay as they are.
+  Update agent-policy preview descriptions to show deposit-only authority
+  and retire the `authorizeAgent` preview with finding 10. Keep the policy
+  ABI tuple's retired fields with zero values (finding 1). Human wallet deposits,
+  withdrawals and redeems remain supported; their shared gateway
+  verification dependency must be removed (system split finding 11).
 
 ### 7. The indexer still decodes agent withdrawals
 
@@ -322,6 +351,14 @@ seven Low, three Info.
     agent made long ago still passes. The consent is consumed on reveal
     (`delete commitments[ck];`, line 546), so it does not survive a reveal
     or a later revoke.
+  - The dapp sends the owner's commitment before requesting agent consent:
+    `AuthorizeTab.tsx:137-155` advances to reveal, where lines 192-205 show
+    `AgentConsentNotice`. `OnboardingWizard.tsx:552-584` has the same order.
+    The headless setup also sends the owner commit before the agent consent
+    (`.github/workflows/suite-11b-opencode-headless.yml:402-411`). Canon
+    requires agent consent first, then owner commit, then reveal. This is a
+    workflow mismatch; the current on-chain consent requirement is not
+    thereby bypassed.
   - `revokeAgent` deletes `agents[agent]` and `agentOwner[agent]` only
     (`RobotMoneyGateway.sol:608-609`). It does not reset
     `_depositWindow[agent]` (line 309). An address registered again inside
@@ -330,6 +367,11 @@ seven Low, three Info.
     `agentOwner[agent] != address(0)` (line 559), never `validUntil`, so a
     reveal for an address whose policy has lapsed still reverts
     `AgentAlreadyOwned`.
+  - `setPolicy` (`RobotMoneyGateway.sol:576-581`) checks the owner and
+    validates the replacement policy, but never checks the existing
+    policy's expiry. After expiry the old owner can reactivate the agent
+    without fresh agent consent. Architecture §5.2 and invariant ACL-9
+    require the old owner's `setPolicy` after expiry to revert.
 - **Risk:** an agent cannot leave a depositor it no longer trusts. A key
   owner cannot re-register an address after the old policy lapses. A stale
   consent lets the owner bind the agent to a policy the agent agreed to
@@ -338,14 +380,27 @@ seven Low, three Info.
   - `revokeAgent` accepts `msg.sender == agent` as well as the owner.
   - `_authorizeAgentInternal` treats an owner link whose policy has expired
     (`agents[agent].validUntil < block.timestamp`) as free: the reveal
-    clears the old link and the old windows, then stores the new policy
-    (owner decision 2026-10-20: expiry frees the address on reveal; the
-    race between a renewal by the old owner and a reveal by a new one is
-    accepted, first reveal wins).
+    clears the old link and the old windows, emits `AgentRevoked(old)`,
+    then stores the new policy. `setPolicy` first rejects an expired
+    existing registration, before validating the replacement. The accepted
+    renewal race does not authorize renewal after expiry; an owner may
+    extend a still-live policy before another registration becomes possible.
   - `revokeAgent` also deletes `_depositWindow[agent]`, so a re-registered
     address starts with a fresh budget.
   - The step-7 check rejects a consent whose `blockNumber` is older than
     `COMMIT_EXPIRY_BLOCKS`, with the same rule as step 4.
+  - Build and freeze the exact agent, owner, salt and policy before asking
+    the agent to commit consent. For distinct agent and owner keys, confirm
+    that consent on-chain before enabling the owner's commit; reveal only
+    while both commitments are live. Editing the bound inputs requires a
+    fresh consent. Apply the sequence to Authorize, onboarding, rotation
+    and headless setup. A self-registration consents by calling and needs
+    no separate agent consent transaction.
+  - The consent is an on-chain `commitAuthorization` commitment over
+    `keccak256(abi.encode(owner, keccak256(revealCalldata)))`; the reveal has
+    three arguments. The credential ADR's former EIP-712 `AgentConsent`,
+    nonce and `rmpc agent-consent` instructions were stale and are replaced
+    by the 2026-10-20 amendment. Do not reintroduce that signature flow.
   - These add no storage. The layout gate is unaffected. Add red tests for
     each rule in `GatewayAgentPolicyAuthorization.t.sol`.
 
@@ -355,8 +410,12 @@ seven Low, three Info.
 - Each of these is a file the fix PRs must touch. None changes the verdict.
   - `publish-contracts/src/ops/derive-agents.ts:5-21` and
     `publish-contracts/src/ops/cli.ts:20-21` derive the deployer's agents
-    from `AgentAuthorized` and `AgentOwnershipTransferred` logs. Both events
-    go with findings 10 and 11.
+    from `AgentAuthorized` and `AgentOwnershipTransferred` logs. Retire the
+    deployer-agent derivation with findings 10 and 11. Preserve
+    `AgentAuthorized`: reveal and policy updates still emit it, and the
+    handover verifier still checks its absence before handover. Only
+    `AgentOwnershipTransferred` is removed from the target gateway ABI;
+    historical replay of older deployments must retain its interpretation.
   - `publish-contracts/src/core-wiring.ts:120` and
     `publish-contracts/src/verify/index.ts:891,899` require the manifest
     fields `gateway_agents_listed_count` and
@@ -387,16 +446,17 @@ seven Low, three Info.
     the receipt register's `ADMIN_ROLE`
     (`contracts/script/DeployRouterGovernance.s.sol:26` in the header,
     `RECEIPT_ADMIN_ROLE` at line 50).
-  - `RouterGovernance.sol:44` documents the same: the timelock and the
-    governance contract both hold the register's `ADMIN_ROLE`.
-  - `ADMIN_ROLE` on the receipt is the role admin of
-    `RECEIPT_SUBMITTER_ROLE`. A `RouterGovernance` with that role can
-    grant a submitter, and the rotation in
-    `docs/technical/router-governance-handoff-runbook.md` §1 step 3 moves
-    that power to each new instance.
-- **Risk:** a weight-setting contract holds a role whose reach is wider than
-  the release it needs. A bug or a replacement instance can register or
-  revoke submitters without a timelock vote on that question.
+  - `releaseReceipt` currently requires `ADMIN_ROLE`
+    (`contracts/gateway/ConsensusRecommendationReceipt.sol:182`).
+  - Today's receipt has no `RECEIPT_SUBMITTER_ROLE`; its membership check
+    is on the IC policy. Today's `RouterGovernance` has no arbitrary-call
+    or submitter-grant entrypoint. Holding a role is not itself evidence
+    of a reachable grant call.
+- **Risk:** the deployed role assignment conflicts with the target boundary.
+  Once IC removal adds a submitter role administered by `ADMIN_ROLE`,
+  retaining the governance contract's admin grant would give that address
+  broader authority than release alone. This is a migration hazard, not
+  a demonstrated ability of today's governance code to register submitters.
 - **Fix:** add a narrow release role on `ConsensusRecommendationReceipt`
   (for example `RECEIPT_RELEASER_ROLE`, admin `ADMIN_ROLE`), gate
   `releaseReceipt` on it, grant it to `RouterGovernance` in the governance
@@ -423,10 +483,103 @@ seven Low, three Info.
   a second gateway. An empty policy list silently opens the router leg.
 - **Fix:** drop the vault and router pins from `initialize` (the slots stay
   retired for the layout gate, as finding 2 says). `_validatePolicy`
-  requires a non-empty `allowedDestinations` and rejects the router or any
-  address that is not a vault the registry lists. `_validateDestination`
-  checks the destination against the policy list only. The verifier label
-  `gateway: router() equals the deployed router` goes with the pin.
+  requires a non-empty `allowedDestinations`. `_validateDestination`
+  checks membership in that policy list only. Do not add an on-chain
+  registry-membership check: architecture §5.2 explicitly assigns contract
+  selection to the owner offline. Remove the router execution branch;
+  owner setup and client checks must select ERC-4626 vault destinations.
+  The verifier label `gateway: router() equals the deployed router` goes
+  with the pin. Close the legacy entrypoint bypass in finding 16 too.
+- **Client dependency:** deposit preflight still reads `gateway.vault()`,
+  compares it to `config.vault_address`, and reads pause and implementation
+  state for that configured vault
+  (`clients/rust-payment-client/src/policy/mod.rs:296-319`). Retiring the
+  gateway's fixed vault pin without updating this preflight breaks rmpc.
+  Resolve the requested destination from the owner's setup and check the
+  actual destination reached, including its live state and implementation,
+  before signing. Update the config/export and preflight tests together.
+- **Dapp dependency:** `AuthorizeTab.tsx:75`, `OnboardingWizard.tsx:248`
+  and `useRotationState.ts:146` construct `allowedDestinations: []`. Adding
+  the non-empty validator alone makes those policies invalid. Collect the
+  owner's explicit vault destinations in each surviving authorization and
+  rotation flow, bind them into the consent's exact reveal calldata before
+  either key commits, and preserve them in policy updates and config export.
+  Do not silently substitute every registry vault or the router. Test a
+  selected destination through authorization, export and deposit, plus an
+  unselected destination's refusal.
+
+### 16. The legacy deposit entrypoint bypasses allowed destinations
+
+- **Severity:** Medium.
+- **Design:** every agent deposit must target a destination in the owner's
+  non-empty `allowedDestinations` (architecture §5.2).
+- **Code:** `deposit` (`contracts/gateway/RobotMoneyGateway.sol:664-763`)
+  calls `vaultContract.deposit` at line 743 without checking the policy's
+  destination list. `depositTo` checks `_validateDestination` at line 807.
+- **Effect:** a policy may allow only the router today, excluding the pinned
+  vault, yet the same agent can call `deposit` into that vault. Amount,
+  expiry, pause and receiver checks still apply; destination restriction
+  does not. Deleting the router branch alone does not close this path.
+- **Fix:** remove the fixed-vault entrypoint or make every deposit entrypoint
+  use the same explicit destination and policy-membership validation.
+  Remove client calls to the retired selector. Add a regression showing
+  that a destination absent from the policy is refused through every
+  surviving deposit entrypoint, even when caps and other checks pass.
+
+### 17. Receipt recording can skip the required payload-byte checks
+
+- **Severity:** Medium.
+- **Design:** architecture §7.5 requires publish-contracts `record-receipt`
+  to recompute the digest and receipt id from payload bytes and refuse a
+  mismatch before any signer exists. `rmpc receipt verify` separately
+  validates the receipt and its embedded analyst signatures (§5.1).
+- **Code:** the CLI reads bytes only if optional `--payload` is present
+  (`publish-contracts/src/cli.ts:620-622`). `assertRecordInputs` accepts
+  syntactically valid ids, digests and a URI without any payload, and runs
+  byte comparisons only inside `if (i.payload !== undefined)`
+  (`publish-contracts/src/record-receipt.ts:139-149`).
+- **Effect:** an operator can record an id or digest unrelated to the
+  intended payload. Safe signatures authorize that transaction, but do not
+  establish that the required payload checks ran. Calling `receipt verify`
+  separately does not bind its output to the later invocation. The review
+  has not demonstrated analyst-signature verification in publish-contracts;
+  canon assigns that check to rmpc's preceding verification step.
+- **Fix:** require payload bytes on the recording path and fail closed when
+  the supported payload cannot yield a receipt id. Always recompute and
+  compare both values before constructing a signer. Preserve the preceding
+  signature-verification step for those same bytes. Add refusals for a
+  missing payload, unsupported payload, mismatched id and mismatched digest,
+  with no signer constructed and no transaction sent.
+
+### 18. The explorer collapses separate registrations of the same agent address
+
+- **Severity:** Low.
+- **Design:** ownership is immutable within one registration, but an address
+  can be registered again after revoke or expiry. Architecture §5.2 and
+  invariant ACL-9 require indexers to key agents on (address, registration).
+- **Code:** `agent_policies` preserves event rows, but the account-policy
+  query selects `DISTINCT ON (chain_id, agent)` across all registrations and
+  only then filters by owner (`clients/explorer-api/src/routes.rs:1591-1615`).
+  There is no registration boundary in that projection. The former explorer
+  ADR §3.4 prescribed the same address-only view and watched ownership
+  transfers; its 2026-10-20 amendment replaces that target.
+- **Effect:** after owner A revokes and owner B registers the same address,
+  A's registration disappears from A's policy results. Registering the same
+  address again under A also collapses its distinct lifecycles. Event rows
+  are retained; this is a projection/history gap, not demonstrated loss of
+  the underlying logs or a signing vulnerability.
+- **Fix:** derive a reproducible registration identity from the event that
+  starts each registration and carry it through policy updates, revocation
+  and associated deposits. An `AgentAuthorized` emitted by `setPolicy` must
+  update the existing registration, not start another. Keep event-log
+  idempotency keys and preserve historical deployments' transfer events.
+  Add any schema change in a new migration, then update account/history
+  projections and the documented API shape together. Separate a current
+  active-agent view from registration history so a later owner never erases
+  the previous owner's historical registration.
+- **Verification:** cover A → revoke → B, A → expiry → B, A → revoke → A,
+  and a policy update within one registration, including same-block events
+  ordered by log index and deterministic replay after a reorg.
 
 ## Open questions for the owner
 

@@ -23,6 +23,12 @@
   (`scripts/ci/check-core-storage-layout.sh`) allows no removal.
 - **Method:** read the contracts, deploy scripts, publish-contracts, clients,
   indexer, plugins and CI. Compile and test runs were not part of this review.
+- **Correctness follow-up (2026-10-20):** checked against canon and checkout
+  `48923e37`. Finding 14 is resolved in this checkout; that does not establish
+  that PR 1887 has merged to `dev`. All 14 runbook-validator tests passed,
+  including template evolution with pinned releases. The original finding
+  remains below as a record of the reviewed baseline. The reviews are a
+  migration inventory, not a completeness certification.
 - **Relation to the system split review:** this design supersedes findings 1
   to 5 of `20261019-code-review-internal-claude-opus-5-5-system-split.md`.
   With the IC policy gone, the caller-binding risk of that review's finding 3
@@ -35,9 +41,10 @@ deployed, the receipt contract authorizes submitters through it, the gateway
 routes committee and receipt writes, and the tooling, clients, indexer, dapp
 and plugins all build on it. None of it feeds router weights. Removing it is a
 code change across about 250 files. The rehearsal deploy runbook follows the
-tooling, and its validator must change before the runbook can drop a step.
-Fifteen findings: three Medium, eight Low, four Info. The validator fix
-(finding 14) is in the runbook template pin pr (1887), unmerged.
+tooling. Its validator prevented template steps from being retired at the
+reviewed baseline; template pins now remove that blocker in this checkout.
+Fifteen findings: three Medium, eight Low, four Info. Finding 14 is resolved
+locally; its merge status is not established by this follow-up.
 
 ## Findings
 
@@ -120,6 +127,9 @@ Fifteen findings: three Medium, eight Low, four Info. The validator fix
 - **Fix:** a `register-submitter` row that schedules one
   `grantRole(RECEIPT_SUBMITTER_ROLE, submitter)` on the receipt.
   `record-receipt` calls `recordReceipt` on the receipt directly.
+  The Safe-only flow must also remove both production refusals, reject
+  single-key submission on every chain and require payload-byte checks;
+  see the rmpc scope review findings 5 and 17.
 
 ### 8. rmpc still has committee writes
 
@@ -197,6 +207,15 @@ Fifteen findings: three Medium, eight Low, four Info. The validator fix
 ### 14. The runbook validator cannot retire a template step
 
 - **Severity:** Low.
+- **Status at `48923e37`:** resolved in this checkout. `validateAll` reads
+  the template at a release's `templateSha` and checks that release against
+  its pinned template, not today's template or CLIs
+  (`scripts/runbook/validate-contract-qa.ts:519-523`). Both completed release
+  files pin `e362df0c`. All 14 validator tests passed, including the test
+  that changes the current template while leaving pinned releases valid.
+  PR 1887's merge status was not checked; the ledger retains its open
+  disposition until landing on `dev` is verified. The following describes
+  the original baseline, where the blocker was real.
 - `scripts/runbook/validate-contract-qa.ts`, run by suite 13, requires each
   `releases/<release>.yaml` to hold every template step unchanged and in
   order. A release may only add steps (`docs/runbooks/contract-qa/README.md`).

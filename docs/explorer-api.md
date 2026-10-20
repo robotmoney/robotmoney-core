@@ -117,7 +117,7 @@ internal client field name appears on the wire.
 
 ---
 
-## Planned endpoints (stubs — not yet implemented)
+## Account policy endpoint
 
 ### `GET /v1/accounts/:address/policies`
 
@@ -126,6 +126,12 @@ internal client field name appears on the wire.
 > **Prerequisites:** Issue #366 (ABI drift fix for `AgentAuthorized` — adds
 > `address indexed owner` field so the indexer knows which depositor owns an agent).
 
+**Status at `48923e37` (2026-10-20):** implemented with latest state per
+agent address, as shown below. The target specified by architecture §5.2
+and the explorer-schema ADR §3.4 retains separate registrations of the same
+address. That migration remains open as RS-1019-18; this response does not
+yet expose a registration identity.
+
 **Request:**
 ```
 GET /v1/accounts/{address}/policies
@@ -133,10 +139,11 @@ GET /v1/accounts/{address}/policies
 
 Path parameter `address`: 0x-prefixed Ethereum address (20 bytes hex).
 
-**Response (200 OK):**
+**Current response (200 OK):**
 ```json
-[
-  {
+{
+  "address": "0x{address}",
+  "policies": [{
     "agent":                  "0xabcdef...",
     "owner":                  "0x{address}",
     "revoked":                false,
@@ -144,29 +151,40 @@ Path parameter `address`: 0x-prefixed Ethereum address (20 bytes hex).
     "max_per_payment":        "1000000000000000000",
     "max_per_window":         "5000000000000000000",
     "window_usage_to_date":   "250000000000000000",
-    "share_receiver":         "0xabcdef...",
-    "tx_hash":                "0x...",
-    "block_number":           12345678,
-    "indexed_at":             "2026-06-07T00:00:00Z"
-  }
-]
+    "share_receiver":         "0x{address}",
+    "tx_hash":                "0x..."
+  }],
+  "block_number": 12345678,
+  "indexed_at": "2026-06-07T00:00:00Z"
+}
 ```
 
-Returns an empty array (not 404) when the owner has no policies.
+Returns `"policies": []` (not 404) when the owner has no matching policies.
 
 All `uint256` fields are decimal strings (NUMERIC(78,0) wire format).
 `valid_until` is a Unix timestamp seconds (i64). `indexed_at` is ISO-8601 UTC.
 
-**DB query target:**
+**Current DB projection (simplified from `routes.rs:get_account_policies`):**
 ```sql
-SELECT DISTINCT ON (chain_id, agent)
-    chain_id, block_number, log_index, tx_hash, agent, owner,
-    revoked, valid_until, max_per_payment, max_per_window,
-    window_usage_to_date, share_receiver, indexed_at
-FROM agent_policies
-WHERE chain_id = $1 AND owner = $2
-ORDER BY chain_id, agent, block_number DESC
+SELECT * FROM (
+    SELECT DISTINCT ON (chain_id, agent) *
+    FROM agent_policies
+    WHERE chain_id = $1
+    ORDER BY chain_id, agent, block_number DESC, log_index DESC
+) AS latest
+WHERE owner = $2
+ORDER BY agent
 ```
+
+**Registration migration target.** Keep event idempotency keys, derive a
+registration identity from its starting event, and project latest policy
+state within each registration before applying account/history filters.
+Earlier registrations remain associated with their original owner after a
+revoke or expiry and re-registration. `setPolicy` updates the same
+registration. Update the schema, response and consumers together; the
+current address-only projection above is not the target for registration
+history. See `docs/technical/explorer-schema-decisions.md` §3.4 and
+RS-1019-18 for replay and same-block ordering requirements.
 
 **Migration dependency:** `0007_account_history_and_vault_detail_stubs.sql`
 adds `owner` and `window_usage_to_date` columns to `agent_policies`.

@@ -64,8 +64,9 @@ usdc_address          = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 vault_address         = "0x4F83837cC2BB7E5b7DA89cf36c52A7D3F6b49DDD"
 gateway_runtime_hash  = "0x0000000000000000000000000000000000000000000000000000000000000000"
 # Required once the gateway is an ERC-1967 proxy (ADR-0014; the Twin 918453 and every
-# release from this tree). Leave it out for a direct (pre-proxy) gateway: rmpc refuses it there.
-# gateway_implementation_hashes = ["0x<keccak256 of the implementation's code>"]
+# release from this tree). Omit both for a direct (pre-proxy) gateway.
+# gateway_implementation = "0x<reviewed implementation address>"
+# gateway_implementation_runtime_hash = "0x<reviewed implementation code hash>"
 # Required once the vault is a proxy too: the deposit checks the logic behind
 # the vault it reaches (issue 1810).
 # proxy_implementation_hashes = ["0x<keccak256 of the vault implementation's code>"]
@@ -82,9 +83,17 @@ state_dir = "/var/lib/openclaw/rmpc/state"
 **Proxied gateway.** `gateway_runtime_hash` pins the code at
 `gateway_address`. For a proxied gateway that is the `ERC1967Proxy`, which an
 upgrade does not change, so rmpc also checks the implementation behind it:
-every write and `agent-consent` refuse with `ErrImplementationNotApproved`
-unless the implementation's code hash is listed in
-`gateway_implementation_hashes` (preflight check 2b). Read it from the chain:
+every write refuses with `ErrImplementationNotApproved` unless the live
+implementation address and code hash match `gateway_implementation` and
+`gateway_implementation_runtime_hash` (preflight check 2b).
+
+Agent setup uses the on-chain consent commitment described in
+`docs/architecture.md` §5.2: confirm the agent's consent before the owner's
+commit, then reveal while both commitments are live. The former
+`rmpc agent-consent` EIP-712 flow is superseded. Implementation hashes copied
+from the chain must be matched to a reviewed release before setting the
+configured pins; reading a live hash alone is not approval. Inspect the live
+implementation with:
 
 ```bash
 IMPL=$(cast parse-bytes32-address "$(cast storage "$GATEWAY" \

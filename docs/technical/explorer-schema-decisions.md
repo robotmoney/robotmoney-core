@@ -10,6 +10,14 @@
 
 Accepted. Authored 2026-05-06 against `Plan tracking issue #109` §11 on branch `feat/56-dev-scout-explorer-schema-indexer-shape`. No prior ADR exists for this phase. No code stubs are required: §11 prescribes a separate service tree that does not yet exist, and the §11 acceptance criteria are documentation-only ("a local developer can start the API and DB, index a fork range, and query deposit/vault history" is satisfied at implementation time, not by this scout).
 
+**Amendment 2026-10-20:** architecture §5.2 and invariant ACL-9 require
+agent identity by (address, registration). The target has no ownership
+transfer within a registration. This supersedes the former address-only
+latest-policy view and ownership-transfer target below. The event primary
+keys stay unchanged; a registration is a separate logical identity derived
+from its starting event. The current account-policy projection has not
+implemented this amendment (RS-1019-18).
+
 Companion ADR: `docs/technical/rmpc-read-output-contract.md` §3.3 and §5 already lock the `source: "json_rpc"` provenance rule for `rmpc` reads and explicitly anticipate a future `Source::Indexer` variant. This ADR does not modify that contract; it operates one layer below, on the indexer that would back any such variant.
 
 ## 2. Context
@@ -92,8 +100,8 @@ A second binding constraint from user memory applies: **no fast-feedback optimiz
   | `contracts` | `(chain_id, address)` | One row per watched contract per chain. |
   | `blocks` | `(chain_id, block_number)` | `hash` is a non-PK column used for reorg detection (§3.3). |
   | `transactions` | `(chain_id, tx_hash)` | `block_number` is a non-PK column; `tx_hash` is globally unique per chain. |
-  | `agent_deposits` | `(chain_id, block_number, log_index)` | Event-sourced from `IGateway.AgentDeposit`. `tx_hash` and `payment_id` are non-PK columns. |
-  | `agent_policies` | `(chain_id, block_number, log_index)` | Event-sourced from `IGateway.AgentAuthorized`/`AgentOwnershipTransferred`/`AgentRevoked`. Latest-state view derived via `DISTINCT ON (chain_id, agent) … ORDER BY block_number DESC`. |
+  | `agent_deposits` | `(chain_id, block_number, log_index)` | Event-sourced from `IGateway.AgentDeposit`. `tx_hash` and `payment_id` are non-PK columns. Associate each deposit with the registration active at its event position. |
+  | `agent_policies` | `(chain_id, block_number, log_index)` | Event-sourced from `IGateway.AgentAuthorized`/`AgentRevoked`. Derive latest state per `(chain_id, agent, registration)` in block/log order; retain earlier registrations. Interpret `AgentOwnershipTransferred` only for historical deployments that emitted it. |
   | `vault_snapshots` | `(chain_id, contract, block_number)` | State-read row, not event-sourced. One snapshot per indexer-decided cadence (§3.5). |
   | `wallet_positions` | `(chain_id, contract, owner, block_number)` | State-read row. Same cadence as `vault_snapshots`. |
   | `indexer_runs` | `(run_id)` (serial) | Append-only audit log; `started_at`, `last_indexed_block`, `reorg_count`, `error` columns. |
@@ -101,6 +109,20 @@ A second binding constraint from user memory applies: **no fast-feedback optimiz
 - **Why `(chain_id, block_number, log_index)` and not the §11 four-tuple.** A single transaction can emit the same event multiple times (e.g. a vault rebalance touching three adapters emits three `Allocated` events). `(chain_id, block_number, log_index)` uniquely identifies one log on one canonical chain. `tx_hash` is redundant with `(block_number, log_index)` on a canonical chain (one log lives in exactly one tx) and would force the PK to widen by 32 bytes per row. `tx_hash` stays as a non-PK indexed column for `WHERE tx_hash = $1` lookups.
 - **Why state snapshots are keyed by `(chain_id, contract, block_number)`.** State reads have no `log_index`. The `block_number` chosen for a snapshot is the indexer's decision (§3.5), and `(chain_id, contract, block_number)` is exactly enough to deduplicate "we already snapshotted this contract at this block".
 - **Reproducibility across re-indexes.** Because every PK is derived from on-chain identifiers (`chain_id`, `block_number`, `log_index`, `contract`, `owner`), a wipe-and-replay produces byte-identical rows for the same block range. The indexer never inserts a synthetic id; surrogate `serial`/`bigserial` columns appear only in `indexer_runs` (which is operational telemetry, not chain truth).
+- **Registration identity (2026-10-20).** Derive a registration from the
+  event position that starts it, such as its authorization block and log
+  index. Repeated `AgentAuthorized` events from `setPolicy` belong to the
+  same registration until revoke or expiry followed by re-registration.
+  The new gateway emits `AgentRevoked(old)` before registering an expired
+  address again, so same-block events must be replayed in log-index order.
+  A later registration never overwrites an earlier owner's registration or
+  reattributes its deposits. Current-active views may show only the live
+  registration; account/history views retain each registration and its
+  owner, including revoked or expired ones. Reorg rollback and replay must
+  reconstruct the same boundaries. Historical transfer events keep their
+  original meaning for old deployments; they are not new registration
+  authority in the target. Add schema changes through a new migration and
+  evolve the API shape with the implementation (RS-1019-18).
 - **Constraint cited.** §11 acceptance criterion (implied by "Idempotent ingestion keyed by …") plus the issue's own acceptance criterion "Idempotency keying is reproducible across re-indexes".
 
 ### 3.5 Ingestion model — **JSON-RPC is canonical; rmpc outputs are NOT ingested by the indexer**
@@ -116,10 +138,10 @@ A second binding constraint from user memory applies: **no fast-feedback optimiz
   - **Per-tick reads (issues 1768, 1781).** A registry vault whose own watched log (deposit, withdrawal, cap, exit fee, pause, shutdown, in-kind exit) lands in a tick is read once at the tick's last block. A vault with no snapshot yet is read at once, and one with zero `total_assets` or an unknown cap is read every tick. Every other vault is read only by trigger 2, so yield and price moves of a quiet vault show at the heartbeat ([indexer.rs `snapshot_read`](../../services/explorer-indexer/src/indexer.rs), test `vault_snapshot_cadence::a_vault_with_value_and_known_caps_is_not_read_in_a_quiet_tick`).
   Both triggers write to the same table with the same `(chain_id, contract, block_number)` key, so heartbeat snapshots are no-ops if an event-driven snapshot already covered that block.
 - **Watched event set (initial).** From the contracts in this repo. The `IGateway` events belong to the rmpc gateway system; the `RobotMoneyVault` events belong to the vaults system:
-  - `IGateway.AgentAuthorized` → `agent_policies` upsert.
-  - `IGateway.AgentOwnershipTransferred` → `agent_policies` row naming the new owner, with the policy fields carried from the agent's latest earlier row (issue #1476).
-  - `IGateway.AgentRevoked` → `agent_policies` upsert (with a tombstone column).
-  - `IGateway.AgentDeposit` → `agent_deposits` insert.
+  - `IGateway.AgentAuthorized` → `agent_policies` event row; start a registration or update the existing one as described in §3.4. This event stays when the admin shortcut is removed.
+  - `IGateway.AgentOwnershipTransferred` → historical deployments only: preserve the old event's owner/policy history (issue #1476). The target gateway removes this event and its entrypoint.
+  - `IGateway.AgentRevoked` → `agent_policies` event row closing that registration, without erasing its history.
+  - `IGateway.AgentDeposit` → `agent_deposits` insert associated with its registration.
   - `IGateway.DepositsPaused` / `IGateway.DepositsUnpaused` → `agent_policies` global state row (or a `gateway_state` later table — defer).
   - `RobotMoneyVault.Allocated` / `Pulled` / `Rebalanced` / `ExitFeeCharged` / `EmergencyWithdraw*` → trigger `vault_snapshots`.
   - `MockVault.Deposit` (test fixture only, ERC-4626-shaped) → not watched in production.

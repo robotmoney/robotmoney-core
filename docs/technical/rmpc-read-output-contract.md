@@ -128,17 +128,32 @@ because the share receiver is always the owner, owner decision 2026-10-20) and `
 floor; retired in the target with `withdraw-router`, see the note above).
 
 QA plan P3 (issue 1810) added `ErrImplementationNotApproved`. Every write
-preflight and `rmpc agent-consent` read the gateway's ERC-1967
+preflight reads the gateway's ERC-1967
 implementation slot and that implementation's code at one block. They refuse
-unless its code hash is in the config's `gateway_implementation_hashes`. A
+unless its address matches `gateway_implementation` and its code hash
+matches `gateway_implementation_runtime_hash`. These are the gateway's
+approved address/hash pair, separate from the destination proxies'
+`proxy_implementation_hashes` allowlist. A
 proxy keeps its own code hash across an upgrade, so `ErrCodeHashMismatch`
 cannot see a new implementation. A failed read of either is a refusal, never
 "not a proxy". `rmpc get-gateway` adds `implementation`,
-`implementation_code_hash`, `configured_implementation_hashes`,
-`implementation_approved`, `implementation_version`, `upgrade_authority` and
+`implementation_code_hash`, `configured_implementation`,
+`configured_implementation_code_hash`, `upgrade_timelock` and
 `upgrades_frozen` to its `data`, all read at the envelope's block; a direct
-gateway reports `implementation: null`. The `checks` object of every write
-gains `gateway_implementation_approved` and `gateway_implementation`.
+gateway reports `implementation: null`. These names match `GatewayData` in
+`clients/rust-payment-client/src/commands/get_gateway.rs`; the former
+`configured_implementation_hashes`, `implementation_approved` and
+`upgrade_authority` names are not the current output contract.
+
+**Consent correction (2026-10-20).** The gateway uses an on-chain consent
+commitment and three-argument `revealAuthorization`, not an EIP-712
+consent signature. The former `rmpc agent-consent` and
+`implementation_version` descriptions belonged to the superseded QA design;
+the current gateway has no `implementationVersion()` getter. Follow
+architecture §5.2 and `docs/technical/dapp-credential-decisions.md` §3.3:
+agent consent first, then owner commit, then reveal within both expiries.
+This does not add a new rmpc transaction command; its target on-chain write
+remains the agent vault deposit.
 
 ### 5.0 Where the simulated names come from
 

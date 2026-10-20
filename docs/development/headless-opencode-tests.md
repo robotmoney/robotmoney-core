@@ -314,9 +314,17 @@ against the same freshly-generated key, one assertable step at a time:
 | 2 | OpenCode skill invocation | `opencode run` exits 0 and emits a transcript. |
 | 3 | rmpc built and configured | `cargo build --release ... --bin rmpc` and a generated `config.toml` pinning the devnet chain id, RPC, gateway/vault/USDC addresses, gateway runtime hash, and the freshly-generated keystore path. |
 | 4 | Fresh keypair + keystore | `cast wallet new --json` produces a secp256k1 keypair; the private key is fed via `RMPC_IMPORT_PRIVKEY_HEX` + `RMPC_KEYSTORE_PASSPHRASE` into `rmpc-keystore-import <output-path>`. Step fails unless the keystore file exists, the printed address matches `^0x[0-9a-fA-F]{40}$`, and the keystore-derived address equals the cast-wallet address. |
-| 5 | On-chain authorization | The deploy authorizes no agent (core 1527): `DeployGateway.s.sol` reads no `AGENT_*` variable. The step "Depositor authorizes the generated agent on-chain" first asserts that `agentOwner(generatedKey)` is zero and `hasRole(AGENT_ROLE, generatedKey)` is false. The depositor (the share receiver, an unlocked Anvil account) then sends `commitAuthorization` and, in a later block, `revealAuthorization` carrying the generated key's EIP-712 `AgentConsent` signature (issue 1791). The step then asserts that `agentOwner(generatedKey)` is the depositor and `hasRole(AGENT_ROLE, generatedKey)` is true, BEFORE the deposit, and fails the job if either check is wrong. |
+| 5 | On-chain authorization | The deploy authorizes no agent (core 1527): `DeployGateway.s.sol` reads no `AGENT_*` variable. First assert that `agentOwner(generatedKey)` is zero and `hasRole(AGENT_ROLE, generatedKey)` is false. The required sequence is agent `commitAuthorization` over the depositor and exact reveal calldata, depositor `commitAuthorization`, then three-argument `revealAuthorization(agent, salt, policy)` in a later block while both commitments are live. The policy names the depositor as share receiver, explicitly allows the selected vault, and zeros retired withdrawal fields. After reveal, assert the depositor owns the key and it holds `AGENT_ROLE`, before depositing. |
 | 6 | Deposit signs with generated key | The headless deposit reads the generated keystore via `config.toml`; `.github/scripts/assert_headless_deposit_sender.py` parses the deposit `tx_hash` from the transcript, calls `eth_getTransactionByHash`, and asserts `from == AGENT_ADDRESS`. |
 | 7 | On-chain vault delta | `.github/scripts/assert_headless_deposit_delta.py` confirms `vault.total_assets` increased by the transcript-reported amount (pre-existing from #461). |
+
+**Authorization migration gap (2026-10-20, `48923e37`).** The workflow uses
+commit-based agent consent, not the former EIP-712 signature. However,
+suite-11b sends the depositor's commit before the agent's consent
+(`suite-11b-opencode-headless.yml:402-411`), and its policy still has an
+empty destination list and non-zero retired withdrawal fields. Step 5 above
+states the target sequence and policy, not a completed migration. Update
+the harness with RS-1019-1, RS-1019-12 and RS-1019-15.
 
 **Closure references:**
 
