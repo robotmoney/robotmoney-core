@@ -587,7 +587,7 @@ each row still needs Phase Q. The review folded nine cross-lens duplicates, so t
 ### SS-1019 — System split review (2026-10-19, 10 findings)
 
 Internal review of the code that couples the vaults system to the rmpc gateway system, against the owner decision of 2026-10-19
-(`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`). Checked at release v0.5.0 (core `57fbe618`) and
+(`docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-system-split.md`). Checked at release v0.5.0 (core `57fbe618`) and
 `dev` at `e362df0c`. Row `SS-1019-N` is the review's finding heading `### N.`. Every finding is open: no fix has landed.
 
 | Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |
@@ -609,7 +609,7 @@ Rows SS-1019-1 to SS-1019-5 are superseded by the IC policy removal design (IC-1
 
 Internal review of the code that still carries the on-chain Investment Committee, against the owner decision of 2026-10-19 that
 `InvestmentCommitteePolicy` is deleted and the receipt is the only rebalancing input
-(`docs/code-review/20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md`). Checked at release v0.5.0 (core `57fbe618`)
+(`docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md`). Checked at release v0.5.0 (core `57fbe618`)
 and `dev` at `e362df0c`. Row `IC-1019-N` is the review's finding heading `### N.`. Finding 15 was added 2026-10-20. Every finding is open: no fix has landed.
 
 | Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |
@@ -634,7 +634,7 @@ and `dev` at `e362df0c`. Row `IC-1019-N` is the review's finding heading `### N.
 
 Internal review of the code that still gives rmpc and the gateway jobs beyond an agent vault deposit, against the owner rule of
 2026-10-19 that rmpc is an end-user signer whose one on-chain write is a vault deposit through the gateway
-(`docs/code-review/20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md`). Checked at release v0.5.0 (core `57fbe618`) and
+(`docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md`). Checked at release v0.5.0 (core `57fbe618`) and
 `dev` at `e362df0c`. Row `RS-1019-N` is the review's finding heading `### N.`. Findings 10 to 15 were added 2026-10-20 from the owner decisions of that day. Every finding is open: no fix has landed.
 
 | Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |

@@ -42,7 +42,7 @@
 >
 > The code references below cite the code at the time they were written.
 > Where the code still differs from this design is recorded in the system
-> split review, `docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`.
+> split review, `docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-system-split.md`.
 >
 > **Close-out boundary.** The independent local-devnet components above are
 > implemented. The cross-repository acceptance test proving the full route is

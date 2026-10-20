@@ -251,9 +251,9 @@ REVIEW_DIR="${REPO_ROOT}/docs/code-review"
 REVIEW_KEY_FROM=20261012
 REVIEW_KEYS='20261012-security-review.md SR-1012
 20261015-review-security-claude.md SR-1015
-20261019-code-review-internal-claude-opus-5-5-system-split.md SS-1019
-20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md IC-1019
-20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md RS-1019'
+20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-system-split.md SS-1019
+20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md IC-1019
+20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md RS-1019'
 [ -d "${REVIEW_DIR}" ] || fail "docs/code-review/ is missing; the ledger keys its reviews (issue #1792)"
 
 REGISTER_IDS="$(
@@ -264,8 +264,11 @@ KEYED_FILES="$(awk 'NF { print $1 }' <<< "${REVIEW_KEYS}")"
 COVERAGE_BAD=0
 HEADINGS_CHECKED=0
 
-for f in "${REVIEW_DIR}"/*.md; do
+# A review sits in docs/code-review/ or in one subfolder that groups related reviews (a keyed path is relative to
+# docs/code-review/, e.g. 20261019-vaults-gateway-split/<file>).
+for f in "${REVIEW_DIR}"/*.md "${REVIEW_DIR}"/*/*.md; do
   [ -f "${f}" ] || continue
+  rel="${f#"${REVIEW_DIR}"/}"
   base="$(basename "${f}")"
   case "${base}" in
     README.md | *-verification.md) continue ;;
@@ -276,8 +279,8 @@ for f in "${REVIEW_DIR}"/*.md; do
   day="${base%%-*}"
   [[ "${day}" =~ ^[0-9]{8}$ ]] || continue
   [ "${day}" -ge "${REVIEW_KEY_FROM}" ] || continue
-  if ! grep -qxF "${base}" <<< "${KEYED_FILES}"; then
-    echo "  review has no ledger key: docs/code-review/${base} (add it to REVIEW_KEYS and a register row per finding heading)" >&2
+  if ! grep -qxF "${rel}" <<< "${KEYED_FILES}"; then
+    echo "  review has no ledger key: docs/code-review/${rel} (add it to REVIEW_KEYS and a register row per finding heading)" >&2
     COVERAGE_BAD=$((COVERAGE_BAD + 1))
   fi
 done

@@ -124,8 +124,8 @@ own release. Who governs it is open (`docs/architecture.md` §10).
 > each listed agent to the timelock with `transferAgentOwnership`. The
 > design has no agent transfer (owner decision 2026-10-20). Step 2 below
 > describes that tooling. The differences are
-> recorded in `docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`
-> and `docs/code-review/20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md`.
+> recorded in `docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-system-split.md`
+> and `docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md`.
 
 **Why.** Architecture §8 requires that `ADMIN_ROLE` on all protocol contracts be
 held by the deployed `TimelockController` in production — no EOA may hold

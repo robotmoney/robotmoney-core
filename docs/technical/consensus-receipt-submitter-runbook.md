@@ -15,7 +15,7 @@ and no on-chain committee membership. The submitter holds
 directly. Rebalancing works with no gateway
 deployed. The deployed release (v0.5.0) still records through the gateway.
 Operators run the deployed-release procedure in §1 on it. The system split
-review records where the code differs (`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
+review records where the code differs (`docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
 
 ---
 

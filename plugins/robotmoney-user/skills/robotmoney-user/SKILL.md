@@ -22,7 +22,7 @@ description: >
 > document today's binary. These parts of it are deprecated: `withdraw`, `withdraw-router`, router deposits, `receipt submit`, `committee vote-submit`, `committee check-agent` and the Investment Committee policy.
 > The only on-chain write `rmpc` keeps is `rmpc deposit` into an allowed vault.
 > Consensus receipts go on-chain only through the submitter Safe (the
-> publish-contracts `record-receipt` row), never through `rmpc`. Details: `docs/code-review/20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md` and `docs/code-review/20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md`.
+> publish-contracts `record-receipt` row), never through `rmpc`. Details: `docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md` and `docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md`.
 
 > **Experimental — pre-v1.0.** Command syntax, flags, and output shapes can
 > change. Verify every transaction. Default to fork/devnet; mainnet must be an

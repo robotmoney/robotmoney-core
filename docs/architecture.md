@@ -1094,7 +1094,7 @@ Agent ownership and policy rules (issue #1476):
   `COMMIT_EXPIRY_BLOCKS` (256 blocks), like the depositor's commitment, as
   a code requirement. The order is: agent consent first, then the
   depositor's commit, then the reveal within 256 blocks of both. Today's
-  reveal checks no consent expiry (finding 12 in `docs/code-review/20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md`);
+  reveal checks no consent expiry (finding 12 in `docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md`);
 - the share receiver is always the owner. Every write of a policy
   (`revealAuthorization`, `setPolicy`) runs one shared validator, and that
   validator requires `shareReceiver == msg.sender` for every caller. No

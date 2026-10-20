@@ -48,7 +48,7 @@ writes through the gateway. A committee agent records through
 `RobotMoneyGateway.consensusRecordReceipt`
 (`consensus-receipt-submitter-runbook.md` §1). Both committee contracts bind
 one gateway address. Steps below marked "deployed release" apply to it. The
-system split review records where the code differs (`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
+system split review records where the code differs (`docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
 
 ---
 

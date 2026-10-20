@@ -283,7 +283,7 @@ rehearsal of publish, verify and govern runs on every push to `dev`
 > labeled "Deployed release (v0.5.0)". Operators run it as written. The
 > target delta list after the table names what the vaults run changes. The
 > system split review records the differences
-> (`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
+> (`docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
 
 **Deployed release (v0.5.0): the stage sequence.** The stage table holds the forge stages 1 to 11; the CLI
 adds `safe`, `prove-control` (between stages 10 and 11), `verify` and `govern`:

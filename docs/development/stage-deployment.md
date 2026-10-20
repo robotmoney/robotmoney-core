@@ -10,7 +10,7 @@ Stage is the same deployment as mainnet. Only parameters differ. There is one ru
 > run, as the deployed release does. The target runs the vaults release
 > alone (`docs/operations/contract-release-runbooks.md` §4, the target delta
 > list). The system split review
-> records the differences (`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
+> records the differences (`docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
 
 
 ## What runs on stage

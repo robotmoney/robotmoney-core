@@ -12,7 +12,7 @@ together as a single orchestrated stack.
 > rmpc gateway system are separate systems (`docs/architecture.md` §1).
 > This fixture deploys both on one stack, as the deployed
 > release does. The system split review
-> records the differences (`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
+> records the differences (`docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
 
 
 ---
