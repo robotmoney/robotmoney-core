@@ -44,6 +44,14 @@ inputs:
     description: "Optional: the Base block the Twin fork is pinned at. Recorded in counts.json (pinBlock) and, when the baseline is rebuilt from an adopted run, in measured.reconstructed.fromRun (issue 1733)."
     required: false
     default: ""
+  vaults-only:
+    description: "'true' (issue 1892) runs the VAULTS system rehearsal with the gateway absent: after publish it asserts no gateway manifest, no gateway-handover manifest and no gateway stage in the run manifest, and prints the 'TWIN-SCENARIO vaults-only:' marker."
+    required: false
+    default: "false"
+  gateway:
+    description: "'true' (issue 1892) then runs the GATEWAY system against the vaults run's manifests: three negative scenarios (missing or zero GATEWAY_UPGRADE_TIMELOCK, an AGENT_ADDRESSES line) that must be refused before any broadcast, then publish and verify --system gateway, asserting the vaults manifests are byte-unchanged, the roles moved to GATEWAY_ADMIN_ADDRESS and zero agents at handover. Prints the gateway-refusals-before-broadcast and gateway-run markers."
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -58,4 +66,10 @@ runs:
         PREDEPLOY_LIBS_IN: ${{ inputs.predeploy-libs }}
         PIN_BLOCK_IN: ${{ inputs.pin-block }}
         SHEET_OVERLAY_IN: ${{ inputs.sheet-overlay }}
-      run: bun "${{ github.action_path }}/../../../publish-contracts/src/ci/twin-publish.ts"
+        VAULTS_ONLY_IN: ${{ inputs.vaults-only }}
+        GATEWAY_IN: ${{ inputs.gateway }}
+      # The script prints one TWIN-SCENARIO marker line per scenario it ran. The log is kept for the marker guard (publish-contracts/src/ci/twin-markers.ts).
+      run: |
+        log="$RUNNER_TEMP/twin-publish.log"
+        echo "TWIN_PUBLISH_LOG=$log" >> "$GITHUB_ENV"
+        bun "${{ github.action_path }}/../../../publish-contracts/src/ci/twin-publish.ts" | tee "$log"

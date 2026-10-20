@@ -16,8 +16,10 @@
 // restores the sheet's threshold (that second transaction carries every owner's signature and runs while the sheet is stale), before the receipt path.
 // Tests replace the tools with stubs: TWIN_CLI (default src/cli.ts), TWIN_EVIDENCE_CHECK (default src/evidence-check.ts), TWIN_REHEARSAL_CLI (src/rehearsal/cli.ts), TWIN_MERGE_SHEET (src/ci/merge-sheet.ts), CAST (cast).
 // Any tool that exits non-zero fails this script. The only Twin environment steps are fund-gas and fund-usdc (the RM/USDC pool is never funded: the Twin forks the live pool, owner decision 2026-10-09); the govern time warp is inside the CLI.
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { GATEWAY_FILES, GATEWAY_STAGES, MARKERS, REQUIRED_GATEWAY_LABELS } from "./twin-markers.ts";
 import { receiptIdOfBytes, receiptPayloadDigest } from "../receipt-digest.ts";
 import { TWIN_CHAIN_ID } from "../chains.ts";
 import { BASKET_KEYS, parseSheetText } from "../sheet.ts";
@@ -102,6 +104,16 @@ if (rehearsalMode) run([castBin, "send", admin, "--value", "0", "--keystore", jo
 const startNonce = rehearsalMode ? run([castBin, "nonce", admin, "--rpc-url", rpc]).trim() : "0";
 // No frozen file in the empty counts dir: the Twin chain publish measures the per-stage counts and writes <counts-dir>/<sha>.json.
 stage("publish");
+// Issue 1892, mode vaults-only (VAULTS_ONLY_IN=true): the vaults system ran with the gateway absent. No gateway manifest, no gateway-handover manifest, and the run manifest holds no
+// gateway stage. The marker line is required by the workflow (publish-contracts/src/ci/twin-markers.ts).
+const vaultsOnly = env("VAULTS_ONLY_IN") === "true";
+if (vaultsOnly) {
+  const runStages = Object.keys((JSON.parse(readFileSync(join(rh, "evidence", "publish-run.json"), "utf8")) as { stages: Record<string, unknown> }).stages);
+  const leaked = [...GATEWAY_FILES.filter((f) => existsSync(join(rh, "manifests", f))), ...runStages.filter((s) => GATEWAY_STAGES.includes(s))];
+  if (leaked.length > 0) fail(`the vaults-only run left gateway artifacts: ${leaked.join(", ")}`);
+  const gatewayTxs = runStages.filter((s) => GATEWAY_STAGES.includes(s)).length;
+  console.log(`${MARKERS.vaultsOnly} stages=${runStages.length} gateway_stages=${gatewayTxs} gateway_manifests=0`);
+}
 // counts.json: the measured counts and the real deployer nonce, read after publish (it includes the one prove-control transaction; verify and govern run after it).
 const nonce = run([castBin, "nonce", admin, "--rpc-url", rpc]).trim();
 const countsJson = join(rh, "counts.json");
@@ -145,6 +157,57 @@ if (env("GOVERN_IN") === "true") {
   exportVar("TWIN_SELF_ADMIN_ROWS", join(rh, "self-admin-rows.txt"));
 }
 
+// ---- the gateway system run (issue 1892), GATEWAY_IN=true: after the vaults run, against its manifests, with its own sheet, evidence directory and run manifest ----
+if (env("GATEWAY_IN") === "true") {
+  const manifestDir = join(rh, "manifests");
+  const vaultsSheet = parseSheetText(readFileSync(sheet, "utf8"));
+  const need = (k: string): string => vaultsSheet[k] ?? fail(`the merged sheet has no ${k}`);
+  const timelockAddr = (JSON.parse(readFileSync(join(manifestDir, "timelock.json"), "utf8")) as Record<string, string>).timelock ?? fail("timelock.json has no timelock");
+  const consumed = ["vault", "router", "libs"].map((n) => join(manifestDir, `${n}.json`));
+  const hashes = () => consumed.map((f) => createHash("sha256").update(readFileSync(f)).digest("hex"));
+  const before = hashes();
+  const gsheet = (extra: string[], name: string): string => {
+    const p = join(rh, name);
+    writeFileSync(p, [`CHAIN_ID=${TWIN_CHAIN_ID}`, `EXPECTED_CHAIN_ID=${TWIN_CHAIN_ID}`, `ADMIN_ADDRESS=${need("ADMIN_ADDRESS")}`, `PAUSER_ADDRESS=${need("PAUSER_ADDRESS")}`,
+      `SHARE_RECEIVER_ADDRESS=${need("SHARE_RECEIVER_ADDRESS")}`, `UPGRADE_MODE=${need("UPGRADE_MODE")}`, ...(vaultsSheet.DEPLOYMENT_KIND ? [`DEPLOYMENT_KIND=${vaultsSheet.DEPLOYMENT_KIND}`] : []), ...extra].join("\n") + "\n");
+    return p;
+  };
+  // The Twin's explicit choices: the gateway admin is the emergency key, its upgrade timelock the run's timelock named explicitly. Production chooses its own (architecture 10, open).
+  const good = [`GATEWAY_ADMIN_ADDRESS=${need("EMERGENCY_ADDRESS")}`, `GATEWAY_UPGRADE_TIMELOCK=${timelockAddr}`];
+  const gargs = (sheetPath: string, verb: string, evidence: string) => [bun, cli, verb, "--system", "gateway", "--chain", String(TWIN_CHAIN_ID), "--rpc", rpc, "--sheet", sheetPath,
+    "--signer", `keystore:${join(rh, "keys", "DEPLOYER")}:${pass}`, "--environment", "stage", "--core-sha", sha, "--counts-dir", join(rh, "counts"), "--evidence", evidence];
+  const gEnv = { PUBLISH_MANIFEST_DIR: manifestDir, YES: "1" };
+  // Negative scenarios: each must be refused BEFORE any broadcast (deployer nonce unmoved, no gateway manifest).
+  const nonce0 = run([castBin, "nonce", admin, "--rpc-url", rpc]).trim();
+  const refused: string[] = [];
+  const negatives: [string, string[]][] = [
+    ["missing-upgrade-timelock", [good[0]!]],
+    ["zero-upgrade-timelock", [good[0]!, "GATEWAY_UPGRADE_TIMELOCK=0x0000000000000000000000000000000000000000"]],
+    ["agent-input", [...good, `AGENT_ADDRESSES=${admin}`]],
+  ];
+  for (const [name, lines] of negatives) {
+    const r = Bun.spawnSync(gargs(gsheet(lines, `gateway-neg-${name}.env`), "publish", join(rh, `gateway-neg-${name}`)), { cwd: pc, env: { ...process.env, ...gEnv }, stdout: "pipe", stderr: "pipe" });
+    if (r.exitCode === 0) fail(`gateway negative scenario ${name} was accepted`);
+    const now = run([castBin, "nonce", admin, "--rpc-url", rpc]).trim();
+    if (now !== nonce0 || GATEWAY_FILES.some((f) => existsSync(join(manifestDir, f)))) fail(`gateway negative scenario ${name} broadcast something (nonce ${nonce0} -> ${now})`);
+    refused.push(name);
+  }
+  console.log(`${MARKERS.gatewayRefusals} scenarios=${refused.join(",")} broadcasts=0`);
+  const gs = gsheet(good, "gateway-sheet.env");
+  const gev = join(rh, "gateway-evidence");
+  run(gargs(gs, "publish", gev), { cwd: pc, childEnv: gEnv });
+  run(gargs(gs, "verify", gev), { cwd: pc, childEnv: gEnv, stdoutTo: join(rh, "verify-labels-gateway.txt") });
+  exportVar("TWIN_VERIFY_LABELS_GATEWAY", join(rh, "verify-labels-gateway.txt"));
+  if (JSON.stringify(before) !== JSON.stringify(hashes())) fail("the gateway run changed a vaults manifest");
+  const gw = (JSON.parse(readFileSync(join(manifestDir, "gateway-handover.json"), "utf8")) as { gateway_admin?: string; roles?: Record<string, boolean> });
+  const roles = gw.roles ?? {};
+  if (!roles.admin_holder_has_admin_role || !roles.admin_holder_has_default_admin_role || roles.deployer_has_admin_role || roles.deployer_has_default_admin_role) fail("the gateway handover manifest does not show the roles moved to GATEWAY_ADMIN_ADDRESS");
+  const labels = readFileSync(join(rh, "verify-labels-gateway.txt"), "utf8");
+  for (const l of REQUIRED_GATEWAY_LABELS) if (!labels.includes(l)) fail(`the gateway verifier did not print '${l}'`);
+  console.log(`${MARKERS.gatewayRun} vaults_manifests_unchanged=true agents_at_handover=0 admin=${gw.gateway_admin}`);
+  exportVar("TWIN_GATEWAY_EVIDENCE_DIR", gev);
+}
+
 // ---- the receipt path of a rehearsal (issue 1727): a REAL recorded receipt, registered submitter, applied by the Safe ----
 if (rehearsalMode && env("GOVERN_IN") === "true") {
   const manifestDir = join(rh, "manifests");
@@ -167,6 +230,9 @@ if (rehearsalMode && env("GOVERN_IN") === "true") {
   // --signer is the DEPLOYER (it pays the gas); two of the submitter Safe's owners sign (their keystores sit beside the DEPLOYER keystore).
   stage("record-receipt", join(rh, "record-receipt.txt"), ["--receipt-id", receiptId, "--payload-digest", digest, "--payload", payload, "--payload-uri", uri, "--submitter", submitter]);
   stage("govern", join(rh, "apply-receipt-rows.txt"), ["--row", "apply-receipt", "--receipt-id", receiptId, "--payload", payload]);
+  // Issue 1892: the receipt path marker. Sibling issue 1888 (receipt stage, submitter grant through the timelock, direct receipt record) owns the rows above and keeps this line
+  // after its own apply step: the workflow requires it, so a run that drops the receipt path fails.
+  console.log(`${MARKERS.receiptPath} receipt_id=${receiptId} submitter=${submitter}`);
   exportVar("TWIN_RECEIPT_ID", receiptId);
   exportVar("TWIN_RECEIPT_SUBMITTER", submitter);
   exportVar("TWIN_SUBMITTER_SAFE_JSON", submitterSafeJson);

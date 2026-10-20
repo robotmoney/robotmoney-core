@@ -321,6 +321,26 @@ pub struct Published {
     pub keys: RehearsalKeys,
     pub cfg: PublishConfig,
     pub rpc_url: String,
+    /// Issue 1892: every manifest file (name and bytes) the VAULTS run left behind, taken right after it and before the gateway system ran. The vaults-only assertions read it:
+    /// it holds no gateway manifest, and the gateway run must leave each of these byte-unchanged.
+    pub vaults_snapshot: BTreeMap<String, Vec<u8>>,
+}
+
+/// The result of the gateway system run (issue 1892).
+#[derive(Debug, Clone)]
+pub struct GatewayRun {
+    /// The gateway verifier's labels (stdout of `verify --system gateway`).
+    pub verify_output: String,
+    /// The gateway run's own evidence directory (run manifest with `system: gateway`).
+    pub evidence_dir: PathBuf,
+}
+
+/// The first whitespace-separated token of a sheet value (the sheet allows a trailing `# comment`).
+fn sheet_token(map: &BTreeMap<String, String>, key: &str) -> Result<String, HarnessError> {
+    map.get(key)
+        .and_then(|v| v.split_whitespace().next())
+        .map(str::to_string)
+        .ok_or_else(|| HarnessError::other(format!("the run sheet has no {key}")))
 }
 
 /// What one CLI run printed and how it ended. Used where a non-zero exit is the thing under test.
@@ -455,19 +475,94 @@ impl Published {
             keys,
             cfg: cfg.clone(),
             rpc_url: rpc_url.to_string(),
+            vaults_snapshot: BTreeMap::new(),
         };
         run_cli(cfg, &p, "publish", &[])?;
         let table = StageTable::load_default()?;
-        let n = table.count_present(&p.manifest_dir);
-        let want = table.expected_manifest_count();
-        if n != want {
+        // Issue 1892: the default run is the VAULTS system. It writes every vaults manifest and no gateway one: the gateway is a separate run (`deploy_gateway`).
+        let missing = table.vaults_missing(&p.manifest_dir);
+        if !missing.is_empty() {
             return Err(HarnessError::DeployFailed(format!(
-                "publish contracts wrote {n} of {want} stage manifests in {} (missing: {})",
+                "publish contracts wrote {} of {} vaults-system manifests in {} (missing: {})",
+                table.vaults_manifests().len() - missing.len(),
+                table.vaults_manifests().len(),
                 p.manifest_dir.display(),
-                table.missing(&p.manifest_dir).join(", ")
+                missing.join(", ")
             )));
         }
+        let leaked = table.gateway_present(&p.manifest_dir);
+        if !leaked.is_empty() {
+            return Err(HarnessError::DeployFailed(format!(
+                "the vaults-system run wrote gateway-system manifests: {}",
+                leaked.join(", ")
+            )));
+        }
+        let mut p = p;
+        for f in table.vaults_manifests() {
+            p.vaults_snapshot
+                .insert(f.clone(), std::fs::read(p.manifest_dir.join(&f))?);
+        }
         Ok(p)
+    }
+
+    /// Issue 1892: the gateway system, run on its own after the vaults system, against the vaults manifests. Its sheet is the small gateway sheet: the deployer, the pauser,
+    /// the share receiver and the release mode of the vaults run, the gateway admin (the EMERGENCY key) and the gateway upgrade timelock, both named explicitly (the Twin names the
+    /// run's own timelock; the production choice is an open decision). It publishes and verifies with `--system gateway` in its own evidence directory, and fails when a
+    /// vaults manifest changed.
+    pub fn deploy_gateway(&self) -> Result<GatewayRun, HarnessError> {
+        let run_sheet = parse_sheet_fragment(&std::fs::read_to_string(&self.sheet_path)?);
+        let table = StageTable::load_default()?;
+        let timelock_file = table.manifest_of("timelock")?;
+        let timelock_json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(self.manifest_dir.join(&timelock_file))?)
+                .map_err(|e| HarnessError::other(format!("{timelock_file}: {e}")))?;
+        let timelock = field(&timelock_json, &timelock_file, "timelock")?;
+        let work = self.manifest_dir.parent().unwrap_or(&self.manifest_dir);
+        let mut text = String::new();
+        for (k, v) in [
+            ("CHAIN_ID", TWIN_CHAIN_ID.to_string()),
+            ("EXPECTED_CHAIN_ID", TWIN_CHAIN_ID.to_string()),
+            ("ADMIN_ADDRESS", sheet_token(&run_sheet, "ADMIN_ADDRESS")?),
+            ("PAUSER_ADDRESS", sheet_token(&run_sheet, "PAUSER_ADDRESS")?),
+            (
+                "SHARE_RECEIVER_ADDRESS",
+                sheet_token(&run_sheet, "SHARE_RECEIVER_ADDRESS")?,
+            ),
+            ("UPGRADE_MODE", sheet_token(&run_sheet, "UPGRADE_MODE")?),
+            (
+                "GATEWAY_ADMIN_ADDRESS",
+                self.keys.address("EMERGENCY_ADDRESS")?.to_string(),
+            ),
+            ("GATEWAY_UPGRADE_TIMELOCK", timelock),
+        ] {
+            text.push_str(&format!("{k}={v}\n"));
+        }
+        let sheet_path = work.join("gateway-sheet.env");
+        std::fs::write(&sheet_path, text)?;
+        let evidence_dir = work.join("evidence-gateway");
+        let gp = Published {
+            sheet_path,
+            ..self.clone()
+        };
+        let extra: Vec<String> = vec![
+            "--system".into(),
+            "gateway".into(),
+            "--evidence".into(),
+            evidence_dir.display().to_string(),
+        ];
+        run_cli(&self.cfg, &gp, "publish", &extra)?;
+        let verify_output = run_cli(&self.cfg, &gp, "verify", &extra)?;
+        for (f, before) in &self.vaults_snapshot {
+            if std::fs::read(self.manifest_dir.join(f))? != *before {
+                return Err(HarnessError::DeployFailed(format!(
+                    "the gateway system run changed the vaults manifest {f}"
+                )));
+            }
+        }
+        Ok(GatewayRun {
+            verify_output,
+            evidence_dir,
+        })
     }
 
     /// Run one governance row through the real Safe and the timelock.

@@ -155,12 +155,12 @@ jobs:
       # silently empty the crate.
       # Floor calibrated to the real count after the fork_manifest and genesis
       # machinery was retired (52 lib tests at the final tree; the earlier 60 was
-      # never reachable). Core 1549 added the dapp compose environment tests: 60.
+      # never reachable). Core 1549 added the dapp compose environment tests: 60. Issue 1892 added the system split reads of the stage table: 65.
       # Raise it when tests are added.
       - name: smoke-test lib test count floor
         working-directory: testing/smoke-test
         env:
-          SMOKE_TEST_LIB_TEST_FLOOR: "60"
+          SMOKE_TEST_LIB_TEST_FLOOR: "65"
         run: |
           set -o pipefail
           cargo test -p smoke-test --lib 2>&1 | tee "$RUNNER_TEMP/smoke-lib.log"
@@ -487,9 +487,17 @@ jobs:
           SMOKE_TEST_VERIFY_OUT: ${{ runner.temp }}/stage-verify-labels.txt
           SMOKE_TEST_SHEET_OUT: ${{ runner.temp }}/stage-run-sheet.env
           SMOKE_TEST_PROOF_DIR: ${{ runner.temp }}/twin-proofs
+          SMOKE_TEST_MARKER_OUT: ${{ runner.temp }}/twin-systems-marker.txt
         run: >-
           bash ../../.github/scripts/cargo_test_require_executed.sh
           -p smoke-test --release --test twin_publish -- --test-threads=1 --nocapture
+
+      # Issue 1892: the vaults-only and gateway system scenario must have RUN, not only compiled. The test prints its marker with positive manifest counts
+      # (vaults run: no gateway manifest; gateway run: both gateway manifests, vaults manifests byte-unchanged, zero agents at handover). A removed scenario fails here.
+      - name: Require the system scenario marker of the Twin publish test
+        run: >-
+          grep -Eq 'TWIN-SCENARIO rust-systems: vaults_manifests=[1-9][0-9]* gateway_manifests=2 vaults_unchanged=true agents_at_handover=0'
+          "${{ runner.temp }}/twin-systems-marker.txt"
 
       # Core 1488: the REAL stage outputs go through label-diff and sheet-diff. The Twin chain test
       # (twin_publish.rs) writes the verifier label file (SMOKE_TEST_VERIFY_OUT) and the run sheet

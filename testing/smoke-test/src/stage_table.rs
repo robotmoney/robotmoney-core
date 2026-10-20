@@ -13,7 +13,13 @@ struct Stage {
     name: String,
     #[serde(default)]
     manifest: Option<String>,
+    /// Issue 1892: the system the stage belongs to (`vaults` or `gateway`). Absent in a table from before the split: every stage is the vaults run.
+    #[serde(default)]
+    system: Option<String>,
 }
+
+/// The gateway system's name in the table (issue 1892).
+pub const GATEWAY_SYSTEM: &str = "gateway";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -106,6 +112,41 @@ impl StageTable {
         self.all_manifests().len()
     }
 
+    /// Issue 1892: the manifests the vaults system writes (every stage that is not a gateway-system stage). A vaults run writes these and no gateway manifest.
+    pub fn vaults_manifests(&self) -> Vec<String> {
+        self.system_manifests(false)
+    }
+
+    /// Issue 1892: the manifests the gateway system writes (`gateway.json`, `gateway-handover.json`). Empty in a table from before the split.
+    pub fn gateway_manifests(&self) -> Vec<String> {
+        self.system_manifests(true)
+    }
+
+    fn system_manifests(&self, gateway: bool) -> Vec<String> {
+        self.stages
+            .iter()
+            .filter(|s| (s.system.as_deref() == Some(GATEWAY_SYSTEM)) == gateway)
+            .filter_map(|s| s.manifest.as_deref())
+            .map(file_name)
+            .collect()
+    }
+
+    /// The vaults system's manifests that are missing in `dir`.
+    pub fn vaults_missing(&self, dir: &Path) -> Vec<String> {
+        self.vaults_manifests()
+            .into_iter()
+            .filter(|f| !dir.join(f).is_file())
+            .collect()
+    }
+
+    /// The gateway system's manifests that exist in `dir` (a vaults-only run has none).
+    pub fn gateway_present(&self, dir: &Path) -> Vec<String> {
+        self.gateway_manifests()
+            .into_iter()
+            .filter(|f| dir.join(f).is_file())
+            .collect()
+    }
+
     /// `(rmUSDC, vault manifest file)` and so on: the table's vault key with the `rm` prefix.
     pub fn vault_manifests(&self) -> Vec<(String, String)> {
         self.vaults
@@ -155,6 +196,35 @@ mod tests {
         assert!(all.contains(&"vault.json".to_string()));
         assert_eq!(t.expected_manifest_count(), all.len());
         assert_eq!(t.vault_manifests().len(), 4);
+    }
+
+    #[test]
+    fn real_table_splits_the_vaults_and_the_gateway_manifests() {
+        let t = StageTable::load_default().unwrap();
+        let (v, g) = (t.vaults_manifests(), t.gateway_manifests());
+        assert!(!v.is_empty());
+        assert_eq!(g, ["gateway.json", "gateway-handover.json"]);
+        assert!(v.iter().all(|f| !g.contains(f)));
+        assert_eq!(v.len() + g.len(), t.expected_manifest_count());
+        // a vaults-only directory: every vaults manifest, no gateway one
+        let tmp = tempfile::tempdir().unwrap();
+        for f in &v {
+            std::fs::write(tmp.path().join(f), "{}").unwrap();
+        }
+        assert!(t.vaults_missing(tmp.path()).is_empty());
+        assert!(t.gateway_present(tmp.path()).is_empty());
+        std::fs::write(tmp.path().join("gateway.json"), "{}").unwrap();
+        assert_eq!(t.gateway_present(tmp.path()), ["gateway.json"]);
+    }
+
+    #[test]
+    fn a_table_without_systems_is_all_vaults() {
+        let t = StageTable::parse(
+            r#"{"stages":[{"name":"a","manifest":"d/<chain>/a.json"}],"vaults":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(t.vaults_manifests(), ["a.json"]);
+        assert!(t.gateway_manifests().is_empty());
     }
 
     #[test]

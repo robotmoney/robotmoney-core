@@ -237,6 +237,8 @@ pub struct Fixture {
     topology: publish::Topology,
     /// The publish run: generated sheet, rehearsal keystores, manifest directory.
     published: publish::Published,
+    /// Issue 1892: the gateway system run that followed the vaults run (its verifier labels and its own evidence directory).
+    gateway_run: publish::GatewayRun,
     /// keccak256 of the gateway's runtime code on this chain.
     gateway_runtime_hash: String,
     /// keccak256 of the implementation code behind every other proxy an rmpc write reaches through
@@ -638,6 +640,11 @@ impl Fixture {
         .inspect_err(|err| {
             logging::error("smoke-test", format!("publish contracts failed: {err}"));
         })?;
+        // Issue 1892: the gateway is its own system, run after the vaults system against its manifests. The vaults run above left no gateway manifest
+        // (`published.vaults_snapshot`); this run adds the gateway and its handover and must leave every vaults manifest unchanged.
+        let gateway_run = published.deploy_gateway().inspect_err(|err| {
+            logging::error("smoke-test", format!("gateway system run failed: {err}"));
+        })?;
         let topology = publish::load_topology(&published.manifest_dir).inspect_err(|err| {
             logging::error("smoke-test", format!("manifest read failed: {err}"));
         })?;
@@ -666,6 +673,7 @@ impl Fixture {
             chain_id,
             topology,
             published,
+            gateway_run,
             gateway_runtime_hash,
             proxy_implementation_hashes,
             repo_root,
@@ -865,6 +873,10 @@ impl Fixture {
     /// The publish run behind this fixture (sheet, keystores, manifests).
     pub fn published(&self) -> &publish::Published {
         &self.published
+    }
+    /// Issue 1892: the gateway system run that followed the vaults run.
+    pub fn gateway_run(&self) -> &publish::GatewayRun {
+        &self.gateway_run
     }
     /// The manifest directory the driver wrote.
     pub fn manifest_dir(&self) -> &Path {

@@ -5,7 +5,7 @@
 // contract with its schema drift guard, parity, and that a redeploy from a new SHA mints a fresh
 // keystore set. The chain up, chain down, chain status and dapp status verbs run against a fake `docker compose`
 // (core 1549): every stage service is a container, so the tool starts no host process. No network, no docker, no chain.
-import { allManifests, expectedManifestCount } from "../stage-manifests.ts";
+import { allManifests, expectedManifestCount, systemManifests } from "../stage-manifests.ts";
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -155,11 +155,20 @@ describe("publish", () => {
   test("publish run fails when the table's manifests are not all there", async () => {
     const r = await run("publish", "run");
     expect(r.code).toBe(66);
-    expect(r.err).toContain(`0 of ${expectedManifestCount()}`);
+    expect(r.err).toContain(`0 of ${systemManifests("vaults").length}`);
+    expect(systemManifests("vaults").length + systemManifests("gateway").length).toBe(expectedManifestCount());
   });
 
-  test("publish run passes with every manifest the stage table names and hands publish contracts the right argv", async () => {
+  test("publish run is the vaults system: a gateway manifest left behind fails it (issue 1892)", async () => {
     for (const f of allManifests()) writeFileSync(join(OUT, "manifests", f), '{"vault":"0x1"}');
+    const r = await run("publish", "run");
+    expect(r.code).toBe(66);
+    expect(r.err).toContain("left gateway-system manifests");
+    expect(r.err).toContain("gateway.json");
+  });
+
+  test("publish run passes with every vaults-system manifest the stage table names and hands publish contracts the right argv", async () => {
+    for (const f of systemManifests("vaults")) writeFileSync(join(OUT, "manifests", f), '{"vault":"0x1"}');
     const r = await run("publish", "run");
     expect(r.code).toBe(0);
     const c = publishCall();
@@ -178,6 +187,51 @@ describe("publish", () => {
   test("a failing publish contracts exit code passes through unchanged", async () => {
     nextResult = { code: 7, stdout: "", stderr: "" };
     expect((await run("publish", "run")).code).toBe(7);
+  });
+
+  // Issue 1892: the gateway system is its own run after the vaults system, with its own sheet and evidence directory.
+  describe("publish gateway", () => {
+    const fullSheet = [
+      "ADMIN_ADDRESS=0x00000000000000000000000000000000000000aa", "PAUSER_ADDRESS=0x00000000000000000000000000000000000000bb", "SHARE_RECEIVER_ADDRESS=0x00000000000000000000000000000000000000cc",
+      "EMERGENCY_ADDRESS=0x00000000000000000000000000000000000000dd", "UPGRADE_MODE=frozen", "GOVERN_UNPAUSE_VAULTS=USDC,PROTO,AGENT,RWA",
+    ].join("\n") + "\n";
+    const seedVaultsRun = () => {
+      writeFileSync(join(OUT, "sheet.env"), fullSheet);
+      for (const f of systemManifests("vaults")) writeFileSync(join(OUT, "manifests", f), JSON.stringify({ vault: "0x1", timelock: "0x00000000000000000000000000000000000000ee" }));
+    };
+    test("it refuses before any publish contracts call when the vaults manifests are missing", async () => {
+      const r = await run("publish", "gateway");
+      expect(r.code).toBe(65);
+      expect(r.err).toContain("Run publish run first");
+      expect(calls.cmds.some((c) => c.cmd[1]?.endsWith("src/cli.ts"))).toBe(false);
+    });
+    test("it publishes then verifies --system gateway with a gateway sheet that names the gateway admin and the explicit upgrade timelock, in its own evidence directory", async () => {
+      seedVaultsRun();
+      handler = (cmd) => {
+        if (cmd[1]?.endsWith("src/cli.ts") && cmd[2] === "publish") for (const f of systemManifests("gateway")) writeFileSync(join(OUT, "manifests", f), "{}");
+        return { code: 0, stdout: "[verify]\n", stderr: "" };
+      };
+      const r = await run("publish", "gateway");
+      expect(r.code).toBe(0);
+      const cli = calls.cmds.filter((c) => c.cmd[1]?.endsWith("src/cli.ts"));
+      expect(cli.map((c) => c.cmd[2])).toEqual(["publish", "verify"]);
+      for (const c of cli) {
+        expect(c.cmd[c.cmd.indexOf("--system") + 1]).toBe("gateway");
+        expect(c.cmd[c.cmd.lastIndexOf("--evidence") + 1]).toBe(join(OUT, "evidence-gateway"));
+        expect(c.cmd[c.cmd.lastIndexOf("--sheet") + 1]).toBe(join(OUT, "gateway-sheet.env"));
+      }
+      const sheet = readFileSync(join(OUT, "gateway-sheet.env"), "utf8");
+      expect(sheet).toContain("GATEWAY_ADMIN_ADDRESS=0x00000000000000000000000000000000000000dd");
+      expect(sheet).toContain("GATEWAY_UPGRADE_TIMELOCK=0x00000000000000000000000000000000000000ee");
+      expect(sheet).not.toMatch(/AGENT|SAFE_|TIMELOCK_MIN_DELAY|GOVERN_/);
+    });
+    test("a gateway run that wrote no gateway manifest fails", async () => {
+      seedVaultsRun();
+      handler = () => ({ code: 0, stdout: "[verify]\n", stderr: "" });
+      const r = await run("publish", "gateway");
+      expect(r.code).toBe(66);
+      expect(r.err).toContain("wrote no gateway.json");
+    });
   });
 });
 
