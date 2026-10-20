@@ -29,6 +29,7 @@ import {TickMath} from "../lib/TickMath.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {AgentRegistration} from "./helpers/AgentRegistration.sol";
 
 /// @dev Mimics the per-vault `tickMathLibrary()` accessor the deploy assertion
 ///      reads, but returns a caller-chosen address — used to prove the deploy
@@ -281,10 +282,6 @@ contract DeployTest is Test {
                 logs[i].topics[0] != IGateway.AgentAuthorized.selector,
                 "deploy emitted AgentAuthorized"
             );
-            assertTrue(
-                logs[i].topics[0] != IGateway.AgentOwnershipTransferred.selector,
-                "deploy emitted AgentOwnershipTransferred"
-            );
         }
         bytes32 agentRole = s.gateway.AGENT_ROLE();
         address[6] memory holders =
@@ -335,16 +332,22 @@ contract DeployTest is Test {
 
     function test_deploy_grantingAgentRoleToAdminReverts() public {
         CoreStages.Stack memory s = _run();
+        IGateway.AgentPolicy memory p = _openPolicy();
+        p.shareReceiver = admin;
+        AgentRegistration.commitBoth(s.gateway, admin, admin, p);
         vm.prank(admin);
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
-        s.gateway.authorizeAgent(admin, _openPolicy());
+        s.gateway.revealAuthorization(admin, AgentRegistration.saltFor(admin, admin, p), p);
     }
 
     function test_deploy_grantingAgentRoleToPauserReverts() public {
         CoreStages.Stack memory s = _run();
-        vm.prank(admin);
+        IGateway.AgentPolicy memory p = _openPolicy();
+        p.shareReceiver = pauser;
+        AgentRegistration.commitBoth(s.gateway, pauser, pauser, p);
+        vm.prank(pauser);
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
-        s.gateway.authorizeAgent(pauser, _openPolicy());
+        s.gateway.revealAuthorization(pauser, AgentRegistration.saltFor(pauser, pauser, p), p);
     }
 
     // --- Pre-deploy distinctness check ----------------------------------

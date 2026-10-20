@@ -35,6 +35,14 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {AgentRegistration} from "../helpers/AgentRegistration.sol";
+import {AccessRoles} from "../../gateway/AccessRoles.sol";
+import {RobotMoneyGateway} from "../../gateway/RobotMoneyGateway.sol";
+import {IGateway} from "../../gateway/interfaces/IGateway.sol";
+import {CoreProxies} from "../helpers/CoreProxies.sol";
+import {MockVault} from "../helpers/MockVault.sol";
+import {TestERC20} from "../helpers/TestERC20.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -820,5 +828,80 @@ contract FvInvariantsTest is Test {
     ///         test_FEE2_overReportingAdapterCannotSocializeLoss.
     function test_FEE2_expectedFail_feeChargedOnRealizedProceeds() public pure {
         _assertHolds("FEE-2");
+    }
+
+    // ── Issue 1890: owner-consented agent lifecycle ──────────────────────────
+
+    /// @notice ACL-4 and ACL-8 are tombstones: the spec retired them (owner decision
+    ///         2026-10-20) and ACL-9 replaces them. The IDs stay in the registry.
+    function test_ACL4_ACL8_areTombstones() public pure {
+        require(
+            InvariantRegistry.get("ACL-4").status == InvariantRegistry.Status.TOMBSTONE,
+            "ACL-4 must be a tombstone"
+        );
+        require(
+            InvariantRegistry.get("ACL-8").status == InvariantRegistry.Status.TOMBSTONE,
+            "ACL-8 must be a tombstone"
+        );
+    }
+
+    /// @notice ACL-9 (red before issue 1890, green after) - an agent's owner never changes,
+    ///         its share receiver is its owner, and no role registers an agent or grants
+    ///         or revokes AGENT_ROLE. Executes the three halves against a real gateway.
+    function test_ACL9_agentLifecycleIsOwnerConsented() public {
+        _assertHolds("ACL-9");
+        vm.warp(1_700_000_000);
+        TestERC20 usdc = new TestERC20();
+        MockVault vault = new MockVault(address(usdc));
+        address admin = makeAddr("acl9-admin");
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(
+            IERC20(address(usdc)),
+            IERC4626(address(vault)),
+            admin,
+            makeAddr("acl9-pauser"),
+            address(0)
+        );
+        address agent = makeAddr("acl9-agent");
+        address owner = makeAddr("acl9-owner");
+        bytes32 agentRole = gw.AGENT_ROLE();
+
+        // No role grants or revokes AGENT_ROLE (the admin holds DEFAULT_ADMIN_ROLE and ADMIN_ROLE).
+        vm.prank(admin);
+        vm.expectRevert(AccessRoles.AgentRoleNotManageable.selector);
+        gw.grantRole(agentRole, agent);
+
+        // The share receiver is the caller, for every caller, the admin included.
+        address[] memory none = new address[](0);
+        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 1 days),
+            maxPerPayment: 1e6,
+            maxPerWindow: 1e6,
+            shareReceiver: owner,
+            allowedDestinations: none,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: none
+        });
+        AgentRegistration.revealExpectRevert(
+            gw, admin, agent, p, RobotMoneyGateway.ShareReceiverNotAuthorized.selector
+        );
+
+        // The owner registers with the agent's consent and keeps the agent. Nobody else can take it.
+        AgentRegistration.register(gw, agent, p);
+        assertEq(gw.agentOwner(agent), owner);
+        AgentRegistration.revealExpectRevert(
+            gw, admin, agent, p, RobotMoneyGateway.AgentAlreadyOwned.selector
+        );
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
+        gw.revokeAgent(agent);
+
+        // The only exit is revokeAgent by the owner or the agent itself.
+        vm.prank(agent);
+        gw.revokeAgent(agent);
+        assertEq(gw.agentOwner(agent), address(0));
+        assertFalse(gw.hasRole(agentRole, agent));
     }
 }

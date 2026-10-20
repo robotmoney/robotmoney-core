@@ -21,6 +21,7 @@ import {RoleHolders} from "./helpers/RoleHolders.sol";
 import {ForkSelect} from "./helpers/ForkSelect.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
 import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
+import {AgentRegistration} from "./helpers/AgentRegistration.sol";
 
 /// @title ISafe — minimal interface for the Safe (Gnosis Safe) multisig contract.
 ///
@@ -191,11 +192,8 @@ contract SafeIntegrationTest is Test {
     mapping(address => address[]) internal adminHolders;
     address[] internal gatewayRootHolders;
 
-    /// A gateway agent the deployer authorizes before the handover, as
-    /// the gateway stage does for its deploy agent (issue #1476).
-    address internal deployAgent;
-    /// Every agent named by an AgentAuthorized or AgentOwnershipTransferred log
-    /// the gateway emitted from before the contracts were built.
+    /// Every agent named by an AgentAuthorized log the gateway emitted from
+    /// before the contracts were built. The deploy registers none (ACL-9).
     address[] internal loggedAgents;
 
     // ─── Set-up ────────────────────────────────────────────────────────────────
@@ -324,19 +322,10 @@ contract SafeIntegrationTest is Test {
         assertGt(SAFE_FALLBACK_HANDLER.code.length, 0, "fallback handler has no code on this fork");
         assertGt(SAFE_MULTISEND.code.length, 0, "MultiSend has no code on this fork");
 
-        // A deployer-owned gateway agent, authorized before the handover the
-        // way the gateway stage authorizes its deploy agent (issue #1476).
-        deployAgent = makeAddr("deploy-agent");
-        vm.prank(deployer);
-        gateway.authorizeAgent(deployAgent, _agentPolicy(makeAddr("deploy-share-receiver")));
-
         // Deploy TimelockController and wire ADMIN_ROLE on all five contracts,
-        // called from the deployer so its roles are the ones revoked. The
-        // deployer's agent is handed to the timelock in the same handover.
-        address[] memory agents = new address[](1);
-        agents[0] = deployAgent;
+        // called from the deployer so its roles are the ones revoked.
         vm.prank(deployer);
-        d = script.runInProcessWithAgents(
+        d = script.runInProcess(
             address(vault),
             address(gateway),
             address(registry),
@@ -345,7 +334,6 @@ contract SafeIntegrationTest is Test {
             address(safe),
             makeAddr("emergency"), // independent emergency hot key (ACL-1 / F-01)
             MIN_DELAY,
-            agents,
             DeployTimelock.SafeSpec({owners: _sortedOwners(), threshold: 2})
         );
 
@@ -380,10 +368,7 @@ contract SafeIntegrationTest is Test {
         for (uint256 i = 0; i < logs.length; i++) {
             if (logs[i].emitter != address(gateway) || logs[i].topics.length < 2) continue;
             bytes32 t0 = logs[i].topics[0];
-            if (
-                t0 == IGateway.AgentAuthorized.selector
-                    || t0 == IGateway.AgentOwnershipTransferred.selector
-            ) {
+            if (t0 == IGateway.AgentAuthorized.selector) {
                 _rememberAgent(address(uint160(uint256(logs[i].topics[1]))));
             }
         }
@@ -446,29 +431,10 @@ contract SafeIntegrationTest is Test {
         assertFalse(gateway.hasRole(bytes32(0), address(this)), "the test holds the gateway root");
     }
 
-    /// @notice Issue #1476: after the handover no gateway agent is owned by
-    ///         the deployer. The agents are enumerated from the gateway's own
-    ///         AgentAuthorized / AgentOwnershipTransferred logs, not from the
-    ///         list the fixture passed in. The transferred agent keeps
-    ///         AGENT_ROLE, and the deployer's setPolicy / revokeAgent on it
-    ///         revert NotAgentOwner.
-    function test_handover_noDeployerOwnedAgentRemains() public withSnap {
-        assertGe(loggedAgents.length, 1, "the logs name no gateway agent");
-        for (uint256 i = 0; i < loggedAgents.length; i++) {
-            assertTrue(
-                gateway.agentOwner(loggedAgents[i]) != deployer,
-                "a gateway agent is still owned by the deployer"
-            );
-        }
-        assertEq(gateway.agentOwner(deployAgent), address(d.timelock), "timelock is not the owner");
-        assertTrue(gateway.hasRole(AGENT_ROLE, deployAgent), "transferred agent lost AGENT_ROLE");
-
-        vm.prank(deployer);
-        vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
-        gateway.setPolicy(deployAgent, _agentPolicy(deployer));
-        vm.prank(deployer);
-        vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
-        gateway.revokeAgent(deployAgent);
+    /// @notice ACL-8 tombstone evidence: the deploy registers no gateway agent,
+    ///         so the gateway's own logs name none before the handover.
+    function test_handover_deployRegistersNoGatewayAgent() public withSnap {
+        assertEq(loggedAgents.length, 0, "the deploy registered a gateway agent");
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -703,21 +669,6 @@ contract SafeIntegrationTest is Test {
             IAccessControl(address(gateway)).hasRole(ADMIN_ROLE, newAdmin),
             "newAdmin should hold ADMIN_ROLE on gateway"
         );
-    }
-
-    /// @notice AC1f (issue #1476): setPolicy on the agent the handover gave the
-    ///         timelock, driven by two owner signatures through
-    ///         Safe.execTransaction -> TimelockController schedule / execute.
-    function test_happyPath_gateway_setPolicyOnTransferredAgent() public withSnap {
-        address newReceiver = makeAddr("governance-receiver");
-        bytes memory callData =
-            abi.encodeCall(IGateway.setPolicy, (deployAgent, _agentPolicy(newReceiver)));
-        _scheduleAndExecute(address(gateway), callData);
-
-        (,,,, address receiver,,,) = gateway.agents(deployAgent);
-        assertEq(receiver, newReceiver, "Safe -> Timelock setPolicy did not land");
-        assertEq(gateway.agentOwner(deployAgent), address(d.timelock), "owner changed");
-        assertTrue(gateway.hasRole(AGENT_ROLE, deployAgent), "agent lost AGENT_ROLE");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

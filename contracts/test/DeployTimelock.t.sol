@@ -17,6 +17,7 @@ import {CoreStages} from "./helpers/CoreStages.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
+import {AccessRoles} from "../gateway/AccessRoles.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
@@ -820,7 +821,7 @@ contract DeployTimelockTest is SafeGovernance {
     // asserted in test_handover_* above.
 
     /// @notice ACL-1: the Timelock receives BOTH ADMIN_ROLE and DEFAULT_ADMIN_ROLE
-    ///         on the Gateway (so it can rotate roles / authorizeAgent), and holds
+    ///         on the Gateway (so it can rotate roles), and holds
     ///         ADMIN_ROLE on the vault.
     function test_ACL1_timelockHoldsGatewayRootAfterHandover() public view {
         assertTrue(
@@ -848,62 +849,30 @@ contract DeployTimelockTest is SafeGovernance {
         );
     }
 
-    /// @notice Fix-interaction (F-01): AGENT_ROLE's admin is ADMIN_ROLE, so after
-    ///         the DEFAULT_ADMIN_ROLE revoke the Timelock (ADMIN_ROLE) can still
-    ///         grant AGENT_ROLE directly. Proves the revoke did not brick agent
-    ///         onboarding.
-    function test_ACL1_agentRoleRemainsGrantableByTimelockAfterRevoke() public {
+    /// @notice ACL-9: after the handover no role, the timelock included, can
+    ///         grant, revoke or renounce AGENT_ROLE through the public methods.
+    function test_ACL9_timelockCannotManageAgentRoleAfterHandover() public {
         address newAgent = makeAddr("post-handover-agent");
-        assertEq(
-            gateway.getRoleAdmin(AGENT_ROLE), ADMIN_ROLE, "AGENT_ROLE admin must be ADMIN_ROLE"
-        );
-
-        bytes memory callData = abi.encodeCall(IAccessControl.grantRole, (AGENT_ROLE, newAgent));
-        bytes32 salt = keccak256("acl1-grant-agent-role");
-
-        _govSchedule(safe, d.timelock, address(gateway), callData, salt, MIN_DELAY);
-        vm.warp(block.timestamp + MIN_DELAY + 1);
-        _govExecute(safe, d.timelock, address(gateway), callData, salt);
-
-        assertTrue(
-            gateway.hasRole(AGENT_ROLE, newAgent),
-            "Timelock (ADMIN_ROLE) must be able to grant AGENT_ROLE after the DEFAULT_ADMIN revoke"
-        );
+        vm.startPrank(address(d.timelock));
+        vm.expectRevert(AccessRoles.AgentRoleNotManageable.selector);
+        gateway.grantRole(AGENT_ROLE, newAgent);
+        vm.expectRevert(AccessRoles.AgentRoleNotManageable.selector);
+        gateway.revokeRole(AGENT_ROLE, newAgent);
+        vm.stopPrank();
     }
 
-    /// @notice AC: the Timelock can `authorizeAgent` on the Gateway post-handover
-    ///         (the gateway-native onboarding path, now ADMIN_ROLE-gated).
-    function test_ACL1_timelockCanAuthorizeAgentAfterHandover() public {
-        address newAgent = makeAddr("timelock-onboarded-agent");
+    /// @notice ACL-9: the gateway has no admin registration shortcut. The old
+    ///         selectors are absent, so a timelock-routed call to them reverts.
+    function test_ACL9_noAdminRegistrationSelectorExists() public {
         IGateway.AgentPolicy memory p = _agentPolicy();
-
-        bytes memory callData = abi.encodeCall(IGateway.authorizeAgent, (newAgent, p));
-        bytes32 salt = keccak256("acl1-authorize-agent");
-
-        _govSchedule(safe, d.timelock, address(gateway), callData, salt, MIN_DELAY);
-        vm.warp(block.timestamp + MIN_DELAY + 1);
-        _govExecute(safe, d.timelock, address(gateway), callData, salt);
-
-        assertTrue(
-            gateway.hasRole(AGENT_ROLE, newAgent),
-            "timelock authorizeAgent did not grant AGENT_ROLE"
+        bytes memory callData = abi.encodeWithSignature(
+            "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
+            makeAddr("rejected-agent"),
+            p
         );
-        assertEq(
-            gateway.agentOwner(newAgent), address(d.timelock), "timelock must be recorded owner"
-        );
-    }
-
-    /// @notice AC: a hot key (the Safe) that holds neither DEFAULT_ADMIN_ROLE nor
-    ///         ADMIN_ROLE on the Gateway cannot directly authorizeAgent — only the
-    ///         timelock-routed path works. Guards the role gate post-handover.
-    function test_ACL1_directAuthorizeAgentFromHotKeyReverts() public {
-        IGateway.AgentPolicy memory p = _agentPolicy();
-        _expectDirectSafeCallRefused(
-            safe,
-            address(gateway),
-            abi.encodeCall(IGateway.authorizeAgent, (makeAddr("rejected-agent"), p))
-        );
-        assertFalse(gateway.hasRole(ADMIN_ROLE, safe), "the Safe holds no admin role");
+        vm.prank(address(d.timelock));
+        (bool ok,) = address(gateway).call(callData);
+        assertFalse(ok, "authorizeAgent must not exist");
     }
 
     /// @notice Negative regression for the fix-interaction warning: a NAKED
@@ -1262,10 +1231,6 @@ contract ManifestHarness is DeployTimelock {
         _writeJsonTo(d, outPath);
     }
 
-    function exposedReadAgentList(string memory name) external view returns (address[] memory) {
-        return _readAgentList(name);
-    }
-
     /// @dev The body of `run()`, reading every env var under `prefix`.
     function exposedRunFrom(string memory prefix) external returns (Deployed memory) {
         return _runFrom(prefix);
@@ -1445,519 +1410,15 @@ contract DeployTimelockManifestTest is SafeGovernance {
         assertFalse(vm.keyExistsJson(manifest, ".min_quorum_threshold"), "quorum floor in manifest");
     }
 
-    /// @notice A run with no listed agent records a listed count of zero, so
-    ///         `deployer_owns_a_listed_gateway_agent = false` is not read as a
-    ///         check over every agent (issue #1476).
-    function test_manifestRecordsZeroListedAgents_whenNoneListed() public view {
-        assertEq(manifest.readUint(".roles.gateway_agents_listed_count"), 0);
-        assertFalse(manifest.readBool(".roles.deployer_owns_a_listed_gateway_agent"));
+    /// @notice The manifest carries no agent handover fields (ACL-9).
+    function test_manifestRecordsNoAgentHandover() public view {
+        assertFalse(vm.keyExistsJson(manifest, ".timelock_owned_agents"));
+        assertFalse(vm.keyExistsJson(manifest, ".roles.gateway_agents_listed_count"));
+        assertFalse(vm.keyExistsJson(manifest, ".roles.deployer_owns_a_listed_gateway_agent"));
     }
 }
 
-// ─── Issue #1476: deployer-owned gateway agents move to the timelock ──────────
-
-/// @notice A full stage-sequence -> DeployTimelock run hands every deployer-owned gateway
-///         agent to the TimelockController: the deploy agent the gateway
-///         stage authorizes and a stage-style submitter agent the deployer authorizes
-///         afterwards. After the handover the timelock owns both, both keep
-///         AGENT_ROLE, and the deployer can no longer call setPolicy or
-///         revokeAgent on them.
-contract DeployTimelockAgentHandoverTest is SafeGovernance {
-    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
-    uint256 public constant MIN_DELAY = 2 days;
-
-    DeployTimelock internal script;
-    address internal deployer;
-    address internal safe;
-    address internal emergency = makeAddr("handover-emergency");
-    address internal deployAgent = makeAddr("deploy-agent");
-    address internal submitter = makeAddr("stage-submitter");
-
-    CoreStages.Stack internal dep;
-    RobotMoneyGateway internal gateway;
-    VaultRegistry internal registry;
-    PortfolioRouter internal router;
-    RouterGovernance internal governance;
-    DeployTimelock.Deployed internal d;
-    address[] internal listed;
-
-    /// Every agent named by an AgentAuthorized or AgentOwnershipTransferred log
-    /// the gateway emitted during the run, deduplicated.
-    address[] internal loggedAgents;
-    uint256 internal transferLogs;
-
-    function setUp() public {
-        vm.recordLogs();
-        TestERC20 usdc = new TestERC20();
-        script = new DeployTimelock();
-        // The deployer is the script's own address, for the reason
-        // DeployTimelockTest.setUp gives: in process, the script's calls come
-        // from address(script), so that is the account the roles and the
-        // agents must belong to.
-        deployer = address(script);
-        _installSafeSet();
-        safe = _newDefaultSafe();
-        // Issue 1808: every proxy (the CoreStages ones too) names the timelock the handover deploys.
-        CoreProxies.useUpgradeConfig(
-            script.predictTimelock(safe, MIN_DELAY), GovernedUUPS.UpgradeMode.Upgradeable
-        );
-
-        // Core stage scripts: vault, adapters, registry, router, gateway, and the deploy agent,
-        // authorized by the admin (the deployer).
-        CoreStages deployScript = new CoreStages();
-        dep = deployScript.run(
-            deployer,
-            makeAddr("handover-pauser"),
-            deployAgent,
-            makeAddr("handover-receiver"),
-            address(usdc)
-        );
-        gateway = dep.gateway;
-        assertEq(gateway.agentOwner(deployAgent), deployer, "fixture: deploy agent owner");
-
-        // A second deployer-owned agent, the way the stage ceremony authorizes
-        // its submitter before the handover.
-        vm.prank(deployer);
-        gateway.authorizeAgent(submitter, _policy(submitter));
-
-        registry = CoreProxies.vaultRegistry(deployer);
-        router = CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
-        governance = CoreProxies.routerGovernance(address(router), makeAddr("receipts"), deployer);
-        vm.prank(deployer);
-        router.grantRole(ADMIN_ROLE, address(governance));
-        vm.prank(deployer);
-        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
-
-        listed.push(deployAgent);
-        listed.push(submitter);
-        vm.prank(deployer);
-        d = script.runInProcessWithAgents(
-            address(dep.vault),
-            address(gateway),
-            address(registry),
-            address(router),
-            address(governance),
-            safe,
-            emergency,
-            MIN_DELAY,
-            listed,
-            _fixtureSpec()
-        );
-
-        Vm.Log[] memory logs = vm.getRecordedLogs();
-        for (uint256 i = 0; i < logs.length; i++) {
-            if (logs[i].emitter != address(gateway) || logs[i].topics.length < 2) continue;
-            bytes32 t0 = logs[i].topics[0];
-            if (t0 == IGateway.AgentOwnershipTransferred.selector) transferLogs++;
-            if (
-                t0 == IGateway.AgentAuthorized.selector
-                    || t0 == IGateway.AgentOwnershipTransferred.selector
-            ) {
-                _remember(address(uint160(uint256(logs[i].topics[1]))));
-            }
-        }
-    }
-
-    function _remember(address agent) internal {
-        for (uint256 i = 0; i < loggedAgents.length; i++) {
-            if (loggedAgents[i] == agent) return;
-        }
-        loggedAgents.push(agent);
-    }
-
-    function _policy(address receiver) internal view returns (IGateway.AgentPolicy memory p) {
-        address[] memory empty = new address[](0);
-        p = IGateway.AgentPolicy({
-            active: true,
-            validUntil: uint64(block.timestamp + 30 days),
-            maxPerPayment: 1e6,
-            maxPerWindow: 1e6,
-            shareReceiver: receiver,
-            allowedDestinations: empty,
-            assetRecipient: address(0),
-            maxWithdrawPerPayment: 0,
-            maxWithdrawPerWindow: 0,
-            allowedSourceVaults: empty
-        });
-    }
-
-    function test_handover_listedAgentsOwnedByTimelock_keepAgentRole() public view {
-        for (uint256 i = 0; i < listed.length; i++) {
-            assertEq(
-                gateway.agentOwner(listed[i]), address(d.timelock), "agent not owned by timelock"
-            );
-            assertTrue(gateway.hasRole(AGENT_ROLE, listed[i]), "agent lost AGENT_ROLE");
-        }
-        assertEq(d.agents.length, 2, "Deployed.agents does not echo the list");
-    }
-
-    function test_handover_deployerSetPolicy_revertsNotAgentOwner() public {
-        for (uint256 i = 0; i < listed.length; i++) {
-            vm.prank(deployer);
-            vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
-            gateway.setPolicy(listed[i], _policy(deployer));
-        }
-    }
-
-    function test_handover_deployerRevokeAgent_revertsNotAgentOwner() public {
-        for (uint256 i = 0; i < listed.length; i++) {
-            vm.prank(deployer);
-            vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
-            gateway.revokeAgent(listed[i]);
-        }
-    }
-
-    /// @notice Enumerated from the run's own logs rather than from the list the
-    ///         test passed in: every agent the gateway ever named in an
-    ///         AgentAuthorized or AgentOwnershipTransferred log has an owner
-    ///         other than the deployer.
-    function test_handover_recordedLogs_noAgentLeftDeployerOwned() public view {
-        assertGe(loggedAgents.length, 2, "logs name fewer agents than the run authorized");
-        assertEq(transferLogs, 2, "expected one AgentOwnershipTransferred per listed agent");
-        for (uint256 i = 0; i < loggedAgents.length; i++) {
-            assertTrue(
-                gateway.agentOwner(loggedAgents[i]) != deployer,
-                "an agent is still owned by the deployer after the handover"
-            );
-        }
-    }
-
-    /// @notice After the handover the owner's authority runs through the
-    ///         timelock: a scheduled setPolicy on a transferred agent executes.
-    function test_handover_timelockRoutedSetPolicy_onTransferredAgent_succeeds() public {
-        address newReceiver = makeAddr("governance-chosen-receiver");
-        bytes memory callData =
-            abi.encodeCall(IGateway.setPolicy, (submitter, _policy(newReceiver)));
-        bytes32 salt = keccak256("1476-setPolicy");
-        _govSchedule(safe, d.timelock, address(gateway), callData, salt, MIN_DELAY);
-        vm.warp(block.timestamp + MIN_DELAY + 1);
-        _govExecute(safe, d.timelock, address(gateway), callData, salt);
-        (,,,, address receiver,,,) = gateway.agents(submitter);
-        assertEq(receiver, newReceiver, "timelock-routed setPolicy did not land");
-    }
-
-    /// @notice A listed agent the deployer does not own stops the handover with
-    ///         a named require, before the deployer loses any gateway role.
-    function test_handover_revertsWhenListedAgentNotDeployerOwned() public {
-        DeployTimelock script2 = new DeployTimelock();
-        address deployer2 = address(script2);
-        TestERC20 usdc2 = new TestERC20();
-        RobotMoneyVault vault2 = CoreProxies.robotMoneyVault(
-            usdc2, type(uint256).max, type(uint256).max, 0, safe, deployer2, deployer2
-        );
-        RobotMoneyGateway gateway2 = CoreProxies.robotMoneyGateway(
-            usdc2, vault2, deployer2, makeAddr("pauser2"), address(0)
-        );
-        VaultRegistry registry2 = CoreProxies.vaultRegistry(deployer2);
-        PortfolioRouter router2 =
-            CoreProxies.portfolioRouter(address(usdc2), address(registry2), deployer2);
-        RouterGovernance governance2 =
-            CoreProxies.routerGovernance(address(router2), makeAddr("receipts"), deployer2);
-        vm.prank(deployer2);
-        router2.grantRole(ADMIN_ROLE, address(governance2));
-        vm.prank(deployer2);
-        router2.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance2));
-
-        // Owned by another account, through the permissionless path.
-        address other = makeAddr("other-owner");
-        address otherAgent = makeAddr("other-agent");
-        bytes32 salt = keccak256("other");
-        vm.prank(other);
-        gateway2.commitAuthorization(keccak256(abi.encode(otherAgent, other, salt)));
-        vm.roll(block.number + 1);
-        vm.prank(otherAgent);
-        gateway2.commitAuthorization(
-            keccak256(
-                abi.encode(
-                    other,
-                    keccak256(
-                        abi.encodeCall(
-                            gateway2.revealAuthorization, (otherAgent, salt, _policy(other))
-                        )
-                    )
-                )
-            )
-        );
-        vm.prank(other);
-        gateway2.revealAuthorization(otherAgent, salt, _policy(other));
-
-        address[] memory bad = new address[](1);
-        bad[0] = otherAgent;
-        vm.prank(deployer2);
-        vm.expectRevert(bytes("AGENT_ADDRESSES entry is not owned by the deployer"));
-        script2.runInProcessWithAgents(
-            address(vault2),
-            address(gateway2),
-            address(registry2),
-            address(router2),
-            address(governance2),
-            safe,
-            emergency,
-            MIN_DELAY,
-            bad,
-            _fixtureSpec()
-        );
-        assertEq(gateway2.agentOwner(otherAgent), other, "owner changed by a reverted handover");
-    }
-
-    /// @notice The manifest names the agents handed to the timelock and records
-    ///         that the deployer owns none of them.
-    function test_manifestRecordsTimelockOwnedAgents() public {
-        ManifestHarness harness = new ManifestHarness();
-        string memory outPath = claimTmpPath(vm, "1476-manifest");
-        vm.prank(deployer);
-        harness.exposedWriteJsonTo(d, outPath);
-        string memory manifest = vm.readFile(outPath);
-        releaseTmpPath(vm, outPath);
-        address[] memory recorded = stdJson.readAddressArray(manifest, ".timelock_owned_agents");
-        assertEq(recorded.length, 2, "manifest agent count");
-        assertEq(recorded[0], deployAgent, "manifest agent 0");
-        assertEq(recorded[1], submitter, "manifest agent 1");
-        assertFalse(
-            stdJson.readBool(manifest, ".roles.deployer_owns_a_listed_gateway_agent"),
-            "manifest says the deployer still owns a listed agent"
-        );
-        assertEq(
-            stdJson.readUint(manifest, ".roles.gateway_agents_listed_count"),
-            2,
-            "manifest listed-agent count"
-        );
-    }
-
-    /// @notice `roles.deployer_owns_a_listed_gateway_agent` is read from the
-    ///         gateway when the manifest is written. run() writes the manifest
-    ///         only after `_deployAndWire` requires every listed agent to have
-    ///         left the deployer, so a manifest run() writes records false. This
-    ///         drives the writer with a listed agent the deployer still owns, and
-    ///         the row must read true.
-    function test_manifestRecordsDeployerOwnedListedAgent_whenOneIsStillOwned() public {
-        // After the handover the deployer holds no gateway ADMIN_ROLE, so it
-        // takes the permissionless path and names itself as shareReceiver.
-        address kept = makeAddr("still-deployer-owned");
-        bytes32 salt = keccak256("kept");
-        vm.prank(deployer);
-        gateway.commitAuthorization(keccak256(abi.encode(kept, deployer, salt)));
-        vm.roll(block.number + 1);
-        vm.prank(kept);
-        gateway.commitAuthorization(
-            keccak256(
-                abi.encode(
-                    deployer,
-                    keccak256(
-                        abi.encodeCall(gateway.revealAuthorization, (kept, salt, _policy(deployer)))
-                    )
-                )
-            )
-        );
-        vm.prank(deployer);
-        gateway.revealAuthorization(kept, salt, _policy(deployer));
-        assertEq(gateway.agentOwner(kept), deployer, "fixture: deployer owns the agent");
-
-        DeployTimelock.Deployed memory withKept = d;
-        address[] memory agents = new address[](2);
-        agents[0] = deployAgent;
-        agents[1] = kept;
-        withKept.agents = agents;
-
-        ManifestHarness harness = new ManifestHarness();
-        string memory outPath = claimTmpPath(vm, "1476-manifest-owned");
-        vm.prank(deployer);
-        harness.exposedWriteJsonTo(withKept, outPath);
-        string memory manifest = vm.readFile(outPath);
-        releaseTmpPath(vm, outPath);
-        assertTrue(
-            stdJson.readBool(manifest, ".roles.deployer_owns_a_listed_gateway_agent"),
-            "manifest misses a listed agent the deployer still owns"
-        );
-        assertEq(
-            stdJson.readUint(manifest, ".roles.gateway_agents_listed_count"),
-            2,
-            "manifest listed-agent count"
-        );
-    }
-
-    /// @dev A fresh core stack (CoreStages) owned by `script_`, plus a second agent
-    ///      the deployer authorizes, so a case can change the agents' roles
-    ///      before its own handover.
-    function _freshStack(DeployTimelock script_, address agent_, address second_)
-        internal
-        returns (CoreStages.Stack memory dep_, address[] memory agents_)
-    {
-        address deployer_ = address(script_);
-        TestERC20 usdc_ = new TestERC20();
-        dep_ = new CoreStages()
-            .run(
-                deployer_,
-                makeAddr("fresh-pauser"),
-                agent_,
-                makeAddr("fresh-receiver"),
-                address(usdc_)
-            );
-        vm.prank(deployer_);
-        dep_.gateway.authorizeAgent(second_, _policy(second_));
-        agents_ = new address[](2);
-        agents_[0] = agent_;
-        agents_[1] = second_;
-    }
-
-    /// @dev Runs the handover of `agents_` on `dep_`, with core contracts
-    ///      owned by `script_`'s address.
-    function _handover(
-        DeployTimelock script_,
-        CoreStages.Stack memory dep_,
-        address[] memory agents_
-    ) internal returns (DeployTimelock.Deployed memory out) {
-        address deployer_ = address(script_);
-        VaultRegistry registry_ = CoreProxies.vaultRegistry(deployer_);
-        PortfolioRouter router_ =
-            CoreProxies.portfolioRouter(address(dep_.usdc), address(registry_), deployer_);
-        RouterGovernance governance_ =
-            CoreProxies.routerGovernance(address(router_), makeAddr("receipts"), deployer_);
-        vm.prank(deployer_);
-        router_.grantRole(ADMIN_ROLE, address(governance_));
-        vm.prank(deployer_);
-        router_.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance_));
-        vm.prank(deployer_);
-        out = script_.runInProcessWithAgents(
-            address(dep_.vault),
-            address(dep_.gateway),
-            address(registry_),
-            address(router_),
-            address(governance_),
-            safe,
-            emergency,
-            MIN_DELAY,
-            agents_,
-            _fixtureSpec()
-        );
-    }
-
-    /// @dev Asserts the handover moved both agents to the timelock, left
-    ///      `withRole` holding AGENT_ROLE and `withoutRole` without it, and
-    ///      left the deployer no setPolicy or revokeAgent over either.
-    function _assertHandedOverRoleUnchanged(
-        DeployTimelock script_,
-        CoreStages.Stack memory dep_,
-        DeployTimelock.Deployed memory out,
-        address withRole,
-        address withoutRole
-    ) internal {
-        address deployer_ = address(script_);
-        RobotMoneyGateway gw = dep_.gateway;
-        assertEq(gw.agentOwner(withRole), address(out.timelock), "agent with role not handed over");
-        assertEq(
-            gw.agentOwner(withoutRole), address(out.timelock), "agent without role not handed over"
-        );
-        assertTrue(gw.hasRole(AGENT_ROLE, withRole), "handover removed AGENT_ROLE");
-        assertFalse(gw.hasRole(AGENT_ROLE, withoutRole), "handover granted AGENT_ROLE");
-        assertFalse(gw.hasRole(ADMIN_ROLE, deployer_), "deployer kept gateway ADMIN_ROLE");
-        vm.prank(deployer_);
-        vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
-        gw.setPolicy(withoutRole, _policy(deployer_));
-        vm.prank(deployer_);
-        vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
-        gw.revokeAgent(withoutRole);
-    }
-
-    /// @notice A listed deployer-owned agent that renounced AGENT_ROLE before
-    ///         the handover is still handed to the timelock. The transfer does
-    ///         not change AGENT_ROLE, so the agent stays without it.
-    function test_handover_listedAgentThatRenouncedAgentRole_isHandedOver() public {
-        DeployTimelock script2 = new DeployTimelock();
-        address agent2 = makeAddr("renounce-deploy-agent");
-        address renounced = makeAddr("renounced-submitter");
-        (CoreStages.Stack memory dep2, address[] memory agents2) =
-            _freshStack(script2, agent2, renounced);
-
-        vm.prank(renounced);
-        dep2.gateway.renounceRole(AGENT_ROLE, renounced);
-        assertEq(dep2.gateway.agentOwner(renounced), address(script2), "fixture: owner");
-        assertFalse(dep2.gateway.hasRole(AGENT_ROLE, renounced), "fixture: role");
-
-        DeployTimelock.Deployed memory out = _handover(script2, dep2, agents2);
-        _assertHandedOverRoleUnchanged(script2, dep2, out, agent2, renounced);
-    }
-
-    /// @notice The same holds for a listed deployer-owned agent whose
-    ///         AGENT_ROLE the deployer revoked, as ADMIN_ROLE, before the
-    ///         handover.
-    function test_handover_listedAgentWithAgentRoleRevoked_isHandedOver() public {
-        DeployTimelock script2 = new DeployTimelock();
-        address agent2 = makeAddr("revoke-deploy-agent");
-        address revoked = makeAddr("revoked-submitter");
-        (CoreStages.Stack memory dep2, address[] memory agents2) =
-            _freshStack(script2, agent2, revoked);
-
-        vm.prank(address(script2));
-        dep2.gateway.revokeRole(AGENT_ROLE, revoked);
-        assertEq(dep2.gateway.agentOwner(revoked), address(script2), "fixture: owner");
-        assertFalse(dep2.gateway.hasRole(AGENT_ROLE, revoked), "fixture: role");
-
-        DeployTimelock.Deployed memory out = _handover(script2, dep2, agents2);
-        _assertHandedOverRoleUnchanged(script2, dep2, out, agent2, revoked);
-    }
-}
-
-/// @notice The broadcast entrypoint reads AGENT_ADDRESSES with no default
-///         (issue #1476): the list must be set, either to the deployer-owned
-///         gateway agents or to the literal `none`. Each reader case uses its
-///         own variable name, because env vars are process-wide and forge runs
-///         tests in parallel.
-contract DeployTimelockAgentListInputTest is SafeGovernance {
-    ManifestHarness internal harness;
-
-    function setUp() public {
-        harness = new ManifestHarness();
-    }
-
-    function test_agentList_unset_reverts() public {
-        vm.expectRevert(
-            bytes(
-                "AGENT_ADDRESSES must be set: the deployer-owned gateway agents, comma-separated, or none"
-            )
-        );
-        harness.exposedReadAgentList("RM_1476_AGENT_LIST_NEVER_SET");
-    }
-
-    function test_agentList_empty_reverts() public {
-        vm.setEnv("RM_1476_AGENT_LIST_EMPTY", "");
-        vm.expectRevert(
-            bytes("AGENT_ADDRESSES is empty: list the deployer-owned gateway agents, or set none")
-        );
-        harness.exposedReadAgentList("RM_1476_AGENT_LIST_EMPTY");
-    }
-
-    function test_agentList_none_isEmpty() public {
-        vm.setEnv("RM_1476_AGENT_LIST_NONE", "none");
-        assertEq(harness.exposedReadAgentList("RM_1476_AGENT_LIST_NONE").length, 0);
-    }
-
-    function test_agentList_parsesCommaSeparatedAddresses() public {
-        address a = makeAddr("listed-a");
-        address b = makeAddr("listed-b");
-        vm.setEnv("RM_1476_AGENT_LIST_TWO", string.concat(vm.toString(a), ",", vm.toString(b)));
-        address[] memory got = harness.exposedReadAgentList("RM_1476_AGENT_LIST_TWO");
-        assertEq(got.length, 2);
-        assertEq(got[0], a);
-        assertEq(got[1], b);
-    }
-
-    /// @notice run() itself stops on a missing AGENT_ADDRESSES before it reads
-    ///         any other input or broadcasts anything. No test sets that name.
-    function test_run_withoutAgentAddresses_reverts() public {
-        DeployTimelock script = new DeployTimelock();
-        vm.expectRevert(
-            bytes(
-                "AGENT_ADDRESSES must be set: the deployer-owned gateway agents, comma-separated, or none"
-            )
-        );
-        script.run();
-    }
-}
-
-/// @notice `run()` hands the AGENT_ADDRESSES list it reads to the handover
-///         (issue #1476). This drives run()'s own body, `_runFrom`, through
+/// @notice `run()` drives its own body, `_runFrom`, through
 ///         the broadcast path against a core stack (CoreStages). Every env var it
 ///         reads carries a prefix only this test sets, because env vars are
 ///         process-wide and forge runs tests in parallel.
@@ -1978,7 +1439,6 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
     ManifestHarness internal harness;
     address internal deployer;
     address internal deployAgent = makeAddr("run-deploy-agent");
-    address internal submitter = makeAddr("run-stage-submitter");
     CoreStages.Stack internal dep;
     RobotMoneyGateway internal gateway;
     address internal safe;
@@ -2026,24 +1486,6 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
                 address(usdc)
             );
         gateway = dep.gateway;
-        address[] memory empty = new address[](0);
-        vm.prank(deployer);
-        gateway.authorizeAgent(
-            submitter,
-            IGateway.AgentPolicy({
-                active: true,
-                validUntil: uint64(block.timestamp + 30 days),
-                maxPerPayment: 1e6,
-                maxPerWindow: 1e6,
-                shareReceiver: submitter,
-                allowedDestinations: empty,
-                assetRecipient: address(0),
-                maxWithdrawPerPayment: 0,
-                maxWithdrawPerWindow: 0,
-                allowedSourceVaults: empty
-            })
-        );
-
         VaultRegistry registry = CoreProxies.vaultRegistry(deployer);
         PortfolioRouter router =
             CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
@@ -2062,9 +1504,6 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
         vm.prank(deployer);
         router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
 
-        _set(
-            "AGENT_ADDRESSES", string.concat(vm.toString(deployAgent), ",", vm.toString(submitter))
-        );
         _set("VAULT_ADDRESSES", vm.toString(address(dep.vault)));
         _set("GATEWAY_ADDRESS", vm.toString(address(gateway)));
         _set("REGISTRY_ADDRESS", vm.toString(address(registry)));
@@ -2091,28 +1530,16 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
 contract DeployTimelockRunEntrypointTest is DeployTimelockRunEntrypointBase {
     using stdJson for string;
 
-    function test_run_handsAgentAddressesToTimelock() public removesOwnManifest {
+    function test_run_handsOverRolesAndRecordsNoAgent() public removesOwnManifest {
         DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, _prefix());
 
-        address timelock = address(d.timelock);
-        assertEq(gateway.agentOwner(deployAgent), timelock, "deploy agent not owned by timelock");
-        assertEq(gateway.agentOwner(submitter), timelock, "submitter not owned by timelock");
-        assertTrue(gateway.hasRole(AGENT_ROLE, deployAgent), "deploy agent lost AGENT_ROLE");
-        assertTrue(gateway.hasRole(AGENT_ROLE, submitter), "submitter lost AGENT_ROLE");
+        assertTrue(gateway.hasRole(ADMIN_ROLE, address(d.timelock)), "timelock missing ADMIN_ROLE");
         assertFalse(gateway.hasRole(ADMIN_ROLE, deployer), "deployer kept gateway ADMIN_ROLE");
+        assertTrue(gateway.hasRole(AGENT_ROLE, deployAgent), "deploy agent lost AGENT_ROLE");
+        assertTrue(gateway.agentOwner(deployAgent) != address(d.timelock), "timelock took an agent");
 
         string memory manifest = vm.readFile(OUT_PATH);
-        assertEq(
-            manifest.readUint(".roles.gateway_agents_listed_count"), 2, "manifest listed count"
-        );
-        assertFalse(
-            manifest.readBool(".roles.deployer_owns_a_listed_gateway_agent"),
-            "manifest says the deployer owns a listed agent"
-        );
-        address[] memory recorded = manifest.readAddressArray(".timelock_owned_agents");
-        assertEq(recorded.length, 2, "manifest agent count");
-        assertEq(recorded[0], deployAgent, "manifest agent 0");
-        assertEq(recorded[1], submitter, "manifest agent 1");
+        assertFalse(vm.keyExistsJson(manifest, ".timelock_owned_agents"), "agent list in manifest");
     }
 }
 
@@ -2594,9 +2021,7 @@ contract DeployTimelockVaultListInputTest is DeployTimelockRunEntrypointBase {
     }
 
     function test_run_revertsWhenVaultAddressesUnset() public removesOwnManifest {
-        // A prefix nothing else sets: only the agent list is present, so the run reaches the
-        // vault list and finds it missing.
-        vm.setEnv("RM_S5_NEVER_AGENT_ADDRESSES", "none");
+        // A prefix nothing else sets, so the run reaches the vault list and finds it missing.
         vm.expectRevert(bytes("VAULT_ADDRESSES must be set: every vault, comma-separated"));
         RunEntrypointRelay(deployer).runFrom(harness, "RM_S5_NEVER_");
     }

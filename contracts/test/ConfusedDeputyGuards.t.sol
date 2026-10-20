@@ -24,6 +24,7 @@ import {BasketVault} from "../vaults/BasketVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
 import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
+import {AgentRegistration} from "./helpers/AgentRegistration.sol";
 
 // ─── Minimal mock infrastructure ─────────────────────────────────────────────
 
@@ -201,9 +202,10 @@ contract ConfusedDeputyGuardsTest is Test {
         });
     }
 
+    /// @dev The owner is always `p.shareReceiver` (ACL-9); `owner_` is kept for call-site shape.
     function _authorize(address owner_, address agent_, IGateway.AgentPolicy memory p) internal {
-        vm.prank(owner_);
-        gateway.authorizeAgent(agent_, p);
+        owner_;
+        AgentRegistration.register(gateway, agent_, p);
     }
 
     function _fund(address who, uint256 amt) internal {
@@ -351,10 +353,12 @@ contract ConfusedDeputyGuardsTest is Test {
         vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
         gateway.setPolicy(agent, _policy(attackerReceiver));
 
-        // Original policy is intact: the agentOwner is still the admin (not the attacker),
+        // Original policy is intact: the agentOwner is still the depositor (not the attacker),
         // which proves setPolicy did not execute for the attacker.
         assertEq(
-            gateway.agentOwner(agent), admin, "agentOwner unchanged after failed setPolicy attack"
+            gateway.agentOwner(agent),
+            shareReceiver,
+            "agentOwner unchanged after failed setPolicy attack"
         );
     }
 
@@ -372,41 +376,39 @@ contract ConfusedDeputyGuardsTest is Test {
         assertTrue(gateway.hasRole(gateway.AGENT_ROLE(), agent), "AGENT_ROLE still held");
     }
 
-    // ─── Invariant 7: authorizeAgent rejects double-registration ─────────────
+    // ─── Invariant 7: a live registration cannot be re-registered ────────────
 
-    /// @notice authorizeAgent on an already-owned agent reverts AgentAlreadyOwned.
+    /// @notice A reveal on an already-owned live agent reverts AgentAlreadyOwned.
     ///         A second caller cannot steal ownership of an existing agent.
-    function test_invariant7_authorizeAgent_rejectsDoubleRegistration() public {
+    function test_invariant7_reveal_rejectsDoubleRegistration() public {
         _authorize(admin, agent, _policy(shareReceiver));
 
-        // Even admin calling again reverts with AgentAlreadyOwned.
-        vm.prank(admin);
+        IGateway.AgentPolicy memory p = _policy(attackerReceiver);
+        AgentRegistration.commitBoth(gateway, attackerReceiver, agent, p);
+        vm.prank(attackerReceiver);
         vm.expectRevert(RobotMoneyGateway.AgentAlreadyOwned.selector);
-        gateway.authorizeAgent(agent, _policy(attackerReceiver));
+        gateway.revealAuthorization(agent, AgentRegistration.saltFor(agent, attackerReceiver, p), p);
 
         // Original owner binding is intact.
-        assertEq(gateway.agentOwner(agent), admin, "agentOwner unchanged");
+        assertEq(gateway.agentOwner(agent), shareReceiver, "agentOwner unchanged");
     }
 
     // ─── Invariant 7b: agentOwner binding is permanent until revoke ──────────
 
-    /// @notice agentOwner[agent] is set to msg.sender at first authorize and
-    ///         can only change via the recorded owner calling revokeAgent.
+    /// @notice agentOwner[agent] is set to msg.sender at registration and
+    ///         is cleared only by the owner's or the agent's revokeAgent.
     function test_invariant7b_agentOwner_boundToFirstDepositor() public {
         _authorize(admin, agent, _policy(shareReceiver));
 
-        assertEq(gateway.agentOwner(agent), admin, "admin is owner");
+        assertEq(gateway.agentOwner(agent), shareReceiver, "depositor is owner");
 
-        // The admin (recorded owner) can revoke and allow a fresh authorization.
-        vm.prank(admin);
+        vm.prank(shareReceiver);
         gateway.revokeAgent(agent);
 
         assertEq(gateway.agentOwner(agent), address(0), "owner cleared after revoke");
 
-        // Now the same admin can authorize the same agent address again.
-        vm.prank(admin);
-        gateway.authorizeAgent(agent, _policy(shareReceiver));
-        assertEq(gateway.agentOwner(agent), admin, "owner after re-authorize");
+        AgentRegistration.register(gateway, agent, _policy(shareReceiver));
+        assertEq(gateway.agentOwner(agent), shareReceiver, "owner after re-registration");
     }
 }
 
