@@ -67,7 +67,13 @@ const abi = [
     ],
     outputs: [{ name: "", type: "uint256" }],
   },
-  { type: "function", name: "pause", stateMutability: "nonpayable", inputs: [], outputs: [] },
+  {
+    type: "function",
+    name: "pauseDeposits",
+    stateMutability: "nonpayable",
+    inputs: [],
+    outputs: [],
+  },
 ] as const;
 
 /** The wallet answers for `walletChain`; code and slot answers are chosen per address. */
@@ -177,7 +183,12 @@ const redeemOf = (address: Address) => ({
   functionName: "redeem" as const,
   args: [1n, USER, USER] as const,
 });
-const pauseOf = (address: Address) => ({ address, abi, functionName: "pause" as const, args: [] });
+const pauseOf = (address: Address) => ({
+  address,
+  abi,
+  functionName: "pauseDeposits" as const,
+  args: [],
+});
 
 describe("gateway-write-reverify: each vaults-system target is verified on its own, gateway absent", () => {
   const vaultPin = (v: Address) => ({

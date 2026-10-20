@@ -89,6 +89,10 @@ jobs:
             grep -Eq '^ *[1-9][0-9]* pass' ../receipt-target.log || { echo "zero tests passed in $target" >&2; exit 1; }
             ! grep -Eq '^ *[1-9][0-9]* fail' ../receipt-target.log || { echo "failures in $target" >&2; exit 1; }
           done
+      # Issue 1892: the vaults and gateway systems on their own. Each file runs by itself and must pass at least 4 tests: a removed file, a skipped-only file and a zero count fail.
+      - name: Require the system cases (gateway run and refusals before broadcast, both verifiers, historical combined reading, gateway evidence)
+        working-directory: publish-contracts
+        run: bun src/ci/require-tests.ts --suite systems --min 4
 
   pin:
     name: twin-pin

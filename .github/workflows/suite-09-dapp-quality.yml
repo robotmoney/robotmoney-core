@@ -117,6 +117,18 @@ jobs:
       - name: Vitest
         run: bun run test
 
+      # Issue 1892: the gateway write re-verification cases are required runtime evidence. Human vault, router and token writes and the vaults Safe and timelock handlers verify their own
+      # targets with an absent, changed, unverified or unreadable gateway; gateway writes still fail closed. A removed file, a skipped case or a zero count fails here.
+      - name: Gateway write re-verification cases ran (no skips, floor of 40)
+        run: |
+          set -euo pipefail
+          bunx vitest run --passWithNoTests=false --reporter=json --outputFile="$RUNNER_TEMP/gateway-write-reverify.json" tests/unit/gateway-write-reverify.test.tsx tests/unit/gateway-write-reverify-targets.test.tsx
+          passed=$(jq '.numPassedTests' "$RUNNER_TEMP/gateway-write-reverify.json")
+          skipped=$(jq '[.numPendingTests, .numTodoTests] | add' "$RUNNER_TEMP/gateway-write-reverify.json")
+          failed=$(jq '.numFailedTests' "$RUNNER_TEMP/gateway-write-reverify.json")
+          echo "gateway-write-reverify: $passed passed, $skipped skipped, $failed failed"
+          [ "$passed" -ge 40 ] && [ "$skipped" -eq 0 ] && [ "$failed" -eq 0 ] || { echo "the gateway-write-reverify cases did not all run" >&2; exit 1; }
+
       - name: Dependency vulnerability audit
         # Scans for high and critical severity advisories (CVSS >= 7.0) via
         # `bun audit --audit-level=high`. We use bun (not npm) because the
