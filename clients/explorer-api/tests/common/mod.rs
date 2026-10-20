@@ -86,14 +86,6 @@ pub const ACCOUNT_HISTORY_MIGRATION: &str = include_str!(
     "../../../../services/explorer-indexer/migrations/0009_account_history_events.sql"
 );
 
-/// Migration 0014: committee tables — committee_agents, committee_votes,
-/// regime_snapshots (issue #1053).
-/// Note: migrations 0010-0013 exist but are not relevant to the committee API.
-/// The API test harness applies all migrations in order via the indexer migrator;
-/// these constants are kept for explicit tracking only.
-pub const COMMITTEE_MIGRATION: &str =
-    include_str!("../../../../services/explorer-indexer/migrations/0014_committee_tables.sql");
-
 /// Migration 0017 (issue 1731): `indexer_runs.chain_head_block` and `admin_events`. `/health`, `/v1/vaults`
 /// and `/v1/stats` read the chain head, so every harness that serves them needs the column.
 pub const ADMIN_EVENTS_MIGRATION: &str = include_str!(
@@ -131,6 +123,11 @@ pub const PREVIEW_REDEEM_MIGRATION: &str = include_str!(
 pub const DROP_GOVERNANCE_VOTING_MIGRATION: &str = include_str!(
     "../../../../services/explorer-indexer/migrations/0025_drop_governance_voting.sql"
 );
+
+/// Migration 0031 (core issue 1891): `agent_policies` / `agent_deposits` gain the gateway and the registration
+/// columns that `/v1/accounts/:address/policies`, `/v1/agents/:address` and the deposits routes read.
+pub const AGENT_REGISTRATIONS_MIGRATION: &str =
+    include_str!("../../../../services/explorer-indexer/migrations/0031_agent_registrations.sql");
 
 /// Primary chain used by the API instance under test.
 pub const PRIMARY_CHAIN_ID: i64 = 8453; // Base mainnet
@@ -260,6 +257,10 @@ pub async fn apply_migrations(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("apply drop governance voting migration (0025)");
+    sqlx::raw_sql(AGENT_REGISTRATIONS_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply agent registrations migration (0031)");
 }
 
 /// Decode a 0x-prefixed hex string into raw bytes for BYTEA columns.
@@ -375,8 +376,8 @@ async fn seed_fixture(pool: &PgPool) {
     // --- agent_deposits: same agent + same payment_id, different amount ---
     for (cid, amount) in [(PRIMARY_CHAIN_ID, "1000000"), (SHADOW_CHAIN_ID, "9999999")] {
         sqlx::query(
-            "INSERT INTO agent_deposits (chain_id, block_number, log_index, tx_hash, payment_id, order_id, agent, share_receiver, amount, shares_minted, window_id, indexed_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::NUMERIC, $10::NUMERIC, $11, $12)",
+            "INSERT INTO agent_deposits (chain_id, block_number, log_index, tx_hash, payment_id, order_id, agent, share_receiver, amount, shares_minted, window_id, indexed_at, gateway, registration_block, registration_log_index) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::NUMERIC, $10::NUMERIC, $11, $12, $13, 900, 0)",
         )
         .bind(cid)
         .bind(1000_i64)
@@ -390,6 +391,7 @@ async fn seed_fixture(pool: &PgPool) {
         .bind(amount)
         .bind(1_i64)
         .bind(indexed_at)
+        .bind(&gateway[..])
         .execute(pool)
         .await
         .unwrap();
@@ -398,8 +400,8 @@ async fn seed_fixture(pool: &PgPool) {
     // --- agent_policies: same agent address, different revoked status ---
     for (cid, revoked) in [(PRIMARY_CHAIN_ID, false), (SHADOW_CHAIN_ID, true)] {
         sqlx::query(
-            "INSERT INTO agent_policies (chain_id, block_number, log_index, tx_hash, agent, revoked, valid_until, max_per_payment, max_per_window, share_receiver, indexed_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8::NUMERIC, $9::NUMERIC, $10, $11)",
+            "INSERT INTO agent_policies (chain_id, block_number, log_index, tx_hash, agent, revoked, valid_until, max_per_payment, max_per_window, share_receiver, indexed_at, gateway, event_kind, registration_block, registration_log_index) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8::NUMERIC, $9::NUMERIC, $10, $11, $12, 'authorized', 900, 0)",
         )
         .bind(cid)
         .bind(900_i64)
@@ -412,6 +414,7 @@ async fn seed_fixture(pool: &PgPool) {
         .bind(Some("5000000"))
         .bind(Some(&share_receiver[..]))
         .bind(indexed_at)
+        .bind(&gateway[..])
         .execute(pool)
         .await
         .unwrap();

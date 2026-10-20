@@ -1662,29 +1662,36 @@ async fn sign_authorize_endpoints_are_absent() {
     }
 }
 
-/// Issue #1476: an agent handed to another owner (`AgentOwnershipTransferred`,
-/// indexed as a new row naming the new owner) is listed under its new owner
-/// only. The previous owner's older rows no longer make it look like the
-/// current owner.
+/// Issue #1476, amended by core 1891: an agent handed to another owner
+/// (`AgentOwnershipTransferred` on an old deployment, indexed as a `transferred` row of the same
+/// registration naming the new owner) is listed under its new owner, and the previous owner keeps the
+/// registration as it was, with the owner it had. Nothing rewrites the old owner's history.
 #[tokio::test]
-async fn account_policies_follow_the_latest_owner_after_transfer() {
+async fn account_policies_keep_the_previous_owner_after_a_historical_transfer() {
     let s = start_with_seed().await;
     let agent = [0x7au8; 20];
     let previous = [0x7bu8; 20];
     let next = [0x7cu8; 20];
     let receiver = [0x7du8; 20];
-    for (block, owner) in [(950_i64, previous), (951_i64, next)] {
+    let gateway = [0x11u8; 20];
+    for (block, owner, kind) in [
+        (950_i64, previous, "authorized"),
+        (951_i64, next, "transferred"),
+    ] {
         sqlx::query(
             "INSERT INTO agent_policies (chain_id, block_number, log_index, tx_hash, agent, owner, \
-             revoked, valid_until, max_per_payment, max_per_window, share_receiver) \
+             revoked, valid_until, max_per_payment, max_per_window, share_receiver, gateway, \
+             event_kind, registration_block, registration_log_index) \
              VALUES (8453, $1, 0, $2, $3, $4, FALSE, 2000000000, 5000000::NUMERIC, \
-             50000000::NUMERIC, $5)",
+             50000000::NUMERIC, $5, $6, $7, 950, 0)",
         )
         .bind(block)
         .bind(&[block as u8; 32][..])
         .bind(&agent[..])
         .bind(&owner[..])
         .bind(&receiver[..])
+        .bind(&gateway[..])
+        .bind(kind)
         .execute(&s._pool)
         .await
         .unwrap();
@@ -1709,10 +1716,16 @@ async fn account_policies_follow_the_latest_owner_after_transfer() {
     };
 
     let before = fetch(previous).await;
+    let old = before["policies"].as_array().expect("policies array");
     assert_eq!(
-        before["policies"].as_array().expect("policies array").len(),
-        0,
-        "the previous owner still lists a transferred agent: {before}"
+        old.len(),
+        1,
+        "the previous owner keeps its registration: {before}"
+    );
+    assert_eq!(old[0]["owner"], format!("0x{}", hex::encode(previous)));
+    assert_eq!(
+        old[0]["registration_id"],
+        "8453:0x1111111111111111111111111111111111111111:950:0"
     );
 
     let after = fetch(next).await;
@@ -1720,6 +1733,7 @@ async fn account_policies_follow_the_latest_owner_after_transfer() {
     assert_eq!(policies.len(), 1, "new owner must list the agent: {after}");
     assert_eq!(policies[0]["agent"], format!("0x{}", hex::encode(agent)));
     assert_eq!(policies[0]["owner"], format!("0x{}", hex::encode(next)));
+    assert_eq!(policies[0]["registration_id"], old[0]["registration_id"]);
     assert_eq!(
         policies[0]["share_receiver"],
         format!("0x{}", hex::encode(receiver))

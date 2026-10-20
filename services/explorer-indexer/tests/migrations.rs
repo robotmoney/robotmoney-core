@@ -1434,3 +1434,437 @@ fn compare_schema_reports_the_lowest_versioned_divergence_first() {
         "the lowest-versioned divergence must be the one reported: {err}"
     );
 }
+
+// ─── Core 1891: retire the committee tables, derive agent registrations ───────
+//
+// Migration 0030 drops the committee and regime tables. Migration 0031 adds the gateway and the registration
+// columns to `agent_policies` and `agent_deposits` and backfills them from the rows already there. Both are
+// forward-only: no applied migration is edited, so the checksums of 0001 to 0029 must survive the upgrade.
+
+/// Apply the embedded migrations up to and including `max_version` through the migrator, so
+/// `_sqlx_migrations` records them with their checksums, exactly as a deployed database has them.
+async fn apply_through(pool: &sqlx::PgPool, max_version: i64) {
+    let migrations: Vec<Migration> = MIGRATOR
+        .iter()
+        .filter(|m| m.version <= max_version)
+        .cloned()
+        .collect();
+    let migrator = sqlx::migrate::Migrator {
+        migrations: Cow::Owned(migrations),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    migrator
+        .run(pool)
+        .await
+        .unwrap_or_else(|e| panic!("apply migrations through {max_version}: {e}"));
+}
+
+async fn applied_checksums(pool: &sqlx::PgPool, max_version: i64) -> Vec<(i64, Vec<u8>)> {
+    sqlx::query_as(
+        "SELECT version, checksum FROM _sqlx_migrations WHERE version <= $1 ORDER BY version",
+    )
+    .bind(max_version)
+    .fetch_all(pool)
+    .await
+    .expect("read applied checksums")
+}
+
+/// A description of the whole schema that two databases can be compared by: columns with type,
+/// nullability and default, indexes, and constraints.
+async fn schema_description(pool: &sqlx::PgPool) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let columns: Vec<(String, String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT table_name::text, column_name::text, data_type::text, is_nullable::text, column_default::text \
+         FROM information_schema.columns WHERE table_schema = current_schema() \
+         ORDER BY table_name, column_name",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("columns");
+    for (t, c, ty, n, d) in columns {
+        out.push(format!("column {t}.{c} {ty} nullable={n} default={d:?}"));
+    }
+    let indexes: Vec<(String, String)> = sqlx::query_as(
+        "SELECT tablename::text, indexdef::text FROM pg_indexes WHERE schemaname = current_schema() \
+         ORDER BY tablename, indexname",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("indexes");
+    for (t, d) in indexes {
+        out.push(format!("index {t} {d}"));
+    }
+    let constraints: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT conrelid::regclass::text, conname::text, pg_get_constraintdef(oid) \
+         FROM pg_constraint WHERE connamespace = current_schema()::regnamespace \
+         ORDER BY conrelid::regclass::text, conname",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("constraints");
+    for (t, n, d) in constraints {
+        out.push(format!("constraint {t} {n} {d}"));
+    }
+    out
+}
+
+/// A table exists in the current schema.
+async fn table_exists(pool: &sqlx::PgPool, table: &str) -> bool {
+    let found: Option<String> = sqlx::query_scalar("SELECT to_regclass($1)::text")
+        .bind(table)
+        .fetch_one(pool)
+        .await
+        .expect("to_regclass");
+    found.is_some()
+}
+
+/// Seed a database migrated through 0029 with committee rows and with the gateway rows of the registration
+/// matrix. Block `n` has timestamp `1000 * n`.
+async fn seed_through_0029(pool: &sqlx::PgPool) {
+    let db = Db::from_pool(pool.clone());
+    db.upsert_chain(8453, "base", "stub").await.unwrap();
+    db.upsert_contract(8453, [0x11u8; 20], "gateway", Some(90))
+        .await
+        .unwrap();
+    for n in [100_i64, 101, 102, 103, 104, 110, 111, 150, 200] {
+        db.insert_block(8453, n, [n as u8; 32], [0u8; 32], 1000 * n)
+            .await
+            .unwrap();
+    }
+    let agent_aa = vec![0xAAu8; 20];
+    let agent_bb = vec![0xBBu8; 20];
+    let agent_cc = vec![0xCCu8; 20];
+    let owner_a = vec![0xA1u8; 20];
+    let owner_b = vec![0xB1u8; 20];
+    // (block, log, agent, owner, revoked, valid_until). The values after valid_until are fixed below.
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(i64, i32, &Vec<u8>, &Vec<u8>, bool, Option<i64>)> = vec![
+        // AA: A registers, setPolicy, A revoked, B registers.
+        (100, 0, &agent_aa, &owner_a, false, Some(900_000)),
+        (101, 0, &agent_aa, &owner_a, false, Some(950_000)),
+        (102, 0, &agent_aa, &owner_a, true, None),
+        (103, 0, &agent_aa, &owner_b, false, Some(900_000)),
+        // BB: A registers with an expiry that has passed by block 200, B registers without a revoke.
+        (100, 1, &agent_bb, &owner_a, false, Some(150_000)),
+        (200, 0, &agent_bb, &owner_b, false, Some(900_000)),
+        // CC: A registers, then an old AgentOwnershipTransferred hands it to B (same policy, new owner).
+        (100, 2, &agent_cc, &owner_a, false, Some(900_000)),
+        (110, 0, &agent_cc, &owner_b, false, Some(900_000)),
+    ];
+    for (block, log, agent, owner, revoked, valid_until) in rows {
+        sqlx::query(
+            "INSERT INTO agent_policies \
+             (chain_id, block_number, log_index, tx_hash, agent, owner, revoked, valid_until, \
+              max_per_payment, max_per_window, share_receiver) \
+             VALUES (8453, $1, $2, $3, $4, $5, $6, $7, \
+                     CASE WHEN $6 THEN NULL ELSE 5000000 END, \
+                     CASE WHEN $6 THEN NULL ELSE 50000000 END, \
+                     CASE WHEN $6 THEN NULL ELSE $8 END)",
+        )
+        .bind(block)
+        .bind(log)
+        .bind(vec![block as u8; 32])
+        .bind(agent)
+        .bind(owner)
+        .bind(revoked)
+        .bind(valid_until)
+        .bind(vec![0x55u8; 20])
+        .execute(pool)
+        .await
+        .expect("seed a policy row");
+    }
+    // (block, log, agent). One deposit per registration of interest.
+    for (block, log, agent) in [
+        (100_i64, 3_i32, &agent_aa),
+        (104, 0, &agent_aa),
+        (150, 0, &agent_bb),
+        (111, 0, &agent_cc),
+    ] {
+        sqlx::query(
+            "INSERT INTO agent_deposits \
+             (chain_id, block_number, log_index, tx_hash, payment_id, order_id, agent, share_receiver, \
+              amount, shares_minted, window_id) \
+             VALUES (8453, $1, $2, $3, $3, $3, $4, $4, 1000000, 1000000, 1)",
+        )
+        .bind(block)
+        .bind(log)
+        .bind(vec![(block as u8).wrapping_add(log as u8); 32])
+        .bind(agent)
+        .execute(pool)
+        .await
+        .expect("seed a deposit");
+    }
+    // The retired committee surface, populated.
+    sqlx::query(
+        "INSERT INTO committee_agents (chain_id, agent_address, agent_id, active, registered_at) \
+         VALUES (8453, $1, 'member', TRUE, 100)",
+    )
+    .bind(&agent_aa)
+    .execute(pool)
+    .await
+    .expect("seed a committee agent");
+    sqlx::query(
+        "INSERT INTO committee_votes \
+           (chain_id, contract_address, vote_id, block_number, log_index, tx_hash, agent_address, \
+            vault_address, stance, target_weight_bps, confidence, rationale_uri, vote_json_hash, \
+            timestamp_secs, verified) \
+         VALUES (8453, $1, 1, 101, 0, $2, $3, $1, 0, 5000, 80, 'https://x.invalid/m', $2, 1, TRUE)",
+    )
+    .bind(vec![0x77u8; 20])
+    .bind(vec![0x66u8; 32])
+    .bind(&agent_aa)
+    .execute(pool)
+    .await
+    .expect("seed a committee vote");
+    sqlx::query(
+        "INSERT INTO regime_snapshots (chain_id, vault_address, block_number, avg_weight_bps, vote_count) \
+         VALUES (8453, $1, 101, 5000, 1)",
+    )
+    .bind(vec![0x22u8; 20])
+    .execute(pool)
+    .await
+    .expect("seed a regime snapshot");
+}
+
+/// `(registration_block, registration_log_index, event_kind)` of the policy row at (block, log).
+async fn policy_registration(
+    pool: &sqlx::PgPool,
+    block: i64,
+    log: i32,
+) -> (Option<i64>, Option<i32>, Option<String>) {
+    sqlx::query_as(
+        "SELECT registration_block, registration_log_index, event_kind FROM agent_policies \
+         WHERE chain_id = 8453 AND block_number = $1 AND log_index = $2",
+    )
+    .bind(block)
+    .bind(log)
+    .fetch_one(pool)
+    .await
+    .expect("policy row")
+}
+
+async fn deposit_registration(
+    pool: &sqlx::PgPool,
+    block: i64,
+    log: i32,
+) -> (Option<i64>, Option<i32>) {
+    sqlx::query_as(
+        "SELECT registration_block, registration_log_index FROM agent_deposits \
+         WHERE chain_id = 8453 AND block_number = $1 AND log_index = $2",
+    )
+    .bind(block)
+    .bind(log)
+    .fetch_one(pool)
+    .await
+    .expect("deposit row")
+}
+
+/// Core 1891 AC — an upgrade from a seeded 0029 database and a fresh migration end at the same schema, the
+/// retired tables are gone, the registration links are backfilled, and the applied history is untouched.
+#[tokio::test]
+async fn upgrade_from_a_seeded_0029_database_converges_with_a_fresh_one() {
+    let old = raw_pg().await;
+    let pool = sqlx::PgPool::connect(&old.url).await.expect("connect");
+    apply_through(&pool, 29).await;
+    seed_through_0029(&pool).await;
+
+    let checksums_before = applied_checksums(&pool, 29).await;
+    assert_eq!(checksums_before.len(), 29);
+    let identities = |table: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (i64, i64, i32)>(&format!(
+                "SELECT chain_id, block_number, log_index FROM {table} \
+                 ORDER BY chain_id, block_number, log_index"
+            ))
+            .fetch_all(&pool)
+            .await
+            .expect("event identities")
+        }
+    };
+    let policy_ids_before = identities("agent_policies").await;
+    let deposit_ids_before = identities("agent_deposits").await;
+
+    // The upgrade: 0030 and 0031 on top of the seeded 0029 database.
+    Db::from_pool(pool.clone())
+        .migrate()
+        .await
+        .expect("upgrade a seeded 0029 database");
+
+    // History untouched: same checksums for 0001..0029, same raw event identities.
+    assert_eq!(applied_checksums(&pool, 29).await, checksums_before);
+    assert_eq!(identities("agent_policies").await, policy_ids_before);
+    assert_eq!(identities("agent_deposits").await, deposit_ids_before);
+    assert_eq!(
+        applied_checksums(&pool, i64::MAX).await.len(),
+        MIGRATOR.iter().count()
+    );
+
+    // The committee and regime tables are retired, with their rows.
+    for t in [
+        "committee_agents",
+        "committee_votes",
+        "committee_agent_events",
+        "regime_snapshots",
+    ] {
+        assert!(!table_exists(&pool, t).await, "{t} must be dropped by 0030");
+    }
+
+    // The gateway is the chain's only gateway row; every row carries it.
+    let gateways: Vec<(Option<Vec<u8>>,)> =
+        sqlx::query_as("SELECT DISTINCT gateway FROM agent_policies")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(gateways, vec![(Some(vec![0x11u8; 20]),)]);
+
+    // AA: A at 100/0 (setPolicy stays in it, the revoke closes it), B at 103/0.
+    assert_eq!(
+        policy_registration(&pool, 100, 0).await,
+        (Some(100), Some(0), Some("authorized".into()))
+    );
+    assert_eq!(
+        policy_registration(&pool, 101, 0).await,
+        (Some(100), Some(0), Some("authorized".into()))
+    );
+    assert_eq!(
+        policy_registration(&pool, 102, 0).await,
+        (Some(100), Some(0), Some("revoked".into()))
+    );
+    assert_eq!(
+        policy_registration(&pool, 103, 0).await,
+        (Some(103), Some(0), Some("authorized".into()))
+    );
+    // BB: A at 100/1; B at 200/0 because A's authorization had expired by block 200.
+    assert_eq!(policy_registration(&pool, 100, 1).await.0, Some(100));
+    assert_eq!(policy_registration(&pool, 100, 1).await.1, Some(1));
+    assert_eq!(
+        policy_registration(&pool, 200, 0).await,
+        (Some(200), Some(0), Some("authorized".into()))
+    );
+    // CC: the old transfer stays in the registration and keeps its kind.
+    assert_eq!(policy_registration(&pool, 100, 2).await.0, Some(100));
+    assert_eq!(
+        policy_registration(&pool, 110, 0).await,
+        (Some(100), Some(2), Some("transferred".into()))
+    );
+
+    // Deposits follow the registration live at their position.
+    assert_eq!(
+        deposit_registration(&pool, 100, 3).await,
+        (Some(100), Some(0))
+    );
+    assert_eq!(
+        deposit_registration(&pool, 104, 0).await,
+        (Some(103), Some(0))
+    );
+    assert_eq!(
+        deposit_registration(&pool, 150, 0).await,
+        (Some(100), Some(1))
+    );
+    assert_eq!(
+        deposit_registration(&pool, 111, 0).await,
+        (Some(100), Some(2))
+    );
+
+    // And the upgraded schema equals a freshly migrated one, table for table.
+    let fresh = pg_fixture().await;
+    assert_eq!(
+        schema_description(&pool).await,
+        schema_description(fresh.db.pool()).await,
+        "an upgraded database and a fresh one must end at the same schema"
+    );
+    drop(old);
+}
+
+/// Core 1891 AC — a seeded database the replay cannot be trusted on makes the migration, and so the
+/// `--migrate-only` deploy step, exit nonzero. Supplying the missing prerequisite makes it succeed.
+#[tokio::test]
+async fn migration_0031_refuses_policy_rows_without_a_stored_block_header() {
+    let pg = raw_pg().await;
+    let pool = sqlx::PgPool::connect(&pg.url).await.expect("connect");
+    apply_through(&pool, 29).await;
+    let db = Db::from_pool(pool.clone());
+    db.upsert_chain(8453, "base", "stub").await.unwrap();
+    // Two policy rows of one agent with no `blocks` row for the second: whether the second starts a new
+    // registration depends on that block's timestamp, and there is none.
+    db.insert_block(8453, 100, [1u8; 32], [0u8; 32], 100_000)
+        .await
+        .unwrap();
+    for (block, until) in [(100_i64, 150_000_i64), (200, 900_000)] {
+        sqlx::query(
+            "INSERT INTO agent_policies \
+             (chain_id, block_number, log_index, tx_hash, agent, owner, revoked, valid_until) \
+             VALUES (8453, $1, 0, $2, $3, $3, FALSE, $4)",
+        )
+        .bind(block)
+        .bind(vec![block as u8; 32])
+        .bind(vec![0xAAu8; 20])
+        .bind(until)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let out = run_migrate_only(&pg.url);
+    assert!(
+        !out.status.success(),
+        "migrate-only must exit nonzero when the registration replay lacks its prerequisite.\n{}",
+        describe(&out)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("cannot derive agent registrations"),
+        "the refusal must say what is missing.\n{}",
+        describe(&out)
+    );
+    // 0031 rolled back as a whole: the columns it adds are not there.
+    let has_column: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns \
+         WHERE table_name = 'agent_policies' AND column_name = 'registration_block')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !has_column,
+        "a refused 0031 must leave no half-applied columns"
+    );
+
+    // Supply the header and the same deploy step succeeds.
+    db.insert_block(8453, 200, [2u8; 32], [1u8; 32], 200_000)
+        .await
+        .unwrap();
+    let out = run_migrate_only(&pg.url);
+    assert!(out.status.success(), "{}", describe(&out));
+    assert_eq!(
+        policy_registration(&pool, 200, 0).await.0,
+        Some(200),
+        "block 200 is past the first authorization's expiry, so it starts a registration"
+    );
+}
+
+/// Core 1891 AC — the compiled indexer refuses a database that lacks the registration migration, naming it.
+#[tokio::test]
+async fn boot_refuses_a_database_missing_the_registration_migration() {
+    let pg = raw_pg().await;
+    let pool = sqlx::PgPool::connect(&pg.url).await.expect("connect");
+    apply_through(&pool, 30).await;
+
+    let out = run_boot(&pg.url);
+    let report = describe(&out);
+    assert!(
+        !out.status.success(),
+        "boot must refuse a schema at 0030 when it embeds 0031.\n{report}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("migration 31"),
+        "the refusal must name the missing migration.\n{report}"
+    );
+    let db = Db::from_pool(pool);
+    assert_eq!(
+        indexer_run_count(&db).await,
+        0,
+        "a refused boot must not have started indexing.\n{report}"
+    );
+}

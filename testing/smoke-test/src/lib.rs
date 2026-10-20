@@ -4264,10 +4264,9 @@ ccc333\t\teth-beacon
         assert_eq!(get("EXPLORER_API_PORT"), Some("18546"));
     }
 
-    /// Security round 2: the stage stack's indexer watches the
-    /// timelock and the Safe, as the 8453 stack does. Without them an `Upgraded` of the IC policy
-    /// proxy never reached the indexed proxy admin events, the watchdog's upgrade page stayed silent for it,
-    /// and `/v1/committee/*` and `/v1/governance/admin-events` stayed empty on the rehearsal chain.
+    /// Security round 2: the stage stack's indexer watches the timelock and the Safe, as the 8453
+    /// stack does. Without them `/v1/governance/admin-events` stayed empty on the rehearsal chain.
+    /// Core 1891: the indexer has no committee input, so the harness does not pass the IC policy.
     #[test]
     fn dapp_compose_env_watches_the_timelock_and_safe() {
         let env = sample_env();
