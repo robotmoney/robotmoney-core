@@ -32,8 +32,10 @@ import {UpgradeAuthority} from "./UpgradeAuthority.sol";
 ///        DEPLOYMENT_OUT        — output JSON path
 ///      USDC is the canonical Base USDC constant on every chain.
 ///
-///      SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE: the upgrade authority and release mode of
-///      the gateway proxy (`UpgradeAuthority`, issue 1808). The manifest `gateway` is the
+///      GATEWAY_UPGRADE_TIMELOCK, UPGRADE_MODE: the upgrade authority and release mode of
+///      the gateway proxy (`UpgradeAuthority`, issue 1808). The gateway system names its own
+///      upgrade timelock: nonzero, with code on the chain. The vaults timelock is never
+///      predicted or defaulted (architecture section 10, gateway governance is open). The manifest `gateway` is the
 ///      ERC-1967 proxy and `gateway_runtime_hash` is the code at that address (the proxy).
 ///      `gateway_implementation` and `gateway_implementation_runtime_hash` name the logic the
 ///      proxy runs: a signing client must check both (upgradeability stage 3).
@@ -68,7 +70,7 @@ contract DeployGateway is UpgradeAuthority {
     /// @return d The deployed gateway and its wiring.
     function run() external returns (Deployed memory d) {
         Params memory p = _readEnvParamsFrom("");
-        UpgradeConfig memory u = _readUpgradeConfig("");
+        UpgradeConfig memory u = _readExplicitUpgradeConfig("", "GATEWAY_UPGRADE_TIMELOCK");
         vm.startBroadcast();
         d = _deployGateway(p, u);
         vm.stopBroadcast();
