@@ -629,7 +629,7 @@ and `dev` at `e362df0c`. Row `IC-1019-N` is the review's finding heading `### N.
 | IC-1019-13 | IC-1019 | Low | accepted-with-rationale | docs/runbooks/contract-qa/template.yaml | — | Rehearsal runbook still runs the committee steps; changes with the tooling. Open. |
 | IC-1019-14 | IC-1019 | Low | fixed | scripts/runbook/validate-contract-qa.ts | #1887 | Validator forbids editing a template step, so no step can be retired. Fix: a finished release pins templateSha and is then a record, so the template can change; v0.4.0 and v0.5.0 pinned to e362df0c. |
 
-### RS-1019 — rmpc scope review (2026-10-19, 10 findings)
+### RS-1019 — rmpc scope review (2026-10-19, 11 findings)
 
 Internal review of the code that still gives rmpc and the gateway jobs beyond an agent vault deposit, against the owner rule of
 2026-10-19 that rmpc is an end-user signer whose one on-chain write is a vault deposit through the gateway
@@ -648,6 +648,7 @@ Internal review of the code that still gives rmpc and the gateway jobs beyond an
 | RS-1019-8 | RS-1019 | Low | accepted-with-rationale | plugins/robotmoney-user, plugins/robotmoney-cli | — | Plugins still teach withdrawals, router deposits and receipt submit. Open. |
 | RS-1019-9 | RS-1019 | Info | accepted-with-rationale | contracts/test, InvariantRegistry, suite 07 | — | Tests, GW-5 in the registry and suite 07 still cover the deprecated paths. Open. |
 | RS-1019-10 | RS-1019 | Medium | accepted-with-rationale | RobotMoneyGateway, clients/dapp | — | authorizeAgent and an ADMIN_ROLE grantRole(AGENT_ROLE) register an agent without consent. Open. |
+| RS-1019-11 | RS-1019 | Medium | accepted-with-rationale | RobotMoneyGateway, DeployTimelock | — | ADMIN_ROLE may name any share receiver; transferAgentOwnership hands agents to admins. Open. |
 
 ### Gap analysis — process & coverage backlog (20260607-code-review-internal-claude-gap-analysis.md)
 

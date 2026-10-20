@@ -76,8 +76,8 @@ Owner decision, 2026-10-19. The contracts form two separate systems. Each is dep
 - Deployed by the rehearsal deploy runbook (`docs/runbooks/contract-qa/`).
 
 **rmpc gateway system** (`rmpc` and the gateway it needs, owner decision 2026-10-19):
-- RobotMoneyGateway and the `rmpc` client (Rust payment client). `rmpc` is an agentic cryptographic signer for end users. Its uses are off-chain (signing, keystores, the committee-identity Ed25519 signer, config export, reads). Its one on-chain write is an agent deposit into a single vault.
-- The gateway holds the depositor's authorization and policy (`commitAuthorization`/`revealAuthorization`, `setPolicy`, `revokeAgent`, `transferAgentOwnership`). It answers whether an agent may deposit, how much, until when, for which depositor and share receiver, into which allowed vault. It then forwards the permitted deposit to that vault. It has no withdrawal path and no router path.
+- RobotMoneyGateway and the `rmpc` client (Rust payment client). `rmpc` is an agentic cryptographic signer for end users. Its uses are off-chain (signing, keystores, the committee-identity Ed25519 signer, config export, reads). Its one on-chain write is an agent deposit into an allowed vault.
+- The gateway holds the depositor's authorization and policy (`commitAuthorization`/`revealAuthorization`, `setPolicy`, `revokeAgent`). The share receiver is always the owner, and an agent's owner never changes. It answers whether an agent may deposit, how much, until when, for which depositor and share receiver, into which allowed vault. It then forwards the permitted deposit to that vault. It has no withdrawal path and no router path.
 - It is a client of the vaults system. It calls the same public vault deposit surface a human wallet uses.
 - Deployed in its own run after the vaults system. It reads the vaults system's addresses for its allowed vaults. It has its own runbook and CI.
 - Who governs the gateway is an open question for its own release.

@@ -43,7 +43,7 @@ Robot Money is two separate systems (owner decision, 2026-10-19).
   on-chain write (owner decision, 2026-10-19). `rmpc`'s other uses are
   off-chain: signing, keystores, the committee-identity Ed25519 signer,
   config export, and reads. The one on-chain write is an agent deposit
-  into a single vault. The gateway decides whether an agent may deposit,
+  into an allowed vault. The gateway decides whether an agent may deposit,
   how much, until when, for which depositor and share receiver, and into
   which allowed vault. It then forwards the permitted deposit to that
   vault.

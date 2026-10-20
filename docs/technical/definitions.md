@@ -24,7 +24,7 @@ The rmpc gateway system is `rmpc` and the Agent Permissions Gateway it
 needs (owner decision, 2026-10-19). `rmpc` is an agentic cryptographic
 signer for end users. Its uses are off-chain: signing, keystores, the
 committee-identity Ed25519 signer, config export, and reads. Its one
-on-chain write is an agent deposit into a single vault through the
+on-chain write is an agent deposit into an allowed vault through the
 gateway. The system is a client of the vaults system. It calls the same
 public vault deposit surface a human wallet uses. It is deployed after the vaults system, in
 its own run, and tested on its own.
@@ -184,8 +184,8 @@ layer for autonomous-agent writes.
 
 It is not a vault, not the Portfolio Router, and not a vault adapter. It
 holds the depositor's authorization and policy
-(`commitAuthorization`/`revealAuthorization`, `setPolicy`, `revokeAgent`,
-`transferAgentOwnership`) and performs one action: the agent deposit.
+(`commitAuthorization`/`revealAuthorization`, `setPolicy`, `revokeAgent`)
+and performs one action: the agent deposit.
 It enforces the policy and forwards accepted USDC into an allowed vault,
 with vault shares minted to the policy-configured share receiver.
 

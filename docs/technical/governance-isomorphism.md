@@ -242,18 +242,14 @@ Normative. "Must" is binding; a violation is a release blocker.
   negative control proves nothing — this mirrors how `propose-negative` already
   makes `propose` meaningful.
 - **R14.** Any assertion that a single key drives the Safe must not exist.
-- **R15.** (issue #1476; rmpc gateway system) Gateway agent ownership is governance authority too:
-  the recorded owner alone can call `setPolicy` and `revokeAgent`. The handover
-  must leave no gateway agent owned by the deployer. `DeployTimelock` hands
-  every agent in `AGENT_ADDRESSES` to the TimelockController with
-  `transferAgentOwnership` and requires none is still deployer-owned. The
-  list is a required input with no default (a comma-separated list, or
-  `none`), because the gateway cannot enumerate an owner's agents; the stage
-  runner passes every deployer-owned agent the gateway logs name, and the
-  verifier fails `AC-CORE-05 no agent authorized by the deployer is still
-  deployer-owned` when an agent an `AgentAuthorized` or
-  `AgentOwnershipTransferred` log gives the deployer is still deployer-owned.
-  This handover belongs to the gateway system's own run.
+- **R15.** (issue #1476; rmpc gateway system) Gateway agent ownership is
+  never governance authority. Only the recorded owner can call `setPolicy`
+  and `revokeAgent`. An agent's owner never changes, the share receiver is
+  always the owner, and no role is exempt (owner decision 2026-10-20). The
+  deploy authorizes no agent, so the gateway handover moves roles only and
+  carries no agent list. The verifier fails when the gateway logged any
+  `AgentAuthorized` up to the handover block. This handover belongs to the
+  gateway system's own run.
 
 ---
 

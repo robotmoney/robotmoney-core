@@ -116,7 +116,10 @@ own release. Who governs it is open (`docs/architecture.md` §10).
 
 > **Deployed release (v0.5.0).** Today's `DeployTimelock` still hands over the
 > gateway in the same run, requires `IC_POLICY_ADDRESS`, and hands over the
-> retired IC policy. Step 2 below describes that tooling. The differences are
+> retired IC policy. It also requires an `AGENT_ADDRESSES` list and moves
+> each listed agent to the timelock with `transferAgentOwnership`. The
+> design has no agent transfer (owner decision 2026-10-20). Step 2 below
+> describes that tooling. The differences are
 > recorded in `docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`
 > and `docs/code-review/20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md`.
 

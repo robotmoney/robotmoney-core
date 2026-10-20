@@ -29,7 +29,7 @@ agents. It is built as **two separate systems** (owner decision,
   decision, 2026-10-19). `rmpc` is an agentic cryptographic signer for end
   users. Its uses are off-chain: signing, keystores, the committee-identity
   Ed25519 signer, config export, and read commands. Its one on-chain write
-  is an agent deposit into a single vault, and that deposit needs
+  is an agent deposit into an allowed vault, and that deposit needs
   `RobotMoneyGateway`. The system holds `RobotMoneyGateway`, its
   `GatewayWindows` library and the `rmpc` client. It is a client of the
   vaults system: it calls the same public vault deposit surface a human
@@ -927,7 +927,7 @@ not be the source of values presented in a signing prompt.
 the rmpc gateway system (§1). Its uses are off-chain: signing, keystores,
 the committee-identity Ed25519 signer, config export, and read commands
 that read chain state without sending a transaction. Its **one on-chain
-write** is an agent deposit into a single vault through
+write** is an agent deposit into an allowed vault through
 `RobotMoneyGateway`, under the depositor's policy. It has no withdraw, no
 Portfolio Router, no receipt, no committee and no governance write.
 Its signing path builds only known calldata for the configured gateway on
@@ -1052,40 +1052,31 @@ Agent ownership and policy rules (issue #1476):
   can squat an address that never agreed. An agent that reveals for itself
   consents by calling. A depositor's distinct agent key therefore signs one
   `commitAuthorization` transaction before the depositor reveals;
-- only the recorded owner can call `setPolicy`, `revokeAgent` or
-  `transferAgentOwnership` on that agent; `ADMIN_ROLE` grants no
-  authority over an agent it does not own;
-- every write of a policy (`revealAuthorization`, `setPolicy`) runs one shared validator: the caller-independent shape
-  checks plus one caller-dependent rule, judged on the caller's role at
-  call time — a caller without `ADMIN_ROLE` must name itself as share
-  receiver. Any policy an owner can set through `setPolicy` is one it
-  could also have obtained through authorization;
-- `transferAgentOwnership` hands an agent only to an `ADMIN_ROLE` holder
-  and does not change its `AGENT_ROLE` or stored policy. The
-  caller-dependent rule does not bind an `ADMIN_ROLE` holder, so the
-  destination rule is the whole rule for a transfer. Governance can be
-  given an agent; it cannot take one;
+- only the recorded owner can call `setPolicy` or `revokeAgent` on that
+  agent. `ADMIN_ROLE` grants no authority over any agent;
+- an agent's owner never changes. There is no ownership transfer. To move
+  an agent to a new owner, the owner revokes it and the new owner
+  authorizes it again with the agent's consent (owner decision 2026-10-20);
+- the share receiver is always the owner. Every write of a policy
+  (`revealAuthorization`, `setPolicy`) runs one shared validator, and that
+  validator requires `shareReceiver == msg.sender` for every caller. No
+  role is exempt (owner decision 2026-10-20). Any policy an owner can set
+  through `setPolicy` is one it could also have obtained through
+  authorization (invariants `GW-7`, `ACL-9` in
+  `docs/technical/smart-contract-invariants.md`);
 - the deploy authorizes no agent. Agents belong to depositors, who
   authorize them through `commitAuthorization` + `revealAuthorization`.
-  At the gateway's handover `DeployTimelock` transfers every agent listed in
-  `AGENT_ADDRESSES` to the `TimelockController`, so after handover
-  `setPolicy` and `revokeAgent` on those agents go Safe -> Timelock ->
-  gateway. The list is a required input (a comma-separated list, or
-  `none`); the deploy passes `none`, and a direct run must list every
-  deployer-owned agent (invariants `ACL-8`, `GW-7` in
-  `docs/technical/smart-contract-invariants.md`). The gateway stage reads
-  no `AGENT_*` input, the sheet refuses them, and the verifier asserts
-  the gateway has no `AgentAuthorized` or `AgentOwnershipTransferred`
-  log up to the handover block, the timelock manifest lists zero agents
-  and nobody holds `AGENT_ROLE` from a grant before it. Agents depositors
-  authorize after the handover are theirs and are not checked. Who
-  receives the gateway handover depends on who governs the gateway, which
-  is open (§10).
+  The gateway's handover moves roles only. It has no agent list, because
+  the deploy owns no agent. The gateway stage reads no `AGENT_*` input,
+  the sheet refuses them, and the verifier asserts the gateway has no
+  `AgentAuthorized` log up to the handover block and nobody holds
+  `AGENT_ROLE` before it. Agents depositors authorize after the handover
+  are theirs and are not checked. Who receives the gateway handover
+  depends on who governs the gateway, which is open (§10).
 
 The gateway has one product action, the agent deposit into a vault. The
 depositor's authorization and policy calls above (`commitAuthorization`,
-`revealAuthorization`, `setPolicy`, `revokeAgent`,
-`transferAgentOwnership`) exist to bound it:
+`revealAuthorization`, `setPolicy`, `revokeAgent`) exist to bound it:
 
 - the agent can call only the gateway deposit;
 - the agent cannot choose its own share receiver;
@@ -1476,10 +1467,8 @@ Protocol authority is limited to contract upgrade where applicable,
 configuration of protocol-level controls, deposit pause, and permanent shutdown.
 Depositor-owned agent policies are controlled by the depositor. Agent
 keys must not hold admin or pause authority. The deploy authorizes no
-agent; each depositor authorizes its own. At the gateway's handover, every agent listed in
-`DeployTimelock`'s required `AGENT_ADDRESSES` input is owned by the
-`TimelockController` after handover, not by the deployer EOA; the deploy
-passes `none` (§5.2, invariant `ACL-8`).
+agent; each depositor authorizes its own. No protocol role owns an agent
+or names a share receiver (§5.2, invariant `ACL-9`).
 
 ## 7. Interface and Execution Contracts
 

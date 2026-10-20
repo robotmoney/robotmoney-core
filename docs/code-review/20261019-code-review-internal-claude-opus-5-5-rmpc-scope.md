@@ -6,7 +6,7 @@
 - **Commits checked:** release v0.5.0 at core `57fbe618` (tag
   `release/v0.5.0-rehearsal`, branch `releases-0.5.x`) and `dev` at
   `e362df0c`.
-- **Reviewed at:** 2026-10-19. Finding 10 added 2026-10-20.
+- **Reviewed at:** 2026-10-19. Findings 10 and 11 added 2026-10-20.
 - **Design under test:** the owner rule of 2026-10-19. `rmpc` is an agentic
   cryptographic signer for end users. Its uses are off-chain: signing,
   keystores, the `committee-identity` Ed25519 signer, config export, offline
@@ -146,11 +146,54 @@ text and dapp or indexer surfaces. None is needed for the vault deposit.
   - Move test setup to commit and reveal. Delete the dapp button and preview.
   - This adds no storage, so the layout gate is unaffected.
 
+### 11. An admin may name any share receiver and can be handed agents
+
+- **Severity:** Medium.
+- **Design:** the share receiver is always the agent's owner, for every
+  caller. An agent's owner never changes. No protocol role owns an agent
+  (owner decision 2026-10-20, `docs/architecture.md` §6, invariant `ACL-9`).
+- **Code:**
+  - `_validatePolicy` skips the share receiver check when the caller holds
+    `ADMIN_ROLE` (`RobotMoneyGateway.sol`, `ShareReceiverNotAuthorized`). An
+    admin can reach it through its own commit and reveal, even without
+    `authorizeAgent`.
+  - `transferAgentOwnership` moves an agent to any `ADMIN_ROLE` holder
+    (`NewAgentOwnerNotAdmin` otherwise). It keeps the stored policy and its
+    share receiver.
+  - `DeployTimelock` requires `AGENT_ADDRESSES` and transfers each listed
+    agent to the timelock. The manifest records
+    `roles.gateway_agents_listed_count`,
+    `roles.deployer_owns_a_listed_gateway_agent` and `timelock_owned_agents`.
+- **Risk:** a timelock-owned agent's policy can be rewritten by a timelock
+  proposal to send its future deposits' shares to any address. Neither path
+  has a use once the deploy authorizes no agent.
+- **Where it lives:**
+  - Contracts: `RobotMoneyGateway.sol` (`_validatePolicy`,
+    `transferAgentOwnership`, `AgentOwnershipTransferred`), `IGateway.sol`,
+    `DeployTimelock.s.sol` (`AGENT_ADDRESSES` and the agent handover).
+  - Tests: `GatewayAgentPolicyAuthorization.t.sol`
+    (`test_transferAgentOwnership_*`, the admin share receiver cases),
+    `DeployTimelock.t.sol::DeployTimelockAgentHandoverTest`,
+    `SafeIntegration.t.sol::test_handover_noDeployerOwnedAgentRemains`.
+  - Tooling: the publish-contracts timelock stage and verifier
+    (`AGENT_ADDRESSES`, `AC-CORE-05`, the agent manifest fields).
+  - Indexer and API: `AgentOwnershipTransferred` decoding and the owner
+    column (`services/explorer-indexer`, `clients/explorer-api`).
+  - `InvariantRegistry` still lists ACL-4 and ACL-8, which the docs retire.
+- **Fix:**
+  - Require `shareReceiver == msg.sender` in `_validatePolicy` for every
+    caller.
+  - Delete `transferAgentOwnership`, its event and `NewAgentOwnerNotAdmin`.
+  - Drop `AGENT_ADDRESSES` and the agent handover from `DeployTimelock` and
+    the timelock stage. Keep the verifier's check that the gateway logged no
+    `AgentAuthorized` before the handover.
+  - Give ACL-4 and ACL-8 tombstone status in the registry. Add ACL-9 with a
+    red test.
+  - This adds no storage, so the layout gate is unaffected.
+
 ## Open questions for the owner
 
-- **The admin share receiver exception.** The policy validator lets a caller
-  holding `ADMIN_ROLE` name any share receiver. Without `authorizeAgent`, an
-  admin can still reach it through its own commit and reveal. A non-admin must
-  name itself. The design does not yet say whether the exception stays.
+- **Resolved 2026-10-20: the admin share receiver exception.** It is
+  removed (finding 11).
 - **Resolved 2026-10-20: vault scope.** An agent may deposit into any vault
   the depositor's policy allows. The docs already say this.
