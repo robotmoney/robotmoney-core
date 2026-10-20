@@ -7,7 +7,7 @@ import { PROOF_STAGE } from "./control-proof.ts";
 import { PublishError } from "./errors.ts";
 import { SAFE_MANIFEST, isVaultKey } from "./core-wiring.ts";
 import type { VaultKey } from "./sheet.ts";
-import { manifestFile, type StageTable, type TableCreate2Library, type TableLibrary } from "./stage-table.ts";
+import { manifestFile, type StageTable, type SystemName, type TableCreate2Library, type TableLibrary } from "./stage-table.ts";
 
 export type StageKind = "safe" | "forge" | "prove" | "verify" | "govern";
 
@@ -41,7 +41,7 @@ const VERIFY_ROW: StageRow = { name: "verify", kind: "verify", countKey: null, r
 const GOVERN_ROW: StageRow = { name: "govern", kind: "govern", countKey: null, usesSafeOwners: true, requiredEnv: [], optionalEnv: [], libraries: [], create2Libraries: [] };
 
 /** The rows for a table: safe first (the Safe is an input of the vault fee recipient and the timelock), the table stages in order, then verify and govern. */
-export function buildStages(table: StageTable): StageRow[] {
+export function buildStages(table: StageTable, system: SystemName | "all-forge" = "vaults"): StageRow[] {
   const forge = table.stages.map((s): StageRow => ({
     name: s.name, kind: "forge", script: s.script, countKey: s.name, manifest: manifestFile(s.manifest),
     requiredEnv: s.requiredEnv, optionalEnv: s.optionalEnv,
@@ -49,10 +49,20 @@ export function buildStages(table: StageTable): StageRow[] {
     create2Libraries: (s.create2Libraries ?? []).map((n) => table.create2Libraries!.find((l) => l.name === n)!),
     ...(s.vault && isVaultKey(s.vault) ? { vault: s.vault } : {}),
   }));
-  const handover = forge.findIndex((r) => r.name === "timelock");
-  const ordered = handover < 0 ? [...forge, PROVE_ROW] : [...forge.slice(0, handover), PROVE_ROW, ...forge.slice(handover)];
+  if (system === "all-forge") return forge;
+  if (system === "gateway") {
+    // Issue 1892: the gateway system deploys and hands over the gateway, then verifies. It creates no Safe, proves no control and governs nothing: the production authority
+    // is an open decision (architecture 10) and the vaults system's Safe and timelock are not its inputs.
+    return [...forge.filter((r) => table.stages.find((s) => s.name === r.name)?.system === "gateway"), VERIFY_ROW];
+  }
+  const own = table.systems ? forge.filter((r) => table.stages.find((s) => s.name === r.name)?.system === "vaults") : forge;
+  const handover = own.findIndex((r) => r.name === "timelock");
+  const ordered = handover < 0 ? [...own, PROVE_ROW] : [...own.slice(0, handover), PROVE_ROW, ...own.slice(handover)];
   return [SAFE_ROW, ...ordered, VERIFY_ROW, GOVERN_ROW];
 }
+
+/** Every forge row of the table whatever the system, for manifest references across systems (the gateway system reads the vaults system's manifests). */
+const allForgeRows = (t: StageTable): StageRow[] => buildStages(t, "all-forge").filter((r) => r.kind === "forge");
 
 // Live bindings: set once by useStageTable() (the CLI, after it has the core checkout) and read everywhere else.
 let table: StageTable | undefined;
@@ -63,9 +73,14 @@ export let DEPLOYER_STAGES: StageRow[] = [];
 /** The vault stages, one per vault, in table order. rmUSDC is first. */
 export let VAULT_STAGES: { key: VaultKey; stage: string }[] = [];
 
-export function useStageTable(t: StageTable): void {
+/** The system of this run (issue 1892). `vaults` is also the system of a table from before the split (one combined run). */
+export let ACTIVE_SYSTEM: SystemName = "vaults";
+
+export function useStageTable(t: StageTable, system: SystemName = "vaults"): void {
+  if (system === "gateway" && !t.systems?.gateway) throw new PublishError("INPUT_MISSING", "the core stage table declares no gateway system: use a core DEPLOY_SHA from after the system split (issue 1892)");
   table = t;
-  STAGES = buildStages(t);
+  ACTIVE_SYSTEM = system;
+  STAGES = buildStages(t, system);
   STAGE_NAMES = STAGES.map((s) => s.name);
   DEPLOYER_STAGES = STAGES.filter((s) => s.countKey !== null);
   VAULT_STAGES = t.vaults.map((v) => ({ key: v.key, stage: v.stage }));
@@ -84,16 +99,20 @@ export const stageByName = (n: string): StageRow => {
 
 /** `file:field` reference of a stage's manifest field, in the form readManifestField reads. */
 export const manifestRef = (stage: string, field: string): string => {
-  const m = stageByName(stage).manifest;
+  const m = (STAGES.find((x) => x.name === stage) ?? (table ? allForgeRows(table).find((x) => x.name === stage) : undefined) ?? stageByName(stage)).manifest;
   if (!m) throw new Error(`stage ${stage} writes no manifest`);
   return `${m.replace(/\.json$/, "")}:${field}`;
 };
 
 /** The deployer transactions outside every stage count that precede a stage: the prove-control transaction, for every stage after it (core 1712). */
 export function proofNoncesBefore(stage: string): number {
+  if (ACTIVE_SYSTEM === "gateway") return 0; // the gateway system proves no Safe control (issue 1892)
   const at = STAGE_NAMES.indexOf(stage);
   return at > STAGE_NAMES.indexOf(PROOF_STAGE) ? PROOF_TX_NONCES : 0;
 }
+
+/** The deployer transactions outside every stage count over the whole run: the one prove-control transaction, none in the gateway system. */
+export const proofTxNonces = (): number => (ACTIVE_SYSTEM === "gateway" ? 0 : PROOF_TX_NONCES);
 
 /**
  * The deployer nonce a stage starts at: the frozen counts of every deployer stage before it, plus the prove-control transaction once it has been sent.
@@ -105,5 +124,5 @@ export function expectedStartNonce(stage: string, counts: Record<string, number>
     if (s.name === stage) return n + proofNoncesBefore(stage);
     n += counts[s.countKey!] ?? 0;
   }
-  return n + PROOF_TX_NONCES;
+  return n + proofTxNonces();
 }

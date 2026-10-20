@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { PublishError } from "./errors.ts";
 import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./chains.ts";
 import { crossCheckDiff, verifyReconstruction, type Reconstruction } from "./counts-reconstruct.ts";
-import { getStageTable } from "./stages.ts";
+import { DEPLOYER_STAGES, getStageTable, proofTxNonces } from "./stages.ts";
 
 export type FrozenCounts = Record<string, number>;
 export interface FrozenFile { deploySha: string; measured: { chainId: number; at: string; forge?: string; /** Stages the measuring run ADOPTED (issue 1721): their counts are not measurements. */ adopted?: string[];
@@ -111,7 +111,9 @@ function loadFrozenChain(dir: string, sha: string, o: { allowAdopted?: boolean }
   return f;
 }
 
-export const sumCounts = (c: FrozenCounts, stages?: string[]): number => (stages ?? Object.keys(c)).reduce((a, s) => a + (c[s] ?? 0), 0);
+export const sumCounts = (c: FrozenCounts, stages?: string[]): number => (stages ?? activeCountKeys(c)).reduce((a, s) => a + (c[s] ?? 0), 0);
+/** Issue 1892: a run sums the counts of its own system's stages only (the file carries every system's keys). Without a loaded table: every key. */
+function activeCountKeys(c: FrozenCounts): string[] { try { return DEPLOYER_STAGES.length === 0 ? Object.keys(c) : DEPLOYER_STAGES.map((s) => s.countKey!).filter((k) => k in c); } catch { return Object.keys(c); } }
 
 /**
  * The deployer sends the prove-control transaction (the Safe execTransaction, core 1712) between stage 10 and the stage 11 handover. It is one
@@ -120,7 +122,7 @@ export const sumCounts = (c: FrozenCounts, stages?: string[]): number => (stages
 export const PROOF_TX_NONCES = 1;
 
 /** The deployer nonce at the end of the deploy stages: the summed frozen counts plus the one prove-control transaction. */
-export const finalDeployerNonce = (c: FrozenCounts, startNonce = 0): number => startNonce + sumCounts(c) + PROOF_TX_NONCES;
+export const finalDeployerNonce = (c: FrozenCounts, startNonce = 0): number => startNonce + sumCounts(c) + proofTxNonces();
 
 /**
  * Adopted stages (issue 1721). A stage whose contracts already sit on chain (the permissionless CREATE2 libraries) plans zero transactions, so the stage is
@@ -155,7 +157,7 @@ export function countFor(c: FrozenCounts, stage: string): number {
  * first deployer stage for a rehearsal that reuses a deployer.
  */
 export function checkNonce(actual: number, c: FrozenCounts, stages?: string[], startNonce = 0): void {
-  const want = startNonce + (stages ? sumCounts(c, stages) : sumCounts(c) + PROOF_TX_NONCES);
+  const want = startNonce + (stages ? sumCounts(c, stages) : sumCounts(c) + proofTxNonces());
   if (actual !== want) throw new PublishError("NONCE", `the deployer nonce is ${actual}, the summed frozen counts say ${want}${startNonce ? ` (start nonce ${startNonce} recorded at the first stage)` : ""}${stages ? "" : ` (${PROOF_TX_NONCES} of them is the prove-control transaction)`}`, { actual, want, startNonce });
 }
 
@@ -166,7 +168,9 @@ export function writeFrozen(dir: string, sha: string, counts: FrozenCounts, meas
   const body: FrozenFile = { deploySha: sha, measured, counts };
   if (existsSync(p)) {
     const old = JSON.parse(readFileSync(p, "utf8"));
-    if (JSON.stringify(old.counts) !== JSON.stringify(counts)) throw new PublishError("COUNT_MISMATCH", `${p} already holds different counts for this SHA: a frozen file is never rewritten, review the difference`, { sha });
+    if (!mergeable(old.counts, counts)) throw new PublishError("COUNT_MISMATCH", `${p} already holds different counts for this SHA: a frozen file is never rewritten, review the difference`, { sha });
+    const extra = Object.keys(counts).filter((k) => !(k in old.counts));
+    if (extra.length > 0) { writeFileSync(p, JSON.stringify({ ...old, counts: { ...old.counts, ...Object.fromEntries(extra.map((k) => [k, counts[k]])) } }, null, 2) + "\n"); return p; } // issue 1892: another system's counts are added, none changed
     return p;
   }
   mkdirSync(dir, { recursive: true });
@@ -204,7 +208,16 @@ export function resolveCounts(o: {
   const file = frozenPath(o.dir, o.sha);
   if (o.measureFlag) return { measure: true, mode: "measure-flag", file };
   // A Twin measuring run that adopted a stage marks its file (issue 1721). Its own follow-on verbs (verify, govern) read it back; on the Twin chain only (918453): every other chain, 8453 included, refuses it.
-  if (existsSync(file)) return { frozen: loadFrozen(o.dir, o.sha, { allowAdopted: o.chainId === TWIN_CHAIN_ID }).counts, measure: false, mode: "frozen", file };
+  if (existsSync(file)) {
+    const f = loadFrozen(o.dir, o.sha, { allowAdopted: o.chainId === TWIN_CHAIN_ID }).counts;
+    // Issue 1892: one frozen file per sha holds the counts of both systems. A run of a system whose stages the file does not name yet measures them (never on 8453) and adds them.
+    if (o.chainId !== MAINNET_CHAIN_ID && missingOwnKeys(f).length > 0) {
+      if (o.dryRun) return { measure: true, mode: "dry-run-measure", file };
+      o.warn?.("counts.measuring_system", { file, missing: missingOwnKeys(f), note: "the frozen file names no count for these stages of this system: this run measures them and adds them to the file" });
+      return { measure: true, mode: "twin-measure", file };
+    }
+    return { frozen: f, measure: false, mode: "frozen", file };
+  }
   if (o.dryRun) {
     o.warn?.("dry_run.counts_missing", { file, note: "no frozen counts for this SHA: the dry run measures them and writes nothing" });
     return { measure: true, mode: "dry-run-measure", file };
@@ -212,4 +225,20 @@ export function resolveCounts(o: {
   if (o.chainId === MAINNET_CHAIN_ID) return { frozen: loadFrozen(o.dir, o.sha).counts, measure: false, mode: "frozen", file }; // throws COUNTS_MISSING
   o.warn?.("counts.measuring", { file, note: "no frozen counts for this SHA on a non-8453 chain: this run measures them and writes the file under the counts dir (review it, then commit it)" });
   return { measure: true, mode: "twin-measure", file };
+}
+
+/** Issue 1892: the stage keys of this run's system that a counts object does not name yet. Empty without a loaded table. */
+function missingOwnKeys(c: FrozenCounts): string[] {
+  try { return DEPLOYER_STAGES.map((s) => s.countKey!).filter((k) => !(k in c)); } catch { return []; }
+}
+
+/**
+ * Issue 1892: whether `next` may be written over a file that holds `old`. A table with systems keeps one file per sha for both systems, so a run of one system names only its own stages:
+ * every key both name must be equal, and either may name keys the other lacks. A table from before the split needs the two to be identical.
+ */
+function mergeable(old: FrozenCounts, next: FrozenCounts): boolean {
+  let systems = false;
+  try { systems = getStageTable().systems !== undefined; } catch { /* no table loaded: the strict rule */ }
+  if (!systems) return JSON.stringify(old) === JSON.stringify(next);
+  return Object.keys(next).every((k) => !(k in old) || old[k] === next[k]);
 }

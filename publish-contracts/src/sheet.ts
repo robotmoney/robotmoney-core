@@ -8,6 +8,7 @@ import { USDC_ADDRESS } from "./usdc.ts";
 import { STAGE13_UNPAUSE_VAULTS } from "./vault-rules.ts";
 import { getAddress, isAddress } from "viem";
 import { PublishError } from "./errors.ts";
+import type { SystemName } from "./stage-table.ts";
 import { BASKET_KEYS, VAULT_KEYS, type VaultKey } from "./vault-keys.ts";
 import { MAINNET_CHAIN_ID, DEPLOYMENT_KINDS, REHEARSAL_DELAY_FLOOR, rehearsalDelayProblem, type DeploymentKind } from "./chains.ts";
 
@@ -42,6 +43,9 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   SAFE_THRESHOLD: { kind: "uint" },
   SAFE_VERSION: { kind: "string" },
   SAFE_SALT_NONCE: { kind: "uint" },
+  // Issue 1892, the gateway system's own governance inputs. Explicit, no default, and never the vaults timelock by omission (architecture 10). A vaults sheet refuses them.
+  GATEWAY_ADMIN_ADDRESS: { kind: "address" },
+  GATEWAY_UPGRADE_TIMELOCK: { kind: "address" },
   // economics
   USDC_ADDRESS: { kind: "address" },
   FEE_RECIPIENT_ADDRESS: { kind: "address-or-safe" },
@@ -76,7 +80,12 @@ export const SHEET_SPEC: Record<string, NameSpec> = { ...GLOBAL_NAMES, ...VAULT_
  * Names with no default and no skip. SAFE_VERSION, SAFE_SALT_NONCE, DEPLOYMENT_KIND (absent means production), USDC_ADDRESS (a constant: when present it must equal it) and
  * UPGRADE_FREEZE_DEADLINE (its presence is ruled by UPGRADE_MODE) are the only optional names.
  */
-export const OPTIONAL_NAMES = new Set(["SAFE_VERSION", "SAFE_SALT_NONCE", "USDC_ADDRESS", "DEPLOYMENT_KIND", "UPGRADE_FREEZE_DEADLINE"]);
+export const OPTIONAL_NAMES = new Set(["SAFE_VERSION", "SAFE_SALT_NONCE", "USDC_ADDRESS", "DEPLOYMENT_KIND", "UPGRADE_FREEZE_DEADLINE", ...["GATEWAY_ADMIN_ADDRESS", "GATEWAY_UPGRADE_TIMELOCK"]]);
+/** Issue 1892: the names only the gateway system's sheet carries. A vaults sheet refuses them. */
+export const GATEWAY_ONLY_NAMES = ["GATEWAY_ADMIN_ADDRESS", "GATEWAY_UPGRADE_TIMELOCK"] as const;
+/** Issue 1892: every name the gateway system's sheet may carry. The required ones are those not in OPTIONAL_NAMES, plus the two GATEWAY_ names. */
+export const GATEWAY_SHEET_NAMES = ["CHAIN_ID", "EXPECTED_CHAIN_ID", "ADMIN_ADDRESS", "PAUSER_ADDRESS", "SHARE_RECEIVER_ADDRESS", "UPGRADE_MODE", "DEPLOYMENT_KIND", "USDC_ADDRESS", ...GATEWAY_ONLY_NAMES] as const;
+const GATEWAY_REQUIRED = GATEWAY_SHEET_NAMES.filter((n) => !["DEPLOYMENT_KIND", "USDC_ADDRESS"].includes(n));
 /** The release modes (issue 1809). The words are the deploy scripts' (UpgradeAuthority.parseUpgradeMode in core). */
 export const UPGRADE_MODES = ["upgradeable", "frozen"] as const;
 export type UpgradeMode = (typeof UPGRADE_MODES)[number];
@@ -106,6 +115,9 @@ export interface SheetVault {
 }
 
 export interface Sheet {
+  /** Issue 1892: `gateway` for the gateway system's sheet (then `gateway` below is set and the vaults-only fields are inert). Absent: the vaults sheet. */
+  system?: SystemName;
+  gateway?: { admin: Address; upgradeTimelock: Address };
   /** Normalised raw values by name, exactly what the sheet said (addresses checksummed). */
   values: Record<string, string>;
   chainId: number;
@@ -179,6 +191,8 @@ export function parseSheetText(text: string): Record<string, string> {
 export const LEGACY_VAULT_NAME_VERBS = ["pause-all", "govern", "verify", "record-receipt"] as const;
 const LEGACY_VAULT_NAME = "VAULT_NAME";
 export interface ParseSheetOpts {
+  /** Issue 1892: the system the sheet is for. `vaults` (the default) is the treasury sheet. `gateway` is the small gateway sheet (GATEWAY_SHEET_NAMES). */
+  system?: SystemName;
   /** The CLI verb (or the single follow-on stage, verify or govern) the sheet is parsed for. Absent: a deploy run, which refuses VAULT_NAME. */
   verb?: string;
   /** Receives the one warning when a follow-on verb drops a VAULT_NAME line. */
@@ -195,10 +209,17 @@ function dropLegacyVaultName(text: string, raw: Record<string, string>, o: Parse
   o.warn?.(`sheet line ${line}: VAULT_NAME is ignored by ${o.verb}. Every registry name is a vault stage script constant (issue 1705): delete the line before the next deploy run, which refuses it`, { name: LEGACY_VAULT_NAME, line, verb: o.verb });
 }
 
-function checkNames(raw: Record<string, string>): void {
+function checkNames(raw: Record<string, string>, system: SystemName = "vaults"): void {
   for (const name of Object.keys(raw)) {
     for (const [re, why] of REFUSED) if (re.test(name)) throw err(`${name} is refused: ${why}`, { name });
     if (!(name in SHEET_SPEC)) throw err(`${name} is not a sheet name (the sheet is a whitelist)`, { name });
+    if (system === "vaults" && (GATEWAY_ONLY_NAMES as readonly string[]).includes(name)) throw err(`${name} is refused in a vaults sheet: it belongs to the gateway system's own sheet (--system gateway). The vaults system has no gateway input`, { name });
+    if (system === "gateway" && !(GATEWAY_SHEET_NAMES as readonly string[]).includes(name)) throw err(`${name} is refused in a gateway sheet: it is a vaults-system input. The gateway system reads the vaults system's addresses from its manifests, and the vaults timelock is not one of its inputs`, { name });
+  }
+  if (system === "gateway") {
+    const missing = GATEWAY_REQUIRED.filter((n) => !(n in raw) || raw[n] === "");
+    if (missing.length) throw err(`the gateway sheet is missing required names: ${missing.join(", ")}. Nothing has a default; the gateway admin and the gateway upgrade timelock are explicit`, { missing });
+    return;
   }
   const missing = REQUIRED_NAMES.filter((n) => !(n in raw) || raw[n] === "");
   if (missing.length) throw err(`the sheet is missing required names: ${missing.join(", ")}. Nothing has a default.`, { missing });
@@ -251,7 +272,8 @@ function asVaultKeys(name: string, v: string, allowNone = true): VaultKey[] {
 export function parseSheet(text: string, opts: ParseSheetOpts = {}): Sheet {
   const raw = parseSheetText(text);
   dropLegacyVaultName(text, raw, opts);
-  checkNames(raw);
+  checkNames(raw, opts.system);
+  if (opts.system === "gateway") return gatewaySheet(raw);
   const v = raw;
 
   const chainId = asSafeInt("CHAIN_ID", v.CHAIN_ID!);
@@ -367,6 +389,43 @@ export function parseSheet(text: string, opts: ParseSheetOpts = {}): Sheet {
     values, chainId, expectedChainId, kind, admin, pauser, emergency, shareReceiver, receiptAdmin, safeOwners, safeThreshold,
     safeSalt: v.SAFE_SALT_NONCE, usdc, swapRouter, feeRecipient, seedDeposit, timelockMinDelay, upgrade, vaults,
     eligibleVaults, weights, govern: { unpauseVaults, newDelay },
+  };
+}
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
+
+/**
+ * Issue 1892: the gateway system's sheet. Small and explicit: the deployer (ADMIN_ADDRESS), the pauser, the share receiver, the release mode and the two governance inputs
+ * (GATEWAY_ADMIN_ADDRESS, the holder of gateway ADMIN_ROLE after the handover, and GATEWAY_UPGRADE_TIMELOCK, the gateway's own nonzero upgrade timelock). Neither has a default and
+ * neither is the vaults timelock by omission: the production choice is an open decision (architecture 10). Every vaults-only field of the returned Sheet is inert and never read.
+ */
+function gatewaySheet(v: Record<string, string>): Sheet {
+  const chainId = asSafeInt("CHAIN_ID", v.CHAIN_ID!);
+  const expectedChainId = asSafeInt("EXPECTED_CHAIN_ID", v.EXPECTED_CHAIN_ID!);
+  if (chainId <= 0) throw err("CHAIN_ID must be positive");
+  if (expectedChainId !== chainId) throw err(`EXPECTED_CHAIN_ID ${expectedChainId} differs from CHAIN_ID ${chainId}`);
+  const kindRaw = v.DEPLOYMENT_KIND ?? "production";
+  if (!(DEPLOYMENT_KINDS as readonly string[]).includes(kindRaw)) throw err(`DEPLOYMENT_KIND must be ${DEPLOYMENT_KINDS.join(" or ")}, got '${kindRaw}'`, { name: "DEPLOYMENT_KIND" });
+  const admin = asAddress("ADMIN_ADDRESS", v.ADMIN_ADDRESS!);
+  const pauser = asAddress("PAUSER_ADDRESS", v.PAUSER_ADDRESS!);
+  const shareReceiver = asAddress("SHARE_RECEIVER_ADDRESS", v.SHARE_RECEIVER_ADDRESS!);
+  const gatewayAdmin = asAddress("GATEWAY_ADMIN_ADDRESS", v.GATEWAY_ADMIN_ADDRESS!);
+  const upgradeTimelock = asAddress("GATEWAY_UPGRADE_TIMELOCK", v.GATEWAY_UPGRADE_TIMELOCK!);
+  if (v.USDC_ADDRESS !== undefined && lc(asAddress("USDC_ADDRESS", v.USDC_ADDRESS)) !== lc(USDC_ADDRESS)) throw err(`USDC_ADDRESS must be ${USDC_ADDRESS} on every chain (the Base USDC), got ${v.USDC_ADDRESS}`);
+  assertDistinct("gateway roles", [["ADMIN_ADDRESS", admin], ["PAUSER_ADDRESS", pauser]]);
+  if (lc(gatewayAdmin) === lc(admin)) throw err("GATEWAY_ADMIN_ADDRESS equals ADMIN_ADDRESS (the deployer): the handover moves the gateway roles away from the deployer", { name: "GATEWAY_ADMIN_ADDRESS" });
+  if (lc(gatewayAdmin) === lc(pauser)) throw err("GATEWAY_ADMIN_ADDRESS equals PAUSER_ADDRESS: the admin and the deposit pauser are different keys", { name: "GATEWAY_ADMIN_ADDRESS" });
+  const mode = v.UPGRADE_MODE ?? "";
+  if (!(UPGRADE_MODES as readonly string[]).includes(mode)) throw err(`UPGRADE_MODE must be ${UPGRADE_MODES.join(" or ")}, got '${mode}'. There is no default`, { name: "UPGRADE_MODE" });
+  const values: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v)) values[k] = SHEET_SPEC[k]!.kind.startsWith("address") ? getAddress(val) : val;
+  return {
+    system: "gateway", gateway: { admin: gatewayAdmin, upgradeTimelock },
+    values, chainId, expectedChainId, kind: kindRaw as DeploymentKind, admin, pauser, shareReceiver, usdc: USDC_ADDRESS as Address,
+    upgrade: { mode: mode as UpgradeMode },
+    // inert: the gateway system has no Safe, no emergency key, no receipt, no vault and no govern row
+    emergency: ZERO_ADDRESS, receiptAdmin: ZERO_ADDRESS, safeOwners: [], safeThreshold: 0, swapRouter: ZERO_ADDRESS, feeRecipient: "@safe", seedDeposit: 0n, timelockMinDelay: 0n,
+    vaults: {} as Record<VaultKey, SheetVault>, eligibleVaults: [], weights: [], govern: { unpauseVaults: [], newDelay: 0n },
   };
 }
 

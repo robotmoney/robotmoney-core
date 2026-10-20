@@ -21,7 +21,8 @@ import { TWIN_CHAIN_ID } from "./chains.ts";
 import { LIBS_STAGE } from "./core-wiring.ts";
 import { PublishError } from "./errors.ts";
 import { buildCreate2Libraries, verifyAdoptedCreate2, verifyAdoptedLibraries } from "./libs-adopt.ts";
-import type { StageTable } from "./stage-table.ts";
+import { scopeTable, type StageTable } from "./stage-table.ts";
+import { ACTIVE_SYSTEM } from "./stages.ts";
 import type { FrozenCounts, FrozenFile } from "./counts.ts";
 
 /** One adopted CREATE2 creation of a measuring run. */
@@ -52,7 +53,9 @@ export function adoptableOf(table: StageTable, stage: string): { library: string
   return (st?.create2Libraries ?? []).filter((n) => !earlier.has(n)).map((n) => { const l = table.create2Libraries!.find((x) => x.name === n)!; return { library: l.name, artifact: l.artifact }; });
 }
 
-const stageKeys = (table: StageTable): string[] => ["safe", ...table.stages.map((s) => s.name)];
+/** The stage names of the systems this run is not (issue 1892). Empty for a table from before the split. */
+const otherSystemKeys = (table: StageTable): Set<string> => new Set(table.systems ? table.stages.filter((s) => s.system !== ACTIVE_SYSTEM).map((s) => s.name) : []);
+const stageKeys = (table: StageTable): string[] => { const own = table.systems ? scopeTable(table, ACTIVE_SYSTEM).stages : table.stages; return [...(ACTIVE_SYSTEM === "gateway" ? [] : ["safe"]), ...own.map((s) => s.name)]; }; // issue 1892: one system's keys
 
 /**
  * Offline check of a reconstruction block against the table. Throws COUNTS_MISSING on the first problem. Pure: it reads no chain and no build, so loadFrozen
@@ -67,7 +70,8 @@ export function verifyReconstruction(file: Pick<FrozenFile, "deploySha" | "measu
   if (r.fromRun.pinBlock !== undefined && !(Number.isInteger(r.fromRun.pinBlock) && r.fromRun.pinBlock > 0)) refuse("pinBlock is not a positive integer");
   if (!Array.isArray(r.adopted) || r.adopted.length === 0) refuse("it records no adopted creation: with nothing adopted the counts are a plain measurement, not a reconstruction");
   const keys = stageKeys(table);
-  const have = Object.keys(file.counts).sort().join(), want = [...keys].sort().join();
+  const other = otherSystemKeys(table); // issue 1892: a combined file also holds the other system's counts, which this reconstruction does not cover
+  const have = Object.keys(file.counts).filter((k) => !other.has(k)).sort().join(), want = [...keys].sort().join();
   if (have !== want) refuse(`its counts name stages [${have}], the stage table names [${want}]`);
   const mhave = Object.keys(r.measuredCounts ?? {}).sort().join();
   if (mhave !== want) refuse(`its measuredCounts name stages [${mhave}], the stage table names [${want}]`);

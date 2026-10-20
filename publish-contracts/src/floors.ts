@@ -93,9 +93,9 @@ export function assertFloors(i: FloorInput): void {
   const kind = i.sheet.kind;
   const min = delayFloor(chainId, kind);
   const at = kind === "rehearsal" ? ` on chain ${chainId} (deployment kind rehearsal)` : ` on chain ${chainId}`;
-  if (i.sheet.timelockMinDelay < BigInt(min)) throw floor(`TIMELOCK_MIN_DELAY ${i.sheet.timelockMinDelay} is below the floor ${min}${at}`, { delay: Number(i.sheet.timelockMinDelay), floor: min, chainId, kind });
-  if (i.sheet.govern.newDelay < BigInt(min)) throw floor(`GOVERN_NEW_DELAY ${i.sheet.govern.newDelay} is below the floor ${min}${at}`, { floor: min, chainId, kind });
-  if (kind === "rehearsal") {
+  if (i.sheet.system !== "gateway" && i.sheet.timelockMinDelay < BigInt(min)) throw floor(`TIMELOCK_MIN_DELAY ${i.sheet.timelockMinDelay} is below the floor ${min}${at}`, { delay: Number(i.sheet.timelockMinDelay), floor: min, chainId, kind });
+  if (i.sheet.system !== "gateway" && i.sheet.govern.newDelay < BigInt(min)) throw floor(`GOVERN_NEW_DELAY ${i.sheet.govern.newDelay} is below the floor ${min}${at}`, { floor: min, chainId, kind });
+  if (kind === "rehearsal" && i.sheet.system !== "gateway") { // issue 1892: the gateway sheet carries no timelock delay
     const why = rehearsalDelayProblem(i.sheet.timelockMinDelay);
     if (why) throw floor(`TIMELOCK_MIN_DELAY ${why} (deployment kind rehearsal)`, { delay: Number(i.sheet.timelockMinDelay), chainId, kind });
   }

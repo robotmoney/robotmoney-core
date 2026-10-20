@@ -125,9 +125,13 @@ export interface VerifySheet {
   vaults: Record<string, VaultSheet>;
   /** The router default weights the deployer left in place, in router order (rmUSDC, then the eligible baskets): vault key and bps. */
   defaultWeights: { vault: string; bps: number }[];
+  /** Issue 1892, the gateway system only: the explicit governance inputs of the gateway sheet (GATEWAY_ADMIN_ADDRESS, GATEWAY_UPGRADE_TIMELOCK). */
+  gateway?: { admin: Address; upgradeTimelock: Address };
 }
 
 export interface VerifyOptions {
+  /** Issue 1892: the system to verify. Absent: `vaults` for a table that declares systems, else `legacy` (the combined deploy, deployments/8453/deploy-2: every check kept). */
+  system?: "vaults" | "gateway" | "legacy";
   /** Read access to the chain. Use viemReader(rpcUrl) in production. */
   chain: ChainReader;
   manifestDir: string;
@@ -204,6 +208,8 @@ export interface VerifyOptions {
   redeployDeployerTxs?: number;
   /** Test seam only: the pinned FiatTokenProxy code hash. Production never sets it (src/usdc.ts holds the pin). */
   usdcCodeHash?: string;
+  /** Issue 1892, the gateway system only: sha256 of each vaults-system manifest the gateway run consumed (hashConsumedManifests), recorded when the run began. The verifier fails when one changed. */
+  consumedVaultsManifests?: Record<string, string>;
   /** Delay in ms between 429 retries (tests set 0). */
   retryBaseMs?: number;
 }
