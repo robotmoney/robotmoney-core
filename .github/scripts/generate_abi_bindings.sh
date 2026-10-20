@@ -27,7 +27,6 @@
 #   clients/rust-payment-client/abi/PortfolioRouter.json
 #   clients/rust-payment-client/abi/RouterGovernance.json
 #   clients/rust-payment-client/abi/TimelockController.json
-#   clients/rust-payment-client/abi/InvestmentCommitteePolicy.json
 #   clients/rust-payment-client/abi/ConsensusRecommendationReceipt.json
 #   clients/rust-payment-client/abi/IVault.json         ← contracts/interfaces/IVault.sol (interface only, issue #1464)
 #   clients/dapp/src/lib/abi.generated.ts
@@ -100,8 +99,6 @@ extract_abi "$OUT/VaultRegistry.sol/VaultRegistry.json"          "$RUST_ABI/Vaul
 extract_abi "$OUT/PortfolioRouter.sol/PortfolioRouter.json"      "$RUST_ABI/PortfolioRouter.json"
 extract_abi "$OUT/RouterGovernance.sol/RouterGovernance.json"    "$RUST_ABI/RouterGovernance.json"
 extract_abi "$OUT/TimelockController.sol/TimelockController.json" "$RUST_ABI/TimelockController.json"
-extract_abi "$OUT/InvestmentCommitteePolicy.sol/InvestmentCommitteePolicy.json" \
-                                                                 "$RUST_ABI/InvestmentCommitteePolicy.json"
 extract_abi "$OUT/ConsensusRecommendationReceipt.sol/ConsensusRecommendationReceipt.json" \
                                                                  "$RUST_ABI/ConsensusRecommendationReceipt.json"
 
@@ -265,7 +262,6 @@ echo "  clients/rust-payment-client/abi/VaultRegistry.json"
 echo "  clients/rust-payment-client/abi/PortfolioRouter.json"
 echo "  clients/rust-payment-client/abi/RouterGovernance.json"
 echo "  clients/rust-payment-client/abi/TimelockController.json"
-echo "  clients/rust-payment-client/abi/InvestmentCommitteePolicy.json"
 echo "  clients/rust-payment-client/abi/ConsensusRecommendationReceipt.json"
 echo "  clients/rust-payment-client/abi/IVault.json"
 echo "  clients/dapp/src/lib/abi.generated.ts"

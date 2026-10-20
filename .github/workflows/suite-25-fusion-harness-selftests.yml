@@ -34,7 +34,7 @@
 # that line against its OWN literal, so a silently lowered in-script floor
 # cannot buy a green on its own. The two numbers move together, in one commit —
 # run-tests.sh asserts that equality itself, so the drift is red here too.
-# This mirrors the suite-17 / plugins/robotmoney-swarm convention.
+# This mirrors the retired suite-17 plugin-suite convention.
 #
 # GOTCHAS
 # - The suite shells out to stub `rmpc`/`cast`/`curl` binaries it writes into a

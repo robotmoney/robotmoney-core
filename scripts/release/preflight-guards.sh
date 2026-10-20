@@ -49,7 +49,6 @@ CEREMONY_CONTRACTS=(
   "VaultRegistry"
   "PortfolioRouter"
   "RouterGovernance"
-  "InvestmentCommitteePolicy"
   "ConsensusRecommendationReceipt"
   "TimelockController"
   # The #865 class: the two vault families that have busted the EIP-170 limit

@@ -111,7 +111,7 @@ in the operator config). Returns:
   contract is bound to.
 - `current_weights` — the router's active weight vector (vault addresses +
   bps), set by the last applied receipt. Router weights change only when
-  `RouterGovernance.applyReceipt` applies the Investment Committee's consensus
+  `RouterGovernance.applyReceipt` applies a consensus
   receipt through the Safe and the timelock.
 - `default_weights` — the router's fallback vector.
 - `admin_role` and `weight_setter_role` — the holders of each role.

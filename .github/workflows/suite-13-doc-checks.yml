@@ -373,9 +373,6 @@ jobs:
       - name: Install schema-validation dependencies
         run: pip install jsonschema cryptography pycryptodome pytest
 
-      - name: Committee vote JSON schema — valid fixture passes, invalid fixture fails (issue #1044, #1050)
-        run: python3 .github/scripts/check_committee_vote_schema.py
-
       - name: Self-test consensus receipt guard (issue #1244)
         # Confirms every guard FIRES before the real check is believed: a
         # scrambled spec field order, a signed body edited by one character, a

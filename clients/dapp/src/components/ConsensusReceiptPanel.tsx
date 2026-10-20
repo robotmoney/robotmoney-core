@@ -10,9 +10,9 @@
  * requirement rather than polish:
  *
  * 1. **The signature count is labelled as payload signatures.** The chain
- *    proves the committee produced the recommendation and that ONE submitter
- *    attested to it. It does not prove each named analyst signed. Rendering the
- *    count without that label would imply per-analyst on-chain attestation,
+ *    proves the submitter Safe attested to the payload digest. Analysts sign
+ *    the payload off-chain; there is no on-chain committee. It does not prove each named analyst
+ *    signed. Rendering the count without that label would imply per-analyst on-chain attestation,
  *    which is false.
  * 2. **Verified vs unverified is explicit.** "Verified" means the indexer
  *    re-fetched the payload and its keccak256 matched the anchored digest.
@@ -148,8 +148,8 @@ export function ConsensusReceiptPanel(props: ConsensusReceiptPanelProps) {
       <h2>Consensus Recommendation Receipts</h2>
       <p className="hint" data-testid="consensus-receipt-disclosure">
         Each receipt is an on-chain commitment to the keccak256 of a published consensus receipt.
-        The commitment records that the committee produced the recommendation and that a single
-        submitter attested to it. It does not record a per-analyst on-chain approval. Releasing a
+        The commitment records that the submitter Safe attested to the payload digest. Analysts sign
+        the payload off-chain. It does not record a per-analyst on-chain approval. Releasing a
         receipt is a signalling-only act: it moves no funds and sets no router weight.
       </p>
 
