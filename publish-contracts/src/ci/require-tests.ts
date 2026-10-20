@@ -23,7 +23,7 @@ export const SUITES: Record<string, string[]> = {
   // the workflow gates: plan gate (core check-sha-green wiring), workflow inputs and pins, config-check, sheet merge
   gates: ["tests/plan-gate.test.ts", "tests/release-tag.test.ts", "tests/config-check.test.ts"],
   // issue 1892: the vaults and gateway systems on their own (the gateway run and its refusals before broadcast, both verifiers, the historical combined reading, the gateway evidence)
-  systems: ["tests/gateway-system-runner.test.ts", "tests/verify/systems.test.ts", "tests/verify/historical.test.ts", "tests/evidence-gateway.test.ts"],
+  systems: ["tests/gateway-system-runner.test.ts", "tests/gateway-sheet.test.ts", "tests/verify/systems.test.ts", "tests/verify/historical.test.ts", "tests/evidence-gateway.test.ts"],
 };
 
 export interface FileResult { file: string; ok: boolean; passed: number; failed: number; skipped: number; reason?: string }
