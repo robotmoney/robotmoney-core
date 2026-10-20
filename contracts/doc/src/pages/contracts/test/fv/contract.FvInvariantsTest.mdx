@@ -4,7 +4,7 @@ title: "FvInvariantsTest"
 
 # FvInvariantsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/test/fv/FvInvariants.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/fv/FvInvariants.t.sol)
 
 **Inherits:** Test
 
@@ -517,5 +517,28 @@ test_FEE2_overReportingAdapterCannotSocializeLoss.
 
 ```solidity
 function test_FEE2_expectedFail_feeChargedOnRealizedProceeds() public pure;
+```
+
+<a id="test_acl4_acl8_aretombstones"></a>
+
+### test_ACL4_ACL8_areTombstones
+
+ACL-4 and ACL-8 are tombstones: the spec retired them (owner decision
+2026-10-20) and ACL-9 replaces them. The IDs stay in the registry.
+
+```solidity
+function test_ACL4_ACL8_areTombstones() public pure;
+```
+
+<a id="test_acl9_agentlifecycleisownerconsented"></a>
+
+### test_ACL9_agentLifecycleIsOwnerConsented
+
+ACL-9 (red before issue 1890, green after) - an agent's owner never changes,
+its share receiver is its owner, and no role registers an agent or grants
+or revokes AGENT_ROLE. Executes the three halves against a real gateway.
+
+```solidity
+function test_ACL9_agentLifecycleIsOwnerConsented() public;
 ```
 

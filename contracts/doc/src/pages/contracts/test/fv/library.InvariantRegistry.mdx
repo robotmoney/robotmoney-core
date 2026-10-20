@@ -4,7 +4,7 @@ title: "InvariantRegistry"
 
 # InvariantRegistry
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/fv/InvariantRegistry.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/fv/InvariantRegistry.sol)
 
 ## Functions
 
@@ -84,7 +84,8 @@ struct Entry {
 ```solidity
 enum Status {
         HOLDS, // spec ✅/🟢/🟡/⚪ — a passing (or trivially-passing) FV test exists
-        RED // spec 🔴 — currently breakable; FV test skipped until remediation lands
+        RED, // spec 🔴 — currently breakable; FV test skipped until remediation lands
+        TOMBSTONE // spec retired the invariant (no surface); the ID stays, append-only
     }
 ```
 
@@ -94,4 +95,5 @@ enum Status {
 | ---- | ----------- |
 | HOLDS |  |
 | RED |  |
+| TOMBSTONE |  |
 

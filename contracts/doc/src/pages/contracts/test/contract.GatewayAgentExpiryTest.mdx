@@ -1,0 +1,145 @@
+---
+title: "GatewayAgentExpiryTest"
+description: "A reveal on an agent whose policy `validUntil` passed treats it as unowned. The old owner cannot revive an expired policy."
+---
+
+# GatewayAgentExpiryTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/GatewayAgentPolicyAuthorization.t.sol)
+
+**Inherits:** [GatewayAgentPolicyFixture](/contracts/test/abstract.GatewayAgentPolicyFixture)
+
+**Title:** GatewayAgentExpiryTest
+
+A reveal on an agent whose policy `validUntil` passed treats it as
+unowned. The old owner cannot revive an expired policy.
+
+## State Variables
+
+### agentU
+
+```solidity
+address internal agentU = makeAddr("agentU");
+```
+
+## Functions
+
+<a id="_shortpolicy-address-uint64"></a>
+
+### _shortPolicy
+
+```solidity
+function _shortPolicy(address owner, uint64 validUntil)
+        internal
+        view
+        returns (IGateway.AgentPolicy memory p);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| validUntil | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `IGateway.AgentPolicy` |  |
+
+<a id="_registershort-address"></a>
+
+### _registerShort
+
+<i>
+
+Registers `agentU` for `owner` expiring one hour from now and spends 300 USDC.
+
+</i>
+
+```solidity
+function _registerShort(address owner) internal returns (uint64 validUntil);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| validUntil | `uint64` |  |
+
+<a id="test_equalityatvaliduntil_stayslive_andblocksreveal"></a>
+
+### test_equalityAtValidUntil_staysLive_andBlocksReveal
+
+```solidity
+function test_equalityAtValidUntil_staysLive_andBlocksReveal() public;
+```
+
+<a id="test_aftervaliduntil_differentowner_replaceswithrevokedthenauthorized"></a>
+
+### test_afterValidUntil_differentOwner_replacesWithRevokedThenAuthorized
+
+```solidity
+function test_afterValidUntil_differentOwner_replacesWithRevokedThenAuthorized() public;
+```
+
+<a id="test_aftervaliduntil_sameowner_reregisters"></a>
+
+### test_afterValidUntil_sameOwner_reRegisters
+
+```solidity
+function test_afterValidUntil_sameOwner_reRegisters() public;
+```
+
+<a id="_assertrevokedthenauthorized-address-address"></a>
+
+### _assertRevokedThenAuthorized
+
+<i>
+
+Exactly one AgentRevoked(agent, oldOwner) precedes exactly one AgentAuthorized(agent, newOwner).
+
+</i>
+
+```solidity
+function _assertRevokedThenAuthorized(address oldOwner, address newOwner) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| oldOwner | `address` |  |
+| newOwner | `address` |  |
+
+<a id="test_oldownersetpolicy_afterexpiry_reverts_evenbeforereplacement"></a>
+
+### test_oldOwnerSetPolicy_afterExpiry_reverts_evenBeforeReplacement
+
+```solidity
+function test_oldOwnerSetPolicy_afterExpiry_reverts_evenBeforeReplacement() public;
+```
+
+<a id="test_extensionbeforeexpiry_blockstakeover"></a>
+
+### test_extensionBeforeExpiry_blocksTakeover
+
+```solidity
+function test_extensionBeforeExpiry_blocksTakeover() public;
+```
+
+<a id="test_failedreplacement_rollsbackoldregistration"></a>
+
+### test_failedReplacement_rollsBackOldRegistration
+
+```solidity
+function test_failedReplacement_rollsBackOldRegistration() public;
+```
+

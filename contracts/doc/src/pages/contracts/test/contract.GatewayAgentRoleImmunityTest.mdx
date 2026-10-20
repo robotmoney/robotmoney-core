@@ -1,0 +1,129 @@
+---
+title: "GatewayAgentRoleImmunityTest"
+description: "ACL-9: AGENT_ROLE can be neither granted, revoked nor renounced through the public role methods, by any caller, whatever the stored role admin."
+---
+
+# GatewayAgentRoleImmunityTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/GatewayAgentPolicyAuthorization.t.sol)
+
+**Inherits:** [GatewayAgentPolicyFixture](/contracts/test/abstract.GatewayAgentPolicyFixture)
+
+**Title:** GatewayAgentRoleImmunityTest
+
+ACL-9: AGENT_ROLE can be neither granted, revoked nor renounced through
+the public role methods, by any caller, whatever the stored role admin.
+
+## Constants
+
+### AC_STORAGE
+
+ERC-7201 slot of OpenZeppelin AccessControlUpgradeable storage.
+
+```solidity
+bytes32 internal constant AC_STORAGE =
+        0x02dd7bc7dec4dceedda775e58dd541e08a116c6c53815c0bd028192f7b626800;
+```
+
+## State Variables
+
+### agentU
+
+```solidity
+address internal agentU = makeAddr("agentU");
+```
+
+### target
+
+```solidity
+address internal target = makeAddr("roleTarget");
+```
+
+## Functions
+
+<a id="_callers"></a>
+
+### _callers
+
+```solidity
+function _callers() internal view returns (address[8] memory c);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `address[8]` |  |
+
+<a id="_setroleadmin-bytes32-bytes32"></a>
+
+### _setRoleAdmin
+
+<i>
+
+Overwrites the stored admin role of `role` (an unset or manipulated role admin).
+
+</i>
+
+```solidity
+function _setRoleAdmin(bytes32 role, bytes32 newAdminRole) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` |  |
+| newAdminRole | `bytes32` |  |
+
+<a id="_assertimmune-bytes32"></a>
+
+### _assertImmune
+
+```solidity
+function _assertImmune(bytes32 note) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| note | `bytes32` |  |
+
+<a id="test_agentrole_immuneforeverycaller_defaultroleadmin"></a>
+
+### test_agentRole_immuneForEveryCaller_defaultRoleAdmin
+
+```solidity
+function test_agentRole_immuneForEveryCaller_defaultRoleAdmin() public;
+```
+
+<a id="test_agentrole_immuneforeverycaller_afterroleadminmanipulation"></a>
+
+### test_agentRole_immuneForEveryCaller_afterRoleAdminManipulation
+
+```solidity
+function test_agentRole_immuneForEveryCaller_afterRoleAdminManipulation() public;
+```
+
+<a id="test_lifecycle_stillgrantsandrevokesinternally"></a>
+
+### test_lifecycle_stillGrantsAndRevokesInternally
+
+The internal lifecycle paths keep working: a consented reveal grants
+the role and revokeAgent revokes it.
+
+```solidity
+function test_lifecycle_stillGrantsAndRevokesInternally() public;
+```
+
+<a id="test_unrelatedroles_keeptheiraccesschecks"></a>
+
+### test_unrelatedRoles_keepTheirAccessChecks
+
+Unrelated role operations keep their prior access checks.
+
+```solidity
+function test_unrelatedRoles_keepTheirAccessChecks() public;
+```
+

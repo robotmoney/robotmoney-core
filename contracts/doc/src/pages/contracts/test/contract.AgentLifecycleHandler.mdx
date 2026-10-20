@@ -1,0 +1,309 @@
+---
+title: "AgentLifecycleHandler"
+---
+
+# AgentLifecycleHandler
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/GatewayAgentLifecycleInvariant.t.sol)
+
+**Inherits:** Test
+
+<i>
+
+Bounded handler over the gateway's agent lifecycle surface.
+
+</i>
+
+## Constants
+
+### gw
+
+```solidity
+RobotMoneyGateway public immutable gw;
+```
+
+### usdc
+
+```solidity
+TestERC20 public immutable usdc;
+```
+
+### admin
+
+```solidity
+address public immutable admin;
+```
+
+### pauser
+
+```solidity
+address public immutable pauser;
+```
+
+## State Variables
+
+### owners
+
+```solidity
+address[] public owners;
+```
+
+### agents
+
+```solidity
+address[] public agents;
+```
+
+### publicRoleSuccess
+
+```solidity
+uint256 public publicRoleSuccess;
+```
+
+### liveOwnerChanged
+
+```solidity
+uint256 public liveOwnerChanged;
+```
+
+### staleBudgetAfterEnd
+
+```solidity
+uint256 public staleBudgetAfterEnd;
+```
+
+### wrongReceiverAccepted
+
+```solidity
+uint256 public wrongReceiverAccepted;
+```
+
+### registrations
+
+```solidity
+uint256 public registrations;
+```
+
+### replacements
+
+```solidity
+uint256 public replacements;
+```
+
+### revocations
+
+```solidity
+uint256 public revocations;
+```
+
+### selfRevocations
+
+```solidity
+uint256 public selfRevocations;
+```
+
+### deposits
+
+```solidity
+uint256 public deposits;
+```
+
+### nonce
+
+```solidity
+uint256 internal nonce;
+```
+
+## Functions
+
+<a id="constructor-robotmoneygateway-testerc20-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(RobotMoneyGateway gw_, TestERC20 usdc_, address admin_, address pauser_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gw_ | `RobotMoneyGateway` |  |
+| usdc_ | `TestERC20` |  |
+| admin_ | `address` |  |
+| pauser_ | `address` |  |
+
+<a id="ownercount"></a>
+
+### ownerCount
+
+```solidity
+function ownerCount() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="agentcount"></a>
+
+### agentCount
+
+```solidity
+function agentCount() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_policy-address-uint256"></a>
+
+### _policy
+
+```solidity
+function _policy(address receiver, uint256 validFor)
+        internal
+        view
+        returns (IGateway.AgentPolicy memory p);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiver | `address` |  |
+| validFor | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `IGateway.AgentPolicy` |  |
+
+<a id="register-uint256-uint256-uint256-bool-bool"></a>
+
+### register
+
+<i>
+
+Registration by a fuzzed owner for a fuzzed agent. `wrongReceiver` makes the
+policy name another receiver (the gateway must refuse it, for every role).
+`withConsent` false skips the agent's consent for a distinct agent.
+
+</i>
+
+```solidity
+function register(
+        uint256 ownerSeed,
+        uint256 agentSeed,
+        uint256 validFor,
+        bool wrongReceiver,
+        bool withConsent
+    ) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ownerSeed | `uint256` |  |
+| agentSeed | `uint256` |  |
+| validFor | `uint256` |  |
+| wrongReceiver | `bool` |  |
+| withConsent | `bool` |  |
+
+<a id="setpolicy-uint256-uint256-uint256-bool"></a>
+
+### setPolicy
+
+```solidity
+function setPolicy(uint256 callerSeed, uint256 agentSeed, uint256 validFor, bool wrongReceiver)
+        external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| callerSeed | `uint256` |  |
+| agentSeed | `uint256` |  |
+| validFor | `uint256` |  |
+| wrongReceiver | `bool` |  |
+
+<a id="revoke-uint256-uint256"></a>
+
+### revoke
+
+<i>
+
+A revoke by an owner, the agent itself, the admin or the pauser.
+
+</i>
+
+```solidity
+function revoke(uint256 callerSeed, uint256 agentSeed) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| callerSeed | `uint256` |  |
+| agentSeed | `uint256` |  |
+
+<a id="publicrolecall-uint256-uint256-uint8"></a>
+
+### publicRoleCall
+
+<i>
+
+Public role calls on AGENT_ROLE from any caller must always revert.
+
+</i>
+
+```solidity
+function publicRoleCall(uint256 callerSeed, uint256 agentSeed, uint8 kind) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| callerSeed | `uint256` |  |
+| agentSeed | `uint256` |  |
+| kind | `uint8` |  |
+
+<a id="deposit-uint256-uint256"></a>
+
+### deposit
+
+```solidity
+function deposit(uint256 agentSeed, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agentSeed | `uint256` |  |
+| amount | `uint256` |  |
+
+<a id="warp-uint256"></a>
+
+### warp
+
+```solidity
+function warp(uint256 secs) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| secs | `uint256` |  |
+

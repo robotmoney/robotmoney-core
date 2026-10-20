@@ -5,7 +5,7 @@ description: "These tests run in-process using Forge cheatcodes so they do not r
 
 # DeployTimelockTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -597,7 +597,7 @@ function test_shutdownVault_unchanged_makesNoRegistryChange() public;
 ### test_ACL1_timelockHoldsGatewayRootAfterHandover
 
 ACL-1: the Timelock receives BOTH ADMIN_ROLE and DEFAULT_ADMIN_ROLE
-on the Gateway (so it can rotate roles / authorizeAgent), and holds
+on the Gateway (so it can rotate roles), and holds
 ADMIN_ROLE on the vault.
 
 ```solidity
@@ -615,40 +615,26 @@ AC: the vault EMERGENCY_ROLE is held by the independent hot key
 function test_ACL1_vaultEmergencyRoleHeldByIndependentHotKey() public view;
 ```
 
-<a id="test_acl1_agentroleremainsgrantablebytimelockafterrevoke"></a>
+<a id="test_acl9_timelockcannotmanageagentroleafterhandover"></a>
 
-### test_ACL1_agentRoleRemainsGrantableByTimelockAfterRevoke
+### test_ACL9_timelockCannotManageAgentRoleAfterHandover
 
-Fix-interaction (F-01): AGENT_ROLE's admin is ADMIN_ROLE, so after
-the DEFAULT_ADMIN_ROLE revoke the Timelock (ADMIN_ROLE) can still
-grant AGENT_ROLE directly. Proves the revoke did not brick agent
-onboarding.
+ACL-9: after the handover no role, the timelock included, can
+grant, revoke or renounce AGENT_ROLE through the public methods.
 
 ```solidity
-function test_ACL1_agentRoleRemainsGrantableByTimelockAfterRevoke() public;
+function test_ACL9_timelockCannotManageAgentRoleAfterHandover() public;
 ```
 
-<a id="test_acl1_timelockcanauthorizeagentafterhandover"></a>
+<a id="test_acl9_noadminregistrationselectorexists"></a>
 
-### test_ACL1_timelockCanAuthorizeAgentAfterHandover
+### test_ACL9_noAdminRegistrationSelectorExists
 
-AC: the Timelock can `authorizeAgent` on the Gateway post-handover
-(the gateway-native onboarding path, now ADMIN_ROLE-gated).
-
-```solidity
-function test_ACL1_timelockCanAuthorizeAgentAfterHandover() public;
-```
-
-<a id="test_acl1_directauthorizeagentfromhotkeyreverts"></a>
-
-### test_ACL1_directAuthorizeAgentFromHotKeyReverts
-
-AC: a hot key (the Safe) that holds neither DEFAULT_ADMIN_ROLE nor
-ADMIN_ROLE on the Gateway cannot directly authorizeAgent — only the
-timelock-routed path works. Guards the role gate post-handover.
+ACL-9: the gateway has no admin registration shortcut. The old
+selectors are absent, so a timelock-routed call to them reverts.
 
 ```solidity
-function test_ACL1_directAuthorizeAgentFromHotKeyReverts() public;
+function test_ACL9_noAdminRegistrationSelectorExists() public;
 ```
 
 <a id="test_acl1_nakeddefaultadminrevoke_bricksagentrolewithoutreadmin"></a>

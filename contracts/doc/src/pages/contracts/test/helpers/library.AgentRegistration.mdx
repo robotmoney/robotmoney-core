@@ -1,0 +1,179 @@
+---
+title: "AgentRegistration"
+description: "Test helper that registers a gateway agent the only way the gateway allows (ACL-9): agent consent, owner commit, one block, owner reveal. The gateway has no admin shortcut, so every test that needs a registered agent goes through here."
+---
+
+# AgentRegistration
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/helpers/AgentRegistration.sol)
+
+**Title:** AgentRegistration
+
+Test helper that registers a gateway agent the only way the gateway
+allows (ACL-9): agent consent, owner commit, one block, owner reveal.
+The gateway has no admin shortcut, so every test that needs a
+registered agent goes through here.
+
+<i>
+
+Canonical: docs/architecture.md section 5.2, docs/technical/smart-contract-invariants.md ACL-9.
+
+</i>
+
+## Constants
+
+### vm
+
+```solidity
+Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+```
+
+## Functions
+
+<a id="saltfor-address-address-igateway-agentpolicy"></a>
+
+### saltFor
+
+<i>
+
+Fixed salt per (agent, owner, validUntil). A consumed commitment is
+deleted, so reusing it for a later registration is safe.
+
+</i>
+
+```solidity
+function saltFor(address agent, address owner, IGateway.AgentPolicy memory p)
+        internal
+        pure
+        returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+| owner | `address` |  |
+| p | `IGateway.AgentPolicy` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="register-igateway-address-igateway-agentpolicy"></a>
+
+### register
+
+Register `agent` with owner `p.shareReceiver` (the only owner the
+gateway accepts for that policy).
+
+```solidity
+function register(IGateway gw, address agent, IGateway.AgentPolicy memory p) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gw | `IGateway` |  |
+| agent | `address` |  |
+| p | `IGateway.AgentPolicy` |  |
+
+<a id="registeras-igateway-address-address-igateway-agentpolicy"></a>
+
+### registerAs
+
+Register `agent` with `owner` as the caller of the reveal.
+
+```solidity
+function registerAs(IGateway gw, address owner, address agent, IGateway.AgentPolicy memory p)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gw | `IGateway` |  |
+| owner | `address` |  |
+| agent | `address` |  |
+| p | `IGateway.AgentPolicy` |  |
+
+<a id="commitboth-igateway-address-address-igateway-agentpolicy"></a>
+
+### commitBoth
+
+The consent commit (when `agent != owner`), the owner commit and
+one block of waiting. A test calls `revealAuthorization` itself
+afterwards, for example under `vm.expectRevert`.
+
+```solidity
+function commitBoth(IGateway gw, address owner, address agent, IGateway.AgentPolicy memory p)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gw | `IGateway` |  |
+| owner | `address` |  |
+| agent | `address` |  |
+| p | `IGateway.AgentPolicy` |  |
+
+<a id="revealexpectrevert-igateway-address-address-igateway-agentpolicy-bytes4"></a>
+
+### revealExpectRevert
+
+Commits as `registerAs` does, then expects the reveal to revert with `err`.
+
+```solidity
+function revealExpectRevert(
+        IGateway gw,
+        address owner,
+        address agent,
+        IGateway.AgentPolicy memory p,
+        bytes4 err
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gw | `IGateway` |  |
+| owner | `address` |  |
+| agent | `address` |  |
+| p | `IGateway.AgentPolicy` |  |
+| err | `bytes4` |  |
+
+<a id="consenthash-address-address-bytes32-igateway-agentpolicy"></a>
+
+### consentHash
+
+The hash the agent commits to consent to `owner` for this exact reveal.
+
+```solidity
+function consentHash(address owner, address agent, bytes32 salt, IGateway.AgentPolicy memory p)
+        internal
+        pure
+        returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| agent | `address` |  |
+| salt | `bytes32` |  |
+| p | `IGateway.AgentPolicy` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+

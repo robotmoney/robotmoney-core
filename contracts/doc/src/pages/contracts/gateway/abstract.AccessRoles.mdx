@@ -5,7 +5,7 @@ description: "Role constants and AccessControl wiring for the RobotMoney gateway
 
 # AccessRoles
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/gateway/AccessRoles.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/gateway/AccessRoles.sol)
 
 **Inherits:** AccessControlUpgradeable
 
@@ -33,7 +33,7 @@ admin so that a compromised pauser key cannot also grant or revoke
 roles, and an admin compromise cannot also rapid-DoS the gateway.
 Enforced by overriding `_grantRole` to revert on any overlap, and
 exposed via `_assertRoleSeparation` for use in deploy scripts and
-the gateway's `authorizeAgent`.
+the gateway's agent registration.
 
 `DEFAULT_ADMIN_ROLE` is treated as part of the ADMIN tier
 (audit 2026-06-09, L-14): it may coexist with `ADMIN_ROLE` (the gateway
@@ -70,6 +70,96 @@ bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
 ```
 
 ## Functions
+
+<a id="_denyagentrole-bytes32"></a>
+
+### _denyAgentRole
+
+<i>
+
+Shared guard of the three public role methods (ACL-9).
+
+</i>
+
+```solidity
+function _denyAgentRole(bytes32 role) private pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` |  |
+
+<a id="grantrole-bytes32-address"></a>
+
+### grantRole
+
+Grants `role` to `account`, except `AGENT_ROLE`, which no caller can grant (ACL-9).
+
+<i>
+
+Reverts `AgentRoleNotManageable` for `AGENT_ROLE` whatever the stored role admin is.
+
+</i>
+
+```solidity
+function grantRole(bytes32 role, address account) public virtual override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` | The role to grant. |
+| account | `address` | The account that receives it. |
+
+<a id="revokerole-bytes32-address"></a>
+
+### revokeRole
+
+Revokes `role` from `account`, except `AGENT_ROLE`, which no caller can revoke (ACL-9).
+
+<i>
+
+Reverts `AgentRoleNotManageable` for `AGENT_ROLE` whatever the stored role admin is.
+`revokeAgent` is the only exit and ends the registration internally.
+
+</i>
+
+```solidity
+function revokeRole(bytes32 role, address account) public virtual override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` | The role to revoke. |
+| account | `address` | The account that loses it. |
+
+<a id="renouncerole-bytes32-address"></a>
+
+### renounceRole
+
+Renounces `role`, except `AGENT_ROLE`, which cannot be renounced (ACL-9).
+
+<i>
+
+Reverts `AgentRoleNotManageable` for `AGENT_ROLE`. The agent exits through `revokeAgent`.
+
+</i>
+
+```solidity
+function renounceRole(bytes32 role, address callerConfirmation) public virtual override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` | The role to renounce. |
+| callerConfirmation | `address` | The caller, as OpenZeppelin requires. |
 
 <a id="_grantrole-bytes32-address"></a>
 
@@ -138,7 +228,7 @@ Post-grant invariant check. Reverts if `account` holds roles
 from any two of the `ADMIN` tiers
 simultaneously (ADMIN_ROLE + DEFAULT_ADMIN_ROLE together count
 as one tier). Intended for deploy scripts and the gateway's
-`authorizeAgent` to assert state explicitly.
+agent registration to assert state explicitly.
 
 </i>
 
@@ -161,5 +251,16 @@ any two of `ADMIN, DEPOSIT_PAUSER, AGENT` simultaneously.
 
 ```solidity
 error RoleSeparationViolated();
+```
+
+### AgentRoleNotManageable
+
+`grantRole`, `revokeRole` or `renounceRole` named `AGENT_ROLE`.
+Agent membership changes only through the gateway lifecycle
+(consented reveal grants, `revokeAgent` revokes), never through
+a public role call, whatever the stored role admin is (ACL-9).
+
+```solidity
+error AgentRoleNotManageable();
 ```
 

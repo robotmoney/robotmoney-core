@@ -59,19 +59,29 @@ abstract contract AccessRoles is AccessControlUpgradeable {
         if (role == AGENT_ROLE) revert AgentRoleNotManageable();
     }
 
-    /// @dev `AGENT_ROLE` cannot be granted through the public method by any role.
+    /// @notice Grants `role` to `account`, except `AGENT_ROLE`, which no caller can grant (ACL-9).
+    /// @dev Reverts `AgentRoleNotManageable` for `AGENT_ROLE` whatever the stored role admin is.
+    /// @param role    The role to grant.
+    /// @param account The account that receives it.
     function grantRole(bytes32 role, address account) public virtual override {
         _denyAgentRole(role);
         super.grantRole(role, account);
     }
 
-    /// @dev `AGENT_ROLE` cannot be revoked through the public method by any role.
+    /// @notice Revokes `role` from `account`, except `AGENT_ROLE`, which no caller can revoke (ACL-9).
+    /// @dev Reverts `AgentRoleNotManageable` for `AGENT_ROLE` whatever the stored role admin is.
+    ///      `revokeAgent` is the only exit and ends the registration internally.
+    /// @param role    The role to revoke.
+    /// @param account The account that loses it.
     function revokeRole(bytes32 role, address account) public virtual override {
         _denyAgentRole(role);
         super.revokeRole(role, account);
     }
 
-    /// @dev `AGENT_ROLE` cannot be renounced; the agent exits through `revokeAgent`.
+    /// @notice Renounces `role`, except `AGENT_ROLE`, which cannot be renounced (ACL-9).
+    /// @dev Reverts `AgentRoleNotManageable` for `AGENT_ROLE`. The agent exits through `revokeAgent`.
+    /// @param role               The role to renounce.
+    /// @param callerConfirmation The caller, as OpenZeppelin requires.
     function renounceRole(bytes32 role, address callerConfirmation) public virtual override {
         _denyAgentRole(role);
         super.renounceRole(role, callerConfirmation);
