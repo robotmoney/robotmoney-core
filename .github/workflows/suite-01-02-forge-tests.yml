@@ -164,6 +164,18 @@ jobs:
       - name: forge test (governed upgrades, freeze and the upgrade authority — issue 1808)
         run: FORGE_TEST_MIN_EXECUTED=28 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/{GovernedUpgrade,UpgradeAuthorityStages}.t.sol"
 
+      # Issue 1892 (SS-1019-10, RS-1019-11): the two-system split. The static guard refuses a vaults-system contract
+      # that names the gateway (SYS-1) and a gateway upgrade artifact that registers an agent or changes an owner
+      # (ACL-9); its self-test plants each mutation and asserts a nonzero exit. The forge step runs the SYS-1 and
+      # ACL-9 regressions and the CoverageMap (tombstones, one mapping per heading): 4 + 4 + 5 tests.
+      - name: system split static guard (SYS-1, ACL-9) and its mutation self-test
+        run: |
+          bun scripts/ci/check-system-split.ts
+          bun test scripts/ci/check-system-split.test.ts
+
+      - name: forge test (SYS-1, ACL-9 and the coverage map — issue 1892)
+        run: FORGE_TEST_MIN_EXECUTED=13 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/fv/{SystemSplit,CoverageMap}.t.sol"
+
       # Issue 1705: the router pins a vault-paused leg (Q3 (c)) and the adapter write-off rule (Q2 (a)). Named so the log proves both ran.
       - name: forge test (four-vault rules, paused router leg and adapter write-off — issue 1705)
         run: FORGE_TEST_MIN_EXECUTED=7 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/{PortfolioRouterPausedLeg,AdapterWriteOffRule}.t.sol"
@@ -344,6 +356,10 @@ jobs:
         env:
           FORGE_TEST_MIN_EXECUTED: "2"
         run: bash .github/scripts/forge_test_require_executed.sh --match-path "contracts/test/GatewayAgentLifecycleInvariant.t.sol" -vvv
+      # Issue 1892: the SYS-1 stateful invariant lives under contracts/test/fv, outside the glob above. Named so a
+      # rename or a moved file is red (floor 1: forge counts the contract's two invariant_ functions as one passed suite test).
+      - name: forge test (SYS-1 stateful invariant — issue 1892)
+        run: FORGE_TEST_MIN_EXECUTED=1 bash .github/scripts/forge_test_require_executed.sh --match-path "contracts/test/fv/SystemSplitInvariant.t.sol" --match-test "^invariant_" -vvv
 
       - name: forge executed-test guard self-test (planted empty match-path is red, issue 1643)
         run: bash .github/scripts/tests/test_forge_test_require_executed.sh

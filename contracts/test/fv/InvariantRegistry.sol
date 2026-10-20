@@ -41,7 +41,7 @@ library InvariantRegistry {
 
     struct Entry {
         string id; // stable invariant ID, e.g. "INV-1"
-        Status status; // HOLDS or RED
+        Status status; // HOLDS, RED or TOMBSTONE
         string strategy; // declared FV strategy (mirrors the spec)
         uint256 remediationIssue; // downstream remediation issue for RED entries; 0 otherwise
     }
@@ -49,8 +49,14 @@ library InvariantRegistry {
     /// @dev The full catalogue. Order mirrors the spec's section order. NEVER
     ///      reorder-and-renumber; append-only like the spec's IDs.
     function entries() internal pure returns (Entry[] memory e) {
-        e = new Entry[](66);
+        e = new Entry[](67);
         uint256 i;
+
+        // ── 0. System boundary (SYS) ─────────────────────────────────────────
+        // Issue 1892 (SS-1019-10): no vaults-system contract depends on the gateway. RED until the receipt-only
+        // change (1888) drops the gateway binding. Executed assertions: SystemSplitSys1Test, SystemSplitInvariant,
+        // the static guard scripts/ci/check-system-split.ts. SYS-2 is retired and was never a registry ID.
+        e[i++] = Entry("SYS-1", Status.RED, "static-guard", 1888);
 
         // ── 1. Custody & solvency (INV-1/2/3, CUST) ──────────────────────────
         e[i++] = Entry("INV-1", Status.HOLDS, "static-guard", 0);
@@ -66,15 +72,15 @@ library InvariantRegistry {
         e[i++] = Entry("SUP-3", Status.HOLDS, "fuzz", 0); // NC-6 / F-16 fixed (#969)
         e[i++] = Entry("SUP-4", Status.HOLDS, "symbolic", 0);
         e[i++] = Entry("SUP-5", Status.HOLDS, "stateful-invariant", 0); // NC-1 fixed (#966)
-        e[i++] = Entry("SUP-6", Status.HOLDS, "static-guard", 0);
+        e[i++] = Entry("SUP-6", Status.TOMBSTONE, "none", 0);
 
         // ── 3. Oracle & pricing (ORA) ────────────────────────────────────────
         e[i++] = Entry("ORA-1", Status.HOLDS, "static-guard", 0);
         e[i++] = Entry("ORA-2", Status.HOLDS, "stateful-invariant", 0);
         e[i++] = Entry("ORA-3", Status.HOLDS, "deploy-assertion", 0); // F-09 fixed (#966)
         e[i++] = Entry("ORA-4", Status.HOLDS, "stateful-invariant", 0); // F-10 deviation guard (#969)
-        e[i++] = Entry("ORA-5", Status.HOLDS, "fuzz", 0);
-        e[i++] = Entry("ORA-6", Status.HOLDS, "deploy-assertion", 0); // 🟡 trusted
+        e[i++] = Entry("ORA-5", Status.TOMBSTONE, "none", 0);
+        e[i++] = Entry("ORA-6", Status.TOMBSTONE, "none", 0);
         e[i++] = Entry("ORA-7", Status.HOLDS, "fuzz", 0); // F-09/F-11/F-16 — independent floor (#966)
 
         // ── 4. Access control & roles (ACL) ──────────────────────────────────
