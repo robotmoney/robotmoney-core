@@ -8,6 +8,9 @@ import {console2} from "forge-std/console2.sol";
 
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {
+    IAccessControlEnumerable
+} from "@openzeppelin/contracts/access/extensions/IAccessControlEnumerable.sol";
 
 import {ProposerFloorTimelock} from "../ProposerFloorTimelock.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
@@ -105,18 +108,11 @@ interface IGatewayAgentOwnership {
 ///                                    be >= 1. No flag lifts the 8453 floor.
 ///           EXPECTED_CHAIN_ID      — mandatory and equal to 8453 on Base mainnet
 ///           DEPLOYMENT_OUT         — output JSON path (no default)
-///           IC_POLICY_ADDRESS      — InvestmentCommitteePolicy (issue #1319, one-
-///                                    ceremony rule #1247 AC10 / INV-3). The
-///                                    same grant→verify→revoke handover runs on
-///                                    it: ADMIN_ROLE + DEFAULT_ADMIN_ROLE move to the
-///                                    timelock and are revoked from the deployer EOA
-///                                    (the ADMIN_ADDRESS DeployInvestmentCommitteePolicy
-///                                    granted them to). The gateway's ADMIN_ROLE on the
-///                                    IC policy — granted separately so it can forward
-///                                    committeeRegister calls — is untouched.
 ///           CONSENSUS_RECEIPT_ADDRESS — ConsensusRecommendationReceipt (issue #1319,
 ///                                    same rule). ADMIN_ROLE +
-///                                    DEFAULT_ADMIN_ROLE move to the timelock.
+///                                    DEFAULT_ADMIN_ROLE move to the timelock, which then
+///                                    holds the receipt ADMIN_ROLE alone. RouterGovernance
+///                                    keeps only RECEIPT_RELEASER_ROLE (issue 1888).
 ///           AGENT_ADDRESSES        — comma-separated gateway agents the deployer
 ///                                    owns (issue #1476): the deploy agent the
 ///                                    gateway stage authorizes (DeployGateway.s.sol).
@@ -134,8 +130,8 @@ interface IGatewayAgentOwnership {
 ///                                    a run whose deployer owns no gateway agent.
 ///           RECEIPT_ADMIN_ADDRESS  — the address that currently holds ADMIN_ROLE /
 ///                                    DEFAULT_ADMIN_ROLE on the receipt contract (the
-///                                    RECEIPT_ADMIN_ADDRESS DeployInvestmentCommittee-
-///                                    Policy granted them to — not necessarily the
+///                                    RECEIPT_ADMIN_ADDRESS DeployConsensusRecommendation-
+///                                    Receipt granted them to — not necessarily the
 ///                                    deployer EOA). Required on every chain together
 ///                                    with CONSENSUS_RECEIPT_ADDRESS; revoked from
 ///                                    here instead of msg.sender. No default.
@@ -161,6 +157,7 @@ contract DeployTimelock is UpgradeAuthority {
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     bytes32 public constant DEPOSIT_PAUSER_ROLE = keccak256("DEPOSIT_PAUSER_ROLE");
     bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
+    bytes32 public constant RECEIPT_RELEASER_ROLE = keccak256("RECEIPT_RELEASER_ROLE");
     /// @dev OZ `AccessControl.DEFAULT_ADMIN_ROLE` is `bytes32(0)`.
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
     /// @dev security-model.md §4: production timelock delay floor, 48 hours. Enforced
@@ -198,11 +195,10 @@ contract DeployTimelock is UpgradeAuthority {
         uint256 threshold;
     }
 
-    /// @dev The optional committee handover inputs, grouped so
-    ///      `runInProcessWithCommittee` stays inside the non-viaIR stack limit
+    /// @dev The optional receipt handover inputs, grouped so
+    ///      `runInProcessWithReceipt` stays inside the non-viaIR stack limit
     ///      (`forge coverage` compiles without the optimizer or viaIR).
-    struct Committee {
-        address icPolicy;
+    struct ReceiptHandover {
         address consensusReceipt;
         address receiptAdmin;
     }
@@ -220,7 +216,6 @@ contract DeployTimelock is UpgradeAuthority {
         uint256 minDelay;
         /// Issue 1727: true only when DEPLOYMENT_KIND=rehearsal was set. Never true by default.
         bool rehearsal;
-        address icPolicy;
         address consensusReceipt;
         address receiptAdmin;
         /// Deployer-owned gateway agents handed to the timelock (issue #1476).
@@ -229,7 +224,7 @@ contract DeployTimelock is UpgradeAuthority {
 
     /// @notice Broadcast entrypoint. Reads env vars, deploys timelock, and
     ///         transfers ADMIN_ROLE on all five contracts (plus the optional
-    ///         IC policy / consensus receipt handover — issue #1319).
+    ///         consensus receipt handover — issue #1319).
     function run() external returns (Deployed memory d) {
         return _runFrom("");
     }
@@ -255,11 +250,9 @@ contract DeployTimelock is UpgradeAuthority {
         uint256 safeThreshold = _envUintRequired(string.concat(prefix, "SAFE_THRESHOLD"));
         address[] memory safeOwners = _readAddressList(string.concat(prefix, "SAFE_OWNERS"));
         // One deployment scheme: these inputs are required on every chain. No input
-        // silently skips the committee handover or defaults to the deployer.
-        d.icPolicy = _envAddressRequired(string.concat(prefix, "IC_POLICY_ADDRESS"));
+        // silently skips the receipt handover or defaults to the deployer.
         d.consensusReceipt = _envAddressRequired(string.concat(prefix, "CONSENSUS_RECEIPT_ADDRESS"));
         d.receiptAdmin = _envAddressRequired(string.concat(prefix, "RECEIPT_ADMIN_ADDRESS"));
-        require(d.icPolicy != address(0), "IC_POLICY_ADDRESS=0");
         require(d.consensusReceipt != address(0), "CONSENSUS_RECEIPT_ADDRESS=0");
         require(d.receiptAdmin != address(0), "RECEIPT_ADMIN_ADDRESS=0");
         _envStringRequired(string.concat(prefix, "DEPLOYMENT_OUT"));
@@ -280,8 +273,8 @@ contract DeployTimelock is UpgradeAuthority {
 
     /// @notice In-process variant for Forge tests. Caller sets up prank context.
     ///         No JSON is written; no env vars are read. Does not exercise the
-    ///         optional IC policy / consensus receipt handover — use
-    ///         `runInProcessWithCommittee` for that. Hands over no gateway
+    ///         optional consensus receipt handover — use
+    ///         `runInProcessWithReceipt` for that. Hands over no gateway
     ///         agent — use `runInProcessWithAgents` for that.
     function runInProcess(
         address vault_,
@@ -340,16 +333,15 @@ contract DeployTimelock is UpgradeAuthority {
         a[0] = v;
     }
 
-    /// @notice In-process variant that also exercises the optional IC policy /
-    ///         consensus receipt handover (issue #1319). Caller sets up prank
+    /// @notice In-process variant that also exercises the optional consensus receipt
+    ///         handover (issue #1319). Caller sets up prank
     ///         context. No JSON is written; no env vars are read.
-    /// @param committee_ `icPolicy`: InvestmentCommitteePolicy address, or address(0)
-    ///        to skip. `consensusReceipt`: ConsensusRecommendationReceipt address, or
+    /// @param receipt_ `consensusReceipt`: ConsensusRecommendationReceipt address, or
     ///        address(0) to skip. `receiptAdmin`: current holder of
     ///        ADMIN_ROLE/DEFAULT_ADMIN_ROLE on the receipt contract
     ///        (RECEIPT_ADMIN_ADDRESS at its construction); address(0) defaults to
     ///        msg.sender.
-    function runInProcessWithCommittee(
+    function runInProcessWithReceipt(
         address vault_,
         address gateway_,
         address registry_,
@@ -358,7 +350,7 @@ contract DeployTimelock is UpgradeAuthority {
         address safe_,
         address emergency_,
         uint256 minDelay_,
-        Committee memory committee_,
+        ReceiptHandover memory receipt_,
         SafeSpec memory safeSpec_
     ) external returns (Deployed memory d) {
         d.vaults = _single(vault_);
@@ -369,9 +361,8 @@ contract DeployTimelock is UpgradeAuthority {
         d.safe = safe_;
         d.emergency = emergency_;
         d.minDelay = minDelay_;
-        d.icPolicy = committee_.icPolicy;
-        d.consensusReceipt = committee_.consensusReceipt;
-        d.receiptAdmin = committee_.receiptAdmin;
+        d.consensusReceipt = receipt_.consensusReceipt;
+        d.receiptAdmin = receipt_.receiptAdmin;
 
         _validate(d, safeSpec_);
         d.timelock = _deployAndWire(d);
@@ -815,41 +806,9 @@ contract DeployTimelock is UpgradeAuthority {
             "R7: governance WEIGHT_SETTER_ROLE (applyReceipt) is not the timelock alone"
         );
 
-        // InvestmentCommitteePolicy (optional — issue #1319, one-ceremony rule
-        // #1247 AC10 / INV-3).
-        //
-        // DeployInvestmentCommitteePolicy grants DEFAULT_ADMIN_ROLE + ADMIN_ROLE
-        // on the IC policy to ADMIN_ADDRESS, the same deployer EOA that runs this
-        // script (msg.sender here). Mirror the five-core-contract handover
-        // exactly. The gateway separately holds ADMIN_ROLE on the IC policy
-        // (granted at wiring time so it can forward committeeRegister calls) —
-        // that is a second, intentional holder and is left untouched.
-        if (d.icPolicy != address(0)) {
-            IAccessControl(d.icPolicy).grantRole(ADMIN_ROLE, address(timelock));
-            require(
-                IAccessControl(d.icPolicy).hasRole(ADMIN_ROLE, address(timelock)),
-                "Timelock missing ADMIN_ROLE on IC policy"
-            );
-            IAccessControl(d.icPolicy).grantRole(DEFAULT_ADMIN_ROLE, address(timelock));
-            require(
-                IAccessControl(d.icPolicy).hasRole(DEFAULT_ADMIN_ROLE, address(timelock)),
-                "Timelock missing DEFAULT_ADMIN_ROLE on IC policy"
-            );
-            IAccessControl(d.icPolicy).revokeRole(ADMIN_ROLE, msg.sender);
-            require(
-                !IAccessControl(d.icPolicy).hasRole(ADMIN_ROLE, msg.sender),
-                "Deployer still has ADMIN_ROLE on IC policy"
-            );
-            IAccessControl(d.icPolicy).revokeRole(DEFAULT_ADMIN_ROLE, msg.sender);
-            require(
-                !IAccessControl(d.icPolicy).hasRole(DEFAULT_ADMIN_ROLE, msg.sender),
-                "Deployer still has DEFAULT_ADMIN_ROLE on IC policy"
-            );
-        }
-
         // ConsensusRecommendationReceipt (optional — issue #1319, same rule).
         //
-        // DeployInvestmentCommitteePolicy grants DEFAULT_ADMIN_ROLE + ADMIN_ROLE
+        // DeployConsensusRecommendationReceipt grants DEFAULT_ADMIN_ROLE + ADMIN_ROLE
         // on the receipt contract to RECEIPT_ADMIN_ADDRESS, which is NOT
         // necessarily the deployer EOA (it is a required input and may differ
         // from ADMIN_ADDRESS). Resolve the actual current holder (d.receiptAdmin)
@@ -892,15 +851,20 @@ contract DeployTimelock is UpgradeAuthority {
                 "Deployer still has DEFAULT_ADMIN_ROLE on consensus receipt: RECEIPT_ADMIN_ADDRESS names the wrong account"
             );
             // applyReceipt releases the receipt it applies (issue 1698): the
-            // governance contract must point at this register and hold its
-            // ADMIN_ROLE (granted by DeployRouterGovernance) after the handover.
+            // governance contract must point at this register and hold its narrow
+            // RECEIPT_RELEASER_ROLE (granted by DeployRouterGovernance), never its
+            // ADMIN_ROLE. The timelock is the only ADMIN_ROLE holder (issue 1888).
             require(
                 address(RouterGovernance(d.governance).receipts()) == d.consensusReceipt,
                 "R7: RouterGovernance.receipts() is not CONSENSUS_RECEIPT_ADDRESS"
             );
             require(
-                IAccessControl(d.consensusReceipt).hasRole(ADMIN_ROLE, d.governance),
-                "R7: RouterGovernance lacks receipt ADMIN_ROLE - applyReceipt cannot release"
+                IAccessControl(d.consensusReceipt).hasRole(RECEIPT_RELEASER_ROLE, d.governance),
+                "R7: RouterGovernance lacks RECEIPT_RELEASER_ROLE - applyReceipt cannot release"
+            );
+            require(
+                !IAccessControl(d.consensusReceipt).hasRole(ADMIN_ROLE, d.governance),
+                "R7: RouterGovernance holds the receipt ADMIN_ROLE - only the timelock may"
             );
         }
     }
@@ -954,7 +918,6 @@ contract DeployTimelock is UpgradeAuthority {
         _requireNamesTimelock(d.registry, timelock);
         _requireNamesTimelock(d.router, timelock);
         _requireNamesTimelock(d.governance, timelock);
-        if (d.icPolicy != address(0)) _requireNamesTimelock(d.icPolicy, timelock);
         if (d.consensusReceipt != address(0)) _requireNamesTimelock(d.consensusReceipt, timelock);
     }
 
@@ -1007,9 +970,6 @@ contract DeployTimelock is UpgradeAuthority {
         console2.log("  registry    :", d.registry);
         console2.log("  router      :", d.router);
         console2.log("  governance  :", d.governance);
-        if (d.icPolicy != address(0)) {
-            console2.log("  ic_policy   :", d.icPolicy);
-        }
         if (d.consensusReceipt != address(0)) {
             console2.log("  consensus_receipt :", d.consensusReceipt);
         }
@@ -1091,7 +1051,6 @@ contract DeployTimelock is UpgradeAuthority {
         vm.serializeAddress(addrs, "gateway", d.gateway);
         vm.serializeAddress(addrs, "registry", d.registry);
         vm.serializeAddress(addrs, "router", d.router);
-        vm.serializeAddress(addrs, "ic_policy", d.icPolicy);
         vm.serializeAddress(addrs, "consensus_receipt", d.consensusReceipt);
         return vm.serializeAddress(addrs, "governance", d.governance);
     }
@@ -1106,7 +1065,6 @@ contract DeployTimelock is UpgradeAuthority {
         vm.serializeBytes32(hashes, "registry", d.registry.codehash);
         vm.serializeBytes32(hashes, "router", d.router.codehash);
         vm.serializeBytes32(hashes, "router_implementation", _implementationCodeHash(d.router));
-        vm.serializeBytes32(hashes, "ic_policy", d.icPolicy.codehash);
         vm.serializeBytes32(hashes, "consensus_receipt", d.consensusReceipt.codehash);
         return vm.serializeBytes32(hashes, "governance", d.governance.codehash);
     }
@@ -1210,7 +1168,22 @@ contract DeployTimelock is UpgradeAuthority {
             "timelock_has_governance_admin_role",
             IAccessControl(d.governance).hasRole(ADMIN_ROLE, address(d.timelock))
         );
-        // Issue #1698: the weight setter can release the receipt it applies.
+        // Issue 1888: the weight setter releases the receipt it applies through the narrow
+        // release role, and never holds the receipt ADMIN_ROLE.
+        vm.serializeBool(
+            roles,
+            "governance_has_receipt_release_role",
+            d.consensusReceipt != address(0)
+                && IAccessControl(d.consensusReceipt).hasRole(RECEIPT_RELEASER_ROLE, d.governance)
+        );
+        // Enumerated holders of the receipt ADMIN_ROLE are the timelock alone (issue 1888).
+        vm.serializeBool(
+            roles,
+            "receipt_admin_held_by_timelock_alone",
+            d.consensusReceipt != address(0)
+                && IAccessControlEnumerable(d.consensusReceipt).getRoleMemberCount(ADMIN_ROLE) == 1
+                && IAccessControl(d.consensusReceipt).hasRole(ADMIN_ROLE, address(d.timelock))
+        );
         vm.serializeBool(
             roles,
             "governance_has_receipt_admin_role",

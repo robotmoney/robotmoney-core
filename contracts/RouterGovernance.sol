@@ -40,12 +40,12 @@ import {
 ///         digest and the vector together so anyone can re-derive the vector
 ///         from the public payload and compare.
 ///
-///         Released is not applied (security review 2026-10-15, finding 023): the
-///         timelock also holds the register's `ADMIN_ROLE` and can release a
-///         receipt directly (the standalone `release-receipt` govern row). A
-///         receipt released that way carries no weights, and `applyReceipt`
-///         refuses it forever (`ReceiptAlreadyReleased`); the committee must
-///         record a new receipt. Read `ReceiptApplied` to learn what was applied.
+///         Released is not applied (security review 2026-10-15, finding 023): a
+///         receipt released outside `applyReceipt` carries no weights, and
+///         `applyReceipt` refuses it forever (`ReceiptAlreadyReleased`); the committee must
+///         record a new receipt. This contract holds only the register's narrow
+///         `RECEIPT_RELEASER_ROLE`. The timelock holds the register's `ADMIN_ROLE` alone
+///         and releases nothing directly. Read `ReceiptApplied` to learn what was applied.
 ///
 ///         Design constraints (docs/architecture.md §2.3):
 ///         - Controls router weights only; cannot govern vault internals,
@@ -80,8 +80,9 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuardUpgradeable
     PortfolioRouter public router;
 
     /// @notice The ConsensusRecommendationReceipt register whose receipts this
-    ///         contract applies. This contract holds `ADMIN_ROLE` there so it
-    ///         can release a receipt in the same call that applies it.
+    ///         contract applies. This contract holds the narrow
+    ///         `RECEIPT_RELEASER_ROLE` there (never its `ADMIN_ROLE`) so it can
+    ///         release a receipt in the same call that applies it.
     IConsensusRecommendationReceipt public receipts;
 
     /// @notice The `recordedAt` of the last receipt `applyReceipt` applied (0 until

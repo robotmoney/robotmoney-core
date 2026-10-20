@@ -5,7 +5,7 @@ description: "The router's weight setter. It holds the Portfolio Router's `WEIGH
 
 # RouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ef707305749eb5814ddb4ffa65dab0e0f435b360/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/RouterGovernance.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
@@ -35,12 +35,12 @@ unless it equals the stored digest, and `ReceiptApplied` records the
 digest and the vector together so anyone can re-derive the vector
 from the public payload and compare.
 
-Released is not applied (security review 2026-10-15, finding 023): the
-timelock also holds the register's `ADMIN_ROLE` and can release a
-receipt directly (the standalone `release-receipt` govern row). A
-receipt released that way carries no weights, and `applyReceipt`
-refuses it forever (`ReceiptAlreadyReleased`); the committee must
-record a new receipt. Read `ReceiptApplied` to learn what was applied.
+Released is not applied (security review 2026-10-15, finding 023): a
+receipt released outside `applyReceipt` carries no weights, and
+`applyReceipt` refuses it forever (`ReceiptAlreadyReleased`); the committee must
+record a new receipt. This contract holds only the register's narrow
+`RECEIPT_RELEASER_ROLE`. The timelock holds the register's `ADMIN_ROLE` alone
+and releases nothing directly. Read `ReceiptApplied` to learn what was applied.
 
 Design constraints (docs/architecture.md §2.3):
 - Controls router weights only; cannot govern vault internals,
@@ -92,8 +92,9 @@ PortfolioRouter public router;
 ### receipts
 
 The ConsensusRecommendationReceipt register whose receipts this
-contract applies. This contract holds `ADMIN_ROLE` there so it
-can release a receipt in the same call that applies it.
+contract applies. This contract holds the narrow
+`RECEIPT_RELEASER_ROLE` there (never its `ADMIN_ROLE`) so it can
+release a receipt in the same call that applies it.
 
 ```solidity
 IConsensusRecommendationReceipt public receipts;

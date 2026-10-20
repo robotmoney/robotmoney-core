@@ -9,7 +9,6 @@ import {RwaBasketVault} from "../../vaults/RwaBasketVault.sol";
 import {VaultRegistry} from "../../VaultRegistry.sol";
 import {PortfolioRouter} from "../../PortfolioRouter.sol";
 import {RobotMoneyGateway} from "../../gateway/RobotMoneyGateway.sol";
-import {InvestmentCommitteePolicy} from "../../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../../gateway/ConsensusRecommendationReceipt.sol";
 import {RouterGovernance} from "../../RouterGovernance.sol";
 
@@ -58,12 +57,6 @@ contract PortfolioRouterV2 is PortfolioRouter {
 }
 
 contract RobotMoneyGatewayV2 is RobotMoneyGateway {
-    function upgradeMarker() external pure returns (uint256) {
-        return UPGRADE_V2_MARKER;
-    }
-}
-
-contract InvestmentCommitteePolicyV2 is InvestmentCommitteePolicy {
     function upgradeMarker() external pure returns (uint256) {
         return UPGRADE_V2_MARKER;
     }

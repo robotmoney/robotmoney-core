@@ -43,7 +43,6 @@ import {InvariantRegistry} from "./InvariantRegistry.sol";
 import {VaultRegistry} from "../../VaultRegistry.sol";
 import {PortfolioRouter} from "../../PortfolioRouter.sol";
 import {RouterGovernance} from "../../RouterGovernance.sol";
-import {InvestmentCommitteePolicy} from "../../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../../gateway/ConsensusRecommendationReceipt.sol";
 import {CoreProxies} from "../helpers/CoreProxies.sol";
 
@@ -585,28 +584,25 @@ contract FvInvariantsTest is Test {
         // Stand up the weight setter and the receipt register it applies, and
         // hand it the router's weight role so applyReceipt -> setWeights is the
         // only weight-setting path.
-        InvestmentCommitteePolicy ic =
-            CoreProxies.investmentCommitteePolicy(address(this), address(this));
-        address submitter = makeAddr("submitter");
-        ic.registerAgent(submitter, "submitter");
         ConsensusRecommendationReceipt receipts =
-            CoreProxies.consensusRecommendationReceipt(address(this), address(this), address(ic));
+            CoreProxies.consensusRecommendationReceipt(address(this));
+        receipts.grantRole(receipts.RECEIPT_SUBMITTER_ROLE(), address(this));
         RouterGovernance gov =
             CoreProxies.routerGovernance(address(router), address(receipts), address(this));
         router.grantRole(router.ADMIN_ROLE(), address(gov));
         router.grantRole(router.WEIGHT_SETTER_ROLE(), address(gov));
-        receipts.grantRole(receipts.ADMIN_ROLE(), address(gov));
+        receipts.grantRole(receipts.RECEIPT_RELEASER_ROLE(), address(gov));
 
         address[] memory vaults = new address[](1);
         uint256[] memory bps = new uint256[](1);
         vaults[0] = address(vault);
         bps[0] = 10_000;
         bytes32 digest = keccak256("payload");
-        receipts.recordReceipt(submitter, keccak256("r1"), digest, "uri");
+        receipts.recordReceipt(keccak256("r1"), digest, "uri");
         // r2 is recorded later, so applyReceipt's monotonic guard (issue 1831) passes
         // and the router's own refusal is what this test sees.
         vm.warp(block.timestamp + 1);
-        receipts.recordReceipt(submitter, keccak256("r2"), digest, "uri");
+        receipts.recordReceipt(keccak256("r2"), digest, "uri");
 
         // While Active, the receipt applies.
         gov.applyReceipt(keccak256("r1"), digest, vaults, bps);

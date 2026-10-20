@@ -13,7 +13,9 @@ import {DeployVault} from "../script/DeployVault.s.sol";
 import {DeployVaultRegistry} from "../script/DeployVaultRegistry.s.sol";
 import {DeployPortfolioRouter} from "../script/DeployPortfolioRouter.s.sol";
 import {DeployGateway} from "../script/DeployGateway.s.sol";
-import {DeployInvestmentCommitteePolicy} from "../script/DeployInvestmentCommitteePolicy.s.sol";
+import {
+    DeployConsensusRecommendationReceipt
+} from "../script/DeployConsensusRecommendationReceipt.s.sol";
 import {DeployRouterGovernance} from "../script/DeployRouterGovernance.s.sol";
 import {BasketVaultDeployBase} from "../script/BasketVaultDeployBase.sol";
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
@@ -27,7 +29,6 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
-import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {
     IConsensusRecommendationReceipt
@@ -45,7 +46,6 @@ import {
     VaultRegistryV2,
     PortfolioRouterV2,
     RobotMoneyGatewayV2,
-    InvestmentCommitteePolicyV2,
     ConsensusRecommendationReceiptV2,
     RouterGovernanceV2,
     UPGRADE_V2_MARKER
@@ -94,7 +94,6 @@ contract UpgradeLifecycleForkTest is Test {
     VaultRegistry internal registry;
     PortfolioRouter internal router;
     RobotMoneyGateway internal gateway;
-    InvestmentCommitteePolicy internal ic;
     ConsensusRecommendationReceipt internal receipts;
     RouterGovernance internal governance;
     BasketVault internal proto;
@@ -158,12 +157,9 @@ contract UpgradeLifecycleForkTest is Test {
         gs.runInProcessWith(deployer, pauser, shareReceiver, USDC, address(vault), address(router))
         .gateway;
 
-        DeployInvestmentCommitteePolicy is_ = new DeployInvestmentCommitteePolicy();
-        is_.setUpgradeConfig(upgradeTimelock, mode);
-        DeployInvestmentCommitteePolicy.Deployed memory icd =
-            is_.runInProcessWith(deployer, address(gateway));
-        ic = icd.policy;
-        receipts = icd.receipts;
+        DeployConsensusRecommendationReceipt rcs = new DeployConsensusRecommendationReceipt();
+        rcs.setUpgradeConfig(upgradeTimelock, mode);
+        receipts = rcs.runInProcessWith(deployer).receipts;
 
         DeployRouterGovernance gv = new DeployRouterGovernance();
         gv.setUpgradeConfig(upgradeTimelock, mode);
@@ -219,7 +215,7 @@ contract UpgradeLifecycleForkTest is Test {
         v[3] = address(rwa);
     }
 
-    function _proxies() internal view returns (address[10] memory) {
+    function _proxies() internal view returns (address[9] memory) {
         return [
             address(vault),
             address(proto),
@@ -228,7 +224,6 @@ contract UpgradeLifecycleForkTest is Test {
             address(registry),
             address(router),
             address(gateway),
-            address(ic),
             address(receipts),
             address(governance)
         ];
@@ -242,8 +237,7 @@ contract UpgradeLifecycleForkTest is Test {
         if (i == 4) return address(new VaultRegistryV2());
         if (i == 5) return address(new PortfolioRouterV2());
         if (i == 6) return address(new RobotMoneyGatewayV2());
-        if (i == 7) return address(new InvestmentCommitteePolicyV2());
-        if (i == 8) return address(new ConsensusRecommendationReceiptV2());
+        if (i == 7) return address(new ConsensusRecommendationReceiptV2());
         return address(new RouterGovernanceV2());
     }
 
@@ -270,7 +264,7 @@ contract UpgradeLifecycleForkTest is Test {
                 allowedSourceVaults: none
             })
         );
-        ic.registerAgent(submitter, "fork-submitter");
+        receipts.grantRole(receipts.RECEIPT_SUBMITTER_ROLE(), submitter);
         vm.stopPrank();
 
         // rmUSDC through the gateway: real Aave / Compound / Moonwell positions.
@@ -291,10 +285,10 @@ contract UpgradeLifecycleForkTest is Test {
         proto.deposit(500e6, holder);
         vm.stopPrank();
 
-        // A receipt on the register (recorded the way the gateway forwards it).
-        vm.prank(address(gateway));
+        // A receipt on the register, recorded directly by the submitter.
+        vm.prank(submitter);
         receipts.recordReceipt(
-            submitter, keccak256("fork-receipt"), keccak256("fork-bytes"), "https://x.invalid/fork"
+            keccak256("fork-receipt"), keccak256("fork-bytes"), "https://x.invalid/fork"
         );
     }
 
@@ -411,7 +405,7 @@ contract UpgradeLifecycleForkTest is Test {
             router.hasRole(router.WEIGHT_SETTER_ROLE(), address(governance)), "weight setter"
         );
         assertTrue(gateway.hasRole(gateway.AGENT_ROLE(), agent), "gateway agent");
-        assertTrue(ic.hasRole(ic.COMMITTEE_AGENT_ROLE(), submitter), "committee agent");
+        assertTrue(receipts.hasRole(receipts.RECEIPT_SUBMITTER_ROLE(), submitter), "submitter");
         IConsensusRecommendationReceipt.Receipt memory r =
             receipts.getReceiptById(keccak256("fork-receipt"));
         assertEq(r.payloadDigest, keccak256("fork-bytes"), "receipt digest");
@@ -423,12 +417,12 @@ contract UpgradeLifecycleForkTest is Test {
     ///         and both synchronous redemptions pay.
     function test_fork_upgradeEveryProxy_throughSafeAndTimelock_keepsState() public {
         if (!selected) return;
-        address[10] memory p = _proxies();
-        address[] memory targets = new address[](10);
-        uint256[] memory values = new uint256[](10);
-        bytes[] memory payloads = new bytes[](10);
-        address[10] memory v2s;
-        for (uint256 i = 0; i < 10; i++) {
+        address[9] memory p = _proxies();
+        address[] memory targets = new address[](9);
+        uint256[] memory values = new uint256[](9);
+        bytes[] memory payloads = new bytes[](9);
+        address[9] memory v2s;
+        for (uint256 i = 0; i < 9; i++) {
             v2s[i] = _v2(i);
             targets[i] = p[i];
             payloads[i] = abi.encodeCall(GovernedUUPS.upgradeToAndCall, (v2s[i], ""));
@@ -450,7 +444,7 @@ contract UpgradeLifecycleForkTest is Test {
             )
         );
 
-        for (uint256 i = 0; i < 10; i++) {
+        for (uint256 i = 0; i < 9; i++) {
             assertEq(CoreProxies.implementationOf(p[i]), v2s[i], "implementation slot");
             assertEq(IMarker(p[i]).upgradeMarker(), UPGRADE_V2_MARKER, "runs v2");
             assertEq(GovernedUUPS(p[i]).upgradeTimelock(), address(timelock), "authority kept");

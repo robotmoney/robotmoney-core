@@ -121,10 +121,6 @@ contract VaultCodeSizeGuard is Test {
         _assertUnderLimit("VaultRegistry.sol:VaultRegistry");
     }
 
-    function test_InvestmentCommitteePolicy_underEip170() public {
-        _assertUnderLimit("InvestmentCommitteePolicy.sol:InvestmentCommitteePolicy");
-    }
-
     function test_ConsensusRecommendationReceipt_underEip170() public {
         _assertUnderLimit("ConsensusRecommendationReceipt.sol:ConsensusRecommendationReceipt");
     }

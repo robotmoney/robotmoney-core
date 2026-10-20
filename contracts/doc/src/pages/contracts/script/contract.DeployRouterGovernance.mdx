@@ -5,7 +5,7 @@ description: "Foundry deploy script for RouterGovernance, the router's weight se
 
 # DeployRouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/script/DeployRouterGovernance.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/script/DeployRouterGovernance.s.sol)
 
 **Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
@@ -20,12 +20,14 @@ wires the three grants `applyReceipt` and the fallbacks need:
 forward;
 - router `WEIGHT_SETTER_ROLE`, the only gate on `setWeights`, after
 which the deployer's own copy is dropped;
-- `ADMIN_ROLE` on the ConsensusRecommendationReceipt, so
-`applyReceipt` can release the receipt it applies.
+- `RECEIPT_RELEASER_ROLE` on the ConsensusRecommendationReceipt, so
+`applyReceipt` can release the receipt it applies. It is a narrow,
+single-purpose role: RouterGovernance never holds the receipt
+`ADMIN_ROLE`, which the timelock alone holds (issue 1888).
 
 Every grant is read back: a silent failure produces a deployment that
 looks complete and fails only when the first receipt is applied.
-The stage runs after `ic-policy` because the receipt register must
+The stage runs after `receipt` because the receipt register must
 exist, and before `timelock`, while the deployer still holds the
 router and receipt admin roles.
 
@@ -55,10 +57,10 @@ Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-t
 string public constant MANIFEST_FILE = "governance.json";
 ```
 
-### RECEIPT_ADMIN_ROLE
+### RECEIPT_RELEASER_ROLE
 
 ```solidity
-bytes32 internal constant RECEIPT_ADMIN_ROLE = keccak256("ADMIN_ROLE");
+bytes32 internal constant RECEIPT_RELEASER_ROLE = keccak256("RECEIPT_RELEASER_ROLE");
 ```
 
 ## Functions
@@ -96,7 +98,7 @@ function runInProcessWith(address admin_, address router_, address receipts_)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| admin_ | `address` | Address to receive ADMIN_ROLE and WEIGHT_SETTER_ROLE; must<br/>hold router ADMIN_ROLE, router WEIGHT_SETTER_ROLE and the<br/>receipt register's DEFAULT_ADMIN_ROLE. |
+| admin_ | `address` | Address to receive ADMIN_ROLE and WEIGHT_SETTER_ROLE; must<br/>hold router ADMIN_ROLE, router WEIGHT_SETTER_ROLE and the<br/>receipt register's ADMIN_ROLE. |
 | router_ | `address` | Deployed PortfolioRouter address. |
 | receipts_ | `address` | Deployed ConsensusRecommendationReceipt address. |
 
@@ -187,8 +189,9 @@ function _grantWeightSetter(Deployed memory d, address granter_) internal;
 
 <i>
 
-Receipt `ADMIN_ROLE`, so `applyReceipt` can release the receipt it
-applies in the same call. Read back.
+Receipt `RECEIPT_RELEASER_ROLE`, so `applyReceipt` can release the receipt it
+applies in the same call. Read back. The granter holds the receipt `ADMIN_ROLE`
+until the timelock stage.
 
 </i>
 

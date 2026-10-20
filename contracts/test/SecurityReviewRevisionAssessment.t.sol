@@ -4,39 +4,9 @@ pragma solidity ^0.8.24;
 // Counterexamples to overly broad conclusions in the revised security report.
 // These use local mocks; the recorder test does not establish economic exploitability.
 
-import {SecurityReviewRecheckCommitteePoc} from "./SecurityReviewRecheckCommitteePoc.t.sol";
 import {SecurityReviewRecheckVaultPoc} from "./SecurityReviewRecheckVaultPoc.t.sol";
 import {UniswapV4PriceRecorderTest} from "./UniswapV4PriceRecorder.t.sol";
-import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
-import {IInvestmentCommitteePolicy} from "../gateway/interfaces/IInvestmentCommitteePolicy.sol";
 import {MockAdapter} from "./RobotMoneyVault.t.sol";
-
-contract RevisionCommitteeAssessment is SecurityReviewRecheckCommitteePoc {
-    /// Core 1791: an address that never consented cannot be squatted, so it cannot be
-    /// registered by the attacker's ownership and the member's own onboarding still works.
-    function test_assessment_unconsentedAgentCannotBeSquattedIntoCommittee() public {
-        address victim = address(0xD1);
-        bytes32 salt = keccak256("assessment");
-        vm.prank(attacker);
-        gateway.commitAuthorization(keccak256(abi.encode(victim, attacker, salt)));
-        vm.roll(block.number + 1);
-        vm.prank(attacker);
-        vm.expectRevert(RobotMoneyGateway.OwnerConsentMissing.selector);
-        gateway.revealAuthorization(victim, salt, _selfPolicy(attacker));
-        assertEq(gateway.agentOwner(victim), address(0));
-
-        // The member's address is onboarded by its own key and registers.
-        _selfReveal(victim, victim, keccak256("assessment-self"));
-        vm.prank(admin);
-        gateway.committeeRegister(victim, "new-member");
-        IInvestmentCommitteePolicy.VoteParams memory p = _defaultVoteParams();
-        p.agent = victim;
-        vm.prank(victim);
-        uint256 id = gateway.committeeVoteSubmit(p);
-        assertEq(ic.getVote(id).agent, victim);
-        assertEq(gateway.agentOwner(victim), victim);
-    }
-}
 
 contract RevisionVaultAssessment is SecurityReviewRecheckVaultPoc {
     /// The pre-1788 counterexample (re-exclude both adapters, deposit, restore) is closed by

@@ -12,7 +12,6 @@ import {RouterGovernance} from "../RouterGovernance.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
-import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
 
@@ -113,9 +112,7 @@ contract RouterGovernanceTest is Test {
         vm.stopPrank();
 
         router = CoreProxies.portfolioRouter(address(usdc), address(registry), routerAdmin);
-        InvestmentCommitteePolicy ic =
-            CoreProxies.investmentCommitteePolicy(govAdmin, address(this));
-        receipts = CoreProxies.consensusRecommendationReceipt(govAdmin, address(this), address(ic));
+        receipts = CoreProxies.consensusRecommendationReceipt(govAdmin);
         gov = CoreProxies.routerGovernance(address(router), address(receipts), govAdmin);
 
         vm.startPrank(routerAdmin);

@@ -5,7 +5,7 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
@@ -70,18 +70,11 @@ On any other chain (the Twin chain 918453) it must
 be >= 1. No flag lifts the 8453 floor.
 EXPECTED_CHAIN_ID      — mandatory and equal to 8453 on Base mainnet
 DEPLOYMENT_OUT         — output JSON path (no default)
-IC_POLICY_ADDRESS      — InvestmentCommitteePolicy (issue #1319, one-
-ceremony rule #1247 AC10 / INV-3). The
-same grant→verify→revoke handover runs on
-it: ADMIN_ROLE + DEFAULT_ADMIN_ROLE move to the
-timelock and are revoked from the deployer EOA
-(the ADMIN_ADDRESS DeployInvestmentCommitteePolicy
-granted them to). The gateway's ADMIN_ROLE on the
-IC policy — granted separately so it can forward
-committeeRegister calls — is untouched.
 CONSENSUS_RECEIPT_ADDRESS — ConsensusRecommendationReceipt (issue #1319,
 same rule). ADMIN_ROLE +
-DEFAULT_ADMIN_ROLE move to the timelock.
+DEFAULT_ADMIN_ROLE move to the timelock, which then
+holds the receipt ADMIN_ROLE alone. RouterGovernance
+keeps only RECEIPT_RELEASER_ROLE (issue 1888).
 AGENT_ADDRESSES        — comma-separated gateway agents the deployer
 owns (issue #1476): the deploy agent the
 gateway stage authorizes (DeployGateway.s.sol).
@@ -99,8 +92,8 @@ broadcast, and the literal `none` declares
 a run whose deployer owns no gateway agent.
 RECEIPT_ADMIN_ADDRESS  — the address that currently holds ADMIN_ROLE /
 DEFAULT_ADMIN_ROLE on the receipt contract (the
-RECEIPT_ADMIN_ADDRESS DeployInvestmentCommittee-
-Policy granted them to — not necessarily the
+RECEIPT_ADMIN_ADDRESS DeployConsensusRecommendation-
+Receipt granted them to — not necessarily the
 deployer EOA). Required on every chain together
 with CONSENSUS_RECEIPT_ADDRESS; revoked from
 here instead of msg.sender. No default.
@@ -174,6 +167,12 @@ bytes32 public constant DEPOSIT_PAUSER_ROLE = keccak256("DEPOSIT_PAUSER_ROLE");
 
 ```solidity
 bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
+```
+
+### RECEIPT_RELEASER_ROLE
+
+```solidity
+bytes32 public constant RECEIPT_RELEASER_ROLE = keccak256("RECEIPT_RELEASER_ROLE");
 ```
 
 ### DEFAULT_ADMIN_ROLE
@@ -297,7 +296,7 @@ bytes32 public constant SAFE_FALLBACK_HANDLER_SLOT =
 
 Broadcast entrypoint. Reads env vars, deploys timelock, and
 transfers ADMIN_ROLE on all five contracts (plus the optional
-IC policy / consensus receipt handover — issue #1319).
+consensus receipt handover — issue #1319).
 
 ```solidity
 function run() external returns (Deployed memory d);
@@ -344,8 +343,8 @@ function _runFrom(string memory prefix) internal returns (Deployed memory d);
 
 In-process variant for Forge tests. Caller sets up prank context.
 No JSON is written; no env vars are read. Does not exercise the
-optional IC policy / consensus receipt handover — use
-`runInProcessWithCommittee` for that. Hands over no gateway
+optional consensus receipt handover — use
+`runInProcessWithReceipt` for that. Hands over no gateway
 agent — use `runInProcessWithAgents` for that.
 
 ```solidity
@@ -450,16 +449,16 @@ function _single(address v) internal pure returns (address[] memory a);
 | ---- | ---- | ----------- |
 | a | `address[]` |  |
 
-<a id="runinprocesswithcommittee-address-address-address-address-address-address-address-uint256-committee-safespec"></a>
+<a id="runinprocesswithreceipt-address-address-address-address-address-address-address-uint256-receipthandover-safespec"></a>
 
-### runInProcessWithCommittee
+### runInProcessWithReceipt
 
-In-process variant that also exercises the optional IC policy /
-consensus receipt handover (issue #1319). Caller sets up prank
+In-process variant that also exercises the optional consensus receipt
+handover (issue #1319). Caller sets up prank
 context. No JSON is written; no env vars are read.
 
 ```solidity
-function runInProcessWithCommittee(
+function runInProcessWithReceipt(
         address vault_,
         address gateway_,
         address registry_,
@@ -468,7 +467,7 @@ function runInProcessWithCommittee(
         address safe_,
         address emergency_,
         uint256 minDelay_,
-        Committee memory committee_,
+        ReceiptHandover memory receipt_,
         SafeSpec memory safeSpec_
     ) external returns (Deployed memory d);
 ```
@@ -485,7 +484,7 @@ function runInProcessWithCommittee(
 | safe_ | `address` |  |
 | emergency_ | `address` |  |
 | minDelay_ | `uint256` |  |
-| committee_ | `Committee` | `icPolicy`: InvestmentCommitteePolicy address, or address(0)<br/>to skip. `consensusReceipt`: ConsensusRecommendationReceipt address, or<br/>address(0) to skip. `receiptAdmin`: current holder of<br/>ADMIN_ROLE/DEFAULT_ADMIN_ROLE on the receipt contract<br/>(RECEIPT_ADMIN_ADDRESS at its construction); address(0) defaults to<br/>msg.sender. |
+| receipt_ | `ReceiptHandover` | `consensusReceipt`: ConsensusRecommendationReceipt address, or<br/>address(0) to skip. `receiptAdmin`: current holder of<br/>ADMIN_ROLE/DEFAULT_ADMIN_ROLE on the receipt contract<br/>(RECEIPT_ADMIN_ADDRESS at its construction); address(0) defaults to<br/>msg.sender. |
 | safeSpec_ | `SafeSpec` |  |
 
 **Returns**
@@ -1094,19 +1093,18 @@ struct SafeSpec {
 | owners | `address[]` |  |
 | threshold | `uint256` |  |
 
-### Committee
+### ReceiptHandover
 
 <i>
 
-The optional committee handover inputs, grouped so
-`runInProcessWithCommittee` stays inside the non-viaIR stack limit
+The optional receipt handover inputs, grouped so
+`runInProcessWithReceipt` stays inside the non-viaIR stack limit
 (`forge coverage` compiles without the optimizer or viaIR).
 
 </i>
 
 ```solidity
-struct Committee {
-        address icPolicy;
+struct ReceiptHandover {
         address consensusReceipt;
         address receiptAdmin;
     }
@@ -1116,7 +1114,6 @@ struct Committee {
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| icPolicy | `address` |  |
 | consensusReceipt | `address` |  |
 | receiptAdmin | `address` |  |
 
@@ -1136,7 +1133,6 @@ struct Deployed {
         uint256 minDelay;
         /// Issue 1727: true only when DEPLOYMENT_KIND=rehearsal was set. Never true by default.
         bool rehearsal;
-        address icPolicy;
         address consensusReceipt;
         address receiptAdmin;
         /// Deployer-owned gateway agents handed to the timelock (issue #1476).
@@ -1158,7 +1154,6 @@ struct Deployed {
 | emergency | `address` |  |
 | minDelay | `uint256` |  |
 | rehearsal | `bool` |  |
-| icPolicy | `address` |  |
 | consensusReceipt | `address` |  |
 | receiptAdmin | `address` |  |
 | agents | `address[]` |  |

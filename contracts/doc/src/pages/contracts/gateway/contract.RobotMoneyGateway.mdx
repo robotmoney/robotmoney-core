@@ -5,7 +5,7 @@ description: "Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC fro
 
 # RobotMoneyGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles), ReentrancyGuardUpgradeable, [IGateway](/contracts/gateway/interfaces/interface.IGateway), [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
@@ -290,9 +290,9 @@ bool private _depositsPaused;
 
 ### icPolicy
 
-Investment Committee Policy contract. When set, `committeeRegister`
-and `committeeVoteSubmit` forward calls here. Settable by
-`ADMIN_ROLE` via `setICPolicy`. `address(0)` means not configured.
+Retired storage slot (issue 1888). The on-chain committee is deleted and nothing
+writes or reads this. The getter stays so the slot keeps its type and its value
+on deployed proxies stays readable. `IInvestmentCommitteePolicy` is empty.
 
 ```solidity
 IInvestmentCommitteePolicy public icPolicy;
@@ -316,11 +316,10 @@ uint256 private _defaultAdminCount;
 
 ### consensusReceipt
 
-Consensus Recommendation Receipt contract. When set,
-`consensusRecordReceipt` forwards calls here. Settable by
-`ADMIN_ROLE` via `setConsensusReceipt`. `address(0)` means not
-configured. Appended after the admin-tier counters so no
-preceding storage slot moves.
+Retired storage slot (issue 1888). Receipts are recorded directly on the
+receipt contract by its submitter, never through the gateway. Nothing writes
+or reads this. The getter stays so the slot keeps its value on deployed proxies.
+Appended after the admin-tier counters so no preceding storage slot moves.
 
 ```solidity
 IConsensusRecommendationReceipt public consensusReceipt;
@@ -1242,148 +1241,6 @@ function _routerWithdrawPaymentId(
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bytes32` |  |
 
-<a id="seticpolicy-address"></a>
-
-### setICPolicy
-
-Set or update the Investment Committee policy contract address.
-Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear (disable).
-
-```solidity
-function setICPolicy(address policy_) external onlyRole(ADMIN_ROLE);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| policy_ | `address` | Address of the deployed `InvestmentCommitteePolicy` contract,<br/>or `address(0)` to disable committee routing. |
-
-<a id="committeeregister-address-string"></a>
-
-### committeeRegister
-
-Forward a committee agent registration to the IC policy contract.
-Restricted to `ADMIN_ROLE` (mirrors IC contract's own `ADMIN_ROLE`
-requirement on `registerAgent`). Reverts if `icPolicy` is not set.
-
-All committee writes pass through the gateway so that the IC
-contract's `onlyGateway` modifier enforcement is the single
-choke point — no committee side channel exists.
-
-```solidity
-function committeeRegister(address agent, string calldata agentId_)
-        external
-        onlyRole(ADMIN_ROLE);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| agent | `address` | Address to grant `COMMITTEE_AGENT_ROLE` on the IC contract. |
-| agentId_ | `string` | Human-readable label (e.g. "athena-v1"). |
-
-<a id="committeevotesubmit-iinvestmentcommitteepolicy-voteparams"></a>
-
-### committeeVoteSubmit
-
-Forward a signed committee vote to the IC policy contract.
-Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set,
-if `p.agent` is not the caller (`CommitteeAgentNotCaller`), or
-if the IC contract's own guards fail (agent not allowlisted,
-invalid vote fields, etc.).
-
-`p.agent` must equal `msg.sender` (issue #1790): the IC contract
-checks `COMMITTEE_AGENT_ROLE` on `p.agent`, so without this bind
-any `AGENT_ROLE` holder could file a signal under a registered
-member's address.
-
-The gateway is the sole permitted caller of `IC.submitVote`
-(enforced by the IC contract's `onlyGateway` modifier). This
-function is the only path through which an agent may reach the
-IC contract.
-
-```solidity
-function committeeVoteSubmit(IInvestmentCommitteePolicy.VoteParams calldata p)
-        external
-        onlyRole(AGENT_ROLE)
-        returns (uint256 voteId);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| p | `IInvestmentCommitteePolicy.VoteParams` | All vote fields packed into a `VoteParams` struct. |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| voteId | `uint256` |  Index of the newly appended vote in the IC contract. |
-
-<a id="setconsensusreceipt-address"></a>
-
-### setConsensusReceipt
-
-Set or update the ConsensusRecommendationReceipt contract address.
-Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear (disable).
-
-```solidity
-function setConsensusReceipt(address receipt_) external onlyRole(ADMIN_ROLE);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| receipt_ | `address` | Address of the deployed `ConsensusRecommendationReceipt`<br/>contract, or `address(0)` to disable receipt routing. |
-
-<a id="consensusrecordreceipt-bytes32-bytes32-string"></a>
-
-### consensusRecordReceipt
-
-Record a consensus recommendation receipt commitment on chain.
-Restricted to `AGENT_ROLE`; the caller is the single submitter
-attesting for the committee, and it must additionally hold
-`COMMITTEE_AGENT_ROLE` on the IC policy (checked by the receipt
-contract, which keeps no registry of its own).
-
-This is the whole write surface for anchoring. There is no
-`consensusSubmitSignature`: the rejected multi-signer design was
-replaced by one submitter carrying the analysts' ed25519
-signatures as payload data verified off-chain (ADR-0012 §5,
-`docs/architecture.md` §4.9). Recording is **signalling only**.
-
-Release is deliberately NOT routed through the gateway: routing
-it here would require granting the gateway `ADMIN_ROLE` on the
-receipt contract, and INV-3 requires that role to be held by the
-`TimelockController`. The timelock calls
-`ConsensusRecommendationReceipt.releaseReceipt` directly.
-
-```solidity
-function consensusRecordReceipt(
-        bytes32 receiptId,
-        bytes32 payloadDigest,
-        string calldata payloadUri
-    ) external onlyRole(AGENT_ROLE) returns (uint256 index);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| receiptId | `bytes32` | `keccak256("robotmoney:consensus-receipt-id:v1\\n" +<br/>session_id + "\\n" + subject_id)`. |
-| payloadDigest | `bytes32` | `keccak256` of the receipt's canonical bytes. |
-| payloadUri | `string` | Public route serving those exact bytes. |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| index | `uint256` | Index of the newly appended receipt. |
-
 <a id="_executerouterwithdraw-routerwithdrawargs-uint256-uint256"></a>
 
 ### _executeRouterWithdraw
@@ -1417,38 +1274,6 @@ function _executeRouterWithdraw(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | assetsPerLeg | `uint256[]` |  |
-
-## Events
-
-### ICPolicySet
-
-Emitted when the IC policy contract address is set or updated.
-
-```solidity
-event ICPolicySet(address indexed by, address indexed policy);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| by | `address` | Address that called `setICPolicy` (must hold `ADMIN_ROLE`). |
-| policy | `address` | New IC policy contract address (`address(0)` clears it). |
-
-### ConsensusReceiptSet
-
-Emitted when the consensus receipt contract address is set or updated.
-
-```solidity
-event ConsensusReceiptSet(address indexed by, address indexed receipt);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| by | `address` | Address that called `setConsensusReceipt` (must hold `ADMIN_ROLE`). |
-| receipt | `address` | New receipt contract address (`address(0)` clears it). |
 
 ## Errors
 
@@ -1757,35 +1582,6 @@ indicating a malicious or fee-on-transfer vault.
 
 ```solidity
 error UnexpectedAssetsReceived();
-```
-
-### ICPolicyNotSet
-
-`committeeRegister()` or `committeeVoteSubmit()` called but no IC
-policy contract is configured (`icPolicy == address(0)`).
-
-```solidity
-error ICPolicyNotSet();
-```
-
-### CommitteeAgentNotCaller
-
-`committeeVoteSubmit()` called with `p.agent != msg.sender`. A
-committee signal is the caller's own (architecture §4.8 identity
-model), so one gateway agent cannot file it under another
-member's address (issue #1790).
-
-```solidity
-error CommitteeAgentNotCaller();
-```
-
-### ConsensusReceiptNotSet
-
-`consensusRecordReceipt()` called but no consensus receipt contract
-is configured (`consensusReceipt == address(0)`).
-
-```solidity
-error ConsensusReceiptNotSet();
 ```
 
 ### WindowBufferFull

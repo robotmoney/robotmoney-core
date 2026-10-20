@@ -12,7 +12,6 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
-import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {DeployRouterGovernance} from "../script/DeployRouterGovernance.s.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
@@ -29,8 +28,8 @@ import {CoreProxies} from "./helpers/CoreProxies.sol";
 ///
 ///         Refusals are asserted with their exact reason by executing the ready
 ///         operation straight on the open-executor timelock (the Safe would hide the
-///         reason as GS013). The receipt register's gateway is this test contract: the
-///         committee's record path is not under test here.
+///         reason as GS013). The receipt is recorded directly by a submitter holding
+///         RECEIPT_SUBMITTER_ROLE; RouterGovernance holds only RECEIPT_RELEASER_ROLE.
 contract RouterGovernanceApplyReceiptTest is SafeGovernance {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
@@ -41,13 +40,12 @@ contract RouterGovernanceApplyReceiptTest is SafeGovernance {
     MockUsdc internal usdc;
     VaultRegistry internal registry;
     PortfolioRouter internal router;
-    InvestmentCommitteePolicy internal ic;
     ConsensusRecommendationReceipt internal receipts;
     RouterGovernance internal gov;
     MockGovVault internal vaultA;
     MockGovVault internal vaultB;
 
-    address internal submitter = makeAddr("committee-submitter");
+    address internal submitter = makeAddr("receipt-submitter");
 
     bytes32 internal constant RECEIPT_ID = keccak256("receipt-1");
     bytes32 internal constant DIGEST = keccak256("canonical receipt bytes 1");
@@ -73,13 +71,11 @@ contract RouterGovernanceApplyReceiptTest is SafeGovernance {
         registry.setRouterEligible(address(vaultA), true);
         registry.setRouterEligible(address(vaultB), true);
 
-        ic = CoreProxies.investmentCommitteePolicy(address(this), address(this));
-        ic.registerAgent(submitter, "submitter");
-        receipts =
-            CoreProxies.consensusRecommendationReceipt(address(this), address(this), address(ic));
+        receipts = CoreProxies.consensusRecommendationReceipt(address(this));
+        receipts.grantRole(receipts.RECEIPT_SUBMITTER_ROLE(), submitter);
 
         // The real governance stage: deploy, router ADMIN_ROLE, router WEIGHT_SETTER_ROLE
-        // (the deployer's copy dropped), receipt ADMIN_ROLE. Each grant is read back.
+        // (the deployer's copy dropped), receipt RECEIPT_RELEASER_ROLE. Each grant is read back.
         DeployRouterGovernance script = new DeployRouterGovernance();
         gov = script.runInProcessWith(address(this), address(router), address(receipts)).governance;
 
@@ -93,8 +89,9 @@ contract RouterGovernanceApplyReceiptTest is SafeGovernance {
         receipts.revokeRole(ADMIN_ROLE, address(this));
         receipts.revokeRole(receipts.DEFAULT_ADMIN_ROLE(), address(this));
 
-        // The committee records a receipt (this contract is the register's gateway).
-        receipts.recordReceipt(submitter, RECEIPT_ID, DIGEST, "https://example.invalid/r1");
+        // The submitter records a receipt directly.
+        vm.prank(submitter);
+        receipts.recordReceipt(RECEIPT_ID, DIGEST, "https://example.invalid/r1");
     }
 
     function _handOver(address target) internal {
@@ -243,7 +240,7 @@ contract RouterGovernanceApplyReceiptTest is SafeGovernance {
     }
 
     /// @notice Every caller other than the timelock is refused: the Safe itself (with
-    ///         two real owner signatures), the deployer, the committee submitter, the
+    ///         two real owner signatures), the deployer, the receipt submitter, the
     ///         router and the receipt register, and any fuzzed address.
     function test_applyReceipt_revertsForNonWeightSetter(address caller) public {
         vm.assume(caller != address(timelock));
@@ -274,6 +271,31 @@ contract RouterGovernanceApplyReceiptTest is SafeGovernance {
         );
     }
 
+    /// @notice RouterGovernance holds the narrow release role on the receipt and cannot
+    ///         administer any receipt role. The timelock alone holds the receipt ADMIN_ROLE.
+    function test_governanceHoldsOnlyTheReleaseRoleOnTheReceipt() public {
+        bytes32 releaser = receipts.RECEIPT_RELEASER_ROLE();
+        bytes32 submitterRole = receipts.RECEIPT_SUBMITTER_ROLE();
+        assertTrue(receipts.hasRole(releaser, address(gov)), "governance holds the release role");
+        assertFalse(receipts.hasRole(ADMIN_ROLE, address(gov)), "governance holds no ADMIN_ROLE");
+        assertFalse(
+            receipts.hasRole(receipts.DEFAULT_ADMIN_ROLE(), address(gov)), "no default admin"
+        );
+        assertEq(receipts.getRoleMemberCount(ADMIN_ROLE), 1, "ADMIN_ROLE holders");
+        assertTrue(receipts.hasRole(ADMIN_ROLE, address(timelock)), "the timelock alone is admin");
+
+        // Governance cannot grant or revoke submitters (it has no role admin).
+        vm.startPrank(address(gov));
+        vm.expectRevert();
+        receipts.grantRole(submitterRole, address(0xBEEF));
+        vm.expectRevert();
+        receipts.revokeRole(submitterRole, submitter);
+        vm.expectRevert();
+        receipts.grantRole(releaser, address(0xBEEF));
+        vm.stopPrank();
+        assertTrue(receipts.hasRole(submitterRole, submitter), "the submitter is untouched");
+    }
+
     /// @notice ADMIN_ROLE (the timelock) cannot grant the weight-setter role: it is
     ///         self-administered, so the only way to change its holder is the holder.
     function test_weightSetterRoleIsSelfAdministered() public view {
@@ -302,7 +324,8 @@ contract RouterGovernanceApplyReceiptTest is SafeGovernance {
         returns (bytes memory applyA, bytes memory applyB)
     {
         vm.warp(block.timestamp + gap);
-        receipts.recordReceipt(submitter, RECEIPT_B, DIGEST_B, "https://example.invalid/r2");
+        vm.prank(submitter);
+        receipts.recordReceipt(RECEIPT_B, DIGEST_B, "https://example.invalid/r2");
         (address[] memory va, uint256[] memory ba) = _vector();
         (address[] memory vb, uint256[] memory bb) = _vectorB();
         applyA = _applyCall(RECEIPT_ID, DIGEST, va, ba);

@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/technical/governance-decisions.md §3.4 — the committee and the weight setter are disjoint
+// Canonical: docs/technical/governance-decisions.md §3.4 — the receipt submitters and the weight setter are disjoint
 // Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §3.4
 // Implements: issue #1248 acceptance criterion 3 and Test plan item 1, as
-//             restated by issue #1698 — the COMMITTEE_AGENT_ROLE holder set and
+//             restated by issue #1698 — the RECEIPT_SUBMITTER_ROLE holder set and
 //             the weight-authority holder set MUST be disjoint.
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 
-import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
+import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
@@ -17,8 +17,8 @@ import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @title GovernanceSeparationInvariant
 /// @notice Verifies the decision that the committee and the weight setter are
-///         separate bodies: no address may hold both `COMMITTEE_AGENT_ROLE` on
-///         the InvestmentCommitteePolicy and any weight authority, meaning
+///         separate bodies: no address may hold both `RECEIPT_SUBMITTER_ROLE` on
+///         the ConsensusRecommendationReceipt and any weight authority, meaning
 ///         `WEIGHT_SETTER_ROLE` or `ADMIN_ROLE` on `RouterGovernance`, or
 ///         `WEIGHT_SETTER_ROLE` on the `PortfolioRouter`.
 ///
@@ -34,7 +34,7 @@ contract GovernanceSeparationInvariant is Test {
 
     address internal admin = makeAddr("admin");
 
-    // Committee body (InvestmentCommitteePolicy.COMMITTEE_AGENT_ROLE).
+    // Committee body (ConsensusRecommendationReceipt.RECEIPT_SUBMITTER_ROLE).
     address internal committeeAthena = makeAddr("committee-athena");
     address internal committeeRobotMoney = makeAddr("committee-robotmoney");
     address internal committeeWoon = makeAddr("committee-woon");
@@ -46,7 +46,7 @@ contract GovernanceSeparationInvariant is Test {
 
     // ─── Contracts ───────────────────────────────────────────────────────────
 
-    InvestmentCommitteePolicy internal ic;
+    ConsensusRecommendationReceipt internal ic;
     PortfolioRouter internal router;
     RouterGovernance internal gov;
 
@@ -56,10 +56,9 @@ contract GovernanceSeparationInvariant is Test {
     // ─── Setup ───────────────────────────────────────────────────────────────
 
     function setUp() public {
-        // Committee body. The gateway address is only required non-zero by the
-        // constructor; this invariant asserts role membership.
-        ic = CoreProxies.investmentCommitteePolicy(admin, makeAddr("gateway"));
-        bytes32 committeeRole = ic.COMMITTEE_AGENT_ROLE();
+        // Recommending body: the receipt submitters. This invariant asserts role membership.
+        ic = CoreProxies.consensusRecommendationReceipt(admin);
+        bytes32 committeeRole = ic.RECEIPT_SUBMITTER_ROLE();
         vm.startPrank(admin);
         ic.grantRole(committeeRole, committeeAthena);
         ic.grantRole(committeeRole, committeeRobotMoney);
@@ -88,7 +87,7 @@ contract GovernanceSeparationInvariant is Test {
         return [committeeAthena, committeeRobotMoney, committeeWoon, timelock, admin, intruder];
     }
 
-    /// @dev True iff no swept address holds both COMMITTEE_AGENT_ROLE and any
+    /// @dev True iff no swept address holds both RECEIPT_SUBMITTER_ROLE and any
     ///      weight authority.
     function _separationHolds() internal view returns (bool) {
         address[6] memory swept = _swept();
@@ -103,9 +102,9 @@ contract GovernanceSeparationInvariant is Test {
             || router.hasRole(WEIGHT_SETTER_ROLE, account);
     }
 
-    /// @dev True iff `account` has COMMITTEE_AGENT_ROLE AND weight authority.
+    /// @dev True iff `account` has RECEIPT_SUBMITTER_ROLE AND weight authority.
     function _overlap(address account) internal view returns (bool) {
-        return ic.hasRole(ic.COMMITTEE_AGENT_ROLE(), account) && _hasWeightAuthority(account);
+        return ic.hasRole(ic.RECEIPT_SUBMITTER_ROLE(), account) && _hasWeightAuthority(account);
     }
 
     // ─── AC3: committee and weight setter are disjoint ───────────────────────
@@ -124,20 +123,20 @@ contract GovernanceSeparationInvariant is Test {
     function test_weightSetterIsNotACommitteeAgent() public view {
         assertTrue(gov.hasRole(WEIGHT_SETTER_ROLE, timelock), "timelock applies receipts");
         assertFalse(
-            ic.hasRole(ic.COMMITTEE_AGENT_ROLE(), timelock), "timelock is a committee agent"
+            ic.hasRole(ic.RECEIPT_SUBMITTER_ROLE(), timelock), "timelock is a receipt submitter"
         );
         assertEq(router.getRoleMemberCount(WEIGHT_SETTER_ROLE), 1);
         assertEq(router.getRoleMember(WEIGHT_SETTER_ROLE, 0), address(gov));
     }
 
-    /// @notice The committee holders are recognised by the policy.
+    /// @notice The committee holders are recognised by the receipt contract.
     function test_committeeHoldersAreRecognisedByPolicy() public view {
-        bytes32 committeeRole = ic.COMMITTEE_AGENT_ROLE();
-        assertTrue(ic.hasRole(committeeRole, committeeAthena), "athena must be a committee agent");
+        bytes32 committeeRole = ic.RECEIPT_SUBMITTER_ROLE();
+        assertTrue(ic.hasRole(committeeRole, committeeAthena), "athena must be a receipt submitter");
         assertTrue(
-            ic.hasRole(committeeRole, committeeRobotMoney), "robotmoney must be a committee agent"
+            ic.hasRole(committeeRole, committeeRobotMoney), "robotmoney must be a receipt submitter"
         );
-        assertTrue(ic.hasRole(committeeRole, committeeWoon), "woon must be a committee agent");
+        assertTrue(ic.hasRole(committeeRole, committeeWoon), "woon must be a receipt submitter");
     }
 
     /// @notice The full configured topology satisfies the separation invariant.
@@ -147,7 +146,7 @@ contract GovernanceSeparationInvariant is Test {
 
     // ─── Negative path: the invariant is a security-model change ─────────────
 
-    /// @notice A committee agent granted governance ADMIN_ROLE is flagged.
+    /// @notice A receipt submitter granted governance ADMIN_ROLE is flagged.
     function test_invariantFlagsCommitteeAgentWithWeightAuthority() public {
         vm.prank(timelock);
         gov.grantRole(ADMIN_ROLE, committeeAthena);
@@ -158,14 +157,14 @@ contract GovernanceSeparationInvariant is Test {
         assertTrue(_overlap(committeeAthena));
     }
 
-    /// @notice The weight setter additionally granted COMMITTEE_AGENT_ROLE is flagged.
+    /// @notice The weight setter additionally granted RECEIPT_SUBMITTER_ROLE is flagged.
     function test_invariantFlagsWeightSetterGivenCommitteeRole() public {
-        bytes32 committeeRole = ic.COMMITTEE_AGENT_ROLE();
+        bytes32 committeeRole = ic.RECEIPT_SUBMITTER_ROLE();
         vm.prank(admin);
         ic.grantRole(committeeRole, timelock);
         assertFalse(
             _separationHolds(),
-            "granting the weight setter COMMITTEE_AGENT_ROLE must break the invariant"
+            "granting the weight setter RECEIPT_SUBMITTER_ROLE must break the invariant"
         );
         assertTrue(_overlap(timelock));
     }

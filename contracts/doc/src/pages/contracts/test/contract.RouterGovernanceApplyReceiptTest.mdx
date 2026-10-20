@@ -5,7 +5,7 @@ description: "A recorded consensus receipt is applied the production way: two of
 
 # RouterGovernanceApplyReceiptTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7947a8e6f43a743f5ba2aa35912426cbfda6b46c/contracts/test/RouterGovernanceApplyReceipt.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/RouterGovernanceApplyReceipt.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -20,8 +20,8 @@ The governance contract is deployed and wired by the real
 
 Refusals are asserted with their exact reason by executing the ready
 operation straight on the open-executor timelock (the Safe would hide the
-reason as GS013). The receipt register's gateway is this test contract: the
-committee's record path is not under test here.
+reason as GS013). The receipt is recorded directly by a submitter holding
+RECEIPT_SUBMITTER_ROLE; RouterGovernance holds only RECEIPT_RELEASER_ROLE.
 
 ## Constants
 
@@ -99,12 +99,6 @@ VaultRegistry internal registry;
 PortfolioRouter internal router;
 ```
 
-### ic
-
-```solidity
-InvestmentCommitteePolicy internal ic;
-```
-
 ### receipts
 
 ```solidity
@@ -132,7 +126,7 @@ MockGovVault internal vaultB;
 ### submitter
 
 ```solidity
-address internal submitter = makeAddr("committee-submitter");
+address internal submitter = makeAddr("receipt-submitter");
 ```
 
 ## Functions
@@ -304,7 +298,7 @@ function test_applyReceipt_revertsOnReleasedReceipt() public;
 ### test_applyReceipt_revertsForNonWeightSetter
 
 Every caller other than the timelock is refused: the Safe itself (with
-two real owner signatures), the deployer, the committee submitter, the
+two real owner signatures), the deployer, the receipt submitter, the
 router and the receipt register, and any fuzzed address.
 
 ```solidity
@@ -336,6 +330,17 @@ function _unauthorized(address who) internal pure returns (bytes memory);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bytes` |  |
+
+<a id="test_governanceholdsonlythereleaseroleonthereceipt"></a>
+
+### test_governanceHoldsOnlyTheReleaseRoleOnTheReceipt
+
+RouterGovernance holds the narrow release role on the receipt and cannot
+administer any receipt role. The timelock alone holds the receipt ADMIN_ROLE.
+
+```solidity
+function test_governanceHoldsOnlyTheReleaseRoleOnTheReceipt() public;
+```
 
 <a id="test_weightsetterroleisselfadministered"></a>
 

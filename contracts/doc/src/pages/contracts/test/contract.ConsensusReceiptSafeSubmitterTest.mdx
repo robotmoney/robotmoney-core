@@ -1,20 +1,20 @@
 ---
 title: "ConsensusReceiptSafeSubmitterTest"
-description: "The consensus receipt SUBMITTER is a real SafeL2 1.4.1 proxy (a second Safe, separate from the governing Safe). It holds AGENT_ROLE on the gateway and COMMITTEE_AGENT_ROLE on the IC policy and nothing else. The contracts make no msg.sender, tx.origin, isContract or ecrecover check on the role holder, so a contract account is accepted unchanged. The policy is the smallest legal one the publish tooling registers (1 raw unit per payment and per window, no withdrawals, shares to the timelock)."
+description: "The consensus receipt SUBMITTER is a real SafeL2 1.4.1 proxy (a second Safe, separate from the governing Safe). It holds `RECEIPT_SUBMITTER_ROLE` on the receipt contract and nothing else. The role is granted by exactly one delayed timelock call (`govern --row register-submitter`). The contract makes no tx.origin, isContract or ecrecover check on the role holder, so a contract account is accepted unchanged, and the stored submitter is the Safe (`msg.sender`)."
 ---
 
 # ConsensusReceiptSafeSubmitterTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/ConsensusReceiptSafeSubmitter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/ConsensusReceiptSafeSubmitter.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
 **Title:** ConsensusReceiptSafeSubmitterTest
 
 The consensus receipt SUBMITTER is a real SafeL2 1.4.1 proxy (a second Safe, separate from the governing Safe). It holds
-AGENT_ROLE on the gateway and COMMITTEE_AGENT_ROLE on the IC policy and nothing else. The contracts make no msg.sender,
-tx.origin, isContract or ecrecover check on the role holder, so a contract account is accepted unchanged. The policy is the
-smallest legal one the publish tooling registers (1 raw unit per payment and per window, no withdrawals, shares to the timelock).
+`RECEIPT_SUBMITTER_ROLE` on the receipt contract and nothing else. The role is granted by exactly one delayed timelock call
+(`govern --row register-submitter`). The contract makes no tx.origin, isContract or ecrecover check on the role holder, so a
+contract account is accepted unchanged, and the stored submitter is the Safe (`msg.sender`).
 
 ## Constants
 
@@ -24,19 +24,13 @@ smallest legal one the publish tooling registers (1 raw unit per payment and per
 string constant URI = "https://twin.invalid/r.json";
 ```
 
+### DELAY
+
+```solidity
+uint256 constant DELAY = 1 hours;
+```
+
 ## State Variables
-
-### admin
-
-```solidity
-address admin = address(0xA0);
-```
-
-### pauser
-
-```solidity
-address pauser = address(0xA1);
-```
 
 ### governingSafe
 
@@ -48,30 +42,6 @@ address governingSafe;
 
 ```solidity
 address submitterSafe;
-```
-
-### usdc
-
-```solidity
-TestERC20 usdc;
-```
-
-### vault
-
-```solidity
-MockVault vault;
-```
-
-### gateway
-
-```solidity
-RobotMoneyGateway gateway;
-```
-
-### ic
-
-```solidity
-InvestmentCommitteePolicy ic;
 ```
 
 ### receipts
@@ -95,6 +65,26 @@ TimelockController timelock;
 ```solidity
 function setUp() public;
 ```
+
+<a id="_registersubmitter-address"></a>
+
+### _registerSubmitter
+
+<i>
+
+`register-submitter`: the governing Safe schedules one `grantRole(RECEIPT_SUBMITTER_ROLE, safe)` on the receipt, then executes it.
+
+</i>
+
+```solidity
+function _registerSubmitter(address safe_) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe_ | `address` |  |
 
 <a id="_recordcall-bytes32-bytes32"></a>
 
@@ -121,7 +111,7 @@ function _recordCall(bytes32 id, bytes32 digest) internal pure returns (bytes me
 
 ### testSafeSubmitterRecordsAReceiptWithTwoOwnerSignatures
 
-The Safe holds both roles and the receipt contract stores the Safe as the submitter.
+The registered Safe records with two owner signatures and the receipt contract stores the Safe as the submitter.
 
 ```solidity
 function testSafeSubmitterRecordsAReceiptWithTwoOwnerSignatures() public;
@@ -141,7 +131,7 @@ function testOneOwnerSignatureCannotRecord() public;
 
 ### testGoverningSafeCannotRecord
 
-The governing Safe is NOT a submitter: its signatures through the governing Safe cannot record (it holds no role).
+The governing Safe is NOT a submitter: with a full quorum it still cannot record (it holds no role).
 
 ```solidity
 function testGoverningSafeCannotRecord() public;
@@ -157,16 +147,6 @@ Signatures made for the governing Safe's hash do not execute on the submitter Sa
 function testSignaturesDoNotTransferBetweenTheTwoSafes() public;
 ```
 
-<a id="testpolicystillcapsthesafeatoneunitandnowithdrawals"></a>
-
-### testPolicyStillCapsTheSafeAtOneUnitAndNoWithdrawals
-
-The signalling-only policy holds for a Safe holder: withdrawals are disabled and a deposit above 1 raw unit reverts.
-
-```solidity
-function testPolicyStillCapsTheSafeAtOneUnitAndNoWithdrawals() public;
-```
-
 <a id="testunregisteredsafecannotrecord"></a>
 
 ### testUnregisteredSafeCannotRecord
@@ -177,228 +157,24 @@ An unregistered Safe cannot record, even with a full quorum.
 function testUnregisteredSafeCannotRecord() public;
 ```
 
-<a id="_handovergatewayadmin"></a>
+<a id="testgoverningsafeassubmitterrecordsafterthegrant"></a>
 
-### _handOverGatewayAdmin
+### testGoverningSafeAsSubmitterRecordsAfterTheGrant
 
-<i>
-
-The handover: the timelock holds the gateway's ADMIN_ROLE (in production DeployTimelock grants it), so it can own an agent, write that agent's
-policy and register a committee agent.
-
-</i>
+The governing Safe may be the submitter too (shared owners): one grant, the same Safe proposes on the timelock and records.
 
 ```solidity
-function _handOverGatewayAdmin() internal;
+function testGoverningSafeAsSubmitterRecordsAfterTheGrant() public;
 ```
 
-<a id="_submitterpolicy-address"></a>
+<a id="testrevokedsafesubmittercannotrecord"></a>
 
-### _submitterPolicy
+### testRevokedSafeSubmitterCannotRecord
 
-<i>
-
-The signalling-only policy the publish tooling registers (1 raw unit, no withdrawals), paying shares to `receiver`.
-
-</i>
+A revoked Safe submitter can no longer record. The revoke is a delayed timelock call.
 
 ```solidity
-function _submitterPolicy(address receiver)
-        internal
-        view
-        returns (IGateway.AgentPolicy memory);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| receiver | `address` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `IGateway.AgentPolicy` |  |
-
-<a id="_selfauthorize-address-bytes32"></a>
-
-### _selfAuthorize
-
-<i>
-
-The PRIVATE half: three transactions of the submitter Safe itself. A caller without ADMIN_ROLE must name itself as shareReceiver; an agent
-revealing for itself consents by the call (issue #1791).
-
-</i>
-
-```solidity
-function _selfAuthorize(address safe_, bytes32 salt) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| safe_ | `address` |  |
-| salt | `bytes32` |  |
-
-<a id="_gatewaybatch-address-bytes"></a>
-
-### _gatewayBatch
-
-<i>
-
-A two-call timelock batch on the gateway: `first`, then committeeRegister(safe_).
-
-</i>
-
-```solidity
-function _gatewayBatch(address safe_, bytes memory first)
-        internal
-        view
-        returns (address[] memory targets, uint256[] memory values, bytes[] memory payloads);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| safe_ | `address` |  |
-| first | `bytes` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| targets | `address[]` |  |
-| values | `uint256[]` |  |
-| payloads | `bytes[]` |  |
-
-<a id="_govschedulebatch-address-uint256-bytes-bytes32"></a>
-
-### _govScheduleBatch
-
-<i>
-
-Governing Safe -> timelock.scheduleBatch, with two owner signatures.
-
-</i>
-
-```solidity
-function _govScheduleBatch(
-        address[] memory targets,
-        uint256[] memory values,
-        bytes[] memory payloads,
-        bytes32 salt
-    ) internal returns (bytes32 id);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| targets | `address[]` |  |
-| values | `uint256[]` |  |
-| payloads | `bytes[]` |  |
-| salt | `bytes32` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| id | `bytes32` |  |
-
-<a id="test_publicregisterbatchcannotbefrontrun"></a>
-
-### test_publicRegisterBatchCannotBeFrontRun
-
-The register batch is public on the timelock for the whole delay. With the submitter Safe's private self-authorization done first, the batch is
-setPolicy + committeeRegister and carries no first-time authorization. A squatter who reads the submitter address from the scheduled batch can
-neither authorize it (AgentAlreadyOwned) nor revoke, re-point or take it (NotAgentOwner), and the batch executes after the delay. Before the
-private half a squatter cannot claim the Safe's address either: it never committed to the squatter (OwnerConsentMissing, issue #1791).
-
-```solidity
-function test_publicRegisterBatchCannotBeFrontRun() public;
-```
-
-<a id="_assertsquattercannotclaim-address"></a>
-
-### _assertSquatterCannotClaim
-
-<i>
-
-Before the private half: a squatter commits and reveals for `agent` with no consent. A caller without ADMIN_ROLE binds another address only
-when that address committed to this caller and this exact reveal (issue #1791). The Safe made no such commit, so the reveal is refused and `agent` stays unowned.
-
-</i>
-
-```solidity
-function _assertSquatterCannotClaim(address agent) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| agent | `address` |  |
-
-<a id="_assertsquattercannottouch-address"></a>
-
-### _assertSquatterCannotTouch
-
-<i>
-
-During the delay: the squatter, who read `agent` from the scheduled batch, tries every agent write the gateway exposes. The timelock owns
-the agent, so a first-time authorization reverts AgentAlreadyOwned and every owner-gated write reverts NotAgentOwner.
-
-</i>
-
-```solidity
-function _assertSquatterCannotTouch(address agent) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| agent | `address` |  |
-
-<a id="_sharereceiver-address"></a>
-
-### _shareReceiver
-
-<i>
-
-The stored policy's share receiver (the public getter returns the eight non-array fields).
-
-</i>
-
-```solidity
-function _shareReceiver(address agent) internal view returns (address receiver);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| agent | `address` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| receiver | `address` |  |
-
-<a id="test_privatecommitcannotberevealedbyanotheraccount"></a>
-
-### test_privateCommitCannotBeRevealedByAnotherAccount
-
-The private commit is bound to the submitter Safe: the commit hash carries msg.sender, so a watcher who sees the Safe's commit, and even learns its
-salt, cannot reveal it. The Safe's own reveal still lands.
-
-```solidity
-function test_privateCommitCannotBeRevealedByAnotherAccount() public;
+function testRevokedSafeSubmitterCannotRecord() public;
 ```
 
 <a id="_nonce-address"></a>

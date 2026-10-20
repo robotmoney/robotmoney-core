@@ -428,49 +428,6 @@ interface IGateway {
     ///         lifecycle of an agent it does not own.
     function unpauseDeposits() external;
 
-    /// @notice Set or update the Investment Committee policy contract address.
-    ///         Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear.
-    /// @param policy_ Address of the deployed `InvestmentCommitteePolicy` contract,
-    ///                or `address(0)` to disable committee routing.
-    function setICPolicy(address policy_) external;
-
-    /// @notice Forward a committee agent registration to the IC policy contract.
-    ///         Restricted to `ADMIN_ROLE`. Reverts if `icPolicy` is not set.
-    /// @param agent    Address to register on the IC contract.
-    /// @param agentId_ Human-readable label (e.g. "athena-v1").
-    function committeeRegister(address agent, string calldata agentId_) external;
-
-    /// @notice Forward a signed committee vote to the IC policy contract.
-    ///         Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set or
-    ///         if `p.agent != msg.sender` (issue #1790).
-    /// @param p  All vote fields packed into a `VoteParams` struct.
-    /// @return voteId  Index of the newly appended vote in the IC contract.
-    function committeeVoteSubmit(IInvestmentCommitteePolicy.VoteParams calldata p)
-        external
-        returns (uint256 voteId);
-
-    /// @notice Set or update the ConsensusRecommendationReceipt contract address.
-    ///         Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear.
-    /// @param receipt_ Address of the deployed `ConsensusRecommendationReceipt`
-    ///                 contract, or `address(0)` to disable receipt routing.
-    function setConsensusReceipt(address receipt_) external;
-
-    /// @notice Record a consensus recommendation receipt commitment. Restricted to
-    ///         `AGENT_ROLE`. Reverts if `consensusReceipt` is not set.
-    ///         Signalling only — see `docs/architecture.md` §4.9 and INV-4.
-    ///         There is no gateway release entrypoint: `ADMIN_ROLE` on the
-    ///         receipt contract is held by the `TimelockController` (INV-3),
-    ///         which calls `releaseReceipt` there directly.
-    /// @param receiptId     Unique receipt id (one per session per subject).
-    /// @param payloadDigest `keccak256` of the receipt's canonical bytes.
-    /// @param payloadUri    Public route serving those exact bytes.
-    /// @return index Index of the newly appended receipt.
-    function consensusRecordReceipt(
-        bytes32 receiptId,
-        bytes32 payloadDigest,
-        string calldata payloadUri
-    ) external returns (uint256 index);
-
     // -------------------------------------------------------------------
     // Views
     // -------------------------------------------------------------------
@@ -490,10 +447,11 @@ interface IGateway {
     /// @notice Whether gateway deposits are currently paused. Withdrawals are never paused.
     function depositsPaused() external view returns (bool);
 
-    /// @notice Investment Committee policy contract, or `address(0)` if not configured.
+    /// @notice Retired storage slot (issue 1888): the on-chain committee is deleted. Read-only.
     function icPolicy() external view returns (IInvestmentCommitteePolicy);
 
-    /// @notice Consensus recommendation receipt contract, or `address(0)` if not configured.
+    /// @notice Retired storage slot (issue 1888): receipts are recorded directly on the receipt
+    ///         contract, never through the gateway. Read-only.
     function consensusReceipt() external view returns (IConsensusRecommendationReceipt);
 
     /// @notice Recorded owner for `agent`, or `address(0)` if no policy is

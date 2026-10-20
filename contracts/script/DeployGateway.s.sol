@@ -19,8 +19,8 @@ import {UpgradeAuthority} from "./UpgradeAuthority.sol";
 ///         and revealAuthorization (architecture 5.2 and 6.3). The router must exist first: the gateway stores it as an immutable,
 ///         so a gateway deployed with a zero router can never route (core 1493).
 ///
-///         The IC policy and the consensus receipt bind the gateway address, so they run in
-///         their own stage AFTER this one (`DeployInvestmentCommitteePolicy`).
+///         The consensus receipt does not bind the gateway: it deploys in its own stage
+///         (`DeployConsensusRecommendationReceipt`).
 ///
 /// @dev Required env vars (all required on every chain, no defaults):
 ///        EXPECTED_CHAIN_ID     — mandatory and equal to 8453 on Base mainnet

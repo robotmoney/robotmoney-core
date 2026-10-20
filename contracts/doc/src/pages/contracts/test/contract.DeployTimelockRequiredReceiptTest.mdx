@@ -1,11 +1,11 @@
 ---
-title: "DeployTimelockRequiredIcPolicyTest"
+title: "DeployTimelockRequiredReceiptTest"
 description: "Required inputs: unset or malformed values revert on every chain. One contract per test with its own prefix: forge runs the tests of a contract in parallel over a process-wide environment, so two tests that mutate inputs would leak into each other."
 ---
 
-# DeployTimelockRequiredIcPolicyTest
+# DeployTimelockRequiredReceiptTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/619570ee0a3da501ae46fccdb4e307b8b11b0f2c/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelockRunEntrypointBase](/contracts/test/abstract.DeployTimelockRunEntrypointBase)
 
@@ -36,11 +36,11 @@ function _prefix() internal pure override returns (string memory);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `string` |  |
 
-<a id="test_run_revertswhenicpolicyunset"></a>
+<a id="test_run_revertswhenreceiptunset"></a>
 
-### test_run_revertsWhenIcPolicyUnset
+### test_run_revertsWhenReceiptUnset
 
 ```solidity
-function test_run_revertsWhenIcPolicyUnset() public removesOwnManifest;
+function test_run_revertsWhenReceiptUnset() public removesOwnManifest;
 ```
 
