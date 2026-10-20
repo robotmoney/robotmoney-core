@@ -124,16 +124,15 @@ const RAW_METHOD_ALLOWED = new Set(["components/SafeProposalPanel.tsx", FAUCET])
 
 /** The exact set of modules that send transactions through the guarded hook. */
 const KNOWN_WRITERS = [
-  "components/AuthorizeTab.tsx",
   "components/DepositWithdrawTab.tsx",
   "components/MultiVaultWithdrawalTab.tsx",
-  "components/OnboardingWizard.tsx",
   "components/PauseFlow.tsx",
   "components/RevokeTab.tsx",
   "components/RefreshPriceButton.tsx",
   "components/RouterDepositTab.tsx",
   "components/SafeProposalPanel.tsx",
   "components/VaultSelectorDepositTab.tsx",
+  "lib/useConsentedRegistration.ts",
   "lib/useRotationState.ts",
 ];
 

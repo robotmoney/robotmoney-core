@@ -43,6 +43,8 @@ const verifiedCtx: PreviewContext = {
   envClass: "fork",
 };
 
+const salt = "0x1111111111111111111111111111111111111111111111111111111111111111" as const;
+
 const unverifiedCtx: PreviewContext = {
   gateway,
   gatewayCodeHashVerified: false,
@@ -53,8 +55,8 @@ describe("Admin write buttons — verification gating (issue #207)", () => {
   describe("AC1 + AC5: verified state enables writes with targetCodeHashKnown=true", () => {
     const actions = [
       {
-        kind: "authorizeAgent" as const,
-        action: { kind: "authorizeAgent" as const, agent, policy },
+        kind: "revealAuthorization" as const,
+        action: { kind: "revealAuthorization" as const, agent, salt, policy },
       },
       { kind: "revokeAgent" as const, action: { kind: "revokeAgent" as const, agent } },
       { kind: "pauseDeposits" as const, action: { kind: "pauseDeposits" as const } },
@@ -84,8 +86,11 @@ describe("Admin write buttons — verification gating (issue #207)", () => {
   });
 
   describe("AC1 + AC2: unverified/missing hash disables writes and renders refusal", () => {
-    it("authorizeAgent: refusal preview when not verified", () => {
-      const preview = buildPreview({ kind: "authorizeAgent", agent, policy }, unverifiedCtx);
+    it("revealAuthorization: refusal preview when not verified", () => {
+      const preview = buildPreview(
+        { kind: "revealAuthorization", agent, salt, policy },
+        unverifiedCtx,
+      );
       expect(preview.ok).toBe(false);
       const { getByTestId, queryByTestId } = render(<TxPreview preview={preview} />);
       expect(getByTestId("refusal-reason").textContent).toMatch(/bytecode hash/i);

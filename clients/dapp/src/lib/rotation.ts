@@ -6,7 +6,8 @@
  *
  * A rotation replaces an old authorized agent address with a new one. The
  * dapp must present a two-step preview — revokeAgent(old) followed by
- * authorizeAgent(new, policy) — before the wallet signing prompt is enabled.
+ * the consented registration of the new agent (consent, commit, reveal) — before the wallet
+ * signing prompt is enabled. Every wallet takes that path (issue 1890).
  *
  * Both steps are presented together so the operator can verify the full
  * effect: the old address loses AGENT_ROLE and the new address gains it with
@@ -119,10 +120,11 @@ export function composeRotationPreview(
     revokeStep,
     authorizeStep,
     combinedRiskAnnotation:
-      "This rotation submits TWO on-chain transactions in sequence: " +
+      "This rotation submits THREE on-chain transactions from this wallet, in sequence, after the new agent's own consent: " +
       "(1) revokeAgent removes the old agent address, " +
-      "(2) authorizeAgent grants AGENT_ROLE to the new address with the specified policy. " +
-      "Both previews must be reviewed and confirmed before wallet signing begins. " +
+      "(2) commitAuthorization, which stays disabled until the new agent has committed its consent from its own key, " +
+      "(3) revealAuthorization grants AGENT_ROLE to the new address with the specified policy, and this wallet becomes its owner. " +
+      "Every preview must be reviewed and confirmed before wallet signing begins. " +
       "Do not close this dialog between transactions.",
   };
 }

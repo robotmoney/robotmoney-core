@@ -118,9 +118,8 @@ test.describe("onboarding USDC seed — testnet/devnet drip", () => {
     // the connected wallet after a successful authorize", which does not care
     // which agent address is being granted AGENT_ROLE.
     //
-    // The gateway requires a caller without ADMIN_ROLE to name itself as
-    // shareReceiver (RobotMoneyGateway._validatePolicy), so the depositor
-    // receives its own shares.
+    // The gateway requires every caller to name itself as shareReceiver
+    // (RobotMoneyGateway._validatePolicy, ACL-9), so the depositor receives its own shares.
     const FRESH_AGENT_ADDR = "0x000000000000000000000000000000000000fa11" as Address;
     await page.getByTestId("wizard-agent-input").fill(FRESH_AGENT_ADDR);
     await page.getByTestId("wizard-shareReceiver-input").fill(depositor.address);
@@ -129,15 +128,18 @@ test.describe("onboarding USDC seed — testnet/devnet drip", () => {
     // Step 3: commit/reveal authorize (two-step flow, AZ-DAPP-1).
     const baseline = await usdcBalanceOf(endpoints.rpc_url, endpoints.usdc_addr, depositor.address);
 
-    // Step 3a: commit — signs commitAuthorization(keccak256(agent,caller,salt)).
+    // Step 3a: freeze the inputs, then the agent address consents (core 1791, ACL-9) BEFORE
+    // the owner commit, which stays disabled until the dapp reads the consent from the gateway.
+    await page.getByTestId("wizard-freeze").click();
     const commitSubmit = page.getByTestId("wizard-commit-submit");
-    await expect(commitSubmit).toBeEnabled({ timeout: 30_000 });
-    await commitSubmit.click();
-
-    // The agent address consents to the depositor before the reveal (core 1791).
+    await expect(commitSubmit).toBeDisabled();
     await consentFromDapp(page, endpoints, FRESH_AGENT_ADDR, "wizard-consent-hash");
 
-    // Step 3b: reveal — enabled once currentBlock > commitBlockNumber.
+    // Step 3b: commit — signs commitAuthorization(keccak256(agent,caller,salt)).
+    await expect(commitSubmit).toBeEnabled({ timeout: 60_000 });
+    await commitSubmit.click();
+
+    // Step 3c: reveal — enabled once currentBlock > commitBlockNumber.
     const revealSubmit = page.getByTestId("wizard-reveal-submit");
     await expect(revealSubmit).toBeEnabled({ timeout: 60_000 });
     await revealSubmit.click();

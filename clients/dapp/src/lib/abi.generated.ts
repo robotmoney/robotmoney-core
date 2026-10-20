@@ -263,76 +263,6 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
-    name: "authorizeAgent",
-    inputs: [
-      {
-        name: "agent",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "p",
-        type: "tuple",
-        internalType: "struct IGateway.AgentPolicy",
-        components: [
-          {
-            name: "active",
-            type: "bool",
-            internalType: "bool",
-          },
-          {
-            name: "validUntil",
-            type: "uint64",
-            internalType: "uint64",
-          },
-          {
-            name: "maxPerPayment",
-            type: "uint256",
-            internalType: "uint256",
-          },
-          {
-            name: "maxPerWindow",
-            type: "uint256",
-            internalType: "uint256",
-          },
-          {
-            name: "shareReceiver",
-            type: "address",
-            internalType: "address",
-          },
-          {
-            name: "allowedDestinations",
-            type: "address[]",
-            internalType: "address[]",
-          },
-          {
-            name: "assetRecipient",
-            type: "address",
-            internalType: "address",
-          },
-          {
-            name: "maxWithdrawPerPayment",
-            type: "uint256",
-            internalType: "uint256",
-          },
-          {
-            name: "maxWithdrawPerWindow",
-            type: "uint256",
-            internalType: "uint256",
-          },
-          {
-            name: "allowedSourceVaults",
-            type: "address[]",
-            internalType: "address[]",
-          },
-        ],
-      },
-    ],
-    outputs: [],
-    stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
     name: "commitAuthorization",
     inputs: [
       {
@@ -911,24 +841,6 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
-    name: "transferAgentOwnership",
-    inputs: [
-      {
-        name: "agent",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "newOwner",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    outputs: [],
-    stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
     name: "unpauseDeposits",
     inputs: [],
     outputs: [],
@@ -1285,31 +1197,6 @@ export const gatewayAbiGenerated = [
         type: "uint64",
         indexed: false,
         internalType: "uint64",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
-    name: "AgentOwnershipTransferred",
-    inputs: [
-      {
-        name: "agent",
-        type: "address",
-        indexed: true,
-        internalType: "address",
-      },
-      {
-        name: "previousOwner",
-        type: "address",
-        indexed: true,
-        internalType: "address",
-      },
-      {
-        name: "newOwner",
-        type: "address",
-        indexed: true,
-        internalType: "address",
       },
     ],
     anonymous: false,
@@ -1711,6 +1598,11 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
+    name: "AgentRoleNotManageable",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "AmountExceedsPerPaymentCap",
     inputs: [],
   },
@@ -1828,11 +1720,6 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "LastAdminFloor",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "NewAgentOwnerNotAdmin",
     inputs: [],
   },
   {

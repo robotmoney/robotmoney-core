@@ -1,6 +1,6 @@
 /**
  * Unit tests for the calldata-preview pipeline. Covers the happy path
- * (authorize, revoke, pauseDeposits), the hard refusal on unverified bytecode,
+ * (register, revoke, pauseDeposits), the hard refusal on unverified bytecode,
  * and the risk classifier matrix from ADR §3.3.
  */
 import { describe, it, expect } from "vitest";
@@ -23,6 +23,8 @@ const baseCtx: PreviewContext = {
   envClass: "fork",
 };
 
+const salt = "0x1111111111111111111111111111111111111111111111111111111111111111" as const;
+
 const policy = {
   active: true,
   validUntil: 1893456000n, // 2030-01-01
@@ -37,11 +39,11 @@ const policy = {
 };
 
 describe("buildPreview", () => {
-  it("renders authorize preview with all required fields", () => {
-    const p = buildPreview({ kind: "authorizeAgent", agent, policy }, baseCtx);
+  it("renders registration reveal preview with all required fields", () => {
+    const p = buildPreview({ kind: "revealAuthorization", agent, salt, policy }, baseCtx);
     expect(p.ok).toBe(true);
     if (!p.ok) return;
-    expect(p.functionName).toBe("authorizeAgent");
+    expect(p.functionName).toBe("revealAuthorization");
     expect(p.target).toBe(gateway);
     expect(p.targetCodeHashKnown).toBe(true);
     expect(p.selector).toMatch(/^0x[0-9a-f]{8}$/);
@@ -62,7 +64,7 @@ describe("buildPreview", () => {
 
   it("hard-refuses when bytecode hash is unverified", () => {
     const p = buildPreview(
-      { kind: "authorizeAgent", agent, policy },
+      { kind: "revealAuthorization", agent, salt, policy },
       { ...baseCtx, gatewayCodeHashVerified: false },
     );
     expect(p.ok).toBe(false);
@@ -95,7 +97,9 @@ describe("buildPreview", () => {
 
   it("flags high-cap authorize as high risk", () => {
     const big = { ...policy, maxPerWindow: 10_000_000_000n };
-    expect(classifyRisk({ kind: "authorizeAgent", agent, policy: big }, baseCtx)).toBe("high");
+    expect(classifyRisk({ kind: "revealAuthorization", agent, salt, policy: big }, baseCtx)).toBe(
+      "high",
+    );
   });
 
   // Issue #83: ADMIN_ROLE / DEPOSIT_PAUSER_ROLE grant + revoke previews.
@@ -156,8 +160,11 @@ describe("buildPreview", () => {
       expect(isWithdrawalEnabled({ ...policy, maxWithdrawPerWindow: 10_000n })).toBe(false);
     });
 
-    it("authorize preview surfaces assetRecipient, caps, expiry, and explicit WARNING copy", () => {
-      const p = buildPreview({ kind: "authorizeAgent", agent, policy: withdrawPolicy }, baseCtx);
+    it("reveal preview surfaces assetRecipient, caps, expiry, and explicit WARNING copy", () => {
+      const p = buildPreview(
+        { kind: "revealAuthorization", agent, salt, policy: withdrawPolicy },
+        baseCtx,
+      );
       expect(p.ok).toBe(true);
       if (!p.ok) return;
       // assetRecipient is decoded into a labelled arg, not an
@@ -185,7 +192,7 @@ describe("buildPreview", () => {
     });
 
     it("deposit-only policy does not advertise withdrawal exposure as enabled", () => {
-      const p = buildPreview({ kind: "authorizeAgent", agent, policy }, baseCtx);
+      const p = buildPreview({ kind: "revealAuthorization", agent, salt, policy }, baseCtx);
       expect(p.ok).toBe(true);
       if (!p.ok) return;
       // The withdrawal-policy args are always present (shape is
@@ -204,9 +211,9 @@ describe("buildPreview", () => {
     });
 
     it("classifyRisk upgrades withdrawal-enabled policies to high", () => {
-      expect(classifyRisk({ kind: "authorizeAgent", agent, policy: withdrawPolicy }, baseCtx)).toBe(
-        "high",
-      );
+      expect(
+        classifyRisk({ kind: "revealAuthorization", agent, salt, policy: withdrawPolicy }, baseCtx),
+      ).toBe("high");
     });
   });
 });

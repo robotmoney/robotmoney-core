@@ -24,7 +24,6 @@ const GATEWAY = "0x1111111111111111111111111111111111111111" as Address;
 const VAULT = "0x2222222222222222222222222222222222222222" as Address;
 const USER = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as Address;
 const AGENT = "0x3333333333333333333333333333333333333333";
-const RECEIVER = "0x4444444444444444444444444444444444444444";
 const IMPL = "0x1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a" as Address;
 const UPGRADED_IMPL = "0x2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b" as Address;
 const GATEWAY_CODE = "0x60016001" as Hex;
@@ -127,15 +126,20 @@ async function revokeFromAdminFlow(state: VerificationState = verified) {
   fireEvent.click(screen.getByTestId("revoke-submit"));
 }
 
-/** AgentsPanel (onboarding): fill the agent and receiver, review, sign the commit. */
+/**
+ * AgentsPanel (onboarding): the wallet registers itself as the agent (no separate consent is
+ * needed), freezes the inputs, and signs the commit. The share receiver is the wallet (ACL-9).
+ */
 async function commitFromAgentsPanel() {
   render(<AgentsPanel {...common} flagEnv={{ VITE_FORCE_ONBOARDING: "1" }} />);
   fireEvent.click(screen.getByTestId("step-1-next"));
-  fireEvent.change(screen.getByTestId("wizard-agent-input"), { target: { value: AGENT } });
+  fireEvent.change(screen.getByTestId("wizard-agent-input"), { target: { value: USER } });
   fireEvent.change(screen.getByTestId("wizard-shareReceiver-input"), {
-    target: { value: RECEIVER },
+    target: { value: USER },
   });
   fireEvent.click(screen.getByTestId("step-2-next"));
+  await waitFor(() => expect(screen.getByTestId("wizard-freeze")).not.toBeDisabled());
+  fireEvent.click(screen.getByTestId("wizard-freeze"));
   await waitFor(() => expect(screen.getByTestId("wizard-commit-submit")).not.toBeDisabled());
   fireEvent.click(screen.getByTestId("wizard-commit-submit"));
 }

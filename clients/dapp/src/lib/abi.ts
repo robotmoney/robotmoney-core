@@ -3,9 +3,10 @@
 /**
  * Minimal ABI excerpt for the depositor-owned agent-policy actions
  * (issue #269 — each depositor is the sole authority over her own
- * agent). The `authorizeAgent` / `setPolicy` / `revokeAgent` surface is
- * permissionless on the contract; gating is by recorded `agentOwner`,
- * not by `ADMIN_ROLE`. `ADMIN_ROLE` survives only as the counterweight
+ * agent). The registration is `commitAuthorization` + `revealAuthorization` only
+ * (issue 1890 removed `authorizeAgent` and `transferAgentOwnership`); `setPolicy`
+ * is gated by the recorded `agentOwner`, and `revokeAgent` by the owner or the
+ * agent itself. `ADMIN_ROLE` grants no authority over an agent. `ADMIN_ROLE` survives only as the counterweight
  * to `pauseDeposits` (it alone may call `unpauseDeposits`) held by the
  * contract-upgrader. A deposit pause stops new deposits only; it never
  * blocks a withdrawal (core 1494).
@@ -16,31 +17,6 @@
  * Rust client (`clients/rust-payment-client/abi/`).
  */
 export const gatewayAbi = [
-  {
-    type: "function",
-    name: "authorizeAgent",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "agent", type: "address" },
-      {
-        name: "p",
-        type: "tuple",
-        components: [
-          { name: "active", type: "bool" },
-          { name: "validUntil", type: "uint64" },
-          { name: "maxPerPayment", type: "uint256" },
-          { name: "maxPerWindow", type: "uint256" },
-          { name: "shareReceiver", type: "address" },
-          { name: "allowedDestinations", type: "address[]" },
-          { name: "assetRecipient", type: "address" },
-          { name: "maxWithdrawPerPayment", type: "uint256" },
-          { name: "maxWithdrawPerWindow", type: "uint256" },
-          { name: "allowedSourceVaults", type: "address[]" },
-        ],
-      },
-    ],
-    outputs: [],
-  },
   {
     type: "function",
     name: "setPolicy",
@@ -72,6 +48,16 @@ export const gatewayAbi = [
     stateMutability: "nonpayable",
     inputs: [{ name: "agent", type: "address" }],
     outputs: [],
+  },
+  {
+    type: "function",
+    name: "commitments",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "bytes32" }],
+    outputs: [
+      { name: "committer", type: "address" },
+      { name: "blockNumber", type: "uint64" },
+    ],
   },
   {
     type: "function",
@@ -181,7 +167,6 @@ export const gatewayAbi = [
 ] as const;
 
 export type AdminActionName =
-  | "authorizeAgent"
   | "commitAuthorization"
   | "revealAuthorization"
   | "setPolicy"

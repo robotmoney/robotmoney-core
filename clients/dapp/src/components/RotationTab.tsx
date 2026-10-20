@@ -1,7 +1,6 @@
 // Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
-// Canonical: docs/technical/dapp-credential-decisions.md §3.2 (2026-10-06 amendment)
+// Canonical: docs/technical/dapp-credential-decisions.md §3.2 (2026-10-06 amendment, 2026-10-20 amendment)
 
-import { AgentConsentNotice } from "./AgentConsentNotice";
 import type { FormEvent } from "react";
 import { useAccount } from "wagmi";
 import type { Address } from "viem";
@@ -10,6 +9,7 @@ import { useRotationState } from "../lib/useRotationState";
 import { TxPreview } from "./TxPreview";
 import { PolicyFields } from "./PolicyFields";
 import { WriteStatus } from "./WriteStatus";
+import { RegistrationSteps, registrationIds } from "./RegistrationSteps";
 
 type Props = Readonly<{
   gatewayAddress: Address;
@@ -17,18 +17,21 @@ type Props = Readonly<{
   now: number;
 }>;
 
+const IDS = registrationIds("rotation", {
+  commitSubmit: "rotation-authorize-submit",
+  revealSubmit: "rotation-reveal-submit",
+  complete: "rotation-complete",
+});
+
 export function RotationTab(props: Props) {
   const { isConnected } = useAccount();
   const r = useRotationState(props.gatewayAddress, props.ctx, props.now);
 
-  const depositor = r.authorizePath === "depositor";
   const disableRevoke = !isConnected || !r.previewsOk || r.step !== "idle" || r.isPending;
-  const disableAuthorize = !isConnected || !r.authorizeOk || !r.authorizeOpen || r.isPending;
-  const disableReveal = !isConnected || !r.revealReady || r.isPending || r.step === "final-sent";
 
   return (
     <section data-testid="rotation-form">
-      <h2>Agent rotation (revoke old → authorize new)</h2>
+      <h2>Agent rotation (revoke old → register new)</h2>
       <p>
         Every step&apos;s preview must be confirmed before wallet signing begins. Do not close this
         dialog between transactions.
@@ -44,16 +47,14 @@ export function RotationTab(props: Props) {
           {r.combinedError}
         </p>
       )}
-      {depositor && (
-        <p data-testid="rotation-depositor-path">
-          This wallet does not hold ADMIN_ROLE, so the new agent is authorized with
-          commitAuthorization then revealAuthorization. No role is needed and this wallet becomes
-          the new agent&apos;s owner.
-        </p>
-      )}
-      {r.depositorError && (
-        <p data-testid="rotation-depositor-error" className="error">
-          {r.depositorError}
+      <p data-testid="rotation-registration-path">
+        Every wallet registers the new agent the same way: the new agent consents from its own key,
+        this wallet commits, then this wallet reveals. No role is needed. This wallet becomes the
+        new agent&apos;s owner and share receiver.
+      </p>
+      {r.newAgentOwnedWarning && (
+        <p data-testid="rotation-new-agent-owned" className="error">
+          {r.newAgentOwnedWarning}
         </p>
       )}
 
@@ -67,7 +68,7 @@ export function RotationTab(props: Props) {
         />
       </label>
       <label>
-        New agent address (to authorize)
+        New agent address (to register)
         <input
           data-testid="rotation-new-agent-input"
           value={r.newAgent}
@@ -107,56 +108,15 @@ export function RotationTab(props: Props) {
         />
       </form>
 
-      <form
-        data-testid="rotation-step2"
-        onSubmit={(e: FormEvent<HTMLFormElement>) => {
-          e.preventDefault();
-          r.onAuthorize();
-        }}
-      >
-        <h3>Step 2: authorize new agent</h3>
-        {r.authorizePreview && <TxPreview preview={r.authorizePreview} />}
-        <button type="submit" data-testid="rotation-authorize-submit" disabled={disableAuthorize}>
-          {depositor
-            ? "Step 2 — Sign commitAuthorization(new) with wallet"
-            : "Step 2 — Sign authorizeAgent(new) with wallet"}
-        </button>
-        <WriteStatus
-          testId="rotation-authorize"
-          label={depositor ? "Commit" : "authorizeAgent"}
-          write={r.authorizeStatus.write}
-          receipt={r.authorizeStatus.receipt}
+      <section data-testid="rotation-step2">
+        <h3>Step 2: register the new agent (consent, commit, reveal)</h3>
+        <RegistrationSteps
+          r={r.registration}
+          ids={IDS}
+          enabled={r.registrationOpen}
+          completeText="Rotation complete. Verify on-chain state."
         />
-      </form>
-
-      {depositor && (
-        <form
-          data-testid="rotation-step3"
-          onSubmit={(e: FormEvent<HTMLFormElement>) => {
-            e.preventDefault();
-            r.onReveal();
-          }}
-        >
-          <h3>Step 3: reveal new agent</h3>
-          <p>Enabled one block after the commit transaction mines.</p>
-          {/* The policy preview for the call step 3 signs (QA plan U4). */}
-          {r.revealPreview && <TxPreview preview={r.revealPreview} />}
-          <AgentConsentNotice testId="rotation-consent-hash" hash={r.consentHash} />
-          <button type="submit" data-testid="rotation-reveal-submit" disabled={disableReveal}>
-            Step 3 — Sign revealAuthorization(new) with wallet
-          </button>
-          <WriteStatus
-            testId="rotation-reveal"
-            label="Reveal"
-            write={r.revealStatus.write}
-            receipt={r.revealStatus.receipt}
-          />
-        </form>
-      )}
-
-      {/* Only once the final transaction is mined with status success (QA plan U5):
-          a step the wallet accepted but the chain reverted shows its revert above. */}
-      {r.done && <p data-testid="rotation-complete">Rotation complete. Verify on-chain state.</p>}
+      </section>
     </section>
   );
 }

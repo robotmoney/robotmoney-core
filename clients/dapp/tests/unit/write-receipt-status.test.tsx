@@ -19,12 +19,12 @@ import { fireEvent, render, screen, waitFor } from "./helpers/render";
 import { AuthorizeTab } from "../../src/components/AuthorizeTab";
 import { RotationTab } from "../../src/components/RotationTab";
 import type { PreviewContext } from "../../src/lib/preview";
+import type { RegState } from "./helpers/registrationWagmi";
 
 const GATEWAY = "0x1111111111111111111111111111111111111111" as const;
 const DEPOSITOR = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as const;
 const OLD_AGENT = "0x5555555555555555555555555555555555555555" as const;
 const NEW_AGENT = "0x6666666666666666666666666666666666666666" as const;
-const ZERO = "0x0000000000000000000000000000000000000000" as const;
 const tx = (b: string) => `0x${b.repeat(64)}` as `0x${string}`;
 const COMMIT_TX = tx("c");
 const REVEAL_TX = tx("e");
@@ -32,43 +32,25 @@ const REVOKE_TX = tx("d");
 
 type Receipt = { status: "success" | "reverted"; blockNumber: bigint };
 
-const state = vi.hoisted(() => ({
-  calls: [] as Array<{ functionName?: string }>,
-  onSuccess: null as ((txHash: `0x${string}`) => void) | null,
-  block: 100n,
-  receipts: new Map<string, { status: "success" | "reverted"; blockNumber: bigint }>(),
-}));
+const state = vi.hoisted(
+  () =>
+    ({
+      account: { address: undefined, isConnected: false },
+      chainId: 918453,
+      block: 100n,
+      consent: undefined,
+      agentOwner: "0x0000000000000000000000000000000000000000",
+      hasAdmin: false,
+      receipts: new Map(),
+      calls: [],
+      reads: [],
+      callbacks: [],
+    }) as unknown as RegState,
+);
 
 vi.mock("wagmi", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("wagmi")>();
-  return {
-    ...actual,
-    useAccount: () => ({ address: DEPOSITOR, isConnected: true, chainId: 918453 }),
-    useChainId: () => 918453,
-    useReadContract: ({ functionName }: { functionName: string }) => {
-      if (functionName === "hasRole") return { data: false };
-      if (functionName === "agentOwner") return { data: ZERO };
-      return { data: undefined };
-    },
-    useBlockNumber: () => ({ data: state.block }),
-    useSimulateContract: ({ functionName, args }: { functionName: string; args?: unknown }) =>
-      functionName === "revokeAgent" && args !== undefined
-        ? { data: { request: { address: GATEWAY, functionName: "revokeAgent", args } } }
-        : { data: undefined },
-    useWaitForTransactionReceipt: ({ hash }: { hash?: string }) => ({
-      data: hash ? state.receipts.get(hash) : undefined,
-    }),
-    useWriteContract: () => ({
-      writeContract: (
-        params: { functionName?: string },
-        opts?: { onSuccess?: (txHash: `0x${string}`) => void },
-      ) => {
-        state.calls.push(params);
-        state.onSuccess = opts?.onSuccess ?? null;
-      },
-      isPending: false,
-    }),
-  };
+  const { makeWagmiMock } = await import("./helpers/registrationWagmi");
+  return makeWagmiMock(await importOriginal(), state);
 });
 
 const ctx: PreviewContext = { gateway: GATEWAY, gatewayCodeHashVerified: true, envClass: "fork" };
@@ -76,21 +58,35 @@ const NOW = 1_893_456_000_000;
 
 /** The wallet accepted the last write and returned `hash`; its receipt is `receipt` (or none yet). */
 async function accept(hash: `0x${string}`, receipt?: Receipt) {
-  await waitFor(() => expect(state.onSuccess).not.toBeNull());
+  await waitFor(() => expect(state.callbacks.length).toBeGreaterThan(0));
   if (receipt) state.receipts.set(hash, receipt);
-  const cb = state.onSuccess!;
-  state.onSuccess = null;
+  const cb = state.callbacks.pop()!;
   await act(async () => {
     cb(hash);
   });
 }
 
 beforeEach(() => {
-  state.calls = [];
-  state.onSuccess = null;
+  state.account = { address: DEPOSITOR, isConnected: true };
+  state.chainId = 918453;
   state.block = 100n;
+  state.consent = undefined;
+  state.hasAdmin = false;
   state.receipts = new Map();
+  state.calls = [];
+  state.reads = [];
+  state.callbacks = [];
 });
+
+/** Freeze the inputs on the host whose controls start with `prefix`, then wait for the owner commit. */
+async function freezeAndWaitForCommit(prefix: string, commitId: string) {
+  const freeze = screen.getByTestId(`${prefix}-freeze`);
+  await waitFor(() => expect(freeze).toBeEnabled());
+  fireEvent.click(freeze);
+  const commit = await screen.findByTestId(commitId);
+  await waitFor(() => expect(commit).toBeEnabled());
+  return commit;
+}
 
 describe("AuthorizeTab — commit and reveal receipts (QA plan U5)", () => {
   // A self-reveal: the wallet binds itself, so no agent consent commit is needed (core 1791).
@@ -113,7 +109,7 @@ describe("AuthorizeTab — commit and reveal receipts (QA plan U5)", () => {
     window.addEventListener("rm:registration-changed", registered);
     try {
       renderSelfBinding();
-      fireEvent.click(screen.getByTestId("authorize-submit"));
+      fireEvent.click(await freezeAndWaitForCommit("authorize", "authorize-submit"));
       state.block = 101n;
       await accept(COMMIT_TX, { status: "success", blockNumber: 100n });
       const reveal = screen.getByTestId("authorize-reveal-submit");
@@ -136,7 +132,7 @@ describe("AuthorizeTab — commit and reveal receipts (QA plan U5)", () => {
     window.addEventListener("rm:registration-changed", registered);
     try {
       renderSelfBinding();
-      fireEvent.click(screen.getByTestId("authorize-submit"));
+      fireEvent.click(await freezeAndWaitForCommit("authorize", "authorize-submit"));
       state.block = 101n;
       await accept(COMMIT_TX, { status: "success", blockNumber: 100n });
       const reveal = screen.getByTestId("authorize-reveal-submit");
@@ -156,7 +152,7 @@ describe("AuthorizeTab — commit and reveal receipts (QA plan U5)", () => {
 
   it("a reverted commit shows its revert and never opens the reveal", async () => {
     renderSelfBinding();
-    fireEvent.click(screen.getByTestId("authorize-submit"));
+    fireEvent.click(await freezeAndWaitForCommit("authorize", "authorize-submit"));
     state.block = 101n;
     await accept(COMMIT_TX, { status: "reverted", blockNumber: 100n });
     expect(await screen.findByTestId("authorize-commit-write-reverted")).toBeInTheDocument();
@@ -179,12 +175,14 @@ describe("RotationTab — every step renders its receipt (QA plan U5)", () => {
   }
 
   async function runToReveal(revealReceipt: Receipt) {
+    // The new agent has consented on the gateway.
+    state.consent = [NEW_AGENT, 90n];
     fill();
     const revoke = screen.getByTestId("rotation-revoke-submit");
     await waitFor(() => expect(revoke).not.toBeDisabled());
     fireEvent.click(revoke);
     await accept(REVOKE_TX, { status: "success", blockNumber: 99n });
-    fireEvent.click(screen.getByTestId("rotation-authorize-submit"));
+    fireEvent.click(await freezeAndWaitForCommit("rotation", "rotation-authorize-submit"));
     state.block = 101n;
     await accept(COMMIT_TX, { status: "success", blockNumber: 100n });
     const reveal = screen.getByTestId("rotation-reveal-submit");
@@ -214,6 +212,7 @@ describe("RotationTab — every step renders its receipt (QA plan U5)", () => {
     fireEvent.click(revoke);
     await accept(REVOKE_TX, { status: "reverted", blockNumber: 99n });
     expect(await screen.findByTestId("rotation-revoke-write-reverted")).toBeInTheDocument();
-    expect(screen.getByTestId("rotation-authorize-submit")).toBeDisabled();
+    // The registration stays closed: a reverted revoke left the old agent bound.
+    expect(screen.getByTestId("rotation-freeze")).toBeDisabled();
   });
 });

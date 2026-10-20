@@ -1,23 +1,19 @@
 /**
  * Unit tests — the previewed call is the signed call on every commit/reveal
- * surface (QA plan U4, finding DR-4, issue #1737 part 2).
+ * surface (QA plan U4, finding DR-4, issue #1737 part 2; reworked by issue 1890).
  *
  * Before U4 the Authorize tab, the onboarding wizard and the rotation flow
  * previewed `authorizeAgent(agent, policy)` while the wallet signed
  * `commitAuthorization(hash)` and then `revealAuthorization(agent, salt,
- * policy)`, and the reveal screen showed no preview at all
- * (docs/technical/dapp-credential-decisions.md §3.3 forbids both).
+ * policy)`. `authorizeAgent` is gone from the gateway (issue 1890), and every surface
+ * now previews the two calls it signs, built from the frozen inputs.
  *
- * Each test drives one surface through commit and reveal with wagmi mocked
- * at the module boundary, captures what reaches `writeContract`, and checks
- * the preview rendered next to that button: `tx-preview-fn` equals the signed
- * functionName, `tx-preview-calldata` equals the calldata of the signed
- * args, and the preview target is the signed address. The reveal screen must
- * re-render the same policy preview the commit screen showed for step 2.
- *
- * The agent is not the depositor, so the agent must consent from its own key
- * before the reveal (core 1791): every reveal screen shows the consent hash
- * it commits, and that hash must be the one for exactly the signed reveal.
+ * Each test drives one surface through consent, commit and reveal with wagmi mocked at the
+ * module boundary (helpers/registrationWagmi.ts), captures what reaches `writeContract`, and
+ * checks the preview rendered next to that button: `tx-preview-fn` equals the signed
+ * functionName, `tx-preview-calldata` equals the calldata of the signed args, and the preview
+ * target is the signed address. The agent is not the signing wallet, so the consent hash on
+ * screen must be the one for exactly the signed reveal (core 1791).
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act } from "react";
@@ -28,10 +24,28 @@ import { OnboardingWizard } from "../../src/components/OnboardingWizard";
 import { RotationTab } from "../../src/components/RotationTab";
 import { computeCommitHash, computeConsentHash } from "../../src/lib/commitReveal";
 import type { PreviewContext } from "../../src/lib/preview";
+import { COMMIT_TX, REVOKE_TX, ZERO, type RegState } from "./helpers/registrationWagmi";
 
-// ---------------------------------------------------------------------------
-// wagmi mock state
-// ---------------------------------------------------------------------------
+const state = vi.hoisted(
+  () =>
+    ({
+      account: { address: undefined, isConnected: false },
+      chainId: 918453,
+      block: 100n,
+      consent: undefined,
+      agentOwner: "0x0000000000000000000000000000000000000000",
+      hasAdmin: false,
+      receipts: new Map(),
+      calls: [],
+      reads: [],
+      callbacks: [],
+    }) as unknown as RegState,
+);
+
+vi.mock("wagmi", async (importOriginal) => {
+  const { makeWagmiMock } = await import("./helpers/registrationWagmi");
+  return makeWagmiMock(await importOriginal(), state);
+});
 
 interface SignedCall {
   address: Address;
@@ -44,63 +58,26 @@ const GATEWAY = "0x1111111111111111111111111111111111111111" as const;
 const AGENT = "0x2222222222222222222222222222222222222222" as const;
 const OLD_AGENT = "0x5555555555555555555555555555555555555555" as const;
 const DEPOSITOR = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as const;
-const ZERO = "0x0000000000000000000000000000000000000000" as const;
-const COMMIT_TX = "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" as const;
-const REVOKE_TX = "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" as const;
-
-const state = vi.hoisted(() => ({
-  calls: [] as unknown[],
-  onSuccess: null as ((txHash: `0x${string}`) => void) | null,
-  block: 100n,
-  receiptBlock: null as bigint | null,
-}));
-
-vi.mock("wagmi", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("wagmi")>();
-  return {
-    ...actual,
-    useAccount: () => ({ address: DEPOSITOR, isConnected: true, chainId: 918453 }),
-    useChainId: () => 918453,
-    useReadContract: ({ functionName }: { functionName: string }) => {
-      if (functionName === "usdc") return { data: "0x4444444444444444444444444444444444444444" };
-      // Rotation: the wallet has no ADMIN_ROLE (depositor path) and the new agent is unowned.
-      if (functionName === "hasRole") return { data: false };
-      if (functionName === "agentOwner") return { data: ZERO };
-      return { data: 1000n };
-    },
-    useBalance: () => ({ data: { value: 1000n } }),
-    useBlockNumber: () => ({ data: state.block }),
-    useSimulateContract: ({ functionName, args }: { functionName: string; args?: unknown }) =>
-      functionName === "revokeAgent" && args !== undefined
-        ? { data: { request: { address: GATEWAY, functionName: "revokeAgent", args } } }
-        : { data: undefined },
-    useWaitForTransactionReceipt: () => ({
-      data: state.receiptBlock !== null ? { blockNumber: state.receiptBlock } : undefined,
-    }),
-    useWriteContract: () => ({
-      writeContract: (params: unknown, opts?: { onSuccess?: (txHash: `0x${string}`) => void }) => {
-        state.calls.push(params);
-        state.onSuccess = opts?.onSuccess ?? null;
-      },
-      isPending: false,
-    }),
-  };
-});
-
-const ctx: PreviewContext = {
-  gateway: GATEWAY,
-  gatewayCodeHashVerified: true,
-  envClass: "fork",
-};
+const ctx: PreviewContext = { gateway: GATEWAY, gatewayCodeHashVerified: true, envClass: "fork" };
 const NOW = 1_893_456_000_000;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+beforeEach(() => {
+  state.account = { address: DEPOSITOR as Address, isConnected: true };
+  state.chainId = 918453;
+  state.block = 100n;
+  // The agent's consent is on the gateway, so the owner commit is open.
+  state.consent = [AGENT, 95n];
+  state.agentOwner = ZERO;
+  state.hasAdmin = false;
+  state.receipts = new Map();
+  state.calls = [];
+  state.reads = [];
+  state.callbacks = [];
+});
 
 function lastCall(): SignedCall {
   expect(state.calls.length).toBeGreaterThan(0);
-  return state.calls[state.calls.length - 1] as SignedCall;
+  return state.calls[state.calls.length - 1] as unknown as SignedCall;
 }
 
 function calldataOf(call: SignedCall): Hex {
@@ -118,10 +95,6 @@ function expectPreviewIsSignedCall(container: HTMLElement, call: SignedCall) {
   expect(preview.getByTestId("tx-preview-target").textContent).toContain(call.address);
 }
 
-function previewCalldata(container: HTMLElement): string | null {
-  return within(container).getByTestId("tx-preview-calldata").textContent;
-}
-
 /** No preview anywhere on screen names a function the flow never signs. */
 function expectNoAuthorizeAgentPreview() {
   for (const el of screen.queryAllByTestId("tx-preview-fn")) {
@@ -129,20 +102,16 @@ function expectNoAuthorizeAgentPreview() {
   }
 }
 
-/** The commit was accepted by the wallet, mined at block 100, and the head is at 101. */
-async function confirmCommit() {
-  await waitFor(() => expect(state.onSuccess).not.toBeNull());
-  state.receiptBlock = 100n;
-  state.block = 101n;
+async function accept(hash: Hex, blockNumber: bigint) {
+  await waitFor(() => expect(state.callbacks.length).toBeGreaterThan(0));
+  state.receipts.set(hash, { status: "success", blockNumber });
+  const cb = state.callbacks.pop()!;
   await act(async () => {
-    state.onSuccess!(COMMIT_TX);
+    cb(hash);
   });
 }
 
-/**
- * The reveal is the 3-argument call (core 1791), and the consent hash the screen shows is the one
- * the agent must commit for exactly this reveal.
- */
+/** The reveal is the 3-argument call (core 1791); the consent hash on screen is for exactly it. */
 function expectConsentHashMatchesReveal(testId: string, reveal: SignedCall) {
   expect(reveal.args).toHaveLength(3);
   const [agent, salt, policy] = reveal.args as [Address, Hex, never];
@@ -157,24 +126,50 @@ function expectCommitMatchesReveal(commit: SignedCall, reveal: SignedCall) {
   expect(commit.args[0]).toBe(computeCommitHash(getAddress(agent), getAddress(DEPOSITOR), salt));
 }
 
-beforeEach(() => {
-  state.calls = [];
-  state.onSuccess = null;
-  state.block = 100n;
-  state.receiptBlock = null;
-});
+/**
+ * Click `commitId`, let it mine, click `revealId`, and check each preview against the call that
+ * reached the wallet. Returns nothing; the assertions are the point.
+ */
+async function driveAndCheck(ids: {
+  commit: string;
+  commitPreview: string;
+  reveal: string;
+  revealPreview: string;
+  consent: string;
+  baseCalls: number;
+}) {
+  const commitBtn = await screen.findByTestId(ids.commit);
+  await waitFor(() => expect(commitBtn).toBeEnabled());
+  // Before the commit the screen shows the commit preview and no reveal preview.
+  expectNoAuthorizeAgentPreview();
+  fireEvent.click(commitBtn);
+  await waitFor(() => expect(state.calls).toHaveLength(ids.baseCalls + 1));
+  const commit = lastCall();
+  expect(commit.functionName).toBe("commitAuthorization");
+  expectPreviewIsSignedCall(screen.getByTestId(ids.commitPreview), commit);
 
-// ---------------------------------------------------------------------------
-// AuthorizeTab
-// ---------------------------------------------------------------------------
+  state.block = 101n;
+  await accept(COMMIT_TX, 100n);
+  const revealBtn = await screen.findByTestId(ids.reveal);
+  await waitFor(() => expect(revealBtn).toBeEnabled());
+  const revealPreview = screen.getByTestId(ids.revealPreview);
+  expectNoAuthorizeAgentPreview();
+  fireEvent.click(revealBtn);
+  await waitFor(() => expect(state.calls).toHaveLength(ids.baseCalls + 2));
+  const reveal = lastCall();
+  expect(reveal.functionName).toBe("revealAuthorization");
+  expectPreviewIsSignedCall(revealPreview, reveal);
+  expectCommitMatchesReveal(commit, reveal);
+  expectConsentHashMatchesReveal(ids.consent, reveal);
+}
 
 describe("AuthorizeTab — commit and reveal previews (QA plan U4)", () => {
-  function renderTab() {
+  function renderTab(agent: string = AGENT) {
     return render(
       <AuthorizeTab
         gatewayAddress={GATEWAY}
         ctx={ctx}
-        agent={AGENT}
+        agent={agent}
         setAgent={vi.fn()}
         shareReceiver={DEPOSITOR}
         setShareReceiver={vi.fn()}
@@ -185,41 +180,28 @@ describe("AuthorizeTab — commit and reveal previews (QA plan U4)", () => {
 
   it("tx-preview-fn equals signed functionName", async () => {
     renderTab();
-    expectNoAuthorizeAgentPreview();
-    const stepTwoCalldata = previewCalldata(screen.getByTestId("authorize-next-reveal-preview"));
-
-    fireEvent.click(screen.getByTestId("authorize-submit"));
-    await waitFor(() => expect(state.calls).toHaveLength(1));
-    const commit = lastCall();
-    expect(commit.functionName).toBe("commitAuthorization");
-    expectPreviewIsSignedCall(screen.getByTestId("authorize-commit-preview"), commit);
-
-    await confirmCommit();
-    await waitFor(() => expect(screen.getByTestId("authorize-reveal-form")).toBeInTheDocument());
-    // The reveal screen re-renders the policy preview the commit screen showed for step 2.
-    const revealPreview = screen.getByTestId("authorize-reveal-preview");
-    expect(previewCalldata(revealPreview)).toBe(stepTwoCalldata);
-    expectNoAuthorizeAgentPreview();
-
-    const revealBtn = screen.getByTestId("authorize-reveal-submit");
-    await waitFor(() => expect(revealBtn).not.toBeDisabled());
-    fireEvent.click(revealBtn);
-    await waitFor(() => expect(state.calls).toHaveLength(2));
-    const reveal = lastCall();
-    expect(reveal.functionName).toBe("revealAuthorization");
-    expectPreviewIsSignedCall(revealPreview, reveal);
-    expectCommitMatchesReveal(commit, reveal);
-    expectConsentHashMatchesReveal("authorize-consent-hash", reveal);
+    const freeze = screen.getByTestId("authorize-freeze");
+    await waitFor(() => expect(freeze).toBeEnabled());
+    fireEvent.click(freeze);
+    await driveAndCheck({
+      commit: "authorize-submit",
+      commitPreview: "authorize-commit-preview",
+      reveal: "authorize-reveal-submit",
+      revealPreview: "authorize-reveal-preview",
+      consent: "authorize-consent-hash",
+      baseCalls: 0,
+    });
   });
 
-  it("an agent edit after the commit does not change the reveal it previews and signs", async () => {
+  it("an agent edit after the freeze unbinds the registration instead of changing the signed call", async () => {
     const view = renderTab();
-    fireEvent.click(screen.getByTestId("authorize-submit"));
-    await waitFor(() => expect(state.calls).toHaveLength(1));
-    await confirmCommit();
-    const before = previewCalldata(screen.getByTestId("authorize-reveal-preview"));
+    const freeze = screen.getByTestId("authorize-freeze");
+    await waitFor(() => expect(freeze).toBeEnabled());
+    fireEvent.click(freeze);
+    const commitBtn = await screen.findByTestId("authorize-submit");
+    await waitFor(() => expect(commitBtn).toBeEnabled());
 
-    // The agent field is shared with other admin tabs; the reveal stays frozen on the commit.
+    // The agent field is shared with other admin tabs: an edit must not retarget the commit.
     view.rerender(
       <AuthorizeTab
         gatewayAddress={GATEWAY}
@@ -231,25 +213,14 @@ describe("AuthorizeTab — commit and reveal previews (QA plan U4)", () => {
         now={NOW}
       />,
     );
-    const revealPreview = screen.getByTestId("authorize-reveal-preview");
-    expect(previewCalldata(revealPreview)).toBe(before);
-
-    const revealBtn = screen.getByTestId("authorize-reveal-submit");
-    await waitFor(() => expect(revealBtn).not.toBeDisabled());
-    fireEvent.click(revealBtn);
-    await waitFor(() => expect(state.calls).toHaveLength(2));
-    const reveal = lastCall();
-    expect((reveal.args[0] as string).toLowerCase()).toBe(AGENT);
-    expectPreviewIsSignedCall(revealPreview, reveal);
+    expect(screen.getByTestId("authorize-submit")).toBeDisabled();
+    expect(screen.getByTestId("authorize-stale")).toBeInTheDocument();
+    expect(state.calls).toHaveLength(0);
   });
 });
 
-// ---------------------------------------------------------------------------
-// OnboardingWizard
-// ---------------------------------------------------------------------------
-
 describe("OnboardingWizard — commit and reveal previews (QA plan U4)", () => {
-  function renderToCommitStep() {
+  it("tx-preview-fn equals signed functionName", async () => {
     render(<OnboardingWizard gatewayAddress={GATEWAY} ctx={ctx} env={{}} now={NOW} />);
     fireEvent.click(screen.getByTestId("step-1-next"));
     fireEvent.change(screen.getByTestId("wizard-agent-input"), { target: { value: AGENT } });
@@ -257,42 +228,21 @@ describe("OnboardingWizard — commit and reveal previews (QA plan U4)", () => {
       target: { value: DEPOSITOR },
     });
     fireEvent.click(screen.getByTestId("step-2-next"));
-  }
-
-  it("tx-preview-fn equals signed functionName", async () => {
-    renderToCommitStep();
-    expectNoAuthorizeAgentPreview();
-    const stepTwoCalldata = previewCalldata(screen.getByTestId("wizard-next-reveal-preview"));
-
-    fireEvent.click(screen.getByTestId("wizard-commit-submit"));
-    await waitFor(() => expect(state.calls).toHaveLength(1));
-    const commit = lastCall();
-    expect(commit.functionName).toBe("commitAuthorization");
-    expectPreviewIsSignedCall(screen.getByTestId("wizard-commit-preview"), commit);
-
-    await confirmCommit();
-    await waitFor(() => expect(screen.getByTestId("wizard-step-3-reveal")).toBeInTheDocument());
-    const revealPreview = screen.getByTestId("wizard-reveal-preview");
-    expect(previewCalldata(revealPreview)).toBe(stepTwoCalldata);
-    expectNoAuthorizeAgentPreview();
-
-    const revealBtn = screen.getByTestId("wizard-reveal-submit");
-    await waitFor(() => expect(revealBtn).not.toBeDisabled());
-    fireEvent.click(revealBtn);
-    await waitFor(() => expect(state.calls).toHaveLength(2));
-    const reveal = lastCall();
-    expect(reveal.functionName).toBe("revealAuthorization");
-    expectPreviewIsSignedCall(revealPreview, reveal);
-    expectCommitMatchesReveal(commit, reveal);
-    expectConsentHashMatchesReveal("wizard-consent-hash", reveal);
+    const freeze = await screen.findByTestId("wizard-freeze");
+    await waitFor(() => expect(freeze).toBeEnabled());
+    fireEvent.click(freeze);
+    await driveAndCheck({
+      commit: "wizard-commit-submit",
+      commitPreview: "wizard-commit-preview",
+      reveal: "wizard-reveal-submit",
+      revealPreview: "wizard-reveal-preview",
+      consent: "wizard-consent-hash",
+      baseCalls: 0,
+    });
   });
 });
 
-// ---------------------------------------------------------------------------
-// RotationTab (depositor path)
-// ---------------------------------------------------------------------------
-
-describe("RotationTab depositor path — commit and reveal previews (QA plan U4)", () => {
+describe("RotationTab — commit and reveal previews (QA plan U4)", () => {
   it("tx-preview-fn equals signed functionName", async () => {
     render(<RotationTab gatewayAddress={GATEWAY} ctx={ctx} now={NOW} />);
     fireEvent.change(screen.getByTestId("rotation-old-agent-input"), {
@@ -303,37 +253,25 @@ describe("RotationTab depositor path — commit and reveal previews (QA plan U4)
       target: { value: DEPOSITOR },
     });
     expectNoAuthorizeAgentPreview();
-    const stepThreeCalldata = previewCalldata(screen.getByTestId("rotation-step3"));
 
-    // Step 1 (revoke), once the wallet accepts it, unlocks step 2.
+    // Step 1 (revoke), once the wallet accepts it, unlocks the registration.
     await waitFor(() => expect(screen.getByTestId("rotation-revoke-submit")).not.toBeDisabled());
     fireEvent.click(screen.getByTestId("rotation-revoke-submit"));
     await waitFor(() => expect(state.calls).toHaveLength(1));
-    expect(screen.getByTestId("rotation-authorize-submit")).toBeDisabled();
-    await act(async () => {
-      state.onSuccess!(REVOKE_TX);
+    expect(screen.getByTestId("rotation-freeze")).toBeDisabled();
+    await accept(REVOKE_TX, 99n);
+
+    const freeze = screen.getByTestId("rotation-freeze");
+    await waitFor(() => expect(freeze).toBeEnabled());
+    fireEvent.click(freeze);
+    await driveAndCheck({
+      commit: "rotation-authorize-submit",
+      commitPreview: "rotation-commit-preview",
+      reveal: "rotation-reveal-submit",
+      revealPreview: "rotation-reveal-preview",
+      consent: "rotation-consent-hash",
+      baseCalls: 1,
     });
-    state.onSuccess = null;
-
-    fireEvent.click(screen.getByTestId("rotation-authorize-submit"));
-    await waitFor(() => expect(state.calls).toHaveLength(2));
-    const commit = lastCall();
-    expect(commit.functionName).toBe("commitAuthorization");
-    expectPreviewIsSignedCall(screen.getByTestId("rotation-step2"), commit);
-
-    await confirmCommit();
-    const step3 = screen.getByTestId("rotation-step3");
-    expect(previewCalldata(step3)).toBe(stepThreeCalldata);
-
-    const revealBtn = screen.getByTestId("rotation-reveal-submit");
-    await waitFor(() => expect(revealBtn).not.toBeDisabled());
-    fireEvent.click(revealBtn);
-    await waitFor(() => expect(state.calls).toHaveLength(3));
-    const reveal = lastCall();
-    expect(reveal.functionName).toBe("revealAuthorization");
-    expectPreviewIsSignedCall(step3, reveal);
-    expectCommitMatchesReveal(commit, reveal);
-    expectConsentHashMatchesReveal("rotation-consent-hash", reveal);
     // Accepted is not mined: "Rotation complete" waits for a success receipt (QA plan U5).
     expect(screen.queryByTestId("rotation-complete")).toBeNull();
   });

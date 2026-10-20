@@ -116,12 +116,12 @@ test.describe("devnet E2E — full-stack Twin chain", () => {
     await expect(page.getByText(re).first()).toBeVisible({ timeout: 30_000 });
   });
 
-  test("(B) authorizeAgent mines on Geth and AGENT_ROLE is confirmed on-chain", async ({
+  test("(B) the consented registration mines on Geth and AGENT_ROLE is confirmed on-chain", async ({
     page,
   }) => {
     // A fresh depositor wallet (gas funded through the Twin "fund gas" step,
-    // no role) authorizes its own agent. The gateway requires a caller
-    // without ADMIN_ROLE to name itself as shareReceiver, so it does.
+    // no role) registers its own agent. The gateway requires every caller
+    // to name itself as shareReceiver (ACL-9), so it does.
     const depositor = await freshDepositor(endpoints);
     await injectWallet(page, {
       privateKey: depositor.privateKey,
@@ -140,16 +140,22 @@ test.describe("devnet E2E — full-stack Twin chain", () => {
     await page.getByTestId("agent-input").fill(FRESH_AGENT_ADDR);
     await page.getByTestId("shareReceiver-input").fill(depositor.address);
 
+    // Freeze the inputs; the previews come from the frozen values.
+    await page.getByTestId("authorize-freeze").click();
     const authorizePreview = page.locator('[data-testid="tx-preview"][data-ok="true"]').first();
     await expect(authorizePreview).toBeVisible({ timeout: 30_000 });
 
-    // Step 1 of 2: commit — signs commitAuthorization(keccak256(agent,caller,salt)).
-    await page.getByTestId("authorize-submit").click();
-
-    // The agent address consents to the depositor before the reveal (core 1791).
+    // The agent address consents to the depositor FIRST (core 1791, ACL-9). The owner commit
+    // stays disabled until the dapp reads that consent from the gateway.
+    await expect(page.getByTestId("authorize-submit")).toBeDisabled();
     await consentFromDapp(page, endpoints, FRESH_AGENT_ADDR, "authorize-consent-hash");
 
-    // Step 2 of 2: reveal — enabled once currentBlock > commitBlockNumber.
+    // Then the owner commit — signs commitAuthorization(keccak256(agent,caller,salt)).
+    const commitSubmit = page.getByTestId("authorize-submit");
+    await expect(commitSubmit).toBeEnabled({ timeout: 60_000 });
+    await commitSubmit.click();
+
+    // Then the reveal — enabled once currentBlock > commitBlockNumber.
     const revealSubmit = page.getByTestId("authorize-reveal-submit");
     await expect(revealSubmit).toBeEnabled({ timeout: 60_000 });
     await revealSubmit.click();
