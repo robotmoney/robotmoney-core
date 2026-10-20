@@ -94,29 +94,31 @@ to **Base mainnet (chain `8453`)**, record their addresses in
 the run's deploy manifests (`deployments/<chain>/`), then hand the privileged
 roles to the `TimelockController`.
 
-> **System split (owner decision, 2026-10-19).** The vaults system and the
-> rmpc gateway system are separate systems (`docs/architecture.md` §1).
-> The list below is the deployed release's combined handover. The system split review
-> records the differences (`docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
+The vaults system's handover covers its eight contracts (`docs/architecture.md`
+§4.5). `DeployTimelock.s.sol` hands over:
 
-`DeployTimelock.s.sol` hands over:
-
-- `ADMIN_ROLE` on the Gateway, VaultRegistry, PortfolioRouter,
-  RouterGovernance, and every vault in `VAULT_ADDRESSES`.
-  The basket vaults (rmPROTO, rmAGENT, rmRWA) are in that list alongside rmUSDC.
-  The deployer's vault `EMERGENCY_ROLE` moves to the independent
-  `EMERGENCY_ADDRESS` key.
-- `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` on the Gateway.
-- `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` on the IC policy
-  (`InvestmentCommitteePolicy`, `IC_POLICY_ADDRESS`), revoked from the deployer.
-  The gateway's own `ADMIN_ROLE` on the IC policy is left in place.
+- `ADMIN_ROLE` on VaultRegistry, PortfolioRouter, RouterGovernance, and every
+  vault in `VAULT_ADDRESSES`. The basket vaults (rmPROTO, rmAGENT, rmRWA) are
+  in that list alongside rmUSDC. The deployer's vault `EMERGENCY_ROLE` moves
+  to the independent `EMERGENCY_ADDRESS` key.
 - `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` on the consensus receipt
   (`ConsensusRecommendationReceipt`, `CONSENSUS_RECEIPT_ADDRESS`), revoked from
-  the address named by `RECEIPT_ADMIN_ADDRESS`.
-- Ownership of every gateway agent in `AGENT_ADDRESSES`.
+  the address named by `RECEIPT_ADMIN_ADDRESS`. `ADMIN_ROLE` administers
+  `RECEIPT_SUBMITTER_ROLE`, so after handover a submitter grant goes
+  Safe -> Timelock -> receipt.
 
-`IC_POLICY_ADDRESS`, `CONSENSUS_RECEIPT_ADDRESS` and `RECEIPT_ADMIN_ADDRESS` are
-required on every chain. The script reverts when one is unset.
+`CONSENSUS_RECEIPT_ADDRESS` and `RECEIPT_ADMIN_ADDRESS` are required on every
+chain. The script reverts when one is unset. There is no on-chain committee
+contract to hand over.
+
+The gateway belongs to the rmpc gateway system. Its handover is part of its
+own release. Who governs it is open (`docs/architecture.md` §10).
+
+> **Deployed release (v0.5.0).** Today's `DeployTimelock` still hands over the
+> gateway in the same run, requires `IC_POLICY_ADDRESS`, and hands over the
+> retired IC policy. Step 2 below describes that tooling. The differences are
+> recorded in `docs/code-review/20261019-code-review-internal-claude-opus-5-5-system-split.md`
+> and `docs/code-review/20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md`.
 
 **Why.** Architecture §8 requires that `ADMIN_ROLE` on all protocol contracts be
 held by the deployed `TimelockController` in production — no EOA may hold
@@ -163,9 +165,9 @@ contract-enforced rather than operational convention.
 3. Record the resulting `portfolio_router`, `router_governance`, and
    `timelock_controller` addresses in the run's deploy manifests (`deployments/<chain>/`).
 
-**Verify.** For each of the ten protocol contracts of `docs/architecture.md`
-§4.5 (rmUSDC and each basket vault, the gateway, registry, router,
-governance, the IC policy and the consensus receipt), confirm the timelock holds `ADMIN_ROLE` and no
+**Verify.** For each of the eight vaults-system contracts of `docs/architecture.md`
+§4.5 (rmUSDC and each basket vault, the registry, router, governance and the
+consensus receipt), confirm the timelock holds `ADMIN_ROLE` and no
 EOA does:
 
 ```bash

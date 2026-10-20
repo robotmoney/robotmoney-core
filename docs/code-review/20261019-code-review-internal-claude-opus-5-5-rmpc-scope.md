@@ -6,7 +6,7 @@
 - **Commits checked:** release v0.5.0 at core `57fbe618` (tag
   `release/v0.5.0-rehearsal`, branch `releases-0.5.x`) and `dev` at
   `e362df0c`.
-- **Reviewed at:** 2026-10-19.
+- **Reviewed at:** 2026-10-19. Finding 10 added 2026-10-20.
 - **Design under test:** the owner rule of 2026-10-19. `rmpc` is an agentic
   cryptographic signer for end users. Its uses are off-chain: signing,
   keystores, the `committee-identity` Ed25519 signer, config export, offline
@@ -111,11 +111,46 @@ text and dapp or indexer surfaces. None is needed for the vault deposit.
 - **Fix:** delete or rework the tests. Give GW-5 a tombstone status in the
   registry. Drop the suite 07 steps.
 
+### 10. An admin can register an agent without its consent
+
+- **Severity:** Medium.
+- **Design:** commit and reveal is the only way to register an agent. No role
+  can register one without the agent's consent (owner decision 2026-10-20,
+  `docs/architecture.md` §6).
+- **Code:** `RobotMoneyGateway.authorizeAgent` lets an `ADMIN_ROLE` holder
+  register any address in one transaction. It skips the agent consent check
+  (issue 1791). It may name any share receiver. The admin becomes the agent's
+  owner. Separately, the constructor makes `ADMIN_ROLE` the admin of
+  `AGENT_ROLE`, so an admin can also call `grantRole(AGENT_ROLE, x)` directly.
+- **Risk:** a compromised or mistaken admin can create agents that deposit
+  under a policy the admin wrote. End users never need either path.
+- **Where it lives:**
+  - Contracts: `RobotMoneyGateway.sol`, `IGateway.sol`, `AccessRoles.sol`
+    comments, `DeployTimelock.s.sol` comments.
+  - Tests: `RobotMoneyGateway.t.sol`, `GatewayAgentPolicyAuthorization.t.sol`,
+    `ConfusedDeputyGuards.t.sol`, `DeployAssertions.t.sol`,
+    `helpers/CoreStages.sol` and about ten more that use it for setup.
+  - Dapp: the Rotation tab `authorizeAgent` button (`RotationTab.tsx`,
+    `useRotationState.ts`, `rotation.ts`), the `authorizeAgent` preview
+    (`preview.ts`, `credentialWorkflow.ts`), `onboardingSeed.ts`, the ABIs.
+  - Clients: the selector check in `rust-payment-client/src/gateway/mod.rs`,
+    the decode-only entry in `publish-contracts/src/committee-register.ts`,
+    `explorer-api/src/model.rs`.
+  - Invariants text in `docs/technical/smart-contract-invariants.md` (the
+    validator writer list) and the generated contract docs.
+- **Fix:**
+  - Delete `authorizeAgent` from the gateway and `IGateway`.
+  - Stop `ADMIN_ROLE` from granting `AGENT_ROLE`. Only `revealAuthorization`
+    grants it. One way is a `grantRole` override that refuses `AGENT_ROLE`.
+    `revokeAgent` by the owner still revokes it.
+  - Move test setup to commit and reveal. Delete the dapp button and preview.
+  - This adds no storage, so the layout gate is unaffected.
+
 ## Open questions for the owner
 
-- **`authorizeAgent`.** An `ADMIN_ROLE` holder can authorize an agent
-  directly, without the depositor's commit and reveal. The rule does not say
-  whether this stays.
-- **One vault or any allowed vault.** The docs keep the depositor's allowed
-  vault list, so an agent may deposit into any vault the depositor allows.
-  The rule says "a vault".
+- **The admin share receiver exception.** The policy validator lets a caller
+  holding `ADMIN_ROLE` name any share receiver. Without `authorizeAgent`, an
+  admin can still reach it through its own commit and reveal. A non-admin must
+  name itself. The design does not yet say whether the exception stays.
+- **Resolved 2026-10-20: vault scope.** An agent may deposit into any vault
+  the depositor's policy allows. The docs already say this.

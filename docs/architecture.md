@@ -1037,9 +1037,11 @@ does not manage individual depositor agent policies at runtime.
 
 Agent ownership and policy rules (issue #1476):
 
-- the account that first authorizes an agent is its recorded owner: any
-  account through `commitAuthorization` + `revealAuthorization`, an
-  `ADMIN_ROLE` holder also through `authorizeAgent`;
+- the account that first authorizes an agent is its recorded owner. The
+  only way to authorize an agent is `commitAuthorization` +
+  `revealAuthorization`. The gateway has no admin shortcut: there is no
+  `authorizeAgent` (owner decision 2026-10-20). No role can register an
+  agent without the agent's consent;
 - an agent address must consent before another account becomes its owner
   (issue #1791). For a reveal naming an `agent` other than the caller, the
   agent first submits, from its own key through `commitAuthorization`,
@@ -1049,13 +1051,11 @@ Agent ownership and policy rules (issue #1476):
   one policy. Without it the reveal reverts `OwnerConsentMissing`, and nobody
   can squat an address that never agreed. An agent that reveals for itself
   consents by calling. A depositor's distinct agent key therefore signs one
-  `commitAuthorization` transaction before the depositor reveals. `authorizeAgent`
-  stays `ADMIN_ROLE`-only and is not bound by consent;
+  `commitAuthorization` transaction before the depositor reveals;
 - only the recorded owner can call `setPolicy`, `revokeAgent` or
   `transferAgentOwnership` on that agent; `ADMIN_ROLE` grants no
   authority over an agent it does not own;
-- every write of a policy (`authorizeAgent`, `revealAuthorization`,
-  `setPolicy`) runs one shared validator: the caller-independent shape
+- every write of a policy (`revealAuthorization`, `setPolicy`) runs one shared validator: the caller-independent shape
   checks plus one caller-dependent rule, judged on the caller's role at
   call time — a caller without `ADMIN_ROLE` must name itself as share
   receiver. Any policy an owner can set through `setPolicy` is one it
