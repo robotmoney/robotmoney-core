@@ -332,11 +332,25 @@ fn documented_flags() -> BTreeSet<String> {
 // (A) `rmpc --help` parity checks.
 // ---------------------------------------------------------------------
 
+/// Names issue 1888 removed from the binary. The plugin docs still mention
+/// them until issue 1889 rewrites those docs. Delete this list with that PR.
+const REMOVED_SUBCOMMANDS: &[&str] = &["committee"];
+const REMOVED_FLAGS: &[&str] = &["--expected-digest"];
+const REMOVED_ERRORS: &[&str] = &[
+    "ErrNotAllowlisted",
+    "ErrIcContractNotConfigured",
+    "ErrReceiptDigestMalformed",
+    "ErrReceiptRecordReverted",
+];
+
 #[test]
 fn every_documented_subcommand_exists_in_rmpc_help() {
     let actual = rmpc_subcommands();
     let documented = documented_subcommands();
-    let missing: Vec<&String> = documented.iter().filter(|s| !actual.contains(*s)).collect();
+    let missing: Vec<&String> = documented
+        .iter()
+        .filter(|s| !actual.contains(*s) && !REMOVED_SUBCOMMANDS.contains(&s.as_str()))
+        .collect();
     assert!(
         missing.is_empty(),
         "skill docs reference subcommands that `rmpc --help` does not list: {:?}\n\
@@ -413,7 +427,10 @@ fn every_documented_flag_exists_on_some_rmpc_subcommand() {
     // resolve.
     let documented = documented_flags();
 
-    let missing: Vec<&String> = documented.iter().filter(|f| !union.contains(*f)).collect();
+    let missing: Vec<&String> = documented
+        .iter()
+        .filter(|f| !union.contains(*f) && !REMOVED_FLAGS.contains(&f.as_str()))
+        .collect();
     assert!(
         missing.is_empty(),
         "skill docs reference flags that no `rmpc` subcommand exposes: {:?}\n\
@@ -671,7 +688,7 @@ fn every_documented_error_name_is_one_rmpc_prints() {
     for path in all_plugin_skill_docs() {
         let text = fs::read_to_string(&path).unwrap();
         for name in err_names_in(&text) {
-            if !real.contains(&name) {
+            if !real.contains(&name) && !REMOVED_ERRORS.contains(&name.as_str()) {
                 fake.push(format!("{}: {name}", path.display()));
             }
         }

@@ -200,23 +200,6 @@ pub enum RmpcError {
     )]
     ErrAgentWithdrawLogMissing { tx_hash: String },
 
-    // ── Committee errors ───────────────────────────────────────────────────
-    /// The caller's address is not on the IC policy allowlist.
-    /// On-chain: `AgentNotAllowlisted` custom error on `submitVote`.
-    /// Emitted when `eth_sendRawTransaction` is rejected with a revert that
-    /// indicates the caller is not an allowlisted committee agent.
-    #[error("ErrNotAllowlisted: caller address is not an allowlisted committee agent")]
-    ErrNotAllowlisted,
-
-    /// The operator config is missing the `ic_policy_address` field.
-    /// `committee vote-submit` fails closed
-    /// before any on-chain write when this field is absent.
-    #[error(
-        "ErrIcContractNotConfigured: ic_policy_address is not set in the operator config; \
-         add `ic_policy_address = \"0x...\"` to the TOML"
-    )]
-    ErrIcContractNotConfigured,
-
     #[error("ErrConfig: configuration error: {0}")]
     ErrConfig(String),
 
@@ -285,8 +268,6 @@ impl RmpcError {
             RmpcError::ErrLegUnavailable => "ErrLegUnavailable",
             RmpcError::ErrSlippageBoundExceeded => "ErrSlippageBoundExceeded",
             RmpcError::ErrAgentWithdrawLogMissing { .. } => "ErrAgentWithdrawLogMissing",
-            RmpcError::ErrNotAllowlisted => "ErrNotAllowlisted",
-            RmpcError::ErrIcContractNotConfigured => "ErrIcContractNotConfigured",
             RmpcError::ErrConfig(_) => "ErrConfig",
             RmpcError::ErrIo(_) => "ErrIo",
             RmpcError::ErrTomlParse(_) => "ErrTomlParse",
@@ -354,8 +335,6 @@ mod tests {
             RmpcError::ErrAgentWithdrawLogMissing {
                 tx_hash: "0x00".into(),
             },
-            RmpcError::ErrNotAllowlisted,
-            RmpcError::ErrIcContractNotConfigured,
             RmpcError::ErrConfig("bad field".into()),
             RmpcError::ErrIo(std::io::Error::other("io")),
             RmpcError::ErrTomlParse(toml::from_str::<toml::Value>("=").unwrap_err()),

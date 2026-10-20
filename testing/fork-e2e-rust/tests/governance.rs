@@ -3,14 +3,13 @@
 //!
 //! Fork e2e scenarios for the RouterGovernance → PortfolioRouter weight path.
 //! Each scenario deploys a fresh VaultRegistry + MockVault + PortfolioRouter +
-//! InvestmentCommitteePolicy + ConsensusRecommendationReceipt + RouterGovernance
+//! ConsensusRecommendationReceipt + RouterGovernance
 //! stack on an anvil-fork backend, records a consensus receipt, and drives
 //! `RouterGovernance.applyReceipt` (or the relevant failure branch).
 //!
-//! The test account stands in for both the gateway (the receipt register's
-//! only writer) and the timelock (the holder of RouterGovernance's
-//! `WEIGHT_SETTER_ROLE`). It is also the allowlisted committee agent that
-//! submits the receipt.
+//! The test account stands in for the timelock (the holder of RouterGovernance's
+//! `WEIGHT_SETTER_ROLE`). It also holds `RECEIPT_SUBMITTER_ROLE` on the receipt
+//! register and submits the receipt directly.
 //!
 //! Covered scenarios:
 //!
@@ -141,18 +140,12 @@ sol! {
         function WEIGHT_SETTER_ROLE() external view returns (bytes32);
     }
 
-    /// InvestmentCommitteePolicy interface — agent allowlist subset.
-    #[allow(missing_docs)]
-    interface IInvestmentCommitteePolicy {
-        function registerAgent(address agent, string calldata agentId_) external;
-    }
-
     /// ConsensusRecommendationReceipt interface — record / read subset.
     #[allow(missing_docs)]
     interface IConsensusRecommendationReceipt {
         function ADMIN_ROLE() external view returns (bytes32);
+        function RECEIPT_SUBMITTER_ROLE() external view returns (bytes32);
         function recordReceipt(
-            address submitter,
             bytes32 receiptId,
             bytes32 payloadDigest,
             string calldata payloadUri
@@ -291,21 +284,13 @@ fn deploy_stack<'a>(fx: &'a ForkFixture, tag: &str) -> Stack<'a> {
         &[usdc, registry, me],
         8_000_000,
     );
-    // InvestmentCommitteePolicy(admin_, gateway_): the gateway is never called here.
-    let ic_policy = deploy_governed(
-        &admin,
-        "InvestmentCommitteePolicy.sol",
-        "InvestmentCommitteePolicy",
-        &[me, me],
-        8_000_000,
-    );
-    // ConsensusRecommendationReceipt(admin_, gateway_, icPolicy_): the test
-    // account is the gateway, so it can call `recordReceipt` directly.
+    // ConsensusRecommendationReceipt.initialize(admin_, ...): the test account is the admin and
+    // is granted RECEIPT_SUBMITTER_ROLE below, so it can call `recordReceipt` directly.
     let receipts = deploy_governed(
         &admin,
         "ConsensusRecommendationReceipt.sol",
         "ConsensusRecommendationReceipt",
-        &[me, me, ic_policy],
+        &[me],
         5_000_000,
     );
     // RouterGovernance(_router, _receipts, _admin): `_admin` gets ADMIN_ROLE and
@@ -319,24 +304,26 @@ fn deploy_stack<'a>(fx: &'a ForkFixture, tag: &str) -> Stack<'a> {
     );
     eprintln!(
         "[{tag}] registry={registry:#x} vault_a={vault_a:#x} vault_b={vault_b:#x} router={router:#x} \
-         ic_policy={ic_policy:#x} receipts={receipts:#x} governance={governance:#x}"
+         receipts={receipts:#x} governance={governance:#x}"
     );
 
     register_eligible_vault(&admin, registry, vault_a, usdc, "Vault A");
     register_eligible_vault(&admin, registry, vault_b, usdc, "Vault B");
 
-    // The receipt's submitter must hold COMMITTEE_AGENT_ROLE on the IC policy.
-    admin
-        .send(
-            ic_policy,
-            &IInvestmentCommitteePolicy::registerAgentCall {
-                agent: me,
-                agentId_: "fork-e2e-agent".to_string(),
-            },
-            U256::ZERO,
-            300_000,
-        )
-        .expect("registerAgent");
+    // The receipt's submitter must hold RECEIPT_SUBMITTER_ROLE on the receipt register.
+    let submitter_role = read_bytes32(
+        &admin,
+        receipts,
+        &IConsensusRecommendationReceipt::RECEIPT_SUBMITTER_ROLECall {},
+        "receipts.RECEIPT_SUBMITTER_ROLE()",
+    );
+    grant_role(
+        &admin,
+        receipts,
+        submitter_role,
+        me,
+        "receipts RECEIPT_SUBMITTER_ROLE -> test account",
+    );
 
     // RouterGovernance releases receipts (receipt ADMIN_ROLE) and sets weights
     // (router WEIGHT_SETTER_ROLE).
@@ -392,7 +379,6 @@ impl Stack<'_> {
             .send(
                 self.receipts,
                 &IConsensusRecommendationReceipt::recordReceiptCall {
-                    submitter: self.admin.address,
                     receiptId: receipt_id,
                     payloadDigest: digest,
                     payloadUri: format!("ipfs://fork-e2e/{label}"),

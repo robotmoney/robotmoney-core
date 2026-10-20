@@ -1178,25 +1178,8 @@ mod tests {
                 "DefaultWeightsSet",
                 t.default_weights_set,
             ),
-            // InvestmentCommitteePolicy — issue #1053.
-            (
-                "InvestmentCommitteePolicy.sol",
-                "InvestmentCommitteePolicy",
-                "AgentRegistered",
-                t.ic_agent_registered,
-            ),
-            (
-                "InvestmentCommitteePolicy.sol",
-                "InvestmentCommitteePolicy",
-                "AgentRevoked",
-                t.ic_agent_revoked,
-            ),
-            (
-                "InvestmentCommitteePolicy.sol",
-                "InvestmentCommitteePolicy",
-                "VoteSubmitted",
-                t.ic_vote_submitted,
-            ),
+            // The InvestmentCommitteePolicy rows were removed with the contract (issue 1888).
+            // Issue 1891 deletes the matching decoders.
             // ConsensusRecommendationReceipt — issue #1247.
             (
                 "ConsensusRecommendationReceipt.sol",

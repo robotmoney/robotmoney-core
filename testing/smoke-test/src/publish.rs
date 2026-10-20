@@ -699,7 +699,6 @@ pub struct Topology {
     pub registry: String,
     pub router: String,
     pub governance: String,
-    pub ic_policy: String,
     pub consensus_receipt: String,
     pub timelock: String,
     pub safe: String,
@@ -748,7 +747,7 @@ pub fn load_topology_with(dir: &Path, table: &StageTable) -> Result<Topology, Ha
     let (reg_f, registry) = stem("registry")?;
     let (rtr_f, router) = stem("router")?;
     let (gov_f, governance) = stem("governance")?;
-    let (ic_f, ic) = stem("ic-policy")?;
+    let (rc_f, rc) = stem("receipt")?;
     let (tl_f, timelock) = stem("timelock")?;
     let mut vaults = BTreeMap::new();
     for (label, file) in table.vault_manifests() {
@@ -784,8 +783,7 @@ pub fn load_topology_with(dir: &Path, table: &StageTable) -> Result<Topology, Ha
         registry: field(&registry, &reg_f, "registry")?,
         router: field(&router, &rtr_f, "router")?,
         governance: field(&governance, &gov_f, "governance")?,
-        ic_policy: field(&ic, &ic_f, "policy")?,
-        consensus_receipt: field(&ic, &ic_f, "consensus_receipt")?,
+        consensus_receipt: field(&rc, &rc_f, "consensus_receipt")?,
         timelock: field(&timelock, &tl_f, "timelock")?,
         safe: field(&timelock, &tl_f, "safe")?,
         vaults,
@@ -1010,12 +1008,8 @@ mod tests {
             w("router", format!("{{\"router\":\"{}\"}}", a('4')));
             w("governance", format!("{{\"governance\":\"{}\"}}", a('5')));
             w(
-                "ic-policy",
-                format!(
-                    "{{\"policy\":\"{}\",\"consensus_receipt\":\"{}\"}}",
-                    a('6'),
-                    a('7')
-                ),
+                "receipt",
+                format!("{{\"consensus_receipt\":\"{}\"}}", a('7')),
             );
             w(
                 "timelock",

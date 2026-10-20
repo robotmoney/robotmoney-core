@@ -13,9 +13,9 @@ import {
 ///         renounced down to zero holders.
 ///
 ///         `ADMIN_ROLE` is self-administered on RouterGovernance,
-///         PortfolioRouter and VaultRegistry. On InvestmentCommitteePolicy and
-///         ConsensusRecommendationReceipt `DEFAULT_ADMIN_ROLE` administers it,
-///         so those two contracts also floor `DEFAULT_ADMIN_ROLE` (#1447).
+///         PortfolioRouter and VaultRegistry. On ConsensusRecommendationReceipt
+///         `DEFAULT_ADMIN_ROLE` administers it, so that contract also floors
+///         `DEFAULT_ADMIN_ROLE` (#1447).
 ///
 ///         Finding L-10 (2026-06-18 holistic review): the floored contracts use a
 ///         single `ADMIN_ROLE` for configuration. OZ's

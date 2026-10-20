@@ -48,9 +48,6 @@ sol_binding!(
     RobotMoneyGateway,
     "abi/RobotMoneyGateway.json"
 );
-/// The `VoteParams` struct as the gateway ABI declares it, which
-/// `RobotMoneyGateway::committeeVoteSubmitCall` takes (issue #1511).
-pub use robot_money_gateway::IInvestmentCommitteePolicy::VoteParams as GatewayVoteParams;
 sol_binding!(erc20, Erc20, "abi/Erc20.json");
 sol_binding!(vault, IVault, "abi/IVault.json");
 sol_binding!(vault_registry, VaultRegistry, "abi/VaultRegistry.json");
@@ -70,11 +67,6 @@ sol_binding!(
     "abi/TimelockController.json"
 );
 sol_binding!(
-    investment_committee_policy,
-    InvestmentCommitteePolicy,
-    "abi/InvestmentCommitteePolicy.json"
-);
-sol_binding!(
     consensus_recommendation_receipt,
     ConsensusRecommendationReceipt,
     "abi/ConsensusRecommendationReceipt.json"
@@ -89,16 +81,6 @@ mod tests {
     /// The `deposit` selector must match `keccak256("deposit(bytes32,uint256,uint64,bytes32)")[..4]`.
     /// This is the load-bearing cross-check that the generated bindings line
     /// up with the Solidity ABI committed in `contracts/gateway/`.
-    /// `committee vote-submit` sends this call to the gateway (issue #1511).
-    /// The tuple layout must match `IInvestmentCommitteePolicy.VoteParams`.
-    #[test]
-    fn committee_vote_submit_selector_matches_canonical_signature() {
-        let canonical = "committeeVoteSubmit((address,address,uint8,uint16,uint8,string,bytes32,bytes32,bytes32,string,uint64))";
-        let expected = &keccak256(canonical.as_bytes())[..4];
-        let actual = RobotMoneyGateway::committeeVoteSubmitCall::SELECTOR;
-        assert_eq!(&actual, expected, "committeeVoteSubmit selector drift");
-    }
-
     #[test]
     fn deposit_selector_matches_canonical_signature() {
         let canonical = "deposit(bytes32,uint256,uint64,bytes32)";

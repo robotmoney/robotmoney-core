@@ -63,7 +63,7 @@ fn governance_releases_from_the_deployed_receipt_register() {
     assert_ne!(
         register,
         Address::ZERO,
-        "the ic-policy manifest names no ConsensusRecommendationReceipt"
+        "the receipt manifest names no ConsensusRecommendationReceipt"
     );
     assert_eq!(
         read_receipts(fx),
