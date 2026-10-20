@@ -126,3 +126,36 @@ test("an 8453 sheet needs an owner signer for every sheet owner", () => {
   const p = sheetProblems(parseSheetText(TWIN_SHEET), "rehearsal");
   expect(p.join("\n")).toContain("--owner-signers");
 });
+
+// Issue 1892: the gateway system has its own runbook (gateway.yaml). It is checked against the real CLIs, and it is the gateway system's: --system gateway, no vaults-only verb,
+// no owner signer, no agent, and a publish that is irreversible and waits for the owner's governance decision (architecture 10: open).
+test("the gateway runbook is committed, is a separate template and publishes only behind the owner's governance decision", () => {
+  const text = readFileSync(join(ROOT, QA_DIR, "gateway.yaml"), "utf8");
+  expect(text).toContain("template: contract-qa-gateway");
+  expect(text).toContain('go: "gateway-governance"');
+  expect(text).toContain("--system gateway");
+  expect(readFileSync(join(ROOT, QA_DIR, "template.yaml"), "utf8")).not.toContain("--system gateway");
+  for (const r of ["v0.4.0", "v0.5.0"]) expect(readFileSync(join(ROOT, QA_DIR, `releases/${r}.yaml`), "utf8")).not.toContain("--system gateway");
+});
+
+test("a gateway runbook step that runs a vaults-only verb, an owner signer, a control proof or an agent fails", () => {
+  const swap = (from: string, to: string) => problemsWith("gateway.yaml", (t) => t.replace(from, to)).join("\n");
+  expect(swap('"verify", "{gcommon}", "{gate}"]\n    env:\n      PUBLISH_MANIFEST_DIR: "{manifestDir}"\n    expectExit: 0\n    receipts:\n      - {"dir": "{runDir}/evidence-gateway"', '"govern", "{gcommon}", "{gate}"]\n    env:\n      PUBLISH_MANIFEST_DIR: "{manifestDir}"\n    expectExit: 0\n    receipts:\n      - {"dir": "{runDir}/evidence-gateway"')).toContain("vaults-only verb");
+  expect(swap('"publish", "{gcommon}", "{gate}"]', '"publish", "{gcommon}", "{gate}", "--owner-signer", "{ownerSigner}"]')).toContain("no Safe owner signer");
+  expect(swap('"publish", "{gcommon}", "--dry-run"]', '"publish", "{gcommon}", "--dry-run", "--stage", "prove-control"]')).toContain("no control proof");
+  expect(swap("echo 'AGENT_ADDRESSES=0x000000000000000000000000000000000000a0aa'", "export AGENT_ADDRESSES=0x000000000000000000000000000000000000a0aa")).toContain("authorizes no agent");
+});
+
+test("a gateway publish with no owner decision gate, or not marked irreversible, fails; a gateway command without --system gateway fails", () => {
+  const gated = problemsWith("gateway.yaml", (t) => t.replace('    go: "gateway-governance"\n', "")).join("\n");
+  expect(gated).toContain("irreversible step needs notBefore");
+  const flag = problemsWith("gateway.yaml", (t) => t.replace('"verify", "{gcommon}", "{gate}"]', '"verify", "--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{gatewaySheet}", "--signer", "{signer}", "--environment", "{environmentName}", "--core-sha", "{coreSha}", "--counts-dir", "{countsDir}", "{gate}"]')).join("\n");
+  expect(flag).toContain("names --system gateway");
+  const missing = problemsWith("gateway.yaml", (t) => t.replace("--system gateway --dry-run", "--dry-run")).join("\n");
+  expect(missing).toContain("names --system gateway");
+  expect(problemsWith("gateway.yaml", (t) => t.replace("contract-qa-gateway", "contract-qa")).join("\n")).toContain("names itself contract-qa");
+});
+
+test("a CLI flag the gateway runbook uses that the CLI does not have fails", () => {
+  expect(problemsWith("gateway.yaml", (t) => t.replace('"publish", "{gcommon}", "{gate}"]', '"publish", "{gcommon}", "{gate}", "--system-two", "x"]')).join("\n")).toContain("--system-two is no publish-contracts flag");
+});

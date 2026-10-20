@@ -310,11 +310,11 @@ adds `safe`, `prove-control` (between stages 10 and 11), `verify` and `govern`:
 
 **Target: the vaults release run (owner decisions 2026-10-19 and 2026-10-20).** What changes against the deployed table above:
 
-- No `gateway` stage. The gateway is deployed by the rmpc gateway system's own release.
+- No `gateway` stage. The stage table (`scripts/deploy/stage-table.json`) declares two systems. The default run, `--system vaults`, runs the vaults stages only and needs no gateway, no gateway sheet name and no `AGENT_*` input. The gateway stages (`gateway`, `gateway-handover`) are the gateway system's own release run, section 4.13.
 - No `ic-policy` stage. A `receipt` stage deploys the `ConsensusRecommendationReceipt` proxy on its own (manifest `receipt.json`: `consensus_receipt`, `consensus_receipt_implementation`, `receipt_admin`). It binds nothing to a gateway and grants no gateway role.
 - The `receipt` stage runs BEFORE `governance`. The governance stage reads `CONSENSUS_RECEIPT_ADDRESS` from `receipt.json`.
 - No `AGENT_*` input anywhere. The timelock stage reads no `AGENT_ADDRESSES`, no `GATEWAY_ADDRESS` and no `IC_POLICY_ADDRESS`.
-- The verifier checks no `AgentAuthorized` log. That check moves to the gateway release. `AgentOwnershipTransferred` no longer exists.
+- The vaults verifier checks no `AgentAuthorized` log and names no gateway contract. That check moves to the gateway release (section 4.13). `AgentOwnershipTransferred` no longer exists: the gateway verifier does not scan it, and a combined historical manifest (`deployments/8453/deploy-2`) keeps its own reading of it.
 
 **Run order: publish, verify, govern, verify (issue 1667).** The stage numbers are fixed (12 `verify`, 13 `govern`), the run order on 8453 is not
 verify once. Verify runs twice, and each run checks a different state, which the CLI reads from the run manifest and confirms against the chain:
@@ -695,19 +695,19 @@ Upgradeability stage 2. The contracts (issue 1808) and the clients (issue 1810) 
 
 The committed Twin sheet, the 8453 rehearsal example and the production fixture sheet declare `frozen`.
 
-**Stage order and transactions.** Deployed release (v0.5.0): the proxy stages run in this order, each before the `timelock` stage, which deploys the upgrade authority LAST (the table is pinned to `scripts/deploy/stage-table.json` by `tests/upgrade-runbook-drift.test.ts`; the table below already carries the one `receipt` row of issue 1888 in place of the two v0.5.0 `ic-policy` rows, still before `governance`, and the system split drops the `gateway` row):
+**Stage order and transactions.** The vaults system's proxy stages run in this order, each before the `timelock` stage, which deploys the upgrade authority LAST. The `gateway` stage belongs to the gateway system: it runs in its own run after the vaults run and names its own explicit upgrade timelock (`GATEWAY_UPGRADE_TIMELOCK`, nonzero, with code), never the core timelock and never a default (issue 1892; production governance of the gateway is an open decision, `docs/architecture.md` §10). The table is pinned to `scripts/deploy/stage-table.json` by `tests/upgrade-runbook-drift.test.ts`; the table carries the one `receipt` row (issue 1888) before `governance`:
 
 | Stage | Proxy (manifest field) | Implementation (manifest field) | Implementation contract |
 | --- | --- | --- | --- |
 | `vault` | `vault` | `vault_implementation` | `RobotMoneyVault` |
 | `registry` | `registry` | `registry_implementation` | `VaultRegistry` |
 | `router` | `router` | `router_implementation` | `PortfolioRouter` |
-| `gateway` | `gateway` | `gateway_implementation` | `RobotMoneyGateway` |
 | `receipt` | `consensus_receipt` | `consensus_receipt_implementation` | `ConsensusRecommendationReceipt` |
 | `governance` | `governance` | `governance_implementation` | `RouterGovernance` |
 | `proto` | `vault` | `implementation` | `ProtocolAssetVault` |
 | `agent` | `vault` | `implementation` | `AgentTokenVault` |
 | `rwa` | `vault` | `implementation` | `RwaBasketVault` |
+| `gateway` | `gateway` | `gateway_implementation` | `RobotMoneyGateway` |
 
 Each proxy is 2 deployer transactions: the implementation, then the `ERC1967Proxy` whose constructor runs `initialize` atomically. The mode changes no count, so a frozen count measured on the Twin chain in one mode holds for the other. The deterministic address assumption is the timelock: every proxy names, from its first block, the CREATE2 address of the exact Safe-proposer `ProposerFloorTimelock` (an OpenZeppelin `TimelockController` that refuses to drop its last proposer), from the factory `0x4e59b44847b379578588920cA78FbF26c0B4956C`, the salt `robotmoney.core.timelock.v1` and `SAFE_ADDRESS` and `TIMELOCK_MIN_DELAY`. Nothing else can hold code there, so no interim deployer upgrade path exists. The stage table (`scripts/deploy/stage-table.json`, `proxies` on each stage and `upgradeAuthority`) carries the same facts.
 
@@ -779,6 +779,24 @@ The record `upgrade-lifecycle.json` is checked by `bun publish-contracts/src/evi
 2. Keep every legacy vault redeemable: `redeem` and `withdraw` for USDC, and `redeemInKind` for the baskets. Do not pause a legacy vault's withdrawals, and do not move a legacy holder's shares.
 3. Point new deposits at the new release only after its cutover gates pass: verify green, evidence accepted, and the signing clients' implementation pins updated from the new gateway manifest (`gateway_implementation`, `gateway_implementation_runtime_hash`). The registry, router and gateway references of the new deployment are its own. Nothing in the legacy deployment is rewired.
 4. Retire legacy vaults only through their own governance (registry retirement, deposits halted, withdrawals kept), as in 4.11. Holders exit and deposit into the new release themselves. The dapp and the explorer show legacy positions at their own addresses (4.11, address-specific holdings).
+
+### 4.13. The gateway system run (issue 1892)
+
+The rmpc gateway system (`RobotMoneyGateway` and its `GatewayWindows` library) deploys, verifies and records its evidence on its own, after the vaults system, against the vaults system's manifests. The vaults system never reads a gateway manifest (invariant `SYS-1`).
+
+**Run.** `bun publish-contracts/src/cli.ts publish --system gateway --sheet <gateway sheet> --evidence <gateway evidence dir> ...` and `verify --system gateway` with the same arguments. The default `--system vaults` is the vaults run of the sections above. Each system has its own evidence directory and run manifest: a run manifest of one system refuses `--resume` by the other (`RESUME`). The gateway system has two stages and no `safe`, `prove-control` or `govern` stage, and the verbs `govern`, `pause-all`, `record-receipt`, `redeploy-vault` and `deploy-implementation` refuse `--system gateway` (`USAGE`).
+
+**Sheet.** A small sheet, not the treasury sheet: `CHAIN_ID`, `EXPECTED_CHAIN_ID`, `ADMIN_ADDRESS` (the deployer), `PAUSER_ADDRESS`, `SHARE_RECEIVER_ADDRESS`, `UPGRADE_MODE`, optional `DEPLOYMENT_KIND`, and two names with no default: `GATEWAY_ADMIN_ADDRESS` (the holder of the gateway `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` after the handover) and `GATEWAY_UPGRADE_TIMELOCK` (the gateway's own nonzero upgrade timelock, with code on the chain). Every other name is refused before any signer, forge call or broadcast: an `AGENT_*` name (the deploy authorizes no agent), `SAFE_*`, `TIMELOCK_MIN_DELAY` and every treasury name, because the vaults timelock is not an input of this system. A vaults sheet that names `GATEWAY_ADMIN_ADDRESS` or `GATEWAY_UPGRADE_TIMELOCK` is refused too. **Open decision:** which authority holds the production gateway `ADMIN_ROLE` and which timelock governs the production gateway release is not chosen (`docs/architecture.md` §10). The sheet never defaults it and never reuses the vaults timelock by omission. The production release records its choice.
+
+**Stages.** `gateway` deploys the gateway proxy bound to the vaults system's vault and router, with `GATEWAY_UPGRADE_TIMELOCK` as its upgrade authority (the manifest `gateway.json` records `upgrade_timelock` and `upgrade_mode`; the runner refuses a manifest that names another timelock). `gateway-handover` has the deployer grant `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` to `GATEWAY_ADMIN_ADDRESS` and revoke both from itself: 4 deployer transactions. It authorizes no agent and transfers no agent. The deployer's start nonce is recorded when the run begins (the deployer already sent the vaults run), so every nonce check is relative to it.
+
+**Consumed manifests.** When the run begins it hashes `vault.json`, `router.json` and `libs.json` and refuses to start if one is missing (`INPUT_MISSING`). The verifier fails `vaults system: the manifests this run consumed are unchanged since it began` when one changed.
+
+**Verify.** The gateway verifier checks the gateway proxy and implementation against the build and the manifest pins, `router()` equals the vaults router, the gateway reads the sheet's upgrade timelock, the admin roles are held by the gateway admin and not by the deployer, the pauser holds `DEPOSIT_PAUSER_ROLE`, and the deployer nonce equals its start plus the gateway stages' frozen counts. Two chain-backed labels read the gateway's logs up to the handover block: `agents: no AgentAuthorized log on the gateway up to the handover block` and `agents: no AGENT_ROLE grant on the gateway up to the handover block`, so a run that authorized an agent before the handover fails. A depositor's own agent after the handover is theirs and does not fail it. A failed gateway verify fails the run and pauses no vault.
+
+**Counts and evidence.** One frozen file per DEPLOY_SHA (`deployments/frozen-counts/<sha>.json`) holds both systems' counts: a Twin run of the gateway system adds `gateway` and `gateway-handover` to the file and changes no count already in it; a run on 8453 needs them already reviewed in the file. Each system sums its own stages only. The gateway evidence names `system: "gateway"` and is checked by `evidence-check` on its own (`publish-contracts/src/evidence-gateway.ts`): its two stages, the explicit upgrade timelock, the admin, the consumed vaults addresses, `agents_at_handover: 0` and the nonce from `deployer_start_nonce`. A vaults evidence may name `system: "vaults"` and then carries no gateway stage; evidence with no `system` is the combined historical reading.
+
+**Historical combined manifests.** A table without `systems` (a core checkout at the combined release SHA, for example the one behind `deployments/8453/deploy-2`) is read as one combined run: the gateway stage sits after the router, the verifier keeps its gateway, `AgentAuthorized` and `AgentOwnershipTransferred` checks and the `gateway_agents_listed_count` and `deployer_owns_a_listed_gateway_agent` manifest fields keep their meaning. Nothing here rewrites a historical manifest or a completed release record.
 
 ## 5. Per-release runbook format
 
