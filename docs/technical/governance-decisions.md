@@ -8,7 +8,7 @@
 > Closes the open question listed under `docs/architecture.md` §10
 > ("Router-weight governance implementation").
 
-The Investment Committee's only on-chain output is the consensus receipt. There is no on-chain committee vote or tilt (owner decision 2026-10-19). A receipt is recorded by a `RECEIPT_SUBMITTER_ROLE` holder under its own address and released only by the Safe applying it through the timelock; receipts are the only rebalance input.
+The Investment Committee's only on-chain output is the consensus receipt. There is no on-chain committee vote or tilt (owner decision 2026-10-19). A receipt is recorded by a `RECEIPT_SUBMITTER_ROLE` holder under its own address and released only by the Safe applying it through the timelock. The receipt is the only rebalancing signal the Safe may cite. The vector the Safe schedules through `applyReceipt` is the input; the chain cannot parse the payload, so readers compare the applied vector to the payload (owner decision 2026-10-20).
 
 ---
 

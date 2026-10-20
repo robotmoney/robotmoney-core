@@ -4,7 +4,7 @@ Canonical: `docs/architecture.md` §4.9 — Consensus Recommendation Receipt Con
 Canonical: `docs/product/20260623-product-proposal-investment-committee-v0.md` §2.1
 Implements: issue #1247 tasks 4.11, 4.12, 4.13 and acceptance criteria 7, 8
 
-The Investment Committee's only on-chain output is the consensus receipt. Consensus receipts are caller bound and ADMIN released; receipts are the only rebalance input, applied by the Safe through the timelock.
+The Investment Committee's only on-chain output is the consensus receipt. Consensus receipts are caller bound; they are released only by `RouterGovernance.applyReceipt` through the timelock. The receipt is the only rebalancing signal the Safe may cite. The vector the Safe schedules through `applyReceipt` is the input; the chain cannot parse the payload, so readers compare the applied vector to the payload. Receipts are submitted on-chain only by the submitter Safe through the publish-contracts `record-receipt` row (a Safe transaction), on every chain including Base production. `rmpc receipt submit` is not a path (owner decisions 2026-10-20).
 
 **System boundary (owner decisions 2026-10-19).** The receipt contract
 belongs to the vaults system. The rmpc gateway system (`RobotMoneyGateway`
@@ -92,12 +92,12 @@ record steps below are the **deployed-release** procedure: they route
 through the gateway (see "Deployed release" above).
 
 Owner decision 2026-10-10: **no single key anchors a receipt.** For the Base mainnet rehearsal and every later run on the `publish-contracts` surface the submitter is not an
-EOA. It is a **second Safe**, a SafeL2 1.4.1 proxy separate from the governing Safe, that holds the two roles above and nothing else. Everything in §1 about what the
+EOA. It is a **Safe** (a SafeL2 1.4.1 proxy with threshold 2 or more; it may be the governing Safe, owner decision 2026-10-20) that holds the submitter role and nothing else. The submitter Safe and the governing Safe may share owners; separate multisigs are not required. Everything in §1 about what the
 submitter can and cannot do holds unchanged for a contract account: the contracts check only the roles, never `msg.sender`, `tx.origin`, `isContract` or a signature
 (`contracts/test/ConsensusReceiptSafeSubmitter.t.sol` proves it with a real Safe, including the 1-raw-unit deposit cap and the disabled withdrawals).
 
 - **What the tooling pins** (`publish-contracts/src/submitter-safe.ts`): the canonical SafeProxy 1.4.1 code hash, the SafeL2 singleton in slot 0, `VERSION` 1.4.1, threshold 2 or more,
-  no module, no guard, the canonical fallback handler. It is never the governing Safe, the timelock, admin (= the deployer), the pauser or the emergency address.
+  no module, no guard, the canonical fallback handler. It may be the governing Safe (owner decision 2026-10-20). It is never the timelock, admin (= the deployer), the pauser or the emergency address.
 - **Register it (target):** `govern --row register-submitter --submitter 0x<Safe>` schedules one timelock call, `ConsensusRecommendationReceipt.grantRole(RECEIPT_SUBMITTER_ROLE, safe)`. The checks run before the timelock round is scheduled. Nothing runs on the gateway, so there is no private half and no public window to front-run.
 - **Register it (deployed release):** `govern --row register-committee --submitter 0x<Safe>`. The checks run before the timelock round is scheduled.
 - **Registration has no public window (QA plan v1 B6, security review CS-2).** The row works in two halves.
@@ -116,7 +116,7 @@ submitter can and cannot do holds unchanged for a contract account: the contract
   signatures) and by each Safe's own nonce, not by different keys. A compromise of two owner keys is a compromise of both Safes. This is the owner's accepted trade-off for the
   rehearsal. The custody requirements of §2 (HSM or KMS, dedicated host, append-only signing log) describe a *single-key* submitter and are replaced, for the owners' keys, by
   the hardware wallets of the governing Safe's own runbook.
-**Roles in the 900 s rehearsal (acceptance criterion 5).** The OLD governance Safe `0x5E68a40648DD23065b21b1C414e1178ddE6482ca` (the first rehearsal's governing Safe, 2 of 3, proxy code hash and singleton checked read-only on 8453) is the **PROPOSER**: it is the submitter Safe that records receipts (`record-receipt --submitter 0x5E68a40648DD23065b21b1C414e1178ddE6482ca`). The NEW governing Safe, created by this rehearsal with `SAFE_SALT_NONCE` 2026101002, is the **APPROVER**: it registers the proposer through the timelock and applies the receipt (`govern --row apply-receipt`). The old Safe holds no role on the new deployment until `register-committee` gives it AGENT_ROLE and COMMITTEE_AGENT_ROLE. **Caveat: the same three owner keys (A, B, C) control BOTH Safes**, so proposer and approver are separated by the multisig and by each Safe's own nonce, not by key. **Preflight:** the three owner EOAs A, B and C must differ from the 900 s sheet's ADMIN_ADDRESS, PAUSER_ADDRESS and EMERGENCY_ADDRESS (the sheet already enforces it for the new Safe; the submitter check enforces it for the old one) or registration is refused with an error naming which owner collided.
+**Deployed release (v0.5.0): roles in the 900 s rehearsal (acceptance criterion 5).** The OLD governance Safe `0x5E68a40648DD23065b21b1C414e1178ddE6482ca` (the first rehearsal's governing Safe, 2 of 3, proxy code hash and singleton checked read-only on 8453) is the **PROPOSER**: it is the submitter Safe that records receipts (`record-receipt --submitter 0x5E68a40648DD23065b21b1C414e1178ddE6482ca`). The NEW governing Safe, created by this rehearsal with `SAFE_SALT_NONCE` 2026101002, is the **APPROVER**: it registers the proposer through the timelock and applies the receipt (`govern --row apply-receipt`). The old Safe holds no role on the new deployment until `register-committee` gives it AGENT_ROLE and COMMITTEE_AGENT_ROLE. **Caveat: the same three owner keys (A, B, C) control BOTH Safes**, so proposer and approver are separated by the multisig and by each Safe's own nonce, not by key. **Preflight:** the three owner EOAs A, B and C must differ from the 900 s sheet's ADMIN_ADDRESS, PAUSER_ADDRESS and EMERGENCY_ADDRESS (the sheet already enforces it for the new Safe; the submitter check enforces it for the old one) or registration is refused with an error naming which owner collided.
 - **Rotation (§3)** is unchanged in shape: register a new submitter Safe, record one receipt through it, revoke the old one. The old Safe stays a valid record of what it attested.
 - **The digest scheme (issue 1754).** `payloadDigest = keccak256("robotmoney:consensus-receipt:v1\n" || compact JSON || "\n")` and `receipt_id = keccak256("robotmoney:consensus-receipt-id:v1\n" || session_id || "\n" || subject_id)`. The domain line is part of the hashed bytes. The public canonical route (`/api/swarm/sessions/<session>/consensus-receipt/canonical`) serves the compact JSON plus the trailing newline WITHOUT the domain line, so a plain `keccak256` of the downloaded file is NOT the digest. Use the `payload_digest` and `receipt_id` that `rmpc receipt verify` prints. `record-receipt --payload FILE` (FILE as served by the route) recomputes both from the bytes before any signer is built and refuses a `--payload-digest` or `--receipt-id` that differs, naming both values. The real swarm receipt of session 5015526d-27f6-478a-86e9-ac768e310af1 (31941 bytes) has `payload_digest` `0x2aebf2b33c117d41813ef338ccf1d44b8006cc8a54eb162b17cbb8ac18adbacb` (a plain keccak256 would be `0x19d64ec6...7f86`) and `receipt_id` `0xdcf4108eb6186e913447fbf24353ee32b2e75cb6c7a46aabbb27f9a663c7ca81`. `govern --row apply-receipt --payload FILE` applies the same function, so the same file passes. The single TypeScript definition is `publish-contracts/src/receipt-digest.ts`.
 - **Recovery after a landed transaction.** If `record-receipt` fails after the Safe transaction landed (a stale RPC read, a timeout), re-run the same command: it finds the receipt on chain with the Safe as submitter and takes the `already_recorded` path, and it fills the missing `tx_hash` and `safe_tx_hash` in the evidence from the Safe's `ExecutionSuccess` event when it can find it. If the event cannot be found the evidence entry keeps `already_recorded` without a transaction and the operator adds the transaction hash from the chain explorer by hand.
@@ -164,26 +164,32 @@ because submitter authority is role state.
 
 1. Provision the new key per §2 and derive its address.
 2. Register the new address with `govern --row register-submitter` (§1.1):
-   one timelock call grants it `RECEIPT_SUBMITTER_ROLE`. On the deployed
-   release use `govern --row register-committee` instead. The deployed release routes registration through the gateway (§1). The
-   new submitter first authorizes ITSELF in private, before anything is public:
-   `gateway.commitAuthorization`, one block later `gateway.revealAuthorization`
-   (its own agent, shares to itself), then
-   `gateway.transferAgentOwnership(new, timelock)`. Only then, via the
-   timelock's normal schedule → delay → execute path, one batch sets the
-   signalling-only policy (`gateway.setPolicy`, shares to the timelock) and
-   grants `COMMITTEE_AGENT_ROLE` (`gateway.committeeRegister`). Never schedule
-   a public `gateway.authorizeAgent` for the new address: during the delay
-   anyone can authorize that address first and own it for good (QA plan v1
-   B6).
-3. Submit one receipt from the new key on a real session and confirm the
-   indexer ingested it with `verified = true`.
+   one timelock call grants it `RECEIPT_SUBMITTER_ROLE`.
+3. Record one receipt from the new Safe on a real session through the
+   `record-receipt` row and confirm the indexer ingested it with
+   `verified = true`.
 4. Revoke the old address:
    `ConsensusRecommendationReceipt.revokeRole(RECEIPT_SUBMITTER_ROLE, old)` (an
-   `ADMIN_ROLE` call from the timelock). On the deployed release call
-   `InvestmentCommitteePolicy.revokeAgent` and `RobotMoneyGateway.revokeAgent`
-   instead (§1).
-5. Confirm on chain that the old address holds neither role.
+   `ADMIN_ROLE` call from the timelock).
+5. Confirm on chain that the old address holds no role.
+
+> **Deployed release (v0.5.0) only.** On release v0.5.0 the steps above
+> differ as follows. Step 2 uses `govern --row register-committee` instead,
+> because registration routes through the gateway (§1). The new submitter
+> first authorizes ITSELF in private, before anything is public:
+> `gateway.commitAuthorization`, one block later `gateway.revealAuthorization`
+> (its own agent, shares to itself), then
+> `gateway.transferAgentOwnership(new, timelock)`. Only then, via the
+> timelock's normal schedule → delay → execute path, one batch sets the
+> signalling-only policy (`gateway.setPolicy`, shares to the timelock) and
+> grants `COMMITTEE_AGENT_ROLE` (`gateway.committeeRegister`). Never schedule
+> a public `gateway.authorizeAgent` for the new address: during the delay
+> anyone can authorize that address first and own it for good (QA plan v1
+> B6). Step 4 calls `InvestmentCommitteePolicy.revokeAgent` and
+> `RobotMoneyGateway.revokeAgent` instead (§1). Step 5 checks both roles.
+> None of this exists in the target: there is no IC policy, no
+> `transferAgentOwnership` and no `committeeRegister` (owner decisions
+> 2026-10-19 and 2026-10-20).
 
 **Both keys are valid between steps 2 and 4.** That overlap is intentional — it
 is what makes a rotation safe to abort. Never revoke before the new key has
@@ -214,9 +220,16 @@ integrity of the public record.
    the fastest kill switch and needs no chain transaction.
 2. **Revoke (one timelock cycle).**
    `ConsensusRecommendationReceipt.revokeRole(RECEIPT_SUBMITTER_ROLE, submitter)`.
-   On the deployed release call `InvestmentCommitteePolicy.revokeAgent` and
-   `RobotMoneyGateway.revokeAgent` instead (§1). Until this lands, containment rests on step 1
-   alone.
+   The revocation lands only after `getMinDelay()` has passed on the
+   timelock. Containment inside that window is off-chain: step 1, plus
+   freezing the Safe's owner keys. Until it lands, containment rests on
+   those alone. The stored submitter is the Safe address. Which owner keys
+   signed the Safe transaction is off-chain evidence (the Safe transaction's
+   signers in the evidence file), not chain state.
+
+   > **Deployed release (v0.5.0) only.** Call
+   > `InvestmentCommitteePolicy.revokeAgent` and
+   > `RobotMoneyGateway.revokeAgent` instead (§1).
 3. **Freeze publication.** Stop the swarm worker from producing new receipts so
    a legitimate submission does not race the incident.
 4. **Scope it.** From the indexer, list every `ReceiptRecorded` from the

@@ -59,8 +59,11 @@ Safe applies the Investment Committee's consensus receipt with
 with `setDefaultWeights`. There is no voting by token holders or anyone
 else. See §2.3 and `docs/prd.md` §"Allocation Governance".
 
-The vaults system's only rebalancing input is the **consensus
-recommendation receipt** (owner decision, 2026-10-19). The Investment
+The vaults system's only rebalancing signal is the **consensus
+recommendation receipt** (owner decision, 2026-10-19). The vector the Safe
+schedules through `applyReceipt` is the input. The chain cannot parse the
+payload, so readers compare the applied vector to the payload (owner
+decision 2026-10-20). The Investment
 Committee's analysts sign a receipt off-chain with their Ed25519 keys. A
 submitter that holds `RECEIPT_SUBMITTER_ROLE` on
 `ConsensusRecommendationReceipt` records it on chain directly. The Safe,
@@ -116,7 +119,7 @@ The gateway is not an allocation layer and is not part of the vaults
 system. It is the on-chain permission and agent-safety layer in front of
 one action: an agent deposit into a vault. It answers whether the agent may
 deposit, how much, until when, on behalf of which depositor, to which
-share receiver, and into which allowed vault. After those checks pass, the
+share receiver (always the owner), and into which allowed vault. After those checks pass, the
 gateway forwards the deposit to that vault through the same public deposit
 surface a human wallet uses. Agents do not withdraw, redeem or use the
 Portfolio Router through the gateway. Human wallets deposit, withdraw and
@@ -1032,7 +1035,7 @@ gateway is an open question for its own release (§10). The gateway never
 touches committee or receipt state.
 
 The depositor owns the policy: valid-until, max per payment, max per
-window, share receiver, and allowed vaults. The Robot Money team
+window, share receiver (always the owner), and allowed vaults. The Robot Money team
 does not manage individual depositor agent policies at runtime.
 
 Agent ownership and policy rules (issue #1476):
@@ -1093,6 +1096,10 @@ forwards the allowed deposit to an allowed vault. The resulting vault
 shares are minted to the policy-configured share receiver. The gateway has
 no withdrawal path and no Portfolio Router path. The depositor withdraws
 or redeems those shares directly on the vault, like any human wallet.
+Retired storage stays in place: the gateway keeps its `routerContract`
+slot (slot 2) and the `AgentPolicy` struct keeps its withdraw fields
+(`assetRecipient`, `maxWithdrawPerPayment`, `maxWithdrawPerWindow`,
+`allowedSourceVaults`) as unused members (owner decision 2026-10-20).
 
 ### 5.3 Human Dapp
 

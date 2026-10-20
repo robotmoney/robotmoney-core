@@ -125,8 +125,7 @@ own release. Who governs it is open (`docs/architecture.md` §10).
 
 **Why.** Architecture §8 requires that `ADMIN_ROLE` on all protocol contracts be
 held by the deployed `TimelockController` in production — no EOA may hold
-`ADMIN_ROLE` directly. §10 resolves this as required before mainnet scale, and
-§4.2 flags PortfolioRouter mainnet onboarding as remaining work. Routing admin
+`ADMIN_ROLE` directly (the timelock rule is §4.5). Routing admin
 through the timelock makes multisig quorum and the time-delay window
 contract-enforced rather than operational convention.
 
@@ -137,34 +136,40 @@ contract-enforced rather than operational convention.
    broadcasting with the production deployer key.
 2. Deploy and migrate using `contracts/script/DeployTimelock.s.sol`, which deploys
    the `TimelockController` and performs the per-contract `ADMIN_ROLE` transfer
-   with role-acceptance verification. Set `AGENT_ADDRESSES` to every gateway
-   agent the deployer still owns, comma-separated, or to `none` when it owns
-   none; the script reverts before broadcasting when the variable is unset or
-   empty. It hands each listed agent to the timelock with
-   `transferAgentOwnership` (issue #1476). The gateway cannot enumerate an
-   owner's agents, so derive the list from its logs: every `AgentAuthorized`
-   log whose second topic is the deployer, plus every
-   `AgentOwnershipTransferred` log whose third topic is the deployer, keeping
-   only the agents whose `agentOwner(agent)` is still the deployer (the
-   commands below do exactly this). The gateway stage's deploy agent is among them unless it was
-   already revoked or handed over.
+   with role-acceptance verification. There is no agent handover: the deploy
+   owns no agent, agents belong to depositors, and an agent's owner never
+   changes (owner decision 2026-10-20). The handover moves roles only.
 
-   ```bash
-   cast logs --rpc-url "$BASE_RPC" --address "$GATEWAY_ADDRESS" --from-block "$GATEWAY_DEPLOY_BLOCK" \
-     'AgentAuthorized(address indexed agent, address indexed owner, uint64 validUntil, uint256 maxPerPayment, uint256 maxPerWindow, address shareReceiver)' \
-     '' "$DEPLOYER"
-   cast logs --rpc-url "$BASE_RPC" --address "$GATEWAY_ADDRESS" --from-block "$GATEWAY_DEPLOY_BLOCK" \
-     'AgentOwnershipTransferred(address indexed agent, address indexed previousOwner, address indexed newOwner)' \
-     '' '' "$DEPLOYER"
-   # for each agent (topic 1) in either list; keep it when this prints $DEPLOYER:
-   cast call "$GATEWAY_ADDRESS" 'agentOwner(address)(address)' "$AGENT" --rpc-url "$BASE_RPC"
-   ```
-
-   The script stops, before the manifest is written, if any listed agent is
-   still deployer-owned after the handover, so a written manifest always
-   records `roles.deployer_owns_a_listed_gateway_agent` as `false`. The check
-   left to you is the list itself: `roles.gateway_agents_listed_count` in the
-   manifest must equal the number of agents found above.
+   > **Deployed release (v0.5.0) sub-procedure.** On release v0.5.0 the script
+   > also hands deploy-owned agents to the timelock. Set `AGENT_ADDRESSES` to
+   > every gateway agent the deployer still owns, comma-separated, or to
+   > `none` when it owns none; the script reverts before broadcasting when the
+   > variable is unset or empty. It hands each listed agent to the timelock
+   > with `transferAgentOwnership` (issue #1476). The gateway cannot enumerate
+   > an owner's agents, so derive the list from its logs: every
+   > `AgentAuthorized` log whose second topic is the deployer, plus every
+   > `AgentOwnershipTransferred` log whose third topic is the deployer, keeping
+   > only the agents whose `agentOwner(agent)` is still the deployer (the
+   > commands below do exactly this). The gateway stage's deploy agent is
+   > among them unless it was already revoked or handed over.
+   >
+   > ```bash
+   > cast logs --rpc-url "$BASE_RPC" --address "$GATEWAY_ADDRESS" --from-block "$GATEWAY_DEPLOY_BLOCK" \
+   >   'AgentAuthorized(address indexed agent, address indexed owner, uint64 validUntil, uint256 maxPerPayment, uint256 maxPerWindow, address shareReceiver)' \
+   >   '' "$DEPLOYER"
+   > cast logs --rpc-url "$BASE_RPC" --address "$GATEWAY_ADDRESS" --from-block "$GATEWAY_DEPLOY_BLOCK" \
+   >   'AgentOwnershipTransferred(address indexed agent, address indexed previousOwner, address indexed newOwner)' \
+   >   '' '' "$DEPLOYER"
+   > # for each agent (topic 1) in either list; keep it when this prints $DEPLOYER:
+   > cast call "$GATEWAY_ADDRESS" 'agentOwner(address)(address)' "$AGENT" --rpc-url "$BASE_RPC"
+   > ```
+   >
+   > The script stops, before the manifest is written, if any listed agent is
+   > still deployer-owned after the handover, so a written manifest always
+   > records `roles.deployer_owns_a_listed_gateway_agent` as `false`. The
+   > check left to you is the list itself: `roles.gateway_agents_listed_count`
+   > in the manifest must equal the number of agents found above. None of
+   > this exists in the target.
 3. Record the resulting `portfolio_router`, `router_governance`, and
    `timelock_controller` addresses in the run's deploy manifests (`deployments/<chain>/`).
 

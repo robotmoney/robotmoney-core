@@ -21,8 +21,11 @@ Beyond the treasury surface, Robot Money provides an **agentic Investment
 Committee**: a group of AI analysts that agree off-chain on a consensus
 recommendation and sign it with their Ed25519 keys. The signed **consensus
 recommendation receipt** is recorded on chain by an authorized submitter.
-It is the only rebalancing input, and it is signalling-only: it never moves
-funds or sets router weights until the Safe applies it. It gives depositors
+It is the only rebalancing signal the Safe may cite, and it is
+signalling-only: it never moves funds or sets router weights until the Safe
+applies it. The vector the Safe schedules through `applyReceipt` is the
+input. The chain cannot parse the payload, so readers compare the applied
+vector to the payload (owner decision 2026-10-20). It gives depositors
 a transparent, multi-party, reproducible allocation rationale.
 
 ### Product Systems
@@ -65,8 +68,8 @@ open question for the gateway's own release.
 - Depositors can withdraw synchronously from eligible vaults and
   Portfolio Router paths.
 - Autonomous depositors can authorize an agent to deposit into a vault
-  with user-defined limits, allowed vaults, share receiver, and
-  expiration.
+  with user-defined limits, allowed vaults, share receiver (always the
+  owner), and expiration.
 - The Safe multisig, through the TimelockController, is the only body
   that changes Portfolio Router target weights: the weight setter applies
   the Investment Committee's consensus receipt as one timelock operation.
@@ -205,7 +208,7 @@ This workflow belongs to the rmpc gateway system. The gateway forwards
 each permitted deposit to the vault's public deposit surface.
 
 1. A depositor authorizes an agent and defines allowed vaults, maximum
-   amounts, share receiver, and expiration.
+   amounts, share receiver (always the owner), and expiration.
 2. The agent observes available balance, policy limits, and vault state.
 3. The agent requests a deposit into an allowed vault within the
    depositor's limits.
@@ -310,8 +313,10 @@ Common edge cases:
   execution changes nothing.
 - **Depositor position.** No position -> previewed deposit -> active
   position -> previewed withdrawal -> reduced or closed position.
-- **Agent policy.** Draft -> active -> updated -> paused or revoked;
-  active -> expired when its validity window ends.
+- **Agent policy.** Draft -> active -> updated -> revoked; active ->
+  expired when its validity window ends. There is no paused state. The
+  owner or the agent itself revokes; no admin can (owner decision
+  2026-10-20).
 - **Agent deposit.** Requested -> previewed -> approved -> settled into
   one allowed vault; requested or previewed -> refused.
 - **Consensus receipt.** Recorded -> scheduled on the timelock ->
@@ -382,8 +387,8 @@ Common edge cases:
 - **NAV disclosure in UIs:** Whenever NAV is displayed (position value, preview estimates, performance metrics), the surface must include the disclaimer: "NAV is the protocol's system-level valuation, used for growth limits and guards. Your share value = market price of underlying assets. See help for details."
 - Product surfaces must itemize fees and slippage in user-facing language where preview estimates diverge from market-adjusted outcomes.
 - Autonomous-agent access must remain bounded by depositor-defined
-  amount limits, allowed vaults, share receiver, and expiration. An
-  agent's only on-chain action is a deposit into a vault.
+  amount limits, allowed vaults, share receiver (always the owner), and
+  expiration. An agent's only on-chain action is a deposit into a vault.
 - A depositor must remain the authority over their own agent policy.
 - Product-wide safety controls must not grant operators authority to
   redirect user funds or expand an individual agent's permissions.

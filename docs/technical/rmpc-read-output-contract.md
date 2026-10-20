@@ -71,9 +71,11 @@ The deferred existing `rmpc status` (issue #15) command predates §9 and emits a
   coerce it to zero.
 - **Also applies to `get-agent`** (QA plan U6, finding DR-8). A failed
   `agents()` read renders every field it fills as `null`: `active`,
-  `valid_until`, `max_per_payment`, `max_per_window`, `share_receiver`,
-  `asset_recipient`, `max_withdraw_per_payment`, `max_withdraw_per_window` and
-  `withdrawals_enabled`. A failed allowance, block-timestamp or window-gross
+  `valid_until`, `max_per_payment`, `max_per_window` and `share_receiver`
+  (deployed release, v0.5.0, also: `asset_recipient`,
+  `max_withdraw_per_payment`, `max_withdraw_per_window` and
+  `withdrawals_enabled`; those fields are retired in the target, since the
+  gateway has no withdrawal path, owner decision 2026-10-19). A failed allowance, block-timestamp or window-gross
   read renders `share_allowance`, `window_id` or `window_gross` as `null`.
   Before U6 a failed `agents()` read printed `false` and `"0"`, which read as an
   inactive agent with withdrawals disabled. A `null` boolean is unknown, never
@@ -114,13 +116,15 @@ variant is a breaking change; see `docs/architecture.md` §7.2.
 | `ErrDepositCapExceeded` | `ErrDepositCapExceeded:` | `cap_exceeded` | preflight `maxPerPayment` / `maxPerWindow`; simulated `AmountExceedsPerPaymentCap` / `WindowCapExceeded` |
 | `ErrWithdrawCapExceeded` | `ErrWithdrawCapExceeded:` | `cap_exceeded` | preflight `maxWithdrawPerPayment` / `maxWithdrawPerWindow`; simulated `SharesExceedWithdrawPerPaymentCap` / `WithdrawWindowCapExceeded` |
 
+> **Retired in the target (owner decisions 2026-10-19 and 2026-10-20, noted 2026-10-20).** `ErrWithdrawCapExceeded`, `ErrMinAssetsPerLegRequired` and the router-leg preflight behind `ErrLegUnavailable` / `ErrSlippageBoundExceeded` belong to the deployed release (v0.5.0) and its withdraw, `withdraw-router` and router deposit commands. The target `rmpc` has one write, `deposit` into an allowed vault, so those variants and that preflight go with the retired commands. The rows stay here because today's binary still raises them.
+
 Before U6 none of the first four was raised anywhere, a cap breach printed
 `ErrConfig` and an expired policy printed `ErrAgentNotAuthorized` (finding
 DR-7). Two refusals that are not reason codes were added with them:
 `ErrAgentBindingMismatch` (the preflight's `agents(self).shareReceiver` or
 `agentOwner(self)` differs from the config's `share_receiver` / `agent_owner`,
 QA plan D2) and `ErrMinAssetsPerLegRequired` (`withdraw-router` without a
-floor).
+floor; retired in the target with `withdraw-router`, see the note above).
 
 QA plan P3 (issue 1810) added `ErrImplementationNotApproved`. Every write
 preflight and `rmpc agent-consent` read the gateway's ERC-1967
@@ -171,6 +175,8 @@ ErrSlippageBoundExceeded: a router leg falls below the caller's per-leg minimum 
 ErrDepositCapExceeded: <amount and the cap it exceeds>
 ErrWithdrawCapExceeded: <shares and the cap it exceeds>
 ```
+
+(`ErrWithdrawCapExceeded` and the two router-leg variants are deployed-release only; see the retired note under the §5 table.)
 
 Every one of them is raised before the transaction is signed: by the
 preflight, or from the revert data of the pre-sign simulation (§5.0). A mined

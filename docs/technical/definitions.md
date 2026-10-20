@@ -112,8 +112,8 @@ operation and expands that vault's security and audit surface.
 A vault receipt is the token issued by an individual vault to represent
 a depositor's claim on that vault.
 
-Vault receipts are held by the depositor or the depositor's configured
-share receiver. The Portfolio Router does not turn them into a separate
+Vault receipts are held by the depositor (the agent's owner is always the
+share receiver). The Portfolio Router does not turn them into a separate
 outer share token.
 
 ## Portfolio Router
@@ -172,7 +172,8 @@ Router-weight governance does not control:
 
 An agent policy is the depositor-owned permission set for an autonomous
 agent. It bounds the agent's one on-chain action, a deposit into a
-vault: spend caps, expiry, share receiver, and allowed vaults.
+vault: spend caps, expiry, share receiver (always the owner), and allowed
+vaults.
 
 The depositor who authorizes the agent owns the policy. The Robot Money
 team does not manage user agent policies at runtime.
@@ -187,7 +188,7 @@ holds the depositor's authorization and policy
 (`commitAuthorization`/`revealAuthorization`, `setPolicy`, `revokeAgent`)
 and performs one action: the agent deposit.
 It enforces the policy and forwards accepted USDC into an allowed vault,
-with vault shares minted to the policy-configured share receiver.
+with vault shares minted to the share receiver (always the owner).
 
 The gateway has no withdrawal path and no Portfolio Router path. The
 depositor withdraws or redeems directly on the vault.

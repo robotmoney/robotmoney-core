@@ -70,7 +70,7 @@ Owner decision, 2026-10-19. The contracts form two separate systems. Each is dep
 **Vaults system** (the treasury product):
 - The Robot Money vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), their adapters and libraries, and the rmAGENT price recorder.
 - VaultRegistry, PortfolioRouter and RouterGovernance.
-- The rebalancing input: ConsensusRecommendationReceipt, the register of consensus receipts. It is the only rebalancing input. A submitter holding `RECEIPT_SUBMITTER_ROLE`, granted by `ADMIN_ROLE` (the Safe through the timelock), records a receipt with `recordReceipt(receiptId, payloadDigest, payloadUri)`. The Safe applies a receipt with `RouterGovernance.applyReceipt` through the timelock. The Safe can also set default weights directly (`setDefaultWeights`).
+- The rebalancing signal: ConsensusRecommendationReceipt, the register of consensus receipts. It is the only rebalancing signal the Safe may cite. The vector the Safe schedules through `applyReceipt` is the input; the chain cannot parse the payload, so readers compare the applied vector to the payload (owner decision 2026-10-20). A submitter holding `RECEIPT_SUBMITTER_ROLE`, granted by `ADMIN_ROLE` (the Safe through the timelock), records a receipt with `recordReceipt(receiptId, payloadDigest, payloadUri)`. The Safe applies a receipt with `RouterGovernance.applyReceipt` through the timelock. The Safe can also set default weights directly (`setDefaultWeights`).
 - Governance: the Safe multisig through the TimelockController.
 - Users: human wallets deposit into a vault or the router directly. The receipt submitter records receipts on the receipt contract directly, not through the gateway.
 - Deployed by the rehearsal deploy runbook (`docs/runbooks/contract-qa/`).
@@ -367,7 +367,7 @@ RobotMoneyVault, the three basket kinds, VaultRegistry, PortfolioRouter, Consens
 
 A freeze never pauses or alters `redeem`, `withdraw` or `redeemInKind` (ADR-0014 §4; the freeze invariants in `smart-contract-invariants.md`).
 
-**Retired storage slots.** Proxy layouts are append-only, so storage that lost its use stays in place under its original label and type. It is `internal`, never read and never written. `RobotMoneyGateway` keeps `icPolicy` (typed by an empty `IInvestmentCommitteePolicy` interface that exists only for this slot) and `consensusReceipt`. `ConsensusRecommendationReceipt` keeps `gateway` and `icPolicy`. The layout snapshots for both contracts stay unchanged.
+**Retired storage slots.** Proxy layouts are append-only, so storage that lost its use stays in place under its original label and type. It is `internal`, never read and never written. `RobotMoneyGateway` keeps `icPolicy` (typed by an empty `IInvestmentCommitteePolicy` interface that exists only for this slot), `consensusReceipt` and `routerContract` (slot 2). The `AgentPolicy` struct keeps its withdraw fields (`assetRecipient`, `maxWithdrawPerPayment`, `maxWithdrawPerWindow`, `allowedSourceVaults`) as retired, unused members (owner decision 2026-10-20). `ConsensusRecommendationReceipt` keeps `gateway` and `icPolicy`. The layout snapshots for both contracts stay unchanged.
 
 ---
 

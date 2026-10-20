@@ -6,7 +6,9 @@
 - **Commits checked:** release v0.5.0 at core `57fbe618` (tag
   `release/v0.5.0-rehearsal`, branch `releases-0.5.x`) and `dev` at
   `e362df0c`. Every finding below holds at both.
-- **Reviewed at:** 2026-10-19.
+- **Reviewed at:** 2026-10-19. Finding 15 added 2026-10-20. Findings 1, 2,
+  5, 6, 7 and 12 corrected 2026-10-20 after an adversarial check against the
+  code.
 - **Design under test:** the owner decision of 2026-10-19 that
   `InvestmentCommitteePolicy` is deleted. There is no voting and no on-chain
   committee tilt. The vaults system's rebalancing input is the consensus
@@ -32,8 +34,10 @@ The code still ships the on-chain committee end to end. The IC policy is
 deployed, the receipt contract authorizes submitters through it, the gateway
 routes committee and receipt writes, and the tooling, clients, indexer, dapp
 and plugins all build on it. None of it feeds router weights. Removing it is a
-code change across about 270 files. The rehearsal deploy runbook follows the
+code change across about 250 files. The rehearsal deploy runbook follows the
 tooling, and its validator must change before the runbook can drop a step.
+Fifteen findings: three Medium, eight Low, four Info. The validator fix
+(finding 14) is in the runbook template pin pr (1887), unmerged.
 
 ## Findings
 
@@ -44,15 +48,26 @@ tooling, and its validator must change before the runbook can drop a step.
   ship. Its tilt storage (`submitVote`, `VoteSubmitted`) is read by nothing in
   the weight path.
 - **Fix:** delete the contract. Reduce `IInvestmentCommitteePolicy` to an
-  empty retired interface. Delete its storage layout snapshot.
+  empty retired interface. Remove the
+  `InvestmentCommitteePolicy:contracts/gateway/InvestmentCommitteePolicy.sol`
+  entry from the `CONTRACTS` list in
+  `scripts/ci/check-core-storage-layout.sh:61` and delete its layout
+  snapshot in the same PR. The gate fails on either one alone.
 
 ### 2. The receipt contract authorizes submitters through the IC policy
 
 - **Severity:** Medium.
 - `ConsensusRecommendationReceipt.recordReceipt` checks
-  `COMMITTEE_AGENT_ROLE` on the IC policy. The receipt has no role of its own.
+  `COMMITTEE_AGENT_ROLE` on the IC policy
+  (`contracts/gateway/ConsensusRecommendationReceipt.sol:155`). The receipt
+  defines `ADMIN_ROLE` (line 70) and grants `DEFAULT_ADMIN_ROLE` and
+  `ADMIN_ROLE` in `initialize` (lines 124 to 125). It has no submitter role
+  of its own.
 - **Fix:** add `RECEIPT_SUBMITTER_ROLE`, administered by `ADMIN_ROLE`. The
-  submitter is `msg.sender`.
+  submitter is `msg.sender`. `_setRoleAdmin` writes proxy storage. A fresh
+  deploy sets it in `initialize`. A live receipt proxy needs a
+  `reinitializer(2)` run through `upgradeToAndCall`
+  (`contracts/lib/GovernedUUPS.sol:101`) in the upgrade transaction.
 
 ### 3. The receipt contract is gateway-only
 
@@ -75,23 +90,33 @@ tooling, and its validator must change before the runbook can drop a step.
 
 - **Severity:** Low.
 - The `ic-policy` stage (`DeployInvestmentCommitteePolicy.s.sol`, manifest
-  `ic-policy.json`) deploys both contracts and wires both to the gateway.
+  `ic-policy.json`, stage 6 in `scripts/deploy/stage-table.json`) deploys
+  both contracts and wires both to the gateway.
 - **Fix:** a `receipt` stage that deploys the receipt alone, manifest
-  `receipt.json`.
+  `receipt.json`. The same PR updates `scripts/deploy/stage-table.json`, the
+  frozen per-stage transaction counts, the `IC_POLICY_ADDRESS` wiring in
+  `publish-contracts/src/core-wiring.ts:48` and template step P1.02 (finding
+  13).
 
 ### 6. The timelock handover requires the IC policy
 
 - **Severity:** Low.
-- `DeployTimelock` requires `IC_POLICY_ADDRESS` and hands the IC policy's
+- `DeployTimelock` requires `IC_POLICY_ADDRESS`
+  (`contracts/script/DeployTimelock.s.sol:259`) and hands the IC policy's
   roles to the timelock.
-- **Fix:** drop the input and the IC handover. Keep `CONSENSUS_RECEIPT_ADDRESS`.
+- **Fix:** drop the input and the IC handover. Keep
+  `CONSENSUS_RECEIPT_ADDRESS` (line 260) and `RECEIPT_ADMIN_ADDRESS` (line
+  135), which the receipt handover still needs.
 
 ### 7. The govern rows route the submitter through the gateway
 
 - **Severity:** Low.
-- `register-committee` authorizes the submitter Safe on the gateway, sets a
-  gateway policy and calls `committeeRegister`. `record-receipt` sends
-  `consensusRecordReceipt` to the gateway.
+- `register-committee` (`publish-contracts/src/committee-register.ts`)
+  first has the submitter Safe call `commitAuthorization`, then
+  `revealAuthorization` for itself, then
+  `transferAgentOwnership(submitter, timelock)` (lines 102 to 104). The
+  timelock batch then runs `setPolicy` and `committeeRegister` on the
+  gateway. `record-receipt` sends `consensusRecordReceipt` to the gateway.
 - **Fix:** a `register-submitter` row that schedules one
   `grantRole(RECEIPT_SUBMITTER_ROLE, submitter)` on the receipt.
   `record-receipt` calls `recordReceipt` on the receipt directly.
@@ -102,8 +127,10 @@ tooling, and its validator must change before the runbook can drop a step.
 - `rmpc committee vote-submit` and `check-agent` exist, with an
   `ic_policy_address` config field and IC errors. `rmpc receipt submit` sends
   to the gateway.
-- **Fix:** delete the committee command. `receipt submit` records on the
-  receipt contract after checking `RECEIPT_SUBMITTER_ROLE`. Keep
+- **Fix:** delete the committee command. Delete `receipt submit` too: the
+  owner decision of 2026-10-20 makes the submitter Safe, through the
+  publish-contracts `record-receipt` row, the only on-chain receipt path on
+  every chain (rmpc scope review finding 5). Keep `receipt verify` and
   `committee-identity`, the off-chain Ed25519 receipt signer.
 
 ### 9. The indexer and explorer API serve committee and regime data
@@ -134,10 +161,16 @@ tooling, and its validator must change before the runbook can drop a step.
 ### 12. Tests and checks still cover the IC policy
 
 - **Severity:** Info.
-- Five Foundry test files exist only for the IC policy. The committee vote
-  schema check, the explorer committee job and the CI test-count floors count
-  committee tests.
-- **Fix:** delete or rework the tests. Remove the schema check. Reset the
+- Three Foundry test files exist only for the IC policy:
+  `contracts/test/InvestmentCommitteePolicy.t.sol`,
+  `contracts/test/ICGatewayIntegration.t.sol` and
+  `contracts/test/SecurityReviewCommitteePoc.t.sol`. Two more mix IC and
+  receipt coverage: `contracts/test/DeployTimelockCommittee.t.sol` and
+  `contracts/test/SecurityReviewRecheckCommitteePoc.t.sol`. The committee
+  vote schema check, the explorer committee job and the CI test-count floors
+  count committee tests.
+- **Fix:** delete the three IC-only files. Rework the two mixed files so
+  only their receipt cases remain. Remove the schema check. Reset the
   floors to the new real counts.
 
 ### 13. The rehearsal deploy runbook still runs the committee steps
@@ -174,3 +207,37 @@ tooling, and its validator must change before the runbook can drop a step.
 - **Fix:** let each release file pin the template version it ran with, for
   example the core commit of the template. The validator then checks a
   release against its pinned template, and the template can evolve.
+
+### 15. Surfaces the findings above do not list
+
+- **Severity:** Info.
+- Each of these is a file the fix PRs must touch. None changes the verdict.
+  - `plugins/robotmoney-analyst/skills/robotmoney-analyst/SKILL.md:196`
+    teaches `rmpc committee vote-submit`. It goes with finding 8.
+  - `publish-contracts/src/evidence-check.ts:344,921,943` enforce the
+    `register-committee` batch shape: exactly `setPolicy` then
+    `committeeRegister` in one timelock batch. It goes with finding 7.
+  - `.github/workflows/suite-16-abi-drift.yml:19-27` pins
+    `InvestmentCommitteePolicy.json`, `ConsensusRecommendationReceipt.json`,
+    `RobotMoneyGateway.json` and `clients/dapp/src/lib/abi.generated.ts`.
+    Every ABI change in findings 1 to 4 must regenerate them.
+  - `.github/workflows/suite-07-rmpc-integration.yml:270-275` runs
+    `--test committee`, the mocked `rmpc committee vote-submit` test. It goes
+    with finding 8.
+  - `.github/workflows/suite-08-explorer-indexer.yml:309-316` holds the
+    `committee_indexing` floor. Line 337 names the
+    `explorer-api-committee-regime` job. Both go with finding 9.
+  - `.github/workflows/suite-13-doc-checks.yml:377` runs
+    `check_committee_vote_schema.py`. It goes with finding 12.
+  - The indexer takes `INDEXER_INVESTMENT_COMMITTEE`
+    (`services/explorer-indexer/src/main.rs:108`). The smoke-test fixture
+    writes it (`testing/smoke-test/src/lib.rs:3057`). Both go with
+    finding 9.
+  - The gateway getters `icPolicy()` and `consensusReceipt()` stay on the
+    ABI after the entrypoints go. The slots are `public`
+    (`contracts/gateway/RobotMoneyGateway.sol:322,344`,
+    `contracts/gateway/interfaces/IGateway.sol:494,497`). Finding 4 keeps
+    them as retired reads. The ABI drift pin in suite 16 keeps them too.
+  - `publish-contracts/src/sheet.ts:91` and
+    `publish-contracts/src/core-wiring.ts:48,80` hard-code
+    `IC_POLICY_ADDRESS`. Both go with finding 5.

@@ -150,28 +150,30 @@ immutable, so steps 3 and 4 apply to the deployed release only (§0):
 2. Deploy a new `RouterGovernance` against it. `RouterGovernance.router` is an
    immutable. The new instance starts empty. Run the stage 6 and 11 handoff
    again for the new pair.
-3. Deployed release only. Gateway system, in its own run: deploy a new gateway against the new
-   router. `RobotMoneyGateway.routerContract` is an immutable. Depositors must
-   authorize agents on the new gateway again. Who governs the gateway is open
-   for its own release. On the deployed release its `ADMIN_ROLE` is held by
-   the timelock as well.
-4. Deployed release only: deploy a new `InvestmentCommitteePolicy` and
-   `ConsensusRecommendationReceipt` (`DeployInvestmentCommitteePolicy`). Both
-   hold the gateway as an immutable, and the receipt also takes the IC policy
-   as an immutable, so they bind the gateway address (`DeployGateway.s.sol`).
-   Wire them on the new gateway with `setICPolicy` and `setConsensusReceipt`.
-   Committee contracts that do not name the gateway are kept when the router
-   changes.
+3. The gateway has no router binding in the target: the `routerContract`
+   slot is retired (owner decision 2026-10-20). A router change needs no
+   gateway redeploy. The gateway keeps serving deposits into its allowed
+   vaults. Agent authorizations stay where they are.
+4. The receipt contract is untouched by a router change. It binds nothing
+   to the gateway or the router.
+
+   > **Deployed release (v0.5.0) only.** On release v0.5.0
+   > `RobotMoneyGateway.routerContract` is an immutable, so a router change
+   > there means a new gateway in its own run, with depositors authorizing
+   > agents on it again, plus a new `InvestmentCommitteePolicy` and
+   > `ConsensusRecommendationReceipt` (`DeployInvestmentCommitteePolicy`)
+   > wired with `setICPolicy` and `setConsensusReceipt`. None of that applies
+   > to the target.
 5. The Safe schedules and executes `VaultRegistry.setRouter(newRouter)` through
    the admin timelock. The deployer cannot do it: it no longer holds the
    registry `ADMIN_ROLE`. The registry does not need a redeploy because
    `setRouter` is repeatable. `setRouter(address(0))` is refused while the old
    router still carries default weights, so never unlink first. Re-link
    straight to the new router, whose default weights step 1 already set.
-6. Retire the old router and gateway. `setRouter` does not stop them. The old
-   gateway stays depositable, and its router still serves any deposit routed
-   through it. The pause is `RobotMoneyGateway.pauseDeposits()` on the old
-   gateway, which reverts both `deposit` entry points with `DepositsArePaused`.
+6. Retire the old router. `setRouter` does not stop it. The gateway is not
+   retired with the router: it has no router binding (step 3). Where a
+   gateway does need to stop, the pause is `RobotMoneyGateway.pauseDeposits()`,
+   which reverts `deposit` with `DepositsArePaused`.
    The holder of `DEPOSIT_PAUSER_ROLE` (the pauser key set at deploy, which the
    timelock handover does not touch) calls it directly. It needs no timelock
    call. Only `unpauseDeposits()` needs the timelock-held `ADMIN_ROLE`. Do not
@@ -181,11 +183,11 @@ immutable, so steps 3 and 4 apply to the deployed release only (§0):
    so pausing the old gateway does not stop direct deposits to the old router.
    No router-level call stops the old router. The only stop is the shared vault
    `pauseDeposits`, which also halts the new gateway, so do not use it. Treat
-   the old router as still depositable, tell users to stop using it, and pause
-   the old gateway. Each agent's owner may also call
-   `revokeAgent` on the old gateway. Users withdraw through the old gateway,
-   because `pauseDeposits` never freezes a withdrawal. Old receipts and old
-   agent authorizations stay on the old contracts and do not move.
+   the old router as still depositable and tell users to stop using it. Each
+   agent's owner may also call `revokeAgent`. Depositors redeem on the vault
+   directly: the gateway has no withdrawal path, and a vault
+   `pauseDeposits` never freezes a withdrawal. Old receipts stay on the
+   receipt contract and do not move.
 7. Re-point every off-chain reader at the new addresses:
    - dapp: `VITE_ROUTER_ADDRESS`, `VITE_GATEWAY_ADDRESS`, `VITE_GOVERNANCE_ADDRESS`
      (`clients/dapp/.env.example`) and the pinned `VITE_GATEWAY_EXPECTED_CODE_HASH`.
@@ -274,7 +276,7 @@ core 1696), and rerun the stage 12 verifier, which labels the applied receipt an
 | **Submitter EOA** (recorded a receipt) | Can anchor a wrong digest, polluting the public record; cannot release, cannot set weights. | New session id + public correction (`consensus-receipt-submitter-runbook.md`); revoke `RECEIPT_SUBMITTER_ROLE` via timelock (and the gateway `AGENT_ROLE` on the deployed release, §0). Never schedule `apply-receipt` for a receipt under correction. |
 | **One Safe signer's key** | Can sign, alone, nothing: the Safe threshold needs more than one signer. | Rotate the signer on the Safe; cancel any operation that signer helped schedule and is still pending. |
 | **Payload file on the operator host** | Cannot pass the digest check unless it is the recorded payload; cannot change what the receipt says. | Rebuild from clean state; re-fetch the payload from the receipt's URI and re-run the row. |
-| **`ADMIN_ROLE` and `WEIGHT_SETTER_ROLE` on `RouterGovernance`** (held by the timelock) | Reaches `applyReceipt`, `setDefaultWeights` and `clearVotedWeights` only after a Safe-signed schedule and the delay. | The Safe cancels the pending operation; verify the committee and weight-setter sets are still disjoint (`GovernanceSeparationInvariant.t.sol`). |
+| **`ADMIN_ROLE` and `WEIGHT_SETTER_ROLE` on `RouterGovernance`** (held by the timelock) | Reaches `applyReceipt`, `setDefaultWeights` and `clearVotedWeights` only after a Safe-signed schedule and the delay. | The Safe cancels the pending operation; verify the submitter and weight-setter sets are still disjoint (`GovernanceSeparationInvariant.t.sol`). |
 
 ---
 

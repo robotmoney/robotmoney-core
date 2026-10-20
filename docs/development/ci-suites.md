@@ -347,7 +347,7 @@ missing `anvil` makes it return early and pass.
 
 **Jobs:**
 - `fast` — migration idempotency, block ingestion, RPC failure recovery, consensus-receipt indexing, and the reorg + read-path suites; uses a Postgres testcontainer; runs immediately
-- `explorer-api` — the `clients/explorer-api` read API: IC committee / regime / consensus-receipt endpoints, plus the HTTP contract, CORS, router-shape and schema-parity suites; Postgres testcontainer
+- `explorer-api` — the `clients/explorer-api` read API: IC committee / regime / consensus-receipt endpoints, plus the HTTP contract, CORS, router-shape and schema-parity suites; Postgres testcontainer. The committee and regime endpoint suites are deprecated (2026-10-20, see IC-1019: the IC policy is removed from the design); CI still runs them today
 - `pin` — chooses the run's one Twin chain pin (`.github/actions/twin-pin`)
 - `devnet` — the `fork_indexer` test: deploys its OWN vault through publish contracts on the Twin chain (`.github/actions/twin-fork` at the run pin, `TWIN_RPC_URL`) and indexes it; runs in parallel with `fast` (independent environments). Reorg handling is covered by the stub-RPC reorg suites of the `fast` job (an instant-finality anvil chain cannot produce competing tips).
 
@@ -367,7 +367,7 @@ missing `anvil` makes it return early and pass.
 1. Checkout repository
 2. Verify Docker is available (loud-skip if the testcontainer resource is missing)
 3. Install Rust toolchain + cargo cache
-4. `cargo_test_require_executed.sh -p explorer-api --test committee_api --test regime_api --test consensus_receipt_api` — IC endpoint handlers (issues #1105, #1247)
+4. `cargo_test_require_executed.sh -p explorer-api --test committee_api --test regime_api --test consensus_receipt_api` — IC endpoint handlers (issues #1105, #1247). `committee_api` and `regime_api` are deprecated (2026-10-20, see IC-1019); CI still runs them today
 5. `cargo_test_require_executed.sh -p explorer-api --test endpoints --test router_introspection --test cors --test canonical_schema` — the four sibling suites left dark when the two above were wired up (issue #1282). `endpoints.rs` is the only executor of the HTTP contract the dApp reads; `router_introspection.rs` is the guard for §11 "the API does not sign, authorize, or write".
 
 **Executed floors (QA plan v1 T5):** every `cargo_test_require_executed.sh` call in this suite names `CARGO_TEST_MIN_EXECUTED`, and the floor equals the number of tests the call selects. Before T5 most calls kept the default floor of 1, so the seven read-path targets (49 tests) were green with one test passing. The ABI drift gate, a bare `cargo test --lib` filter, now runs through the guard too. `.github/scripts/check_executed_floors.py` (suite 14) counts the selected tests from the source and fails on any difference.
@@ -671,7 +671,8 @@ decoded a `VaultRegistry` shape that no longer existed (#1348).
 2. **Regenerate and diff.** `forge build`, then `generate_abi_bindings.sh`, then
    `git diff --exit-code` over `Erc20.json`, `RobotMoneyGateway.json`,
    `VaultRegistry.json`, `PortfolioRouter.json`, `RouterGovernance.json`,
-   `TimelockController.json`, `InvestmentCommitteePolicy.json`,
+   `TimelockController.json`, `InvestmentCommitteePolicy.json` (deprecated
+   2026-10-20, see IC-1019; the binding stays until the ABI set is regenerated),
    `ConsensusRecommendationReceipt.json`, `IVault.json` and `abi.generated.ts`. Fix a failure by
    running those two commands locally and committing the result. The six added by
    #1362 were hand-trimmed excerpts; one of them, `VaultRegistry.json`, had
@@ -1055,7 +1056,7 @@ file no longer exists). It is a debt ledger, not a mute button.
 |--------|-------------|------|----------|----------|
 | `rust-payment-client::cli`, `cli_deposit`, `cli_status`, `cli_self_check`, `deposit_router`, and the twelve `cli_get_*` | 7 — `rmpc-parity`, step *rmpc CLI surface* | heavy | mockito + the built `rmpc` binary; **no chain, no Docker** | 67 tests, ~22s |
 | `explorer-indexer::cursor_header_reorg`, `reorg_cursor_vault_status`, `account_history`, `account_position_vote_power`, `committee_indexing`, `multi_vault`, `vault_detail`, `vault_registry` | 8 — `explorer-indexer-fast`, step *Indexer reorg + read-path suites* | quick | Postgres testcontainer (Docker only; no compose stack) | 37 tests, ~2m10s |
-| `explorer-api::endpoints`, `router_introspection`, `cors`, `canonical_schema` | 8 — `explorer-api-committee-regime`, step *explorer-api HTTP contract, CORS, router shape, schema parity* | quick | Postgres testcontainer; `router_introspection` needs none | 49 tests, ~2m40s |
+| `explorer-api::endpoints`, `router_introspection`, `cors`, `canonical_schema` | 8 — `explorer-api-committee-regime` (the committee and regime suites in this job are deprecated 2026-10-20, see IC-1019; CI still runs them today), step *explorer-api HTTP contract, CORS, router shape, schema parity* | quick | Postgres testcontainer; `router_introspection` needs none | 49 tests, ~2m40s |
 | `watchdog::cursor_and_volume` | 20 — `watchdog-integration` | quick | Postgres testcontainer | 7 tests, ~25s |
 | `watchdog::liveness` (issue #1378, wired at creation) | 20 — `watchdog-integration`, step *Watchdog liveness heartbeat integration test* | quick | Postgres testcontainer + the built `watchdog` / `watchdog-liveness` binaries | 8 tests, ~90s |
 | `rmpc-logging::workspace_uses_shared_facade` | 4 — `lint`, step *Workspace logging facade guard* | quick | none (source-text walk) | 5 tests, ~0s |

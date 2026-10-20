@@ -2,18 +2,20 @@
 
 ## Scope and pinned commits
 
-- **Repository:** `robotmoney/robotmoney-monorepo`.
+- **Repository:** `robotmoney/robotmoney-core`.
 - **Commits checked:** release v0.5.0 at core `57fbe618` (tag
   `release/v0.5.0-rehearsal`, the Deploy 3 SHA, rc.9, on branch
   `releases-0.5.x`) and `dev` at `e362df0c`. Every finding below holds at
   both.
-- **Reviewed at:** 2026-10-19.
+- **Reviewed at:** 2026-10-19. Findings 5, 7 and 10 corrected 2026-10-20
+  after an adversarial check against the code.
 - **Design under test:** the owner decision of 2026-10-19 that the vaults
   system and the rmpc gateway system are separate systems
   (`docs/architecture.md` §1, `docs/prd.md` §"Product Systems"). The
   dependency rule says the gateway depends on the vaults system and never
-  the reverse. Invariants `SYS-1` and `SYS-2` in
-  `docs/technical/smart-contract-invariants.md` §0 state it.
+  the reverse. Invariant `SYS-1` in
+  `docs/technical/smart-contract-invariants.md` §0 states it. `SYS-2` was
+  retired on 2026-10-19 with the IC policy.
 - **Method:** read the contracts, deploy scripts, publish-contracts stage
   table, indexer and test harness. Compile and test runs were not part of
   this review.
@@ -26,7 +28,8 @@ The code does not meet the dependency rule. The committee and receipt
 contracts accept writes only from the gateway. Committee members and the
 receipt submitter must hold gateway roles. The deploy, the indexer and the
 test stacks treat the two systems as one. A receipt cannot reach router
-weights without a deployed gateway.
+weights without a deployed gateway. Ten findings: three Medium, five Low,
+two Info. Findings 1 to 5 are superseded by the IC policy removal review.
 
 One finding is a trap for the fix itself. The check that binds a committee
 vote to its caller lives only in the gateway. Removing `onlyGateway` from
@@ -88,9 +91,12 @@ Until the code changes, operators run the gateway-routed procedures in
 
 - **Severity:** Low. **Violates:** `SYS-1`.
 - `committeeVoteSubmit` and `consensusRecordReceipt` require `AGENT_ROLE`
-  on the gateway. The `register-committee` govern row therefore authorizes
-  the submitter Safe on the gateway and sets a minimal gateway policy for
-  it.
+  on the gateway. The `register-committee` govern row
+  (`publish-contracts/src/committee-register.ts:102-104`) therefore has the
+  submitter Safe `commitAuthorization`, then `revealAuthorization` for
+  itself with a minimal gateway policy, then
+  `transferAgentOwnership(submitter, timelock)`. The timelock batch then
+  runs `setPolicy` and `committeeRegister`.
 - **Fix:** follows from findings 1, 2 and 4. The govern row then grants
   only `COMMITTEE_AGENT_ROLE`.
 
@@ -106,8 +112,9 @@ Until the code changes, operators run the gateway-routed procedures in
 ### 7. One deploy run, one handover and one verify cover both systems
 
 - **Severity:** Low. **Violates:** the separate-deploy rule.
-- The publish-contracts stage table deploys the gateway at stage 5. Stage 7
-  binds the IC policy and receipt to it. Stage 11 (`DeployTimelock`) hands
+- The publish-contracts stage table (`scripts/deploy/stage-table.json`)
+  deploys the gateway at stage 5. Stage 6 (`ic-policy`) binds the IC policy
+  and receipt to it. Stage 11 (`DeployTimelock`) hands
   both systems to one timelock, gateway agents included. One verify checks
   both.
 - **Fix:** a vaults-system stage table with no gateway stage. A separate
@@ -131,12 +138,15 @@ Until the code changes, operators run the gateway-routed procedures in
   sets default weights with no gateway deployed. A separate gateway
   rehearsal.
 
-### 10. `SYS-1` and `SYS-2` have no registry entry or test
+### 10. `SYS-1` has no registry entry or test
 
 - **Severity:** Info.
-- Neither ID has an `InvariantRegistry` entry. Both are written without
-  the heading form so `CoverageMap.t.sol` does not fail.
-- **Fix:** add each registry entry with a red test in the PR that fixes it.
+- `SYS-1` has no `InvariantRegistry` entry
+  (`contracts/test/fv/InvariantRegistry.sol`). It is written without the
+  `> **\`ID\`` heading form so `CoverageMap.t.sol` does not fail. `SYS-2`
+  was retired on 2026-10-19 and needs no entry.
+- **Fix:** add the `SYS-1` registry entry with a red test in the PR that
+  fixes finding 1.
 
 ## Open decision raised by this review
 
