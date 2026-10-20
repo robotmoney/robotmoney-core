@@ -390,11 +390,14 @@ jobs:
       - name: explorer-api registration history + retired committee routes + consensus-receipt endpoint tests
         run: |
           echo "::group::clients/explorer-api/tests/registration_history.rs:"
-          # 13 tests: registration_history 5, consensus_receipt_api 8 (QA plan v1 T5; core 1891 removed
-          # committee_api 5 and regime_api 1 with the routes they tested).
-          CARGO_TEST_MIN_EXECUTED=13 bash .github/scripts/cargo_test_require_executed.sh \
+          # One call and one floor per target (core 1891; QA plan v1 T5 removed committee_api 5 and
+          # regime_api 1 with the routes they tested). registration_history holds 5 tests,
+          # consensus_receipt_api holds 8.
+          CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
-            --test registration_history \
+            --test registration_history -- --nocapture
+          CARGO_TEST_MIN_EXECUTED=8 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-api \
             --test consensus_receipt_api -- --nocapture
           echo "::endgroup::"
 
@@ -419,13 +422,17 @@ jobs:
       # dominated by endpoints.rs booting a seeded container per test.
       - name: explorer-api HTTP contract, CORS, router shape, schema parity
         run: |
-          # 58 tests: endpoints 51, router_introspection 1, cors 4, canonical_schema 2 (QA plan v1 T5; C1
-          # removed the /v1/governance/proposals cases with the route).
-          CARGO_TEST_MIN_EXECUTED=60 bash .github/scripts/cargo_test_require_executed.sh \
+          # 58 tests: endpoints 53, router_introspection 1, cors 4 (QA plan v1 T5; C1 removed the
+          # /v1/governance/proposals cases with the route).
+          CARGO_TEST_MIN_EXECUTED=58 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test endpoints \
             --test router_introspection \
-            --test cors \
+            --test cors -- --test-threads=1 --nocapture
+          # Core 1891: canonical_schema now also proves the harness and the full migrator agree on the
+          # registration columns and that the committee tables are gone, so it has its own floor.
+          CARGO_TEST_MIN_EXECUTED=3 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-api \
             --test canonical_schema -- --test-threads=1 --nocapture
 
       # Core 1731: the index cursor and chain head are not read from the newest (in-flight or failed) run
@@ -444,7 +451,7 @@ jobs:
       # Testcontainer Postgres, same Docker check as above.
       - name: explorer-api boot-time schema guard (compiled binary)
         run: |
-          CARGO_TEST_MIN_EXECUTED=2 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test boot_schema_guard -- --nocapture
 
