@@ -561,38 +561,11 @@ fn deposits_paused_blocks_deposit_not_withdraw() {
 
 // ------------------------------------------------------------- scenario 7
 
-/// Admin trying to grant itself `AGENT_ROLE` reverts via the
-/// role-separation invariant in `AccessRoles`.
-///
-/// We drive this via `cast send` rather than rmpc: the daemon never
-/// calls `authorizeAgent`, so plumbing this through rmpc would prove
-/// nothing about the gateway. The test calls `authorizeAgent(admin,
-/// policy)` from the admin EOA; the inner `_grantRole` override in
-/// `AccessRoles` reverts with `RoleSeparationViolated()`.
-#[test]
-fn role_separation_invariant() {
-    require_prereqs("role_separation_invariant");
-    with_fixture(|fx| {
-        // The admin is the timelock after handover. Authorizing an admin-holding
-        // address as an agent goes through the real Safe and the timelock (a
-        // generic Safe -> Timelock call of `authorizeAgent`); the inner
-        // `_grantRole` override in `AccessRoles` reverts with
-        // `RoleSeparationViolated()` at execution, so the run must fail. No
-        // deployer key is involved.
-        let one_usdc = 1_000_000u128;
-        let result = fx.authorize_agent_for(fx.timelock(), 10_000 * one_usdc, 100_000 * one_usdc);
-        let err = result.expect_err("authorizeAgent(admin) must revert; the govern run succeeded");
-        let combined = err.to_string();
-        assert!(
-            combined.contains("RoleSeparationViolated")
-                || combined.to_lowercase().contains("revert"),
-            "expected RoleSeparationViolated in revert output;\n{combined}"
-        );
-
-        // Sanity: AGENT_PRIVATE_KEY constant is not silently empty.
-        assert_eq!(AGENT_PRIVATE_KEY.len(), 32);
-    });
-}
+// Retired by issue 1890. This scenario drove `authorizeAgent(admin, policy)` through the Safe
+// and the timelock to show the role-separation invariant. The gateway has no admin
+// registration entrypoint any more, and registration needs the registered address's own
+// consent. Role separation on registration is covered by the Foundry suite
+// (`RobotMoneyGateway.t.sol::test_register_revertsOnRoleSeparation_*`).
 
 // ------------------------------------------------------------- scenario 8
 
