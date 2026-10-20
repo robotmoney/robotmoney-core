@@ -21,6 +21,8 @@ function problemsWith(file: string, edit: (text: string) => string): string[] {
 }
 /** The text of one step block: from its `- id:` line to the next step. */
 const stepBlock = (text: string, id: string): string => new RegExp(`  - id: "${id}"\\n(?:(?!  - id: ).*\\n?)*`).exec(text)![0];
+/** A release file as the release being prepared: no templateSha pin, so the add-only check applies. */
+const unpinned = (text: string): string => text.replace(/^templateSha: .*\n/m, "");
 
 test("the committed template and release runbooks are clean", () => {
   const all = validateAll(ROOT, model);
@@ -29,15 +31,40 @@ test("the committed template and release runbooks are clean", () => {
   expect(all.releases.has("v0.5.0")).toBe(true);
 });
 
-test("a release that drops a template step fails", () => {
-  const p = problemsWith(RELEASE, (t) => t.replace(stepBlock(t, "P0.04-checkout"), ""));
+test("an unpinned release that drops a template step fails", () => {
+  const p = problemsWith(RELEASE, (t) => unpinned(t).replace(stepBlock(t, "P0.04-checkout"), ""));
   expect(p.length).toBeGreaterThan(0);
   expect(p.join("\n")).toContain("P0.04-checkout");
 });
 
-test("a release that edits a template step fails", () => {
+test("an unpinned release that edits a template step fails", () => {
+  const p = problemsWith(RELEASE, (t) => unpinned(t).replace(stepBlock(t, "P0.04-checkout"), (b) => b.replace("The core checkout is clean", "The core checkout")));
+  expect(p.join("\n")).toContain("P0.04-checkout");
+});
+
+test("the template can change while every committed release is pinned", () => {
+  const p = problemsWith("template.yaml", (t) => t.replace(stepBlock(t, "P0.04-checkout"), (b) => b.replace("The core checkout is clean", "The core checkout")));
+  expect(p).toEqual([]);
+});
+
+test("a pinned release that edits a template step fails against the template at its pin", () => {
   const p = problemsWith(RELEASE, (t) => t.replace(stepBlock(t, "P0.04-checkout"), (b) => b.replace("The core checkout is clean", "The core checkout")));
   expect(p.join("\n")).toContain("P0.04-checkout");
+});
+
+test("a pinned release that drops a template step fails against the template at its pin", () => {
+  const p = problemsWith(RELEASE, (t) => t.replace(stepBlock(t, "P0.04-checkout"), ""));
+  expect(p.join("\n")).toContain("P0.04-checkout");
+});
+
+test("a templateSha with no template in git fails", () => {
+  const p = problemsWith(RELEASE, (t) => t.replace(/^templateSha: .*$/m, "templateSha: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"));
+  expect(p.join("\n")).toContain("has no docs/runbooks/contract-qa/template.yaml in git");
+});
+
+test("a templateSha that is not a full commit fails", () => {
+  const p = problemsWith(RELEASE, (t) => t.replace(/^templateSha: .*$/m, "templateSha: e362df0c"));
+  expect(p.join("\n")).toContain("templateSha is the full 40-character commit");
 });
 
 test("a sheet value read before the run sheet is written fails", () => {
@@ -46,8 +73,8 @@ test("a sheet value read before the run sheet is written fails", () => {
 });
 
 test("a command that names a verb no CLI has fails", () => {
-  const p = problemsWith("template.yaml", (t) => t.replace(stepBlock(t, "P0.06-forge-build"), (b) => b.replace('["forge", "build"]', '["forge", "no-such-verb"]')));
-  expect(p.length).toBeGreaterThan(0);
+  const p = problemsWith("template.yaml", (t) => t.replace(stepBlock(t, "P2.01-verify-pre-govern"), (b) => b.replace('"publish-contracts/src/cli.ts", "verify"', '"publish-contracts/src/cli.ts", "no-such-verb"')));
+  expect(p.join("\n")).toContain("P2.01-verify-pre-govern");
 });
 
 test("a planted credential fails", () => {

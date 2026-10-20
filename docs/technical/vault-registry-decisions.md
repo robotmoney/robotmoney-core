@@ -7,8 +7,15 @@
 > read-ABI shape. No contract bytecode or schema migrations are produced by this
 > scout.
 >
+> **Note 2026-10-19 (rmpc scope).** Statements here about a gateway router allowlist or `rmpc` router deposits are deprecated (owner decision 2026-10-19: `rmpc`'s only on-chain write is an agent deposit into a single vault through the gateway; the gateway has no withdrawal or Portfolio Router path, and `rmpc` has no `withdraw`, `withdraw-router` or `receipt submit`).
+>
 > Closes the open question gate listed under `Plan tracking issue #109`
 > §"Phase: Vault registry" item 1.
+>
+> **Note 2026-10-19 (system split).** The registry belongs to the vaults
+> system. The rmpc gateway system is a separate client of it and deploys in
+> its own run. Read §3.3 that way: the gateway update is the gateway system's
+> step, not part of a vault deploy. The registry never names the gateway.
 
 ---
 

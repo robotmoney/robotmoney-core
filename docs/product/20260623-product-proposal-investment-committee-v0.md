@@ -1,5 +1,20 @@
 # Investment Committee — v0 Feature Proposal
 
+> **Superseded for the on-chain committee (owner decision 2026-10-19).**
+> `InvestmentCommitteePolicy` is deleted. There is no on-chain committee
+> registration, no on-chain tilt and no voting of any kind. The vaults system's
+> only rebalancing input is the consensus recommendation receipt: a submitter
+> holding `RECEIPT_SUBMITTER_ROLE` on `ConsensusRecommendationReceipt` (granted
+> by `ADMIN_ROLE`, the Safe through the timelock) records it with
+> `recordReceipt(receiptId, payloadDigest, payloadUri)`, and the Safe applies
+> it with `RouterGovernance.applyReceipt` or sets default weights with
+> `setDefaultWeights`. The receipt is still built off-chain from the analysts'
+> Ed25519 signatures. The receipt material below (payload, canonicalization,
+> signatures, anchoring, the cross-repo release process) stays current. Every
+> section about committee agents, votes, tilts, the regime feed, the committee
+> dapp surfaces or `rmpc committee vote-submit` is history. The canonical
+> design is `docs/architecture.md` §2.4, §4.8 and §4.9.
+
 > Status: **Implemented on a local devnet; not publicly deployed.** The
 > `InvestmentCommitteePolicy` contract and its gateway/indexer wiring are
 > shipped (`issue #1044`, `docs/architecture.md` §2.4, §4.8, §5.1, §5.4,
@@ -9,6 +24,26 @@
 > §5.4, §7.5). They are deliberately not a public-chain deployment. Companion
 > to the GTM strategy doc (RobotMoney_PMF_GTM_Strategy).
 >
+> **Design change, 2026-10-19: committee writes go directly to the committee
+> contracts.** Robot Money is now two separate systems. The vaults system holds
+> the vaults, the router, `RouterGovernance`, and its rebalancing input:
+> `InvestmentCommitteePolicy` and `ConsensusRecommendationReceipt`. The rmpc
+> gateway system (`RobotMoneyGateway` and `rmpc`) is a client of the vaults
+> system for agent deposits and withdrawals. The vaults system never depends on
+> the gateway. Committee agents call `InvestmentCommitteePolicy.submitVote`
+> directly. The receipt submitter calls
+> `ConsensusRecommendationReceipt.recordReceipt` directly. Registration stays an
+> `ADMIN_ROLE` action through the Safe and timelock. This document now describes
+> that design. **The original proposal routed every committee write through
+> `RobotMoneyGateway`** (`onlyGateway` on both contracts, with the gateway
+> entrypoints `setICPolicy`, `setConsensusReceipt`, `committeeRegister`,
+> `committeeVoteSubmit` and `consensusRecordReceipt`). Older sections that
+> still cite those entrypoints record the original design.
+>
+> The code references below cite the code at the time they were written.
+> Where the code still differs from this design is recorded in the system
+> split review, `docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-system-split.md`.
+>
 > **Close-out boundary.** The independent local-devnet components above are
 > implemented. The cross-repository acceptance test proving the full route is
 > `robotmoney-core#1315`, now merged on `dev`; this document claims its
@@ -17,12 +52,13 @@
 > decision (§6).
 >
 > **Position.** The Investment Committee vision reuses the existing `rmpc`
-> client, `RobotMoneyGateway` entrypoint, `RouterGovernance`, `robotmoney-analyst`
-> plugin, and dapp surfaces. The committee's core (`InvestmentCommitteePolicy`)
+> client, `RouterGovernance`, `robotmoney-analyst` plugin, and dapp surfaces.
+> *(The original proposal also reused the `RobotMoneyGateway` entrypoint; see
+> the 2026-10-19 design change above.)* The committee's core (`InvestmentCommitteePolicy`)
 > is done — it extends those primitives with a signalling-only registry. The
 > only new subsystem in the delta is the consensus recommendation receipts flow
 > (§2.1, §3.3), which is scoped as v0.1 and requires its own payload schema,
-> **consensus judge**, gateway surface, indexer tables, `rmpc` command, and
+> **consensus judge**, receipt contract surface, indexer tables, `rmpc` command, and
 > off-chain worker (see §2.1, §3.3, and §6).
 >
 > **Two decisions since the first draft** (both in §2.1, and both narrowing §6):
@@ -114,13 +150,13 @@ asks for:
 | Requirement | v0 decision | Status | Grounding |
 |---|---|---|---|
 | Membership | **Admin-gated, timelock-held, capped.** `ADMIN_ROLE` on the IC contract is held by the `TimelockController` (`docs/architecture.md` §4.5, §4.8) with proposer/canceller on the Safe (`0x88bA…75A0`). V0 allowlist is capped at **3–5 internal seats** (Athena / Robot Money / Woon — see §4 decision 3). Membership is registry state (`VaultRegistry.isRouterEligible` analogue, `docs/architecture.md` §7.3), not a code variant. Public `AgentRegistered`/`AgentRevoked` events are the auditable membership log. No permissionless onboarding in v0. | Shipped (cap is a product decision) | `contracts/gateway/InvestmentCommitteePolicy.sol:37,164-177`, `docs/architecture.md:134-136,4.5` |
-| Agent enablement toolkit | **Publish a committee agent skill + plugin**, extending `robotmoney-analyst`. Proprietary methods stay out of the published surface. Reuses the analyst's regime/market datasources; adds "form per-vault tilt → post memo → sign and submit via gateway." Fails closed on missing IC config, unregistered agent, or unreachable `rationale_uri`. | Shipped (skill) | `plugins/robotmoney-analyst/`, `docs/architecture.md:5.5` |
-| Identity / registration / signing | **EOA-via-gateway is the v0 identity.** Agent is its registered EOA; authentication is `msg.sender` via `RobotMoneyGateway` (`onlyGateway`) + `hasRole(COMMITTEE_AGENT_ROLE)` — no ed25519, no EIP-712 in v0. The `robotmoney-frontend` swarm's ed25519 stack (`contract/src/signing.js`, `backend/src/lib/signing.ts`) is a *different product* (frontend swarm) with a different trust model, and **no on-chain write in v0 or v0.1 is ever authenticated by an ed25519 signature.** *(v0.1 carve-out: ed25519 signatures may appear inside a receipt payload as data verified off-chain — content, not authentication. See §2.2 and ADR-0012 §5.)* Key rotation is via `revokeAgent` + `registerAgent`; compromise response is revocation + event. | Shipped | `contracts/gateway/InvestmentCommitteePolicy.sol:154-157,164-177,197-246`, `contracts/gateway/RobotMoneyGateway.sol:1396-1446`, `docs/prd.md` §9, `docs/architecture.md:586` |
-| Vote record & auditability | **Content-addressed, not gist-addressed.** Vote + commitment registered on-chain via `InvestmentCommitteePolicy` through the gateway; the narrative memo/CoT lives at any public `rationale_uri` but is **bound by `vote_digest` (= `keccak256` of the canonical vote JSON per `tests/fixtures/committee-vote.schema.json`)**. The indexer fetches `rationale_uri`, checks `keccak256(memo)==vote_digest`, and stores tilts only when verified; otherwise it records an unverified commitment (`docs/architecture.md` §5.4, §7.4). The dapp renders verified vs unverified distinctly and shows a fallback when the URI is unreachable or a reorg rewrites the log. | Shipped | `tests/fixtures/committee-vote.schema.json:1-60`, `contracts/gateway/InvestmentCommitteePolicy.sol:78,90-91,110-120`, `services/explorer-indexer/src/indexer.rs:1125,1164`, `docs/architecture.md:554-561,7.4,911-914` |
+| Agent enablement toolkit | **Publish a committee agent skill + plugin**, extending `robotmoney-analyst`. Proprietary methods stay out of the published surface. Reuses the analyst's regime/market datasources; adds "form per-vault tilt → post memo → sign and submit directly to the IC policy contract." Fails closed on missing IC config, unregistered agent, or unreachable `rationale_uri`. | Shipped (skill) | `plugins/robotmoney-analyst/`, `docs/architecture.md:5.5` |
+| Identity / registration / signing | **Direct EOA is the v0 identity.** Agent is its registered EOA; authentication is the agent's own `msg.sender` on `InvestmentCommitteePolicy` + `hasRole(COMMITTEE_AGENT_ROLE)`, with no gateway hop (2026-10-19; the original design authenticated `msg.sender` via `RobotMoneyGateway` `onlyGateway`) — no ed25519, no EIP-712 in v0. The `robotmoney-frontend` swarm's ed25519 stack (`contract/src/signing.js`, `backend/src/lib/signing.ts`) is a *different product* (frontend swarm) with a different trust model, and **no on-chain write in v0 or v0.1 is ever authenticated by an ed25519 signature.** *(v0.1 carve-out: ed25519 signatures may appear inside a receipt payload as data verified off-chain — content, not authentication. See §2.2 and ADR-0012 §5.)* Key rotation is via `revokeAgent` + `registerAgent`; compromise response is revocation + event. | Shipped | `contracts/gateway/InvestmentCommitteePolicy.sol:154-157,164-177,197-246`, `contracts/gateway/RobotMoneyGateway.sol:1396-1446`, `docs/prd.md` §9, `docs/architecture.md:586` |
+| Vote record & auditability | **Content-addressed, not gist-addressed.** Vote + commitment registered on-chain by a direct call to `InvestmentCommitteePolicy`; the narrative memo/CoT lives at any public `rationale_uri` but is **bound by `vote_digest` (= `keccak256` of the canonical vote JSON per `tests/fixtures/committee-vote.schema.json`)**. The indexer fetches `rationale_uri`, checks `keccak256(memo)==vote_digest`, and stores tilts only when verified; otherwise it records an unverified commitment (`docs/architecture.md` §5.4, §7.4). The dapp renders verified vs unverified distinctly and shows a fallback when the URI is unreachable or a reorg rewrites the log. | Shipped | `tests/fixtures/committee-vote.schema.json:1-60`, `contracts/gateway/InvestmentCommitteePolicy.sol:78,90-91,110-120`, `services/explorer-indexer/src/indexer.rs:1125,1164`, `docs/architecture.md:554-561,7.4,911-914` |
 | Allocation choices | **Per-vault tilts over the existing 4-vault catalog, not a weight vector.** Each vote is one vault (`overweight`/`neutral`/`underweight` at `InvestmentCommitteePolicy.sol:63-69`, `tests/fixtures/committee-vote.schema.json:22-33` with `target_weight_bps` 0–10 000 and `confidence` 0–100). Aggregation to a router weight vector is **off-chain, admin-applied**; there is no on-chain aggregation in v0. A vault is votable only when it is Active and (for router relevance) `isRouterEligible` (`docs/architecture.md` §4.1, §4.7; `RouterGovernance.sol:387`). | Shipped | `docs/prd.md` §11, `docs/architecture.md:4.1,4.7`, `RouterGovernance.sol:365-422` |
 | Daily regime feed | **Protocol-scope, read-only dapp surface with declared authority.** Rendered from the indexer + live chain reads per `docs/architecture.md` §5.0/5.3/5.4 (protocol scope: no wallet; safety-critical signing values still come from live `rmpc` reads, `docs/architecture.md` §6.1). Authored by Robot Money (RM) on a daily cadence; staleness and late-publish handling are specified in §3.2. | Shipped (shape) | `docs/architecture.md:5.0,5.3,5.4` |
-| Committee display | **Three-layer dapp surface (protocol / account / action) per `docs/architecture.md` §5.3.** Protocol layer: registered agents, per-vault tilts, aggregated tilt, per-agent track record (from indexer). Account layer: connected agent's own tilt history (live `getVote`/`latestVoteByAgent` + indexed history). Action layer: tilt submission (`committee vote-submit`: vault → stance/weight → `rationale_uri` → preview → sign via gateway). A tilt is a signed recommendation, not a vote on anything; the preview states explicitly that it does not move funds or set weights. | Shipped (shape) | `contracts/gateway/InvestmentCommitteePolicy.sol:250-270`, `docs/architecture.md:845-856,906-921` |
-| Consensus recommendation receipts | **v0.1 — implemented on the local devnet (see §2.1, §3.3, §6.1).** The on-chain write is an **EOA-via-gateway commitment** by a **single submitter** attesting for the committee; the analysts' ed25519 signatures ride inside the payload as data verified off-chain (§2.2, ADR-0012 §5). The allocation is the **deterministic mean** of the analysts' vectors converted to bps; a judge agent authors the rationale, not the numbers. The Safe, through the timelock, releases the receipt and applies its weights in one timelock operation (`releaseReceipt` sets `released=true` and emits `ReceiptReleased`; the weight setter writes the router weights in the same `RouterGovernance.applyReceipt` call — INV-4 `docs/prd.md` §12, `docs/architecture.md` §4.9; the receipt contract itself makes no router call). Receipts are observable via the indexer/API like tilts. Full spec (schema, judge, gateway interface, indexer, `rmpc`, worker) is in §2.1. | Implemented locally; public deployment deferred | `docs/prd.md:650-657` INV-4, `docs/architecture.md:4.9,5.1,5.4,7.5`, `docs/adr/ADR-0012-dual-curve-identity-policy.md` §4–5 |
+| Committee display | **Three-layer dapp surface (protocol / account / action) per `docs/architecture.md` §5.3.** Protocol layer: registered agents, per-vault tilts, aggregated tilt, per-agent track record (from indexer). Account layer: connected agent's own tilt history (live `getVote`/`latestVoteByAgent` + indexed history). Action layer: tilt submission (`committee vote-submit`: vault → stance/weight → `rationale_uri` → preview → sign and submit directly to the IC policy contract). A tilt is a signed recommendation, not a vote on anything; the preview states explicitly that it does not move funds or set weights. | Shipped (shape) | `contracts/gateway/InvestmentCommitteePolicy.sol:250-270`, `docs/architecture.md:845-856,906-921` |
+| Consensus recommendation receipts | **v0.1 — implemented on the local devnet (see §2.1, §3.3, §6.1).** The on-chain write is a **direct EOA commitment** to the receipt contract by a **single submitter** attesting for the committee; the analysts' ed25519 signatures ride inside the payload as data verified off-chain (§2.2, ADR-0012 §5). The allocation is the **deterministic mean** of the analysts' vectors converted to bps; a judge agent authors the rationale, not the numbers. The Safe, through the timelock, releases the receipt and applies its weights in one timelock operation (`releaseReceipt` sets `released=true` and emits `ReceiptReleased`; the weight setter writes the router weights in the same `RouterGovernance.applyReceipt` call — INV-4 `docs/prd.md` §12, `docs/architecture.md` §4.9; the receipt contract itself makes no router call). Receipts are observable via the indexer/API like tilts. Full spec (schema, judge, receipt contract interface, indexer, `rmpc`, worker) is in §2.1. | Implemented locally; public deployment deferred | `docs/prd.md:650-657` INV-4, `docs/architecture.md:4.9,5.1,5.4,7.5`, `docs/adr/ADR-0012-dual-curve-identity-policy.md` §4–5 |
 
 #### 2.1 Consensus recommendation receipts — v0.1 implementation scope
 
@@ -131,11 +167,13 @@ close-out dependency, the cross-repository acceptance test, is now merged
 the local-devnet path; there is no unimplemented receipt interface.
 
 - **Identity — one submitter attests for the committee (decided).** The on-chain
-  write is EOA-via-gateway: `onlyGateway` on the receipt contract,
-  `COMMITTEE_AGENT_ROLE` check, no parallel `AGENT_ROLE` and no second
-  `registerAgent` entrypoint; the shipped policy pattern
-  (`InvestmentCommitteePolicy.sol:154-157,209`) is the template, so the gateway
-  stays the single choke point and role administration stays on one contract.
+  write is a direct EOA call to the receipt contract: the submitter's own
+  `msg.sender` plus a `COMMITTEE_AGENT_ROLE` check, no parallel `AGENT_ROLE` and
+  no second `registerAgent` entrypoint, so role administration stays on one
+  contract. *(Changed 2026-10-19: the original design put `onlyGateway` on the
+  receipt contract and made the gateway the single choke point, following
+  `InvestmentCommitteePolicy.sol:154-157,209`. The vaults system no longer
+  depends on the gateway.)*
   **What changed:** an earlier draft of this section had *each* analyst call
   `consensusSubmitSignature` under its own `COMMITTEE_AGENT_ROLE` EOA. That is
   rejected. A **single submitter** records the receipt, and the analysts'
@@ -207,7 +245,7 @@ the local-devnet path; there is no unimplemented receipt interface.
   normalization bug there propagates into a signed, governance-facing artifact.
   It needs property tests and a guard against being bypassed or reimplemented.
 - **Judge component.** The judge is a **sixth component** of this subsystem
-  alongside the schema, gateway surface, indexer, `rmpc` command, and worker.
+  alongside the schema, receipt contract surface, indexer, `rmpc` command, and worker.
   It slots into the frontend's existing job queue and session state machine
   (`backend/src/worker/handlers/index.ts:55-59`, states
   `scheduled → collecting → window_closed → aggregated → published`). Its inputs
@@ -246,13 +284,15 @@ the local-devnet path; there is no unimplemented receipt interface.
   detect either.
   `@robotmoney/contract` remains explicitly unsuitable across the
   Rust/Solidity boundary (§6.1).
-- **Gateway surface:** additive only — `setICPolicy`/`committeeRegister`/`committeeVoteSubmit`
-  at `contracts/gateway/interfaces/IGateway.sol:380,386,392` stay; the new
-  receipt entrypoints are added alongside `agentOwner` (`IGateway.sol:422`), not
-  substituted (D6). The exact new set is two calls:
-  `consensusRecordReceipt(bytes32 receiptId, bytes32 payloadDigest, string payloadUri)`
+- **Receipt contract surface:** the submitter calls the receipt contract
+  directly. The exact set is two calls:
+  `recordReceipt(bytes32 receiptId, bytes32 payloadDigest, string payloadUri)`
   records the authenticated submitter and an unreleased commitment, and
-  `consensusReleaseReceipt(bytes32 receiptId)` is the admin-only human gate.
+  `releaseReceipt(bytes32 receiptId)` is the admin-only human gate.
+  *(Changed 2026-10-19: the original design added these as gateway entrypoints
+  `consensusRecordReceipt` and `consensusReleaseReceipt` alongside
+  `setICPolicy`/`committeeRegister`/`committeeVoteSubmit` and `agentOwner` in
+  `contracts/gateway/interfaces/IGateway.sol:380,386,392,422` (D6).)*
   `receiptId` is `keccak256` of UTF-8
   `robotmoney:consensus-receipt-id:v1\n{session_id}\n{subject_id}`; refusing an
   existing ID enforces one receipt per session per subject.
@@ -288,16 +328,19 @@ the local-devnet path; there is no unimplemented receipt interface.
 
 #### 2.2 Identity note — EOA vs ed25519 (resolved)
 
-The earlier proposal blended two trust models: `robotmoney-core`'s EOA-via-gateway
+The earlier proposal blended two trust models: `robotmoney-core`'s EOA identity
+(originally EOA-via-gateway; direct EOA since 2026-10-19)
 (`InvestmentCommitteePolicy.sol:154-157,209`) and `robotmoney-frontend`'s
 ed25519 swarm (`contract/src/signing.js:5-20`, `backend/src/lib/signing.ts:26-37`,
 `backend/src/swarm/domain.ts:544-768`).
 
 **The rule, stated precisely:**
 
-- **EOA-via-gateway is the sole *on-chain* identity** for v0 and v0.1. Every
-  on-chain write — vote or receipt — is authenticated by `msg.sender` through the
-  gateway plus a role check. No ed25519 signature is ever verified on-chain;
+- **Direct EOA is the sole *on-chain* identity** for v0 and v0.1. Every
+  on-chain write — vote or receipt — is authenticated by the caller's own
+  `msg.sender` on the committee contract plus a role check. *(The original
+  design authenticated `msg.sender` through the gateway; changed 2026-10-19.)*
+  No ed25519 signature is ever verified on-chain;
   the EVM has no ed25519 precompile, and ADR-0012 §5 closes that seam explicitly
   so no design assumes one.
 - **Ed25519 signatures may ride inside a receipt payload as verifiable data**,
@@ -334,7 +377,7 @@ question of *what to change*, not *what to invent*.
 **append-only canonicalization rule**, and the analysts' **ed25519 signatures as
 payload content**. Not adopted: the frontend's **authentication model** — no
 ed25519 signature authenticates an on-chain write here, and the receipt's
-authority comes from EOA-via-gateway plus the payload digest (§2.2, ADR-0012 §5).
+authority comes from the submitter's direct EOA call plus the payload digest (§2.2, ADR-0012 §5).
 The frontend's off-chain Postgres record remains a different product's storage,
 not this subsystem's source of truth.
 
@@ -420,7 +463,8 @@ These are sequenced after v0 rather than dropped. The first three are
   `:104-120`), `ADMIN_ROLE` allowlists `COMMITTEE_AGENT_ROLE` at `:164-168`,
   `onlyGateway` at `:154-157`, vote validation at `:197-246` (stance, bps, confidence,
   `voteJsonHash`, `rationaleUri`, vault). Enforced by `testSignallingOnlyBoundary`.
-- **Gateway wiring.** `contracts/gateway/RobotMoneyGateway.sol:285-287` (`icPolicy`),
+- **Gateway wiring (original design, superseded by the 2026-10-19
+  note).** `contracts/gateway/RobotMoneyGateway.sol:285-287` (`icPolicy`),
   `1396-1446` (`setICPolicy`, `committeeRegister` at `:1419`, `committeeVoteSubmit` at
   `:1439` with `onlyRole(ADMIN_ROLE)`/`onlyRole(AGENT_ROLE)` and `ICPolicyNotSet`).
   `contracts/gateway/interfaces/IGateway.sol:379-394`, `contracts/gateway/interfaces/IInvestmentCommitteePolicy.sol:1-124`.
@@ -433,7 +477,8 @@ These are sequenced after v0 rather than dropped. The first three are
   (`docs/architecture.md` §5.4, §7.4); per-vault tilts stored only when
   `keccak256(memo)==vote_digest` (`docs/architecture.md:911-914`).
 - **`rmpc` client.** `docs/architecture.md:5.1,690-710` — `committee register` + `committee vote-submit`
-  via `AgentSigner` + gateway, production-signer gate, stable JSON envelope
+  via `AgentSigner` + gateway (original design; since 2026-10-19 the vote goes
+  directly to the IC policy contract), production-signer gate, stable JSON envelope
   (`docs/architecture.md:642-654`), fail-closed on missing IC config.
   *Note (2026-10-05): `rmpc committee register` was removed (issue #1447,
   workstream K). Registration is an `ADMIN_ROLE` action that goes through the
@@ -441,7 +486,8 @@ These are sequenced after v0 rather than dropped. The first three are
   §3.*
 - **`robotmoney-analyst` plugin.** `plugins/robotmoney-analyst/` — committee skill
   extends the analyst's regime/market datasources; adds "form per-vault tilt →
-  post memo → sign and submit via gateway" (`docs/architecture.md:5.5`).
+  post memo → sign and submit directly to the IC policy contract"
+  (`docs/architecture.md:5.5`; the original design submitted via the gateway).
 - **Dapp.** Regime feed + committee surfaces shaped per `docs/architecture.md:5.3,845-856,5.4,7.4`
   (see also §3.2).
 
@@ -473,12 +519,13 @@ behaviors the shape leaves open.
 
 ### 3.3 Extend for v0.1 (Consensus recommendation receipts — implemented locally)
 
-- **Contract.** New `ConsensusRecommendationReceipt.sol` — `onlyGateway`, signalling-only
+- **Contract.** New `ConsensusRecommendationReceipt.sol` — direct submitter writes
+  (the original design used `onlyGateway`; see the 2026-10-19 note), signalling-only
   (no `receive`/`fallback`, no vault/router calls — same constraint as
   `InvestmentCommitteePolicy.sol:272-278` / `docs/architecture.md:148,1192-1198`),
   `ADMIN_ROLE` held by `TimelockController` (INV-3 `docs/prd.md:642-648`), event
   `ReceiptRecorded` plus `ReceiptReleased`, neither carrying an indexed signature
-  parameter. Additive gateway surface alongside `IGateway.sol:380,386,392,422`:
+  parameter. Its own surface, with no gateway entrypoint:
   one record call and one admin release call with the signatures kept off-chain in
   the payload (§2.1). The rejected multi-party signature collection and 7-day
   deadline do not exist.

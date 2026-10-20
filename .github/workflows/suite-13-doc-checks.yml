@@ -478,6 +478,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the contract QA validator reads each pinned release's template from git history (templateSha)
 
       - uses: oven-sh/setup-bun@v2
 

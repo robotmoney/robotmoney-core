@@ -8,7 +8,7 @@
 > Closes the open question listed under `docs/architecture.md` §10
 > ("Router-weight governance implementation").
 
-Investment Committee signals are advisory only. The gateway signal endpoint binds the member to the caller: `committeeVoteSubmit` reverts `CommitteeAgentNotCaller` unless the vote's `agent` is `msg.sender` (core issue 1790, PR 1818). The explorer's tilt aggregate counts one signal per member, its latest verified vote. Consensus receipts are caller bound and ADMIN released; receipts are the only rebalance input, applied by the Safe through the timelock.
+The Investment Committee's only on-chain output is the consensus receipt. There is no on-chain committee vote or tilt (owner decision 2026-10-19). A receipt is recorded by a `RECEIPT_SUBMITTER_ROLE` holder under its own address and released only by the Safe applying it through the timelock. The receipt is the only rebalancing signal the Safe may cite. The vector the Safe schedules through `applyReceipt` is the input; the chain cannot parse the payload, so readers compare the applied vector to the payload (owner decision 2026-10-20).
 
 ---
 
@@ -28,11 +28,20 @@ nothing else. It cannot govern vault onboarding, vault retirement, per-vault
 asset selection, per-vault strategy internals, adapter selection, adapter caps,
 fees, or agent permissions.
 
-The Investment Committee is a set of agents holding `COMMITTEE_AGENT_ROLE` on
-`InvestmentCommitteePolicy`. The gateway records their consensus as a
-`ConsensusRecommendationReceipt`: a receipt id, a payload digest and a payload
-URI, written on chain by `recordReceipt`. A receipt is a recommendation. It
+The Investment Committee is a group of analysts that sign a consensus receipt
+off-chain with Ed25519 keys. A submitter holding `RECEIPT_SUBMITTER_ROLE` on
+`ConsensusRecommendationReceipt` records it: a receipt id, a payload digest and
+a payload URI, written on chain by `recordReceipt`. A receipt is a recommendation. It
 moves no funds and sets no weights by itself.
+
+**Two systems (owner decision, 2026-10-19).** Router-weight governance belongs
+to the vaults system: the vaults, VaultRegistry, PortfolioRouter,
+RouterGovernance and ConsensusRecommendationReceipt, governed by the Safe
+through the TimelockController. The rmpc gateway system (RobotMoneyGateway and
+`rmpc`) is a separate system and a client of the vaults system. The receipt
+submitter records receipts on the receipt contract directly, not through the
+gateway. Rebalancing works with no gateway
+deployed.
 
 `contracts/PortfolioRouter.sol` is deployed. `setWeights(address[], uint256[])`
 and `setDefaultWeights(address[], uint256[])` are the only functions that
@@ -56,7 +65,8 @@ Three questions had to be fixed before any router-weight tooling was written:
 ### 3.1 One body changes configuration
 
 **The Safe multisig, through the `TimelockController`, is the only body that
-changes any Robot Money contract configuration, router weights included.**
+changes any vaults-system contract configuration, router weights included.**
+Who governs the gateway is an open question for the gateway's own release.
 
 Every privileged change (roles, caps, fees, eligibility, default weights,
 receipt release, router weights) is a Safe-signed timelock operation: the Safe
@@ -68,11 +78,12 @@ an exception to it.
 
 ### 3.2 A receipt is applied, not voted on
 
-**The Investment Committee records a consensus receipt. The weight setter
-applies it through the timelock. That application is the rebalance.**
+**The receipt submitter records the Investment Committee's consensus receipt.
+The weight setter applies it through the timelock. That application is the
+rebalance.**
 
 The committee's output is a receipt (`recordReceipt`, submitter gated by
-`COMMITTEE_AGENT_ROLE`). Nothing happens to the router at record time. When the
+`RECEIPT_SUBMITTER_ROLE` on the receipt contract). Nothing happens to the router at record time. When the
 Safe decides to act on a receipt, it schedules **one** timelock call that
 releases the receipt and applies its weight vector:
 
@@ -99,7 +110,7 @@ The timelock holds `ADMIN_ROLE` on the receipt register directly (the timelock
 stage grants it), and the standalone `release-receipt` govern row calls
 `releaseReceipt` alone. A receipt released that way can never be applied: a
 later `applyReceipt` for it reverts `ReceiptAlreadyReleased` at execute,
-after its own delay, and the committee records a new receipt instead
+after its own delay, and the submitter records a new receipt instead
 (`RouterGovernanceApplyReceipt.t.sol::test_applyReceipt_revertsOnReleasedReceipt`).
 So "released" does not mean "applied"; a reader checks `ReceiptApplied` (or the
 router's weights) for that (security review 2026-10-15, review-security-023).
@@ -127,24 +138,19 @@ addresses nobody holds keys for. rmpc has no vote command, and no client builds
 a call to the deleted functions (CI gate
 `.github/scripts/check_no_router_governance_voting.sh`).
 
-The IC agent's `committee vote-submit` is a signed tilt the agent sends to the
-committee session. It is not a vote on anything: it changes no contract state
-and carries no authority over weights.
-
 The only delay in the path is the timelock's own delay. The only threshold is
 the Safe's signer threshold.
 
-### 3.4 The committee and the weight setter are disjoint
+### 3.4 The submitter and the weight setter are disjoint
 
-**No committee agent holds `WEIGHT_SETTER_ROLE`, router `ADMIN_ROLE` or any
-timelock role, and no Safe signer or timelock address holds
-`COMMITTEE_AGENT_ROLE`.**
+**No receipt submitter holds `WEIGHT_SETTER_ROLE`, router `ADMIN_ROLE` or any
+timelock role, and no timelock address holds `RECEIPT_SUBMITTER_ROLE`.**
 
 The committee recommends; the Safe applies. The two sets of addresses must not
-overlap, so a compromised committee key can at most record a wrong receipt, and
+overlap, so a compromised submitter key can at most record a wrong receipt, and
 a receipt can at most be applied by a Safe-signed timelock operation after its
 delay. `GovernanceSeparationInvariant.t.sol` asserts the disjointness. Granting
-a committee agent any weight-setting or timelock authority is a security-model
+a submitter any weight-setting or timelock authority is a security-model
 change that needs a new ADR against INV-4; it is not an ordinary admin action.
 
 ### 3.5 Receipt lifecycle
@@ -153,7 +159,7 @@ A receipt has two on-chain states.
 
 | State | Entry condition | Exit conditions |
 |---|---|---|
-| **Recorded** | `recordReceipt` succeeded through the gateway from a `COMMITTEE_AGENT_ROLE` holder. | The `apply-receipt` call executes: `Released`. A receipt the Safe never schedules stays `Recorded`. |
+| **Recorded** | `recordReceipt` succeeded from a `RECEIPT_SUBMITTER_ROLE` holder. | The `apply-receipt` call executes: `Released`. A receipt the Safe never schedules stays `Recorded`. |
 | **Released** | `applyReceipt` released it, and applied the receipt's weights in the same call. | Terminal. |
 
 Events: `ReceiptRecorded` and `ReceiptReleased` on the receipt contract,

@@ -27,6 +27,7 @@ mk_tree() {
   cp "${REPO}/SECURITY.md" "${TMP}/t/"
   # The review files the ledger keys, one row per finding heading (#1792).
   cp "${REPO}"/docs/code-review/*.md "${TMP}/t/docs/code-review/"
+  cp -r "${REPO}"/docs/code-review/*/ "${TMP}/t/docs/code-review/"
   # Only the shipped Solidity is needed for the coverage scan.
   (cd "${REPO}" && find contracts -maxdepth 2 -name '*.sol' \
     -not -path 'contracts/test/*' -not -path 'contracts/script/*' \

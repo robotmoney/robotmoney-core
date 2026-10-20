@@ -6,6 +6,7 @@
 # docs/runbooks/contract-qa/README.md and docs/operations/contract-release-runbooks.md.
 release: v0.5.0
 template: contract-qa
+templateSha: e362df0c0ad270cfc859dbc1df22140be5419278
 productionReady: false
 notes: |
   Identity. Deploy 3 is v0.5.0 (a bump from the v0.4.0 line, owner decision 2026-10-16). The v0.4.0 tags: release/v0.4.0-base (Deploy 1, 9a768bb9) and

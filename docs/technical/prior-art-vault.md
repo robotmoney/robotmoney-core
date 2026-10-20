@@ -30,6 +30,9 @@ outer layer splits USDC across individual `RobotMoneyVault` contracts, each of
 which routes internally through `IStrategyAdapter` implementations. Vaults are
 the stable interface; adapters are internal and swappable. The gateway sits
 outside both layers as a permission and safety boundary for agent-signed writes.
+It is a separate system, the rmpc gateway system. It is a client of the vaults
+system and calls the same public surfaces a human wallet uses. The vaults system
+never depends on it (`docs/technical/smart-contracts.md` §1.1).
 The vault-plus-adapter pattern is modeled directly on Yearn V3: a single
 ERC-4626 contract routes assets across pluggable strategy adapters, with a
 keeper-triggered rebalance correcting drift. The asymmetric pause model
@@ -102,9 +105,11 @@ entire deposit.
 
 Gateway path (agents): `rmpc` reads chain state, then calls
 `gateway.deposit(...)` → gateway enforces policy (valid-until, per-payment cap,
-per-window cap, allowed destinations, share receiver) → forwards to vault or
-router. Withdrawn assets go only to the policy-configured recipient; the agent
-cannot redirect proceeds to itself.
+per-window cap, allowed destinations, share receiver) → forwards to the
+allowed destination. The gateway has no withdrawal or router path (owner
+decision 2026-10-19, noted 2026-10-20). It is deployed and tested on its
+own, after the vaults system. Shares are minted to the owner; the agent
+cannot redirect them to itself.
 
 **Enzyme Finance**
 
@@ -303,8 +308,10 @@ The `RobotMoneyGateway` is the only product in this comparison with a
 first-class design for autonomous agent access. The depositor owns the
 policy (valid-until, per-payment cap, window cap, share receiver, allowed
 destinations); the protocol never manages individual agent policies at
-runtime. The gateway enforces on-chain that agents cannot redirect proceeds,
-raise caps, or bypass disabled vaults.
+runtime. The gateway forwards a deposit to the allowed destination only; it
+has no withdrawal or router path (owner decision 2026-10-19, noted
+2026-10-20). It enforces on-chain that agents cannot redirect shares, raise
+caps, or bypass disabled vaults.
 
 No other product in this comparison has an equivalent structure. Enzyme and
 Veda assume human-or-operator callers. Alvara and Zyfi do not model agent

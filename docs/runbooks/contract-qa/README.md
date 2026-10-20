@@ -17,6 +17,16 @@ A release file also holds its `decisions:` (owner decisions, open or decided), i
 
 The next release adds its own file. It never edits the template steps. The validator refuses a release file that drops, edits or reorders a template step.
 
+The template itself can change. When a release is finished, its file pins `templateSha`, the full commit its template steps were copied from. A pinned release is a record. The validator reads `template.yaml` at that commit from git and checks the release add-only against it, never against the current template or the current CLIs. A `templateSha` with no template in git is refused. Only an unpinned release, the one being prepared, must match the current template.
+
+## Next release
+
+1. Create `releases/<next>.yaml` with no `templateSha`. Copy the current template steps into it, unchanged and in order.
+2. Add the steps only that release needs, each marked `added: <next>`, with an id the template lacks.
+3. Run `bun scripts/runbook/validate-contract-qa.ts`. The unpinned file is checked against the current template and the current CLIs.
+4. Run the release.
+5. After the run, pin `templateSha` to the commit of the template the steps were copied from (`git log -1 --format=%H -- docs/runbooks/contract-qa/template.yaml`). From then on the validator checks the file add-only against the template at that commit, read from git, and the template is free to change.
+
 ## Targets
 
 The environment is chosen at run time with `--target twin|rehearsal|production`. There are no per-environment files. Only parameters differ. A step that exists for one environment says so with `onlyFor`.

@@ -10,15 +10,19 @@ description: >
   run the signer self-check before any write
   ("Is my signing backend ready?");
   submit a guarded USDC deposit through the gateway
-  ("Deposit 100 USDC for order 0x...");
-  submit a guarded gateway redemption (agent-initiated vault share withdrawal)
-  ("Withdraw 1000 shares from vault 0x... for order 0x...").
+  ("Deposit 100 USDC for order 0x..."). The deposit is the only write.
   Always run reads first, run `self-check` before any write, and refuse to
   proceed when preflight (caps, allowance, code-hash, fee cap, role,
-  deposit pause for a deposit) does not pass. A pause never blocks a withdraw.
+  deposit pause) does not pass.
 ---
 
 # robotmoney-user (`rmpc`)
+
+> **Owner decisions 2026-10-19 and 2026-10-20 (noted 2026-10-20).** The tables below
+> document today's binary. These parts of it are deprecated: `withdraw`, `withdraw-router`, router deposits, `receipt submit`, `committee vote-submit`, `committee check-agent` and the Investment Committee policy.
+> The only on-chain write `rmpc` keeps is `rmpc deposit` into an allowed vault.
+> Consensus receipts go on-chain only through the submitter Safe (the
+> publish-contracts `record-receipt` row), never through `rmpc`. Details: `docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md` and `docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md`.
 
 > **Experimental — pre-v1.0.** Command syntax, flags, and output shapes can
 > change. Verify every transaction. Default to fork/devnet; mainnet must be an

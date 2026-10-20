@@ -20,8 +20,8 @@
    (QA plan v1 C1, completeness critic). Dated review artifacts (docs/code-review/) and
    the QA plan, which quotes the residue as its work list, are records and are
    not read.
-4. docs/operations/manual-admin-actions.md names the IC policy, the consensus
-   receipt and the basket vaults in the timelock handover.
+4. docs/operations/manual-admin-actions.md names the consensus receipt, its
+   submitter role and the basket vaults in the timelock handover.
 5. Every `architecture.md` section reference (section sign or the word
    "section", N, N.M or N.M.K) in docs/, contracts/ and .github/ matches a
    heading in docs/architecture.md (QA plan v1 W4). security-model.md cited
@@ -306,7 +306,7 @@ def check_residue_everywhere(root: Path, errors: list[str]) -> None:
 
 def check_manual(root: Path, errors: list[str]) -> None:
     text = (root / MANUAL).read_text()
-    for needle in ("InvestmentCommitteePolicy", "ConsensusRecommendationReceipt", "basket vaults"):
+    for needle in ("ConsensusRecommendationReceipt", "RECEIPT_SUBMITTER_ROLE", "basket vaults"):
         if needle not in text:
             errors.append(f"manual-admin-actions.md handover lacks: {needle}")
 
@@ -346,7 +346,7 @@ COMPLIANT_ARCHITECTURE = (
 def _write_tree(root: Path) -> None:
     for rel, body in (
         (SECURITY, "# Security model\n\n## 4. Admin authority\n"),
-        (MANUAL, "InvestmentCommitteePolicy, ConsensusRecommendationReceipt and the basket vaults.\n"),
+        (MANUAL, "ConsensusRecommendationReceipt, RECEIPT_SUBMITTER_ROLE and the basket vaults.\n"),
         (GOVERNANCE, COMPLIANT_MODEL),
         (PRD, COMPLIANT_MODEL),
         (ARCHITECTURE, COMPLIANT_ARCHITECTURE),

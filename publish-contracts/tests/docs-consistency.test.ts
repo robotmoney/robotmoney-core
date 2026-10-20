@@ -18,11 +18,13 @@ test("INV-4 names the weight setter and the Safe", () => {
   for (const name of ["WEIGHT_SETTER_ROLE", "TimelockController", "Safe"]) expect(inv4).toContain(name);
 });
 
-test("committee vote-submit is described as a signed tilt", () => {
+// Owner decision 2026-10-19: there is no on-chain committee tilt. A doc that still names vote-submit either describes today's
+// binary as a signed tilt or marks the command deprecated; it never calls it a governance vote.
+test("committee vote-submit is described as a signed tilt or marked deprecated", () => {
   const mentions = files.filter((file) => read(file).includes("vote-submit"));
   expect(mentions.length).toBeGreaterThan(0);
   for (const file of mentions) {
-    expect(read(file), file).toMatch(/signed\s+(?:allocation\s+)?tilt/);
+    expect(read(file), file).toMatch(/signed\s+(?:allocation\s+)?tilt|deprecated/i);
     expect(read(file), file).not.toMatch(/vote-submit[^\n]*(?:casts?|submits?) a governance vote/i);
   }
 });
@@ -33,15 +35,17 @@ test("no supersession trails", () => {
   }
 });
 
-// Core issue 1790 (PR 1818) landed: the gateway binds the vote's agent to the caller, so the docs state that check, not the gap.
-test("signals are advisory and the signal endpoint binds the member to the caller", () => {
+// Owner decisions 2026-10-19/20: there is no on-chain committee signal. The receipt is the only rebalancing signal the Safe may
+// cite; the vector the Safe schedules through applyReceipt is the input. Both docs state that, not the old signal-endpoint check.
+test("the receipt is the only rebalancing signal and the Safe's scheduled vector is the input", () => {
   for (const file of ["docs/technical/governance-decisions.md", "docs/technical/consensus-receipt-submitter-runbook.md"]) {
     const text = read(file);
-    expect(text).toContain("signals are advisory only");
-    expect(text).toContain("reverts `CommitteeAgentNotCaller` unless the vote's `agent` is `msg.sender`");
+    expect(text).toContain("The Investment Committee's only on-chain output is the consensus receipt.");
+    expect(text).toContain("the only rebalancing signal the Safe may cite");
+    expect(text).toContain("The vector the Safe schedules through `applyReceipt` is the input");
     expect(text).not.toContain("does not authenticate the member");
-    expect(text).toContain("caller bound and ADMIN released");
-    expect(text).toContain("receipts are the only rebalance input");
+    expect(text).not.toContain("caller bound and ADMIN released");
+    expect(text).not.toContain("receipts are the only rebalance input");
   }
 });
 

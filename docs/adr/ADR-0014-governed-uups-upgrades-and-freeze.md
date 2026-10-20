@@ -1,6 +1,7 @@
 # ADR-0014: Governed per-instance UUPS proxies with a one-way, target-bound freeze for the core contracts
 
 - **Status:** Accepted (2026-10-16)
+- **Amendment 2026-10-19:** `InvestmentCommitteePolicy` is deleted (owner decision 2026-10-19), so nine contracts are proxied, not ten. Its row in the table below is history.
 - **Date:** 2026-10-15
 - **Deciders:** Product owner (accepted 2026-10-16: Deploy 3 launches as an upgradeable proving period, which this ADR governs)
 - **Related:**

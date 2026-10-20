@@ -51,13 +51,13 @@ insufficient to land changes to the contract or deploy-script surface.
 Inspect current protection on `dev`:
 
 ```bash
-gh api repos/lucky-tensor/robotmoney-monorepo/branches/dev/protection
+gh api repos/robotmoney/robotmoney-monorepo/branches/dev/protection
 ```
 
 Apply protection (adjust the JSON to the agreed policy):
 
 ```bash
-gh api -X PUT repos/lucky-tensor/robotmoney-monorepo/branches/dev/protection \
+gh api -X PUT repos/robotmoney/robotmoney-monorepo/branches/dev/protection \
   --input - <<'JSON'
 {
   "required_status_checks": null,
@@ -77,7 +77,7 @@ repeat the `PUT` for `main`.
 **Verify.**
 
 ```bash
-gh api repos/lucky-tensor/robotmoney-monorepo/branches/dev/protection \
+gh api repos/robotmoney/robotmoney-monorepo/branches/dev/protection \
   --jq '.required_pull_request_reviews
         | select(.required_approving_review_count >= 2
                  and .require_code_owner_reviews == true)'
@@ -92,73 +92,101 @@ A non-empty result confirms the gate is in place.
 **What.** Deploy `PortfolioRouter`, `RouterGovernance`, and `TimelockController`
 to **Base mainnet (chain `8453`)**, record their addresses in
 the run's deploy manifests (`deployments/<chain>/`), then hand the privileged
-roles to the `TimelockController`. `DeployTimelock.s.sol` hands over:
+roles to the `TimelockController`.
 
-- `ADMIN_ROLE` on the Gateway, VaultRegistry, PortfolioRouter,
-  RouterGovernance, and every vault in `VAULT_ADDRESSES`.
-  The basket vaults (rmPROTO, rmAGENT, rmRWA) are in that list alongside rmUSDC.
-  The deployer's vault `EMERGENCY_ROLE` moves to the independent
-  `EMERGENCY_ADDRESS` key.
-- `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` on the Gateway.
-- `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` on the IC policy
-  (`InvestmentCommitteePolicy`, `IC_POLICY_ADDRESS`), revoked from the deployer.
-  The gateway's own `ADMIN_ROLE` on the IC policy is left in place.
+The vaults system's handover covers its eight contracts (`docs/architecture.md`
+§4.5). `DeployTimelock.s.sol` hands over:
+
+- `ADMIN_ROLE` on VaultRegistry, PortfolioRouter, RouterGovernance, and every
+  vault in `VAULT_ADDRESSES`. The basket vaults (rmPROTO, rmAGENT, rmRWA) are
+  in that list alongside rmUSDC. The deployer's vault `EMERGENCY_ROLE` moves
+  to the independent `EMERGENCY_ADDRESS` key.
 - `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` on the consensus receipt
   (`ConsensusRecommendationReceipt`, `CONSENSUS_RECEIPT_ADDRESS`), revoked from
-  the address named by `RECEIPT_ADMIN_ADDRESS`.
-- Ownership of every gateway agent in `AGENT_ADDRESSES`.
+  the address named by `RECEIPT_ADMIN_ADDRESS`. `ADMIN_ROLE` administers
+  `RECEIPT_SUBMITTER_ROLE`, so after handover a submitter grant goes
+  Safe -> Timelock -> receipt.
 
-`IC_POLICY_ADDRESS`, `CONSENSUS_RECEIPT_ADDRESS` and `RECEIPT_ADMIN_ADDRESS` are
-required on every chain. The script reverts when one is unset.
+The script's inputs, on every chain (it reverts when one is unset):
+
+- Target: `CONSENSUS_RECEIPT_ADDRESS` and `RECEIPT_ADMIN_ADDRESS` (from
+  `receipt.json`), with the vault, registry, router and governance addresses.
+  There is no on-chain committee contract to hand over.
+- Deployed release (v0.5.0): the same, plus `GATEWAY_ADDRESS`,
+  `IC_POLICY_ADDRESS` and `AGENT_ADDRESSES` (the CLI sets it to `none`).
+
+The gateway belongs to the rmpc gateway system. Its handover is part of its
+own release. Who governs it is open (`docs/architecture.md` §10).
+
+> **Deployed release (v0.5.0).** Today's `DeployTimelock` still hands over the
+> gateway in the same run, requires `IC_POLICY_ADDRESS`, and hands over the
+> retired IC policy. It also requires an `AGENT_ADDRESSES` list and moves
+> each listed agent to the timelock with `transferAgentOwnership`. The
+> design has no agent transfer (owner decision 2026-10-20). Step 2 below
+> describes that tooling. The differences are
+> recorded in `docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-system-split.md`
+> and `docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md`.
 
 **Why.** Architecture §8 requires that `ADMIN_ROLE` on all protocol contracts be
 held by the deployed `TimelockController` in production — no EOA may hold
-`ADMIN_ROLE` directly. §10 resolves this as required before mainnet scale, and
-§4.2 flags PortfolioRouter mainnet onboarding as remaining work. Routing admin
+`ADMIN_ROLE` directly (the timelock rule is §4.5). Routing admin
 through the timelock makes multisig quorum and the time-delay window
 contract-enforced rather than operational convention.
 
 **Manual steps.**
 
-1. Deploy the router stack using the existing script
-   `contracts/script/DeployPortfolioRouter.s.sol` against the Base mainnet RPC,
-   broadcasting with the production deployer key.
-2. Deploy and migrate using `contracts/script/DeployTimelock.s.sol`, which deploys
+1. Run the publish-contracts CLI, the only deploy driver
+   (`docs/operations/contract-release-runbooks.md` §4, the stage table). Its
+   `router` stage runs `DeployPortfolioRouter.s.sol` and its `governance`
+   stage runs `DeployRouterGovernance.s.sol`. Never run a forge script by
+   hand against 8453: the CLI checks the nonce, the frozen counts and the
+   release tag before each stage.
+2. The CLI's `timelock` stage runs `contracts/script/DeployTimelock.s.sol`, which deploys
    the `TimelockController` and performs the per-contract `ADMIN_ROLE` transfer
-   with role-acceptance verification. Set `AGENT_ADDRESSES` to every gateway
-   agent the deployer still owns, comma-separated, or to `none` when it owns
-   none; the script reverts before broadcasting when the variable is unset or
-   empty. It hands each listed agent to the timelock with
-   `transferAgentOwnership` (issue #1476). The gateway cannot enumerate an
-   owner's agents, so derive the list from its logs: every `AgentAuthorized`
-   log whose second topic is the deployer, plus every
-   `AgentOwnershipTransferred` log whose third topic is the deployer, keeping
-   only the agents whose `agentOwner(agent)` is still the deployer (the
-   commands below do exactly this). The gateway stage's deploy agent is among them unless it was
-   already revoked or handed over.
+   with role-acceptance verification. There is no agent handover: the deploy
+   owns no agent, agents belong to depositors, and an agent's owner never
+   changes (owner decision 2026-10-20). The handover moves roles only.
 
-   ```bash
-   cast logs --rpc-url "$BASE_RPC" --address "$GATEWAY_ADDRESS" --from-block "$GATEWAY_DEPLOY_BLOCK" \
-     'AgentAuthorized(address indexed agent, address indexed owner, uint64 validUntil, uint256 maxPerPayment, uint256 maxPerWindow, address shareReceiver)' \
-     '' "$DEPLOYER"
-   cast logs --rpc-url "$BASE_RPC" --address "$GATEWAY_ADDRESS" --from-block "$GATEWAY_DEPLOY_BLOCK" \
-     'AgentOwnershipTransferred(address indexed agent, address indexed previousOwner, address indexed newOwner)' \
-     '' '' "$DEPLOYER"
-   # for each agent (topic 1) in either list; keep it when this prints $DEPLOYER:
-   cast call "$GATEWAY_ADDRESS" 'agentOwner(address)(address)' "$AGENT" --rpc-url "$BASE_RPC"
-   ```
+   > **Deployed release (v0.5.0) sub-procedure.** On release v0.5.0 the script
+   > also hands deploy-owned agents to the timelock. Set `AGENT_ADDRESSES` to
+   > every gateway agent the deployer still owns, comma-separated, or to
+   > `none` when it owns none; the script reverts before broadcasting when the
+   > variable is unset or empty. It hands each listed agent to the timelock
+   > with `transferAgentOwnership` (issue #1476). The gateway cannot enumerate
+   > an owner's agents, so derive the list from its logs: every
+   > `AgentAuthorized` log whose second topic is the deployer, plus every
+   > `AgentOwnershipTransferred` log whose third topic is the deployer, keeping
+   > only the agents whose `agentOwner(agent)` is still the deployer (the
+   > commands below do exactly this). The gateway stage's deploy agent is
+   > among them unless it was already revoked or handed over.
+   >
+   > ```bash
+   > cast logs --rpc-url "$BASE_RPC" --address "$GATEWAY_ADDRESS" --from-block "$GATEWAY_DEPLOY_BLOCK" \
+   >   'AgentAuthorized(address indexed agent, address indexed owner, uint64 validUntil, uint256 maxPerPayment, uint256 maxPerWindow, address shareReceiver)' \
+   >   '' "$DEPLOYER"
+   > cast logs --rpc-url "$BASE_RPC" --address "$GATEWAY_ADDRESS" --from-block "$GATEWAY_DEPLOY_BLOCK" \
+   >   'AgentOwnershipTransferred(address indexed agent, address indexed previousOwner, address indexed newOwner)' \
+   >   '' '' "$DEPLOYER"
+   > # for each agent (topic 1) in either list; keep it when this prints $DEPLOYER:
+   > cast call "$GATEWAY_ADDRESS" 'agentOwner(address)(address)' "$AGENT" --rpc-url "$BASE_RPC"
+   > ```
+   >
+   > The script stops, before the manifest is written, if any listed agent is
+   > still deployer-owned after the handover, so a written manifest always
+   > records `roles.deployer_owns_a_listed_gateway_agent` as `false`. The
+   > check left to you is the list itself: `roles.gateway_agents_listed_count`
+   > in the manifest must equal the number of agents found above. None of
+   > this exists in the target.
+3. The stages write the manifests themselves: `router.json` (`router`),
+   `governance.json` (`governance`) and `timelock.json`
+   (`addresses.timelock`, `addresses.safe`, `addresses.consensus_receipt`),
+   under `deployments/<chain>/` or `PUBLISH_MANIFEST_DIR`
+   (`docs/development/stage-deployment.md`, the overlay key table). Nothing
+   is typed by hand.
 
-   The script stops, before the manifest is written, if any listed agent is
-   still deployer-owned after the handover, so a written manifest always
-   records `roles.deployer_owns_a_listed_gateway_agent` as `false`. The check
-   left to you is the list itself: `roles.gateway_agents_listed_count` in the
-   manifest must equal the number of agents found above.
-3. Record the resulting `portfolio_router`, `router_governance`, and
-   `timelock_controller` addresses in the run's deploy manifests (`deployments/<chain>/`).
-
-**Verify.** For each of the ten protocol contracts of `docs/architecture.md`
-§4.5 (rmUSDC and each basket vault, the gateway, registry, router,
-governance, the IC policy and the consensus receipt), confirm the timelock holds `ADMIN_ROLE` and no
+**Verify.** For each of the eight vaults-system contracts of `docs/architecture.md`
+§4.5 (rmUSDC and each basket vault, the registry, router, governance and the
+consensus receipt), confirm the timelock holds `ADMIN_ROLE` and no
 EOA does:
 
 ```bash
@@ -167,11 +195,17 @@ cast call "$CONTRACT" "hasRole(bytes32,address)(bool)" \
   --rpc-url "$BASE_RPC"   # expect: true
 ```
 
-Also confirm the run's merged deploy manifest carries the three new addresses:
+Deployed release (v0.5.0): also check `RobotMoneyGateway` and
+`InvestmentCommitteePolicy` with the same call. The governance check
+keeps its three literals: `ConsensusRecommendationReceipt`,
+`RECEIPT_SUBMITTER_ROLE` and the basket vaults.
+
+Also confirm the stage manifests carry the three addresses:
 
 ```bash
-jq 'has("portfolio_router") and has("router_governance") and has("timelock_controller")' \
-  deployments/<chain>/<merged manifest>.json   # expect: true
+jq 'has("router")' deployments/<chain>/router.json           # expect: true
+jq 'has("governance")' deployments/<chain>/governance.json   # expect: true
+jq '.addresses | has("timelock")' deployments/<chain>/timelock.json   # expect: true
 ```
 
 **If verify (stage 12) or the postflight fails.** The publish-contracts CLI

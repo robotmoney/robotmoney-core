@@ -61,7 +61,28 @@
         └────────────────────────────────────────────────────────────────┘
 ```
 
-**Allocation flow**: Humans and agents deposit USDC either directly to a vault (RobotMoneyVault or a BasketVault) or through PortfolioRouter, which splits the deposit across multiple vaults by the router weight vector. VaultRegistry provides the single source of truth for vault discovery and router eligibility. RouterGovernance holds `WEIGHT_SETTER_ROLE` on the router and applies the weights the Safe schedules through the timelock from a consensus receipt.
+**Allocation flow**: Human wallets deposit USDC either directly to a vault (RobotMoneyVault or a BasketVault) or through PortfolioRouter, which splits the deposit across multiple vaults by the router weight vector. Agents reach the same public surfaces through the rmpc gateway system (§1.1). VaultRegistry provides the single source of truth for vault discovery and router eligibility. RouterGovernance holds `WEIGHT_SETTER_ROLE` on the router and applies the weights the Safe schedules through the timelock from a consensus receipt.
+
+### 1.1 Two systems: the vaults system and the rmpc gateway system
+
+Owner decision, 2026-10-19. The contracts form two separate systems. Each is deployed in its own run and tested on its own.
+
+**Vaults system** (the treasury product):
+- The Robot Money vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), their adapters and libraries, and the rmAGENT price recorder.
+- VaultRegistry, PortfolioRouter and RouterGovernance.
+- The rebalancing signal: ConsensusRecommendationReceipt, the register of consensus receipts. It is the only rebalancing signal the Safe may cite. The vector the Safe schedules through `applyReceipt` is the input; the chain cannot parse the payload, so readers compare the applied vector to the payload (owner decision 2026-10-20). A submitter holding `RECEIPT_SUBMITTER_ROLE`, granted by `ADMIN_ROLE` (the Safe through the timelock), records a receipt with `recordReceipt(receiptId, payloadDigest, payloadUri)`. The Safe applies a receipt with `RouterGovernance.applyReceipt` through the timelock. The Safe can also set default weights directly (`setDefaultWeights`).
+- Governance: the Safe multisig through the TimelockController.
+- Users: human wallets deposit into a vault or the router directly. The receipt submitter records receipts on the receipt contract directly, not through the gateway.
+- Deployed by the rehearsal deploy runbook (`docs/runbooks/contract-qa/`).
+
+**rmpc gateway system** (`rmpc` and the gateway it needs, owner decision 2026-10-19):
+- RobotMoneyGateway and the `rmpc` client (Rust payment client). `rmpc` is an agentic cryptographic signer for end users. Its uses are off-chain (signing, keystores, the committee-identity Ed25519 signer, config export, reads). Its one on-chain write is an agent deposit into an allowed vault.
+- The gateway holds the depositor's authorization and policy (`commitAuthorization`/`revealAuthorization`, `setPolicy`, `revokeAgent`). The share receiver is always the owner, and an agent's owner never changes. It answers whether an agent may deposit, how much, until when, for which depositor and share receiver, into which allowed vault. It then forwards the permitted deposit to that vault. It has no withdrawal path and no router path.
+- It is a client of the vaults system. It calls the same public vault deposit surface a human wallet uses.
+- Deployed in its own run after the vaults system. It reads the vaults system's addresses for its allowed vaults. It has its own runbook and CI.
+- Who governs the gateway is an open question for its own release.
+
+**Dependency rule.** The gateway depends on the vaults system. The vaults system has no dependency on the gateway. No vaults-system contract names the gateway, takes it as a constructor or initializer argument, or accepts writes only from it. Rebalancing works with no gateway deployed.
 
 ---
 
@@ -115,8 +136,8 @@
 
 **Notes:**
 - RobotMoneyVault and its adapters are direct (non-proxy) deployments on mainnet. CompoundV3Adapter was compiled with `viaIR: true`; the others were not. Every address in this section is a direct deployment and cannot be upgraded in place.
-- From issue 1808 the source deploys every core contract (rmUSDC, the three basket vaults, VaultRegistry, PortfolioRouter, RobotMoneyGateway, InvestmentCommitteePolicy, ConsensusRecommendationReceipt, RouterGovernance) behind its own ERC-1967 proxy ([ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md)). No proxied deployment is on 8453 yet. When one is, this section lists the proxy address (the address users and clients call), the implementation address and code hash, the upgrade timelock and the freeze state, and keeps the direct addresses above as the legacy deployment.
-- VaultRegistry, PortfolioRouter, RouterGovernance, and basket vaults are deployed to Base mainnet by the publish-contracts CLI (`publish-contracts/`). The demo deploy path is retired.
+- From issue 1808 the source deploys every core contract (the vaults system: rmUSDC, the three basket vaults, VaultRegistry, PortfolioRouter, ConsensusRecommendationReceipt, RouterGovernance; the rmpc gateway system: RobotMoneyGateway; §1.1) behind its own ERC-1967 proxy ([ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md)). No proxied deployment is on 8453 yet. When one is, this section lists the proxy address (the address users and clients call), the implementation address and code hash, the upgrade timelock and the freeze state, and keeps the direct addresses above as the legacy deployment.
+- VaultRegistry, PortfolioRouter, RouterGovernance, and basket vaults are deployed to Base mainnet by the publish-contracts CLI (`publish-contracts/`). The demo deploy path is retired. The gateway is deployed in its own later run (§1.1).
 - Basket vault mainnet addresses are intentionally excluded here (out of scope); they will be added once they reach production status and mainnet deployment.
 
 ---
@@ -305,14 +326,14 @@ Owner decision 2026-10-05: withdrawals are never frozen. A pause stops new depos
 | `paused()` | `depositsPaused()` | vaults and gateway (view) | v1 keeps `paused()` and also has `depositsPaused()` |
 | `PAUSER_ROLE` | `DEPOSIT_PAUSER_ROLE` (`keccak256("DEPOSIT_PAUSER_ROLE")`, a new hash) | gateway. The env var `PAUSER_ADDRESS` keeps its name and receives this role. | not a v1 vault name |
 | `Paused(address)` / `Unpaused(address)`, `DepositsPausedChanged(bool)`, `DepositsPausedSet(bool)` | `DepositsPaused(address indexed)` / `DepositsUnpaused(address indexed)` | vaults and gateway (events) | v1 keeps `DepositsPausedChanged` |
-| `EnforcedPause()`, vault error `DepositsPaused()`, gateway `PausedError()` | `DepositsArePaused()` | `deposit`, `mint`, `depositTo` while paused | v1 keeps error `DepositsPaused()` |
+| `EnforcedPause()`, vault error `DepositsPaused()`, gateway `PausedError()` | `DepositsArePaused()` | `deposit`, `mint` while paused | v1 keeps error `DepositsPaused()` |
 | gateway `NotPaused()` | `DepositsNotPaused()` | gateway `unpauseDeposits()` when not paused | not a v1 vault name |
 | `ExpectedPause()` | removed | BasketVault no longer inherits OZ Pausable | not a v1 vault name |
 | `withdrawalsPaused`, `WithdrawalsPaused()`, `WithdrawalsPausedChanged`, `setWithdrawalsPaused` | deleted | no current vault has a withdrawal pause | v1 keeps `withdrawalsPaused()` |
 | `VaultStatus.Paused` | `VaultStatus.DepositsPaused` (ordinal 1, unchanged) | `VaultRegistry` | not a v1 vault name |
 | `VaultPausedForRedeem` | removed | `PortfolioRouter.redeemFor` redeems from a vault in every status | not a v1 vault name |
 
-Gateway `withdraw` and `withdrawFromRouter` do not read the pause. Emergency levers (`emergencyWithdraw`, `emergencyWithdrawAdapter`, `forceRemoveAdapter`, `emergencyUnwind`, `shutdownVault`) set a deposit halt or move funds to idle. They never block an exit.
+Emergency levers (`emergencyWithdraw`, `emergencyWithdrawAdapter`, `forceRemoveAdapter`, `emergencyUnwind`, `shutdownVault`) set a deposit halt or move funds to idle. They never block an exit.
 
 **The v1 exception.** The deployed v1 RobotMoneyVault (`0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd`, Base mainnet) keeps its old code and the old names. Its v1 `pause()` also freezes withdrawals (it sets v1 `withdrawalsPaused`). Never call `pause()` on v1. The v1 vault has `paused()`, `depositsPaused()` and `withdrawalsPaused()`. Clients read `depositsPaused()`, which exists on v1 and on every current contract.
 
@@ -333,7 +354,7 @@ Additional read-only helpers: `getAdapterDrift()`, `isRebalanceAvailable()`, `ne
 
 ### 3.11 Upgrade and freeze (every proxied contract)
 
-RobotMoneyVault, the three basket kinds, VaultRegistry, PortfolioRouter, RobotMoneyGateway, InvestmentCommitteePolicy, ConsensusRecommendationReceipt and RouterGovernance each inherit `GovernedUUPS` (`contracts/lib/GovernedUUPS.sol`) and run behind their own `ERC1967Proxy` ([ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md) §1). The upgrade and freeze rules live once, in the linked `GovernedUpgrade` library, which runs by DELEGATECALL in the proxy's storage (ERC-7201 namespace `robotmoney.storage.GovernedUUPS`). The storage-layout gate (`scripts/ci/check-core-storage-layout.sh`, ADR-0014 §5) pins each contract's layout. The surface is the same on all ten:
+RobotMoneyVault, the three basket kinds, VaultRegistry, PortfolioRouter, ConsensusRecommendationReceipt and RouterGovernance (the vaults system), and RobotMoneyGateway (the rmpc gateway system, §1.1), each inherit `GovernedUUPS` (`contracts/lib/GovernedUUPS.sol`) and run behind their own `ERC1967Proxy` ([ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md) §1). The upgrade and freeze rules live once, in the linked `GovernedUpgrade` library, which runs by DELEGATECALL in the proxy's storage (ERC-7201 namespace `robotmoney.storage.GovernedUUPS`). The storage-layout gate (`scripts/ci/check-core-storage-layout.sh`, ADR-0014 §5) pins each contract's layout. The surface is the same on all nine:
 
 | Function | Caller | Notes |
 |---|---|---|
@@ -344,7 +365,9 @@ RobotMoneyVault, the three basket kinds, VaultRegistry, PortfolioRouter, RobotMo
 | `freezeUpgrades(address expectedImplementation, bytes32 expectedCodeHash)` | upgrade timelock only | Sets the frozen flag forever, disables every later initializer and reinitializer, and emits `UpgradesFrozen(proxy, implementation, codeHash)`. Reverts `FreezeTargetMismatch(live, liveCodeHash)` unless the live implementation and its runtime code hash equal the arguments, so a freeze queued before an intervening upgrade cannot lock in the other version, and `UpgradesAreFrozen()` when already frozen. Scheduled through the Safe and the timelock (`docs/operations/contract-release-runbooks.md` §4.12). |
 | `proxiableUUID()` | view | UUPS: the ERC-1967 implementation slot. Reverts when called on anything but the implementation itself. |
 
-A freeze never pauses or alters `redeem`, `withdraw`, `redeemInKind` or the gateway withdraw paths (ADR-0014 §4; the freeze invariants in `smart-contract-invariants.md`).
+A freeze never pauses or alters `redeem`, `withdraw` or `redeemInKind` (ADR-0014 §4; the freeze invariants in `smart-contract-invariants.md`).
+
+**Retired storage slots.** Proxy layouts are append-only, so storage that lost its use stays in place under its original label and type. It is `internal`, never read and never written. `RobotMoneyGateway` keeps `icPolicy` (typed by an empty `IInvestmentCommitteePolicy` interface that exists only for this slot), `consensusReceipt` and `routerContract` (slot 2). The `AgentPolicy` struct keeps its withdraw fields (`assetRecipient`, `maxWithdrawPerPayment`, `maxWithdrawPerWindow`, `allowedSourceVaults`) as retired, unused members (owner decision 2026-10-20). The policy validator rejects any non-zero retired withdraw field: `assetRecipient`, `maxWithdrawPerPayment` and `maxWithdrawPerWindow` must be zero, `allowedSourceVaults` must be empty. No client reads the retired getters. `ConsensusRecommendationReceipt` keeps `gateway` and `icPolicy`. The layout snapshots for both contracts stay unchanged.
 
 ---
 
@@ -565,10 +588,10 @@ Access model: `ADMIN_ROLE` is self-administered (its own role-admin). The deploy
 
 ### 9.1.1 Purpose and deposit flow
 
-`PortfolioRouter` is the outer allocation contract. It accepts USDC deposits and routes them proportionally across multiple active Robot Money vaults by admin-set or governance-voted weights. Depositors receive vault receipts directly.
+`PortfolioRouter` is the outer allocation contract. It accepts USDC deposits and routes them proportionally across multiple active Robot Money vaults by default weights or by the weights of an applied consensus receipt. Depositors receive vault receipts directly.
 
 **Deposit mechanics**: A user calls `deposit(uint256 amount, uint256[] minSharesPerLeg[])`. The router:
-1. Reads the active weight vector (voted weights if active; otherwise default weights).
+1. Reads the active weight vector (the applied receipt's weights if `votedWeightsActive`; otherwise default weights).
 2. Marks each leg available or skipped (`_availabilityAndAmounts` / `_isDepositable`): a leg is available only when its registry status is `Active` and it is router-eligible.
 3. Splits the full amount across the available legs only, pro rata by bps: `legAmount[i] = amount × weight[i] / availableBps`, where `availableBps` is the sum of the available legs' bps. The rounding remainder goes to the last available leg WITH NON-ZERO BPS, so it never lands on a 0 bps leg. Skipped legs get 0.
 4. Calls `vault.deposit(legAmount[i], depositor)` for each available leg whose `legAmount` is non-zero (`_executeLeg`). A leg whose computed amount is 0 (a 0 bps weight, or a small weight that rounds to 0 on a tiny deposit) is skipped like an unavailable leg: no approval, no vault call, no event (issue 1746). Without this, one Active, eligible 0 bps leg such as rmAGENT (whose `deposit(0)` reverts) would revert the whole router deposit over the 9500/500/0/0 launch vector. `previewDeposit` reports such a leg as available with `legAmount` 0 and `estShares` 0.
@@ -651,11 +674,11 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 - Controls router weights only; cannot govern vault internals, agent permissions, or protocol admin operations.
 - Exposes the resulting weights for rmpc and dapp reads.
 - `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE` (both self-administered) are held by the timelock after stage 11; the deployer holds nothing.
-- `RouterGovernance` holds router `ADMIN_ROLE`, router `WEIGHT_SETTER_ROLE` and the receipt register's `ADMIN_ROLE`, so it can release a receipt in the same call that applies it.
+- `RouterGovernance` holds router `ADMIN_ROLE`, router `WEIGHT_SETTER_ROLE` and a narrow release role on the receipt register (`RECEIPT_RELEASER_ROLE` or equivalent), so it can release a receipt in the same call that applies it. The receipt's `ADMIN_ROLE` is held by the timelock alone, which alone grants or revokes `RECEIPT_SUBMITTER_ROLE` (owner decision 2026-10-20; the deployed release v0.5.0 grants `RouterGovernance` the receipt `ADMIN_ROLE` instead).
 
 ### 9.2.2 Applying a receipt
 
-1. **Record**: the committee submitter records the consensus receipt through the gateway (`ConsensusRecommendationReceipt.recordReceipt`).
+1. **Record**: the receipt submitter records the consensus receipt directly with `ConsensusRecommendationReceipt.recordReceipt`. The call reverts `SubmitterNotAllowlisted()` unless the caller holds `RECEIPT_SUBMITTER_ROLE`, and the stored submitter is the caller. No gateway takes part (§1.1).
 2. **Schedule**: the Safe schedules one timelock call: `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)` with the receipt's weight vector. The govern row checks before sending that the receipt is recorded, its digest equals `keccak256` of the payload, it is not yet released, the bps sum to 10000 and the vault list equals the registry's router-eligible list in order.
 3. **Delay**: the timelock delay elapses (172800 s on 8453).
 4. **Execute**: the Safe executes the call. `applyReceipt` checks that the receipt is recorded, not released and that `payloadDigest` equals the stored digest. It then calls `releaseReceipt(receiptId)` and `PortfolioRouter.setWeights(vaults, bps)` and emits `ReceiptApplied`. Release and weights land in one call; partial state is impossible.
@@ -679,6 +702,7 @@ Errors: `ZeroAddress` (a zero constructor argument), `ReceiptNotRecorded(receipt
 - **One path to weights**: only the holder of `WEIGHT_SETTER_ROLE` can call `PortfolioRouter.setWeights`, and only the timelock can reach `RouterGovernance.applyReceipt` and its admin calls.
 - **Atomic rebalance**: a receipt's release and its weights are one call.
 - **Timelock delay enforcement**: no weight change lands before the timelock delay elapses.
+- **No gateway dependency**: recording a receipt, applying it and setting default weights need no gateway deployed (§1.1).
 
 ---
 

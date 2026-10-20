@@ -10,6 +10,12 @@ description: >
 
 # DEPRECATED — `robotmoney-committee` is now `robotmoney-swarm`
 
+> **Owner decisions 2026-10-19 and 2026-10-20 (noted 2026-10-20).** The tables below
+> document today's binary. These parts of it are deprecated: `committee vote-submit`, `committee check-agent`, `receipt submit` and the Investment Committee policy, in the `robotmoney-swarm` skill this stub points to.
+> The only on-chain write `rmpc` keeps is `rmpc deposit` into an allowed vault.
+> Consensus receipts go on-chain only through the submitter Safe (the
+> publish-contracts `record-receipt` row), never through `rmpc`. Details: `docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md` and `docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md`.
+
 **This file is a compatibility stub. It contains no instructions to follow.**
 
 The allocation-signalling agent skill was renamed when the product surface became the

@@ -8,6 +8,13 @@ test harness that validates the complete Robot Money service graph: the
 Twin chain (a pinned lazy anvil fork of real Base), deployed contracts, explorer indexer and API, and dapp running
 together as a single orchestrated stack.
 
+> **System split (owner decision, 2026-10-19).** The vaults system and the
+> rmpc gateway system are separate systems (`docs/architecture.md` §1).
+> This fixture deploys both on one stack, as the deployed
+> release does. The system split review
+> records the differences (`docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
+
+
 ---
 
 ## The `smoke-test` crate
@@ -230,7 +237,7 @@ passphrase in a 0600 file, never an argument), funds them, and calls the one
 runbook, "publish contracts", with `--chain 918453 --rpc <twin rpc> --sheet
 <stage sheet> --signer keystore --environment stage --core-sha <sha>`. The
 addresses come from the manifests the driver writes (`core.json`, `registry.json`,
-`router.json`, `governance.json`, `ic-policy.json`, `timelock.json`, `safe.json`,
+`router.json`, `governance.json`, `receipt.json`, `timelock.json`, `safe.json`,
 `libraries.json`, one `vault-<key>.json` per extra vault) and are passed to the
 remaining services as environment variables. See
 `docs/development/stage-deployment.md`.
@@ -323,10 +330,11 @@ skipped on every suite 10 run. The required-coverage reporter now also fails a
 full run that skipped any test, so no test can sit skipped in suite 10.
 
 The seeding uses the mainnet authorities, with no test-only admin grant and no
-mock Safe. `committeeRegister(agent, "smoke-test-receipt-agent")` needs the
-gateway's `ADMIN_ROLE`, held by the timelock after handover, so it is a Safe ->
-Timelock call (`Fixture::timelock_call`). The harness agent key (`AGENT_ROLE`
-plus the `COMMITTEE_AGENT_ROLE` that registration grants) records `receipt-a`
+mock Safe. `grantRole(RECEIPT_SUBMITTER_ROLE, submitter)` on the receipt
+contract needs its `ADMIN_ROLE`, held by the timelock after handover, so it is
+a Safe -> Timelock call (`Fixture::timelock_call`). The harness submitter key
+(holding `RECEIPT_SUBMITTER_ROLE`) records `receipt-a` directly on the receipt
+contract
 with the keccak256 of its served bytes and `receipt-b` with a deliberately
 wrong digest. `receipt-a` is then released by a Twin-only Safe -> Timelock
 call (`Fixture::timelock_call`, the real Safe and timelock). The govern row

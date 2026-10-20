@@ -45,12 +45,12 @@ issues #654, #661, #675, and #695.
 - `chain_head_block` (on `/health`, `/v1/vaults` and `/v1/stats`) is the head the indexer last saw. `chain_head_block - block_number` is the lag (about 5 when healthy, because the indexer waits 5 confirmations). It is `null` until a tick has read a head.
 - Chain and vault scope (QA plan X7, DI-9). `GET /v1/vault/snapshot/latest` requires `?contract=0x…` (the vault, the same parameter `/v1/vault/snapshots` takes) and returns that vault's newest snapshot on the served chain. Without the parameter it answers 400, a malformed address 400, and a vault with no snapshot 404. It used to return the newest row of the whole table, so with several vaults it answered whichever vault was read last. `GET /v1/chains/:chain_id/contracts` answers 404 for any chain other than the one the service serves (`EXPLORER_API_CHAIN_ID`); it used to list another chain's rows from a shared database. `GET /v1/vault/snapshots` returns the served chain's rows only and answers 404 for a `chain_id` query that names another chain; without one it used to return every chain's rows mixed (security round 1). Tested by `endpoints::latest_snapshot_is_chain_and_vault_scoped`, `endpoints::list_contracts_serves_only_the_configured_chain` and `endpoints::vault_snapshots_are_scoped_to_the_served_chain`.
 - Exclusion claims (QA plan X7, issue 1820). When a `RobotMoneyVault` excludes a funded adapter, its `ExclusionLedger` opens a record with a snapshot of the vault's shares. USDC later recovered from the adapter goes to the record, not to the vault, and belongs pro rata to the holders at the snapshot, including holders who have since exited. `GET /v1/accounts/:address/exclusion-claims` lists, per record the address held shares at, `vault`, `exclusion_ledger`, `exclusion_id`, `adapter`, `adapter_index`, `opened_block`, `snapshot_supply`, `balance_at` (the holder's shares at the snapshot), `recovered_usdc`, `claimed_usdc` (paid to this holder), `claimable_usdc` and `finalized` / `finalize_reason` (`restored`, `removed` or `force_removed`; a closed record stays claimable), plus `total_claimable_usdc`. `claimable_usdc` is `floor(recovered_usdc * balance_at / snapshot_supply) - claimed_usdc`, never below 0, the ledger's own formula and rounding. The indexer reads each vault's ledger address from the vault's own `exclusionLedger()` once, at the first block of the range it indexes (a newly registered vault at its registration block), and stores it in `vault_exclusion_ledgers` (migration 0028): every vault is a proxy whose initializer creates the ledger, so no address derived from the vault is the ledger (security round 1). It reads the getter again at the block of each `Upgraded` or `Initialized` event of the vault, so a reinitializer that a later timelock operation runs is followed too. A new answer is stored as of that block and its logs are fetched from there, and the old ledger stays watched (security rounds 2 and 3). Reading at the indexed block lets a rebuild from the deploy floor learn every ledger a vault named. That needs an RPC that serves old state: a node that does not is read at the safe head, which names only the newest ledger, so there the old ledger stays watched only for an indexer that was live before the move (security round 3). It accepts the ledger's four events only from a stored ledger, stores them, and reads `balanceAt(holder, id)` from the chain for every address whose latest deposit-or-withdrawal position in the vault before the snapshot's block holds shares, for every address with a deposit or withdrawal in that block (a holder who exits later in the record's own block keeps its claim, security round 3), and for any other address when it first claims. The snapshot reads run in a pass with a 10 s budget per tick that goes on from where it stopped on the next tick (`exclusion_snapshot_progress`, migration 0029), so a vault with many dust holders delays the explorer's copy and never stalls the tick (security round 2). A holder who only received shares by a plain transfer and has not claimed is not listed, nor is one whose followed position reads zero while it still holds transferred shares; the ledger's `claimable(id, holder)` is the authority. Tested by `endpoints::account_exclusion_claims_are_pro_rata_to_the_snapshot`, `vault_detail::exclusion_record_events_store_each_snapshot_holders_balance`, `vault_detail::exclusion_ledger_is_set_once_from_the_factory_and_read_from_the_vault`, `vault_detail::a_vault_upgrade_that_moves_its_ledger_keeps_both_ledgers_indexed`, `vault_detail::a_reinitializer_run_after_its_upgrade_moves_the_ledger_and_is_indexed`, `vault_detail::a_rebuilt_index_learns_the_ledger_a_vault_moved_away_from`, `vault_detail::a_node_without_old_state_reads_the_ledger_at_the_safe_head`, `vault_detail::exclusion_snapshot_balances_are_read_by_a_budgeted_pass`, `vault_detail::a_holder_who_exits_in_the_records_own_block_keeps_its_snapshot_balance` and, on the Twin chain, `fork_indexer::exclusion_record_of_a_proxy_vault_is_indexed_at_its_factory_ledger`.
-- Reorgs and the registries (QA plan X7, DI-8). `/v1/committee/agents` and `/v1/vaults` follow a reorg like every event list. A reorg that orphans an `AgentRevoked` makes the member active again, one that orphans a re-registration brings back the registration before it, and a member or a vault that only orphaned blocks registered disappears until the canonical chain registers it again. Tested by `reorg_cursor_vault_status::reorged_agent_revoke_is_undone` and `reorg_cursor_vault_status::reorged_vault_registration_is_undone`.
+- Reorgs and the registry (QA plan X7, DI-8). `/v1/vaults` follows a reorg like every event list. A vault that only orphaned blocks registered disappears until the canonical chain registers it again. Tested by `reorg_cursor_vault_status::reorged_vault_registration_is_undone`.
 - Halt visibility (QA plan X5, DI-5). `/health` also reports `lag_blocks` (`chain_head_block - last_indexed_block`, `null` while either is `null`) and `last_run_error` (the `indexer_runs.error` of the newest finished run, `null` when it succeeded). It also reports `since_success_secs`, the age of the newest successful run on the database clock (`null` until there is one). `status` is `"degraded"` while `last_run_error` is set or `since_success_secs` is over 300 (the watchdog's default `max_silence_secs`), and `"ok"` otherwise; the HTTP status stays 200 so readiness probes are unaffected. A stopped indexer writes no run, so its verdict and its lag freeze at healthy values and only the age shows it (security round 1). A tick that reads the head and then fails still records that head, so a wedged indexer shows a growing `lag_blocks` and the error it repeats, instead of `ok` and a frozen lag of 5. Tested by `progress_and_admin::health_exposes_the_newest_run_error_and_the_head_lag` and `progress_and_admin::health_degrades_when_the_last_good_run_is_older_than_the_silence_budget`.
 - `GET /v1/vaults` rows carry `deposits_paused`: the vault's `depositsPaused()` at its latest snapshot, `null` when it has none (read that as unknown, never as open). `status` is the registry lifecycle status and does not follow `pauseDeposits()`.
 - There is no `/v1/governance/proposals` route (QA plan C1, issue 1698). RouterGovernance voting was deleted, so the indexer no longer reads its proposal, vote or execution events, and migration 0027 dropped `governance_proposals` and `governance_votes`. `/v1/governance/proposals` and `/v1/governance/proposals/:id` answer 404. The account history has no `governance_vote` kind. Tested by `endpoints::governance_proposals_routes_are_removed` and `migrations::migration_0024_drops_governance_voting_tables_and_history_rows`.
 - `GET /v1/governance/admin-events` lists, newest first (at most 500), the events of the Timelock (`CallScheduled`, `CallExecuted`, `Cancelled`, `MinDelayChange`) and of the Safe (`ExecutionSuccess`, `ExecutionFailure`, `AddedOwner`, `RemovedOwner`, `ChangedThreshold`) when the indexer is given `INDEXER_TIMELOCK` and `INDEXER_SAFE`. Each entry has `block_number`, `log_index`, `tx_hash`, `contract`, `contract_kind` (`timelock` or `safe`), `event_name`, `op_id` (timelock operation id or Safe transaction hash) and `detail` (the decoded arguments). Both contracts are listed by `/v1/chains/:chain_id/contracts` with kinds `timelock` and `safe`.
-- Proxy upgrade and freeze events (issue 1810): every proxied core contract the indexer watches (the gateway, the vaults, the registry, the router, RouterGovernance, the IC policy and the receipt register) emits ERC-1967 `Upgraded(implementation)` and `UpgradesFrozen(proxy, implementation, codeHash)`. They are listed by `GET /v1/governance/admin-events` with `contract_kind` `proxy`; `detail` holds `implementation` and, for a freeze, `code_hash`. The Timelock and the Safe are not Robot Money proxies, so the same topics from them are not recorded. The registry's proxy events are indexed whether or not `INDEXER_MULTI_VAULT_EVENTS` is on (its other events stay behind the flag). On startup the indexer backfills both topics for every watched proxy, including registry-discovered vaults, from the deploy floor to its cursor, idempotently (issue 1840). The backfill scans one slice (at most 25 `eth_getLogs` requests) per good tick from a checkpoint saved in `proxy_backfill_progress` (migration 0020), so live ingestion keeps moving and a restart resumes the pass (issue 1856). `/health` reports that row as `proxy_backfill` (`null` before the first attempt): `state` is `running` (with `next_block` and `target_block`), `done`, `refused` (the floor-to-cursor range needs more than 10000 requests; `detail` says to set `INDEXER_START_BLOCK`) or `no_cursor` (nothing indexed yet). `refused` and `no_cursor` are retried every tick and mean the upgrade history below the cursor is not indexed yet. A pass never scans above the current cursor: after a reorg rollback it stops at the new cursor, because live ingestion re-indexes everything above it. A pass resumed after a restart keeps its saved floor, so lowering `INDEXER_START_BLOCK` takes effect at the pass after the running one. `/health` reports `proxy_backfill: null` when the database has no migration 0020 yet. A row whose transaction created that proxy (the receipt's `contractAddress` is the proxy) carries `"deployment": true` in `detail`; the watchdog pages every other proxy row.
+- Proxy upgrade and freeze events (issue 1810): every proxied core contract the indexer watches (the gateway, the vaults, the registry, the router, RouterGovernance and the receipt register) emits ERC-1967 `Upgraded(implementation)` and `UpgradesFrozen(proxy, implementation, codeHash)`. They are listed by `GET /v1/governance/admin-events` with `contract_kind` `proxy`; `detail` holds `implementation` and, for a freeze, `code_hash`. The Timelock and the Safe are not Robot Money proxies, so the same topics from them are not recorded. The registry's proxy events are indexed whether or not `INDEXER_MULTI_VAULT_EVENTS` is on (its other events stay behind the flag). On startup the indexer backfills both topics for every watched proxy, including registry-discovered vaults, from the deploy floor to its cursor, idempotently (issue 1840). The backfill scans one slice (at most 25 `eth_getLogs` requests) per good tick from a checkpoint saved in `proxy_backfill_progress` (migration 0020), so live ingestion keeps moving and a restart resumes the pass (issue 1856). `/health` reports that row as `proxy_backfill` (`null` before the first attempt): `state` is `running` (with `next_block` and `target_block`), `done`, `refused` (the floor-to-cursor range needs more than 10000 requests; `detail` says to set `INDEXER_START_BLOCK`) or `no_cursor` (nothing indexed yet). `refused` and `no_cursor` are retried every tick and mean the upgrade history below the cursor is not indexed yet. A pass never scans above the current cursor: after a reorg rollback it stops at the new cursor, because live ingestion re-indexes everything above it. A pass resumed after a restart keeps its saved floor, so lowering `INDEXER_START_BLOCK` takes effect at the pass after the running one. `/health` reports `proxy_backfill: null` when the database has no migration 0020 yet. A row whose transaction created that proxy (the receipt's `contractAddress` is the proxy) carries `"deployment": true` in `detail`; the watchdog pages every other proxy row.
 - `GET /v1/chains/:chain_id/contracts` gives each contract `implementation` (from its newest indexed `Upgraded`, else from its `UpgradesFrozen`, else null), `upgrade_state` and `frozen_at_block` (issue 1810). `upgrade_state` is `frozen` once an `UpgradesFrozen` is indexed (permanent), `upgradeable` when an `Upgraded` is indexed and no freeze, and `unknown` when no upgrade event was indexed: a direct deployment, a non-core contract, or a proxy deployed before the indexer's first block. This is disclosure only. Signing clients (`rmpc`, the dapp) read the implementation slot and `upgradesFrozen()` from the chain and never trust the index.
 
 ---
@@ -117,7 +117,7 @@ internal client field name appears on the wire.
 
 ---
 
-## Planned endpoints (stubs — not yet implemented)
+## Account policy endpoint
 
 ### `GET /v1/accounts/:address/policies`
 
@@ -126,6 +126,12 @@ internal client field name appears on the wire.
 > **Prerequisites:** Issue #366 (ABI drift fix for `AgentAuthorized` — adds
 > `address indexed owner` field so the indexer knows which depositor owns an agent).
 
+**Status at `48923e37` (2026-10-20):** implemented with latest state per
+agent address, as shown below. The target specified by architecture §5.2
+and the explorer-schema ADR §3.4 retains separate registrations of the same
+address. That migration remains open as RS-1019-18; this response does not
+yet expose a registration identity.
+
 **Request:**
 ```
 GET /v1/accounts/{address}/policies
@@ -133,10 +139,11 @@ GET /v1/accounts/{address}/policies
 
 Path parameter `address`: 0x-prefixed Ethereum address (20 bytes hex).
 
-**Response (200 OK):**
+**Current response (200 OK):**
 ```json
-[
-  {
+{
+  "address": "0x{address}",
+  "policies": [{
     "agent":                  "0xabcdef...",
     "owner":                  "0x{address}",
     "revoked":                false,
@@ -144,29 +151,40 @@ Path parameter `address`: 0x-prefixed Ethereum address (20 bytes hex).
     "max_per_payment":        "1000000000000000000",
     "max_per_window":         "5000000000000000000",
     "window_usage_to_date":   "250000000000000000",
-    "share_receiver":         "0xabcdef...",
-    "tx_hash":                "0x...",
-    "block_number":           12345678,
-    "indexed_at":             "2026-06-07T00:00:00Z"
-  }
-]
+    "share_receiver":         "0x{address}",
+    "tx_hash":                "0x..."
+  }],
+  "block_number": 12345678,
+  "indexed_at": "2026-06-07T00:00:00Z"
+}
 ```
 
-Returns an empty array (not 404) when the owner has no policies.
+Returns `"policies": []` (not 404) when the owner has no matching policies.
 
 All `uint256` fields are decimal strings (NUMERIC(78,0) wire format).
 `valid_until` is a Unix timestamp seconds (i64). `indexed_at` is ISO-8601 UTC.
 
-**DB query target:**
+**Current DB projection (simplified from `routes.rs:get_account_policies`):**
 ```sql
-SELECT DISTINCT ON (chain_id, agent)
-    chain_id, block_number, log_index, tx_hash, agent, owner,
-    revoked, valid_until, max_per_payment, max_per_window,
-    window_usage_to_date, share_receiver, indexed_at
-FROM agent_policies
-WHERE chain_id = $1 AND owner = $2
-ORDER BY chain_id, agent, block_number DESC
+SELECT * FROM (
+    SELECT DISTINCT ON (chain_id, agent) *
+    FROM agent_policies
+    WHERE chain_id = $1
+    ORDER BY chain_id, agent, block_number DESC, log_index DESC
+) AS latest
+WHERE owner = $2
+ORDER BY agent
 ```
+
+**Registration migration target.** Keep event idempotency keys, derive a
+registration identity from its starting event, and project latest policy
+state within each registration before applying account/history filters.
+Earlier registrations remain associated with their original owner after a
+revoke or expiry and re-registration. `setPolicy` updates the same
+registration. Update the schema, response and consumers together; the
+current address-only projection above is not the target for registration
+history. See `docs/technical/explorer-schema-decisions.md` §3.4 and
+RS-1019-18 for replay and same-block ordering requirements.
 
 **Migration dependency:** `0007_account_history_and_vault_detail_stubs.sql`
 adds `owner` and `window_usage_to_date` columns to `agent_policies`.

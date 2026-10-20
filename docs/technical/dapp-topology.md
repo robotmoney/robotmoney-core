@@ -10,6 +10,30 @@ user's own wallet and the chain?
 
 ---
 
+## Which system each surface touches
+
+Robot Money is two systems, deployed and tested apart. The dapp is a
+client of both, and it treats them as two separate sets of contracts
+(owner decision 2026-10-19).
+
+- **Vaults system.** The vaults, `VaultRegistry`, `PortfolioRouter` and
+  `RouterGovernance`. The dapp reads them, and a human wallet writes to
+  them directly: approve, deposit, redeem. Their pins are the vault and
+  router pins below (`VITE_VAULT_EXPECTED_*`, `VITE_ROUTER_EXPECTED_*`).
+- **rmpc gateway system.** `RobotMoneyGateway`. The dapp reads it, and
+  the depositor's wallet writes to it: agent registration, policy,
+  revoke. A connected agent wallet has one write, its own self-revoke
+  (`revokeAgent` from the agent key, owner decision 2026-10-20). Pause is
+  `DEPOSIT_PAUSER_ROLE`, not the depositor. Its pins are the gateway pins below
+  (`VITE_GATEWAY_EXPECTED_*`).
+
+The gateway depends on the vaults system. The vaults system never
+depends on the gateway. So a vaults-system write is gated by the
+vaults-system pins of the contract it reaches. "Admin writes" in this
+document means writes to the gateway.
+
+---
+
 ## Load-bearing insight
 
 When the dapp calls `signer.sendTransaction(...)` via the injected
@@ -129,8 +153,8 @@ false for a while.
   dapp image carries no attestation yet, and `/config.json` is served by
   the dapp's own origin rather than by the node the threat model
   distrusts), so this is pre-emptive rather than a fix for a live hole.
-- **Cost, stated plainly.** The gateway's `usdcToken`, `vaultContract`
-  and `routerContract` are `immutable`, so they live in its runtime
+- **Cost, stated plainly.** The gateway's `usdcToken` and `vaultContract`
+  are `immutable` (`routerContract` is a retired storage slot), so they live in its runtime
   bytecode and the hash is deployment-specific. There is therefore no
   correct hash for an environment-agnostic image to pin: a bundle that
   is to enable admin writes must be built for its deployment. The

@@ -28,6 +28,16 @@ YYYYMMDD-code-review-<vendor>.md
   `…-internal-claude-scan-verification.md` (a verification of an external scan),
   `…-internal-claude-gap-analysis.md`.
 
+## Grouping related reviews
+
+Reviews written for one piece of work sit together in one subfolder of this
+directory, named `YYYYMMDD-<topic>/`. Each file keeps the filename pattern
+above. `scripts/check-audit-ledger.sh` reads reviews in this directory and in
+its immediate subfolders. A keyed review's `REVIEW_KEYS` entry is its path
+relative to this directory, for example
+`20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md`.
+Older reviews stay where they are.
+
 ## The `.json` companion and CI enforcement (issue #1240)
 
 `YYYYMMDD-code-review-<vendor>.json` is an optional machine-readable

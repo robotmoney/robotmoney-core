@@ -33,10 +33,11 @@ stronger immutability than a frozen UUPS proxy can instead use a separately
 reviewed direct-deployment architecture; that is a distinct release decision,
 not an interchangeable flag on the current constructors.
 
-Candidates for per-instance proxies are `RobotMoneyVault`, the three concrete
-`BasketVault` subclasses, `VaultRegistry`, `PortfolioRouter`,
-`RobotMoneyGateway`, `RouterGovernance`, `InvestmentCommitteePolicy`, and
-`ConsensusRecommendationReceipt`. Inventory each deployment stage before
+Candidates for per-instance proxies are, in the vaults system,
+`RobotMoneyVault`, the three concrete `BasketVault` subclasses,
+`VaultRegistry`, `PortfolioRouter`, `RouterGovernance`, and
+`ConsensusRecommendationReceipt`, and, in the
+rmpc gateway system, `RobotMoneyGateway`. Inventory each deployment stage before
 implementation; make the decision per contract and record exclusions in the
 release manifest. The strategy and swap adapters, linked libraries,
 `UniswapV4PriceRecorder`, and `TimelockController` remain direct
@@ -45,6 +46,19 @@ and verified SafeL2 singleton topology; it is not converted to a Robot Money
 UUPS proxy. Adapter address and runtime-codehash checks and the
 no-proxy scan remain mandatory. An adapter upgrade means deploying a new
 adapter and approving its address/hash through the existing governance path.
+
+## Two systems
+
+Owner decision, 2026-10-19. The proxied core is two separate systems. The
+vaults system (the vaults, VaultRegistry, PortfolioRouter, RouterGovernance
+and ConsensusRecommendationReceipt) is released,
+rehearsed and frozen in its own run. The rmpc gateway system
+(RobotMoneyGateway and `rmpc`) is released in its own later run and tested on
+its own. The gateway is a client of the vaults system. The vaults system has
+no dependency on the gateway: no vaults-system contract names the gateway,
+takes it as an initializer argument, or accepts writes only from it. Who
+governs the gateway, and so who upgrades and freezes its proxy, is an open
+question for its own release.
 
 ## Mechanism and authority
 
@@ -58,6 +72,13 @@ constants. Audit inheritance order, namespaced storage, and every external
 library link before choosing final storage layout. Pin and validate that layout
 for every upgrade; append-only layout discipline alone is insufficient when
 inheritance or library linking changes.
+
+Storage that loses its use is retired in place, never removed or reused. It
+keeps its label and type, becomes `internal`, and is never read or written
+again. `RobotMoneyGateway` keeps the retired slots `icPolicy` and
+`consensusReceipt`. An empty `IInvestmentCommitteePolicy` interface stays only
+to type the `icPolicy` slot. `ConsensusRecommendationReceipt` keeps the retired
+slots `gateway` and `icPolicy`. Their layout snapshots do not change.
 
 The proxy's upgrade authority is the existing Safe-controlled
 `TimelockController`, never the deployer, an EOA, `EMERGENCY_ROLE`, or
@@ -164,7 +185,8 @@ Implemented by issue 1809. The operator procedure is
   against the mode, and the layout identifier (keccak256 of the committed
   snapshot and the OpenZeppelin pins). It fails a missed freeze deadline.
 - **Claim.** Core immutability is claimed only when the full proxied core set
-  of the stage table reads frozen on chain and verifies; a frozen-mode release
+  of the stage table reads frozen on chain and verifies (after the split, the
+  set of the system being released); a frozen-mode release
   fails verification otherwise. The record lists the parameters a freeze leaves
   governed and the upstream dependencies it does not control.
 - **Evidence.** `deployments/<chain>/upgradeability.json` becomes the evidence
@@ -184,11 +206,15 @@ Implemented by issue 1811. The CI job `core-stages-twin-upgrade-lifecycle`
 SHA on the Twin chain with `UPGRADE_MODE=upgradeable`
 (`deployments/twin-918453/upgrade-rehearsal.env`). Through the real Safe and
 timelock it upgrades the gateway proxy to a second copy of the release
-implementation, queues a second upgrade, freezes all ten core proxies in one
+implementation, queues a second upgrade, freezes all nine core proxies in one
 batch bound to the reviewed `upgradeability.json`, and shows the queued upgrade
-is refused after the freeze with `UpgradesAreFrozen`. Verify then claims core
+is refused after the freeze with `UpgradesAreFrozen` (deployed release,
+v0.5.0). The target rehearsal covers the eight vaults-system proxies; the
+gateway proxy is upgraded and frozen in its own rehearsal, under its own
+upgrade timelock. Verify then claims core
 immutability. `evidence-check --upgrade-lifecycle` reads the record back from
-the chain. The release runbook (4.1 and 4.12) makes this job and an external
+the chain. Each system's own rehearsal covers its own proxies (see "Two
+systems"). The release runbook (4.1 and 4.12) makes this job and an external
 security review gates of a final mainnet release, and says why a rollback is not
 assumed safe after a state migration. The rehearsal runs the operator rows
 `govern --row upgrade-proxy` and `govern --row freeze-upgrades` (issues 1842 and
@@ -197,12 +223,13 @@ library directly.
 
 ## Signing clients and disclosure (stage 3)
 
-Implemented by issue 1810. Every Robot Money write a client signs goes to the
-gateway proxy, so the gateway is the proxy the signing clients verify.
+Implemented by issue 1810. `rmpc`'s one on-chain write, the agent deposit
+into a vault, goes to the gateway proxy, so the gateway is the proxy the
+signing clients verify. This section is about the rmpc gateway system. The
+submitter Safe records receipts with publish-contracts `record-receipt`, not
+with `rmpc`.
 
-**Verification before signing.** `rmpc` (`deposit`, `withdraw`,
-`withdraw-router`, the committee's signed tilt `committee vote-submit`, and
-`receipt submit`) and the dapp's
+**Verification before signing.** `rmpc deposit` and the dapp's
 admin writes pin a block, then check at that block:
 
 1. `keccak256(eth_getCode(gateway))` equals the proxy pin
@@ -230,8 +257,7 @@ authorizes signing.
 gateway call carries an implementation version, and adding one is a Solidity
 change (stage 1 scope). The clients therefore bind what they sign:
 
-- Every `rmpc` gateway write (`deposit`, `withdraw`, `withdraw-router`,
-  `committee vote-submit` and `receipt submit`) re-reads the implementation at
+- `rmpc deposit` re-reads the implementation at
   `latest` after signing and before broadcast. A changed or unapproved
   implementation discards the signed transaction unsent
   (`ErrImplementationChanged`), so it can never execute (issue 1856,
@@ -241,11 +267,9 @@ change (stage 1 scope). The clients therefore bind what they sign:
   is reported as `ErrImplementationChanged` with the `tx_hash`, never as a
   success, and the replay-cache entry stays so the write is not re-sent
   blindly.
-- A signed `deposit`, `withdraw` or `withdraw-router` carries an on-chain
+- A signed `deposit` carries an on-chain
   `deadline` of at most `MAX_DEADLINE_SKEW` (600 s) ahead of the block time.
-  `committee vote-submit` and `receipt submit` carry no deadline, because the
-  gateway's vote and receipt ABI has none; the re-read before broadcast and the
-  receipt check cover them. An upgrade must wait the
+  An upgrade must wait the
   timelock's minimum delay after it is scheduled, which is far longer, and the
   `CallScheduled` operation is public for that whole time. A write signed before
   an upgrade can only execute after it inside that bound, and the receipt check

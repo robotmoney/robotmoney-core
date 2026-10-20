@@ -1,4 +1,5 @@
 # docs/runbooks/contract-qa/template.yaml: the general contract-release QA runbook.
+# Deployed release (v0.5.0) procedure on today's tooling; target changes are IC-1019 finding 13.
 #
 # Every step a contract release runs, in order: gate, publish, verify, govern, receipt, deposits, observability,
 # evidence, teardown (the Deploy 2 flow, on today's tooling). A release's own runbook is releases/<release>.yaml:
@@ -538,7 +539,7 @@ steps:
     receipts: []
     irreversible: false
 
-  # ── Phase 8, observability: what the stack shows must equal the chain. ──
+  # ── Phase 9, failure drills: the pause path and the recovery path run on real contracts. ──
   - id: "P9.01-pause-all"
     standing: ["4.5", "4.6"]
     description: "pause-all pauses deposits on all four vaults with the emergency key, reads each back and writes the rollout report; withdrawals stay open"
@@ -662,5 +663,3 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: "twin"
-
-  # ── Phase 0, gate: nothing is sent. The same checks the 8453 plan job and every broadcasting run repeat. ──

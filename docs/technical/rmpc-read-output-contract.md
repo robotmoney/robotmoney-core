@@ -18,6 +18,8 @@ Accepted. Authored 2026-05-06 against `Plan tracking issue #109` §9 on branch `
 
 The plan does not say which crate owns the envelope, what the partial-aggregation seam looks like, or how the "no JSON numbers for `u256`/`u128`" rule is enforced. Without a single anchored answer, each read-command batch (`get-vault`, `get-balance`, …) would re-implement the envelope locally and drift — exactly the failure mode §9 names ("must be enforced as one shared module before the read-command batches diverge").
 
+**Which system each read touches (owner decision 2026-10-19).** `rmpc` belongs to the rmpc gateway system, with `RobotMoneyGateway`. It is an agentic cryptographic signer for end users: its reads and signing are off-chain uses, and its one on-chain write is an agent deposit into an allowed vault through the gateway. That system is a client of the separate vaults system. `get-gateway`, `get-agent`, `get-roles` and `get-deposit` read the gateway. `get-vault`, `get-vaults`, `get-router`, `get-governance` and `get-timelock` read the vaults system's public surfaces, the same ones a human wallet reads. `get-balance` and `get-allowance` read the USDC token. The envelope is the same for every read, whichever system it touches. The vaults system never depends on `rmpc` or the gateway.
+
 The deferred existing `rmpc status` (issue #15) command predates §9 and emits a flatter shape with no envelope. It is **not** retrofit by this scout; migration is left as a follow-up.
 
 ## 3. Decisions
@@ -69,9 +71,11 @@ The deferred existing `rmpc status` (issue #15) command predates §9 and emits a
   coerce it to zero.
 - **Also applies to `get-agent`** (QA plan U6, finding DR-8). A failed
   `agents()` read renders every field it fills as `null`: `active`,
-  `valid_until`, `max_per_payment`, `max_per_window`, `share_receiver`,
-  `asset_recipient`, `max_withdraw_per_payment`, `max_withdraw_per_window` and
-  `withdrawals_enabled`. A failed allowance, block-timestamp or window-gross
+  `valid_until`, `max_per_payment`, `max_per_window` and `share_receiver`
+  (deployed release, v0.5.0, also: `asset_recipient`,
+  `max_withdraw_per_payment`, `max_withdraw_per_window` and
+  `withdrawals_enabled`; those fields are retired in the target, since the
+  gateway has no withdrawal path, owner decision 2026-10-19). A failed allowance, block-timestamp or window-gross
   read renders `share_allowance`, `window_id` or `window_gross` as `null`.
   Before U6 a failed `agents()` read printed `false` and `"0"`, which read as an
   inactive agent with withdrawals disabled. A `null` boolean is unknown, never
@@ -112,26 +116,44 @@ variant is a breaking change; see `docs/architecture.md` §7.2.
 | `ErrDepositCapExceeded` | `ErrDepositCapExceeded:` | `cap_exceeded` | preflight `maxPerPayment` / `maxPerWindow`; simulated `AmountExceedsPerPaymentCap` / `WindowCapExceeded` |
 | `ErrWithdrawCapExceeded` | `ErrWithdrawCapExceeded:` | `cap_exceeded` | preflight `maxWithdrawPerPayment` / `maxWithdrawPerWindow`; simulated `SharesExceedWithdrawPerPaymentCap` / `WithdrawWindowCapExceeded` |
 
+> **Retired in the target (owner decisions 2026-10-19 and 2026-10-20, noted 2026-10-20).** `ErrWithdrawCapExceeded`, `ErrMinAssetsPerLegRequired` and the router-leg preflight behind `ErrLegUnavailable` / `ErrSlippageBoundExceeded` belong to the deployed release (v0.5.0) and its withdraw, `withdraw-router` and router deposit commands. The target `rmpc` has one write, `deposit` into an allowed vault, so those variants and that preflight go with the retired commands. The rows stay here because today's binary still raises them.
+
 Before U6 none of the first four was raised anywhere, a cap breach printed
 `ErrConfig` and an expired policy printed `ErrAgentNotAuthorized` (finding
 DR-7). Two refusals that are not reason codes were added with them:
 `ErrAgentBindingMismatch` (the preflight's `agents(self).shareReceiver` or
 `agentOwner(self)` differs from the config's `share_receiver` / `agent_owner`,
-QA plan D2) and `ErrMinAssetsPerLegRequired` (`withdraw-router` without a
-floor).
+QA plan D2; `share_receiver` must equal `agent_owner`, or is derived from it,
+because the share receiver is always the owner, owner decision 2026-10-20) and `ErrMinAssetsPerLegRequired` (`withdraw-router` without a
+floor; retired in the target with `withdraw-router`, see the note above).
 
 QA plan P3 (issue 1810) added `ErrImplementationNotApproved`. Every write
-preflight and `rmpc agent-consent` read the gateway's ERC-1967
+preflight reads the gateway's ERC-1967
 implementation slot and that implementation's code at one block. They refuse
-unless its code hash is in the config's `gateway_implementation_hashes`. A
+unless its address matches `gateway_implementation` and its code hash
+matches `gateway_implementation_runtime_hash`. These are the gateway's
+approved address/hash pair, separate from the destination proxies'
+`proxy_implementation_hashes` allowlist. A
 proxy keeps its own code hash across an upgrade, so `ErrCodeHashMismatch`
 cannot see a new implementation. A failed read of either is a refusal, never
 "not a proxy". `rmpc get-gateway` adds `implementation`,
-`implementation_code_hash`, `configured_implementation_hashes`,
-`implementation_approved`, `implementation_version`, `upgrade_authority` and
+`implementation_code_hash`, `configured_implementation`,
+`configured_implementation_code_hash`, `upgrade_timelock` and
 `upgrades_frozen` to its `data`, all read at the envelope's block; a direct
-gateway reports `implementation: null`. The `checks` object of every write
-gains `gateway_implementation_approved` and `gateway_implementation`.
+gateway reports `implementation: null`. These names match `GatewayData` in
+`clients/rust-payment-client/src/commands/get_gateway.rs`; the former
+`configured_implementation_hashes`, `implementation_approved` and
+`upgrade_authority` names are not the current output contract.
+
+**Consent correction (2026-10-20).** The gateway uses an on-chain consent
+commitment and three-argument `revealAuthorization`, not an EIP-712
+consent signature. The former `rmpc agent-consent` and
+`implementation_version` descriptions belonged to the superseded QA design;
+the current gateway has no `implementationVersion()` getter. Follow
+architecture §5.2 and `docs/technical/dapp-credential-decisions.md` §3.3:
+agent consent first, then owner commit, then reveal within both expiries.
+This does not add a new rmpc transaction command; its target on-chain write
+remains the agent vault deposit.
 
 ### 5.0 Where the simulated names come from
 
@@ -169,6 +191,8 @@ ErrSlippageBoundExceeded: a router leg falls below the caller's per-leg minimum 
 ErrDepositCapExceeded: <amount and the cap it exceeds>
 ErrWithdrawCapExceeded: <shares and the cap it exceeds>
 ```
+
+(`ErrWithdrawCapExceeded` and the two router-leg variants are deployed-release only; see the retired note under the §5 table.)
 
 Every one of them is raised before the transaction is signed: by the
 preflight, or from the revert data of the pre-sign simulation (§5.0). A mined

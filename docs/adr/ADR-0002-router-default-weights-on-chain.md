@@ -1,6 +1,8 @@
 # ADR-0002: Router default weights live on-chain, not derived from the front-end
 
 - **Status:** Accepted. Router default weights live on chain. The Safe multisig, through the TimelockController, is the only body that changes router weights: `WEIGHT_SETTER_ROLE` applies the Investment Committee's consensus receipt in one timelock operation (govern row `apply-receipt`, core 1696). There is no voting by anyone. See [Launch default weights and who sets active weights](#amendment--2026-10-05-launch-default-weights-and-who-sets-active-weights).
+- **Amendment 2026-10-19:** `InvestmentCommitteePolicy` is deleted and the receipt register no longer binds the gateway (owner decision 2026-10-19). The redeploy cascades below that name the IC policy are history.
+- **Amendment 2026-10-19 (rmpc scope):** The gateway deposits only into vaults and has no router path (owner decision 2026-10-19), so replacing the router no longer cascades to the gateway. The cascades below that name the gateway are history.
 - **Date:** 2026-05-27 (amended 2026-10-05)
 - **Deciders:** Product owner (recorded reply 2026-05-27)
 - **Related:** `docs/development/open-questions.md` §3.9; `contracts/RouterGovernance.sol`, `contracts/PortfolioRouter.sol`; public allocation surface at `robotmoney.net/allocation`

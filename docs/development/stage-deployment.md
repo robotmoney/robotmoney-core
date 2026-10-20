@@ -4,6 +4,15 @@ Canonical plan: core issue 1499. Core issue 1488 (S9).
 
 Stage is the same deployment as mainnet. Only parameters differ. There is one runbook, "publish contracts" (the Bun TypeScript CLI in `publish-contracts/` in this repo, run as `bun publish-contracts/src/cli.ts`). It is the only deploy driver. Devops checks core out and runs the same CLI: core never depends on devops. It runs on the Twin chain (918453) and on Base mainnet (8453). A rehearsal and production differ only in the arguments given to it.
 
+> **System split (owner decision, 2026-10-19).** The vaults system and the
+> rmpc gateway system are separate systems (`docs/architecture.md` §1).
+> Deployed release (v0.5.0): the stage stack deploys and runs both in one
+> run, as the deployed release does. The target runs the vaults release
+> alone (`docs/operations/contract-release-runbooks.md` §4, the target delta
+> list). The system split review
+> records the differences (`docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-system-split.md`).
+
+
 ## What runs on stage
 
 Every rehearsal chain runs on the stage host `rm-core-stage-1`: the Twin fork, any anvil and any fork of Base. None runs on the operator machine. The operator machine holds the keys, drives a contract QA run over ssh and signs through an ssh tunnel to the stage fork (`docs/runbooks/contract-qa/README.md`, "Hosts").
@@ -20,7 +29,7 @@ Every stage service runs in a container (core 1549). `core-stack.ts` only calls 
    ```
 
    Publish contracts deploys all four vaults, creates the real Safe (Safe SDK, `@safe-global/protocol-kit`), hands over to the Safe and the timelock, and verifies. It refuses a checkout that is not the DEPLOY_SHA or has uncommitted changes, so the stage host checkout must be a normal clone (not a git worktree) at the ref.
-4. The job reads the manifests (`libs.json`, `recorder.json`, `vault.json`, `registry.json`, `router.json`, `gateway.json`, `ic-policy.json`, `governance.json`, `protocol-asset-vault.json`, `agent-token-vault.json`, `rwa-basket-vault.json`, `timelock.json`), writes the endpoint summary and the dapp compose environment (`dapp-env.json`) to the work directory, and **exits**. It owns nothing afterwards.
+4. The job reads the manifests (`libs.json`, `recorder.json`, `vault.json`, `registry.json`, `router.json`, `gateway.json`, `ic-policy.json` on the deployed release (v0.5.0; the target writes `receipt.json` instead), `governance.json`, `protocol-asset-vault.json`, `agent-token-vault.json`, `rwa-basket-vault.json`, `timelock.json`), writes the endpoint summary and the dapp compose environment (`dapp-env.json`) to the work directory, and **exits**. It owns nothing afterwards.
    The signer is the string publish contracts accepts, `keystore:PATH:PASSFILE`. Only paths are passed. The passphrase stays in its 0600 file.
 5. `chain up` starts the **dapp stack** from that environment: `docker-compose.dapp.yaml` plus `docker-compose.dapp.stage.yaml` (project `robotmoney-dapp`). The overlay joins the indexer to the chain network (it dials `twin-chain:8545`) and publishes no postgres host port. Ports (`18545`, `18546`, `5173`) and the public stage URLs are unchanged.
    `chain status` checks the stamp, that the chain container runs, `eth_chainId` on 18545, a healthy `robotmoney-dapp` container and the rmpc build commit. A stamp from the host-process era (it names a pid) reads as `not-booted`: run `chain down` and `chain up` once on the new ref. There is no data to migrate.
@@ -111,7 +120,6 @@ Deploy 2 is devops run 2 on Base 8453: release `release/v0.4.0-base.3-rehearsal`
   | `VITE_REGISTRY_ADDRESS`, `INDEXER_REGISTRY` | `registry.json` `registry` | `0x686EbEFda732DffA988253Ecf9c012946B8066A3` |
   | `INDEXER_ROUTER_GOVERNANCE` | `governance.json` `governance` | `0x59b593ab06bB5587534EfE255f6C614858b32754` |
   | `INDEXER_CONSENSUS_RECEIPT` | `timelock.json` `addresses.consensus_receipt` | `0xEfEe1c9881D1291460f72dA7000bA53e42eb36E2` |
-  | `INDEXER_INVESTMENT_COMMITTEE` | `timelock.json` `addresses.ic_policy` | `0x820A3874A8B44D7e1D4C67B3Bf5619CFAe06907e` |
   | `VITE_TIMELOCK_ADDRESS`, `INDEXER_TIMELOCK` | `timelock.json` `addresses.timelock` | `0xd65165AF0Fb4062ED0da5D119d4B56B92b15356b` |
   | `VITE_SAFE_ADDRESS`, `INDEXER_SAFE` | `timelock.json` `addresses.safe` | `0xdFDea0E1AdF55a9a938bD34ead7920175b47Cb4b` |
   | `INDEXER_START_BLOCK` | `--start-block` | `52484018` |
@@ -134,7 +142,7 @@ Deploy 2 is devops run 2 on Base 8453: release `release/v0.4.0-base.3-rehearsal`
 Stage has no second deployment path. These do not exist and a CI gate keeps them gone:
 
 - a stage ceremony shell and a stage deploy shell. Publish contracts deploys, hands over to the Safe and verifies.
-- a Rust harness deployment of core, registry, router, governance and the IC policy. The deploy job calls publish contracts.
+- a Rust harness deployment of core, registry, router, governance and the receipt. The deploy job calls publish contracts.
 - a stage service that runs as a host process, or any container that mounts the Docker socket. `scripts/ci/check-stage-containers.ts` (suite 28) keeps that true, with digest-pinned base images and `--locked` builds.
 - demo vaults, stub pools, demo depositor seeding and dapp faucet funding.
 - a deploy workflow. Deploys are the publish contracts runbook.
@@ -145,7 +153,7 @@ The stage verbs (chain boot and health, publish and governance calls, parity, th
 
 ## No voting
 
-There is no voting by anyone. The Safe, through the timelock, is the only body that changes contract configuration; router weights change only when it applies a consensus receipt (govern row `apply-receipt`, core 1696). `RouterGovernance` has no propose, vote or execute function (issue 1698). Its stage runs after ic-policy and takes only the admin, router and consensus receipt addresses. The sheet parser refuses the old voter, quorum, voting period and execution delay names. Agent registration and weights are govern rows executed through the real Safe and the timelock. Nothing sets them from a deployer key. `Fixture::set_voting_power` is gone. `Fixture::unpause_gateway`, `revoke_agent` and `reauthorize_agent` call govern rows. The Fusion acceptance release stage runs `core-stack governance apply --receipt-id ID --payload FILE` (govern row `apply-receipt`). `core-stack governance release` is refused with exit 64, because govern refuses row `release-receipt` since issue 1831 (issue 1849). No release keystore exists.
+There is no voting by anyone. The Safe, through the timelock, is the only body that changes contract configuration; router weights change only when it applies a consensus receipt (govern row `apply-receipt`, core 1696). `RouterGovernance` has no propose, vote or execute function (issue 1698). Its stage takes only the admin, router and consensus receipt addresses. Deployed release (v0.5.0): it runs after ic-policy. Target: it runs after the receipt stage. The sheet parser refuses the old voter, quorum, voting period and execution delay names. Agent registration and weights are govern rows executed through the real Safe and the timelock. Nothing sets them from a deployer key. `Fixture::set_voting_power` is gone. `Fixture::unpause_gateway`, `revoke_agent` and `reauthorize_agent` call govern rows. The Fusion acceptance release stage runs `core-stack governance apply --receipt-id ID --payload FILE` (govern row `apply-receipt`). `core-stack governance release` is refused with exit 64, because govern refuses row `release-receipt` since issue 1831 (issue 1849). No release keystore exists.
 
 ## Seed share receiver (verifier note for devops)
 
@@ -179,7 +187,7 @@ Every line above is required. No script has a default for it (`scripts/deploy/RE
 | Four vault manifests after a publish run | `core-stack publish run` (exit 66 on a short count) |
 | Verifier labels on stage equal the mainnet label set | `scripts/stage/parity.ts` runs `label-diff.ts` on the verifier output the Twin chain smoke job saved (`SMOKE_TEST_VERIFY_OUT`) |
 | Stage sheet versus production sheet differ only in parameter lines | `scripts/stage/parity.ts` runs `sheet-diff.ts` on the run sheet the smoke job saved (`SMOKE_TEST_SHEET_OUT`) |
-| Router, basket vault and timelock role proofs | Labels of the one verifier (`publish-contracts/src/verify`): `gateway: router() equals the deployed router`, `registry: router() equals the deployed router`, `vault[KEY]: a second setRegistry reverts`, the role matrix, the asset config and `vault[rmAGENT]: holds RM as its one asset` |
+| Router, basket vault and timelock role proofs | Labels of the one verifier (`publish-contracts/src/verify`): `gateway: router() equals the deployed router` (deployed release v0.5.0 only; the target gateway binds no router), `registry: router() equals the deployed router`, `vault[KEY]: a second setRegistry reverts`, the role matrix, the asset config and `vault[rmAGENT]: holds RM as its one asset` |
 | Every govern row has a tx hash and receipt status 1 | `scripts/stage/govern-rows.ts` |
 | Deleted paths stay deleted | `scripts/stage/check-deleted-stage-scripts.ts` |
 

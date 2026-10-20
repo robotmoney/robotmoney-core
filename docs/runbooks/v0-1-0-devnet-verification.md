@@ -1,5 +1,7 @@
 # v0.1.0 — Robot Money Devnet verification runbook
 
+> **Historical: v0.1.0 as shipped.** This runbook records the v0.1.0 ceremony, IC policy and gateway router path included. The current design has no IC policy and no gateway router path (owner decisions 2026-10-19 and 2026-10-20). Do not use it as a procedure.
+
 **Release identity:** `v0.1.0` (Robot Money Devnet, chain id `918453`) — the
 default target per [ADR-0013](../adr/ADR-0013-twin-devnet-over-base-sepolia-for-testnet-verification.md).
 

@@ -58,6 +58,14 @@ This ADR identifies every migration seam and extension point required to make
 the explorer aware of all registered vaults, Portfolio Router state, governance
 events, and account positions.
 
+**Two systems (owner decision 2026-10-19).** Everything this ADR adds reads the
+vaults system: the vaults, `VaultRegistry`, `PortfolioRouter`,
+`RouterGovernance`, and the consensus receipt contract that feeds
+rebalancing. The rmpc gateway system (`RobotMoneyGateway`) is a separate
+system with its own tables (`agent_deposits`, `agent_policies`). The gateway
+depends on the vaults system, never the reverse. So the vault, router and
+governance tables must fill with no gateway deployed.
+
 ---
 
 ## 3. Single-vault hardcoding audit

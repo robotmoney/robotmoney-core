@@ -1,5 +1,7 @@
 # Deposit gas floors (core 1777)
 
+> **Note 2026-10-19 (rmpc scope).** The `rmpc deposit --destination <router>` and gateway router floors below describe code that the design deprecates (owner decision 2026-10-19: `rmpc`'s only on-chain write is an agent deposit into a single vault through the gateway; the gateway has no withdrawal or Portfolio Router path, and `rmpc` has no `withdraw`, `withdraw-router` or `receipt submit`).
+
 Companion to `docs/technical/redeem-gas-1482.md`. That document explains why each entrypoint checks one gas floor at entry. This one lists the deposit floors that integrators and the dapp must meet.
 
 ## Minimums
@@ -23,7 +25,7 @@ The check reads `gasleft()` after the transaction's intrinsic cost and the code 
 ## Who must comply
 - **Dapp:** `clients/dapp/src/lib/depositGas.ts` sets the limit on every deposit write. Router deposits send `legs * 2,400,000 + 1,200,000` from the effective leg count (10,800,000 for 4 legs, 13,200,000 for 5). Vault deposits send 2,500,000. Unused gas is refunded.
 - **rmpc:** `rmpc deposit --destination <router>` reads `router.getEffectiveWeights()` and sends the gateway floor (400,000 + 2,550,000 per leg) plus 150,000. It refuses a `--gas-limit` below the floor with `ErrGasLimitBelowFloor` before signing. The vault path sends 3,000,000 (gateway floor 2,000,000).
-- **Gateway callers and other integrators:** the gateway has its own floors (`docs/technical/redeem-gas-1482.md`, Deposit paths). A direct call to the router or a vault must set `gas` explicitly. Do not rely on a wallet estimate, since it can land below the floor in another block state.
+- **Gateway callers and other integrators:** the gateway belongs to the rmpc gateway system, a client of the vaults system. It has its own, higher floors (`docs/technical/redeem-gas-1482.md`, Deposit paths). A direct call to the router or a vault must set `gas` explicitly. Do not rely on a wallet estimate, since it can land below the floor in another block state.
 
 ## Tests
 - **Fork** (`contracts/test/CoreStagesFork.t.sol`, job `forge-fork-vault-regressions`):

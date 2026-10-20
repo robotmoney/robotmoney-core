@@ -1,5 +1,7 @@
 # Redeem out-of-gas at the node estimate (core 1482)
 
+> **Note 2026-10-19 (rmpc scope).** The gateway `withdraw` and `withdrawFromRouter` measurements below describe code that the design deprecates (owner decision 2026-10-19: `rmpc`'s only on-chain write is an agent deposit into a single vault through the gateway; the gateway has no withdrawal or Portfolio Router path, and `rmpc` has no `withdraw`, `withdraw-router` or `receipt submit`).
+
 ## Status
 - Root cause: PROVEN on a Base mainnet fork (read-only RPC, in-process, no transaction sent).
 - The first guard (PR 1505) did not fix it. It changed the failure from an empty revert to a typed `InsufficientGas`, but the transaction still failed at the node estimate.
@@ -45,7 +47,7 @@ Router (`contracts/PortfolioRouter.sol`):
 - **Sizing:** each leg must hand its vault 1.6M after the 63/64 forward, which is about 1,625,400 at the call, plus the leg's registry and allowance reads. A real leg costs about 1.11M, so earlier legs leave slack for later ones.
 - **Per-leg check removed:** the check in `_redeemLeg` is gone.
 
-Gateway (`contracts/gateway/RobotMoneyGateway.sol`):
+Gateway (`contracts/gateway/RobotMoneyGateway.sol`). The gateway belongs to the rmpc gateway system, a client of the vaults system (owner decision 2026-10-19). Its floors sit on top of the vault and router floors above. The vault and router floors do not depend on it.
 - **`withdraw`:** checks `WITHDRAW_GAS_FLOOR` = 2,000,000 at entry, before the policy reads, window writes, payment id and share pull. The vault needs about 1,625,400 at the call, plus that prefix.
 - **`withdrawFromRouter`:** checks `ROUTER_WITHDRAW_BASE_GAS + legs * ROUTER_WITHDRAW_GAS_PER_LEG` (400,000 + legs * 1,850,000) at entry, after the array-length checks. Per leg, the router needs 1.7M after the 63/64 forward (about 1,727,000) plus the gateway's share pull, approvals and custody reads for that leg.
 - **Mid-path checks removed:** the checks before `vault.redeem` and `router.redeemFor` are gone.

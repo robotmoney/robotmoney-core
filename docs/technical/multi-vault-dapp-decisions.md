@@ -52,6 +52,15 @@ product:
   no voting (issue 1698). Router weights change only when the Safe applies a
   consensus receipt through the timelock.
 
+**Two systems (owner decision 2026-10-19).** The dapp reads two separate
+systems. The vaults system is the vaults, `VaultRegistry`,
+`PortfolioRouter` and `RouterGovernance`: all three layers read it, and the
+action layer writes to it directly from the human wallet. The rmpc gateway
+system is `RobotMoneyGateway`: the dapp reads it and writes agent
+registration and policy to it. The gateway depends on the vaults system,
+never the reverse. A multi-vault surface needs no gateway to work, so the
+registry and router seams below do not route through the gateway.
+
 Before any implementation issue begins, five questions must be resolved:
 
 1. **Shared data-fetching seam.** What prevents N+1 chain reads when multiple
@@ -235,6 +244,9 @@ goes through RPC per implementation-plan.md §12."
 
 **Live-chain reads (JSON-RPC, safety-critical, never substituted by explorer):**
 
+The `gateway.*` rows read the rmpc gateway system. Every other row reads the
+vaults system.
+
 | Data | Source | Used for |
 |---|---|---|
 | `gateway.depositsPaused()` | `useReadContract` | Block deposit signing while deposits are paused. A withdrawal is never blocked by it (core 1494). |
@@ -254,6 +266,9 @@ goes through RPC per implementation-plan.md §12."
 | Router weights `getEffectiveWeights()`, `getDefaultWeights()`, `votedWeightsActive()` | `useReadContract` | Current weights in the router view. There is no proposal read: issue 1698 deleted `getProposal` with the voting path (item 7 below) |
 
 **Explorer reads (HTTP API, display only, may be stale by one indexer tick):**
+
+The TVL and weight history rows come from the vaults system. The agent
+deposit history comes from gateway-system events.
 
 | Data | Explorer endpoint | Used for |
 |---|---|---|
