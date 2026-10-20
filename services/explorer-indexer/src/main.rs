@@ -66,12 +66,9 @@ struct Cli {
     #[arg(long, env = "INDEXER_RPC_LABEL", default_value = "unknown")]
     rpc_label: String,
 
-    /// Watched gateway address. Required unless `--migrate-only`.
-    #[arg(
-        long,
-        env = "INDEXER_GATEWAY",
-        required_unless_present = "migrate_only"
-    )]
+    /// Optional watched gateway address. The vaults system and the gateway system are indexed
+    /// independently: unset, a vaults-only run needs no gateway. A set but malformed value exits nonzero.
+    #[arg(long, env = "INDEXER_GATEWAY")]
     gateway: Option<String>,
 
     /// Watched vault address. Required unless `--migrate-only`.
@@ -99,14 +96,6 @@ struct Cli {
     /// deposit is processed.
     #[arg(long, env = "INDEXER_PORTFOLIO_ROUTER")]
     portfolio_router: Option<String>,
-
-    /// Optional InvestmentCommitteePolicy contract address.
-    /// When set, the indexer ingests AgentRegistered, AgentRevoked, and
-    /// VoteSubmitted events, performs memo keccak256 verification, and
-    /// writes to committee_agents, committee_votes, and regime_snapshots
-    /// tables (issue #1053).
-    #[arg(long, env = "INDEXER_INVESTMENT_COMMITTEE")]
-    investment_committee: Option<String>,
 
     /// Optional ConsensusRecommendationReceipt contract address.
     /// When set, the indexer ingests ReceiptRecorded and ReceiptReleased
@@ -234,16 +223,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
          starting indexer"
     );
 
-    // clap enforces these three via `required_unless_present = "migrate_only"`,
+    // clap enforces these two via `required_unless_present = "migrate_only"`,
     // so the `ok_or` arms are unreachable on the normal path; they exist so a
     // future CLI edit that drops the constraint fails with a message instead
     // of a panic.
     let rpc_url = cli
         .rpc_url
         .ok_or("--rpc-url (INDEXER_RPC_URL) is required unless --migrate-only")?;
-    let gateway = cli
-        .gateway
-        .ok_or("--gateway (INDEXER_GATEWAY) is required unless --migrate-only")?;
     let vault = cli
         .vault
         .ok_or("--vault (INDEXER_VAULT) is required unless --migrate-only")?;
@@ -276,14 +262,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|s| Address::from_str(s.trim_start_matches("0x")))
         .transpose()?;
 
-    let investment_committee = cli
-        .investment_committee
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| Address::from_str(s.trim_start_matches("0x")))
-        .transpose()?;
-
     let consensus_receipt = cli
         .consensus_receipt
         .as_deref()
@@ -299,12 +277,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         chain_id: cli.chain_id,
         chain_name: cli.chain_name,
         rpc_label: cli.rpc_label,
-        gateway: Address::from_str(gateway.trim_start_matches("0x"))?,
+        gateway: parse_optional_address(cli.gateway.as_deref())?,
         vault: Address::from_str(vault.trim_start_matches("0x"))?,
         registry,
         router_governance,
         portfolio_router,
-        investment_committee,
         consensus_receipt,
         timelock,
         safe,

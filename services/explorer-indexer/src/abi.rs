@@ -317,43 +317,6 @@ sol! {
         function vaultCount() external view returns (uint256);
     }
 
-    /// Event surface from `InvestmentCommitteePolicy`.
-    ///
-    /// Signatures match `contracts/gateway/InvestmentCommitteePolicy.sol` and
-    /// `contracts/gateway/interfaces/IInvestmentCommitteePolicy.sol` exactly.
-    /// See `docs/architecture.md §5.4` and issue #1053.
-    ///
-    /// Three events are indexed:
-    ///   AgentRegistered  — upserts committee_agents row.
-    ///   AgentRevoked     — sets committee_agents.active = false.
-    ///   VoteSubmitted    — stores commitment; memo hash-verification sets verified.
-    #[sol(abi)]
-    #[allow(missing_docs)]
-    interface IInvestmentCommitteePolicyEvents {
-        /// Emitted when ADMIN_ROLE registers a committee agent.
-        /// InvestmentCommitteePolicy.sol:104
-        event AgentRegistered(address indexed agent, string agentId);
-
-        /// Emitted when ADMIN_ROLE revokes a committee agent.
-        /// InvestmentCommitteePolicy.sol:107
-        event AgentRevoked(address indexed agent);
-
-        /// Emitted when an allowlisted agent submits a signed vote.
-        /// InvestmentCommitteePolicy.sol:110
-        /// Stance ABI-encodes as uint8: Overweight=0, Neutral=1, Underweight=2.
-        event VoteSubmitted(
-            uint256 indexed voteId,
-            address indexed agent,
-            address indexed vault,
-            uint8   stance,
-            uint16  targetWeightBps,
-            uint8   confidence,
-            string  rationaleUri,
-            bytes32 voteJsonHash,
-            uint64  timestamp
-        );
-    }
-
     /// Event surface from `ConsensusRecommendationReceipt`.
     ///
     /// Signatures match `contracts/gateway/ConsensusRecommendationReceipt.sol` and
@@ -540,16 +503,6 @@ pub struct Topics {
     pub vault_redeemed_in_kind: B256,
     /// RobotMoneyVault only.
     pub vault_adapter_force_removed: B256,
-    // InvestmentCommitteePolicy events — docs/architecture.md §5.4, issue #1053.
-    /// Emitted when ADMIN_ROLE registers a committee agent.
-    /// InvestmentCommitteePolicy.sol:104
-    pub ic_agent_registered: B256,
-    /// Emitted when ADMIN_ROLE revokes a committee agent.
-    /// InvestmentCommitteePolicy.sol:107
-    pub ic_agent_revoked: B256,
-    /// Emitted when an allowlisted agent submits a signed vote.
-    /// InvestmentCommitteePolicy.sol:110
-    pub ic_vote_submitted: B256,
     // ConsensusRecommendationReceipt events — docs/architecture.md §4.9, issue #1247.
     /// Emitted when a committee submitter records a receipt commitment.
     pub consensus_receipt_recorded: B256,
@@ -628,12 +581,6 @@ impl Topics {
             vault_restored: keccak256(b"Restored(uint256)"),
             vault_redeemed_in_kind: keccak256(b"RedeemedInKind(address,address,uint256)"),
             vault_adapter_force_removed: keccak256(b"AdapterForceRemoved(uint256,address,uint256)"),
-            // InvestmentCommitteePolicy — issue #1053.
-            ic_agent_registered: keccak256(b"AgentRegistered(address,string)"),
-            ic_agent_revoked: keccak256(b"AgentRevoked(address)"),
-            ic_vote_submitted: keccak256(
-                b"VoteSubmitted(uint256,address,address,uint8,uint16,uint8,string,bytes32,uint64)",
-            ),
             // ConsensusRecommendationReceipt — issue #1247.
             consensus_receipt_recorded: keccak256(
                 b"ReceiptRecorded(bytes32,address,uint256,bytes32,string,uint64)",
@@ -697,10 +644,6 @@ impl Topics {
             self.vault_restored,
             self.vault_redeemed_in_kind,
             self.vault_adapter_force_removed,
-            // InvestmentCommitteePolicy — issue #1053.
-            self.ic_agent_registered,
-            self.ic_agent_revoked,
-            self.ic_vote_submitted,
             // ConsensusRecommendationReceipt — issue #1247. A topic omitted from this
             // list is silently never fetched by `eth_getLogs`.
             self.consensus_receipt_recorded,
@@ -838,9 +781,7 @@ mod tests {
     /// topic-0, as `(event name, [(parameter name, indexed), ...])`.
     ///
     /// Topic-0 is the key because it is what the check table already carries
-    /// and because it disambiguates the two distinct `AgentRevoked` events
-    /// (`IGatewayEvents` and `IInvestmentCommitteePolicyEvents`) that share a
-    /// name but not a signature.
+    /// and because it disambiguates events that share a name but not a signature.
     fn sol_events_by_topic0() -> BTreeMap<B256, (String, Vec<(String, bool)>)> {
         let mut out: BTreeMap<B256, (String, Vec<(String, bool)>)> = BTreeMap::new();
         macro_rules! collect {
@@ -869,7 +810,6 @@ mod tests {
             IVaultEvents,
             IVaultRegistryEvents,
             IPortfolioRouterEvents,
-            IInvestmentCommitteePolicyEvents,
             IConsensusRecommendationReceiptEvents,
             IExclusionLedgerEvents,
             IGovernedUpgradeEvents,
@@ -1166,8 +1106,6 @@ mod tests {
                 "DefaultWeightsSet",
                 t.default_weights_set,
             ),
-            // The InvestmentCommitteePolicy rows were removed with the contract (issue 1888).
-            // Issue 1891 deletes the matching decoders.
             // ConsensusRecommendationReceipt — issue #1247.
             (
                 "ConsensusRecommendationReceipt.sol",
@@ -1432,19 +1370,6 @@ mod tests {
             t.vault_adapter_force_removed,
             IVaultEvents::AdapterForceRemoved::SIGNATURE_HASH
         );
-        // InvestmentCommitteePolicy — issue #1053.
-        assert_eq!(
-            t.ic_agent_registered,
-            IInvestmentCommitteePolicyEvents::AgentRegistered::SIGNATURE_HASH
-        );
-        assert_eq!(
-            t.ic_agent_revoked,
-            IInvestmentCommitteePolicyEvents::AgentRevoked::SIGNATURE_HASH
-        );
-        assert_eq!(
-            t.ic_vote_submitted,
-            IInvestmentCommitteePolicyEvents::VoteSubmitted::SIGNATURE_HASH
-        );
         // ConsensusRecommendationReceipt — issue #1247.
         assert_eq!(
             t.consensus_receipt_recorded,
@@ -1644,23 +1569,6 @@ mod tests {
                 "AdapterForceRemoved",
                 b"AdapterForceRemoved(uint256,address,uint256)",
                 IVaultEvents::AdapterForceRemoved::SIGNATURE_HASH,
-            ),
-            // InvestmentCommitteePolicy.sol:104,107,110 — issue #1053.
-            // Stance ABI-encodes as uint8.
-            (
-                "AgentRegistered",
-                b"AgentRegistered(address,string)",
-                IInvestmentCommitteePolicyEvents::AgentRegistered::SIGNATURE_HASH,
-            ),
-            (
-                "IC AgentRevoked",
-                b"AgentRevoked(address)",
-                IInvestmentCommitteePolicyEvents::AgentRevoked::SIGNATURE_HASH,
-            ),
-            (
-                "VoteSubmitted",
-                b"VoteSubmitted(uint256,address,address,uint8,uint16,uint8,string,bytes32,uint64)",
-                IInvestmentCommitteePolicyEvents::VoteSubmitted::SIGNATURE_HASH,
             ),
             // ConsensusRecommendationReceipt.sol — issue #1247, docs/architecture.md §4.9.
             // Exactly two events; neither carries a signature parameter.

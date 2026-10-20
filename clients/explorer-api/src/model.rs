@@ -194,6 +194,9 @@ pub struct Deposit {
     pub share_receiver: String,
     pub amount: String,
     pub indexed_at: DateTime<Utc>,
+    /// Id of the agent registration this deposit belongs to (`GET /v1/agents/:address/registrations`),
+    /// or null when the indexed history does not show one (issue 1891).
+    pub registration_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -644,21 +647,35 @@ pub struct AccountHistoryResponse {
 
 // ─── GET /v1/accounts/:address/policies ──────────────────────────────────────
 
-/// A single agent-policy entry as returned by GET /v1/accounts/:address/policies.
+/// One agent registration as returned by GET /v1/accounts/:address/policies and
+/// GET /v1/agents/:address/registrations (issue 1891, RS-1019-18).
 ///
-/// Represents the latest-state snapshot for one agent authorized by `owner`.
-/// `revoked = true` rows are tombstones; consumers should filter them when
-/// showing only active authorizations.
+/// Agent identity is (address, registration). The entry is the latest state of ONE registration, owned
+/// by `owner`: a later registration of the same address never replaces it.
 #[derive(Debug, Serialize)]
 pub struct AccountPolicy {
+    /// Deterministic id of the registration: `chain:gateway:block:log_index` of the event that started it.
+    /// Deposits carry the same id.
+    pub registration_id: String,
+    /// Gateway deployment that emitted the registration, or null when the indexed rows do not name one.
+    pub gateway: Option<String>,
     /// Agent address that was authorized.
     pub agent: String,
-    /// Owner (depositor) address that called gateway.authorizeAgent.
-    pub owner: String,
-    /// True when the latest event for this agent is an AgentRevoked tombstone.
+    /// Owner (depositor) address that registered the agent. Null when the indexed row does not name
+    /// one: nothing fabricates an owner.
+    pub owner: Option<String>,
+    /// True when the registration was closed by an AgentRevoked event.
     pub revoked: bool,
-    /// Block timestamp after which the authorization expires (Unix seconds).
-    /// Null for revoked tombstone rows.
+    /// `active`, `revoked` or `expired` (valid_until before the newest indexed block's timestamp).
+    pub status: String,
+    /// Block of the event that started the registration.
+    pub started_block: i64,
+    /// Block of the AgentRevoked event that closed it, when one did.
+    pub closed_block: Option<i64>,
+    /// Transaction of that AgentRevoked event.
+    pub closed_tx_hash: Option<String>,
+    /// Block timestamp after which the authorization expires (Unix seconds), from the registration's
+    /// newest authorization.
     pub valid_until: Option<i64>,
     /// Maximum USDC amount per single payment, decimal string.
     pub max_per_payment: Option<String>,
@@ -678,93 +695,19 @@ pub struct AccountPolicy {
 pub struct AccountPoliciesResponse {
     /// Queried owner address.
     pub address: String,
-    /// One entry per agent authorized by this owner (latest state per agent).
+    /// One entry per registration this account owns or owned (latest state per registration).
     pub policies: Vec<AccountPolicy>,
     #[serde(flatten)]
     pub freshness: Freshness,
 }
 
-// ─── Investment Committee (IC) models ────────────────────────────────────────
-// Canonical: docs/architecture.md §5.4 — issue #1053.
-
-/// A registered IC committee agent.
+/// Response envelope for GET /v1/agents/:address/registrations.
 #[derive(Debug, Serialize)]
-pub struct CommitteeAgent {
-    pub address: String,
-    pub agent_id: String,
-    pub active: bool,
-    pub registered_at: i64,
-    pub revoked_at: Option<i64>,
-}
-
-/// Response envelope for GET /v1/committee/agents.
-#[derive(Debug, Serialize)]
-pub struct CommitteeAgentsResponse {
-    pub agents: Vec<CommitteeAgent>,
-    #[serde(flatten)]
-    pub freshness: Freshness,
-}
-
-/// A single verified vote in an agent's track record.
-#[derive(Debug, Serialize)]
-pub struct CommitteeVoteEntry {
-    /// The InvestmentCommitteePolicy deployment that emitted `VoteSubmitted`,
-    /// 0x-prefixed hex. `vote_id` is an index into one deployment's votes, so
-    /// a redeployed policy reuses every id, and only this field tells two such
-    /// votes apart (DI-10, migration 0021).
-    pub contract_address: String,
-    pub vote_id: i64,
-    pub vault: String,
-    pub stance: i16,
-    pub target_weight_bps: i16,
-    pub confidence: i16,
-    pub rationale_uri: String,
-    pub verified: bool,
-    pub block_number: i64,
-    pub timestamp_secs: i64,
-}
-
-/// Response envelope for GET /v1/committee/agents/:address/track-record.
-#[derive(Debug, Serialize)]
-pub struct CommitteeTrackRecordResponse {
+pub struct AgentRegistrationsResponse {
+    /// Queried agent address.
     pub agent: String,
-    pub votes: Vec<CommitteeVoteEntry>,
-    #[serde(flatten)]
-    pub freshness: Freshness,
-}
-
-/// Per-vault tilt aggregate for GET /v1/committee/tilts. `vote_count` is the
-/// number of members counted: one latest, verified, fresh signal per active
-/// member (issue #1790), never the raw number of votes.
-#[derive(Debug, Serialize)]
-pub struct CommitteeTilt {
-    pub vault: String,
-    pub avg_weight_bps: String,
-    pub vote_count: i64,
-}
-
-/// Response envelope for GET /v1/committee/tilts.
-#[derive(Debug, Serialize)]
-pub struct CommitteeTiltsResponse {
-    pub tilts: Vec<CommitteeTilt>,
-    #[serde(flatten)]
-    pub freshness: Freshness,
-}
-
-/// A per-vault regime snapshot row.
-#[derive(Debug, Serialize)]
-pub struct RegimeSnapshot {
-    pub vault: String,
-    pub avg_weight_bps: String,
-    pub vote_count: i32,
-    pub block_number: i64,
-    pub indexed_at: DateTime<Utc>,
-}
-
-/// Response envelope for GET /v1/regime/feed.
-#[derive(Debug, Serialize)]
-pub struct RegimeFeedResponse {
-    pub snapshots: Vec<RegimeSnapshot>,
+    /// Every registration of the address, oldest first, whatever its status.
+    pub registrations: Vec<AccountPolicy>,
     #[serde(flatten)]
     pub freshness: Freshness,
 }
