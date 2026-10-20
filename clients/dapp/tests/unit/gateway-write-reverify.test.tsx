@@ -235,12 +235,13 @@ function scheduleInside(state: VerificationState, inner: Address) {
       <Probe />
     </GatewayWriteCheck>,
   );
-  write!.writeContract({
+  const variables = {
     address: TIMELOCK,
     abi: [],
     functionName: "schedule",
     args: [inner, 0n, "0x", "0x00", "0x00", 1n],
-  } as never);
+  };
+  write!.writeContract(variables as never);
 }
 
 /** Calls the check the way the Safe proposal panel does before it signs. */
