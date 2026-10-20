@@ -13,7 +13,7 @@
 # USAGE
 #   cargo_test_require_executed.sh <cargo test args...>
 # e.g.
-#   cargo_test_require_executed.sh -p explorer-api --test committee_api --test regime_api -- --nocapture
+#   cargo_test_require_executed.sh -p explorer-api --test registration_history --test consensus_receipt_api -- --nocapture
 #
 # Reference: skills/_shared/test-coverage-policy.md (invariant 2: Exit 0 != tested).
 #

@@ -39,7 +39,8 @@ name: explorer-indexer-migrations-reorg
 
 # CI taxonomy (issue #1105): every job here exercises integration/devnet/
 # testcontainer behaviour (migrations against a real Postgres, reorg handling against
-# stub RPC chains, IC committee/regime endpoints against a Postgres testcontainer)
+# stub RPC chains, agent registration history and the retired committee routes against a Postgres
+# testcontainer)
 # — that is the `system-correctness` class. system-correctness skips drafts and runs
 # from ready_for_review onward, and is bypassed on docs-only changes.
 env:
@@ -146,9 +147,31 @@ jobs:
         env:
           EXPLORER_INDEXER_REQUIRE_PG: "1"
         run: |
-          CARGO_TEST_MIN_EXECUTED=24 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=27 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
             --test migrations -- --test-threads=1 --nocapture
+
+      # SYSTEM ISOLATION AND AGENT REGISTRATION HISTORY (core 1891, SS-1019-8, RS-1019-18)
+      # system_isolation runs the COMPILED indexer binary against a Postgres testcontainer and a loopback
+      # JSON-RPC stub with no gateway argument and no INDEXER_GATEWAY: the vault registry and the receipt
+      # register are ingested, the cursor moves, the gateway tables stay empty, and no request names a
+      # gateway. Its control run with a gateway proves the stub would have seen one, and a malformed
+      # configured gateway exits nonzero. registration_history feeds gateway logs through the handlers and
+      # asserts the registration identity of every policy and deposit row (revoke then another owner,
+      # expiry, same-owner re-registration, same-block log-index order, two gateways, two chains), that a
+      # second pass changes nothing, and that a rollback plus replay equals a clean canonical replay.
+      # Both need Docker for the Postgres testcontainer and FAIL, naming it, when it is absent
+      # (pg_fixture panics). Floors equal the tests each target holds.
+      - name: Gateway-optional indexing and agent registration history (core 1891)
+        env:
+          EXPLORER_INDEXER_REQUIRE_PG: "1"
+        run: |
+          CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer \
+            --test system_isolation -- --test-threads=1 --nocapture
+          CARGO_TEST_MIN_EXECUTED=9 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer \
+            --test registration_history -- --test-threads=1 --nocapture
 
       - name: Block ingestion idempotency
         working-directory: services/explorer-indexer
@@ -305,21 +328,25 @@ jobs:
             -- --test-threads=1 --nocapture
           echo "::endgroup::"
           echo "::group::services/explorer-indexer/tests/reorg_cursor_vault_status.rs:"
-          # 63 tests: reorg_cursor_vault_status 15, account_history 9, account_position_vote_power 1,
-          # committee_indexing 11, multi_vault 4, vault_detail 16, vault_registry 7 (QA plan v1 T5; C1
-          # removed the governance-vote cases with the voting tables).
-          CARGO_TEST_MIN_EXECUTED=63 bash .github/scripts/cargo_test_require_executed.sh \
+          # 47 tests: reorg_cursor_vault_status 10, account_history 9, account_position_vote_power 1,
+          # multi_vault 4, vault_detail 16, vault_registry 7 (QA plan v1 T5; C1 removed the governance-vote
+          # cases with the voting tables; core 1891 removed the 11 committee_indexing cases and the 5
+          # committee reorg cases with the committee tables, migration 0030).
+          CARGO_TEST_MIN_EXECUTED=47 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
             --test reorg_cursor_vault_status \
             --test account_history \
             --test account_position_vote_power \
-            --test committee_indexing \
             --test multi_vault \
             --test vault_detail \
             --test vault_registry -- --test-threads=1 --nocapture
           echo "::endgroup::"
 
-  # EXPLORER-API IC COMMITTEE / REGIME / CONSENSUS-RECEIPT ENDPOINT TESTS (issues #1105, #1247)
+  # EXPLORER-API REGISTRATION HISTORY / RETIRED COMMITTEE ROUTES / CONSENSUS-RECEIPT ENDPOINT TESTS
+  # (issues #1105, #1247, core 1891). The job keeps its name, `explorer-api-committee-regime`, because
+  # it is a required check. Core 1891 retired the IC committee and regime-feed routes; this job now
+  # runs the executed HTTP proof that they return 404 (registration_history.rs), next to the
+  # registration-aware account and agent routes.
   # The clients/explorer-api crate (the read API the dApp queries) shipped IC committee
   # and regime-feed endpoint integration tests (committee_api.rs, regime_api.rs from
   # PR #1083) that NO required suite executed — the fast job above runs only
@@ -349,7 +376,7 @@ jobs:
 
       - name: Verify Docker is available (testcontainer Postgres resource)
         run: |
-          # The committee_api / regime_api / consensus_receipt_api tests start a Postgres
+          # The registration_history / consensus_receipt_api tests start a Postgres
           # testcontainer in-process.
           # Fail loudly here if Docker is missing instead of letting the tests skip/no-op.
           docker version
@@ -360,14 +387,14 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
-      - name: explorer-api committee + regime + consensus-receipt endpoint tests
+      - name: explorer-api registration history + retired committee routes + consensus-receipt endpoint tests
         run: |
-          echo "::group::clients/explorer-api/tests/consensus_receipt_api.rs:"
-          # 14 tests: committee_api 5, regime_api 1, consensus_receipt_api 8 (QA plan v1 T5).
-          CARGO_TEST_MIN_EXECUTED=14 bash .github/scripts/cargo_test_require_executed.sh \
+          echo "::group::clients/explorer-api/tests/registration_history.rs:"
+          # 13 tests: registration_history 5, consensus_receipt_api 8 (QA plan v1 T5; core 1891 removed
+          # committee_api 5 and regime_api 1 with the routes they tested).
+          CARGO_TEST_MIN_EXECUTED=13 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
-            --test committee_api \
-            --test regime_api \
+            --test registration_history \
             --test consensus_receipt_api -- --nocapture
           echo "::endgroup::"
 

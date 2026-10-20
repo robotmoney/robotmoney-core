@@ -15,8 +15,7 @@ agent identity by (address, registration). The target has no ownership
 transfer within a registration. This supersedes the former address-only
 latest-policy view and ownership-transfer target below. The event primary
 keys stay unchanged; a registration is a separate logical identity derived
-from its starting event. The current account-policy projection has not
-implemented this amendment (RS-1019-18).
+from its starting event. Implemented by core 1891 (migration 0031, RS-1019-18).
 
 Companion ADR: `docs/technical/rmpc-read-output-contract.md` §3.3 and §5 already lock the `source: "json_rpc"` provenance rule for `rmpc` reads and explicitly anticipate a future `Source::Indexer` variant. This ADR does not modify that contract; it operates one layer below, on the indexer that would back any such variant.
 
