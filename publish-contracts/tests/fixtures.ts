@@ -31,8 +31,22 @@ export function sheetText(over: Record<string, string | null> = {}, extra: strin
 export const SHA = "a".repeat(40);
 export const SHA2 = "b".repeat(40);
 
-/** Frozen counts used across the tests. Deployer stages only. */
-export const COUNTS: Record<string, number> = { safe: 1, libs: 4, recorder: 6, vault: 18, registry: 2, router: 3, gateway: 3, governance: 2, receipt: 2, proto: 6, agent: 6, rwa: 6, timelock: 25 };
+/** Frozen counts used across the tests: the vaults system's deployer stages (issue 1892: the gateway system's counts are GATEWAY_COUNTS). */
+export const COUNTS: Record<string, number> = { safe: 1, libs: 4, recorder: 6, vault: 18, registry: 2, router: 3, governance: 2, receipt: 2, proto: 6, agent: 6, rwa: 6, timelock: 25 };
+
+/** The gateway system's frozen counts (issue 1892): the gateway proxy stage and the four-transaction handover. A frozen file holds both systems' keys. */
+export const GATEWAY_COUNTS: Record<string, number> = { gateway: 3, "gateway-handover": 4 };
+
+/** The gateway system's sheet (issue 1892): the deployer, the pauser, the share receiver, the release mode and the two explicit governance inputs. */
+export function gatewaySheetText(chainId: number, over: Record<string, string | null> = {}): string {
+  const base: Record<string, string> = {
+    CHAIN_ID: String(chainId), EXPECTED_CHAIN_ID: String(chainId), ADMIN_ADDRESS: "0x000000000000000000000000000000000000a001", PAUSER_ADDRESS: "0x000000000000000000000000000000000000a002",
+    SHARE_RECEIVER_ADDRESS: "0x000000000000000000000000000000000000a005", UPGRADE_MODE: "frozen", GATEWAY_ADMIN_ADDRESS: "0x000000000000000000000000000000000000a0c1",
+    GATEWAY_UPGRADE_TIMELOCK: "0x000000000000000000000000000000000000a0c2",
+  };
+  const merged = { ...base, ...over };
+  return Object.entries(merged).filter(([, v]) => v !== null).map(([k, v]) => `${k}=${v}`).join("\n") + "\n";
+}
 
 export function tmp(prefix = "pc-"): string { return mkdtempSync(join(tmpdir(), prefix)); }
 

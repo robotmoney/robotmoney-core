@@ -1,6 +1,7 @@
 // Issue 1809 (upgradeability stage 2): the verifier proves each proxied core contract is the build's ERC1967Proxy, names the manifest's implementation, links the build's
 // libraries, is governed by the deployed timelock alone, is initialized, is in the sheet's release mode and has a layout identifier, and it refuses the immutability claim
 // unless the full core set verifies frozen on chain. Fixtures only (an in-memory chain): the real-chain proof is the Twin chain rehearsal (suite 28) and the mainnet run.
+import { scopeTable } from "../../src/stage-table.ts";
 import { describe, expect, test } from "bun:test";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -12,7 +13,7 @@ import { padTopic } from "../../src/verify/logs.ts";
 import { CLAIM_LABEL, CODE_LABEL, DEADLINE_LABEL, ERC1967_ADMIN_SLOT, GOVERNED_PARAMETERS, MODE_LABEL, PROXY_LABELS, UPSTREAM_DEPENDENCIES, layoutId, proxySpecs } from "../../src/verify/upgradeability.ts";
 import { buildWorld, failed, addr, GATEWAY, GOVERNED_UPGRADE_LIB, GOV, IMPLS, IMPL_SLOT, INIT_SLOT, REGISTRY, ROUTER, TIMELOCK, VAULTS, type World } from "./world.ts";
 
-const table = getStageTable();
+const table = scopeTable(getStageTable(), "legacy"); // issue 1892: these tests read the combined deployment
 const L = (name: string, i: number) => `${name}: ${PROXY_LABELS[i]}`;
 const ALL = proxySpecs(table).map((s) => s.name);
 const ADDR: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, ...Object.fromEntries(Object.entries(VAULTS).map(([k, v]) => [`vault[${k}]`, v.address])) };

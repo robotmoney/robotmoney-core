@@ -45,7 +45,7 @@ describe("the create2 libraries of the table and their addresses", () => {
   test("the table lists the basket libraries and the proxy libraries (issue 1808), and every stage that deploys a proxied contract lists some", () => {
     const t = getStageTable();
     expect(t.create2Libraries!.map((l) => l.artifact)).toEqual(["BasketAssetConfigGuard", "TwapTickMath", "BasketViews", "BasketSwaps", "GovernedUpgrade", "RobotMoneyVaultOps", "GatewayWindows"]);
-    expect(t.stages.filter((s) => s.create2Libraries?.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "gateway", "receipt", "governance", "proto", "agent", "rwa"]);
+    expect(t.stages.filter((s) => s.create2Libraries?.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "receipt", "governance", "proto", "agent", "rwa", "gateway"]);
   });
   test("each basket stage lists exactly the libraries its built vault links (linkReferences of the built artifacts), so a mislisted library cannot hide a dropped creation", () => {
     const t = getStageTable();

@@ -11,7 +11,7 @@ const kind = (f: () => unknown): string | undefined => { try { f(); } catch (e) 
 describe("frozen counts keyed by DEPLOY_SHA", () => {
   test("the nonce check passes when it equals the summed frozen counts", () => {
     const sum = sumCounts(COUNTS);
-    expect(sum).toBe(1 + 4 + 6 + 18 + 2 + 3 + 3 + 2 + 2 + 6 + 6 + 6 + 25);
+    expect(sum).toBe(1 + 4 + 6 + 18 + 2 + 3 + 2 + 2 + 6 + 6 + 6 + 25);
     expect(kind(() => checkNonce(sum + PROOF_TX_NONCES, COUNTS))).toBeUndefined();
     expect(kind(() => checkNonce(sum, COUNTS))).toBe("NONCE"); // the deployer also sent the prove-control transaction (core 1712)
     expect(kind(() => checkNonce(sum, COUNTS, Object.keys(COUNTS)))).toBeUndefined(); // a named subset of stages is just their sum

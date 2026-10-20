@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadStageTable } from "../stage/stage-table";
-import { loadStageTable as cliLoadStageTable, VAULT_RULE_FIELDS, vaultRules } from "../../publish-contracts/src/stage-table";
+import { loadStageTable as cliLoadStageTable, parseStageTable, VAULT_RULE_FIELDS, vaultRules } from "../../publish-contracts/src/stage-table";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const table = loadStageTable();
@@ -20,7 +20,7 @@ function scriptSource(path: string): string {
   return own + extra + upgrade + read(`${base}ExpectedChainGuard.sol`);
 }
 
-const EXPECTED = ["libs", "recorder", "vault", "registry", "router", "gateway", "receipt", "governance", "proto", "agent", "rwa", "timelock"];
+const EXPECTED = ["libs", "recorder", "vault", "registry", "router", "receipt", "governance", "proto", "agent", "rwa", "timelock", "gateway", "gateway-handover"]; // issue 1892: the vaults system, then the gateway system
 
 describe("stage-table.json", () => {
   test("version 1 with every stage, in deploy order", () => {
@@ -127,7 +127,7 @@ describe("stage-table.json", () => {
     }
     // Every proxied core contract links GovernedUpgrade (issue 1808): every stage that deploys one lists it.
     expect((table.stages as any[]).filter((s) => s.create2Libraries?.includes("GovernedUpgrade")).map((s) => s.name)).toEqual([
-      "vault", "registry", "router", "gateway", "receipt", "governance", "proto", "agent", "rwa",
+      "vault", "registry", "router", "receipt", "governance", "proto", "agent", "rwa", "gateway",
     ]);
   });
 
@@ -276,8 +276,8 @@ describe("stage-table.json", () => {
     test("every stage that reads UPGRADE_MODE lists its proxies, and the timelock stage, deployed last, lists none", () => {
       expect(u.modeEnv).toBe("UPGRADE_MODE");
       expect(proxyStages.map((s) => s.name)).toEqual(cli.stages.filter((s) => s.requiredEnv.includes("UPGRADE_MODE")).map((s) => s.name));
-      expect(proxyStages.map((s) => s.name)).toEqual(["vault", "registry", "router", "gateway", "receipt", "governance", "proto", "agent", "rwa"]);
-      expect(cli.stages[cli.stages.length - 1]!.name).toBe(u.stage);
+      expect(proxyStages.map((s) => s.name)).toEqual(["vault", "registry", "router", "receipt", "governance", "proto", "agent", "rwa", "gateway"]);
+      expect(cli.stages.filter((s) => s.system !== "gateway").at(-1)!.name).toBe(u.stage); // the upgrade authority is last of the vaults system
       expect(cli.stages.find((s) => s.name === u.stage)!.proxies).toBeUndefined();
     });
     test("the nine proxied core contracts are exactly the contracts the storage-layout gate snapshots", () => {
@@ -317,6 +317,49 @@ describe("stage-table.json", () => {
       const auth = read("contracts/script/UpgradeAuthority.sol");
       // the proxy constructor runs the initializer (no separate initialize transaction) and the mode only feeds that initializer
       expect(auth).toContain("proxy = address(new ERC1967Proxy(implementation, initData));");
+    });
+  });
+
+  describe("two independent systems (issue 1892)", () => {
+    const t = table as unknown as { systems: Record<string, { stages: string[]; requires: string[] }>; stages: { name: string; system: string; requiredEnv: string[]; script: string; upgradeTimelockEnv?: string }[] };
+    test("the table declares the vaults system and the gateway system, the vaults system requires nothing and the gateway system requires the vaults system", () => {
+      expect(t.systems.vaults).toMatchObject({ requires: [] });
+      expect(t.systems.gateway).toMatchObject({ stages: ["gateway", "gateway-handover"], requires: ["vaults"] });
+      expect(t.systems.vaults!.stages).toEqual(EXPECTED.filter((n) => !n.startsWith("gateway")));
+      for (const s of t.stages) expect(t.systems[s.system]!.stages, s.name).toContain(s.name);
+    });
+    test("SYS-1: no vaults-system stage script names the gateway system's contracts or imports its sources", () => {
+      for (const s of t.stages.filter((x) => x.system === "vaults")) {
+        const src = scriptSource(s.script.split(":")[0]!);
+        // the stages that still read GATEWAY_ADDRESS (ic-policy, timelock) are removed by the receipt stage (1888) and the agent-free timelock (1890); nothing else may start to
+        const KNOWN = ["receipt", "timelock"];
+        if (KNOWN.includes(s.name)) continue;
+        expect(src, s.name).not.toMatch(/RobotMoneyGateway|GATEWAY_ADDRESS|GatewayWindows|gateway\/RobotMoneyGateway/);
+        expect(s.requiredEnv, s.name).not.toContain("GATEWAY_ADDRESS");
+      }
+    });
+    test("the gateway stage names its own explicit upgrade timelock and reads neither the Safe nor the vaults timelock delay; the handover reads the gateway and its explicit admin", () => {
+      const gw = t.stages.find((s) => s.name === "gateway")!;
+      expect(gw.upgradeTimelockEnv).toBe("GATEWAY_UPGRADE_TIMELOCK");
+      expect(gw.requiredEnv).toEqual(expect.arrayContaining(["GATEWAY_UPGRADE_TIMELOCK", "UPGRADE_MODE"]));
+      expect(gw.requiredEnv).not.toContain("SAFE_ADDRESS");
+      expect(gw.requiredEnv).not.toContain("TIMELOCK_MIN_DELAY");
+      expect(gw.requiredEnv.some((e) => e.startsWith("AGENT_"))).toBe(false);
+      expect(t.stages.find((s) => s.name === "gateway-handover")!.requiredEnv).toEqual(["GATEWAY_ADDRESS", "GATEWAY_ADMIN_ADDRESS", "DEPLOYMENT_OUT"]);
+    });
+    test("a table whose systems and stages disagree is refused by the driver", () => {
+      const bad = JSON.parse(JSON.stringify(t));
+      bad.systems.gateway.stages = ["gateway"];
+      expect(() => parseStageTable(bad)).toThrow("system gateway lists stages");
+      const noSys = JSON.parse(JSON.stringify(t));
+      noSys.stages.push({ ...noSys.stages[0], name: "orphan", system: undefined });
+      expect(() => parseStageTable(noSys)).toThrow("names no system");
+      const vaultsNeedsGateway = JSON.parse(JSON.stringify(t));
+      vaultsNeedsGateway.systems.vaults.requires = ["gateway"];
+      expect(() => parseStageTable(vaultsNeedsGateway)).toThrow("vaults system requires nothing");
+      const implicitTimelock = JSON.parse(JSON.stringify(t));
+      implicitTimelock.stages.find((s: { name: string }) => s.name === "gateway").requiredEnv.push("SAFE_ADDRESS");
+      expect(() => parseStageTable(implicitTimelock)).toThrow("must not read SAFE_ADDRESS");
     });
   });
 

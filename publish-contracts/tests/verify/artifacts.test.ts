@@ -1,5 +1,6 @@
 // The verifier's code-hash targets come from core's stage table: each vault against its own artifact, each library against its library
 // artifact, each core contract against table.artifacts. Fixtures only (an in-memory chain, artifact files on disk).
+import { scopeTable } from "../../src/stage-table.ts";
 import { describe, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
@@ -10,7 +11,7 @@ import { loadManifests } from "../../src/verify/manifests.ts";
 import { CLAIM_LABEL } from "../../src/verify/upgradeability.ts";
 import { buildWorld, failed, IMPLS } from "./world.ts";
 
-const table = getStageTable();
+const table = scopeTable(getStageTable(), "legacy"); // issue 1892: these tests read the combined deployment
 const art = (key: "USDC" | "PROTO" | "AGENT" | "RWA") => table.vaults.find((v) => v.key === key)!.artifact;
 const codeLabel = (l: string) => `${l}: runtime code equals build artifact (masked)`;
 

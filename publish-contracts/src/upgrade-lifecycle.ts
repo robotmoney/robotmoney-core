@@ -1,5 +1,5 @@
 // Issue 1811 (upgradeability stage 4): the evidence of the Twin upgrade rehearsal, and its check. The rehearsal (src/ci/twin-upgrade-lifecycle.ts) deploys the release
-// artifacts UPGRADE_MODE=upgradeable, upgrades the gateway proxy to a second copy of the release implementation through the real Safe and timelock, queues a
+// artifacts UPGRADE_MODE=upgradeable, upgrades the router proxy to a second copy of the release implementation through the real Safe and timelock, queues a
 // second gateway upgrade, freezes every core proxy through the Safe and timelock, and shows the queued upgrade is refused after the freeze (UpgradesAreFrozen).
 // The record (`upgrade-lifecycle.json`) carries the verifier's upgradeability record after each step and the transactions of each timelock operation.
 // Offline: the steps tell one story (deploy upgradeable, one upgrade of the gateway only, the freeze targets are the reviewed record, the final record claims
@@ -11,8 +11,11 @@ import { decodeEventLog, encodeFunctionData, keccak256, parseAbi, type Hex } fro
 import { upgradeabilityEvidenceProblems, upgradeabilityOnChainProblems, type UpgradeabilityChain } from "./evidence-upgradeability.ts";
 
 export const LIFECYCLE_KIND = "twin-upgrade-lifecycle";
-/** The proxy the rehearsal upgrades: the gateway, the one proxy every signing client pins (issue 1810). */
-export const UPGRADED_PROXY = "gateway";
+/**
+ * The proxy the rehearsal upgrades: the router, a vaults-system proxy every signing client pins for a deposit (issue 1810). The gateway system has its own upgrade timelock and its
+ * production governance is an open decision (issue 1892), so the vaults rehearsal does not upgrade it.
+ */
+export const UPGRADED_PROXY = "router";
 
 export const GOVERNED_UUPS_ABI = parseAbi([
   "function upgradeToAndCall(address newImplementation, bytes data)",
@@ -76,6 +79,8 @@ const proxiesOf = (u: any): Record<string, any> => (u && typeof u.proxies === "o
 /** Offline problems of a lifecycle record. `proxies` is the full proxied core set of the stage table (verifier names). */
 export function upgradeLifecycleProblems(r: any, proxies: readonly string[]): string[] {
   const p: string[] = [];
+  // a record of the combined (pre-split) deployment upgraded the gateway; a record of the vaults system upgrades UPGRADED_PROXY (issue 1892)
+  const UPGRADED = r?.upgrade?.proxy === "gateway" && proxies.includes("gateway") ? "gateway" : UPGRADED_PROXY;
   const bad = (m: string) => p.push(`upgrade-lifecycle: ${m}`);
   if (r?.kind !== LIFECYCLE_KIND) { bad(`kind is ${String(r?.kind)}, not ${LIFECYCLE_KIND}`); return p; }
   if (!ADDR.test(r.safe ?? "")) bad("safe is not an address");
@@ -94,19 +99,19 @@ export function upgradeLifecycleProblems(r: any, proxies: readonly string[]): st
   // 2. the governed upgrade of the gateway, and only the gateway
   const u = r.upgrade ?? {};
   const after = u.upgradeability;
-  if (u.proxy !== UPGRADED_PROXY) bad(`upgrade: proxy is ${String(u.proxy)}, the rehearsal upgrades ${UPGRADED_PROXY}`);
+  if (u.proxy !== UPGRADED) bad(`upgrade: proxy is ${String(u.proxy)}, the rehearsal upgrades ${UPGRADED}`);
   for (const f of ["proxy_address", "from_implementation", "to_implementation"]) if (!ADDR.test(u[f] ?? "")) bad(`upgrade: ${f} is not an address`);
   for (const f of ["to_code_hash", "deploy_tx", "operation_id", "salt", "schedule_tx", "execute_tx"]) if (!B32.test(u[f] ?? "")) bad(`upgrade: ${f} is not a bytes32`);
-  const dg = proxiesOf(d)[UPGRADED_PROXY], ag = proxiesOf(after)[UPGRADED_PROXY];
-  if (lc(dg?.proxy) !== lc(u.proxy_address)) bad(`upgrade: proxy_address ${u.proxy_address} is not the deployed ${UPGRADED_PROXY} ${dg?.proxy}`);
+  const dg = proxiesOf(d)[UPGRADED], ag = proxiesOf(after)[UPGRADED];
+  if (lc(dg?.proxy) !== lc(u.proxy_address)) bad(`upgrade: proxy_address ${u.proxy_address} is not the deployed ${UPGRADED} ${dg?.proxy}`);
   if (lc(dg?.implementation) !== lc(u.from_implementation)) bad(`upgrade: from_implementation ${u.from_implementation} is not the deployed implementation ${dg?.implementation}`);
   if (lc(u.to_implementation) === lc(u.from_implementation)) bad("upgrade: to_implementation equals from_implementation, nothing was upgraded");
   if (lc(ag?.implementation) !== lc(u.to_implementation) || lc(ag?.implementation_code_hash) !== lc(u.to_code_hash)) bad(`upgrade: the verifier record after the upgrade names ${ag?.implementation} (${ag?.implementation_code_hash}), not ${u.to_implementation} (${u.to_code_hash})`);
   for (const x of upgradeabilityEvidenceProblems(ev(after, 0), proxies, "production")) bad(`upgrade: ${x}`);
   for (const n of proxies) {
-    if (n === UPGRADED_PROXY) continue;
+    if (n === UPGRADED) continue;
     const a = proxiesOf(d)[n], b = proxiesOf(after)[n];
-    if (lc(a?.implementation) !== lc(b?.implementation) || lc(a?.implementation_code_hash) !== lc(b?.implementation_code_hash)) bad(`upgrade: ${n} changed implementation between the deploy and the upgrade record, only ${UPGRADED_PROXY} is upgraded`);
+    if (lc(a?.implementation) !== lc(b?.implementation) || lc(a?.implementation_code_hash) !== lc(b?.implementation_code_hash)) bad(`upgrade: ${n} changed implementation between the deploy and the upgrade record, only ${UPGRADED} is upgraded`);
   }
   if (Object.values(proxiesOf(after)).some((x: any) => x?.upgrades_frozen !== false)) bad("upgrade: a proxy is recorded frozen before the freeze");
 
@@ -125,7 +130,7 @@ export function upgradeLifecycleProblems(r: any, proxies: readonly string[]): st
 
   // 4. the queued upgrade refused after the freeze
   const x = r.rejected_upgrade ?? {};
-  if (lc(x.proxy_address) !== lc(u.proxy_address) || x.proxy !== UPGRADED_PROXY) bad(`rejected_upgrade: it does not target the ${UPGRADED_PROXY} proxy ${u.proxy_address}`);
+  if (lc(x.proxy_address) !== lc(u.proxy_address) || x.proxy !== UPGRADED) bad(`rejected_upgrade: it does not target the ${UPGRADED} proxy ${u.proxy_address}`);
   if (!ADDR.test(x.target_implementation ?? "")) bad("rejected_upgrade: target_implementation is not an address");
   for (const k of ["operation_id", "salt", "schedule_tx"]) if (!B32.test(x[k] ?? "")) bad(`rejected_upgrade: ${k} is not a bytes32`);
   if (lc(x.revert_selector) !== lc(UPGRADES_ARE_FROZEN_SELECTOR) || x.revert_error !== "UpgradesAreFrozen") bad(`rejected_upgrade: the recorded revert is ${String(x.revert_error)} (${String(x.revert_selector)}), want UpgradesAreFrozen (${UPGRADES_ARE_FROZEN_SELECTOR})`);
@@ -139,8 +144,8 @@ export function upgradeLifecycleProblems(r: any, proxies: readonly string[]): st
   if (fin?.mode !== "upgradeable") bad(`final: mode is ${String(fin?.mode)}, the release mode never changes`);
   for (const y of upgradeabilityEvidenceProblems(ev(fin, r.final?.verifier_exit_code), proxies, "production")) bad(`final: ${y}`);
   if (fin?.core_immutable !== true) bad(`final: core_immutable is not true after the governed freeze (${JSON.stringify(fin?.immutability_refused_because ?? [])})`);
-  const fg = proxiesOf(fin)[UPGRADED_PROXY];
-  if (lc(fg?.implementation) !== lc(u.to_implementation)) bad(`final: ${UPGRADED_PROXY} implementation is ${fg?.implementation}, the refused upgrade must leave ${u.to_implementation} in place`);
+  const fg = proxiesOf(fin)[UPGRADED];
+  if (lc(fg?.implementation) !== lc(u.to_implementation)) bad(`final: ${UPGRADED} implementation is ${fg?.implementation}, the refused upgrade must leave ${u.to_implementation} in place`);
   for (const n of proxies) {
     const t = targets[n], y = proxiesOf(fin)[n];
     if (t && (lc(y?.implementation) !== lc(t.implementation) || lc(y?.implementation_code_hash) !== lc(t.implementation_code_hash))) bad(`final: ${n} is frozen on ${y?.implementation}, not the freeze target ${t.implementation}`);

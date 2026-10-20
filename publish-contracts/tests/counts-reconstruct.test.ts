@@ -24,8 +24,10 @@ const kind = async (f: () => unknown): Promise<string | undefined> => { try { aw
 const msg = async (f: () => unknown): Promise<string> => { try { await f(); } catch (e) { return (e as Error).message; } return ""; };
 
 // The frozen counts of the first real release (9a768bb9), read from the repo: the reference a rebuilt baseline must equal.
-const REF_PATH = refFrozenPath(); // the pinned first-release counts, `ic-policy` keyed as the table's `receipt` (issue 1888)
-const REF = JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>;
+const REF_PATH = refFrozenPath(); // the pinned first-release counts, ic-policy keyed as the table receipt (issue 1888)
+// Issue 1892: the first release deployed the gateway in the same run. The vaults baseline is rebuilt without it (the gateway system's counts are its own).
+const GATEWAY_KEYS = new Set(table.stages.filter((s) => s.system === "gateway").map((s) => s.name));
+const REF = Object.fromEntries(Object.entries(JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>).filter(([k]) => !GATEWAY_KEYS.has(k)));
 
 // Build artifacts and what the chain holds, derived with the code under test's own inputs but compared with hand-built values below.
 const tickArt = JSON.parse(readFileSync(join(OUT, "TickMath.sol", "TickMath.json"), "utf8"));
@@ -36,7 +38,7 @@ const THREE = [...C2.values()];
 // Issue 1808: the create2 libraries a Twin run adopts, by the first stage that lists them (vault: GovernedUpgrade and RobotMoneyVaultOps,
 // gateway: GatewayWindows, proto: the four basket libraries). The first three of BASKET are the first release's three.
 const libsOf = (stage: string) => adoptableOf(table, stage).map((l) => C2.get(l.artifact)!);
-const VAULT_LIBS = libsOf("vault"), GATE_LIBS = libsOf("gateway"), BASKET = libsOf("proto");
+const VAULT_LIBS = libsOf("vault"), BASKET = libsOf("proto");
 const rec = (bs: typeof THREE) => bs.map((b) => ({ name: b.name, artifact: b.artifact, address: b.address, codeHash: b.runtimeHash }));
 const chain = (over: Record<string, string> = {}) => {
   const code: Record<string, string> = { [TICK.toLowerCase()]: TICK_RUNTIME, ...Object.fromEntries(THREE.map((b) => [b.address.toLowerCase(), b.runtime])), ...over };
@@ -46,13 +48,12 @@ const OUTS = { linkOut: OUT, c2Out: OUT };
 
 /** The counts.json of an adopted Twin measuring run: libs 0 (TickMath adopted), vault, gateway and proto less their adopted creations, every other stage as measured. */
 function adoptedRun(over: Partial<CountsJsonLike> = {}, ad: Record<string, unknown> = {}): CountsJsonLike {
-  const counts = { ...REF, libs: 0, vault: REF.vault! - VAULT_LIBS.length, gateway: REF.gateway! - GATE_LIBS.length, proto: REF.proto! - BASKET.length };
+  const counts = { ...REF, libs: 0, vault: REF.vault! - VAULT_LIBS.length, proto: REF.proto! - BASKET.length };
   return {
     deploySha: SHA, chainId: 918453, counts, deployerNonce: sumCounts(counts) + 1, pinBlock: 52_500_000, rehearsal: { conclusion: "success" },
     adopted: {
       libs: { deployerTxs: 0, factory: "0x4e59b44847b379578588920cA78FbF26c0B4956C", libraries: [{ name: "tick_math", artifact: "TickMath", address: TICK, codeHash: keccak256(TICK_RUNTIME) }] },
       vault: { deployerTxs: REF.vault! - VAULT_LIBS.length, libraries: rec(VAULT_LIBS) },
-      gateway: { deployerTxs: REF.gateway! - GATE_LIBS.length, libraries: rec(GATE_LIBS) },
       proto: { deployerTxs: REF.proto! - BASKET.length, libraries: rec(BASKET) },
       ...ad,
     } as never,
@@ -90,7 +91,7 @@ describe("reconstruction from an adopted measuring run", () => {
     expect(r.measuredCounts.libs).toBe(0);
     expect(r.measuredCounts.proto).toBe(REF.proto! - 4);
     expect(r.adopted.map((a) => `${a.stage}/${a.library}`)).toEqual([
-      "libs/tick_math", "vault/GovernedUpgrade", "vault/RobotMoneyVaultOps", "gateway/GatewayWindows",
+      "libs/tick_math", "vault/GovernedUpgrade", "vault/RobotMoneyVaultOps",
       "proto/BasketAssetConfigGuard", "proto/TwapTickMath", "proto/BasketViews", "proto/BasketSwaps",
     ]);
     expect(() => verifyReconstruction(f, table)).not.toThrow();
@@ -270,7 +271,7 @@ describe("a reconstructed file is verified on every load, so a hand-set or tampe
     expect(msg1).toContain("ADOPTED stage(s) libs");
     expect(msg1).toContain("--from-adopted-run");
     const dir = tmp("pc-recon-");
-    writeFileSync(join(dir, `${SHA}.json`), JSON.stringify({ deploySha: SHA, measured: { chainId: 918453, at: "x", adopted: ["libs", "vault", "gateway", "proto"] }, counts: REF }));
+    writeFileSync(join(dir, `${SHA}.json`), JSON.stringify({ deploySha: SHA, measured: { chainId: 918453, at: "x", adopted: ["libs", "vault", "proto"] }, counts: REF }));
     for (const chainId of [8453, 84532, 1, 918454]) expect(await kind(() => resolveCounts({ dir, sha: SHA, measureFlag: false, dryRun: false, chainId }))).toBe("COUNTS_MISSING");
     expect(loadFrozen(dir, SHA, { allowAdopted: true }).counts).toEqual(REF); // the Twin follow-on verbs only
   });
@@ -311,7 +312,6 @@ describe("the Twin job's counts.json carries the adoption records, so the recons
     writeFileSync(mf, JSON.stringify({ stages: {
       libs: { status: "done", adopted: true, adoption: { deployerTxs: 0, factory: run.adopted!.libs!.factory, libraries: run.adopted!.libs!.libraries } },
       vault: { status: "done", adopted: true, adoption: { deployerTxs: run.adopted!.vault!.deployerTxs, libraries: run.adopted!.vault!.libraries } },
-      gateway: { status: "done", adopted: true, adoption: { deployerTxs: run.adopted!.gateway!.deployerTxs, libraries: run.adopted!.gateway!.libraries } },
       proto: { status: "done", adopted: true, adoption: { deployerTxs: run.adopted!.proto!.deployerTxs, libraries: run.adopted!.proto!.libraries } },
       "prove-control": { status: "done", adopted: true }, safe: { status: "done" },
     } }));
@@ -319,7 +319,7 @@ describe("the Twin job's counts.json carries the adoption records, so the recons
     expect(adopted).toEqual(run.adopted as never);
     const cdir = join(dir, "counts");
     mkdirSync(cdir);
-    writeFileSync(join(cdir, `${SHA}.json`), JSON.stringify({ deploySha: SHA, measured: { chainId: 918453, at: "x", adopted: ["libs", "vault", "gateway", "proto"] }, counts: run.counts }));
+    writeFileSync(join(cdir, `${SHA}.json`), JSON.stringify({ deploySha: SHA, measured: { chainId: 918453, at: "x", adopted: ["libs", "vault", "proto"] }, counts: run.counts }));
     const j = buildCountsJson(cdir, SHA, run.deployerNonce, adopted, undefined, 52_500_000);
     expect(j.pinBlock).toBe(52_500_000);
     expect(j.adopted).toEqual(adopted);
@@ -371,7 +371,7 @@ describe("the 8453 plan job (the CLI) with a reconstructed baseline", () => {
     expect(r.verified).toBe(0);
   });
   test("the old adopted marker is refused by the plan: it is not a frozen file", async () => {
-    const r = await plan({ deploySha: A40, measured: { chainId: 918453, at: "x", adopted: ["libs", "vault", "gateway", "proto"] }, counts: REF });
+    const r = await plan({ deploySha: A40, measured: { chainId: 918453, at: "x", adopted: ["libs", "vault", "proto"] }, counts: REF });
     expect(r.code).toBe(EXIT_CODES.COUNTS_MISSING);
   });
 });

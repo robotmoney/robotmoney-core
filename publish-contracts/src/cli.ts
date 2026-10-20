@@ -146,6 +146,9 @@ export const USAGE = `publish contracts
   --submitter ADDR   govern --row register-submitter and the record-receipt verb: the consensus receipt SUBMITTER Safe, a SafeL2 1.4.1 multisig (threshold 2 or more, no module, no guard). It may be the governing Safe.
                      record-receipt: required on every chain; --signer is the gas payer and --owner-signer names the submitter Safe's owners (enough to reach its threshold).
   --payload FILE     govern with --row apply-receipt (required), or record-receipt (required, checked before any signer is built): the receipt payload file as served by the canonical route. Its receipt digest (domain line + bytes) is the anchored payloadDigest.
+  --system S         vaults (default) | gateway (issue 1892): the independent system to deploy and verify. gateway runs the stages gateway and gateway-handover against the vaults system's
+                     manifests, with its own small sheet (GATEWAY_ADMIN_ADDRESS and GATEWAY_UPGRADE_TIMELOCK, no default, no AGENT_ name, no Safe), its own --evidence directory and its own
+                     verifier. Only publish and verify run in it (docs/operations/contract-release-runbooks.md 4.13).
   --stage S          plan | deploy | all | a comma list of stage names (default: everything through verify)
                      The stage names come from core's scripts/deploy/stage-table.json at the DEPLOY_SHA, plus safe, verify and govern.
   --resume           continue a run: adopt the existing Safe, skip finished stages; prove-control also adopts a proof that landed on chain before the run died (nothing is sent again)

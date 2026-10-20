@@ -38,7 +38,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const withGateway = sys === "legacy";
   const c = new Collector();
   const { chain, sheet } = opts;
-  const table = sys === "legacy" ? opts.table : scopeTable(opts.table, "vaults");
+  const table = scopeTable(opts.table, sys);
   const man = loadManifests(opts.manifestDir, table);
   for (const r of opts.redeploys ?? []) {
     if (!r.replacementManifest) continue;

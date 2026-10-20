@@ -11,7 +11,7 @@ import { COUNTS } from "./fixtures.ts";
 import { ADMIN, SCRIPT, world } from "./harness.ts";
 
 const table = getStageTable();
-const PROXY_STAGES = table.stages.filter((s) => s.proxies).map((s) => s.name);
+const PROXY_STAGES = table.stages.filter((s) => s.proxies && s.system !== "gateway").map((s) => s.name); // issue 1892: the vaults system's proxy stages
 const forgeScripts = (w: ReturnType<typeof world>) => w.state().calls.filter((c: any) => c.tool === "forge" && c.args[0] === "script");
 const broadcastOf = (w: ReturnType<typeof world>, stage: string) => forgeScripts(w).filter((c: any) => String(c.args[1]).startsWith(table.stages.find((s) => s.name === stage)!.script) && c.args.includes("--broadcast"));
 const runManifest = (w: ReturnType<typeof world>) => JSON.parse(readFileSync(join(w.evidence, "publish-run.json"), "utf8"));
@@ -45,32 +45,32 @@ describe("the proxy stages run in table order with the sheet's release mode (iss
 });
 
 describe("resume after a partial failure of a proxy stage reaches a state-compatible result (issue 1809)", () => {
-  test("the gateway proxy stage dies after its implementation landed: --resume replays the same stage, the gateway manifest names both addresses in the run's mode, the nonce is the frozen sum", async () => {
+  test("a proxy stage (registry) dies after its implementation landed: --resume replays the same stage, the stage manifest names both addresses in the run's mode, the nonce is the frozen sum", async () => {
     const w = world({ startNonce: 0 });
-    w.cfg.failBroadcast = SCRIPT.gateway;
+    w.cfg.failBroadcast = SCRIPT.registry;
     expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.BROADCAST);
     const m1 = runManifest(w);
-    expect(m1.stages.gateway.status).toBe("started");
-    expect(m1.stages.router.status).toBe("done");
+    expect(m1.stages.registry.status).toBe("started");
+    expect(m1.stages.vault.status).toBe("done");
     expect(m1.upgradeMode).toBe("frozen");
     expect(await w.run(["--stage", "deploy", "--resume"])).toBe(0);
-    // only the gateway stage is resumed (forge --resume replays its own transactions at the same nonces), every earlier proxy stage is skipped
+    // only the failed stage is resumed (forge --resume replays its own transactions at the same nonces), every earlier proxy stage is skipped
     const resumed = forgeScripts(w).filter((c: any) => c.args.includes("--resume")).map((c: any) => c.args[1].split(":")[0].split("/").pop());
-    expect(resumed).toEqual([SCRIPT.gateway]);
-    expect(w.logs().filter((l) => l.event === "stage.skipped").map((l) => l.stage)).toEqual(["safe", "libs", "recorder", "vault", "registry", "router"]);
+    expect(resumed).toEqual([SCRIPT.registry]);
+    expect(w.logs().filter((l) => l.event === "stage.skipped").map((l) => l.stage)).toEqual(["safe", "libs", "recorder", "vault"]);
     const m2 = runManifest(w);
-    expect(m2.stages.gateway.status).toBe("done");
-    expect(m2.stages.gateway.startNonce).toBe(m1.stages.gateway.startNonce);
-    const g = stageManifest(w, "gateway");
+    expect(m2.stages.registry.status).toBe("done");
+    expect(m2.stages.registry.startNonce).toBe(m1.stages.registry.startNonce);
+    const g = stageManifest(w, "registry");
     expect(g).toMatchObject({ upgrade_mode: "frozen" });
-    expect(g.gateway).toMatch(/^0x[0-9a-f]{40}$/);
-    expect(g.gateway_implementation).toMatch(/^0x[0-9a-f]{40}$/);
+    expect(g.registry).toMatch(/^0x[0-9a-f]{40}$/);
+    expect(g.registry_implementation).toMatch(/^0x[0-9a-f]{40}$/);
     expect(w.state().nonces[ADMIN.toLowerCase()]).toBe(Object.values(COUNTS).reduce((a, b) => a + b, 0) + PROOF_TX_NONCES);
   });
 
   test("a resume under another UPGRADE_MODE than the run started with is refused before any forge call", async () => {
     const w = world({ startNonce: 0 });
-    w.cfg.failBroadcast = SCRIPT.gateway;
+    w.cfg.failBroadcast = SCRIPT.registry;
     expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.BROADCAST);
     setSheetMode(w, "upgradeable");
     const before = forgeScripts(w).length;
@@ -81,7 +81,7 @@ describe("resume after a partial failure of a proxy stage reaches a state-compat
 
   test("a manifest written before the field existed is a frozen run (the interim literal of issue 1808): an upgradeable resume is refused, a frozen one continues", async () => {
     const w = world({ startNonce: 0 });
-    w.cfg.failBroadcast = SCRIPT.gateway;
+    w.cfg.failBroadcast = SCRIPT.registry;
     expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.BROADCAST);
     const p = join(w.evidence, "publish-run.json");
     const m = JSON.parse(readFileSync(p, "utf8"));

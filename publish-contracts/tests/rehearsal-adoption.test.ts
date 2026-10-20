@@ -14,9 +14,9 @@ import { SCRIPT, world, type World } from "./harness.ts";
 const OUT = join(import.meta.dir, "fixtures", "build-out");
 const BUILT = buildCreate2Libraries(getStageTable().create2Libraries!, OUT);
 const THREE = [BUILT.get("BasketAssetConfigGuard")!, BUILT.get("TwapTickMath")!, BUILT.get("BasketViews")!, BUILT.get("BasketSwaps")!];
-// Issue 1808: the vault stage adopts GovernedUpgrade and RobotMoneyVaultOps, the gateway stage GatewayWindows, proto the basket libraries.
-const VAULT_LIBS = [BUILT.get("GovernedUpgrade")!, BUILT.get("RobotMoneyVaultOps")!], GATE_LIBS = [BUILT.get("GatewayWindows")!];
-const N = THREE.length + VAULT_LIBS.length + GATE_LIBS.length;
+// Issue 1808: the vault stage adopts GovernedUpgrade and RobotMoneyVaultOps, proto the basket libraries. The gateway system adopts GatewayWindows in its own run (issue 1892).
+const VAULT_LIBS = [BUILT.get("GovernedUpgrade")!, BUILT.get("RobotMoneyVaultOps")!];
+const N = THREE.length + VAULT_LIBS.length;
 const tickArt = JSON.parse(readFileSync(join(OUT, "TickMath.sol", "TickMath.json"), "utf8"));
 const TICK = predictedLibraryAddress(tickArt.bytecode.object);
 const A = "0x000000000000000000000000000000000000a001";
@@ -32,16 +32,15 @@ function adoptedWorld(startNonce = START, sheet: Record<string, string> = REH): 
   cpSync(OUT, join(w.coreDir, "out"), { recursive: true });
   w.cfg.counts[SCRIPT.proto] = COUNTS.proto! - THREE.length;
   w.cfg.counts[SCRIPT.vault] = COUNTS.vault! - VAULT_LIBS.length;
-  w.cfg.counts[SCRIPT.gateway] = COUNTS.gateway! - GATE_LIBS.length;
   const codeAt: Record<string, string> = { [TICK.toLowerCase()]: `0x73${TICK.slice(2).toLowerCase()}${tickArt.deployedBytecode.object.slice(44)}` };
-  for (const b of [...THREE, ...VAULT_LIBS, ...GATE_LIBS]) codeAt[b.address.toLowerCase()] = b.runtime;
-  Object.assign(w.cfg, { zeroTx: SCRIPT.libs, libsAddress: TICK, codeAt, creates: { [SCRIPT.proto]: [], [SCRIPT.vault]: [], [SCRIPT.gateway]: [] } });
+  for (const b of [...THREE, ...VAULT_LIBS]) codeAt[b.address.toLowerCase()] = b.runtime;
+  Object.assign(w.cfg, { zeroTx: SCRIPT.libs, libsAddress: TICK, codeAt, creates: { [SCRIPT.proto]: [], [SCRIPT.vault]: [] } });
   return w;
 }
-const PRE_PROTO = ["safe", "libs", "recorder", "vault", "registry", "router", "gateway", "receipt", "governance"];
+const PRE_PROTO = ["safe", "libs", "recorder", "vault", "registry", "router", "receipt", "governance"];
 
 describe("a rehearsal with a non-zero start and adopted stages", () => {
-  test("libs adopted at 0 and vault, gateway and proto less their libraries: start recorded at safe, the later stages start where the adopted ones left off, the final nonce is start + (sum - libs - adopted) + proof", async () => {
+  test("libs adopted at 0 and vault and proto less their libraries: start recorded at safe, the later stages start where the adopted ones left off, the final nonce is start + (sum - libs - adopted) + proof", async () => {
     const w = adoptedWorld();
     expect(await w.run(["--stage", "deploy"])).toBe(0);
     expect(failed(w)).toBeUndefined();

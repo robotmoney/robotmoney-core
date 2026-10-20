@@ -29,8 +29,8 @@ import { REDEPLOY_ROW, buildRedeployCalls, createdVaultProblems, vectorsFromFina
 import { assertOwnerExceptions } from "./plan.ts";
 import { GATEWAY_EVIDENCE_STAGES, checkGatewayEvidence } from "./evidence-gateway.ts";
 import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
-import { LIBS_STAGE } from "./core-wiring.ts";
-import { loadStageTable, type StageTable, type TableVault, type VaultRules } from "./stage-table.ts";
+import { LIBS_STAGE, SAFE_STAGE } from "./core-wiring.ts";
+import { loadStageTable, scopeTable, type StageTable, type TableVault, type VaultRules } from "./stage-table.ts";
 import { STAGE13_UNPAUSE_ROWS, VAULT_RULES, VAULT_UNPAUSE_ROWS } from "./vault-rules.ts";
 import { upgradeabilityEvidenceProblems, upgradeabilityOnChainProblems } from "./evidence-upgradeability.ts";
 import { proxySpecs } from "./verify/upgradeability.ts";
@@ -458,7 +458,7 @@ export interface EvidenceOpts {
   systemStages?: Partial<Record<"vaults" | "gateway", readonly string[]>>;
 }
 /** Issue 1809: the proxied core set of the stage table at the root of this checkout. */
-export const repoProxyNames = (): string[] => proxySpecs(loadStageTable(new URL("../../", import.meta.url).pathname)).map((s) => s.name);
+export const repoProxyNames = (system: "vaults" | "legacy" = "legacy"): string[] => proxySpecs(scopeTable(loadStageTable(new URL("../../", import.meta.url).pathname), system)).map((s) => s.name); // issue 1892: the vaults system has no gateway proxy; legacy is the combined deployment
 const kindOf = (o?: EvidenceOpts): DeploymentKind => o?.kind ?? "production";
 /** The kind the evidence claims (absent: production) against the kind it is read as. A mismatch is always a problem, whichever way round. */
 function kindProblems(ev: any, expected: DeploymentKind, bad: (m: string) => void): void {
@@ -532,7 +532,7 @@ export function adoptedTxsOfEvidence(ev: any): Record<string, number> {
 /** The frozen counts with every adopted stage counted at the transactions the deployer sent. An impossible adopted entry leaves the counts as frozen, so the nonce check still fails on it. */
 function effectiveForEvidence(ev: any, frozenCounts: Record<string, number>): Record<string, number> {
   // Issue 1892: an evidence that names its system is summed over that system's stages only (the frozen file holds both systems' counts).
-  const scoped = ev?.system === undefined ? frozenCounts : Object.fromEntries(Object.entries(frozenCounts).filter(([k]) => k === "safe" || (Array.isArray(ev?.stages) && ev.stages.some((s: any) => s?.stage === k))));
+  const scoped = ev?.system === undefined ? frozenCounts : Object.fromEntries(Object.entries(frozenCounts).filter(([k]) => k === SAFE_STAGE || (Array.isArray(ev?.stages) && ev.stages.some((s: any) => s?.stage === k))));
   try { return effectiveCounts(scoped, adoptedTxsOfEvidence(ev)); } catch { return scoped; }
 }
 const adoptedLibraries = (s: any): { name?: string; address?: string; code_hash?: string }[] => (Array.isArray(adoptedOf(s)?.libraries) ? adoptedOf(s).libraries : []);
@@ -646,8 +646,8 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   if (ev?.verifier?.exit_code !== 0) bad("the verifier did not exit 0");
   if (ev?.verifier?.registry_list_vaults_equals_manifests !== true) bad("registry listVaults was not shown equal to the manifests");
   // explorer source verification is publishing, not a gate (owner decision 2026-10-19): the verifier's code labels prove the build from the chain
-  p.push(...upgradeabilityEvidenceProblems(ev, opts?.proxies ?? repoProxyNames(), kind));
-  p.push(...governedUpgradeProblems(ev, floor, opts?.proxies ?? repoProxyNames()));
+  p.push(...upgradeabilityEvidenceProblems(ev, opts?.proxies ?? repoProxyNames(ev?.system === "vaults" ? "vaults" : "legacy"), kind));
+  p.push(...governedUpgradeProblems(ev, floor, opts?.proxies ?? repoProxyNames(ev?.system === "vaults" ? "vaults" : "legacy")));
   return p;
 }
 
@@ -1353,7 +1353,7 @@ export function rpcCallRevert(url: string): LifecycleChain["callRevert"] {
  */
 async function checkLifecycleMain(values: Record<string, string | boolean | undefined>): Promise<void> {
   const r = JSON.parse(readFileSync(values["upgrade-lifecycle"] as string, "utf8"));
-  const problems = upgradeLifecycleProblems(r, repoProxyNames());
+  const problems = upgradeLifecycleProblems(r, repoProxyNames(r?.upgrade?.proxy === "gateway" ? "legacy" : "vaults"));
   if (problems.length === 0 && typeof values.rpc === "string") {
     const { createPublicClient, http } = await import("viem");
     const client = createPublicClient({ transport: http(values.rpc) });

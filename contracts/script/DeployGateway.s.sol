@@ -43,6 +43,9 @@ contract DeployGateway is UpgradeAuthority {
     /// @notice Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "gateway.json";
 
+    /// @notice The env var that names the gateway's own upgrade timelock (explicit, nonzero, never the vaults timelock).
+    string public constant TIMELOCK_ENV = "GATEWAY_UPGRADE_TIMELOCK";
+
     struct Params {
         address admin;
         address pauser;
@@ -70,7 +73,7 @@ contract DeployGateway is UpgradeAuthority {
     /// @return d The deployed gateway and its wiring.
     function run() external returns (Deployed memory d) {
         Params memory p = _readEnvParamsFrom("");
-        UpgradeConfig memory u = _readExplicitUpgradeConfig("", "GATEWAY_UPGRADE_TIMELOCK");
+        UpgradeConfig memory u = _readExplicitUpgradeConfig("", TIMELOCK_ENV);
         vm.startBroadcast();
         d = _deployGateway(p, u);
         vm.stopBroadcast();

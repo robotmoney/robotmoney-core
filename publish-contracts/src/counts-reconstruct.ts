@@ -22,7 +22,7 @@ import { LIBS_STAGE } from "./core-wiring.ts";
 import { PublishError } from "./errors.ts";
 import { buildCreate2Libraries, verifyAdoptedCreate2, verifyAdoptedLibraries } from "./libs-adopt.ts";
 import { scopeTable, type StageTable } from "./stage-table.ts";
-import { ACTIVE_SYSTEM } from "./stages.ts";
+import { ACTIVE_SYSTEM, getStageTable } from "./stages.ts";
 import type { FrozenCounts, FrozenFile } from "./counts.ts";
 
 /** One adopted CREATE2 creation of a measuring run. */
@@ -144,7 +144,10 @@ export async function verifyReconstructionOnChain(r: Reconstruction, o: { table:
 
 /** The stage-by-stage difference between a baseline and an earlier frozen file. */
 export function crossCheckDiff(counts: FrozenCounts, old: FrozenCounts): { stage: string; old: number | null; new: number | null }[] {
-  return [...new Set([...Object.keys(counts), ...Object.keys(old)])].sort().filter((k) => counts[k] !== old[k]).map((k) => ({ stage: k, old: old[k] ?? null, new: counts[k] ?? null }));
+  // issue 1892: the other system's counts (the anchor of an earlier release carries the gateway's) are not this baseline's to compare
+  let ignore = new Set<string>();
+  try { ignore = otherSystemKeys(getStageTable()); } catch { /* no table loaded: compare every key */ }
+  return [...new Set([...Object.keys(counts), ...Object.keys(old)])].sort().filter((k) => !ignore.has(k) && counts[k] !== old[k]).map((k) => ({ stage: k, old: old[k] ?? null, new: counts[k] ?? null }));
 }
 
 export interface AdoptedEntry { deployerTxs: number; libraries?: { name: string; artifact: string; address: string; codeHash: string }[]; factory?: string }

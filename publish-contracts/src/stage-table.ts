@@ -290,7 +290,16 @@ export const manifestPathFor = (template: string, chainId: number | string): str
  * Issue 1892: the table as one system sees it. A table from before the split (no `systems`) is returned as it is. Otherwise `stages` keeps only the stages of `system`, so every
  * reader that walks `table.stages` (the verifier, the manifests it requires, the proxy set, the evidence floors) sees one system and never the other's contracts.
  */
-export function scopeTable(t: StageTable, system: SystemName): StageTable {
+export function scopeTable(t: StageTable, system: SystemName | "legacy"): StageTable {
   if (!t.systems) return t;
+  if (system === "legacy") {
+    // the combined deployment (deploy-2) read with a table that declares systems: the vaults stages with the gateway stage back in its combined place (after the router), and never
+    // the gateway handover stage the combined deploy did not have
+    const rest = t.stages.filter((s) => s.system !== "gateway");
+    const gw = t.stages.find((s) => s.name === "gateway");
+    if (!gw) return { ...t, stages: rest };
+    const at = rest.findIndex((s) => s.name === "router");
+    return { ...t, stages: at < 0 ? [...rest, gw] : [...rest.slice(0, at + 1), gw, ...rest.slice(at + 1)] };
+  }
   return { ...t, stages: t.stages.filter((s) => s.system === system) };
 }
