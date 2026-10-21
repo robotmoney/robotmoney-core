@@ -1,0 +1,28 @@
+{
+  "description": "TEST FIXTURE (core issue 1903, ADR-0015). The config/agent-token-shortlist.json of a reactivated rmAGENT: RM moved from parked.entries into shortlist. The Foundry tests that need RM and its V4 pool run on this file while RM_PARKED is true in the shipped config. test_rmParked_fixtureEqualsTheShippedRmEntry fails if it drifts from the shipped RM entry.",
+  "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "uniswapV3Factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+  "swapRouter02": "0x2626664c2603336E57B271c5C0b26F421741e481",
+  "shortlist": [
+    {
+      "symbol": "RM",
+      "token": "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3",
+      "tokenDecimals": 18,
+      "tokenCodeHash": "0x7c678e2a3551a8d92c49819894c995e9b973a885b1ca5ab096853095e9a329d6",
+      "venue": "UniswapV4",
+      "poolManager": "0x498581fF718922c3f8e6A244956aF099B2652b2b",
+      "stateView": "0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71",
+      "poolId": "0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391",
+      "poolKey": {
+        "currency0": "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3",
+        "currency1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "fee": 29100,
+        "tickSpacing": 582,
+        "hooks": "0x0000000000000000000000000000000000000000"
+      },
+      "poolFee": 29100
+    }
+  ],
+  "parked": { "entries": [] },
+  "maxSlippageBps": 500
+}

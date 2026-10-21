@@ -1,3 +1,4 @@
+import { writeActivatedAgentConfig } from "./rm-parked.ts";
 // Core 1676: the runner waits for the Uniswap V4 price recorder to hold a full TWAP window before the agent stage, and refuses the stage while
 // the recorder's oldest snapshot is younger than the window. BasketVault.addAsset would revert InsufficientObservationHistory otherwise.
 import { describe, expect, test } from "bun:test";
@@ -31,7 +32,7 @@ function setup(o: { chainId?: number; v4?: boolean; simRpc?: string } = {}) {
   mkdirSync(m, { recursive: true });
   writeFileSync(join(m, "recorder.json"), JSON.stringify({ chain_id: chainId, recorder: RECORDER }));
   writeCoreAssetConfig(coreDir);
-  if (o.v4 !== false) copyFileSync(join(REPO, "config", "agent-token-shortlist.json"), join(coreDir, "config", "agent-token-shortlist.json"));
+  if (o.v4 !== false) writeActivatedAgentConfig(join(coreDir, "config", "agent-token-shortlist.json")); // RM_PARKED: the reactivated copy
   const state = { now: 1_800_000_000n, oldest: 1_800_000_000n - 100n, reads: [] as string[] };
   const lines: string[] = [];
   const spawned: string[][] = [];
@@ -126,7 +127,7 @@ describe("the recorder wait before the agent stage (core 1676)", () => {
 describe("the runner refuses the agent stage while the recorder is young (full CLI run on stub forge)", () => {
   test("the agent script is never simulated or broadcast, and the run exits RECORDER_HISTORY", async () => {
     const w = world({ startNonce: 0 });
-    copyFileSync(join(REPO, "config", "agent-token-shortlist.json"), join(w.coreDir, "config", "agent-token-shortlist.json"));
+    writeActivatedAgentConfig(join(w.coreDir, "config", "agent-token-shortlist.json")); // RM_PARKED: the reactivated copy
     // every V3 pool is healthy (the proto and rwa config-checks pass); the RM V4 pool is funded; the recorder holds only 60 s of history
     const base = healthyPoolReader();
     const reader: ChainReader = {

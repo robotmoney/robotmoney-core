@@ -254,3 +254,7 @@ There is no voting by token holders or anyone else. The Safe multisig, through t
   `CallScheduled` event) and document it in the dapp monitoring spec.
 - [ ] Update `docs/development/open-questions.md` §1.3 and §1.4 to mark this
   question resolved and link this ADR.
+
+## Amendment — 2026-10-21 (RM parked)
+
+The owner parked RM out of rmAGENT until its market is deep enough. rmAGENT launches with an empty shortlist, and tokens are added later through the timelock. See [ADR-0015](ADR-0015-rm-parked-from-rmagent-until-market-depth.md). The text above is unchanged.

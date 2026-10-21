@@ -8,7 +8,8 @@
 //   - deSPXA is listed with Uniswap V3 fee 500 and nothing else in rwa-assets.json
 //   - wSOL, BNKR and JUNO are absent; RM appears only in agent-token-shortlist.json
 //   - no Chronicle, Aerodrome, mainnet or devnet key anywhere in config/
-//   - agent-token-shortlist.json launch list is exactly RM (live ROBOTMONEY token, code-hash pinned) on the Uniswap V4
+//   - agent-token-shortlist.json launch list is EMPTY with RM parked under `parked.entries` (owner decision 2026-10-21, core issue 1903: rmAGENT ships
+//     with no asset until the RM pool is deep enough), or exactly RM once reactivated, never both. The RM entry is (live ROBOTMONEY token, code-hash pinned) on the Uniswap V4
 //     RM/USDC 2.91% pool (owner decision 2026-10-08, core 1676): venue UniswapV4, fee 29100, tickSpacing 582, hooks 0x0,
 //     and the PoolKey hashes to pool id 0xf2e7b957...; it records swapRouter02 (the script parser needs it)
 // Live rules (per V3 asset, pinned to one block): token, pool, factory and router have code,
@@ -92,6 +93,26 @@ export interface AgentEntry extends Omit<Asset, "pool"> {
   poolId?: string;
   poolKey?: PoolKey;
 }
+/**
+ * config/agent-token-shortlist.json. `parked` holds the entries dropped from rmAGENT by the owner decision of 2026-10-21 (core issue 1903): no deploy script,
+ * recorder script, vault or live check reads it. RM_PARKED is true exactly while `parked.entries` is not empty (`rmParked`).
+ */
+export interface AgentFile {
+  usdc: string;
+  uniswapV3Factory: string;
+  swapRouter02: string;
+  maxSlippageBps?: number;
+  shortlist: AgentEntry[];
+  parked?: {
+    decision?: string;
+    reason?: string;
+    measured?: Record<string, unknown>;
+    reactivation?: { criteria?: string[]; steps?: string[] };
+    entries?: AgentEntry[];
+  };
+}
+/** RM_PARKED (core issue 1903): RM is out of rmAGENT while the config holds it under `parked.entries`. The tests that need RM and its pool read this flag. */
+export const rmParked = (agent: Pick<AgentFile, "parked">): boolean => (agent.parked?.entries ?? []).length > 0;
 export interface AssetFile {
   usdc: string;
   uniswapV3Factory: string;
@@ -102,7 +123,7 @@ export interface AssetFile {
 export interface Configs {
   protocol: AssetFile;
   rwa: AssetFile;
-  agent: { usdc: string; uniswapV3Factory: string; swapRouter02: string; maxSlippageBps?: number; shortlist: AgentEntry[] };
+  agent: AgentFile;
   dexPools: Record<string, unknown>;
   /** Pinned USDC code hashes (config/usdc-hashes.json). null means not pinned yet: refused. */
   usdcHashes: UsdcHashes;
@@ -183,14 +204,24 @@ export function staticFindings(c: Configs): Finding[] {
   add("rwa-assets.json", "despxa-venue", d?.venue === "UniswapV3", `venue=${d?.venue}`);
   const protoSyms = (c.protocol.assets ?? []).map((a) => a.symbol).sort();
   add("protocol-assets.json", "weth-cbbtc-only", JSON.stringify(protoSyms) === JSON.stringify(["cbBTC", "wETH"]), `symbols=${protoSyms.join(",")}`);
+  // Core issue 1903: the launch list is either empty with RM parked (owner decision 2026-10-21) or exactly RM, never both and never anything else.
   const sl = c.agent.shortlist ?? [];
-  const rm = sl[0];
+  const parkedEntries = c.agent.parked?.entries ?? [];
+  const isParked = sl.length === 0 && parkedEntries.length === 1;
+  const isActive = sl.length === 1 && parkedEntries.length === 0;
+  const rm = isParked ? parkedEntries[0]! : sl[0]!;
   const k = rm?.poolKey;
   const eq = (a: string | undefined, b: string) => a?.toLowerCase() === b.toLowerCase();
-  add(AGENT_FILE, "launch-list-is-rm-only",
-    sl.length === 1 && rm.symbol === "RM" && eq(rm.token, RM.token) && rm.venue === RM.venue && rm.poolFee === RM.fee &&
+  add(AGENT_FILE, "launch-list-is-rm-only-or-rm-parked",
+    (isParked || isActive) && rm.symbol === "RM" && eq(rm.token, RM.token) && rm.venue === RM.venue && rm.poolFee === RM.fee &&
       HASH_RE.test(rm.tokenCodeHash ?? ""),
-    `entries=${sl.length} ${rm ? `${rm.symbol} fee=${rm.poolFee} venue=${rm.venue}` : ""}`);
+    `shortlist=${sl.length} parked=${parkedEntries.length} ${rm ? `${rm.symbol} fee=${rm.poolFee} venue=${rm.venue}` : ""}`);
+  // A parked RM must carry the decision, the reason, the measured numbers and reactivation criteria stated in dollars, or nobody can tell when to bring it back.
+  const pk = c.agent.parked;
+  add(AGENT_FILE, "rm-parked-states-reactivation",
+    !isParked || (!!pk?.decision && !!pk.reason && Object.keys(pk.measured ?? {}).length > 0 && (pk.reactivation?.steps ?? []).length > 0 &&
+      (pk.reactivation?.criteria ?? []).length > 0 && /USD/.test((pk.reactivation?.criteria ?? []).join(" "))),
+    isParked ? `criteria=${pk?.reactivation?.criteria?.length ?? 0} steps=${pk?.reactivation?.steps?.length ?? 0}` : "RM is listed, nothing is parked");
   // Core 1676: the V4 PoolKey. Every field is pinned, and the key must hash to the configured pool id (a spoofed key cannot share the id).
   let derived = "";
   try { derived = k ? poolIdOfKey(k) : ""; } catch { derived = ""; }

@@ -13,7 +13,7 @@ import {IPoolManagerV4} from "../interfaces/IPoolManagerV4.sol";
 
 /// @title DeployUniswapV4PriceRecorder
 /// @notice Stage `recorder`: deploys the permissionless `UniswapV4PriceRecorder` for the Uniswap V4 pool named by the
-///         rmAGENT config (`config/agent-token-shortlist.json`, the entry with venue UniswapV4), grows its observation
+///         rmAGENT config (`config/agent-token-shortlist.json`: the shortlist entry with venue UniswapV4, or `parked.entries` while RM is parked, ADR-0015), grows its observation
 ///         ring to 7_201 slots and records the first snapshot. 7_201 is the 4 hour USDC sell anchor window / 2 s Base
 ///         block + 1 (`BasketViews.SELL_ANCHOR_WINDOW`, core 1793): at one record per block no spammer can evict the
 ///         anchor's history. It also covers the 901-slot floor `addAsset` needs for the 1800 s NAV window.
@@ -68,28 +68,23 @@ contract DeployUniswapV4PriceRecorder is ExpectedChainGuard {
         d = _deploy(poolManager, key, poolId);
     }
 
-    /// @dev The one UniswapV4 entry of the config. Fails closed on none or on a key that does not hash to its id.
+    /// @dev The one UniswapV4 entry of the config: the shortlist entry, or, while RM is parked out of rmAGENT (core issue 1903, ADR-0015),
+    ///      the entry in `parked.entries`. The recorder is permissionless and holds no role, so pre-positioning it for the parked pool costs
+    ///      only gas and makes reactivation a timelock `addAsset` with no wait for price history. Fails closed on none, on two, or on a key
+    ///      that does not hash to its id.
     function _readV4Entry(string memory json)
         internal
         view
         returns (address poolManager, IPoolManagerV4.PoolKey memory key, bytes32 poolId)
     {
-        uint256 found = type(uint256).max;
-        uint256 n;
-        while (vm.keyExistsJson(json, string.concat(".shortlist[", vm.toString(n), "]"))) {
-            string memory venue =
-                json.readString(string.concat(".shortlist[", vm.toString(n), "].venue"));
-            if (keccak256(bytes(venue)) == keccak256("UniswapV4")) {
-                require(
-                    found == type(uint256).max,
-                    "more than one UniswapV4 asset: one recorder per run"
-                );
-                found = n;
-            }
-            n++;
+        string memory root = ".shortlist";
+        uint256 found = _findV4(json, root);
+        if (found == type(uint256).max) {
+            root = ".parked.entries";
+            found = _findV4(json, root);
         }
         require(found != type(uint256).max, "no UniswapV4 asset in the config: nothing to record");
-        string memory base = string.concat(".shortlist[", vm.toString(found), "]");
+        string memory base = string.concat(root, "[", vm.toString(found), "]");
         poolManager = json.readAddress(string.concat(base, ".poolManager"));
         poolId = json.readBytes32(string.concat(base, ".poolId"));
         string memory k = string.concat(base, ".poolKey");
@@ -101,6 +96,23 @@ contract DeployUniswapV4PriceRecorder is ExpectedChainGuard {
             hooks: json.readAddress(string.concat(k, ".hooks"))
         });
         require(keccak256(abi.encode(key)) == poolId, "config poolKey does not hash to poolId");
+    }
+
+    function _findV4(string memory json, string memory root) internal view returns (uint256 found) {
+        found = type(uint256).max;
+        uint256 n;
+        while (vm.keyExistsJson(json, string.concat(root, "[", vm.toString(n), "]"))) {
+            string memory venue =
+                json.readString(string.concat(root, "[", vm.toString(n), "].venue"));
+            if (keccak256(bytes(venue)) == keccak256("UniswapV4")) {
+                require(
+                    found == type(uint256).max,
+                    "more than one UniswapV4 asset: one recorder per run"
+                );
+                found = n;
+            }
+            n++;
+        }
     }
 
     function _deploy(address poolManager, IPoolManagerV4.PoolKey memory key, bytes32 poolId)

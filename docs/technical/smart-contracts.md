@@ -125,7 +125,7 @@ Owner decision, 2026-10-19. The contracts form two separate systems. Each is dep
 |---|---|---|---|
 | BasketVault (base) | Abstract ERC-4626 USDC → basket asset mix. Subclassed by ProtocolAssetVault, AgentTokenVault, RwaBasketVault. | `contracts/vaults/BasketVault.sol` | N/A (abstract) |
 | ProtocolAssetVault | USDC → wETH, cbBTC (volatile protocol assets; assets with no usable pool are added later through the timelock) | `contracts/vaults/ProtocolAssetVault.sol` | set at the mainnet deploy |
-| AgentTokenVault | USDC → RM, the live ROBOTMONEY token `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (nothing deploys an RM mock). RM's venue is decided (owner, 2026-10-08; supersedes 2026-10-06): the Uniswap V4 RM/USDC pool with fee 2.91% (id `0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391`), traded through `UniswapV4SwapAdapter` and priced by the permissionless `UniswapV4PriceRecorder` (sufficient for the Base mainnet test, not the final deployment; `perDepositCap` and `tvlCap` stay below the pool depth). RM is the only entry in `config/agent-token-shortlist.json` (core 1554), pinned by token code hash | `contracts/vaults/AgentTokenVault.sol` | set at the mainnet deploy |
+| AgentTokenVault | Deployed with no active asset (RM is parked, owner 2026-10-21, [ADR-0015](../adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md)): `maxDeposit` is 0 and `deposit` reverts `ERC4626ExceededMaxDeposit` until a token is added through the timelock. When listed, USDC → RM, the live ROBOTMONEY token `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (nothing deploys an RM mock). RM's venue is decided (owner, 2026-10-08; supersedes 2026-10-06): the Uniswap V4 RM/USDC pool with fee 2.91% (id `0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391`), traded through `UniswapV4SwapAdapter` and priced by the permissionless `UniswapV4PriceRecorder` (sufficient for the Base mainnet test, not the final deployment; `perDepositCap` and `tvlCap` stay below the pool depth). RM is parked under `parked` in `config/agent-token-shortlist.json` and `shortlist` is empty (core 1554), pinned by token code hash | `contracts/vaults/AgentTokenVault.sol` | set at the mainnet deploy |
 | RwaBasketVault | USDC → deSPXA, a plain basket row priced from its fee 500 pool TWAP | `contracts/vaults/RwaBasketVault.sol` | set at the mainnet deploy |
 
 ### 2.4 Admin and fee recipient
@@ -766,7 +766,7 @@ Newly registered assets use `DEFAULT_TWAP_WINDOW` until ADMIN_ROLE raises or low
 | Subclass | Share symbol | Basket composition | Status | Use case |
 |---|---|---|---|---|
 | **ProtocolAssetVault** | rmPROTO | Volatile protocol assets (wETH, cbBTC on Base). | Prototype (not audited) | Exposure to Base protocol ecosystem assets. |
-| **AgentTokenVault** | rmAGENT | RM, the live ROBOTMONEY token. Other agent tokens (BNKR, JUNO) are added later through the timelock. | Prototype (not audited) | Agent incentive and governance participation. |
+| **AgentTokenVault** | rmAGENT | No asset at launch: RM, the live ROBOTMONEY token, is parked (ADR-0015). RM and other agent tokens (BNKR, JUNO) are added later through the timelock. | Prototype (not audited) | Agent incentive and governance participation. |
 | **RwaBasketVault** | rmRWA | deSPXA, one plain basket row. | Prototype (not audited) | Diversification into real-world collateral. |
 
 All three subclasses inherit BasketVault behavior and are configured with:

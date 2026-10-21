@@ -43,7 +43,9 @@ contract UniswapV4SwapAdapterForkTest is Test {
         if (!ForkSelect.selectOrSkip(rpc)) return;
 
         cfg = vm.readFile("config/agent-token-shortlist.json");
-        string memory b = ".shortlist[0]";
+        // RM_PARKED (core issue 1903, ADR-0015): while RM is parked the config holds its entry under parked.entries. The fork test still runs against it.
+        string memory b =
+            vm.keyExistsJson(cfg, ".shortlist[0]") ? ".shortlist[0]" : ".parked.entries[0]";
         rmToken = cfg.readAddress(string.concat(b, ".token"));
         poolManager = cfg.readAddress(string.concat(b, ".poolManager"));
         stateView = cfg.readAddress(string.concat(b, ".stateView"));

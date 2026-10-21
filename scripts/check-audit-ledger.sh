@@ -253,7 +253,8 @@ REVIEW_KEYS='20261012-security-review.md SR-1012
 20261015-review-security-claude.md SR-1015
 20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-system-split.md SS-1019
 20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md IC-1019
-20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md RS-1019'
+20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md RS-1019
+20261021-code-review-internal-claude-rm-parked-from-rmagent.md RP-1021'
 [ -d "${REVIEW_DIR}" ] || fail "docs/code-review/ is missing; the ledger keys its reviews (issue #1792)"
 
 REGISTER_IDS="$(

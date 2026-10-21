@@ -1,3 +1,4 @@
+import { rmEntry } from "./rm-parked.ts";
 // devops 58 (S11): the read-only config-check of every configured asset against the chain (a fake read-only ChainReader here).
 // Plan: Parameters, "Oracle config": the TWAP that prices the basket vault is inside the window, fresh and near V3 spot.
 import { describe, expect, test } from "bun:test";
@@ -102,7 +103,8 @@ describe("config-check", () => {
 // ---- the Uniswap V4 asset (core 1676) ----------------------------------------------------------------------------------------------
 
 const SHIPPED_RM = (): ConfiguredAsset => {
-  const a = loadVaultConfiguredAssets(REPO_ROOT, "AGENT")[0]!;
+  const dir = tmp("cc-rm-"); writeCoreAssetConfig(dir, { shortlist: [rmEntry()] }); // RM_PARKED: the committed config parks the entry
+  const a = loadVaultConfiguredAssets(dir, "AGENT")[0]!;
   expect(a.venue).toBe(1);
   return a;
 };
@@ -189,7 +191,7 @@ describe("config-check of the Uniswap V4 RM pool (core 1676)", () => {
 
 describe("core's asset config files", () => {
   test("a UniswapV4 entry loads with the zero pool and its PoolKey; a malformed V4 entry is refused by name", () => {
-    const rm = JSON.parse(readFileSync(join(REPO_ROOT, "config", "agent-token-shortlist.json"), "utf8")).shortlist[0];
+    const rm = rmEntry(); // RM_PARKED: the committed config parks the entry
     const load = (e: object) => { const dir = tmp("cc-"); writeCoreAssetConfig(dir, { shortlist: [e] }); return loadVaultConfiguredAssets(dir, "AGENT"); };
     const got = load(rm)[0]!;
     expect([got.venue, got.pool, got.swapFee, got.v4?.key.tickSpacing]).toEqual([1, "0x0000000000000000000000000000000000000000", 29100, 582]);
@@ -238,10 +240,13 @@ describe.skipIf(!coreAvailable())(`core parity: the real core config files in ${
       if (a.symbol === "RM") { expect(a.venue).toBe(1); expect(a.v4?.key.fee).toBe(29100); } else expect(a.venue).toBe(0);
     }
   });
-  test("rmPROTO lists wETH and cbBTC, rmRWA lists deSPXA only, rmAGENT lists RM only", () => {
+  test("rmPROTO lists wETH and cbBTC, rmRWA lists deSPXA only, rmAGENT lists nothing while RM is parked (core 1903, ADR-0015)", () => {
     expect(loadVaultConfiguredAssets(REPO_ROOT, "PROTO").map((a) => a.symbol)).toEqual(["wETH", "cbBTC"]);
     expect(loadVaultConfiguredAssets(REPO_ROOT, "RWA").map((a) => a.symbol)).toEqual(["deSPXA"]);
-    const agent = loadVaultConfiguredAssets(REPO_ROOT, "AGENT");
+    // RM_PARKED: the committed shortlist is empty. The parked RM entry is checked on the reactivated copy.
+    expect(loadVaultConfiguredAssets(REPO_ROOT, "AGENT")).toEqual([]);
+    const dir = tmp("cc-rm-"); writeCoreAssetConfig(dir, { shortlist: [rmEntry()] });
+    const agent = loadVaultConfiguredAssets(dir, "AGENT");
     expect(agent.map((a) => a.symbol)).toEqual(["RM"]);
     expect(agent[0].token.toLowerCase()).toBe("0x65021a79aeef22b17cdc1b768f5e79a8618beba3");
     expect(agent[0].swapFee).toBe(29100);

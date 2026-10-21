@@ -26,7 +26,7 @@
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/recorder.json",
-      "manifestNotes": "The permissionless Uniswap V4 price recorder for the RM/USDC pool (core 1676). It runs right after libs so the 1800 s price history accumulates while the other stages run. The runner waits for a full window of history before the agent stage. No role is involved.",
+      "manifestNotes": "The permissionless Uniswap V4 price recorder for the RM/USDC pool (core 1676). It runs right after libs so the 1800 s price history accumulates while the other stages run. The runner waits for a full window of history before an agent stage that registers a V4 asset. While RM is parked (ADR-0015) the pool comes from parked.entries in the config, the agent stage registers no asset and the wait does not apply. No role is involved.",
       "libraries": [],
       "vault": null
     },

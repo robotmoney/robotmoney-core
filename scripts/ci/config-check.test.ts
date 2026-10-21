@@ -6,14 +6,20 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   loadConfigs, staticFindings, liveFindings, keccak256, keccakHex, parseCli, httpRpc, redactUrl, usdcHashFindings, readUsdcHashes, UsageError,
-  USDC, USDC_IMPL_SLOT, RM, poolIdOfKey, type Rpc,
+  USDC, USDC_IMPL_SLOT, RM, poolIdOfKey, rmParked, type Rpc,
 } from "./config-check";
 import { spawnSync } from "node:child_process";
+import { activatedConfigDir } from "./rm-parked-testlib";
 
 const repo = resolve(import.meta.dir, "..", "..");
 const realDir = join(repo, "config");
 
+/** The config with RM reactivated (core issue 1903: the committed config parks RM), then mutated. The V4 RM-pool rules run on it in full. */
 function fixture(mutate: (files: Record<string, any>) => void) {
+  return loadConfigs(activatedConfigDir(realDir, mutate));
+}
+/** The committed parked config, mutated. */
+function parkedFixture(mutate: (files: Record<string, any>) => void) {
   const dir = mkdtempSync(join(tmpdir(), "cfg-"));
   cpSync(realDir, dir, { recursive: true });
   const files: Record<string, any> = {};
@@ -56,16 +62,49 @@ describe("static rules", () => {
   });
   test("an agent shortlist other than exactly RM fails", () => {
     const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist = [{ symbol: "X" }]; });
-    expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only")).toBe(true);
+    expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only-or-rm-parked")).toBe(true);
     const e = fixture((f) => { f["agent-token-shortlist.json"].shortlist = []; });
-    expect(failures(e).some((x) => x.rule === "launch-list-is-rm-only")).toBe(true);
+    expect(failures(e).some((x) => x.rule === "launch-list-is-rm-only-or-rm-parked")).toBe(true);
+  });
+  describe("RM parked (core issue 1903, owner decision 2026-10-21)", () => {
+    test("the committed config ships an empty shortlist with RM parked and rmParked is true", () => {
+      const c = loadConfigs(realDir);
+      expect(c.agent.shortlist).toEqual([]);
+      expect(c.agent.parked!.entries!.map((e) => e.symbol)).toEqual(["RM"]);
+      expect(rmParked(c.agent)).toBe(true);
+    });
+    test("the parked block states the decision, the measured numbers and reactivation criteria in dollars", () => {
+      const p = loadConfigs(realDir).agent.parked!;
+      expect(p.decision).toContain("provisionally drop Robotmoney");
+      expect(String(p.measured!.inRangeLiquidityL)).toBe("6.476e13");
+      expect(p.reactivation!.criteria!.join(" ")).toMatch(/5,000 USD/);
+      expect(p.reactivation!.steps!.length).toBeGreaterThan(0);
+    });
+    test("a parked config with no reactivation criteria fails", () => {
+      const c = parkedFixture((f) => { f["agent-token-shortlist.json"].parked.reactivation.criteria = []; });
+      expect(failures(c).some((x) => x.rule === "rm-parked-states-reactivation")).toBe(true);
+    });
+    test("a parked RM with a wrong pool id fails the same pin rules as a listed RM", () => {
+      const c = parkedFixture((f) => { f["agent-token-shortlist.json"].parked.entries[0].poolId = "0x" + "ab".repeat(32); });
+      expect(failures(c).some((x) => x.rule === "rm-v4-pool-id")).toBe(true);
+    });
+    test("RM in both the shortlist and parked fails", () => {
+      const c = parkedFixture((f) => { const a = f["agent-token-shortlist.json"]; a.shortlist = [...a.parked.entries]; });
+      expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only-or-rm-parked")).toBe(true);
+    });
+    test("the reactivated config (RM moved back into the shortlist) passes and rmParked is false", () => {
+      const c = fixture(() => {});
+      expect(failures(c)).toEqual([]);
+      expect(c.agent.shortlist.map((e) => e.symbol)).toEqual(["RM"]);
+      expect(rmParked(c.agent)).toBe(false);
+    });
   });
   test("the committed RM entry pins the public RM code hash (the same value .gitleaks.toml allowlists)", () => {
-    const rm = loadConfigs(realDir).agent.shortlist[0];
+    const rm = loadConfigs(realDir).agent.parked!.entries![0]!;
     expect(rm.tokenCodeHash).toBe("0x7c678e2a3551a8d92c49819894c995e9b973a885b1ca5ab096853095e9a329d6");
   });
   test("the committed RM entry is the Uniswap V4 pool: venue, fee 29100, tickSpacing 582, hooks 0x0, pool id 0xf2e7b957...", () => {
-    const rm = loadConfigs(realDir).agent.shortlist[0];
+    const rm = loadConfigs(realDir).agent.parked!.entries![0]!;
     expect(rm.venue).toBe("UniswapV4");
     expect(rm.poolFee).toBe(29100);
     expect(rm.poolKey).toEqual({ currency0: RM.token, currency1: USDC, fee: 29100, tickSpacing: 582, hooks: RM.hooks });
@@ -73,7 +112,7 @@ describe("static rules", () => {
     expect(rm.pool).toBeUndefined();
   });
   test("the pool id is the keccak256 of the abi-encoded PoolKey (matches cast)", () => {
-    const rm = loadConfigs(realDir).agent.shortlist[0];
+    const rm = loadConfigs(realDir).agent.parked!.entries![0]!;
     expect(poolIdOfKey(rm.poolKey!)).toBe(rm.poolId!);
     const r = spawnSync("cast", ["keccak", "0x" + [RM.token, USDC].map((x) => x.slice(2).toLowerCase().padStart(64, "0")).join("") +
       (29100).toString(16).padStart(64, "0") + (582).toString(16).padStart(64, "0") + "0".repeat(64)], { encoding: "utf8" });
@@ -100,13 +139,13 @@ describe("static rules", () => {
   });
   test("an RM entry on UniswapV3, or with a V3 pool address, fails", () => {
     const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].venue = "UniswapV3"; });
-    expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only")).toBe(true);
+    expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only-or-rm-parked")).toBe(true);
     const d = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].pool = "0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882"; });
     expect(failures(d).some((x) => x.rule === "rm-v4-poolkey")).toBe(true);
   });
   test("an RM pool fee other than 29100 fails", () => {
     const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].poolFee = 3000; });
-    expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only")).toBe(true);
+    expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only-or-rm-parked")).toBe(true);
   });
   test("a PoolManager or StateView other than the Base ones fails", () => {
     const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].poolManager = "0x" + "33".repeat(20); });
@@ -172,7 +211,7 @@ describe("live rules against a fake RPC", () => {
     usdcHashes: { proxyCodeHash: FAKE_HASH, implementationCodeHash: FAKE_HASH },
     agent: { ...c.agent, shortlist: c.agent.shortlist.map((e) => ({ ...e, tokenCodeHash: FAKE_HASH })) },
   });
-  const cfg = pin(loadConfigs(realDir));
+  const cfg = pin(loadConfigs(activatedConfigDir(realDir)));
   const w = (n: bigint | number) => BigInt(n).toString(16).padStart(64, "0");
   const a = (x: string) => x.replace(/^0x/, "").toLowerCase().padStart(64, "0");
   const all = [...cfg.protocol.assets, ...cfg.rwa.assets, ...cfg.agent.shortlist] as { symbol: string; token: string; pool?: string; poolFee: number }[];

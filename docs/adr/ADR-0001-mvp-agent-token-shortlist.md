@@ -202,3 +202,7 @@ There is no voting by token holders or anyone else. The Safe multisig, through t
   §3.15 only.
 - Intra-vault rebalancing (§3.15) — the new-deposits-only proposal is
   tracked separately and may need its own ADR once product confirms.
+
+## Amendment — 2026-10-21 (RM parked)
+
+The owner parked RM out of rmAGENT until its market is deep enough. rmAGENT launches with an empty shortlist, and tokens are added later through the timelock. See [ADR-0015](ADR-0015-rm-parked-from-rmagent-until-market-depth.md). The text above is unchanged.

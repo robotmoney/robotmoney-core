@@ -608,13 +608,23 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         "recorder: has no owner, role or setter",
         "recorder: runtime code equals build artifact (masked)",
         "adapter[V4:rmAGENT]: runtime code equals build artifact (masked)",
-    ] {
+    ]
+    .into_iter()
+    // RM_PARKED (core issue 1903, ADR-0015): rmAGENT is empty, so no V4 asset row exists to verify. Only the recorder's own code check remains.
+    .filter(|l| !rm_parked(&fx) || *l == "recorder: runtime code equals build artifact (masked)")
+    {
         assert!(
             verified.lines().any(|l| l.trim() == label),
             "the verifier output lacks the label '{label}'"
         );
     }
-    rm_v4_flows(&fx, dir);
+    if rm_parked(&fx) {
+        // RM_PARKED is announced, never silent: the run states the decision, then asserts what an empty rmAGENT does.
+        eprintln!("RM_PARKED (core issue 1903, ADR-0015): rmAGENT is deployed empty, rm_v4_flows is not run");
+        rm_parked_empty_vault(&fx);
+    } else {
+        rm_v4_flows(&fx, dir);
+    }
 
     // Issues 1485 (AC7) and 1493 (AC5): a router deposit and a router withdraw both succeed on the Twin chain after the full publish and govern run.
     // `cast_send` fails on a reverted receipt.
@@ -747,6 +757,38 @@ fn word(raw: &str, i: usize) -> String {
 fn tick_of(raw: &str, i: usize) -> i32 {
     let w = word(raw, i);
     u32::from_str_radix(&w[w.len() - 8..], 16).expect("tick word") as i32
+}
+
+/// RM_PARKED (core issue 1903, ADR-0015): true exactly while `config/agent-token-shortlist.json` holds RM under `parked.entries`.
+fn rm_parked(fx: &Fixture) -> bool {
+    let cfg: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fx.repo_root().join("config/agent-token-shortlist.json"))
+            .expect("read the shipped agent config"),
+    )
+    .expect("agent config is JSON");
+    cfg["parked"]["entries"]
+        .as_array()
+        .map(|a| !a.is_empty())
+        .unwrap_or(false)
+}
+
+/// RM_PARKED: an empty rmAGENT, opened by the real Safe and timelock, holds no asset and takes no deposit.
+fn rm_parked_empty_vault(fx: &Fixture) {
+    let agent_vault = fx.agent_vault();
+    let count = fx
+        .cast_call_raw(agent_vault, "assetCount()", &[])
+        .expect("read rmAGENT assetCount");
+    assert!(
+        word(&count, 0).chars().all(|c| c == '0'),
+        "rmAGENT must hold no asset while RM is parked, got {count}"
+    );
+    let max = fx
+        .cast_call_raw(agent_vault, "maxDeposit(address)", &[&format!("{:#x}", fx.agent())])
+        .expect("read rmAGENT maxDeposit");
+    assert!(
+        word(&max, 0).chars().all(|c| c == '0'),
+        "an empty rmAGENT must take no deposit (maxDeposit 0), got {max}"
+    );
 }
 
 /// Core 1676. rmAGENT holds RM through the REAL Uniswap V4 PoolManager pool `0xf2e7b957...`, priced by the REAL recorder, on the Twin chain

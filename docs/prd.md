@@ -597,11 +597,12 @@ Router allocation.
 
 Shortlist curation is admin-controlled for the MVP, with an
 equal-weighted target basket drawn from BNKR, JUNO, RM (Base-chain
-only). rmAGENT launches holding RM only: the existing ROBOTMONEY token on
-Base at `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (core #1491).
-BNKR and JUNO are added later through the timelock. Each token
+only). rmAGENT launches with an empty shortlist: RM, the existing ROBOTMONEY token on
+Base at `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (core #1491), is parked until its market is deep enough
+(owner, 2026-10-21, [ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md)). An empty rmAGENT is deployed and paused, takes no deposits and holds nothing.
+RM, BNKR and JUNO are added later through the timelock, RM only after the dollar criteria in [ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md) hold. Each token
 routes through one venue under the per-asset venue abstraction in
-[ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md). RM's venue is
+[ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md). RM's venue, once it is listed, is
 decided (owner, 2026-10-08; supersedes 2026-10-06): the Uniswap V4 RM/USDC pool with fee 2.91%
 (id `0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391`, tickSpacing 582, no hooks). The vault
 swaps through `UniswapV4SwapAdapter` and prices RM from `UniswapV4PriceRecorder`, a permissionless in-protocol

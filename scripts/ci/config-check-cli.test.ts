@@ -10,6 +10,7 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadConfigs, keccakHex } from "./config-check";
+import { activateRm, activatedConfigDir } from "./rm-parked-testlib";
 
 const repo = resolve(import.meta.dir, "..", "..");
 const script = join(repo, "scripts/ci/config-check.ts");
@@ -20,7 +21,8 @@ const a = (x: string) => x.replace(/^0x/, "").toLowerCase().padStart(64, "0");
 
 // The fake chain serves the code 0x6001 everywhere, so its hash is the USDC pin.
 const FAKE_HASH = keccakHex("0x6001");
-const base = loadConfigs(realDir);
+// Core issue 1903: the committed config parks RM. The CLI RM-pool rules run on the reactivated config (rm-parked-testlib.ts).
+const base = loadConfigs(activatedConfigDir(realDir));
 const all = [...base.protocol.assets, ...base.rwa.assets, ...base.agent.shortlist] as { symbol: string; token: string; pool?: string; poolFee: number }[];
 const RM_ENTRY = base.agent.shortlist[0];
 const FACTORY = base.rwa.uniswapV3Factory.toLowerCase();
@@ -82,6 +84,7 @@ function configDir(mutate: (files: Record<string, any>) => void = () => {}): str
   const files: Record<string, any> = {};
   for (const n of readdirSync(dir)) if (n.endsWith(".json")) files[n] = JSON.parse(readFileSync(join(dir, n), "utf8"));
   files["usdc-hashes.json"] = { ...files["usdc-hashes.json"], proxyCodeHash: FAKE_HASH, implementationCodeHash: FAKE_HASH };
+  activateRm(files); // core issue 1903: the committed config parks RM
   // RM is pinned by token code hash like USDC, so the fake chain's code hash is its pin too.
   for (const e of files["agent-token-shortlist.json"].shortlist) e.tokenCodeHash = FAKE_HASH;
   mutate(files);

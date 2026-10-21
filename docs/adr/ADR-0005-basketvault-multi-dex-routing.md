@@ -365,3 +365,7 @@ multi-hop route. The USDC-only pairing rule is unchanged.
   adjusted preview).
 - Shortlist governance for AgentTokenVault — separate ADR (issue #546).
 - Any oracle source for ProtocolAssetVault assets that already have V3 pools.
+
+## Amendment — 2026-10-21 (RM parked)
+
+The owner parked RM out of rmAGENT until its market is deep enough. rmAGENT launches with an empty shortlist, and tokens are added later through the timelock. See [ADR-0015](ADR-0015-rm-parked-from-rmagent-until-market-depth.md). The text above is unchanged.

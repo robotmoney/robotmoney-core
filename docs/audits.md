@@ -659,6 +659,16 @@ Internal review of the code that still gives rmpc and the gateway jobs beyond an
 | RS-1019-17 | RS-1019 | Medium | accepted-with-rationale | publish-contracts cli and assertRecordInputs | — | Payload bytes are optional on record-receipt, so syntax-only inputs can reach signing without the digest and receipt-id comparisons architecture section 7.5 requires. Require supported payload bytes and both comparisons before signer construction; preserve the preceding rmpc analyst-signature verification step for those same bytes. Open. |
 | RS-1019-18 | RS-1019 | Low | accepted-with-rationale | explorer-indexer agent_policies, explorer-api get_account_policies | — | Account-policy projection selects latest state per chain and agent across registrations before filtering owner. Re-registering an address collapses earlier registrations, despite canon requiring identity by address and registration. Preserve event rows, derive deterministic registration boundaries and update schema/API/history together, including replay and same-block ordering. Open. |
 
+### RP-1021 — RM parked out of rmAGENT (2026-10-21, 3 findings)
+
+Internal review of the owner decision to park RM out of rmAGENT until its market is deep enough, with the measured evidence and the reactivation path (`docs/code-review/20261021-code-review-internal-claude-rm-parked-from-rmagent.md`, [ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md)). Row `RP-1021-N` is the review's finding heading `### N.`.
+
+| Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |
+|---|---|---|---|---|---|---|
+| RP-1021-1 | RP-1021 | Medium | accepted-with-rationale | BasketVault, DeployAgentTokenVault, config-check | — | The pool-depth guard is raw liquidity L, a different dollar depth at every price (L 1e15 is about 1.7 USDC at the measured RM price). The guard stays at 1e15. Reactivation is decided by dollar criteria in the shortlist config and ADR-0015. |
+| RP-1021-2 | RP-1021 | Medium | accepted-with-rationale | AgentTokenVault, config/agent-token-shortlist.json | — | rmAGENT launches with no asset (RM parked by the owner, 2026-10-21). Open until the criteria hold and a timelock addAsset lands. |
+| RP-1021-3 | RP-1021 | Low | accepted-with-rationale | testing/smoke-test twin_publish, contracts/test fork tests, scripts/ci | — | Tests that need RM and its pool run on a reactivated copy of the config (RM_PARKED), never skipped, no bound lowered, no liquidity seeded. Issue 1900 (seed the Twin pool) is superseded. |
+
 ### Gap analysis — process & coverage backlog (20260607-code-review-internal-claude-gap-analysis.md)
 
 > The gap analysis enumerates 50 tracked-as-future-work items (issues #643–#692),

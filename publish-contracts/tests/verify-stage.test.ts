@@ -1,3 +1,4 @@
+import { writeActivatedAgentConfig } from "./rm-parked.ts";
 import { describe, expect, test } from "bun:test";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { RM_TOKEN } from "../src/verify/constants.ts";
@@ -111,7 +112,7 @@ describe("stage 12: the one verifier", () => {
 
   test("the committed agent shortlist expects RM as rmAGENT's one asset, on the V4 venue (1) at fee 29100, with the recorder as its pool and the run's V4 adapter (core 1676)", () => {
     const { ctx } = setup({}, {});
-    copyFileSync(join(import.meta.dir, "..", "..", "config", "agent-token-shortlist.json"), join(ctx.coreDir, "config", "agent-token-shortlist.json"));
+    writeActivatedAgentConfig(join(ctx.coreDir, "config", "agent-token-shortlist.json")); // RM_PARKED: the reactivated copy
     const want = loadExpectedAssets(ctx, "AGENT");
     expect(want.map((a) => [a.token.toLowerCase(), a.pool, a.swapFee, a.adapter, a.venue])).toEqual([
       [RM_TOKEN.toLowerCase(), MANIFEST_RECORDER, 29100, MANIFEST_ADAPTER_V4, 1],
@@ -122,7 +123,7 @@ describe("stage 12: the one verifier", () => {
 
   test("a V4 asset whose vault manifest has no adapter_v4 is an error, not a silent V3 fallback", () => {
     const { ctx } = setup({}, {});
-    copyFileSync(join(import.meta.dir, "..", "..", "config", "agent-token-shortlist.json"), join(ctx.coreDir, "config", "agent-token-shortlist.json"));
+    writeActivatedAgentConfig(join(ctx.coreDir, "config", "agent-token-shortlist.json")); // RM_PARKED: the reactivated copy
     const m = join(ctx.coreDir, "deployments", String(ctx.chainId), "agent-token-vault.json");
     writeFileSync(m, JSON.stringify({ chain_id: ctx.chainId, vault: "0x00000000000000000000000000000000000000b1", adapter: MANIFEST_ADAPTER }));
     expect(() => loadExpectedAssets(ctx, "AGENT")).toThrow(/adapter_v4/);
