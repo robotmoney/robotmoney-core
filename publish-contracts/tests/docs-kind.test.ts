@@ -10,7 +10,7 @@ const README = readFileSync(join(ROOT, "publish-contracts", "README.md"), "utf8"
 
 const BOTH: [string, RegExp][] = [
   ["the sheet line", /DEPLOYMENT_KIND=rehearsal/], ["900 s", /900/], ["the tag kind", /release\/<version>-rehearsal/], ["the tag error", /RELEASE_TAG_KIND/],
-  ["the start nonce", /deployerStartNonce/], ["the Safe salt refusal", /SAFE_SALT_NONCE_REUSED/], ["register-committee", /register-committee/], ["record-receipt", /record-receipt/],
+  ["the start nonce", /deployerStartNonce/], ["the Safe salt refusal", /SAFE_SALT_NONCE_REUSED/], ["register-submitter", /register-submitter/], ["record-receipt", /record-receipt/],
 ];
 const RUNBOOK_ONLY: [string, RegExp][] = [
   ["the production floor is unchanged", /172800/], ["funding ETH", /0\.00237 ETH/], ["funding USDC", /5 USDC/], ["the owner question on the submitter key", /OWNER QUESTION/],

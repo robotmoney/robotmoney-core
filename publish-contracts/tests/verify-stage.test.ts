@@ -508,7 +508,7 @@ describe("issue 1701: on 8453 the applied receipt vector of the run manifest mus
   async function run(apps: unknown[]) {
     const { ctx } = setup({}, { chain: 8453 });
     const dir = join(ctx.coreDir, "deployments", "8453");
-    for (const [ref, v] of [[manifestRef("timelock", "timelock"), TL], [manifestRef("governance", "governance"), GOV], [manifestRef("ic-policy", "consensus_receipt"), RCPT]] as const) {
+    for (const [ref, v] of [[manifestRef("timelock", "timelock"), TL], [manifestRef("governance", "governance"), GOV], [manifestRef("receipt", "consensus_receipt"), RCPT]] as const) {
       const [file, field] = ref.split(":") as [string, string];
       writeFileSync(join(dir, `${file}.json`), JSON.stringify({ chain_id: 8453, [field]: v }));
     }

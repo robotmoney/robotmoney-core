@@ -70,11 +70,14 @@ describe("publish environment", () => {
 describe("stage-deployment.md names the manifests the tool reads", () => {
   const doc = readFileSync(join(import.meta.dir, "../../../docs/development/stage-deployment.md"), "utf8");
   const line = doc.split("\n").find((l) => l.startsWith("4. The job reads the manifests")) ?? "";
-  const listed = [...line.slice(0, line.indexOf(")") + 1).matchAll(/`([^`]+\.json)`/g)].map((m) => m[1]);
+  // the list ends at "), writes the endpoint summary": the first ")" closes the parenthetical about the deployed release (issue 1888)
+  const listed = [...line.slice(0, line.indexOf("), writes") + 1).matchAll(/`([^`]+\.json)`/g)].map((m) => m[1]);
+  // The deployed release (v0.5.0) wrote ic-policy.json, which the target replaces with receipt.json: the doc names both, the tool reads the target's.
+  const DEPLOYED_RELEASE_ONLY = new Set(["ic-policy.json"]);
   const read = new Set([...allManifests(), ...Object.values(vaultManifests())]);
   test("the step 4 line is found", () => expect(listed.length).toBeGreaterThan(0));
   test("every listed name is a manifest the tool reads", () => {
-    expect(listed.filter((n) => !read.has(n))).toEqual([]);
+    expect(listed.filter((n) => !read.has(n) && !DEPLOYED_RELEASE_ONLY.has(n))).toEqual([]);
   });
   test("every manifest the tool reads is listed", () => {
     expect([...read].filter((n) => !listed.includes(n))).toEqual([]);

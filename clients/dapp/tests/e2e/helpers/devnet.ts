@@ -30,8 +30,6 @@ export interface DevnetEndpoints {
   registry_addr: string;
   /** PortfolioRouter contract address (issue #320). */
   router_addr: string;
-  /** InvestmentCommitteePolicy contract address (issue #1247/#1294). */
-  ic_policy_addr: string;
   /** ConsensusRebalanceReceipt contract address (issue #1247/#1294). */
   consensus_receipt_addr: string;
   /** The real 2-of-3 SafeL2 v1.4.1 that proposes to the timelock (core 1544). */

@@ -18,7 +18,6 @@
     ".addresses.router",
     ".addresses.governance",
     ".addresses.consensus_receipt",
-    ".addresses.ic_policy",
     ".addresses.timelock",
     ".addresses.safe",
     ".addresses.emergency",
@@ -71,7 +70,7 @@
       "type": "object",
       "required": [
         "gateway", "vault", "registry", "router", "governance",
-        "consensus_receipt", "ic_policy", "timelock", "safe", "emergency"
+        "consensus_receipt", "timelock", "safe", "emergency"
       ],
       "properties": {
         "gateway": { "$ref": "#/$defs/address" },
@@ -80,7 +79,6 @@
         "router": { "$ref": "#/$defs/address" },
         "governance": { "$ref": "#/$defs/address" },
         "consensus_receipt": { "$ref": "#/$defs/address" },
-        "ic_policy": { "$ref": "#/$defs/address" },
         "timelock": { "$ref": "#/$defs/address" },
         "safe": { "$ref": "#/$defs/address" },
         "emergency": { "$ref": "#/$defs/address" }

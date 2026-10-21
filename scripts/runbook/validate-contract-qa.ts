@@ -61,7 +61,7 @@ export const LIST_PLACEHOLDERS: Readonly<Record<string, readonly string[]>> = {
   emergency: ["--emergency-signer", "{emergencySigner}"],
   cast: ["--keystore", "{deployerKeystore}"],
 };
-export const MANIFEST_FILES = ["libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "governance", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault", "timelock", "safe"];
+export const MANIFEST_FILES = ["libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "receipt", "governance", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault", "timelock", "safe"];
 const PLACEHOLDER = /\{([A-Za-z][A-Za-z0-9]*)(?::([A-Za-z0-9_.\-]+))?\}/g;
 
 // ─── the step schema ────────────────────────────────────────────────────────────────────────────────────────────

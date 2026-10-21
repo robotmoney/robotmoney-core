@@ -78,9 +78,9 @@ jobs:
           # (watch-released-drafts.sh) and every draft-proposal assertion were
           # deleted with RouterGovernance's propose/vote/execute.
           # Raised 117 -> 129 by issue 1849: the apply-receipt release step. Raised 129 -> 135 by
-          # the QA reconcile onto dev (QA plan v1 leftovers L1: six cross-repo and submit worker checks).
-          if [[ "$count" -lt 135 ]]; then
-            echo "::error::only $count assertions executed (expected >= 135, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
+          # the QA reconcile onto dev (QA plan v1 leftovers L1: six cross-repo and submit worker checks). Raised 135 -> 168 by issue 1888: the Safe recording path checks.
+          if [[ "$count" -lt 168 ]]; then
+            echo "::error::only $count assertions executed (expected >= 168, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
             exit 1
           fi
 

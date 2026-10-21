@@ -78,7 +78,7 @@ describe("stage list built from core's stage table", () => {
     // Issue 1808: every stage that deploys a proxied core contract compiles with --libraries tick_math (one setting, one CREATE2 address per library);
     // so does the timelock stage, whose TimelockController init code (metadata included) every proxy's CREATE2 prediction hashes.
     // The libs and recorder stages deploy no proxy and link nothing.
-    expect(forge.filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa", "timelock"]);
+    expect(forge.filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "gateway", "receipt", "governance", "proto", "agent", "rwa", "timelock"]);
     for (const s of forge) for (const l of s.libraries) expect(l.manifestKey).toBeTruthy();
   });
   test("no script path, env name list or artifact name is typed in the stage modules", () => {
@@ -125,15 +125,15 @@ describe("stage list built from core's stage table", () => {
 
 describe("deploy-time configuration is consumed by the deployer stages 4 to 10, never by govern (issue 1520)", () => {
   const stage = (n: string) => STAGES.find((s) => s.name === n)!;
-  test("the governance stage takes no voting value and wires the receipt register from the ic-policy manifest (issue 1698)", () => {
+  test("the governance stage takes no voting value and wires the receipt register from the receipt manifest (issues 1698, 1888)", () => {
     for (const k of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) expect(stage("governance").requiredEnv).not.toContain(k);
     // Issue 1808: TIMELOCK_MIN_DELAY (with SAFE_ADDRESS from the Safe manifest) names the timelock the governance proxy's upgrade authority is.
     // Issue 1809: UPGRADE_MODE is the release sheet's (no literal, no default).
     expect(requiredSheetNames(stage("governance"))).toEqual(["ADMIN_ADDRESS", "TIMELOCK_MIN_DELAY", "UPGRADE_MODE"]);
     expect(resolveEnv("UPGRADE_MODE", null)).toEqual({ from: "sheet", name: "UPGRADE_MODE" });
-    expect(resolveEnv("CONSENSUS_RECEIPT_ADDRESS", null)).toEqual({ from: "manifest", stage: "ic-policy", field: "consensus_receipt" });
+    expect(resolveEnv("CONSENSUS_RECEIPT_ADDRESS", null)).toEqual({ from: "manifest", stage: "receipt", field: "consensus_receipt" });
     const names = forge.map((s) => s.name);
-    expect(names.indexOf("ic-policy")).toBeLessThan(names.indexOf("governance"));
+    expect(names.indexOf("receipt")).toBeLessThan(names.indexOf("governance"));
   });
   test("each basket stage takes the caps, the exit fee, the fee recipient and the router eligibility with the default weights", () => {
     for (const n of ["proto", "agent", "rwa"]) {
@@ -145,7 +145,7 @@ describe("deploy-time configuration is consumed by the deployer stages 4 to 10, 
   test("every deploy-time key reaches a stage between router (4) and rwa (10), and no deployer stage reads a GOVERN_ name", () => {
     const names = forge.map((s) => s.name);
     const between = names.slice(names.indexOf("router"), names.indexOf("rwa") + 1);
-    expect(between).toEqual(["router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa"]);
+    expect(between).toEqual(["router", "gateway", "receipt", "governance", "proto", "agent", "rwa"]);
     const consumed = new Set(between.flatMap((n) => stage(n).requiredEnv));
     for (const k of ["CONSENSUS_RECEIPT_ADDRESS", "TVL_CAP", "PER_DEPOSIT_CAP", "EXIT_FEE_BPS", "FEE_RECIPIENT", "ROUTER_DEFAULT_BPS"]) expect(consumed.has(k), k).toBe(true);
     for (const s of forge) for (const e of s.requiredEnv) expect(e.startsWith("GOVERN_"), `${s.name} reads ${e}`).toBe(false);

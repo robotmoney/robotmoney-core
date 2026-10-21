@@ -9,7 +9,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { localSafeTxHash } from "../../src/safe/tx.ts";
 import {
-  ADMIN_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, coreContracts, stageManifestFile, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT,
+  ADMIN_ROLE, RECEIPT_RELEASER_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, coreContracts, stageManifestFile, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT,
   RM_TOKEN, SAFE_GUARD_SLOT, SAFE_L2_141_SINGLETON, SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED, Z32, ZERO,
 } from "../../src/verify/constants.ts";
 import { PROOF_TX_NONCES } from "../../src/counts.ts";
@@ -45,7 +45,6 @@ export const REGISTRY = addr(0x4e6);
 export const ROUTER = addr(0x40a7e4);
 export const GATEWAY = addr(0x6a7e);
 export const GOV = addr(0x60b);
-export const ICP = addr(0x1c9);
 export const REC = addr(0x4ec);
 /** Core 1676: the permissionless Uniswap V4 price recorder and the V4 swap adapter bound to it. */
 export const RECORDER = addr(0x4ec0de);
@@ -224,7 +223,7 @@ export const IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3
 export const INIT_SLOT = "0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00" as Hex;
 /** Verifier name of each proxied core contract -> its implementation address in the world. */
 export const IMPLS: Record<string, Address> = {
-  gateway: addr(0x1e01), registry: addr(0x1e02), router: addr(0x1e03), governance: addr(0x1e04), icpolicy: addr(0x1e05), receipt: addr(0x1e06),
+  gateway: addr(0x1e01), registry: addr(0x1e02), router: addr(0x1e03), governance: addr(0x1e04), receipt: addr(0x1e06),
   "vault[rmUSDC]": addr(0x1e11), "vault[rmPROTO]": addr(0x1e12), "vault[rmAGENT]": addr(0x1e13), "vault[rmRWA]": addr(0x1e14),
 };
 
@@ -288,7 +287,7 @@ export function buildWorld(chainId = 8453): World {
     proxy(a, impl);
   };
 
-  const byName: Record<string, Address> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, icpolicy: ICP, receipt: REC, timelock: TIMELOCK, recorder: RECORDER };
+  const byName: Record<string, Address> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, receipt: REC, timelock: TIMELOCK, recorder: RECORDER };
   for (const c of CORE_CONTRACTS) (IMPLS[c.name] ? setProxy(c.name, byName[c.name]!, c.artifact) : setCode(byName[c.name], c.artifact));
   for (const [k, v] of Object.entries(VAULTS)) setProxy(`vault[${k}]`, v.address, vaultArtifactOf(k));
   setCode(V4_ADAPTER, table.artifacts.v4Adapter!);
@@ -303,10 +302,11 @@ export function buildWorld(chainId = 8453): World {
   ch.codes.set(USDC_ADDRESS.toLowerCase(), USDC_CODE as Hex);
 
   // roles: timelock admin everywhere, emergency on vaults
-  for (const a of [GATEWAY, REGISTRY, ROUTER, GOV, ICP, REC, ...Object.values(VAULTS).map((v) => v.address)]) ch.grant(a, ADMIN_ROLE, TIMELOCK);
-  for (const a of [GATEWAY, ICP, REC, TIMELOCK]) ch.grant(a, Z32, TIMELOCK);
+  for (const a of [GATEWAY, REGISTRY, ROUTER, GOV, REC, ...Object.values(VAULTS).map((v) => v.address)]) ch.grant(a, ADMIN_ROLE, TIMELOCK);
+  for (const a of [GATEWAY, REC, TIMELOCK]) ch.grant(a, Z32, TIMELOCK);
   ch.grant(GATEWAY, DEPOSIT_PAUSER_ROLE, PAUSER);
   ch.grant(ROUTER, ADMIN_ROLE, GOV);
+  ch.grant(REC, RECEIPT_RELEASER_ROLE, GOV); // issue 1888: RouterGovernance releases through the narrow role, never ADMIN_ROLE
   ch.grant(ROUTER, WEIGHT_SETTER_ROLE, GOV);
   // Rotation of the weight setter (core 1616): the Safe proposes, the timelock executes, nothing is pending.
   ch.grant(ROUTER, WEIGHT_SETTER_ROTATOR_ROLE, SAFE);
@@ -325,7 +325,6 @@ export function buildWorld(chainId = 8453): World {
   ch.set(REGISTRY, "isRouterEligible", () => true);
   // the weight setter (issue 1698): applyReceipt is gated by governance's own WEIGHT_SETTER_ROLE (the timelock) and releases on the receipt register
   ch.grant(GOV, WEIGHT_SETTER_ROLE, TIMELOCK);
-  ch.grant(REC, ADMIN_ROLE, GOV);
   ch.set(GOV, "router", ROUTER);
   ch.set(GOV, "receipts", REC);
   // deploy-time configuration (issue 1520): the router default weights
@@ -405,7 +404,7 @@ export function buildWorld(chainId = 8453): World {
   ch.set(V4_ADAPTER, "POOL_FEE", RM_POOL_KEY.fee);
   ch.set(V4_ADAPTER, "TICK_SPACING", RM_POOL_KEY.tickSpacing);
 
-  const frozenCounts = { safe: 1, libs: 4, recorder: 6, vault: 12, registry: 2, router: 2, gateway: 3, governance: 2, "ic-policy": 3, "vault-proto": 6, "vault-agent": 3, "vault-rwa": 6, timelock: 18 };
+  const frozenCounts = { safe: 1, libs: 4, recorder: 6, vault: 12, registry: 2, router: 2, gateway: 3, governance: 2, receipt: 2, "vault-proto": 6, "vault-agent": 3, "vault-rwa": 6, timelock: 18 };
   ch.noncesMap.set(DEPLOYER.toLowerCase(), Object.values(frozenCounts).reduce((a, b) => a + b, 0) + PROOF_TX_NONCES); // the stages plus the deployer's prove-control transaction (core 1712)
 
   const w = (f: string, o: unknown) => writeFileSync(join(manifestDir, f), JSON.stringify(o, null, 2));
@@ -416,7 +415,7 @@ export function buildWorld(chainId = 8453): World {
   w(file("router"), { chain_id: chainId, router: ROUTER, router_implementation: IMPLS.router, ...up });
   w(file("gateway"), { chain_id: chainId, gateway: GATEWAY, gateway_implementation: IMPLS.gateway, gateway_implementation_runtime_hash: keccak256(codeByName[table.artifacts.gateway!]!), gateway_runtime_hash: keccak256(proxyCode), ...up });
   w(file("governance"), { chain_id: chainId, governance: GOV, governance_implementation: IMPLS.governance, ...up });
-  w(file("ic-policy"), { chain_id: chainId, policy: ICP, consensus_receipt: REC, policy_implementation: IMPLS.icpolicy, consensus_receipt_implementation: IMPLS.receipt, ...up });
+  w(file("receipt"), { chain_id: chainId, consensus_receipt: REC, consensus_receipt_implementation: IMPLS.receipt, ...up });
   w(file("timelock"), {
     chain_id: chainId, timelock: TIMELOCK, safe: SAFE, emergency: EMERGENCY, executorPolicy: "open", cancellerPolicy: "safe-only", code_hashes: { safe: safeHash },
     roles: { gateway_agents_listed_count: 0, deployer_owns_a_listed_gateway_agent: false },
@@ -457,7 +456,7 @@ export const WORLD_CREATE2_FACTORY = "0x4e59b44847b379578588920cA78FbF26c0B4956C
 export function deployedWorld(blocks: Record<string, bigint> = {}): World {
   const w = buildWorld();
   w.opts.fromBlock = 100n;
-  const contracts: Record<string, Address> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, icpolicy: ICP, receipt: REC, recorder: RECORDER, ...Object.fromEntries(Object.entries(VAULTS).map(([k, v]) => [k, v.address])) };
+  const contracts: Record<string, Address> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, receipt: REC, recorder: RECORDER, ...Object.fromEntries(Object.entries(VAULTS).map(([k, v]) => [k, v.address])) };
   const txs = Object.entries(contracts).map(([n, a]) => w.chain.created(a, blocks[n] ?? 100n));
   const tl = keccak256(toHex("timelock factory call"));
   w.chain.receipts.set(tl.toLowerCase(), { blockNumber: blocks.timelock ?? 100n, status: "success", contractAddress: null, to: WORLD_CREATE2_FACTORY, logs: [{ address: TIMELOCK }] });

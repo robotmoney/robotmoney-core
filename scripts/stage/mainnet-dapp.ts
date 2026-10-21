@@ -180,11 +180,6 @@ export interface MainnetAddresses {
   vaultImplementationHashes: Record<(typeof VAULT_KEYS)[number], string>;
   governance: string;
   consensusReceipt: string;
-  /**
-   * The InvestmentCommitteePolicy proxy (`timelock.json` `addresses.ic_policy`). Security round 1: one of the proxied core contracts (ADR-0014 §1), so the indexer must
-   * watch it, or its Upgraded and UpgradesFrozen events never reach proxy_upgrade_events and the watchdog's upgrade page stays silent for it.
-   */
-  icPolicy: string;
   timelock: string;
   safe: string;
   vaults: Record<(typeof VAULT_KEYS)[number], string>;
@@ -287,7 +282,6 @@ export function readMainnetManifests(dir: string, read: (p: string) => string = 
   const timelock = addr(files.timelock, "addresses.timelock", ta.timelock);
   const safe = addr(files.timelock, "addresses.safe", ta.safe);
   const consensusReceipt = addr(files.timelock, "addresses.consensus_receipt", ta.consensus_receipt);
-  const icPolicy = addr(files.timelock, "addresses.ic_policy", ta.ic_policy);
   for (const [field, want] of [["registry", registry], ["router", router], ["governance", governance], ["gateway", gateway]] as const) {
     if (!same(addr(files.timelock, `addresses.${field}`, ta[field]), want)) {
       throw new MainnetDappError("manifest-mismatch", `${files.timelock} addresses.${field} differs from its own manifest`);
@@ -370,7 +364,6 @@ export function readMainnetManifests(dir: string, read: (p: string) => string = 
     routerImplementationHash,
     governance,
     consensusReceipt,
-    icPolicy,
     timelock,
     safe,
     vaults,
@@ -475,9 +468,7 @@ export function buildMainnetDappEnv(input: MainnetDappInput, read?: (p: string) 
     INDEXER_PORTFOLIO_ROUTER: a.router,
     INDEXER_ROUTER_GOVERNANCE: a.governance,
     INDEXER_CONSENSUS_RECEIPT: a.consensusReceipt,
-    // Security round 1: the IC policy proxy is watched too. Without it its Upgraded and UpgradesFrozen events never reach proxy_upgrade_events (the watchdog's upgrade
-    // page), and /v1/committee/* and /v1/regime/feed stay empty.
-    INDEXER_INVESTMENT_COMMITTEE: a.icPolicy,
+    // Issue 1888: the investment committee policy is retired. The timelock manifest names no ic_policy and the indexer is given no committee address.
     // The indexer watches only the addresses it is given. Without these two the Safe and the timelock are
     // absent from /v1/chains/8453/contracts and their governance events are never read (issue 1731).
     INDEXER_TIMELOCK: a.timelock,

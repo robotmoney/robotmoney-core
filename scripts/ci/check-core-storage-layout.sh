@@ -49,7 +49,7 @@ SNAPSHOT_DIR="${SNAPSHOT_DIR:-$REPO_ROOT/contracts/test/fixtures/storage-layout}
 FORGE="${FORGE:-forge}"
 PINS="$SNAPSHOT_DIR/pins.json"
 
-# contract:source — the ten proxied core contracts (docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md).
+# contract:source — the nine proxied core contracts (docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md).
 CONTRACTS=(
   "RobotMoneyVault:contracts/RobotMoneyVault.sol"
   "ProtocolAssetVault:contracts/vaults/ProtocolAssetVault.sol"
@@ -58,7 +58,6 @@ CONTRACTS=(
   "VaultRegistry:contracts/VaultRegistry.sol"
   "PortfolioRouter:contracts/PortfolioRouter.sol"
   "RobotMoneyGateway:contracts/gateway/RobotMoneyGateway.sol"
-  "InvestmentCommitteePolicy:contracts/gateway/InvestmentCommitteePolicy.sol"
   "ConsensusRecommendationReceipt:contracts/gateway/ConsensusRecommendationReceipt.sol"
   "RouterGovernance:contracts/RouterGovernance.sol"
 )
@@ -353,6 +352,27 @@ case "${1:-}" in
     jq '.namespaces["robotmoney.storage.GovernedUUPS"] |= reverse' "$WORK/live.json" >"$WORK/new.json"
     cp "$WORK/new.json" "$WORK/snap.json"
     gate "a reordered namespace with a regenerated snapshot fails against the baseline" 1
+    # Issue 1888: the retired committee slots stay in storage. Deleting one (and regenerating the snapshot) is rejected.
+    for retired in icPolicy consensusReceipt; do
+      jq --arg l "$retired" '.storage |= map(select(.label != $l))' "$WORK/live.json" >"$WORK/new.json"
+      if [[ "$(jq '.storage | length' "$WORK/new.json")" == "$(jq '.storage | length' "$WORK/live.json")" ]]; then
+        echo "FAIL the gateway layout has no retired slot $retired to remove"; fails=$((fails + 1))
+      fi
+      cp "$WORK/new.json" "$WORK/snap.json"
+      gate "removing the retired gateway slot $retired with a regenerated snapshot fails against the baseline" 1
+    done
+    normalized_live "ConsensusRecommendationReceipt" "contracts/gateway/ConsensusRecommendationReceipt.sol" >"$WORK/receipt-live.json"
+    for retired in gateway icPolicy; do
+      jq --arg l "$retired" '.storage |= map(select(.label != $l))' "$WORK/receipt-live.json" >"$WORK/new.json"
+      if [[ "$(jq '.storage | length' "$WORK/new.json")" == "$(jq '.storage | length' "$WORK/receipt-live.json")" ]]; then
+        echo "FAIL the receipt layout has no retired slot $retired to remove"; fails=$((fails + 1))
+      fi
+      if extends "ConsensusRecommendationReceipt" "$WORK/new.json" "$WORK/receipt-live.json" base >"$WORK/out" 2>&1; then
+        echo "FAIL removing the retired receipt slot $retired passed the baseline check"; fails=$((fails + 1))
+      else
+        echo "ok   removing the retired receipt slot $retired fails against the baseline"
+      fi
+    done
     jq '.libraries |= .[1:]' "$WORK/live.json" >"$WORK/new.json"
     cp "$WORK/new.json" "$WORK/snap.json"
     gate "a dropped library link with a regenerated snapshot fails against the baseline" 1

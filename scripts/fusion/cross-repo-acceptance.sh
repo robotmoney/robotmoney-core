@@ -10,6 +10,7 @@ fail() { echo "fusion-cross-repo: $*" >&2; exit 1; }
 : "${FUSION_RMPC_CONFIG:?set FUSION_RMPC_CONFIG}"
 : "${FUSION_RECEIPT_ADDRESS:?set FUSION_RECEIPT_ADDRESS}"
 : "${FUSION_RPC_URL:?set FUSION_RPC_URL}"
+: "${FUSION_RECORD_CMD:?set FUSION_RECORD_CMD (the Safe recording command the submit worker hands the verified bytes to; issue 1888)}"
 # INV-4 witnesses. Required, not optional: "recording changed no allocation
 # state" is an assertion this test makes, and an unset address would turn it into a
 # silent skip (AC-CORE-04, AC-E2E-03, AC-E2E-04).

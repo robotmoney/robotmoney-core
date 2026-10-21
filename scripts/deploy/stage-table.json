@@ -171,12 +171,10 @@
       ]
     },
     {
-      "name": "ic-policy",
+      "name": "receipt",
       "kind": "forge",
-      "script": "contracts/script/DeployInvestmentCommitteePolicy.s.sol:DeployInvestmentCommitteePolicy",
+      "script": "contracts/script/DeployConsensusRecommendationReceipt.s.sol:DeployConsensusRecommendationReceipt",
       "requiredEnv": [
-        "ADMIN_ADDRESS",
-        "GATEWAY_ADDRESS",
         "RECEIPT_ADMIN_ADDRESS",
         "SAFE_ADDRESS",
         "TIMELOCK_MIN_DELAY",
@@ -186,7 +184,7 @@
       "optionalEnv": [
         "EXPECTED_CHAIN_ID"
       ],
-      "manifest": "deployments/<chain>/ic-policy.json",
+      "manifest": "deployments/<chain>/receipt.json",
       "libraries": [
         "tick_math"
       ],
@@ -195,12 +193,6 @@
         "GovernedUpgrade"
       ],
       "proxies": [
-        {
-          "field": "policy",
-          "implementationField": "policy_implementation",
-          "contract": "InvestmentCommitteePolicy",
-          "layout": "contracts/test/fixtures/storage-layout/InvestmentCommitteePolicy.json"
-        },
         {
           "field": "consensus_receipt",
           "implementationField": "consensus_receipt_implementation",
@@ -226,7 +218,7 @@
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/governance.json",
-      "manifestNotes": "RouterGovernance is the router's weight setter (issue 1698). It runs after ic-policy because its applyReceipt releases receipts on the ConsensusRecommendationReceipt register in the same call that sets the weights: the stage grants it router ADMIN_ROLE, router WEIGHT_SETTER_ROLE (the deployer's copy dropped) and the receipt register's ADMIN_ROLE. It has no voting and no constructor parameters beyond the three addresses.",
+      "manifestNotes": "RouterGovernance is the router's weight setter (issue 1698). It runs after receipt because its applyReceipt releases receipts on the ConsensusRecommendationReceipt register in the same call that sets the weights: the stage grants it router ADMIN_ROLE, router WEIGHT_SETTER_ROLE (the deployer's copy dropped) and the receipt register's RECEIPT_RELEASER_ROLE. It has no voting and no constructor parameters beyond the three addresses.",
       "libraries": [
         "tick_math"
       ],
@@ -392,7 +384,6 @@
         "SAFE_THRESHOLD",
         "EMERGENCY_ADDRESS",
         "TIMELOCK_MIN_DELAY",
-        "IC_POLICY_ADDRESS",
         "CONSENSUS_RECEIPT_ADDRESS",
         "RECEIPT_ADMIN_ADDRESS",
         "DEPLOYMENT_OUT"
@@ -619,7 +610,6 @@
     "registry": "VaultRegistry",
     "governance": "RouterGovernance",
     "timelock": "ProposerFloorTimelock",
-    "icPolicy": "InvestmentCommitteePolicy",
     "receipt": "ConsensusRecommendationReceipt",
     "recorder": "UniswapV4PriceRecorder",
     "v4Adapter": "UniswapV4SwapAdapter"

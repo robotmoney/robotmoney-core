@@ -12,7 +12,7 @@ import { exitCodeOf, isPublishError, PublishError } from "./errors.ts";
 import { assertFloors, assertOwnerSignerSpec, assertSignerSpec, readRpcChainId, isMainnet, MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./floors.ts";
 import { ACTIONS_TOKEN_ENV, proveActions, proofLogFields, type ActionsProof } from "./actions-proof.ts";
 import { kindLabel } from "./chains.ts";
-import { REGISTER_ROW, assertAgentLabel, assertSubmitter } from "./committee-register.ts";
+import { REGISTER_ROW, assertSubmitter } from "./submitter-register.ts";
 import { assertRecordInputs, recordReceipt, type RecordApi } from "./record-receipt.ts";
 import { FROZEN_DIR, assertSha, loadFrozen, resolveCounts, writeFrozen, type FrozenFile } from "./counts.ts";
 import { claimedOwnerOf, siblingEmergencySpec, siblingOwnerSpecs } from "./owner-signers.ts";
@@ -49,6 +49,17 @@ import { runCoreConfigCheck, type CoreConfigCheck } from "./core-config-check.ts
 
 /** The environment variable core's harness sets on the child: the directory the stage manifests are written to and read from. */
 export const MANIFEST_DIR_ENV = "PUBLISH_MANIFEST_DIR";
+/** A PublishSigner that constructs the real one on its first use. Cleanup before then is a no-op. */
+function lazyPublishSigner(spec: string, construct: () => PublishSigner, adopt: (real: PublishSigner) => void): PublishSigner {
+  let real: PublishSigner | undefined;
+  const get = (): PublishSigner => { if (!real) { real = construct(); adopt(real); } return real; };
+  return {
+    spec, kind: "keystore",
+    forgeArgs: () => get().forgeArgs(), address: () => get().address(), safeSigner: () => get().safeSigner(),
+    cleanup: () => { real?.cleanup(); },
+  };
+}
+
 export const VERBS = ["publish", "verify", "govern", "pause-all", "record-receipt", "redeploy-vault", "deploy-implementation"] as const;
 export type Verb = (typeof VERBS)[number];
 
@@ -58,8 +69,9 @@ export const USAGE = `publish contracts
                                  before the timelock stage: the real Safe executes one self-call signed by EVERY owner, or stage 11 refuses (exit 24)
                        verify  = the verify stage (the one verifier; a follow-on verb, so it implies --resume)
                        govern  = the govern stage (a follow-on verb, so it implies --resume)
-                       record-receipt = the registered committee SUBMITTER (a Safe: --submitter, executed by --signer = the deployer, signed by its --owner-signer owners) anchors one consensus receipt through the gateway (issue 1727): --receipt-id, --payload-digest and --payload-uri
-                                 from 'rmpc receipt verify'. Rehearsal (sheet DEPLOYMENT_KIND=rehearsal) and Twin only: production records with 'rmpc receipt submit' and an HSM or KMS signer.
+                       record-receipt = the SUBMITTER SAFE (--submitter, executed by --signer = the gas payer, signed by its --owner-signer owners) anchors one consensus receipt DIRECTLY on the receipt contract (issue 1888), on every
+                                 chain and in every mode (production 8453, rehearsal 8453, Twin). Required: --submitter, --payload FILE (the exact served bytes, already verified with 'rmpc receipt verify'), --receipt-id, --payload-digest and
+                                 --payload-uri. The digest and the id are recomputed from the bytes and the Safe, its RECEIPT_SUBMITTER_ROLE and the payload are checked BEFORE any signer is built. A single key is refused in every mode.
                        redeploy-vault = REDEPLOY ONE VAULT into the live deployment (issue 1796, an experiment on a Base mainnet REHEARSAL: refused on 8453 in production): --vault PROTO. The DEPLOYER (--signer) deploys a NEW rmPROTO from the
                                  release tag that holds the fix: closed, unregistered, linked to the registry, ADMIN_ROLE on the timelock and EMERGENCY_ROLE on the emergency key. The old vault is not touched. --evidence is the run that deployed
                                  the deployment. Then run 'govern --row redeploy-vault' (the Safe, through the timelock, registers it, moves router eligibility, retires the old vault and opens the new one). --dry-run simulates only.
@@ -92,8 +104,8 @@ export const USAGE = `publish contracts
                      Refused with USAGE (nothing sent) unless the receipt is recorded and unreleased, was recorded after the last applied receipt (lastAppliedRecordedAt, issue 1831),
                      the payload's receipt digest (domain line + bytes) equals the stored digest, and the vector sums to 10000 bps and lists the registry's router-eligible vaults in
                      registry order. Not part of stage 13. After the delay the same command executes it and reads isReleased and the router weights back.
-                     --row release-receipt --receipt-id 0x<bytes32> is refused with USAGE once RouterGovernance holds the receipt ADMIN_ROLE (every deploy since issue 1698):
-                     a release alone would burn the receipt, so use --row apply-receipt (issue 1831).
+                     --row release-receipt --receipt-id 0x<bytes32> is refused with USAGE once RouterGovernance holds the receipt's RECEIPT_RELEASER_ROLE (the narrow release role, issue 1888;
+                     before it, ADMIN_ROLE since issue 1698): the timelock cannot release directly and a release alone would burn the receipt, so use --row apply-receipt (issue 1831).
                      --row clear-voted-weights (no other argument) clears the router's ACTIVE (applied receipt) weight vector (issue 1743): ONE timelock call, RouterGovernance.clearVotedWeights(),
                      so routing falls back to the default vector: the emergency lever. Refused (nothing scheduled) when no active vector is in effect. Production and rehearsal, never part of stage 13.
                      --row set-unwind-guard --admin-arg vault=PROTO|AGENT|RWA --admin-arg token=0x<address>|all --admin-arg min-usdc-out=N --admin-arg max-loss-bps=N
@@ -101,12 +113,10 @@ export const USAGE = `publish contracts
                      minUsdcOut, overrideAllowed, maxLossBps) for the one token or for every active asset (all). min-usdc-out is USDC (6 decimals) for the vault's whole balance of the token,
                      above zero; override-allowed defaults to true (Safe-only, issue 1705 Q2). Refused (nothing scheduled) for a token that is not an active asset; a guard already in effect is
                      recorded as skipped. Production and rehearsal, never part of stage 13. The stage 12 verifier requires it on every active asset of an open basket: run it with the unpauses.
-                     --row register-committee --submitter 0x<address> [--agent-label NAME] registers the consensus receipt submitter (issue 1727, QA plan v1 B6): first, in
-                     private, the submitter Safe authorizes itself on the gateway (commitAuthorization, a block later revealAuthorization, then transferAgentOwnership to the
-                     timelock; its owners sign through --owner-signer), then ONE timelock batch, gateway.setPolicy (the 1-unit signalling-only policy, shares to the timelock)
-                     plus gateway.committeeRegister (COMMITTEE_AGENT_ROLE). The address is owned by the timelock before the batch is public, so no squatter can break it.
-                     A submitter another account already owns is refused (GOVERN, nothing scheduled): use a new submitter Safe. Not part of stage 13.
-                     Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only; refused on 8453 in production. Same two-step wait as every on-demand row.
+                     --row register-submitter --submitter 0x<the submitter Safe> registers the consensus receipt submitter (issue 1888): the Safe, through the timelock, schedules ONE delayed call,
+                     ConsensusRecommendationReceipt.grantRole(RECEIPT_SUBMITTER_ROLE, submitter). Pre-checks run before it is scheduled: the submitter is a canonical SafeL2 1.4.1 multisig (threshold 2 or more,
+                     no module, no guard) that is not the timelock or a deployment role address, the timelock administers the role, and the Safe does not hold it yet. The submitter MAY be the governing Safe
+                     and its owners may be shared. Every chain and kind. Not part of stage 13. Same two-step wait as every on-demand row.
                       --row safe-add-owner|safe-remove-owner|safe-swap-owner|safe-change-threshold|timelock-grant-role|timelock-revoke-role --admin-arg K=V (Twin chain 918453 only, refused on 8453) runs a Safe or timelock self-administration row (issue 1645):
                       the four safe-* rows are one Safe transaction to the Safe, the two timelock-* rows are a Safe -> Timelock round. Keys: owner, old-owner, new-owner, threshold, role, account.
                      In a REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) update-delay, batch and cancel also run on 8453, as explicit --row runs after the unpauses, in that order.
@@ -121,7 +131,7 @@ export const USAGE = `publish contracts
                      --row upgrade-proxy --proxy NAME --implementation 0x<address> [--upgrade-build DIR] (issue 1842) upgrades one core proxy: ONE timelock call, upgradeToAndCall(new, "").
                      Refused (nothing scheduled) when the proxy is frozen, when the new implementation's storage layout snapshot (DIR, default the DEPLOY_SHA checkout) does not extend the
                      deployed one append-only, or when its runtime code is not DIR/out's build. After the execute it rewrites the proxy's stage manifest implementation fields. Run verify after it.
-  --proxy NAME       govern --row upgrade-proxy and deploy-implementation: the verifier name of the proxy (gateway, registry, router, governance, icpolicy, receipt, vault[rmUSDC], ...).
+  --proxy NAME       govern --row upgrade-proxy and deploy-implementation: the verifier name of the proxy (gateway, registry, router, governance, receipt, vault[rmUSDC], ...).
   --implementation A govern --row upgrade-proxy only: the new implementation, already deployed (linked to the live libraries): the address deploy-implementation printed.
   --upgrade-build D  govern --row upgrade-proxy and deploy-implementation: a core checkout at the commit the new implementation was built from, after forge build. Default: the DEPLOY_SHA checkout.
   --vault KEY        redeploy-vault only: the vault to redeploy. PROTO is the only one.
@@ -133,10 +143,9 @@ export const USAGE = `publish contracts
   --receipt-id ID    govern with --row release-receipt or --row apply-receipt, and the record-receipt verb: the bytes32 receipt id.
   --payload-digest D record-receipt only: the bytes32 payload_digest of 'rmpc receipt verify' = keccak256("robotmoney:consensus-receipt:v1\n" + the canonical receipt bytes). A plain keccak256 of the served canonical file is WRONG.
   --payload-uri URL  record-receipt only: the public route that serves exactly those bytes.
-  --submitter ADDR   govern --row register-committee and the record-receipt verb: the consensus receipt SUBMITTER, a SafeL2 1.4.1 multisig (issue 1750; threshold 2 or more, no module, no guard, separate from the governing Safe).
-                     record-receipt: required on 8453; --signer is then the deployer that pays gas and --owner-signer names the submitter Safe's owners (enough to reach its threshold).
-  --agent-label NAME govern --row register-committee only: the label on the IC policy (default committee-submitter).
-  --payload FILE     govern with --row apply-receipt (required), or record-receipt (optional, checked before anything is sent): the receipt payload file as served by the canonical route. Its receipt digest (domain line + bytes) is the anchored payloadDigest.
+  --submitter ADDR   govern --row register-submitter and the record-receipt verb: the consensus receipt SUBMITTER Safe, a SafeL2 1.4.1 multisig (threshold 2 or more, no module, no guard). It may be the governing Safe.
+                     record-receipt: required on every chain; --signer is the gas payer and --owner-signer names the submitter Safe's owners (enough to reach its threshold).
+  --payload FILE     govern with --row apply-receipt (required), or record-receipt (required, checked before any signer is built): the receipt payload file as served by the canonical route. Its receipt digest (domain line + bytes) is the anchored payloadDigest.
   --stage S          plan | deploy | all | a comma list of stage names (default: everything through verify)
                      The stage names come from core's scripts/deploy/stage-table.json at the DEPLOY_SHA, plus safe, verify and govern.
   --resume           continue a run: adopt the existing Safe, skip finished stages; prove-control also adopts a proof that landed on chain before the run died (nothing is sent again)
@@ -228,9 +237,8 @@ export interface Parsed {
   receiptId?: string;
   /** With --row apply-receipt only: the receipt payload file. */
   payload?: string;
-  /** With --row register-committee only: the submitter and its label. */
+  /** With --row register-submitter and the record-receipt verb: the submitter Safe. */
   submitter?: string;
-  agentLabel?: string;
   /** record-receipt only. */
   payloadDigest?: string;
   payloadUri?: string;
@@ -260,7 +268,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" }, "counts-require-origin-dev": { type: "boolean" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "no-warp": { type: "boolean" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "check-sources": { type: "boolean" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, proxy: { type: "string" }, implementation: { type: "string" }, "upgrade-build": { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "no-warp": { type: "boolean" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "check-sources": { type: "boolean" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, proxy: { type: "string" }, implementation: { type: "string" }, "upgrade-build": { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -296,13 +304,15 @@ export function parseCli(argv: string[]): Parsed {
   const receiptIdRaw = v["receipt-id"] as string | undefined;
   let receiptId: string | undefined;
   const submitter = v.submitter as string | undefined;
-  const agentLabel = v["agent-label"] as string | undefined;
-  if (row === REGISTER_ROW) { assertSubmitter(submitter); assertAgentLabel(agentLabel); }
-  else if (verb === "record-receipt" && agentLabel === undefined) { if (submitter !== undefined) assertSubmitter(submitter); } // issue 1750: the submitter Safe
-  else if (submitter !== undefined || agentLabel !== undefined) throw new PublishError("USAGE", `--submitter and --agent-label go with --row ${REGISTER_ROW} only\n${USAGE}`);
+  if (row === REGISTER_ROW) assertSubmitter(submitter);
+  else if (verb === "record-receipt") { if (submitter === undefined) throw new PublishError("USAGE", `record-receipt needs --submitter <the submitter Safe> and the --owner-signer of its owners: the receipt submitter is a Safe on every chain, never a single key. Nothing sent.\n${USAGE}`); assertSubmitter(submitter); } // issue 1888
+  else if (submitter !== undefined) throw new PublishError("USAGE", `--submitter goes with --row ${REGISTER_ROW} (or the record-receipt verb) only\n${USAGE}`);
   const payloadDigest = v["payload-digest"] as string | undefined;
   const payloadUri = v["payload-uri"] as string | undefined;
-  if (verb === "record-receipt") assertRecordInputs({ receiptId: receiptIdRaw, payloadDigest, payloadUri });
+  if (verb === "record-receipt") {
+    if ((v.payload as string | undefined) === undefined) throw new PublishError("USAGE", `record-receipt needs --payload FILE: the exact served receipt bytes (already verified with 'rmpc receipt verify'). Nothing sent.\n${USAGE}`);
+    if (!/^0x[0-9a-fA-F]{64}$/.test(receiptIdRaw ?? "")) throw new PublishError("USAGE", `--receipt-id must be a 0x-prefixed bytes32\n${USAGE}`);
+  }
   else if (payloadDigest !== undefined || payloadUri !== undefined) throw new PublishError("USAGE", `--payload-digest and --payload-uri go with the record-receipt verb only\n${USAGE}`);
   if (row === RECEIPT_ROW && receiptIdRaw === undefined) throw new PublishError("USAGE", `--row ${RECEIPT_ROW} needs --receipt-id 0x<bytes32>\n${USAGE}`);
   if (row === APPLY_ROW && receiptIdRaw === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --receipt-id 0x<bytes32> and --payload FILE\n${USAGE}`);
@@ -375,7 +385,7 @@ export function parseCli(argv: string[]): Parsed {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
     checkSources: !!v["check-sources"], coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, countsRequireOriginDev: !!v["counts-require-origin-dev"], measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
-    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, noWarp: !!v["no-warp"], call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri, adminArgs, vault: vaultArg, priorOut, logs, proxy, implementation, upgradeBuild: upgradeBuild === undefined ? undefined : resolve(upgradeBuild),
+    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, noWarp: !!v["no-warp"], call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, payloadDigest, payloadUri, adminArgs, vault: vaultArg, priorOut, logs, proxy, implementation, upgradeBuild: upgradeBuild === undefined ? undefined : resolve(upgradeBuild),
   };
 }
 
@@ -532,7 +542,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     }
     assertFloors({ rpcChainId, rpc: a.rpc, sheet, argChainId: a.chain, caller, signerSpec: a.signer, env, environment: a.environment, githubActions, actionsProof, measure: a.measure });
     if (sheet.kind === "rehearsal") log.log("warn", "run.deployment_kind", { deployment_kind: sheet.kind, label: kindLabel(sheet.kind, sheet.timelockMinDelay), note: "a REHEARSAL with a short timelock delay: never a production deployment" });
-    // A row this chain and kind refuse is refused HERE, before any signer exists: no passphrase prompt for a row that can never run (production update-delay, batch, cancel, register-committee on 8453).
+    // A row this chain and kind refuse is refused HERE, before any signer exists: no passphrase prompt for a row that can never run (production update-delay, batch, cancel on 8453).
     const rowRefusal = govRowRefusal(a.row, rpcChainId, sheet.kind);
     if (rowRefusal !== undefined) throw new PublishError("USAGE", rowRefusal);
     // The single-vault redeploy is refused on 8453 in production HERE, before any signer or passphrase exists (issue 1796).
@@ -564,9 +574,11 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     }
     useStageTable(stageTable);
     const evidenceDir = resolve(cwd, a.evidence ?? join("evidence", `publish-${rpcChainId}-${a.coreSha.slice(0, 12)}`));
-    const buildCtx = (frozen: RunContext["frozen"], measure: boolean): RunContext => {
+    const buildCtx = (frozen: RunContext["frozen"], measure: boolean, lazySigner = false): RunContext => {
       if (a.signer!.startsWith("address:") && !a.dryRun) throw new PublishError("USAGE", "an address: signer cannot sign: it is accepted with --dry-run only");
-      signer = (deps.makeSigner ?? ((s) => makeSigner(s, { env })))(a.signer!);
+      const construct = (): PublishSigner => (deps.makeSigner ?? ((s) => makeSigner(s, { env })))(a.signer!);
+      // lazySigner (record-receipt): the signer is constructed by its first use, so a refusal before then constructs none (issue 1888)
+      signer = lazySigner ? lazyPublishSigner(a.signer!, construct, (real) => { signer = real; }) : construct();
       return {
         chainId: rpcChainId, rpc: a.rpc, sheet, coreDir, coreSha: a.coreSha, evidenceDir,
         environment: a.environment, signer, caller, frozen, measure, dryCounts: a.dryRun ? {} : undefined, resume: a.resume, dryRun: a.dryRun, run, log,
@@ -611,18 +623,15 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       for (const s of specs) { const sg = await mk(s); await sg.address(); out.push(sg); } // in order, one device at a time
       return out;
     };
-    // record-receipt (issue 1727): --signer is the SUBMITTER (issue 1750: with --submitter it is the gas payer and the submitter is a Safe). No counts, no stages: it anchors one receipt and records the evidence entry in the run manifest.
+    // record-receipt (issues 1727, 1888): the SUBMITTER SAFE records directly on the receipt contract, on every chain and in every mode. --signer only pays the gas. No counts, no stages: it anchors one
+    // receipt and records the evidence entry in the run manifest. NO signer is built here: the payload, the Safe and the live role are checked first (record-receipt.ts), and the signers are lazy.
     if (a.verb === "record-receipt") {
-      // Refused in production on 8453 BEFORE the signer exists: no passphrase prompt, no key load (review advisory 3).
-      if (rpcChainId === MAINNET_CHAIN_ID && sheet.kind !== "rehearsal") throw new PublishError("USAGE", "record-receipt is refused on this chain in production: production records receipts with 'rmpc receipt submit' and an HSM or KMS signer. It runs on a Base mainnet REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) and on the Twin chain.");
-      // Owner decision 2026-10-10: on 8453 the submitter is a multisig. Refused before the signer exists too.
-      if (rpcChainId === MAINNET_CHAIN_ID && a.submitter === undefined) throw new PublishError("USAGE", "record-receipt on 8453 needs --submitter <the submitter Safe> (a SafeL2 1.4.1 multisig) and the --owner-signer of its owners: the consensus receipt submitter is never a single key. --signer is the deployer that pays the gas.");
       let payloadBytes: Uint8Array | undefined;
       if (a.payload !== undefined) { try { payloadBytes = new Uint8Array(readFileSync(a.payload)); } catch (e) { throw new PublishError("USAGE", `--payload ${a.payload} is not readable: ${(e as Error).message}`); } }
-      const inputs = assertRecordInputs({ receiptId: a.receiptId, payloadDigest: a.payloadDigest, payloadUri: a.payloadUri, payload: payloadBytes }); // issue 1754: digest and id are checked against the bytes BEFORE the signer exists
-      const ctx = buildCtx(undefined, false);
-      const safeMode = a.submitter === undefined ? undefined : { safe: assertSubmitter(a.submitter), ownerSigners: await ownerSigners(ctx) };
-      const rec = await (deps.recordReceipt ?? recordReceipt)(ctx, await ctx.signer.safeSigner(), inputs, deps.recordApi, safeMode);
+      const request = { receiptId: a.receiptId, payloadDigest: a.payloadDigest, payloadUri: a.payloadUri, payload: payloadBytes, submitter: a.submitter };
+      assertRecordInputs(request); // issue 1754, 1888: the digest and the id are checked against the bytes BEFORE the signer exists
+      const ctx = buildCtx(undefined, false, true);
+      const rec = await (deps.recordReceipt ?? recordReceipt)(ctx, { sender: () => ctx.signer.safeSigner(), owners: () => ownerSigners(ctx) }, request, deps.recordApi);
       console.log(JSON.stringify({ event: "record_receipt", ...rec }));
       log.log("info", "run.done", { ran: ["record-receipt"], skipped: [] });
       return 0;
@@ -743,7 +752,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
           }
         },
         govern: async (c, row, m) => {
-          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, ...(a.noWarp ? { warp: false as const } : {}), row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, agentLabel: a.agentLabel, proxy: a.proxy, implementation: a.implementation, upgradeBuild: a.upgradeBuild, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
+          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, ...(a.noWarp ? { warp: false as const } : {}), row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, proxy: a.proxy, implementation: a.implementation, upgradeBuild: a.upgradeBuild, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
         },
       });
       try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { postflight = "postflight"; throw e; }

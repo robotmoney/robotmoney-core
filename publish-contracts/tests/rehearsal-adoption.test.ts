@@ -38,7 +38,7 @@ function adoptedWorld(startNonce = START, sheet: Record<string, string> = REH): 
   Object.assign(w.cfg, { zeroTx: SCRIPT.libs, libsAddress: TICK, codeAt, creates: { [SCRIPT.proto]: [], [SCRIPT.vault]: [], [SCRIPT.gateway]: [] } });
   return w;
 }
-const PRE_PROTO = ["safe", "libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "governance"];
+const PRE_PROTO = ["safe", "libs", "recorder", "vault", "registry", "router", "gateway", "receipt", "governance"];
 
 describe("a rehearsal with a non-zero start and adopted stages", () => {
   test("libs adopted at 0 and vault, gateway and proto less their libraries: start recorded at safe, the later stages start where the adopted ones left off, the final nonce is start + (sum - libs - adopted) + proof", async () => {

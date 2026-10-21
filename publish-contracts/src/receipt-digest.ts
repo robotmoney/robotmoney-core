@@ -48,3 +48,28 @@ export function assertDigestMatchesBytes(bytes: Uint8Array, digest: string, what
     throw new PublishError("USAGE", `${what} ${digest} is not the receipt digest of the payload bytes ${want}: the digest is keccak256("${RECEIPT_DOMAIN.trim()}\\n" + the canonical receipt bytes), not a plain keccak256 of the file (plain keccak256 of these bytes is ${keccak256(bytes)})`, { digest, computed: want });
   }
 }
+
+/** The only `schema_version` the digest and id derivation here supports (clients/rust-payment-client/src/consensus_receipt.rs SCHEMA_VERSION). */
+export const SUPPORTED_RECEIPT_SCHEMA_VERSION = "1.0";
+
+export interface SupportedPayload { digest: Hex; receiptId: Hex; sessionId: string; subjectId: string }
+
+/**
+ * Issue 1888: the MANDATORY payload check of record-receipt. The served canonical bytes (or the full preimage) must be present, strict UTF-8, one compact JSON object
+ * followed by exactly one newline, of the supported schema_version, with a non-empty session_id and subject_id. The protocol digest and the receipt id are recomputed from
+ * the bytes. Throws USAGE (nothing sent, no signer built) for anything else. It does not verify analyst signatures: that is `rmpc receipt verify` on the same bytes.
+ */
+export function supportedReceiptPayload(bytes: Uint8Array | undefined): SupportedPayload {
+  if (bytes === undefined || bytes.length === 0) throw new PublishError("USAGE", "the receipt payload bytes are required (--payload FILE: the exact bytes the canonical route served, already verified with `rmpc receipt verify`). Nothing sent.");
+  const body = startsWithDomain(bytes) ? bytes.subarray(DOMAIN_BYTES.length) : bytes;
+  let text: string;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(body); } catch { throw new PublishError("USAGE", "the receipt payload is not valid UTF-8: it is not a canonical consensus receipt. Nothing sent."); }
+  if (!text.startsWith("{") || !text.endsWith("}\n") || text.endsWith("\n\n")) throw new PublishError("USAGE", "the receipt payload is not the canonical form (one compact JSON object followed by exactly one newline). Nothing sent.");
+  let doc: unknown;
+  try { doc = JSON.parse(text); } catch { throw new PublishError("USAGE", "the receipt payload is not valid JSON: it is not a canonical consensus receipt. Nothing sent."); }
+  const o = doc as Record<string, unknown>;
+  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) throw new PublishError("USAGE", "the receipt payload is not a JSON object. Nothing sent.");
+  if (o.schema_version !== SUPPORTED_RECEIPT_SCHEMA_VERSION) throw new PublishError("USAGE", `the receipt payload schema_version is ${JSON.stringify(o.schema_version)}: only ${JSON.stringify(SUPPORTED_RECEIPT_SCHEMA_VERSION)} is supported. Nothing sent.`, { schema_version: o.schema_version });
+  if (typeof o.session_id !== "string" || o.session_id === "" || typeof o.subject_id !== "string" || o.subject_id === "") throw new PublishError("USAGE", "the receipt payload has no session_id and subject_id: the receipt id cannot be derived. Nothing sent.");
+  return { digest: receiptPayloadDigest(bytes), receiptId: deriveReceiptId(o.session_id, o.subject_id), sessionId: o.session_id, subjectId: o.subject_id };
+}

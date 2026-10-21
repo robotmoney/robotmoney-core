@@ -25,7 +25,7 @@ describe("runbook 4.12 and the stage table agree (issue 1809)", () => {
   test("the proxy table lists the stage table's proxies, in stage order, with the same fields and contracts", () => {
     const rows = [...SECTION.matchAll(/^\| `([\w-]+)` \| `(\w+)` \| `(\w+)` \| `(\w+)` \|$/gm)].map((m) => [m[1], m[2], m[3], m[4]]);
     const want = table.stages.flatMap((s) => (s.proxies ?? []).map((p) => [s.name, p.field, p.implementationField, p.contract]));
-    expect(want.length).toBe(10);
+    expect(want.length).toBe(9);
     expect(rows).toEqual(want);
   });
   test("the upgrade authority is deployed last, at the stated CREATE2 address, and each proxy is the stated number of transactions", () => {

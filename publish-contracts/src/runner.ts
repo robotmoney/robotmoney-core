@@ -137,7 +137,9 @@ export interface RunManifest {
   vault_redeploys?: RedeployRecord[];
   /** Issue 1861: one entry per new proxy implementation the `deploy-implementation` verb deployed (step 2 of a governed upgrade), before `govern --row upgrade-proxy` names it. */
   implementation_deploys?: ImplementationDeploy[];
-  /** Issue 1727: the committee registration rounds `govern --row register-committee` executed, one entry per submitter (the evidence `committee_registrations` shape). */
+  /** Issue 1888: the registration rounds `govern --row register-submitter` executed, one entry per submitter Safe (the evidence `submitter_registrations` shape). */
+  submitter_registrations?: unknown[];
+  /** HISTORICAL (issue 1727): the retired `register-committee` rounds. Read from old run manifests only, never written. */
   committee_registrations?: unknown[];
   /** Issue 1727: the receipts `record-receipt` anchored (the evidence `recorded_receipts` shape): id, digest, uri, submitter ADDRESS, transaction. Never a key. */
   recorded_receipts?: unknown[];

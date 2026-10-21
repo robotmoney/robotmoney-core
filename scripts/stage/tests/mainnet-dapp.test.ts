@@ -45,7 +45,6 @@ const REGISTRY = A(0x1002);
 const ROUTER = A(0x1003);
 const GOVERNANCE = A(0x1004);
 const RECEIPT = A(0x1005);
-const IC_POLICY = A(0x1007);
 const TIMELOCK = A(0x1006);
 const HASH = `0x${"ab".repeat(32)}`;
 // QA plan U5: the router's and each vault's runtime code hash, as DeployTimelock records them.
@@ -70,7 +69,7 @@ function fixture(name: string, tweak?: (docs: Record<string, Json>) => void): st
     [manifestOf("governance")]: { chain_id: 8453, governance: GOVERNANCE },
     [manifestOf("timelock")]: {
       chain_id: 8453,
-      addresses: { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOVERNANCE, consensus_receipt: RECEIPT, ic_policy: IC_POLICY, timelock: TIMELOCK, safe: SAFE, vaults: Object.values(VAULTS) },
+      addresses: { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOVERNANCE, consensus_receipt: RECEIPT, timelock: TIMELOCK, safe: SAFE, vaults: Object.values(VAULTS) },
       code_hashes: { gateway: HASH, router: ROUTER_HASH },
       vault_handover: Object.fromEntries(
         Object.entries(VAULTS).map(([key, address], i) => [`vault_${i}`, { address, code_hash: VAULT_HASHES[key] }]),
@@ -112,9 +111,9 @@ describe("the env builder from the manifests", () => {
     expect(env.INDEXER_PORTFOLIO_ROUTER).toBe(ROUTER);
     expect(env.INDEXER_ROUTER_GOVERNANCE).toBe(GOVERNANCE);
     expect(env.INDEXER_CONSENSUS_RECEIPT).toBe(RECEIPT);
-    // Security round 1: the IC policy proxy is watched (its Upgraded / UpgradesFrozen events page the watchdog)
-    expect(env.INDEXER_INVESTMENT_COMMITTEE).toBe(IC_POLICY);
-    expect(readMainnetManifests(dir).icPolicy).toBe(IC_POLICY);
+    // Issue 1888: the retired committee policy is not handed to the indexer, and the manifests carry no ic_policy
+    expect(env).not.toHaveProperty("INDEXER_INVESTMENT_COMMITTEE");
+    expect(readMainnetManifests(dir)).not.toHaveProperty("icPolicy");
     // Issue 1731: the Safe and the timelock are in the indexer's watched set.
     expect(env.INDEXER_SAFE).toBe(SAFE);
     expect(env.INDEXER_TIMELOCK).toBe(TIMELOCK);
@@ -226,11 +225,6 @@ describe("refusals on the manifests and the options", () => {
     expect(refusal(() => buildMainnetDappEnv(input(dir)))).toBe("manifest-unreadable");
     writeFileSync(join(dir, manifestOf("router")), "[]");
     expect(refusal(() => buildMainnetDappEnv(input(dir)))).toBe("manifest-unreadable");
-  });
-  test("security round 1: a timelock manifest with no IC policy address, or a zero one, is refused (the indexer would never watch that proxy)", () => {
-    const tl = (d: Record<string, Json>) => (d[manifestOf("timelock")]!.addresses as Json);
-    expect(refusal(() => buildMainnetDappEnv(input(fixture("ic-none", (d) => void delete tl(d).ic_policy))))).toBe("manifest-field");
-    expect(refusal(() => buildMainnetDappEnv(input(fixture("ic-zero", (d) => void (tl(d).ic_policy = A(0))))))).toBe("manifest-field");
   });
   test("a zero or malformed address, a bad gateway hash", () => {
     expect(refusal(() => buildMainnetDappEnv(input(fixture("zero", (d) => void (d[manifestOf("registry")]!.registry = A(0))))))).toBe("manifest-field");
@@ -429,15 +423,15 @@ describe("the loopback guard on the compose files", () => {
   // Security round 1: an env value the container never receives watches nothing. Every setting the indexer reads from its environment (services/explorer-indexer
   // src/main.rs `env = "INDEXER_..."`) must reach the explorer-indexer container from the dapp compose file or the mainnet overlay. The two left out are tuning and
   // backfill knobs with safe defaults, never a contract the indexer must watch.
-  test("security round 1: every INDEXER_* setting of the indexer reaches its container (INDEXER_INVESTMENT_COMMITTEE among them)", () => {
-    const UNMAPPED_ON_PURPOSE = new Set(["INDEXER_TICK_SECONDS", "INDEXER_END_BLOCK"]);
+  test("security round 1: every INDEXER_* setting of the indexer reaches its container (the retired committee input excepted, issue 1888)", () => {
+    const UNMAPPED_ON_PURPOSE = new Set(["INDEXER_TICK_SECONDS", "INDEXER_END_BLOCK", "INDEXER_INVESTMENT_COMMITTEE" /* issue 1888: the committee input is retired, the explorer-model change removes it from the indexer */]);
     const mainRs = readFileSync(join(CORE_ROOT, "services", "explorer-indexer", "src", "main.rs"), "utf8");
     const names = [...new Set([...mainRs.matchAll(/env\s*=\s*"(INDEXER_[A-Z0-9_]+)"/g)].map((m) => m[1]!))];
-    expect(names).toContain("INDEXER_INVESTMENT_COMMITTEE");
+    expect(names).toContain("INDEXER_CONSENSUS_RECEIPT");
     const blockOf = (text: string) => noComments(text).split(/\n  explorer-indexer:/)[1]?.split(/\n  [a-z][a-z0-9-]*:\s*\n/)[0] ?? "";
     const mapped = blockOf(base.text) + blockOf(overlay.text);
     for (const n of names) if (!UNMAPPED_ON_PURPOSE.has(n)) expect([n, new RegExp(`\\b${n}:`).test(mapped)]).toEqual([n, true]);
-    expect(blockOf(base.text)).toContain("INDEXER_INVESTMENT_COMMITTEE: ${INDEXER_INVESTMENT_COMMITTEE:-}");
+    expect(blockOf(base.text)).not.toContain("INDEXER_INVESTMENT_COMMITTEE");
   });
   test("issue 1731: the compose file hands INDEXER_TIMELOCK and INDEXER_SAFE to the indexer container", () => {
     // An env value the container never receives watches nothing. The indexer service block must pass both.

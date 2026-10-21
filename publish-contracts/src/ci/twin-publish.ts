@@ -8,7 +8,7 @@
 // REHEARSAL_IN=true (issue 1727) runs the Twin chain in the REHEARSAL kind the Base mainnet rehearsal uses: the sheet gets DEPLOYMENT_KIND=rehearsal, TIMELOCK_MIN_DELAY=900, a new
 // SAFE_SALT_NONCE, and the deployer is NOT fresh (one self-transfer before publish moves its nonce, so the relative nonce accounting runs). After govern and the second verify it
 // runs the receipt path with a REAL recorded receipt, not a fixture. The SUBMITTER is a SECOND Safe (issue 1750, owner decision 2026-10-10: the submitter is a multisig, never a key): this script
-// creates it with the Safe tool (the same three owners, threshold 2, a different salt), registers it through the governing Safe and the timelock (govern --row register-committee --submitter),
+// creates it with the Safe tool (the same three owners, threshold 2, a different salt), registers it through the governing Safe and the timelock (govern --row register-submitter --submitter: one delayed receipt grantRole),
 // two of its owners sign the record and the deployer pays the gas (the record-receipt verb with --submitter), the Safe applies it (govern --row apply-receipt: ONE RouterGovernance.applyReceipt call, which releases the receipt and writes the router weights in one transaction, issue 1698), then verify a third time and check the run manifest's receipt path (evidence-check).
 // The order is publish, verify, govern, verify (issue 1667): the second verify runs only with both VERIFY_IN and GOVERN_IN. Between govern and that verify, one set-unwind-guard
 // round per basket stage 13 opened (QA plan v1 D7: the verifier requires the emergency unwind guard on an open basket). With GOVERN_IN the govern matrix then runs
@@ -131,7 +131,7 @@ if (env("GOVERN_IN") === "true") {
   // QA plan v1 B5 (finding T5, issue 1645): one Safe self-administration row on the REAL SafeL2, not only against the fake Safe of govern.test.ts. The matrix raises
   // the threshold to the owner count (so the next Safe transaction needs every owner's signature), then restores the sheet's threshold: that transaction carries all
   // three signatures and runs while the sheet is stale (the self-administration exemption of B4), and the run manifest holds two records (two calldata, two Safe nonces).
-  // The restore is what keeps the rest of the run honest: the verifier's Safe threshold label and every later row (register-committee, apply-receipt) compare the live
+  // The restore is what keeps the rest of the run honest: the verifier's Safe threshold label and every later row (register-submitter, apply-receipt) compare the live
   // roster with the sheet, and the sheet parser refuses a threshold equal to the owner count, so the sheet cannot be rewritten to the raised value instead (runbook section 9).
   // The owner count and the threshold come from the merged sheet, the one the CLI reads: nothing here is hard-coded.
   const merged = parseSheetText(readFileSync(sheet, "utf8"));
@@ -163,7 +163,7 @@ if (rehearsalMode && env("GOVERN_IN") === "true") {
   const digest = receiptPayloadDigest(new Uint8Array(body));
   const receiptId = receiptIdOfBytes(new Uint8Array(body)) ?? fail("the receipt fixture has no session_id and subject_id");
   const uri = `https://twin.invalid/receipts/${receiptId}.json`;
-  stage("govern", join(rh, "register-committee-rows.txt"), ["--row", "register-committee", "--submitter", submitter, "--agent-label", "twin-submitter"]);
+  stage("govern", join(rh, "register-submitter-rows.txt"), ["--row", "register-submitter", "--submitter", submitter]);
   // --signer is the DEPLOYER (it pays the gas); two of the submitter Safe's owners sign (their keystores sit beside the DEPLOYER keystore).
   stage("record-receipt", join(rh, "record-receipt.txt"), ["--receipt-id", receiptId, "--payload-digest", digest, "--payload", payload, "--payload-uri", uri, "--submitter", submitter]);
   stage("govern", join(rh, "apply-receipt-rows.txt"), ["--row", "apply-receipt", "--receipt-id", receiptId, "--payload", payload]);
@@ -175,6 +175,6 @@ if (rehearsalMode && env("GOVERN_IN") === "true") {
     exportVar("TWIN_VERIFY_LABELS_POST_APPLY", join(rh, "verify-labels-post-apply.txt"));
   }
   // The run manifest's receipt path (registration, recorded receipt, application) read back from the chain with the rehearsal evidence checker.
-  run([bun, env("TWIN_EVIDENCE_CHECK", "src/evidence-check.ts"), "--receipt-applications", join(rh, "evidence", "publish-run.json"), "--deployment-kind", "rehearsal", "--consensus-receipt", field("ic-policy", "consensus_receipt"),
+  run([bun, env("TWIN_EVIDENCE_CHECK", "src/evidence-check.ts"), "--receipt-applications", join(rh, "evidence", "publish-run.json"), "--deployment-kind", "rehearsal", "--consensus-receipt", field("receipt", "consensus_receipt"),
     "--governance", field("governance", "governance"), "--timelock", field("timelock", "timelock"), "--rpc", rpc], { cwd: pc });
 }

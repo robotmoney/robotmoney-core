@@ -334,13 +334,13 @@ steps:
     onlyFor: ["twin", "rehearsal"]
     gateAbsent: "{runDir}/state/submitter-safe"
     writes: ["submitter-safe"]
-  - id: "P3.04-register-committee-schedule"
+  - id: "P3.04-register-submitter-schedule"
     standing: ["4.10"]
-    description: "The submitter Safe authorizes itself privately (commit, a block later reveal, hand the agent to the timelock), then the governing Safe schedules one batch: setPolicy and committeeRegister"
+    description: "The governing Safe schedules ONE delayed timelock call, receipt.grantRole(RECEIPT_SUBMITTER_ROLE, the submitter Safe), after the submitter is checked as a canonical SafeL2 1.4.1 multisig"
     host: "control"
     phase: 3
     cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "register-committee", "--submitter", "{state:submitter-safe}", "--agent-label", "qa-submitter", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "register-submitter", "--submitter", "{state:submitter-safe}", "{common}", "{owners}", "{gate}", "{wait}"]
     env:
       PUBLISH_MANIFEST_DIR: "{manifestDir}"
       YES: "{yes}"
@@ -349,13 +349,13 @@ steps:
     irreversible: false
     onlyFor: ["twin", "rehearsal"]
     maxMinutes: 60
-  - id: "P3.05-register-committee-execute"
+  - id: "P3.05-register-submitter-execute"
     standing: ["4.10"]
-    description: "After the delay the batch executes and AGENT_ROLE, COMMITTEE_AGENT_ROLE, the label, the agent owner and the share receiver read back"
+    description: "After the delay the call executes and RECEIPT_SUBMITTER_ROLE reads back for the submitter Safe"
     host: "control"
     phase: 3
     cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "register-committee", "--submitter", "{state:submitter-safe}", "--agent-label", "qa-submitter", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "register-submitter", "--submitter", "{state:submitter-safe}", "{common}", "{owners}", "{gate}", "{wait}"]
     env:
       PUBLISH_MANIFEST_DIR: "{manifestDir}"
       YES: "{yes}"
@@ -363,7 +363,7 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: ["twin", "rehearsal"]
-    notBefore: {"afterStep": "P3.04-register-committee-schedule", "hours": "timelockDelay"}
+    notBefore: {"afterStep": "P3.04-register-submitter-schedule", "hours": "timelockDelay"}
     maxMinutes: 60
 
   # ── Phase 4, verify again: the post-govern state. ──
@@ -396,7 +396,7 @@ steps:
     writes: ["receipt-id", "receipt-digest"]
   - id: "P5.02-record-receipt"
     standing: ["4.10"]
-    description: "The submitter Safe records the receipt through the gateway: threshold owners sign, the deployer pays; the stored submitter reads back as the Safe. A receipt id is unique, so a wrong digest cannot be corrected"
+    description: "The submitter Safe records the receipt directly on the receipt contract: threshold owners sign, the deployer pays; the digest and id are recomputed from the served bytes before any signer exists; the stored submitter reads back as the Safe. A receipt id is unique, so a wrong digest cannot be corrected"
     host: "control"
     phase: 5
     cmds:

@@ -15,8 +15,8 @@ const off = (e: any, kind: "production" | "rehearsal" = "production") => upgrade
 const none: ChainReader = { getChainId: async () => 8453, getTransactionCount: async () => 0, getTransactionReceipt: async () => { throw new Error("none"); }, getBlock: async () => { throw new Error("none"); }, readContract: async () => { throw new Error("no read"); } };
 
 describe("the evidence upgradeability record, offline (issue 1809)", () => {
-  test("the full core set is the stage table's ten proxies, and a frozen record and an upgradeable record each pass", () => {
-    expect(NAMES).toHaveLength(10);
+  test("the full core set is the stage table's nine proxies, and a frozen record and an upgradeable record each pass", () => {
+    expect(NAMES).toHaveLength(9);
     expect(off(withUpgradeability(base()))).toBe("");
     expect(off(withUpgradeability(base(), "upgradeable"))).toBe("");
   });

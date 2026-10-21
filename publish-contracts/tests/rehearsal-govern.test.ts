@@ -1,20 +1,19 @@
 // Issue 1727: the govern surface of a Base mainnet REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) on 8453, against the fake timelock of govern-world.ts.
 // Per row: unpauses, apply-receipt and release-receipt run in production and in a rehearsal. update-delay, batch and cancel run on 8453 ONLY in a rehearsal, as explicit rows after the unpauses.
-// register-committee (the consensus receipt submitter) is rehearsal and Twin only. Every refusal has a mutation check: the same call with the mode on (or the input fixed) succeeds.
-// QA plan v1 B6 (review CS-2): the submitter Safe authorizes itself in private (commit, reveal, hand-over to the timelock) BEFORE the batch is scheduled, and the public batch is
-// setPolicy + committeeRegister, which no squatter can break during the delay (the contract-level proof is ConsensusReceiptSafeSubmitter.t.sol::test_publicRegisterBatchCannotBeFrontRun).
+// Issue 1888: register-submitter (the consensus receipt submitter Safe) is ONE delayed receipt.grantRole(RECEIPT_SUBMITTER_ROLE, safe) on every chain and kind. The retired
+// register-committee batch (setPolicy, committeeRegister and the private commit/reveal/hand-over) is gone. Every refusal has a mutation check.
 import { describe, expect, test } from "bun:test";
-import { decodeFunctionData, getAddress } from "viem";
+import { decodeFunctionData, getAddress, type Address, type Hex } from "viem";
 import { EXIT_CODES } from "../src/errors.ts";
-import {
-  GATEWAY_REGISTER_ABI, REGISTER_ROW, SUBMITTER_POLICY_CAP, buildRegisterCalls, buildSelfAuthCalls, registerReadBackProblems, registerRecordKey, selfAuthCommitHash, selfAuthPolicyProblems, selfAuthStateOf,
-} from "../src/committee-register.ts";
+import { REGISTER_ROW, RECEIPT_ROLE_ABI, buildRegisterCall, registerReadBackProblems, registerRecordKey } from "../src/submitter-register.ts";
+import { PublishError } from "../src/errors.ts";
+import { inspectSubmitterSafe } from "../src/submitter-safe.ts";
 import { GOVERN_ROWS, TWIN_ONLY_ROWS, runGovern, stageRows, twinOnlyRefused } from "../src/govern.ts";
 import { newManifest } from "../src/runner.ts";
 import { updateTimelockDelay } from "../src/safe/timelock.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { stageByName } from "../src/stages.ts";
-import { A, addr, fakeTimelock, sender, setup, signers } from "./govern-world.ts";
+import { A, SUBMITTER_ROLE_ID, addr, fakeTimelock, sender, setup, signers } from "./govern-world.ts";
 
 const ALL = { ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:5000,PROTO:2500,AGENT:1000,RWA:1500" };
 const REHEARSAL = { ...ALL, DEPLOYMENT_KIND: "rehearsal", TIMELOCK_MIN_DELAY: "900", GOVERN_NEW_DELAY: "1800", SAFE_SALT_NONCE: "20261010" };
@@ -90,217 +89,135 @@ describe("update-delay, batch and cancel on 8453: refused in production, allowed
   });
 });
 
-describe("register-committee: the consensus receipt submitter, through the Safe and the timelock", () => {
-  test("a rehearsal on 8453: the submitter Safe self-authorizes in private, THEN ONE batch of setPolicy then committeeRegister, a signalling-only policy owned by the timelock, read back, evidence entry in the run manifest", async () => {
+describe("register-submitter: the receipt submitter Safe, through the Safe and the timelock (issue 1888)", () => {
+  const WANT_CALL = () => buildRegisterCall(A.receipt, getAddress(SUBMITTER));
+  test("a production sheet on 8453 schedules the ONE grantRole and exits GOVERN_PENDING with a resume command for this row (the 48 hour delay is not waited in one process)", async () => {
+    const { d, tl, manifest } = mk(ALL, 172800n);
+    await expect(go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "GOVERN_PENDING", message: expect.stringContaining(`--row ${REGISTER_ROW} --submitter ${SUBMITTER}`) });
+    expect(tl.s.events).toEqual([`schedule:${REGISTER_ROW}`]);
+    expect(tl.s.scheduled.get(REGISTER_ROW)!.calls).toEqual([{ target: A.receipt, data: buildRegisterCall(A.receipt, getAddress(SUBMITTER)).data }]);
+    tl.s.clock += 172800n; // the delay passes: the resume executes the same operation and reads the role back
+    await go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER, maxWaitSeconds: 3600 });
+    expect(tl.s.events).toEqual([`schedule:${REGISTER_ROW}`, `execute:${REGISTER_ROW}`]);
+    expect(tl.s.submitterRoles.has(SUBMITTER.toLowerCase())).toBe(true);
+  });
+  for (const [name, over, chainId] of [["a rehearsal on 8453", REHEARSAL, 8453], ["the Twin chain", ALL, 918453]] as const) {
+    test(`${name}: ONE delayed receipt.grantRole(RECEIPT_SUBMITTER_ROLE, safe), no batch, no gateway, no private half; read back; evidence entry written`, async () => {
+      const d = setup(over, chainId);
+      const tl = fakeTimelock(d.sheet, chainId === 8453 ? 900n : 60n);
+      const manifest = newManifest(d.ctx, addr(0xa001));
+      const res = await go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
+      expect(res.rows).toEqual([registerRecordKey(SUBMITTER)]);
+      // exactly one schedule and one execute, in the single form: no batch, and no private submitter-Safe transaction before it
+      expect(tl.s.events).toEqual([`schedule:${REGISTER_ROW}`, `execute:${REGISTER_ROW}`]);
+      const sc = tl.s.scheduled.get(REGISTER_ROW)!;
+      expect(sc.form).toBe("single");
+      expect(sc.calls).toHaveLength(1);
+      expect(sc.calls[0]).toEqual({ target: A.receipt, data: WANT_CALL().data });
+      expect(sc.calls[0]!.target).not.toBe(A.gateway);
+      const call = decodeFunctionData({ abi: RECEIPT_ROLE_ABI, data: sc.calls[0]!.data as Hex });
+      expect(call).toMatchObject({ functionName: "grantRole", args: [SUBMITTER_ROLE_ID, getAddress(SUBMITTER)] });
+      expect(tl.s.submitterRoles.has(SUBMITTER.toLowerCase())).toBe(true);
+      const entry = (manifest as unknown as { submitter_registrations: Record<string, unknown>[] }).submitter_registrations[0]!;
+      expect(entry).toMatchObject({ step: REGISTER_ROW, submitter: getAddress(SUBMITTER), receipt: A.receipt, timelock: A.timelock, schedule_status: 1, execute_status: 1 });
+      expect(entry.submitter_safe).toMatchObject({ threshold: 2 });
+      expect((manifest as unknown as { committee_registrations?: unknown }).committee_registrations).toBeUndefined();
+      expect(JSON.stringify(manifest)).not.toMatch(/salt"?:\s*"0x[0-9a-f]{64}".*self_authorization/);
+    });
+  }
+
+  test("a rerun after completion schedules nothing more (idempotent) and keeps the one evidence entry", async () => {
     const { d, tl, manifest } = mk(REHEARSAL);
-    const res = await go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER, agentLabel: "rehearsal-submitter" });
-    expect(res.rows).toEqual([registerRecordKey(SUBMITTER)]);
-    // QA plan v1 B6: the three submitter-Safe transactions land before the batch is on the timelock, so the address is owned by the timelock before it is public
-    expect(tl.s.events).toEqual(["propose:submitter-commit", "propose:submitter-reveal", "propose:submitter-hand-over", `scheduleBatch:${REGISTER_ROW}`, `executeBatch:${REGISTER_ROW}`]);
-    const sc = tl.s.scheduled.get(REGISTER_ROW)!;
-    expect(sc.form).toBe("batch");
-    expect(sc.calls).toHaveLength(2);
-    expect(sc.calls.every((c) => c.target === A.gateway)).toBe(true);
-    const [auth, reg] = sc.calls.map((c) => decodeFunctionData({ abi: GATEWAY_REGISTER_ABI, data: c.data as `0x${string}` }));
-    expect(auth!.functionName).toBe("setPolicy"); // no first-time authorization in the public batch: nothing a squatter does during the delay can make it revert
-    expect(tl.s.agentOwner.get(SUBMITTER.toLowerCase())).toBe(A.timelock.toLowerCase());
-    expect(tl.s.policies.get(SUBMITTER.toLowerCase())!.shareReceiver).toBe(A.timelock.toLowerCase());
-    const [agent, p] = auth!.args as unknown as [string, { active: boolean; maxPerPayment: bigint; maxPerWindow: bigint; shareReceiver: string; maxWithdrawPerPayment: bigint; allowedDestinations: string[] }];
-    expect(agent.toLowerCase()).toBe(SUBMITTER.toLowerCase());
-    expect(p).toMatchObject({ active: true, maxPerPayment: SUBMITTER_POLICY_CAP, maxPerWindow: SUBMITTER_POLICY_CAP, maxWithdrawPerPayment: 0n });
-    expect(p.shareReceiver.toLowerCase()).toBe(A.timelock.toLowerCase());
-    expect(p.allowedDestinations).toEqual([]);
-    expect(reg).toMatchObject({ functionName: "committeeRegister", args: [expect.any(String), "rehearsal-submitter"] });
-    expect(tl.s.agentRole.has(SUBMITTER.toLowerCase())).toBe(true);
-    expect(tl.s.committee.get(SUBMITTER.toLowerCase())).toBe("rehearsal-submitter");
-    const entry = (manifest as unknown as { committee_registrations: Record<string, unknown>[] }).committee_registrations[0]!;
-    expect(entry).toMatchObject({ step: REGISTER_ROW, submitter: getAddress(SUBMITTER), agent_label: "rehearsal-submitter", gateway: A.gateway, ic_policy: A.icPolicy, timelock: A.timelock, schedule_status: 1, execute_status: 1 });
-    // the private half is in the evidence as its three transactions; the salt stays in the govern state only
-    expect(entry.self_authorization).toMatchObject({ commit_tx: expect.stringMatching(/^0x[0-9a-f]{64}$/), reveal_tx: expect.stringMatching(/^0x[0-9a-f]{64}$/), hand_over_tx: expect.stringMatching(/^0x[0-9a-f]{64}$/) });
-    expect(JSON.stringify(entry)).not.toMatch(/key|pass|secret|salt/i);
+    await go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
+    const events = [...tl.s.events];
+    await go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
+    expect(tl.s.events).toEqual(events);
+    expect((manifest as unknown as { submitter_registrations: unknown[] }).submitter_registrations).toHaveLength(1);
   });
 
-  test("QA plan v1 B6: a squatter that already owns the submitter's agent is caught before anything is proposed or scheduled (no timelock round spent); mutation: an unowned Safe runs", async () => {
+  test("a submitter that already holds the role is refused before anything is scheduled", async () => {
     const { d, tl, manifest } = mk(REHEARSAL);
-    tl.s.agentOwner.set(SUBMITTER.toLowerCase(), addr(0xbad).toLowerCase());
-    tl.s.agentRole.add(SUBMITTER.toLowerCase());
-    await expect(go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("Create a NEW submitter Safe") });
+    tl.s.submitterRoles.add(SUBMITTER.toLowerCase());
+    await expect(go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("already holds RECEIPT_SUBMITTER_ROLE") });
     expect(tl.s.events).toEqual([]);
-    const ok = mk(REHEARSAL);
-    await expect(go(ok.d, ok.tl, ok.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).resolves.toBeDefined();
   });
 
-  test("QA plan v1 B6: a timelock-owned agent whose policy is not the signalling-only one (a depositor's agent) is refused, the batch would overwrite it; mutation: the submitter shape passes", async () => {
-    const seed = (tl: ReturnType<typeof fakeTimelock>, cap: bigint) => {
-      tl.s.agentOwner.set(SUBMITTER.toLowerCase(), A.timelock.toLowerCase()); tl.s.agentRole.add(SUBMITTER.toLowerCase());
-      tl.s.policies.set(SUBMITTER.toLowerCase(), { maxPerPayment: cap, maxPerWindow: cap, shareReceiver: SUBMITTER.toLowerCase(), maxWithdrawPerPayment: 0n, maxWithdrawPerWindow: 0n });
-    };
-    const dep = mk(REHEARSAL);
-    seed(dep.tl, 1_000_000n);
-    await expect(go(dep.d, dep.tl, dep.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("is not the submitter's signalling-only one") });
-    expect(dep.tl.s.events).toEqual([]);
-    const own = mk(REHEARSAL);
-    seed(own.tl, SUBMITTER_POLICY_CAP); // the private half done by an earlier run (or by the owners by hand): nothing private is sent again
-    await go(own.d, own.tl, own.manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
-    expect(own.tl.s.events).toEqual([`scheduleBatch:${REGISTER_ROW}`, `executeBatch:${REGISTER_ROW}`]);
-  });
-
-  test("QA plan v1 B6: a run that dies after the commit landed reveals the SAME commitment on the next run (no second commit, same salt); an expired one is replaced by a new salt", async () => {
-    const dying = (tl: ReturnType<typeof fakeTimelock>, action: string) => {
-      const real = tl.api.executeTx as unknown as (...a: unknown[]) => Promise<unknown>;
-      let armed = true;
-      tl.api.executeTx = (async (h: unknown, b: { action?: string }, snd: unknown) => { if (armed && b.action === action) { armed = false; throw new Error("stale RPC"); } return real(h, b, snd); }) as never;
-    };
-    const saltOf = (m: ReturnType<typeof newManifest>) => (m as unknown as { govern: Record<string, { register?: { self_authorization?: { salt?: string } } }> }).govern[registerRecordKey(SUBMITTER)]!.register!.self_authorization!.salt;
+  test("the timelock must administer the role: without ADMIN_ROLE on the receipt the grant is refused before it is scheduled", async () => {
     const { d, tl, manifest } = mk(REHEARSAL);
-    dying(tl, "submitter-reveal");
-    await expect(go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toThrow("stale RPC");
-    expect(tl.s.events).toEqual(["propose:submitter-commit", "propose:submitter-reveal"]);
-    const first = saltOf(manifest);
-    expect(first).toMatch(/^0x[0-9a-f]{64}$/);
-    await go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
-    expect(tl.s.events.slice(2)).toEqual(["propose:submitter-reveal", "propose:submitter-hand-over", `scheduleBatch:${REGISTER_ROW}`, `executeBatch:${REGISTER_ROW}`]);
-    expect(saltOf(manifest)).toBe(first);
-    // the commitment's window (256 blocks) ran out before the resume: a new commit, with a new salt
-    const late = mk(REHEARSAL);
-    dying(late.tl, "submitter-reveal");
-    await expect(go(late.d, late.tl, late.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toThrow("stale RPC");
-    const old = saltOf(late.manifest);
-    late.tl.s.clock += 600n;
-    await go(late.d, late.tl, late.manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
-    expect(late.tl.s.events.slice(2, 5)).toEqual(["propose:submitter-commit", "propose:submitter-reveal", "propose:submitter-hand-over"]);
-    expect(saltOf(late.manifest)).not.toBe(old);
+    tl.s.timelockIsReceiptAdmin = false;
+    await expect(go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("does not hold the admin role of RECEIPT_SUBMITTER_ROLE") });
+    expect(tl.s.events).toEqual([]);
   });
 
-  test("QA plan v1 B6: the private calls hide the agent in the commit, pay the Safe itself in the reveal and hand the agent to the timelock; the state names each step", () => {
-    const salt = `0x${"5a".repeat(32)}` as const;
-    const c = buildSelfAuthCalls(A.gateway, A.timelock, SUBMITTER, salt, 1000n);
-    expect(c.commit.data.toLowerCase()).not.toContain(SUBMITTER.slice(2).toLowerCase()); // the commit names no agent
-    expect(decodeFunctionData({ abi: GATEWAY_REGISTER_ABI, data: c.commit.data }).args).toEqual([selfAuthCommitHash(SUBMITTER, salt)]);
-    const rv = decodeFunctionData({ abi: GATEWAY_REGISTER_ABI, data: c.reveal.data });
-    expect(rv.functionName).toBe("revealAuthorization");
-    expect((rv.args![2] as { shareReceiver: string }).shareReceiver.toLowerCase()).toBe(SUBMITTER.toLowerCase()); // a caller without ADMIN_ROLE must name itself
-    expect(decodeFunctionData({ abi: GATEWAY_REGISTER_ABI, data: c.handOver.data })).toMatchObject({ functionName: "transferAgentOwnership", args: [getAddress(SUBMITTER), getAddress(A.timelock)] });
-    const st = (owner: string, agentRole: boolean) => selfAuthStateOf({ owner, agentRole, submitter: SUBMITTER, timelock: A.timelock });
-    expect(st(addr(0), false)).toBe("fresh");
-    expect(st(addr(0), true)).toBe("foreign-role");
-    expect(st(SUBMITTER, true)).toBe("self-owned");
-    expect(st(A.timelock, true)).toBe("handed-over");
-    expect(st(addr(0xbad), true)).toBe("squatted");
-    const shape = { maxPerPayment: 1n, maxPerWindow: 1n, shareReceiver: A.timelock as string, maxWithdrawPerPayment: 0n, maxWithdrawPerWindow: 0n };
-    expect(selfAuthPolicyProblems(shape, SUBMITTER, A.timelock)).toEqual([]);
-    expect(selfAuthPolicyProblems({ ...shape, shareReceiver: SUBMITTER }, SUBMITTER, A.timelock)).toEqual([]);
-    expect(selfAuthPolicyProblems({ ...shape, maxPerWindow: 5n }, SUBMITTER, A.timelock)).toHaveLength(1);
-    expect(selfAuthPolicyProblems({ ...shape, maxWithdrawPerPayment: 1n }, SUBMITTER, A.timelock)).toHaveLength(1);
-    expect(selfAuthPolicyProblems({ ...shape, shareReceiver: addr(0xbad) }, SUBMITTER, A.timelock)).toHaveLength(1);
-  });
-
-  test("a second run of the same row sends nothing and keeps the same calldata (validUntil is fixed at the first plan)", async () => {
-    const { d, tl, manifest } = mk(REHEARSAL);
-    await go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
-    const first = tl.s.scheduled.get(REGISTER_ROW)!.calls[0]!.data;
-    const n = tl.s.events.length;
-    tl.s.clock += 5000n;
-    await go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
-    expect(tl.s.events.length).toBe(n);
-    expect(tl.s.scheduled.get(REGISTER_ROW)!.calls[0]!.data).toBe(first);
-  });
-
-  test("production on 8453 refuses it with USAGE, nothing sent; the same call in a rehearsal runs (mutation)", async () => {
-    const prod = mk(ALL, 172800n);
-    await expect(go(prod.d, prod.tl, prod.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("refused on chain 8453 in production") });
-    expect(prod.tl.s.events).toEqual([]);
-    const reh = mk(REHEARSAL);
-    await expect(go(reh.d, reh.tl, reh.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).resolves.toBeDefined();
-  });
-
-  test("a Safe owner, a role key, the Safe, the timelock, an existing agent and the zero address are refused before anything is scheduled", async () => {
-    const bad: [string, string | undefined][] = [["a Safe owner", undefined], ["the timelock", A.timelock], ["the Safe", A.safe]];
-    for (const [what, who] of bad) {
-      const { d, tl, manifest } = mk(REHEARSAL);
-      const submitter = who ?? d.sheet.safeOwners[0]!;
-      await expect(go(d, tl, manifest, { row: REGISTER_ROW, submitter })).rejects.toMatchObject({ kind: "USAGE" });
-      expect(tl.s.events, what).toEqual([]);
+  test("a key (no code), a non-canonical Safe, the timelock and the deployment role addresses are refused before anything is scheduled; the governing Safe is not", async () => {
+    const key = mk(REHEARSAL); key.tl.s.submitterKind = null;
+    await expect(go(key.d, key.tl, key.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("single key") });
+    const bad = mk(REHEARSAL);
+    bad.tl.s.submitterKind = (async () => { throw new PublishError("USAGE", "the submitter is not a canonical SafeL2 1.4.1 multisig: its threshold is 1, want at least 2. Nothing sent."); }) as never;
+    await expect(go(bad.d, bad.tl, bad.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("threshold is 1") });
+    // the real forbidden list refuses the timelock, admin, pauser and emergency before any chain read (forbiddenSubmitters is unit-tested in submitter-safe.test.ts)
+    for (const pick of [(m: ReturnType<typeof mk>) => A.timelock, (m: ReturnType<typeof mk>) => m.d.sheet.admin, (m: ReturnType<typeof mk>) => m.d.sheet.pauser, (m: ReturnType<typeof mk>) => m.d.sheet.emergency]) {
+      const m = mk(REHEARSAL);
+      m.tl.api.inspectSubmitter = ((_h: unknown, who: Address, forbidden: ReadonlyMap<string, string>) => inspectSubmitterSafe({ getCode: async () => undefined, getStorageAt: async () => undefined, read: async () => { throw new Error("no read"); } }, who, forbidden)) as never;
+      await expect(go(m.d, m.tl, m.manifest, { row: REGISTER_ROW, submitter: pick(m) as Address })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("Nothing sent") });
+      expect(m.tl.s.events).toEqual([]);
     }
-    const agent = mk(REHEARSAL);
-    agent.tl.s.agentRole.add(SUBMITTER.toLowerCase());
-    await expect(go(agent.d, agent.tl, agent.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("already holds AGENT_ROLE") });
-    const admin = mk(REHEARSAL);
-    admin.tl.s.gatewayAdmins.add(SUBMITTER.toLowerCase());
-    admin.tl.s.agentRole.delete(SUBMITTER.toLowerCase());
-    await expect(go(admin.d, admin.tl, admin.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toBeDefined();
+    const governing = mk(REHEARSAL);
+    await expect(go(governing.d, governing.tl, governing.manifest, { row: REGISTER_ROW, submitter: A.safe })).resolves.toBeDefined();
+  });
+
+  test("a bad address or a missing --submitter is a usage error; --submitter without the register row is a usage error; --agent-label no longer exists", async () => {
     const zero = mk(REHEARSAL);
     await expect(go(zero.d, zero.tl, zero.manifest, { row: REGISTER_ROW, submitter: addr(0) })).rejects.toMatchObject({ kind: "USAGE" });
     await expect(go(zero.d, zero.tl, zero.manifest, { row: REGISTER_ROW })).rejects.toMatchObject({ kind: "USAGE" });
+    await expect(go(zero.d, zero.tl, zero.manifest, { submitter: SUBMITTER })).rejects.toMatchObject({ kind: "USAGE" });
+    expect(zero.tl.s.events).toEqual([]);
   });
 
-  test("issue 1750: the submitter is a Safe: the evidence entry carries its threshold and owners; a key (no code) is refused on 8453 and nothing is scheduled (mutation: a Safe passes)", async () => {
-    const ok = mk(REHEARSAL);
-    await go(ok.d, ok.tl, ok.manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
-    const entry = (ok.manifest as unknown as { committee_registrations: { submitter_safe?: { threshold: number; owners: string[]; code_hash: string } }[] }).committee_registrations[0]!;
-    expect(entry.submitter_safe).toMatchObject({ threshold: 2 });
-    expect(entry.submitter_safe!.owners).toHaveLength(3);
-    const key = mk(REHEARSAL);
-    key.tl.s.submitterKind = null;
-    await expect(go(key.d, key.tl, key.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("single key") });
-    expect(key.tl.s.events).toEqual([]);
-  });
-
-  test("issue 1750: a non-canonical Safe, and the governing Safe or timelock as submitter, are refused before anything is scheduled", async () => {
-    const bad = mk(REHEARSAL);
-    bad.tl.s.submitterKind = () => { throw Object.assign(new Error("not a canonical SafeL2 1.4.1 multisig: threshold is 1"), { kind: "USAGE" }); };
-    await expect(go(bad.d, bad.tl, bad.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("threshold is 1") });
-    expect(bad.tl.s.events).toEqual([]);
-    for (const who of [A.safe, A.timelock]) {
-      const m = mk(REHEARSAL);
-      await expect(go(m.d, m.tl, m.manifest, { row: REGISTER_ROW, submitter: who })).rejects.toMatchObject({ kind: "USAGE" });
-      expect(m.tl.s.events).toEqual([]);
-    }
-  });
-
-  test("issue 1750: on the Twin chain a key submitter is still accepted once it has authorized itself and handed the agent to the timelock; the evidence entry then has no submitter_safe", async () => {
-    const d = setup(REHEARSAL, 918453);
-    const tl = fakeTimelock(d.sheet, 900n);
-    tl.s.submitterKind = null;
-    const manifest = newManifest(d.ctx, addr(0xa001));
-    // QA plan v1 B6: the tool cannot sign for a key, so a fresh key is refused with the three private steps named, and nothing is scheduled
-    await expect(go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("transferAgentOwnership") });
-    expect(tl.s.events).toEqual([]);
-    // mutation: the key did the private half itself (owner the timelock, the signalling-only policy paying the key)
-    tl.s.agentOwner.set(SUBMITTER.toLowerCase(), A.timelock.toLowerCase()); tl.s.agentRole.add(SUBMITTER.toLowerCase());
-    tl.s.policies.set(SUBMITTER.toLowerCase(), { maxPerPayment: SUBMITTER_POLICY_CAP, maxPerWindow: SUBMITTER_POLICY_CAP, shareReceiver: SUBMITTER.toLowerCase(), maxWithdrawPerPayment: 0n, maxWithdrawPerWindow: 0n });
-    await go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
-    expect(tl.s.events).toEqual([`scheduleBatch:${REGISTER_ROW}`, `executeBatch:${REGISTER_ROW}`]);
-    expect((manifest as unknown as { committee_registrations: Record<string, unknown>[] }).committee_registrations[0]!.submitter_safe).toBeUndefined();
-  });
-
-  test("--submitter without the register row is a usage error", async () => {
+  test("a different operation under the same key is refused: one submitter is one operation", async () => {
     const { d, tl, manifest } = mk(REHEARSAL);
-    await expect(go(d, tl, manifest, { submitter: SUBMITTER })).rejects.toMatchObject({ kind: "USAGE" });
+    await go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
+    const rec = (manifest as unknown as { govern: Record<string, { scheduled?: { operation_id: string } }> }).govern[registerRecordKey(SUBMITTER)]!;
+    rec.scheduled!.operation_id = `0x${"ee".repeat(32)}`;
+    await expect(go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("already used for a different call") });
   });
 
-  test("the read-back names every missing effect, and an empty list is a pass", () => {
-    const ok = { agentRole: true, committeeRole: true, label: "x", wantLabel: "x", owner: A.timelock, timelock: A.timelock };
-    expect(registerReadBackProblems(ok)).toEqual([]);
-    expect(registerReadBackProblems({ ...ok, agentRole: false })).toHaveLength(1);
-    expect(registerReadBackProblems({ ...ok, committeeRole: false })).toHaveLength(1);
-    expect(registerReadBackProblems({ ...ok, label: "y" })).toHaveLength(1);
-    expect(registerReadBackProblems({ ...ok, owner: addr(1) })).toHaveLength(1);
-    expect(registerReadBackProblems({ ...ok, shareReceiver: A.timelock })).toEqual([]);
-    expect(registerReadBackProblems({ ...ok, shareReceiver: SUBMITTER })).toHaveLength(1); // the batch's setPolicy did not land: shares still go to the Safe
+  test("the read-back names a missing role, and an empty list is a pass; the call is deterministic and differs with the submitter", () => {
+    expect(registerReadBackProblems({ submitterRole: true })).toEqual([]);
+    expect(registerReadBackProblems({ submitterRole: false })).toHaveLength(1);
+    const base = buildRegisterCall(A.receipt, SUBMITTER);
+    expect(buildRegisterCall(A.receipt, SUBMITTER)).toEqual(base);
+    expect(buildRegisterCall(A.receipt, addr(0x5ab2)).data).not.toBe(base.data);
+    expect(buildRegisterCall(A.receipt, SUBMITTER).target).toBe(A.receipt);
   });
+});
 
-  test("the calls are deterministic and differ with the validity, the label and the submitter", () => {
-    const base = buildRegisterCalls(A.gateway, A.timelock, SUBMITTER, "a", 1000n);
-    expect(buildRegisterCalls(A.gateway, A.timelock, SUBMITTER, "a", 1000n)).toEqual(base);
-    expect(buildRegisterCalls(A.gateway, A.timelock, SUBMITTER, "a", 1001n)[0]!.data).not.toBe(base[0]!.data);
-    expect(buildRegisterCalls(A.gateway, A.timelock, SUBMITTER, "b", 1000n)[1]!.data).not.toBe(base[1]!.data);
-    expect(buildRegisterCalls(A.gateway, A.timelock, addr(0x5ab2), "a", 1000n)[0]!.data).not.toBe(base[0]!.data);
+describe("release-receipt after the narrow-role handover (issue 1888)", () => {
+  const RID = `0x${"ab".repeat(32)}` as Hex;
+  test("RouterGovernance holds RECEIPT_RELEASER_ROLE: the standalone release is refused with a clear message and nothing is scheduled", async () => {
+    const { d, tl, manifest } = mk(REHEARSAL);
+    tl.s.recorded.add(RID);
+    await expect(go(d, tl, manifest, { row: "release-receipt", receiptId: RID })).rejects.toMatchObject({
+      kind: "USAGE", message: expect.stringMatching(/RouterGovernance .* holds the receipt contract's RECEIPT_RELEASER_ROLE.*the timelock cannot release directly.*--row apply-receipt/s),
+    });
+    expect(tl.s.events).toEqual([]);
+  });
+  test("a not-yet-migrated proxy where RouterGovernance still holds ADMIN_ROLE is refused too", async () => {
+    const { d, tl, manifest } = mk(REHEARSAL);
+    tl.s.recorded.add(RID); tl.s.governanceIsReceiptReleaser = false; tl.s.governanceIsReceiptAdmin = true;
+    await expect(go(d, tl, manifest, { row: "release-receipt", receiptId: RID })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("ADMIN_ROLE") });
+    expect(tl.s.events).toEqual([]);
+  });
+  test("mutation: with no governance release role at all the standalone row still schedules", async () => {
+    const { d, tl, manifest } = mk(REHEARSAL);
+    tl.s.recorded.add(RID); tl.s.governanceIsReceiptReleaser = false; tl.s.governanceIsReceiptAdmin = false;
+    await go(d, tl, manifest, { row: "release-receipt", receiptId: RID });
+    expect(tl.s.events).toEqual(["schedule:release-receipt", "execute:release-receipt"]);
   });
 });
 
 describe("production refuses the rehearsal-only rows BEFORE any signer or passphrase prompt (review of PR 1728)", () => {
-  const ROWS: string[][] = [["update-delay"], ["batch"], ["cancel"], ["5"], ["6"], ["7"], ["register-committee", "--submitter", SUBMITTER]];
+  const ROWS: string[][] = [["update-delay"], ["batch"], ["cancel"], ["5"], ["6"], ["7"]]; // register-submitter is allowed on 8453 in production (issue 1888): see the next describe
   const probe = async (sheet: Record<string, string>, row: string[]) => {
     const { world: mkWorld } = await import("./harness.ts");
     const w = mkWorld({ chainId: 8453, sheet });
@@ -329,7 +246,7 @@ describe("production refuses the rehearsal-only rows BEFORE any signer or passph
     }
   });
   test("the unpauses and the on-demand release and apply rows are not refused early in production", async () => {
-    for (const row of [["unpause-USDC"], ["1"], ["release-receipt", "--receipt-id", `0x${"ab".repeat(32)}`]]) {
+    for (const row of [["unpause-USDC"], ["1"], ["release-receipt", "--receipt-id", `0x${"ab".repeat(32)}`], ["register-submitter", "--submitter", SUBMITTER]]) {
       const r = await probe({}, row);
       expect(r.calls.makeSigner, row.join(" ")).toBeGreaterThan(0);
     }

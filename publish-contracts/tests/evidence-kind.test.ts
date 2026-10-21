@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { encodeAbiParameters, encodeEventTopics, keccak256, parseAbi, toBytes, type Hex } from "viem";
 import { checkEvidence, checkEvidenceOnChain, checkReceiptPathOnChain, GOVERN_STEPS, REHEARSAL_ROWS, type ChainReader } from "../src/evidence-check.ts";
-import { buildRegisterCalls } from "../src/committee-register.ts";
+import { buildHistoricalRegisterCalls as buildRegisterCalls } from "../src/committee-register.ts";
 import { finalDeployerNonce } from "../src/counts.ts";
 import { withUpgradeability } from "./upgradeability-fixture.ts";
 
@@ -145,12 +145,13 @@ describe("forged evidence cannot skip the gap check (review B1)", () => {
   });
 });
 
-describe("the receipt path of a rehearsal", () => {
+describe("the receipt path of a rehearsal (HISTORICAL register-committee fixtures stay valid, issue 1888)", () => {
   test("a registered submitter, a recorded receipt and the application of that same receipt pass", () => expect(checkEvidence(path(reh()), undefined, undefined, R)).toEqual([]));
-  test("production refuses both lists", () => {
+  test("issue 1888: production no longer refuses the lists (a Safe records on 8453 in production); the same entry checks run and a single key is still refused", () => {
     const e: any = path(prod());
-    expect(problems(e)).toContain("committee_registrations is present in a production evidence");
-    expect(problems(e)).toContain("recorded_receipts is present in a production evidence");
+    expect(problems(e)).not.toContain("is present in a production evidence");
+    delete e.recorded_receipts[0].submitter_safe;
+    expect(problems(e)).toContain("no submitter_safe: the consensus receipt submitter is a multisig Safe on every chain");
   });
   test("an application whose receipt was never recorded in this run (a fixture) is refused", () => {
     const e = path(reh()); e.recorded_receipts = [];
@@ -162,14 +163,14 @@ describe("the receipt path of a rehearsal", () => {
   });
   test("a receipt recorded by an unregistered submitter is refused", () => {
     const e = path(reh()); e.recorded_receipts[0].submitter = a(0xbad);
-    expect(problems(e, R)).toContain("has no committee_registrations entry");
+    expect(problems(e, R)).toContain("has no submitter_registrations (or historical committee_registrations) entry");
     e.recorded_receipts[0].submitter = SUB;
     expect(checkEvidence(e, undefined, undefined, R)).toEqual([]);
   });
   test("issue 1750: a single-key submitter is refused on 8453, a role key is refused anywhere, and the Safe facts are checked (mutation: the Safe passes)", () => {
     const m = (f: (e: any) => void) => { const e = path(reh()); f(e); return problems(e, R); };
-    expect(m((e) => { delete e.recorded_receipts[0].submitter_safe; })).toContain("on 8453 the consensus receipt submitter is a multisig Safe");
-    expect(m((e) => { delete e.committee_registrations[0].submitter_safe; })).toContain("on 8453 the consensus receipt submitter is a multisig Safe");
+    expect(m((e) => { delete e.recorded_receipts[0].submitter_safe; })).toContain("the consensus receipt submitter is a multisig Safe on every chain");
+    expect(m((e) => { delete e.committee_registrations[0].submitter_safe; })).toContain("the consensus receipt submitter is a multisig Safe on every chain");
     for (const [who, text] of [[a(9), "the timelock"], [a(1), "the governing Safe"], [a(20), "the deployer"], [a(2), "governing Safe owner 1"]] as const) {
       expect(m((e) => { e.committee_registrations[0].submitter = who; e.recorded_receipts[0].submitter = who; e.recorded_receipts[0].submitter_safe.address = who; })).toContain(text);
     }
@@ -230,7 +231,7 @@ const stub = (rcs: Record<string, { status?: "success" | "reverted"; logs: any[]
   getBlock: async ({ blockNumber }) => ({ timestamp: BigInt(blocks[blockNumber.toString()]!) }), readContract: async () => { throw new Error("unused"); },
 });
 
-describe("the registration batch and the rehearsal rows on chain", () => {
+describe("the HISTORICAL registration batch and the rehearsal rows on chain", () => {
   const validUntil = 9999999n;
   const calls = () => buildRegisterCalls(a(30) as never, TL as never, SUB as never, "s", validUntil);
   const regEvidence = () => { const e = path(reh()); e.committee_registrations[0].valid_until = validUntil.toString(); return e; };
@@ -281,6 +282,106 @@ describe("the registration batch and the rehearsal rows on chain", () => {
   test("checkEvidenceOnChain in production does not run the rehearsal checks, and refuses a rehearsal evidence as production", async () => {
     const out = await checkEvidenceOnChain(reh(), stub({}, {}), { safe: 2 });
     expect(out.join("\n")).toContain("the evidence is checked as production");
+  });
+});
+
+
+// ---- issue 1888: the live register-submitter evidence (ONE receipt.grantRole), the Safe-only recorded receipts, and the narrow-role release refusal ----
+import { buildRegisterCall } from "../src/submitter-register.ts";
+describe("issue 1888: submitter_registrations and Safe-recorded receipts, in every kind", () => {
+  const RECEIPT = a(32);
+  /** The new shape: ONE grantRole call, a Safe submitter, no gateway and no IC policy. `gap` is the schedule-to-execute seconds. */
+  const live = (base: any, gap: number): any => {
+    const e = path(base);
+    delete e.committee_registrations;
+    e.submitter_registrations = [{ step: "register-submitter", submitter: SUB, receipt: RECEIPT, timelock: a(9), operation_id: h(810), schedule_tx: h(210), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(211), execute_status: 1, execute_block_timestamp: T0 + gap, submitter_safe: { ...SAFE_FACTS } }];
+    return e;
+  };
+  const liveProd = (): any => { const e = live(prod(), 172800); e.receipt_applications = []; return e; };
+  test("a rehearsal and a production evidence with the live shape pass (no production refusal of the lists)", () => {
+    expect(checkEvidence(live(reh(), 900), undefined, undefined, R)).toEqual([]);
+    expect(checkEvidence(liveProd())).toEqual([]);
+  });
+  test("a single key (no submitter_safe) is refused in every mode, the Twin chain included", () => {
+    for (const [mk, o] of [[() => live(reh(), 900), R], [() => liveProd(), undefined]] as const) {
+      for (const chain of [8453, 918453]) {
+        for (const list of ["submitter_registrations", "recorded_receipts"]) {
+          const e = mk(); e.chain_id = chain; delete e[list][0].submitter_safe;
+          expect([chain, list, problems(e, o as never)]).toEqual([chain, list, expect.stringContaining("multisig Safe on every chain")]);
+        }
+      }
+    }
+  });
+  test("the governing Safe may be the submitter, and its owners may be shared; the timelock and the deployer may not", () => {
+    const g = live(reh(), 900); g.safe.address = SUB; g.recorded_receipts[0].submitter_safe.owners = [...g.safe.owners];
+    expect(checkEvidence(g, undefined, undefined, R)).toEqual([]);
+    for (const [who, text] of [[a(9), "the timelock"], [a(20), "the deployer (admin)"]] as const) {
+      const e = live(reh(), 900); e.submitter_registrations[0].submitter = who; e.recorded_receipts[0].submitter = who; e.recorded_receipts[0].submitter_safe.address = who; e.submitter_registrations[0].submitter_safe.address = who;
+      expect(problems(e, R)).toContain(text);
+    }
+  });
+  test("the shape of a registration is checked: addresses, step, receipt contract, duplicates, gap", () => {
+    const m = (f: (e: any) => void) => { const e = live(reh(), 900); f(e); return problems(e, R); };
+    expect(m(() => {})).toBe("");
+    expect(m((e) => { e.submitter_registrations[0].submitter = "x"; })).toContain("submitter is not an address");
+    expect(m((e) => { e.submitter_registrations[0].receipt = "x"; })).toContain("receipt is not an address");
+    expect(m((e) => { e.submitter_registrations[0].receipt = a(77); })).toContain("is not the run's receipt contract");
+    expect(m((e) => { e.submitter_registrations[0].step = "register-committee"; })).toContain("is not register-submitter");
+    expect(m((e) => { e.submitter_registrations[0].timelock = a(1); })).toContain("is not the run's timelock");
+    expect(m((e) => { e.submitter_registrations.push({ ...e.submitter_registrations[0] }); })).toContain("submitter has more than one evidence entry");
+    expect(m((e) => { e.submitter_registrations[0].execute_block_timestamp = T0 + 899; })).toContain("gap 899 s");
+    expect(m((e) => { e.submitter_registrations[0].cancelled = true; })).toContain("cancelled is not a field of an executed operation");
+    expect(m((e) => { e.submitter_registrations = "x"; })).toContain("submitter_registrations is not a list");
+  });
+  test("a receipt recorded by a submitter with no registration is refused in a rehearsal (mutation: the registered one passes)", () => {
+    const e = live(reh(), 900); e.recorded_receipts[0].submitter = a(0xbad); e.recorded_receipts[0].submitter_safe.address = a(0xbad);
+    expect(problems(e, R)).toContain("has no submitter_registrations");
+  });
+  test("a standalone release after the narrow-role handover is refused; the same release in historical evidence (no flag) passes", () => {
+    const e: any = prod(); e.consensus_receipt = { address: a(32) };
+    e.receipt_releases = [{ step: "release-receipt", receipt_id: RID, target: a(32), operation_id: h(820), schedule_tx: h(230), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(231), execute_status: 1, execute_block_timestamp: T0 + 172800 }];
+    expect(checkEvidence(e)).toEqual([]); // historical shape: the release was possible then
+    e.consensus_receipt.governance_has_release_role = true;
+    expect(problems(e)).toContain("after the narrow-role handover a receipt is released only by apply-receipt");
+    e.consensus_receipt.governance_has_release_role = false;
+    expect(checkEvidence(e)).toEqual([]);
+  });
+
+  describe("on chain", () => {
+    const grant = () => buildRegisterCall(RECEIPT as never, SUB as never);
+    const topicOf = (x: string) => `0x${x.slice(2).padStart(64, "0")}` as Hex;
+    const execOk = (safe: string, safeTxHash: string) => ({ address: safe, topics: [keccak256(toBytes("ExecutionSuccess(bytes32,uint256)")), safeTxHash as Hex], data: `0x${"0".repeat(64)}` as Hex });
+    const recorded = (over: Partial<{ address: string; id: Hex }> = {}) => ({ address: over.address ?? RECEIPT, topics: [keccak256(toBytes("ReceiptRecorded(bytes32,address,uint256,bytes32,string,uint64)")), over.id ?? (RID as Hex), topicOf(SUB), topicOf(a(0))], data: "0x" as Hex });
+    const chain = (o: { calls?: { target: string; data: Hex }[]; execCalls?: number; delay?: number; gap?: number; receiptLogs?: any[] } = {}): ChainReader => {
+      const id = h(810) as Hex;
+      const calls = o.calls ?? [grant()];
+      return { ...stub({
+        [h(210)]: { block: 1n, logs: calls.map((x, i) => sched(id, i, x.target, x.data, o.delay ?? 900)) },
+        [h(211)]: { block: 2n, logs: calls.slice(0, o.execCalls ?? calls.length).map((x, i) => exec(id, i, x.target, x.data)) },
+        [h(220)]: { block: 3n, logs: o.receiptLogs ?? [execOk(SUB, h(0x5a)), recorded()] },
+      }, { "1": T0, "2": T0 + (o.gap ?? 900), "3": T0 + (o.gap ?? 900) }), readContract: async () => 2n };
+    };
+    const run = (c: ChainReader, f: (e: any) => void = () => {}) => { const e = live(reh(), 900); f(e); return checkReceiptPathOnChain(e, c, 900).then((p) => p.join("\n")); };
+    test("exactly one grantRole(RECEIPT_SUBMITTER_ROLE, submitter) on the receipt contract, executed once, with the ReceiptRecorded log, passes", async () => expect(await run(chain())).toBe(""));
+    test("the retired two-call batch (setPolicy, committeeRegister) and any extra call are refused as a new grant batch", async () => {
+      const hist = buildRegisterCalls(a(30) as never, TL as never, SUB as never, "s", 9999999n);
+      expect(await run(chain({ calls: hist }))).toContain("a registration is exactly one call");
+      expect(await run(chain({ calls: [grant(), { target: RECEIPT, data: grant().data }] }))).toContain("a registration is exactly one call");
+    });
+    test("another target, other calldata (another role or account), a short delay, a short gap or a missing execute are refused", async () => {
+      expect(await run(chain({ calls: [{ ...grant(), target: a(99) }] }))).toContain("is not the receipt contract");
+      expect(await run(chain({ calls: [{ ...grant(), data: buildRegisterCall(RECEIPT as never, a(0x5ab2) as never).data }] }))).toContain("calldata is not");
+      expect(await run(chain({ delay: 899 }))).toContain("is under 900");
+      expect(await run(chain({ gap: 899 }))).toContain("gap is under 900");
+      expect(await run(chain({ execCalls: 0 }))).toContain("0 CallExecuted events");
+      expect(await run(chain(), (e) => { e.submitter_registrations[0].submitter = a(0x5ab2); })).toContain("calldata is not");
+    });
+    test("a recorded receipt whose transaction lacks the receipt contract's ReceiptRecorded, or the Safe's ExecutionSuccess, is refused (mutation: both present passes)", async () => {
+      expect(await run(chain({ receiptLogs: [execOk(SUB, h(0x5a))] }))).toContain("emitted no ReceiptRecorded");
+      expect(await run(chain({ receiptLogs: [execOk(SUB, h(0x5a)), recorded({ address: a(99) })] }))).toContain("emitted no ReceiptRecorded");
+      expect(await run(chain({ receiptLogs: [execOk(SUB, h(0x5a)), recorded({ id: h(0xdef) as Hex })] }))).toContain("emitted no ReceiptRecorded");
+      expect(await run(chain({ receiptLogs: [recorded()] }))).toContain("emitted no ExecutionSuccess");
+    });
   });
 });
 

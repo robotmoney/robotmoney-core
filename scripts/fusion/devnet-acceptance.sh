@@ -15,8 +15,9 @@
 #   negative tampered bytes, tampered prose, unsupported schema, unauthorized
 #            submit, unauthorized release — none of which may change allocation
 #            state or send a transaction                 AC-FMT-06 AC-E2E-06
-#   record   anchor the digest through RobotMoneyGateway using the retrying,
-#            idempotent worker                           AC-CORE-01 AC-CORE-09 AC-E2E-02
+#   record   anchor the digest DIRECTLY on the receipt contract through the
+#            submitter Safe (publish-contracts record-receipt), using the
+#            retrying, idempotent worker                 AC-CORE-01 AC-CORE-09 AC-E2E-02
 #   index    indexer and explorer API converge on the same digest and URL
 #                                                        AC-CORE-06 AC-CORE-07
 #   release  the Safe applies the receipt through the timelock (govern row
@@ -47,23 +48,29 @@
 #
 # Required environment (no defaults are invented — an unset address would turn
 # an assertion into a silent skip):
-#   FUSION_RMPC_CONFIG       operator config TOML for the SUBMITTER identity
+#   FUSION_RMPC_CONFIG       operator config TOML (rmpc receipt verify; rmpc writes no receipt)
 #   FUSION_RPC_URL           devnet JSON-RPC
-#   FUSION_GATEWAY_ADDRESS   RobotMoneyGateway
 #   FUSION_RECEIPT_ADDRESS   ConsensusRecommendationReceipt
 #   FUSION_GOVERNANCE_ADDRESS RouterGovernance      (INV-4 witness)
 #   FUSION_ROUTER_ADDRESS    PortfolioRouter        (INV-4 witness)
 #   FUSION_VAULT_ADDRESSES   rmUSDC,rmPROTO,rmAGENT,rmRWA in canonical bucket
 #                            order                  (INV-4 witness + AC-FMT-04)
+# Required for the record stage and the tampered-receipt negative cases:
+#   FUSION_RECORD_CMD              the Safe recording command prefix, for example
+#                                  `bun publish-contracts/src/cli.ts`. It is called
+#                                  `record-receipt $FUSION_RECORD_ARGS --receipt-id ID
+#                                  --payload-digest D --payload-uri URL --payload FILE`.
+#                                  FUSION_RECORD_ARGS holds the run's flags (--submitter,
+#                                  --owner-signer, --signer, --chain ...). rmpc is never
+#                                  asked to submit (it has no receipt write path).
 # Required for the negative stage:
-#   FUSION_UNAUTHORIZED_SUBMITTER  an EOA with neither AGENT_ROLE nor
-#                                  COMMITTEE_AGENT_ROLE
-#   FUSION_SUBMITTER_ADDRESS       the authorized submitter, used as the control
-#                                  that keeps the two reverts non-vacuous
-#   FUSION_UNAUTHORIZED_RELEASER   an EOA WITHOUT ADMIN_ROLE on the receipt
-#                                  contract (defaults to the unauthorized
+#   FUSION_UNAUTHORIZED_SUBMITTER  an address WITHOUT RECEIPT_SUBMITTER_ROLE
+#   FUSION_SUBMITTER_ADDRESS       the authorized submitter Safe, used as the control
+#                                  that keeps the unauthorized-record revert non-vacuous
+#   FUSION_UNAUTHORIZED_RELEASER   an address WITHOUT RECEIPT_RELEASER_ROLE on the
+#                                  receipt contract (defaults to the unauthorized
 #                                  submitter, which is only correct when that
-#                                  address also lacks ADMIN_ROLE)
+#                                  address also lacks the release role)
 # Required for the index stage:  FUSION_EXPLORER_API
 # Required for the dapp stage:   FUSION_DAPP_URL
 # Required for the release stage: FUSION_GOVERN_CMD (the govern apply command,
@@ -71,12 +78,13 @@
 #   `--receipt-id ID --payload FILE` appended, FILE being the bytes served at the
 #   receipt URL, and runs publish contracts govern row apply-receipt through the
 #   real Safe and the timelock. Issue 1849: row release-receipt is refused since
-#   issue 1831, because a bare release burns the receipt), FUSION_TIMELOCK_ADDRESS
-#   (the TimelockController, the ONLY holder of ADMIN_ROLE on the receipt contract
-#   after the handover, used as `--from` of the duplicate-release probe below so
-#   the call passes the role check and reaches ReceiptAlreadyReleased). No keystore
-#   is needed: a raw `releaseReceipt` from any other address reverts on authority
-#   (AccessControlUnauthorizedAccount) before the one-shot check is ever reached.
+#   issue 1831, because a bare release burns the receipt). The duplicate-release
+#   probe is sent `--from` FUSION_GOVERNANCE_ADDRESS (RouterGovernance, the ONLY
+#   holder of RECEIPT_RELEASER_ROLE on the receipt contract: the timelock holds no
+#   release role) so the call passes the role check and reaches
+#   ReceiptAlreadyReleased. No keystore is needed: a raw `releaseReceipt` from any
+#   other address reverts on authority (AccessControlUnauthorizedAccount) before
+#   the one-shot check is ever reached.
 # Optional: RMPC_BIN, CAST_BIN, FUSION_INDEX_TIMEOUT_SECS (default 180),
 #           FUSION_EVIDENCE_DIR (raw command output is written there)
 set -uo pipefail
@@ -156,7 +164,7 @@ trap 'rm -rf "$WORK"' EXIT
 for bin in "$RMPC_BIN" "$CAST_BIN" jq curl; do
   command -v "$bin" >/dev/null || { echo "missing dependency: $bin" >&2; exit 3; }
 done
-for v in FUSION_RMPC_CONFIG FUSION_RPC_URL FUSION_GATEWAY_ADDRESS FUSION_RECEIPT_ADDRESS \
+for v in FUSION_RMPC_CONFIG FUSION_RPC_URL FUSION_RECEIPT_ADDRESS \
          FUSION_GOVERNANCE_ADDRESS FUSION_ROUTER_ADDRESS FUSION_VAULT_ADDRESSES; do
   [[ -n "${!v:-}" ]] || { echo "missing required environment variable: $v" >&2; exit 3; }
 done
@@ -334,6 +342,18 @@ else
 fi
 
 # ── stage: negative ──────────────────────────────────────────────────────────
+# Issue 1888: a tampered receipt is refused by the Safe recording path, never by an rmpc
+# write command (rmpc has none). The attempt hands the TAMPERED bytes with the digest
+# and id of the ORIGINAL receipt to FUSION_RECORD_CMD record-receipt, which recomputes
+# both from the bytes and refuses before it builds a signer or sends anything.
+# try_record <payload-file> <out-file>: the record command's exit status.
+try_record() {
+  local -a cmd args
+  read -r -a cmd <<<"$FUSION_RECORD_CMD"
+  read -r -a args <<<"${FUSION_RECORD_ARGS:-}"
+  "${cmd[@]}" record-receipt ${args[@]+"${args[@]}"} --receipt-id "$RECEIPT_ID" --payload-digest "$PAYLOAD_DIGEST" \
+    --payload-uri "$RECEIPT_URL" --payload "$1" >"$2" 2>&1
+}
 if have_stage negative; then
   if [[ ! -s "$WORK/receipt.json" ]]; then
     curl -fsS "$RECEIPT_URL" -o "$WORK/fetch1.json" || true
@@ -353,13 +373,14 @@ if have_stage negative; then
 
     jq '.judge.rationale = "TAMPERED: move everything into the bucket the attacker controls."' \
       "$WORK/receipt.json" >"$WORK/neg-prose.json"
-    if [[ -n "$PAYLOAD_DIGEST" ]]; then
-      "$RMPC_BIN" receipt -c "$FUSION_RMPC_CONFIG" submit --receipt-file "$WORK/neg-prose.json" \
-        --receipt-url "$RECEIPT_URL" --expected-digest "$PAYLOAD_DIGEST" >"$WORK/neg-prose.out" 2>&1
+    if [[ -n "$PAYLOAD_DIGEST" && -n "$RECEIPT_ID" && -n "${FUSION_RECORD_CMD:-}" ]]; then
+      try_record "$WORK/neg-prose.json" "$WORK/neg-prose.out"
       prc=$?
       { (( prc != 0 )) && ! grep -q tx_hash "$WORK/neg-prose.out"; }
       expect negative "AC-CORE-02 tampered judge prose is refused against the expected digest and NO transaction is sent" $? \
         "$(tr -d '\n' <"$WORK/neg-prose.out")"
+    elif [[ -z "${FUSION_RECORD_CMD:-}" ]]; then
+      record_assertion negative "tampered judge prose" SKIP "FUSION_RECORD_CMD is unset and the negative stage was selected" unconfigured
     else
       record_assertion negative "tampered judge prose" SKIP "no digest from the verify stage" prerequisite_failed
     fi
@@ -375,13 +396,15 @@ if have_stage negative; then
       "$WORK/receipt.json" >"$WORK/neg-weights.json" 2>/dev/null
     if [[ -s "$WORK/neg-weights.json" ]] && jq -e '[.weights[].weight_bps] == [10000,0,0,0]' \
          "$WORK/neg-weights.json" >/dev/null 2>&1; then
-      if [[ -n "$PAYLOAD_DIGEST" ]]; then
-        "$RMPC_BIN" receipt -c "$FUSION_RMPC_CONFIG" submit --receipt-file "$WORK/neg-weights.json" \
-          --receipt-url "$RECEIPT_URL" --expected-digest "$PAYLOAD_DIGEST" >"$WORK/neg-weights.out" 2>&1
+      if [[ -n "$PAYLOAD_DIGEST" && -n "$RECEIPT_ID" && -n "${FUSION_RECORD_CMD:-}" ]]; then
+        try_record "$WORK/neg-weights.json" "$WORK/neg-weights.out"
         wrc=$?
         { (( wrc != 0 )) && ! grep -q tx_hash "$WORK/neg-weights.out"; }
         expect negative "AC-FMT-03 a receipt whose weights were rewritten to 10000/0/0/0 is refused against the anchored digest and NO transaction is sent" $? \
           "exit $wrc; $(tr -d '\n' <"$WORK/neg-weights.out" | head -c 300)"
+      elif [[ -z "${FUSION_RECORD_CMD:-}" ]]; then
+        record_assertion negative "tampered weights refused against the anchored digest" SKIP \
+          "FUSION_RECORD_CMD is unset and the negative stage was selected" unconfigured
       else
         record_assertion negative "tampered weights refused against the anchored digest" SKIP \
           "no digest from the verify stage" prerequisite_failed
@@ -394,28 +417,33 @@ if have_stage negative; then
     fi
 
     jq '.schema_version = "2.0"' "$WORK/receipt.json" >"$WORK/neg-schema.json"
-    "$RMPC_BIN" receipt -c "$FUSION_RMPC_CONFIG" submit --receipt-file "$WORK/neg-schema.json" \
-      --receipt-url "$RECEIPT_URL" >"$WORK/neg-schema.out" 2>&1
-    src_rc=$?
-    { (( src_rc != 0 )) && ! grep -q tx_hash "$WORK/neg-schema.out" \
-      && grep -qi 'schema_version' "$WORK/neg-schema.out"; }
-    expect negative "AC-FMT-06 an unsupported schema_version produces NO transaction and a diagnosable error" $? \
-      "$(tr -d '\n' <"$WORK/neg-schema.out")"
-    keep "negative-unsupported-schema.txt" "$(cat "$WORK/neg-schema.out")"
+    if [[ -n "${FUSION_RECORD_CMD:-}" && -n "$RECEIPT_ID" && -n "$PAYLOAD_DIGEST" ]]; then
+      try_record "$WORK/neg-schema.json" "$WORK/neg-schema.out"
+      src_rc=$?
+      { (( src_rc != 0 )) && ! grep -q tx_hash "$WORK/neg-schema.out" \
+        && grep -qi 'schema_version' "$WORK/neg-schema.out"; }
+      expect negative "AC-FMT-06 an unsupported schema_version produces NO transaction and a diagnosable error" $? \
+        "$(tr -d '\n' <"$WORK/neg-schema.out")"
+      keep "negative-unsupported-schema.txt" "$(cat "$WORK/neg-schema.out")"
+    elif [[ -z "${FUSION_RECORD_CMD:-}" ]]; then
+      record_assertion negative "unsupported schema_version" SKIP "FUSION_RECORD_CMD is unset and the negative stage was selected" unconfigured
+    else
+      record_assertion negative "unsupported schema_version" SKIP "the verify stage produced no receipt id or digest" prerequisite_failed
+    fi
   else
     record_assertion negative "receipt-derived negative cases" FAIL "could not read the receipt bytes from $RECEIPT_URL"
   fi
 
   if [[ -n "${FUSION_UNAUTHORIZED_SUBMITTER:-}" && -n "$RECEIPT_ID" && -n "$PAYLOAD_DIGEST" ]]; then
-    out="$("$CAST_BIN" call "$FUSION_GATEWAY_ADDRESS" \
-      'consensusRecordReceipt(bytes32,bytes32,string)(uint256)' "$RECEIPT_ID" "$PAYLOAD_DIGEST" \
+    out="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" \
+      'recordReceipt(bytes32,bytes32,string)(uint256)' "$RECEIPT_ID" "$PAYLOAD_DIGEST" \
       "$RECEIPT_URL" --from "$FUSION_UNAUTHORIZED_SUBMITTER" --rpc-url "$FUSION_RPC_URL" 2>&1)"
     urc=$?
     (( urc != 0 ))
-    expect negative "AC-CORE-01 an unauthorized submitter's gateway call reverts" $? "$(tr -d '\n' <<<"$out" | head -c 300)"
+    expect negative "AC-CORE-01 an unauthorized submitter's direct receipt call reverts" $? "$(tr -d '\n' <<<"$out" | head -c 300)"
     if [[ -n "${FUSION_SUBMITTER_ADDRESS:-}" ]]; then
-      out="$("$CAST_BIN" call "$FUSION_GATEWAY_ADDRESS" \
-        'consensusRecordReceipt(bytes32,bytes32,string)(uint256)' "$RECEIPT_ID" "$PAYLOAD_DIGEST" \
+      out="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" \
+        'recordReceipt(bytes32,bytes32,string)(uint256)' "$RECEIPT_ID" "$PAYLOAD_DIGEST" \
         "$RECEIPT_URL" --from "$FUSION_SUBMITTER_ADDRESS" --rpc-url "$FUSION_RPC_URL" 2>&1)"
       crc=$?
       # Non-vacuity control. Once the receipt IS recorded the same call reverts
@@ -430,11 +458,10 @@ the unauthorized-submit revert non-vacuous did not run" unconfigured
     fi
 
     # A DIFFERENT IDENTITY FROM THE SUBMIT CASE, ON PURPOSE. Release is gated by
-    # ADMIN_ROLE on the receipt contract, submission by AGENT_ROLE on the
-    # gateway plus COMMITTEE_AGENT_ROLE on the IC policy. An EOA can easily lack
-    # one and hold the other — the run's approver key holds ADMIN_ROLE and no
-    # agent role — and reusing one address for both turns this assertion into a
-    # ReceiptNotFound, which is not an authority refusal at all.
+    # RECEIPT_RELEASER_ROLE on the receipt contract (RouterGovernance only),
+    # submission by RECEIPT_SUBMITTER_ROLE (the submitter Safe). An address can
+    # easily lack one and hold the other, and reusing one address for both turns
+    # this assertion into a ReceiptNotFound, which is not an authority refusal at all.
     releaser="${FUSION_UNAUTHORIZED_RELEASER:-$FUSION_UNAUTHORIZED_SUBMITTER}"
     out="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'releaseReceipt(bytes32)' "$RECEIPT_ID" \
       --from "$releaser" --rpc-url "$FUSION_RPC_URL" 2>&1)"
@@ -471,6 +498,9 @@ fi
 if have_stage record; then
   if [[ -z "$RECEIPT_ID" ]]; then
     record_assertion record "anchor the digest" FAIL "the verify stage did not produce a receipt id"
+  elif [[ -z "${FUSION_RECORD_CMD:-}" ]]; then
+    record_assertion record "anchor the digest" SKIP \
+      "FUSION_RECORD_CMD (the Safe recording command) is unset and the record stage was selected" unconfigured
   else
     FUSION_RECEIPT_URL="$RECEIPT_URL" FUSION_MAX_ATTEMPTS="${FUSION_MAX_ATTEMPTS:-5}" \
       "$HERE/submit-receipt-worker.sh" >"$WORK/record.out" 2>&1
@@ -564,10 +594,9 @@ fi
 # W_PRE_APPLY is the witness reading taken immediately before that call.
 APPLY_SENT=0; W_PRE_APPLY=""
 if have_stage release; then
-  if [[ -z "${FUSION_GOVERN_CMD:-}" || -z "${FUSION_TIMELOCK_ADDRESS:-}" ]]; then
+  if [[ -z "${FUSION_GOVERN_CMD:-}" ]]; then
     record_assertion release "admin release" SKIP \
-      "the release stage was SELECTED but FUSION_GOVERN_CMD / \
-FUSION_TIMELOCK_ADDRESS are not all set" unconfigured
+      "the release stage was SELECTED but FUSION_GOVERN_CMD is not set" unconfigured
   elif [[ -z "$RECEIPT_ID" ]]; then
     record_assertion release "admin release" SKIP \
       "no receipt id — an earlier stage already failed" prerequisite_failed
@@ -627,20 +656,21 @@ FUSION_TIMELOCK_ADDRESS are not all set" unconfigured
     expect release "AC-E2E-03 the receipt reads as released" $? "isReleased=$released"
 
     # The two duplicate refusals that cannot exist until something is anchored.
-    # The release probe is sent `--from` the TIMELOCK, the only ADMIN_ROLE holder.
-    # `onlyRole(ADMIN_ROLE)` runs before the one-shot check, so any other sender
-    # (an approver EOA, say) reverts AccessControlUnauthorizedAccount and would
-    # never exercise ReceiptAlreadyReleased. An eth_call needs no signature, so
-    # impersonating the timelock address is enough here; the real release above
-    # went through the Safe and the timelock.
+    # The release probe is sent `--from` ROUTERGOVERNANCE, the only RECEIPT_RELEASER_ROLE
+    # holder (issue 1888: the timelock holds no release role). `onlyRole(RECEIPT_RELEASER_ROLE)`
+    # runs before the one-shot check, so any other sender (the timelock, an approver
+    # EOA) reverts AccessControlUnauthorizedAccount and would never exercise
+    # ReceiptAlreadyReleased. An eth_call needs no signature, so impersonating the
+    # RouterGovernance address is enough here; the real release above went through
+    # the Safe, the timelock and applyReceipt.
     out="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'releaseReceipt(bytes32)' "$RECEIPT_ID" \
-      --from "$FUSION_TIMELOCK_ADDRESS" --rpc-url "$FUSION_RPC_URL" 2>&1)"
+      --from "$FUSION_GOVERNANCE_ADDRESS" --rpc-url "$FUSION_RPC_URL" 2>&1)"
     grep -q 'ReceiptAlreadyReleased' <<<"$out"
     expect release "AC-CORE-03 a duplicate release is rejected (ReceiptAlreadyReleased)" $? "$(tr -d '\n' <<<"$out" | head -c 300)"
 
     if [[ -n "${FUSION_SUBMITTER_ADDRESS:-}" ]]; then
-      out="$("$CAST_BIN" call "$FUSION_GATEWAY_ADDRESS" \
-        'consensusRecordReceipt(bytes32,bytes32,string)(uint256)' "$RECEIPT_ID" "$PAYLOAD_DIGEST" \
+      out="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" \
+        'recordReceipt(bytes32,bytes32,string)(uint256)' "$RECEIPT_ID" "$PAYLOAD_DIGEST" \
         "$RECEIPT_URL" --from "$FUSION_SUBMITTER_ADDRESS" --rpc-url "$FUSION_RPC_URL" 2>&1)"
       grep -q 'ReceiptAlreadyRecorded' <<<"$out"
       expect release "AC-E2E-06 a duplicate record of the same receipt id is rejected (ReceiptAlreadyRecorded)" $? \

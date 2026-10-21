@@ -32,9 +32,24 @@ export const SHA = "a".repeat(40);
 export const SHA2 = "b".repeat(40);
 
 /** Frozen counts used across the tests. Deployer stages only. */
-export const COUNTS: Record<string, number> = { safe: 1, libs: 4, recorder: 6, vault: 18, registry: 2, router: 3, gateway: 3, governance: 2, "ic-policy": 5, proto: 6, agent: 6, rwa: 6, timelock: 25 };
+export const COUNTS: Record<string, number> = { safe: 1, libs: 4, recorder: 6, vault: 18, registry: 2, router: 3, gateway: 3, governance: 2, receipt: 2, proto: 6, agent: 6, rwa: 6, timelock: 25 };
 
 export function tmp(prefix = "pc-"): string { return mkdtempSync(join(tmpdir(), prefix)); }
+
+/**
+ * The pinned frozen counts file of the first real release (deployments/frozen-counts/9a768bb9...json, historical, never edited) as the CURRENT stage table keys it:
+ * its retired `ic-policy` stage is the table's `receipt` stage since issue 1888. Written once to a temp directory; the repo file is only read.
+ */
+let refPath: string | undefined;
+export function refFrozenPath(sha = "9a768bb9cc66d4485470a99a068ba7477604501a"): string {
+  if (refPath) return refPath;
+  const orig = JSON.parse(readFileSync(join(REPO, "deployments", "frozen-counts", `${sha}.json`), "utf8"));
+  const counts: Record<string, number> = {};
+  for (const [k, v] of Object.entries(orig.counts as Record<string, number>)) counts[k === "ic-policy" ? "receipt" : k] = v;
+  refPath = join(tmp("pc-ref-"), `${sha}.json`);
+  writeFileSync(refPath, JSON.stringify({ ...orig, counts }, null, 2));
+  return refPath;
+}
 
 export function writeCounts(dir: string, sha = SHA, counts = COUNTS): string {
   mkdirSync(dir, { recursive: true });

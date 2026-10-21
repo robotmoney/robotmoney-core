@@ -6,7 +6,7 @@ import { getStageTable } from "../../src/stages.ts";
 import { RPC_REFUSED_DETAIL, UNWIND_GUARD_LABEL, verifyDeployment } from "../../src/verify/index.ts";
 import { keccak256, toHex } from "viem";
 import { padTopic } from "../../src/verify/logs.ts";
-import { ADMIN_ROLE, EMERGENCY_ROLE, SAFE_GUARD_SLOT, WEIGHT_SETTER_ROLE, stageManifestFile, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP } from "../../src/verify/constants.ts";
+import { ADMIN_ROLE, EMERGENCY_ROLE, RECEIPT_RELEASER_ROLE, SAFE_GUARD_SLOT, WEIGHT_SETTER_ROLE, stageManifestFile, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP } from "../../src/verify/constants.ts";
 import { USDC_ADDRESS, USDC_PROXY_CODE_HASH } from "../../src/usdc.ts";
 import { LABELS_TXT, rewriteLabelsTxt, verifySection } from "./labels-file.ts";
 import { CLAIM_LABEL } from "../../src/verify/upgradeability.ts";
@@ -493,9 +493,9 @@ describe("rotation of the weight setter (core 1616, ADR-0002)", () => {
     w.chain.grant(ROUTER, WEIGHT_SETTER_ROLE, NEW_GOV);
     w.chain.revoke(ROUTER, ADMIN_ROLE, GOV);
     w.chain.grant(ROUTER, ADMIN_ROLE, NEW_GOV);
-    // issue 1698: the new weight setter releases receipts, so the timelock moves the receipt register's ADMIN_ROLE to it too
-    w.chain.revoke(REC, ADMIN_ROLE, GOV);
-    w.chain.grant(REC, ADMIN_ROLE, NEW_GOV);
+    // issue 1698, 1888: the new weight setter releases receipts, so the timelock moves the receipt register's narrow RECEIPT_RELEASER_ROLE to it too
+    w.chain.revoke(REC, RECEIPT_RELEASER_ROLE, GOV);
+    w.chain.grant(REC, RECEIPT_RELEASER_ROLE, NEW_GOV);
     if (updateManifest) {
       const p = join(w.manifestDir, stageManifestFile(getStageTable(), "governance"));
       const o = JSON.parse(readFileSync(p, "utf8"));

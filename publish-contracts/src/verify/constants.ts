@@ -10,8 +10,11 @@ export const ADMIN_ROLE = role("ADMIN_ROLE");
 // AGENT_ROLE and the SIG_AGENT_* signatures below are kept on purpose. Only the negative-invariant agent checks
 // (AGENT_LABELS in index.ts) use them: the deploy authorizes no agent (core 1527, architecture 5.2 and 6.3).
 export const AGENT_ROLE = role("AGENT_ROLE");
-// The consensus receipt submitter Safe holds this on the IC policy by design (issue 1750).
+// The retired committee role (issue 1888): kept so historical evidence and the role scan still name it. No contract grants it any more.
 export const COMMITTEE_AGENT_ROLE = role("COMMITTEE_AGENT_ROLE");
+// The consensus receipt roles (issue 1888): the submitter Safe records directly, RouterGovernance alone releases. The timelock administers both.
+export const RECEIPT_SUBMITTER_ROLE = role("RECEIPT_SUBMITTER_ROLE");
+export const RECEIPT_RELEASER_ROLE = role("RECEIPT_RELEASER_ROLE");
 /** The live ROBOTMONEY token, the one asset rmAGENT launches with (core 1554). config/agent-token-shortlist.json pins its code hash. */
 export const RM_TOKEN: Address = "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3";
 export const WEIGHT_SETTER_ROLE = role("WEIGHT_SETTER_ROLE");

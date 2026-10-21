@@ -522,10 +522,10 @@ describe("release-receipt: the on-demand row, one Safe -> Timelock round per rec
   const RID = `0x${"ab".repeat(32)}` as `0x${string}`;
   const OTHER = `0x${"cd".repeat(32)}` as `0x${string}`;
   const rel = (receiptId: string, extra: object = {}) => ({ row: RECEIPT_ROW, receiptId, ...extra });
-  /** A deployment from before issue 1698, where RouterGovernance does not hold the receipt ADMIN_ROLE: the only world in which the release row still runs (issue 1831). */
-  const legacyTl = (sheet: Parameters<typeof fakeTimelock>[0]) => { const tl = fakeTimelock(sheet, DELAY); tl.s.governanceIsReceiptAdmin = false; return tl; };
+  /** A deployment from before issue 1698, where RouterGovernance holds neither the receipt ADMIN_ROLE nor (issue 1888) RECEIPT_RELEASER_ROLE: the only world in which the release row still runs (issue 1831). */
+  const legacyTl = (sheet: Parameters<typeof fakeTimelock>[0]) => { const tl = fakeTimelock(sheet, DELAY); tl.s.governanceIsReceiptReleaser = false; tl.s.governanceIsReceiptAdmin = false; return tl; };
 
-  test("issue 1831: once RouterGovernance holds the receipt ADMIN_ROLE the release row is refused with USAGE, names --row apply-receipt and sends nothing", async () => {
+  test("issue 1831, 1888: once RouterGovernance holds RECEIPT_RELEASER_ROLE the release row is refused with USAGE, names --row apply-receipt and sends nothing", async () => {
     for (const chainId of [918453, 8453]) {
       const { ctx, sheet } = setup(ALL, chainId);
       const tl = fakeTimelock(sheet, DELAY);
