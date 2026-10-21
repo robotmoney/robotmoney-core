@@ -5,7 +5,7 @@ description: "Fork test on the Twin chain (a pinned lazy anvil fork of real Base
 
 # V4RecorderSamplingEconomicsForkTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9185787a46b53c093c2a91c07114ad5be60179c6/contracts/test/V4RecorderSamplingEconomicsFork.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/V4RecorderSamplingEconomicsFork.t.sol)
 
 **Inherits:** Test
 
@@ -62,19 +62,6 @@ Existing holders' value: the 100 USDC TVL cap less 20 USDC of headroom: a mark u
 
 ```solidity
 uint256 internal constant HOLDER_TVL = 80e6;
-```
-
-### MIN_VIRTUAL_USDC_RESERVE
-
-<i>
-
-Virtual USDC reserve at spot (L x sqrtP, raw 6-decimal USDC) below which these economics no longer describe the live pool.
-Measured on the pin, never a date. Core 1893.
-
-</i>
-
-```solidity
-uint256 internal constant MIN_VIRTUAL_USDC_RESERVE = 500e6;
 ```
 
 ## State Variables
@@ -178,21 +165,6 @@ address internal keeper = makeAddr("keeper");
 
 ```solidity
 function setUp() public;
-```
-
-<a id="_skipifpooltoothin"></a>
-
-### _skipIfPoolTooThin
-
-<i>
-
-Loud skip: the reason carries the measured depth and the threshold, so the run reads SKIPPED, never as a pass.
-Follow-up: seed liquidity into the Twin at boot.
-
-</i>
-
-```solidity
-function _skipIfPoolTooThin() internal;
 ```
 
 <a id="_livetick"></a>

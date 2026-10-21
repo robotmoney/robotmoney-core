@@ -106,8 +106,8 @@ contract UniswapV4SwapAdapterForkTest is Test {
         vm.stopPrank();
         assertGt(usdcOut, 0);
         assertEq(IERC20(USDC).balanceOf(alice) - usdcBefore, usdcOut);
-        // a round trip pays the 2.91 percent fee on both legs. The exact loss depends on the live pool depth, so only require it to lose more than one fee (below 98 percent).
-        assertLt(usdcOut, usdcIn * 98 / 100);
+        // a round trip pays the 2.91 percent fee twice, so it returns less than 95 percent
+        assertLt(usdcOut, usdcIn * 95 / 100);
     }
 
     function test_fork_swapRefusesAFloorTheRealPoolCannotMeet() public {
