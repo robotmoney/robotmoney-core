@@ -830,7 +830,7 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
     let pk = format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY));
     fx.fund_gas(user, 10_000_000_000_000_000_000)
         .expect("fund gas for the depositor");
-    let deposit: u128 = 1_000_000; // 1 USDC: the live RM pool is thin (in-range L fell to 6.5e13 on Oct 21), 10 USDC now exceeds the 209 bps margin
+    let deposit: u128 = 10_000_000; // 10 USDC: the live pool is unfunded (owner 2026-10-09), one swap above about 18 USDC exceeds the 209 bps margin
     fx.fund_usdc(user, deposit * 4)
         .expect("fund USDC for the depositor");
     let (vault_s, dep_s) = (format!("{agent_vault:#x}"), deposit.to_string());
