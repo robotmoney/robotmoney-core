@@ -5,7 +5,7 @@ description: "Runs on the Twin chain (a pinned lazy anvil fork of real Base). Wi
 
 # RecorderManipulationForkTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/RecorderManipulationFork.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9185787a46b53c093c2a91c07114ad5be60179c6/contracts/test/RecorderManipulationFork.t.sol)
 
 **Inherits:** Test
 
@@ -99,6 +99,19 @@ uint256 internal constant HIGH_LOSS_BPS = 500;
 
 ```solidity
 uint32 internal constant ANCHOR_SECS = 14_400;
+```
+
+### MIN_VIRTUAL_USDC_RESERVE
+
+<i>
+
+Virtual USDC reserve at spot (L x sqrtP, raw 6-decimal USDC) below which the fixtures (STEP_USDC, the 18 USDC single-swap
+limit of the 2026-10-08 depth) no longer describe the live pool. Measured on the pin, never a date. Core 1893.
+
+</i>
+
+```solidity
+uint256 internal constant MIN_VIRTUAL_USDC_RESERVE = 500e6;
 ```
 
 ## State Variables
@@ -329,6 +342,21 @@ refuses with `SpotBelowSellAnchor` and the lowest price a USDC redeem could exec
 
 ```solidity
 function test_recorder_heldDisplacementDragsSellFloorUnderKeeperCadence() public;
+```
+
+<a id="_skipifpooltoothin"></a>
+
+### _skipIfPoolTooThin
+
+<i>
+
+Loud skip: the live RM pool has drifted too thin for this model. The reason carries the measured depth and the threshold,
+so the run reads SKIPPED with a cause, never as a pass. Follow-up: seed liquidity into the Twin at boot.
+
+</i>
+
+```solidity
+function _skipIfPoolTooThin() internal;
 ```
 
 <a id="_buyinventory"></a>

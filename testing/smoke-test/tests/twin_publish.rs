@@ -836,8 +836,10 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
         let slot_raw = fx
             .cast_call_raw(state_view, "getSlot0(bytes32)", &[&pool_id])
             .expect("StateView.getSlot0");
-        let liq = alloy_primitives::U256::from_str_radix(&word(&liq_raw, 0), 16).expect("liquidity word");
-        let sqrt_p = alloy_primitives::U256::from_str_radix(&word(&slot_raw, 0), 16).expect("sqrtPriceX96 word");
+        let liq =
+            alloy_primitives::U256::from_str_radix(&word(&liq_raw, 0), 16).expect("liquidity word");
+        let sqrt_p = alloy_primitives::U256::from_str_radix(&word(&slot_raw, 0), 16)
+            .expect("sqrtPriceX96 word");
         // (sqrtP >> 32) x L >> 64 equals L x sqrtP >> 96 and stays inside 256 bits.
         let reserve = ((sqrt_p >> 32usize) * liq) >> 64usize;
         if reserve < alloy_primitives::U256::from(MIN_VIRTUAL_USDC_RESERVE) {

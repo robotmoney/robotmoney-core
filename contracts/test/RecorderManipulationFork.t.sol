@@ -177,8 +177,12 @@ contract RecorderManipulationForkTest is Test {
         (uint160 sqrtP,,,) = rec.slot0();
         uint256 reserve = Math.mulDiv(rec.liquidity(), sqrtP, 1 << 96);
         if (reserve < MIN_VIRTUAL_USDC_RESERVE) {
-            emit log_named_uint("SKIPPED: live RM pool virtual USDC reserve (raw USDC, 6 decimals)", reserve);
-            emit log_named_uint("SKIPPED: required minimum (raw USDC, 6 decimals)", MIN_VIRTUAL_USDC_RESERVE);
+            emit log_named_uint(
+                "SKIPPED: live RM pool virtual USDC reserve (raw USDC, 6 decimals)", reserve
+            );
+            emit log_named_uint(
+                "SKIPPED: required minimum (raw USDC, 6 decimals)", MIN_VIRTUAL_USDC_RESERVE
+            );
             vm.skip(
                 true,
                 string.concat(

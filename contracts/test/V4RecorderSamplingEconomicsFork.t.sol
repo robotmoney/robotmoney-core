@@ -9,6 +9,7 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {ForkSelect} from "./helpers/ForkSelect.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
@@ -97,6 +98,35 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
     }
 
     // ─── helpers ─────────────────────────────────────────────────────
+
+    /// @dev Virtual USDC reserve at spot (L x sqrtP, raw 6-decimal USDC) below which these economics no longer describe the live pool.
+    ///      Measured on the pin, never a date. Core 1893.
+    uint256 internal constant MIN_VIRTUAL_USDC_RESERVE = 500e6;
+
+    /// @dev Loud skip: the reason carries the measured depth and the threshold, so the run reads SKIPPED, never as a pass.
+    ///      Follow-up: seed liquidity into the Twin at boot.
+    function _skipIfPoolTooThin() internal {
+        (uint160 sqrtP,,,) = rec.slot0();
+        uint256 reserve = Math.mulDiv(rec.liquidity(), sqrtP, 1 << 96);
+        if (reserve < MIN_VIRTUAL_USDC_RESERVE) {
+            emit log_named_uint(
+                "SKIPPED: live RM pool virtual USDC reserve (raw USDC, 6 decimals)", reserve
+            );
+            emit log_named_uint(
+                "SKIPPED: required minimum (raw USDC, 6 decimals)", MIN_VIRTUAL_USDC_RESERVE
+            );
+            vm.skip(
+                true,
+                string.concat(
+                    "SKIPPED, NOT PASSED: live RM pool too thin. virtual USDC reserve ",
+                    vm.toString(reserve),
+                    " raw is below the required ",
+                    vm.toString(MIN_VIRTUAL_USDC_RESERVE),
+                    " raw"
+                )
+            );
+        }
+    }
 
     function _liveTick() internal view returns (int24 t) {
         (, t,,) = rec.slot0();
@@ -192,6 +222,7 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
     /// @notice The review item on the real pool: one sampled push, then nobody records for 1,790 s. Measures the NAV mark
     ///         error the sample leaves and shows the vault paths it breaks.
     function test_fork_noHonestRecord_markIsWrongBySeveralPercentAndDepositsPause() public {
+        _skipIfPoolTooThin();
         int24 tick0 = _liveTick();
         _fundAttacker();
         _keeperRecord();
@@ -270,6 +301,7 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
     /// @notice Keeper at 240 s. The attacker samples at the earliest legal moment (pushing in the keeper block, recording 60 s later) with a full
     ///         clamp push in each direction and restores the pool. Both directions lose money against the baseline.
     function test_fork_keeper240s_bestSampleIsNotProfitable() public {
+        _skipIfPoolTooThin();
         uint256 snap = vm.snapshotState();
         (int256 base,) = _cycle240(0, true);
         vm.revertToState(snap);
@@ -315,6 +347,7 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
     /// @notice The mark error at the keeper cadence stays below the 100 bps guard and below the redeem floor margin, in both
     ///         directions, so the sample cannot pause deposits either.
     function test_fork_keeper240s_markErrorStaysInsideTheGuard() public {
+        _skipIfPoolTooThin();
         uint256 snap = vm.snapshotState();
         (, int256 upErr) = _cycle240(MAX_STEP + 60, false);
         vm.revertToState(snap);
