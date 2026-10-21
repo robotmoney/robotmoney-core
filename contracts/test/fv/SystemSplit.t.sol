@@ -27,7 +27,10 @@ import {GatewayAgentPolicyFixture} from "../GatewayAgentPolicyAuthorization.t.so
 library CodeSearch {
     function containsSelector(bytes memory code, bytes4 sel) internal pure returns (bool) {
         for (uint256 i = 0; i + 4 <= code.length; i++) {
-            if (code[i] == sel[0] && code[i + 1] == sel[1] && code[i + 2] == sel[2] && code[i + 3] == sel[3]) {
+            if (
+                code[i] == sel[0] && code[i + 1] == sel[1] && code[i + 2] == sel[2]
+                    && code[i + 3] == sel[3]
+            ) {
                 return true;
             }
         }
@@ -69,7 +72,9 @@ contract SystemSplitSys1Test is Test {
         registry.setRouterEligible(address(vaultB), true);
         vm.stopPrank();
         router = CoreProxies.portfolioRouter(address(usdc), address(registry), routerAdmin);
-        gov = CoreProxies.routerGovernance(address(router), address(new MockGovVault(address(usdc))), govAdmin);
+        gov = CoreProxies.routerGovernance(
+            address(router), address(new MockGovVault(address(usdc))), govAdmin
+        );
         vm.startPrank(routerAdmin);
         router.grantRole(router.ADMIN_ROLE(), address(gov));
         router.grantRole(router.WEIGHT_SETTER_ROLE(), address(gov));
@@ -103,9 +108,13 @@ contract SystemSplitSys1Test is Test {
     function _assertNoGateway(string memory artifact) internal view {
         bytes memory code = vm.getDeployedCode(artifact);
         assertGt(code.length, 1000, string.concat(artifact, ": no code read"));
-        assertFalse(CodeSearch.containsSelector(code, bytes4(keccak256("gateway()"))), string.concat(artifact, " reads a gateway"));
         assertFalse(
-            CodeSearch.containsSelector(code, bytes4(keccak256("setGateway(address)"))), string.concat(artifact, " sets a gateway")
+            CodeSearch.containsSelector(code, bytes4(keccak256("gateway()"))),
+            string.concat(artifact, " reads a gateway")
+        );
+        assertFalse(
+            CodeSearch.containsSelector(code, bytes4(keccak256("setGateway(address)"))),
+            string.concat(artifact, " sets a gateway")
         );
     }
 
@@ -122,7 +131,8 @@ contract SystemSplitSys1Test is Test {
     function _assertSourceClean(string memory path) internal view {
         string memory src = vm.readFile(path);
         assertGt(bytes(src).length, 1000, string.concat(path, ": no source read"));
-        string[5] memory banned = ["RobotMoneyGateway", "IGateway", "onlyGateway", "GatewayWindows", "gateway/"];
+        string[5] memory banned =
+            ["RobotMoneyGateway", "IGateway", "onlyGateway", "GatewayWindows", "gateway/"];
         bytes memory b = bytes(src);
         uint256 lineStart;
         for (uint256 i = 0; i <= b.length; i++) {
@@ -133,7 +143,9 @@ contract SystemSplitSys1Test is Test {
                 }
                 if (!_isComment(line)) {
                     for (uint256 t = 0; t < banned.length; t++) {
-                        assertFalse(_has(line, bytes(banned[t])), string.concat(path, " names ", banned[t]));
+                        assertFalse(
+                            _has(line, bytes(banned[t])), string.concat(path, " names ", banned[t])
+                        );
                     }
                 }
                 lineStart = i + 1;
@@ -145,7 +157,9 @@ contract SystemSplitSys1Test is Test {
         uint256 i;
         while (i < line.length && (line[i] == bytes1(" ") || line[i] == bytes1("\t"))) i++;
         if (i >= line.length) return true;
-        return (line[i] == bytes1("/") && i + 1 < line.length && (line[i + 1] == bytes1("/") || line[i + 1] == bytes1("*")))
+        return (line[i] == bytes1("/")
+                && i + 1 < line.length
+                && (line[i + 1] == bytes1("/") || line[i + 1] == bytes1("*")))
             || line[i] == bytes1("*");
     }
 
@@ -167,14 +181,21 @@ contract SystemSplitSys1Test is Test {
     /// @notice The registry status follows the code: SYS-1 is RED exactly while the receipt register still exposes a
     ///         gateway binding. The removal (1888) must flip the entry to HOLDS in the same PR.
     function test_SYS1_registryStatusFollowsReceiptBinding() public view {
-        bytes memory code = vm.getDeployedCode("ConsensusRecommendationReceipt.sol:ConsensusRecommendationReceipt");
+        bytes memory code =
+            vm.getDeployedCode("ConsensusRecommendationReceipt.sol:ConsensusRecommendationReceipt");
         bool bound = CodeSearch.containsSelector(code, bytes4(keccak256("gateway()")));
         InvariantRegistry.Entry memory e = InvariantRegistry.get("SYS-1");
         if (bound) {
-            assertTrue(e.status == InvariantRegistry.Status.RED, "SYS-1 must be RED while the receipt binds a gateway");
+            assertTrue(
+                e.status == InvariantRegistry.Status.RED,
+                "SYS-1 must be RED while the receipt binds a gateway"
+            );
             assertEq(e.remediationIssue, 1888);
         } else {
-            assertTrue(e.status == InvariantRegistry.Status.HOLDS, "SYS-1 must be HOLDS once the receipt binds no gateway");
+            assertTrue(
+                e.status == InvariantRegistry.Status.HOLDS,
+                "SYS-1 must be HOLDS once the receipt binds no gateway"
+            );
             assertEq(e.remediationIssue, 0);
         }
     }
@@ -189,25 +210,38 @@ contract SystemSplitAcl9Test is GatewayAgentPolicyFixture {
         _reveal(user, agent, _policy(user));
         assertEq(_storedShareReceiver(agent), user, "share receiver is the owner");
         bytes32 before = _storedPolicyHash(agent);
-        (bool ok, bytes4 sel) =
-            _try(user, abi.encodeWithSignature("setPolicy(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))", agent, _policy(stranger)));
+        (bool ok, bytes4 sel) = _try(
+            user,
+            abi.encodeWithSignature(
+                "setPolicy(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
+                agent,
+                _policy(stranger)
+            )
+        );
         assertFalse(ok, "owner named another receiver");
         assertEq(sel, bytes4(keccak256("ShareReceiverNotAuthorized()")));
         assertEq(_storedPolicyHash(agent), before, "policy changed");
     }
 
     /// @notice For any caller but the owner, setPolicy, revokeAgent and an ownership change leave the owner and the policy as they were.
-    function testFuzz_ACL9_strangerCannotChangeOwnerOrPolicy(address caller, address newOwner) public {
+    function testFuzz_ACL9_strangerCannotChangeOwnerOrPolicy(address caller, address newOwner)
+        public
+    {
         vm.assume(caller != user && caller != address(0));
         address agent = makeAddr("agentB");
         _reveal(user, agent, _policy(user));
         bytes32 before = _storedPolicyHash(agent);
         bytes memory setPol = abi.encodeWithSignature(
-            "setPolicy(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))", agent, _policy(caller)
+            "setPolicy(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
+            agent,
+            _policy(caller)
         );
         (bool ok1,) = _try(caller, setPol);
         (bool ok2,) = _try(caller, abi.encodeWithSignature("revokeAgent(address)", agent));
-        (bool ok3,) = _try(caller, abi.encodeWithSignature("transferAgentOwnership(address,address)", agent, newOwner));
+        (bool ok3,) = _try(
+            caller,
+            abi.encodeWithSignature("transferAgentOwnership(address,address)", agent, newOwner)
+        );
         assertFalse(ok1 || ok2 || ok3, "a stranger changed an agent");
         assertEq(gateway.agentOwner(agent), user, "owner changed");
         assertEq(_storedPolicyHash(agent), before, "policy changed");
@@ -220,14 +254,15 @@ contract SystemSplitAcl9Test is GatewayAgentPolicyFixture {
         _commit(user, agent, salt);
         vm.roll(block.number + 1);
         vm.prank(stranger);
-        (bool ok,) = address(gateway).call(
-            abi.encodeWithSignature(
-                "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
-                agent,
-                salt,
-                _policy(stranger)
-            )
-        );
+        (bool ok,) = address(gateway)
+            .call(
+                abi.encodeWithSignature(
+                    "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
+                    agent,
+                    salt,
+                    _policy(stranger)
+                )
+            );
         assertFalse(ok, "a stranger registered the agent");
         assertEq(gateway.agentOwner(agent), address(0));
     }
@@ -240,19 +275,36 @@ contract SystemSplitAcl9Test is GatewayAgentPolicyFixture {
         assertGt(code.length, 1000, "no gateway code read");
         bool hasAuthorize = CodeSearch.containsSelector(
             code,
-            bytes4(keccak256("authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))"))
+            bytes4(
+                keccak256(
+                    "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))"
+                )
+            )
         );
-        bool hasTransfer = CodeSearch.containsSelector(code, bytes4(keccak256("transferAgentOwnership(address,address)")));
+        bool hasTransfer = CodeSearch.containsSelector(
+            code, bytes4(keccak256("transferAgentOwnership(address,address)"))
+        );
         bool adminCanGrant;
         vm.prank(admin);
-        (adminCanGrant,) = address(gateway).call(abi.encodeWithSignature("grantRole(bytes32,address)", AGENT_ROLE, makeAddr("planted")));
+        (adminCanGrant,) = address(gateway)
+            .call(
+                abi.encodeWithSignature(
+                    "grantRole(bytes32,address)", AGENT_ROLE, makeAddr("planted")
+                )
+            );
         bool violated = hasAuthorize || hasTransfer || adminCanGrant;
         InvariantRegistry.Entry memory e = InvariantRegistry.get("ACL-9");
         if (violated) {
-            assertTrue(e.status == InvariantRegistry.Status.RED, "ACL-9 must be RED while a role can register an agent or an owner can change");
+            assertTrue(
+                e.status == InvariantRegistry.Status.RED,
+                "ACL-9 must be RED while a role can register an agent or an owner can change"
+            );
             assertEq(e.remediationIssue, 1890);
         } else {
-            assertTrue(e.status == InvariantRegistry.Status.HOLDS, "ACL-9 must be HOLDS once the surface is gone");
+            assertTrue(
+                e.status == InvariantRegistry.Status.HOLDS,
+                "ACL-9 must be HOLDS once the surface is gone"
+            );
             assertEq(e.remediationIssue, 0);
             assertFalse(hasAuthorize, "authorizeAgent exists");
             assertFalse(hasTransfer, "transferAgentOwnership exists");

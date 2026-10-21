@@ -23,7 +23,7 @@ import { planNonceBasis, stagePlan } from "./plan.ts";
 import { assertBaselineCommitted, assertReleaseGate, gitAnchorCommitted, gitFrozenDirCommitted, type CheckShaGreen } from "./release-gate.ts";
 import { codeWithRetry, verifyReconstructionOnChain } from "./counts-reconstruct.ts";
 import { buildLibraryArtifacts } from "./libs-build.ts";
-import { DEPLOYER_STAGES, STAGE_NAMES, getStageTable, useStageTable } from "./stages.ts";
+import { DEPLOYER_STAGES, STAGE_NAMES, getStageTable, peekStageState, restoreStageState, useStageTable } from "./stages.ts";
 import { TABLE_REL, loadStageTable, SYSTEM_NAMES, type SystemName } from "./stage-table.ts";
 import { adoptedTxs, finalNonceCheck, loadRunManifest, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
 import { callerInputs, parseSheet, type Sheet } from "./sheet.ts";
@@ -524,6 +524,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
   const log: Logger = publishLogger(deps.logSink);
   const run = deps.run ?? spawnTool;
   let signer: PublishSigner | undefined;
+  let stageState: ReturnType<typeof peekStageState> | undefined;
   const extraSigners: PublishSigner[] = [];
   try {
     const a = parseCli(argv);
@@ -582,6 +583,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       if (a.verb !== "pause-all" || !isPublishError(e, "INPUT_MISSING")) throw e;
       log.log("warn", "vault_rules.mismatch", { ...(e.details ?? {}), message: `${e.message}. pause-all reads no per-vault rule, so it runs anyway` });
     }
+    stageState = peekStageState(); // issue 1892: the stage list is process-wide; the run puts back what it found (a test process runs many mains)
     useStageTable(stageTable, a.system);
     const evidenceDir = resolve(cwd, a.evidence ?? join("evidence", `publish-${rpcChainId}-${a.coreSha.slice(0, 12)}`));
     const buildCtx = (frozen: RunContext["frozen"], measure: boolean, lazySigner = false): RunContext => {
@@ -795,6 +797,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     return code;
   } finally {
     signer?.cleanup();
+    if (stageState) restoreStageState(stageState);
     for (const x of extraSigners) x.cleanup();
   }
 }

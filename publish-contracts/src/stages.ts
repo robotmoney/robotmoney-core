@@ -86,6 +86,10 @@ export function useStageTable(t: StageTable, system: SystemName = "vaults"): voi
   VAULT_STAGES = t.vaults.map((v) => ({ key: v.key, stage: v.stage }));
 }
 
+/** Issue 1892: the stage list and the system are process-wide. A run that switches them (the gateway system) hands back what it found. */
+export function peekStageState(): { table: StageTable | undefined; system: SystemName } { return { table, system: ACTIVE_SYSTEM }; }
+export function restoreStageState(s: { table: StageTable | undefined; system: SystemName }): void { if (s.table) useStageTable(s.table, s.system); }
+
 export function getStageTable(): StageTable {
   if (!table) throw new PublishError("INPUT_MISSING", "the core stage table is not loaded: loadStageTable(coreDir) then useStageTable()");
   return table;

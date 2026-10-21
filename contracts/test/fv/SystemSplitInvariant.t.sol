@@ -57,13 +57,16 @@ contract SystemSplitInvariantTest is Test {
             MockGovVault v = new MockGovVault(address(usdc));
             vs[i] = address(v);
             registry.registerVault(
-                vs[i], VaultRegistry.VaultMetadata({name: "V", asset: address(usdc), registeredAt: 0})
+                vs[i],
+                VaultRegistry.VaultMetadata({name: "V", asset: address(usdc), registeredAt: 0})
             );
             registry.setRouterEligible(vs[i], true);
         }
         vm.stopPrank();
         router = CoreProxies.portfolioRouter(address(usdc), address(registry), routerAdmin);
-        gov = CoreProxies.routerGovernance(address(router), address(new MockGovVault(address(usdc))), govAdmin);
+        gov = CoreProxies.routerGovernance(
+            address(router), address(new MockGovVault(address(usdc))), govAdmin
+        );
         vm.startPrank(routerAdmin);
         router.grantRole(router.ADMIN_ROLE(), address(gov));
         router.grantRole(router.WEIGHT_SETTER_ROLE(), address(gov));

@@ -98,7 +98,9 @@ contract CoverageMapTest is Test {
             assertEq(
                 isTomb,
                 isRetired,
-                string.concat(reg[i].id, ": TOMBSTONE status must match a struck-through Retired heading")
+                string.concat(
+                    reg[i].id, ": TOMBSTONE status must match a struck-through Retired heading"
+                )
             );
         }
         assertEq(InvariantRegistry.get("ACL-4").remediationIssue, 0);
