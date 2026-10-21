@@ -5,7 +5,7 @@ description: "Reads the launch config files and pins the facts S2 fixed. Offline
 
 # ConfigFilesTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/ConfigFiles.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e7b1ad2af4f3bc5b1daeb4566fa7077db87f5c86/contracts/test/ConfigFiles.t.sol)
 
 **Inherits:** Test
 
@@ -49,14 +49,40 @@ function test_Config_rwaAssetsIsDespxaOnlyOnFee500() public view;
 function test_Config_protocolAssetsIsWethAndCbbtc() public view;
 ```
 
-<a id="test_config_agentshortlistisrmonlyonthev4pool"></a>
+<a id="_rm-string"></a>
 
-### test_Config_agentShortlistIsRmOnlyOnTheV4Pool
+### _rm
+
+<i>
+
+RM_PARKED (core issue 1903, ADR-0015): RM sits under parked.entries while it is parked, else in the shortlist. Either way its pin is checked.
+
+</i>
+
+```solidity
+function _rm(string memory j) internal view returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| j | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="test_config_agentrmislistedorparkedonthev4pool"></a>
+
+### test_Config_agentRmIsListedOrParkedOnTheV4Pool
 
 Owner decision 2026-10-08 (core 1676): RM is on the Uniswap V4 RM/USDC 2.91% pool with a hookless PoolKey.
 
 ```solidity
-function test_Config_agentShortlistIsRmOnlyOnTheV4Pool() public view;
+function test_Config_agentRmIsListedOrParkedOnTheV4Pool() public view;
 ```
 
 <a id="test_config_agentpoolkeyhashestothepoolid"></a>
