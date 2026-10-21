@@ -144,6 +144,7 @@ sol! {
     #[allow(missing_docs)]
     interface IConsensusRecommendationReceipt {
         function ADMIN_ROLE() external view returns (bytes32);
+        function RECEIPT_RELEASER_ROLE() external view returns (bytes32);
         function RECEIPT_SUBMITTER_ROLE() external view returns (bytes32);
         function recordReceipt(
             bytes32 receiptId,
@@ -325,20 +326,20 @@ fn deploy_stack<'a>(fx: &'a ForkFixture, tag: &str) -> Stack<'a> {
         "receipts RECEIPT_SUBMITTER_ROLE -> test account",
     );
 
-    // RouterGovernance releases receipts (receipt ADMIN_ROLE) and sets weights
+    // RouterGovernance releases receipts (receipt RECEIPT_RELEASER_ROLE) and sets weights
     // (router WEIGHT_SETTER_ROLE).
     let receipt_admin_role = read_bytes32(
         &admin,
         receipts,
-        &IConsensusRecommendationReceipt::ADMIN_ROLECall {},
-        "receipts.ADMIN_ROLE()",
+        &IConsensusRecommendationReceipt::RECEIPT_RELEASER_ROLECall {},
+        "receipts.RECEIPT_RELEASER_ROLE()",
     );
     grant_role(
         &admin,
         receipts,
         receipt_admin_role,
         governance,
-        "receipts ADMIN_ROLE -> governance",
+        "receipts RECEIPT_RELEASER_ROLE -> governance",
     );
     let router_setter_role = read_bytes32(
         &admin,
