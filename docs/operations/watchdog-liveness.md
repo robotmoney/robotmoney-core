@@ -154,15 +154,46 @@ backfill would page every historical upgrade in one burst (issue 1856).
   (webhook down or unset). The baseline is then `-1` and nothing is seeded:
   every unpaged proxy event pages once. This is the rollout of issue 1856 on an
   existing deployment.
-- With nothing indexed when the watchdog first starts, no baseline is taken. By
-  its next cycle it has its own cursor row, so the baseline becomes `-1`. Start
-  the watchdog after the indexer has indexed its first blocks to get the seeding.
+- Only the startup call may take the indexer cursor as the baseline. A later
+  cycle that finds no baseline stores `-1`. Otherwise an indexer run that
+  commits after startup could cover an upgrade mined after the watchdog started,
+  and that upgrade would never page (issue 1868).
+- With nothing indexed when the watchdog first starts, the startup call stores
+  `-1` at once. After a failed startup call the next cycle stores `-1`. Either
+  way a restart or a second replica cannot take the indexer cursor later, and
+  every historical proxy event the backfill inserts pages once, in one burst.
+  This is intended.
+  Retrying the cursor baseline until the indexer's first run would reopen the
+  race above, and a burst of extra pages is recoverable while a silent upgrade
+  is not. Start the watchdog after the indexer has indexed its first blocks to
+  get the seeding.
 - If the baseline table cannot be read, the watchdog logs an error and pages
   every unpaged proxy event.
 
 Before issue 1856, a watchdog that started before the indexer finished its
 backfill paged every unmarked deployment row once. On a fresh install the
 baseline now covers those rows.
+
+Before rolling out the issue 1856 baseline on an existing deployment, check
+each chain for a prior watchdog. The watchdog infers one from a
+`watchdog_cursor` row or any `watchdog_pager_state` row. A watchdog from before
+issue 1856 that never stored a cursor and never delivered a page leaves neither,
+so the new watchdog would take a cursor baseline and silence history it may
+have missed. For each chain the watchdog monitors, run
+`SELECT 1 FROM watchdog_cursor WHERE chain_id = <chain>`. If it returns no
+row, record a `-1` baseline before the new watchdog starts, unless you know no
+watchdog ever ran against this database, so every unpaged proxy event pages once. Run it as the
+watchdog's database role, so the watchdog can still read the table:
+
+```sql
+CREATE TABLE IF NOT EXISTS watchdog_proxy_baseline (
+  chain_id BIGINT NOT NULL,
+  baseline_block BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (chain_id));
+INSERT INTO watchdog_proxy_baseline (chain_id, baseline_block)
+VALUES (<chain>, -1) ON CONFLICT (chain_id) DO NOTHING;
+```
 
 To re-take the baseline (for example after restoring the database), first make
 sure no proxy page is still undelivered: every `admin_events` row with
@@ -172,6 +203,15 @@ every event at or below the new cursor as seen, so an undelivered upgrade would
 never page. Then delete the chain's row from `watchdog_proxy_baseline`, its
 `proxy_change:` rows from `watchdog_pager_state`, and every other row for the
 chain in `watchdog_pager_state` and `watchdog_cursor`, and restart the watchdog.
+
+Deleting those rows resets more than the baseline:
+
+- With no `watchdog_cursor` row, the volume cycle restarts at the latest indexed
+  block. Blocks between the old cursor and that block are not evaluated for
+  mint and burn volume.
+- With no `watchdog_pager_state` rows, the liveness pagers (missing consensus
+  receipt, no receipt baseline, weight-setter path, indexer behind) re-arm. A
+  condition that is still open pages again on the first cycle that sees it.
 
 The indexer reports the backfill's own state in the explorer's `/health` as
 `proxy_backfill`. `refused` means the range is too wide: set

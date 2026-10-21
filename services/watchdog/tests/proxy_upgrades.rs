@@ -461,6 +461,11 @@ async fn proxy_events_older_than_the_first_run_do_not_page_and_a_new_upgrade_doe
     )
     .await;
 
+    // Startup takes the baseline before the first cycle (issue 1868).
+    assert_eq!(
+        proxy_change_baseline(&fx.pool, CHAIN, true).await.unwrap(),
+        Some(95)
+    );
     let server = MockWebhookServer::start().await;
     let client = Client::new();
     let first = alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_000)
@@ -468,7 +473,7 @@ async fn proxy_events_older_than_the_first_run_do_not_page_and_a_new_upgrade_doe
         .unwrap();
     assert_eq!(first, 0, "history older than the first run is not paged");
     assert_eq!(
-        proxy_change_baseline(&fx.pool, CHAIN).await.unwrap(),
+        proxy_change_baseline(&fx.pool, CHAIN, false).await.unwrap(),
         Some(95),
         "the baseline is the indexer cursor, not the chain head (100)"
     );
@@ -505,7 +510,7 @@ async fn proxy_events_older_than_the_first_run_do_not_page_and_a_new_upgrade_doe
         "a backfilled row below the baseline is not paged either"
     );
     assert_eq!(
-        proxy_change_baseline(&fx.pool, CHAIN).await.unwrap(),
+        proxy_change_baseline(&fx.pool, CHAIN, false).await.unwrap(),
         Some(95),
         "the baseline is kept, not moved with the chain"
     );
@@ -578,16 +583,17 @@ async fn a_monitor_that_ran_before_seeds_nothing_and_an_undelivered_change_still
     .await
     .unwrap();
 
+    assert_eq!(
+        proxy_change_baseline(&fx.pool, CHAIN, true).await.unwrap(),
+        Some(-1),
+        "a pager row shows a watchdog ran here: startup seeds nothing"
+    );
     let server = MockWebhookServer::start().await;
     let client = Client::new();
     let paged = alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_000)
         .await
         .unwrap();
     assert_eq!(paged, 1, "the undelivered freeze pages");
-    assert_eq!(
-        proxy_change_baseline(&fx.pool, CHAIN).await.unwrap(),
-        Some(-1)
-    );
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let bodies = server.drain_captures();
     let body: serde_json::Value = serde_json::from_slice(&bodies[0].body).unwrap();
@@ -613,6 +619,11 @@ async fn an_upgrade_an_older_watchdog_failed_to_deliver_still_pages_after_rollou
         .execute(&fx.pool)
         .await
         .unwrap();
+    assert_eq!(
+        proxy_change_baseline(&fx.pool, CHAIN, true).await.unwrap(),
+        Some(-1),
+        "a cursor row shows a watchdog ran here: startup seeds nothing"
+    );
     // The old watchdog's delivery failed: nothing is recorded.
     let failing = FailingWebhookServer::start(503).await;
     let client = Client::new();
@@ -624,7 +635,7 @@ async fn an_upgrade_an_older_watchdog_failed_to_deliver_still_pages_after_rollou
     );
     failing.shutdown();
     assert_eq!(
-        proxy_change_baseline(&fx.pool, CHAIN).await.unwrap(),
+        proxy_change_baseline(&fx.pool, CHAIN, false).await.unwrap(),
         Some(-1),
         "a watchdog ran here before: nothing is seeded"
     );
@@ -659,4 +670,104 @@ async fn an_unreadable_baseline_pages_everything() {
         "below the cursor, yet paged: no baseline, no seeding"
     );
     server.shutdown();
+}
+
+/// Issue 1868: a call after startup that finds no stored baseline stores `-1`,
+/// never the indexer cursor, so every unpaged change pages.
+#[tokio::test]
+async fn non_startup_call_stores_minus_one() {
+    let fx = pg_fixture().await;
+    ensure_pager_state_table(&fx.pool).await.unwrap();
+    seed_chain(&fx.pool).await;
+    seed_run(&fx.pool, 95, 100).await;
+    assert_eq!(
+        proxy_change_baseline(&fx.pool, CHAIN, false).await.unwrap(),
+        Some(-1),
+        "only startup may take the cursor (95)"
+    );
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT baseline_block FROM watchdog_proxy_baseline WHERE chain_id = $1",
+    )
+    .bind(CHAIN)
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert_eq!(stored, -1);
+}
+
+/// Issue 1868: startup finds nothing indexed, so the baseline is `-1`. The
+/// indexer's first run then commits a cursor at 95 that covers an upgrade at
+/// 90 mined after the watchdog started. The next cycle must not take that
+/// cursor as the baseline: the upgrade pages exactly once.
+#[tokio::test]
+async fn late_cycle_never_takes_a_cursor_baseline() {
+    let fx = pg_fixture().await;
+    ensure_pager_state_table(&fx.pool).await.unwrap();
+    seed_chain(&fx.pool).await;
+    assert_eq!(
+        proxy_change_baseline(&fx.pool, CHAIN, true).await.unwrap(),
+        Some(-1),
+        "nothing indexed at startup: the baseline is -1 at once"
+    );
+
+    seed_run(&fx.pool, 95, 100).await;
+    let v2 = format!("0x{}", "2b".repeat(20));
+    seed_event(
+        &fx.pool,
+        GATEWAY,
+        90,
+        0,
+        0x03,
+        "Upgraded",
+        &format!(r#"{{"implementation":"{v2}"}}"#),
+    )
+    .await;
+
+    let server = MockWebhookServer::start().await;
+    let client = Client::new();
+    let paged = alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_000)
+        .await
+        .unwrap();
+    assert_eq!(paged, 1, "the upgrade at or below the cursor still pages");
+    assert_eq!(
+        proxy_change_baseline(&fx.pool, CHAIN, false).await.unwrap(),
+        Some(-1)
+    );
+    assert_eq!(
+        alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_012)
+            .await
+            .unwrap(),
+        0,
+        "paged once, never again"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let bodies = server.drain_captures();
+    assert_eq!(bodies.len(), 1, "exactly one page reached the webhook");
+    let body: serde_json::Value = serde_json::from_slice(&bodies[0].body).unwrap();
+    assert_eq!(body["payload"]["custom_details"]["block_number"], 90);
+    assert_eq!(
+        body["payload"]["custom_details"]["alert_kind"],
+        "proxy_upgraded"
+    );
+    server.shutdown();
+}
+
+/// Issue 1868 (review): startup finds nothing indexed and the watchdog restarts
+/// (or a second replica starts) after the indexer's first run but before any
+/// cycle ran. The second startup must not take the new cursor as the baseline.
+#[tokio::test]
+async fn a_restart_after_an_empty_startup_never_takes_a_cursor_baseline() {
+    let fx = pg_fixture().await;
+    ensure_pager_state_table(&fx.pool).await.unwrap();
+    seed_chain(&fx.pool).await;
+    assert_eq!(
+        proxy_change_baseline(&fx.pool, CHAIN, true).await.unwrap(),
+        Some(-1)
+    );
+    seed_run(&fx.pool, 95, 100).await;
+    assert_eq!(
+        proxy_change_baseline(&fx.pool, CHAIN, true).await.unwrap(),
+        Some(-1),
+        "the second startup keeps -1, not the cursor (95)"
+    );
 }
