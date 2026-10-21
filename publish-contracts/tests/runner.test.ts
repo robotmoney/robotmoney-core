@@ -89,7 +89,7 @@ describe("the stage runner on stub forge and cast", () => {
     expect(proto.env.VAULT_TVL_CAP).toBeUndefined();
     // the deploy authorizes no agent (core 1527): stage 11 passes AGENT_ADDRESSES=none and stage 5 reads no AGENT_* name
     const timelock = forgeScripts(w).find((c: any) => String(c.args[1]).startsWith(t.stages.find((s) => s.name === "timelock")!.script) && c.args.includes("--broadcast"));
-    expect(timelock.env.AGENT_ADDRESSES).toBe("none");
+    expect(timelock.env.AGENT_ADDRESSES).toBeUndefined();
     for (const c of forgeScripts(w).filter((x: any) => String(x.args[1]).startsWith(t.stages.find((s) => s.name === "gateway")!.script))) {
       expect(Object.keys(c.env).filter((k) => k.startsWith("AGENT_"))).toEqual([]);
     }

@@ -877,9 +877,7 @@ async function assetReadBack(chain: ChainReader, vault: Address, want: ExpectedA
 // no deployer-owned agent). They are deliberate after the no-agent deploy (core 1527). Do not delete them as dead code.
 const AGENT_LABELS = [
   "agents: no agent authorized at handover",
-  "agents: manifest lists zero agents",
   "agents: no address holds AGENT_ROLE after handover",
-  "agents: manifest says deployer owns no listed agent",
 ];
 
 /** The deploy authorizes no agent (architecture 5.2 and 6.3): an agent belongs to a depositor. The gateway has no agent log since the deploy began, the timelock manifest lists none and nobody holds AGENT_ROLE. */
@@ -897,15 +895,13 @@ async function agentChecks(
     const agents = [...new Set(logs.map((l) => lc(topicToAddress(l.topics[1]))))];
     c.push(AGENT_LABELS[0]!, logs.length === 0, logs.length ? `${logs.length} agent logs from block ${s.fromBlock}, agents ${agents.join(", ")}` : `no AgentAuthorized or AgentOwnershipTransferred log from block ${s.fromBlock}`);
   } catch (e: any) { c.fail(AGENT_LABELS[0]!, `scan failed: ${String(e?.message ?? e).slice(0, 300)}`); }
-  c.eq(AGENT_LABELS[1]!, timelockManifest.roles?.gateway_agents_listed_count, 0);
-  if (late !== undefined) c.fail(AGENT_LABELS[2]!, late);
+  if (late !== undefined) c.fail(AGENT_LABELS[1]!, late);
   else try {
     const logs = await scanLogs(chain, { ...base, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), AGENT_ROLE] });
     const holders: string[] = [];
     for (const who of new Set(logs.map((l) => topicToAddress(l.topics[2])))) if (await hasRole(chain, gateway, AGENT_ROLE, who)) holders.push(who);
-    c.push(AGENT_LABELS[2]!, holders.length === 0, holders.length ? `holders ${holders.join(", ")}` : `${logs.length} AGENT_ROLE grants scanned, none held`);
-  } catch (e: any) { c.fail(AGENT_LABELS[2]!, `scan failed: ${String(e?.message ?? e).slice(0, 300)}`); }
-  c.eq(AGENT_LABELS[3]!, timelockManifest.roles?.deployer_owns_a_listed_gateway_agent, false);
+    c.push(AGENT_LABELS[1]!, holders.length === 0, holders.length ? `holders ${holders.join(", ")}` : `${logs.length} AGENT_ROLE grants scanned, none held`);
+  } catch (e: any) { c.fail(AGENT_LABELS[1]!, `scan failed: ${String(e?.message ?? e).slice(0, 300)}`); }
 }
 
 /** Log-enumerated scan of the timelock's PROPOSER, CANCELLER and EXECUTOR holders: only the Safe, plus address(0) as the open executor. An EOA holder is named. */

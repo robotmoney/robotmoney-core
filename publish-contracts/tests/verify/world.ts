@@ -418,7 +418,6 @@ export function buildWorld(chainId = 8453): World {
   w(file("receipt"), { chain_id: chainId, consensus_receipt: REC, consensus_receipt_implementation: IMPLS.receipt, ...up });
   w(file("timelock"), {
     chain_id: chainId, timelock: TIMELOCK, safe: SAFE, emergency: EMERGENCY, executorPolicy: "open", cancellerPolicy: "safe-only", code_hashes: { safe: safeHash },
-    roles: { gateway_agents_listed_count: 0, deployer_owns_a_listed_gateway_agent: false },
   });
   w("safe.json", { chain_id: chainId, safe: SAFE });
   w(file("libs"), { chain_id: chainId, tick_math: LIBS.tick_math });
