@@ -446,6 +446,23 @@ contract RobotMoneyGatewayTest is Test {
         assertTrue(gateway.hasRole(agentRole, agent));
     }
 
+    /// @notice A reveal for another address needs that address's own prior consent
+    ///         (core 1791). Without it the reveal reverts `OwnerConsentMissing`. The case
+    ///         lived in the retired committee suites; this keeps the branch executed.
+    function test_revealAuthorization_forAnotherAgentWithoutConsentReverts() public {
+        address attacker = makeAddr("consent-attacker");
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        p.shareReceiver = attacker;
+        bytes32 salt = bytes32(uint256(789));
+        vm.prank(attacker);
+        gateway.commitAuthorization(keccak256(abi.encode(agent, attacker, salt)));
+        vm.roll(block.number + 2);
+        vm.prank(attacker);
+        vm.expectRevert(RobotMoneyGateway.OwnerConsentMissing.selector);
+        gateway.revealAuthorization(agent, salt, p);
+        assertEq(gateway.agentOwner(agent), address(0));
+    }
+
     function test_authorizeAgent_revertsOnRoleSeparation_grantingAgentToAdmin() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
         vm.prank(admin);
