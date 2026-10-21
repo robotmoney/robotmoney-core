@@ -261,8 +261,13 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         assertEq(gov.getRoleMemberCount(WEIGHT_SETTER_ROLE), 1, "one applyReceipt caller");
         assertEq(gov.getRoleMember(WEIGHT_SETTER_ROLE, 0), address(timelock));
         assertTrue(
-            IAccessControl(address(receipts)).hasRole(ADMIN_ROLE, address(gov)),
+            IAccessControl(address(receipts))
+                .hasRole(receipts.RECEIPT_RELEASER_ROLE(), address(gov)),
             "governance cannot release the receipt it applies"
+        );
+        assertFalse(
+            IAccessControl(address(receipts)).hasRole(ADMIN_ROLE, address(gov)),
+            "governance must not hold the receipt ADMIN_ROLE"
         );
         assertEq(address(gov.receipts()), address(receipts));
     }
