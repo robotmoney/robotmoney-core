@@ -5,7 +5,7 @@ description: "rmAGENT script: paused and registered at launch, holding RM on the
 
 # DeployAgentTokenVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/DeployAgentTokenVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9b1477e1ade28b3357b8d3032a304bb71d43b867/contracts/test/DeployAgentTokenVault.t.sol)
 
 **Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
 
@@ -44,6 +44,20 @@ bytes32 internal constant RM_POOL_ID =
 
 ```solidity
 string internal constant SHIPPED = "config/agent-token-shortlist.json";
+```
+
+### LISTED
+
+<i>
+
+RM_PARKED (core issue 1903, ADR-0015): the shipped config parks RM and ships an empty shortlist. The tests that need RM and its V4 pool
+run on this reactivated copy (RM moved back into the shortlist), never skipped. `test_rmParked_fixtureEqualsTheShippedRmEntry` pins it.
+
+</i>
+
+```solidity
+string internal constant LISTED =
+        "contracts/test/fixtures/agent-token-shortlist.rm-listed.json";
 ```
 
 ## State Variables
@@ -262,12 +276,64 @@ function test_config_aFeeThatDiffersFromPoolFeeIsRefused() public;
 function test_config_anUnknownVenueIsRefused() public;
 ```
 
-<a id="test_launchconfigshortlistisrmonly"></a>
+<a id="_rmparked"></a>
 
-### test_launchConfigShortlistIsRmOnly
+### _rmParked
+
+<i>
+
+RM_PARKED: true exactly while the shipped config holds RM under `parked.entries`.
+
+</i>
 
 ```solidity
-function test_launchConfigShortlistIsRmOnly() public view;
+function _rmParked() internal view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="test_launchconfigshortlistisemptywithrmparkedorrmonly"></a>
+
+### test_launchConfigShortlistIsEmptyWithRmParkedOrRmOnly
+
+The shipped launch config is EMPTY with RM parked (owner decision 2026-10-21, ADR-0015), or exactly RM once reactivated.
+
+```solidity
+function test_launchConfigShortlistIsEmptyWithRmParkedOrRmOnly() public view;
+```
+
+<a id="test_rmparked_shippedconfigdeploysanemptypausedregisteredvault"></a>
+
+### test_rmParked_shippedConfigDeploysAnEmptyPausedRegisteredVault
+
+The shipped config (RM parked) runs through the real script: a paused, registered, EMPTY rmAGENT with no adapter and no recorder.
+
+```solidity
+function test_rmParked_shippedConfigDeploysAnEmptyPausedRegisteredVault() public;
+```
+
+<a id="test_rmparked_emptyvaultrevertsexceededmaxdepositevenunpaused"></a>
+
+### test_rmParked_emptyVaultRevertsExceededMaxDepositEvenUnpaused
+
+An empty rmAGENT refuses a deposit even when unpaused: maxDeposit is 0.
+
+```solidity
+function test_rmParked_emptyVaultRevertsExceededMaxDepositEvenUnpaused() public;
+```
+
+<a id="test_rmparked_fixtureequalstheshippedrmentry"></a>
+
+### test_rmParked_fixtureEqualsTheShippedRmEntry
+
+The reactivated fixture used by the RM-pool tests is the shipped RM entry, field by field.
+
+```solidity
+function test_rmParked_fixtureEqualsTheShippedRmEntry() public view;
 ```
 
 <a id="test_deploy_addsrmandregisterspaused"></a>
