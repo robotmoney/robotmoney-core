@@ -154,6 +154,7 @@ contract RecorderManipulationForkTest is Test {
     ///         refuses with `SpotBelowSellAnchor` and the lowest price a USDC redeem could execute at stays inside the bar.
     ///         `redeemInKind` still pays the RM. The logs carry the pool depth and the attack's cost for the report.
     function test_recorder_heldDisplacementDragsSellFloorUnderKeeperCadence() public {
+        _skipIfPoolTooThin();
         _buyInventory();
         _honestHistory();
         _push();
@@ -164,6 +165,31 @@ contract RecorderManipulationForkTest is Test {
         _measureAndAssertBound();
         _usdcRedeemRefusesAndInKindPays();
         _unwindAndLogCost();
+    }
+
+    /// @dev Virtual USDC reserve at spot (L x sqrtP, raw 6-decimal USDC) below which the fixtures (STEP_USDC, the 18 USDC single-swap
+    ///      limit of the 2026-10-08 depth) no longer describe the live pool. Measured on the pin, never a date. Core 1893.
+    uint256 internal constant MIN_VIRTUAL_USDC_RESERVE = 500e6;
+
+    /// @dev Loud skip: the live RM pool has drifted too thin for this model. The reason carries the measured depth and the threshold,
+    ///      so the run reads SKIPPED with a cause, never as a pass. Follow-up: seed liquidity into the Twin at boot.
+    function _skipIfPoolTooThin() internal {
+        (uint160 sqrtP,,,) = rec.slot0();
+        uint256 reserve = Math.mulDiv(rec.liquidity(), sqrtP, 1 << 96);
+        if (reserve < MIN_VIRTUAL_USDC_RESERVE) {
+            emit log_named_uint("SKIPPED: live RM pool virtual USDC reserve (raw USDC, 6 decimals)", reserve);
+            emit log_named_uint("SKIPPED: required minimum (raw USDC, 6 decimals)", MIN_VIRTUAL_USDC_RESERVE);
+            vm.skip(
+                true,
+                string.concat(
+                    "SKIPPED, NOT PASSED: live RM pool too thin for this model. virtual USDC reserve ",
+                    vm.toString(reserve),
+                    " raw is below the required ",
+                    vm.toString(MIN_VIRTUAL_USDC_RESERVE),
+                    " raw"
+                )
+            );
+        }
     }
 
     /// @dev Attacker inventory, bought before the honest history. Each step pokes the recorder (a no-op in this block).

@@ -825,6 +825,29 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
         "venue is V4 (1)"
     );
 
+    // Loud skip (core 1893): the deposit steps below assume the pool depth of 2026-10-08 (an 18 USDC single swap stays inside the
+    // 209 bps margin). The live RM pool drifts. Measure its virtual USDC reserve (L x sqrtP, raw 6-decimal USDC) on the pin and skip the
+    // deposit when it is below the floor. Follow-up: seed liquidity into the Twin at boot so these steps run again.
+    {
+        const MIN_VIRTUAL_USDC_RESERVE: u64 = 500_000_000; // 500 USDC
+        let liq_raw = fx
+            .cast_call_raw(state_view, "getLiquidity(bytes32)", &[&pool_id])
+            .expect("StateView.getLiquidity");
+        let slot_raw = fx
+            .cast_call_raw(state_view, "getSlot0(bytes32)", &[&pool_id])
+            .expect("StateView.getSlot0");
+        let liq = alloy_primitives::U256::from_str_radix(&word(&liq_raw, 0), 16).expect("liquidity word");
+        let sqrt_p = alloy_primitives::U256::from_str_radix(&word(&slot_raw, 0), 16).expect("sqrtPriceX96 word");
+        // (sqrtP >> 32) x L >> 64 equals L x sqrtP >> 96 and stays inside 256 bits.
+        let reserve = ((sqrt_p >> 32usize) * liq) >> 64usize;
+        if reserve < alloy_primitives::U256::from(MIN_VIRTUAL_USDC_RESERVE) {
+            eprintln!(
+                "\n!!! SKIPPED, NOT PASSED: the rmAGENT V4 deposit steps. Live RM pool virtual USDC reserve is {reserve} raw USDC (L {liq}), below the required {MIN_VIRTUAL_USDC_RESERVE} raw USDC. The asset-row checks above did run. Follow-up: seed RM pool liquidity into the Twin at boot. !!!\n"
+            );
+            return;
+        }
+    }
+
     // The depositor: a funded EOA. rmAGENT is already open: the govern matrix above unpaused it through the real Safe and timelock.
     let user = fx.agent();
     let pk = format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY));
