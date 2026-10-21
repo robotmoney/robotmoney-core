@@ -50,7 +50,7 @@ Follow-ups for other lanes:
 
 ### clients leftovers: deferred / dropped
 
-- Dropped, not deferred: QA `rmpc agent-consent` command and its plugin docs (cli SKILL.md, commands.md "Agent consent", user SKILL consent section). Why: dev's commit-based agent ownership flow (#1823) replaces the EIP-712 consent (QA D2). No rmpc source for the command remains.
+- Dropped, not deferred: QA agent-consent command and its plugin docs (cli SKILL.md, commands.md "Agent consent", user SKILL consent section). Why: dev's commit-based agent ownership flow (#1823) replaces the EIP-712 consent (QA D2). No rmpc source for the command remains.
 - Dropped: QA `gateway_implementation_hashes` / `implementation_approved` / `implementation_version` / `upgrade_authority` docs in plugins. Why: dev pins the gateway with `gateway_implementation` + `gateway_implementation_runtime_hash`; get-gateway reports `upgrade_timelock` and `upgrades_frozen`. Docs rewritten to dev's fields.
 - Follow-up for the orchestrator: clients/rust-payment-client/abi/PortfolioRouter.json holds dev's ABI plus one hand-added entry (error LegSkippedWithFloor, QA D4) so rmpc compiles. Regenerate all abi/*.json from forge at the end (L2) and confirm the error survives.
 - Removed unused QA test helpers `install_gateway_pin_mocks` and `install_direct_gateway_slot_mock` from tests/common/mod.rs (dev's `install_direct_gateway_code_mocks` replaces them).
