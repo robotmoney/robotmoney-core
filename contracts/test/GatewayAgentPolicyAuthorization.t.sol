@@ -16,6 +16,7 @@ import {MockVault} from "./helpers/MockVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 import {AgentRegistration} from "./helpers/AgentRegistration.sol";
 
 /// @dev Shared fixture: a gateway with two ADMIN_ROLE holders (`admin`, the
@@ -949,6 +950,64 @@ contract GatewayConsentBoundaryTest is GatewayAgentPolicyFixture {
             keccak256(abi.encode(AgentRegistration.consentHash(user, agentU, SALT, p), agentU))
         );
         assertEq(committer, agentU, "consent was consumed by a failed reveal");
+    }
+}
+
+/// @title GatewayAgentUpgradeTest
+/// @notice A populated gateway proxy upgrades to a fresh implementation through its timelock.
+///         The stored registration (owner, role, policy tuple, deposit budget) survives, and
+///         the owner-consented lifecycle still holds afterwards (issue 1890, ACL-9).
+contract GatewayAgentUpgradeTest is GatewayAgentPolicyFixture {
+    address internal constant UPGRADE_TIMELOCK = address(0x7157);
+    address internal agentU = makeAddr("agentU");
+
+    function setUp() public override {
+        CoreProxies.useUpgradeConfig(UPGRADE_TIMELOCK, GovernedUUPS.UpgradeMode.Upgradeable);
+        super.setUp();
+    }
+
+    function test_populatedProxy_upgrade_keepsRegistration_andLifecycleStillHolds() public {
+        _reveal(user, agentU, _policy(user));
+        _deposit(agentU, 100 * ONE_USDC, bytes32(uint256(1)));
+        bytes32 policyBefore = _storedPolicyHash(agentU);
+        uint256 budgetBefore = gateway.effectiveDepositWindowGross(agentU);
+        assertEq(budgetBefore, 100 * ONE_USDC, "pre budget");
+
+        address newImpl = address(new RobotMoneyGateway());
+        vm.prank(UPGRADE_TIMELOCK);
+        GovernedUUPS(address(gateway)).upgradeToAndCall(newImpl, "");
+
+        // Stored data is intact.
+        assertEq(gateway.agentOwner(agentU), user, "owner kept");
+        assertTrue(gateway.hasRole(AGENT_ROLE, agentU), "role kept");
+        assertEq(_storedPolicyHash(agentU), policyBefore, "policy tuple kept");
+        assertEq(gateway.effectiveDepositWindowGross(agentU), budgetBefore, "budget kept");
+
+        // Lifecycle enforcement works on the upgraded proxy.
+        vm.prank(admin);
+        vm.expectRevert(AccessRoles.AgentRoleNotManageable.selector);
+        gateway.grantRole(AGENT_ROLE, stranger);
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
+        gateway.revokeAgent(agentU);
+        AgentRegistration.revealExpectRevert(
+            gateway,
+            adminOwner,
+            agentU,
+            _policy(adminOwner),
+            RobotMoneyGateway.AgentAlreadyOwned.selector
+        );
+        vm.prank(user);
+        vm.expectRevert(RobotMoneyGateway.ShareReceiverNotAuthorized.selector);
+        gateway.setPolicy(agentU, _policy(otherReceiver));
+
+        // Self-revoke clears everything, and a new owner registers with a fresh budget.
+        vm.prank(agentU);
+        gateway.revokeAgent(agentU);
+        assertEq(gateway.agentOwner(agentU), address(0), "owner cleared");
+        assertEq(gateway.effectiveDepositWindowGross(agentU), 0, "budget reset");
+        _reveal(adminOwner, agentU, _policy(adminOwner));
+        assertEq(gateway.agentOwner(agentU), adminOwner, "re-registered");
     }
 }
 

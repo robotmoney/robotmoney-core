@@ -243,7 +243,7 @@ jobs:
         # never green. The stateful fuzz (GatewayAgentLifecycleInvariant.t.sol) runs in the
         # forge-invariant-fuzz-tests job, which has its own executed-test floor.
         env:
-          FORGE_TEST_MIN_EXECUTED: "34"
+          FORGE_TEST_MIN_EXECUTED: "35"
         run: bash .github/scripts/forge_test_require_executed.sh --match-path "contracts/test/GatewayAgentPolicyAuthorization.t.sol"
 
       - name: forge test (basket vault production scripts and eligibility — core 1486)
