@@ -783,7 +783,11 @@ fn rm_parked_empty_vault(fx: &Fixture) {
         "rmAGENT must hold no asset while RM is parked, got {count}"
     );
     let max = fx
-        .cast_call_raw(agent_vault, "maxDeposit(address)", &[&format!("{:#x}", fx.agent())])
+        .cast_call_raw(
+            agent_vault,
+            "maxDeposit(address)",
+            &[&format!("{:#x}", fx.agent())],
+        )
         .expect("read rmAGENT maxDeposit");
     assert!(
         word(&max, 0).chars().all(|c| c == '0'),

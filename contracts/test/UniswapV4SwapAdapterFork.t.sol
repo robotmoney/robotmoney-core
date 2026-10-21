@@ -86,6 +86,14 @@ contract UniswapV4SwapAdapterForkTest is Test {
 
     /// @notice USDC to RM and back through the real PoolManager. The recorder is poked by the swaps.
     function test_fork_swapUsdcToRmAndBackThroughTheRealPoolManager() public {
+        // RM_PARKED (core issue 1903, ADR-0015, owner decision 2026-10-21): the live RM/USDC pool holds L 6.476e13 (about 0.11 USDC), so a 2 USDC round trip
+        // measures that pool's depth, not the adapter. The test runs again when RM leaves `parked.entries`. The bound is not changed.
+        if (vm.keyExistsJson(cfg, ".parked.entries[0]")) {
+            vm.skip(
+                true,
+                "RM_PARKED (core 1903, ADR-0015): the live RM/USDC pool is too thin for a 2 USDC round trip"
+            );
+        }
         rec.grow(10);
         vm.warp(block.timestamp + 20);
         uint256 usdcIn = 2e6;
