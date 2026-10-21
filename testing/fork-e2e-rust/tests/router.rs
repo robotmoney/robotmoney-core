@@ -45,6 +45,7 @@ use std::process::Command;
 
 use alloy_primitives::{keccak256, Address, Bytes, U256};
 use alloy_sol_types::sol;
+use rmpc_fork_e2e::registration::register_agent;
 use rmpc_fork_e2e::{skip_if_no_fork, ForkFixture};
 use serde_json::{json, Value};
 
@@ -174,7 +175,7 @@ sol! {
             address[] allowedSourceVaults;
         }
 
-        function authorizeAgent(address agent, AgentPolicy calldata p) external;
+        function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external;
         function depositTo(
             bytes32 orderId,
             uint256 amount,
@@ -909,7 +910,7 @@ fn agent_gateway_router_deposit() {
         )
         .expect("setWeights");
 
-    // Authorize the agent. The owner calls `gateway.authorizeAgent(agent, policy)`.
+    // Authorize the agent. The owner calls consent, commit and reveal.
     // Policy: active=true, validUntil = now + 3600, maxPerPayment = deposit_amount,
     // maxPerWindow = deposit_amount, shareReceiver = owner.address,
     // allowedDestinations = [router].
@@ -926,17 +927,13 @@ fn agent_gateway_router_deposit() {
         maxWithdrawPerWindow: U256::ZERO,
         allowedSourceVaults: vec![],
     };
-    owner
-        .send(
-            gateway,
-            &IGateway::authorizeAgentCall {
-                agent: agent.address,
-                p: policy,
-            },
-            U256::ZERO,
-            500_000,
-        )
-        .expect("authorizeAgent");
+    register_agent(&fx, gateway, &owner, &agent, |salt| {
+        IGateway::revealAuthorizationCall {
+            agent: agent.address,
+            salt,
+            p: policy.clone(),
+        }
+    });
 
     eprintln!(
         "[agent_gateway_router_deposit] agent authorized: agent={:#x} shareReceiver={:#x}",
@@ -1232,7 +1229,7 @@ fn deposit_router_default_gas_clears_gateway_floor() {
         "[deposit_router_default_gas_clears_gateway_floor] router={router:#x} gateway={gateway:#x} legs={LEGS}"
     );
 
-    // Authorize the agent (ADMIN_ROLE caller, no consent needed) for the router only.
+    // Register the agent (consent, commit, reveal) for the router only.
     let now_secs: u64 = fx.chain_now().expect("read chain time");
     let policy = IGateway::AgentPolicy {
         active: true,
@@ -1247,17 +1244,13 @@ fn deposit_router_default_gas_clears_gateway_floor() {
         maxWithdrawPerWindow: U256::ZERO,
         allowedSourceVaults: vec![],
     };
-    owner
-        .send(
-            gateway,
-            &IGateway::authorizeAgentCall {
-                agent: agent.address,
-                p: policy,
-            },
-            U256::ZERO,
-            800_000,
-        )
-        .expect("authorizeAgent");
+    register_agent(&fx, gateway, &owner, &agent, |salt| {
+        IGateway::revealAuthorizationCall {
+            agent: agent.address,
+            salt,
+            p: policy.clone(),
+        }
+    });
     approve_usdc(&agent, usdc, gateway, deposit_amount);
 
     // rmpc signs as the agent through a software keystore.

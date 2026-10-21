@@ -32,6 +32,7 @@ use std::path::PathBuf;
 
 use alloy_primitives::{keccak256, Address, Bytes, U256};
 use alloy_sol_types::{sol, SolCall};
+use rmpc_fork_e2e::registration::register_agent;
 use rmpc_fork_e2e::{skip_if_no_fork, ForkFixture};
 use serde_json::Value;
 
@@ -115,7 +116,7 @@ sol! {
             address[] allowedSourceVaults;
         }
 
-        function authorizeAgent(address agent, AgentPolicy calldata p) external;
+        function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external;
 
         /// Full withdraw() signature as merged in issue #311.
         function withdraw(
@@ -380,17 +381,13 @@ fn agent_withdrawal_happy_path() {
         maxWithdrawPerWindow: deposit_amount,
         allowedSourceVaults: vec![],
     };
-    admin
-        .send(
-            gateway,
-            &IGateway::authorizeAgentCall {
-                agent: agent.address,
-                p: policy,
-            },
-            U256::ZERO,
-            500_000,
-        )
-        .expect("authorizeAgent");
+    register_agent(&fx, gateway, &agent, &agent, |salt| {
+        IGateway::revealAuthorizationCall {
+            agent: agent.address,
+            salt,
+            p: policy.clone(),
+        }
+    });
 
     // Agent deposits USDC via gateway.deposit() → shares land at agent.address.
     approve_usdc(&agent, usdc, gateway, deposit_amount);
@@ -575,17 +572,13 @@ fn agent_withdrawal_redirect_blocked() {
         maxWithdrawPerWindow: deposit_amount,
         allowedSourceVaults: vec![],
     };
-    admin
-        .send(
-            gateway,
-            &IGateway::authorizeAgentCall {
-                agent: agent.address,
-                p: policy,
-            },
-            U256::ZERO,
-            500_000,
-        )
-        .expect("authorizeAgent");
+    register_agent(&fx, gateway, &agent, &agent, |salt| {
+        IGateway::revealAuthorizationCall {
+            agent: agent.address,
+            salt,
+            p: policy.clone(),
+        }
+    });
 
     // Deposit so agent holds shares.
     approve_usdc(&agent, usdc, gateway, deposit_amount);
@@ -693,17 +686,13 @@ fn agent_withdrawal_window_cap() {
         maxWithdrawPerWindow: half_amount,
         allowedSourceVaults: vec![],
     };
-    admin
-        .send(
-            gateway,
-            &IGateway::authorizeAgentCall {
-                agent: agent.address,
-                p: policy,
-            },
-            U256::ZERO,
-            500_000,
-        )
-        .expect("authorizeAgent");
+    register_agent(&fx, gateway, &agent, &agent, |salt| {
+        IGateway::revealAuthorizationCall {
+            agent: agent.address,
+            salt,
+            p: policy.clone(),
+        }
+    });
 
     // Deposit full_amount so agent holds full_amount shares.
     approve_usdc(&agent, usdc, gateway, full_amount);
@@ -989,17 +978,13 @@ fn router_withdrawal() {
         maxWithdrawPerWindow: deposit_amount * U256::from(10u64),
         allowedSourceVaults: vec![vault_a, vault_b],
     };
-    admin
-        .send(
-            gateway,
-            &IGateway::authorizeAgentCall {
-                agent: agent.address,
-                p: policy,
-            },
-            U256::ZERO,
-            500_000,
-        )
-        .expect("authorizeAgent");
+    register_agent(&fx, gateway, &share_receiver, &agent, |salt| {
+        IGateway::revealAuthorizationCall {
+            agent: agent.address,
+            salt,
+            p: policy.clone(),
+        }
+    });
 
     // ── Deposit via router ───────────────────────────────────────────────────
     // Agent approves gateway for USDC.

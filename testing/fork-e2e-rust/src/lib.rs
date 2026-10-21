@@ -58,6 +58,7 @@ pub mod base_testnet_addresses;
 pub mod deployed;
 /// Governed core contracts behind ERC-1967 proxies, deployed from their artifacts (core 1808).
 pub mod governed;
+pub mod registration;
 pub mod scenarios;
 
 // -- Deployed addresses module is re-exported for ergonomic use ----
