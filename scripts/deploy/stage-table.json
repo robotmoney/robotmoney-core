@@ -408,8 +408,6 @@
         "ADMIN_ADDRESS",
         "PAUSER_ADDRESS",
         "SHARE_RECEIVER_ADDRESS",
-        "VAULT_ADDRESS",
-        "ROUTER_ADDRESS",
         "GATEWAY_UPGRADE_TIMELOCK",
         "UPGRADE_MODE",
         "DEPLOYMENT_OUT"

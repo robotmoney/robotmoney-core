@@ -16,7 +16,7 @@ const lastError = (w: World) => w.logs().filter((l) => l.event === "run.failed")
 const runManifest = (w: World) => JSON.parse(readFileSync(join(w.evidence, "publish-run.json"), "utf8"));
 const mdir = (w: World) => join(w.coreDir, "deployments", "918453");
 const sha = (p: string) => createHash("sha256").update(readFileSync(p)).digest("hex");
-const VAULTS_FILES = ["vault.json", "router.json", "libs.json"];
+const VAULTS_FILES = ["vault.json", "router.json", "libs.json"]; // every vaults manifest stays unchanged; only libs.json is consumed
 
 describe("the gateway system run (issue 1892)", () => {
   test("it deploys the gateway then the handover and nothing else: no Safe, no control proof, no vaults stage, no AGENT_ name", async () => {
@@ -34,8 +34,8 @@ describe("the gateway system run (issue 1892)", () => {
     expect(gw.env.GATEWAY_UPGRADE_TIMELOCK.toLowerCase()).toBe(GW_TL);
     expect(gw.env.SAFE_ADDRESS).toBeUndefined();
     expect(gw.env.TIMELOCK_MIN_DELAY).toBeUndefined();
-    expect(gw.env.VAULT_ADDRESS).toBe("0x0000000000000000000000000000000000001001");
-    expect(gw.env.ROUTER_ADDRESS).toBe("0x0000000000000000000000000000000000001003");
+    expect(gw.env.VAULT_ADDRESS).toBeUndefined(); // the gateway binds no vault and no router (core 1895)
+    expect(gw.env.ROUTER_ADDRESS).toBeUndefined();
     const ho = forgeScripts(w).find((c: any) => c.args.includes("--broadcast") && String(c.args[1]).includes("HandoverGateway"));
     expect(ho.env.GATEWAY_ADMIN_ADDRESS.toLowerCase()).toBe("0x000000000000000000000000000000000000a0c1");
     // the last forge compile of a run decides the state of out/ the vaults verifier compares the deployed libraries with: the handover compiles with the same --libraries as the stages before it
@@ -55,15 +55,15 @@ describe("the gateway system run (issue 1892)", () => {
     const w = world({ system: "gateway", startNonce: 0 });
     const before = Object.fromEntries(VAULTS_FILES.map((f) => [f, sha(join(mdir(w), f))]));
     expect(await w.run(["--stage", "deploy"])).toBe(0);
-    expect(runManifest(w).consumedVaultsManifests).toEqual({ vault: before["vault.json"], router: before["router.json"], libs: before["libs.json"] });
+    expect(runManifest(w).consumedVaultsManifests).toEqual({ libs: before["libs.json"] });
     for (const f of VAULTS_FILES) expect(sha(join(mdir(w), f)), f).toBe(before[f]!);
   });
 
   test("a gateway run before a vaults run is refused before any signer or forge call", async () => {
     const w = world({ system: "gateway", startNonce: 0 });
-    rmSync(join(mdir(w), "router.json"));
+    rmSync(join(mdir(w), "libs.json"));
     expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.INPUT_MISSING);
-    expect(lastError(w).message).toContain("router.json");
+    expect(lastError(w).message).toContain("libs.json");
     expect(forgeScripts(w).filter((c: any) => c.args.includes("--broadcast"))).toEqual([]);
   });
 

@@ -137,7 +137,7 @@ describe("the gateway system verifier (issue 1892)", () => {
   });
   test("a vaults manifest that changed since the gateway run began fails; a run that recorded no hash fails too", async () => {
     const a = gatewayWorld();
-    writeFileSync(join(a.w.manifestDir, "router.json"), JSON.stringify({ chain_id: 8453, router: ROUTER, tampered: true }));
+    writeFileSync(join(a.w.manifestDir, "libs.json"), JSON.stringify({ chain_id: 8453, tampered: true }));
     expect(failed(await verifyDeployment(a.opts))).toEqual(["vaults system: the manifests this run consumed are unchanged since it began"]);
     const b = gatewayWorld();
     expect(failed(await verifyDeployment({ ...b.opts, consumedVaultsManifests: undefined }))).toEqual(["vaults system: the manifests this run consumed are unchanged since it began"]);

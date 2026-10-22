@@ -5,7 +5,7 @@ description: "The gateway system names its own upgrade timelock and hands its ro
 
 # GatewaySystemDeployTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7c2e53fe327c80d91d5d140cb198d84a94ad506c/contracts/test/GatewaySystemDeploy.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58a774e0370fd9946d743a40f01792cf059929e7/contracts/test/GatewaySystemDeploy.t.sol)
 
 **Inherits:** Test
 
@@ -44,12 +44,6 @@ address internal govHolder = makeAddr("gw-gov");
 address internal tl = makeAddr("gw-upgrade-timelock");
 ```
 
-### router
-
-```solidity
-address internal router = makeAddr("gw-router");
-```
-
 ### gw
 
 ```solidity
@@ -72,13 +66,19 @@ HandoverGateway internal h;
 function setUp() public;
 ```
 
-<a id="_upgrade"></a>
+<a id="_upgrade-string"></a>
 
 ### _upgrade
 
 ```solidity
-function _upgrade() internal returns (GatewayUpgradeHarness u);
+function _upgrade(string memory prefix) internal returns (GatewayUpgradeHarness u);
 ```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
 
 **Returns**
 

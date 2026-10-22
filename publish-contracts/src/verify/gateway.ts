@@ -1,7 +1,7 @@
 // The gateway system's verifier (issue 1892). It reads the chain and the gateway system's manifests and checks every postcondition of the gateway run on its own:
 // the gateway proxy and its implementation, the explicit upgrade timelock, the role handover to the explicitly configured admin, and the chain-backed negative invariants
 // (the gateway logged no AgentAuthorized and granted no AGENT_ROLE up to the handover block, so the run left zero agents). It needs no Safe, no vaults-system timelock and
-// no vaults verifier. The vaults system's addresses are read only as inputs (the router and the vault the gateway is bound to), and their manifests must be unchanged.
+// no vaults verifier. The gateway binds no vault and no router (core 1895). It reads the vaults system's libs manifest only (the library it links), and that manifest must be unchanged.
 // AgentOwnershipTransferred is not scanned: the event is gone from the target gateway (historical combined manifests keep their own reading in verify/index.ts).
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -19,8 +19,8 @@ import type { Address, ChainReader, Hex, VerifyOptions, VerifyReport } from "./t
 const HAS_ROLE = "function hasRole(bytes32 role, address account) view returns (bool)";
 const hasRole = async (ch: ChainReader, at: Address, r: Hex, who: Address): Promise<boolean> => (await ch.read(at, HAS_ROLE, [r, who])) as boolean;
 
-/** The vaults system manifests the gateway run consumes (and must leave unchanged): the addresses it binds and the libraries it links. */
-export const CONSUMED_VAULTS_MANIFESTS = ["vault", "router", "libs"] as const;
+/** The vaults system manifests the gateway run consumes (and must leave unchanged): the libraries it links. */
+export const CONSUMED_VAULTS_MANIFESTS = ["libs"] as const;
 
 /** sha256 of each consumed vaults manifest file in `dir`, by name (no .json). A missing file is left out. */
 export function hashConsumedManifests(dir: string): Record<string, string> {
@@ -67,9 +67,9 @@ export async function verifyGatewaySystem(opts: VerifyOptions): Promise<VerifyRe
   } else c.fail("vaults system: the manifests this run consumed are unchanged since it began", "the run recorded no hash of the vaults manifests it consumed");
 
   const gm = files["gateway"], hm = files["gateway-handover"];
-  const gateway = gm.gateway as Address, router = files["router"].router as Address, vault = files["vault"].vault as Address;
-  for (const [n, a] of [["gateway", gateway], ["router", router], ["vault", vault]] as const) c.push(`${n}: manifest address is valid`, isAddress(a), String(a));
-  if (![gateway, router, vault].every(isAddress)) return c.report();
+  const gateway = gm.gateway as Address;
+  c.push("gateway: manifest address is valid", isAddress(gateway), String(gateway));
+  if (!isAddress(gateway)) return c.report();
   const D = sheet.deployer;
 
   // ---- code present and equal to the build (the proxy is the ERC-1967 proxy, the logic is the gateway build)
@@ -86,8 +86,7 @@ export async function verifyGatewaySystem(opts: VerifyOptions): Promise<VerifyRe
     return { ok, detail: ok ? "proxy and implementation runtime hashes equal" : `proxy ${proxyHash} implementation ${implHash} differ from the manifest pins` };
   });
 
-  // ---- bound to the vaults system's router
-  await c.runEq("gateway: router() equals the vaults system router", async () => lc((await chain.read(gateway, "function router() view returns (address)")) as string), lc(router));
+  // ---- bound to nothing of the vaults system (core 1895): no router, no vault
   await c.runEq("gateway: not paused", () => chain.read(gateway, "function depositsPaused() view returns (bool)"), false);
 
   // ---- the explicit upgrade authority: never the vaults timelock by omission

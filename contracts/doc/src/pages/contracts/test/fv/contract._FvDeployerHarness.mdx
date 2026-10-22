@@ -4,7 +4,7 @@ title: "_FvDeployerHarness"
 
 # _FvDeployerHarness
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/fv/DeployAssertions.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58a774e0370fd9946d743a40f01792cf059929e7/contracts/test/fv/DeployAssertions.t.sol)
 
 <i>
 
@@ -12,9 +12,9 @@ Stand-in for the deployer EOA. It holds the constructor-granted roles and
 itself calls `runHandover`, so inside the handover `msg.sender` (the
 address revoked) is this harness — mirroring the broadcast path where the
 deployer key both grants and is revoked. It first delegates the
-role-granting authority (ADMIN_ROLE on all five contracts, plus the
-gateway DEFAULT_ADMIN_ROLE) to `address(script)`, which is what executes
-the script's grant/revoke external calls.
+role-granting authority (ADMIN_ROLE on the vault, registry, router and governance)
+to `address(script)`, which is what executes the script's grant/revoke external
+calls. The handover touches no gateway (issue 1892).
 
 </i>
 
@@ -34,7 +34,7 @@ bytes32 internal constant DEFAULT_ADMIN_ROLE = 0x00;
 
 ## Functions
 
-<a id="grantadminto-address-address-address-address-address-address"></a>
+<a id="grantadminto-address-address-address-address-address"></a>
 
 ### grantAdminTo
 
@@ -42,7 +42,6 @@ bytes32 internal constant DEFAULT_ADMIN_ROLE = 0x00;
 function grantAdminTo(
         address script_,
         address vault_,
-        address gateway_,
         address registry_,
         address router_,
         address governance_
@@ -55,12 +54,11 @@ function grantAdminTo(
 | ---- | ---- | ----------- |
 | script_ | `address` |  |
 | vault_ | `address` |  |
-| gateway_ | `address` |  |
 | registry_ | `address` |  |
 | router_ | `address` |  |
 | governance_ | `address` |  |
 
-<a id="runhandover-deploytimelock-address-address-address-address-address-address-address-uint256-deploytimelock-safespec"></a>
+<a id="runhandover-deploytimelock-address-address-address-address-address-address-uint256-deploytimelock-safespec"></a>
 
 ### runHandover
 
@@ -68,7 +66,6 @@ function grantAdminTo(
 function runHandover(
         DeployTimelock script_,
         address vault_,
-        address gateway_,
         address registry_,
         address router_,
         address governance_,
@@ -85,7 +82,6 @@ function runHandover(
 | ---- | ---- | ----------- |
 | script_ | `DeployTimelock` |  |
 | vault_ | `address` |  |
-| gateway_ | `address` |  |
 | registry_ | `address` |  |
 | router_ | `address` |  |
 | governance_ | `address` |  |

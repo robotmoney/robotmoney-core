@@ -6,16 +6,16 @@ import {Test} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 import {TestERC20} from "./helpers/TestERC20.sol";
-import {MockVault} from "./helpers/MockVault.sol";
 import {DeployGateway} from "../script/DeployGateway.s.sol";
 import {HandoverGateway} from "../script/HandoverGateway.s.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {AgentRegistration} from "./helpers/AgentRegistration.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @dev Exposes the explicit upgrade-config reader of the gateway stage.
 contract GatewayUpgradeHarness is DeployGateway {
-    function readUpgrade() external view returns (UpgradeConfig memory) {
-        return _readExplicitUpgradeConfig("", "GATEWAY_UPGRADE_TIMELOCK");
+    function readUpgrade(string memory prefix) external view returns (UpgradeConfig memory) {
+        return _readExplicitUpgradeConfig(prefix, "GATEWAY_UPGRADE_TIMELOCK");
     }
 }
 
@@ -27,45 +27,44 @@ contract GatewaySystemDeployTest is Test {
     address internal recv = makeAddr("gw-recv");
     address internal govHolder = makeAddr("gw-gov");
     address internal tl = makeAddr("gw-upgrade-timelock");
-    address internal router = makeAddr("gw-router");
     IAccessControl internal gw;
     HandoverGateway internal h;
 
     function setUp() public {
         vm.etch(tl, hex"00");
-        vm.etch(router, hex"00");
         TestERC20 usdc = new TestERC20();
-        MockVault v = new MockVault(address(usdc));
         DeployGateway s = new DeployGateway();
-        DeployGateway.Deployed memory d =
-            s.runInProcessWith(deployer, pauser, recv, address(usdc), address(v), router);
+        DeployGateway.Deployed memory d = s.runInProcessWith(deployer, pauser, recv, address(usdc));
         gw = IAccessControl(address(d.gateway));
         h = new HandoverGateway();
     }
 
-    function _upgrade() internal returns (GatewayUpgradeHarness u) {
+    function _upgrade(string memory prefix) internal returns (GatewayUpgradeHarness u) {
         u = new GatewayUpgradeHarness();
-        vm.setEnv("UPGRADE_MODE", "upgradeable");
+        vm.setEnv(string.concat(prefix, "UPGRADE_MODE"), "upgradeable");
     }
 
     function test_upgradeTimelock_zeroRefused() public {
-        GatewayUpgradeHarness u = _upgrade();
-        vm.setEnv("GATEWAY_UPGRADE_TIMELOCK", vm.toString(address(0)));
+        string memory p = "GWSD_ZERO_";
+        GatewayUpgradeHarness u = _upgrade(p);
+        vm.setEnv(string.concat(p, "GATEWAY_UPGRADE_TIMELOCK"), vm.toString(address(0)));
         vm.expectRevert(bytes("GATEWAY_UPGRADE_TIMELOCK=0"));
-        u.readUpgrade();
+        u.readUpgrade(p);
     }
 
     function test_upgradeTimelock_noCodeRefused() public {
-        GatewayUpgradeHarness u = _upgrade();
-        vm.setEnv("GATEWAY_UPGRADE_TIMELOCK", vm.toString(makeAddr("gw-nocode")));
+        string memory p = "GWSD_NOCODE_";
+        GatewayUpgradeHarness u = _upgrade(p);
+        vm.setEnv(string.concat(p, "GATEWAY_UPGRADE_TIMELOCK"), vm.toString(makeAddr("gw-nocode")));
         vm.expectRevert(bytes("GATEWAY_UPGRADE_TIMELOCK has no code on this chain"));
-        u.readUpgrade();
+        u.readUpgrade(p);
     }
 
     function test_upgradeTimelock_explicitAccepted() public {
-        GatewayUpgradeHarness u = _upgrade();
-        vm.setEnv("GATEWAY_UPGRADE_TIMELOCK", vm.toString(tl));
-        assertEq(u.readUpgrade().timelock, tl);
+        string memory p = "GWSD_OK_";
+        GatewayUpgradeHarness u = _upgrade(p);
+        vm.setEnv(string.concat(p, "GATEWAY_UPGRADE_TIMELOCK"), vm.toString(tl));
+        assertEq(u.readUpgrade(p).timelock, tl);
     }
 
     function test_handover_movesBothRolesAndDeployerKeepsNone() public {
@@ -103,10 +102,10 @@ contract GatewaySystemDeployTest is Test {
             maxPerPayment: 100e6,
             maxPerWindow: 1_000e6,
             shareReceiver: recv,
-            allowedDestinations: new address[](0),
-            assetRecipient: recv,
-            maxWithdrawPerPayment: 10e6,
-            maxWithdrawPerWindow: 100e6,
+            allowedDestinations: CoreProxies.oneDestination(address(0xD357)),
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
             allowedSourceVaults: new address[](0)
         });
         AgentRegistration.registerAs(IGateway(address(gw)), recv, govHolder, p);

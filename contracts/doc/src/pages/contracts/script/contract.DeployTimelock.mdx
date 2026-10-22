@@ -1,27 +1,28 @@
 ---
 title: "DeployTimelock"
-description: "Deploy an OZ TimelockController and complete the privileged-role handover on all five Robot Money contracts (RobotMoneyVault, RobotMoneyGateway, VaultRegistry, PortfolioRouter, RouterGovernance) from the deployer EOA to the TimelockController + an independent emergency hot key."
+description: "Deploy an OZ TimelockController and complete the privileged-role handover on the Robot Money vaults-system contracts (RobotMoneyVault, VaultRegistry, PortfolioRouter, RouterGovernance, ConsensusRecommendationReceipt) from the deployer EOA to the TimelockController + an independent emergency hot key."
 ---
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58a774e0370fd9946d743a40f01792cf059929e7/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
 **Title:** DeployTimelock
 
 Deploy an OZ TimelockController and complete the privileged-role
-handover on all five Robot Money contracts (RobotMoneyVault,
-RobotMoneyGateway, VaultRegistry, PortfolioRouter, RouterGovernance)
+handover on the Robot Money vaults-system contracts (RobotMoneyVault,
+VaultRegistry, PortfolioRouter, RouterGovernance, ConsensusRecommendationReceipt)
 from the deployer EOA to the TimelockController + an independent
 emergency hot key.
 
 After this script runs (ACL-1 / F-01):
-- TimelockController holds ADMIN_ROLE on all five contracts AND the
-Gateway DEFAULT_ADMIN_ROLE (so it can rotate roles).
+- TimelockController holds ADMIN_ROLE on every vault, the registry, the router,
+RouterGovernance and the consensus receipt. The deploy touches no gateway: the
+gateway system has its own run and its own handover (issue 1892, SYS-1).
 - The deployer EOA holds NO privileged role of any kind:
-no ADMIN_ROLE on any contract, no Gateway DEFAULT_ADMIN_ROLE, and
+no ADMIN_ROLE on any contract and
 no vault EMERGENCY_ROLE.
 - The deploy registers no gateway agent and hands none over. An agent
 is registered only by its depositor through commit/reveal consent
@@ -46,7 +47,6 @@ up the role only after a second proposer holds it.
 
 Required env vars:
 VAULT_ADDRESS          — RobotMoneyVault
-GATEWAY_ADDRESS        — RobotMoneyGateway
 REGISTRY_ADDRESS       — VaultRegistry
 ROUTER_ADDRESS         — PortfolioRouter
 GOVERNANCE_ADDRESS     — RouterGovernance
@@ -272,7 +272,7 @@ bytes32 public constant SAFE_FALLBACK_HANDLER_SLOT =
 ### run
 
 Broadcast entrypoint. Reads env vars, deploys timelock, and
-transfers ADMIN_ROLE on all five contracts (plus the optional
+transfers ADMIN_ROLE on the vaults-system contracts (plus the optional
 consensus receipt handover — issue #1319).
 
 ```solidity
@@ -314,7 +314,7 @@ function _runFrom(string memory prefix) internal returns (Deployed memory d);
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="runinprocess-address-address-address-address-address-address-address-uint256-safespec"></a>
+<a id="runinprocess-address-address-address-address-address-address-uint256-safespec"></a>
 
 ### runInProcess
 
@@ -327,7 +327,6 @@ no gateway agent (ACL-9).
 ```solidity
 function runInProcess(
         address vault_,
-        address gateway_,
         address registry_,
         address router_,
         address governance_,
@@ -343,7 +342,6 @@ function runInProcess(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | vault_ | `address` |  |
-| gateway_ | `address` |  |
 | registry_ | `address` |  |
 | router_ | `address` |  |
 | governance_ | `address` |  |
@@ -358,7 +356,7 @@ function runInProcess(
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="runinprocessvaults-address-address-address-address-address-address-address-uint256-safespec"></a>
+<a id="runinprocessvaults-address-address-address-address-address-address-uint256-safespec"></a>
 
 ### runInProcessVaults
 
@@ -369,7 +367,6 @@ sets up prank context. No JSON is written; no env vars are read.
 ```solidity
 function runInProcessVaults(
         address[] memory vaults_,
-        address gateway_,
         address registry_,
         address router_,
         address governance_,
@@ -385,7 +382,6 @@ function runInProcessVaults(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | vaults_ | `address[]` |  |
-| gateway_ | `address` |  |
 | registry_ | `address` |  |
 | router_ | `address` |  |
 | governance_ | `address` |  |
@@ -426,7 +422,7 @@ function _single(address v) internal pure returns (address[] memory a);
 | ---- | ---- | ----------- |
 | a | `address[]` |  |
 
-<a id="runinprocesswithreceipt-address-address-address-address-address-address-address-uint256-receipthandover-safespec"></a>
+<a id="runinprocesswithreceipt-address-address-address-address-address-address-uint256-receipthandover-safespec"></a>
 
 ### runInProcessWithReceipt
 
@@ -437,7 +433,6 @@ context. No JSON is written; no env vars are read.
 ```solidity
 function runInProcessWithReceipt(
         address vault_,
-        address gateway_,
         address registry_,
         address router_,
         address governance_,
@@ -454,7 +449,6 @@ function runInProcessWithReceipt(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | vault_ | `address` |  |
-| gateway_ | `address` |  |
 | registry_ | `address` |  |
 | router_ | `address` |  |
 | governance_ | `address` |  |
@@ -966,7 +960,6 @@ struct Deployed {
         TimelockController timelock;
         /// Every vault handed over (VAULT_ADDRESSES), all treated the same way.
         address[] vaults;
-        address gateway;
         address registry;
         address router;
         address governance;
@@ -986,7 +979,6 @@ struct Deployed {
 | ---- | ---- | ----------- |
 | timelock | `TimelockController` |  |
 | vaults | `address[]` |  |
-| gateway | `address` |  |
 | registry | `address` |  |
 | router | `address` |  |
 | governance | `address` |  |

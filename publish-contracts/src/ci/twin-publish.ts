@@ -202,7 +202,7 @@ if (env("GATEWAY_IN") === "true") {
   const vaultsSheet = parseSheetText(readFileSync(sheet, "utf8"));
   const need = (k: string): string => vaultsSheet[k] ?? fail(`the merged sheet has no ${k}`);
   const timelockAddr = (JSON.parse(readFileSync(join(manifestDir, "timelock.json"), "utf8")) as Record<string, string>).timelock ?? fail("timelock.json has no timelock");
-  const consumed = ["vault", "router", "libs"].map((n) => join(manifestDir, `${n}.json`));
+  const consumed = ["libs"].map((n) => join(manifestDir, `${n}.json`));
   const hashes = () => consumed.map((f) => createHash("sha256").update(readFileSync(f)).digest("hex"));
   const before = hashes();
   const gsheet = (extra: string[], name: string): string => {

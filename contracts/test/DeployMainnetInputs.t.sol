@@ -79,8 +79,6 @@ contract DeployMainnetInputsTest is Test {
         _set(prefix, "FEE_RECIPIENT", vm.toString(treasury));
         _set(prefix, "TVL_CAP", "2000000000000");
         _set(prefix, "PER_DEPOSIT_CAP", "100000000000");
-        _set(prefix, "VAULT_ADDRESS", vm.toString(makeAddr("inputs-vault")));
-        _set(prefix, "ROUTER_ADDRESS", vm.toString(makeAddr("inputs-router")));
     }
 
     /// @dev Every required input. Exit fee and seed are explicit: the scripts have no defaults.
@@ -103,7 +101,6 @@ contract DeployMainnetInputsTest is Test {
         assertEq(r.tvlCap, 2_000_000_000_000);
         assertEq(r.perDepositCap, 100_000_000_000);
         assertEq(gp.admin, admin);
-        assertEq(gp.router, makeAddr("inputs-router"), "router comes from ROUTER_ADDRESS");
         assertEq(r.exitFeeBps, 25);
         assertEq(r.usdcAddress, h.CANONICAL_BASE_USDC(), "USDC is the constant on every chain");
         assertEq(h.seed(p), 1_000_000_000, "seed override");
@@ -156,15 +153,13 @@ contract DeployMainnetInputsTest is Test {
     }
 
     function _copyAllExcept(string memory from, string memory to, string memory skip) internal {
-        string[8] memory keys = [
+        string[6] memory keys = [
             "ADMIN_ADDRESS",
             "PAUSER_ADDRESS",
             "SHARE_RECEIVER_ADDRESS",
             "FEE_RECIPIENT",
             "TVL_CAP",
-            "PER_DEPOSIT_CAP",
-            "VAULT_ADDRESS",
-            "ROUTER_ADDRESS"
+            "PER_DEPOSIT_CAP"
         ];
         for (uint256 i = 0; i < keys.length; i++) {
             if (keccak256(bytes(keys[i])) == keccak256(bytes(skip))) continue;
@@ -182,15 +177,6 @@ contract DeployMainnetInputsTest is Test {
 
     function test_missingPerDepositCap_reverts() public {
         _assertMissing("RM_INPUTS_M_PDC_", "PER_DEPOSIT_CAP");
-    }
-
-    /// @notice The gateway stage has no default router: ROUTER_ADDRESS must be set (core 1493).
-    function test_missingRouterAddress_reverts() public {
-        _assertMissing("RM_INPUTS_M_ROUTER_", "ROUTER_ADDRESS");
-    }
-
-    function test_missingVaultAddress_reverts() public {
-        _assertMissing("RM_INPUTS_M_VAULT_", "VAULT_ADDRESS");
     }
 
     // --- malformed values revert -------------------------------------------------------------
@@ -261,7 +247,7 @@ contract DeployMainnetInputsTest is Test {
     /// @notice Every required input reverts when unset, on anvil (31337) and on the Twin chain
     ///         (918453) alike (ported from dev #1541 `test_missingInputs_revertOnEveryChain`).
     function test_missingInputs_revertOnEveryChain() public {
-        string[10] memory names = [
+        string[8] memory names = [
             "ADMIN_ADDRESS",
             "FEE_RECIPIENT",
             "TVL_CAP",
@@ -269,8 +255,6 @@ contract DeployMainnetInputsTest is Test {
             "EXIT_FEE_BPS",
             "PAUSER_ADDRESS",
             "SHARE_RECEIVER_ADDRESS",
-            "VAULT_ADDRESS",
-            "ROUTER_ADDRESS",
             "SEED_DEPOSIT_USDC"
         ];
         uint256[2] memory chains = [uint256(31337), uint256(918453)];
