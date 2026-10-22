@@ -159,7 +159,7 @@ describe("each proxy label fails on its own defect", () => {
     expect(failed(await verifyDeployment(w.opts))).toEqual([L("governance", 7), CLAIM_LABEL]);
     const n = buildWorld();
     delete n.opts.coreDir;
-    expect(failed(await verifyDeployment(n.opts))).toEqual([...ALL.map((x) => L(x, 7)), CLAIM_LABEL]);
+    expect(failed(await verifyDeployment(n.opts))).toEqual(["vault[rmAGENT]: lists exactly the shortlist asset of the config", ...ALL.map((x) => L(x, 7)), CLAIM_LABEL]);
   });
   test("a sheet with no release mode fails the mode label and every freeze and manifest-mode label", async () => {
     const w = buildWorld();

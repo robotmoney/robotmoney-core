@@ -430,6 +430,8 @@ export function buildWorld(chainId = 8453): World {
   }
   // the storage-layout snapshots and the pins the layout identifiers hash, as in the core checkout
   const coreDir = join(dir, "core");
+  mkdirSync(join(coreDir, "config"), { recursive: true });
+  writeFileSync(join(coreDir, "config", "agent-token-shortlist.json"), JSON.stringify({ shortlist: [{ symbol: "RM", token: RM_TOKEN }] }));
   for (const s of table.stages) for (const p of s.proxies ?? []) { mkdirSync(join(coreDir, dirname(p.layout)), { recursive: true }); writeFileSync(join(coreDir, p.layout), JSON.stringify({ contract: p.contract })); }
   writeFileSync(join(coreDir, table.upgradeAuthority!.layoutPins), JSON.stringify({ pins: true }));
 

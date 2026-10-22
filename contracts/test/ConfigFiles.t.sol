@@ -98,28 +98,44 @@ contract ConfigFilesTest is Test {
         assertEq(id, j.readBytes32(string.concat(b, ".poolId")));
     }
 
-    /// @notice BNKR, the rmAGENT test asset while RM is parked (ADR-0016): a hookless Uniswap V4 USDC pool whose key hashes to the pinned pool id.
-    function test_Config_agentBnkrTestAssetIsPinnedOnItsHooklessV4Pool() public view {
+    /// @notice The listed asset (`shortlist[0]`) is hookless, paired with USDC, and its key hashes to its pool id. While RM is parked the listed asset is BNKR, the
+    ///         rmAGENT test asset (ADR-0016), pinned below. Any other listed token fails.
+    function test_Config_listedAssetIsPinnedOnItsHooklessV4Pool() public view {
         string memory j = vm.readFile("config/agent-token-shortlist.json");
-        if (!vm.keyExistsJson(j, ".parked.entries[0]")) return; // RM reactivated: the shortlist holds RM alone
-        assertEq(j.readString(".shortlist[0].symbol"), "BNKR");
-        assertFalse(vm.keyExistsJson(j, ".shortlist[1]"), "BNKR only");
-        assertEq(j.readAddress(".shortlist[0].token"), 0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b);
-        assertEq(j.readUint(".shortlist[0].poolKey.fee"), 3000);
-        assertEq(j.readInt(".shortlist[0].poolKey.tickSpacing"), 60);
+        assertTrue(vm.keyExistsJson(j, ".shortlist[0]"), "rmAGENT lists an asset");
+        assertFalse(vm.keyExistsJson(j, ".shortlist[1]"), "one listed asset");
+        address token = j.readAddress(".shortlist[0].token");
+        assertEq(j.readAddress(".shortlist[0].poolKey.currency0"), token, "token sorts first");
+        assertEq(
+            j.readAddress(".shortlist[0].poolKey.currency1"),
+            0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913,
+            "paired with USDC"
+        );
         assertEq(j.readAddress(".shortlist[0].poolKey.hooks"), address(0), "hookless pool");
+        assertEq(
+            j.readUint(".shortlist[0].poolKey.fee"), j.readUint(".shortlist[0].poolFee"), "pool fee"
+        );
         bytes32 id = keccak256(
             abi.encode(
-                j.readAddress(".shortlist[0].poolKey.currency0"),
+                token,
                 j.readAddress(".shortlist[0].poolKey.currency1"),
                 uint24(j.readUint(".shortlist[0].poolKey.fee")),
                 int24(j.readInt(".shortlist[0].poolKey.tickSpacing")),
                 j.readAddress(".shortlist[0].poolKey.hooks")
             )
         );
-        assertEq(id, 0x87a44b2ff90d59448342017e80c513fd469c9f5edc34db815436a5d984000f52);
-        assertEq(j.readBytes32(".shortlist[0].poolId"), id);
-        assertEq(j.readUint(".maxSlippageBps"), 300);
+        assertEq(j.readBytes32(".shortlist[0].poolId"), id, "the key hashes to the pool id");
+        if (token == 0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b) {
+            assertEq(j.readString(".shortlist[0].symbol"), "BNKR");
+            assertEq(j.readUint(".shortlist[0].poolKey.fee"), 3000);
+            assertEq(j.readInt(".shortlist[0].poolKey.tickSpacing"), 60);
+            assertEq(id, 0x87a44b2ff90d59448342017e80c513fd469c9f5edc34db815436a5d984000f52);
+            assertEq(j.readUint(".maxSlippageBps"), 300);
+        } else {
+            assertEq(token, 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3, "BNKR or RM only");
+            assertEq(j.readUint(".shortlist[0].poolKey.fee"), 29100);
+            assertEq(j.readUint(".maxSlippageBps"), 500);
+        }
     }
 
     function test_Config_agentShortlistCarriesSwapRouter02() public view {

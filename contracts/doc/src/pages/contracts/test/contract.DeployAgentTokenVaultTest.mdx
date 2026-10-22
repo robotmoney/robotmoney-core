@@ -5,7 +5,7 @@ description: "rmAGENT script: paused and registered at launch, holding RM on the
 
 # DeployAgentTokenVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/74e0ed2d92d98f84ac717869d06a1091d6abb6a6/contracts/test/DeployAgentTokenVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7f11d4667b227734a53d1df9c820ed6d77827df0/contracts/test/DeployAgentTokenVault.t.sol)
 
 **Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
 
@@ -325,38 +325,46 @@ The shipped launch config lists BNKR alone (the rmAGENT test asset, ADR-0016) an
 function test_launchConfigShortlistIsBnkrWithRmParkedOrRmOnly() public view;
 ```
 
-<a id="_v4worldbnkr"></a>
+<a id="_v4worldof-string"></a>
 
-### _v4WorldBnkr
+### _v4WorldOf
 
 <i>
 
-The V4 world of the BNKR test asset: the PoolManager double with the BNKR/USDC 0.30% pool, BNKR code at its real address and a warm recorder.
+The V4 world of the SHIPPED shortlist entry, whatever its symbol (BNKR while RM is parked, ADR-0016, or RM once reactivated): the PoolManager double
+with the entry's pool initialised, the token code at its real address and a warm recorder for the entry's PoolKey.
 
 </i>
 
 ```solidity
-function _v4WorldBnkr() internal;
+function _v4WorldOf(string memory json) internal;
 ```
 
-<a id="test_bnkrtestasset_shippedconfigdeploysanonemptypausedregisteredvault"></a>
+**Parameters**
 
-### test_bnkrTestAsset_shippedConfigDeploysANonEmptyPausedRegisteredVault
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
 
-The SHIPPED config (BNKR test asset, RM parked) runs through the real script: a paused, registered rmAGENT with one V4 asset, BNKR, the recorder as its pool.
+<a id="test_shippedshortlist_deploysitsonev4assetpausedandregistered"></a>
+
+### test_shippedShortlist_deploysItsOneV4AssetPausedAndRegistered
+
+The SHIPPED config runs through the real script: a paused, registered rmAGENT with exactly the one V4 asset the config lists (BNKR while RM is parked),
+the recorder as its pool and the swap bound the config sets.
 
 ```solidity
-function test_bnkrTestAsset_shippedConfigDeploysANonEmptyPausedRegisteredVault() public;
+function test_shippedShortlist_deploysItsOneV4AssetPausedAndRegistered() public;
 ```
 
-<a id="test_bnkrtestasset_shippedconfigparses"></a>
+<a id="test_shippedshortlist_parsesasonehooklessv4assetwithitspins"></a>
 
-### test_bnkrTestAsset_shippedConfigParses
+### test_shippedShortlist_parsesAsOneHooklessV4AssetWithItsPins
 
-The shipped BNKR entry parses through the script parser: hookless, sorted, and the key hashes to the pinned pool id.
+The shipped shortlist entry parses through the script parser: one hookless V4 asset whose key hashes to its pool id, with BNKR's pins asserted while it is listed.
 
 ```solidity
-function test_bnkrTestAsset_shippedConfigParses() public;
+function test_shippedShortlist_parsesAsOneHooklessV4AssetWithItsPins() public;
 ```
 
 <a id="test_rmparked_emptyvaultrevertsexceededmaxdepositevenunpaused"></a>

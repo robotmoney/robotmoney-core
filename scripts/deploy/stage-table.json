@@ -26,7 +26,7 @@
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/recorder.json",
-      "manifestNotes": "The permissionless Uniswap V4 price recorder for the RM/USDC pool (core 1676). It runs right after libs so the 1800 s price history accumulates while the other stages run. The runner waits for a full window of history before the agent stage. While RM is parked the pool is the BNKR test asset pool of the shortlist (ADR-0016). No role is involved.",
+      "manifestNotes": "The permissionless Uniswap V4 price recorder for the V4 pool of the shortlist entry (the BNKR/USDC test pool while RM is parked, ADR-0016; core 1676). It runs right after libs so the 1800 s price history accumulates while the other stages run. The runner waits for a full window of history before the agent stage. While RM is parked the pool is the BNKR test asset pool of the shortlist (ADR-0016). No role is involved.",
       "libraries": [],
       "vault": null
     },

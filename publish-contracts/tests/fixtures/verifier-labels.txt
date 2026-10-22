@@ -196,7 +196,7 @@ vault[rmAGENT]: navDeviationGuardBps equals sheet
 vault[rmAGENT]: navDeviationGuardBps above zero
 vault[rmAGENT]: pool liquidity meets the sheet floor
 vault[rmAGENT]: emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault
-vault[rmAGENT]: holds RM as its one asset
+vault[rmAGENT]: lists exactly the shortlist asset of the config
 vault[rmAGENT]: asset row is venue V4 with the price recorder as its pool
 vault[rmAGENT]: V4 adapter codehash is allowed
 vault[rmAGENT]: V4 adapter is bound to the recorder, the PoolManager and the pool key

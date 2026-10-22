@@ -239,59 +239,77 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
         }
     }
 
-    /// @dev The V4 world of the BNKR test asset: the PoolManager double with the BNKR/USDC 0.30% pool, BNKR code at its real address and a warm recorder.
-    function _v4WorldBnkr() internal {
+    /// @dev The V4 world of the SHIPPED shortlist entry, whatever its symbol (BNKR while RM is parked, ADR-0016, or RM once reactivated): the PoolManager double
+    ///      with the entry's pool initialised, the token code at its real address and a warm recorder for the entry's PoolKey.
+    function _v4WorldOf(string memory json) internal {
         vm.warp(1_700_000_000);
+        address token = json.readAddress(".shortlist[0].token");
+        uint24 fee = uint24(json.readUint(".shortlist[0].poolKey.fee"));
+        int24 spacing = int24(json.readInt(".shortlist[0].poolKey.tickSpacing"));
         vm.etch(PM_ADDR, address(new MockV4PoolManager()).code);
-        vm.etch(BNKR_TOKEN, address(new TestERC20()).code);
+        vm.etch(token, address(new TestERC20()).code);
         IPoolManagerV4.PoolKey memory k =
-            IPoolManagerV4.PoolKey(BNKR_TOKEN, BASE_USDC, 3000, 60, address(0));
+            IPoolManagerV4.PoolKey(token, BASE_USDC, fee, spacing, address(0));
         MockV4PoolManager(PM_ADDR).initializePool(k, -356605, 1e18);
-        recorder = new UniswapV4PriceRecorder(PM_ADDR, BNKR_TOKEN, BASE_USDC, 3000, 60, address(0));
+        recorder = new UniswapV4PriceRecorder(PM_ADDR, token, BASE_USDC, fee, spacing, address(0));
         _warm(recorder);
     }
 
-    /// @notice The SHIPPED config (BNKR test asset, RM parked) runs through the real script: a paused, registered rmAGENT with one V4 asset, BNKR, the recorder as its pool.
-    function test_bnkrTestAsset_shippedConfigDeploysANonEmptyPausedRegisteredVault() public {
-        if (!_rmParked()) return; // reactivated: test_deploy_addsRmAndRegistersPaused covers the RM deploy
-        _v4WorldBnkr();
+    /// @notice The SHIPPED config runs through the real script: a paused, registered rmAGENT with exactly the one V4 asset the config lists (BNKR while RM is parked),
+    ///         the recorder as its pool and the swap bound the config sets.
+    function test_shippedShortlist_deploysItsOneV4AssetPausedAndRegistered() public {
         string memory json = vm.readFile(SHIPPED);
+        _v4WorldOf(json);
         BasketVaultDeployBase.Params memory p = _params();
         p.swapRouter = _configRouter(json);
         p.recorder = address(recorder);
         BasketVaultDeployBase.Deployed memory d = script.runInProcess(p, json);
         AgentTokenVault v = AgentTokenVault(d.vault);
         assertTrue(v.depositsPaused(), "paused");
-        assertEq(v.assetCount(), 1, "BNKR is the one asset");
+        assertEq(v.assetCount(), 1, "the shortlist lists one asset");
         (address t, address pool, uint24 fee, bool active,, BasketVault.Venue venue) = v.assets(0);
-        assertEq(t, BNKR_TOKEN, "asset is BNKR");
+        assertEq(t, json.readAddress(".shortlist[0].token"), "the asset is the listed token");
         assertEq(pool, address(recorder), "the registered pool is the price recorder");
-        assertEq(uint256(fee), 3000, "fee 3000");
+        assertEq(
+            uint256(fee), json.readUint(".shortlist[0].poolFee"), "the swap fee is the pool fee"
+        );
         assertTrue(active, "active");
         assertEq(uint256(venue), uint256(BasketVault.Venue.V4), "venue V4");
         assertEq(d.tokens.length, 1);
         assertEq(d.recorder, address(recorder));
         assertTrue(d.adapterV4 != address(0), "V4 adapter deployed");
-        assertEq(v.maxSlippageBps(), 300, "the vault default swap bound");
+        assertEq(
+            v.maxSlippageBps(), json.readUint(".maxSlippageBps"), "the swap bound of the config"
+        );
         assertEq(v.maxDeposit(address(this)), 0, "paused: no deposit");
         assertEq(registry.listVaults().length, 1, "registered once");
     }
 
-    /// @notice The shipped BNKR entry parses through the script parser: hookless, sorted, and the key hashes to the pinned pool id.
-    function test_bnkrTestAsset_shippedConfigParses() public {
+    /// @notice The shipped shortlist entry parses through the script parser: one hookless V4 asset whose key hashes to its pool id, with BNKR's pins asserted while it is listed.
+    function test_shippedShortlist_parsesAsOneHooklessV4AssetWithItsPins() public {
+        string memory json = vm.readFile(SHIPPED);
         AgentDeployHarness h = new AgentDeployHarness();
-        BasketVaultDeployBase.Cfg memory cfg = h.parse(vm.readFile(SHIPPED));
-        if (!_rmParked()) return;
-        assertEq(cfg.assets.length, 1);
+        BasketVaultDeployBase.Cfg memory cfg = h.parse(json);
+        assertEq(cfg.assets.length, 1, "one asset");
         BasketVaultDeployBase.AssetCfg memory a = cfg.assets[0];
-        assertEq(a.symbol, "BNKR");
-        assertEq(a.token, BNKR_TOKEN);
-        assertTrue(a.isV4);
-        assertEq(a.poolFee, 3000);
-        assertEq(a.poolId, BNKR_POOL_ID);
+        assertTrue(a.isV4, "a UniswapV4 asset");
+        assertEq(a.pool, address(0), "no V3 pool");
         assertEq(a.key.hooks, address(0), "hookless pool");
-        assertEq(int256(a.key.tickSpacing), int256(60));
-        assertEq(keccak256(abi.encode(a.key)), BNKR_POOL_ID, "the key hashes to the pool id");
+        assertEq(a.key.currency1, BASE_USDC, "paired with USDC");
+        assertEq(a.key.currency0, a.token, "token sorts first");
+        assertEq(uint256(a.poolFee), uint256(a.key.fee), "pool fee equals the key fee");
+        assertEq(keccak256(abi.encode(a.key)), a.poolId, "the key hashes to the pool id");
+        if (a.token == BNKR_TOKEN) {
+            assertEq(a.symbol, "BNKR");
+            assertEq(a.poolFee, 3000);
+            assertEq(int256(a.key.tickSpacing), int256(60));
+            assertEq(a.poolId, BNKR_POOL_ID);
+        } else {
+            assertEq(a.token, RM_TOKEN, "the shortlist lists BNKR or RM, nothing else");
+            assertEq(a.poolFee, 29100);
+            assertEq(int256(a.key.tickSpacing), int256(582));
+            assertEq(a.poolId, RM_POOL_ID);
+        }
     }
 
     /// @notice An empty rmAGENT refuses a deposit even when unpaused: maxDeposit is 0.

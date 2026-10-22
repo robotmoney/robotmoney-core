@@ -5,7 +5,7 @@ description: "Reads the launch config files and pins the facts S2 fixed. Offline
 
 # ConfigFilesTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/74e0ed2d92d98f84ac717869d06a1091d6abb6a6/contracts/test/ConfigFiles.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7f11d4667b227734a53d1df9c820ed6d77827df0/contracts/test/ConfigFiles.t.sol)
 
 **Inherits:** Test
 
@@ -95,14 +95,15 @@ The shipped PoolKey hashes to the configured pool id (a spoofed key cannot share
 function test_Config_agentPoolKeyHashesToThePoolId() public view;
 ```
 
-<a id="test_config_agentbnkrtestassetispinnedonitshooklessv4pool"></a>
+<a id="test_config_listedassetispinnedonitshooklessv4pool"></a>
 
-### test_Config_agentBnkrTestAssetIsPinnedOnItsHooklessV4Pool
+### test_Config_listedAssetIsPinnedOnItsHooklessV4Pool
 
-BNKR, the rmAGENT test asset while RM is parked (ADR-0016): a hookless Uniswap V4 USDC pool whose key hashes to the pinned pool id.
+The listed asset (`shortlist[0]`) is hookless, paired with USDC, and its key hashes to its pool id. While RM is parked the listed asset is BNKR, the
+rmAGENT test asset (ADR-0016), pinned below. Any other listed token fails.
 
 ```solidity
-function test_Config_agentBnkrTestAssetIsPinnedOnItsHooklessV4Pool() public view;
+function test_Config_listedAssetIsPinnedOnItsHooklessV4Pool() public view;
 ```
 
 <a id="test_config_agentshortlistcarriesswaprouter02"></a>

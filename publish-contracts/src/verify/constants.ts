@@ -14,8 +14,6 @@ export const AGENT_ROLE = role("AGENT_ROLE");
 export const COMMITTEE_AGENT_ROLE = role("COMMITTEE_AGENT_ROLE");
 /** The live ROBOTMONEY token, the one asset rmAGENT launches with (core 1554). config/agent-token-shortlist.json pins its code hash. */
 export const RM_TOKEN: Address = "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3";
-/** BNKR (BankrCoin), the rmAGENT test asset while RM is parked (owner decision 2026-10-22, ADR-0016). Not a production sizing: the pool holds about 706 USD of virtual depth. */
-export const BNKR_TOKEN: Address = "0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b";
 export const WEIGHT_SETTER_ROLE = role("WEIGHT_SETTER_ROLE");
 export const WEIGHT_SETTER_ROTATOR_ROLE = role("WEIGHT_SETTER_ROTATOR_ROLE");
 export const WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE = role("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE");
