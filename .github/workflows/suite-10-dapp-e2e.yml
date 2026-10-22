@@ -60,7 +60,7 @@ jobs:
   # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once.
   pin:
     name: twin-pin
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       block: ${{ steps.pin.outputs.block }}
@@ -75,7 +75,7 @@ jobs:
   e2e:
     name: dapp-e2e
     needs: pin
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     defaults:
       run:

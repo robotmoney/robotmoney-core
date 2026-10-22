@@ -100,5 +100,5 @@ jobs:
           # The head repo/branch is pushed, so raw.githubusercontent serves it.
           # Falls back to the pushed ref outside pull_request.
           REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          REF: ${{ github.head_ref || github.ref_name }}
+          REF: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bash scripts/check-skill-url-reachability.sh
