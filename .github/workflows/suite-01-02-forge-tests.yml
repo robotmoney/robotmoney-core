@@ -180,6 +180,11 @@ jobs:
       - name: forge test (four-vault rules, paused router leg and adapter write-off — issue 1705)
         run: FORGE_TEST_MIN_EXECUTED=7 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/{PortfolioRouterPausedLeg,AdapterWriteOffRule}.t.sol"
 
+      # Issue 1912 (ADR-0017): the retire batch of the live four-vault deployment, on a fork-free fixture. Count 4 to 3, the three-entry vector,
+      # deposits revert, redeem and redeemInKind pay, the router splits across three. Named so the log proves the nine tests ran.
+      - name: forge test (retire rmAGENT batch, three-vault router — issue 1912)
+        run: FORGE_TEST_MIN_EXECUTED=9 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/RetireVaultBatch.t.sol"
+
       # Fusion's named evidence files need an execution boundary in the CI log.
       # A whole-suite `forge test` is not enough for a fail-closed external
       # evidence reader to know that an individual file actually ran.
@@ -484,7 +489,7 @@ jobs:
           echo "::endgroup::"
 
       - name: forge test (each vault deploys with the stage table's deposit state — issue 1705)
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/FourVaultInitialState.t.sol"
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/ThreeVaultInitialState.t.sol"
 
       - name: forge test (split-stage vault deposit through the gateway on the fork — core 1485)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/CoreStagesFork.t.sol"

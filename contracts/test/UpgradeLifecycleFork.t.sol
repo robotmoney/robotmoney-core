@@ -194,7 +194,7 @@ contract UpgradeLifecycleForkTest is Test {
 
     /// @dev rmAGENT's launch asset (RM on Uniswap V4) needs the recorder's history; the upgrade
     ///      path is the same base contract for any asset list, so this run gives the agent script
-    ///      the real V3 wETH pool (as FourVaultInitialState.t.sol does).
+    ///      the real V3 wETH pool (as ThreeVaultInitialState.t.sol does).
     function _agentCfg() internal pure returns (string memory) {
         return string.concat(
             '{"swapRouter02":"0x2626664c2603336E57B271c5C0b26F421741e481","shortlist":[',

@@ -1,0 +1,346 @@
+---
+title: "RetireVaultBatchTest"
+description: "The governed retire batch of rmAGENT (ADR-0017, ADR-0009), replayed call by call from the timelock on a four-vault fixture with no fork. rmUSDC, rmPROTO and rmRWA are 1:1 router legs. rmAGENT is the real AgentTokenVault over a flat 1:1 V3 pool double, so its deposit, redeem, redeemInKind, retire and registry link run production code. The batch is the two calls `publish-contracts/src/retire-vault.ts` builds: registry.migrateEligibility(rmAGENT, false, three legs) then registry.retire(rmAGENT), one atomic timelock batch in production. The order is checked on the real contracts: retire first reverts, a four-leg vector after the flip reverts. Nothing here changes PortfolioRouter, VaultRegistry or vault storage."
+---
+
+# RetireVaultBatchTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/RetireVaultBatch.t.sol)
+
+**Inherits:** Test
+
+The governed retire batch of rmAGENT (ADR-0017, ADR-0009), replayed call by call from the timelock on a four-vault fixture with no fork.
+rmUSDC, rmPROTO and rmRWA are 1:1 router legs. rmAGENT is the real AgentTokenVault over a flat 1:1 V3 pool double, so its deposit, redeem,
+redeemInKind, retire and registry link run production code. The batch is the two calls `publish-contracts/src/retire-vault.ts` builds:
+registry.migrateEligibility(rmAGENT, false, three legs) then registry.retire(rmAGENT), one atomic timelock batch in production.
+The order is checked on the real contracts: retire first reverts, a four-leg vector after the flip reverts. Nothing here changes PortfolioRouter,
+VaultRegistry or vault storage.
+
+## Constants
+
+### ONE
+
+```solidity
+uint256 internal constant ONE = 1e6;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### rmUsdc
+
+```solidity
+MockVault internal rmUsdc;
+```
+
+### rmProto
+
+```solidity
+MockVault internal rmProto;
+```
+
+### rmRwa
+
+```solidity
+MockVault internal rmRwa;
+```
+
+### rmAgent
+
+```solidity
+AgentTokenVault internal rmAgent;
+```
+
+### bnkr
+
+```solidity
+TestERC20 internal bnkr;
+```
+
+### swaps
+
+```solidity
+RecordingSwapRouter internal swaps;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### timelock
+
+```solidity
+address internal timelock = makeAddr("timelock");
+```
+
+### holder
+
+```solidity
+address internal holder = makeAddr("holder");
+```
+
+### depositor
+
+```solidity
+address internal depositor = makeAddr("depositor");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_register-address-string"></a>
+
+### _register
+
+```solidity
+function _register(address vault, string memory name) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `address` |  |
+| name | `string` |  |
+
+<a id="_four"></a>
+
+### _four
+
+```solidity
+function _four() internal view returns (address[] memory v);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `address[]` |  |
+
+<a id="_fourbps-uint256-uint256-uint256-uint256"></a>
+
+### _fourBps
+
+```solidity
+function _fourBps(uint256 a, uint256 b, uint256 c, uint256 d)
+        internal
+        pure
+        returns (uint256[] memory x);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256` |  |
+| b | `uint256` |  |
+| c | `uint256` |  |
+| d | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| x | `uint256[]` |  |
+
+<a id="_three"></a>
+
+### _three
+
+```solidity
+function _three() internal view returns (address[] memory v);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `address[]` |  |
+
+<a id="_threebps-uint256-uint256-uint256"></a>
+
+### _threeBps
+
+```solidity
+function _threeBps(uint256 a, uint256 b, uint256 c) internal pure returns (uint256[] memory x);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256` |  |
+| b | `uint256` |  |
+| c | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| x | `uint256[]` |  |
+
+<a id="_retire-uint256"></a>
+
+### _retire
+
+<i>
+
+The two calls of the govern row, in the one order the contracts allow, sent as the timelock.
+
+</i>
+
+```solidity
+function _retire(uint256[] memory bps) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256[]` |  |
+
+<a id="_holderdeposit-uint256"></a>
+
+### _holderDeposit
+
+<i>
+
+An existing holder: deposits into rmAGENT while it is Active.
+
+</i>
+
+```solidity
+function _holderDeposit(uint256 amount) internal returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="_routerdeposit-uint256"></a>
+
+### _routerDeposit
+
+```solidity
+function _routerDeposit(uint256 amount) internal returns (uint256[] memory shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256[]` |  |
+
+<a id="test_beforethebatchfourvaultsareeligibleandthevectorhasfourlegs"></a>
+
+### test_beforeTheBatchFourVaultsAreEligibleAndTheVectorHasFourLegs
+
+```solidity
+function test_beforeTheBatchFourVaultsAreEligibleAndTheVectorHasFourLegs() public view;
+```
+
+<a id="test_batchmoveseligibilityfourtothreeandshrinksthevectortothreelegs"></a>
+
+### test_batchMovesEligibilityFourToThreeAndShrinksTheVectorToThreeLegs
+
+```solidity
+function test_batchMovesEligibilityFourToThreeAndShrinksTheVectorToThreeLegs() public;
+```
+
+<a id="test_theorderisforcedretirebeforethefliprevertsandafourlegvectorafteritreverts"></a>
+
+### test_theOrderIsForcedRetireBeforeTheFlipRevertsAndAFourLegVectorAfterItReverts
+
+```solidity
+function test_theOrderIsForcedRetireBeforeTheFlipRevertsAndAFourLegVectorAfterItReverts()
+        public;
+```
+
+<a id="test_depositintormagentrevertsafterthebatch"></a>
+
+### test_depositIntoRmAgentRevertsAfterTheBatch
+
+```solidity
+function test_depositIntoRmAgentRevertsAfterTheBatch() public;
+```
+
+<a id="test_arouterlegintormagentrevertsafterthebatch"></a>
+
+### test_aRouterLegIntoRmAgentRevertsAfterTheBatch
+
+```solidity
+function test_aRouterLegIntoRmAgentRevertsAfterTheBatch() public;
+```
+
+<a id="test_redeemandredeeminkindstillpayexistingholdersafterthebatch"></a>
+
+### test_redeemAndRedeemInKindStillPayExistingHoldersAfterTheBatch
+
+```solidity
+function test_redeemAndRedeemInKindStillPayExistingHoldersAfterTheBatch() public;
+```
+
+<a id="test_routerdepositssplitoverrmusdcrmprotoandrmrwaandnevertouchrmagent"></a>
+
+### test_routerDepositsSplitOverRmUsdcRmProtoAndRmRwaAndNeverTouchRmAgent
+
+```solidity
+function test_routerDepositsSplitOverRmUsdcRmProtoAndRmRwaAndNeverTouchRmAgent() public;
+```
+
+<a id="test_thelaunchvectorsendseverythingtormusdcandrmproto"></a>
+
+### test_theLaunchVectorSendsEverythingToRmUsdcAndRmProto
+
+```solidity
+function test_theLaunchVectorSendsEverythingToRmUsdcAndRmProto() public;
+```
+
+<a id="test_thebatchmovesnoholderfunds"></a>
+
+### test_theBatchMovesNoHolderFunds
+
+```solidity
+function test_theBatchMovesNoHolderFunds() public;
+```
+

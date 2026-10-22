@@ -171,7 +171,6 @@ contracts/test/contract.EligibilityWeightsInterlockTest.mdx
 contracts/test/contract.FeatureFlagsTest.mdx
 contracts/test/contract.FeeOnTransferUSDC.mdx
 contracts/test/contract.FixedLiquidityPool.mdx
-contracts/test/contract.FourVaultInitialStateForkTest.mdx
 contracts/test/contract.GasBurningAdapter.mdx
 contracts/test/contract.GasMeteredStubVault.mdx
 contracts/test/contract.GasUSDC.mdx
@@ -261,6 +260,7 @@ contracts/test/contract.RedeployProtocolAssetVaultTest.mdx
 contracts/test/contract.ReentrantHookToken.mdx
 contracts/test/contract.ReentrantToken.mdx
 contracts/test/contract.ReentrantVault.mdx
+contracts/test/contract.RetireVaultBatchTest.mdx
 contracts/test/contract.RevertingRetireVault.mdx
 contracts/test/contract.RevisionRecorderAssessment.mdx
 contracts/test/contract.RevisionVaultAssessment.mdx
@@ -302,6 +302,7 @@ contracts/test/contract.ShortlistStubSwapRouter.mdx
 contracts/test/contract.StrictZeroRevertVault.mdx
 contracts/test/contract.StubSwapRouter.mdx
 contracts/test/contract.TestUSDC.mdx
+contracts/test/contract.ThreeVaultInitialStateForkTest.mdx
 contracts/test/contract.TwapTickMathHarness.mdx
 contracts/test/contract.TwapTickMathTest.mdx
 contracts/test/contract.UnderPullVault.mdx
@@ -371,6 +372,7 @@ contracts/test/helpers/contract.NotUUPS.mdx
 contracts/test/helpers/contract.PausableComet.mdx
 contracts/test/helpers/contract.PortfolioRouterV2.mdx
 contracts/test/helpers/contract.ProtocolAssetVaultV2.mdx
+contracts/test/helpers/contract.RetirableLegVault.mdx
 contracts/test/helpers/contract.RobotMoneyGatewayV2.mdx
 contracts/test/helpers/contract.RobotMoneyVaultV2.mdx
 contracts/test/helpers/contract.RouterGovernanceV2.mdx

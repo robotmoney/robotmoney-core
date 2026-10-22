@@ -35,7 +35,7 @@ fs_permissions = [
     # DERIVE the anchoring digest by hashing the committed golden canonical
     # bytes rather than transcribing a constant (issue #1247 AC11, #1280).
     { access = "read", path = "./tests" },
-    # Read-only access to the stage table so FourVaultInitialState.t.sol compares each vault's
+    # Read-only access to the stage table so ThreeVaultInitialState.t.sol compares each vault's
     # deposit state after its deploy script with the table's deployPaused (issue 1705).
     { access = "read", path = "./scripts/deploy" },
     # The Solidity core timelock predictions UpgradeAuthorityPrediction.t.sol writes for the

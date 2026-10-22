@@ -1,15 +1,15 @@
 ---
-title: "FourVaultInitialStateForkTest"
-description: "Issue 1705: the four production vault deploy scripts run in process, and each vault's `depositsPaused()` right after its stage equals the stage table's `deployPaused` for that vault (scripts/deploy/stage-table.json, the one rule table). rmUSDC runs the seeded path the broadcast run takes (the pause follows the seed), the baskets run their in-process entry point. The table row is matched to the script by its `stage` name."
+title: "ThreeVaultInitialStateForkTest"
+description: "Issue 1705, ADR-0017: the three production vault deploy scripts run in process, and each vault's `depositsPaused()` right after its stage equals the stage table's `deployPaused` for that vault (scripts/deploy/stage-table.json, the one rule table). rmUSDC runs the seeded path the broadcast run takes (the pause follows the seed), the baskets run their in-process entry point. The table row is matched to the script by its `stage` name."
 ---
 
-# FourVaultInitialStateForkTest
+# ThreeVaultInitialStateForkTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/FourVaultInitialState.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/ThreeVaultInitialState.t.sol)
 
 **Inherits:** Test
 
-Issue 1705: the four production vault deploy scripts run in process, and each vault's
+Issue 1705, ADR-0017: the three production vault deploy scripts run in process, and each vault's
 `depositsPaused()` right after its stage equals the stage table's `deployPaused` for that
 vault (scripts/deploy/stage-table.json, the one rule table). rmUSDC runs the seeded path
 the broadcast run takes (the pause follows the seed), the baskets run their in-process
@@ -79,28 +79,6 @@ function _basketParams(VaultRegistry registry)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `BasketVaultDeployBase.Params` |  |
-
-<a id="_agentcfg"></a>
-
-### _agentCfg
-
-<i>
-
-rmAGENT's launch asset is RM on Uniswap V4, priced by the recorder stage's history. The
-pause is the same base-contract step for every asset list, so this run gives the agent
-script the real V3 wETH pool (as BasketVaultRedeemGas.t.sol does).
-
-</i>
-
-```solidity
-function _agentCfg() internal pure returns (string memory);
-```
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `string` |  |
 
 <a id="_deploy-string-vaultregistry"></a>
 
