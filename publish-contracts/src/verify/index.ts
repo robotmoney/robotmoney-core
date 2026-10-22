@@ -454,7 +454,7 @@ async function vaultChecks(
   } else {
     await c.run(`${p}: asset config equals sheet`, async () => assetReadBack(chain, a, vs.assets));
     await basketGuardChecks(c, chain, a, p, vs, v.kind === "agent");
-    await unwindGuardCheck(c, chain, a, p, vs);
+    await unwindGuardCheck(c, chain, a, p, vs, v.kind === "agent");
     // rmAGENT launches holding RM only (core 1554). "asset config equals sheet" ties the chain to the sheet, so this ties the sheet to RM.
     if (v.kind === "agent") await c.run(`${p}: holds RM as its one asset`, async () => ({ ok: vs.assets.length === 0 || (vs.assets.length === 1 && lc(vs.assets[0]!.token) === lc(RM_TOKEN)), detail: `RM is parked (core 1903, ADR-0015): no asset or only RM. sheet lists [${vs.assets.map((a) => a.token).join(", ")}], expected only ${RM_TOKEN}` }));
     // core 1676: every UniswapV4 asset is wired to the permissionless price recorder, the V4 adapter and the configured PoolKey.
@@ -794,7 +794,7 @@ const UNWIND_GUARD_SIG = "function emergencyUnwindGuard(address token) view retu
  * passes and records the values. Only the Safe, through the timelock, sets the guard (the row), so the pre-govern verify sees zeros and passes; the post-govern verify needs the row
  * run for every unpaused basket. The detail records overrideAllowed and maxLossBps too (QA plan v1 Decisions D3: override allowed, Safe-only), but only minUsdcOut is asserted.
  */
-async function unwindGuardCheck(c: Collector, chain: ChainReader, vault: Address, p: string, vs: VaultSheet): Promise<void> {
+async function unwindGuardCheck(c: Collector, chain: ChainReader, vault: Address, p: string, vs: VaultSheet, emptyOk = false): Promise<void> {
   await c.run(`${p}: ${UNWIND_GUARD_LABEL}`, async () => {
     const active: Address[] = [];
     for (let i = 0; i < 64; i++) {
@@ -811,7 +811,8 @@ async function unwindGuardCheck(c: Collector, chain: ChainReader, vault: Address
     }
     const values = guards.map((g) => g.text).join("; ");
     if (vs.expectPaused) return { ok: true, detail: `deposits paused, no guard required until the vault opens${values ? `: ${values}` : ""}` };
-    if (active.length === 0) return { ok: false, detail: "the vault is open and lists no active asset: nothing proves an unwind floor" };
+    // RM_PARKED (core 1903, ADR-0015): an open rmAGENT with no asset has nothing to unwind. Any other vault with no active asset still fails.
+    if (active.length === 0) return emptyOk ? { ok: true, detail: "no active asset (RM is parked): nothing to unwind" } : { ok: false, detail: "the vault is open and lists no active asset: nothing proves an unwind floor" };
     const zero = guards.filter((g) => g.min === 0n).map((g) => g.token);
     return {
       ok: zero.length === 0,
