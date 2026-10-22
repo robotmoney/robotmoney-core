@@ -52,7 +52,7 @@ export function parseUnwindGuardArgs(args: UnwindGuardArgs | undefined): UnwindG
   const a = args ?? {};
   const vault = a.vault;
   if (vault === undefined) return usage(`needs --admin-arg vault=${BASKET_KEYS.join("|")}`);
-  if (vault === "USDC") return usage("rmUSDC has no emergency unwind guard (it holds lending adapters, not swapped basket assets): vault is PROTO, AGENT or RWA");
+  if (vault === "USDC") return usage("rmUSDC has no emergency unwind guard (it holds lending adapters, not swapped basket assets): vault is PROTO or RWA");
   if (!(BASKET_KEYS as readonly string[]).includes(vault)) return usage(`--admin-arg vault must be one of ${BASKET_KEYS.join(", ")}, got '${vault}'`);
   const t = a.token;
   if (t === undefined) return usage("needs --admin-arg token=0x<address> (one active asset) or token=all (every active asset of the vault)");

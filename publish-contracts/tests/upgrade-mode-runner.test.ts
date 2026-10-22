@@ -57,7 +57,7 @@ describe("resume after a partial failure of a proxy stage reaches a state-compat
     // only the failed stage is resumed (forge --resume replays its own transactions at the same nonces), every earlier proxy stage is skipped
     const resumed = forgeScripts(w).filter((c: any) => c.args.includes("--resume")).map((c: any) => c.args[1].split(":")[0].split("/").pop());
     expect(resumed).toEqual([SCRIPT.registry]);
-    expect(w.logs().filter((l) => l.event === "stage.skipped").map((l) => l.stage)).toEqual(["safe", "libs", "recorder", "vault"]);
+    expect(w.logs().filter((l) => l.event === "stage.skipped").map((l) => l.stage)).toEqual(["safe", "libs", "vault"]);
     const m2 = runManifest(w);
     expect(m2.stages.registry.status).toBe("done");
     expect(m2.stages.registry.startNonce).toBe(m1.stages.registry.startNonce);

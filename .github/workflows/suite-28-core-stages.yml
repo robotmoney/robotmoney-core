@@ -93,6 +93,10 @@ jobs:
       - name: Require the system cases (gateway run and refusals before broadcast, both verifiers, historical combined reading, gateway evidence)
         working-directory: publish-contracts
         run: bun src/ci/require-tests.ts --suite systems --min 4
+      # Issue 1912, ADR-0017: the retire-vault row, its evidence entry and the verifier after it each run on their own with a positive count, so a removed or emptied file is red.
+      - name: Require the retire-vault cases (govern row, evidence, verifier after the retirement, the 1e15 pool floor)
+        working-directory: publish-contracts
+        run: bun src/ci/require-tests.ts --suite retire --min 4
 
   pin:
     name: twin-pin

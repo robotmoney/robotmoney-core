@@ -62,11 +62,11 @@ describe("rehearsal and production differ only in the arguments", () => {
 
   test("--row update-delay, batch and cancel parse on both chains (issue 1727: whether 8453 accepts them depends on the sheet DEPLOYMENT_KIND, so runGovern refuses them in production, see rehearsal-govern.test.ts); the unpauses are accepted on both", () => {
     const base = (chain: string) => ["--chain", chain, "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "ledger"];
-    for (const row of ["update-delay", "batch", "cancel", "5", "6", "7"]) {
+    for (const row of ["update-delay", "batch", "cancel", "4", "5", "6"]) {
       expect(parseCli(["govern", ...base("8453"), "--row", row]).row).toBe(row);
       expect(parseCli(["govern", ...base("918453"), "--row", row]).row).toBe(row);
     }
-    for (const row of ["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA", "1", "4"]) expect(parseCli(["govern", ...base("8453"), "--row", row]).row).toBe(row);
+    for (const row of ["unpause-USDC", "unpause-PROTO", "unpause-RWA", "1", "3"]) expect(parseCli(["govern", ...base("8453"), "--row", row]).row).toBe(row);
   });
 
   test("--row release-receipt is accepted on --chain 8453 and on 918453 (issue 1611), and still needs its receipt id", () => {

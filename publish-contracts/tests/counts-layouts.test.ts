@@ -18,7 +18,7 @@ import { dirtyTreeLines } from "../src/isomorphism.ts";
 import { fileHashOf } from "../src/counts.ts";
 import { STUB_DIR } from "./harness.ts";
 import { spawnTool } from "../src/runner.ts";
-import { getStageTable } from "../src/stages.ts";
+import { DEPLOYER_STAGES, getStageTable } from "../src/stages.ts";
 import { freezeFromAdoptedRun } from "../scripts/freeze-counts.ts";
 import { REPO, refFrozenPath, tmp } from "./fixtures.ts";
 import { world, type World } from "./harness.ts";
@@ -26,7 +26,7 @@ import { world, type World } from "./harness.ts";
 const PREV = "9a768bb9cc66d4485470a99a068ba7477604501a";
 const REF_PATH = refFrozenPath(); // the pinned first-release counts, ic-policy keyed as the table receipt (issue 1888)
 const GATEWAY_KEYS = new Set(getStageTable().stages.filter((s) => s.system === "gateway").map((s) => s.name)); // issue 1892: the vaults baseline holds no gateway count
-const REF = Object.fromEntries(Object.entries(JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>).filter(([k]) => !GATEWAY_KEYS.has(k)));
+const REF = Object.fromEntries(Object.entries(JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>).filter(([k]) => !GATEWAY_KEYS.has(k) && DEPLOYER_STAGES.some((s) => s.name === k))); // ADR-0017: the first release deployed an agent and a recorder stage, the current table has neither
 const OUT = join(import.meta.dir, "fixtures", "build-out");
 const table = getStageTable();
 const tickArt = JSON.parse(readFileSync(join(OUT, "TickMath.sol", "TickMath.json"), "utf8"));

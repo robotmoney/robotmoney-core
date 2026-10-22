@@ -1,6 +1,6 @@
 // Stage 13 govern: the post-handover operations through the REAL Safe and the REAL timelock, with the Safe tool (src/safe).
 // After the timelock stage the deployer holds no role. Everything here is a Safe transaction that schedules, executes or cancels a timelock operation.
-// STAGE 13 IS THE UNPAUSE OF EACH OF THE FOUR VAULTS (issue 1520, issue 1710: all four deploy paused). The rows come from the stage table's vault rules
+// STAGE 13 IS THE UNPAUSE OF EACH OF THE THREE VAULTS (issue 1520, issue 1710: all three deploy paused). The rows come from the stage table's vault rules
 // (scripts/deploy/stage-table.json vaults[], `unpauseRow` and `unpauseInStage13`, issue 1705), never from a vault key typed here. An unpause
 // needs ADMIN_ROLE through the timelock (docs/technical/security-model.md, the pause-key abuse and pause-trigger rows). The vault
 // setters, router eligibility and the router default weights are DEPLOY-TIME configuration the deployer sets before the handover (the basket vault
@@ -10,11 +10,11 @@
 // Committee's consensus receipt; that submission is the rebalance: ONE timelock call, RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps),
 // which releases the receipt and sets the router's active vector together, read back as isReleased and the router weights. Never part of stage 13.
 // The rows (GOVERN_ROWS):
-//   unpause-USDC, unpause-PROTO, unpause-AGENT, unpause-RWA   one timelock operation per unpause (never a shared operation), all scheduled in ONE sitting.
-//                                               All four vaults deploy paused (issue 1710), so stage 13 opens all four. After a pause-all the same rows reopen a vault
+//   unpause-USDC, unpause-PROTO, unpause-RWA   one timelock operation per unpause (never a shared operation), all scheduled in ONE sitting.
+//                                               All three vaults deploy paused (issue 1710), so stage 13 opens all three. After a pause-all the same rows reopen a vault
 //                                               on demand (`--row unpause-X`, a new numbered round, issue 1667).
 //   update-delay, batch, cancel                 Demonstrations of the Safe tool. Refused with USAGE on 8453, except in a REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal, issue 1727):
-//                                               there they run on 8453 as explicit `--row` runs, in order after the four unpauses, never as part of stage 13.
+//                                               there they run on 8453 as explicit `--row` runs, in order after the three unpauses, never as part of stage 13.
 // A run schedules every unpause the sheet asks for (GOVERN_UNPAUSE_VAULTS), waits ONE timelock delay, then executes each and reads depositsPaused() back.
 // An operation declared dependent on another carries that operation's id as the timelock predecessor and runs in the same resume (no second wait).
 // On demand, outside the matrix (it never blocks or completes the govern stage):
@@ -34,7 +34,7 @@
 //   release-receipt              ConsensusRecommendationReceipt.releaseReceipt(receiptId), one round per receipt id (--receipt-id)
 // The receipt contract's ADMIN_ROLE is held by the TimelockController after the timelock stage (INV-3), so the release is the same Safe ->
 // Timelock round as every other row. It runs on the Twin chain AND on 8453 (issue 1611): on 8453 it is a standalone post-launch action, its own
-// timelock operation with its own 48-hour delay, never part of stage 13 (stageRows stays the four unpauses). The first run schedules and exits
+// timelock operation with its own 48-hour delay, never part of stage 13 (stageRows stays the three unpauses). The first run schedules and exits
 // GOVERN_PENDING with the resume command, the resume after the delay executes and reads isReleased back. Its run-manifest key and salt are `release-receipt-<receiptId>`.
 // Issue 1831: REFUSED with USAGE (nothing read past the role, nothing sent) once RouterGovernance holds the receipt contract's ADMIN_ROLE, which every deploy since issue 1698
 // grants. A release alone would burn the receipt (applyReceipt then reverts ReceiptAlreadyReleased), so the message points at apply-receipt.
@@ -49,12 +49,17 @@
 //   clear-voted-weights          on demand (issue 1743), no arguments: ONE timelock call, RouterGovernance.clearVotedWeights() (ADMIN_ROLE, the timelock), which clears the router's active vector
 // so routing falls back to the default. It reads votedWeightsActive false and effective == default back. Refused (GOVERN, nothing scheduled) when no active vector is in effect. Runs on 8453 in
 // production and in a rehearsal, never in stage 13, with its own delay. A later applied receipt that sets an active vector again opens round 2 with the same explicit `--row`.
-//   set-unwind-guard             on demand (QA plan v1 D7, review E5, issue 1705 Q2), `--admin-arg vault=PROTO|AGENT|RWA token=0x..|all min-usdc-out=N max-loss-bps=N [override-allowed=true|false]`:
+//   set-unwind-guard             on demand (QA plan v1 D7, review E5, issue 1705 Q2), `--admin-arg vault=PROTO|RWA token=0x..|all min-usdc-out=N max-loss-bps=N [override-allowed=true|false]`:
 // ONE timelock operation on one basket vault, BasketVault.setEmergencyUnwindGuard(token, minUsdcOut, overrideAllowed, maxLossBps) per token (ADMIN_ROLE, the timelock). Before it no stage
 // and no row set the guard, so the oracle-free unwind and emergencyUnwindWithOverride could not run. overrideAllowed defaults to true, set by the Safe only (QA plan v1 Decisions D3).
 // Refused (GOVERN, nothing scheduled) for a token that is not an active asset or a vault whose ADMIN_ROLE the timelock does not hold; a guard already in effect is recorded as
 // skipped. It reads each guard back. Runs on 8453 in production and in a rehearsal, and on the Twin chain, never in stage 13. unwind-guard.ts has the why.
 // Evidence: the run manifest's `unwind_guards` (a record).
+//   retire-vault                on demand (issue 1912, ADR-0017, ADR-0009), `--admin-arg vault=0x.. weights=USDC:9500,PROTO:500,RWA:0`: the Safe, through the timelock, retires ONE vault of the live
+// deployment (rmAGENT on v0.5.0) in ONE batch of two calls, registry.migrateEligibility(vault, false, three legs) then registry.retire(vault). The order is forced by the contracts (retire reverts
+// RetireWhileRouterEligible, and the router's default vector must span the eligible set), see retire-vault.ts. The preview is logged before the schedule, the vector is refused unless it is the router's
+// current default vector without the vault, and the read-back checks the registry status, the eligible count, the router's DEFAULT and EFFECTIVE vectors and the vault's retired() flag. Production,
+// rehearsal and the Twin chain. Never part of stage 13. Its run-manifest key and salt are `retire-vault-<the vault address, 40 lower-case hex digits>`; the evidence entry is `vault_retirements`.
 //   redeploy-vault              on demand (issue 1796), no arguments: the Safe, through the timelock, replaces ONE vault of the live deployment (rmPROTO) with the one the `redeploy-vault`
 // verb deployed. ONE timelock batch of five calls (registry.registerVault(new), registry.migrateEligibility(new, true, five legs), registry.migrateEligibility(old, false, four legs),
 // registry.retire(old), new.unpauseDeposits()) so no observer sees a router that weights a paused or retired vault. The order is forced by the contracts (a vault must be made
@@ -91,6 +96,9 @@ import {
   UNWIND_GUARD_ROW, VAULT_UNWIND_GUARD_ABI, buildUnwindGuardCalls, parseUnwindGuardArgs, unwindGuardArgsText, unwindGuardProblems, unwindGuardRecordKey, unwindGuardTargets,
   type GuardRead, type UnwindGuardArgs, type UnwindGuardWant,
 } from "./unwind-guard.ts";
+import {
+  RETIRE_ROW, buildRetireCalls, parseRetireArgs, retireBeforeProblems, retireReadBackProblems, retireRecordKey, retirePreviewLines, type RetireArgs, type RetireWant,
+} from "./retire-vault.ts";
 import { PublishError } from "./errors.ts";
 import {
   FREEZE_ROW, GOVERNED_PROXY_ABI, UPGRADE_MIGRATIONS, UPGRADE_ROW, buildFreezeCalls, buildMigration, buildUpgradeCall, codeHashOf, freezeSpecsFor, freezeTargets, layoutGateProblems, migrationNameProblems,
@@ -155,7 +163,7 @@ export interface LabelledCall extends TimelockCall { label: string }
 
 /**
  * The mainnet rows: one unpause per vault, each its own timelock operation, all scheduled in one sitting. Derived from the stage table's vault rules
- * (issue 1705, `unpauseRow` where `unpauseInStage13`): all four vaults deploy paused (issue 1710), so stage 13 is the four unpauses.
+ * (issue 1705, `unpauseRow` where `unpauseInStage13`): all three vaults deploy paused (issue 1710), so stage 13 is the three unpauses.
  */
 export { BASKET_KEYS };
 export const UNPAUSE_ROWS: readonly UnpauseRow[] = STAGE13_UNPAUSE_ROWS;
@@ -172,7 +180,7 @@ export const isTwinOnlyRow = (row: string): boolean => (TWIN_ONLY_ROWS as readon
 /**
  * Issue 1727: update-delay, batch and cancel are refused on 8453 UNLESS the sheet is a rehearsal (DEPLOYMENT_KIND=rehearsal). Each is a no-op or a bounded delay
  * change through the real Safe and the real timelock, so a rehearsal exercises the Safe tool on real contracts. Production keeps them refused. On a rehearsal they
- * are explicit `--row` runs: stage 13 on 8453 stays the four unpauses, and the later rows keep their order (update-delay, batch, cancel) after the unpauses.
+ * are explicit `--row` runs: stage 13 on 8453 stays the three unpauses, and the later rows keep their order (update-delay, batch, cancel) after the unpauses.
  */
 export const twinOnlyRefused = (row: string, chainId: number, kind: DeploymentKind): boolean => isTwinOnlyRow(row) && chainId === BASE_CHAIN_ID && kind !== "rehearsal";
 /**
@@ -181,7 +189,7 @@ export const twinOnlyRefused = (row: string, chainId: number, kind: DeploymentKi
  */
 export function govRowRefusal(row: string | undefined, chainId: number, kind: DeploymentKind): string | undefined {
   if (row === REDEPLOY_ROW) return redeployRefusal(chainId, kind);
-  if (row === undefined || row === RECEIPT_ROW || row === REGISTER_ROW || row === APPLY_ROW || row === CLEAR_ROW || row === UNWIND_GUARD_ROW || row === FREEZE_ROW || row === UPGRADE_ROW) return undefined;
+  if (row === undefined || row === RECEIPT_ROW || row === REGISTER_ROW || row === APPLY_ROW || row === CLEAR_ROW || row === RETIRE_ROW || row === UNWIND_GUARD_ROW || row === FREEZE_ROW || row === UPGRADE_ROW) return undefined;
   let name: string;
   try { name = resolveGovernRow(row); } catch { return undefined; } // an unknown row is a usage error raised where it always was
   return twinOnlyRefused(name, chainId, kind)
@@ -460,7 +468,8 @@ export function resolveGovernRow(row: string): PlannedRow {
   if (row === APPLY_ROW) throw new PublishError("USAGE", `--row ${APPLY_ROW} is the on-demand receipt application: it needs --receipt-id 0x<bytes32> and --payload FILE`);
   if (row === CLEAR_ROW) throw new PublishError("USAGE", `--row ${CLEAR_ROW} is the on-demand clear of the router's voted weight vector: it is run by name only (runGovern)`);
   if (row === REDEPLOY_ROW) throw new PublishError("USAGE", `--row ${REDEPLOY_ROW} is the on-demand replacement of one redeployed vault: it is run by name only (runGovern)`);
-  if (row === UNWIND_GUARD_ROW) throw new PublishError("USAGE", `--row ${UNWIND_GUARD_ROW} is the on-demand emergency unwind guard of one basket vault: it needs --admin-arg vault=PROTO|AGENT|RWA token=0x..|all min-usdc-out=N max-loss-bps=N`);
+  if (row === RETIRE_ROW) throw new PublishError("USAGE", `--row ${RETIRE_ROW} is the on-demand retirement of one vault (ADR-0017): it needs --admin-arg vault=0x<address> and --admin-arg weights=USDC:9500,PROTO:500,RWA:0`);
+  if (row === UNWIND_GUARD_ROW) throw new PublishError("USAGE", `--row ${UNWIND_GUARD_ROW} is the on-demand emergency unwind guard of one basket vault: it needs --admin-arg vault=PROTO|RWA token=0x..|all min-usdc-out=N max-loss-bps=N`);
   if (row === FREEZE_ROW) throw new PublishError("USAGE", `--row ${FREEZE_ROW} is the on-demand freeze of every core proxy (issue 1842): it is run by name only (runGovern)`);
   if (row === UPGRADE_ROW) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} is the on-demand governed upgrade of one core proxy (issue 1842): it needs --proxy NAME --implementation 0x<address>`);
   if (/^[0-9]+$/.test(row)) {
@@ -584,6 +593,8 @@ export interface GovernOpts {
   selfAdmin?: SelfAdminArgs;
   /** With `--row set-unwind-guard` only (QA plan v1 D7): the vault, the token (or `all`) and the guard values, as `--admin-arg` gave them. */
   unwindGuard?: UnwindGuardArgs;
+  /** With `--row retire-vault` only (issue 1912): the vault to retire and the three-leg default vector that stays, as `--admin-arg` gave them. */
+  retire?: RetireArgs;
   /** With `--row upgrade-proxy` only (issue 1842): the verifier name of the proxy (gateway, registry, vault[rmUSDC], ...) and the new implementation's address. */
   proxy?: string;
   implementation?: string;
@@ -662,6 +673,7 @@ export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha"> & { e
   else if (row?.startsWith(`${RECEIPT_ROW}-`)) row = `${RECEIPT_ROW} --receipt-id ${row.slice(RECEIPT_ROW.length + 1)}`;
   else if (row?.startsWith(`${REGISTER_ROW}-`)) row = `${REGISTER_ROW} --submitter ${row.slice(REGISTER_ROW.length + 1)}`;
   else if (row?.startsWith(`${REDEPLOY_ROW}-`)) row = REDEPLOY_ROW;
+  else if (row?.startsWith(`${RETIRE_ROW}-`)) row = `${RETIRE_ROW} ${same}`;
   else if (row?.startsWith(`${APPLY_ROW}-`)) row = `${APPLY_ROW} --receipt-id ${row.slice(APPLY_ROW.length + 1)}${payload === undefined ? " --payload FILE" : ` --payload ${payload}`}`;
   else if (selfAdmin !== undefined) row = `${selfAdmin} ${same}`; // the record key carries the calldata hash and the Safe nonce, not the arguments
   const evidence = ctx.evidenceDir ? ` --evidence ${resolve(ctx.evidenceDir)}` : " --evidence DIR (this run's own evidence directory)";
@@ -762,16 +774,20 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   const clearing = o.row === CLEAR_ROW;
   const redeploying = o.row === REDEPLOY_ROW;
   const guarding = o.row === UNWIND_GUARD_ROW;
+  const retiring = o.row === RETIRE_ROW;
   const freezing = o.row === FREEZE_ROW;
   const upgrading = o.row === UPGRADE_ROW;
   if ((o.proxy !== undefined || o.implementation !== undefined || o.upgradeBuild !== undefined || o.migration !== undefined) && !upgrading) throw new PublishError("USAGE", `--proxy, --implementation, --upgrade-build and --migration go with --row ${UPGRADE_ROW} only`);
   if (o.submitter !== undefined && !registering) throw new PublishError("USAGE", `--submitter goes with --row ${REGISTER_ROW} only`);
   if (o.unwindGuard !== undefined && !guarding) throw new PublishError("USAGE", `--admin-arg vault, token, min-usdc-out, max-loss-bps and override-allowed go with --row ${UNWIND_GUARD_ROW} only`);
+  if (o.retire !== undefined && !retiring) throw new PublishError("USAGE", `--admin-arg vault and weights go with --row ${RETIRE_ROW} only`);
+  // issue 1912: the retire row's arguments (an address and exactly three legs summing to 10000) are checked before the Safe is read or anything is sent
+  const retireWant = retiring ? parseRetireArgs(o.retire) : undefined;
   // QA plan v1 D7: the row's arguments are checked before the Safe is read or anything is sent
   const guardWant = guarding ? parseUnwindGuardArgs(o.unwindGuard) : undefined;
   const early = govRowRefusal(o.row, ctx.chainId, ctx.sheet.kind);
   if (early !== undefined) throw new PublishError("USAGE", early);
-  const selected: PlannedRow | undefined = o.row === undefined || releasing || applying || registering || clearing || redeploying || guarding || freezing || upgrading || selfAdminRow !== undefined ? undefined : resolveGovernRow(o.row);
+  const selected: PlannedRow | undefined = o.row === undefined || releasing || applying || registering || clearing || redeploying || retiring || guarding || freezing || upgrading || selfAdminRow !== undefined ? undefined : resolveGovernRow(o.row);
   // Issue 1842: the upgrade row's arguments are checked before the Safe is read.
   const upgradeSpec = upgrading ? proxySpecs(getStageTable()).find((x) => x.name === o.proxy) : undefined;
   if (upgrading) {
@@ -1183,6 +1199,108 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     await recordClear(name, governance);
     save();
     ctx.log.log("info", "govern.row_run_done", { stage: row.name, row: CLEAR_ROW });
+    return { rows: [name], skipped: [], opIds };
+  }
+
+  /** The evidence entry of an executed retire round (`vault_retirements` of the run manifest, checked by evidence-check). */
+  async function recordRetire(name: string, want: RetireWant, vaults: readonly Address[], bps: readonly number[]): Promise<void> {
+    const r = state[name]!;
+    if (!r?.executed?.tx_hash || !r.scheduled?.tx_hash) return;
+    const at = async (hash: string): Promise<number> => {
+      const rc = await handle.client.getTransactionReceipt({ hash: hash as Hex });
+      return Number((await handle.client.getBlock({ blockNumber: rc.blockNumber })).timestamp);
+    };
+    const entry = {
+      step: RETIRE_ROW, round: r.round ?? 1, vault: want.vault, registry: a.registry, router: a.router, timelock: a.timelock, vaults: [...vaults], bps: [...bps],
+      voted_weights_active: r.observed?.voted_weights_active, effective_vaults: r.observed?.effective_vaults, effective_bps: r.observed?.effective_bps,
+      operation_id: r.scheduled.operation_id, schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await at(r.scheduled.tx_hash),
+      execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await at(r.executed.tx_hash),
+    };
+    const list = ((manifest as { vault_retirements?: { operation_id?: string }[] }).vault_retirements ??= []);
+    const i = list.findIndex((x) => x.operation_id?.toLowerCase() === String(entry.operation_id).toLowerCase());
+    if (i >= 0) list[i] = entry; else list.push(entry);
+    save();
+  }
+
+  if (retiring) {
+    // Issue 1912 (ADR-0017, ADR-0009): ONE timelock batch, registry.migrateEligibility(vault, false, three legs) then registry.retire(vault). Never part of the matrix. On 8453 in production
+    // and in a rehearsal, and on the Twin chain. retire-vault.ts has the why. Every pre-check runs BEFORE the round is scheduled, so a refused vector spends no delay.
+    const want = retireWant!;
+    const name = retireRecordKey(want.vault);
+    const rd = reader(handle);
+    const finalVaults = want.weights.map((w) => a.vaults[w.key]);
+    const finalBps = want.weights.map((w) => w.bps);
+    const calls = buildRetireCalls({ registry: a.registry, vault: want.vault, finalVaults, finalBps });
+    const before = async () => {
+      const [listed, [, status], eligible, registryRouter, tlAdmin, voted, [defaultVaults]] = await Promise.all([
+        rd<Address[]>(a.registry, REGISTRY_REDEPLOY_ABI, "listVaults"),
+        rd<[unknown, number]>(a.registry, REGISTRY_REDEPLOY_ABI, "getVault", [want.vault]),
+        rd<boolean>(a.registry, REGISTRY_REDEPLOY_ABI, "isRouterEligible", [want.vault]),
+        rd<Address>(a.registry, REGISTRY_REDEPLOY_ABI, "router"),
+        rd<boolean>(a.registry, REGISTRY_REDEPLOY_ABI, "hasRole", [ADMIN_ROLE, a.timelock]),
+        rd<boolean>(a.router, ROUTER_REDEPLOY_ABI, "votedWeightsActive"),
+        rd<[Address[], bigint[]]>(a.router, ROUTER_REDEPLOY_ABI, "getDefaultWeights"),
+      ]);
+      const code = await handle.client.getCode({ address: want.vault });
+      return retireBeforeProblems(want, finalVaults, {
+        listed, status: Number(status), eligible, registryRouter, router: a.router, timelockIsRegistryAdmin: tlAdmin, votedWeightsActive: voted, defaultVaults, hasCode: !!code && code !== "0x",
+      });
+    };
+    const prev = state[name];
+    if (prev?.scheduled?.operation_id && !rowComplete(prev)) {
+      // The operator cancelled this round's operation through the Safe and named the row again: the same round is scheduled again (a cancelled id is free).
+      const st = await api.operationState(handle, a.timelock, prev.scheduled.operation_id as Hex);
+      if (!st.exists && !st.done) {
+        const n = prev.round ?? 1;
+        let k = 1;
+        while (state[`${roundKey(name, n)}:cancelled-${k}`]) k++;
+        state[`${roundKey(name, n)}:cancelled-${k}`] = prev;
+        state[name] = { round: n };
+        save();
+        ctx.log.log("info", "govern.round_rescheduled", { row: RETIRE_ROW, key: name, round: n, cancelled_operation: prev.scheduled.operation_id });
+      }
+    }
+    if (!rowComplete(state[name])) {
+      const p = { timelock: a.timelock, calls: calls.map(({ target, data }) => ({ target, data })), salt: salt(labelOf(name)), form: "batch" as const };
+      const id = await api.operationId(handle, p);
+      const prior = state[name]?.scheduled?.operation_id;
+      if (prior !== undefined && prior.toLowerCase() !== id.toLowerCase()) throw new PublishError("USAGE", `${name} was already used for a different call (operation ${prior}, this call is ${id})`, { row: RETIRE_ROW, prior, id });
+      if (state[name]?.scheduled === undefined && !(await api.operationState(handle, a.timelock, id)).exists) {
+        const problems = await before();
+        if (problems.length > 0) throw new PublishError("GOVERN", `govern row ${RETIRE_ROW} cannot start from the state on chain: ${problems.join("; ")}. Nothing was scheduled.`, { row: RETIRE_ROW, problems });
+      }
+      for (const line of retirePreviewLines(want, finalVaults, calls)) ctx.log.log("info", "govern.retire_preview", { line });
+      const readBack = async () => {
+        const [, status] = await rd<[unknown, number]>(a.registry, REGISTRY_REDEPLOY_ABI, "getVault", [want.vault]);
+        const [defaultVaults, defaultBps] = await rd<[Address[], bigint[]]>(a.router, ROUTER_REDEPLOY_ABI, "getDefaultWeights");
+        const [effectiveVaults, effectiveBps] = await rd<[Address[], bigint[]]>(a.router, ROUTER_REDEPLOY_ABI, "getEffectiveWeights");
+        const votedWeightsActive = await rd<boolean>(a.router, ROUTER_REDEPLOY_ABI, "votedWeightsActive");
+        const code = await handle.client.getCode({ address: want.vault });
+        const bad = retireReadBackProblems(finalVaults, finalBps, {
+          status: Number(status), eligible: await rd<boolean>(a.registry, REGISTRY_REDEPLOY_ABI, "isRouterEligible", [want.vault]),
+          eligibleCount: Number(await rd<bigint>(a.registry, REGISTRY_REDEPLOY_ABI, "routerEligibleCount")), votedWeightsActive,
+          defaultVaults, defaultBps, effectiveVaults, effectiveBps, retiredFlag: await rd<boolean>(want.vault, VAULT_REDEPLOY_ABI, "retired"), hasCode: !!code && code !== "0x",
+        });
+        if (bad.length === 0) state[name]!.observed = { voted_weights_active: votedWeightsActive, effective_vaults: [...effectiveVaults], effective_bps: effectiveBps.map(Number) };
+        return bad;
+      };
+      state[name] = { ...(state[name] ?? { round: 1 }) };
+      await round(name, {
+        id, description: `retire vault ${want.vault}`, readBack,
+        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${RETIRE_ROW} ${want.vault}: ${calls.map((c) => c.label).join("; ")}` }),
+        execute: async () => {
+          // Re-read immediately before public execution: a saved plan is no authority to execute stale state.
+          const problems = await before();
+          if (problems.length > 0) throw new PublishError("GOVERN", `govern row ${RETIRE_ROW} will NOT execute: the state on chain changed since the schedule: ${problems.join("; ")}. Nothing was sent.`, { row: RETIRE_ROW, problems });
+          return api.executeOnTimelock(handle, { ...p, description: `${RETIRE_ROW} execute ${want.vault}` });
+        },
+      }, RETIRE_ROW);
+    } else {
+      reprint(name);
+    }
+    await recordRetire(name, want, finalVaults, finalBps);
+    save();
+    ctx.log.log("info", "govern.row_run_done", { stage: row.name, row: RETIRE_ROW, vault: want.vault });
     return { rows: [name], skipped: [], opIds };
   }
 
@@ -1791,7 +1909,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
 
   if (o.call) {
     const { label, target, data } = o.call;
-    if (!/^[A-Za-z0-9._-]+$/.test(label) || (GOVERN_ROWS as readonly string[]).includes(label) || label === RECEIPT_ROW || label === APPLY_ROW || label === REGISTER_ROW || label === CLEAR_ROW || label === REDEPLOY_ROW || label === UNWIND_GUARD_ROW) throw new PublishError("USAGE", `call label '${label}': letters, digits, . _ - only, and not a govern row name`);
+    if (!/^[A-Za-z0-9._-]+$/.test(label) || (GOVERN_ROWS as readonly string[]).includes(label) || label === RECEIPT_ROW || label === APPLY_ROW || label === REGISTER_ROW || label === CLEAR_ROW || label === REDEPLOY_ROW || label === RETIRE_ROW || label === UNWIND_GUARD_ROW) throw new PublishError("USAGE", `call label '${label}': letters, digits, . _ - only, and not a govern row name`);
     const name = `call-${label}`;
     const p = { timelock: a.timelock, calls: [{ target, data }], salt: salt(name), form: "single" as const };
     const id = await api.operationId(handle, p);

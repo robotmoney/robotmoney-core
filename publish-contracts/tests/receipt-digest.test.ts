@@ -82,14 +82,22 @@ describe("issue 1754: record-receipt checks the digest and the id against the pa
 });
 
 describe("issue 1754: apply-receipt accepts the real receipt only under the protocol digest", () => {
-  const V = { USDC: "0x00000000000000000000000000000000000000a1", PROTO: "0x00000000000000000000000000000000000000a2", AGENT: "0x00000000000000000000000000000000000000a3", RWA: "0x00000000000000000000000000000000000000a4" } as Record<"USDC" | "PROTO" | "AGENT" | "RWA", Address>;
-  const base = { receiptId: RID as Hex, payload: bytes, recorded: true, released: false, eligible: [V.USDC, V.PROTO, V.AGENT, V.RWA], vaultOf: V };
-  test("stored protocol digest: the vector is the real weights in registry order", () => {
-    const v = planApply({ ...base, storedDigest: DIGEST });
-    expect(v.vaults).toEqual([V.USDC, V.PROTO, V.AGENT, V.RWA]);
-    expect(v.bps).toEqual([8550, 525, 575, 350]);
+  const V = { USDC: "0x00000000000000000000000000000000000000a1", PROTO: "0x00000000000000000000000000000000000000a2", RWA: "0x00000000000000000000000000000000000000a4" } as Record<"USDC" | "PROTO" | "RWA", Address>;
+  const base = { receiptId: RID as Hex, payload: bytes, recorded: true, released: false, eligible: [V.USDC, V.PROTO, V.RWA], vaultOf: V };
+  // ADR-0017: rmAGENT is retired. The real receipt weights the agent_tokens bucket 575 bps, which no vault can take, so it is refused. The same envelope with the bucket at 0 is applied.
+  const threeVault = new TextEncoder().encode(JSON.stringify({
+    ...JSON.parse(readFileSync(FIXTURE, "utf8")),
+    weights: [{ bucket: "agent_tokens", weight_bps: 0 }, { bucket: "conservative_defi_yield", weight_bps: 8550 }, { bucket: "protocol_tokens", weight_bps: 900 }, { bucket: "real_world_assets", weight_bps: 550 }],
+  }));
+  test("the real receipt gives the retired agent_tokens bucket weight: it is refused, naming the bucket and ADR-0017", () => {
+    expect(() => planApply({ ...base, storedDigest: DIGEST as Hex })).toThrow(/agent_tokens.*retired/);
+  });
+  test("stored protocol digest: the vector is the three-vault weights in registry order, the retired bucket dropped", () => {
+    const v = planApply({ ...base, payload: threeVault, storedDigest: receiptPayloadDigest(threeVault) as Hex });
+    expect(v.vaults).toEqual([V.USDC, V.PROTO, V.RWA]);
+    expect(v.bps).toEqual([8550, 900, 550]);
   });
   test("mutation: a stored plain keccak256 is refused", () => {
-    expect(() => planApply({ ...base, storedDigest: PLAIN as Hex })).toThrow(/differs from the digest stored/);
+    expect(() => planApply({ ...base, payload: threeVault, storedDigest: keccak256(threeVault) as Hex })).toThrow(/differs from the digest stored/);
   });
 });

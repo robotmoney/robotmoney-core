@@ -3,13 +3,14 @@
 // Usage: bun src/evidence-check.ts --upgrade-lifecycle FILE [--rpc URL]   (the Twin upgrade rehearsal: deploy upgradeable, governed upgrade, freeze, refused upgrade after the freeze, issue 1811)
 //        bun src/evidence-check.ts --governed-upgrades RUN_MANIFEST --timelock ADDR [--governance ADDR] [--delay-floor SECONDS] [--rpc URL]   (proxy_upgrades read back from the chain, a typed migration included, issue 1910)
 //        bun src/evidence-check.ts --vault-redeploys RUN_MANIFEST --registry ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a single-vault redeploy of a rehearsal or a Twin run, issue 1796)
+//        bun src/evidence-check.ts --vault-retirements RUN_MANIFEST --registry ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (the retire-vault row, issue 1912, ADR-0017)
 //        bun src/evidence-check.ts --receipt-applications RUN_MANIFEST --consensus-receipt ADDR --governance ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a Twin run; the floor defaults to the 8453 floor, a Twin run passes its own timelock min delay, issue 1696; on an --rpc of chain 8453 a floor under the 8453 floor is refused, issue 1701)
 //        bun src/evidence-check.ts --evidence FILE [--frozen FILE --deploy-sha SHA] [--rpc URL [--record-chain-fixture OUT] | --chain-fixture FILE]
 // Rejects: a wrong tx count against the frozen count, a missing tx hash, a failed receipt, a delay under 172800 s, a govern
 // schedule-to-execute gap under 172800 s per operation, a govern operation that shares a transaction or a timelock operation id with another one, any
 // operation scheduled on 8453 that is not a vault unpause (issue 1520) or a validated receipt release (issue 1611), a chain id other than 8453, owner exceptions recorded at or after plan approval.
 // DEPLOYMENT KIND (issue 1727): the evidence is read as PRODUCTION unless `--deployment-kind rehearsal` is passed. Evidence carries `deployment_kind` (absent means production).
-// A rehearsal evidence presented as production fails, and so does a production evidence presented as a rehearsal. Production keeps the 172800 s floor and the four unpauses.
+// A rehearsal evidence presented as production fails, and so does a production evidence presented as a rehearsal. Production keeps the 172800 s floor and the three unpauses.
 // A rehearsal reads the 900 s floor, accepts the rehearsal-only `rehearsal_rows` (update-delay, batch, cancel) and counts the deployer nonce from `deployer_start_nonce`.
 // Offline mode (no --rpc) checks the recorded JSON shape only. Online mode (--rpc URL, chain 8453) reads the chain with viem and
 // does not trust the recorded numbers: deployer nonce, every receipt status, the timelock events and block timestamps of each
@@ -26,6 +27,7 @@ import { DEPLOYMENT_KINDS, kindLabel, type DeploymentKind } from "./chains.ts";
 import { HISTORICAL_REGISTER_ROW, buildHistoricalRegisterCalls } from "./committee-register.ts";
 import { REGISTER_ROW, buildRegisterCall } from "./submitter-register.ts";
 import { CLEAR_ROW, clearCalldata } from "./clear-voted-weights.ts";
+import { RETIRE_ROW, STAYING_KEYS, buildRetireCalls } from "./retire-vault.ts";
 import { REDEPLOY_ROW, buildRedeployCalls, createdVaultProblems, vectorsFromFinal, type DeployReceipt } from "./redeploy-vault.ts";
 import { assertOwnerExceptions } from "./plan.ts";
 import { GATEWAY_EVIDENCE_STAGES, checkGatewayEvidence } from "./evidence-gateway.ts";
@@ -43,7 +45,7 @@ const TX = /^0x[0-9a-fA-F]{64}$/;
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 
 /**
- * Stage 13 on 8453 (issue 1520): the only operation after the timelock handover is the unpause of each of the four vaults (rmUSDC too since issue 1710: all four deploy paused). One govern entry per vault, each with
+ * Stage 13 on 8453 (issue 1520): the only operation after the timelock handover is the unpause of each of the three vaults (rmUSDC too since issue 1710: all three deploy paused). One govern entry per vault, each with
  * its own schedule transaction, its own execute transaction and its own timelock operation (never a shared one). All are scheduled in one sitting and wait
  * one delay: each execute is at least 172800 s after the same operation's schedule. update-delay, batch and cancel are Twin-only demonstrations of the
  * Safe tool: on 8453 they are rejected here. The names are the unpause rows of the govern CLI (src/govern.ts UNPAUSE_ROWS).
@@ -65,7 +67,7 @@ const stepLabel = (g: any): string => (roundOf(g) === 1 ? String(g?.step) : `${g
 
 /**
  * The one other operation the timelock may carry on 8453 (issue 1611): a post-launch consensus receipt release, recorded under `receipt_releases` (never
- * in `govern`, so stage 13 stays the four unpauses). One entry per receipt: one schedule and one execute at least MAINNET_DELAY_FLOOR apart, the target the
+ * in `govern`, so stage 13 stays the three unpauses). One entry per receipt: one schedule and one execute at least MAINNET_DELAY_FLOOR apart, the target the
  * receipt contract (`consensus_receipt.address`), the calldata releaseReceipt(receipt_id). The list is optional. Any other operation fails.
  */
 const RELEASE_ABI = parseAbi(["function releaseReceipt(bytes32 receiptId)"]);
@@ -159,7 +161,7 @@ function effectiveReadBackProblems(w: string, r: any, vaults: unknown[] | undefi
 }
 
 /**
- * A router voted-vector clear (issue 1743, `govern --row clear-voted-weights`), recorded under `voted_weights_clears` (never in `govern`, so stage 13 stays the four unpauses).
+ * A router voted-vector clear (issue 1743, `govern --row clear-voted-weights`), recorded under `voted_weights_clears` (never in `govern`, so stage 13 stays the three unpauses).
  * One entry per round: ONE timelock call, clearVotedWeights() on the governance contract (`governance.address`), one schedule and one execute at least the floor apart, and the
  * read-back: votedWeightsActive false and the effective weights recorded.
  */
@@ -190,7 +192,44 @@ export function checkVotedWeightsClears(ev: any, floor: number = MAINNET_DELAY_F
 }
 
 /**
- * A single-vault redeploy (issue 1796, the `redeploy-vault` verb and `govern --row redeploy-vault`), recorded under `vault_redeploys` (never in `govern`, so stage 13 stays the four unpauses).
+ * A vault retirement (issue 1912, ADR-0017, `govern --row retire-vault`), recorded under `vault_retirements` (never in `govern`, so stage 13 stays the three unpauses). One entry per round:
+ * ONE timelock batch of two calls, registry.migrateEligibility(vault, false, three legs) then registry.retire(vault), one schedule and one execute at least the floor apart, and the read-back:
+ * the three-leg default vector (`vaults`, `bps`, 10000 bps, the retired vault out), voted_weights_active false and the router's effective weights equal to it. Allowed in every kind: the row
+ * is the governed path on the live production deployment.
+ */
+const retireLabel = (r: any) => `${RETIRE_ROW} ${r?.vault ?? "?"} round ${r?.round ?? 1}`;
+function retireShapeProblems(ev: any, bad: (m: string) => void): any[] {
+  const rs: any[] = ev?.vault_retirements === undefined ? [] : Array.isArray(ev.vault_retirements) ? ev.vault_retirements : (bad("vault_retirements is not a list"), []);
+  if (rs.length > 0 && !ADDR.test(ev?.timelock?.address ?? "")) bad("timelock.address is missing: a vault retirement has no timelock to check");
+  const seen = new Set<string>();
+  for (const r of rs) {
+    const w = retireLabel(r);
+    if (r?.step !== undefined && r.step !== RETIRE_ROW) bad(`${w}: step '${r.step}' is not ${RETIRE_ROW}`);
+    const id = `${lc(String(r?.vault))}:${r?.round ?? 1}`;
+    if (seen.has(id)) bad(`${w}: more than one evidence entry for this round`); else seen.add(id);
+    for (const k of ["vault", "registry", "router", "timelock"]) if (!ADDR.test(r?.[k] ?? "")) bad(`${w}: ${k} is not an address`);
+    if (ADDR.test(r?.registry ?? "") && lc(r.registry) !== lc(ev?.registry?.address ?? "")) bad(`${w}: registry ${r.registry} is not the run's registry ${ev?.registry?.address}`);
+    if (ADDR.test(r?.timelock ?? "") && lc(r.timelock) !== lc(ev?.timelock?.address ?? "")) bad(`${w}: timelock ${r.timelock} is not the run's timelock ${ev?.timelock?.address}`);
+    const vaults: unknown[] = Array.isArray(r?.vaults) ? r.vaults : [];
+    const bps: unknown[] = Array.isArray(r?.bps) ? r.bps : [];
+    if (vaults.length !== STAYING_KEYS.length || vaults.length !== bps.length || !vaults.every((v) => typeof v === "string" && ADDR.test(v)) || new Set(vaults.map((v) => lc(String(v)))).size !== vaults.length) bad(`${w}: vaults and bps are not ${STAYING_KEYS.length} distinct addresses with one weight each`);
+    else if (!bps.every((x) => Number.isInteger(x) && (x as number) >= 0) || (bps as number[]).reduce((t, x) => t + x, 0) !== 10000) bad(`${w}: bps do not sum to 10000`);
+    else if (ADDR.test(r?.vault ?? "") && vaults.some((v) => lc(String(v)) === lc(r.vault))) bad(`${w}: the retired vault ${r.vault} is still in the default vector`);
+    effectiveReadBackProblems(w, r, vaults, bps, false, bad);
+  }
+  return rs;
+}
+/** Offline check of `vault_retirements` alone (shape, both transactions, statuses and the delay floor). An empty list is a pass. */
+export function checkVaultRetirements(ev: any, floor: number = MAINNET_DELAY_FLOOR): string[] {
+  const p: string[] = [];
+  const rs = retireShapeProblems(ev, (m) => p.push(m));
+  forbidCancelFields(rs, (e) => String(e?.step ?? "entry"), (m) => p.push(m));
+  operationProblems(rs.map((r) => ({ ...r, step: retireLabel(r) })), (m) => p.push(m), floor);
+  return p;
+}
+
+/**
+ * A single-vault redeploy (issue 1796, the `redeploy-vault` verb and `govern --row redeploy-vault`), recorded under `vault_redeploys` (never in `govern`, so stage 13 stays the three unpauses).
  * One entry per redeploy: the deploy transactions the deployer sent (`deploy_tx_hashes`, `deploy_count`, all status 1), the vault it replaced (`old_vault`, now Retired) and the vault that replaced
  * it (`new_vault`, the address `vaults.<vault>.address` names), ONE timelock batch of five calls, one schedule and one execute at least the floor apart, and the read-back: the final default
  * vector (`vaults`, `bps`, 10000 bps, the new vault in and the old vault out), voted_weights_active false and the router's effective weights equal to it. A REHEARSAL evidence only: a production
@@ -493,7 +532,7 @@ function kindProblems(ev: any, expected: DeploymentKind, bad: (m: string) => voi
 }
 
 /**
- * Issue 1727: the rehearsal-only govern rows on 8453, recorded under `rehearsal_rows` (never in `govern`, so stage 13 stays the four unpauses). update-delay and batch:
+ * Issue 1727: the rehearsal-only govern rows on 8453, recorded under `rehearsal_rows` (never in `govern`, so stage 13 stays the three unpauses). update-delay and batch:
  * one schedule and one execute at least the floor apart. cancel: a schedule and a cancel_tx, no execute. Refused in production.
  */
 export const REHEARSAL_ROWS = ["update-delay", "batch", "cancel"] as const;
@@ -658,11 +697,12 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   const applications = applicationShapeProblems(ev, bad);
   const clears = clearShapeProblems(ev, bad);
   const redeploys = redeployShapeProblems(ev, kind, bad);
+  const retirements = retireShapeProblems(ev, bad);
   // one operation per unpause, release or application: no schedule or execute transaction, and no timelock operation id, is shared by two operations
-  forbidCancelFields([...govern, ...releases, ...applications, ...clears, ...redeploys, ...(Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : []), ...(Array.isArray(ev?.submitter_registrations) ? ev.submitter_registrations : [])], (e) => String(e?.step ?? "entry"), bad);
+  forbidCancelFields([...govern, ...releases, ...applications, ...clears, ...redeploys, ...retirements, ...(Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : []), ...(Array.isArray(ev?.submitter_registrations) ? ev.submitter_registrations : [])], (e) => String(e?.step ?? "entry"), bad);
   const rrows = rehearsalRowProblems(ev, kind, bad);
   const regs = receiptPathProblems(ev, kind, applications, bad);
-  operationProblems([...govern.map((g) => ({ ...g, step: stepLabel(g) })), ...releases.map((r) => ({ ...r, step: releaseLabel(r) })), ...applications.map((r) => ({ ...r, step: applyLabel(r) })), ...clears.map((r) => ({ ...r, step: clearLabel(r) })), ...redeploys.map((r) => ({ ...r, step: redeployLabel(r) })), ...rowOperations(rrows), ...registrationOperations(regs)], bad, floor);
+  operationProblems([...govern.map((g) => ({ ...g, step: stepLabel(g) })), ...releases.map((r) => ({ ...r, step: releaseLabel(r) })), ...applications.map((r) => ({ ...r, step: applyLabel(r) })), ...clears.map((r) => ({ ...r, step: clearLabel(r) })), ...retirements.map((r) => ({ ...r, step: retireLabel(r) })), ...redeploys.map((r) => ({ ...r, step: redeployLabel(r) })), ...rowOperations(rrows), ...registrationOperations(regs)], bad, floor);
   if (!ADDR.test(ev?.deployer ?? "")) bad("deployer address is missing");
   if (!ADDR.test(ev?.registry?.address ?? "")) bad("registry address is missing");
   if (!Number.isInteger(ev?.deployer_nonce_final)) bad("deployer_nonce_final is missing");
@@ -835,9 +875,10 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
   p.push(...(await checkGovernedUpgradesOnChain(ev, chain)));
   p.push(...(await checkVotedWeightsClearsOnChain(ev, chain, FLOOR)));
   p.push(...(await checkVaultRedeploysOnChain(ev, chain, FLOOR)));
+  p.push(...(await checkVaultRetirementsOnChain(ev, chain, FLOOR)));
   if (kind === "rehearsal") { p.push(...(await checkRehearsalRowsOnChain(ev, chain, FLOOR))); p.push(...(await checkReceiptPathOnChain(ev, chain, FLOOR))); }
   // The unpause govern rows and the depositsPaused() reads must tell one story: a vault is unpaused on chain exactly when its LATEST unpause round executed
-  // (all four vaults deploy paused, issue 1710). Issue 1833: the unpaused-without-receipt alarm holds for every vault whatever the table's deployPaused says,
+  // (all three vaults deploy paused, issue 1710). Issue 1833: the unpaused-without-receipt alarm holds for every vault whatever the table's deployPaused says,
   // so a table edit to deployPaused=false can never silence it.
   for (const { key: b, unpauseRow } of opts?.vaultRules ?? VAULT_RULES) {
     const rows = (ev.govern ?? []).filter((g: any) => g?.step === unpauseRow).sort((x: any, y: any) => roundOf(x) - roundOf(y));
@@ -964,6 +1005,53 @@ export async function checkVotedWeightsClearsOnChain(ev: any, chain: ChainReader
     const ex = await status(`${w} execute`, r.execute_tx);
     if (!ex) continue;
     if (!timelockEvents(ex, ev.timelock.address, "CallExecuted").some((x) => lc(x.id) === lc(e.id) && lc(x.target) === lc(ev.governance.address) && lc(x.data) === lc(want))) bad(`${w}: the execute tx has no CallExecuted event for the scheduled clear`);
+    const gap = (await ts(ex)) - schedTs;
+    if (!(gap >= floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${floor} s`);
+  }
+  return p;
+}
+
+/**
+ * Chain check of `vault_retirements` (issue 1912). Each entry is ONE timelock batch of two calls with one operation id: the schedule tx has exactly two CallScheduled events, index 0 and 1,
+ * whose targets and calldata are rebuilt from the recorded vault and vector (migrateEligibility(vault, false, three legs), retire(vault)), each with a delay of at least the floor. The execute tx has
+ * the two matching CallExecuted events. The block gap is at least the floor. It does not read the chain id: a Twin run uses it too.
+ */
+export async function checkVaultRetirementsOnChain(ev: any, chain: ChainReader, floor: number = MAINNET_DELAY_FLOOR): Promise<string[]> {
+  const p: string[] = [];
+  const bad = (m: string) => p.push(m);
+  const ts = async (rc: { blockNumber: bigint }) => Number((await chain.getBlock({ blockNumber: rc.blockNumber })).timestamp);
+  const status = async (what: string, hash: string) => {
+    try {
+      const rc = await chain.getTransactionReceipt({ hash: hash as Hex });
+      if (rc.status !== "success") bad(`${what}: receipt on chain is ${rc.status}`);
+      return rc;
+    } catch (e) { bad(`${what}: receipt not readable on chain (${(e as Error).message})`); return undefined; }
+  };
+  for (const r of Array.isArray(ev?.vault_retirements) ? ev.vault_retirements : []) {
+    const w = retireLabel(r);
+    if (!ADDR.test(r?.vault ?? "") || !ADDR.test(r?.registry ?? "") || !ADDR.test(ev?.timelock?.address ?? "") || !Array.isArray(r?.vaults) || !Array.isArray(r?.bps) || !TX.test(r?.schedule_tx ?? "") || !TX.test(r?.execute_tx ?? "")) continue; // the offline check already named it
+    let want: ReturnType<typeof buildRetireCalls>;
+    try { want = buildRetireCalls({ registry: r.registry, vault: r.vault, finalVaults: r.vaults, finalBps: r.bps }); } catch { continue; } // the offline check already named it
+    const sc = await status(`${w} schedule`, r.schedule_tx);
+    if (!sc) continue;
+    const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled").sort((x, y) => Number(x.index - y.index));
+    if (scheduled.length === 0) { bad(`${w}: the schedule tx has no CallScheduled event from the timelock`); continue; }
+    if (scheduled.length !== want.length) bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, a retire round is exactly ${want.length} calls in one batch`);
+    scheduled.forEach((e, i) => {
+      const c = want[i];
+      if (c === undefined) { bad(`${w}: CallScheduled call ${i} is not part of a retire round`); return; }
+      if (lc(e.target) !== lc(c.target)) bad(`${w}: CallScheduled call ${i} target ${e.target} is not ${c.target} (${c.label})`);
+      else if (lc(e.data) !== lc(c.data)) bad(`${w}: CallScheduled call ${i} calldata is not ${c.label}`);
+      if (e.index !== BigInt(i)) bad(`${w}: CallScheduled call ${i} has batch index ${e.index}`);
+      if (!(e.delay !== undefined && e.delay >= BigInt(floor))) bad(`${w}: CallScheduled delay ${e.delay} is under ${floor} s`);
+      if (lc(e.id) !== lc(scheduled[0]!.id)) bad(`${w}: the batch calls are not one operation (${e.id} and ${scheduled[0]!.id})`);
+    });
+    if (typeof r.operation_id === "string" && lc(r.operation_id) !== lc(scheduled[0]!.id)) bad(`${w}: operation_id ${r.operation_id} is not the scheduled operation ${scheduled[0]!.id}`);
+    const schedTs = await ts(sc);
+    const ex = await status(`${w} execute`, r.execute_tx);
+    if (!ex) continue;
+    const executed = timelockEvents(ex, ev.timelock.address, "CallExecuted").filter((e) => lc(e.id) === lc(scheduled[0]!.id)).sort((x, y) => Number(x.index - y.index));
+    if (executed.length !== want.length || !executed.every((e, i) => lc(e.target) === lc(want[i]!.target) && lc(e.data) === lc(want[i]!.data))) bad(`${w}: the execute tx has no CallExecuted events for the two scheduled calls`);
     const gap = (await ts(ex)) - schedTs;
     if (!(gap >= floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${floor} s`);
   }
@@ -1399,6 +1487,26 @@ async function checkRedeploysMain(values: Record<string, string | boolean | unde
   console.log(`evidence ok (${entries.length} vault redeploy entr${entries.length === 1 ? "y" : "ies"}${values.rpc ? ", chain read" : ", offline shape only"})`);
 }
 
+/**
+ * `--vault-retirements RUN_MANIFEST --registry ADDR --timelock ADDR [--delay-floor S] [--rpc URL]` (issue 1912, ADR-0017): the `vault_retirements` entries a `govern --row retire-vault` run wrote.
+ * Offline: the shape, the three-leg vector and the delays. With --rpc: each batch is read from the chain (two CallScheduled and two CallExecuted events with the rebuilt calldata). The Twin
+ * upgrade rehearsal runs it on its retirement of a populated fourth vault.
+ */
+async function checkRetirementsMain(values: Record<string, string | boolean | undefined>, kind: DeploymentKind): Promise<void> {
+  const need = ["registry", "timelock"].filter((k) => typeof values[k] !== "string");
+  if (need.length) { console.error(`evidence: --vault-retirements needs ${need.map((k) => `--${k}`).join(", ")}`); process.exit(2); }
+  const m = JSON.parse(readFileSync(values["vault-retirements"] as string, "utf8"));
+  const entries: any[] = Array.isArray(m.vault_retirements) ? m.vault_retirements : [];
+  const ev = { deployment_kind: kind, registry: { address: values.registry }, timelock: { address: values.timelock }, vault_retirements: entries };
+  const { createPublicClient, http } = await import("viem");
+  const reader = typeof values.rpc === "string" ? createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader : undefined;
+  const floor = await floorArg(values, kind, reader);
+  const problems = [...(entries.length > 0 ? [] : ["the run manifest has no vault_retirements entry"]), ...checkVaultRetirements(ev, floor)];
+  if (reader) problems.push(...(await checkVaultRetirementsOnChain(ev, reader, floor)));
+  if (problems.length) { for (const x of problems) console.error(`evidence: ${x}`); process.exit(1); }
+  console.log(`evidence ok (vault retirements: ${entries.length} retirement(s)${values.rpc ? ", chain read" : ", offline shape only"})`);
+}
+
 /** An eth_call that returns the revert data, or undefined when the call succeeds. Raw JSON-RPC: the revert data is the error's `data`. */
 export function rpcCallRevert(url: string): LifecycleChain["callRevert"] {
   return async ({ from, to, data }) => {
@@ -1452,7 +1560,7 @@ async function checkGovernedUpgradesMain(values: Record<string, string | boolean
 }
 
 async function main() {
-  const { values } = parseArgs({ options: { evidence: { type: "string" }, "governed-upgrades": { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "deployment-kind": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "upgrade-lifecycle": { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" }, "vault-redeploys": { type: "string" }, registry: { type: "string" } } });
+  const { values } = parseArgs({ options: { evidence: { type: "string" }, "governed-upgrades": { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "deployment-kind": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "upgrade-lifecycle": { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" }, "vault-redeploys": { type: "string" }, "vault-retirements": { type: "string" }, registry: { type: "string" } } });
   const kindArg = values["deployment-kind"] ?? "production";
   if (!(DEPLOYMENT_KINDS as readonly string[]).includes(kindArg)) { console.error(`evidence: --deployment-kind must be ${DEPLOYMENT_KINDS.join(" or ")}`); process.exit(2); }
   const kind = kindArg as DeploymentKind;
@@ -1460,6 +1568,7 @@ async function main() {
   if (values["governed-upgrades"]) return checkGovernedUpgradesMain(values, kind);
   if (values["receipt-applications"]) return checkApplicationsMain(values, kind);
   if (values["vault-redeploys"]) return checkRedeploysMain(values, kind);
+  if (values["vault-retirements"]) return checkRetirementsMain(values, kind);
   if (!values.evidence) { console.error("missing --evidence FILE"); process.exit(2); }
   const ev = JSON.parse(readFileSync(values.evidence, "utf8"));
   let counts: Record<string, number> | undefined;

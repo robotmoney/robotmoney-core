@@ -119,7 +119,7 @@ describe("core harness contract: the argument vector and environment core builds
     if (r.code !== 0) console.error(r.stderr.split("\n").slice(-8).join("\n"));
     expect(r.code).toBe(0);
     const rows = parseGovernOutput(r.stdout);
-    // the default sheet unpauses all four vaults (rmUSDC and the three baskets). The unpauses are scheduled in one sitting (all scheduled lines first), then executed; the Twin-only rows follow, one round each
+    // the default sheet unpauses all three vaults (rmUSDC and the three baskets). The unpauses are scheduled in one sitting (all scheduled lines first), then executed; the Twin-only rows follow, one round each
     const unpauses = [...UNPAUSE_ROWS];
     const twinOnly = TWIN_ONLY_ROWS;
     expect(GOVERN_ROWS.length as number).toBe(UNPAUSE_ROWS.length + twinOnly.length);

@@ -20,18 +20,19 @@ import {
 import { beginPauseEntry, loadRunManifest, newManifest, saveRunManifest, type RunManifest } from "../src/runner.ts";
 import { stageByName } from "../src/stages.ts";
 import { checkEvidence, checkReceiptApplications, checkVaultRedeploys, checkVaultRedeploysOnChain } from "../src/evidence-check.ts";
-import { A, addr, fakeTimelock, sender, setup, signers, writeGovernManifests } from "./govern-world.ts";
+import { A, RETIRED_VAULT, addr, fakeTimelock, sender, setup, signers, writeGovernManifests } from "./govern-world.ts";
 import { ADMIN, typedPrompt, world } from "./harness.ts";
 import { COUNTS, SHA, SHA2, healthyPoolReader, tmp, writeCounts } from "./fixtures.ts";
 import type { ChainReader } from "../src/verify/types.ts";
 import { ADMIN_ROLE } from "../src/verify/constants.ts";
 
-const USDC = A.vaults.USDC, OLD = A.vaults.PROTO, AGENT = A.vaults.AGENT, RWA = A.vaults.RWA;
+// The redeploy builders are generic in the number of legs. The fixture is the live four-vault v0.5.0 deployment (AGENT is its rmAGENT, a retired vault in the target state, ADR-0017).
+const USDC = A.vaults.USDC, OLD = A.vaults.PROTO, AGENT = RETIRED_VAULT, RWA = A.vaults.RWA;
 const NEW = addr(0x3012);
 const DEF_VAULTS = [USDC, OLD, AGENT, RWA];
 const DEF_BPS = [8550, 525, 575, 350];
 const REHEARSAL = { DEPLOYMENT_KIND: "rehearsal", TIMELOCK_MIN_DELAY: "900", GOVERN_NEW_DELAY: "1800", SAFE_SALT_NONCE: "7" };
-const ALL = { ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:8550,PROTO:525,AGENT:575,RWA:350" };
+const ALL = { ELIGIBLE_VAULTS: "PROTO,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,RWA", ROUTER_WEIGHTS: "USDC:8550,PROTO:1100,RWA:350" };
 const lc = (x: string) => x.toLowerCase();
 
 describe("the vectors", () => {
@@ -208,7 +209,7 @@ function chainOf(o: { listed?: readonly Address[]; oldStatus?: number; oldEligib
 
 function verbWorld(o: { chainId?: number; sheet?: Record<string, string | null>; manifest?: Partial<RunManifest> | null } = {}) {
   const chainId = o.chainId ?? 918453;
-  const w = world({ chainId, sheet: { ...ALL, ...(chainId === 8453 ? { ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0" } : {}), ...(o.sheet ?? {}) } });
+  const w = world({ chainId, sheet: { ...ALL, ...(chainId === 8453 ? { ROUTER_WEIGHTS: "USDC:9500,PROTO:500,RWA:0" } : {}), ...(o.sheet ?? {}) } });
   const dir = join(w.coreDir, "deployments", String(chainId));
   writeGovernManifests(dir);
   writeFileSync(join(dir, "libs.json"), JSON.stringify({ tick_math: addr(0x7001) }));
@@ -235,8 +236,9 @@ describe("the redeploy-vault verb", () => {
     expect(rec.retired_manifest).toBe("protocol-asset-vault.retired-1.json");
     expect(JSON.parse(readFileSync(join(t.dir, rec.retired_manifest!), "utf8")).vault).toBe(OLD);
     expect(existsSync(join(t.dir, "protocol-asset-vault.redeploy.json"))).toBe(false);
-    // the other three manifests are untouched
-    expect(JSON.parse(readFileSync(join(t.dir, "agent-token-vault.json"), "utf8")).vault).toBe(AGENT);
+    // the other manifests are untouched
+    expect(JSON.parse(readFileSync(join(t.dir, "vault.json"), "utf8")).vault).toBe(A.vaults.USDC);
+    expect(JSON.parse(readFileSync(join(t.dir, "rwa-basket-vault.json"), "utf8")).vault).toBe(RWA);
   });
   test("forge runs the redeploy script with the timelock, the emergency key and the deployer, simulated first, then broadcast once", async () => {
     const t = verbWorld();
@@ -473,6 +475,7 @@ describe("the redeploy-vault verb", () => {
 function rowWorld(chainId = 918453, sheetOver: Record<string, string | null> = {}) {
   const d = setup({ ...ALL, ...(chainId === 8453 ? REHEARSAL : {}), ...sheetOver }, chainId);
   const tl = fakeTimelock(d.sheet, 900n);
+  tl.s.listed = [USDC, OLD, AGENT, RWA]; // the live four-vault v0.5.0 deployment
   tl.s.vaultCaps.set(OLD, 525000n);
   tl.s.weights = { vaults: [...DEF_VAULTS], bps: DEF_BPS.map(BigInt) };
   tl.s.paused = new Set([NEW]); // the old vault was unpaused by stage 13; the new one deploys closed
@@ -559,7 +562,7 @@ describe("the govern row", () => {
     expect(w.tl.s.events).toEqual(["scheduleBatch:redeploy-vault", "scheduleBatch:redeploy-vault"]);
   });
   test("refused on 8453 in production, with nothing scheduled", async () => {
-    const w = rowWorld(8453, { DEPLOYMENT_KIND: null, TIMELOCK_MIN_DELAY: "172800", GOVERN_NEW_DELAY: "172800", SAFE_SALT_NONCE: null, ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0" });
+    const w = rowWorld(8453, { DEPLOYMENT_KIND: null, TIMELOCK_MIN_DELAY: "172800", GOVERN_NEW_DELAY: "172800", SAFE_SALT_NONCE: null, ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,RWA:0" });
     await expect(w.go()).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("refused on chain 8453 in production") });
     expect(w.tl.s.events).toEqual([]);
   });
@@ -922,7 +925,7 @@ describe("the sha model (QA plan v1 E1): which sha the govern row and the verify
   test("verify is refused with USAGE when the model cannot check it: the original sha after a round at FIX, FIX without --prior-out, a --prior-out of another sha or outside a checkout, two other builds", () => {
     const usage = (m: ReturnType<typeof run>, i: Parameters<typeof redeployShaRun>[1], text: string) => expect(failure(() => redeployShaRun(m, i))).toMatchObject({ kind: "USAGE", message: expect.stringContaining(text) });
     usage(run(round()), { coreSha: ORIGINAL, path: "verify" }, `verify --core-sha ${FIX} --prior-out`);
-    usage(run(round({ status: "deployed" })), { coreSha: ORIGINAL, path: "verify" }, "pauses all four vaults");
+    usage(run(round({ status: "deployed" })), { coreSha: ORIGINAL, path: "verify" }, "pauses all three vaults");
     usage(run(round()), { coreSha: FIX, path: "verify" }, "needs --prior-out");
     usage(run(round()), { coreSha: FIX, path: "verify", priorOut: "/o" }, "not inside a git checkout");
     usage(run(round()), { coreSha: FIX, path: "verify", priorOut: "/o", priorOutSha: FIX }, `not at the original deployment sha ${ORIGINAL}`);
@@ -933,9 +936,9 @@ describe("the sha model (QA plan v1 E1): which sha the govern row and the verify
 
   test("a stage set that reaches the verify stage after a round at FIX is refused with USAGE at the original sha and at FIX, and its --prior-out is checked; never a pair", () => {
     const usage = (m: ReturnType<typeof run> | undefined, i: Parameters<typeof redeployShaRun>[1], text: string) => expect(failure(() => redeployShaRun(m, i))).toMatchObject({ kind: "USAGE", message: expect.stringContaining(text) });
-    // the original sha: its verify stage would compare the replacing vault with the original build, fail and pause all four vaults
+    // the original sha: its verify stage would compare the replacing vault with the original build, fail and pause all three vaults
     usage(run(round()), { coreSha: ORIGINAL, path: "stage-set" }, `verify --core-sha ${FIX} --prior-out`);
-    usage(run(round()), { coreSha: ORIGINAL, path: "stage-set", priorOut: "/o", priorOutSha: ORIGINAL }, "pauses all four vaults");
+    usage(run(round()), { coreSha: ORIGINAL, path: "stage-set", priorOut: "/o", priorOutSha: ORIGINAL }, "pauses all three vaults");
     // the redeploy sha: only the verify alone may name it
     usage(run(round()), { coreSha: FIX, path: "stage-set", priorOut: "/o", priorOutSha: ORIGINAL }, "only the verify alone");
     // a --prior-out of the wrong build or outside a checkout, with or without a round, and before any run manifest exists

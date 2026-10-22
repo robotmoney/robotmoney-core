@@ -24,9 +24,9 @@ describe("preflight (--dry-run)", () => {
     expect(code).toBe(0);
     const forge = calls(w).filter((c) => c.tool === "forge" && c.args[0] === "script");
     const scripts = forge.map((c) => c.args[1]!.split(":")[1]);
-    for (const st of ["vault", "proto", "agent", "rwa", "timelock"]) expect(scripts).toContain(contractOf(st));
+    for (const st of ["vault", "proto", "rwa", "timelock"]) expect(scripts).toContain(contractOf(st));
     expect(scripts).not.toContain("DeployGateway"); // issue 1892: the vaults run simulates no gateway stage
-    expect(forge.filter((c) => !c.args.includes("--broadcast")).length).toBe(11);
+    expect(forge.filter((c) => !c.args.includes("--broadcast")).length).toBe(9);
     // a stage is applied to the local chain only (so the next stage finds its contracts), never to the target RPC
     for (const c of forge.filter((c) => c.args.includes("--broadcast"))) { expect(c.rpcEnv).toBe(LOCAL_RPC); expect(c.args).toContain("--unlocked"); }
     expect(w.logs().filter((l) => l.event === "stage.broadcast").length).toBe(0);
@@ -82,7 +82,7 @@ describe("preflight (--dry-run)", () => {
   });
   test("a failing simulation of one vault script fails the preflight and the chain is still stopped", async () => {
     const w = world();
-    w.cfg.simFails = SCRIPT.agent;
+    w.cfg.simFails = SCRIPT.rwa;
     expect(await w.run(["--stage", "deploy", "--dry-run"])).not.toBe(0);
     expect(w.chainEvents).toEqual(["start", "stop"]);
   });

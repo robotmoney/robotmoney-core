@@ -5,14 +5,12 @@
       "description": "The treasury product: vaults, registry, router, governance, receipt and the timelock handover. It needs no gateway.",
       "stages": [
         "libs",
-        "recorder",
         "vault",
         "registry",
         "router",
         "receipt",
         "governance",
         "proto",
-        "agent",
         "rwa",
         "timelock"
       ],
@@ -42,22 +40,6 @@
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/libs.json",
-      "libraries": [],
-      "vault": null
-    },
-    {
-      "name": "recorder",
-      "system": "vaults",
-      "kind": "forge",
-      "script": "contracts/script/DeployUniswapV4PriceRecorder.s.sol:DeployUniswapV4PriceRecorder",
-      "requiredEnv": [
-        "DEPLOYMENT_OUT"
-      ],
-      "optionalEnv": [
-        "EXPECTED_CHAIN_ID"
-      ],
-      "manifest": "deployments/<chain>/recorder.json",
-      "manifestNotes": "The permissionless Uniswap V4 price recorder for the V4 pool of the shortlist entry (the BNKR/USDC test pool while RM is parked, ADR-0016; core 1676). It runs right after libs so the 1800 s price history accumulates while the other stages run. The runner waits for a full window of history before the agent stage. While RM is parked the pool is the BNKR test asset pool of the shortlist (ADR-0016). No role is involved.",
       "libraries": [],
       "vault": null
     },
@@ -281,52 +263,6 @@
       ]
     },
     {
-      "name": "agent",
-      "system": "vaults",
-      "kind": "forge",
-      "script": "contracts/script/DeployAgentTokenVault.s.sol:DeployAgentTokenVault",
-      "requiredEnv": [
-        "ADMIN_ADDRESS",
-        "SWAP_ROUTER",
-        "RECORDER_ADDRESS",
-        "REGISTRY_ADDRESS",
-        "TVL_CAP",
-        "PER_DEPOSIT_CAP",
-        "FEE_RECIPIENT",
-        "EXIT_FEE_BPS",
-        "NAV_DEVIATION_BPS",
-        "MIN_POOL_LIQUIDITY",
-        "ROUTER_DEFAULT_BPS",
-        "SAFE_ADDRESS",
-        "TIMELOCK_MIN_DELAY",
-        "UPGRADE_MODE",
-        "DEPLOYMENT_OUT"
-      ],
-      "optionalEnv": [
-        "EXPECTED_CHAIN_ID"
-      ],
-      "manifest": "deployments/<chain>/agent-token-vault.json",
-      "libraries": [
-        "tick_math"
-      ],
-      "vault": "AGENT",
-      "create2Libraries": [
-        "BasketAssetConfigGuard",
-        "TwapTickMath",
-        "BasketViews",
-        "BasketSwaps",
-        "GovernedUpgrade"
-      ],
-      "proxies": [
-        {
-          "field": "vault",
-          "implementationField": "implementation",
-          "contract": "AgentTokenVault",
-          "layout": "contracts/test/fixtures/storage-layout/AgentTokenVault.json"
-        }
-      ]
-    },
-    {
       "name": "rwa",
       "system": "vaults",
       "kind": "forge",
@@ -478,11 +414,10 @@
   },
   "govern": {
     "stage": 13,
-    "description": "After the timelock handover the only mainnet operation is the unpause of each of the four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), all four deployed paused: one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait, then executed. Vault setters, router eligibility and router default weights are deploy-time configuration set by the deployer in stages 4 to 10, before the handover, and asserted by the verify stage. There is no voting by anyone. Router weights change on demand through the apply-receipt row (core 1696): the Safe schedules RouterGovernance.applyReceipt on the timelock, never in stage 13. update-delay, batch and cancel are Twin-only demonstrations of the Safe tool and are refused on 8453.",
+    "description": "After the timelock handover the only mainnet operation is the unpause of each of the three vaults (rmUSDC, rmPROTO, rmRWA), all three deployed paused (rmAGENT is retired under ADR-0009 and ADR-0017: no stage deploys it): one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait, then executed. Vault setters, router eligibility and router default weights are deploy-time configuration set by the deployer in stages 4 to 10, before the handover, and asserted by the verify stage. There is no voting by anyone. Router weights change on demand through the apply-receipt row (core 1696): the Safe schedules RouterGovernance.applyReceipt on the timelock, never in stage 13. update-delay, batch and cancel are Twin-only demonstrations of the Safe tool and are refused on 8453.",
     "mainnetRows": [
       "unpause-USDC",
       "unpause-PROTO",
-      "unpause-AGENT",
       "unpause-RWA"
     ],
     "twinOnlyRows": [
@@ -568,24 +503,6 @@
       "registryNameSource": "script-constant"
     },
     {
-      "key": "AGENT",
-      "stage": "agent",
-      "artifact": "AgentTokenVault",
-      "manifest": "deployments/<chain>/agent-token-vault.json",
-      "deployPaused": true,
-      "unpauseRow": "unpause-AGENT",
-      "unpauseInStage13": true,
-      "seed": null,
-      "eligibilitySource": "sheet:ROUTER_DEFAULT_BPS",
-      "emergencyLevers": [
-        "pauseDeposits",
-        "emergencyUnwind",
-        "emergencyUnwindWithOverride",
-        "shutdownVault"
-      ],
-      "registryNameSource": "script-constant"
-    },
-    {
       "key": "RWA",
       "stage": "rwa",
       "artifact": "RwaBasketVault",
@@ -606,11 +523,11 @@
   ],
   "vaultRuleDecisions": {
     "seed": {
-      "reason": "rmUSDC is seeded with 1 USDC (SEED_DEPOSIT_USDC) to the seed share receiver (owner D3, 2026-10-01). The baskets take no seed: the 18-decimal virtual share offset protects all four vaults (issue 1705 Q6 (a)).",
+      "reason": "rmUSDC is seeded with 1 USDC (SEED_DEPOSIT_USDC) to the seed share receiver (owner D3, 2026-10-01). The baskets take no seed: the 18-decimal virtual share offset protects all three vaults (issue 1705 Q6 (a)).",
       "decision": "https://github.com/robotmoney/robotmoney-core/issues/1705"
     },
     "eligibilitySource": {
-      "reason": "rmUSDC is the router's base leg: the router stage makes it eligible and sets the first default vector before any basket exists. Each basket stage makes itself eligible from the sheet's ROUTER_DEFAULT_BPS in one migrateEligibility, and the last one leaves exactly the sheet's ROUTER_WEIGHTS, which names all four vaults. Issue 1705 Q4 (a) fixes the sheet format: ELIGIBLE_VAULTS=PROTO,AGENT,RWA with rmUSDC in ROUTER_WEIGHTS, the same on the Twin chain and on 8453 (docs/technical/governance-isomorphism.md 1.1).",
+      "reason": "rmUSDC is the router's base leg: the router stage makes it eligible and sets the first default vector before any basket exists. Each basket stage makes itself eligible from the sheet's ROUTER_DEFAULT_BPS in one migrateEligibility, and the last one leaves exactly the sheet's ROUTER_WEIGHTS, which names all three vaults. Issue 1705 Q4 (a) fixes the sheet format: ELIGIBLE_VAULTS=PROTO,RWA with rmUSDC in ROUTER_WEIGHTS, the same on the Twin chain and on 8453 (docs/technical/governance-isomorphism.md 1.1).",
       "decision": "https://github.com/robotmoney/robotmoney-core/issues/1705"
     },
     "emergencyLevers": {
@@ -669,8 +586,6 @@
     "registry": "VaultRegistry",
     "governance": "RouterGovernance",
     "timelock": "ProposerFloorTimelock",
-    "receipt": "ConsensusRecommendationReceipt",
-    "recorder": "UniswapV4PriceRecorder",
-    "v4Adapter": "UniswapV4SwapAdapter"
+    "receipt": "ConsensusRecommendationReceipt"
   }
 }

@@ -113,7 +113,7 @@ describe("four-vault rule", () => {
     const table = JSON.parse(read("scripts/deploy/stage-table.json")) as { vaults: { key: string; deployPaused: boolean; unpauseInStage13: boolean }[] };
     // the docs' sentence is the table's rule: written for the case every vault deploys paused and stage 13 opens every vault
     expect(table.vaults.map((v) => [v.key, v.deployPaused, v.unpauseInStage13])).toEqual(table.vaults.map((v) => [v.key, true, true]));
-    const rule = "all four vaults deploy paused, and stage 13 unpauses all four through the Safe and the timelock";
+    const rule = "all three vaults deploy paused, and stage 13 unpauses all three through the Safe and the timelock";
     for (const doc of ["docs/prd.md", "docs/operations/contract-release-runbooks.md", "docs/technical/security-model.md", "docs/technical/smart-contracts.md"]) {
       const text = flat(doc);
       expect([doc, text.includes(rule)]).toEqual([doc, true]);

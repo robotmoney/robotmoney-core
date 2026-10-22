@@ -56,8 +56,8 @@ function scheduleLog(w: World, target: `0x${string}`, id: Hex, pending = true, d
 const ALL_ADDRS = () => [...Object.values(ADDR), addr(0x4ec)];
 
 describe("the full proxied core set (issue 1809)", () => {
-  test("the stage table names the nine proxied core contracts, and a healthy frozen deployment passes every label and claims core immutability", async () => {
-    expect(ALL).toEqual(["vault[rmUSDC]", "registry", "router", "gateway", "receipt", "governance", "vault[rmPROTO]", "vault[rmAGENT]", "vault[rmRWA]"]);
+  test("the stage table names the eight proxied core contracts, and a healthy frozen deployment passes every label and claims core immutability", async () => {
+    expect(ALL).toEqual(["vault[rmUSDC]", "registry", "router", "gateway", "receipt", "governance", "vault[rmPROTO]", "vault[rmRWA]"]);
     const w = buildWorld();
     const r = await verifyDeployment(w.opts);
     expect(failed(r)).toEqual([]);
@@ -160,7 +160,7 @@ describe("each proxy label fails on its own defect", () => {
     expect(failed(await verifyDeployment(w.opts))).toEqual([L("governance", 7), CLAIM_LABEL]);
     const n = buildWorld();
     delete n.opts.coreDir;
-    expect(failed(await verifyDeployment(n.opts))).toEqual(["vault[rmAGENT]: lists exactly the shortlist asset of the config", ...ALL.map((x) => L(x, 7)), CLAIM_LABEL]);
+    expect(failed(await verifyDeployment(n.opts))).toEqual([...ALL.map((x) => L(x, 7)), CLAIM_LABEL]);
   });
   test("a sheet with no release mode fails the mode label and every freeze and manifest-mode label", async () => {
     const w = buildWorld();
@@ -227,7 +227,7 @@ describe("the freeze deadline alerts before the deadline (issue 1842)", () => {
   test("before deadline - (delay + 7 days) the label passes quietly", async () => {
     const d = await detail(world(at - DELAY - 7n * DAY - 1n));
     expect(d.failed).toEqual([]);
-    expect(d.detail).toMatch(/^deadline 2027-01-31T00:00:00Z, 9 of 9 proxies still upgradeable$/);
+    expect(d.detail).toMatch(/^deadline 2027-01-31T00:00:00Z, 8 of 8 proxies still upgradeable$/);
   });
   test("WARN at deadline - (delay + 7 days): passes, names every unfrozen proxy and the govern row", async () => {
     const w = world(at - DELAY - 7n * DAY);
@@ -351,7 +351,7 @@ describe("source verification covers both halves of every proxy (issue 1809)", (
       expect(c[n]?.toLowerCase(), n).toBe((ADDR[n] ?? addr(0x4ec)).toLowerCase());
       expect(c[`${n} implementation`]?.toLowerCase(), n).toBe(IMPLS[n]!.toLowerCase());
     }
-    // the timelock, the recorder and the library have no implementation entry: they are direct deployments
-    for (const n of ["timelock", "recorder", "library[tick_math]"]) { expect(c[n]).toBeTruthy(); expect(c[`${n} implementation`]).toBeUndefined(); }
+    // the timelock and the library have no implementation entry: they are direct deployments
+    for (const n of ["timelock", "library[tick_math]"]) { expect(c[n]).toBeTruthy(); expect(c[`${n} implementation`]).toBeUndefined(); }
   });
 });

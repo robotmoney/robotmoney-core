@@ -45,7 +45,7 @@ describe("the create2 libraries of the table and their addresses", () => {
   test("the table lists the basket libraries and the proxy libraries (issue 1808), and every stage that deploys a proxied contract lists some", () => {
     const t = getStageTable();
     expect(t.create2Libraries!.map((l) => l.artifact)).toEqual(["BasketAssetConfigGuard", "TwapTickMath", "BasketViews", "BasketSwaps", "GovernedUpgrade", "RobotMoneyVaultOps", "GatewayWindows"]);
-    expect(t.stages.filter((s) => s.create2Libraries?.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "receipt", "governance", "proto", "agent", "rwa", "gateway"]);
+    expect(t.stages.filter((s) => s.create2Libraries?.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "receipt", "governance", "proto", "rwa", "gateway"]);
   });
   test("each basket stage lists exactly the libraries its built vault links (linkReferences of the built artifacts), so a mislisted library cannot hide a dropped creation", () => {
     const t = getStageTable();
@@ -83,7 +83,7 @@ describe("a fresh run: the first basket stage creates the libraries itself", () 
     expect(await w.run(["--stage", "deploy"])).toBe(0);
     const m = manifest(w);
     expect(m.stages.proto.created).toEqual(THREE.map((b) => b.address.toLowerCase()));
-    for (const s of ["libs", "proto", "agent", "rwa"]) expect(m.stages[s].adopted).toBeUndefined();
+    for (const s of ["libs", "proto", "rwa"]) expect(m.stages[s].adopted).toBeUndefined();
     expect(w.state().nonces[A]).toBe(sum + PROOF_TX_NONCES);
   });
 });
@@ -92,7 +92,7 @@ describe("a fresh measuring run", () => {
   test("adopts nothing: the libraries the first basket stage created are not adopted by the later basket stages, and the counts file is unmarked", async () => {
     const w = proWorld({ plan: THREE, writeFrozen: false });
     expect(await w.run(["--stage", "deploy"])).toBe(0);
-    for (const s of ["proto", "agent", "rwa"]) expect(manifest(w).stages[s].adopted).toBeUndefined();
+    for (const s of ["proto", "rwa"]) expect(manifest(w).stages[s].adopted).toBeUndefined();
     const f = JSON.parse(readFileSync(join(w.countsDir, `${SHA}.json`), "utf8"));
     expect(f.measured.adopted).toBeUndefined();
   });
@@ -107,7 +107,7 @@ describe("a run where the libraries already exist", () => {
     expect(p).toMatchObject({ status: "done", adopted: true, count: COUNTS.proto, dryRunCount: COUNTS.proto! - N, broadcastCount: COUNTS.proto! - N });
     expect(p.adoption.deployerTxs).toBe(COUNTS.proto! - N);
     expect(p.adoption.libraries.map((l: any) => [l.name, l.address.toLowerCase(), l.codeHash])).toEqual(THREE.map((b) => [b.name, b.address.toLowerCase(), b.runtimeHash]));
-    for (const s of ["agent", "rwa"]) expect(manifest(w).stages[s].adopted).toBeUndefined();
+    for (const s of ["rwa"]) expect(manifest(w).stages[s].adopted).toBeUndefined();
     expect(w.state().nonces[A]).toBe(sum - N + PROOF_TX_NONCES);
     expect(w.logs().some((l) => l.event === "run.nonce_ok" && l.summed_frozen_counts === sum - N)).toBe(true);
   });
@@ -116,7 +116,7 @@ describe("a run where the libraries already exist", () => {
     const w = proWorld({ have: THREE });
     expect(await w.run(["--stage", "deploy"])).toBe(0);
     const m = manifest(w);
-    expect(m.stages.agent.startNonce).toBe(m.stages.proto.startNonce + COUNTS.proto! - N);
+    expect(m.stages.rwa.startNonce).toBe(m.stages.proto.startNonce + COUNTS.proto! - N);
   });
 
   test("partial: two exist, one is still planned: the stage adopts exactly two", async () => {
@@ -129,7 +129,7 @@ describe("a run where the libraries already exist", () => {
     expect(w.state().nonces[A]).toBe(sum - 2 + PROOF_TX_NONCES);
   });
 
-  test("all four: TickMath in libs and the three in proto, one full run, the nonce is the frozen sum less libs less three plus the proof", async () => {
+  test("all three: TickMath in libs and the three in proto, one full run, the nonce is the frozen sum less libs less three plus the proof", async () => {
     const w = proWorld({ have: THREE, libsAdopted: true });
     expect(await w.run(["--stage", "deploy"])).toBe(0);
     expect(lastError(w)).toBeUndefined();
@@ -208,8 +208,8 @@ describe("a run where the libraries already exist", () => {
   test("a measuring dry run adopts in the first basket stage only: the later basket stages see the libraries as already accounted for", async () => {
     const w = proWorld({ have: THREE, writeFrozen: false });
     expect(await w.run(["--stage", "deploy", "--dry-run"])).toBe(0);
-    const sim = w.logs().filter((l) => l.event === "stage.simulated" && ["proto", "agent", "rwa"].includes(l.stage));
-    expect(sim.map((l) => [l.stage, l.adopted_create2?.length ?? 0])).toEqual([["proto", N], ["agent", 0], ["rwa", 0]]);
+    const sim = w.logs().filter((l) => l.event === "stage.simulated" && ["proto", "rwa"].includes(l.stage));
+    expect(sim.map((l) => [l.stage, l.adopted_create2?.length ?? 0])).toEqual([["proto", N], ["rwa", 0]]);
   });
 
   test("with no build output of the libraries nothing is adopted and a short count is the plain COUNT_MISMATCH", async () => {

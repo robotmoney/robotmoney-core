@@ -1,4 +1,4 @@
-// pause-all (core 1619, plan decision 22): pause deposits on ALL FOUR vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA). rmUSDC is not special.
+// pause-all (core 1619, plan decision 22): pause deposits on ALL THREE vaults (rmUSDC, rmPROTO, rmRWA). rmUSDC is not special.
 // It runs by itself when stage 12 (verify) or the postflight fails, and by hand as `pause-all`. Withdrawals stay open (core 1494): pauseDeposits() sets
 // `depositsPaused` only. No contract change: every vault already has pauseDeposits(), gated by EMERGENCY_ROLE.
 // Signer by stage: the DEPLOYER before the stage 11 handover (it holds EMERGENCY_ROLE on every vault until the timelock stage moves the role),
@@ -97,7 +97,7 @@ async function hasEmergencyRole(ctx: RunContext, vault: string, who: string): Pr
 }
 
 /**
- * Pauses deposits on all four vaults, reads `depositsPaused` back on each, and writes the rollout report. It tries every vault even when one fails.
+ * Pauses deposits on all three vaults, reads `depositsPaused` back on each, and writes the rollout report. It tries every vault even when one fails.
  * Returns the report. `allPaused` is false when any vault could not be sent or does not read back paused: the caller turns that into an error.
  */
 export async function pauseAll(ctx: RunContext, manifest: Pick<RunManifest, "stages">, o: PauseOpts): Promise<PauseAllReport> {
@@ -197,7 +197,7 @@ export function pauseUnrecorded(report: PauseAllReport, prefix = ""): PublishErr
 }
 
 /**
- * The error for a pause-all that did not leave all four vaults paused. Issue 1701: when the pause could not be recorded either, the message also carries the
+ * The error for a pause-all that did not leave all three vaults paused. Issue 1701: when the pause could not be recorded either, the message also carries the
  * cancel-pending-unpauses instruction of `pauseUnrecorded` (govern cannot see an unrecorded pause) and the details say `manifest_recorded: false`.
  */
 export function pauseIncomplete(report: PauseAllReport, prefix = ""): PublishError {

@@ -196,8 +196,8 @@ describe("mutations fail with the expected label", () => {
 
   test("missing vault: manifest lists a vault the registry does not", async () => {
     const w = buildWorld();
-    w.chain.set(REGISTRY, "listVaults", Object.values(VAULTS).slice(0, 3).map((v) => v.address));
-    w.chain.set(REGISTRY, "vaultCount", 3n);
+    w.chain.set(REGISTRY, "listVaults", Object.values(VAULTS).slice(0, 2).map((v) => v.address));
+    w.chain.set(REGISTRY, "vaultCount", 2n);
     expect(failed(await verifyDeployment(w.opts))).toContain("vault set: manifests equal registry.listVaults");
   });
 
@@ -218,8 +218,8 @@ describe("mutations fail with the expected label", () => {
 
   test("unlinked registry on a vault", async () => {
     const w = buildWorld();
-    w.chain.set(VAULTS.rmAGENT.address, "registry", "0x0000000000000000000000000000000000000000");
-    expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmAGENT]: registry link"]);
+    w.chain.set(VAULTS.rmPROTO.address, "registry", "0x0000000000000000000000000000000000000000");
+    expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmPROTO]: registry link"]);
   });
 
   test("emergency key lost EMERGENCY on a vault", async () => {
@@ -234,16 +234,16 @@ describe("mutations fail with the expected label", () => {
     expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmRWA]: asset config equals sheet"]);
   });
 
-  test("every basket's maxSlippageBps is read back on chain and equals the config: rmAGENT 500, any other value fails (core 1695, issue 1705 C4)", async () => {
+  test("every basket's maxSlippageBps is read back on chain and equals the config: rmPROTO and rmRWA 100, any other value fails (core 1695, issue 1705 C4)", async () => {
     const ok = await verifyDeployment(buildWorld().opts);
-    const labels = ["rmPROTO", "rmAGENT", "rmRWA"].map((k) => `vault[${k}]: maxSlippageBps equals config`);
+    const labels = ["rmPROTO", "rmRWA"].map((k) => `vault[${k}]: maxSlippageBps equals config`);
     for (const L of labels) expect(ok.checks.find((c) => c.label === L)).toMatchObject({ ok: true });
     // rmUSDC holds no basket and is not asked for it
     expect(ok.checks.filter((c) => c.label.endsWith("maxSlippageBps equals config")).map((c) => c.label)).toEqual(labels);
-    for (const bad of [499n, 501n, 291n, 0n]) {
+    for (const bad of [99n, 101n, 291n, 0n]) {
       const w = buildWorld();
-      w.chain.set(VAULTS.rmAGENT.address, "maxSlippageBps", bad);
-      expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmAGENT]: maxSlippageBps equals config"]);
+      w.chain.set(VAULTS.rmRWA.address, "maxSlippageBps", bad);
+      expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmRWA]: maxSlippageBps equals config"]);
     }
     const p = buildWorld();
     p.chain.set(VAULTS.rmPROTO.address, "maxSlippageBps", 300n);
@@ -261,7 +261,7 @@ describe("mutations fail with the expected label", () => {
       for (const l of want) expect([l, r.checks.find((c) => c.label === l)?.ok]).toEqual([l, true]);
     });
     test("the verifier fails when any vault's KEEPER_ROLE has a holder, even the Safe or the timelock", async () => {
-      for (const [k, who] of [["rmUSDC", SAFE], ["rmUSDC", TIMELOCK], ["rmPROTO", addr(0xbeef)], ["rmAGENT", addr(0xbeef)], ["rmRWA", addr(0xbeef)]] as const) {
+      for (const [k, who] of [["rmUSDC", SAFE], ["rmUSDC", TIMELOCK], ["rmPROTO", addr(0xbeef)], ["rmRWA", addr(0xbeef)]] as const) {
         const w = buildWorld();
         w.chain.grant(VAULTS[k]!.address, KEEPER_ROLE, who);
         w.chain.roleGrantedLog(VAULTS[k]!.address, KEEPER_ROLE, who, 3000n);
@@ -275,9 +275,9 @@ describe("mutations fail with the expected label", () => {
     });
     test("a second EMERGENCY_ROLE holder fails, the emergency key alone passes", async () => {
       const w = buildWorld();
-      w.chain.grant(VAULTS.rmAGENT.address, EMERGENCY_ROLE, addr(0xbeef));
-      w.chain.roleGrantedLog(VAULTS.rmAGENT.address, EMERGENCY_ROLE, addr(0xbeef), 3000n);
-      expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmAGENT]: EMERGENCY_ROLE has exactly one holder", "roles: every holder of every role on every governed contract is an expected account (log scan)"]);
+      w.chain.grant(VAULTS.rmPROTO.address, EMERGENCY_ROLE, addr(0xbeef));
+      w.chain.roleGrantedLog(VAULTS.rmPROTO.address, EMERGENCY_ROLE, addr(0xbeef), 3000n);
+      expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmPROTO]: EMERGENCY_ROLE has exactly one holder", "roles: every holder of every role on every governed contract is an expected account (log scan)"]);
     });
     const ADAPTERS = "vault[rmUSDC]: adapter set, caps and code-hash allowlist equal the deploy script";
     test("rmUSDC adapters: a moved cap, a missing adapter, an extra allowed adapter or code hash each fail", async () => {
@@ -315,7 +315,6 @@ describe("mutations fail with the expected label", () => {
     const want: Record<string, string[]> = {
       rmUSDC: [...common, ...usdc],
       rmPROTO: [...common, ...basket, "maxSlippageBps equals config"],
-      rmAGENT: [...common, ...basket, "maxSlippageBps equals config"],
       rmRWA: [...common, ...basket, "maxSlippageBps equals config"],
     };
     for (const key of Object.keys(want)) {
@@ -326,10 +325,10 @@ describe("mutations fail with the expected label", () => {
     }
   });
 
-  test("rmAGENT must be paused", async () => {
+  test("rmPROTO must be paused", async () => {
     const w = buildWorld();
-    w.chain.set(VAULTS.rmAGENT.address, "depositsPaused", false);
-    expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmAGENT]: paused state equals sheet"]);
+    w.chain.set(VAULTS.rmPROTO.address, "depositsPaused", false);
+    expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmPROTO]: paused state equals sheet"]);
   });
 
   test("rmUSDC seed missing", async () => {
@@ -616,7 +615,7 @@ describe("rotation of the weight setter (core 1616, ADR-0002)", () => {
 // QA plan v1 D7 (review E5, issue 1705 Q2): before govern --row set-unwind-guard nothing set a basket's emergency unwind guard, so the oracle-free unwind and the override path
 // could not run. The stage 12 label requires a non-zero minUsdcOut on every active asset of a basket the sheet expects OPEN; a paused basket (pre-govern) passes and records the values.
 describe("the emergency unwind guard label (QA plan v1 D7)", () => {
-  const BASKETS = ["rmPROTO", "rmAGENT", "rmRWA"] as const;
+  const BASKETS = ["rmPROTO", "rmRWA"] as const;
   const labelOf = (k: string) => `vault[${k}]: ${UNWIND_GUARD_LABEL}`;
   const check = (r: Awaited<ReturnType<typeof verifyDeployment>>, k: string) => r.checks.find((c) => c.label === labelOf(k))!;
   /** The post-govern state of one basket: the sheet expects it open and the chain reads it open. */
@@ -683,9 +682,9 @@ describe("the emergency unwind guard label (QA plan v1 D7)", () => {
   });
   test("an unreadable guard is a failed check, not a pass", async () => {
     const w = buildWorld();
-    open(w, "rmAGENT");
-    w.chain.handlers.delete(`${VAULTS.rmAGENT!.address.toLowerCase()}:emergencyUnwindGuard`);
-    expect(check(await verifyDeployment(w.opts), "rmAGENT").ok).toBe(false);
+    open(w, "rmPROTO");
+    w.chain.handlers.delete(`${VAULTS.rmPROTO!.address.toLowerCase()}:emergencyUnwindGuard`);
+    expect(check(await verifyDeployment(w.opts), "rmPROTO").ok).toBe(false);
   });
   test("the label set is the same before and after govern (the check is always present)", async () => {
     const before = (await verifyDeployment(buildWorld().opts)).checks.map((c) => c.label);
@@ -703,7 +702,7 @@ describe("from-block against the deploy receipts (issue 1833, 1851)", () => {
   const DEPLOYER_SCAN = "deployer: holds no role on any contract (log scan)";
   const HOLDERS_SCAN = "roles: every holder of every role on every governed contract is an expected account (log scan)";
   const TIMELOCK_SCAN = "timelock: only the safe holds PROPOSER, CANCELLER or EXECUTOR role (log scan)";
-  const ALL_SCANS = [...["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"].flatMap(scanLabels), ...AGENT_SCANS, DEPLOYER_SCAN, HOLDERS_SCAN, TIMELOCK_SCAN];
+  const ALL_SCANS = [...["rmUSDC", "rmPROTO", "rmRWA"].flatMap(scanLabels), ...AGENT_SCANS, DEPLOYER_SCAN, HOLDERS_SCAN, TIMELOCK_SCAN];
   const deployed = deployedWorld;
   const okOf = (r: Awaited<ReturnType<typeof verifyDeployment>>, l: string) => [l, r.checks.find((c) => c.label === l)?.ok];
   const detailOf = (r: Awaited<ReturnType<typeof verifyDeployment>>, l: string) => r.checks.find((c) => c.label === l)?.detail ?? "";
@@ -724,7 +723,7 @@ describe("from-block against the deploy receipts (issue 1833, 1851)", () => {
       expect(detailOf(r, l)).toContain("from-block 100 is after the vault's creation");
       expect(detailOf(r, l)).toContain("created in block 99");
     }
-    for (const k of ["rmPROTO", "rmAGENT", "rmRWA"]) for (const l of scanLabels(k)) expect(okOf(r, l)).toEqual([l, true]);
+    for (const k of ["rmPROTO", "rmRWA"]) for (const l of scanLabels(k)) expect(okOf(r, l)).toEqual([l, true]);
   });
   test("historical state reads throw 'missing trie node' and the receipts read fine: every scan passes", async () => {
     const w = deployed();
@@ -841,7 +840,7 @@ describe("from-block against the deploy receipts (issue 1833, 1851)", () => {
     ["the gateway (agent scans, deployer-role and role-holder scans)", { gateway: 99n }, [...AGENT_SCANS, DEPLOYER_SCAN, HOLDERS_SCAN]],
     ["the router (deployer-role and role-holder scans)", { router: 99n }, [DEPLOYER_SCAN, HOLDERS_SCAN]],
     ["the timelock, created through the CREATE2 factory (timelock-holder, deployer-role and role-holder scans)", { timelock: 99n }, [TIMELOCK_SCAN, DEPLOYER_SCAN, HOLDERS_SCAN]],
-    ["a vault (its own scans, deployer-role and role-holder scans)", { rmAGENT: 99n }, [...scanLabels("rmAGENT"), DEPLOYER_SCAN, HOLDERS_SCAN]],
+    ["a vault (its own scans, deployer-role and role-holder scans)", { rmRWA: 99n }, [...scanLabels("rmRWA"), DEPLOYER_SCAN, HOLDERS_SCAN]],
   ] as const) {
     test(`from-block after the creation of ${what}: exactly those scan labels fail`, async () => {
       const r = await verifyDeployment(deployed(blocks as Record<string, bigint>).opts);

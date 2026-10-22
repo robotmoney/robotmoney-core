@@ -9,7 +9,7 @@ import { requiredManifests, stageManifestName } from "./constants.ts";
 import type { Address, Hex, VaultKind } from "./types.ts";
 
 export interface ManifestVault {
-  /** rmUSDC, rmPROTO, rmAGENT or rmRWA. */
+  /** rmUSDC, rmPROTO or rmRWA. */
   key: string;
   kind: VaultKind;
   address: Address;

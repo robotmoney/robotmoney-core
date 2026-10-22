@@ -173,7 +173,7 @@ describe("the plan labels its nonce column by kind (review of PR 1728)", () => {
 });
 
 describe("the deployer nonce relative to the recorded start (rehearsal), absolute from 0 (production)", () => {
-  const D = ["safe", "libs", "recorder"];
+  const D = ["safe", "libs", "vault"];
   const rehearsalWorld = (startNonce: number) => world({ startNonce, sheet: REH });
   const manifestOf = (w: ReturnType<typeof world>) => JSON.parse(readFileSync(join(w.evidence, "publish-run.json"), "utf8"));
   const failed = (w: ReturnType<typeof world>) => w.logs().filter((l) => l.event === "run.failed").pop();
@@ -233,14 +233,14 @@ describe("the deployer nonce relative to the recorded start (rehearsal), absolut
     const w = rehearsalWorld(118);
     expect(await w.run(["--stage", "safe,libs"])).toBe(0);
     bump(w);
-    expect(await w.run(["--stage", "recorder", "--resume"])).toBe(EXIT_CODES.NONCE);
+    expect(await w.run(["--stage", "vault", "--resume"])).toBe(EXIT_CODES.NONCE);
     expect(failed(w)!.message).toContain("expected");
-    expect(w.state().calls.filter((c: any) => c.tool === "forge" && c.args.includes("--broadcast") && String(c.args[1]).includes(SCRIPT.recorder!.replace(/\.s\.sol$/, "")))).toEqual([]);
+    expect(w.state().calls.filter((c: any) => c.tool === "forge" && c.args.includes("--broadcast") && String(c.args[1]).includes(SCRIPT.vault!.replace(/\.s\.sol$/, "")))).toEqual([]);
   });
   test("mutation: with no stray the same resume succeeds", async () => {
     const w = rehearsalWorld(118);
     expect(await w.run(["--stage", "safe,libs"])).toBe(0);
-    expect(await w.run(["--stage", "recorder", "--resume"])).toBe(0);
+    expect(await w.run(["--stage", "vault", "--resume"])).toBe(0);
   });
   test("a stray transaction AFTER the last stage fails the end-of-deploy relative check", () => {
     const counts = { safe: 1, libs: 4 };

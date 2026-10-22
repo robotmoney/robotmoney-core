@@ -12,7 +12,7 @@ import { buildCreate2Libraries, predictedLibraryAddress, expectedLibraryRuntime 
 import { assertBaselineCommitted, assertReleaseGate, gitAnchorCommitted, gitFrozenDirCommitted } from "../src/release-gate.ts";
 import { adoptedFromRunManifest, buildCountsJson, checkCountsJson } from "../src/ci/rehearsal-counts.ts";
 import { freezeFromAdoptedRun } from "../scripts/freeze-counts.ts";
-import { getStageTable } from "../src/stages.ts";
+import { DEPLOYER_STAGES, getStageTable } from "../src/stages.ts";
 import { EXIT_CODES } from "../src/errors.ts";
 import { REPO, refFrozenPath, tmp } from "./fixtures.ts";
 import { world } from "./harness.ts";
@@ -27,7 +27,7 @@ const msg = async (f: () => unknown): Promise<string> => { try { await f(); } ca
 const REF_PATH = refFrozenPath(); // the pinned first-release counts, ic-policy keyed as the table receipt (issue 1888)
 // Issue 1892: the first release deployed the gateway in the same run. The vaults baseline is rebuilt without it (the gateway system's counts are its own).
 const GATEWAY_KEYS = new Set(table.stages.filter((s) => s.system === "gateway").map((s) => s.name));
-const REF = Object.fromEntries(Object.entries(JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>).filter(([k]) => !GATEWAY_KEYS.has(k)));
+const REF = Object.fromEntries(Object.entries(JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>).filter(([k]) => !GATEWAY_KEYS.has(k) && DEPLOYER_STAGES.some((s) => s.name === k))); // ADR-0017: the first release deployed an agent and a recorder stage, the current table has neither
 
 // Build artifacts and what the chain holds, derived with the code under test's own inputs but compared with hand-built values below.
 const tickArt = JSON.parse(readFileSync(join(OUT, "TickMath.sol", "TickMath.json"), "utf8"));
@@ -73,7 +73,7 @@ describe("the fixtures are the real thing", () => {
     expect(adoptableOf(table, "vault").map((l) => l.library)).toEqual(["GovernedUpgrade", "RobotMoneyVaultOps"]);
     expect(adoptableOf(table, "gateway").map((l) => l.library)).toEqual(["GatewayWindows"]);
     expect(adoptableOf(table, "registry")).toEqual([]);
-    expect(adoptableOf(table, "agent")).toEqual([]);
+    expect(adoptableOf(table, "rwa")).toEqual([]);
     expect(expectedLibraryRuntime(tickArt.deployedBytecode.object, TICK)).toBe(TICK_RUNTIME);
     expect(REF.libs).toBe(1);
     expect(REF.proto).toBe(10);
@@ -237,7 +237,7 @@ describe("a reconstructed file is verified on every load, so a hand-set or tampe
   test("a raised count, a lowered count and a raised measured count are refused (the sum no longer holds)", async () => {
     expect(await edit((f) => { f.counts.proto = 11; })).toContain("plus 4 adopted creation");
     expect(await edit((f) => { f.counts.libs = 2; })).toContain("stage libs");
-    expect(await edit((f) => { f.counts.agent = 9; })).toContain("stage agent");
+    expect(await edit((f) => { f.counts.rwa = 9; })).toContain("stage rwa");
     expect(await edit((f) => { f.measured.reconstructed.measuredCounts.proto = 8; })).toContain("stage proto");
   });
   test("a removed or duplicated adoption entry, an invalid address or hash, and an unknown stage are refused", async () => {

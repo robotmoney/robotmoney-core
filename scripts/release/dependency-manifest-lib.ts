@@ -101,7 +101,6 @@ export const JSON_ADDRESS_SOURCES: { file: string }[] = [
   { file: "config/dex-pools.json" },
   { file: "config/protocol-assets.json" },
   { file: "config/rwa-assets.json" },
-  { file: "config/agent-token-shortlist.json" },
 ];
 /** Solidity deploy scripts: `address ... constant NAME = 0x...;` lines are third-party pins. */
 export const SOLIDITY_SCRIPT_DIR = "contracts/script";

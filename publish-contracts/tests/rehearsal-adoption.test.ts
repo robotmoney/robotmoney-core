@@ -37,7 +37,7 @@ function adoptedWorld(startNonce = START, sheet: Record<string, string> = REH): 
   Object.assign(w.cfg, { zeroTx: SCRIPT.libs, libsAddress: TICK, codeAt, creates: { [SCRIPT.proto]: [], [SCRIPT.vault]: [] } });
   return w;
 }
-const PRE_PROTO = ["safe", "libs", "recorder", "vault", "registry", "router", "receipt", "governance"];
+const PRE_PROTO = ["safe", "libs", "vault", "registry", "router", "receipt", "governance"];
 
 describe("a rehearsal with a non-zero start and adopted stages", () => {
   test("libs adopted at 0 and vault and proto less their libraries: start recorded at safe, the later stages start where the adopted ones left off, the final nonce is start + (sum - libs - adopted) + proof", async () => {
@@ -50,8 +50,8 @@ describe("a rehearsal with a non-zero start and adopted stages", () => {
     expect(m.stages.libs).toMatchObject({ adopted: true });
     expect(m.stages.libs.adoption.deployerTxs).toBe(0);
     expect(m.stages.proto.adoption.deployerTxs).toBe(COUNTS.proto! - THREE.length);
-    expect(m.stages.recorder.startNonce).toBe(START + COUNTS.safe!); // libs contributed nothing
-    expect(m.stages.agent.startNonce).toBe(m.stages.proto.startNonce + COUNTS.proto! - THREE.length);
+    expect(m.stages.vault.startNonce).toBe(START + COUNTS.safe!); // libs contributed nothing
+    expect(m.stages.rwa.startNonce).toBe(m.stages.proto.startNonce + COUNTS.proto! - THREE.length);
     const final = START + (sum - COUNTS.libs! - N) + PROOF_TX_NONCES;
     expect(w.state().nonces[A]).toBe(final);
     expect(w.logs().some((l) => l.event === "run.nonce_ok" && l.deployer_start_nonce === START && l.summed_frozen_counts === sum - COUNTS.libs! - N)).toBe(true);
@@ -75,17 +75,17 @@ describe("a rehearsal with a non-zero start and adopted stages", () => {
     expect(await w.run(["--stage", "proto", "--resume"])).toBe(EXIT_CODES.NONCE);
     expect(w.state().calls.filter((c: any) => c.tool === "forge" && c.args.includes("--broadcast") && String(c.args[1]).includes(SCRIPT.proto!))).toEqual([]);
   });
-  test("a stray transaction AFTER the adopted proto stage, before agent, is refused", async () => {
+  test("a stray transaction AFTER the adopted proto stage, before rwa, is refused", async () => {
     const w = adoptedWorld();
     expect(await w.run(["--stage", [...PRE_PROTO, "proto"].join(",")])).toBe(0);
     expect(manifest(w).stages.proto.adopted).toBe(true);
     bump(w);
-    expect(await w.run(["--stage", "agent", "--resume"])).toBe(EXIT_CODES.NONCE);
+    expect(await w.run(["--stage", "rwa", "--resume"])).toBe(EXIT_CODES.NONCE);
   });
   test("mutation: with no stray transaction the same resumes succeed and the run completes at the composed nonce", async () => {
     const w = adoptedWorld();
     expect(await w.run(["--stage", PRE_PROTO.join(",")])).toBe(0);
-    expect(await w.run(["--stage", "proto,agent,rwa,prove-control,timelock", "--resume"])).toBe(0);
+    expect(await w.run(["--stage", "proto,rwa,prove-control,timelock", "--resume"])).toBe(0);
     expect(w.state().nonces[A]).toBe(START + (sum - COUNTS.libs! - N) + PROOF_TX_NONCES);
   });
   test("the end-of-deploy check: start + sum(effective) + proof passes, one stray transaction after the last stage, a missing start and the production reading fail", async () => {

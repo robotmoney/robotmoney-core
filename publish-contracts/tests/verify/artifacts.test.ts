@@ -12,18 +12,17 @@ import { CLAIM_LABEL } from "../../src/verify/upgradeability.ts";
 import { buildWorld, failed, IMPLS } from "./world.ts";
 
 const table = scopeTable(getStageTable(), "legacy"); // issue 1892: these tests read the combined deployment
-const art = (key: "USDC" | "PROTO" | "AGENT" | "RWA") => table.vaults.find((v) => v.key === key)!.artifact;
+const art = (key: "USDC" | "PROTO" | "RWA") => table.vaults.find((v) => v.key === key)!.artifact;
 const codeLabel = (l: string) => `${l}: runtime code equals build artifact (masked)`;
 
 describe("verify artifacts come from the core table", () => {
-  test("rmRWA is checked against RwaBasketVault and rmAGENT against AgentTokenVault", async () => {
+  test("rmRWA is checked against RwaBasketVault and the table names no AgentTokenVault (ADR-0017)", async () => {
     expect(art("RWA")).toBe("RwaBasketVault");
-    expect(art("AGENT")).toBe("AgentTokenVault");
+    expect(table.vaults.map((v) => v.artifact)).not.toContain("AgentTokenVault");
     const w = buildWorld();
     const r = await verifyDeployment(w.opts);
     expect(failed(r)).toEqual([]);
     expect(r.checks.find((c) => c.label === codeLabel("vault[rmRWA]"))!.detail).toContain("RwaBasketVault");
-    expect(r.checks.find((c) => c.label === codeLabel("vault[rmAGENT]"))!.detail).toContain("AgentTokenVault");
     expect(r.checks.find((c) => c.label === codeLabel("vault[rmPROTO]"))!.detail).toContain("ProtocolAssetVault");
     expect(r.checks.find((c) => c.label === codeLabel("vault[rmUSDC]"))!.detail).toContain("RobotMoneyVault");
   });
@@ -33,12 +32,6 @@ describe("verify artifacts come from the core table", () => {
     // issue 1808: behind its proxy, the rmRWA implementation runs the rmPROTO build. The sheet's frozen mode claims immutability, so the claim is refused too (issue 1809).
     w.chain.codes.set(IMPLS["vault[rmRWA]"]!.toLowerCase(), w.chain.codes.get(IMPLS["vault[rmPROTO]"]!.toLowerCase())!);
     expect(failed(await verifyDeployment(w.opts))).toEqual([codeLabel("vault[rmRWA]"), CLAIM_LABEL]);
-  });
-
-  test("rmAGENT running basket code fails", async () => {
-    const w = buildWorld();
-    w.chain.codes.set(IMPLS["vault[rmAGENT]"]!.toLowerCase(), w.chain.codes.get(IMPLS["vault[rmPROTO]"]!.toLowerCase())!);
-    expect(failed(await verifyDeployment(w.opts))).toEqual([codeLabel("vault[rmAGENT]"), CLAIM_LABEL]);
   });
 
   test("a missing RwaBasketVault build artifact fails that vault only", async () => {
@@ -67,7 +60,7 @@ describe("verify artifacts come from the core table", () => {
     const w = buildWorld();
     const m = loadManifests(w.manifestDir, table);
     expect(m.missing).toEqual([]);
-    expect(m.vaults.map((v) => [v.key, v.artifact])).toEqual([["rmUSDC", art("USDC")], ["rmPROTO", art("PROTO")], ["rmAGENT", art("AGENT")], ["rmRWA", art("RWA")]]);
+    expect(m.vaults.map((v) => [v.key, v.artifact])).toEqual([["rmUSDC", art("USDC")], ["rmPROTO", art("PROTO")], ["rmRWA", art("RWA")]]);
     expect(Object.keys(m.libraries)).toEqual(table.libraries.map((l) => l.name));
     expect(m.libraryArtifacts[table.libraries[0]!.name]).toBe(table.libraries[0]!.artifact);
   });

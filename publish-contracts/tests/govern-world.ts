@@ -23,7 +23,9 @@ import { ERC1967_IMPLEMENTATION_SLOT } from "../src/verify/codehash.ts";
 import { SHA, sheetText, tmp } from "./fixtures.ts";
 
 export const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as Address;
-export const A = { timelock: addr(0x2001), safe: addr(0x2002), router: addr(0x1003), registry: addr(0x1002), gateway: addr(0x1004), governance: addr(0x1005), receipt: addr(0x1006), vaults: { USDC: addr(0x3001), PROTO: addr(0x3002), AGENT: addr(0x3003), RWA: addr(0x3004) } };
+export const A = { timelock: addr(0x2001), safe: addr(0x2002), router: addr(0x1003), registry: addr(0x1002), gateway: addr(0x1004), governance: addr(0x1005), receipt: addr(0x1006), vaults: { USDC: addr(0x3001), PROTO: addr(0x3002), RWA: addr(0x3004) } };
+/** The vault a retire-vault round retires (rmAGENT on the live v0.5.0 deployment): not in any manifest of a three-vault deployment, so it is an address the sheet and the manifests never name. */
+export const RETIRED_VAULT = addr(0x3003);
 
 /** Writes the manifests govern reads (timelock, safe, router, registry, gateway, governance, the receipt stage's receipt, one per vault) into `dir`. */
 export function writeGovernManifests(dir: string): void {
@@ -32,7 +34,6 @@ export function writeGovernManifests(dir: string): void {
   const t = getStageTable();
   const n = (stage: string) => stageManifestName(t, stage);
   w(n("timelock"), { timelock: A.timelock }); w("safe", { safe: A.safe }); w(n("router"), { router: A.router }); w(n("registry"), { registry: A.registry });
-  w(n("recorder"), { recorder: "0x00000000000000000000000000000000000c0c0c" });
   w(n("gateway"), { gateway: A.gateway }); w(n("governance"), { governance: A.governance }); w(n("receipt"), { consensus_receipt: A.receipt });
   for (const v of t.vaults) w(manifestBase(v.manifest), { vault: A.vaults[v.key] });
 }
@@ -62,10 +63,10 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     reads: {} as Record<string, unknown>,
     /** Receipt ids recordReceipt has anchored (the test seeds it) and releaseReceipt has released (an executed timelock call adds to it). */
     recorded: new Set<string>(), released: new Set<string>(),
-    /** The vaults that read depositsPaused true. All four vaults deploy paused (issue 1710); an executed unpauseDeposits opens a vault, a test pauses one by adding it. */
-    paused: new Set<string>([A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA]),
+    /** The vaults that read depositsPaused true. All three vaults deploy paused (issue 1710); an executed unpauseDeposits opens a vault, a test pauses one by adding it. */
+    paused: new Set<string>([A.vaults.USDC, A.vaults.PROTO, A.vaults.RWA]),
     /** Registry order, the vaults that are NOT router-eligible, the digest each recorded receipt stored, and the router's default weights (an executed setDefaultWeights sets them). */
-    listed: [A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA] as Address[], ineligible: new Set<string>(),
+    listed: [A.vaults.USDC, A.vaults.PROTO, A.vaults.RWA] as Address[], ineligible: new Set<string>(),
     digests: new Map<string, Hex>(),
     /** Issue 1831: a receipt's recordedAt (default: its 1-based position in `recorded`, so receipts seeded in order are recorded in order), RouterGovernance's
      *  lastAppliedRecordedAt (an executed applyReceipt raises it and refuses a receipt not newer), and whether RouterGovernance holds the receipt ADMIN_ROLE. */

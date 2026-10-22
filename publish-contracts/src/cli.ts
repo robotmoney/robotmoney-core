@@ -33,6 +33,7 @@ import { PROOF_STAGE } from "./control-proof.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
 import { APPLY_ROW } from "./apply-receipt.ts";
 import { CLEAR_ROW } from "./clear-voted-weights.ts";
+import { RETIRE_KEYS, RETIRE_ROW, parseRetireArgs } from "./retire-vault.ts";
 import { UNWIND_GUARD_KEYS, UNWIND_GUARD_ROW, parseUnwindGuardArgs } from "./unwind-guard.ts";
 import { REDEPLOY_ROW, REDEPLOY_VERB, REDEPLOY_KEYS, isRedeployKey, redeployRefusal, redeployShaPath, redeployShaRun, runRedeployVault } from "./redeploy-vault.ts";
 import { FREEZE_ROW, UPGRADE_ROW } from "./upgrade-rows.ts";
@@ -82,7 +83,7 @@ export const USAGE = `publish contracts
                                  reads upgradesFrozen() true, when DIR's layout snapshot does not extend the deployed one append-only, or when the build and the live implementation do not link
                                  the same libraries. It reads the runtime code back against the build (immutables and links masked), records implementation_deploys in the run manifest and
                                  prints the govern --row upgrade-proxy --implementation command to run next. A rerun with the same arguments reprints the recorded entry and sends nothing.
-                       pause-all = pause deposits on ALL FOUR vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), read depositsPaused back on each, write evidence/rollout-report-<chain>.json.
+                       pause-all = pause deposits on ALL THREE vaults (rmUSDC, rmPROTO, rmRWA), read depositsPaused back on each, write evidence/rollout-report-<chain>.json.
                                  Withdrawals stay open. The signer is the deployer before the stage 11 handover and the EMERGENCY key after it (--emergency-signer).
                                  It also runs by itself when stage 12 (verify) or the postflight fails (the run then still exits with the verify failure's code, 13).
   --chain N          target chain id (8453 or 918453). Must equal 'cast chain-id' of the RPC.
@@ -93,7 +94,7 @@ export const USAGE = `publish contracts
   --environment NAME the GitHub Environment (or 'local' on a rehearsal)
   --core-sha SHA     the core DEPLOY_SHA (40 hex). The core checkout HEAD must equal it.
   --row R            govern only: run one govern row, by 1-based number or by name.
-                     Rows: unpause-USDC, unpause-PROTO, unpause-AGENT, unpause-RWA (all four vaults deploy paused; the only mainnet operation after the handover), then the Twin-only
+                     Rows: unpause-USDC, unpause-PROTO, unpause-RWA (all three vaults deploy paused; the only mainnet operation after the handover), then the Twin-only
                      demonstrations update-delay, batch, cancel (refused with USAGE on 8453). Without --row, every unpause the sheet asks for is
                      scheduled in one sitting, then one wait, then executed (on 8453 only the unpauses run).
                      Naming an unpause row whose
@@ -108,7 +109,11 @@ export const USAGE = `publish contracts
                      before it, ADMIN_ROLE since issue 1698): the timelock cannot release directly and a release alone would burn the receipt, so use --row apply-receipt (issue 1831).
                      --row clear-voted-weights (no other argument) clears the router's ACTIVE (applied receipt) weight vector (issue 1743): ONE timelock call, RouterGovernance.clearVotedWeights(),
                      so routing falls back to the default vector: the emergency lever. Refused (nothing scheduled) when no active vector is in effect. Production and rehearsal, never part of stage 13.
-                     --row set-unwind-guard --admin-arg vault=PROTO|AGENT|RWA --admin-arg token=0x<address>|all --admin-arg min-usdc-out=N --admin-arg max-loss-bps=N
+                     --row retire-vault --admin-arg vault=0x<address> --admin-arg weights=USDC:9500,PROTO:500,RWA:0 (issue 1912, ADR-0017) retires one vault of the live deployment, rmAGENT on
+                     v0.5.0: ONE timelock batch, registry.migrateEligibility(vault, false, three legs) then registry.retire(vault). The vector must name USDC, PROTO and RWA once each and sum to
+                     10000, and it must be the router's current default vector without the vault, or nothing is scheduled. The preview (the vault, the vector, each call's target and data) is logged
+                     before the schedule. The vault becomes withdraw-only (ADR-0009): redeem and redeemInKind stay open, deposit reverts. Production and rehearsal, never part of stage 13.
+                     --row set-unwind-guard --admin-arg vault=PROTO|RWA --admin-arg token=0x<address>|all --admin-arg min-usdc-out=N --admin-arg max-loss-bps=N
                      [--admin-arg override-allowed=true|false] (QA plan v1 D7) sets a basket vault's emergency unwind guard: ONE timelock operation, BasketVault.setEmergencyUnwindGuard(token,
                      minUsdcOut, overrideAllowed, maxLossBps) for the one token or for every active asset (all). min-usdc-out is USDC (6 decimals) for the vault's whole balance of the token,
                      above zero; override-allowed defaults to true (Safe-only, issue 1705 Q2). Refused (nothing scheduled) for a token that is not an active asset; a guard already in effect is
@@ -141,7 +146,7 @@ export const USAGE = `publish contracts
   --prior-out DIR    verify, after a redeploy: the forge out/ directory of a git checkout built at the ORIGINAL deployment sha (its HEAD must be that sha). Every contract the redeploy did not replace
                      (core, libraries, adapters, the other vaults, the retired one) runs the code of that build, so its code hash is compared with it; the replacing vault is compared with the
                      build of the --core-sha checkout. After a round deployed at another sha (QA plan v1 E1) the verify runs ALONE at --core-sha <the round's core_sha> WITH --prior-out: at the
-                     original sha, or without --prior-out, it is refused (USAGE) before any signer, so it never fails and pauses the four vaults. The counts are the original sha's (its frozen
+                     original sha, or without --prior-out, it is refused (USAGE) before any signer, so it never fails and pauses the three vaults. The counts are the original sha's (its frozen
                      file in the counts dir, else the run manifest's per-stage counts): no frozen file for the redeploy sha.
   --receipt-id ID    govern with --row release-receipt or --row apply-receipt, and the record-receipt verb: the bytes32 receipt id.
   --payload-digest D record-receipt only: the bytes32 payload_digest of 'rmpc receipt verify' = keccak256("robotmoney:consensus-receipt:v1\n" + the canonical receipt bytes). A plain keccak256 of the served canonical file is WRONG.
@@ -204,8 +209,6 @@ export interface CliDeps {
   pauseAll?: typeof pauseAll;
   /** Test seam: the read-only chain reader behind the config-check that runs before each vault stage. */
   chainReader?: RunContext["chainReader"];
-  /** Injected for tests: the poll and the longest wait of the recorder gate before the agent stage (core 1676). */
-  recorderWait?: RunContext["recorderWait"];
   /** Test seam (issue 1723, QA plan v1 E6): the sleep and the bound of the reads after a landed transaction. Default: the shared read-after-write bound. */
   readRetry?: RunContext["readRetry"];
   /** Test seam: core's own config-check (bun scripts/ci/config-check.ts, read-only against live Base). Default: the real spawn. */
@@ -304,7 +307,7 @@ export function parseCli(argv: string[]): Parsed {
     if (!(verb === "govern" || stageNames === "govern")) throw new PublishError("USAGE", `--row applies to the govern verb (or --stage govern) only\n${USAGE}`);
     // An unknown row fails here, before any work. Whether update-delay, batch and cancel may run on 8453 depends on the sheet's DEPLOYMENT_KIND, so runGovern decides that.
     if (isSelfAdminRow(row)) assertSelfAdminAllowed(Number(chainRaw), row);
-    else if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW && row !== REDEPLOY_ROW && row !== UNWIND_GUARD_ROW && row !== FREEZE_ROW && row !== UPGRADE_ROW) resolveGovernRow(row);
+    else if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW && row !== RETIRE_ROW && row !== REDEPLOY_ROW && row !== UNWIND_GUARD_ROW && row !== FREEZE_ROW && row !== UPGRADE_ROW) resolveGovernRow(row);
   }
   const vaultArg = v.vault as string | undefined;
   if (verb === REDEPLOY_VERB) {
@@ -359,8 +362,17 @@ export function parseCli(argv: string[]): Parsed {
       adminArgs[m[1]!] = m[2]!;
     }
     parseUnwindGuardArgs(adminArgs);
+  } else if (adminRaw !== undefined && row === RETIRE_ROW) {
+    // Issue 1912: the retire row's own keys, checked here before any signer or passphrase prompt. The vector must be exactly three legs summing to 10000.
+    adminArgs = {};
+    for (const kv of adminRaw) {
+      const m = /^([a-z-]+)=(.+)$/.exec(kv);
+      if (!m || !(RETIRE_KEYS as readonly string[]).includes(m[1]!)) throw new PublishError("USAGE", `--row ${RETIRE_ROW}: --admin-arg takes key=value with key ${RETIRE_KEYS.join(", ")}, got '${kv}'`);
+      adminArgs[m[1]!] = m[2]!;
+    }
+    parseRetireArgs(adminArgs);
   } else if (adminRaw !== undefined) {
-    if (row === undefined || !isSelfAdminRow(row)) throw new PublishError("USAGE", `--admin-arg goes with a self-administration row (${SELF_ADMIN_ROWS.join(", ")}) or --row ${UNWIND_GUARD_ROW} only\n${USAGE}`);
+    if (row === undefined || !isSelfAdminRow(row)) throw new PublishError("USAGE", `--admin-arg goes with a self-administration row (${SELF_ADMIN_ROWS.join(", ")}) or --row ${UNWIND_GUARD_ROW} or --row ${RETIRE_ROW} only\n${USAGE}`);
     adminArgs = {};
     for (const kv of adminRaw) {
       const m = /^(owner|old-owner|new-owner|threshold|role|account)=(.+)$/.exec(kv);
@@ -368,6 +380,7 @@ export function parseCli(argv: string[]): Parsed {
       adminArgs[m[1]!] = m[2]!;
     }
   } else if (row === UNWIND_GUARD_ROW) parseUnwindGuardArgs(undefined); // USAGE: the row needs its --admin-arg values
+  else if (row === RETIRE_ROW) parseRetireArgs(undefined); // USAGE: the row needs its --admin-arg values
   let call: Parsed["call"];
   if (v["call-label"] !== undefined || v["call-target"] !== undefined || v["call-data"] !== undefined) {
     if (!(verb === "govern" || stage === "govern")) throw new PublishError("USAGE", `--call-label, --call-target and --call-data apply to the govern verb only\n${USAGE}`);
@@ -506,7 +519,7 @@ export function defaultCountsDir(cwd: string): string {
 }
 
 /**
- * Core 1619: stage 12 (verify) or the postflight failed. Pause deposits on all four vaults, then hand back the error the run fails with:
+ * Core 1619: stage 12 (verify) or the postflight failed. Pause deposits on all three vaults, then hand back the error the run fails with:
  * the original failure when every vault reads paused, else a PAUSE error that names the vaults still open.
  */
 async function pauseOnFailure(ctx: RunContext, trigger: PauseTrigger, cause: unknown, emergency: () => PublishSigner | undefined, pause: typeof pauseAll = pauseAll): Promise<unknown> {
@@ -599,7 +612,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return {
         chainId: rpcChainId, rpc: a.rpc, sheet, coreDir, coreSha: a.coreSha, evidenceDir,
         environment: a.environment, signer, caller, frozen, measure, dryCounts: a.dryRun ? {} : undefined, resume: a.resume, dryRun: a.dryRun, run, log,
-        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions, actionsProof, baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, recorderWait: deps.recorderWait, readRetry: deps.readRetry, coreConfigCheck: deps.coreConfigCheck, logs: a.logs, checkSources: a.checkSources,
+        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions, actionsProof, baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, readRetry: deps.readRetry, coreConfigCheck: deps.coreConfigCheck, logs: a.logs, checkSources: a.checkSources,
         manifestOut, startChain: a.dryRun && a.verb !== REDEPLOY_VERB ? (deps.startChain ?? startAnvil) : undefined, priorArtifactsDir: a.priorOut ? resolve(cwd, a.priorOut) : undefined,
         // security round 1 (review-security-033): a printed resume command names the absolute counts dir and --counts-require-origin-dev (govern.ts resumeCommand)
         countsDir: a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd), countsRequireOriginDev: a.countsRequireOriginDev,
@@ -681,7 +694,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     // QA plan v1 E1 (review DT-2, QD-6, issue 1796): the single-vault redeploy's sha model. `govern --row redeploy-vault` and `verify --prior-out` may name the sha the
     // redeploy-vault verb ran at although the run manifest names the original deployment sha (redeploy-vault.ts redeployShaRun). A verify the model cannot check
     // (the original sha after a round at another sha, the redeploy sha without --prior-out, a --prior-out that is not a checkout of the original sha) is refused HERE,
-    // before any signer, frozen counts or forge: a failed verify would pause all four vaults. A stage set that reaches verify never names the redeploy sha.
+    // before any signer, frozen counts or forge: a failed verify would pause all three vaults. A stage set that reaches verify never names the redeploy sha.
     // Every run that reaches the verify stage is covered, not only the verify verb: the default stage set, --stage all and a list naming verify ("stage-set").
     const shaPath = a.stage === "plan" ? undefined : redeployShaPath({ verb: a.verb, stage: a.stage, row: a.row, dryRun: a.dryRun });
     const priorRun = shaPath ? loadRunManifest(evidenceDir) : undefined;
@@ -749,7 +762,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     }
     // QA plan v1 E1: a run at a redeploy round's sha continues the run manifest of the original sha; the verify records the sha of the --prior-out checkout.
     const ctx: RunContext = { ...buildCtx(frozen, counts.measure), ...(shaRun ? { originalSha: shaRun.originalSha } : toolRun ? { originalSha: toolRun.originalSha } : {}), ...(priorOutSha ? { priorArtifactsSha: priorOutSha } : {}) };
-    // A failed verify (stage 12) or postflight pauses deposits on all four vaults (core 1619) and then fails the run as before.
+    // A failed verify (stage 12) or postflight pauses deposits on all three vaults (core 1619) and then fails the run as before.
     let postflight: PauseTrigger | undefined;
     let result: Awaited<ReturnType<typeof runStages>>;
     try {
@@ -769,7 +782,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
           }
         },
         govern: async (c, row, m) => {
-          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, ...(a.noWarp ? { warp: false as const } : {}), row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, proxy: a.proxy, implementation: a.implementation, migration: a.migration, upgradeBuild: a.upgradeBuild, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
+          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, ...(a.noWarp ? { warp: false as const } : {}), row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, proxy: a.proxy, implementation: a.implementation, migration: a.migration, upgradeBuild: a.upgradeBuild, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs && a.row === RETIRE_ROW ? { retire: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
         },
       });
       try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { if (a.system !== "gateway") postflight = "postflight"; throw e; } // issue 1892: the gateway run owns no vault to pause

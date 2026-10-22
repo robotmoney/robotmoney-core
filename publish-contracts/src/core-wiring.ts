@@ -9,17 +9,6 @@ import type { StageRow } from "./stages.ts";
 
 /** The stage whose manifest holds the library addresses (`libraries[].manifestKey`). */
 export const LIBS_STAGE = "libs";
-/**
- * The stage that deploys the permissionless Uniswap V4 price recorder (core 1676). It runs right after libs, so the 1800 s price history
- * accumulates while the other stages run. The runner waits for a full window of history before the agent stage.
- */
-export const RECORDER_STAGE = "recorder";
-/** The manifest field of a vault that holds its Uniswap V4 swap adapter (core 1676), and the field of the recorder it is bound to. */
-export const VAULT_ADAPTER_V4_FIELD = "adapter_v4";
-export const VAULT_RECORDER_FIELD = "recorder";
-/** The build artifacts of the V4 contracts. They are in core's stage table `artifacts` as `recorder` and `v4Adapter` and checked against it. */
-export const RECORDER_ARTIFACT_KEY = "recorder";
-export const V4_ADAPTER_ARTIFACT_KEY = "v4Adapter";
 /** Written by this tool's Safe stage, not by a core script. */
 export const SAFE_STAGE = "safe";
 export const SAFE_MANIFEST = "safe.json";
@@ -49,8 +38,6 @@ export const MANIFEST_ENV: Record<string, { stage: string; field: string }> = {
   SAFE_ADDRESS: { stage: SAFE_STAGE, field: "safe" },
   /** The single-vault redeploy (issue 1796) hands the new vault to the live timelock. */
   TIMELOCK_ADDRESS: { stage: "timelock", field: "timelock" },
-  /** The agent stage registers this permissionless price recorder as RM's pool (core 1676). */
-  RECORDER_ADDRESS: { stage: RECORDER_STAGE, field: "recorder" },
 };
 export const VAULT_LIST_ENV = "VAULT_ADDRESSES";
 /**
@@ -63,7 +50,7 @@ export const VAULT_ADDRESS_FIELD = "vault";
 /** Env names core uses for the per-vault caps -> the suffix of the sheet name VAULT_<KEY>_<suffix>. */
 export const VAULT_CAP_ENV: Record<string, string> = {
   TVL_CAP: "TVL_CAP", PER_DEPOSIT_CAP: "PER_DEPOSIT_CAP", EXIT_FEE_BPS: "EXIT_FEE_BPS",
-  // basket stages only (issue 1666): the table lists them for proto, agent and rwa, never for vault (rmUSDC)
+  // basket stages only (issue 1666): the table lists them for proto and rwa, never for vault (rmUSDC)
   NAV_DEVIATION_BPS: "NAV_DEVIATION_BPS", MIN_POOL_LIQUIDITY: "MIN_POOL_LIQUIDITY",
 };
 /** Env names core reads that carry a different name in the sheet. */
@@ -105,8 +92,6 @@ export const CORE_CONTRACT_REFS: { name: string; stage: string; field: string; a
   { name: "governance", stage: "governance", field: "governance", artifactKey: "governance" },
   { name: "receipt", stage: "receipt", field: "consensus_receipt", artifactKey: "receipt" },
   { name: "timelock", stage: "timelock", field: "timelock", artifactKey: "timelock" },
-  // core 1676: the price recorder is a core contract of the deploy. It has no role, so the role matrix skips it.
-  { name: "recorder", stage: RECORDER_STAGE, field: "recorder", artifactKey: RECORDER_ARTIFACT_KEY },
 ];
 
 /** Manifest fields the tool reads, by stage. The parity test checks the scripts write them. */
@@ -116,9 +101,6 @@ export const MANIFEST_FIELDS_READ: { stage: string; field: string }[] = [
   // the verifier reads these from the timelock manifest, and chain_id from every stage manifest
   ...["safe", "emergency", "code_hashes", "roles"].map((field) => ({ stage: "timelock", field })),
   { stage: "libs", field: "chain_id" },
-  // core 1676: the verifier reads the V4 adapter and the recorder a vault stage wrote, and the recorder stage's own manifest
-  { stage: "agent", field: VAULT_ADAPTER_V4_FIELD },
-  { stage: "agent", field: VAULT_RECORDER_FIELD },
 ];
 
 /**
@@ -129,16 +111,12 @@ export const MANIFEST_FIELDS_READ: { stage: string; field: string }[] = [
 export const ASSET_CONFIG_FILES: Partial<Record<VaultKey, { file: string; list: string }>> = {
   PROTO: { file: "config/protocol-assets.json", list: "assets" },
   RWA: { file: "config/rwa-assets.json", list: "assets" },
-  AGENT: { file: "config/agent-token-shortlist.json", list: "shortlist" },
 };
 /** The manifest field of a basket or agent vault that holds its Uniswap V3 swap adapter. */
 export const VAULT_ADAPTER_FIELD = "adapter";
-/** Core's `venue` names to the on-chain Venue enum index (`BasketVault.Venue`: V3 = 0, V4 = 1, Aerodrome = 2). */
-export const VENUE_INDEX: Record<string, number> = { UniswapV3: 0, UniswapV4: 1 };
+/** Core's `venue` names to the on-chain Venue enum index (`BasketVault.Venue`: V3 = 0). The V4 venue is not deployed by any stage (ADR-0017). */
+export const VENUE_INDEX: Record<string, number> = { UniswapV3: 0 };
 export const VENUE_V3 = 0;
-export const VENUE_V4 = 1;
-/** The manifest field that holds the adapter of an asset on this venue. */
-export const adapterFieldFor = (venue: number): string => (venue === VENUE_V4 ? VAULT_ADAPTER_V4_FIELD : VAULT_ADAPTER_FIELD);
 /**
  * The strategy adapters a RobotMoneyVault stage registers (DeployVault.s.sol, issue 1705 C4): in registration order, the manifest field of each adapter and the
  * script constant that holds its bps cap. The verifier reads the cap from the script source at the DEPLOY_SHA, never a number typed here.
@@ -153,5 +131,5 @@ export const STRATEGY_ADAPTER_VAULT_ARTIFACT = "RobotMoneyVault";
 
 
 /** The verifier's vault kind per table vault key. */
-export const VAULT_KIND: Record<VaultKey, "usdc" | "basket" | "agent"> = { USDC: "usdc", PROTO: "basket", AGENT: "agent", RWA: "basket" };
+export const VAULT_KIND: Record<VaultKey, "usdc" | "basket"> = { USDC: "usdc", PROTO: "basket", RWA: "basket" };
 export const isVaultKey = (k: string): k is VaultKey => (VAULT_KEYS as readonly string[]).includes(k);

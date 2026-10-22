@@ -201,7 +201,7 @@ describe("stage 11 refuses without the recorded proof", () => {
 });
 
 describe("the verifier reads the proof transaction back", () => {
-  test("the healthy world passes all four proof labels with real signatures", async () => {
+  test("the healthy world passes all three proof labels with real signatures", async () => {
     const w = buildWorld(8453);
     const r = await verifyDeployment(w.opts);
     expect(failed(r)).toEqual([]);

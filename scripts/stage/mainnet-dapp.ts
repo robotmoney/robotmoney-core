@@ -25,8 +25,8 @@ export const MAINNET_OVERLAY_REL = "testing/ethereum-testnet/config/docker-compo
 /** Host ports differ from the stage stack (5173 and 18546) so a tunnel pointed at the stage ports never reaches this stack. */
 export const MAINNET_DEFAULT_PORTS = { dapp: 15173, explorer: 18547 } as const;
 export const MAINNET_DEFAULT_MAX_BLOCK_RANGE = 1000;
-/** Vault order is the order of the router weights and of the manifests: USDC, PROTO, AGENT, RWA. */
-export const VAULT_KEYS = ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"] as const;
+/** Vault order is the order of the router weights and of the manifests: USDC, PROTO, RWA (rmAGENT is retired, ADR-0017). */
+export const VAULT_KEYS = ["rmUSDC", "rmPROTO", "rmRWA"] as const;
 
 /** A refusal. `cls` is the one word a caller can switch on; the detail never carries a secret value. */
 export class MainnetDappError extends Error {

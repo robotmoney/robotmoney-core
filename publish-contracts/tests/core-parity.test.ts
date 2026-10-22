@@ -29,16 +29,17 @@ describe(`core parity against ${REPO_ROOT}`, () => {
     expect(tableProblems(table, REPO_ROOT)).toEqual([]);
   });
 
-  test("the table has every vault, rmRWA as RwaBasketVault and rmAGENT as AgentTokenVault", () => {
-    expect(table.vaults.map((v) => v.key)).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
+  test("the table has the three vaults, rmRWA as RwaBasketVault, and no rmAGENT (retired, ADR-0017)", () => {
+    expect(table.vaults.map((v) => v.key)).toEqual(["USDC", "PROTO", "RWA"]);
     expect(table.vaults.find((v) => v.key === "RWA")!.artifact).toBe("RwaBasketVault");
-    expect(table.vaults.find((v) => v.key === "AGENT")!.artifact).toBe("AgentTokenVault");
+    expect(table.vaults.some((v) => (v.key as string) === "AGENT")).toBe(false);
+    expect(table.stages.some((s) => s.name === "agent" || s.name === "recorder")).toBe(false);
   });
 });
 
 describe("issue 1666: the basket stages read the NAV deviation guard and the pool liquidity floor", () => {
-  test("proto, agent and rwa require NAV_DEVIATION_BPS and MIN_POOL_LIQUIDITY, fed by their own VAULT_<KEY> sheet names", () => {
-    for (const key of ["PROTO", "AGENT", "RWA"] as const) {
+  test("proto and rwa require NAV_DEVIATION_BPS and MIN_POOL_LIQUIDITY, fed by their own VAULT_<KEY> sheet names", () => {
+    for (const key of ["PROTO", "RWA"] as const) {
       const row = STAGES.find((s) => s.vault === key)!;
       expect(row.requiredEnv, row.name).toContain("NAV_DEVIATION_BPS");
       expect(row.requiredEnv, row.name).toContain("MIN_POOL_LIQUIDITY");
@@ -53,21 +54,18 @@ describe("issue 1666: the basket stages read the NAV deviation guard and the poo
   });
 });
 
-describe("core 1676: the V4 venue wiring", () => {
-  test("VENUE_INDEX equals the BasketVault.Venue enum order in core (V3 0, V4 1, Aerodrome 2)", () => {
+describe("ADR-0017: the three-vault table carries no V4 venue wiring", () => {
+  test("VENUE_INDEX names the V3 venue at the BasketVault.Venue enum index; no stage deploys the V4 venue", () => {
     const src = readFileSync(join(REPO_ROOT, "contracts", "vaults", "BasketVault.sol"), "utf8");
     const body = /enum Venue \{([^}]*)\}/.exec(src)![1]!.split(",").map((x) => x.trim()).filter(Boolean);
-    expect(body).toEqual(["V3", "V4", "Aerodrome"]);
-    expect(VENUE_INDEX).toEqual({ UniswapV3: body.indexOf("V3"), UniswapV4: body.indexOf("V4") });
+    expect(body.slice(0, 2)).toEqual(["V3", "V4"]);
+    expect(VENUE_INDEX).toEqual({ UniswapV3: body.indexOf("V3") });
   });
-  test("the agent stage reads RECORDER_ADDRESS from the recorder stage manifest field the script writes", () => {
-    expect(MANIFEST_ENV.RECORDER_ADDRESS).toEqual({ stage: "recorder", field: "recorder" });
-    expect(STAGES.find((s) => s.name === "agent")!.requiredEnv).toContain("RECORDER_ADDRESS");
-    expect(STAGES.map((s) => s.name).indexOf("recorder")).toBe(STAGES.map((s) => s.name).indexOf("libs") + 1);
-  });
-  test("the recorder and the V4 adapter are artifacts of core's table", () => {
-    expect(table.artifacts.recorder).toBe("UniswapV4PriceRecorder");
-    expect(table.artifacts.v4Adapter).toBe("UniswapV4SwapAdapter");
+  test("no stage reads RECORDER_ADDRESS and the table has no recorder or V4 adapter artifact", () => {
+    expect(MANIFEST_ENV.RECORDER_ADDRESS).toBeUndefined();
+    for (const s of STAGES) expect(s.requiredEnv, s.name).not.toContain("RECORDER_ADDRESS");
+    expect(table.artifacts.recorder).toBeUndefined();
+    expect(table.artifacts.v4Adapter).toBeUndefined();
   });
 });
 

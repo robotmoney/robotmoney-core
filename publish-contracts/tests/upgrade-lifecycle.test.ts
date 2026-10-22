@@ -22,7 +22,9 @@ import { addr, buildWorld, failed, GATEWAY, IMPL_SLOT, IMPLS, type World } from 
 const FIX = join(import.meta.dir, "fixtures");
 const record = (): any => JSON.parse(readFileSync(join(FIX, "upgrade-lifecycle.twin.json"), "utf8"));
 const recorded = JSON.parse(readFileSync(join(FIX, "upgrade-lifecycle.twin.chain.json"), "utf8"));
-const proxies = repoProxyNames();
+// The recorded Twin run is a nine-proxy deployment of the v0.5.0 line (rmAGENT was a stage). Its record is history, so it is read with the proxy set it was made with. The live Twin job
+// (twin-upgrade-lifecycle.ts) records the current eight-proxy shape.
+const proxies = ["vault[rmUSDC]", "registry", "router", "gateway", "receipt", "governance", "vault[rmPROTO]", "vault[rmAGENT]", "vault[rmRWA]"];
 
 /** Replays the recorded chain. `over` replaces single answers. A question the run never asked throws, so a check that reads something new fails loudly here. */
 function replay(over: Partial<{ callRevert: (k: string) => Hex | undefined; read: (k: string) => unknown }> = {}): LifecycleChain {

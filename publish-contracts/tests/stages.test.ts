@@ -49,17 +49,17 @@ describe("stage list built from core's stage table", () => {
     }
     expect(readers).toEqual([]);
   });
-  test("the table has a row for each of the four vaults, each pointing at a forge stage with that vault key", () => {
-    expect(VAULT_STAGES.map((v) => v.key)).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
+  test("the table has a row for each of the three vaults, each pointing at a forge stage with that vault key", () => {
+    expect(VAULT_STAGES.map((v) => v.key)).toEqual(["USDC", "PROTO", "RWA"]);
     for (const v of VAULT_STAGES) {
       const row = STAGES.find((s) => s.name === v.stage)!;
       expect(row.vault).toBe(v.key);
       expect(row.script).toMatch(/^contracts\/script\/\w+\.s\.sol:\w+$/);
     }
   });
-  test("rmRWA is verified against its own artifact (RwaBasketVault), rmAGENT against AgentTokenVault", () => {
+  test("rmRWA is verified against its own artifact (RwaBasketVault) and the table names no rmAGENT", () => {
     expect(table.vaults.find((v) => v.key === "RWA")!.artifact).toBe("RwaBasketVault");
-    expect(table.vaults.find((v) => v.key === "AGENT")!.artifact).toBe("AgentTokenVault");
+    expect(table.vaults.some((v) => (v.key as string) === "AGENT")).toBe(false);
   });
   test("every required env name of every forge row resolves to a sheet name, a manifest field, the vault list or the chain id", () => {
     for (const s of forge) for (const e of s.requiredEnv) expect(resolveEnv(e, s.vault ?? null).from, `${s.name} reads ${e}`).not.toBe("unmapped");
@@ -102,8 +102,8 @@ describe("stage list built from core's stage table", () => {
     expect(STAGES.find((s) => s.name === LIBS_STAGE)!.libraries).toEqual([]);
     // Issue 1808: every stage that deploys a proxied core contract compiles with --libraries tick_math (one setting, one CREATE2 address per library);
     // so does the timelock stage, whose TimelockController init code (metadata included) every proxy's CREATE2 prediction hashes.
-    // The libs and recorder stages deploy no proxy and link nothing.
-    expect(forge.filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "receipt", "governance", "proto", "agent", "rwa", "timelock"]);
+    // The libs stage deploys no proxy and links nothing.
+    expect(forge.filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "receipt", "governance", "proto", "rwa", "timelock"]);
     // the gateway handover links nothing but compiles with the same --libraries: the last compile of a run leaves out/ in that state, which the vaults verifier reads (issue 1892)
     expect(buildStages(table, "gateway").filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["gateway", "gateway-handover"]);
     for (const s of forge) for (const l of s.libraries) expect(l.manifestKey).toBeTruthy();
@@ -121,8 +121,7 @@ describe("stage list built from core's stage table", () => {
   test("start nonces are the running sum of the frozen counts", () => {
     expect(expectedStartNonce("safe", COUNTS)).toBe(0);
     expect(expectedStartNonce("libs", COUNTS)).toBe(1);
-    expect(expectedStartNonce("recorder", COUNTS)).toBe(5);
-    expect(expectedStartNonce("vault", COUNTS)).toBe(5 + COUNTS.recorder!);
+    expect(expectedStartNonce("vault", COUNTS)).toBe(1 + COUNTS.libs!);
     const plan = stagePlan(COUNTS);
     expect(plan.map((p) => p.stage)).toEqual(STAGE_NAMES);
     const last = plan.find((p) => p.stage === "timelock")!;
@@ -163,7 +162,7 @@ describe("deploy-time configuration is consumed by the deployer stages 4 to 10, 
     expect(names.indexOf("receipt")).toBeLessThan(names.indexOf("governance"));
   });
   test("each basket stage takes the caps, the exit fee, the fee recipient and the router eligibility with the default weights", () => {
-    for (const n of ["proto", "agent", "rwa"]) {
+    for (const n of ["proto", "rwa"]) {
       expect(stage(n).requiredEnv, n).toEqual(expect.arrayContaining(["TVL_CAP", "PER_DEPOSIT_CAP", "EXIT_FEE_BPS", "FEE_RECIPIENT", "ROUTER_DEFAULT_BPS"]));
       expect(resolveEnv("ROUTER_DEFAULT_BPS", stage(n).vault ?? null).from).toBe("computed");
     }
@@ -172,7 +171,7 @@ describe("deploy-time configuration is consumed by the deployer stages 4 to 10, 
   test("every deploy-time key reaches a stage between router (4) and rwa (10), and no deployer stage reads a GOVERN_ name", () => {
     const names = forge.map((s) => s.name);
     const between = names.slice(names.indexOf("router"), names.indexOf("rwa") + 1);
-    expect(between).toEqual(["router", "receipt", "governance", "proto", "agent", "rwa"]);
+    expect(between).toEqual(["router", "receipt", "governance", "proto", "rwa"]);
     const consumed = new Set(between.flatMap((n) => stage(n).requiredEnv));
     for (const k of ["CONSENSUS_RECEIPT_ADDRESS", "TVL_CAP", "PER_DEPOSIT_CAP", "EXIT_FEE_BPS", "FEE_RECIPIENT", "ROUTER_DEFAULT_BPS"]) expect(consumed.has(k), k).toBe(true);
     for (const s of forge) for (const e of s.requiredEnv) expect(e.startsWith("GOVERN_"), `${s.name} reads ${e}`).toBe(false);
@@ -182,19 +181,18 @@ describe("deploy-time configuration is consumed by the deployer stages 4 to 10, 
     const { ctx, sheet } = setup();
     const gov = stageEnv(ctx, stage("governance"));
     for (const k of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) expect(gov).not.toHaveProperty(k);
-    // the example sheet makes PROTO, AGENT and RWA eligible with the launch vector USDC 9500, PROTO 500, AGENT 0, RWA 0
+    // the example sheet makes PROTO and RWA eligible with the launch vector USDC 9500, PROTO 500, RWA 0
     expect(stageEnv(ctx, stage("proto")).ROUTER_DEFAULT_BPS).toBe("9500,500");
-    expect(stageEnv(ctx, stage("agent")).ROUTER_DEFAULT_BPS).toBe("9500,500,0");
-    expect(stageEnv(ctx, stage("rwa")).ROUTER_DEFAULT_BPS).toBe("9500,500,0,0");
+    expect(stageEnv(ctx, stage("rwa")).ROUTER_DEFAULT_BPS).toBe("9500,500,0");
     expect(stageEnv(ctx, stage("rwa")).TVL_CAP).toBe(sheet.vaults.RWA.tvlCap.toString());
     expect(stageEnv(ctx, stage("vault")).ROUTER_DEFAULT_BPS).toBeUndefined();
   });
 });
 
 describe("the govern stage lists the unpause-only matrix (issue 1520)", () => {
-  test("governRowNames() is the four vault unpauses then the Twin-only demonstrations, and no 13-row list survives", () => {
-    expect([...governRowNames()]).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]);
-    expect(governRowNames().length).toBe(7);
+  test("governRowNames() is the three vault unpauses then the Twin-only demonstrations, and no 13-row list survives", () => {
+    expect([...governRowNames()]).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA", "update-delay", "batch", "cancel"]);
+    expect(governRowNames().length).toBe(6);
     const g = (table as unknown as { govern: { mainnetRows: string[]; twinOnlyRows: string[] } }).govern;
     expect([...g.mainnetRows, ...g.twinOnlyRows]).toEqual([...governRowNames()]);
   });

@@ -19,7 +19,7 @@ import type { PublishSigner } from "./signer.ts";
 import { ACTIVE_SYSTEM, DEPLOYER_STAGES, STAGES, expectedStartNonce, getStageTable, proofNoncesBefore, manifestRef, stageByName, type StageRow } from "./stages.ts";
 import { PROOF_STAGE, assertControlProven } from "./control-proof.ts";
 import { CONSUMED_VAULTS_MANIFESTS, hashConsumedManifests } from "./verify/gateway.ts";
-import { LIBS_STAGE, RECORDER_STAGE, VAULT_KIND, VENUE_V4, resolveEnv } from "./core-wiring.ts";
+import { LIBS_STAGE, VAULT_KIND, resolveEnv } from "./core-wiring.ts";
 import { runCoreConfigCheck, type CoreConfigCheck } from "./core-config-check.ts";
 import { configCheck, loadVaultConfiguredAssets } from "./ci/config-check.ts";
 import { viemReader } from "./verify/reader.ts";
@@ -28,7 +28,6 @@ import { manifestBase, manifestPathFor } from "./stage-table.ts";
 import { eligibilityBps, type Address, type Sheet, type UpgradeMode } from "./sheet.ts";
 import type { RedeployRecord } from "./redeploy-vault.ts";
 import type { ImplementationDeploy } from "./deploy-implementation.ts";
-import { httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import type { CallerInputs } from "./sheet.ts";
 import { isReadOnlyGitAncestry, isReadOnlyGitInputsDiff } from "./tooling-sha.ts";
 import { SafeToolError, createSafe, impersonatedSender, connectSafe, readAfterWrite, rpcHost, verifyCreatedSafe, type CreateSafePlan, type SafeManifest, type StaleReadRetry } from "./safe/index.ts";
@@ -136,6 +135,8 @@ export interface RunManifest {
   receipt_applications?: unknown[];
   /** One entry per executed `govern --row clear-voted-weights` round (issue 1743). */
   voted_weights_clears?: unknown[];
+  /** One entry per executed `govern --row retire-vault` round (issue 1912). */
+  vault_retirements?: unknown[];
   /** QA plan v1 D7: one entry per executed `govern --row set-unwind-guard` round (a basket vault's emergency unwind guard). A record: the verifier reads the guards from the chain. */
   unwind_guards?: unknown[];
   /** Issue 1796: one entry per single-vault redeploy (`redeploy-vault` verb, then govern `--row redeploy-vault`): the deploy transactions, the new and the old vault, the operation and the read-back (the evidence `vault_redeploys` shape). */
@@ -321,8 +322,6 @@ export interface RunContext {
   startChain?: ChainStarter;
   /** Injected for tests: the read-only chain reader behind the config-check that runs before each vault stage. Defaults to viem over `rpc`. */
   chainReader?: (rpc: string) => ChainReader;
-  /** Injected for tests: the sleep, the poll and the longest wait of the recorder gate (core 1676). Defaults to a 15 s poll for up to 40 minutes. */
-  recorderWait?: RecorderWaitDeps;
   /**
    * Injected for tests: how a read that checks what a landed transaction left is read again on a load-balanced RPC (issue 1723, safe/read-after-write.ts; the redeploy
    * verb's reads after its broadcast, QA plan v1 E6). Defaults to the shared bound (STALE_READ_TRIES reads, STALE_READ_DELAY_MS apart).
@@ -634,7 +633,7 @@ function estimatedEthFrom(stdout: string): number | undefined {
 
 /**
  * Before each vault stage the config-check runs again against the live RPC (the target chain, also in a dry run: it only reads) and the
- * stage fails on any failed row. A vault with no configured assets (rmUSDC holds no basket assets, and an agent list emptied through the timelock holds none) has nothing to check.
+ * stage fails on any failed row. A vault with no configured assets (rmUSDC holds no basket assets) has nothing to check.
  */
 export async function vaultConfigGate(ctx: RunContext, row: StageRow): Promise<void> {
   if (!row.vault) return;
@@ -648,66 +647,6 @@ export async function vaultConfigGate(ctx: RunContext, row: StageRow): Promise<v
   for (const c of report.checks) ctx.log.log(c.ok ? "info" : "error", "stage.config_check", { stage: row.name, label: c.label, ok: c.ok, detail: c.ok ? undefined : c.detail });
   const failed = report.checks.filter((c) => !c.ok);
   if (failed.length > 0) throw new PublishError("VERIFY", `config-check before stage ${row.name} failed ${failed.length} check(s): ${failed.slice(0, 5).map((c) => c.label).join(", ")}`, { stage: row.name, failed: failed.map((c) => c.label) });
-}
-
-/**
- * Seconds of price history the recorder must hold before a vault stage that registers a Uniswap V4 asset (core 1676): the 1800 s TWAP window
- * (`BasketVault.DEFAULT_TWAP_WINDOW`), which `addAsset` reads with `observe([1800, 0])`, plus three Base blocks.
- */
-export const RECORDER_WINDOW_SECONDS = 1800;
-export const RECORDER_WAIT_MARGIN_SECONDS = 6;
-/** The longest a real chain (8453) is waited for in one process: a little over the window. A younger recorder after that is refused. */
-export const RECORDER_MAX_WAIT_MS = (RECORDER_WINDOW_SECONDS + 600) * 1000;
-export interface RecorderWaitDeps { sleep?: (ms: number) => Promise<void>; pollMs?: number; maxWaitMs?: number }
-
-/**
- * The recorder wait (core 1676). The price recorder keeps no history before it exists, and `BasketVault.addAsset` reverts
- * `InsufficientObservationHistory` while it holds less than the 1800 s window. So a vault stage whose config lists a UniswapV4 asset
- * does not start until the recorder's oldest snapshot is older than the window.
- *   - the local simulation chain of a dry run and a Twin fork move time with the anvil warp (one jump, then a re-read);
- *   - a real chain (8453) is waited for, polling, up to RECORDER_MAX_WAIT_MS, then refused with RECORDER_HISTORY.
- * The recorder stage runs right after libs, so on a real run the other stages normally take longer than the window.
- */
-export async function recorderWindowGate(ctx: RunContext, row: StageRow, deps: RecorderWaitDeps = {}): Promise<void> {
-  if (!row.vault || row.kind !== "forge") return;
-  if (!loadVaultConfiguredAssets(ctx.coreDir, row.vault).some((a) => a.venue === VENUE_V4)) return;
-  const recorder = readManifestField(ctx, manifestRef(RECORDER_STAGE, "recorder")) as Address;
-  const reader = (ctx.chainReader ?? viemReader)(ctx.rpc);
-  if (!reader.blockTimestamp) throw new PublishError("TOOL", "this chain reader cannot read the head block timestamp: the recorder wait needs it");
-  const need = RECORDER_WINDOW_SECONDS + RECORDER_WAIT_MARGIN_SECONDS;
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const maxWaitMs = deps.maxWaitMs ?? RECORDER_MAX_WAIT_MS;
-  const t0 = Date.now();
-  for (let warps = 0; ; ) {
-    const oldest = BigInt((await reader.read(recorder, "function oldestObservation() view returns (uint32)")) as bigint | number);
-    const age = Number((await reader.blockTimestamp()) - oldest);
-    if (age >= need) { ctx.log.log("info", "stage.recorder_ready", { stage: row.name, recorder, history_s: age, need_s: need }); return; }
-    const remaining = need - age;
-    const warped = warps === 0 ? await warpForRecorder(ctx, remaining) : false;
-    if (warped) { warps++; ctx.log.log("info", "stage.recorder_warped", { stage: row.name, recorder, seconds: remaining }); continue; }
-    if (warps > 0 || Date.now() - t0 >= maxWaitMs) {
-      throw new PublishError("RECORDER_HISTORY", `stage ${row.name}: the price recorder ${recorder} holds ${age} s of history, the vault needs ${need} s (the ${RECORDER_WINDOW_SECONDS} s window). addAsset would revert InsufficientObservationHistory. Nothing was sent. Wait ${remaining} s and rerun with --resume.`, { stage: row.name, recorder, history_s: age, need_s: need });
-    }
-    ctx.log.log("info", "stage.recorder_waiting", { stage: row.name, recorder, history_s: age, remaining_s: remaining });
-    await sleep(deps.pollMs ?? 15_000);
-  }
-}
-
-/** Moves time on a chain that may be warped (the dry-run simulation anvil, a Twin fork). False on any other chain, 8453 included. */
-async function warpForRecorder(ctx: RunContext, seconds: number): Promise<boolean> {
-  if (ctx.simRpc) {
-    if (!isLoopback(ctx.simRpc)) throw new PublishError("USAGE", `refusing to warp ${ctx.simRpc}: only the local simulation chain of a dry run is warped`);
-    for (const args of [["rpc", "evm_increaseTime", String(seconds), "--rpc-url", ctx.simRpc], ["rpc", "evm_mine", "--rpc-url", ctx.simRpc]]) {
-      const r = await ctx.run("cast", args, { env: childEnv({ ...ctx, rpc: ctx.simRpc }) });
-      if (r.code !== 0) throw new PublishError("TOOL", `cannot warp the local preflight chain: ${r.stderr.trim().split("\n").slice(-1)[0] ?? ""}`);
-    }
-    return true;
-  }
-  if (isMainnet(ctx.chainId)) return false;
-  const rpc = httpRpc(ctx.rpc);
-  if (!(await isTwinFork(rpc))) return false;
-  await warpBy(rpc, BigInt(seconds));
-  return true;
 }
 
 const isLoopback = (url: string): boolean => { try { const h = new URL(url).hostname; return h === "127.0.0.1" || h === "localhost" || h === "[::1]"; } catch { return false; } };
@@ -896,7 +835,6 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   const env = stageEnv(ctx, row);
   const real = ctx;
   if (ctx.simRpc) ctx = { ...ctx, rpc: ctx.simRpc }; // a dry run simulates on the local chain: nonces, balances and forge all read it
-  await recorderWindowGate(ctx, row, ctx.recorderWait); // core 1676: the V4 price recorder must hold a full TWAP window before addAsset
   const deployer = await ctx.signer.address();
   if (deployer.toLowerCase() !== ctx.sheet.admin.toLowerCase()) throw new PublishError("SIGNER", `the signer ${deployer} is not ADMIN_ADDRESS ${ctx.sheet.admin}`);
   const counts = ctx.frozen;

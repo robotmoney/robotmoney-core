@@ -15,7 +15,7 @@ import { parseSheet } from "../src/sheet.ts";
 import { stageByName } from "../src/stages.ts";
 import { A, SUBMITTER_ROLE_ID, addr, fakeTimelock, sender, setup, signers } from "./govern-world.ts";
 
-const ALL = { ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:5000,PROTO:2500,AGENT:1000,RWA:1500" };
+const ALL = { ELIGIBLE_VAULTS: "PROTO,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,RWA", ROUTER_WEIGHTS: "USDC:5000,PROTO:3500,RWA:1500" };
 const REHEARSAL = { ...ALL, DEPLOYMENT_KIND: "rehearsal", TIMELOCK_MIN_DELAY: "900", GOVERN_NEW_DELAY: "1800", SAFE_SALT_NONCE: "20261010" };
 const SUBMITTER = addr(0x5ab1);
 const opts = (sheet: ReturnType<typeof parseSheet>, tl: ReturnType<typeof fakeTimelock>, extra: object = {}) =>
@@ -48,7 +48,7 @@ describe("update-delay, batch and cancel on 8453: refused in production, allowed
 
   test("a rehearsal on 8453: the unpauses first, then update-delay, batch and cancel run as explicit rows, in order", async () => {
     const { d, tl, manifest } = mk(REHEARSAL);
-    expect([...stageRows(8453)]).toEqual(GOVERN_ROWS.slice(0, 4)); // stage 13 on 8453 stays the four unpauses, rehearsal or not
+    expect([...stageRows(8453)]).toEqual(GOVERN_ROWS.slice(0, 3)); // stage 13 on 8453 stays the three unpauses, rehearsal or not
     // a Twin-only row cannot start before the unpauses are complete
     await expect(go(d, tl, manifest, { row: "update-delay" })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("is not complete") });
     await go(d, tl, manifest);
@@ -217,7 +217,7 @@ describe("release-receipt after the narrow-role handover (issue 1888)", () => {
 });
 
 describe("production refuses the rehearsal-only rows BEFORE any signer or passphrase prompt (review of PR 1728)", () => {
-  const ROWS: string[][] = [["update-delay"], ["batch"], ["cancel"], ["5"], ["6"], ["7"]]; // register-submitter is allowed on 8453 in production (issue 1888): see the next describe
+  const ROWS: string[][] = [["update-delay"], ["batch"], ["cancel"], ["4"], ["5"], ["6"]]; // register-submitter is allowed on 8453 in production (issue 1888): see the next describe
   const probe = async (sheet: Record<string, string>, row: string[]) => {
     const { world: mkWorld } = await import("./harness.ts");
     const w = mkWorld({ chainId: 8453, sheet });
