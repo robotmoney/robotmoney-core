@@ -74,7 +74,6 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
   }
 
   if (args[0] === "--version") out("forge 1.0.0-stub");
-  if (args[0] === "build") out("", 0); // issue 1892: the rebuild after a gateway system run
   if (args[0] !== "script") out(`stub forge: unsupported ${args[0]}`, 1);
   const script = args[1]!;
   const file = basename(script.split(":")[0]!);

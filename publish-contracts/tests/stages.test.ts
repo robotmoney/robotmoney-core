@@ -104,7 +104,8 @@ describe("stage list built from core's stage table", () => {
     // so does the timelock stage, whose TimelockController init code (metadata included) every proxy's CREATE2 prediction hashes.
     // The libs and recorder stages deploy no proxy and link nothing.
     expect(forge.filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "receipt", "governance", "proto", "agent", "rwa", "timelock"]);
-    expect(buildStages(table, "gateway").filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["gateway"]);
+    // the gateway handover links nothing but compiles with the same --libraries: the last compile of a run leaves out/ in that state, which the vaults verifier reads (issue 1892)
+    expect(buildStages(table, "gateway").filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["gateway", "gateway-handover"]);
     for (const s of forge) for (const l of s.libraries) expect(l.manifestKey).toBeTruthy();
   });
   test("no script path, env name list or artifact name is typed in the stage modules", () => {

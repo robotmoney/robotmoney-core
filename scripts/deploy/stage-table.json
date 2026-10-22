@@ -452,7 +452,10 @@
       ],
       "manifest": "deployments/<chain>/gateway-handover.json",
       "manifestNotes": "The gateway system's handover. The deployer grants gateway ADMIN_ROLE and DEFAULT_ADMIN_ROLE to the explicitly configured GATEWAY_ADMIN_ADDRESS and revokes both from itself. It authorizes no agent and transfers no agent. The production authority is an open decision (architecture 10): the sheet names it, nothing defaults it.",
-      "libraries": [],
+      "libraries": [
+        "tick_math"
+      ],
+      "libraryNotes": "The handover links nothing. It names tick_math so its forge compile uses the same --libraries as every other stage: the last compile of a run leaves out/ in that state, which the vaults verifier compares the deployed libraries with (issue 1892).",
       "vault": null
     }
   ],

@@ -35,6 +35,14 @@ export interface LabelledProxyCall { label: string; target: Address; data: Hex }
 /** The run-manifest key of one upgrade: the proxy and the implementation it moves to. A rerun of the same pair reprints its record. */
 export const upgradeRecordKey = (proxy: string, implementation: string): string => `${UPGRADE_ROW}-${proxy}-${implementation.toLowerCase()}`;
 
+/**
+ * Issue 1892: the proxies a freeze names. The gateway system's proxy is frozen by its own release (its own upgrade timelock), so it joins this freeze only when the record lists
+ * it, a record of the combined deployment. Every other proxy of the table is required.
+ */
+export function freezeSpecsFor(specs: readonly ProxySpec[], systemOfStage: (stage: string) => string | undefined, record: any): ProxySpec[] {
+  return specs.filter((s) => systemOfStage(s.stage) !== "gateway" || record?.proxies?.[s.name] !== undefined);
+}
+
 /** Every core proxy's freeze target from the verifier's record, or the problems that make the record unusable (a proxy missing, an address or hash malformed). */
 export function freezeTargets(record: any, specs: readonly ProxySpec[]): { targets: Record<string, FreezeTarget>; problems: string[] } {
   const targets: Record<string, FreezeTarget> = {};

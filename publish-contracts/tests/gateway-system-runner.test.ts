@@ -38,24 +38,17 @@ describe("the gateway system run (issue 1892)", () => {
     expect(gw.env.ROUTER_ADDRESS).toBe("0x0000000000000000000000000000000000001003");
     const ho = forgeScripts(w).find((c: any) => c.args.includes("--broadcast") && String(c.args[1]).includes("HandoverGateway"));
     expect(ho.env.GATEWAY_ADMIN_ADDRESS.toLowerCase()).toBe("0x000000000000000000000000000000000000a0c1");
+    // the last forge compile of a run decides the state of out/ the vaults verifier compares the deployed libraries with: the handover compiles with the same --libraries as the stages before it
+    for (const c of forgeScripts(w).filter((x: any) => x.args.includes("--broadcast"))) {
+      const at = c.args.indexOf("--libraries");
+      expect(at, String(c.args[1])).toBeGreaterThan(-1);
+      expect(String(c.args[at + 1])).toContain(":TickMath:");
+    }
     for (const c of forgeScripts(w)) expect(Object.keys(c.env).filter((k) => k.startsWith("AGENT_")), String(c.args[1])).toEqual([]);
     // 3 + 4 transactions after the recorded start, and the stage nonces follow it
     expect(m.stages.gateway.startNonce).toBe(40);
     expect(m.stages["gateway-handover"].startNonce).toBe(43);
     expect(w.state().nonces[ADMIN.toLowerCase()]).toBe(47);
-    // the gateway scripts rebuilt out/ with their own libraries: one `forge build` after the last stage restores the build the vaults verifier reads
-    const calls = w.state().calls as any[];
-    const isForge = (c: any, verb: string) => c.tool === "forge" && c.args[0] === verb;
-    expect(calls.filter((c) => isForge(c, "build")).length).toBe(1);
-    const lastScript = calls.map((c, i) => (isForge(c, "script") && c.args.includes("--broadcast") ? i : -1)).reduce((a, b) => Math.max(a, b), -1);
-    expect(calls.findIndex((c) => isForge(c, "build"))).toBeGreaterThan(lastScript);
-    expect(w.logs().some((l) => l.event === "build.vaults_restored")).toBe(true);
-  });
-
-  test("a vaults run never runs forge build: only the gateway system rebuilds out/", async () => {
-    const w = world({ startNonce: 0 });
-    expect(await w.run(["--stage", "deploy"])).toBe(0);
-    expect(w.state().calls.filter((c: any) => c.tool === "forge" && c.args[0] === "build")).toEqual([]);
   });
 
   test("the vaults manifests are consumed and left unchanged: their hashes are recorded when the run begins", async () => {
