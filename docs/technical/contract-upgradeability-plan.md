@@ -233,6 +233,27 @@ against the layout of the commit the live implementation was built from, at ever
 needs the owner's recorded go before any Base broadcast, and the timelock delay is the sheet's (48 hours in production,
 900 s in a rehearsal). After `freezeUpgrades` the line takes no contract change: a fix is a new deployment on a new line.
 
+**Typed migrations (issue 1910).** An upgrade that must migrate state in the
+same `upgradeToAndCall` names a typed migration: `govern --row upgrade-proxy
+--migration NAME`. The tool builds the calldata. It never takes free hex, and
+the generic `--call-data` row stays Twin-only and is refused on 8453. The one
+name is `receipt-submitter-roles` for the receipt proxy: the tool resolves
+`migrateToSubmitterRoles(releaser)` (a `reinitializer(2)`, callable only by the
+upgrade timelock) from the build ABI of the new implementation and takes
+`releaser` from the governance manifest, the RouterGovernance address of the
+deployment. The row refuses an unknown name, a proxy with no such migration, a
+build without the function and a missing or zero address. It previews the
+decoded migration, schedules `upgradeToAndCall(impl, data)` as one timelock
+call and records the migration (name, function, selector, releaser, data, data
+hash) in the run manifest's `proxy_upgrades` entry. `evidence-check` reads the
+scheduled data back from the chain and fails any entry whose data is not the
+typed migration, or that hides one. The Twin rehearsal upgrades a populated
+v0.5.0-shaped receipt proxy this way and asserts the roles after the upgrade
+(`RECEIPT_RELEASER_ROLE` on RouterGovernance only, `ADMIN_ROLE` on the timelock
+only), the history preserved and the reinitializer refused a second time.
+Another proxy's migration is a reviewed addition to the registry with its own
+Twin proof. The remaining gaps are RM-1022 in `docs/audits.md`.
+
 ## Signing clients and disclosure (stage 3)
 
 Implemented by issue 1810. `rmpc`'s one on-chain write, the agent deposit
