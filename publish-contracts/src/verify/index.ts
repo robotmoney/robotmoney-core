@@ -10,7 +10,7 @@ import { kindLabel, rehearsalDelayProblem } from "../chains.ts";
 import { ERC1967_PROXY_ARTIFACT, compareDeployedCode, loadArtifact, logicCode, tryLoadArtifact } from "./codehash.ts";
 import {
   ADMIN_ROLE, AGENT_ROLE, COMMITTEE_AGENT_ROLE, KEEPER_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
-  RM_TOKEN, SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
+  RM_TOKEN, BNKR_TOKEN, SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
 import { manifestBase } from "../stage-table.ts";
 import { SAFE_MANIFEST, VAULT_ADAPTER_V4_FIELD, V4_ADAPTER_ARTIFACT_KEY, VENUE_V4 } from "../core-wiring.ts";
@@ -453,10 +453,10 @@ async function vaultChecks(
     await seedShareChecks(c, chain, v, D, vs.seedShareReceiver);
   } else {
     await c.run(`${p}: asset config equals sheet`, async () => assetReadBack(chain, a, vs.assets));
-    await basketGuardChecks(c, chain, a, p, vs, v.kind === "agent");
-    await unwindGuardCheck(c, chain, a, p, vs, v.kind === "agent");
+    await basketGuardChecks(c, chain, a, p, vs);
+    await unwindGuardCheck(c, chain, a, p, vs);
     // rmAGENT launches holding RM only (core 1554). "asset config equals sheet" ties the chain to the sheet, so this ties the sheet to RM.
-    if (v.kind === "agent") await c.run(`${p}: holds RM as its one asset`, async () => ({ ok: vs.assets.length === 0 || (vs.assets.length === 1 && lc(vs.assets[0]!.token) === lc(RM_TOKEN)), detail: `RM is parked (core 1903, ADR-0015): no asset or only RM. sheet lists [${vs.assets.map((a) => a.token).join(", ")}], expected only ${RM_TOKEN}` }));
+    if (v.kind === "agent") await c.run(`${p}: holds RM as its one asset`, async () => ({ ok: vs.assets.length === 1 && [RM_TOKEN, BNKR_TOKEN].some((t) => lc(vs.assets[0]!.token) === lc(t)), detail: `sheet lists [${vs.assets.map((a) => a.token).join(", ")}], expected only ${RM_TOKEN} (listed) or ${BNKR_TOKEN} (test asset while RM is parked, ADR-0016)` }));
     // core 1676: every UniswapV4 asset is wired to the permissionless price recorder, the V4 adapter and the configured PoolKey.
     for (const asset of vs.assets.filter((x) => x.venue === VENUE_V4)) await v4AssetChecks(c, chain, v, asset, ctx);
     // core 1695, issue 1705 C4: the swap bound is read back from every basket and compared with the config (its maxSlippageBps, else the vault default).
@@ -761,7 +761,7 @@ const BASKET_GUARD_LABELS = ["navDeviationGuardBps equals sheet", "navDeviationG
  * liquidity meets the sheet floor. Both are read from the chain: the guard from the vault, the liquidity from each asset pool
  * (`IUniswapV3Pool.liquidity()`, a uint128 L). The guard is checked against the sheet AND against zero: a sheet that says 0 cannot pass.
  */
-async function basketGuardChecks(c: Collector, chain: ChainReader, vault: Address, p: string, vs: VaultSheet, emptyOk = false): Promise<void> {
+async function basketGuardChecks(c: Collector, chain: ChainReader, vault: Address, p: string, vs: VaultSheet): Promise<void> {
   const read = () => chain.read(vault, "function navDeviationGuardBps() view returns (uint256)");
   if (vs.navDeviationBps === undefined) c.fail(`${p}: ${BASKET_GUARD_LABELS[0]}`, "the sheet has no navDeviationBps for this vault");
   else await c.runEq(`${p}: ${BASKET_GUARD_LABELS[0]}`, read, vs.navDeviationBps);
@@ -772,8 +772,7 @@ async function basketGuardChecks(c: Collector, chain: ChainReader, vault: Addres
   await c.run(`${p}: ${BASKET_GUARD_LABELS[2]}`, async () => {
     const floor = vs.minPoolLiquidity;
     if (floor === undefined || floor <= 0n) return { ok: false, detail: `the sheet has no pool liquidity floor above zero for this vault (${String(floor)})` };
-    // RM_PARKED (core 1903, ADR-0015): rmAGENT ships with no asset, so there is no pool to measure. A basket with no asset still fails.
-    if (vs.assets.length === 0) return emptyOk ? { ok: true, detail: "no asset is listed (RM is parked): no pool to check" } : { ok: false, detail: "the sheet lists no asset pool to check" };
+    if (vs.assets.length === 0) return { ok: false, detail: "the sheet lists no asset pool to check" };
     const short: string[] = [];
     for (const asset of vs.assets) {
       const liq = BigInt((await chain.read(asset.pool, "function liquidity() view returns (uint128)")) as bigint);
@@ -794,7 +793,7 @@ const UNWIND_GUARD_SIG = "function emergencyUnwindGuard(address token) view retu
  * passes and records the values. Only the Safe, through the timelock, sets the guard (the row), so the pre-govern verify sees zeros and passes; the post-govern verify needs the row
  * run for every unpaused basket. The detail records overrideAllowed and maxLossBps too (QA plan v1 Decisions D3: override allowed, Safe-only), but only minUsdcOut is asserted.
  */
-async function unwindGuardCheck(c: Collector, chain: ChainReader, vault: Address, p: string, vs: VaultSheet, emptyOk = false): Promise<void> {
+async function unwindGuardCheck(c: Collector, chain: ChainReader, vault: Address, p: string, vs: VaultSheet): Promise<void> {
   await c.run(`${p}: ${UNWIND_GUARD_LABEL}`, async () => {
     const active: Address[] = [];
     for (let i = 0; i < 64; i++) {
@@ -811,8 +810,7 @@ async function unwindGuardCheck(c: Collector, chain: ChainReader, vault: Address
     }
     const values = guards.map((g) => g.text).join("; ");
     if (vs.expectPaused) return { ok: true, detail: `deposits paused, no guard required until the vault opens${values ? `: ${values}` : ""}` };
-    // RM_PARKED (core 1903, ADR-0015): an open rmAGENT with no asset has nothing to unwind. Any other vault with no active asset still fails.
-    if (active.length === 0) return emptyOk ? { ok: true, detail: "no active asset (RM is parked): nothing to unwind" } : { ok: false, detail: "the vault is open and lists no active asset: nothing proves an unwind floor" };
+    if (active.length === 0) return { ok: false, detail: "the vault is open and lists no active asset: nothing proves an unwind floor" };
     const zero = guards.filter((g) => g.min === 0n).map((g) => g.token);
     return {
       ok: zero.length === 0,

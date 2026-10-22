@@ -35,9 +35,9 @@ contract ConfigFilesTest is Test {
         assertEq(j.readAddress(".uniswapV3Factory"), V3_FACTORY);
     }
 
-    /// @dev RM_PARKED (core issue 1903, ADR-0015): RM sits under parked.entries while it is parked, else in the shortlist. Either way its pin is checked.
+    /// @dev RM_PARKED (core issue 1903, ADR-0015): RM sits under parked.entries while it is parked (BNKR is listed, ADR-0016), else in the shortlist. Either way its pin is checked.
     function _rm(string memory j) internal view returns (string memory) {
-        return vm.keyExistsJson(j, ".shortlist[0]") ? ".shortlist[0]" : ".parked.entries[0]";
+        return vm.keyExistsJson(j, ".parked.entries[0]") ? ".parked.entries[0]" : ".shortlist[0]";
     }
 
     /// @notice Owner decision 2026-10-08 (core 1676): RM is on the Uniswap V4 RM/USDC 2.91% pool with a hookless PoolKey.
@@ -71,7 +71,15 @@ contract ConfigFilesTest is Test {
             0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391
         );
         assertFalse(vm.keyExistsJson(j, string.concat(b, ".pool")), "no V3 pool address for RM");
-        assertEq(j.readUint(".maxSlippageBps"), 500);
+        // RM needs the 500 bps ceiling (291 bps pool fee). While RM is parked the bound sits in parked.maxSlippageBps and the vault default 300 serves BNKR.
+        assertEq(
+            j.readUint(
+                vm.keyExistsJson(j, ".parked.entries[0]")
+                    ? ".parked.maxSlippageBps"
+                    : ".maxSlippageBps"
+            ),
+            500
+        );
     }
 
     /// @notice The shipped PoolKey hashes to the configured pool id (a spoofed key cannot share the id).
@@ -88,6 +96,30 @@ contract ConfigFilesTest is Test {
             )
         );
         assertEq(id, j.readBytes32(string.concat(b, ".poolId")));
+    }
+
+    /// @notice BNKR, the rmAGENT test asset while RM is parked (ADR-0016): a hookless Uniswap V4 USDC pool whose key hashes to the pinned pool id.
+    function test_Config_agentBnkrTestAssetIsPinnedOnItsHooklessV4Pool() public view {
+        string memory j = vm.readFile("config/agent-token-shortlist.json");
+        if (!vm.keyExistsJson(j, ".parked.entries[0]")) return; // RM reactivated: the shortlist holds RM alone
+        assertEq(j.readString(".shortlist[0].symbol"), "BNKR");
+        assertFalse(vm.keyExistsJson(j, ".shortlist[1]"), "BNKR only");
+        assertEq(j.readAddress(".shortlist[0].token"), 0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b);
+        assertEq(j.readUint(".shortlist[0].poolKey.fee"), 3000);
+        assertEq(j.readInt(".shortlist[0].poolKey.tickSpacing"), 60);
+        assertEq(j.readAddress(".shortlist[0].poolKey.hooks"), address(0), "hookless pool");
+        bytes32 id = keccak256(
+            abi.encode(
+                j.readAddress(".shortlist[0].poolKey.currency0"),
+                j.readAddress(".shortlist[0].poolKey.currency1"),
+                uint24(j.readUint(".shortlist[0].poolKey.fee")),
+                int24(j.readInt(".shortlist[0].poolKey.tickSpacing")),
+                j.readAddress(".shortlist[0].poolKey.hooks")
+            )
+        );
+        assertEq(id, 0x87a44b2ff90d59448342017e80c513fd469c9f5edc34db815436a5d984000f52);
+        assertEq(j.readBytes32(".shortlist[0].poolId"), id);
+        assertEq(j.readUint(".maxSlippageBps"), 300);
     }
 
     function test_Config_agentShortlistCarriesSwapRouter02() public view {

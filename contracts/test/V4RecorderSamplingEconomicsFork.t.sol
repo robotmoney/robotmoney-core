@@ -75,7 +75,7 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
 
         string memory cfg = vm.readFile("config/agent-token-shortlist.json");
         string memory b =
-            vm.keyExistsJson(cfg, ".shortlist[0]") ? ".shortlist[0]" : ".parked.entries[0]"; // RM_PARKED (core 1903, ADR-0015)
+            vm.keyExistsJson(cfg, ".parked.entries[0]") ? ".parked.entries[0]" : ".shortlist[0]"; // RM_PARKED (core 1903, ADR-0015)
         rm = cfg.readAddress(string.concat(b, ".token"));
         poolFee = uint24(cfg.readUint(string.concat(b, ".poolFee")));
 
@@ -275,7 +275,7 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
         // RM_PARKED (core issue 1903, ADR-0015): the attack cycle pushes the price through the live RM/USDC pool, which now holds L 6.476e13
         // (about 0.11 USDC), so the push reverts SlippageExceeded before the economics are measured. The test runs again when RM leaves
         // `parked.entries`. No bound is changed.
-        if (!vm.keyExistsJson(vm.readFile("config/agent-token-shortlist.json"), ".shortlist[0]")) {
+        if (vm.keyExistsJson(vm.readFile("config/agent-token-shortlist.json"), ".parked.entries[0]")) {
             vm.skip(
                 true,
                 "RM_PARKED (core 1903, ADR-0015): the live RM/USDC pool is too thin for the sampling attack cycle"

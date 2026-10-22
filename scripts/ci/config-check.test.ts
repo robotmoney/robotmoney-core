@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   loadConfigs, staticFindings, liveFindings, keccak256, keccakHex, parseCli, httpRpc, redactUrl, usdcHashFindings, readUsdcHashes, UsageError,
-  USDC, USDC_IMPL_SLOT, RM, poolIdOfKey, rmParked, type Rpc,
+  USDC, USDC_IMPL_SLOT, RM, BNKR, poolIdOfKey, rmParked, type Rpc,
 } from "./config-check";
 import { spawnSync } from "node:child_process";
 import { activatedConfigDir } from "./rm-parked-testlib";
@@ -62,16 +62,39 @@ describe("static rules", () => {
   });
   test("an agent shortlist other than exactly RM fails", () => {
     const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist = [{ symbol: "X" }]; });
-    expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only-or-rm-parked")).toBe(true);
+    expect(failures(c).some((x) => x.rule === "launch-list-is-bnkr-test-asset-with-rm-parked-or-rm-only")).toBe(true);
     const e = fixture((f) => { f["agent-token-shortlist.json"].shortlist = []; });
-    expect(failures(e).some((x) => x.rule === "launch-list-is-rm-only-or-rm-parked")).toBe(true);
+    expect(failures(e).some((x) => x.rule === "launch-list-is-bnkr-test-asset-with-rm-parked-or-rm-only")).toBe(true);
   });
   describe("RM parked (core issue 1903, owner decision 2026-10-21)", () => {
-    test("the committed config ships an empty shortlist with RM parked and rmParked is true", () => {
+    test("the committed config lists BNKR as the test asset with RM parked and rmParked is true", () => {
       const c = loadConfigs(realDir);
-      expect(c.agent.shortlist).toEqual([]);
+      expect(c.agent.shortlist.map((e) => e.symbol)).toEqual(["BNKR"]);
       expect(c.agent.parked!.entries!.map((e) => e.symbol)).toEqual(["RM"]);
       expect(rmParked(c.agent)).toBe(true);
+    });
+    test("BNKR test asset (ADR-0016): token, hookless USDC pool key, pool id and code hash are pinned", () => {
+      const b = loadConfigs(realDir).agent.shortlist[0]!;
+      expect(b.symbol).toBe("BNKR");
+      expect(b.poolKey).toEqual({ currency0: BNKR.token, currency1: USDC, fee: 3000, tickSpacing: 60, hooks: BNKR.hooks });
+      expect(b.poolId).toBe("0x87a44b2ff90d59448342017e80c513fd469c9f5edc34db815436a5d984000f52");
+      expect(poolIdOfKey(b.poolKey!)).toBe(b.poolId!);
+      expect(b.tokenCodeHash).toBe("0x334311ad8d9f8a10d5d16d38bc215d0de7f8204d332a6f1a060ebb3f4adbc57f");
+      expect(loadConfigs(realDir).agent.maxSlippageBps).toBe(300);
+    });
+    test("a BNKR pool with hooks, another fee or another pool id fails", () => {
+      for (const mut of [
+        (e: any) => { e.poolKey.hooks = "0x00000000000000000000000000000000000000aa"; },
+        (e: any) => { e.poolKey.fee = 10000; e.poolFee = 10000; },
+        (e: any) => { e.poolId = "0x" + "ab".repeat(32); },
+      ]) {
+        const c = parkedFixture((f) => mut(f["agent-token-shortlist.json"].shortlist[0]));
+        expect(failures(c).some((x) => x.rule.startsWith("bnkr-v4-"))).toBe(true);
+      }
+    });
+    test("BNKR outside the agent file fails the forbidden-symbol rule", () => {
+      const c = fixture((f) => { f["rwa-assets.json"].assets.push({ ...f["rwa-assets.json"].assets[0], symbol: "BNKR" }); });
+      expect(failures(c).some((x) => x.rule === "forbidden-symbol")).toBe(true);
     });
     test("the parked block states the decision, the measured numbers and reactivation criteria in dollars", () => {
       const p = loadConfigs(realDir).agent.parked!;
@@ -89,8 +112,8 @@ describe("static rules", () => {
       expect(failures(c).some((x) => x.rule === "rm-v4-pool-id")).toBe(true);
     });
     test("RM in both the shortlist and parked fails", () => {
-      const c = parkedFixture((f) => { const a = f["agent-token-shortlist.json"]; a.shortlist = [...a.parked.entries]; });
-      expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only-or-rm-parked")).toBe(true);
+      const c = parkedFixture((f) => { const a = f["agent-token-shortlist.json"]; a.shortlist = [...a.shortlist, ...a.parked.entries]; });
+      expect(failures(c).some((x) => x.rule === "launch-list-is-bnkr-test-asset-with-rm-parked-or-rm-only")).toBe(true);
     });
     test("the reactivated config (RM moved back into the shortlist) passes and rmParked is false", () => {
       const c = fixture(() => {});
@@ -139,13 +162,13 @@ describe("static rules", () => {
   });
   test("an RM entry on UniswapV3, or with a V3 pool address, fails", () => {
     const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].venue = "UniswapV3"; });
-    expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only-or-rm-parked")).toBe(true);
+    expect(failures(c).some((x) => x.rule === "rm-v4-poolkey")).toBe(true);
     const d = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].pool = "0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882"; });
     expect(failures(d).some((x) => x.rule === "rm-v4-poolkey")).toBe(true);
   });
   test("an RM pool fee other than 29100 fails", () => {
     const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].poolFee = 3000; });
-    expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only-or-rm-parked")).toBe(true);
+    expect(failures(c).some((x) => x.rule === "rm-v4-poolkey")).toBe(true);
   });
   test("a PoolManager or StateView other than the Base ones fails", () => {
     const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].poolManager = "0x" + "33".repeat(20); });

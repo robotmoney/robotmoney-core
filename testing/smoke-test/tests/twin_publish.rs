@@ -265,10 +265,6 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     // one `govern --row set-unwind-guard` round per basket (token=all), as the twin-publish step does, before the post-govern verify. The baskets hold nothing yet:
     // these values prove the row and the label on the real contracts, not a sizing (on 8453 the operator sizes min-usdc-out from each vault's holding).
     for basket in ["PROTO", "AGENT", "RWA"] {
-        // RM_PARKED (core issue 1903, ADR-0015): an empty rmAGENT has no asset to guard, so the row refuses. The verifier passes an empty vault.
-        if basket == "AGENT" && rm_parked(&fx) {
-            continue;
-        }
         let vault_arg = format!("vault={basket}");
         let guarded = fx
             .published()
@@ -612,23 +608,13 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         "recorder: has no owner, role or setter",
         "recorder: runtime code equals build artifact (masked)",
         "adapter[V4:rmAGENT]: runtime code equals build artifact (masked)",
-    ]
-    .into_iter()
-    // RM_PARKED (core issue 1903, ADR-0015): rmAGENT is empty, so no V4 asset row exists to verify. Only the recorder's own code check remains.
-    .filter(|l| !rm_parked(&fx) || *l == "recorder: runtime code equals build artifact (masked)")
-    {
+    ] {
         assert!(
             verified.lines().any(|l| l.trim() == label),
             "the verifier output lacks the label '{label}'"
         );
     }
-    if rm_parked(&fx) {
-        // RM_PARKED is announced, never silent: the run states the decision, then asserts what an empty rmAGENT does.
-        eprintln!("RM_PARKED (core issue 1903, ADR-0015): rmAGENT is deployed empty, rm_v4_flows is not run");
-        rm_parked_empty_vault(&fx);
-    } else {
-        rm_v4_flows(&fx, dir);
-    }
+    rm_v4_flows(&fx, dir);
 
     // Issues 1485 (AC7) and 1493 (AC5): a router deposit and a router withdraw both succeed on the Twin chain after the full publish and govern run.
     // `cast_send` fails on a reverted receipt.
@@ -763,42 +749,6 @@ fn tick_of(raw: &str, i: usize) -> i32 {
     u32::from_str_radix(&w[w.len() - 8..], 16).expect("tick word") as i32
 }
 
-/// RM_PARKED (core issue 1903, ADR-0015): true exactly while `config/agent-token-shortlist.json` holds RM under `parked.entries`.
-fn rm_parked(fx: &Fixture) -> bool {
-    let cfg: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(fx.repo_root().join("config/agent-token-shortlist.json"))
-            .expect("read the shipped agent config"),
-    )
-    .expect("agent config is JSON");
-    cfg["parked"]["entries"]
-        .as_array()
-        .map(|a| !a.is_empty())
-        .unwrap_or(false)
-}
-
-/// RM_PARKED: an empty rmAGENT, opened by the real Safe and timelock, holds no asset and takes no deposit.
-fn rm_parked_empty_vault(fx: &Fixture) {
-    let agent_vault = fx.agent_vault();
-    let count = fx
-        .cast_call_raw(agent_vault, "assetCount()", &[])
-        .expect("read rmAGENT assetCount");
-    assert!(
-        word(&count, 0).chars().all(|c| c == '0'),
-        "rmAGENT must hold no asset while RM is parked, got {count}"
-    );
-    let max = fx
-        .cast_call_raw(
-            agent_vault,
-            "maxDeposit(address)",
-            &[&format!("{:#x}", fx.agent())],
-        )
-        .expect("read rmAGENT maxDeposit");
-    assert!(
-        word(&max, 0).chars().all(|c| c == '0'),
-        "an empty rmAGENT must take no deposit (maxDeposit 0), got {max}"
-    );
-}
-
 /// Core 1676. rmAGENT holds RM through the REAL Uniswap V4 PoolManager pool `0xf2e7b957...`, priced by the REAL recorder, on the Twin chain
 /// after the full publish and govern run. Nothing is mocked: the pool is real Base state (the live pool, never funded), the vault is opened by the real Safe and timelock, and every swap goes through the real PoolManager.
 ///  1. the asset row is RM, venue V4, pool = the recorder, adapter = the V4 adapter the vault manifest names;
@@ -812,13 +762,19 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
             .expect("read the shipped agent config"),
     )
     .expect("agent config is JSON");
+    // The listed V4 asset: BNKR, the rmAGENT test asset while RM is parked (ADR-0016), or RM once reactivated. Every pin below comes from the config.
     let rm_cfg = &cfg["shortlist"][0];
-    assert_eq!(rm_cfg["venue"], "UniswapV4", "RM is a Uniswap V4 asset");
-    let pool_id = rm_cfg["poolId"].as_str().expect("poolId").to_string();
     assert_eq!(
-        pool_id,
-        "0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391"
+        rm_cfg["venue"], "UniswapV4",
+        "the listed asset is a Uniswap V4 asset"
     );
+    let pool_id = rm_cfg["poolId"].as_str().expect("poolId").to_string();
+    let pool_fee = rm_cfg["poolFee"].as_u64().expect("poolFee");
+    let token_hex = rm_cfg["token"]
+        .as_str()
+        .expect("token")
+        .trim_start_matches("0x")
+        .to_lowercase();
     let state_view: alloy_primitives::Address = rm_cfg["stateView"]
         .as_str()
         .expect("stateView")
@@ -849,8 +805,8 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
         .cast_call_raw(agent_vault, "assets(uint256)", &["0"])
         .expect("read rmAGENT assets(0)");
     assert!(
-        word(&first, 0).ends_with("65021a79aeef22b17cdc1b768f5e79a8618beba3"),
-        "rmAGENT asset 0 must be RM, got {first}"
+        word(&first, 0).ends_with(&token_hex),
+        "rmAGENT asset 0 must be the listed asset {token_hex}, got {first}"
     );
     assert!(
         word(&first, 1).ends_with(
@@ -862,8 +818,8 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
     );
     assert_eq!(
         u64::from_str_radix(word(&first, 2).trim_start_matches('0').max("0"), 16).unwrap(),
-        29100,
-        "the swap fee is the pool fee 29100"
+        pool_fee,
+        "the swap fee is the pool fee {pool_fee}"
     );
     assert!(
         word(&first, 4).ends_with(&v4_adapter.trim_start_matches("0x").to_lowercase()),
@@ -880,7 +836,9 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
     let pk = format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY));
     fx.fund_gas(user, 10_000_000_000_000_000_000)
         .expect("fund gas for the depositor");
-    let deposit: u128 = 10_000_000; // 10 USDC: the live pool is unfunded (owner 2026-10-09), one swap above about 18 USDC exceeds the 209 bps margin
+    // 5 USDC: the largest safe deposit into the BNKR test pool (about 706 USD of virtual depth: 5 USDC costs 1.05 percent against the 300 bps swap bound,
+    // 10 USDC 1.75 percent, 100 USDC 11.7 percent). The Twin forks the live pool and never funds it.
+    let deposit: u128 = 5_000_000;
     fx.fund_usdc(user, deposit * 4)
         .expect("fund USDC for the depositor");
     let (vault_s, dep_s) = (format!("{agent_vault:#x}"), deposit.to_string());

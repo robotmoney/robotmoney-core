@@ -118,10 +118,7 @@ if (env("GOVERN_IN") === "true") {
   exportVar("TWIN_GOVERN_ROWS", join(rh, "govern-rows.txt"));
   // QA plan v1 D7: one set-unwind-guard round per basket the sheet's GOVERN_UNPAUSE_VAULTS opened, through the real Safe and timelock (one warp each), before the post-govern verify.
   const unpaused = (parseSheetText(readFileSync(sheet, "utf8")).GOVERN_UNPAUSE_VAULTS ?? fail("the merged sheet has no GOVERN_UNPAUSE_VAULTS")).split(",").map((x) => x.trim());
-  // RM_PARKED (core issue 1903, ADR-0015): an empty rmAGENT has no active asset, so the row refuses ("nothing to guard"). The verifier passes an empty vault.
-  const agentCfg = JSON.parse(readFileSync(join(core, "config/agent-token-shortlist.json"), "utf8")) as { shortlist?: unknown[] };
-  const agentEmpty = (agentCfg.shortlist ?? []).length === 0;
-  const guarded = BASKET_KEYS.filter((k) => unpaused.includes(k) && !(k === "AGENT" && agentEmpty));
+  const guarded = BASKET_KEYS.filter((k) => unpaused.includes(k));
   const guardRows = guarded.map((k) => stage("govern", join(rh, `unwind-guard-${k}.txt`), twinUnwindGuardArgs(k)));
   writeFileSync(join(rh, "unwind-guard-rows.txt"), guardRows.join(""));
   exportVar("TWIN_UNWIND_GUARD_ROWS", join(rh, "unwind-guard-rows.txt"));

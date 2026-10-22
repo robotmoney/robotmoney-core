@@ -38,7 +38,8 @@ contract DeployUniswapV4PriceRecorderTest is Test {
     }
 
     function _shipped() internal view returns (string memory) {
-        return vm.readFile("config/agent-token-shortlist.json");
+        // RM_PARKED (core issue 1903): the shipped config lists BNKR. These tests drive the RM pool double, so they read the RM-listed fixture.
+        return vm.readFile("contracts/test/fixtures/agent-token-shortlist.rm-listed.json");
     }
 
     /// @notice The ring target is the 4 hour sell anchor floor (core 1793): 14_400 s / 2 s + 1 = 7_201 slots.

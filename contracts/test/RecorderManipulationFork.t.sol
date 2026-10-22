@@ -68,7 +68,7 @@ contract RecorderManipulationForkTest is Test {
         cfg = vm.readFile("config/agent-token-shortlist.json");
         // RM_PARKED (core issue 1903, ADR-0015): RM sits under parked.entries while it is parked.
         string memory b =
-            vm.keyExistsJson(cfg, ".shortlist[0]") ? ".shortlist[0]" : ".parked.entries[0]";
+            vm.keyExistsJson(cfg, ".parked.entries[0]") ? ".parked.entries[0]" : ".shortlist[0]";
         rmToken = cfg.readAddress(string.concat(b, ".token"));
         poolManager = cfg.readAddress(string.concat(b, ".poolManager"));
         swapRouter02 = cfg.readAddress(".swapRouter02");
@@ -158,7 +158,7 @@ contract RecorderManipulationForkTest is Test {
     function test_recorder_heldDisplacementDragsSellFloorUnderKeeperCadence() public {
         // RM_PARKED (core issue 1903, ADR-0015): the live RM/USDC pool holds L 6.476e13 (about 0.11 USDC), so buying inventory moves the price past the
         // 400 bps NAV guard before the displacement under test starts. The test runs again when RM leaves `parked.entries`. No bound is changed.
-        if (!vm.keyExistsJson(cfg, ".shortlist[0]")) {
+        if (vm.keyExistsJson(cfg, ".parked.entries[0]")) {
             vm.skip(
                 true,
                 "RM_PARKED (core 1903, ADR-0015): the live RM/USDC pool is too thin for this displacement test"
