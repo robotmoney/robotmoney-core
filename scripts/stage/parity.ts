@@ -50,6 +50,18 @@ export function missingInputs(inp: ParityInputs): string[] {
   return out;
 }
 
+/** The verifier labels that exist only while rmAGENT lists a Uniswap V4 asset (RM). */
+export const RM_PARKED_ASSET_LABELS: readonly string[] = [
+  "adapter[V4:rmAGENT]: has code",
+  "adapter[V4:rmAGENT]: runtime code equals build artifact (masked)",
+  "recorder: PoolKey and PoolManager equal config",
+  "recorder: has no owner, role or setter",
+  "recorder: observation ring holds the full window floor",
+  "vault[rmAGENT]: V4 adapter codehash is allowed",
+  "vault[rmAGENT]: V4 adapter is bound to the recorder, the PoolManager and the pool key",
+  "vault[rmAGENT]: asset row is venue V4 with the price recorder as its pool",
+];
+
 export function labelParity(stageText: string, mainnetText: string): ParityResult {
   const stage = parseLabels(stageText);
   const mainnet = parseLabels(mainnetText);
@@ -60,9 +72,15 @@ export function labelParity(stageText: string, mainnetText: string): ParityResul
     };
   }
   const d = labelDiff(stage, mainnet);
+  // RM_PARKED (core issue 1903, ADR-0015): rmAGENT ships with no asset, so the verifier prints none of the V4 asset labels. The mainnet reference of the
+  // earlier deploy still lists them. They are excused only when the stage run prints NONE of them, so a half-wired V4 asset still fails.
+  const parkedAll = RM_PARKED_ASSET_LABELS.every((l) => !stage.includes(l));
+  const excused = parkedAll ? d.onlyMainnet.filter((l) => RM_PARKED_ASSET_LABELS.includes(l)) : [];
+  d.onlyMainnet = d.onlyMainnet.filter((l) => !excused.includes(l));
   const messages = [
     ...d.onlyStage.map((l) => `label-diff: only on stage: ${l}`),
     ...d.onlyMainnet.map((l) => `label-diff: only on mainnet: ${l}`),
+    ...(excused.length > 0 ? [`label-diff: ${excused.length} V4 asset labels excused, RM is parked out of rmAGENT (core 1903, ADR-0015)`] : []),
   ];
   if (messages.length === 0) messages.push(`label-diff: ${new Set(stage).size} labels, identical on stage and mainnet`);
   return { ok: d.onlyStage.length === 0 && d.onlyMainnet.length === 0, messages };

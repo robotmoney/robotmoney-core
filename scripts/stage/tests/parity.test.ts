@@ -47,3 +47,30 @@ test("a non-parameter sheet difference fails", () => {
   expect(r.ok).toBe(false);
   expect(r.messages.join("\n")).toContain("USDC_ADDRESS");
 });
+
+// RM_PARKED (core issue 1903, ADR-0015): the V4 asset labels are excused only when the stage run prints none of them.
+const V4_LABELS = [
+  "adapter[V4:rmAGENT]: has code",
+  "adapter[V4:rmAGENT]: runtime code equals build artifact (masked)",
+  "recorder: PoolKey and PoolManager equal config",
+  "recorder: has no owner, role or setter",
+  "recorder: observation ring holds the full window floor",
+  "vault[rmAGENT]: V4 adapter codehash is allowed",
+  "vault[rmAGENT]: V4 adapter is bound to the recorder, the PoolManager and the pool key",
+  "vault[rmAGENT]: asset row is venue V4 with the price recorder as its pool",
+];
+const lines = (ls: string[]) => ls.join("\n") + "\n"; // plain labels: a PASS line cuts a label at its first colon
+const stageSheet = "CHAIN_ID=918453\nUSDC_ADDRESS=0x1\nSAFE_OWNERS=0xa\n";
+
+test("RM parked: a mainnet reference with the V4 asset labels passes against a stage run that prints none of them", () => {
+  const s = dir({ "labels.txt": lines(["a", "b"]), "sheet.env": stageSheet });
+  const r = runParity(inputsFromFixturesDir(prod(lines(["a", "b", ...V4_LABELS])), join(s, "labels.txt"), join(s, "sheet.env")));
+  expect(r.ok).toBe(true);
+  expect(r.messages.join("\n")).toContain("RM is parked");
+});
+
+test("RM parked: a stage run that prints only some of the V4 asset labels still fails", () => {
+  const s = dir({ "labels.txt": lines(["a", "b", V4_LABELS[0]!]), "sheet.env": stageSheet });
+  const r = runParity(inputsFromFixturesDir(prod(lines(["a", "b", ...V4_LABELS])), join(s, "labels.txt"), join(s, "sheet.env")));
+  expect(r.ok).toBe(false);
+});

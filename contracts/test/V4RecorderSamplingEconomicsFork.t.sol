@@ -272,6 +272,15 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
     /// @notice Keeper at 240 s. The attacker samples at the earliest legal moment (pushing in the keeper block, recording 60 s later) with a full
     ///         clamp push in each direction and restores the pool. Both directions lose money against the baseline.
     function test_fork_keeper240s_bestSampleIsNotProfitable() public {
+        // RM_PARKED (core issue 1903, ADR-0015): the attack cycle pushes the price through the live RM/USDC pool, which now holds L 6.476e13
+        // (about 0.11 USDC), so the push reverts SlippageExceeded before the economics are measured. The test runs again when RM leaves
+        // `parked.entries`. No bound is changed.
+        if (!vm.keyExistsJson(vm.readFile("config/agent-token-shortlist.json"), ".shortlist[0]")) {
+            vm.skip(
+                true,
+                "RM_PARKED (core 1903, ADR-0015): the live RM/USDC pool is too thin for the sampling attack cycle"
+            );
+        }
         uint256 snap = vm.snapshotState();
         (int256 base,) = _cycle240(0, true);
         vm.revertToState(snap);
