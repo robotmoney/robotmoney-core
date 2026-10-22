@@ -1725,10 +1725,11 @@ impl Fixture {
     ///   timelock after handover: a Safe -> Timelock generic call ([`Self::timelock_call`]).
     /// - `recordReceipt` needs RECEIPT_SUBMITTER_ROLE and is called directly on the receipt contract (no gateway):
     ///   the harness agent key signs it.
-    /// - `releaseReceipt` needs the receipt contract's ADMIN_ROLE, held by the timelock: a Safe -> Timelock generic
-    ///   call ([`Self::timelock_call`], Twin-only). The govern row `release-receipt` is refused once RouterGovernance
-    ///   holds that role (issue 1831: a release alone burns a receipt in production), and receipt A's plain digest is
-    ///   not the `apply-receipt` digest, so the harness sends the bare `releaseReceipt` the dapp needs to render.
+    /// - `releaseReceipt` needs RECEIPT_RELEASER_ROLE. The timelock administers it (ADMIN_ROLE) but cannot release, so
+    ///   the harness agent is granted the role and revoked again around the one release, each a Safe -> Timelock
+    ///   generic call ([`Self::timelock_call`], Twin-only). The govern row `release-receipt` is refused once
+    ///   RouterGovernance holds the role (issue 1831: a release alone burns a receipt in production), and receipt A's
+    ///   plain digest is not the `apply-receipt` digest, so the harness sends the bare `releaseReceipt` the dapp needs.
     ///
     /// Both payloads are served by the `receipt-fixtures` compose service at [`RECEIPT_FIXTURES_PORT`] under the
     /// hostname `receipt-fixtures`: the indexer reaches it over the compose network, and the Playwright browser maps
@@ -1763,11 +1764,27 @@ impl Fixture {
 
         // Release receipt A only: a signalling-only act (no funds move, no router weight changes). Receipt B stays
         // recorded, not released.
+        // The timelock holds only the receipt ADMIN_ROLE, which cannot release (issue 1888). The release role is
+        // granted to the harness agent through the Safe -> Timelock path for this one release, then revoked, so the
+        // role table is back to "RouterGovernance alone releases" before any verify runs.
+        let releaser_role = format!("0x{}", hex::encode(keccak256(b"RECEIPT_RELEASER_ROLE").0));
         self.timelock_call(
-            "receipt-release",
+            "receipt-grant-releaser",
+            self.consensus_receipt(),
+            "grantRole(bytes32,address)",
+            &[&releaser_role, &agent_hex],
+        )?;
+        self.cast_send(
+            &agent_pk_hex,
             self.consensus_receipt(),
             "releaseReceipt(bytes32)",
             &[&id_a],
+        )?;
+        self.timelock_call(
+            "receipt-revoke-releaser",
+            self.consensus_receipt(),
+            "revokeRole(bytes32,address)",
+            &[&releaser_role, &agent_hex],
         )?;
         logging::info(
             "smoke-test",

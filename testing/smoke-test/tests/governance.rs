@@ -3,7 +3,7 @@
 //! Verifies that:
 //!   - RouterGovernance is deployed at a non-zero address.
 //!   - RouterGovernance has bytecode on-chain.
-//!   - RouterGovernance releases from the deployed receipt register, which grants it ADMIN_ROLE
+//!   - RouterGovernance releases from the deployed receipt register, which grants it RECEIPT_RELEASER_ROLE
 //!     (one `applyReceipt` call releases a receipt and applies its weights).
 //!   - The deployer holds no admin; the timelock is admin.
 //!   - The deployer cannot apply a consensus receipt: the timelock holds
@@ -53,7 +53,7 @@ fn governance_has_code() {
 /// The weight setter applies receipts from the register the deploy wired (issue 1698, QA plan v1 C1).
 /// `applyReceipt` releases the receipt on `receipts()` and then calls `setWeights`, so the deploy must
 /// initialize `receipts()` with the deployed ConsensusRecommendationReceipt and the register must
-/// grant the weight setter ADMIN_ROLE (its `releaseReceipt` gate). Either one missing makes every
+/// grant the weight setter RECEIPT_RELEASER_ROLE (its `releaseReceipt` gate, never ADMIN_ROLE). Either one missing makes every
 /// `apply-receipt` revert.
 #[test]
 fn governance_releases_from_the_deployed_receipt_register() {
@@ -71,8 +71,16 @@ fn governance_releases_from_the_deployed_receipt_register() {
         "RouterGovernance.receipts() must be the deployed receipt register"
     );
     assert!(
-        has_role(fx, register, ADMIN_ROLE, fx.governance()),
-        "the receipt register must grant RouterGovernance ADMIN_ROLE (the releaseReceipt gate)"
+        has_role(fx, register, RECEIPT_RELEASER_ROLE, fx.governance()),
+        "the receipt register must grant RouterGovernance RECEIPT_RELEASER_ROLE (the releaseReceipt gate)"
+    );
+    assert!(
+        !has_role(fx, register, ADMIN_ROLE, fx.governance()),
+        "RouterGovernance must not hold the receipt ADMIN_ROLE"
+    );
+    assert!(
+        has_role(fx, register, ADMIN_ROLE, fx.timelock()),
+        "the timelock holds the receipt ADMIN_ROLE"
     );
 }
 
@@ -135,6 +143,10 @@ fn get_code(url: &str, addr: Address) -> String {
 
 /// `keccak256("ADMIN_ROLE")`.
 const ADMIN_ROLE: &str = "a49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775";
+
+/// `keccak256("RECEIPT_RELEASER_ROLE")`, the narrow release gate on the receipt register.
+const RECEIPT_RELEASER_ROLE: &str =
+    "6f1c85956a8a3bd80f9a05609a81c97597fa00224fb9de0fe0d596558d8c8fe1";
 
 /// `keccak256("WEIGHT_SETTER_ROLE")`, the gate on `applyReceipt`.
 const WEIGHT_SETTER_ROLE: &str = "a2edfd05c0c1cda238b1c99a8a31252998b19153c63b3f9e5b7048bc4b5f4a3f";
