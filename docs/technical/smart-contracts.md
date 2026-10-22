@@ -68,7 +68,7 @@
 Owner decision, 2026-10-19. The contracts form two separate systems. Each is deployed in its own run and tested on its own.
 
 **Vaults system** (the treasury product):
-- The Robot Money vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), their adapters and libraries, and the rmAGENT price recorder.
+- The Robot Money vaults (rmUSDC, rmPROTO, rmRWA), their adapters and libraries. rmAGENT is retired (ADR-0017) and a new deployment has neither it nor its price recorder.
 - VaultRegistry, PortfolioRouter and RouterGovernance.
 - The rebalancing signal: ConsensusRecommendationReceipt, the register of consensus receipts. It is the only rebalancing signal the Safe may cite. The vector the Safe schedules through `applyReceipt` is the input; the chain cannot parse the payload, so readers compare the applied vector to the payload (owner decision 2026-10-20). A submitter holding `RECEIPT_SUBMITTER_ROLE`, granted by `ADMIN_ROLE` (the Safe through the timelock), records a receipt with `recordReceipt(receiptId, payloadDigest, payloadUri)`. The Safe applies a receipt with `RouterGovernance.applyReceipt` through the timelock. The Safe can also set default weights directly (`setDefaultWeights`).
 - Governance: the Safe multisig through the TimelockController.
@@ -95,8 +95,8 @@ Owner decision, 2026-10-19. The contracts form two separate systems. Each is dep
 > argument (§2.4, §5 role table), so its `ADMIN_ROLE` and `EMERGENCY_ROLE` follow
 > that constructor argument, not a `TimelockController`. `DeployTimelock.s.sol`
 > hands over only the vaults listed in `VAULT_ADDRESSES` for the launch run, and
-> the launch plan (devops issue 72) deploys four new vaults (rmUSDC, rmPROTO,
-> rmAGENT, rmRWA) behind the timelock. Whether to migrate the v1 vault behind a
+> the launch plan (devops issue 72) deploys new vaults (rmUSDC, rmPROTO,
+> rmRWA; rmAGENT is retired, ADR-0017) behind the timelock. Whether to migrate the v1 vault behind a
 > timelock or retire it is an owner decision that has **not** been made. The
 > current default is option (b): retire v1 and document its Safe-direct control
 > as legacy (see `docs/operations/retired-v1-vault-maintenance.md`). This default
@@ -528,7 +528,7 @@ Rationale: even with `_decimalsOffset() == 18`, a fresh vault with `totalSupply 
 
 **Seed amount:** the stage sheet's `SEED_DEPOSIT_USDC` (6-decimal units, must be above 0). The decided production seed is 1 USDC (`1_000_000`), rmUSDC only (runbook D3, 2026-10-01). The baskets take no seed: the 18-decimal virtual share offset protects all four vaults (`scripts/deploy/stage-table.json` `vaults[].seed`, issue 1705 Q6).
 
-**Initial deposit state, one rule for all four vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all four vaults deploy paused, and stage 13 unpauses all four through the Safe and the timelock.
+**Initial deposit state, one rule for all three vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all three vaults deploy paused, and stage 13 unpauses all three through the Safe and the timelock.
 
 **Seed share receiver:** the sheet's `SHARE_RECEIVER_ADDRESS`, passed to the script as `SEED_SHARE_RECEIVER`. It is never zero and never the deployer or admin (the sheet's `ADMIN_ADDRESS` is the deployer, which holds admin until the timelock handover). The deployer holds no seed shares (core 1503, fixed on PR 1505).
 
@@ -545,7 +545,7 @@ Rationale: even with `_decimalsOffset() == 18`, a fresh vault with `totalSupply 
 6. Call `vault.pauseDeposits()` right after the seed (core 1710): rmUSDC deploys paused like the three basket vaults. The stage 13 `unpause-USDC` row, a Safe operation through the timelock, opens it.
 7. Only after steps 1–6 are confirmed and stage 13 has run: the vault is open to the public (publish the vault address). The deploy authorizes no agent: each depositor authorizes its own.
 
-All four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) deploy paused, and the Safe unpauses each one through the timelock in stage 13. The rule for each vault, with the seed, the router-eligibility source, the emergency levers and the registry-name source, is in `scripts/deploy/stage-table.json` `vaults[]` (issue 1705).
+All three vaults (rmUSDC, rmPROTO, rmRWA) deploy paused, and the Safe unpauses each one through the timelock in stage 13. The rule for each vault, with the seed, the router-eligibility source, the emergency levers and the registry-name source, is in `scripts/deploy/stage-table.json` `vaults[]` (issue 1705).
 
 The seed deposit is not recoverable through normal channels (it is locked as vault shares). Consider it a permanent operational cost of the deployment. The seed share receiver holds the rmUSDC shares minted for the seed and can participate in future withdrawals.
 
@@ -766,7 +766,7 @@ Newly registered assets use `DEFAULT_TWAP_WINDOW` until ADMIN_ROLE raises or low
 | Subclass | Share symbol | Basket composition | Status | Use case |
 |---|---|---|---|---|
 | **ProtocolAssetVault** | rmPROTO | Volatile protocol assets (wETH, cbBTC on Base). | Prototype (not audited) | Exposure to Base protocol ecosystem assets. |
-| **AgentTokenVault** | rmAGENT | BNKR as a test asset (ADR-0016). RM, the live ROBOTMONEY token, is parked (ADR-0015). RM and JUNO are added later through the timelock. | Prototype (not audited) | Agent incentive and governance participation. |
+| **AgentTokenVault** | rmAGENT | Retired (ADR-0017): withdraw-only on the live v0.5.0 line, not deployed by v0.6.0. The code stays for the retired vault and for any future agent-token vault. | Prototype (not audited) | Agent incentive and governance participation. |
 | **RwaBasketVault** | rmRWA | deSPXA, one plain basket row. | Prototype (not audited) | Diversification into real-world collateral. |
 
 All three subclasses inherit BasketVault behavior and are configured with:

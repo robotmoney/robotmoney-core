@@ -1,6 +1,6 @@
 # ADR-0015: Robotmoney (RM) is parked out of rmAGENT until its market is deep enough
 
-- **Status:** Accepted
+- **Status:** Superseded in part by [ADR-0017](ADR-0017-rmagent-retired-router-uses-three-vaults.md): decisions 2 to 4 (the empty or test-asset rmAGENT, the recorder stage and the guard on a listing) no longer apply because rmAGENT is retired. Decision 1 (RM stays parked) and the reactivation criteria stand, and now live in the retired-vault note of ADR-0017.
 - **Date:** 2026-10-21
 - **Deciders:** Product owner
 - **Related:**

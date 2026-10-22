@@ -48,7 +48,7 @@ go through explicit approval.
 
 Owner decision, 2026-10-19. Robot Money is two separate systems. Each is deployed in its own run and tested on its own. The attack families below cover both. This section groups the trust boundaries by system.
 
-**Vaults system** (the treasury product): the vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), their adapters and libraries, the rmAGENT price recorder, VaultRegistry, PortfolioRouter, RouterGovernance and ConsensusRecommendationReceipt. Its trust boundaries:
+**Vaults system** (the treasury product): the vaults (rmUSDC, rmPROTO, rmRWA), their adapters and libraries, VaultRegistry, PortfolioRouter, RouterGovernance and ConsensusRecommendationReceipt. Its trust boundaries:
 
 | Boundary | Who crosses it | What the vaults system trusts |
 |---|---|---|
@@ -140,10 +140,10 @@ Every Base 8453 deployment fills a column of this table from its stage 11 manife
 | Timelock contract | `ProposerFloorTimelock`, which refuses to drop the last `PROPOSER_ROLE` holder (§4, QA plan v1 B3) | A stock OZ `TimelockController`: core `78c50cbd` predates B3, so on Deploy 2 the last `PROPOSER_ROLE` holder (the Safe) can still be dropped by a scheduled `revokeRole` or by its own `renounceRole`. |
 | Executor policy | Open (`address(0)`), recorded as `executorPolicy` in `timelock.json` | `open` (`executorPolicy`, and `timelock_executor_is_open` true). |
 | Canceller policy | The Safe only, recorded as `cancellerPolicy` in `timelock.json` | `safe-only` (`cancellerPolicy`). |
-| `ADMIN_ROLE` handover | The timelock holds `ADMIN_ROLE` on every protocol contract and the deployer holds none | The timelock holds it on the four vaults (`vaults_handed_over_count` 4), the gateway (gateway: v0.5.0 only), registry, router and governance, and every `deployer_*` role flag is false (`timelock.json` `roles`). |
+| `ADMIN_ROLE` handover | The timelock holds `ADMIN_ROLE` on every protocol contract and the deployer holds none | The timelock holds it on the vaults (`vaults_handed_over_count` 3 from v0.6.0, 4 on the live v0.5.0 line), the gateway (gateway: v0.5.0 only), registry, router and governance, and every `deployer_*` role flag is false (`timelock.json` `roles`). |
 | Gateway agents authorized by the deploy | None (the sheet refuses `AGENT_*` inputs, see §13 Deploy-time protocol agent) | None: `gateway_agents_listed_count` 0 and `timelock_owned_agents` empty (`timelock.json`) (gateway: v0.5.0 only). |
 
-Deploy-time configuration (setters, eligibility, router default weights, at launch rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps) is set by the deployer before stage 11. There is no voting configuration: RouterGovernance has no voter, power or quorum (core 1698). **Initial deposit state, one rule for all four vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all four vaults deploy paused, and stage 13 unpauses all four through the Safe and the timelock. Stage 13 holds only the four vault deposit unpause operations, one timelock operation per vault.
+Deploy-time configuration (setters, eligibility, router default weights, at launch rmUSDC 9500, rmPROTO 500, rmRWA 0 bps) is set by the deployer before stage 11. There is no voting configuration: RouterGovernance has no voter, power or quorum (core 1698). **Initial deposit state, one rule for all three vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all three vaults deploy paused, and stage 13 unpauses all three through the Safe and the timelock. Stage 13 holds only the four vault deposit unpause operations, one timelock operation per vault.
 
 ---
 

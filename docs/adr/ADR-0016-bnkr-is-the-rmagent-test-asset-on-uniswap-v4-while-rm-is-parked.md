@@ -1,6 +1,6 @@
 # ADR-0016: BNKR is the rmAGENT test asset on Uniswap V4 while RM is parked
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0017](ADR-0017-rmagent-retired-router-uses-three-vaults.md) in full: rmAGENT is retired, BNKR is dropped, and no stage deploys the V4 recorder. The due diligence below stays as the record of the contained test.
 - **Date:** 2026-10-22
 - **Deciders:** Product owner
 - **Related:**

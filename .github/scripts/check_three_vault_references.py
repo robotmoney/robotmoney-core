@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
-"""Four-vault reference invariant (issue #479).
+"""Three-vault reference invariant (issue #479, inverted by issue #1912, ADR-0017).
 
-PRD §11 names four vault categories — Stable Yield, Protocol Asset, Agent
-Token, and RWA/Thematic — and the deployed set now matches: four **Active**
-vaults registered in `VaultRegistry`, all four router-eligible (rmRWA at 500
-bps, ADR-0006 §1 amended 2026-06-05 / issue #621, gives the 8500/500/500/500
-default weight split). Product- and architecture-level docs must not claim a
-"three vault" shape that contradicts this, or the dapp, the public allocation
-surface, and the docs drift apart.
+Until 2026-10-22 the deployed set was four **Active** vaults (rmUSDC, rmPROTO,
+rmAGENT, rmRWA) and this check failed any doc that claimed a three-vault shape
+(issue #479). ADR-0017 retires rmAGENT: the router routes across three vaults
+(rmUSDC, rmPROTO, rmRWA) and a new deployment has three vault stages. The
+invariant therefore points the other way. Product- and architecture-level docs
+must not claim a four-vault deployed or catalog shape as the current one, or the
+dapp, the public allocation surface, and the docs drift apart again.
 
-This drift-catcher greps the in-scope docs for phrases that assert a
-three-vault deployed/catalog shape and fails if any unallowlisted hit is
-found. Historical and closed-question contexts (e.g. a line that quotes the
-verbatim title of the closed seeding issue #465) are allowlisted, because the
-acceptance criterion explicitly permits them.
+This drift-catcher greps the in-scope docs for phrases that assert a four-vault
+shape and fails if any unallowlisted hit is found. Historical contexts (the live
+v0.5.0 deployment that still has rmAGENT until the Safe retires it, Deploy 2,
+the retired vault itself, the ADRs) are allowlisted by substring.
 
-Scope (per issue #479 AC):
+Scope:
   - docs/prd.md
   - docs/architecture.md
   - docs/development/*.md
@@ -40,31 +39,35 @@ SCOPE_GLOBS = [
     "docs/development/*.md",
 ]
 
-# Phrases (case-insensitive regexes) that assert a three-vault deployed or
-# catalog shape. We deliberately target the contradicting count phrasings, not
-# every occurrence of the word "three", to avoid false positives on unrelated
-# prose.
+# Phrases (case-insensitive regexes) that assert a four-vault deployed or
+# catalog shape. We target the count phrasings, not every occurrence of the word
+# "four", to avoid false positives on unrelated prose.
 FORBIDDEN = [
-    re.compile(r"\bthree[\s-]+vaults?\b", re.IGNORECASE),
-    re.compile(r"\bthree registered vaults?\b", re.IGNORECASE),
-    re.compile(r"\bthree active vaults?\b", re.IGNORECASE),
-    re.compile(r"\bthree demo vaults?\b", re.IGNORECASE),
-    re.compile(r"\bset of three vaults?\b", re.IGNORECASE),
+    re.compile(r"\bfour[\s-]+vaults?\b", re.IGNORECASE),
+    re.compile(r"\bfour registered vaults?\b", re.IGNORECASE),
+    re.compile(r"\bfour active vaults?\b", re.IGNORECASE),
+    re.compile(r"\bfour demo vaults?\b", re.IGNORECASE),
+    re.compile(r"\bset of four vaults?\b", re.IGNORECASE),
+    re.compile(r"\ball four (?:vaults?|legs?)\b", re.IGNORECASE),
 ]
 
 # Allowlist of substrings: a line containing any of these is a historical /
-# closed-question / router-weight-vector context and is permitted to mention a
-# three-vault shape. NOTE: as of issue #621 all four vaults are router-eligible
-# (8500/500/500/500), so the current router weight vector holds FOUR legs, not
-# three; the router-weight allowlist entries below now only cover legitimate
-# HISTORICAL descriptions of the earlier three-way split, not the live shape.
+# retired-vault / pinned-release context and may mention a four-vault shape.
 ALLOWLIST_SUBSTRINGS = [
+    "adr-0017",  # the decision itself and every line that cites it
+    "retired",  # the retired rmAGENT and its withdraw-only state
+    "retire-vault",  # the govern row that retires it
+    "v0.5.0",  # the live four-vault release line
+    "deploy 2",  # devops run 2 on Base 8453 (a four-vault deployment, history)
+    "deploy-2",
+    "historical",
+    "four unpause",
     "#465",  # verbatim title of the closed demo-seeding issue
-    "router weight",  # the router weight vector is a legitimate 3-way split
-    "weight vector",
-    "three-way split",
-    "router-split",
 ]
+
+
+# Dated QA planning records written while the deployed set was four vaults: history.
+EXCLUDED = {"docs/development/qa-plan-v1.md", "docs/development/qa-merge-deferred.md"}
 
 
 def in_scope_files() -> list[Path]:
@@ -72,7 +75,7 @@ def in_scope_files() -> list[Path]:
     for pattern in SCOPE_GLOBS:
         for match in glob.glob(str(REPO_ROOT / pattern)):
             files.append(Path(match))
-    return sorted(set(files))
+    return sorted(p for p in set(files) if str(p.relative_to(REPO_ROOT)) not in EXCLUDED)
 
 
 def line_is_allowlisted(line: str) -> bool:
@@ -94,13 +97,12 @@ def main() -> int:
 
     if violations:
         print(
-            "FAIL: found three-vault references that contradict the four-vault "
-            "deployed set (issue #479).\n"
-            "PRD §11 names four vault categories and the deployed set is three "
-            "Active vaults plus the non-Active RWA/Thematic placeholder.\n"
-            "If a hit is a legitimate historical/closed-question or router "
-            "weight-vector context, add an allowlist substring in "
-            ".github/scripts/check_four_vault_references.py.\n"
+            "FAIL: found four-vault references that contradict the three-vault "
+            "deployed set (issue #1912, ADR-0017).\n"
+            "The router routes across rmUSDC, rmPROTO and rmRWA; rmAGENT is "
+            "retired (withdraw-only).\n"
+            "If a hit is a legitimate historical or retired-vault context, add an "
+            "allowlist substring in .github/scripts/check_three_vault_references.py.\n"
         )
         for v in violations:
             print(f"  {v}")
@@ -108,7 +110,7 @@ def main() -> int:
 
     print(
         f"OK: {len(in_scope_files())} in-scope docs contain no contradicting "
-        "three-vault references."
+        "four-vault references."
     )
     return 0
 

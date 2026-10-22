@@ -14,7 +14,7 @@ ADR takes the next number after the highest one in the table.
 
 | # | Title | Status |
 | --- | --- | --- |
-| 0001 | [MVP agent-token shortlist is hand-picked, not quant-filtered](ADR-0001-mvp-agent-token-shortlist.md) | Accepted (amended 2026-10-05) |
+| 0001 | [MVP agent-token shortlist is hand-picked, not quant-filtered](ADR-0001-mvp-agent-token-shortlist.md) | Accepted (amended 2026-10-05), four-vault launch scope superseded in part (ADR-0017) |
 | 0002 | [Router default weights live on-chain, not derived from the front-end](ADR-0002-router-default-weights-on-chain.md) | Accepted (amended 2026-10-05) |
 | 0003 (preview) | [Slippage-adjusted basket-vault previewRedeem/previewDeposit (worst-case floor)](ADR-0003-slippage-adjusted-basket-vault-preview.md) | Accepted |
 | 0003 (rebalancing) | [BasketVault rebalancing model — trigger, target weights, cost disclosure](ADR-0003-basketvault-rebalancing-model.md) | Accepted |
@@ -29,5 +29,6 @@ ADR takes the next number after the highest one in the table.
 | 0012 | [Ed25519 is the default identity algorithm; secp256k1 is confined to the EVM boundary; one keystore primitive serves both curves](ADR-0012-dual-curve-identity-policy.md) | Accepted |
 | 0013 | [Verify deploy tooling and dapp integration against the Robot Money Devnet ("Twin"), not public Base Sepolia](ADR-0013-twin-devnet-over-base-sepolia-for-testnet-verification.md) | Accepted |
 | 0014 | [Governed per-instance UUPS proxies with a one-way, target-bound freeze for the core contracts](ADR-0014-governed-uups-upgrades-and-freeze.md) | Accepted |
-| 0015 | [Robotmoney (RM) is parked out of rmAGENT until its market is deep enough](ADR-0015-rm-parked-from-rmagent-until-market-depth.md) | Accepted |
-| 0016 | [BNKR is the rmAGENT test asset on Uniswap V4 while RM is parked](ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md) | Accepted |
+| 0015 | [Robotmoney (RM) is parked out of rmAGENT until its market is deep enough](ADR-0015-rm-parked-from-rmagent-until-market-depth.md) | Superseded in part (ADR-0017) |
+| 0016 | [BNKR is the rmAGENT test asset on Uniswap V4 while RM is parked](ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md) | Superseded (ADR-0017) |
+| 0017 | [rmAGENT is retired and the router routes across three vaults (rmUSDC, rmPROTO, rmRWA)](ADR-0017-rmagent-retired-router-uses-three-vaults.md) | Accepted |

@@ -55,7 +55,7 @@ Owner decision, 2026-10-19. The on-chain code forms two separate systems. Each i
 
 | System | What it holds | Sections |
 |---|---|---|
-| **Vaults system** (Part A) | rmUSDC, rmPROTO, rmAGENT, rmRWA, their adapters and libraries, the rmAGENT price recorder, VaultRegistry, PortfolioRouter, RouterGovernance, ConsensusRecommendationReceipt. Governed by the Safe through the TimelockController. | §0–§6, §8–§10 |
+| **Vaults system** (Part A) | rmUSDC, rmPROTO, rmRWA (rmAGENT is retired, ADR-0017), their adapters and libraries, VaultRegistry, PortfolioRouter, RouterGovernance, ConsensusRecommendationReceipt. Governed by the Safe through the TimelockController. | §0–§6, §8–§10 |
 | **rmpc gateway system** (Part B) | RobotMoneyGateway and the `rmpc` client. `rmpc` is an agentic cryptographic signer for end users; its one on-chain write is an agent deposit into an allowed vault through the gateway, under the depositor's policy (owner decision 2026-10-19). | §11 |
 
 ACL-1, ACL-2 and ACL-3 apply in both systems. Some Part A entries name the gateway (for example `ADP-5`). That clause describes the gateway as a client of the vault deposit surface. Part A never relies on it.

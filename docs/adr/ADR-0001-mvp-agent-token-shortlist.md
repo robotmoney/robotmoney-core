@@ -1,6 +1,6 @@
 # ADR-0001: MVP agent-token shortlist is hand-picked, not quant-filtered
 
-- **Status:** Accepted (amended 2026-10-05 — see [Amendment — 2026-10-05](#amendment--2026-10-05-mainnet-launch-shortlist-is-rm-only); earlier [Amendment — 2026-06-15](#amendment--2026-06-15-real-four-vault-demo-shortlist))
+- **Status:** Accepted (amended 2026-10-22, the four-vault launch scope is superseded in part by ADR-0017; amended 2026-10-05 — see [Amendment — 2026-10-05](#amendment--2026-10-05-mainnet-launch-shortlist-is-rm-only); earlier [Amendment — 2026-06-15](#amendment--2026-06-15-real-four-vault-demo-shortlist))
 - **Date:** 2026-05-27 (amended 2026-06-15, 2026-10-05)
 - **Deciders:** Product owner (recorded reply 2026-05-27)
 - **Related:** `docs/development/open-questions.md` §1.3, §1.4, §3.1; `docs/prd.md` §11.3; [ADR-0004](ADR-0004-agent-token-shortlist-governance.md); [ADR-0005](ADR-0005-basketvault-multi-dex-routing.md); `config/agent-token-shortlist.json`
@@ -206,3 +206,7 @@ There is no voting by token holders or anyone else. The Safe multisig, through t
 ## Amendment — 2026-10-21 (RM parked)
 
 The owner parked RM out of rmAGENT until its market is deep enough ([ADR-0015](ADR-0015-rm-parked-from-rmagent-until-market-depth.md)). BNKR is the rmAGENT test asset on Uniswap V4 meanwhile, inside the contained test scope only ([ADR-0016](ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md)). Tokens are added and removed through the timelock. The text above is unchanged.
+
+## Amendment — 2026-10-22 (rmAGENT retired, ADR-0017)
+
+The four-vault launch scope of this ADR is superseded in part by [ADR-0017](ADR-0017-rmagent-retired-router-uses-three-vaults.md): rmAGENT is retired and the router routes across rmUSDC, rmPROTO and rmRWA. The shortlist method and the agent-token vault design stay as history and as the design of any future agent-token vault. No vault uses the shortlist while rmAGENT is retired, and `config/agent-token-shortlist.json` is parked code that no stage reads.
