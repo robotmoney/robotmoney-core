@@ -1,0 +1,152 @@
+---
+title: "GatewaySystemDeployTest"
+description: "The gateway system names its own upgrade timelock and hands its roles over in its own stage. Neither reads a vaults-system input."
+---
+
+# GatewaySystemDeployTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58a774e0370fd9946d743a40f01792cf059929e7/contracts/test/GatewaySystemDeploy.t.sol)
+
+**Inherits:** Test
+
+The gateway system names its own upgrade timelock and hands its roles over in its
+own stage. Neither reads a vaults-system input.
+
+## State Variables
+
+### deployer
+
+```solidity
+address internal deployer = makeAddr("gw-deployer");
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("gw-pauser");
+```
+
+### recv
+
+```solidity
+address internal recv = makeAddr("gw-recv");
+```
+
+### govHolder
+
+```solidity
+address internal govHolder = makeAddr("gw-gov");
+```
+
+### tl
+
+```solidity
+address internal tl = makeAddr("gw-upgrade-timelock");
+```
+
+### gw
+
+```solidity
+IAccessControl internal gw;
+```
+
+### h
+
+```solidity
+HandoverGateway internal h;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_upgrade-string"></a>
+
+### _upgrade
+
+```solidity
+function _upgrade(string memory prefix) internal returns (GatewayUpgradeHarness u);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| u | `GatewayUpgradeHarness` |  |
+
+<a id="test_upgradetimelock_zerorefused"></a>
+
+### test_upgradeTimelock_zeroRefused
+
+```solidity
+function test_upgradeTimelock_zeroRefused() public;
+```
+
+<a id="test_upgradetimelock_nocoderefused"></a>
+
+### test_upgradeTimelock_noCodeRefused
+
+```solidity
+function test_upgradeTimelock_noCodeRefused() public;
+```
+
+<a id="test_upgradetimelock_explicitaccepted"></a>
+
+### test_upgradeTimelock_explicitAccepted
+
+```solidity
+function test_upgradeTimelock_explicitAccepted() public;
+```
+
+<a id="test_handover_movesbothrolesanddeployerkeepsnone"></a>
+
+### test_handover_movesBothRolesAndDeployerKeepsNone
+
+```solidity
+function test_handover_movesBothRolesAndDeployerKeepsNone() public;
+```
+
+<a id="test_handover_zeroadminrefused"></a>
+
+### test_handover_zeroAdminRefused
+
+```solidity
+function test_handover_zeroAdminRefused() public;
+```
+
+<a id="test_handover_deployerasadminrefused"></a>
+
+### test_handover_deployerAsAdminRefused
+
+```solidity
+function test_handover_deployerAsAdminRefused() public;
+```
+
+<a id="test_handover_pauserasadminrefused"></a>
+
+### test_handover_pauserAsAdminRefused
+
+```solidity
+function test_handover_pauserAsAdminRefused() public;
+```
+
+<a id="test_handover_agentpreboundadminrefused"></a>
+
+### test_handover_agentPreBoundAdminRefused
+
+```solidity
+function test_handover_agentPreBoundAdminRefused() public;
+```
+

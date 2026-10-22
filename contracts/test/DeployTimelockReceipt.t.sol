@@ -138,7 +138,6 @@ contract DeployTimelockReceiptTest is SafeFixture {
         if (runAsDeployer) vm.prank(address(script));
         d = script.runInProcessWithReceipt(
             address(vault),
-            address(gateway),
             address(registry),
             address(router),
             address(governance),
@@ -247,7 +246,6 @@ contract DeployTimelockReceiptTest is SafeFixture {
         );
         script.runInProcessWithReceipt(
             address(vault),
-            address(gateway),
             address(registry),
             address(router),
             address(governance),
@@ -261,17 +259,12 @@ contract DeployTimelockReceiptTest is SafeFixture {
         );
     }
 
-    function test_timelockIsTheOnlyAdminRoleHolder_onTheFiveCoreContracts() public {
+    function test_timelockIsTheOnlyAdminRoleHolder_onTheVaultsSystemContracts() public {
         _becomeScriptDeployer();
         _deployReceiptAndRun(address(script), address(0));
         Vm.Log[] memory logs = vm.getRecordedLogs();
-        address[5] memory core = [
-            address(vault),
-            address(gateway),
-            address(registry),
-            address(router),
-            address(governance)
-        ];
+        address[4] memory core =
+            [address(vault), address(registry), address(router), address(governance)];
         for (uint256 i = 0; i < core.length; i++) {
             address[] memory admins = RoleHolders.holders(logs, core[i], ADMIN_ROLE);
             // The router's ADMIN_ROLE also stays with RouterGovernance (the approving body,
@@ -295,7 +288,6 @@ contract DeployTimelockReceiptTest is SafeFixture {
         _wireGovernance(makeAddr("receipts"));
         d = script.runInProcessWithReceipt(
             address(vault),
-            address(gateway),
             address(registry),
             address(router),
             address(governance),
@@ -335,7 +327,6 @@ contract DeployTimelockReceiptTest is SafeFixture {
         );
         script.runInProcessWithReceipt(
             address(vault),
-            address(gateway),
             address(registry),
             address(router),
             address(governance),

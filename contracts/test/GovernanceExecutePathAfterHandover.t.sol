@@ -182,7 +182,6 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         vm.prank(deployer);
         DeployTimelock.Deployed memory t = timelockScript.runInProcessWithReceipt(
             address(vault),
-            address(gateway),
             address(registry),
             address(router),
             address(gov),

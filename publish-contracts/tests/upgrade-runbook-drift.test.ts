@@ -29,7 +29,7 @@ describe("runbook 4.12 and the stage table agree (issue 1809)", () => {
     expect(rows).toEqual(want);
   });
   test("the upgrade authority is deployed last, at the stated CREATE2 address, and each proxy is the stated number of transactions", () => {
-    expect(table.stages[table.stages.length - 1]!.name).toBe(u.stage);
+    expect(table.stages.filter((s) => s.system !== "gateway").at(-1)!.name).toBe(u.stage); // issue 1892: last of the vaults system; the gateway system runs after it
     expect(SECTION).toContain(`the \`${u.stage}\` stage, which deploys the upgrade authority LAST`);
     expect(SECTION).toContain(`Each proxy is ${u.transactionsPerProxy} deployer transactions`);
     expect(SECTION).toContain(`\`${u.factory}\``);

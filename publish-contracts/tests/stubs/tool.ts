@@ -88,6 +88,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
   // issue 1835: like the real stage scripts, a proxy stage names the CREATE2 prediction of the core timelock (build artifact, SAFE_ADDRESS, TIMELOCK_MIN_DELAY)
   const upgradeTimelock = async (): Promise<string> => {
     if (cfg.upgradeTimelock?.[file]) return cfg.upgradeTimelock[file]!;
+    if (process.env.GATEWAY_UPGRADE_TIMELOCK) return process.env.GATEWAY_UPGRADE_TIMELOCK; // issue 1892: the gateway stage names the explicit timelock of its sheet
     if (!existsSync(join("out", "ProposerFloorTimelock.sol", "ProposerFloorTimelock.json")) || !process.env.SAFE_ADDRESS || !process.env.TIMELOCK_MIN_DELAY) return addr(0x1008);
     const [{ loadStageTable }, { predictCoreTimelock }] = await Promise.all([import("../../src/stage-table.ts"), import("../../src/timelock-pin.ts")]);
     return predictCoreTimelock(loadStageTable(".").upgradeAuthority!, "out", process.env.SAFE_ADDRESS as `0x${string}`, BigInt(process.env.TIMELOCK_MIN_DELAY)).address;

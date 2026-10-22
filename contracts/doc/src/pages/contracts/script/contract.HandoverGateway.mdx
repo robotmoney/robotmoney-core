@@ -1,0 +1,153 @@
+---
+title: "HandoverGateway"
+description: "The gateway system's own handover stage. The deployer, who holds ADMIN_ROLE and DEFAULT_ADMIN_ROLE on the gateway after the `gateway` stage, grants both to the explicitly configured `GATEWAY_ADMIN_ADDRESS` and revokes both from itself. The deployer sends exactly 4 transactions: 2 grants, 2 revokes. It authorizes no agent and transfers no agent. Who governs the gateway in production is an open decision (architecture section 10): this script takes the holder as plain explicit config and defaults nothing."
+---
+
+# HandoverGateway
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7c2e53fe327c80d91d5d140cb198d84a94ad506c/contracts/script/HandoverGateway.s.sol)
+
+**Inherits:** Script, [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+
+**Title:** HandoverGateway
+
+The gateway system's own handover stage. The deployer, who holds ADMIN_ROLE and
+DEFAULT_ADMIN_ROLE on the gateway after the `gateway` stage, grants both to the
+explicitly configured `GATEWAY_ADMIN_ADDRESS` and revokes both from itself.
+The deployer sends exactly 4 transactions: 2 grants, 2 revokes.
+It authorizes no agent and transfers no agent. Who governs the gateway in production
+is an open decision (architecture section 10): this script takes the holder as plain
+explicit config and defaults nothing.
+
+<i>
+
+Required env: GATEWAY_ADDRESS, GATEWAY_ADMIN_ADDRESS, DEPLOYMENT_OUT.
+Optional env: EXPECTED_CHAIN_ID.
+
+</i>
+
+## Constants
+
+### MANIFEST_FILE
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT.
+
+```solidity
+string public constant MANIFEST_FILE = "gateway-handover.json";
+```
+
+### DEFAULT_ADMIN_ROLE
+
+```solidity
+bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
+```
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### AGENT_ROLE
+
+```solidity
+bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
+```
+
+### DEPOSIT_PAUSER_ROLE
+
+```solidity
+bytes32 public constant DEPOSIT_PAUSER_ROLE = keccak256("DEPOSIT_PAUSER_ROLE");
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+```solidity
+function run() external;
+```
+
+<a id="runinprocesswith-address-address-address"></a>
+
+### runInProcessWith
+
+In-process variant for tests: acts as `deployer_` through a prank.
+
+```solidity
+function runInProcessWith(address gateway_, address admin_, address deployer_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gateway_ | `address` |  |
+| admin_ | `address` |  |
+| deployer_ | `address` |  |
+
+<a id="_precheck-params-address"></a>
+
+### _precheck
+
+```solidity
+function _precheck(Params memory p, address deployer) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+| deployer | `address` |  |
+
+<a id="_handover-params-address"></a>
+
+### _handover
+
+```solidity
+function _handover(Params memory p, address deployer) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+| deployer | `address` |  |
+
+<a id="_write-params-address"></a>
+
+### _write
+
+```solidity
+function _write(Params memory p, address deployer) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+| deployer | `address` |  |
+
+## Structs
+
+### Params
+
+```solidity
+struct Params {
+        address gateway;
+        address admin;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gateway | `address` |  |
+| admin | `address` |  |
+

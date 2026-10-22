@@ -11,14 +11,18 @@
  * write path, and the Safe proposal signature run the check before anything
  * goes to the wallet.
  *
- * - A write to an admin target (the gateway, the Timelock, the Safe) is
- *   refused unless the cached state is verified AND a re-read at the latest
- *   block still matches it: the gateway code, the ERC-1967 implementation slot
- *   and the implementation's code (`verifyGatewayAt`). Fail closed.
- * - Any other write (an approve, a vault or router deposit or withdrawal) is
- *   re-checked the same way while the cached state is verified, and passes
- *   through while it is not. Those flows do not authorize anything on the
- *   gateway, and their previews own their own refusals.
+ * - Only a gateway operation needs the gateway verifier (issue 1892): a write
+ *   whose target is the gateway, or whose nested target is the gateway (a
+ *   Timelock `schedule` or `execute`, or a Safe proposal, about a gateway
+ *   call). It is refused unless the cached state is verified AND a re-read at
+ *   the latest block still matches it: the gateway code, the ERC-1967
+ *   implementation slot and the implementation's code (`verifyGatewayAt`).
+ *   Fail closed.
+ * - Every other write (an approve, a vault or router deposit or redemption, a
+ *   vaults-system Timelock or Safe action) belongs to the vaults system. It
+ *   verifies its own actual targets in `useGuardedWriteContract` and makes no
+ *   gateway read, so an absent, changed, unverified or unreadable gateway
+ *   cannot block it.
  *
  * The re-read goes through the connected wallet's own provider and first
  * checks that it answers for the connected chain, so another injected wallet
@@ -89,6 +93,8 @@ export async function reverifyGateway(
 export interface GatewayWriteRequest {
   /** The contract the write goes to (`variables.address`, or the Safe for a proposal signature). */
   target: unknown;
+  /** The call the target forwards (a Timelock operation or a Safe proposal target), when it has one. */
+  nestedTarget?: unknown;
   /** The connected wallet's provider (`connector.getProvider()`). */
   provider?: Eip1193Provider;
   /** The connected chain. */
@@ -115,29 +121,23 @@ export function GatewayWriteCheck(
   props: Readonly<{
     gatewayAddress: string;
     verification: VerificationState;
-    /** Admin targets besides the gateway: the Timelock and the Safe. */
-    adminTargets?: ReadonlyArray<string | undefined>;
     children: ReactNode;
   }>,
 ) {
-  const { gatewayAddress, verification, adminTargets } = props;
+  const { gatewayAddress, verification } = props;
   const check = useCallback(
-    async ({ target, provider, chainId }: GatewayWriteRequest) => {
-      const admin = [gatewayAddress, ...(adminTargets ?? [])]
-        .filter((a): a is string => typeof a === "string" && a !== "")
-        .map((a) => a.toLowerCase());
-      const isAdmin = typeof target === "string" && admin.includes(target.toLowerCase());
+    async ({ target, nestedTarget, provider, chainId }: GatewayWriteRequest) => {
+      const gw = gatewayAddress.toLowerCase();
+      const is = (a: unknown) => typeof a === "string" && a.toLowerCase() === gw;
+      if (!is(target) && !is(nestedTarget)) return;
       if (verification.status !== "verified") {
-        if (isAdmin) {
-          throw new GatewayChangedError(
-            "the gateway is not verified, so no admin write can be sent",
-          );
-        }
-        return;
+        throw new GatewayChangedError(
+          "the gateway is not verified, so no gateway write can be sent",
+        );
       }
       await reverifyGateway(provider ?? injectedProvider(), gatewayAddress, verification, chainId);
     },
-    [gatewayAddress, verification, adminTargets],
+    [gatewayAddress, verification],
   );
   return (
     <GatewayWriteCheckContext.Provider value={check}>

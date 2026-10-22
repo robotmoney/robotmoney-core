@@ -24,8 +24,9 @@ import { REPO, refFrozenPath, tmp } from "./fixtures.ts";
 import { world, type World } from "./harness.ts";
 
 const PREV = "9a768bb9cc66d4485470a99a068ba7477604501a";
-const REF_PATH = refFrozenPath(); // the pinned first-release counts, `ic-policy` keyed as the table's `receipt` (issue 1888)
-const REF = JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>;
+const REF_PATH = refFrozenPath(); // the pinned first-release counts, ic-policy keyed as the table receipt (issue 1888)
+const GATEWAY_KEYS = new Set(getStageTable().stages.filter((s) => s.system === "gateway").map((s) => s.name)); // issue 1892: the vaults baseline holds no gateway count
+const REF = Object.fromEntries(Object.entries(JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>).filter(([k]) => !GATEWAY_KEYS.has(k)));
 const OUT = join(import.meta.dir, "fixtures", "build-out");
 const table = getStageTable();
 const tickArt = JSON.parse(readFileSync(join(OUT, "TickMath.sol", "TickMath.json"), "utf8"));
@@ -33,8 +34,8 @@ const TICK = predictedLibraryAddress(tickArt.bytecode.object);
 const TICK_RUNTIME = `0x73${TICK.slice(2).toLowerCase()}${tickArt.deployedBytecode.object.slice(44)}` as Hex;
 const C2 = buildCreate2Libraries(table.create2Libraries!, OUT);
 const THREE = [...C2.values()];
-// Issue 1808: each create2 library is adopted by the first stage that lists it (vault, gateway, proto).
-const ADOPTING = ["vault", "gateway", "proto"].map((stage) => ({ stage, libs: adoptableOf(table, stage).map((l) => C2.get(l.artifact)!) }));
+// Issue 1808: each create2 library is adopted by the first stage that lists it (vault, proto; the gateway system adopts its own).
+const ADOPTING = ["vault", "proto"].map((stage) => ({ stage, libs: adoptableOf(table, stage).map((l) => C2.get(l.artifact)!) }));
 const getCode = async (a: Address): Promise<string> => ({ [TICK.toLowerCase()]: TICK_RUNTIME, ...Object.fromEntries(THREE.map((b) => [b.address.toLowerCase(), b.runtime])) } as Record<string, string>)[a.toLowerCase()] ?? "0x";
 const adoptedRun = (sha: string): CountsJsonLike => {
   const counts: Record<string, number> = { ...REF, libs: 0 };

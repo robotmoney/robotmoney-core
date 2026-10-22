@@ -30,7 +30,7 @@ describe("the stage runner on stub forge and cast", () => {
     const code = await w.run(["--stage", "deploy"]);
     expect(lastError(w)).toBeUndefined();
     expect(code).toBe(0);
-    expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.recorder, SCRIPT.vault, SCRIPT.registry, SCRIPT.router, SCRIPT.gateway,
+    expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.recorder, SCRIPT.vault, SCRIPT.registry, SCRIPT.router,
       SCRIPT.receipt, SCRIPT.governance, SCRIPT.proto, SCRIPT.agent, SCRIPT.rwa, SCRIPT.timelock]);
     expect(w.safeCalls[0]).toBe("createSafe");
     const m = manifest(w);
@@ -63,11 +63,11 @@ describe("the stage runner on stub forge and cast", () => {
     expect(lastError(w)).toBeUndefined();
     const t = getStageTable();
     // each stage writes the manifest file the core table names
-    for (const s of t.stages) expect(existsSync(join(w.coreDir, "deployments", "918453", basename(s.manifest))), s.manifest).toBe(true);
+    for (const s of t.stages.filter((x) => x.system !== "gateway")) expect(existsSync(join(w.coreDir, "deployments", "918453", basename(s.manifest))), s.manifest).toBe(true);
     // the basket stages pass --libraries with the tick_math address from the libs manifest, the others do not
     const libsFile = JSON.parse(readFileSync(join(w.coreDir, "deployments", "918453", basename(t.stages.find((s) => s.name === "libs")!.manifest)), "utf8"));
     expect(libsFile.tick_math).toBeTruthy();
-    for (const st of t.stages) {
+    for (const st of t.stages.filter((x) => x.system !== "gateway")) {
       const calls = forgeScripts(w).filter((c: any) => String(c.args[1]).startsWith(st.script));
       expect(calls.length, st.name).toBeGreaterThan(0);
       for (const c of calls) {
@@ -78,7 +78,7 @@ describe("the stage runner on stub forge and cast", () => {
     }
     expect(forgeScripts(w).some((c: any) => c.args.includes("--libraries"))).toBe(true);
     // every required env name the table lists is set, DEPLOYMENT_OUT names the table's manifest, per-vault values land under core's names
-    for (const st of t.stages) {
+    for (const st of t.stages.filter((x) => x.system !== "gateway")) {
       const call = forgeScripts(w).find((c: any) => String(c.args[1]).startsWith(st.script) && c.args.includes("--broadcast"));
       for (const name of st.requiredEnv) expect(call.env[name], `${st.name} ${name}`).toBeTruthy();
       expect(call.env.DEPLOYMENT_OUT).toBe(`deployments/918453/${basename(st.manifest)}`);
@@ -90,9 +90,9 @@ describe("the stage runner on stub forge and cast", () => {
     // the deploy authorizes no agent (core 1527): stage 11 passes AGENT_ADDRESSES=none and stage 5 reads no AGENT_* name
     const timelock = forgeScripts(w).find((c: any) => String(c.args[1]).startsWith(t.stages.find((s) => s.name === "timelock")!.script) && c.args.includes("--broadcast"));
     expect(timelock.env.AGENT_ADDRESSES).toBeUndefined();
-    for (const c of forgeScripts(w).filter((x: any) => String(x.args[1]).startsWith(t.stages.find((s) => s.name === "gateway")!.script))) {
-      expect(Object.keys(c.env).filter((k) => k.startsWith("AGENT_"))).toEqual([]);
-    }
+    // issue 1892: the vaults run deploys no gateway: no gateway-system script ran, and no AGENT_ name but the timelock's own literal reached any stage
+    for (const gw of t.stages.filter((s) => s.system === "gateway")) expect(forgeScripts(w).some((c: any) => String(c.args[1]).startsWith(gw.script)), gw.name).toBe(false);
+    for (const c of forgeScripts(w)) expect(Object.keys(c.env).filter((k) => k.startsWith("AGENT_")), String(c.args[1])).toEqual([]);
   });
 
   test("the run stops at the first failing stage with a non-zero exit code", async () => {
@@ -174,7 +174,7 @@ describe("the stage runner on stub forge and cast", () => {
     const code = await w.run(["--stage", "deploy", "--dry-run"]);
     expect(code).toBe(0);
     expect(targetBroadcasts(w)).toEqual([]);
-    expect(simulations(w).length).toBe(12);
+    expect(simulations(w).length).toBe(getStageTable().stages.filter((s) => s.system !== "gateway").length);
     // only the control proof is skipped (a real Safe transaction signed by every owner), loudly, and the stage 11 gate with it
     expect(w.logs().filter((l) => l.event === "stage.dry_run_skipped").map((l) => l.stage)).toEqual(["prove-control"]);
     expect(w.logs().some((l) => l.event === "stage.control_proof_skipped")).toBe(true);
@@ -442,7 +442,7 @@ describe("the core timelock: pinned at the first proxy stage, adopted when someo
     expect(m.stages.timelock.adopted).toBeUndefined();
     // issue 1853: every proxy stage after the first and the timelock stage recompute the pin before they broadcast
     const ok = w.logs().filter((l) => l.event === "stage.timelock_pin_ok");
-    expect(ok.map((l) => l.stage)).toEqual(["registry", "router", "gateway", "receipt", "governance", "proto", "agent", "rwa", "timelock"]);
+    expect(ok.map((l) => l.stage)).toEqual(["registry", "router", "receipt", "governance", "proto", "agent", "rwa", "timelock"]);
     for (const l of ok) expect(l).toMatchObject({ timelock: TL.address, init_code_hash: TL.initCodeHash });
   });
 

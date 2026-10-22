@@ -23,6 +23,7 @@ import { DEPLOYER_STAGES, VAULT_STAGES, getStageTable, manifestRef, type StageRo
 import { RPC_REFUSED_DETAIL, verifyDeployment, verifySources, viemReader, type ChainReader, type VerifyReport, type VerifySheet, type VerifyOptions, type VaultSheet } from "./verify/index.ts";
 import { recordDependencyManifest, type RecorderSpawn } from "./record-dependencies.ts";
 import { contractsFromManifests } from "./verify/sources.ts";
+import { runGatewayVerifyStage } from "./verify-gateway-stage.ts";
 import { REDEPLOY_ROW, oldVaultBuild, redeploysOf, verifyBuildRefusal } from "./redeploy-vault.ts";
 
 /** Issue 1809: the record of the upgradeability labels, written by verify under deployments/<chain>/. */
@@ -200,6 +201,8 @@ export function verifyReader(ctx: Pick<RunContext, "rpc" | "logs">, make: (url: 
 }
 
 export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: RunManifest, deps: VerifyDeps = realVerifyDeps): Promise<VerifyReport> {
+  // Issue 1892: the gateway system verifies on its own, with no Safe, no govern state and no vault.
+  if (ctx.sheet.system === "gateway") return runGatewayVerifyStage(ctx, row, manifest, { verifyDeployment: deps.verifyDeployment, chain: verifyReader(ctx), emit: deps.emit });
   const frozenFile = ctx.frozen ?? (ctx.measure ? measuredCounts(manifest) : undefined);
   if (!frozenFile) throw new PublishError("COUNTS_MISSING", "the verifier needs the frozen counts for this DEPLOY_SHA");
   const frozen = effectiveCounts(frozenFile, adoptedTxs(manifest)); // an adopted stage (libs, issue 1721) counts the transactions this deployer sent for it

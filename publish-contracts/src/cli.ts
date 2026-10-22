@@ -23,8 +23,8 @@ import { planNonceBasis, stagePlan } from "./plan.ts";
 import { assertBaselineCommitted, assertReleaseGate, gitAnchorCommitted, gitFrozenDirCommitted, type CheckShaGreen } from "./release-gate.ts";
 import { codeWithRetry, verifyReconstructionOnChain } from "./counts-reconstruct.ts";
 import { buildLibraryArtifacts } from "./libs-build.ts";
-import { DEPLOYER_STAGES, STAGE_NAMES, getStageTable, useStageTable } from "./stages.ts";
-import { TABLE_REL, loadStageTable } from "./stage-table.ts";
+import { DEPLOYER_STAGES, STAGE_NAMES, getStageTable, peekStageState, restoreStageState, useStageTable } from "./stages.ts";
+import { TABLE_REL, loadStageTable, SYSTEM_NAMES, type SystemName } from "./stage-table.ts";
 import { adoptedTxs, finalNonceCheck, loadRunManifest, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
 import { callerInputs, parseSheet, type Sheet } from "./sheet.ts";
 import { assertVaultRulesMatch } from "./vault-rules.ts";
@@ -146,6 +146,9 @@ export const USAGE = `publish contracts
   --submitter ADDR   govern --row register-submitter and the record-receipt verb: the consensus receipt SUBMITTER Safe, a SafeL2 1.4.1 multisig (threshold 2 or more, no module, no guard). It may be the governing Safe.
                      record-receipt: required on every chain; --signer is the gas payer and --owner-signer names the submitter Safe's owners (enough to reach its threshold).
   --payload FILE     govern with --row apply-receipt (required), or record-receipt (required, checked before any signer is built): the receipt payload file as served by the canonical route. Its receipt digest (domain line + bytes) is the anchored payloadDigest.
+  --system S         vaults (default) | gateway (issue 1892): the independent system to deploy and verify. gateway runs the stages gateway and gateway-handover against the vaults system's
+                     manifests, with its own small sheet (GATEWAY_ADMIN_ADDRESS and GATEWAY_UPGRADE_TIMELOCK, no default, no AGENT_ name, no Safe), its own --evidence directory and its own
+                     verifier. Only publish and verify run in it (docs/operations/contract-release-runbooks.md 4.13).
   --stage S          plan | deploy | all | a comma list of stage names (default: everything through verify)
                      The stage names come from core's scripts/deploy/stage-table.json at the DEPLOY_SHA, plus safe, verify and govern.
   --resume           continue a run: adopt the existing Safe, skip finished stages; prove-control also adopts a proof that landed on chain before the run died (nothing is sent again)
@@ -231,6 +234,8 @@ export interface CliDeps {
 }
 
 export interface Parsed {
+  /** Issue 1892: the system this run deploys and verifies. Default vaults. The gateway system has its own sheet, stages, evidence and verifier. */
+  system: SystemName;
   chain: number; rpc: string; sheet: string; signer?: string; environment: string; coreSha: string; stage?: string; resume: boolean; dryRun: boolean;
   verb?: Verb; row?: string; coreDir?: string; evidence?: string; countsDir?: string; countsRequireOriginDev?: boolean; measure: boolean; ownerSigners: string[]; emergencySigner?: string; compareSheet?: string; maxWait?: number; noWarp: boolean; call?: { label: string; target: string; data: string };
   /** With --row release-receipt or --row apply-receipt: the receipt. */
@@ -267,7 +272,7 @@ export function parseCli(argv: string[]): Parsed {
       options: {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
-        resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" }, "counts-require-origin-dev": { type: "boolean" },
+        resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" }, "counts-require-origin-dev": { type: "boolean" }, system: { type: "string" },
         measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "no-warp": { type: "boolean" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "check-sources": { type: "boolean" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, proxy: { type: "string" }, implementation: { type: "string" }, "upgrade-build": { type: "string" }, help: { type: "boolean" },
       },
     }));
@@ -284,6 +289,11 @@ export function parseCli(argv: string[]): Parsed {
   if (!/^[0-9]+$/.test(chainRaw!)) throw new PublishError("USAGE", `--chain must be a chain id, got '${chainRaw}'`);
   const stage = v.stage as string | undefined;
   const row = v.row as string | undefined;
+  // Issue 1892: --system picks the independent system. The default is the vaults system. The gateway system deploys, hands over and verifies the gateway and has no govern row,
+  // no receipt and no vault verb: its production governance is an open decision (architecture 10).
+  const system = (v.system as string | undefined) ?? "vaults";
+  if (!(SYSTEM_NAMES as readonly string[]).includes(system)) throw new PublishError("USAGE", `--system must be ${SYSTEM_NAMES.join(" or ")}, got '${system}'\n${USAGE}`);
+  if (system === "gateway" && verb !== undefined && verb !== "publish" && verb !== "verify") throw new PublishError("USAGE", `the ${verb} verb belongs to the vaults system: the gateway system runs publish and verify only (--system gateway)\n${USAGE}`);
   if (row !== undefined && row === "") throw new PublishError("USAGE", `--row needs a number or a name\n${USAGE}`);
   if (row !== undefined) {
     const stageNames = verb === undefined ? stage : undefined;
@@ -382,7 +392,7 @@ export function parseCli(argv: string[]): Parsed {
     logs = { logsRpc, window: window === undefined ? undefined : BigInt(window), tries: count("logs-tries") };
   }
   return {
-    chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
+    system: system as SystemName, chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
     checkSources: !!v["check-sources"], coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, countsRequireOriginDev: !!v["counts-require-origin-dev"], measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
     maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, noWarp: !!v["no-warp"], call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, payloadDigest, payloadUri, adminArgs, vault: vaultArg, priorOut, logs, proxy, implementation, upgradeBuild: upgradeBuild === undefined ? undefined : resolve(upgradeBuild),
@@ -391,7 +401,7 @@ export function parseCli(argv: string[]): Parsed {
 
 /** The verb to stage names: publish = every deployer stage through timelock, verify = verify, govern = govern. */
 export function selectVerbStages(verb: Verb): string[] {
-  if (verb === "publish") return STAGE_NAMES.slice(0, STAGE_NAMES.indexOf("timelock") + 1);
+  if (verb === "publish") return STAGE_NAMES.slice(0, STAGE_NAMES.indexOf(DEPLOYER_STAGES[DEPLOYER_STAGES.length - 1]!.name) + 1); // issue 1892: the last deployer stage of the system (timelock, or gateway-handover)
   return [verb];
 }
 
@@ -452,7 +462,7 @@ export function selectStages(stage: string | undefined): string[] {
   const through = (last: string) => STAGE_NAMES.slice(0, STAGE_NAMES.indexOf(last) + 1);
   if (stage === undefined) return through("verify");
   if (stage === "all") return [...STAGE_NAMES];
-  if (stage === "deploy") return through("timelock");
+  if (stage === "deploy") return through(DEPLOYER_STAGES[DEPLOYER_STAGES.length - 1]!.name);
   const names = stage.split(",").map((s) => s.trim());
   for (const n of names) if (!STAGE_NAMES.includes(n)) throw new PublishError("USAGE", `unknown stage '${n}' (${STAGE_NAMES.join(", ")}, plan, deploy, all)`);
   return names;
@@ -514,13 +524,14 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
   const log: Logger = publishLogger(deps.logSink);
   const run = deps.run ?? spawnTool;
   let signer: PublishSigner | undefined;
+  let stageState: ReturnType<typeof peekStageState> | undefined;
   const extraSigners: PublishSigner[] = [];
   try {
     const a = parseCli(argv);
     const cwd = deps.cwd ?? process.cwd();
     const caller = callerInputs(env);
     // Issue 1833: a follow-on verb (pause-all above all) drops an old sheet's VAULT_NAME line with one warning; a deploy run refuses it.
-    const sheetOpts = { verb: a.verb ?? (a.stage === "verify" || a.stage === "govern" ? a.stage : undefined), warn: (message: string, fields: Record<string, unknown>) => log.log("warn", "sheet.vault_name_ignored", { ...fields, message }) };
+    const sheetOpts = { system: a.system, verb: a.verb ?? (a.stage === "verify" || a.stage === "govern" ? a.stage : undefined), warn: (message: string, fields: Record<string, unknown>) => log.log("warn", "sheet.vault_name_ignored", { ...fields, message }) };
     const sheet = parseSheet(readFileSync(resolve(cwd, a.sheet), "utf8"), sheetOpts);
     // one chain-id source: the RPC
     const castEnv = childEnv({ baseEnv: env, rpc: a.rpc, chainId: a.chain });
@@ -572,7 +583,8 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       if (a.verb !== "pause-all" || !isPublishError(e, "INPUT_MISSING")) throw e;
       log.log("warn", "vault_rules.mismatch", { ...(e.details ?? {}), message: `${e.message}. pause-all reads no per-vault rule, so it runs anyway` });
     }
-    useStageTable(stageTable);
+    stageState = peekStageState(); // issue 1892: the stage list is process-wide; the run puts back what it found (a test process runs many mains)
+    useStageTable(stageTable, a.system);
     const evidenceDir = resolve(cwd, a.evidence ?? join("evidence", `publish-${rpcChainId}-${a.coreSha.slice(0, 12)}`));
     const buildCtx = (frozen: RunContext["frozen"], measure: boolean, lazySigner = false): RunContext => {
       if (a.signer!.startsWith("address:") && !a.dryRun) throw new PublishError("USAGE", "an address: signer cannot sign: it is accepted with --dry-run only");
@@ -747,7 +759,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
             // A part-way govern run (GOVERN_PENDING, issue 1667) is not a failed verify: nothing was checked, so nothing is paused. Neither is a verify refused before
             // the verifier ran because it would compare a contract with the wrong build (QA plan v1 E1, redeploy-vault.ts verifyBuildRefusal).
             // Neither is a verify whose only failures are reads the RPC refused (RPC_REFUSED, issue 1851): an RPC without the data is not an incident.
-            if (!isPublishError(e, "GOVERN_PENDING") && !isPublishError(e, "RPC_REFUSED") && !(isPublishError(e, "USAGE") && e.details.refused_before_verify === true)) postflight = "verify";
+            if (a.system !== "gateway" && !isPublishError(e, "GOVERN_PENDING") && !isPublishError(e, "RPC_REFUSED") && !(isPublishError(e, "USAGE") && e.details.refused_before_verify === true)) postflight = "verify";
             throw e;
           }
         },
@@ -755,7 +767,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
           await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, ...(a.noWarp ? { warp: false as const } : {}), row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, proxy: a.proxy, implementation: a.implementation, upgradeBuild: a.upgradeBuild, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
         },
       });
-      try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { postflight = "postflight"; throw e; }
+      try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { if (a.system !== "gateway") postflight = "postflight"; throw e; } // issue 1892: the gateway run owns no vault to pause
     } catch (e) {
       if (postflight && !a.dryRun) throw await pauseOnFailure(ctx, postflight, e, emergencySigner, deps.pauseAll);
       throw e;
@@ -771,7 +783,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     // report is the deployment's, filed under the original sha (coreHead names the checkout it was read from).
     const isoPath = join(ctx.evidenceDir, `isomorphism-${rpcChainId}.json`);
     if (shaRun || (toolRun && existsSync(isoPath))) log.log("info", "run.isomorphism_kept", { original_sha: (shaRun ?? toolRun)!.originalSha, note: "a run at a redeploy or tooling sha does not rewrite the deployment's isomorphism report" });
-    else if (!a.dryRun && existsSync(ctx.evidenceDir)) {
+    else if (!a.dryRun && a.system !== "gateway" && existsSync(ctx.evidenceDir)) { // issue 1892: the isomorphism report is the vaults deployment's
       const cmp = a.compareSheet ? { path: a.compareSheet, sheet: parseSheet(readFileSync(resolve(cwd, a.compareSheet), "utf8"), sheetOpts) } : undefined;
       const report = await buildIsomorphismReport(ctx, { compareTo: cmp });
       writeReport(isoPath, toolRun ? { ...report, coreSha: toolRun.originalSha } : report);
@@ -785,6 +797,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     return code;
   } finally {
     signer?.cleanup();
+    if (stageState) restoreStageState(stageState);
     for (const x of extraSigners) x.cleanup();
   }
 }

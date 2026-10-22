@@ -25,7 +25,18 @@ export interface TableStage {
   vault: TableVaultKey | null;
   /** The ERC-1967 proxies the stage deploys (upgradeability stage 2, issue 1809). Absent: the stage deploys no proxy. */
   proxies?: TableProxy[];
+  /** The system this stage belongs to (issue 1892). Absent on a table from before the system split: every stage is then one combined run. */
+  system?: SystemName;
+  /**
+   * Issue 1892: the sheet name of an EXPLICIT upgrade timelock. A proxy stage that carries it is not governed by the vaults system's core timelock (`upgradeAuthority`):
+   * its proxies name the nonzero timelock the sheet gives, and the stage reads no SAFE_ADDRESS and no TIMELOCK_MIN_DELAY. Only the gateway system uses it.
+   */
+  upgradeTimelockEnv?: string;
 }
+export type SystemName = "vaults" | "gateway";
+export const SYSTEM_NAMES: readonly SystemName[] = ["vaults", "gateway"];
+/** One system of the table (issue 1892): its stages in run order and the systems it reads (the gateway reads the vaults system's manifests, never the reverse). */
+export interface TableSystem { description: string; stages: string[]; requires: SystemName[] }
 /**
  * One proxied core contract a stage deploys (issue 1809): the manifest field of the proxy and of its implementation, the build artifact of the implementation and the
  * committed storage-layout snapshot (contracts/test/fixtures/storage-layout, gated by scripts/ci/check-core-storage-layout.sh) whose bytes identify its layout.
@@ -92,6 +103,8 @@ export interface TableRedeploy {
 }
 export interface StageTable {
   version: 1;
+  /** Issue 1892: the independent systems. Absent: a table from before the split, one combined run (the legacy deployment manifests, deploy-2). */
+  systems?: Partial<Record<SystemName, TableSystem>>;
   stages: TableStage[];
   /** Upgradeability stage 2 (issue 1809). Absent: the table deploys no proxy (a core checkout from before issue 1808). */
   upgradeAuthority?: UpgradeAuthority;
@@ -136,6 +149,7 @@ export function parseStageTable(json: unknown, where = "stage-table.json"): Stag
   const c2Names = new Set(c2.map((l) => l.name));
   for (const s of t.stages) if (s.create2Libraries !== undefined) { strList(s.create2Libraries, `stage ${s.name} create2Libraries`); for (const l of s.create2Libraries) if (!c2Names.has(l)) bad(`stage ${s.name} lists unknown create2 library '${l}'`); }
   for (const l of t.libraries) if (!l.name || !l.artifact || !l.manifestKey || !l.path) bad(`library ${String(l.name)} needs name, artifact, manifestKey and path`);
+  systemProblems(t as StageTable, where);
   upgradeProblems(t as StageTable);
   const redeploys: unknown = t.redeploys;
   if (redeploys !== undefined) {
@@ -162,6 +176,26 @@ export function parseStageTable(json: unknown, where = "stage-table.json"): Stag
   return t as StageTable;
 }
 
+/**
+ * Issue 1892: the systems and the stages agree. Every stage names a system when the table declares systems, each system lists exactly its stages in table order, a system
+ * requires only another declared system, and the vaults system requires nothing (no vaults-system stage depends on the gateway, SYS-1).
+ */
+function systemProblems(t: StageTable, where: string): void {
+  const sys = t.systems;
+  if (sys === undefined) { for (const s of t.stages) if (s.system !== undefined) bad(`${where}: stage ${s.name} names system ${s.system} but the table declares no systems`); return; }
+  if (!sys || typeof sys !== "object" || Array.isArray(sys)) return bad(`${where}: systems must be an object`);
+  for (const [name, def] of Object.entries(sys)) {
+    if (!(SYSTEM_NAMES as readonly string[]).includes(name)) bad(`${where}: unknown system '${name}' (${SYSTEM_NAMES.join(", ")})`);
+    if (!def || typeof def.description !== "string") bad(`${where}: system ${name} needs a description`);
+    strList(def!.stages, `system ${name} stages`);
+    const listed = t.stages.filter((s) => s.system === name).map((s) => s.name);
+    if (JSON.stringify(listed) !== JSON.stringify(def!.stages)) bad(`${where}: system ${name} lists stages [${def!.stages.join(", ")}] but the table's stages of that system are [${listed.join(", ")}], in table order`);
+    if (!Array.isArray(def!.requires) || def!.requires.some((r) => !(r in sys) || r === name)) bad(`${where}: system ${name} requires an unknown system or itself`);
+  }
+  for (const s of t.stages) if (s.system === undefined || !(s.system in sys)) bad(`${where}: stage ${s.name} names ${s.system === undefined ? "no system" : `undeclared system '${s.system}'`}`);
+  if (sys.vaults && sys.vaults.requires.length > 0) bad(`${where}: the vaults system requires nothing: no vaults-system stage depends on the gateway (SYS-1)`);
+}
+
 const LAYOUT = /^contracts\/test\/fixtures\/storage-layout\/\w+\.json$/;
 /**
  * Issue 1809: the proxy rows and the upgrade authority agree. A stage with proxies reads the authority's inputs and mode env; a stage that reads the mode env deploys a
@@ -183,8 +217,15 @@ function upgradeProblems(t: StageTable): void {
     const reads = s.requiredEnv.includes(u.modeEnv);
     if (reads !== (s.proxies !== undefined && s.proxies.length > 0)) bad(`stage ${s.name}: ${reads ? `reads ${u.modeEnv} but lists no proxies` : `lists proxies but does not read ${u.modeEnv}`}`);
     if (!s.proxies) continue;
-    for (const i of u.inputs) if (!s.requiredEnv.includes(i)) bad(`stage ${s.name} deploys a proxy but does not read ${i}`);
-    if (t.stages.indexOf(s) > at) bad(`stage ${s.name} deploys a proxy after the ${u.stage} stage: the upgrade authority is deployed last`);
+    if (s.upgradeTimelockEnv !== undefined) {
+      // Issue 1892: an explicit upgrade timelock (the gateway system). It reads that env INSTEAD of the vaults timelock's inputs and is not ordered against the vaults timelock stage.
+      if (!s.requiredEnv.includes(s.upgradeTimelockEnv)) bad(`stage ${s.name} names upgradeTimelockEnv ${s.upgradeTimelockEnv} but does not read it`);
+      for (const i of u.inputs) if (s.requiredEnv.includes(i)) bad(`stage ${s.name} has an explicit upgrade timelock and must not read ${i}: the vaults timelock is not an input of this system`);
+      if (s.system === "vaults") bad(`stage ${s.name} is a vaults-system stage: its proxies are governed by the core timelock, not an explicit one`);
+    } else {
+      for (const i of u.inputs) if (!s.requiredEnv.includes(i)) bad(`stage ${s.name} deploys a proxy but does not read ${i}`);
+      if (t.stages.indexOf(s) > at) bad(`stage ${s.name} deploys a proxy after the ${u.stage} stage: the upgrade authority is deployed last`);
+    }
     for (const p of s.proxies) {
       if (!p || typeof p.field !== "string" || typeof p.implementationField !== "string" || typeof p.contract !== "string" || p.field === "" || p.implementationField === "" || p.contract === "") bad(`stage ${s.name}: a proxy needs field, implementationField and contract`);
       if (typeof p.layout !== "string" || !LAYOUT.test(p.layout)) bad(`stage ${s.name} proxy ${p.field}: layout must be a snapshot under contracts/test/fixtures/storage-layout`);
@@ -244,3 +285,21 @@ export const manifestFile = (template: string): string => basename(template);
 export const manifestBase = (template: string): string => basename(template, ".json");
 /** The template with the chain id filled in. */
 export const manifestPathFor = (template: string, chainId: number | string): string => template.replace("<chain>", String(chainId));
+
+/**
+ * Issue 1892: the table as one system sees it. A table from before the split (no `systems`) is returned as it is. Otherwise `stages` keeps only the stages of `system`, so every
+ * reader that walks `table.stages` (the verifier, the manifests it requires, the proxy set, the evidence floors) sees one system and never the other's contracts.
+ */
+export function scopeTable(t: StageTable, system: SystemName | "legacy"): StageTable {
+  if (!t.systems) return t;
+  if (system === "legacy") {
+    // the combined deployment (deploy-2) read with a table that declares systems: the vaults stages with the gateway stage back in its combined place (after the router), and never
+    // the gateway handover stage the combined deploy did not have
+    const rest = t.stages.filter((s) => s.system !== "gateway");
+    const gw = t.stages.find((s) => s.name === "gateway");
+    if (!gw) return { ...t, stages: rest };
+    const at = rest.findIndex((s) => s.name === "router");
+    return { ...t, stages: at < 0 ? [...rest, gw] : [...rest.slice(0, at + 1), gw, ...rest.slice(at + 1)] };
+  }
+  return { ...t, stages: t.stages.filter((s) => s.system === system) };
+}

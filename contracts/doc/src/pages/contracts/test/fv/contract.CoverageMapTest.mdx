@@ -4,7 +4,7 @@ title: "CoverageMapTest"
 
 # CoverageMapTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/fv/CoverageMap.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58a774e0370fd9946d743a40f01792cf059929e7/contracts/test/fv/CoverageMap.t.sol)
 
 **Inherits:** Test
 
@@ -53,6 +53,55 @@ always tell its downstream issue which test to flip green.
 ```solidity
 function test_everyRedEntryNamesRemediationIssue() public pure;
 ```
+
+<a id="test_tombstonestatusmatchesretiredheadings"></a>
+
+### test_tombstoneStatusMatchesRetiredHeadings
+
+Issue 1892 (RS-1019-11): a spec heading that is struck through (`~~`) and marked
+Retired maps to exactly one TOMBSTONE registry entry, and a TOMBSTONE entry maps to
+such a heading. ACL-4 and ACL-8 are tombstones. SYS-2 is a retired non-registry ID:
+it has no `> **` heading and no registry entry.
+
+```solidity
+function test_tombstoneStatusMatchesRetiredHeadings() public view;
+```
+
+<a id="test_negativefixture_retiredheadingparsed"></a>
+
+### test_negativeFixture_retiredHeadingParsed
+
+Negative fixture: the retired-heading parser reads the strike-through marker.
+
+```solidity
+function test_negativeFixture_retiredHeadingParsed() public pure;
+```
+
+<a id="_parseretiredids-string"></a>
+
+### _parseRetiredIds
+
+<i>
+
+IDs whose heading line contains a `~~` strike-through and the word Retired.
+
+</i>
+
+```solidity
+function _parseRetiredIds(string memory spec) internal pure returns (string[] memory out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| spec | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `string[]` |  |
 
 <a id="test_negativefixture_unmappedspecidisdetected"></a>
 

@@ -47,6 +47,98 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         "manifests the stage table names are missing in {}: {missing:?}",
         dir.display()
     );
+    // Issue 1892: the vaults system and the gateway system are independent runs. The vaults run left no gateway manifest and sent no gateway transaction; the gateway run
+    // came after it, against its manifests, left every one of them byte-unchanged, moved the gateway roles to GATEWAY_ADMIN_ADDRESS and authorized no agent.
+    {
+        let published = fx.published();
+        let gateway_files = table.gateway_manifests();
+        assert_eq!(
+            gateway_files,
+            ["gateway.json", "gateway-handover.json"],
+            "the table's gateway system writes exactly the gateway and its handover"
+        );
+        assert!(
+            !published.vaults_snapshot.is_empty()
+                && published.vaults_snapshot.len() == table.vaults_manifests().len(),
+            "the vaults run's snapshot must hold every vaults manifest (executed count)"
+        );
+        assert!(
+            published
+                .vaults_snapshot
+                .keys()
+                .all(|f| !gateway_files.contains(f)),
+            "the vaults-only run left a gateway manifest"
+        );
+        for (f, before) in &published.vaults_snapshot {
+            assert_eq!(
+                &std::fs::read(dir.join(f)).expect("read a vaults manifest"),
+                before,
+                "the gateway run changed the vaults manifest {f}"
+            );
+        }
+        let read_json = |p: PathBuf| -> serde_json::Value {
+            serde_json::from_slice(
+                &std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display())),
+            )
+            .unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+        };
+        let vaults_run = read_json(fx.published().evidence_dir().join("publish-run.json"));
+        let vaults_stages: Vec<&String> = vaults_run["stages"]
+            .as_object()
+            .expect("stages")
+            .keys()
+            .collect();
+        assert!(
+            vaults_stages.iter().all(|s| !s.starts_with("gateway")),
+            "the vaults run manifest records a gateway stage: {vaults_stages:?}"
+        );
+        assert_eq!(vaults_run["system"], "vaults");
+        let gateway_evidence = fx.gateway_run().evidence_dir.clone();
+        let gateway_run = read_json(gateway_evidence.join("publish-run.json"));
+        assert_eq!(gateway_run["system"], "gateway");
+        for stage in ["gateway", "gateway-handover", "verify"] {
+            assert!(
+                gateway_run["stages"].get(stage).is_some(),
+                "the gateway run manifest lacks stage {stage}"
+            );
+        }
+        let handover = read_json(dir.join("gateway-handover.json"));
+        for (role, want) in [
+            ("admin_holder_has_admin_role", true),
+            ("admin_holder_has_default_admin_role", true),
+            ("deployer_has_admin_role", false),
+            ("deployer_has_default_admin_role", false),
+        ] {
+            assert_eq!(
+                handover["roles"][role], want,
+                "gateway-handover.json roles.{role}"
+            );
+        }
+        for label in [
+            "agents: no AgentAuthorized log on the gateway up to the handover block",
+            "agents: no AGENT_ROLE grant on the gateway up to the handover block",
+            "vaults system: the manifests this run consumed are unchanged since it began",
+            "gateway: ADMIN_ROLE held by the gateway admin",
+        ] {
+            assert!(
+                fx.gateway_run()
+                    .verify_output
+                    .lines()
+                    .any(|l| l.trim() == label),
+                "the gateway verifier output lacks the label '{label}'"
+            );
+        }
+        let marker = format!(
+            "TWIN-SCENARIO rust-systems: vaults_manifests={} gateway_manifests={} vaults_unchanged=true agents_at_handover=0",
+            published.vaults_snapshot.len(),
+            gateway_files.len()
+        );
+        println!("{marker}");
+        // The workflow names a file for the marker and requires it afterwards (suite 14): a removed scenario leaves no line.
+        if let Some(p) = std::env::var_os("SMOKE_TEST_MARKER_OUT") {
+            std::fs::write(p, format!("{marker}\n")).expect("write the scenario marker");
+        }
+    }
     // Core 1710, issue 1705: each vault's deposit state before govern is the stage table's deployPaused (all four deploy paused, rmUSDC included),
     // and after govern it is open where the table makes the unpause a stage 13 row. The verifier below expects exactly that.
     let rules = table.vault_deposit_rules();

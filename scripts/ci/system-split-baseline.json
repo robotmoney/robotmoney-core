@@ -1,0 +1,23 @@
+{
+  "_comment": "Known violations of SYS-1 and ACL-9 on dev, each with the open issue that removes it. check-system-split.ts refuses every violation not listed here and warns about an entry that no longer matches. Do not add entries: remove them.",
+  "known": [
+    {
+      "rule": "SYS-1:import",
+      "file": "contracts/RouterGovernance.sol",
+      "issue": 1906,
+      "reason": "imports the receipt interface from contracts/gateway/interfaces; the follow-up moves the receipt out of the gateway directory"
+    },
+    {
+      "rule": "SYS-1:name",
+      "file": "contracts/RouterGovernance.sol",
+      "issue": 1906,
+      "reason": "names the gateway through the receipt interface"
+    },
+    {
+      "rule": "SYS-1:name",
+      "file": "contracts/gateway/ConsensusRecommendationReceipt.sol",
+      "issue": 1906,
+      "reason": "the receipt keeps the retired public storage slot gateway (storage layout and the preserved getter); the follow-up decides how it is kept"
+    }
+  ]
+}

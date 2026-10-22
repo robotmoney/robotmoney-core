@@ -15,9 +15,6 @@ import {DeployTimelock} from "../script/DeployTimelock.s.sol";
 import {ProposerFloorTimelock} from "../ProposerFloorTimelock.sol";
 import {CoreStages} from "./helpers/CoreStages.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
-import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
-import {IGateway} from "../gateway/interfaces/IGateway.sol";
-import {AccessRoles} from "../gateway/AccessRoles.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
@@ -62,7 +59,6 @@ contract DeployTimelockTest is SafeGovernance {
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
-    bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
 
     // ─── Test addresses ───────────────────────────────────────────────────────
@@ -82,7 +78,6 @@ contract DeployTimelockTest is SafeGovernance {
 
     TestERC20 internal usdc;
     RobotMoneyVault internal vault;
-    RobotMoneyGateway internal gateway;
     VaultRegistry internal registry;
     PortfolioRouter internal router;
     RouterGovernance internal governance;
@@ -99,12 +94,10 @@ contract DeployTimelockTest is SafeGovernance {
     /// RoleRevoked log since before the contracts were built (the contracts are
     /// not AccessControlEnumerable, so this is the only complete list).
     mapping(address => address[]) internal adminHolders;
-    address[] internal gatewayRootHolders;
     address[] internal executorHolders;
     address[] internal vaultEmergencyHolders;
     /// Contracts on which the logs show the deployer losing ADMIN_ROLE.
     mapping(address => bool) internal deployerAdminRevoked;
-    bool internal deployerRootRevoked;
 
     // ─── Constants ────────────────────────────────────────────────────────────
 
@@ -138,10 +131,8 @@ contract DeployTimelockTest is SafeGovernance {
         // address that never held anything and leave the script contract as a
         // second admin on every contract (issue #1447).
         //
-        // RobotMoneyVault and RobotMoneyGateway are instantiated as real
-        // contracts (issue #420 — replacing the registry placeholder that was
-        // used as a stub for both).  Vault is constructed first so that the
-        // gateway can validate vault.asset() == address(usdc) at deploy time.
+        // RobotMoneyVault is instantiated as a real contract (issue #420). The
+        // handover touches no gateway: the gateway system has its own run (issue 1892).
         vault = CoreProxies.robotMoneyVault(
             usdc,
             type(uint256).max, // tvlCap (no cap for tests)
@@ -150,13 +141,6 @@ contract DeployTimelockTest is SafeGovernance {
             safe, // feeRecipient (non-zero; reuses the safe test address)
             address(script), // admin — script must hold ADMIN_ROLE to wire timelock
             address(script) // emergencyResponder
-        );
-        gateway = CoreProxies.robotMoneyGateway(
-            usdc,
-            vault,
-            address(script), // admin — script holds ADMIN_ROLE to wire timelock
-            admin, // pauser — must be distinct from admin (RoleSeparationViolated guard)
-            address(0) // router (not exercised in these tests)
         );
         registry = CoreProxies.vaultRegistry(address(script));
         router = CoreProxies.portfolioRouter(address(usdc), address(registry), address(script));
@@ -174,7 +158,6 @@ contract DeployTimelockTest is SafeGovernance {
         vm.prank(deployer);
         d = script.runInProcess(
             address(vault),
-            address(gateway),
             address(registry),
             address(router),
             address(governance),
@@ -185,28 +168,18 @@ contract DeployTimelockTest is SafeGovernance {
         );
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
-        address[5] memory governed = _governed();
+        address[4] memory governed = _governed();
         for (uint256 i = 0; i < governed.length; i++) {
             adminHolders[governed[i]] = RoleHolders.holders(logs, governed[i], ADMIN_ROLE);
             deployerAdminRevoked[governed[i]] =
                 RoleHolders.wasRevoked(logs, governed[i], ADMIN_ROLE, deployer);
         }
-        deployerRootRevoked =
-            RoleHolders.wasRevoked(logs, address(gateway), DEFAULT_ADMIN_ROLE, deployer);
-        gatewayRootHolders = RoleHolders.holders(logs, address(gateway), DEFAULT_ADMIN_ROLE);
         vaultEmergencyHolders = RoleHolders.holders(logs, address(vault), EMERGENCY_ROLE);
         executorHolders = RoleHolders.holders(logs, address(d.timelock), d.timelock.EXECUTOR_ROLE());
     }
 
-    function _governed() internal view returns (address[5] memory) {
-        return
-            [
-                address(vault),
-                address(gateway),
-                address(registry),
-                address(router),
-                address(governance)
-            ];
+    function _governed() internal view returns (address[4] memory) {
+        return [address(vault), address(registry), address(router), address(governance)];
     }
 
     // ─── AC1: Timelock holds ADMIN_ROLE on all five contracts ─────────────────
@@ -243,42 +216,28 @@ contract DeployTimelockTest is SafeGovernance {
         );
     }
 
-    /// @notice After DeployTimelock, the TimelockController holds ADMIN_ROLE on
-    ///         the real RobotMoneyGateway instance (not a registry placeholder).
-    function test_timelock_holdsAdminRoleOnGateway() public view {
-        assertTrue(
-            IAccessControl(address(gateway)).hasRole(ADMIN_ROLE, address(d.timelock)),
-            "timelock missing ADMIN_ROLE on gateway"
-        );
-    }
-
     /// @notice After role transfer, the deployer — the address that held
     ///         ADMIN_ROLE and sent the handover — no longer holds it anywhere.
     ///         Each check is preceded by proof that the deployer DID hold the
     ///         role, so it cannot pass against an address that never had it.
     function test_deployer_heldAndLostAdminRoleOnEveryGovernedContract() public view {
-        address[5] memory governed = _governed();
+        address[4] memory governed = _governed();
         for (uint256 i = 0; i < governed.length; i++) {
             assertTrue(
                 deployerAdminRevoked[governed[i]],
                 "the handover never revoked ADMIN_ROLE from the deployer (it never held it?)"
             );
         }
-        assertTrue(deployerRootRevoked, "the handover never revoked the deployer's gateway root");
     }
 
     function test_deployer_noLongerHasAdminRoleOnAnyGovernedContract() public view {
-        address[5] memory governed = _governed();
+        address[4] memory governed = _governed();
         for (uint256 i = 0; i < governed.length; i++) {
             assertFalse(
                 IAccessControl(governed[i]).hasRole(ADMIN_ROLE, deployer),
                 "deployer still has ADMIN_ROLE on a governed contract"
             );
         }
-        assertFalse(
-            gateway.hasRole(DEFAULT_ADMIN_ROLE, deployer),
-            "deployer still has DEFAULT_ADMIN_ROLE on gateway"
-        );
         assertFalse(
             vault.hasRole(EMERGENCY_ROLE, deployer), "deployer still has EMERGENCY_ROLE on vault"
         );
@@ -291,7 +250,7 @@ contract DeployTimelockTest is SafeGovernance {
     ///         complete sets, replayed from every RoleGranted/RoleRevoked log
     ///         since before construction, not a check of a few named addresses.
     function test_handover_timelockIsTheOnlyAdminOnEveryGovernedContract() public view {
-        address[5] memory governed = _governed();
+        address[4] memory governed = _governed();
         for (uint256 i = 0; i < governed.length; i++) {
             address[] memory h = adminHolders[governed[i]];
             bool isRouter = governed[i] == address(router);
@@ -324,18 +283,8 @@ contract DeployTimelockTest is SafeGovernance {
         }
     }
 
-    /// @notice No address other than the timelock holds the gateway root
-    ///         (DEFAULT_ADMIN_ROLE), and only the independent hot key holds the
-    ///         vault EMERGENCY_ROLE.
-    function test_handover_timelockIsTheOnlyGatewayRootHolder() public view {
-        assertEq(
-            gatewayRootHolders.length, 1, "gateway DEFAULT_ADMIN_ROLE has more than one holder"
-        );
-        assertEq(gatewayRootHolders[0], address(d.timelock), "gateway root is not the timelock");
-        assertFalse(
-            gateway.hasRole(DEFAULT_ADMIN_ROLE, address(script)), "script kept gateway root"
-        );
-        assertFalse(gateway.hasRole(DEFAULT_ADMIN_ROLE, address(this)), "test holds gateway root");
+    /// @notice Only the independent hot key holds the vault EMERGENCY_ROLE.
+    function test_handover_onlyTheHotKeyHoldsVaultEmergencyRole() public view {
         assertEq(vaultEmergencyHolders.length, 1, "vault EMERGENCY_ROLE has more than one holder");
         assertEq(vaultEmergencyHolders[0], emergency, "vault EMERGENCY_ROLE is not the hot key");
     }
@@ -820,22 +769,6 @@ contract DeployTimelockTest is SafeGovernance {
     // independent emergency hot key. The complete post-handover member sets are
     // asserted in test_handover_* above.
 
-    /// @notice ACL-1: the Timelock receives BOTH ADMIN_ROLE and DEFAULT_ADMIN_ROLE
-    ///         on the Gateway (so it can rotate roles), and holds
-    ///         ADMIN_ROLE on the vault.
-    function test_ACL1_timelockHoldsGatewayRootAfterHandover() public view {
-        assertTrue(
-            gateway.hasRole(ADMIN_ROLE, address(d.timelock)), "timelock missing Gateway ADMIN_ROLE"
-        );
-        assertTrue(
-            gateway.hasRole(DEFAULT_ADMIN_ROLE, address(d.timelock)),
-            "timelock missing Gateway DEFAULT_ADMIN_ROLE"
-        );
-        assertTrue(
-            vault.hasRole(ADMIN_ROLE, address(d.timelock)), "timelock missing vault ADMIN_ROLE"
-        );
-    }
-
     /// @notice AC: the vault EMERGENCY_ROLE is held by the independent hot key
     ///         (not the timelock — emergency response stays a fast hot-key path).
     function test_ACL1_vaultEmergencyRoleHeldByIndependentHotKey() public view {
@@ -849,88 +782,12 @@ contract DeployTimelockTest is SafeGovernance {
         );
     }
 
-    /// @notice ACL-9: after the handover no role, the timelock included, can
-    ///         grant, revoke or renounce AGENT_ROLE through the public methods.
-    function test_ACL9_timelockCannotManageAgentRoleAfterHandover() public {
-        address newAgent = makeAddr("post-handover-agent");
-        vm.startPrank(address(d.timelock));
-        vm.expectRevert(AccessRoles.AgentRoleNotManageable.selector);
-        gateway.grantRole(AGENT_ROLE, newAgent);
-        vm.expectRevert(AccessRoles.AgentRoleNotManageable.selector);
-        gateway.revokeRole(AGENT_ROLE, newAgent);
-        vm.stopPrank();
-    }
-
-    /// @notice ACL-9: the gateway has no admin registration shortcut. The old
-    ///         selectors are absent, so a timelock-routed call to them reverts.
-    function test_ACL9_noAdminRegistrationSelectorExists() public {
-        IGateway.AgentPolicy memory p = _agentPolicy();
-        bytes memory callData = abi.encodeWithSignature(
-            "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
-            makeAddr("rejected-agent"),
-            p
-        );
-        vm.prank(address(d.timelock));
-        (bool ok,) = address(gateway).call(callData);
-        assertFalse(ok, "authorizeAgent must not exist");
-    }
-
-    /// @notice Negative regression for the fix-interaction warning: a NAKED
-    ///         DEFAULT_ADMIN_ROLE revoke that did NOT redirect AGENT_ROLE's admin
-    ///         to ADMIN_ROLE would leave AGENT_ROLE ungrantable forever. We build
-    ///         a throwaway gateway whose AGENT_ROLE admin is the default
-    ///         (DEFAULT_ADMIN_ROLE), revoke that root from the only holder, and
-    ///         assert AGENT_ROLE can no longer be granted — proving the
-    ///         constructor's `_setRoleAdmin(AGENT_ROLE, ADMIN_ROLE)` is what keeps
-    ///         the real gateway safe.
-    function test_ACL1_nakedDefaultAdminRevoke_bricksAgentRoleWithoutReadmin() public {
-        NaiveAgentGateway naive = new NaiveAgentGateway(address(this));
-        // Sanity: AGENT_ROLE admin is the default root (the bug condition).
-        assertEq(
-            naive.getRoleAdmin(AGENT_ROLE),
-            DEFAULT_ADMIN_ROLE,
-            "pre-condition: AGENT_ROLE admin is DEFAULT_ADMIN_ROLE"
-        );
-        // Naked revoke of the root from its only holder.
-        naive.revokeRole(DEFAULT_ADMIN_ROLE, address(this));
-        assertFalse(naive.hasRole(DEFAULT_ADMIN_ROLE, address(this)), "root not revoked");
-
-        // AGENT_ROLE is now ungrantable: nobody holds its admin (DEFAULT_ADMIN).
-        address wouldBeAgent = makeAddr("bricked-agent");
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                address(this),
-                DEFAULT_ADMIN_ROLE
-            )
-        );
-        naive.grantRole(AGENT_ROLE, wouldBeAgent);
-    }
-
-    /// @dev Minimal active AgentPolicy used by the authorize tests.
-    function _agentPolicy() internal returns (IGateway.AgentPolicy memory p) {
-        address[] memory empty = new address[](0);
-        p = IGateway.AgentPolicy({
-            active: true,
-            validUntil: uint64(block.timestamp + 365 days),
-            maxPerPayment: 1e6,
-            maxPerWindow: 1e6,
-            shareReceiver: makeAddr("share-receiver"),
-            allowedDestinations: CoreProxies.oneDestination(address(0xD357)),
-            assetRecipient: address(0),
-            maxWithdrawPerPayment: 0,
-            maxWithdrawPerWindow: 0,
-            allowedSourceVaults: empty
-        });
-    }
-
     // ─── Revert cases — script validation ────────────────────────────────────
 
     function test_deploy_revertsOnZeroSafe() public {
         vm.startPrank(admin);
         vm.expectRevert(bytes("SAFE_ADDRESS=0"));
         script.runInProcess(
-            address(registry),
             address(registry),
             address(registry),
             address(router),
@@ -949,7 +806,6 @@ contract DeployTimelockTest is SafeGovernance {
         script.runInProcess(
             address(registry),
             address(registry),
-            address(registry),
             address(router),
             address(governance),
             safe,
@@ -964,7 +820,6 @@ contract DeployTimelockTest is SafeGovernance {
 
     function _runWithSafe(address safe_, address[] memory owners_, uint256 threshold_) internal {
         script.runInProcess(
-            address(registry),
             address(registry),
             address(registry),
             address(router),
@@ -1104,7 +959,6 @@ contract DeployTimelockChainFloorTest is SafeGovernance {
     address internal safe;
     address internal emergency = makeAddr("floor-emergency");
     RobotMoneyVault internal vault;
-    RobotMoneyGateway internal gateway;
     VaultRegistry internal registry;
     PortfolioRouter internal router;
     RouterGovernance internal governance;
@@ -1129,9 +983,6 @@ contract DeployTimelockChainFloorTest is SafeGovernance {
         vault = CoreProxies.robotMoneyVault(
             usdc_, type(uint256).max, type(uint256).max, 0, safe, deployer, deployer
         );
-        gateway = CoreProxies.robotMoneyGateway(
-            usdc_, vault, deployer, makeAddr("floor-pauser"), address(0)
-        );
         registry = CoreProxies.vaultRegistry(deployer);
         router = CoreProxies.portfolioRouter(address(usdc_), address(registry), deployer);
         governance = CoreProxies.routerGovernance(address(router), makeAddr("receipts"), deployer);
@@ -1147,7 +998,6 @@ contract DeployTimelockChainFloorTest is SafeGovernance {
         vm.prank(deployer);
         return script.runInProcess(
             address(vault),
-            address(gateway),
             address(registry),
             address(router),
             address(governance),
@@ -1196,22 +1046,6 @@ contract DeployTimelockChainFloorTest is SafeGovernance {
     function test_factoryMadeSafeL2_isAccepted() public {
         DeployTimelock.Deployed memory d = _run(2 days);
         assertTrue(IAccessControl(address(vault)).hasRole(ADMIN_ROLE, address(d.timelock)));
-    }
-}
-
-/// @dev A deliberately NAIVE gateway: plain AccessControl with AGENT_ROLE whose
-///      admin is left at the default (DEFAULT_ADMIN_ROLE), i.e. WITHOUT the
-///      `_setRoleAdmin(AGENT_ROLE, ADMIN_ROLE)` redirect the real
-///      RobotMoneyGateway constructor performs. Models the pre-fix gateway so the
-///      negative test can prove that a naked DEFAULT_ADMIN_ROLE revoke would
-///      brick AGENT_ROLE (fix-interaction warning, F-01).
-contract NaiveAgentGateway is AccessControl {
-    bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
-
-    constructor(address root) {
-        // Only the default root is granted; AGENT_ROLE's admin stays
-        // DEFAULT_ADMIN_ROLE (the bug condition). No _setRoleAdmin redirect.
-        _grantRole(DEFAULT_ADMIN_ROLE, root);
     }
 }
 
@@ -1264,9 +1098,6 @@ contract DeployTimelockManifestTest is SafeGovernance {
         RobotMoneyVault vault = CoreProxies.robotMoneyVault(
             usdc, type(uint256).max, type(uint256).max, 0, safe, deployer, deployer
         );
-        RobotMoneyGateway gateway = CoreProxies.robotMoneyGateway(
-            usdc, vault, deployer, makeAddr("manifest-pauser"), address(0)
-        );
         VaultRegistry registry = CoreProxies.vaultRegistry(deployer);
         PortfolioRouter router =
             CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
@@ -1284,7 +1115,6 @@ contract DeployTimelockManifestTest is SafeGovernance {
         vm.prank(deployer);
         DeployTimelock.Deployed memory d = script.runInProcess(
             address(vault),
-            address(gateway),
             address(registry),
             address(router),
             address(governance),
@@ -1426,7 +1256,6 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
     using stdJson for string;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
 
     /// @dev Overridden by subclasses so tests that mutate shared env vars
     ///      (vm.setEnv is process-wide) each get their own namespace.
@@ -1440,7 +1269,6 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
     address internal deployer;
     address internal deployAgent = makeAddr("run-deploy-agent");
     CoreStages.Stack internal dep;
-    RobotMoneyGateway internal gateway;
     address internal safe;
 
     function _set(string memory name, string memory value) internal {
@@ -1485,7 +1313,6 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
                 makeAddr("run-receiver"),
                 address(usdc)
             );
-        gateway = dep.gateway;
         VaultRegistry registry = CoreProxies.vaultRegistry(deployer);
         PortfolioRouter router =
             CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
@@ -1505,7 +1332,6 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
         router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
 
         _set("VAULT_ADDRESSES", vm.toString(address(dep.vault)));
-        _set("GATEWAY_ADDRESS", vm.toString(address(gateway)));
         _set("REGISTRY_ADDRESS", vm.toString(address(registry)));
         _set("ROUTER_ADDRESS", vm.toString(address(router)));
         _set("GOVERNANCE_ADDRESS", vm.toString(address(governance)));
@@ -1533,13 +1359,24 @@ contract DeployTimelockRunEntrypointTest is DeployTimelockRunEntrypointBase {
     function test_run_handsOverRolesAndRecordsNoAgent() public removesOwnManifest {
         DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, _prefix());
 
-        assertTrue(gateway.hasRole(ADMIN_ROLE, address(d.timelock)), "timelock missing ADMIN_ROLE");
-        assertFalse(gateway.hasRole(ADMIN_ROLE, deployer), "deployer kept gateway ADMIN_ROLE");
-        assertTrue(gateway.hasRole(AGENT_ROLE, deployAgent), "deploy agent lost AGENT_ROLE");
-        assertTrue(gateway.agentOwner(deployAgent) != address(d.timelock), "timelock took an agent");
+        assertTrue(
+            dep.vault.hasRole(ADMIN_ROLE, address(d.timelock)), "timelock missing vault ADMIN_ROLE"
+        );
+        assertFalse(dep.vault.hasRole(ADMIN_ROLE, deployer), "deployer kept vault ADMIN_ROLE");
 
+        // Issue 1892: the handover touches no gateway. The manifest names none and the gateway agent
+        // the fixture authorized is exactly as it was.
         string memory manifest = vm.readFile(OUT_PATH);
         assertFalse(vm.keyExistsJson(manifest, ".timelock_owned_agents"), "agent list in manifest");
+        assertFalse(vm.keyExistsJson(manifest, ".gateway"), "gateway in manifest");
+        assertFalse(vm.keyExistsJson(manifest, ".addresses.gateway"), "gateway address in manifest");
+        assertFalse(
+            vm.keyExistsJson(manifest, ".code_hashes.gateway"), "gateway code hash in manifest"
+        );
+        assertFalse(
+            vm.keyExistsJson(manifest, ".roles.timelock_has_gateway_default_admin_role"),
+            "gateway role row in manifest"
+        );
     }
 }
 
@@ -1816,7 +1653,6 @@ contract DeployTimelockFourVaultsTest is SafeGovernance {
     TestERC20 internal usdc;
     address[] internal vaults;
     VaultRegistry internal registry;
-    RobotMoneyGateway internal gateway;
     PortfolioRouter internal router;
     RouterGovernance internal governance;
     DeployTimelock.Deployed internal d;
@@ -1879,9 +1715,6 @@ contract DeployTimelockFourVaultsTest is SafeGovernance {
             )
         );
 
-        gateway = CoreProxies.robotMoneyGateway(
-            usdc, rmUsdc, deployer, makeAddr("four-pauser"), address(0)
-        );
         registry = CoreProxies.vaultRegistry(deployer);
         router = CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
         governance = CoreProxies.routerGovernance(address(router), makeAddr("receipts"), deployer);
@@ -1905,7 +1738,6 @@ contract DeployTimelockFourVaultsTest is SafeGovernance {
         vm.prank(deployer);
         d = script.runInProcessVaults(
             vaults,
-            address(gateway),
             address(registry),
             address(router),
             address(governance),
@@ -1961,7 +1793,6 @@ contract DeployTimelockFourVaultsTest is SafeGovernance {
         vm.expectRevert(bytes("VAULT_ADDRESSES is empty"));
         script.runInProcessVaults(
             none,
-            address(gateway),
             address(registry),
             address(router),
             address(governance),
@@ -1980,7 +1811,6 @@ contract DeployTimelockFourVaultsTest is SafeGovernance {
         vm.expectRevert(bytes("VAULT_ADDRESSES contains a duplicate"));
         script.runInProcessVaults(
             dup,
-            address(gateway),
             address(registry),
             address(router),
             address(governance),

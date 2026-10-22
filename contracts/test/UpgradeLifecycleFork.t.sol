@@ -116,7 +116,6 @@ contract UpgradeLifecycleForkTest is Test {
         timelock =
         timelockScript.runInProcessVaults(
             _vaults(),
-            address(gateway),
             address(registry),
             address(router),
             address(governance),
@@ -154,9 +153,7 @@ contract UpgradeLifecycleForkTest is Test {
 
         DeployGateway gs = new DeployGateway();
         gs.setUpgradeConfig(upgradeTimelock, mode);
-        gateway =
-        gs.runInProcessWith(deployer, pauser, shareReceiver, USDC, address(vault), address(router))
-        .gateway;
+        gateway = gs.runInProcessWith(deployer, pauser, shareReceiver, USDC).gateway;
 
         DeployConsensusRecommendationReceipt rcs = new DeployConsensusRecommendationReceipt();
         rcs.setUpgradeConfig(upgradeTimelock, mode);

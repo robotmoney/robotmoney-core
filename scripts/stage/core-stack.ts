@@ -28,7 +28,8 @@
 //   core-stack chain down      [--out-dir DIR]
 //   core-stack chain status    [--ref REF] [--out-dir DIR]
 //   core-stack publish args    [--out-dir DIR]
-//   core-stack publish run     [--out-dir DIR]
+//   core-stack publish run     [--out-dir DIR]   (the vaults system)
+//   core-stack publish gateway [--out-dir DIR]   (issue 1892: the gateway system, after the vaults system)
 //   core-stack governance preflight|ensure|verify [--out-dir DIR]
 //   core-stack governance apply --receipt-id ID --payload FILE [--out-dir DIR]
 //     (govern row apply-receipt: the Safe applies the consensus receipt through the timelock. The old
@@ -67,7 +68,7 @@ import { checkRows, parseRows } from "./govern-rows.ts";
 import { labelParity, sheetParity } from "./parity.ts";
 import { parseSheet } from "./sheet-diff.ts";
 import { assertOverlayInFileList, MAINNET_CHAIN_ID, MAINNET_DAPP_PROJECT, MAINNET_DEFAULT_PORTS, MAINNET_TEARDOWN_ENV, MainnetDappError, assertComposeReadOnly, assertMergedConfigLoopback, assertNoSigningEnv, buildMainnetDappEnv, mainnetComposeFiles, mainnetComposeTexts, redactRpc } from "./mainnet-dapp.ts";
-import { STAGE_TABLE, expectedManifestCount, manifestOf, missingManifests, presentManifests, publishEnv, vaultManifests, type StageTableShape } from "./stage-manifests.ts";
+import { STAGE_TABLE, expectedManifestCount, manifestOf, missingManifests, missingSystemManifests, presentManifests, presentSystemManifests, publishEnv, systemManifests, vaultManifests, type StageTableShape } from "./stage-manifests.ts";
 
 // ─── constants ───────────────────────────────────────────────────────────────
 export const EXIT = { OK: 0, NO: 1, TOOL: 3, USAGE: 64, INPUT: 65, ACTION: 66 } as const;
@@ -115,7 +116,7 @@ export const RECORD_REQUIRED_FIELDS = [
 
 const USAGE_TEXT = `usage: core-stack <noun> <verb> [flags]
   chain up|down|status [--ref REF] [--timeout SECS] [--out-dir DIR]
-  publish args|run [--out-dir DIR]
+  publish args|run|gateway [--out-dir DIR]
   governance preflight|ensure|verify [--out-dir DIR]
   governance apply --receipt-id ID --payload FILE [--out-dir DIR]
   parity labels --mainnet FILE [--stage-labels FILE] | parity sheet --production FILE
@@ -775,10 +776,36 @@ async function publishVerb(s: Stack, verb: string): Promise<void> {
     const r = await s.publishContracts("publish", [], true);
     if (r.code !== 0) throw new StackExit(r.code, `publish contracts exited ${r.code}`);
     const mdir = s.sv("manifest_dir");
-    const n = countStageManifests(mdir);
-    const want = expectedManifestCount();
-    if (n !== want) throw fail(`publish contracts wrote ${n} of ${want} stage manifests in ${mdir} (missing: ${missingManifests(mdir).join(", ")})`);
-    s.log("stage manifests present", { mdir, count: n });
+    // Issue 1892: `publish run` is the VAULTS system. It writes every vaults manifest and no gateway manifest (the gateway is `publish gateway`, a separate run).
+    const n = presentSystemManifests("vaults", mdir).length;
+    const want = systemManifests("vaults").length;
+    if (n !== want) throw fail(`publish contracts wrote ${n} of ${want} vaults-system stage manifests in ${mdir} (missing: ${missingSystemManifests("vaults", mdir).join(", ")})`);
+    const leaked = presentSystemManifests("gateway", mdir);
+    if (leaked.length > 0) throw fail(`the vaults-system run left gateway-system manifests in ${mdir}: ${leaked.join(", ")}`);
+    s.log("stage manifests present", { mdir, count: n, system: "vaults" });
+  } else if (verb === "gateway") {
+    // Issue 1892: the gateway system, after the vaults system, against its manifests: its small sheet (the vaults run's deployer, pauser, share receiver and release mode, the
+    // run's own timelock as both the gateway admin and the gateway upgrade timelock: the Twin's explicit choice, so the Twin's governed unpauses and role grants keep working; production decides its own), its own evidence directory.
+    const mdir = s.sv("manifest_dir");
+    const missingVaults = missingSystemManifests("vaults", mdir);
+    if (missingVaults.length > 0) throw fail(`the gateway system reads the vaults system's manifests: missing ${missingVaults.join(", ")}. Run publish run first`, EXIT.INPUT);
+    const vaultsSheet = parseSheet(readFileSync(s.sv("sheet_path"), "utf8"));
+    const need = (k: string): string => (vaultsSheet.get(k) ?? "").split(/\s+/)[0] || (() => { throw fail(`the stage sheet has no ${k}`, EXIT.INPUT); })();
+    const timelock = (JSON.parse(readFileSync(join(mdir, manifestOf("timelock")), "utf8")) as { timelock?: string }).timelock;
+    if (!timelock) throw fail("the timelock manifest names no timelock", EXIT.INPUT);
+    const work = dirname(mdir);
+    const gatewaySheet = join(work, "gateway-sheet.env");
+    const lines = [["CHAIN_ID", String(CHAIN_ID)], ["EXPECTED_CHAIN_ID", String(CHAIN_ID)], ["ADMIN_ADDRESS", need("ADMIN_ADDRESS")], ["PAUSER_ADDRESS", need("PAUSER_ADDRESS")],
+      ["SHARE_RECEIVER_ADDRESS", need("SHARE_RECEIVER_ADDRESS")], ["UPGRADE_MODE", need("UPGRADE_MODE")], ["GATEWAY_ADMIN_ADDRESS", timelock], ["GATEWAY_UPGRADE_TIMELOCK", timelock]];
+    writeFileSync(gatewaySheet, lines.map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
+    const extra = ["--system", "gateway", "--sheet", gatewaySheet, "--evidence", join(work, "evidence-gateway")];
+    const r = await s.publishContracts("publish", extra, true);
+    if (r.code !== 0) throw new StackExit(r.code, `publish contracts (gateway system) exited ${r.code}`);
+    const v = await s.publishContracts("verify", extra);
+    s.passthrough(v);
+    const missingGateway = missingSystemManifests("gateway", mdir);
+    if (missingGateway.length > 0) throw fail(`the gateway-system run wrote no ${missingGateway.join(", ")} in ${mdir}`);
+    s.log("gateway system published and verified", { mdir, system: "gateway" });
   } else throw usageError();
 }
 

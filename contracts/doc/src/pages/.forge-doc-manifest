@@ -75,6 +75,7 @@ contracts/script/contract.DeployTimelock.mdx
 contracts/script/contract.DeployUniswapV4PriceRecorder.mdx
 contracts/script/contract.DeployVault.mdx
 contracts/script/contract.DeployVaultRegistry.mdx
+contracts/script/contract.HandoverGateway.mdx
 contracts/script/contract.RedeployProtocolAssetVault.mdx
 contracts/script/interface.IRetirableVaultLink.mdx
 contracts/script/interface.ISafeFull.mdx
@@ -187,6 +188,8 @@ contracts/test/contract.GatewayDepositOnlyTest.mdx
 contracts/test/contract.GatewayInputsHarness.mdx
 contracts/test/contract.GatewayRollingDepositWindowTest.mdx
 contracts/test/contract.GatewayRouterTest.mdx
+contracts/test/contract.GatewaySystemDeployTest.mdx
+contracts/test/contract.GatewayUpgradeHarness.mdx
 contracts/test/contract.GovernanceExecutePathAfterHandoverTest.mdx
 contracts/test/contract.GovernanceSeparationInvariant.mdx
 contracts/test/contract.GovernedSurfacesSafeTimelockTest.mdx
@@ -226,7 +229,6 @@ contracts/test/contract.MockVaultForRouter.mdx
 contracts/test/contract.MockVaultTest.mdx
 contracts/test/contract.MorphoAdapterPositionTest.mdx
 contracts/test/contract.MorphoAdapterTest.mdx
-contracts/test/contract.NaiveAgentGateway.mdx
 contracts/test/contract.NoYieldTestAdapterTest.mdx
 contracts/test/contract.PartialAcceptVault.mdx
 contracts/test/contract.PartlyLiquidMockAdapter.mdx
@@ -338,9 +340,14 @@ contracts/test/fv/contract.Ora3BasketVault.mdx
 contracts/test/fv/contract.Ora3Pool.mdx
 contracts/test/fv/contract.Ora3Token.mdx
 contracts/test/fv/contract.Sup1OverpromisingVault.mdx
+contracts/test/fv/contract.SystemSplitAcl9Test.mdx
+contracts/test/fv/contract.SystemSplitHandler.mdx
+contracts/test/fv/contract.SystemSplitInvariantTest.mdx
+contracts/test/fv/contract.SystemSplitSys1Test.mdx
 contracts/test/fv/contract.TwapManipulationTest.mdx
 contracts/test/fv/contract._FvDeployerHarness.mdx
 contracts/test/fv/function.newOra3BasketVault.mdx
+contracts/test/fv/library.CodeSearch.mdx
 contracts/test/fv/library.InvariantRegistry.mdx
 contracts/test/helpers/abstract.BasketDeployFixture.mdx
 contracts/test/helpers/abstract.SafeFixture.mdx

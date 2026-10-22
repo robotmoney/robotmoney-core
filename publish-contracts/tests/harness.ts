@@ -11,7 +11,7 @@ import { BUNDLE_FORMAT, localSafeTxHash, signTx, type SafeHandle, type SafeTxBun
 import type { LandedTx, ProveApi, SafeExecution } from "../src/prove-control.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { STUB_CODE } from "./stubs/tool.ts";
-import { COUNTS, SHA, healthyPoolReader, sheetText, tmp, writeCoreAssetConfig, writeCounts } from "./fixtures.ts";
+import { COUNTS, GATEWAY_COUNTS, SHA, gatewaySheetText, healthyPoolReader, sheetText, tmp, writeCoreAssetConfig, writeCounts } from "./fixtures.ts";
 
 /** Three Safe owners with real keys (throwaway, never funded): the prove-control step recovers every signature, so the owners sign for real. */
 const PROVE_KEYS = [toHex(0xb1, { size: 32 }), toHex(0xb2, { size: 32 }), toHex(0xb3, { size: 32 })] as const;
@@ -65,7 +65,7 @@ export interface World {
   coreCheckCode: number;
 }
 
-export interface WorldOpts { /** Reuse this directory (a spawned CLI process rebuilds the same world from it). */ dir?: string; chainId?: number; sheet?: Record<string, string | null>; counts?: Record<string, number>; startNonce?: number; writeSafeManifest?: boolean; writeFrozen?: boolean }
+export interface WorldOpts { /** Reuse this directory (a spawned CLI process rebuilds the same world from it). */ dir?: string; chainId?: number; sheet?: Record<string, string | null>; counts?: Record<string, number>; startNonce?: number; writeSafeManifest?: boolean; writeFrozen?: boolean; /** Issue 1892: `gateway` builds the gateway system world: its sheet, the vaults manifests it consumes, and `--system gateway` on every run. */ system?: "vaults" | "gateway" }
 
 /** The operator and the reviewer type the stage name. */
 export function typedPrompt(): (q: string) => Promise<string> {
@@ -99,8 +99,16 @@ export function world(o: WorldOpts = {}): World {
   cpSync(join(import.meta.dir, "fixtures", "build-out", "ProposerFloorTimelock.sol"), join(coreDir, "out", "ProposerFloorTimelock.sol"), { recursive: true });
   const sheetPath = join(dir, "sheet.env");
   const delay = chainId === 8453 ? "172800" : "60";
-  writeFileSync(sheetPath, sheetText({ CHAIN_ID: String(chainId), EXPECTED_CHAIN_ID: String(chainId), SAFE_OWNERS: PROVE_OWNERS.join(","), TIMELOCK_MIN_DELAY: delay, GOVERN_NEW_DELAY: chainId === 8453 ? "172800" : "3600", ...(o.sheet ?? {}) }));
-  const counts = o.counts ?? COUNTS;
+  writeFileSync(sheetPath, o.system === "gateway" ? gatewaySheetText(chainId, o.sheet ?? {}) : sheetText({ CHAIN_ID: String(chainId), EXPECTED_CHAIN_ID: String(chainId), SAFE_OWNERS: PROVE_OWNERS.join(","), TIMELOCK_MIN_DELAY: delay, GOVERN_NEW_DELAY: chainId === 8453 ? "172800" : "3600", ...(o.sheet ?? {}) }));
+  if (o.system === "gateway") {
+    // the vaults system's manifests the gateway run consumes (issue 1892): it binds the router and the vault and links the libraries
+    const mdir = join(coreDir, "deployments", String(chainId));
+    mkdirSync(mdir, { recursive: true });
+    writeFileSync(join(mdir, "vault.json"), JSON.stringify({ chain_id: chainId, vault: "0x0000000000000000000000000000000000001001" }));
+    writeFileSync(join(mdir, "router.json"), JSON.stringify({ chain_id: chainId, router: "0x0000000000000000000000000000000000001003" }));
+    writeFileSync(join(mdir, "libs.json"), JSON.stringify({ chain_id: chainId, tick_math: "0x0000000000000000000000000000000000001009" }));
+  }
+  const counts = { ...GATEWAY_COUNTS, ...(o.counts ?? COUNTS) }; // issue 1892: a frozen file holds both systems' counts
   const countsDir = join(dir, "frozen");
   if (o.writeFrozen !== false) writeCounts(countsDir, SHA, counts);
   const cfgPath = join(dir, "stub-config.json");
@@ -134,7 +142,7 @@ export function world(o: WorldOpts = {}): World {
         PATH: `${STUB_DIR}:${process.env.PATH}`, HOME: process.env.HOME, STUB_STATE: statePath, STUB_CONFIG: cfgPath, GITHUB_TOKEN: "test-token", ...(envOver ?? {}),
       };
       const args = ["--chain", String(chain), "--rpc", "http://rpc.test:8545", "--sheet", sheetPath, "--signer", signerOver ?? "keystore:/dev/shm/stub/DEPLOYER",
-        "--environment", "local", "--core-sha", SHA, "--core-dir", coreDir, "--counts-dir", countsDir, "--evidence", w.evidence, ...extra];
+        "--environment", "local", "--core-sha", SHA, "--core-dir", coreDir, "--counts-dir", countsDir, "--evidence", w.evidence, ...(o.system === "gateway" ? ["--system", "gateway"] : []), ...extra];
       return main(args, w.deps({ env, ...over }));
     },
   };

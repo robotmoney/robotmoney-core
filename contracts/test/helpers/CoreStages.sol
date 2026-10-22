@@ -140,9 +140,8 @@ contract CoreStages {
         s.router = rt.router;
         stages.push("router");
 
-        DeployGateway.Deployed memory g = gatewayScript.runInProcessWith(
-            admin_, pauser_, shareReceiver_, usdc_, address(s.vault), address(s.router)
-        );
+        DeployGateway.Deployed memory g =
+            gatewayScript.runInProcessWith(admin_, pauser_, shareReceiver_, usdc_);
         s.gateway = g.gateway;
         s.gatewayRuntimeHash = g.gatewayRuntimeHash;
         stages.push("gateway");

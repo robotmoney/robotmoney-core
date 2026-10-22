@@ -241,7 +241,7 @@ steps:
     irreversible: false
   - id: "P1.02-publish"
     standing: ["4.3"]
-    description: "Safe, libs, recorder, vault, registry, router, gateway, ic-policy, governance, proto, agent, rwa, prove-control signed by every owner, then the timelock handover; each stage matches its frozen count"
+    description: "Safe, libs, recorder, vault, registry, router, ic-policy, governance, proto, agent, rwa, prove-control signed by every owner, then the timelock handover; each stage matches its frozen count"
     host: "control"
     phase: 1
     cmds:

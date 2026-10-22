@@ -59,7 +59,8 @@ export const stageManifestName = (table: StageTable, stage: string): string => m
 
 /** Core contracts the verifier checks: manifest file and field from the table's stage, build artifact from the table's `artifacts`. */
 export function coreContracts(table: StageTable): CoreContract[] {
-  return CORE_CONTRACT_REFS.map((r) => {
+  // Issue 1892: a table scoped to the vaults system (scopeTable) has no gateway stage, and the vaults verifier names no gateway contract.
+  return CORE_CONTRACT_REFS.filter((r) => !(table.systems && r.stage === "gateway" && !table.stages.some((s) => s.name === "gateway"))).map((r) => {
     const artifact = table.artifacts[r.artifactKey];
     if (!artifact) throw new Error(`the core stage table has no artifacts.${r.artifactKey}`);
     return { name: r.name, file: stageManifestFile(table, r.stage), field: r.field, artifact };

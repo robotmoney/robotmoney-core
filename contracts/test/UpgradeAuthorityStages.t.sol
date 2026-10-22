@@ -78,7 +78,6 @@ contract UpgradeAuthorityStagesTest is SafeGovernance {
         vm.prank(deployer);
         return script.runInProcess(
             address(vault),
-            address(gateway),
             address(registry),
             address(router),
             address(governance),
@@ -155,7 +154,6 @@ contract UpgradeAuthorityStagesTest is SafeGovernance {
             );
             script.runInProcess(
                 address(vault),
-                address(gateway),
                 address(registry),
                 address(router),
                 address(governance),

@@ -438,7 +438,8 @@ export function buildWorld(chainId = 8453): World {
     defaultWeights: Object.keys(VAULTS).map((vault, i) => ({ vault, bps: DEFAULT_BPS[i]! })),
   };
   ch.txs.set(PROOF_TX.toLowerCase(), { to: SAFE, input: proofInput(chainId), value: 0n, status: "success" });
-  const opts: VerifyOptions = { chain: ch, manifestDir, table, sheet, fromBlock: 0n, frozenCounts, artifactsDir, coreDir, retryBaseMs: 0, usdcCodeHash: keccak256(USDC_CODE), controlProof: { txHash: PROOF_TX, nonce: 0 } };
+  // issue 1892: this world is the combined (legacy) deployment, the deploy-2 shape: gateway, agents and all. tests/verify/systems.test.ts reads it as each system.
+  const opts: VerifyOptions = { system: "legacy", chain: ch, manifestDir, table, sheet, fromBlock: 0n, frozenCounts, artifactsDir, coreDir, retryBaseMs: 0, usdcCodeHash: keccak256(USDC_CODE), controlProof: { txHash: PROOF_TX, nonce: 0 } };
   return { chain: ch, dir, manifestDir, artifactsDir, sheet, opts, libraries: LIBS, proxy };
 }
 

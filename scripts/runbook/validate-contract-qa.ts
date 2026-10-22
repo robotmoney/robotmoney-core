@@ -23,6 +23,8 @@ import { fileURLToPath } from "node:url";
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const QA_DIR = "docs/runbooks/contract-qa";
 export const TEMPLATE_NAME = "contract-qa";
+/** Issue 1892: the gateway system's own runbook, a second template checked on its own (docs/runbooks/contract-qa/gateway.yaml). */
+export const GATEWAY_TEMPLATE_NAME = "contract-qa-gateway";
 
 // ─── the environments (README.md "Targets") ─────────────────────────────────────────────────────────────────────
 export const TARGET_NAMES = ["twin", "rehearsal", "production"] as const;
@@ -50,10 +52,12 @@ export const SCALARS = new Set([
   "coreSha", "release", "runDir", "target", "countsCheckout", "releaseTag", "versionTag", "rmpcConfig", "receiptFile", "receiptUri",
   "submitterSaltNonce", "unwindMinUsdcOut", "unwindMaxLossBps", "environmentName", "ownerSigner", "emergencySigner", "deployerKeystore",
   "chainId", "rpcUrl", "sheet", "sheetTemplate", "countsDir", "evidenceDir", "manifestDir", "signer", "yes", "usdc", "deploymentKind",
-  "ownerSignerCount", "sheetOwnerCount", "castFlagsInline", "gateSha",
+  "ownerSignerCount", "sheetOwnerCount", "castFlagsInline", "gateSha", "gatewaySheet",
 ]);
 /** A whole-element placeholder that expands to several argv elements (empty on the Twin chain where noted). */
 export const LIST_PLACEHOLDERS: Readonly<Record<string, readonly string[]>> = {
+  // issue 1892: the gateway system run (docs/runbooks/contract-qa/gateway.yaml): its own sheet, its own evidence directory, --system gateway
+  gcommon: ["--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{gatewaySheet}", "--signer", "{signer}", "--environment", "{environmentName}", "--core-sha", "{coreSha}", "--counts-dir", "{countsDir}", "--evidence", "{runDir}/evidence-gateway", "--system", "gateway"],
   common: ["--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--signer", "{signer}", "--environment", "{environmentName}", "--core-sha", "{coreSha}", "--counts-dir", "{countsDir}", "--evidence", "{evidenceDir}"],
   owners: ["--owner-signer", "{ownerSigner}"],
   gate: ["--counts-require-origin-dev"],
@@ -61,7 +65,7 @@ export const LIST_PLACEHOLDERS: Readonly<Record<string, readonly string[]>> = {
   emergency: ["--emergency-signer", "{emergencySigner}"],
   cast: ["--keystore", "{deployerKeystore}"],
 };
-export const MANIFEST_FILES = ["libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "receipt", "governance", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault", "timelock", "safe"];
+export const MANIFEST_FILES = ["libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "receipt", "governance", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault", "gateway-handover", "timelock", "safe"];
 const PLACEHOLDER = /\{([A-Za-z][A-Za-z0-9]*)(?::([A-Za-z0-9_.\-]+))?\}/g;
 
 // ─── the step schema ────────────────────────────────────────────────────────────────────────────────────────────
@@ -370,17 +374,17 @@ const TEMPLATE_KEYS = new Set(["template", "steps"]);
 const RELEASE_KEYS = new Set(["release", "template", "templateSha", "productionReady", "notes", "recovery", "decisions", "scope", "steps"]);
 
 /** PURE. A template from its YAML text. Throws with every reason it is not one. */
-export function parseTemplate(text: string): { name: string; steps: RunbookStep[] } {
+export function parseTemplate(text: string, templateName: string = TEMPLATE_NAME): { name: string; steps: RunbookStep[] } {
   const doc = Bun.YAML.parse(text) as unknown;
   const where = "template";
   const errors: string[] = [];
   if (!isObject(doc)) throw new Error(`${where}: not a mapping`);
   for (const k of Object.keys(doc)) if (!TEMPLATE_KEYS.has(k)) errors.push(`${where}: unknown key ${k}`);
-  if (doc.template !== TEMPLATE_NAME) errors.push(`${where}: names itself ${String(doc.template)}, not ${TEMPLATE_NAME}`);
+  if (doc.template !== templateName) errors.push(`${where}: names itself ${String(doc.template)}, not ${templateName}`);
   const steps = parseSteps(doc.steps, where, errors);
   for (const s of steps) if (s.added !== undefined) errors.push(`${where} ${s.id}: a template step carries no added`);
   if (errors.length > 0) throw new Error(errors.join("\n"));
-  return { name: TEMPLATE_NAME, steps };
+  return { name: templateName, steps };
 }
 
 /** PURE. Why a release's scope list is not one: every entry a PR with a check step of this runbook or a reason. */
@@ -493,6 +497,43 @@ export function templateAtCommit(sha: string): string | undefined {
   } catch { return undefined; }
 }
 
+/**
+ * PURE (issue 1892). Why the steps of the gateway runbook are not the gateway system's: every gateway publish and verify command names `--system gateway`, no step runs a vaults-only
+ * verb or row (govern, pause-all, prove-control, owner signers, a receipt), none reads an `AGENT_` name, and the step that publishes is irreversible and gated on the owner's
+ * governance decision (architecture 10: the production gateway authority is an open decision).
+ */
+export function gatewayStepProblems(steps: RunbookStep[]): string[] {
+  const out: string[] = [];
+  for (const s of steps) {
+    const joinedAll = s.cmds.map((c) => expandArgv(c).join(" "));
+    for (const joined of joinedAll) {
+      if (/publish-contracts\/src\/cli\.ts\s+(publish|verify)\b/.test(joined) && !/--system gateway\b/.test(joined) && !s.id.endsWith("-vaults-verified")) out.push(`${s.id}: a gateway publish or verify command names --system gateway`);
+      if (/\b(govern|pause-all|record-receipt|redeploy-vault|deploy-implementation)\b/.test(joined.replace(/validate-contract-qa/g, ""))) out.push(`${s.id}: ${JSON.stringify(joined.slice(0, 80))} runs a vaults-only verb: the gateway system has no govern row, receipt or vault verb`);
+      if (/--owner-signer|prove-control|--emergency-signer/.test(joined)) out.push(`${s.id}: the gateway system has no Safe owner signer and no control proof`);
+      if (/AGENT_(ADDRESS|ADDRESSES|VALID_UNTIL|MAX)/.test(joined) && !/echo /.test(joined)) out.push(`${s.id}: the gateway deploy authorizes no agent`);
+    }
+    const publishes = joinedAll.some((j) => /publish-contracts\/src\/cli\.ts\s+publish\b/.test(j) && !j.includes("--dry-run"));
+    if (publishes) {
+      if (!s.irreversible) out.push(`${s.id}: the step that publishes the gateway is irreversible: true`);
+      if (s.go === undefined) out.push(`${s.id}: the gateway publish needs go: the owner's gateway governance decision (architecture 10, open) is recorded before it runs`);
+    }
+  }
+  return out;
+}
+
+/** Everything about docs/runbooks/contract-qa/gateway.yaml: it parses as the gateway template, its commands match the real CLIs, it holds no secret and it is the gateway system's. */
+export function gatewayRunbookProblems(root: string, model: CliModel): string[] {
+  const p = join(root, QA_DIR, "gateway.yaml");
+  if (!existsSync(p)) return [`${QA_DIR}/gateway.yaml is missing: the gateway system has its own runbook`];
+  const text = readFileSync(p, "utf8");
+  const out: string[] = [...secretProblems(text, "gateway.yaml")];
+  try {
+    const t = parseTemplate(text, GATEWAY_TEMPLATE_NAME);
+    out.push(...commandProblems(t.steps, model, root), ...gatewayStepProblems(t.steps));
+  } catch (e) { out.push(...(e as Error).message.split("\n").map((m) => `gateway.yaml: ${m}`)); }
+  return out;
+}
+
 export interface Loaded { template: { name: string; steps: RunbookStep[] }; releases: Map<string, ReleaseRunbook>; problems: string[] }
 /** Everything in docs/runbooks/contract-qa/: the template, every release file against it, and the commands against the real CLIs. */
 export function validateAll(root: string = ROOT, model: CliModel = loadModel(root), pinnedTemplate: (sha: string) => string | undefined = templateAtCommit): Loaded {
@@ -503,6 +544,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
   try { template = parseTemplate(tplText); } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   problems.push(...secretProblems(tplText, "template.yaml"));
   problems.push(...commandProblems(template.steps, model, root));
+  problems.push(...gatewayRunbookProblems(root, model));
   const releases = new Map<string, ReleaseRunbook>();
   const dir = join(root, QA_DIR, "releases");
   for (const f of existsSync(dir) ? readdirSync(dir).filter((x) => x.endsWith(".yaml")).sort() : []) {

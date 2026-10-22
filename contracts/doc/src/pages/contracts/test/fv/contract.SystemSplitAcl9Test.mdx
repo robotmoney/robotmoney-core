@@ -1,0 +1,84 @@
+---
+title: "SystemSplitAcl9Test"
+description: "ACL-9 executed assertions, written so they stay valid when authorizeAgent and transferAgentOwnership are removed."
+---
+
+# SystemSplitAcl9Test
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7c2e53fe327c80d91d5d140cb198d84a94ad506c/contracts/test/fv/SystemSplit.t.sol)
+
+**Inherits:** [GatewayAgentPolicyFixture](/contracts/test/abstract.GatewayAgentPolicyFixture)
+
+**Title:** SystemSplitAcl9Test
+
+ACL-9 executed assertions, written so they stay valid when authorizeAgent and transferAgentOwnership are removed.
+
+## Functions
+
+<a id="test_acl9_nonadminownercannotnameanothersharereceiver"></a>
+
+### test_ACL9_nonAdminOwnerCannotNameAnotherShareReceiver
+
+A permissionless owner cannot name another account as share receiver, at reveal or at setPolicy.
+
+```solidity
+function test_ACL9_nonAdminOwnerCannotNameAnotherShareReceiver() public;
+```
+
+<a id="_callas-address-bytes"></a>
+
+### _callAs
+
+<i>
+
+A plain low-level call: a missing function reverts with no selector, which still counts as refused.
+
+</i>
+
+```solidity
+function _callAs(address caller, bytes memory data) internal returns (bool ok);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+
+<a id="testfuzz_acl9_strangercannotchangeownerorpolicy-address-address"></a>
+
+### testFuzz_ACL9_strangerCannotChangeOwnerOrPolicy
+
+For any caller but the owner, setPolicy, revokeAgent and an ownership change leave the owner and the policy as they were.
+
+```solidity
+function testFuzz_ACL9_strangerCannotChangeOwnerOrPolicy(address caller, address newOwner)
+        public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| newOwner | `address` |  |
+
+<a id="test_acl9_registrystatusfollowsgatewaysurface"></a>
+
+### test_ACL9_registryStatusFollowsGatewaySurface
+
+The registry status follows the code: ACL-9 is RED exactly while the gateway still has
+authorizeAgent, transferAgentOwnership or lets ADMIN_ROLE grant AGENT_ROLE. The agent lifecycle change (1890)
+must flip the entry to HOLDS in the same PR, and then the second branch executes the full rule.
+
+```solidity
+function test_ACL9_registryStatusFollowsGatewaySurface() public;
+```
+

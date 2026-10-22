@@ -89,6 +89,10 @@ jobs:
             grep -Eq '^ *[1-9][0-9]* pass' ../receipt-target.log || { echo "zero tests passed in $target" >&2; exit 1; }
             ! grep -Eq '^ *[1-9][0-9]* fail' ../receipt-target.log || { echo "failures in $target" >&2; exit 1; }
           done
+      # Issue 1892: the vaults and gateway systems on their own. Each file runs by itself and must pass at least 4 tests: a removed file, a skipped-only file and a zero count fail.
+      - name: Require the system cases (gateway run and refusals before broadcast, both verifiers, historical combined reading, gateway evidence)
+        working-directory: publish-contracts
+        run: bun src/ci/require-tests.ts --suite systems --min 4
 
   pin:
     name: twin-pin
@@ -140,6 +144,12 @@ jobs:
           # Issue 1727: the Twin chain runs the REHEARSAL kind of the Base mainnet rehearsal (900 s timelock, non-fresh deployer, new Safe salt) and
           # the receipt path with a REAL recorded receipt (register the submitter, record through the gateway, apply with the Safe, read back).
           rehearsal: "true"
+          # Issue 1892: the vaults system runs with the gateway absent (no gateway manifest, no gateway transaction), then the gateway system runs separately against its
+          # manifests: its refusals happen before any broadcast, the vaults manifests stay byte-unchanged and the gateway roles move to GATEWAY_ADMIN_ADDRESS.
+          vaults-only: "true"
+          gateway: "true"
+      - name: Require the system scenario markers (a removed scenario fails the job)
+        run: bun publish-contracts/src/ci/twin-markers.ts check --log "$TWIN_PUBLISH_LOG" --require vaultsOnly,receiptPath,gatewayRefusals,gatewayRun
       - name: Check counts.json against the stage table
         run: bun publish-contracts/src/ci/rehearsal-counts.ts check --file "$TWIN_COUNTS_JSON"
       # Issue 1733: this run ADOPTED the CREATE2 libraries, so its counts.json is not a frozen file. The reconstruct verb rebuilds the BASELINE from the adoption records,

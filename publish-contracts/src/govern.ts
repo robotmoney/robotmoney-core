@@ -93,7 +93,7 @@ import {
 } from "./unwind-guard.ts";
 import { PublishError } from "./errors.ts";
 import {
-  FREEZE_ROW, GOVERNED_PROXY_ABI, UPGRADE_ROW, buildFreezeCalls, buildUpgradeCall, codeHashOf, freezeTargets, layoutGateProblems, pendingUpgrades, rerecordProxyManifest,
+  FREEZE_ROW, GOVERNED_PROXY_ABI, UPGRADE_ROW, buildFreezeCalls, buildUpgradeCall, codeHashOf, freezeSpecsFor, freezeTargets, layoutGateProblems, pendingUpgrades, rerecordProxyManifest,
   runtimeCodeProblems, upgradeRecordKey,
 } from "./upgrade-rows.ts";
 import { proxySpecs } from "./verify/upgradeability.ts";
@@ -1361,7 +1361,10 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       if (!plan) {
         const rec = upgradeabilityRecord(name);
         if (rec.mode !== "upgradeable") throw new PublishError("GOVERN", `--row ${FREEZE_ROW}: upgradeability.json says mode ${String(rec.mode)}. Only an upgradeable release has proxies to freeze. Nothing was scheduled.`, { row: name });
-        const { targets, problems } = freezeTargets(rec, proxySpecs(getStageTable()));
+        // Issue 1892: the gateway system's proxy is frozen by its own release (its own upgrade timelock). It joins this freeze only when the record lists it, a record of the combined deployment.
+        const freezeTable = getStageTable();
+        const freezeSpecs = freezeSpecsFor(proxySpecs(freezeTable), (stage) => freezeTable.stages.find((x) => x.name === stage)?.system, rec);
+        const { targets, problems } = freezeTargets(rec, freezeSpecs);
         if (problems.length) throw new PublishError("GOVERN", `--row ${FREEZE_ROW}: upgradeability.json cannot bind the freeze: ${problems.join("; ")}. Run verify, then this row again. Nothing was scheduled.`, { row: name, problems });
         // each target must still be what the record says (else freezeUpgrades reverts FreezeTargetMismatch), and a proxy already frozen is left out (it would revert UpgradesAreFrozen)
         const open: typeof targets = {};

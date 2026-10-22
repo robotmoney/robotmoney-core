@@ -27,9 +27,10 @@ import { REGISTER_ROW, buildRegisterCall } from "./submitter-register.ts";
 import { CLEAR_ROW, clearCalldata } from "./clear-voted-weights.ts";
 import { REDEPLOY_ROW, buildRedeployCalls, createdVaultProblems, vectorsFromFinal, type DeployReceipt } from "./redeploy-vault.ts";
 import { assertOwnerExceptions } from "./plan.ts";
+import { GATEWAY_EVIDENCE_STAGES, checkGatewayEvidence } from "./evidence-gateway.ts";
 import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
-import { LIBS_STAGE } from "./core-wiring.ts";
-import { loadStageTable, type StageTable, type TableVault, type VaultRules } from "./stage-table.ts";
+import { LIBS_STAGE, SAFE_STAGE } from "./core-wiring.ts";
+import { loadStageTable, scopeTable, type StageTable, type TableVault, type VaultRules } from "./stage-table.ts";
 import { STAGE13_UNPAUSE_ROWS, VAULT_RULES, VAULT_UNPAUSE_ROWS } from "./vault-rules.ts";
 import { upgradeabilityEvidenceProblems, upgradeabilityOnChainProblems } from "./evidence-upgradeability.ts";
 import { proxySpecs } from "./verify/upgradeability.ts";
@@ -453,9 +454,11 @@ export interface EvidenceOpts {
   proxies?: readonly string[];
   /** Issue 1833 test seam: the per-vault rule rows. Absent: this checkout's stage table (vault-rules.ts). */
   vaultRules?: readonly (TableVault & VaultRules)[];
+  /** Issue 1892: the stage names of each system, from the table. Absent: the gateway check uses its default list. */
+  systemStages?: Partial<Record<"vaults" | "gateway", readonly string[]>>;
 }
 /** Issue 1809: the proxied core set of the stage table at the root of this checkout. */
-export const repoProxyNames = (): string[] => proxySpecs(loadStageTable(new URL("../../", import.meta.url).pathname)).map((s) => s.name);
+export const repoProxyNames = (system: "vaults" | "legacy" = "legacy"): string[] => proxySpecs(scopeTable(loadStageTable(new URL("../../", import.meta.url).pathname), system)).map((s) => s.name); // issue 1892: the vaults system has no gateway proxy; legacy is the combined deployment
 const kindOf = (o?: EvidenceOpts): DeploymentKind => o?.kind ?? "production";
 /** The kind the evidence claims (absent: production) against the kind it is read as. A mismatch is always a problem, whichever way round. */
 function kindProblems(ev: any, expected: DeploymentKind, bad: (m: string) => void): void {
@@ -528,7 +531,9 @@ export function adoptedTxsOfEvidence(ev: any): Record<string, number> {
 }
 /** The frozen counts with every adopted stage counted at the transactions the deployer sent. An impossible adopted entry leaves the counts as frozen, so the nonce check still fails on it. */
 function effectiveForEvidence(ev: any, frozenCounts: Record<string, number>): Record<string, number> {
-  try { return effectiveCounts(frozenCounts, adoptedTxsOfEvidence(ev)); } catch { return frozenCounts; }
+  // Issue 1892: an evidence that names its system is summed over that system's stages only (the frozen file holds both systems' counts).
+  const scoped = ev?.system === undefined ? frozenCounts : Object.fromEntries(Object.entries(frozenCounts).filter(([k]) => k === SAFE_STAGE || (Array.isArray(ev?.stages) && ev.stages.some((s: any) => s?.stage === k))));
+  try { return effectiveCounts(scoped, adoptedTxsOfEvidence(ev)); } catch { return scoped; }
 }
 const adoptedLibraries = (s: any): { name?: string; address?: string; code_hash?: string }[] => (Array.isArray(adoptedOf(s)?.libraries) ? adoptedOf(s).libraries : []);
 
@@ -539,6 +544,13 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   const p: string[] = [];
   const bad = (m: string) => p.push(m);
   const kind = kindOf(opts);
+  // Issue 1892: a gateway system evidence is checked on its own; a vaults evidence that names its system carries none of the gateway system's stages. Absent system: the combined legacy evidence.
+  if (ev?.system === "gateway") return checkGatewayEvidence(ev, frozenCounts, { kind, stages: opts?.systemStages?.gateway });
+  if (ev?.system !== undefined && ev.system !== "vaults") return [`system '${String(ev.system)}' is not vaults or gateway`];
+  if (ev?.system === "vaults") {
+    for (const s of Array.isArray(ev?.stages) ? ev.stages : []) if (GATEWAY_EVIDENCE_STAGES.includes(s?.stage)) bad(`stage ${s.stage} belongs to the gateway system: a vaults evidence has no gateway stage`);
+    if (ev?.gateway !== undefined) bad("'gateway' belongs to the gateway system's evidence: a vaults evidence has no gateway");
+  }
   const floor = delayFloor(MAINNET_CHAIN_ID, kind);
   kindProblems(ev, kind, bad);
   if (ev?.chain_id !== MAINNET_CHAIN_ID) bad(`chain_id is ${ev?.chain_id}, evidence is read for ${MAINNET_CHAIN_ID}`);
@@ -634,8 +646,8 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   if (ev?.verifier?.exit_code !== 0) bad("the verifier did not exit 0");
   if (ev?.verifier?.registry_list_vaults_equals_manifests !== true) bad("registry listVaults was not shown equal to the manifests");
   // explorer source verification is publishing, not a gate (owner decision 2026-10-19): the verifier's code labels prove the build from the chain
-  p.push(...upgradeabilityEvidenceProblems(ev, opts?.proxies ?? repoProxyNames(), kind));
-  p.push(...governedUpgradeProblems(ev, floor, opts?.proxies ?? repoProxyNames()));
+  p.push(...upgradeabilityEvidenceProblems(ev, opts?.proxies ?? repoProxyNames(ev?.system === "vaults" ? "vaults" : "legacy"), kind));
+  p.push(...governedUpgradeProblems(ev, floor, opts?.proxies ?? repoProxyNames(ev?.system === "vaults" ? "vaults" : "legacy")));
   return p;
 }
 
@@ -688,6 +700,21 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
   };
   const id = await chain.getChainId();
   if (id !== MAINNET_CHAIN_ID) { bad(`the RPC reports chain ${id}, evidence is read on ${MAINNET_CHAIN_ID}`); return p; }
+  if (ev?.system === "gateway") {
+    // Issue 1892: the gateway system's evidence is read on chain on its own: its stages' receipts, the deployer nonce from its recorded start, and the gateway's upgrade authority.
+    const stages: any[] = Array.isArray(ev.stages) ? ev.stages : [];
+    const wantNonce = (Number.isInteger(ev.deployer_start_nonce) ? ev.deployer_start_nonce : Number.NaN) + stages.reduce((a, s) => a + (frozenCounts[s?.stage] ?? 0), 0);
+    const got = await chain.getTransactionCount({ address: ev.deployer });
+    if (got !== wantNonce) bad(`deployer nonce on chain is ${got}, the start nonce plus the gateway frozen counts say ${wantNonce}`);
+    for (const s of stages) for (const [i, h] of (s.tx_hashes ?? []).entries()) {
+      try { const rc = await chain.getTransactionReceipt({ hash: h as Hex }); if (rc.status !== "success") bad(`stage ${s.stage} tx ${i}: receipt on chain is ${rc.status}`); } catch (e) { bad(`stage ${s.stage} tx ${i}: receipt not readable on chain (${(e as Error).message})`); }
+    }
+    try {
+      const tl = await chain.readContract({ address: ev.gateway?.address, abi: parseAbi(["function upgradeTimelock() view returns (address)"]), functionName: "upgradeTimelock" });
+      if (lc(String(tl)) !== lc(String(ev.gateway?.upgrade_timelock))) bad(`gateway upgradeTimelock() on chain is ${String(tl)}, the evidence records ${String(ev.gateway?.upgrade_timelock)}`);
+    } catch (e) { bad(`gateway upgradeTimelock() is not readable on chain (${(e as Error).message})`); }
+    return p;
+  }
   const want = finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), startNonceOf(ev, kind, bad)) + redeployTxs(ev);
   const nonce = await chain.getTransactionCount({ address: ev.deployer });
   if (nonce !== want) bad(`deployer nonce on chain is ${nonce}, the summed frozen counts plus the prove-control transaction${redeployTxs(ev) ? ` plus the ${redeployTxs(ev)} redeploy transaction(s)` : ""} say ${want}`);
@@ -1326,7 +1353,7 @@ export function rpcCallRevert(url: string): LifecycleChain["callRevert"] {
  */
 async function checkLifecycleMain(values: Record<string, string | boolean | undefined>): Promise<void> {
   const r = JSON.parse(readFileSync(values["upgrade-lifecycle"] as string, "utf8"));
-  const problems = upgradeLifecycleProblems(r, repoProxyNames());
+  const problems = upgradeLifecycleProblems(r, repoProxyNames(r?.upgrade?.proxy === "gateway" ? "legacy" : "vaults"));
   if (problems.length === 0 && typeof values.rpc === "string") {
     const { createPublicClient, http } = await import("viem");
     const client = createPublicClient({ transport: http(values.rpc) });

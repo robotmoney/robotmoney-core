@@ -12,7 +12,8 @@ import {
   ADMIN_ROLE, AGENT_ROLE, RECEIPT_SUBMITTER_ROLE, RECEIPT_RELEASER_ROLE, KEEPER_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
     SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
-import { manifestBase } from "../stage-table.ts";
+import { manifestBase, scopeTable } from "../stage-table.ts";
+import { verifyGatewaySystem } from "./gateway.ts";
 import { SAFE_MANIFEST, VAULT_ADAPTER_V4_FIELD, V4_ADAPTER_ARTIFACT_KEY, VENUE_V4 } from "../core-wiring.ts";
 import { isAddress, loadManifests, lc, type ManifestVault } from "./manifests.ts";
 import { padTopic, scanLogs, topicToAddress } from "./logs.ts";
@@ -31,9 +32,13 @@ const hasRole = async (ch: ChainReader, at: Address, r: Hex, who: Address): Prom
   (await ch.read(at, HAS_ROLE, [r, who])) as boolean;
 
 export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyReport> {
+  // Issue 1892: the verifier of one system. `legacy` is a table from before the split (the combined deploy, deployments/8453/deploy-2): it keeps every check, the gateway ones included.
+  const sys = opts.system ?? (opts.table.systems ? "vaults" : "legacy");
+  if (sys === "gateway") return verifyGatewaySystem(opts);
+  const withGateway = sys === "legacy";
   const c = new Collector();
   const { chain, sheet } = opts;
-  const { table } = opts;
+  const table = scopeTable(opts.table, sys);
   const man = loadManifests(opts.manifestDir, table);
   for (const r of opts.redeploys ?? []) {
     if (!r.replacementManifest) continue;
@@ -70,7 +75,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
 
   const core = coreContracts(table).map((x) => ({ ...x, address: man.files[x.file.replace(/\.json$/, "")][x.field] as Address }));
   const byName = Object.fromEntries(core.map((x) => [x.name, x.address])) as Record<string, Address>;
-  const tl = byName.timelock!, registry = byName.registry!, router = byName.router!, gateway = byName.gateway!;
+  const tl = byName.timelock!, registry = byName.registry!, router = byName.router!, gateway = (byName.gateway ?? ZERO) as Address;
 
   // ---- vault set: manifests equal registry.listVaults()
   let chainVaults: string[] = [];
@@ -127,10 +132,12 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     await c.runEq(`${name}: ADMIN_ROLE not held by emergency`, () => hasRole(chain, at, ADMIN_ROLE, sheet.emergency), false);
     await c.runEq(`${name}: ADMIN_ROLE not held by safe`, () => hasRole(chain, at, ADMIN_ROLE, safe), false);
   };
-  for (const n of ["gateway", "registry", "router", "governance", "receipt"]) await roleChecks(n, byName[n]);
-  for (const n of ["gateway", "receipt"]) await c.runEq(`${n}: DEFAULT_ADMIN held by timelock`, () => hasRole(chain, byName[n], Z32, tl), true);
-  await c.runEq("gateway: DEPOSIT_PAUSER_ROLE held by pauser", () => hasRole(chain, gateway, DEPOSIT_PAUSER_ROLE, sheet.pauser), true);
-  await c.runEq("gateway: DEPOSIT_PAUSER_ROLE not held by deployer", () => hasRole(chain, gateway, DEPOSIT_PAUSER_ROLE, D), false);
+  for (const n of [...(withGateway ? ["gateway"] : []), "registry", "router", "governance", "receipt"]) await roleChecks(n, byName[n]);
+  for (const n of [...(withGateway ? ["gateway"] : []), "receipt"]) await c.runEq(`${n}: DEFAULT_ADMIN held by timelock`, () => hasRole(chain, byName[n], Z32, tl), true);
+  if (withGateway) {
+    await c.runEq("gateway: DEPOSIT_PAUSER_ROLE held by pauser", () => hasRole(chain, gateway, DEPOSIT_PAUSER_ROLE, sheet.pauser), true);
+    await c.runEq("gateway: DEPOSIT_PAUSER_ROLE not held by deployer", () => hasRole(chain, gateway, DEPOSIT_PAUSER_ROLE, D), false);
+  }
   await c.runEq("router: ADMIN_ROLE held by governance", () => hasRole(chain, router, ADMIN_ROLE, byName.governance), true);
   // setWeights is gated by WEIGHT_SETTER_ROLE: only RouterGovernance holds it, so the timelock and the Safe reach it only through applyReceipt (issue 1698).
   await c.runEq("router: WEIGHT_SETTER_ROLE held by governance", () => hasRole(chain, router, WEIGHT_SETTER_ROLE, byName.governance), true);
@@ -161,7 +168,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   // contract the Safe chose, so the run records the current holder's gating (VerifyReport.weightSetter, the verify stage record) and fails on any other gate.
   const weightSetter = await weightSetterGating(chain, { router, timelock: tl, artifactsDir: originalDir ?? opts.artifactsDir, governanceArtifact: core.find((x) => x.name === "governance")!.artifact });
   c.push(WEIGHT_SETTER_GATING_LABEL, weightSetter.gating === "timelock", gatingDetail(weightSetter));
-  await c.runEq("gateway: not paused", () => chain.read(gateway, "function depositsPaused() view returns (bool)"), false);
+  if (withGateway) await c.runEq("gateway: not paused", () => chain.read(gateway, "function depositsPaused() view returns (bool)"), false);
   // The router-first split (core 1493): the registry names the router the router stage deployed. The gateway binds no router.
   await c.runEq("registry: router() equals the deployed router", async () => lc((await chain.read(registry, "function router() view returns (address)")) as string), lc(router));
 
@@ -195,14 +202,14 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const created = creationProof(chain, opts.fromBlock, opts.deployTxs, opts.adoptedContracts, head === undefined ? undefined : { head, chunk, retryBaseMs });
   const governed: Scanned[] = [...core, ...man.vaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address }))];
   if (head === undefined) {
-    for (const l of AGENT_LABELS) c.fail(l, "block number unreadable");
+    if (withGateway) for (const l of AGENT_LABELS) c.fail(l, "block number unreadable");
     for (const v of man.vaults) for (const l of vaultScanLabels(v)) c.fail(l, "block number unreadable");
     c.fail("deployer: holds no role on any contract (log scan)", "block number unreadable");
     c.fail(ROLE_HOLDERS_LABEL, "block number unreadable");
   } else {
     // each label is a c.run, so a failed log scan fails that label with the error and never skips it
     for (const v of man.vaults) await vaultScanChecks(c, chain, v, sheet.vaults[v.key], sheet.emergency, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
-    await agentChecks(c, chain, gateway, tlManifest, { fromBlock: opts.fromBlock, head: opts.handoverBlock !== undefined && opts.handoverBlock < head ? opts.handoverBlock : head, chunk, retryBaseMs, created });
+    if (withGateway) await agentChecks(c, chain, gateway, tlManifest, { fromBlock: opts.fromBlock, head: opts.handoverBlock !== undefined && opts.handoverBlock < head ? opts.handoverBlock : head, chunk, retryBaseMs, created });
     // Issue 1851: the deployer can only have been granted a role on a contract that exists, so the scan start must precede the creation of every governed contract.
     await roleScan(c, chain, D, governed, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
     await roleHolderEnumeration(c, chain, governed, {
@@ -282,7 +289,8 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     // the deployer also sent the one prove-control transaction (core 1712), which is outside every stage count
     // rehearsal (issue 1727): the deployer was not fresh, the run manifest recorded the nonce it started at. Production has no start: 0.
     const start = kind === "rehearsal" ? (opts.deployerStartNonce ?? Number.NaN) : 0;
-    const want = start + Object.values(opts.frozenCounts).reduce((a, b) => a + b, 0) + PROOF_TX_NONCES;
+    const ownKeys = sys === "legacy" ? Object.keys(opts.frozenCounts) : ["safe", ...table.stages.map((s) => s.name)]; // issue 1892: this system's stages only
+    const want = start + ownKeys.reduce((a, k) => a + (opts.frozenCounts[k] ?? 0), 0) + PROOF_TX_NONCES;
     const wantNow = want + (opts.redeployDeployerTxs ?? 0); // the single-vault redeploys' deploy transactions (issue 1796) are outside every frozen stage count
     const got = await chain.nonce(D);
     const frozen = Object.keys(opts.frozenCounts).length > 0;
@@ -290,7 +298,11 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     // at the end of the deploy stages stands in for it, and the live nonce may only be at or above that record.
     const rec = opts.deployerNonceAtDeployEnd;
     if (rec !== undefined) return { ok: frozen && rec === want && got >= rec, detail: `recorded nonce at deploy end ${rec}, frozen sum plus the prove-control transaction ${want}, live nonce ${got} (govern ran)` };
-    return { ok: frozen && got === wantNow, detail: `nonce ${got}, frozen sum plus the prove-control transaction ${want}${wantNow !== want ? ` plus ${wantNow - want} redeploy transaction(s)` : ""}` };
+    // Issue 1892: the gateway system runs after this one with the same deployer. When the frozen file holds its counts it ran or was measured, and its transactions are the only other
+    // thing the deployer may have sent: the nonce is then this system's sum or this system's sum plus the other system's, nothing in between.
+    const otherSum = sys === "vaults" ? (opts.table.stages ?? []).filter((s) => s.system !== undefined && s.system !== "vaults").reduce((a, s) => a + (opts.frozenCounts[s.name] ?? 0), 0) : 0;
+    const afterOther = otherSum > 0 && got === wantNow + otherSum;
+    return { ok: frozen && (got === wantNow || afterOther), detail: `nonce ${got}, frozen sum plus the prove-control transaction ${want}${wantNow !== want ? ` plus ${wantNow - want} redeploy transaction(s)` : ""}${otherSum > 0 ? `, or plus the gateway system's ${otherSum}` : ""}` };
   });
 
   // ---- the immutability claim (issue 1809), last: it needs every other check of the run

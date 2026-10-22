@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import stageTable from "../deploy/stage-table.json";
 
 export interface StageTableShape {
-  stages: { name: string; manifest?: string | null }[];
+  stages: { name: string; manifest?: string | null; system?: "vaults" | "gateway" }[];
   vaults: { key: string; stage: string; manifest: string }[];
 }
 export const STAGE_TABLE: StageTableShape = stageTable as StageTableShape;
@@ -25,6 +25,19 @@ export function allManifests(table: StageTableShape = STAGE_TABLE): string[] {
 
 export function expectedManifestCount(table: StageTableShape = STAGE_TABLE): number {
   return allManifests(table).length;
+}
+
+/** Issue 1892: the manifests of one system. A table from before the split has no `system` on a stage: every stage is then the vaults system. */
+export function systemManifests(system: "vaults" | "gateway", table: StageTableShape = STAGE_TABLE): string[] {
+  return table.stages.filter((s) => s.manifest && (s.system ?? "vaults") === system).map((s) => basename(s.manifest as string));
+}
+
+/** The vaults system's manifests that exist in `mdir` / are missing there. The default publish run is the vaults system: it writes these and no gateway manifest. */
+export function missingSystemManifests(system: "vaults" | "gateway", mdir: string, table: StageTableShape = STAGE_TABLE): string[] {
+  return systemManifests(system, table).filter((f) => !existsSync(join(mdir, f)));
+}
+export function presentSystemManifests(system: "vaults" | "gateway", mdir: string, table: StageTableShape = STAGE_TABLE): string[] {
+  return systemManifests(system, table).filter((f) => existsSync(join(mdir, f)));
 }
 
 /** The vault manifests keyed rmUSDC, rmPROTO, ... (the table's vault key with the rm prefix). */

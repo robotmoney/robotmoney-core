@@ -5,7 +5,7 @@ description: "`run()` drives its own body, `_runFrom`, through the broadcast pat
 
 # DeployTimelockRunEntrypointBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c510865f92160376f5adaec3aa3c46bd84008c0d/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -20,12 +20,6 @@ process-wide and forge runs tests in parallel.
 
 ```solidity
 bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-```
-
-### AGENT_ROLE
-
-```solidity
-bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
 ```
 
 ## State Variables
@@ -64,12 +58,6 @@ address internal deployAgent = makeAddr("run-deploy-agent");
 
 ```solidity
 CoreStages.Stack internal dep;
-```
-
-### gateway
-
-```solidity
-RobotMoneyGateway internal gateway;
 ```
 
 ### safe

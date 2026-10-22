@@ -16,14 +16,38 @@ const forge = STAGES.filter((s) => s.kind === "forge");
 
 describe("stage list built from core's stage table", () => {
   test("the order is safe, then the table's stages in table order with prove-control just before the timelock stage, then verify and govern", () => {
-    const names = table.stages.map((s) => s.name);
+    // issue 1892: the default run is the vaults system, whose stages are the table's stages of that system
+    const names = table.stages.filter((s) => s.system !== "gateway").map((s) => s.name);
     const last = names.length - 1;
     expect(names[last]).toBe("timelock");
     expect(STAGE_NAMES).toEqual(["safe", ...names.slice(0, last), "prove-control", "timelock", "verify", "govern"]);
   });
-  test("the router stage comes before the gateway and the timelock is the last deployer stage", () => {
-    expect(STAGE_NAMES.indexOf("router")).toBeLessThan(STAGE_NAMES.indexOf("gateway"));
-    expect(DEPLOYER_STAGES[DEPLOYER_STAGES.length - 1]!.name).toBe(table.stages[table.stages.length - 1]!.name);
+  test("the vaults system lists no gateway stage and the timelock is its last deployer stage", () => {
+    expect(STAGE_NAMES).not.toContain("gateway");
+    expect(STAGE_NAMES).not.toContain("gateway-handover");
+    expect(DEPLOYER_STAGES[DEPLOYER_STAGES.length - 1]!.name).toBe("timelock");
+  });
+  test("the gateway system is its own stage list: the gateway, its handover, then verify, with no Safe, no control proof and no govern row (issue 1892)", () => {
+    const rows = buildStages(table, "gateway");
+    expect(rows.map((r) => r.name)).toEqual(["gateway", "gateway-handover", "verify"]);
+    expect(table.systems?.gateway?.stages).toEqual(["gateway", "gateway-handover"]);
+    expect(table.systems?.gateway?.requires).toEqual(["vaults"]);
+    expect(table.systems?.vaults?.requires).toEqual([]);
+    // the gateway stage names the sheet's explicit upgrade timelock: it reads neither the Safe nor the vaults timelock delay
+    const gw = rows.find((r) => r.name === "gateway")!;
+    expect(gw.requiredEnv).toContain("GATEWAY_UPGRADE_TIMELOCK");
+    expect(gw.requiredEnv).not.toContain("SAFE_ADDRESS");
+    expect(gw.requiredEnv).not.toContain("TIMELOCK_MIN_DELAY");
+    expect(gw.requiredEnv.some((e) => e.startsWith("AGENT_"))).toBe(false);
+    expect(rows.find((r) => r.name === "gateway-handover")!.requiredEnv).toEqual(["GATEWAY_ADDRESS", "GATEWAY_ADMIN_ADDRESS", "DEPLOYMENT_OUT"]);
+  });
+  test("no vaults-system stage reads a gateway-system manifest (SYS-1)", () => {
+    const gatewayStages = new Set(table.stages.filter((s) => s.system === "gateway").map((s) => s.name));
+    const readers: string[] = [];
+    for (const s of table.stages.filter((x) => x.system !== "gateway")) {
+      for (const e of s.requiredEnv) { const src = resolveEnv(e, s.vault ?? null); if (src.from === "manifest" && gatewayStages.has(src.stage)) readers.push(s.name); }
+    }
+    expect(readers).toEqual([]);
   });
   test("the table has a row for each of the four vaults, each pointing at a forge stage with that vault key", () => {
     expect(VAULT_STAGES.map((v) => v.key)).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
@@ -67,6 +91,7 @@ describe("stage list built from core's stage table", () => {
         const src = resolveEnv(e, s.vault ?? null);
         const stages = src.from === "manifest" ? [src.stage] : src.from === "vaults" ? table.vaults.map((v) => v.stage) : [];
         for (const st of stages) {
+          if (table.stages.find((x) => x.name === st)?.system === "gateway") continue; // a gateway-system manifest is no earlier stage of this run: the SYS-1 test above bounds who reads it
           const file = manifestRef(st, "x").split(":")[0]!;
           expect(written.get(file), `${s.name} reads ${file} for ${e}`).toBeLessThan(i);
         }
@@ -78,7 +103,9 @@ describe("stage list built from core's stage table", () => {
     // Issue 1808: every stage that deploys a proxied core contract compiles with --libraries tick_math (one setting, one CREATE2 address per library);
     // so does the timelock stage, whose TimelockController init code (metadata included) every proxy's CREATE2 prediction hashes.
     // The libs and recorder stages deploy no proxy and link nothing.
-    expect(forge.filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "gateway", "receipt", "governance", "proto", "agent", "rwa", "timelock"]);
+    expect(forge.filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "receipt", "governance", "proto", "agent", "rwa", "timelock"]);
+    // the gateway handover links nothing but compiles with the same --libraries: the last compile of a run leaves out/ in that state, which the vaults verifier reads (issue 1892)
+    expect(buildStages(table, "gateway").filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["gateway", "gateway-handover"]);
     for (const s of forge) for (const l of s.libraries) expect(l.manifestKey).toBeTruthy();
   });
   test("no script path, env name list or artifact name is typed in the stage modules", () => {
@@ -145,7 +172,7 @@ describe("deploy-time configuration is consumed by the deployer stages 4 to 10, 
   test("every deploy-time key reaches a stage between router (4) and rwa (10), and no deployer stage reads a GOVERN_ name", () => {
     const names = forge.map((s) => s.name);
     const between = names.slice(names.indexOf("router"), names.indexOf("rwa") + 1);
-    expect(between).toEqual(["router", "gateway", "receipt", "governance", "proto", "agent", "rwa"]);
+    expect(between).toEqual(["router", "receipt", "governance", "proto", "agent", "rwa"]);
     const consumed = new Set(between.flatMap((n) => stage(n).requiredEnv));
     for (const k of ["CONSENSUS_RECEIPT_ADDRESS", "TVL_CAP", "PER_DEPOSIT_CAP", "EXIT_FEE_BPS", "FEE_RECIPIENT", "ROUTER_DEFAULT_BPS"]) expect(consumed.has(k), k).toBe(true);
     for (const s of forge) for (const e of s.requiredEnv) expect(e.startsWith("GOVERN_"), `${s.name} reads ${e}`).toBe(false);

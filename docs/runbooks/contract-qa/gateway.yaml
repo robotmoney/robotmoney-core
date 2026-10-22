@@ -1,0 +1,126 @@
+# docs/runbooks/contract-qa/gateway.yaml: the gateway system release runbook (issue 1892).
+#
+# The rmpc gateway system deploys, verifies and records its evidence on its own, after the vaults system and against its manifests
+# (docs/architecture.md section 1; docs/operations/contract-release-runbooks.md 4.13). The vaults release runbook is template.yaml and
+# runs first. This runbook is a SEPARATE template with its own steps. It is checked against the real CLIs by
+# scripts/runbook/validate-contract-qa.ts like the vaults template, and a vaults release file never contains one of its steps.
+#
+# The step keys are template.yaml's. The gateway sheet is a small sheet ({gatewaySheet}): the deployer, the pauser, the share receiver,
+# UPGRADE_MODE and two names with no default, GATEWAY_ADMIN_ADDRESS and GATEWAY_UPGRADE_TIMELOCK. Which authority holds the production
+# gateway ADMIN_ROLE and which nonzero timelock governs the production gateway release is an OPEN decision (docs/architecture.md section 10):
+# a production run records its owner decision in {runDir}/go/gateway-governance.json before it publishes. Nothing here chooses it.
+#
+# There is no Safe, no control proof, no govern row and no agent in this runbook. The gateway verifier fails a run that authorized an agent
+# before the handover block.
+template: contract-qa-gateway
+steps:
+  - id: "P0.01-gateway-runbook-valid"
+    standing: ["4.13"]
+    description: "The gateway runbook is valid against the real CLIs and names no vaults-only step"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "scripts/runbook/validate-contract-qa.ts"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P0.02-run-dirs"
+    standing: ["4.13"]
+    description: "The run directory layout the gateway run's receipts and state live in, outside the core checkout, which must stay clean"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["mkdir", "-p", "{runDir}/state", "{runDir}/journal", "{runDir}/go", "{runDir}/evidence-gateway", "{runDir}/manifests", "{runDir}/counts"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "state", "required": true}
+    irreversible: false
+  - id: "P0.04-checkout"
+    standing: ["4.13"]
+    description: "The core checkout is clean and its HEAD is the DEPLOY_SHA (the CLI refuses anything else)"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bash", "-c", 'test -z "$(git status --porcelain)" && test "$(git rev-parse HEAD)" = "{coreSha}"']
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P1.01-vaults-verified"
+    standing: ["4.13"]
+    description: "The vaults system this gateway binds to is deployed and its own verifier passes: the gateway run reads its router, vault and libs manifests and changes none of them"
+    host: "control"
+    phase: 1
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{common}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{manifestDir}", "pattern": "router.json", "required": true}
+    irreversible: false
+  - id: "P1.02-gateway-preflight"
+    standing: ["4.13"]
+    description: "The gateway system simulated on a local chain: both stages plan their counts, nothing is broadcast"
+    host: "control"
+    phase: 1
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "publish", "{gcommon}", "--dry-run"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P1.03-gateway-refusals"
+    standing: ["4.13"]
+    description: "A gateway sheet with no GATEWAY_UPGRADE_TIMELOCK, and one with an AGENT_ADDRESSES line, are each refused before any signer or broadcast (SHEET, exit 3)"
+    host: "control"
+    phase: 1
+    cmds:
+      - ["bash", "-c", "grep -v '^GATEWAY_UPGRADE_TIMELOCK=' {gatewaySheet} > {runDir}/state/gateway-sheet-no-timelock.env; { cat {gatewaySheet}; echo 'AGENT_ADDRESSES=0x000000000000000000000000000000000000a0aa'; } > {runDir}/state/gateway-sheet-agent.env"]
+      - ["bash", "-c", "for f in gateway-sheet-no-timelock gateway-sheet-agent; do bun publish-contracts/src/cli.ts publish --chain {chainId} --rpc {rpcUrl} --sheet {runDir}/state/$f.env --signer {signer} --environment {environmentName} --core-sha {coreSha} --counts-dir {countsDir} --evidence {runDir}/evidence-gateway --system gateway --dry-run; test $? -eq 3 || exit 1; done"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P1.04-gateway-publish"
+    standing: ["4.13"]
+    description: "The gateway proxy bound to the vaults router and vault with the explicit upgrade timelock, then the handover of ADMIN_ROLE and DEFAULT_ADMIN_ROLE to GATEWAY_ADMIN_ADDRESS; each stage matches its frozen count"
+    host: "control"
+    phase: 1
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "publish", "{gcommon}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/evidence-gateway", "pattern": "publish-run.json", "required": true}
+      - {"dir": "{manifestDir}", "pattern": "gateway-handover.json", "required": true}
+    irreversible: true
+    go: "gateway-governance"
+    maxMinutes: 60
+  - id: "P2.01-gateway-verify"
+    standing: ["4.13"]
+    description: "The gateway verifier: the proxy and implementation equal the build, the sheet's upgrade timelock and admin hold, the deployer holds nothing, no AgentAuthorized log and no AGENT_ROLE grant up to the handover block, the vaults manifests are unchanged"
+    host: "control"
+    phase: 2
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{gcommon}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/evidence-gateway", "pattern": "publish-run.json", "required": true}
+    irreversible: false
+  - id: "P10.01-gateway-evidence"
+    standing: ["4.13"]
+    description: "The gateway evidence (system gateway, filled from the run manifest and the manifests) passes the evidence check against the frozen counts of the sha"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--evidence", "{runDir}/evidence-gateway/evidence.json", "--frozen", "{countsDir}/{gateSha}.json", "--deploy-sha", "{gateSha}", "--deployment-kind", "{deploymentKind}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/evidence-gateway", "pattern": "evidence.json", "required": true}
+    irreversible: false

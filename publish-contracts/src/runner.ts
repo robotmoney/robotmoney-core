@@ -16,8 +16,9 @@ import type { Logger } from "./log.ts";
 import { adoptableCoreTimelock, assertTimelockPin, predictCoreTimelock, type TimelockPrediction } from "./timelock-pin.ts";
 import { DryRunFiles, type ChainStarter } from "./preflight.ts";
 import type { PublishSigner } from "./signer.ts";
-import { DEPLOYER_STAGES, STAGES, expectedStartNonce, getStageTable, proofNoncesBefore, manifestRef, stageByName, type StageRow } from "./stages.ts";
+import { ACTIVE_SYSTEM, DEPLOYER_STAGES, STAGES, expectedStartNonce, getStageTable, proofNoncesBefore, manifestRef, stageByName, type StageRow } from "./stages.ts";
 import { PROOF_STAGE, assertControlProven } from "./control-proof.ts";
+import { CONSUMED_VAULTS_MANIFESTS, hashConsumedManifests } from "./verify/gateway.ts";
 import { LIBS_STAGE, RECORDER_STAGE, VAULT_KIND, VENUE_V4, resolveEnv } from "./core-wiring.ts";
 import { runCoreConfigCheck, type CoreConfigCheck } from "./core-config-check.ts";
 import { configCheck, loadVaultConfiguredAssets } from "./ci/config-check.ts";
@@ -107,6 +108,10 @@ export interface StageRecord {
 
 export interface RunManifest {
   version: 1;
+  /** Issue 1892: the system this run deploys. Absent: a run manifest from before the split, the combined (vaults) run. */
+  system?: "vaults" | "gateway";
+  /** Issue 1892, the gateway system only: sha256 of each vaults-system manifest the run consumed, taken when the run began. The verifier fails when one changed. */
+  consumedVaultsManifests?: Record<string, string>;
   /** Issue 1727: the deployment kind of the run, from the sheet's DEPLOYMENT_KIND. A manifest written before the field existed is a production run. */
   deploymentKind?: DeploymentKind;
   /**
@@ -798,14 +803,14 @@ async function adoptCreate2Libraries(ctx: RunContext, row: StageRow, manifest: R
 }
 
 /** The first stage of the table that deploys proxies: it pins the core timelock prediction (issue 1835). */
-const firstProxyStage = (): string | undefined => getStageTable().stages.find((s) => (s.proxies?.length ?? 0) > 0)?.name;
+const firstProxyStage = (): string | undefined => getStageTable().stages.find((s) => (s.proxies?.length ?? 0) > 0 && s.upgradeTimelockEnv === undefined)?.name;
 /** Pins of a dry run, which never persists the run manifest. */
 const dryRunPins = new WeakMap<object, TimelockPrediction>();
 /** The pin of this run: the first proxy stage's record (`rec` while that stage runs), or a dry run's. */
 const timelockPinOf = (manifest: RunManifest, rec?: StageRecord): TimelockPrediction | undefined => rec?.timelockPrediction ?? manifest.stages[firstProxyStage() ?? ""]?.timelockPrediction ?? dryRunPins.get(manifest);
 
 /** The stages of the table that deploy proxies (issue 1853: every one checks the pin before it broadcasts). */
-const isProxyStage = (name: string): boolean => (getStageTable().stages.find((s) => s.name === name)?.proxies?.length ?? 0) > 0;
+const isProxyStage = (name: string): boolean => { const s = getStageTable().stages.find((x) => x.name === name); return (s?.proxies?.length ?? 0) > 0 && s?.upgradeTimelockEnv === undefined; }; // issue 1892: a stage with an explicit upgrade timelock is not pinned to the core timelock
 
 /**
  * Issue 1835, 1853. The first proxy stage pins the core timelock prediction (address and init code hash, from the build, the Safe and TIMELOCK_MIN_DELAY) in its run
@@ -1029,7 +1034,8 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   if (expectedCount === undefined && adoptedLibs.length === 0 && sent.count !== delta) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: broadcast count ${sent.count} differs from the nonce delta ${delta}`, { stage: row.name });
   rec.count = expectedCount ?? sent.count;
   if (!existsSync(outPath) || readFileSync(outPath, "utf8").trim() === "") throw new PublishError("MANIFEST", `manifest ${outPath} was not written by ${row.name}`, { stage: row.name });
-  proxyManifestCheck(ctx, row, outPath, timelockPinOf(manifest, rec)?.address);
+  const explicitTl = getStageTable().stages.find((s) => s.name === row.name)?.upgradeTimelockEnv; // issue 1892: the gateway names the sheet's explicit timelock, never the core timelock
+  proxyManifestCheck(ctx, row, outPath, explicitTl ? env[explicitTl] : timelockPinOf(manifest, rec)?.address);
   if (sent.firstBlock !== undefined && (manifest.firstBlock === undefined || sent.firstBlock < manifest.firstBlock)) manifest.firstBlock = sent.firstBlock;
   rec.status = "done";
   rec.finishedAt = (ctx.now?.() ?? new Date()).toISOString();
@@ -1063,7 +1069,7 @@ export function proxyManifestCheck(ctx: Pick<RunContext, "sheet">, row: Pick<Sta
  * value is never rewritten: a resume cross-checks it against the first stage's own record and, before any stage has started, against the chain.
  */
 export function runStartNonce(ctx: Pick<RunContext, "sheet" | "dryRun" | "evidenceDir" | "log">, manifest: RunManifest, row: Pick<StageRow, "name">, nonce0: number): number {
-  if (ctx.sheet.kind !== "rehearsal") return 0;
+  if (ctx.sheet.kind !== "rehearsal" && ACTIVE_SYSTEM !== "gateway") return 0; // issue 1892: the gateway run follows the vaults run with the same deployer, so its start nonce is recorded too
   const first = DEPLOYER_STAGES[0]!.name;
   const recorded = manifest.deployerStartNonce;
   if (recorded === undefined) {
@@ -1071,9 +1077,9 @@ export function runStartNonce(ctx: Pick<RunContext, "sheet" | "dryRun" | "eviden
       throw new PublishError("NONCE", `the rehearsal run manifest has no deployerStartNonce and stage ${row.name} is not the first deployer stage (${first}) of a fresh run: the start nonce is recorded once, at the first stage, before any transaction. Use the run's own evidence directory with --resume, or start a new run from stage ${first}.`, { stage: row.name });
     }
     manifest.deployerStartNonce = nonce0;
-    manifest.deploymentKind = "rehearsal";
+    if (ctx.sheet.kind === "rehearsal") manifest.deploymentKind = "rehearsal";
     if (!ctx.dryRun) saveRunManifest(ctx.evidenceDir, manifest);
-    ctx.log.log("info", "run.start_nonce_recorded", { deployer_start_nonce: nonce0, deployment_kind: "rehearsal" });
+    ctx.log.log("info", "run.start_nonce_recorded", { deployer_start_nonce: nonce0, deployment_kind: ctx.sheet.kind });
     return nonce0;
   }
   if (!Number.isInteger(recorded) || recorded < 0) throw new PublishError("MANIFEST", `the run manifest deployerStartNonce '${String(recorded)}' is not a non-negative integer`);
@@ -1091,7 +1097,7 @@ export function runStartNonce(ctx: Pick<RunContext, "sheet" | "dryRun" | "eviden
 
 /** The start nonce a finished rehearsal run is measured from: the manifest's record. A rehearsal manifest without one is refused. Production: 0. */
 export function recordedStartNonce(kind: DeploymentKind, manifest: Pick<RunManifest, "deployerStartNonce">): number {
-  if (kind !== "rehearsal") return 0;
+  if (kind !== "rehearsal" && ACTIVE_SYSTEM !== "gateway") return 0;
   if (!Number.isInteger(manifest.deployerStartNonce)) throw new PublishError("MANIFEST", "the rehearsal run manifest has no deployerStartNonce: the deployer nonce cannot be checked relative to the start");
   return manifest.deployerStartNonce!;
 }
@@ -1208,8 +1214,21 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
 export type StageHandler = (ctx: RunContext, row: StageRow, manifest: RunManifest) => Promise<void>;
 export interface Handlers { prove: StageHandler; verify: StageHandler; govern: StageHandler }
 
+/**
+ * Issue 1892: the vaults system manifests a gateway run consumes, hashed when the run begins. All of them must exist (the gateway binds the vaults system's router and vault and links
+ * its libraries): a gateway run before a vaults run is refused here, before any signer or broadcast. The verifier fails when one of them changed since.
+ */
+export function consumedVaultsManifestsOf(ctx: ManifestCtx): Record<string, string> {
+  const hashes = hashConsumedManifests(manifestDir(ctx));
+  const missing = CONSUMED_VAULTS_MANIFESTS.filter((n) => hashes[n] === undefined);
+  if (missing.length > 0) throw new PublishError("INPUT_MISSING", `the gateway system reads the vaults system's manifests and ${missing.map((n) => `${n}.json`).join(", ")} ${missing.length === 1 ? "is" : "are"} missing in ${manifestDir(ctx)}: run and verify the vaults system first`, { missing });
+  return hashes;
+}
+
 export function newManifest(ctx: RunContext, deployer: string): RunManifest {
-  return { version: 1, deploymentKind: ctx.sheet.kind, ...(ctx.sheet.upgrade ? { upgradeMode: ctx.sheet.upgrade.mode } : {}), chainId: ctx.chainId, coreSha: ctx.coreSha, deployer, environment: ctx.environment, startedAt: new Date().toISOString(), stages: {} };
+  const sys = getStageTable().systems ? { system: ACTIVE_SYSTEM } : {};
+  const consumed = ACTIVE_SYSTEM === "gateway" ? { consumedVaultsManifests: consumedVaultsManifestsOf(ctx) } : {};
+  return { version: 1, ...sys, ...consumed, deploymentKind: ctx.sheet.kind, ...(ctx.sheet.upgrade ? { upgradeMode: ctx.sheet.upgrade.mode } : {}), chainId: ctx.chainId, coreSha: ctx.coreSha, deployer, environment: ctx.environment, startedAt: new Date().toISOString(), stages: {} };
 }
 
 export interface RunResult { manifest: RunManifest; ran: string[]; skipped: string[] }
@@ -1259,6 +1278,7 @@ export async function runStages(ctx: RunContext, names: string[], handlers: Hand
       const why = manifest.coreSha !== manifestSha ? `: it was written at core SHA ${manifest.coreSha}, this run names ${ctx.coreSha}. Only a descendant with byte-identical deployed inputs (tooling-sha.ts), govern --row redeploy-vault and verify (with --prior-out) may name the sha a redeploy-vault round was deployed at` : "";
       throw new PublishError("RESUME", `the run manifest belongs to a different chain, core SHA or deployer${why}`);
     }
+    if ((manifest.system ?? "vaults") !== ACTIVE_SYSTEM) throw new PublishError("RESUME", `the run manifest in ${ctx.evidenceDir} is a ${manifest.system ?? "vaults"} system run, this run is --system ${ACTIVE_SYSTEM}: each system has its own evidence directory and run manifest`);
     if ((manifest.deploymentKind ?? "production") !== ctx.sheet.kind) throw new PublishError("RESUME", `the run manifest is a ${manifest.deploymentKind ?? "production"} run, the sheet says DEPLOYMENT_KIND ${ctx.sheet.kind}: a run never changes kind`);
     if (manifest.deploymentKind === undefined) manifest.deploymentKind = "production";
     const runMode = manifest.upgradeMode ?? "frozen";

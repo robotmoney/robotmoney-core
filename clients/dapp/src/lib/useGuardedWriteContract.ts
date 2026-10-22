@@ -43,12 +43,11 @@
  * A redeem of a RobotMoneyVault (rmUSDC) also gets a fixed gas limit (redeemGas.ts, core issue 1758),
  * on every class and path. A basket vault redeem does not: it needs more than that limit (QA plan U3).
  *
- * Inside a `GatewayWriteCheck` (AdminFlow and AgentsPanel, issue 1840), every write
- * first runs the gateway check through the connected wallet's provider, on every
- * env class: an admin write (gateway, Timelock, Safe) is refused unless the
- * gateway is verified and still matches at the latest block, and any write is
- * refused on a mismatch (`GatewayChangedError`). That check runs after checks
- * (2) to (5), which only apply on Base.
+ * Inside a `GatewayWriteCheck` (AdminFlow and AgentsPanel, issue 1840), a gateway
+ * operation first runs the gateway check through the connected wallet's provider: a write
+ * to the gateway, or a Timelock schedule or execute whose target is the gateway, is refused
+ * unless the gateway is verified and still matches at the latest block (`GatewayChangedError`).
+ * A vaults-system write (vault, router, token, Timelock, Safe) makes no gateway read (issue 1892).
  */
 import { useCallback, useMemo, useState } from "react";
 import { useAccount, useWriteContract } from "wagmi";
@@ -291,6 +290,13 @@ async function assertWriteTarget(
   );
 }
 
+/** The target a Timelock `schedule` or `execute` forwards to (`args[0]`), or undefined for any other write. */
+function nestedTargetOf(variables: unknown): unknown {
+  const v = variables as { functionName?: unknown; args?: unknown };
+  if (v.functionName !== "schedule" && v.functionName !== "execute") return undefined;
+  return Array.isArray(v.args) ? v.args[0] : undefined;
+}
+
 export function useGuardedWriteContract() {
   const base = useWriteContract();
   const { connector, chainId } = useAccount();
@@ -348,6 +354,7 @@ export function useGuardedWriteContract() {
       }
       await gatewayCheck({
         target: (variables as { address?: unknown }).address,
+        nestedTarget: nestedTargetOf(variables),
         provider,
         chainId,
       });

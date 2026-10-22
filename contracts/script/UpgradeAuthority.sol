@@ -84,6 +84,22 @@ abstract contract UpgradeAuthority is ExpectedChainGuard {
         c.mode = parseUpgradeMode(_envStringRequired(string.concat(prefix, "UPGRADE_MODE")));
     }
 
+    /// @dev The explicit upgrade config of a system that has its own upgrade timelock (the
+    ///      gateway system): `<prefix><timelockEnv>` is a required, nonzero address with code on
+    ///      this chain, and `<prefix>UPGRADE_MODE` is required. The vaults timelock is never
+    ///      predicted or defaulted here.
+    function _readExplicitUpgradeConfig(string memory prefix, string memory timelockEnv)
+        internal
+        view
+        returns (UpgradeConfig memory c)
+    {
+        address tl = _envAddressRequired(string.concat(prefix, timelockEnv));
+        require(tl != address(0), string.concat(timelockEnv, "=0"));
+        require(tl.code.length > 0, string.concat(timelockEnv, " has no code on this chain"));
+        c.timelock = tl;
+        c.mode = parseUpgradeMode(_envStringRequired(string.concat(prefix, "UPGRADE_MODE")));
+    }
+
     /// @dev The in-process upgrade config (see `setUpgradeConfig`).
     function _inProcessUpgradeConfig() internal view returns (UpgradeConfig memory c) {
         c = _inProcessUpgrade;

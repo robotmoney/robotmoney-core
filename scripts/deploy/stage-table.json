@@ -1,8 +1,38 @@
 {
   "version": 1,
+  "systems": {
+    "vaults": {
+      "description": "The treasury product: vaults, registry, router, governance, receipt and the timelock handover. It needs no gateway.",
+      "stages": [
+        "libs",
+        "recorder",
+        "vault",
+        "registry",
+        "router",
+        "receipt",
+        "governance",
+        "proto",
+        "agent",
+        "rwa",
+        "timelock"
+      ],
+      "requires": []
+    },
+    "gateway": {
+      "description": "The rmpc gateway system: RobotMoneyGateway and its handover. It reads the vaults system's addresses and nothing else of it.",
+      "stages": [
+        "gateway",
+        "gateway-handover"
+      ],
+      "requires": [
+        "vaults"
+      ]
+    }
+  },
   "stages": [
     {
       "name": "libs",
+      "system": "vaults",
       "kind": "forge",
       "script": "contracts/script/DeployLibs.s.sol:DeployLibs",
       "requiredEnv": [
@@ -17,6 +47,7 @@
     },
     {
       "name": "recorder",
+      "system": "vaults",
       "kind": "forge",
       "script": "contracts/script/DeployUniswapV4PriceRecorder.s.sol:DeployUniswapV4PriceRecorder",
       "requiredEnv": [
@@ -32,6 +63,7 @@
     },
     {
       "name": "vault",
+      "system": "vaults",
       "kind": "forge",
       "script": "contracts/script/DeployVault.s.sol:DeployVault",
       "requiredEnv": [
@@ -71,6 +103,7 @@
     },
     {
       "name": "registry",
+      "system": "vaults",
       "kind": "forge",
       "script": "contracts/script/DeployVaultRegistry.s.sol:DeployVaultRegistry",
       "requiredEnv": [
@@ -103,6 +136,7 @@
     },
     {
       "name": "router",
+      "system": "vaults",
       "kind": "forge",
       "script": "contracts/script/DeployPortfolioRouter.s.sol:DeployPortfolioRouter",
       "requiredEnv": [
@@ -135,43 +169,8 @@
       ]
     },
     {
-      "name": "gateway",
-      "kind": "forge",
-      "script": "contracts/script/DeployGateway.s.sol:DeployGateway",
-      "requiredEnv": [
-        "ADMIN_ADDRESS",
-        "PAUSER_ADDRESS",
-        "SHARE_RECEIVER_ADDRESS",
-        "VAULT_ADDRESS",
-        "ROUTER_ADDRESS",
-        "SAFE_ADDRESS",
-        "TIMELOCK_MIN_DELAY",
-        "UPGRADE_MODE",
-        "DEPLOYMENT_OUT"
-      ],
-      "optionalEnv": [
-        "EXPECTED_CHAIN_ID"
-      ],
-      "manifest": "deployments/<chain>/gateway.json",
-      "libraries": [
-        "tick_math"
-      ],
-      "vault": null,
-      "create2Libraries": [
-        "GovernedUpgrade",
-        "GatewayWindows"
-      ],
-      "proxies": [
-        {
-          "field": "gateway",
-          "implementationField": "gateway_implementation",
-          "contract": "RobotMoneyGateway",
-          "layout": "contracts/test/fixtures/storage-layout/RobotMoneyGateway.json"
-        }
-      ]
-    },
-    {
       "name": "receipt",
+      "system": "vaults",
       "kind": "forge",
       "script": "contracts/script/DeployConsensusRecommendationReceipt.s.sol:DeployConsensusRecommendationReceipt",
       "requiredEnv": [
@@ -203,6 +202,7 @@
     },
     {
       "name": "governance",
+      "system": "vaults",
       "kind": "forge",
       "script": "contracts/script/DeployRouterGovernance.s.sol:DeployRouterGovernance",
       "requiredEnv": [
@@ -237,6 +237,7 @@
     },
     {
       "name": "proto",
+      "system": "vaults",
       "kind": "forge",
       "script": "contracts/script/DeployProtocolAssetVault.s.sol:DeployProtocolAssetVault",
       "requiredEnv": [
@@ -281,6 +282,7 @@
     },
     {
       "name": "agent",
+      "system": "vaults",
       "kind": "forge",
       "script": "contracts/script/DeployAgentTokenVault.s.sol:DeployAgentTokenVault",
       "requiredEnv": [
@@ -326,6 +328,7 @@
     },
     {
       "name": "rwa",
+      "system": "vaults",
       "kind": "forge",
       "script": "contracts/script/DeployRwaBasketVault.s.sol:DeployRwaBasketVault",
       "requiredEnv": [
@@ -370,11 +373,11 @@
     },
     {
       "name": "timelock",
+      "system": "vaults",
       "kind": "forge",
       "script": "contracts/script/DeployTimelock.s.sol:DeployTimelock",
       "requiredEnv": [
         "VAULT_ADDRESSES",
-        "GATEWAY_ADDRESS",
         "REGISTRY_ADDRESS",
         "ROUTER_ADDRESS",
         "GOVERNANCE_ADDRESS",
@@ -394,6 +397,63 @@
       "libraries": [
         "tick_math"
       ],
+      "vault": null
+    },
+    {
+      "name": "gateway",
+      "system": "gateway",
+      "kind": "forge",
+      "script": "contracts/script/DeployGateway.s.sol:DeployGateway",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "PAUSER_ADDRESS",
+        "SHARE_RECEIVER_ADDRESS",
+        "GATEWAY_UPGRADE_TIMELOCK",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/gateway.json",
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": null,
+      "create2Libraries": [
+        "GovernedUpgrade",
+        "GatewayWindows"
+      ],
+      "proxies": [
+        {
+          "field": "gateway",
+          "implementationField": "gateway_implementation",
+          "contract": "RobotMoneyGateway",
+          "layout": "contracts/test/fixtures/storage-layout/RobotMoneyGateway.json"
+        }
+      ],
+      "upgradeTimelockEnv": "GATEWAY_UPGRADE_TIMELOCK",
+      "manifestNotes": "The gateway system's first stage (architecture 1, 10). The gateway proxy names the explicitly configured GATEWAY_UPGRADE_TIMELOCK (nonzero, with code) as its upgrade authority. It never defaults to the vaults timelock, which is not an input of this system. The deployer holds the gateway roles until the gateway-handover stage."
+    },
+    {
+      "name": "gateway-handover",
+      "system": "gateway",
+      "kind": "forge",
+      "script": "contracts/script/HandoverGateway.s.sol:HandoverGateway",
+      "requiredEnv": [
+        "GATEWAY_ADDRESS",
+        "GATEWAY_ADMIN_ADDRESS",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/gateway-handover.json",
+      "manifestNotes": "The gateway system's handover. The deployer grants gateway ADMIN_ROLE and DEFAULT_ADMIN_ROLE to the explicitly configured GATEWAY_ADMIN_ADDRESS and revokes both from itself. It authorizes no agent and transfers no agent. The production authority is an open decision (architecture 10): the sheet names it, nothing defaults it.",
+      "libraries": [
+        "tick_math"
+      ],
+      "libraryNotes": "The handover links nothing. It names tick_math so its forge compile uses the same --libraries as every other stage: the last compile of a run leaves out/ in that state, which the vaults verifier compares the deployed libraries with (issue 1892).",
       "vault": null
     }
   ],

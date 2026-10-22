@@ -1,0 +1,76 @@
+---
+title: "SystemSplitHandler"
+---
+
+# SystemSplitHandler
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7c2e53fe327c80d91d5d140cb198d84a94ad506c/contracts/test/fv/SystemSplitInvariant.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### gov
+
+```solidity
+RouterGovernance public immutable gov;
+```
+
+### admin
+
+```solidity
+address public immutable admin;
+```
+
+## State Variables
+
+### vaults
+
+```solidity
+address[] public vaults;
+```
+
+### calls
+
+```solidity
+uint256 public calls;
+```
+
+## Functions
+
+<a id="constructor-routergovernance-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(RouterGovernance gov_, address admin_, address[] memory vaults_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gov_ | `RouterGovernance` |  |
+| admin_ | `address` |  |
+| vaults_ | `address[]` |  |
+
+<a id="setdefault-uint256"></a>
+
+### setDefault
+
+<i>
+
+The admin sets default weights split between the first two vaults.
+
+</i>
+
+```solidity
+function setDefault(uint256 seed) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| seed | `uint256` |  |
+

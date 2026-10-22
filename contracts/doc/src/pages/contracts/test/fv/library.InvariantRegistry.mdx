@@ -4,7 +4,7 @@ title: "InvariantRegistry"
 
 # InvariantRegistry
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/fv/InvariantRegistry.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58a774e0370fd9946d743a40f01792cf059929e7/contracts/test/fv/InvariantRegistry.sol)
 
 ## Functions
 
@@ -62,7 +62,7 @@ function get(string memory id) internal pure returns (Entry memory);
 ```solidity
 struct Entry {
         string id; // stable invariant ID, e.g. "INV-1"
-        Status status; // HOLDS or RED
+        Status status; // HOLDS, RED or TOMBSTONE
         string strategy; // declared FV strategy (mirrors the spec)
         uint256 remediationIssue; // downstream remediation issue for RED entries; 0 otherwise
     }

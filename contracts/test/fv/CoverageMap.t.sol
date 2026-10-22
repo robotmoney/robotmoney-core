@@ -82,6 +82,94 @@ contract CoverageMapTest is Test {
         }
     }
 
+    /// @notice Issue 1892 (RS-1019-11): a spec heading that is struck through (`~~`) and marked
+    ///         Retired maps to exactly one TOMBSTONE registry entry, and a TOMBSTONE entry maps to
+    ///         such a heading. ACL-4 and ACL-8 are tombstones. SYS-2 is a retired non-registry ID:
+    ///         it has no `> **` heading and no registry entry.
+    function test_tombstoneStatusMatchesRetiredHeadings() public view {
+        string memory spec = vm.readFile(SPEC);
+        string[] memory ids = _parseSpecIds(spec);
+        string[] memory retired = _parseRetiredIds(spec);
+        InvariantRegistry.Entry[] memory reg = InvariantRegistry.entries();
+        assertGt(retired.length, 0, "no retired heading parsed: the tombstone gate ran nothing");
+        for (uint256 i = 0; i < reg.length; i++) {
+            bool isRetired = _arrayHas(retired, reg[i].id);
+            bool isTomb = reg[i].status == InvariantRegistry.Status.TOMBSTONE;
+            assertEq(
+                isTomb,
+                isRetired,
+                string.concat(
+                    reg[i].id, ": TOMBSTONE status must match a struck-through Retired heading"
+                )
+            );
+        }
+        assertEq(InvariantRegistry.get("ACL-4").remediationIssue, 0);
+        assertTrue(InvariantRegistry.get("ACL-4").status == InvariantRegistry.Status.TOMBSTONE);
+        assertTrue(InvariantRegistry.get("ACL-8").status == InvariantRegistry.Status.TOMBSTONE);
+        // Each active heading maps once: no ID is listed twice in the spec or the registry.
+        for (uint256 i = 0; i < ids.length; i++) {
+            uint256 specCount;
+            uint256 regCount;
+            for (uint256 j = 0; j < ids.length; j++) {
+                if (keccak256(bytes(ids[i])) == keccak256(bytes(ids[j]))) specCount++;
+            }
+            for (uint256 j = 0; j < reg.length; j++) {
+                if (keccak256(bytes(ids[i])) == keccak256(bytes(reg[j].id))) regCount++;
+            }
+            assertEq(specCount, 1, string.concat(ids[i], " is a heading twice"));
+            assertEq(regCount, 1, string.concat(ids[i], " does not map to exactly one entry"));
+        }
+        // SYS-2: retired non-registry ID.
+        assertFalse(_arrayHas(ids, "SYS-2"), "SYS-2 must keep the non-heading form");
+        assertFalse(_registryHas(reg, "SYS-2"), "SYS-2 must stay out of the registry");
+        // SYS-1 and ACL-9 are registered and have headings.
+        assertTrue(_arrayHas(ids, "SYS-1") && _registryHas(reg, "SYS-1"), "SYS-1 not mapped");
+        assertTrue(_arrayHas(ids, "ACL-9") && _registryHas(reg, "ACL-9"), "ACL-9 not mapped");
+    }
+
+    /// @notice Negative fixture: the retired-heading parser reads the strike-through marker.
+    function test_negativeFixture_retiredHeadingParsed() public pure {
+        string memory fake = string.concat(
+            "> **`ZZZ-1` - ~~old rule~~ Retired 2026-01-01.**\n",
+            "> **`ZZZ-2` - an active rule.**\n"
+        );
+        string[] memory r = _parseRetiredIds(fake);
+        assertEq(r.length, 1);
+        assertEq(r[0], "ZZZ-1");
+    }
+
+    /// @dev IDs whose heading line contains a `~~` strike-through and the word Retired.
+    function _parseRetiredIds(string memory spec) internal pure returns (string[] memory out) {
+        bytes memory b = bytes(spec);
+        bytes memory mark = HEADING;
+        string[] memory tmp = new string[](b.length / 8 + 1);
+        uint256 n;
+        for (uint256 i = 0; i + mark.length <= b.length; i++) {
+            if (!_matchesAt(b, mark, i)) continue;
+            uint256 s = i + mark.length;
+            uint256 j = s;
+            while (j < b.length && b[j] != bytes1("`")) j++;
+            bytes memory idb = new bytes(j - s);
+            for (uint256 k = 0; k < idb.length; k++) {
+                idb[k] = b[s + k];
+            }
+            uint256 e = j;
+            while (e < b.length && b[e] != bytes1("\n")) e++;
+            bool strike;
+            bool word;
+            for (uint256 k = j; k + 1 < e; k++) {
+                if (b[k] == bytes1("~") && b[k + 1] == bytes1("~")) strike = true;
+                if (b[k] == bytes1("R") && _matchesAt(b, bytes("Retired"), k)) word = true;
+            }
+            if (_isInvariantId(idb) && strike && word) tmp[n++] = string(idb);
+            i = e;
+        }
+        out = new string[](n);
+        for (uint256 k = 0; k < n; k++) {
+            out[k] = tmp[k];
+        }
+    }
+
     // ───────────────────────── negative fixture (Test-plan 2) ─────────────────
 
     /// @notice Proves the coverage gate actually bites: an ID that exists in a

@@ -88,11 +88,12 @@ describe("core harness contract: the argument vector and environment core builds
     if (r.code !== 0) console.error(r.stderr.split("\n").slice(-8).join("\n"));
     expect(r.code).toBe(0);
     // the same stage set as --stage deploy: safe first, then every table stage through timelock
-    const want = ["safe.json", ...getStageTable().stages.map((s) => manifestFile(s.manifest))].sort();
+    const vaultStages = getStageTable().stages.filter((s) => s.system !== "gateway"); // issue 1892: the publish verb runs the vaults system
+    const want = ["safe.json", ...vaultStages.map((s) => manifestFile(s.manifest))].sort();
     expect(readdirSync(c.manifestDir).sort()).toEqual(want);
     expect(existsSync(join(c.w.coreDir, "deployments", "918453"))).toBe(false);
     const forge = c.w.state().calls.filter((x: any) => x.tool === "forge" && x.args.includes("--broadcast"));
-    expect(forge.length).toBe(getStageTable().stages.length);
+    expect(forge.length).toBe(vaultStages.length);
     for (const f of forge) expect(f.env.DEPLOYMENT_OUT.startsWith(`${c.manifestDir}/`)).toBe(true);
     // core reads stderr as logs: every line is JSON
     for (const line of r.stderr.split("\n").filter(Boolean)) JSON.parse(line);

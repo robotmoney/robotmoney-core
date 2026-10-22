@@ -1,0 +1,38 @@
+---
+title: "GatewayUpgradeHarness"
+---
+
+# GatewayUpgradeHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/58a774e0370fd9946d743a40f01792cf059929e7/contracts/test/GatewaySystemDeploy.t.sol)
+
+**Inherits:** [DeployGateway](/contracts/script/contract.DeployGateway)
+
+<i>
+
+Exposes the explicit upgrade-config reader of the gateway stage.
+
+</i>
+
+## Functions
+
+<a id="readupgrade-string"></a>
+
+### readUpgrade
+
+```solidity
+function readUpgrade(string memory prefix) external view returns (UpgradeConfig memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `UpgradeConfig` |  |
+

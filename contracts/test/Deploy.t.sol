@@ -125,20 +125,6 @@ contract DeployTest is Test {
         assertEq(address(s.registry.router()), address(s.router), "registry.router != router");
     }
 
-    /// @notice The gateway stage refuses a zero router and a router with no code.
-    function test_gatewayStage_revertsOnZeroOrEmptyRouter() public {
-        CoreStages.Stack memory s = _run();
-        DeployGateway gw = stages.gatewayScript();
-        vm.expectRevert(bytes("ROUTER_ADDRESS=0"));
-        gw.runInProcessWith(
-            admin, pauser, shareReceiver, address(usdc), address(s.vault), address(0)
-        );
-        vm.expectRevert(bytes("ROUTER_ADDRESS has no code on this chain"));
-        gw.runInProcessWith(
-            admin, pauser, shareReceiver, address(usdc), address(s.vault), makeAddr("not-a-router")
-        );
-    }
-
     /// @notice Agent authorization runs in the gateway stage, after the gateway exists, and
     ///         the IC policy stage that follows binds the final gateway address.
     function test_agentAuthorizationAndIcPolicy_runAfterGateway_bindFinalGateway() public {
@@ -347,9 +333,7 @@ contract DeployTest is Test {
         CoreStages.Stack memory s = _run();
         DeployGateway gw = stages.gatewayScript();
         vm.expectRevert(bytes("ADMIN==PAUSER"));
-        gw.runInProcessWith(
-            admin, admin, shareReceiver, address(usdc), address(s.vault), address(s.router)
-        );
+        gw.runInProcessWith(admin, admin, shareReceiver, address(usdc));
     }
 
     // --- Seed deposit constant (issue #656) --------------------------------
