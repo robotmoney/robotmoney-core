@@ -111,7 +111,7 @@ describe("stage-table.json", () => {
       registry: ["contracts/VaultRegistry.sol"],
       router: ["contracts/PortfolioRouter.sol"],
       gateway: ["contracts/gateway/RobotMoneyGateway.sol"],
-      receipt: ["contracts/gateway/ConsensusRecommendationReceipt.sol"],
+      receipt: ["contracts/ConsensusRecommendationReceipt.sol"],
       governance: ["contracts/RouterGovernance.sol"],
       proto: ["contracts/vaults/BasketVault.sol"],
       agent: ["contracts/vaults/BasketVault.sol"],

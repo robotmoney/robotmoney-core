@@ -10,10 +10,8 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 
-import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
-import {
-    IConsensusRecommendationReceipt
-} from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../ConsensusRecommendationReceipt.sol";
+import {IConsensusRecommendationReceipt} from "../interfaces/IConsensusRecommendationReceipt.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 contract SecurityReviewRecheckReceiptPoc is Test {

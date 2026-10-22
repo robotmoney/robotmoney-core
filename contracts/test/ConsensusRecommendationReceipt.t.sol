@@ -11,10 +11,8 @@ import {
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
-import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
-import {
-    IConsensusRecommendationReceipt
-} from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../ConsensusRecommendationReceipt.sol";
+import {IConsensusRecommendationReceipt} from "../interfaces/IConsensusRecommendationReceipt.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "./helpers/MockVault.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
@@ -189,7 +187,7 @@ contract ConsensusRecommendationReceiptTest is SafeGovernance {
 
     /// @dev The retired gateway and IC slots are never written by a fresh deploy.
     function testRetiredSlotsAreEmpty() public view {
-        assertEq(receipts.gateway(), address(0));
+        assertEq(address(uint160(uint256(vm.load(address(receipts), bytes32(0))))), address(0));
         assertEq(receipts.icPolicy(), address(0));
     }
 

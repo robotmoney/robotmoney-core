@@ -16,7 +16,7 @@ function run(root?: string): { code: number; out: string } {
 
 const CLEAN: Record<string, string> = {
   "contracts/PortfolioRouter.sol": "contract PortfolioRouter { function setDefaultWeights() external {} }\n",
-  "contracts/gateway/ConsensusRecommendationReceipt.sol": 'import {X} from "../lib/X.sol";\ncontract ConsensusRecommendationReceipt { }\n',
+  "contracts/ConsensusRecommendationReceipt.sol": 'import {X} from "./lib/X.sol";\ncontract ConsensusRecommendationReceipt { }\n',
   "contracts/gateway/RobotMoneyGateway.sol":
     "contract RobotMoneyGateway {\n  function revealAuthorization(address agent) external { _register(agent); }\n  function _validatePolicy(address caller, address shareReceiver) internal pure { if (shareReceiver != caller) revert(); }\n}\n",
   "contracts/gateway/AccessRoles.sol": "abstract contract AccessRoles { }\n",
@@ -44,7 +44,7 @@ describe("system split static guard", () => {
   });
   test("every baseline entry names an issue and a reason", () => {
     const b = JSON.parse(readFileSync(join(repo, "scripts/ci/system-split-baseline.json"), "utf8")) as { known: { issue: number; reason: string; rule: string }[] };
-    expect(b.known.length).toBeGreaterThan(0);
+    expect(b.known.length).toBe(0); // SYS-1 holds (issue 1906): the baseline is empty, a new entry needs a new issue
     for (const k of b.known) { expect(k.issue).toBeGreaterThan(0); expect(k.reason.length).toBeGreaterThan(10); expect(k.rule).toMatch(/^(SYS-1|ACL-9):/); }
   });
   test("a clean temp tree passes", () => expect(run(tree(CLEAN)).code).toBe(0));
@@ -60,7 +60,7 @@ describe("system split static guard", () => {
     expect(r.out).toContain("SYS-1:name");
   });
   test("SYS-1: a writes-only-from-the-gateway modifier fails", () => {
-    const r = mutate("contracts/gateway/ConsensusRecommendationReceipt.sol", "contract R { modifier onlyGateway() { _; } }\n");
+    const r = mutate("contracts/ConsensusRecommendationReceipt.sol", "contract R { modifier onlyGateway() { _; } }\n");
     expect(r.code).toBe(1);
   });
   test("SYS-1: a gateway name in a comment alone does not fail", () => {

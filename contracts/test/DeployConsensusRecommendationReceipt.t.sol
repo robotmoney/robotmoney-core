@@ -8,9 +8,7 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
 import {
     DeployConsensusRecommendationReceipt
 } from "../script/DeployConsensusRecommendationReceipt.s.sol";
-import {
-    IConsensusRecommendationReceipt
-} from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
+import {IConsensusRecommendationReceipt} from "../interfaces/IConsensusRecommendationReceipt.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 
 /// @title DeployConsensusRecommendationReceiptTest
@@ -39,7 +37,11 @@ contract DeployConsensusRecommendationReceiptTest is SafeGovernance {
     /// @dev The receipt deploys alone: its retired gateway and IC slots stay empty.
     function testReceiptDeploysAloneWithRetiredSlotsEmpty() public view {
         assertTrue(address(d.receipts) != address(0), "receipt contract deployed");
-        assertEq(d.receipts.gateway(), address(0), "no gateway binding");
+        assertEq(
+            address(uint160(uint256(vm.load(address(d.receipts), bytes32(0))))),
+            address(0),
+            "retired writer slot empty"
+        );
         assertEq(d.receipts.icPolicy(), address(0), "no IC policy binding");
     }
 

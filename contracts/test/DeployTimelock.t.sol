@@ -22,7 +22,7 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
 import {claimTmpPath, releaseTmpPath, uniqueTmpPath} from "./helpers/TmpPaths.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
-import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../ConsensusRecommendationReceipt.sol";
 import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
 import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";

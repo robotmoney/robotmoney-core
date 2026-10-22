@@ -8,10 +8,8 @@ import {Vm} from "forge-std/Vm.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
-import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
-import {
-    IConsensusRecommendationReceipt
-} from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../ConsensusRecommendationReceipt.sol";
+import {IConsensusRecommendationReceipt} from "../interfaces/IConsensusRecommendationReceipt.sol";
 import {GovernedUUPS, GovernedUpgrade} from "../lib/GovernedUUPS.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
@@ -134,7 +132,11 @@ contract ConsensusReceiptMigrationTest is SafeGovernance {
 
     function test_migration_keepsSlotsAndHistoricalReceiptsUnchanged() public {
         _migrate();
-        assertEq(receipts.gateway(), gatewayStandIn, "retired gateway slot value");
+        assertEq(
+            address(uint160(uint256(vm.load(address(receipts), bytes32(0))))),
+            gatewayStandIn,
+            "retired writer slot value"
+        );
         assertEq(receipts.icPolicy(), committeeStandIn, "retired IC slot value");
         assertEq(receipts.receiptCount(), 2);
 

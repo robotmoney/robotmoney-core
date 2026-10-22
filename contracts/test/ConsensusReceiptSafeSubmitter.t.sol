@@ -5,10 +5,8 @@ pragma solidity ^0.8.24;
 
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
-import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
-import {
-    IConsensusRecommendationReceipt
-} from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../ConsensusRecommendationReceipt.sol";
+import {IConsensusRecommendationReceipt} from "../interfaces/IConsensusRecommendationReceipt.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
 

@@ -23,10 +23,8 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
-import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
-import {
-    IConsensusRecommendationReceipt
-} from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../ConsensusRecommendationReceipt.sol";
+import {IConsensusRecommendationReceipt} from "../interfaces/IConsensusRecommendationReceipt.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 
 import {CoreProxies} from "./helpers/CoreProxies.sol";
@@ -282,7 +280,11 @@ contract GovernedUpgradeTest is SafeGovernance {
         assertEq(address(router.registry()), address(registry));
         assertEq(gateway.usdc(), address(usdc));
         assertTrue(gateway.hasRole(gateway.DEPOSIT_PAUSER_ROLE(), pauser));
-        assertEq(receipts.gateway(), address(0), "retired receipt gateway slot");
+        assertEq(
+            address(uint160(uint256(vm.load(address(receipts), bytes32(0))))),
+            address(0),
+            "retired receipt writer slot"
+        );
         assertEq(receipts.icPolicy(), address(0), "retired receipt IC slot");
         assertEq(address(governance.receipts()), address(receipts));
         address[N] memory p = _proxies();

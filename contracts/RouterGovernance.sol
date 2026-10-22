@@ -11,9 +11,7 @@ import {
 } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {GovernedUUPS} from "./lib/GovernedUUPS.sol";
 import {PortfolioRouter} from "./PortfolioRouter.sol";
-import {
-    IConsensusRecommendationReceipt
-} from "./gateway/interfaces/IConsensusRecommendationReceipt.sol";
+import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommendationReceipt.sol";
 
 /// @title RouterGovernance
 /// @notice The router's weight setter. It holds the Portfolio Router's

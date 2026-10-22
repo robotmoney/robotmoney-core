@@ -9,6 +9,7 @@ export const sidebar = [
           text: "Contracts",
           collapsed: true,
           items: [
+            { text: "ConsensusRecommendationReceipt", link: "/contracts/contract.ConsensusRecommendationReceipt" },
             { text: "ExclusionLedger", link: "/contracts/contract.ExclusionLedger" },
             { text: "PortfolioRouter", link: "/contracts/contract.PortfolioRouter" },
             { text: "ProposerFloorTimelock", link: "/contracts/contract.ProposerFloorTimelock" },
@@ -55,7 +56,6 @@ export const sidebar = [
           text: "Contracts",
           collapsed: true,
           items: [
-            { text: "ConsensusRecommendationReceipt", link: "/contracts/gateway/contract.ConsensusRecommendationReceipt" },
             { text: "RobotMoneyGateway", link: "/contracts/gateway/contract.RobotMoneyGateway" },
           ],
         },
@@ -71,7 +71,6 @@ export const sidebar = [
     {
       text: "contracts/gateway/interfaces",
       items: [
-        { text: "IConsensusRecommendationReceipt", link: "/contracts/gateway/interfaces/interface.IConsensusRecommendationReceipt" },
         { text: "IGateway", link: "/contracts/gateway/interfaces/interface.IGateway" },
         { text: "IInvestmentCommitteePolicy", link: "/contracts/gateway/interfaces/interface.IInvestmentCommitteePolicy" },
         { text: "IPortfolioRouter", link: "/contracts/gateway/interfaces/interface.IPortfolioRouter" },
@@ -87,6 +86,7 @@ export const sidebar = [
         { text: "IAerodromeSlipstreamRouter", link: "/contracts/interfaces/interface.IAerodromeSlipstreamRouter" },
         { text: "IBasketSwapAdapter", link: "/contracts/interfaces/interface.IBasketSwapAdapter" },
         { text: "IComet", link: "/contracts/interfaces/interface.IComet" },
+        { text: "IConsensusRecommendationReceipt", link: "/contracts/interfaces/interface.IConsensusRecommendationReceipt" },
         { text: "IExposureCappedAdapter", link: "/contracts/interfaces/interface.IExposureCappedAdapter" },
         { text: "IObservablePool", link: "/contracts/interfaces/interface.IObservablePool" },
         { text: "IPoolManagerV4", link: "/contracts/interfaces/interface.IPoolManagerV4" },

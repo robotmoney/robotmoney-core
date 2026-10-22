@@ -48,6 +48,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SNAPSHOT_DIR="${SNAPSHOT_DIR:-$REPO_ROOT/contracts/test/fixtures/storage-layout}"
 FORGE="${FORGE:-forge}"
 PINS="$SNAPSHOT_DIR/pins.json"
+RENAMES="${RENAMES:-$REPO_ROOT/scripts/ci/storage-layout-renames.json}"
 
 # contract:source — the nine proxied core contracts (docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md).
 CONTRACTS=(
@@ -58,7 +59,7 @@ CONTRACTS=(
   "VaultRegistry:contracts/VaultRegistry.sol"
   "PortfolioRouter:contracts/PortfolioRouter.sol"
   "RobotMoneyGateway:contracts/gateway/RobotMoneyGateway.sol"
-  "ConsensusRecommendationReceipt:contracts/gateway/ConsensusRecommendationReceipt.sol"
+  "ConsensusRecommendationReceipt:contracts/ConsensusRecommendationReceipt.sol"
   "RouterGovernance:contracts/RouterGovernance.sol"
 )
 
@@ -180,11 +181,13 @@ compare() {
 # extends <label> <live-file> <baseline-file> <baseline-name>: 0 when the live layout extends the baseline
 # append-only, 1 when it moves, retypes or removes anything the baseline holds, 2 input error.
 extends() {
-  local label="$1" live="$2" base="$3" ref="$4" bad
+  local label="$1" live="$2" base="$3" ref="$4" contract="${5:-}" bad
   [[ -s "$base" ]] || { echo "check-core-storage-layout: the snapshot of $label at $ref is empty" >&2; return 2; }
-  bad="$(jq -r --slurpfile b "$base" '
+  # Reviewed label-only renames (storage-layout-renames.json: slot, offset and type pinned) are applied to the baseline rows.
+  bad="$(jq -r --slurpfile b "$base" --slurpfile rn "$RENAMES" --arg c "$contract" '
+    def renamed($rows): $rows | map(. as $r | ([$rn[0].renames[] | select(.contract == $c and .from == $r.label and .slot == $r.slot and .offset == $r.offset and .type == $r.type)] | first) as $m | if $m then .label = $m.to else . end);
     def ext($old; $new): ($old | length) <= ($new | length) and $new[:($old | length)] == $old;
-    . as $l | $b[0] as $o
+    . as $l | ($b[0] | .storage = renamed(.storage // [])) as $o
     | (if ext($o.storage // []; $l.storage // []) then empty else "storage: a variable moved, was retyped or removed" end),
       (($o.structs // {}) | to_entries[] | select(ext(.value; $l.structs[.key] // []) | not) | "struct \(.key): a member moved, was retyped or removed"),
       (($o.namespaces // {}) | to_entries[] | select(ext(.value; $l.namespaces[.key] // []) | not) | "namespace \(.key): a member moved, was retyped or removed"),
@@ -225,7 +228,7 @@ baseline_check() {
       continue
     fi
     git -C "$REPO_ROOT" show "$ref:$rel/$name.json" >"$WORK/baseline.json"
-    extends "$name storage layout" "$dir/$name.json" "$WORK/baseline.json" "$ref" || rc=$?
+    extends "$name storage layout" "$dir/$name.json" "$WORK/baseline.json" "$ref" "$name" || rc=$?
     [[ "$rc" == 2 ]] && return 2
   done
   return "$rc"
@@ -361,8 +364,8 @@ case "${1:-}" in
       cp "$WORK/new.json" "$WORK/snap.json"
       gate "removing the retired gateway slot $retired with a regenerated snapshot fails against the baseline" 1
     done
-    normalized_live "ConsensusRecommendationReceipt" "contracts/gateway/ConsensusRecommendationReceipt.sol" >"$WORK/receipt-live.json"
-    for retired in gateway icPolicy; do
+    normalized_live "ConsensusRecommendationReceipt" "contracts/ConsensusRecommendationReceipt.sol" >"$WORK/receipt-live.json"
+    for retired in _retiredWriterSlot icPolicy; do
       jq --arg l "$retired" '.storage |= map(select(.label != $l))' "$WORK/receipt-live.json" >"$WORK/new.json"
       if [[ "$(jq '.storage | length' "$WORK/new.json")" == "$(jq '.storage | length' "$WORK/receipt-live.json")" ]]; then
         echo "FAIL the receipt layout has no retired slot $retired to remove"; fails=$((fails + 1))
@@ -373,6 +376,24 @@ case "${1:-}" in
         echo "ok   removing the retired receipt slot $retired fails against the baseline"
       fi
     done
+    # Issue 1906: the reviewed label-only rename (gateway -> _retiredWriterSlot) extends the old baseline. Any other change at that slot does not.
+    jq '(.storage[] | select(.label == "_retiredWriterSlot") | .label) = "gateway"' "$WORK/receipt-live.json" >"$WORK/old-baseline.json"
+    if extends "ConsensusRecommendationReceipt" "$WORK/receipt-live.json" "$WORK/old-baseline.json" base ConsensusRecommendationReceipt >"$WORK/out" 2>&1; then
+      echo "ok   the reviewed retired-slot rename extends the baseline that still calls it gateway"
+    else
+      echo "FAIL the reviewed retired-slot rename was refused"; cat "$WORK/out"; fails=$((fails + 1))
+    fi
+    if extends "RobotMoneyGateway" "$WORK/receipt-live.json" "$WORK/old-baseline.json" base RobotMoneyGateway >"$WORK/out" 2>&1; then
+      echo "FAIL a rename recorded for another contract was accepted"; fails=$((fails + 1))
+    else
+      echo "ok   a rename is scoped to the contract it is recorded for"
+    fi
+    jq '(.storage[] | select(.label == "gateway") | .type) = "t_uint256"' "$WORK/old-baseline.json" >"$WORK/old-retyped.json"
+    if extends "ConsensusRecommendationReceipt" "$WORK/receipt-live.json" "$WORK/old-retyped.json" base ConsensusRecommendationReceipt >"$WORK/out" 2>&1; then
+      echo "FAIL a rename of a retyped slot was accepted"; fails=$((fails + 1))
+    else
+      echo "ok   a rename does not cover a retyped slot"
+    fi
     jq '.libraries |= .[1:]' "$WORK/live.json" >"$WORK/new.json"
     cp "$WORK/new.json" "$WORK/snap.json"
     gate "a dropped library link with a regenerated snapshot fails against the baseline" 1

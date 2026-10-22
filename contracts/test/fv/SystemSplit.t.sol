@@ -5,10 +5,8 @@
 // SYS-1  No vaults-system contract depends on the rmpc gateway; rebalancing works with no gateway deployed.
 // ACL-9  An agent's owner never changes, its share receiver is always its owner, no role registers an agent.
 //
-// Both registry entries are RED while the code the siblings remove is still on dev (SYS-1: the receipt keeps a retired gateway slot,
-// issue 1906. ACL-9 holds since the agent lifecycle change, issue 1890). The tests here
-// execute the parts that hold today and pin the registry status to what the bytecode says, so the entry cannot stay RED
-// after the removal or flip HOLDS before it. They compile against names that survive both siblings (artifact names and
+// SYS-1 holds since the receipt left contracts/gateway (issue 1906). ACL-9 holds since the agent lifecycle change (issue 1890).
+// The tests here execute the parts that hold and pin the registry status to what the bytecode says. They compile against names that survive both siblings (artifact names and
 // selectors by string, not by import).
 pragma solidity ^0.8.24;
 
@@ -178,26 +176,18 @@ contract SystemSplitSys1Test is Test {
         return false;
     }
 
-    /// @notice The registry status follows the code: SYS-1 is RED exactly while the receipt register still exposes a
-    ///         gateway binding. The follow-up (1906) must flip the entry to HOLDS in the same PR.
-    function test_SYS1_registryStatusFollowsReceiptBinding() public view {
+    /// @notice SYS-1 HOLDS (issue 1906 moved the receipt out of contracts/gateway): the receipt register exposes no
+    ///         gateway() binding, and the registry entry is HOLDS with no remediation issue.
+    function test_SYS1_receiptExposesNoGatewayBindingAndRegistryHolds() public view {
         bytes memory code =
             vm.getDeployedCode("ConsensusRecommendationReceipt.sol:ConsensusRecommendationReceipt");
-        bool bound = CodeSearch.containsSelector(code, bytes4(keccak256("gateway()")));
+        assertFalse(
+            CodeSearch.containsSelector(code, bytes4(keccak256("gateway()"))),
+            "the receipt must expose no gateway() getter"
+        );
         InvariantRegistry.Entry memory e = InvariantRegistry.get("SYS-1");
-        if (bound) {
-            assertTrue(
-                e.status == InvariantRegistry.Status.RED,
-                "SYS-1 must be RED while the receipt binds a gateway"
-            );
-            assertEq(e.remediationIssue, 1906);
-        } else {
-            assertTrue(
-                e.status == InvariantRegistry.Status.HOLDS,
-                "SYS-1 must be HOLDS once the receipt binds no gateway"
-            );
-            assertEq(e.remediationIssue, 0);
-        }
+        assertTrue(e.status == InvariantRegistry.Status.HOLDS, "SYS-1 must be HOLDS");
+        assertEq(e.remediationIssue, 0);
     }
 }
 

@@ -16,7 +16,7 @@ import {VaultRegistry} from "../../VaultRegistry.sol";
 import {PortfolioRouter} from "../../PortfolioRouter.sol";
 import {RouterGovernance} from "../../RouterGovernance.sol";
 import {RobotMoneyGateway} from "../../gateway/RobotMoneyGateway.sol";
-import {ConsensusRecommendationReceipt} from "../../gateway/ConsensusRecommendationReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../../ConsensusRecommendationReceipt.sol";
 import {ISwapRouter} from "../../interfaces/ISwapRouter.sol";
 
 /// @title CoreProxies
