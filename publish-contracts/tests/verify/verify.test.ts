@@ -128,8 +128,9 @@ describe("no active vector may override the launch vector without an applied rec
 
 describe("label drift", () => {
   test("Twin chain label set equals mainnet label set equals the committed fixture", async () => {
-    const main = (await verifyDeployment(buildWorld(8453).opts)).checks.map((c) => c.label);
-    const twin = (await verifyDeployment(buildWorld(918453).opts)).checks.map((c) => c.label);
+    // issue 1892: the reference is the vaults system, the one a production release verifies; the gateway system has its own label set
+    const main = (await verifyDeployment({ ...buildWorld(8453).opts, system: "vaults" })).checks.map((c) => c.label);
+    const twin = (await verifyDeployment({ ...buildWorld(918453).opts, system: "vaults" })).checks.map((c) => c.label);
     expect(twin).toEqual(main);
     if (process.env.UPDATE_LABELS === "1") {
       writeFileSync(FIXTURE, JSON.stringify(main, null, 2) + "\n");

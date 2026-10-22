@@ -9,7 +9,6 @@ import { repoProxyNames } from "../src/evidence-check.ts";
 import { EXIT_CODES } from "../src/errors.ts";
 import { getStageTable } from "../src/stages.ts";
 import { manifestBase } from "../src/stage-table.ts";
-import { proxySpecs } from "../src/verify/upgradeability.ts";
 import { UPGRADES_ARE_FROZEN_SELECTOR, upgradeLifecycleOnChainProblems, upgradeLifecycleProblems, type LifecycleChain } from "../src/upgrade-lifecycle.ts";
 import { freezeSpecsFor, rerecordProxyManifest } from "../src/upgrade-rows.ts";
 import { stageManifestFile } from "../src/verify/constants.ts";
