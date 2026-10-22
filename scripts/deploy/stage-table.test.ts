@@ -331,9 +331,7 @@ describe("stage-table.json", () => {
     test("SYS-1: no vaults-system stage script names the gateway system's contracts or imports its sources", () => {
       for (const s of t.stages.filter((x) => x.system === "vaults")) {
         const src = scriptSource(s.script.split(":")[0]!);
-        // the stages that still read GATEWAY_ADDRESS (ic-policy, timelock) are removed by the receipt stage (1888) and the agent-free timelock (1890); nothing else may start to
-        const KNOWN = ["receipt", "timelock"];
-        if (KNOWN.includes(s.name)) continue;
+        // no vaults stage reads the gateway: the list of exceptions is empty (issue 1892)
         expect(src, s.name).not.toMatch(/RobotMoneyGateway|GATEWAY_ADDRESS|GatewayWindows|gateway\/RobotMoneyGateway/);
         expect(s.requiredEnv, s.name).not.toContain("GATEWAY_ADDRESS");
       }

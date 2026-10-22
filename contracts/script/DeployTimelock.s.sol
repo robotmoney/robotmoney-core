@@ -14,7 +14,6 @@ import {
 
 import {ProposerFloorTimelock} from "../ProposerFloorTimelock.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
-import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
@@ -43,16 +42,17 @@ interface IRetirableVaultLink {
 
 /// @title DeployTimelock
 /// @notice Deploy an OZ TimelockController and complete the privileged-role
-///         handover on all five Robot Money contracts (RobotMoneyVault,
-///         RobotMoneyGateway, VaultRegistry, PortfolioRouter, RouterGovernance)
+///         handover on the Robot Money vaults-system contracts (RobotMoneyVault,
+///         VaultRegistry, PortfolioRouter, RouterGovernance, ConsensusRecommendationReceipt)
 ///         from the deployer EOA to the TimelockController + an independent
 ///         emergency hot key.
 ///
 ///         After this script runs (ACL-1 / F-01):
-///         - TimelockController holds ADMIN_ROLE on all five contracts AND the
-///           Gateway DEFAULT_ADMIN_ROLE (so it can rotate roles).
+///         - TimelockController holds ADMIN_ROLE on every vault, the registry, the router,
+///           RouterGovernance and the consensus receipt. The deploy touches no gateway: the
+///           gateway system has its own run and its own handover (issue 1892, SYS-1).
 ///         - The deployer EOA holds NO privileged role of any kind:
-///           no ADMIN_ROLE on any contract, no Gateway DEFAULT_ADMIN_ROLE, and
+///           no ADMIN_ROLE on any contract and
 ///           no vault EMERGENCY_ROLE.
 ///         - The deploy registers no gateway agent and hands none over. An agent
 ///           is registered only by its depositor through commit/reveal consent
@@ -77,7 +77,6 @@ interface IRetirableVaultLink {
 ///
 ///         Required env vars:
 ///           VAULT_ADDRESS          — RobotMoneyVault
-///           GATEWAY_ADDRESS        — RobotMoneyGateway
 ///           REGISTRY_ADDRESS       — VaultRegistry
 ///           ROUTER_ADDRESS         — PortfolioRouter
 ///           GOVERNANCE_ADDRESS     — RouterGovernance
@@ -177,7 +176,6 @@ contract DeployTimelock is UpgradeAuthority {
         TimelockController timelock;
         /// Every vault handed over (VAULT_ADDRESSES), all treated the same way.
         address[] vaults;
-        address gateway;
         address registry;
         address router;
         address governance;
@@ -191,7 +189,7 @@ contract DeployTimelock is UpgradeAuthority {
     }
 
     /// @notice Broadcast entrypoint. Reads env vars, deploys timelock, and
-    ///         transfers ADMIN_ROLE on all five contracts (plus the optional
+    ///         transfers ADMIN_ROLE on the vaults-system contracts (plus the optional
     ///         consensus receipt handover — issue #1319).
     function run() external returns (Deployed memory d) {
         return _runFrom("");
@@ -205,7 +203,6 @@ contract DeployTimelock is UpgradeAuthority {
     ///      process-wide and forge runs tests in parallel.
     function _runFrom(string memory prefix) internal returns (Deployed memory d) {
         d.vaults = _readVaultList(string.concat(prefix, "VAULT_ADDRESSES"));
-        d.gateway = _envAddressRequired(string.concat(prefix, "GATEWAY_ADDRESS"));
         d.registry = _envAddressRequired(string.concat(prefix, "REGISTRY_ADDRESS"));
         d.router = _envAddressRequired(string.concat(prefix, "ROUTER_ADDRESS"));
         d.governance = _envAddressRequired(string.concat(prefix, "GOVERNANCE_ADDRESS"));
@@ -244,7 +241,6 @@ contract DeployTimelock is UpgradeAuthority {
     ///         no gateway agent (ACL-9).
     function runInProcess(
         address vault_,
-        address gateway_,
         address registry_,
         address router_,
         address governance_,
@@ -254,7 +250,6 @@ contract DeployTimelock is UpgradeAuthority {
         SafeSpec memory safeSpec_
     ) external returns (Deployed memory d) {
         d.vaults = _single(vault_);
-        d.gateway = gateway_;
         d.registry = registry_;
         d.router = router_;
         d.governance = governance_;
@@ -271,7 +266,6 @@ contract DeployTimelock is UpgradeAuthority {
     ///         sets up prank context. No JSON is written; no env vars are read.
     function runInProcessVaults(
         address[] memory vaults_,
-        address gateway_,
         address registry_,
         address router_,
         address governance_,
@@ -281,7 +275,6 @@ contract DeployTimelock is UpgradeAuthority {
         SafeSpec memory safeSpec_
     ) external returns (Deployed memory d) {
         d.vaults = vaults_;
-        d.gateway = gateway_;
         d.registry = registry_;
         d.router = router_;
         d.governance = governance_;
@@ -309,7 +302,6 @@ contract DeployTimelock is UpgradeAuthority {
     ///        msg.sender.
     function runInProcessWithReceipt(
         address vault_,
-        address gateway_,
         address registry_,
         address router_,
         address governance_,
@@ -320,7 +312,6 @@ contract DeployTimelock is UpgradeAuthority {
         SafeSpec memory safeSpec_
     ) external returns (Deployed memory d) {
         d.vaults = _single(vault_);
-        d.gateway = gateway_;
         d.registry = registry_;
         d.router = router_;
         d.governance = governance_;
@@ -366,7 +357,6 @@ contract DeployTimelock is UpgradeAuthority {
                 require(d.vaults[i] != d.vaults[j], "VAULT_ADDRESSES contains a duplicate");
             }
         }
-        require(d.gateway != address(0), "GATEWAY_ADDRESS=0");
         require(d.registry != address(0), "REGISTRY_ADDRESS=0");
         require(d.router != address(0), "ROUTER_ADDRESS=0");
         require(d.governance != address(0), "GOVERNANCE_ADDRESS=0");
@@ -469,30 +459,7 @@ contract DeployTimelock is UpgradeAuthority {
         timelock = _deployTimelockAtPrediction(d.safe, d.minDelay);
         _requireUpgradeAuthority(d, address(timelock));
 
-        // ACL-7 / NC-10: GATE THE GRANT-DoS. The Gateway's agent registration is
-        // permissionless (anyone may `commitAuthorization`/`revealAuthorization`),
-        // and the role-separation invariant forbids one account from holding both
-        // AGENT_ROLE and an ADMIN/DEPOSIT_PAUSER-tier role. An attacker who front-runs the
-        // handover by pre-binding an INTENDED admin/deposit-pauser address as an AGENT
-        // would make the subsequent `grantRole(ADMIN_ROLE, …)` revert with
-        // `RoleSeparationViolated`, bricking the handover with a confusing,
-        // late-stage failure.
-        //
-        // Assert UP FRONT — before any gateway grant — that every address about to
-        // receive an ADMIN/DEPOSIT_PAUSER-tier role on the Gateway is AGENT-free. The
-        // freshly-deployed `timelock` cannot have been pre-bound, but we assert it
-        // anyway (defence in depth and a clear, typed early failure). This turns a
-        // griefing vector into an explicit deploy-time precondition.
-        require(
-            !IAccessControl(d.gateway).hasRole(AGENT_ROLE, address(timelock)),
-            "ACL-7: timelock pre-bound as gateway AGENT - handover would brick"
-        );
-        require(
-            !IAccessControl(d.gateway).hasRole(AGENT_ROLE, d.safe),
-            "ACL-7: safe pre-bound as gateway AGENT - handover would brick"
-        );
-
-        // 2. Grant ADMIN_ROLE to the timelock on all five contracts, then
+        // 2. Grant ADMIN_ROLE to the timelock on the vaults-system contracts, then
         //    revoke ADMIN_ROLE from msg.sender (the deployer).
         //    Order: grant → verify → revoke to ensure we never lose admin.
 
@@ -540,40 +507,6 @@ contract DeployTimelock is UpgradeAuthority {
             );
         }
 
-        // RobotMoneyGateway
-        //
-        // ACL-1 / F-01: unlike the other four contracts (whose roles are all
-        // administered by ADMIN_ROLE), the Gateway grants the deployer
-        // DEFAULT_ADMIN_ROLE at construction, and every Gateway role's admin —
-        // except AGENT_ROLE, redirected to ADMIN_ROLE in the constructor — is
-        // DEFAULT_ADMIN_ROLE. A naked ADMIN_ROLE-only handover would leave the
-        // deployer EOA holding the Gateway root (re-grant ADMIN, take over
-        // agents, block the Timelock from rotating roles). So hand over BOTH
-        // ADMIN_ROLE and DEFAULT_ADMIN_ROLE to the Timelock and revoke both from
-        // the deployer.
-        //
-        // No role can register or manage agents (ACL-9), so revoking
-        // DEFAULT_ADMIN_ROLE here cannot affect agent onboarding.
-        IAccessControl(d.gateway).grantRole(ADMIN_ROLE, address(timelock));
-        require(
-            IAccessControl(d.gateway).hasRole(ADMIN_ROLE, address(timelock)),
-            "Timelock missing ADMIN_ROLE on gateway"
-        );
-        IAccessControl(d.gateway).grantRole(DEFAULT_ADMIN_ROLE, address(timelock));
-        require(
-            IAccessControl(d.gateway).hasRole(DEFAULT_ADMIN_ROLE, address(timelock)),
-            "Timelock missing DEFAULT_ADMIN_ROLE on gateway"
-        );
-        IAccessControl(d.gateway).revokeRole(ADMIN_ROLE, msg.sender);
-        require(
-            !IAccessControl(d.gateway).hasRole(ADMIN_ROLE, msg.sender),
-            "Deployer still has ADMIN_ROLE on gateway"
-        );
-        IAccessControl(d.gateway).revokeRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        require(
-            !IAccessControl(d.gateway).hasRole(DEFAULT_ADMIN_ROLE, msg.sender),
-            "Deployer still has DEFAULT_ADMIN_ROLE on gateway"
-        );
         // VaultRegistry
         IAccessControl(d.registry).grantRole(ADMIN_ROLE, address(timelock));
         require(
@@ -807,7 +740,6 @@ contract DeployTimelock is UpgradeAuthority {
         for (uint256 i = 0; i < d.vaults.length; i++) {
             _requireNamesTimelock(d.vaults[i], timelock);
         }
-        _requireNamesTimelock(d.gateway, timelock);
         _requireNamesTimelock(d.registry, timelock);
         _requireNamesTimelock(d.router, timelock);
         _requireNamesTimelock(d.governance, timelock);
@@ -823,7 +755,7 @@ contract DeployTimelock is UpgradeAuthority {
 
     function _logResult(Deployed memory d) internal pure {
         console2.log(
-            "ProposerFloorTimelock (TimelockController with the last-proposer floor) deployed and ADMIN_ROLE transferred on all five contracts"
+            "ProposerFloorTimelock (TimelockController with the last-proposer floor) deployed and ADMIN_ROLE transferred on all four contracts"
         );
         console2.log("  timelock    :", address(d.timelock));
         console2.log("  safe        :", d.safe);
@@ -832,7 +764,6 @@ contract DeployTimelock is UpgradeAuthority {
         for (uint256 i = 0; i < d.vaults.length; i++) {
             console2.log("  vault       :", d.vaults[i]);
         }
-        console2.log("  gateway     :", d.gateway);
         console2.log("  registry    :", d.registry);
         console2.log("  router      :", d.router);
         console2.log("  governance  :", d.governance);
@@ -886,7 +817,6 @@ contract DeployTimelock is UpgradeAuthority {
         vm.serializeString(obj, "cancellerPolicy", CANCELLER_POLICY);
         vm.serializeAddress(obj, "vault", d.vaults[0]);
         vm.serializeAddress(obj, "vaults", d.vaults);
-        vm.serializeAddress(obj, "gateway", d.gateway);
         vm.serializeAddress(obj, "registry", d.registry);
         vm.serializeAddress(obj, "router", d.router);
         vm.serializeAddress(obj, "governance", d.governance);
@@ -909,7 +839,6 @@ contract DeployTimelock is UpgradeAuthority {
         vm.serializeAddress(addrs, "emergency", d.emergency);
         vm.serializeAddress(addrs, "vault", d.vaults[0]);
         vm.serializeAddress(addrs, "vaults", d.vaults);
-        vm.serializeAddress(addrs, "gateway", d.gateway);
         vm.serializeAddress(addrs, "registry", d.registry);
         vm.serializeAddress(addrs, "router", d.router);
         vm.serializeAddress(addrs, "consensus_receipt", d.consensusReceipt);
@@ -922,7 +851,6 @@ contract DeployTimelock is UpgradeAuthority {
         vm.serializeBytes32(hashes, "timelock", address(d.timelock).codehash);
         vm.serializeBytes32(hashes, "safe", d.safe.codehash);
         vm.serializeBytes32(hashes, "vault", d.vaults[0].codehash);
-        vm.serializeBytes32(hashes, "gateway", d.gateway.codehash);
         vm.serializeBytes32(hashes, "registry", d.registry.codehash);
         vm.serializeBytes32(hashes, "router", d.router.codehash);
         vm.serializeBytes32(hashes, "router_implementation", _implementationCodeHash(d.router));
@@ -1053,11 +981,6 @@ contract DeployTimelock is UpgradeAuthority {
             roles,
             "timelock_has_registry_admin_role",
             IAccessControl(d.registry).hasRole(ADMIN_ROLE, address(d.timelock))
-        );
-        vm.serializeBool(
-            roles,
-            "timelock_has_gateway_default_admin_role",
-            IAccessControl(d.gateway).hasRole(DEFAULT_ADMIN_ROLE, address(d.timelock))
         );
         vm.serializeBool(roles, "emergency_key_has_vault_emergency_role", allEmergencyKey);
         vm.serializeBool(roles, "deployer_has_vault_emergency_role", deployerHoldsVaultRole);

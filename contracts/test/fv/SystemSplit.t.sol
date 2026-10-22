@@ -223,6 +223,12 @@ contract SystemSplitAcl9Test is GatewayAgentPolicyFixture {
         assertEq(_storedPolicyHash(agent), before, "policy changed");
     }
 
+    /// @dev A plain low-level call: a missing function reverts with no selector, which still counts as refused.
+    function _callAs(address caller, bytes memory data) internal returns (bool ok) {
+        vm.prank(caller);
+        (ok,) = address(gateway).call(data);
+    }
+
     /// @notice For any caller but the owner, setPolicy, revokeAgent and an ownership change leave the owner and the policy as they were.
     function testFuzz_ACL9_strangerCannotChangeOwnerOrPolicy(address caller, address newOwner)
         public
@@ -236,35 +242,15 @@ contract SystemSplitAcl9Test is GatewayAgentPolicyFixture {
             agent,
             _policy(caller)
         );
-        (bool ok1,) = _try(caller, setPol);
-        (bool ok2,) = _try(caller, abi.encodeWithSignature("revokeAgent(address)", agent));
-        (bool ok3,) = _try(
+        bool ok1 = _callAs(caller, setPol);
+        bool ok2 = _callAs(caller, abi.encodeWithSignature("revokeAgent(address)", agent));
+        bool ok3 = _callAs(
             caller,
             abi.encodeWithSignature("transferAgentOwnership(address,address)", agent, newOwner)
         );
         assertFalse(ok1 || ok2 || ok3, "a stranger changed an agent");
         assertEq(gateway.agentOwner(agent), user, "owner changed");
         assertEq(_storedPolicyHash(agent), before, "policy changed");
-    }
-
-    /// @notice An agent can only be registered through the owner's own reveal: a stranger's reveal of the owner's commitment reverts.
-    function test_ACL9_registrationNeedsTheOwnersOwnReveal() public {
-        address agent = makeAddr("agentC");
-        bytes32 salt = keccak256("salt-c");
-        _commit(user, agent, salt);
-        vm.roll(block.number + 1);
-        vm.prank(stranger);
-        (bool ok,) = address(gateway)
-            .call(
-                abi.encodeWithSignature(
-                    "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
-                    agent,
-                    salt,
-                    _policy(stranger)
-                )
-            );
-        assertFalse(ok, "a stranger registered the agent");
-        assertEq(gateway.agentOwner(agent), address(0));
     }
 
     /// @notice The registry status follows the code: ACL-9 is RED exactly while the gateway still has

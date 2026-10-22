@@ -1,0 +1,66 @@
+---
+title: "SystemSplitInvariantTest"
+---
+
+# SystemSplitInvariantTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7c2e53fe327c80d91d5d140cb198d84a94ad506c/contracts/test/fv/SystemSplitInvariant.t.sol)
+
+**Inherits:** Test
+
+## State Variables
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### gov
+
+```solidity
+RouterGovernance internal gov;
+```
+
+### handler
+
+```solidity
+SystemSplitHandler internal handler;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="invariant_sys1_effectiveweightssumtomaxbpswithnogateway"></a>
+
+### invariant_SYS1_effectiveWeightsSumToMaxBpsWithNoGateway
+
+Whatever the sequence of default-weight changes, the effective vector sums to MAX_BPS with no gateway present.
+
+```solidity
+function invariant_SYS1_effectiveWeightsSumToMaxBpsWithNoGateway() public view;
+```
+
+<a id="invariant_sys1_novaultscontractholdsagateway"></a>
+
+### invariant_SYS1_noVaultsContractHoldsAGateway
+
+The vaults contracts answer no gateway() call: none holds a gateway address.
+
+```solidity
+function invariant_SYS1_noVaultsContractHoldsAGateway() public view;
+```
+

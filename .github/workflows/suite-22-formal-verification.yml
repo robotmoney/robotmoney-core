@@ -125,11 +125,11 @@ jobs:
       - name: forge test (invariant spec harness, contracts/test/fv)
         # The coverage-map gate, the per-invariant tests and the dedicated harnesses.
         # A red invariant would be skipped; an un-skipped red test (landed
-        # remediation) must pass. Floor 39 is every test in contracts/test/fv/
-        # (QA plan v1 T5): CoverageMap 3, CustodyMultiVault 4, DeployAssertions 3,
-        # FvInvariants 27, TwapManipulation 2.
+        # remediation) must pass. Floor 49 is every test in contracts/test/fv/
+        # (QA plan v1 T5): CoverageMap 5, CustodyMultiVault 4, DeployAssertions 3,
+        # FvInvariants 27, SystemSplit 8 (Sys1 4, Acl9 3, Invariant 1), TwapManipulation 2.
         run: |
-          FORGE_TEST_MIN_EXECUTED=39 bash .github/scripts/forge_test_require_executed.sh \
+          FORGE_TEST_MIN_EXECUTED=49 bash .github/scripts/forge_test_require_executed.sh \
             --match-path 'contracts/test/fv/**' -vvv
 
       - name: forge test (custody invariant + guards — anchoring proofs)

@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { ADMIN, LOCAL_RPC, SCRIPT, legacyGatewayShimNeeded, world } from "./harness.ts";
+import { ADMIN, LOCAL_RPC, SCRIPT, world } from "./harness.ts";
 import { impersonatedSender, loopbackKeySigner } from "../src/safe/index.ts";
 import type { CliDeps } from "../src/cli.ts";
 import { topUpSimulationUsdc } from "../src/preflight.ts";
@@ -77,7 +77,7 @@ describe("preflight (--dry-run)", () => {
     const w = world();
     expect(await w.run(["--stage", "deploy", "--dry-run"])).toBe(0);
     const dir = join(w.coreDir, "deployments", "918453");
-    expect(existsSync(dir) ? readdirSync(dir) : []).toEqual(legacyGatewayShimNeeded() ? ["gateway.json"] : []); // only the legacy gateway manifest the world holds (issue 1892)
+    expect(existsSync(dir) ? readdirSync(dir) : []).toEqual([]);
     expect(existsSync(join(w.evidence, "publish-run.json"))).toBe(false);
   });
   test("a failing simulation of one vault script fails the preflight and the chain is still stopped", async () => {

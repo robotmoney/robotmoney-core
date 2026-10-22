@@ -65,7 +65,7 @@ export interface World {
   coreCheckCode: number;
 }
 
-export interface WorldOpts { /** Reuse this directory (a spawned CLI process rebuilds the same world from it). */ dir?: string; chainId?: number; sheet?: Record<string, string | null>; counts?: Record<string, number>; startNonce?: number; writeSafeManifest?: boolean; writeFrozen?: boolean; /** Issue 1892: the caller writes the legacy gateway manifest itself (into its own manifest dir). */ noGatewayShim?: boolean; /** Issue 1892: `gateway` builds the gateway system world: its sheet, the vaults manifests it consumes, and `--system gateway` on every run. */ system?: "vaults" | "gateway" }
+export interface WorldOpts { /** Reuse this directory (a spawned CLI process rebuilds the same world from it). */ dir?: string; chainId?: number; sheet?: Record<string, string | null>; counts?: Record<string, number>; startNonce?: number; writeSafeManifest?: boolean; writeFrozen?: boolean; /** Issue 1892: `gateway` builds the gateway system world: its sheet, the vaults manifests it consumes, and `--system gateway` on every run. */ system?: "vaults" | "gateway" }
 
 /** The operator and the reviewer type the stage name. */
 export function typedPrompt(): (q: string) => Promise<string> {
@@ -79,13 +79,6 @@ export function fakeSigner(spec = "keystore:/dev/shm/stub/DEPLOYER"): PublishSig
     async forgeArgs() { return ["--keystore", "/dev/shm/stub/DEPLOYER", "--sender", ADMIN]; },
     async safeSigner() { return { kind: "keystore", modes: ["raw"], address: async () => ADMIN } as never; },
   };
-}
-
-/** True while a vaults-system stage of the table still reads GATEWAY_ADDRESS (before 1888 and 1890 drop it): such a world holds a gateway manifest that is NOT a gateway-system run. */
-export const legacyGatewayShimNeeded = (): boolean => getStageTable().stages.some((s) => s.system !== "gateway" && s.requiredEnv.includes("GATEWAY_ADDRESS"));
-export function writeLegacyGatewayShim(dir: string, chainId: number): void {
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "gateway.json"), JSON.stringify({ chain_id: chainId, gateway: "0x00000000000000000000000000000000000000a9" }));
 }
 
 export function world(o: WorldOpts = {}): World {
@@ -104,9 +97,6 @@ export function world(o: WorldOpts = {}): World {
   writeFileSync(join(coreDir, "foundry.toml"), 'optimizer_runs = 100\nevm_version = "cancun"\n');
   // the build artifact the runner and the stub forge derive the core timelock address from (issue 1835)
   cpSync(join(import.meta.dir, "fixtures", "build-out", "ProposerFloorTimelock.sol"), join(coreDir, "out", "ProposerFloorTimelock.sol"), { recursive: true });
-  // Issue 1892: the vaults system needs no gateway. Until the receipt stage (1888) and the agent-free timelock stage (1890) land in core, the ic-policy and timelock stages still
-  // read GATEWAY_ADDRESS from the gateway manifest, so a vaults world holds one then. The condition reads the table: with no such stage the fixture is not written.
-  if (o.system !== "gateway" && !o.noGatewayShim && legacyGatewayShimNeeded()) writeLegacyGatewayShim(join(coreDir, "deployments", String(chainId)), chainId);
   const sheetPath = join(dir, "sheet.env");
   const delay = chainId === 8453 ? "172800" : "60";
   writeFileSync(sheetPath, o.system === "gateway" ? gatewaySheetText(chainId, o.sheet ?? {}) : sheetText({ CHAIN_ID: String(chainId), EXPECTED_CHAIN_ID: String(chainId), SAFE_OWNERS: PROVE_OWNERS.join(","), TIMELOCK_MIN_DELAY: delay, GOVERN_NEW_DELAY: chainId === 8453 ? "172800" : "3600", ...(o.sheet ?? {}) }));

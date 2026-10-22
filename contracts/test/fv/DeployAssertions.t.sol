@@ -127,9 +127,9 @@ contract Ora3BasketVault is BasketVault {
 ///      itself calls `runHandover`, so inside the handover `msg.sender` (the
 ///      address revoked) is this harness — mirroring the broadcast path where the
 ///      deployer key both grants and is revoked. It first delegates the
-///      role-granting authority (ADMIN_ROLE on all five contracts, plus the
-///      gateway DEFAULT_ADMIN_ROLE) to `address(script)`, which is what executes
-///      the script's grant/revoke external calls.
+///      role-granting authority (ADMIN_ROLE on the vault, registry, router and governance)
+///      to `address(script)`, which is what executes the script's grant/revoke external
+///      calls. The handover touches no gateway (issue 1892).
 contract _FvDeployerHarness {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant DEFAULT_ADMIN_ROLE = 0x00;
@@ -137,7 +137,6 @@ contract _FvDeployerHarness {
     function grantAdminTo(
         address script_,
         address vault_,
-        address gateway_,
         address registry_,
         address router_,
         address governance_
@@ -146,17 +145,11 @@ contract _FvDeployerHarness {
         IAccessControl(registry_).grantRole(ADMIN_ROLE, script_);
         IAccessControl(router_).grantRole(ADMIN_ROLE, script_);
         IAccessControl(governance_).grantRole(ADMIN_ROLE, script_);
-        // The gateway administers ADMIN_ROLE and DEFAULT_ADMIN_ROLE under
-        // DEFAULT_ADMIN_ROLE; the script needs both to grant the timelock the
-        // gateway root and to revoke them from this harness.
-        IAccessControl(gateway_).grantRole(ADMIN_ROLE, script_);
-        IAccessControl(gateway_).grantRole(DEFAULT_ADMIN_ROLE, script_);
     }
 
     function runHandover(
         DeployTimelock script_,
         address vault_,
-        address gateway_,
         address registry_,
         address router_,
         address governance_,
@@ -166,15 +159,7 @@ contract _FvDeployerHarness {
         DeployTimelock.SafeSpec memory safeSpec_
     ) external returns (DeployTimelock.Deployed memory) {
         return script_.runInProcess(
-            vault_,
-            gateway_,
-            registry_,
-            router_,
-            governance_,
-            safe_,
-            emergency_,
-            minDelay_,
-            safeSpec_
+            vault_, registry_, router_, governance_, safe_, emergency_, minDelay_, safeSpec_
         );
     }
 }
@@ -188,7 +173,6 @@ contract DeployAssertionsTest is SafeFixture {
 
     // ACL-1 fixture handles (storage, to avoid stack-too-deep in the test body).
     RobotMoneyVault internal _aclVault;
-    RobotMoneyGateway internal _aclGateway;
     VaultRegistry internal _aclRegistry;
     PortfolioRouter internal _aclRouter;
     RouterGovernance internal _aclGovernance;
@@ -232,17 +216,6 @@ contract DeployAssertionsTest is SafeFixture {
         address deployer = _aclDeployer;
 
         // ACL-1: the deployer EOA holds NO privileged role of ANY kind.
-        assertFalse(
-            _aclGateway.hasRole(DEFAULT_ADMIN_ROLE, deployer),
-            "deployer retains Gateway DEFAULT_ADMIN"
-        );
-        assertFalse(
-            _aclGateway.hasRole(ADMIN_ROLE, deployer), "deployer retains Gateway ADMIN_ROLE"
-        );
-        assertFalse(
-            _aclGateway.hasRole(DEPOSIT_PAUSER_ROLE, deployer),
-            "deployer retains Gateway DEPOSIT_PAUSER_ROLE"
-        );
         assertFalse(_aclVault.hasRole(ADMIN_ROLE, deployer), "deployer retains vault ADMIN_ROLE");
         assertFalse(
             _aclVault.hasRole(EMERGENCY_ROLE, deployer), "deployer retains vault EMERGENCY_ROLE"
@@ -263,15 +236,10 @@ contract DeployAssertionsTest is SafeFixture {
             "timelock missing governance WEIGHT_SETTER_ROLE (applyReceipt)"
         );
 
-        // The independent hot key holds the vault EMERGENCY_ROLE; the Timelock
-        // holds the Gateway root.
+        // The independent hot key holds the vault EMERGENCY_ROLE.
         assertTrue(
             _aclVault.hasRole(EMERGENCY_ROLE, _aclEmergency), "emergency hot key missing EMERGENCY"
         );
-        assertTrue(
-            _aclGateway.hasRole(DEFAULT_ADMIN_ROLE, timelock), "timelock missing gateway root"
-        );
-        assertTrue(_aclGateway.hasRole(ADMIN_ROLE, timelock), "timelock missing gateway ADMIN");
     }
 
     /// @notice ACL-7 / NC-10 (FLIPPED GREEN by #970): permissionless agent
@@ -313,19 +281,9 @@ contract DeployAssertionsTest is SafeFixture {
         vm.expectRevert(); // RoleSeparationViolated (cross-tier overlap)
         gw.grantRole(ADMIN_ROLE, intendedAdmin);
 
-        // Layer 2: the deploy-time guard catches the same condition explicitly. A
-        // clean handover — where no intended admin/pauser is pre-bound as AGENT —
-        // passes the guard and completes, which the full ACL-1 handover fixture
-        // already exercises end-to-end.
-        address freshTimelock = _deployAclFixtureAndHandover();
-        assertFalse(
-            _aclGateway.hasRole(AGENT_ROLE, freshTimelock),
-            "ACL-7: handed-over timelock must be AGENT-free"
-        );
-        assertTrue(
-            _aclGateway.hasRole(ADMIN_ROLE, freshTimelock),
-            "ACL-7: AGENT-free timelock receives gateway ADMIN without a grant-DoS"
-        );
+        // Layer 2 moved with the gateway handover to HandoverGateway (issue 1892):
+        // GatewaySystemDeploy.t.sol::test_handover_agentPreBoundAdminRefused pins that the
+        // gateway handover refuses a pre-bound admin before any role moves.
     }
 
     /// @dev Minimal valid agent policy for the ACL-7 grant-DoS fixture.
@@ -369,9 +327,6 @@ contract DeployAssertionsTest is SafeFixture {
         _aclVault = CoreProxies.robotMoneyVault(
             usdc, type(uint256).max, type(uint256).max, 0, safe, _aclDeployer, _aclDeployer
         );
-        _aclGateway = CoreProxies.robotMoneyGateway(
-            usdc, _aclVault, _aclDeployer, makeAddr("fv-pauser"), address(0)
-        );
         _aclRegistry = CoreProxies.vaultRegistry(_aclDeployer);
         _aclRouter = CoreProxies.portfolioRouter(address(usdc), address(_aclRegistry), _aclDeployer);
         _aclGovernance =
@@ -409,7 +364,6 @@ contract DeployAssertionsTest is SafeFixture {
         harness.grantAdminTo(
             address(script),
             address(_aclVault),
-            address(_aclGateway),
             address(_aclRegistry),
             address(_aclRouter),
             address(_aclGovernance)
@@ -417,16 +371,12 @@ contract DeployAssertionsTest is SafeFixture {
 
         // Pre-condition (pre-fix gap): the deployer EOA DOES hold the at-risk roles.
         assertTrue(
-            _aclGateway.hasRole(DEFAULT_ADMIN_ROLE, _aclDeployer), "pre: gateway root on deployer"
-        );
-        assertTrue(
             _aclVault.hasRole(EMERGENCY_ROLE, _aclDeployer), "pre: vault EMERGENCY on deployer"
         );
 
         DeployTimelock.Deployed memory d = harness.runHandover(
             script,
             address(_aclVault),
-            address(_aclGateway),
             address(_aclRegistry),
             address(_aclRouter),
             address(_aclGovernance),

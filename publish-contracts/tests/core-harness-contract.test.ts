@@ -17,7 +17,7 @@ import { getStageTable } from "../src/stages.ts";
 import { manifestFile } from "../src/stage-table.ts";
 import { REPO_ROOT } from "./repo-root.ts";
 import { SHA, tmp } from "./fixtures.ts";
-import { legacyGatewayShimNeeded, world, writeLegacyGatewayShim } from "./harness.ts";
+import { world } from "./harness.ts";
 import { writeGovernManifests } from "./govern-world.ts";
 
 const ENTRY = join(import.meta.dir, "stubs", "cli-entry.ts");
@@ -44,7 +44,7 @@ interface Case { dir: string; cwd: string; manifestDir: string; sheet: string; s
 
 /** One harness boot: a work dir with the keystores layout core makes (DEPLOYER and SAFE_OWNER_* under one passphrase file), the manifest dir, and a cwd inside a core checkout. */
 function boot(o: { withEnv?: Record<string, string>; noYes?: boolean } = {}): Case {
-  const w = world({ chainId: 918453, noGatewayShim: true });
+  const w = world({ chainId: 918453 });
   const keyDir = join(w.dir, "keys");
   mkdirSync(keyDir, { recursive: true });
   for (const n of ["DEPLOYER", "SAFE_OWNER_A", "SAFE_OWNER_B", "SAFE_OWNER_C"]) writeFileSync(join(keyDir, n), "{}");
@@ -56,7 +56,6 @@ function boot(o: { withEnv?: Record<string, string>; noYes?: boolean } = {}): Ca
   copyFileSync(join(w.countsDir, `${SHA}.json`), join(cwd, "deployments", "frozen-counts", `${SHA}.json`));
   const manifestDir = join(w.dir, "manifests");
   mkdirSync(manifestDir, { recursive: true });
-  if (legacyGatewayShimNeeded()) writeLegacyGatewayShim(manifestDir, 918453);
   const clean = Object.fromEntries(Object.entries(process.env).filter(([k, v]) => v !== undefined && !/PRIVATE_KEY|ETH_PASSWORD|MNEMONIC|CHAIN_SIGNER|^YES$|^CONFIRM$/.test(k))) as Record<string, string>;
   const env: Record<string, string> = {
     ...clean, PATH: `${join(import.meta.dir, "stubs")}:${process.env.PATH}`, STUB_STATE: w.statePath, STUB_CONFIG: w.cfgPath, CONTRACT_TEST_WORLD: w.dir,
@@ -90,7 +89,7 @@ describe("core harness contract: the argument vector and environment core builds
     expect(r.code).toBe(0);
     // the same stage set as --stage deploy: safe first, then every table stage through timelock
     const vaultStages = getStageTable().stages.filter((s) => s.system !== "gateway"); // issue 1892: the publish verb runs the vaults system
-    const want = ["safe.json", ...vaultStages.map((s) => manifestFile(s.manifest)), ...(legacyGatewayShimNeeded() ? ["gateway.json"] : [])].sort();
+    const want = ["safe.json", ...vaultStages.map((s) => manifestFile(s.manifest))].sort();
     expect(readdirSync(c.manifestDir).sort()).toEqual(want);
     expect(existsSync(join(c.w.coreDir, "deployments", "918453"))).toBe(false);
     const forge = c.w.state().calls.filter((x: any) => x.tool === "forge" && x.args.includes("--broadcast"));

@@ -1,0 +1,200 @@
+---
+title: "SystemSplitSys1Test"
+description: "SYS-1 executed assertions."
+---
+
+# SystemSplitSys1Test
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7c2e53fe327c80d91d5d140cb198d84a94ad506c/contracts/test/fv/SystemSplit.t.sol)
+
+**Inherits:** Test
+
+**Title:** SystemSplitSys1Test
+
+SYS-1 executed assertions.
+
+## State Variables
+
+### usdc
+
+```solidity
+MockUsdc internal usdc;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### gov
+
+```solidity
+RouterGovernance internal gov;
+```
+
+### vaultA
+
+```solidity
+MockGovVault internal vaultA;
+```
+
+### vaultB
+
+```solidity
+MockGovVault internal vaultB;
+```
+
+### govAdmin
+
+```solidity
+address internal govAdmin = makeAddr("govAdmin");
+```
+
+### routerAdmin
+
+```solidity
+address internal routerAdmin = makeAddr("routerAdmin");
+```
+
+### registryAdmin
+
+```solidity
+address internal registryAdmin = makeAddr("registryAdmin");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+<i>
+
+The vaults system, deployed with NO gateway anywhere. The receipt register is a code-bearing stand-in:
+setDefaultWeights never reads it.
+
+</i>
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_sys1_defaultweightssetwithnogateway"></a>
+
+### test_SYS1_defaultWeightsSetWithNoGateway
+
+Rebalancing works with no gateway deployed: the admin sets default weights and the router routes by them.
+
+```solidity
+function test_SYS1_defaultWeightsSetWithNoGateway() public;
+```
+
+<a id="test_sys1_vaultscontractshavenogatewaysurface"></a>
+
+### test_SYS1_vaultsContractsHaveNoGatewaySurface
+
+Router, registry and RouterGovernance expose no gateway getter or setter and no onlyGateway entrypoint.
+
+```solidity
+function test_SYS1_vaultsContractsHaveNoGatewaySurface() public view;
+```
+
+<a id="_assertnogateway-string"></a>
+
+### _assertNoGateway
+
+```solidity
+function _assertNoGateway(string memory artifact) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| artifact | `string` |  |
+
+<a id="test_sys1_cleanvaultssourcesnamenogateway"></a>
+
+### test_SYS1_cleanVaultsSourcesNameNoGateway
+
+Source scan: the vaults-system sources that are already clean import nothing from the gateway and
+name no gateway type or modifier in code (comments are skipped). RouterGovernance and the receipt
+are the known violations listed in scripts/ci/system-split-baseline.json.
+
+```solidity
+function test_SYS1_cleanVaultsSourcesNameNoGateway() public view;
+```
+
+<a id="_assertsourceclean-string"></a>
+
+### _assertSourceClean
+
+```solidity
+function _assertSourceClean(string memory path) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| path | `string` |  |
+
+<a id="_iscomment-bytes"></a>
+
+### _isComment
+
+```solidity
+function _isComment(bytes memory line) internal pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| line | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_has-bytes-bytes"></a>
+
+### _has
+
+```solidity
+function _has(bytes memory hay, bytes memory needle) internal pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| hay | `bytes` |  |
+| needle | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="test_sys1_registrystatusfollowsreceiptbinding"></a>
+
+### test_SYS1_registryStatusFollowsReceiptBinding
+
+The registry status follows the code: SYS-1 is RED exactly while the receipt register still exposes a
+gateway binding. The removal (1888) must flip the entry to HOLDS in the same PR.
+
+```solidity
+function test_SYS1_registryStatusFollowsReceiptBinding() public view;
+```
+

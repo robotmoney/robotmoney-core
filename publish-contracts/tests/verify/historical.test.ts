@@ -1,6 +1,6 @@
 // Issue 1892: the historical combined deployment (deployments/8453/deploy-2, one run that deployed the gateway, the agents list and the handover together) stays readable.
 // Its manifests are never rewritten; the combined (legacy) reading keeps the meaning of its agent fields, and a vaults or gateway reading does not consume them.
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -18,12 +18,19 @@ import { REPO } from "../fixtures.ts";
 const DEPLOY2 = join(REPO, "deployments", "8453", "deploy-2");
 const legacy = scopeTable(getStageTable(), "legacy");
 
+/** The deployed release (v0.5.0) wrote ic-policy.json where the target writes receipt.json (issue 1888). The committed files are never renamed: a temp copy carries the target's name. */
+function aliasedCopy(): string {
+  const dir = mkdtempSync(join(tmpdir(), "deploy2-"));
+  for (const f of readdirSync(DEPLOY2).filter((x) => x.endsWith(".json"))) copyFileSync(join(DEPLOY2, f), join(dir, f === "ic-policy.json" ? "receipt.json" : f));
+  return dir;
+}
+
 describe("deployments/8453/deploy-2, the combined deployment (issue 1892)", () => {
   test("every manifest the combined reading requires is committed there, and the vaults list names four vaults", () => {
-    const m = loadManifests(DEPLOY2, legacy);
+    const m = loadManifests(aliasedCopy(), legacy);
     expect(m.missing).toEqual([]);
     expect(m.vaults.length).toBe(4);
-    expect(requiredManifests(legacy).sort()).toEqual(readdirSync(DEPLOY2).filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort());
+    expect(requiredManifests(legacy).sort()).toEqual(readdirSync(DEPLOY2).filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "").replace(/^ic-policy$/, "receipt")).sort());
     // the gateway handover manifest belongs to the gateway system only: the combined deployment never had one
     expect(requiredManifests(legacy)).not.toContain("gateway-handover");
     expect(requiredManifests(scopeTable(getStageTable(), "vaults"))).not.toContain("gateway");
@@ -42,12 +49,10 @@ describe("deployments/8453/deploy-2, the combined deployment (issue 1892)", () =
     const tl = JSON.parse(readFileSync(tlFile, "utf8"));
     writeFileSync(tlFile, JSON.stringify({ ...tl, roles: { ...tl.roles, ...roles } }));
     expect(failed(await verifyDeployment(w.opts))).toEqual([]);
-    // tampered historical manifest: a listed agent, or a deployer-owned one
+    // the manifest-listed agent fields are no longer verified (the timelock stage writes none since 1896): a historical value changes nothing
     writeFileSync(tlFile, JSON.stringify({ ...tl, roles: { ...roles, gateway_agents_listed_count: 1 } }));
-    expect(failed(await verifyDeployment(w.opts))).toEqual(["agents: manifest lists zero agents"]);
-    writeFileSync(tlFile, JSON.stringify({ ...tl, roles: { ...roles, deployer_owns_a_listed_gateway_agent: true } }));
-    expect(failed(await verifyDeployment(w.opts))).toEqual(["agents: manifest says deployer owns no listed agent"]);
-    // and the transferred-ownership replay is still read, as history
+    expect(failed(await verifyDeployment(w.opts))).toEqual([]);
+    // the transferred-ownership replay is still read by the combined reading, as history
     writeFileSync(tlFile, JSON.stringify({ ...tl, roles }));
     w.chain.logs.push({ address: GATEWAY, topics: [keccak256(toHex(SIG_AGENT_OWNERSHIP)), padTopic(OWNERS[0]!), padTopic(OWNERS[1]!)], data: "0x", blockNumber: 300n });
     expect(failed(await verifyDeployment(w.opts))).toEqual(["agents: no agent authorized at handover"]);
@@ -60,9 +65,7 @@ describe("deployments/8453/deploy-2, the combined deployment (issue 1892)", () =
     expect(vaults.checks.some((c) => c.label.startsWith("agents:"))).toBe(false);
   });
   test("copying the historical manifests elsewhere changes none of them (they are read, never rewritten)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "deploy2-"));
-    mkdirSync(dir, { recursive: true });
-    for (const f of readdirSync(DEPLOY2).filter((x) => x.endsWith(".json"))) copyFileSync(join(DEPLOY2, f), join(dir, f));
+    const dir = aliasedCopy();
     const m = loadManifests(dir, legacy);
     expect(m.missing).toEqual([]);
     expect(m.files.timelock.roles.gateway_agents_listed_count).toBe(0);

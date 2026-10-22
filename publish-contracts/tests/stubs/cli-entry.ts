@@ -12,7 +12,7 @@ import { fakeTimelock } from "../govern-world.ts";
 import { world } from "../harness.ts";
 
 const dir = process.env.CONTRACT_TEST_WORLD!;
-const w = world({ dir, chainId: 918453, noGatewayShim: true }); // the parent test writes the legacy gateway manifest into the manifest dir itself (issue 1892)
+const w = world({ dir, chainId: 918453 });
 const sheet = parseSheet(readFileSync(join(dir, "sheet.env"), "utf8"));
 const tl = fakeTimelock(sheet);
 const OWNER_KEYS = ["SAFE_OWNER_A", "SAFE_OWNER_B", "SAFE_OWNER_C"];

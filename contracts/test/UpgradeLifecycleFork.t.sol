@@ -116,7 +116,6 @@ contract UpgradeLifecycleForkTest is Test {
         timelock =
         timelockScript.runInProcessVaults(
             _vaults(),
-            address(gateway),
             address(registry),
             address(router),
             address(governance),

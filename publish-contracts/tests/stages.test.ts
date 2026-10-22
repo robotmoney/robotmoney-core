@@ -41,15 +41,13 @@ describe("stage list built from core's stage table", () => {
     expect(gw.requiredEnv.some((e) => e.startsWith("AGENT_"))).toBe(false);
     expect(rows.find((r) => r.name === "gateway-handover")!.requiredEnv).toEqual(["GATEWAY_ADDRESS", "GATEWAY_ADMIN_ADDRESS", "DEPLOYMENT_OUT"]);
   });
-  test("a vaults-system stage reads a gateway-system manifest only where a sibling change has not landed yet (SYS-1)", () => {
-    // ic-policy and timelock read GATEWAY_ADDRESS until the receipt stage (1888) and the agent-free timelock stage (1890) land. The list only shrinks: a new reader fails here.
-    const KNOWN = new Set(["receipt", "timelock"]);
+  test("no vaults-system stage reads a gateway-system manifest (SYS-1)", () => {
     const gatewayStages = new Set(table.stages.filter((s) => s.system === "gateway").map((s) => s.name));
     const readers: string[] = [];
     for (const s of table.stages.filter((x) => x.system !== "gateway")) {
       for (const e of s.requiredEnv) { const src = resolveEnv(e, s.vault ?? null); if (src.from === "manifest" && gatewayStages.has(src.stage)) readers.push(s.name); }
     }
-    for (const r of readers) expect(KNOWN.has(r), `${r} reads a gateway-system manifest`).toBe(true);
+    expect(readers).toEqual([]);
   });
   test("the table has a row for each of the four vaults, each pointing at a forge stage with that vault key", () => {
     expect(VAULT_STAGES.map((v) => v.key)).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);

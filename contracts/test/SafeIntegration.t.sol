@@ -327,7 +327,6 @@ contract SafeIntegrationTest is Test {
         vm.prank(deployer);
         d = script.runInProcess(
             address(vault),
-            address(gateway),
             address(registry),
             address(router),
             address(governance),

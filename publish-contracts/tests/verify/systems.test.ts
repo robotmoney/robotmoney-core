@@ -11,7 +11,7 @@ import { padTopic } from "../../src/verify/logs.ts";
 import type { VerifyOptions } from "../../src/verify/types.ts";
 import { OWNERS, DEPLOYER, GATEWAY, PAUSER, ROUTER, TIMELOCK, addr, buildWorld, failed, type World } from "./world.ts";
 
-const VAULT_COUNTS = { safe: 1, libs: 4, recorder: 6, vault: 12, registry: 2, router: 2, governance: 2, "ic-policy": 3, proto: 6, agent: 3, rwa: 6, timelock: 18 };
+const VAULT_COUNTS = { safe: 1, libs: 4, recorder: 6, vault: 12, registry: 2, router: 2, governance: 2, receipt: 3, proto: 6, agent: 3, rwa: 6, timelock: 18 };
 const GATEWAY_COUNTS = { gateway: 3, "gateway-handover": 4 };
 const GW_ADMIN = addr(0x9a01);
 const GW_TIMELOCK = addr(0x9a02);

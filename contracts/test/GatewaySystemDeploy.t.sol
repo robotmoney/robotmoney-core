@@ -9,6 +9,8 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "./helpers/MockVault.sol";
 import {DeployGateway} from "../script/DeployGateway.s.sol";
 import {HandoverGateway} from "../script/HandoverGateway.s.sol";
+import {IGateway} from "../gateway/interfaces/IGateway.sol";
+import {AgentRegistration} from "./helpers/AgentRegistration.sol";
 
 /// @dev Exposes the explicit upgrade-config reader of the gateway stage.
 contract GatewayUpgradeHarness is DeployGateway {
@@ -94,9 +96,20 @@ contract GatewaySystemDeployTest is Test {
     }
 
     function test_handover_agentPreBoundAdminRefused() public {
-        bytes32 agentRole = h.AGENT_ROLE();
-        vm.prank(deployer);
-        gw.grantRole(agentRole, govHolder);
+        // The only way to bind an address as an agent is the owner's consented registration. A pre-bound admin address would make the handover brick, so it is refused up front.
+        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 30 days),
+            maxPerPayment: 100e6,
+            maxPerWindow: 1_000e6,
+            shareReceiver: recv,
+            allowedDestinations: new address[](0),
+            assetRecipient: recv,
+            maxWithdrawPerPayment: 10e6,
+            maxWithdrawPerWindow: 100e6,
+            allowedSourceVaults: new address[](0)
+        });
+        AgentRegistration.registerAs(IGateway(address(gw)), recv, govHolder, p);
         vm.expectRevert(bytes("ACL-7: GATEWAY_ADMIN_ADDRESS pre-bound as gateway AGENT"));
         h.runInProcessWith(address(gw), govHolder, deployer);
     }

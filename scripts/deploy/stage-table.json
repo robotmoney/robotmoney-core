@@ -378,7 +378,6 @@
       "script": "contracts/script/DeployTimelock.s.sol:DeployTimelock",
       "requiredEnv": [
         "VAULT_ADDRESSES",
-        "GATEWAY_ADDRESS",
         "REGISTRY_ADDRESS",
         "ROUTER_ADDRESS",
         "GOVERNANCE_ADDRESS",

@@ -140,7 +140,6 @@ contract WithdrawalsNeverFrozenTest is Test {
         vm.prank(deployer);
         DeployTimelock.Deployed memory d = script.runInProcessVaults(
             vaults,
-            address(gateway),
             address(registry),
             address(router),
             address(governance),
