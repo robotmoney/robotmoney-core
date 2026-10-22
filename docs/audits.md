@@ -684,6 +684,16 @@ Internal review of the gaps between the release branch policy (`docs/operations/
 | RB-1022-8 | RB-1022 | Low | accepted-with-rationale | validate-contract-qa.ts scopeProblems | — | The scope list is checked for shape, not against the commits between the deployed version and the rc. Open until a scope step compares them. |
 | RB-1022-9 | RB-1022 | Low | accepted-with-rationale | fusion-devnet-ci.md, legacy releases-v0.4.0-base branches | — | A doc names a releases-0.4.x branch that is not on origin, and four legacy branches use the old naming. Open until the owner archives or deletes them. |
 
+### RM-1022 — Typed receipt migration for the governed upgrade row (2026-10-22, 3 findings)
+
+Internal review of the typed `--migration` option of `govern --row upgrade-proxy` that lets the live v0.5.0 receipt proxy take `migrateToSubmitterRoles` in the same `upgradeToAndCall` (`docs/code-review/20261022-code-review-internal-claude-receipt-migration-tooling.md`, core issue 1910). Row `RM-1022-N` is the review's finding heading `### N.`.
+
+| Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |
+|---|---|---|---|---|---|---|
+| RM-1022-1 | RM-1022 | Low | accepted-with-rationale | publish-contracts upgrade-rows, govern | — | The typed migration registry has one entry (receipt-submitter-roles). Another proxy migration is a reviewed code change with tests and a Twin proof, by design: no free hex path exists on 8453. |
+| RM-1022-2 | RM-1022 | Low | accepted-with-rationale | publish-contracts govern upgrade-proxy, ConsensusRecommendationReceipt | — | The row does not read the live proxy's initialized version or ADMIN_ROLE holders before it schedules. A proxy already at version 2 reverts atomically at the timelock execute with InvalidInitialization, so no half state exists. The operator reads the live pre-state before the schedule (runbook). |
+| RM-1022-3 | RM-1022 | Low | accepted-with-rationale | twin-upgrade-lifecycle, LegacyConsensusRecommendationReceipt, ConsensusReceiptMigration.t.sol | — | The Twin proof uses a source-level copy of the v0.5.0 receipt (same state, write surface and storage layout), not the byte-identical deployed code. Verify compares the live implementation with the DEPLOY_SHA build. |
+
 ### Gap analysis — process & coverage backlog (20260607-code-review-internal-claude-gap-analysis.md)
 
 > The gap analysis enumerates 50 tracked-as-future-work items (issues #643–#692),

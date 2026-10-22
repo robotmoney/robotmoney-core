@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Evidence check for a mainnet run. Reads evidence/<run-id>/evidence.json (template: publish-contracts/evidence.example.json).
 // Usage: bun src/evidence-check.ts --upgrade-lifecycle FILE [--rpc URL]   (the Twin upgrade rehearsal: deploy upgradeable, governed upgrade, freeze, refused upgrade after the freeze, issue 1811)
+//        bun src/evidence-check.ts --governed-upgrades RUN_MANIFEST --timelock ADDR [--governance ADDR] [--delay-floor SECONDS] [--rpc URL]   (proxy_upgrades read back from the chain, a typed migration included, issue 1910)
 //        bun src/evidence-check.ts --vault-redeploys RUN_MANIFEST --registry ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a single-vault redeploy of a rehearsal or a Twin run, issue 1796)
 //        bun src/evidence-check.ts --receipt-applications RUN_MANIFEST --consensus-receipt ADDR --governance ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a Twin run; the floor defaults to the 8453 floor, a Twin run passes its own timelock min delay, issue 1696; on an --rpc of chain 8453 a floor under the 8453 floor is refused, issue 1701)
 //        bun src/evidence-check.ts --evidence FILE [--frozen FILE --deploy-sha SHA] [--rpc URL [--record-chain-fixture OUT] | --chain-fixture FILE]
@@ -34,7 +35,8 @@ import { loadStageTable, scopeTable, type StageTable, type TableVault, type Vaul
 import { STAGE13_UNPAUSE_ROWS, VAULT_RULES, VAULT_UNPAUSE_ROWS } from "./vault-rules.ts";
 import { upgradeabilityEvidenceProblems, upgradeabilityOnChainProblems } from "./evidence-upgradeability.ts";
 import { proxySpecs } from "./verify/upgradeability.ts";
-import { FREEZE_ROW, UPGRADE_ROW } from "./upgrade-rows.ts";
+import { FREEZE_ROW, UPGRADE_MIGRATIONS, UPGRADE_ROW, decodeUpgradeCall, pinnedMigrationData } from "./upgrade-rows.ts";
+import { upgradeCalldata } from "./upgrade-lifecycle.ts";
 import { upgradeLifecycleOnChainProblems, upgradeLifecycleProblems, type LifecycleChain } from "./upgrade-lifecycle.ts";
 
 const TX = /^0x[0-9a-fA-F]{64}$/;
@@ -279,6 +281,28 @@ export function checkReceiptApplications(ev: any, floor: number = MAINNET_DELAY_
 }
 
 /**
+ * Issue 1910: the `migration` of a `proxy_upgrades` entry (govern --row upgrade-proxy --migration). Absent is a plain upgrade (empty data). Present, it must be a named typed
+ * migration of THIS proxy whose function, selector, data and data hash are exactly the reviewed encoding for its releaser, and the releaser must be the deployment's
+ * RouterGovernance when the evidence names one. Free hex never passes: the data is recomputed here from the name and the address.
+ */
+function migrationEntryProblems(e: any, w: string, governance: unknown, bad: (m: string) => void): void {
+  const mg = e?.migration;
+  if (mg === undefined) return;
+  if (!mg || typeof mg !== "object" || Array.isArray(mg)) { bad(`${w}: migration is not an object`); return; }
+  const def = Object.prototype.hasOwnProperty.call(UPGRADE_MIGRATIONS, String(mg.name)) ? UPGRADE_MIGRATIONS[String(mg.name)] : undefined;
+  if (!def) { bad(`${w}: migration ${JSON.stringify(mg.name)} is not a known typed migration (${Object.keys(UPGRADE_MIGRATIONS).join(", ")})`); return; }
+  if (def.proxy !== e?.proxy_name) bad(`${w}: migration ${mg.name} belongs to the ${def.proxy} proxy, not ${e?.proxy_name}`);
+  if (mg.function !== def.functionName) bad(`${w}: migration function ${mg.function} is not ${def.functionName}`);
+  if (!ADDR.test(mg.releaser ?? "")) { bad(`${w}: migration releaser is not an address`); return; }
+  if (/^0x0{40}$/i.test(mg.releaser)) bad(`${w}: migration releaser is the zero address`);
+  if (ADDR.test(String(governance ?? "")) && lc(mg.releaser) !== lc(String(governance))) bad(`${w}: migration releaser ${mg.releaser} is not RouterGovernance ${String(governance)}`);
+  const want = pinnedMigrationData(String(mg.name), mg.releaser);
+  if (lc(String(mg.data ?? "")) !== lc(want)) bad(`${w}: migration data is not ${def.functionName}(${mg.releaser}) of the reviewed signature`);
+  if (lc(String(mg.selector ?? "")) !== lc(want.slice(0, 10))) bad(`${w}: migration selector ${mg.selector} is not ${want.slice(0, 10)}`);
+  if (lc(String(mg.data_hash ?? "")) !== lc(keccak256(want))) bad(`${w}: migration data_hash ${mg.data_hash} is not the keccak256 of the migration data`);
+}
+
+/**
  * Issue 1859: `upgrade_freezes` (govern --row freeze-upgrades) and `proxy_upgrades` (govern --row upgrade-proxy), the governed-upgrade operations the run manifest records. Both
  * lists are optional. Each entry is ONE executed timelock operation: its id, the schedule and the execute transaction (status 1, at least the floor apart, none shared) and never
  * a cancel field. A transaction this tool did not send and could not recover from the timelock's log (an execution adopted from the chain) is null, with a null status and
@@ -337,6 +361,7 @@ export function governedUpgradeProblems(ev: any, floor: number = MAINNET_DELAY_F
       const fields = e?.manifest_fields && typeof e.manifest_fields === "object" && !Array.isArray(e.manifest_fields) ? Object.values<unknown>(e.manifest_fields) : [];
       if (!fields.some((v) => typeof v === "string" && lc(v) === lc(String(e?.to_implementation ?? "")))) bad(`${w}: manifest_fields does not re-record the implementation field to ${e?.to_implementation}`);
       if (typeof e?.build !== "string" || e.build === "") bad(`${w}: build names no core checkout`);
+      migrationEntryProblems(e, w, ev?.governance?.address, bad);
     }
   }
   return p;
@@ -807,6 +832,7 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
   }
   p.push(...(await upgradeabilityOnChainProblems(ev, chain)));
   p.push(...(await checkReceiptApplicationsOnChain(ev, chain, FLOOR)));
+  p.push(...(await checkGovernedUpgradesOnChain(ev, chain)));
   p.push(...(await checkVotedWeightsClearsOnChain(ev, chain, FLOOR)));
   p.push(...(await checkVaultRedeploysOnChain(ev, chain, FLOOR)));
   if (kind === "rehearsal") { p.push(...(await checkRehearsalRowsOnChain(ev, chain, FLOOR))); p.push(...(await checkReceiptPathOnChain(ev, chain, FLOOR))); }
@@ -865,6 +891,43 @@ export async function checkReceiptApplicationsOnChain(ev: any, chain: ChainReade
     if (!timelockEvents(ex, ev.timelock.address, "CallExecuted").some((x) => lc(x.id) === lc(e.id) && lc(x.target) === lc(want.target) && lc(x.data) === lc(want.data))) bad(`${w}: the execute tx has no CallExecuted event for the scheduled applyReceipt`);
     const gap = (await ts(ex)) - schedTs;
     if (!(gap >= floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${floor} s`);
+  }
+  return p;
+}
+
+/**
+ * Issue 1910: chain check of `proxy_upgrades`. Each entry is ONE timelock call: the schedule tx has exactly one CallScheduled event whose id is the recorded operation, whose target
+ * is the recorded proxy and whose data is `upgradeToAndCall(to_implementation, data)`, where `data` is the typed migration's pinned encoding when the entry names a migration and
+ * EMPTY when it does not. An entry that claims no migration cannot hide one, and an entry that claims one cannot have scheduled other data. An entry without a schedule tx (an
+ * execution adopted from the chain, with its note) is skipped: the offline check already required the note.
+ */
+export async function checkGovernedUpgradesOnChain(ev: any, chain: ChainReader): Promise<string[]> {
+  const p: string[] = [];
+  const bad = (m: string) => p.push(m);
+  for (const e of Array.isArray(ev?.proxy_upgrades) ? ev.proxy_upgrades : []) {
+    const w = `${UPGRADE_ROW} ${e?.proxy_name} ${e?.operation_id}`;
+    if (!TX.test(e?.schedule_tx ?? "") || !ADDR.test(e?.proxy ?? "") || !ADDR.test(e?.to_implementation ?? "") || !ADDR.test(ev?.timelock?.address ?? "")) continue; // the offline check already named it
+    let data = "0x";
+    if (e.migration !== undefined) {
+      const name = String(e.migration?.name);
+      if (!Object.prototype.hasOwnProperty.call(UPGRADE_MIGRATIONS, name) || !ADDR.test(e.migration?.releaser ?? "")) continue; // the offline check already named it
+      data = pinnedMigrationData(name, e.migration.releaser);
+    }
+    let sc;
+    try {
+      sc = await chain.getTransactionReceipt({ hash: e.schedule_tx as Hex });
+      if (sc.status !== "success") bad(`${w}: schedule receipt on chain is ${sc.status}`);
+    } catch (x) { bad(`${w}: schedule receipt not readable on chain (${(x as Error).message})`); continue; }
+    const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled");
+    if (scheduled.length !== 1) { bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, an upgrade is exactly one upgradeToAndCall`); continue; }
+    const s = scheduled[0]!;
+    const want = upgradeCalldata(e.to_implementation, data);
+    if (lc(s.target) !== lc(e.proxy)) bad(`${w}: CallScheduled target ${s.target} is not the proxy ${e.proxy}`);
+    if (lc(s.data) !== lc(want)) {
+      const got = decodeUpgradeCall(s.data as Hex);
+      bad(`${w}: CallScheduled calldata is not upgradeToAndCall(${e.to_implementation}, ${e.migration ? `${e.migration.function}(${e.migration.releaser})` : '""'}): ${got ? `it schedules upgradeToAndCall(${got.implementation}, ${got.data === "0x" ? '""' : got.data})` : "it is not an upgradeToAndCall"}`);
+    }
+    if (typeof e.operation_id === "string" && lc(e.operation_id) !== lc(s.id)) bad(`${w}: operation_id ${e.operation_id} is not the scheduled operation ${s.id}`);
   }
   return p;
 }
@@ -1369,12 +1432,32 @@ export function adoptableFromTable(t: StageTable = loadStageTable(new URL("../..
   return Object.fromEntries(t.stages.map((st) => [st.name, st.name === LIBS_STAGE ? t.libraries.length : (st.create2Libraries ?? []).length + (st.name === t.upgradeAuthority?.stage ? 1 : 0)]));
 }
 
+/**
+ * `--governed-upgrades RUN_MANIFEST --timelock ADDR [--governance ADDR] [--delay-floor S] [--rpc URL]` (issue 1910): the `proxy_upgrades` and `upgrade_freezes` entries a govern run
+ * wrote. Offline: the shape, the delays and every typed migration (governedUpgradeProblems). With --rpc: each upgrade's scheduled data is read from the chain and must equal
+ * `upgradeToAndCall(impl, typed migration data)`. The Twin upgrade rehearsal runs it on its receipt migration.
+ */
+async function checkGovernedUpgradesMain(values: Record<string, string | boolean | undefined>, kind: DeploymentKind): Promise<void> {
+  const need = ["timelock"].filter((k) => typeof values[k] !== "string");
+  if (need.length) { console.error(`evidence: --governed-upgrades needs ${need.map((k) => `--${k}`).join(", ")}`); process.exit(2); }
+  const m = JSON.parse(readFileSync(values["governed-upgrades"] as string, "utf8"));
+  const ev: any = { deployment_kind: kind, timelock: { address: values.timelock }, proxy_upgrades: m.proxy_upgrades, upgrade_freezes: m.upgrade_freezes, ...(typeof values.governance === "string" ? { governance: { address: values.governance } } : {}) };
+  const { createPublicClient, http } = await import("viem");
+  const reader = typeof values.rpc === "string" ? createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader : undefined;
+  const floor = await floorArg(values, kind, reader);
+  const problems = [...((Array.isArray(m.proxy_upgrades) && m.proxy_upgrades.length > 0) ? [] : ["the run manifest has no proxy_upgrades entry"]), ...governedUpgradeProblems(ev, floor)];
+  if (reader) problems.push(...(await checkGovernedUpgradesOnChain(ev, reader)));
+  if (problems.length) { for (const x of problems) console.error(`evidence: ${x}`); process.exit(1); }
+  console.log(`evidence ok (governed upgrades: ${m.proxy_upgrades.length} upgrade(s), ${Array.isArray(m.proxy_upgrades) ? m.proxy_upgrades.filter((x: any) => x.migration).length : 0} with a typed migration${reader ? ", chain read" : ", offline shape only"})`);
+}
+
 async function main() {
-  const { values } = parseArgs({ options: { evidence: { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "deployment-kind": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "upgrade-lifecycle": { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" }, "vault-redeploys": { type: "string" }, registry: { type: "string" } } });
+  const { values } = parseArgs({ options: { evidence: { type: "string" }, "governed-upgrades": { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "deployment-kind": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "upgrade-lifecycle": { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" }, "vault-redeploys": { type: "string" }, registry: { type: "string" } } });
   const kindArg = values["deployment-kind"] ?? "production";
   if (!(DEPLOYMENT_KINDS as readonly string[]).includes(kindArg)) { console.error(`evidence: --deployment-kind must be ${DEPLOYMENT_KINDS.join(" or ")}`); process.exit(2); }
   const kind = kindArg as DeploymentKind;
   if (values["upgrade-lifecycle"]) return checkLifecycleMain(values);
+  if (values["governed-upgrades"]) return checkGovernedUpgradesMain(values, kind);
   if (values["receipt-applications"]) return checkApplicationsMain(values, kind);
   if (values["vault-redeploys"]) return checkRedeploysMain(values, kind);
   if (!values.evidence) { console.error("missing --evidence FILE"); process.exit(2); }

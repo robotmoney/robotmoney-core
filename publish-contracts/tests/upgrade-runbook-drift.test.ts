@@ -182,4 +182,16 @@ describe("the deploy-implementation verb in runbook 4.12 and the Twin harness (i
     expect(harness).not.toContain('"--create"');
     expect(harness.indexOf("deployImpl(join(rh, \"deploy-implementation.txt\"))")).toBeLessThan(harness.indexOf('"--row", UPGRADE_ROW'));
   });
+  test("the receipt migration step takes its new implementation from the verb, and the only raw CREATEs are the legacy fixture's (issue 1910)", () => {
+    const harness = readFileSync(join(REPO, "publish-contracts", "src", "ci", "twin-upgrade-lifecycle.ts"), "utf8");
+    const fixture = readFileSync(join(REPO, "publish-contracts", "src", "ci", "twin-legacy-receipt.ts"), "utf8");
+    expect(harness).toContain('stage(DEPLOY_IMPL_VERB, join(rh, "deploy-implementation-receipt.txt"), ["--proxy", rcSpec.name])');
+    expect(harness).toContain('"--migration", MIGRATION');
+    expect(harness).not.toContain('"--create"');
+    // the fixture creates the v0.5.0 proxy and its legacy implementation; it never creates what the rehearsal upgrades to, and it schedules nothing
+    expect(fixture.match(/"--create"/g)?.length).toBe(2);
+    expect(fixture).toContain("LegacyConsensusRecommendationReceipt");
+    expect(fixture).not.toContain("upgradeToAndCall");
+    expect(fixture.match(/artifactJson\(o\.outDir, [^)]+\)/g)).toEqual(["artifactJson(o.outDir, LEGACY_RECEIPT_CONTRACT)", 'artifactJson(o.outDir, "ERC1967Proxy")']);
+  });
 });

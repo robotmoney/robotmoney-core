@@ -93,8 +93,8 @@ import {
 } from "./unwind-guard.ts";
 import { PublishError } from "./errors.ts";
 import {
-  FREEZE_ROW, GOVERNED_PROXY_ABI, UPGRADE_ROW, buildFreezeCalls, buildUpgradeCall, codeHashOf, freezeSpecsFor, freezeTargets, layoutGateProblems, pendingUpgrades, rerecordProxyManifest,
-  runtimeCodeProblems, upgradeRecordKey,
+  FREEZE_ROW, GOVERNED_PROXY_ABI, UPGRADE_MIGRATIONS, UPGRADE_ROW, buildFreezeCalls, buildMigration, buildUpgradeCall, codeHashOf, freezeSpecsFor, freezeTargets, layoutGateProblems, migrationNameProblems,
+  pendingUpgrades, rerecordProxyManifest, runtimeCodeProblems, upgradeRecordKey, type MigrationRecord,
 } from "./upgrade-rows.ts";
 import { proxySpecs } from "./verify/upgradeability.ts";
 import { ERC1967_IMPLEMENTATION_SLOT } from "./verify/codehash.ts";
@@ -592,6 +592,11 @@ export interface GovernOpts {
    * Absent: the DEPLOY_SHA checkout itself (a new copy of the release implementation, as the Twin rehearsal deploys).
    */
   upgradeBuild?: string;
+  /**
+   * With `--row upgrade-proxy` only (issue 1910): the name of a typed migration (UPGRADE_MIGRATIONS) run in the same upgradeToAndCall. The tool builds the data from the build ABI
+   * and the deployment's manifest. There is no raw data option.
+   */
+  migration?: string;
 }
 
 /** One generic timelock call, named by `label` (the manifest key, the salt input and the `row` of the output lines). */
@@ -759,7 +764,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   const guarding = o.row === UNWIND_GUARD_ROW;
   const freezing = o.row === FREEZE_ROW;
   const upgrading = o.row === UPGRADE_ROW;
-  if ((o.proxy !== undefined || o.implementation !== undefined || o.upgradeBuild !== undefined) && !upgrading) throw new PublishError("USAGE", `--proxy, --implementation and --upgrade-build go with --row ${UPGRADE_ROW} only`);
+  if ((o.proxy !== undefined || o.implementation !== undefined || o.upgradeBuild !== undefined || o.migration !== undefined) && !upgrading) throw new PublishError("USAGE", `--proxy, --implementation, --upgrade-build and --migration go with --row ${UPGRADE_ROW} only`);
   if (o.submitter !== undefined && !registering) throw new PublishError("USAGE", `--submitter goes with --row ${REGISTER_ROW} only`);
   if (o.unwindGuard !== undefined && !guarding) throw new PublishError("USAGE", `--admin-arg vault, token, min-usdc-out, max-loss-bps and override-allowed go with --row ${UNWIND_GUARD_ROW} only`);
   // QA plan v1 D7: the row's arguments are checked before the Safe is read or anything is sent
@@ -772,6 +777,11 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   if (upgrading) {
     if (!upgradeSpec) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} needs --proxy NAME, one of ${proxySpecs(getStageTable()).map((x) => x.name).join(", ")}; got ${String(o.proxy)}`);
     if (!/^0x[0-9a-fA-F]{40}$/.test(o.implementation ?? "")) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} needs --implementation 0x<address> (the new implementation, already deployed), got ${String(o.implementation)}`);
+    // Issue 1910: an unknown migration, or one on a proxy that has none, is refused before the Safe is read.
+    if (o.migration !== undefined) {
+      const bad = migrationNameProblems(o.migration, upgradeSpec.name);
+      if (bad.length) throw new PublishError("USAGE", `--row ${UPGRADE_ROW}: ${bad.join("; ")}. Nothing was scheduled.`, { row: UPGRADE_ROW, migration: o.migration });
+    }
   }
   const a = loadGovernAddrs(ctx);
   const sheet = ctx.sheet;
@@ -1424,10 +1434,10 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     // implementation's layout does not extend the deployed snapshot, or when its code is not the build. After the execute the stage manifest is re-recorded.
     const spec = upgradeSpec!;
     const implementation = getAddress(o.implementation!) as Address;
-    const name = upgradeRecordKey(spec.name, implementation);
+    const name = upgradeRecordKey(spec.name, implementation, o.migration);
     const t = getStageTable();
     const manifestPath = join(manifestDir(ctx), `${manifestBase(t.stages.find((x) => x.name === spec.stage)!.manifest)}.json`);
-    type Upgrade = { proxy: string; from_implementation: string; from_code_hash: string | null; to_implementation: string; to_code_hash: string; build: string };
+    type Upgrade = { proxy: string; from_implementation: string; from_code_hash: string | null; to_implementation: string; to_code_hash: string; build: string; migration?: MigrationRecord };
     if (!rowComplete(state[name])) {
       let plan = (state[name] as { upgrade?: Upgrade } | undefined)?.upgrade;
       if (!plan) {
@@ -1448,17 +1458,30 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
         let code: string[];
         try { code = await runtimeCodeProblems(codeOf, implementation, join(build, "out"), spec.contract); } catch (e) { code = [(e as Error).message]; }
         if (code.length) throw new PublishError("GOVERN", `--row ${UPGRADE_ROW}: ${implementation} is not the build's ${spec.contract} (${join(build, "out")}): ${code.join("; ")}. Nothing was scheduled.`, { row: UPGRADE_ROW, code });
-        plan = { proxy, from_implementation: from, from_code_hash: codeHashOf(await codeOf(from)), to_implementation: implementation, to_code_hash: codeHashOf(await codeOf(implementation))!, build };
-        ctx.log.log("info", "govern.preview", { row: UPGRADE_ROW, proxy_name: spec.name, proxy, old_implementation: plan.from_implementation, old_code_hash: plan.from_code_hash, new_implementation: implementation, new_code_hash: plan.to_code_hash });
+        // Issue 1910: a typed migration. The data is built here from the build ABI and the deployment's own manifest (the stage that holds the argument), never from operator hex.
+        let migration: MigrationRecord | undefined;
+        if (o.migration !== undefined) {
+          const mig = UPGRADE_MIGRATIONS[o.migration]!;
+          const argStage = t.stages.find((x) => x.name === mig.argument.manifest);
+          let argument: string | undefined;
+          if (argStage) {
+            const argPath = join(manifestDir(ctx), `${manifestBase(argStage.manifest)}.json`);
+            if (existsSync(argPath)) argument = JSON.parse(readFileSync(argPath, "utf8"))[mig.argument.field];
+          }
+          try { migration = buildMigration(o.migration, spec.name, join(build, "out"), argument); } catch (e) { throw new PublishError("GOVERN", `--row ${UPGRADE_ROW}: ${(e as Error).message}. Nothing was scheduled.`, { row: UPGRADE_ROW, migration: o.migration }); }
+        }
+        plan = { proxy, from_implementation: from, from_code_hash: codeHashOf(await codeOf(from)), to_implementation: implementation, to_code_hash: codeHashOf(await codeOf(implementation))!, build, ...(migration ? { migration } : {}) };
+        ctx.log.log("info", "govern.preview", { row: UPGRADE_ROW, proxy_name: spec.name, proxy, old_implementation: plan.from_implementation, old_code_hash: plan.from_code_hash, new_implementation: implementation, new_code_hash: plan.to_code_hash,
+          ...(migration ? { migration: migration.name, migration_function: `${migration.function}(${migration.argument} = ${migration.releaser})`, migration_selector: migration.selector, migration_data_hash: migration.data_hash } : { migration: null }) });
         state[name] = { ...(state[name] ?? { round: 1 }), upgrade: plan } as RowRecord;
         save();
       }
-      const c = buildUpgradeCall(spec.name, plan.proxy as Address, implementation);
+      const c = buildUpgradeCall(spec.name, plan.proxy as Address, implementation, plan.migration);
       const p = { timelock: a.timelock, calls: [{ target: c.target, data: c.data }], salt: salt(name), form: "single" as const };
       const id = await api.operationId(handle, p);
       const readBack = async () => ((await implOf(plan!.proxy as Address)).toLowerCase() === implementation.toLowerCase() ? [] : [`${spec.name} implementation slot reads ${await implOf(plan!.proxy as Address)}, want ${implementation}`]);
       await round(name, {
-        id, description: `upgrade ${spec.name} to ${implementation}`, readBack,
+        id, description: `upgrade ${spec.name} to ${implementation}${plan.migration ? ` with ${plan.migration.function}` : ""}`, readBack,
         schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${UPGRADE_ROW}: ${c.label}` }),
         execute: async () => {
           // a proxy frozen since the schedule would revert UpgradesAreFrozen on chain: refuse before the Safe signs

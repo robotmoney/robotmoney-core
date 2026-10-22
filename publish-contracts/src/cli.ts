@@ -128,11 +128,14 @@ export const USAGE = `publish contracts
                      --row freeze-upgrades (no other argument, issue 1842) freezes every unfrozen core proxy: ONE timelock batch of freezeUpgrades(implementation, implementation_code_hash), both
                      taken from the latest deployments/<chain>/upgradeability.json (run verify first). Prints a preview per proxy. Refused (nothing scheduled) while an upgrade operation is
                      pending on the timelock, or when the record is stale. Production and rehearsal, never part of stage 13. Run verify after it.
-                     --row upgrade-proxy --proxy NAME --implementation 0x<address> [--upgrade-build DIR] (issue 1842) upgrades one core proxy: ONE timelock call, upgradeToAndCall(new, "").
+                     --row upgrade-proxy --proxy NAME --implementation 0x<address> [--upgrade-build DIR] [--migration NAME] (issue 1842) upgrades one core proxy: ONE timelock call, upgradeToAndCall(new, "")
+                     or, with a typed --migration, upgradeToAndCall(new, <the migration's calldata>).
                      Refused (nothing scheduled) when the proxy is frozen, when the new implementation's storage layout snapshot (DIR, default the DEPLOY_SHA checkout) does not extend the
                      deployed one append-only, or when its runtime code is not DIR/out's build. After the execute it rewrites the proxy's stage manifest implementation fields. Run verify after it.
   --proxy NAME       govern --row upgrade-proxy and deploy-implementation: the verifier name of the proxy (gateway, registry, router, governance, receipt, vault[rmUSDC], ...).
   --implementation A govern --row upgrade-proxy only: the new implementation, already deployed (linked to the live libraries): the address deploy-implementation printed.
+  --migration NAME   govern --row upgrade-proxy only (issue 1910): a typed migration run in the same upgradeToAndCall. The only name is receipt-submitter-roles, valid for --proxy receipt: the tool
+                     builds migrateToSubmitterRoles(releaser) from DIR/out's ABI with the RouterGovernance address of the governance manifest. There is no raw data option on 8453.
   --upgrade-build D  govern --row upgrade-proxy and deploy-implementation: a core checkout at the commit the new implementation was built from, after forge build. Default: the DEPLOY_SHA checkout.
   --vault KEY        redeploy-vault only: the vault to redeploy. PROTO is the only one.
   --prior-out DIR    verify, after a redeploy: the forge out/ directory of a git checkout built at the ORIGINAL deployment sha (its HEAD must be that sha). Every contract the redeploy did not replace
@@ -261,6 +264,7 @@ export interface Parsed {
   proxy?: string;
   implementation?: string;
   upgradeBuild?: string;
+  migration?: string;
 }
 
 export function parseCli(argv: string[]): Parsed {
@@ -273,7 +277,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" }, "counts-require-origin-dev": { type: "boolean" }, system: { type: "string" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "no-warp": { type: "boolean" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "check-sources": { type: "boolean" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, proxy: { type: "string" }, implementation: { type: "string" }, "upgrade-build": { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "no-warp": { type: "boolean" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "check-sources": { type: "boolean" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, proxy: { type: "string" }, implementation: { type: "string" }, "upgrade-build": { type: "string" }, migration: { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -335,7 +339,8 @@ export function parseCli(argv: string[]): Parsed {
   if (payload !== undefined && row !== APPLY_ROW && verb !== "record-receipt") throw new PublishError("USAGE", `--payload goes with --row ${APPLY_ROW} only (or the record-receipt verb)\n${USAGE}`);
   if (v["no-warp"] && verb !== "govern") throw new PublishError("USAGE", `--no-warp goes with the govern verb only\n${USAGE}`);
   // issue 1842: the governed upgrade row's arguments
-  const proxy = v.proxy as string | undefined, implementation = v.implementation as string | undefined, upgradeBuild = v["upgrade-build"] as string | undefined;
+  const proxy = v.proxy as string | undefined, implementation = v.implementation as string | undefined, upgradeBuild = v["upgrade-build"] as string | undefined, migration = v.migration as string | undefined;
+  if (migration !== undefined && row !== UPGRADE_ROW) throw new PublishError("USAGE", `--migration goes with --row ${UPGRADE_ROW} only\n${USAGE}`);
   if (row === UPGRADE_ROW && (proxy === undefined || implementation === undefined)) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} needs --proxy NAME and --implementation 0x<address>\n${USAGE}`);
   if (verb === DEPLOY_IMPL_VERB) {
     if (proxy === undefined) throw new PublishError("USAGE", `${DEPLOY_IMPL_VERB} needs --proxy NAME\n${USAGE}`);
@@ -395,7 +400,7 @@ export function parseCli(argv: string[]): Parsed {
     system: system as SystemName, chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
     checkSources: !!v["check-sources"], coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, countsRequireOriginDev: !!v["counts-require-origin-dev"], measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
-    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, noWarp: !!v["no-warp"], call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, payloadDigest, payloadUri, adminArgs, vault: vaultArg, priorOut, logs, proxy, implementation, upgradeBuild: upgradeBuild === undefined ? undefined : resolve(upgradeBuild),
+    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, noWarp: !!v["no-warp"], call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, payloadDigest, payloadUri, adminArgs, vault: vaultArg, priorOut, logs, proxy, implementation, migration, upgradeBuild: upgradeBuild === undefined ? undefined : resolve(upgradeBuild),
   };
 }
 
@@ -764,7 +769,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
           }
         },
         govern: async (c, row, m) => {
-          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, ...(a.noWarp ? { warp: false as const } : {}), row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, proxy: a.proxy, implementation: a.implementation, upgradeBuild: a.upgradeBuild, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
+          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, ...(a.noWarp ? { warp: false as const } : {}), row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, proxy: a.proxy, implementation: a.implementation, migration: a.migration, upgradeBuild: a.upgradeBuild, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
         },
       });
       try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { if (a.system !== "gateway") postflight = "postflight"; throw e; } // issue 1892: the gateway run owns no vault to pause

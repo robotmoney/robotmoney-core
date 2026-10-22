@@ -38,7 +38,7 @@ const LIFECYCLE_TIMELOCK_ABI = parseAbi([
 export const UPGRADES_ARE_FROZEN_SELECTOR: Hex = keccak256(new TextEncoder().encode("UpgradesAreFrozen()")).slice(0, 10) as Hex;
 const ZERO32: Hex = `0x${"0".repeat(64)}`;
 
-export const upgradeCalldata = (impl: string): Hex => encodeFunctionData({ abi: GOVERNED_UUPS_ABI, functionName: "upgradeToAndCall", args: [impl as Hex, "0x"] });
+export const upgradeCalldata = (impl: string, data: string = "0x"): Hex => encodeFunctionData({ abi: GOVERNED_UUPS_ABI, functionName: "upgradeToAndCall", args: [impl as Hex, data as Hex] });
 export const freezeCalldata = (impl: string, codeHash: string): Hex => encodeFunctionData({ abi: GOVERNED_UUPS_ABI, functionName: "freezeUpgrades", args: [impl as Hex, codeHash as Hex] });
 /** The timelock `execute` of a single-call operation (no predecessor), as the Safe would send it. */
 export const executeCalldata = (target: string, data: string, salt: string): Hex =>

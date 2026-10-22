@@ -7,7 +7,7 @@ import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { receiptPayloadDigest } from "../src/receipt-digest.ts";
 import { decodeFunctionData, encodeFunctionData, keccak256, pad, parseAbi, toBytes, toFunctionSelector, type Address } from "viem";
-import { GOVERNED_PROXY_ABI, rerecordProxyManifest, upgradeRecordKey } from "../src/upgrade-rows.ts";
+import { GOVERNED_PROXY_ABI, UPGRADE_MIGRATIONS, buildMigration, decodeUpgradeCall, migrationNameProblems, pinnedMigrationData, rerecordProxyManifest, upgradeRecordKey } from "../src/upgrade-rows.ts";
 import { upgradeCalldata } from "../src/upgrade-lifecycle.ts";
 import { layoutId, proxySpecs } from "../src/verify/upgradeability.ts";
 import { getStageTable } from "../src/stages.ts";
@@ -2163,6 +2163,121 @@ describe("issue 1842: govern --row freeze-upgrades and --row upgrade-proxy", () 
     writeBuild(build3, (j) => { j.storage.push({ label: "appended", offset: 0, slot: "99", type: "t_uint256" }); });
     await ok.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW, upgradeBuild: build3 });
     expect(ok.tl.s.proxies.get(A.gateway.toLowerCase())!.impl).toBe(NEW);
+  });
+
+  // Issue 1910: the typed receipt migration of the upgrade-proxy row.
+  describe("issue 1910: --migration receipt-submitter-roles", () => {
+    const RC = SPECS.find((x) => x.name === "receipt")!;
+    const RC_CODE = codeOf("ConsensusRecommendationReceipt build");
+    const NEW_RC = addr(0x9201);
+    const MIGRATE_ABI = [{ type: "function", name: "migrateToSubmitterRoles", inputs: [{ name: "releaser", type: "address" }], outputs: [], stateMutability: "nonpayable" }];
+    /** The receipt build under `dir`/out: the runtime code of the artifact and its ABI. */
+    function writeReceiptBuild(dir: string, abi: unknown[] = MIGRATE_ABI): void {
+      writeBuild(dir);
+      mkdirSync(join(dir, "out", `${RC.contract}.sol`), { recursive: true });
+      writeFileSync(join(dir, "out", `${RC.contract}.sol`, `${RC.contract}.json`), JSON.stringify({ abi, deployedBytecode: { object: RC_CODE, linkReferences: {}, immutableReferences: {} } }));
+    }
+    function receiptWorld() {
+      const w = world();
+      writeReceiptBuild(w.ctx.coreDir);
+      w.tl.s.codes.set(NEW_RC.toLowerCase(), RC_CODE);
+      // the receipt proxy is the one the receipt stage manifest names
+      const up = JSON.parse(readFileSync(join(w.dir, "upgradeability.json"), "utf8"));
+      const old = String(up.proxies.receipt.proxy).toLowerCase();
+      up.proxies.receipt.proxy = A.receipt;
+      writeFileSync(join(w.dir, "upgradeability.json"), JSON.stringify(up));
+      w.tl.s.proxies.set(A.receipt.toLowerCase(), w.tl.s.proxies.get(old)!);
+      w.tl.s.proxies.delete(old);
+      w.proxies.receipt.proxy = A.receipt;
+      return w;
+    }
+    const migrationData = () => encodeFunctionData({ abi: MIGRATE_ABI as any, functionName: "migrateToSubmitterRoles", args: [A.governance] });
+
+    test("the data is built by the tool from the build ABI and the governance manifest: ONE upgradeToAndCall(impl, migrateToSubmitterRoles(governance)), previewed decoded and recorded", async () => {
+      const w = receiptWorld();
+      const res = await w.run({ row: "upgrade-proxy", proxy: "receipt", implementation: NEW_RC, migration: "receipt-submitter-roles" });
+      expect(res.rows).toEqual([upgradeRecordKey("receipt", NEW_RC, "receipt-submitter-roles")]);
+      expect(w.tl.s.events).toEqual(["schedule:upgrade-proxy", "execute:upgrade-proxy"]);
+      const sc = w.tl.s.scheduled.get("upgrade-proxy")!;
+      expect(sc.calls.length).toBe(1);
+      expect(sc.calls[0]!.target.toLowerCase()).toBe(w.proxies.receipt.proxy.toLowerCase());
+      expect(sc.calls[0]!.data).toBe(upgradeCalldata(NEW_RC, migrationData()));
+      const dec = decodeUpgradeCall(sc.calls[0]!.data as `0x${string}`)!;
+      expect(dec.implementation).toBe(NEW_RC);
+      expect(dec.data).toBe(migrationData());
+      expect(decodeFunctionData({ abi: MIGRATE_ABI as any, data: dec.data })).toMatchObject({ functionName: "migrateToSubmitterRoles", args: [A.governance] });
+      expect(dec.data).toBe(pinnedMigrationData("receipt-submitter-roles", A.governance));
+      // the preview decodes the migration for the signers
+      const preview = w.lines.map((l) => JSON.parse(l)).find((l) => l.event === "govern.preview")!;
+      expect(preview).toMatchObject({ proxy_name: "receipt", new_implementation: NEW_RC, migration: "receipt-submitter-roles", migration_function: `migrateToSubmitterRoles(releaser = ${A.governance})`, migration_selector: migrationData().slice(0, 10), migration_data_hash: keccak256(migrationData()) });
+      // the evidence entry re-records the migration with the function name and the data hash
+      const ev = (w.manifest as { proxy_upgrades?: any[] }).proxy_upgrades!;
+      expect(ev.length).toBe(1);
+      expect(ev[0]).toMatchObject({ step: "upgrade-proxy", proxy_name: "receipt", to_implementation: NEW_RC, schedule_status: 1, execute_status: 1,
+        migration: { name: "receipt-submitter-roles", function: "migrateToSubmitterRoles", releaser: A.governance, data: migrationData(), data_hash: keccak256(migrationData()), selector: migrationData().slice(0, 10) } });
+      expect(w.tl.s.proxies.get(w.proxies.receipt.proxy.toLowerCase())!.impl).toBe(NEW_RC);
+      // a rerun reprints and sends nothing
+      await w.run({ row: "upgrade-proxy", proxy: "receipt", implementation: NEW_RC, migration: "receipt-submitter-roles" });
+      expect(w.tl.s.events.length).toBe(2);
+    });
+
+    test("a plain upgrade of the same proxy schedules EMPTY data and records no migration", async () => {
+      const w = receiptWorld();
+      await w.run({ row: "upgrade-proxy", proxy: "receipt", implementation: NEW_RC });
+      expect(w.tl.s.scheduled.get("upgrade-proxy")!.calls[0]!.data).toBe(upgradeCalldata(NEW_RC));
+      expect((w.manifest as { proxy_upgrades?: any[] }).proxy_upgrades![0].migration).toBeUndefined();
+    });
+
+    test("an unknown migration, a migration on a proxy that has none and free hex are refused before the Safe is read", async () => {
+      const unknown = receiptWorld();
+      await expect(unknown.run({ row: "upgrade-proxy", proxy: "receipt", implementation: NEW_RC, migration: "0xdeadbeef" })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("is not a known migration (known: receipt-submitter-roles)") });
+      await expect(unknown.run({ row: "upgrade-proxy", proxy: "receipt", implementation: NEW_RC, migration: "toString" })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("is not a known migration") });
+      const other = receiptWorld();
+      await expect(other.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW, migration: "receipt-submitter-roles" })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("belongs to the receipt proxy, not gateway: gateway has no such migration") });
+      await expect(other.run({ row: "freeze-upgrades", migration: "receipt-submitter-roles" })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("go with --row upgrade-proxy only") });
+      for (const w of [unknown, other]) { expect(w.tl.s.events).toEqual([]); expect(w.manifest.govern?.["upgrade-proxy"]).toBeUndefined(); }
+      expect(migrationNameProblems("receipt-submitter-roles", "receipt")).toEqual([]);
+      expect(Object.keys(UPGRADE_MIGRATIONS)).toEqual(["receipt-submitter-roles"]);
+    });
+
+    test("a build ABI without the function, with another shape, a missing governance address and a zero address are each refused before anything is scheduled", async () => {
+      const noFn = receiptWorld();
+      writeReceiptBuild(noFn.ctx.coreDir, [{ type: "function", name: "other", inputs: [], outputs: [], stateMutability: "nonpayable" }]);
+      await expect(noFn.run({ row: "upgrade-proxy", proxy: "receipt", implementation: NEW_RC, migration: "receipt-submitter-roles" })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("does not declare exactly migrateToSubmitterRoles(address)") });
+      const shape = receiptWorld();
+      writeReceiptBuild(shape.ctx.coreDir, [{ type: "function", name: "migrateToSubmitterRoles", inputs: [{ name: "a", type: "address" }, { name: "b", type: "address" }], outputs: [], stateMutability: "nonpayable" }]);
+      await expect(shape.run({ row: "upgrade-proxy", proxy: "receipt", implementation: NEW_RC, migration: "receipt-submitter-roles" })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("does not declare exactly migrateToSubmitterRoles(address)") });
+      const missing = receiptWorld();
+      const gov = join(missing.dir, "governance.json");
+      writeFileSync(gov, JSON.stringify({}));
+      await expect(missing.run({ row: "upgrade-proxy", proxy: "receipt", implementation: NEW_RC, migration: "receipt-submitter-roles" })).rejects.toMatchObject({ message: expect.stringContaining("governance.json has no governance") });
+      const zero = receiptWorld();
+      writeFileSync(join(zero.dir, "governance.json"), JSON.stringify({ governance: "0x0000000000000000000000000000000000000000" }));
+      await expect(zero.run({ row: "upgrade-proxy", proxy: "receipt", implementation: NEW_RC, migration: "receipt-submitter-roles" })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("not a non-zero address") });
+      for (const w of [noFn, shape, missing, zero]) { expect(w.tl.s.events).toEqual([]); expect(w.tl.s.proxies.get(w.proxies.receipt.proxy.toLowerCase())!.impl).toBe(w.proxies.receipt.implementation); }
+    });
+
+    test("buildMigration: the release's data for a build, and a build whose function has another selector is refused", () => {
+      const dir = join(receiptWorld().ctx.coreDir, "out");
+      const m = buildMigration("receipt-submitter-roles", "receipt", dir, A.governance);
+      expect(m).toMatchObject({ name: "receipt-submitter-roles", function: "migrateToSubmitterRoles", releaser: A.governance, data: migrationData(), data_hash: keccak256(migrationData()) });
+      expect(() => buildMigration("receipt-submitter-roles", "receipt", dir, "0x12")).toThrow("not a non-zero address");
+      expect(() => buildMigration("receipt-submitter-roles", "router", dir, A.governance)).toThrow("has no such migration");
+    });
+
+    test("the CLI: --migration goes with --row upgrade-proxy only", async () => {
+      const { parseCli } = await import("../src/cli.ts");
+      const base = ["govern", "--chain", "8453", "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "keystore:/k"];
+      expect(parseCli([...base, "--row", "upgrade-proxy", "--proxy", "receipt", "--implementation", NEW_RC, "--migration", "receipt-submitter-roles"])).toMatchObject({ row: "upgrade-proxy", proxy: "receipt", migration: "receipt-submitter-roles" });
+      expect(() => parseCli([...base, "--row", "freeze-upgrades", "--migration", "receipt-submitter-roles"])).toThrow("--migration goes with --row upgrade-proxy only");
+    });
+
+    test("the generic raw --call-data row stays Twin-only: refused on 8453", async () => {
+      const w = setup(ALL, 8453);
+      const tl = fakeTimelock(w.sheet, DELAY);
+      await expect(runGovern(w.ctx, stageByName("govern"), newManifest(w.ctx, addr(0xa001)), { ownerSigners: signers(w.sheet), sender, api: tl.api, emit: () => {}, call: { label: "raw", target: A.receipt, data: "0x12345678" } })).rejects.toMatchObject({ kind: "USAGE" });
+      expect(tl.s.events).toEqual([]);
+    });
   });
 
   test("the CLI: --proxy, --implementation and --upgrade-build go with --row upgrade-proxy, which needs the first two", async () => {

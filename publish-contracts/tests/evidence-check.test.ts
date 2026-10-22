@@ -7,8 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertOwnerExceptions } from "../src/plan.ts";
 import { UNPAUSE_ROWS } from "../src/govern.ts";
-import { releaseCalldata, checkVaultRedeploys, checkVaultRedeploysOnChain, checkVotedWeightsClears, checkVotedWeightsClearsOnChain, governedUpgradeProblems } from "../src/evidence-check.ts";
+import { releaseCalldata, checkVaultRedeploys, checkVaultRedeploysOnChain, checkVotedWeightsClears, checkVotedWeightsClearsOnChain, governedUpgradeProblems, checkGovernedUpgradesOnChain } from "../src/evidence-check.ts";
 import { buildRedeployCalls } from "../src/redeploy-vault.ts";
+import { pinnedMigrationData } from "../src/upgrade-rows.ts";
+import { upgradeCalldata } from "../src/upgrade-lifecycle.ts";
 import { clearCalldata } from "../src/clear-voted-weights.ts";
 import { VAULT_RULES } from "../src/vault-rules.ts";
 import { keccak256 } from "viem";
@@ -765,5 +767,63 @@ describe("upgrade_freezes and proxy_upgrades (issue 1859)", () => {
       expect(withLists((fr) => { fr[k] = k === "cancel_tx" ? h(1) : 1; }).join("\n")).toContain(`freeze-upgrades ${h(4000)}: ${k} is not a field of an executed operation`);
       expect(withLists((_, up) => { up[k] = true; }).join("\n")).toContain(`upgrade-proxy gateway ${h(5000)}: ${k} is not a field of an executed operation`);
     }
+  });
+});
+
+// ---- issue 1910: the typed migration of a proxy_upgrades entry ----
+describe("proxy_upgrades typed migration (issue 1910)", () => {
+  const D = 172800;
+  const RELEASER = a(60);
+  const MIG = () => {
+    const data = pinnedMigrationData("receipt-submitter-roles", RELEASER);
+    return { name: "receipt-submitter-roles", function: "migrateToSubmitterRoles", selector: data.slice(0, 10), argument: "releaser", releaser: RELEASER, data, data_hash: keccak256(data) };
+  };
+  const upgrade = (migration: any = MIG()) => ({
+    step: "upgrade-proxy", proxy_name: "receipt", proxy: a(70), from_implementation: a(71), from_code_hash: h(72), to_implementation: a(73), to_code_hash: h(74), build: "/core",
+    timelock: a(9), manifest_fields: { consensus_receipt_implementation: a(73) }, ...(migration ? { migration } : {}),
+    operation_id: h(6000), schedule_tx: h(6001), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(6002), execute_status: 1, execute_block_timestamp: T0 + D,
+  });
+  const evOf = (up: any) => ({ timelock: { address: a(9) }, governance: { address: RELEASER }, proxy_upgrades: [up] });
+  const problems = (f: (u: any) => void = () => {}) => { const u = upgrade(); f(u); return governedUpgradeProblems(evOf(u), D, ["receipt", "gateway"]).join("\n"); };
+
+  test("a well formed migration entry passes, and so does an upgrade without one", () => {
+    expect(governedUpgradeProblems(evOf(upgrade()), D, ["receipt"])).toEqual([]);
+    expect(governedUpgradeProblems(evOf(upgrade(null)), D, ["receipt"])).toEqual([]);
+  });
+  test("an unknown name, another proxy, a wrong function, free hex, a wrong hash or selector, a zero or foreign releaser fail", () => {
+    expect(problems((u) => { u.migration.name = "other"; })).toContain("is not a known typed migration");
+    expect(problems((u) => { u.proxy_name = "gateway"; })).toContain("belongs to the receipt proxy, not gateway");
+    expect(problems((u) => { u.migration.function = "initialize"; })).toContain("migration function initialize is not migrateToSubmitterRoles");
+    expect(problems((u) => { u.migration.data = "0xdeadbeef"; })).toContain("migration data is not migrateToSubmitterRoles");
+    expect(problems((u) => { u.migration.data_hash = h(1); })).toContain("migration data_hash");
+    expect(problems((u) => { u.migration.selector = "0xdeadbeef"; })).toContain("migration selector");
+    expect(problems((u) => { u.migration.releaser = "0x" + "0".repeat(40); })).toContain("zero address");
+    expect(problems((u) => { u.migration.releaser = a(61); })).toContain("is not RouterGovernance");
+    expect(problems((u) => { u.migration = "yes"; })).toContain("migration is not an object");
+  });
+
+  // the chain: the timelock's CallScheduled of the recorded operation
+  const chainOf = (up: any, scheduledData: string, calls = 1): ChainReader => {
+    const logs = Array.from({ length: calls }, (_, k) => log("CallScheduled", 6000, 172800n, up.proxy, scheduledData, BigInt(k)));
+    return { getChainId: async () => 8453, getTransactionCount: async () => 0, getBlock: async () => ({ timestamp: 1n }), readContract: async () => undefined,
+      getTransactionReceipt: async ({ hash }: { hash: string }) => { if (hash !== up.schedule_tx) throw new Error("not found"); return { status: "success", blockNumber: 1n, logs }; } } as unknown as ChainReader;
+  };
+  test("the scheduled data is read back from the chain and must equal upgradeToAndCall(impl, typed migration data)", async () => {
+    const up = upgrade();
+    const want = upgradeCalldata(up.to_implementation, pinnedMigrationData("receipt-submitter-roles", RELEASER));
+    expect(await checkGovernedUpgradesOnChain(evOf(up), chainOf(up, want))).toEqual([]);
+    // an entry that claims the migration while the chain scheduled EMPTY data
+    const empty = (await checkGovernedUpgradesOnChain(evOf(up), chainOf(up, upgradeCalldata(up.to_implementation)))).join("\n");
+    expect(empty).toContain("CallScheduled calldata is not upgradeToAndCall");
+    expect(empty).toContain("it schedules upgradeToAndCall(");
+    // other data on the chain (another releaser)
+    expect((await checkGovernedUpgradesOnChain(evOf(up), chainOf(up, upgradeCalldata(up.to_implementation, pinnedMigrationData("receipt-submitter-roles", a(99)))))).join("\n")).toContain("CallScheduled calldata is not upgradeToAndCall");
+    // an entry that claims NO migration cannot hide one
+    const plain = upgrade(null);
+    expect(await checkGovernedUpgradesOnChain(evOf(plain), chainOf(plain, upgradeCalldata(plain.to_implementation)))).toEqual([]);
+    expect((await checkGovernedUpgradesOnChain(evOf(plain), chainOf(plain, want))).join("\n")).toContain("CallScheduled calldata is not upgradeToAndCall");
+    // another implementation, a batch of two
+    expect((await checkGovernedUpgradesOnChain(evOf(up), chainOf(up, upgradeCalldata(a(99), pinnedMigrationData("receipt-submitter-roles", RELEASER))))).join("\n")).toContain("CallScheduled calldata is not upgradeToAndCall");
+    expect((await checkGovernedUpgradesOnChain(evOf(up), chainOf(up, want, 2))).join("\n")).toContain("2 CallScheduled events");
   });
 });
