@@ -74,8 +74,10 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
         assertGt(recorderAddr.code.length, 0, "the deployed recorder must exist at the pin");
 
         string memory cfg = vm.readFile("config/agent-token-shortlist.json");
-        rm = cfg.readAddress(".shortlist[0].token");
-        poolFee = uint24(cfg.readUint(".shortlist[0].poolFee"));
+        string memory b =
+            vm.keyExistsJson(cfg, ".shortlist[0]") ? ".shortlist[0]" : ".parked.entries[0]"; // RM_PARKED (core 1903, ADR-0015)
+        rm = cfg.readAddress(string.concat(b, ".token"));
+        poolFee = uint24(cfg.readUint(string.concat(b, ".poolFee")));
 
         // The production configuration this report is about. A drift fails here, so the report cannot go stale silently.
         assertEq(vault.navDeviationGuardBps(), 100, "production NAV deviation guard is 100 bps");

@@ -7,6 +7,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { COUNTS, tmp } from "./fixtures.ts";
 import { REPO_ROOT } from "./repo-root.ts";
+import { RM_PARKED } from "./rm-parked.ts";
 import { parseSheet } from "../src/sheet.ts";
 
 const ACTION = join(REPO_ROOT, ".github/actions/twin-publish");
@@ -56,9 +57,11 @@ function runScript(env: Record<string, string>) {
  * The verbs of a green Twin run with verify and govern: publish, verify, govern, the three set-unwind-guard rounds (QA plan v1 D7), verify (issue 1667), then the two
  * safe-change-threshold rows (QA plan v1 B5).
  */
-const GREEN_VERBS = ["publish", "verify", "govern", "govern", "govern", "govern", "verify", "govern", "govern"] as const;
+const GUARDS = 3 - (RM_PARKED ? 1 : 0); // the set-unwind-guard rounds: PROTO, AGENT, RWA, less AGENT while RM is parked (core 1903)
+const GREEN_VERBS = ["publish", "verify", "govern", ...Array(GUARDS).fill("govern"), "verify", "govern", "govern"] as readonly string[];
 /** QA plan v1 D7: the set-unwind-guard rounds as the stub logs them, one per basket the sheet's GOVERN_UNPAUSE_VAULTS opened, in basket order. */
-const GUARD_ROWS = ["PROTO", "AGENT", "RWA"].map((k) => `set-unwind-guard vault=${k} token=all min-usdc-out=1000000 max-loss-bps=500`);
+// RM_PARKED (core issue 1903, ADR-0015): an empty rmAGENT has no active asset, so no guard round is run for it. With RM listed the AGENT round returns.
+const GUARD_ROWS = ["PROTO", "AGENT", "RWA"].filter((k) => !(k === "AGENT" && RM_PARKED)).map((k) => `set-unwind-guard vault=${k} token=all min-usdc-out=1000000 max-loss-bps=500`);
 /** The self-administration pair as the stub logs it: raised to the owner count (3), restored to the sheet's threshold (2). */
 const SELF_ADMIN_ROWS = ["safe-change-threshold threshold=3", "safe-change-threshold threshold=2"] as const;
 
@@ -76,9 +79,10 @@ describe("twin-publish step script", () => {
     expect(existsSync(r.exported.TWIN_GOVERN_ROWS!)).toBe(true);
     expect(existsSync(r.exported.TWIN_SELF_ADMIN_ROWS!)).toBe(true);
   });
-  for (const [fail, verbs] of [["publish", ["publish"]], ["verify", ["publish", "verify"]], ["govern", ["publish", "verify", "govern"]], ["govern:2", ["publish", "verify", "govern", "govern"]],
-    ["govern:4", ["publish", "verify", "govern", "govern", "govern", "govern"]], ["verify:2", ["publish", "verify", "govern", "govern", "govern", "govern", "verify"]],
-    ["govern:5", ["publish", "verify", "govern", "govern", "govern", "govern", "verify", "govern"]], ["govern:6", [...GREEN_VERBS]]] as const) {
+  const g = (n: number): string[] => Array(n).fill("govern");
+  for (const [fail, verbs] of [["publish", ["publish"]], ["verify", ["publish", "verify"]], ["govern", ["publish", "verify", "govern"]], ["govern:2", ["publish", "verify", ...g(2)]],
+    [`govern:${GUARDS + 1}`, ["publish", "verify", ...g(GUARDS + 1)]], ["verify:2", ["publish", "verify", ...g(GUARDS + 1), "verify"]],
+    [`govern:${GUARDS + 2}`, ["publish", "verify", ...g(GUARDS + 1), "verify", "govern"]], [`govern:${GUARDS + 3}`, [...GREEN_VERBS]]] as [string, string[]][]) {
     test(`a failing ${fail} makes the script exit non-zero and later stages do not run`, () => {
       const r = runScript({ STUB_FAIL: fail });
       expect(r.code).not.toBe(0);
@@ -110,8 +114,8 @@ describe("twin-publish step script", () => {
   test("twin-publish runs set-unwind-guard for each basket stage 13 opened (token=all), after govern and before the post-govern verify", () => {
     const r = runScript({});
     expect(r.code).toBe(0);
-    expect(r.rows.slice(0, 3)).toEqual(GUARD_ROWS);
-    const firstGuard = r.all.indexOf(`row ${GUARD_ROWS[0]}`), lastGuard = r.all.indexOf(`row ${GUARD_ROWS[2]}`);
+    expect(r.rows.slice(0, GUARD_ROWS.length)).toEqual(GUARD_ROWS);
+    const firstGuard = r.all.indexOf(`row ${GUARD_ROWS[0]}`), lastGuard = r.all.indexOf(`row ${GUARD_ROWS[GUARD_ROWS.length - 1]}`);
     expect(r.all.indexOf("cli govern")).toBeLessThan(firstGuard); // stage 13 first: the unpauses
     expect(lastGuard).toBeLessThan(r.all.lastIndexOf("cli verify")); // then the post-govern verify
     expect(r.all.indexOf("cli verify")).toBeLessThan(firstGuard); // the first verify is the pre-govern one
@@ -125,7 +129,7 @@ describe("twin-publish step script", () => {
     writeFileSync(some, `const a = process.argv; require("node:fs").writeFileSync(a[a.indexOf("--out") + 1], "GOVERN_UNPAUSE_VAULTS=USDC,PROTO,RWA\\n${roster}");`);
     const r = runScript({ TWIN_MERGE_SHEET: some });
     expect(r.code).toBe(0);
-    expect(r.rows.filter((x) => x.startsWith("set-unwind-guard"))).toEqual([GUARD_ROWS[0], GUARD_ROWS[2]]);
+    expect(r.rows.filter((x) => x.startsWith("set-unwind-guard"))).toEqual(GUARD_ROWS.filter((x) => !x.includes("vault=AGENT")));
     const none = join(dir, "merge-none.js");
     writeFileSync(none, `const a = process.argv; require("node:fs").writeFileSync(a[a.indexOf("--out") + 1], "${roster}");`);
     const bad = runScript({ TWIN_MERGE_SHEET: none });
@@ -154,7 +158,7 @@ describe("twin-publish step script", () => {
     const r = runScript({ TWIN_MERGE_SHEET: merge });
     expect(r.code).not.toBe(0);
     expect(r.err).toContain("the sheet threshold 2 is not below the owner count 2");
-    expect(r.verbs).toEqual(["publish", "verify", "govern", "govern", "govern", "govern", "verify"]);
+    expect(r.verbs).toEqual(["publish", "verify", "govern", ...Array(GUARDS).fill("govern"), "verify"]);
     expect(r.rows).toEqual(GUARD_ROWS);
     const noRoster = join(dir, "merge-no-roster.js");
     writeFileSync(noRoster, `const a = process.argv; require("node:fs").writeFileSync(a[a.indexOf("--out") + 1], "X=1\\nGOVERN_UNPAUSE_VAULTS=USDC,PROTO,AGENT,RWA\\n");`);
@@ -164,7 +168,7 @@ describe("twin-publish step script", () => {
     expect(bad.rows).toEqual(GUARD_ROWS);
   });
   test("a failing threshold raise stops the run before the restore: the Safe is left at the raised threshold and the step is red, never a silent skip", () => {
-    const r = runScript({ STUB_FAIL: "govern:5" }); // stage 13, the three set-unwind-guard rounds, then the raise
+    const r = runScript({ STUB_FAIL: `govern:${GUARDS + 2}` }); // stage 13, the set-unwind-guard rounds, then the raise
     expect(r.code).not.toBe(0);
     expect(r.rows).toEqual([...GUARD_ROWS, "safe-change-threshold threshold=3"]);
     expect(r.exported.TWIN_SELF_ADMIN_ROWS).toBeUndefined();
@@ -288,8 +292,9 @@ fi
     const row = (l: string) => (l.includes("--row ") ? l.split("--row ")[1]!.split(" ")[0] : "");
     // QA plan v1 B5: the safe-change-threshold pair runs after the post-govern verify and before the receipt path, so the restored threshold is what register-committee compares with the sheet
     // QA plan v1 D7: the three set-unwind-guard rounds run between stage 13 and the post-govern verify
-    expect(cli.map((l) => verb(l) + (row(l) ? ":" + row(l) : ""))).toEqual(["publish", "verify", "govern", "govern:set-unwind-guard", "govern:set-unwind-guard", "govern:set-unwind-guard", "verify", "govern:safe-change-threshold", "govern:safe-change-threshold", "govern:register-committee", "record-receipt", "govern:apply-receipt", "verify"]);
-    const reg = cli[9]!, rec = cli[10]!, app = cli[11]!;
+    expect(cli.map((l) => verb(l) + (row(l) ? ":" + row(l) : ""))).toEqual(["publish", "verify", "govern", ...Array(GUARDS).fill("govern:set-unwind-guard"), "verify", "govern:safe-change-threshold", "govern:safe-change-threshold", "govern:register-committee", "record-receipt", "govern:apply-receipt", "verify"]);
+    const o = GUARDS - 3; // the guard rounds shift the receipt path (core 1903: one round fewer while RM is parked)
+    const reg = cli[9 + o]!, rec = cli[10 + o]!, app = cli[11 + o]!;
     const submitterAddr = /--submitter (0x[0-9a-fA-F]{40})/.exec(reg)![1]!;
     expect(submitterAddr).toBe("0x00000000000000000000000000000000005afe01"); // the Safe the Safe tool created
     // issue 1750: the submitter Safe is created from the SAME owners, threshold 2, a salt one above the governing Safe's, by the deployer

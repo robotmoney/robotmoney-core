@@ -66,7 +66,9 @@ contract RecorderManipulationForkTest is Test {
         if (!ForkSelect.selectOrSkip(rpc)) return;
 
         cfg = vm.readFile("config/agent-token-shortlist.json");
-        string memory b = ".shortlist[0]";
+        // RM_PARKED (core issue 1903, ADR-0015): RM sits under parked.entries while it is parked.
+        string memory b =
+            vm.keyExistsJson(cfg, ".shortlist[0]") ? ".shortlist[0]" : ".parked.entries[0]";
         rmToken = cfg.readAddress(string.concat(b, ".token"));
         poolManager = cfg.readAddress(string.concat(b, ".poolManager"));
         swapRouter02 = cfg.readAddress(".swapRouter02");
