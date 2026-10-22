@@ -11,6 +11,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 import {DeployTimelock} from "../script/DeployTimelock.s.sol";
+import {HandoverGateway} from "../script/HandoverGateway.s.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
@@ -126,9 +127,10 @@ contract WithdrawalsNeverFrozenTest is Test {
         _buildOtherVaults(deployer);
         vm.stopPrank();
 
-        // The production handover: ADMIN_ROLE on all four vaults and the gateway,
-        // registry, router and governance to the timelock, EMERGENCY_ROLE to the
-        // emergency key, the deployer keeps nothing.
+        // The vaults handover: ADMIN_ROLE on all four vaults, the registry, router and
+        // governance to the timelock, EMERGENCY_ROLE to the emergency key, the deployer keeps
+        // nothing. The gateway is its own system (issue 1892): its handover runs separately, here
+        // to the same timelock, as the Twin does.
         address[] memory vaults = new address[](4);
         vaults[0] = address(rmUsdc);
         vaults[1] = address(rmProto);
@@ -149,6 +151,7 @@ contract WithdrawalsNeverFrozenTest is Test {
             spec
         );
         timelock = d.timelock;
+        new HandoverGateway().runInProcessWith(address(gateway), address(timelock), deployer);
         address[3] memory others = _others();
         for (uint256 i = 0; i < others.length; i++) {
             assertTrue(IAccessControl(others[i]).hasRole(ADMIN_ROLE, address(timelock)), "admin");

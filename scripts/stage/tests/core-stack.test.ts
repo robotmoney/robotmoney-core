@@ -221,7 +221,7 @@ describe("publish", () => {
         expect(c.cmd[c.cmd.lastIndexOf("--sheet") + 1]).toBe(join(OUT, "gateway-sheet.env"));
       }
       const sheet = readFileSync(join(OUT, "gateway-sheet.env"), "utf8");
-      expect(sheet).toContain("GATEWAY_ADMIN_ADDRESS=0x00000000000000000000000000000000000000dd");
+      expect(sheet).toContain("GATEWAY_ADMIN_ADDRESS=0x00000000000000000000000000000000000000ee");
       expect(sheet).toContain("GATEWAY_UPGRADE_TIMELOCK=0x00000000000000000000000000000000000000ee");
       expect(sheet).not.toMatch(/AGENT|SAFE_|TIMELOCK_MIN_DELAY|GOVERN_/);
     });

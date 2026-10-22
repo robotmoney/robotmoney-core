@@ -785,7 +785,7 @@ async function publishVerb(s: Stack, verb: string): Promise<void> {
     s.log("stage manifests present", { mdir, count: n, system: "vaults" });
   } else if (verb === "gateway") {
     // Issue 1892: the gateway system, after the vaults system, against its manifests: its small sheet (the vaults run's deployer, pauser, share receiver and release mode, the
-    // EMERGENCY key as the gateway admin and the run's own timelock as the gateway upgrade timelock: the Twin's explicit choices, production decides its own), its own evidence directory.
+    // run's own timelock as both the gateway admin and the gateway upgrade timelock: the Twin's explicit choice, so the Twin's governed unpauses and role grants keep working; production decides its own), its own evidence directory.
     const mdir = s.sv("manifest_dir");
     const missingVaults = missingSystemManifests("vaults", mdir);
     if (missingVaults.length > 0) throw fail(`the gateway system reads the vaults system's manifests: missing ${missingVaults.join(", ")}. Run publish run first`, EXIT.INPUT);
@@ -796,7 +796,7 @@ async function publishVerb(s: Stack, verb: string): Promise<void> {
     const work = dirname(mdir);
     const gatewaySheet = join(work, "gateway-sheet.env");
     const lines = [["CHAIN_ID", String(CHAIN_ID)], ["EXPECTED_CHAIN_ID", String(CHAIN_ID)], ["ADMIN_ADDRESS", need("ADMIN_ADDRESS")], ["PAUSER_ADDRESS", need("PAUSER_ADDRESS")],
-      ["SHARE_RECEIVER_ADDRESS", need("SHARE_RECEIVER_ADDRESS")], ["UPGRADE_MODE", need("UPGRADE_MODE")], ["GATEWAY_ADMIN_ADDRESS", need("EMERGENCY_ADDRESS")], ["GATEWAY_UPGRADE_TIMELOCK", timelock]];
+      ["SHARE_RECEIVER_ADDRESS", need("SHARE_RECEIVER_ADDRESS")], ["UPGRADE_MODE", need("UPGRADE_MODE")], ["GATEWAY_ADMIN_ADDRESS", timelock], ["GATEWAY_UPGRADE_TIMELOCK", timelock]];
     writeFileSync(gatewaySheet, lines.map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
     const extra = ["--system", "gateway", "--sheet", gatewaySheet, "--evidence", join(work, "evidence-gateway")];
     const r = await s.publishContracts("publish", extra, true);

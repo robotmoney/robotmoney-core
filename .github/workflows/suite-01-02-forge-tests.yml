@@ -174,7 +174,7 @@ jobs:
           bun test scripts/ci/check-system-split.test.ts
 
       - name: forge test (SYS-1, ACL-9 and the coverage map — issue 1892)
-        run: FORGE_TEST_MIN_EXECUTED=13 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/fv/{SystemSplit,CoverageMap}.t.sol"
+        run: FORGE_TEST_MIN_EXECUTED=13 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/fv/{SystemSplit,SystemSplitInvariant,CoverageMap}.t.sol"
 
       # Issue 1705: the router pins a vault-paused leg (Q3 (c)) and the adapter write-off rule (Q2 (a)). Named so the log proves both ran.
       - name: forge test (four-vault rules, paused router leg and adapter write-off — issue 1705)

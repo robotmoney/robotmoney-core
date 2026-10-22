@@ -506,7 +506,7 @@ impl Published {
     }
 
     /// Issue 1892: the gateway system, run on its own after the vaults system, against the vaults manifests. Its sheet is the small gateway sheet: the deployer, the pauser,
-    /// the share receiver and the release mode of the vaults run, the gateway admin (the EMERGENCY key) and the gateway upgrade timelock, both named explicitly (the Twin names the
+    /// the share receiver and the release mode of the vaults run, the gateway admin and the gateway upgrade timelock (both the run's own timelock on the Twin), named explicitly (the Twin names the
     /// run's own timelock; the production choice is an open decision). It publishes and verifies with `--system gateway` in its own evidence directory, and fails when a
     /// vaults manifest changed.
     pub fn deploy_gateway(&self) -> Result<GatewayRun, HarnessError> {
@@ -529,10 +529,7 @@ impl Published {
                 sheet_token(&run_sheet, "SHARE_RECEIVER_ADDRESS")?,
             ),
             ("UPGRADE_MODE", sheet_token(&run_sheet, "UPGRADE_MODE")?),
-            (
-                "GATEWAY_ADMIN_ADDRESS",
-                self.keys.address("EMERGENCY_ADDRESS")?.to_string(),
-            ),
+            ("GATEWAY_ADMIN_ADDRESS", timelock.clone()),
             ("GATEWAY_UPGRADE_TIMELOCK", timelock),
         ] {
             text.push_str(&format!("{k}={v}\n"));

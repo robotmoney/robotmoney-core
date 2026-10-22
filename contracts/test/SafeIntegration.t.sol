@@ -9,6 +9,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 import {DeployTimelock} from "../script/DeployTimelock.s.sol";
+import {HandoverGateway} from "../script/HandoverGateway.s.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
@@ -335,6 +336,9 @@ contract SafeIntegrationTest is Test {
             MIN_DELAY,
             DeployTimelock.SafeSpec({owners: _sortedOwners(), threshold: 2})
         );
+
+        // The gateway is its own system (issue 1892): its handover runs separately, here to the same timelock, as the Twin does.
+        new HandoverGateway().runInProcessWith(address(gateway), address(d.timelock), deployer);
 
         // Verify wiring.
         assertTrue(
