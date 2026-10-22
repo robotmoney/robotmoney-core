@@ -502,7 +502,7 @@ impl Fixture {
         Self::boot(extra_deploy_env, true)
     }
 
-    /// The fixture exactly as the deploy leaves it: rmUSDC, rmPROTO, rmAGENT and rmRWA all paused, stage 13 not run
+    /// The fixture exactly as the deploy leaves it: rmUSDC, rmPROTO and rmRWA all paused, stage 13 not run
     /// (core 1710). The rehearsal tests that prove the verifier and the govern stage start here.
     pub fn new_closed() -> Result<Self, HarnessError> {
         Self::boot(&[], false)
@@ -835,7 +835,7 @@ impl Fixture {
     pub fn safe_hex(&self) -> &str {
         &self.topology.safe
     }
-    /// A vault by its key: rmUSDC, rmPROTO, rmAGENT or rmRWA.
+    /// A vault by its key: rmUSDC, rmPROTO or rmRWA.
     pub fn vault_by_key(&self, key: &str) -> Address {
         self.topology
             .vaults
@@ -847,26 +847,21 @@ impl Fixture {
     pub fn proto_vault(&self) -> Address {
         self.vault_by_key("rmPROTO")
     }
-    /// rmAGENT (AgentTokenVault: deployed paused, holding RM as its one asset).
-    pub fn agent_vault(&self) -> Address {
-        self.vault_by_key("rmAGENT")
-    }
     /// rmRWA (deSPXA only, plain basket row).
     pub fn rwa_vault(&self) -> Address {
         self.vault_by_key("rmRWA")
     }
-    /// JSON `{rmUSDC,rmPROTO,rmAGENT,rmRWA}` map, threaded to the dapp as
+    /// JSON `{rmUSDC,rmPROTO,rmRWA}` map, threaded to the dapp as
     /// `VITE_VAULT_ADDRESSES`. Read from the manifests, never hand-typed.
     pub fn vault_address_map_json(&self) -> String {
         serde_json::json!({
             "rmUSDC": self.topology.vaults.get("rmUSDC"),
             "rmPROTO": self.topology.vaults.get("rmPROTO"),
-            "rmAGENT": self.topology.vaults.get("rmAGENT"),
             "rmRWA": self.topology.vaults.get("rmRWA"),
         })
         .to_string()
     }
-    /// The vault addresses by name (rmUSDC, rmPROTO, rmAGENT, rmRWA), read from the manifests.
+    /// The vault addresses by name (rmUSDC, rmPROTO, rmRWA), read from the manifests.
     pub fn vault_addresses(&self) -> &std::collections::BTreeMap<String, String> {
         &self.topology.vaults
     }
@@ -1707,7 +1702,7 @@ impl Fixture {
     ///
     /// - `receipt-a.json`: recorded with its OWN correct digest and released. Its weights equal the live router
     ///   vector under the missing-vault = 0 bps rule (the Twin stage sheet `ROUTER_WEIGHTS` the deployer leaves on
-    ///   the router before the handover: rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0), so it renders
+    ///   the router before the handover: rmUSDC 9500, rmPROTO 500, rmRWA 0), so it renders
     ///   "Verified", "Released" and "Applied".
     /// - `receipt-b.json`: recorded with a deliberately WRONG digest and never released. Its weights differ from
     ///   the live vector, so it renders "Unverified", "Recorded, not released" and "Not applied".
@@ -3693,7 +3688,7 @@ mod tests {
 
     /// The seeded fixtures load, derive distinct ids from their own payload fields, and are served under the
     /// `receipt-fixtures` hostname. receipt-a matches the live router vector under the missing-vault = 0 bps rule
-    /// (the Twin stage sheet `ROUTER_WEIGHTS`: rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0), and receipt-b differs from it.
+    /// (the Twin stage sheet `ROUTER_WEIGHTS`: rmUSDC 9500, rmPROTO 500, rmRWA 0), and receipt-b differs from it.
     #[test]
     fn fixture_receipts_load_and_carry_the_expected_weights() {
         let root = locate_repo_root().expect("repo root");

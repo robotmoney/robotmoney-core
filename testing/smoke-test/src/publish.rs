@@ -794,7 +794,7 @@ pub struct Topology {
     pub consensus_receipt: String,
     pub timelock: String,
     pub safe: String,
-    /// rmUSDC, rmPROTO, rmAGENT, rmRWA.
+    /// rmUSDC, rmPROTO, rmRWA.
     pub vaults: BTreeMap<String, String>,
 }
 
@@ -846,7 +846,7 @@ pub fn load_topology_with(dir: &Path, table: &StageTable) -> Result<Topology, Ha
         let j = read_file(dir, &file)?;
         vaults.insert(label, field(&j, &file, "vault")?);
     }
-    for k in ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"] {
+    for k in ["rmUSDC", "rmPROTO", "rmRWA"] {
         if !vaults.contains_key(k) {
             return Err(HarnessError::other(format!("no manifest for vault {k}")));
         }
@@ -1125,7 +1125,7 @@ mod tests {
             format!("0x{}", "cd".repeat(32))
         );
         assert_eq!(topo.safe, a('9'));
-        assert_eq!(topo.vaults.len(), 4);
+        assert_eq!(topo.vaults.len(), 3);
         assert_eq!(topo.vaults["rmUSDC"], a('1'));
         // Rename the router manifest in a temp copy of the table: the reader follows it.
         let renamed = StageTable::parse(&real.replace("router.json", "router-x.json")).unwrap();

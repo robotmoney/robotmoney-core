@@ -285,10 +285,10 @@ fn run() -> i32 {
         return finish_deploy_only(fixture, deploy_args);
     }
 
-    // Issue 1746: the dapp e2e devnet opens all four vaults the way stage 13 does (rmUSDC is already open). The router routes by the launch vector
-    // 9500/500/0/0: the 0 bps rmAGENT and rmRWA legs are skipped, but the 500 bps rmPROTO leg is deposited into, and a paused vault reverts its deposit.
+    // Issue 1746: the dapp e2e devnet opens all three vaults the way stage 13 does (rmUSDC is already open). The router routes by the launch vector
+    // 9500/500/0: the 0 bps rmRWA leg is skipped, but the 500 bps rmPROTO leg is deposited into, and a paused vault reverts its deposit.
     if cli.full_stack {
-        for row in ["unpause-PROTO", "unpause-AGENT", "unpause-RWA"] {
+        for row in ["unpause-PROTO", "unpause-RWA"] {
             if let Err(err) = fixture.govern(row, &[]) {
                 smoke_test::logging::error("smoke-test", format!("{row} failed: {err}"));
                 eprintln!("smoke-test: {row} failed: {err}");

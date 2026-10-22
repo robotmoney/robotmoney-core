@@ -184,6 +184,16 @@ describe("parseVaultAddressMap", () => {
     expect(parseVaultAddressMap(JSON.stringify(VAULTS))).toEqual(VAULTS);
   });
 
+  it("accepts the three-vault map of the v0.6.0 line: rmAGENT is retired and not required (ADR-0017)", () => {
+    const { rmAGENT: _retired, ...three } = VAULTS;
+    expect(parseVaultAddressMap(JSON.stringify(three))).toEqual(three);
+  });
+
+  it("refuses a map that lacks one of the three live vaults", () => {
+    const { rmPROTO: _gone, ...lacking } = VAULTS;
+    expect(parseVaultAddressMap(JSON.stringify(lacking))).toBeUndefined();
+  });
+
   it("refuses an incomplete map rather than substituting a zero address", () => {
     const partial = { rmUSDC: VAULTS.rmUSDC, rmPROTO: VAULTS.rmPROTO };
     expect(parseVaultAddressMap(JSON.stringify(partial))).toBeUndefined();
@@ -405,5 +415,32 @@ describe("ConsensusReceiptPanel", () => {
       "could not be fetched",
     );
     expect(screen.getByTestId(`applied-${RECEIPT_B}`).textContent).toContain("Cannot determine");
+  });
+});
+
+describe("computeAppliedState on a three-vault deployment (ADR-0017)", () => {
+  const { rmAGENT: _retired, ...THREE } = VAULTS;
+  const ROUTER = [
+    { vault: THREE.rmUSDC, bps: 9500 },
+    { vault: THREE.rmPROTO, bps: 500 },
+    { vault: THREE.rmRWA, bps: 0 },
+  ];
+  const payload = (agent: number, usdc: number, proto: number, rwa: number): ReceiptPayload =>
+    ({
+      ...PAYLOAD,
+      weights: [
+        { bucket: "agent_tokens", weight_bps: agent },
+        { bucket: "conservative_defi_yield", weight_bps: usdc },
+        { bucket: "protocol_tokens", weight_bps: proto },
+        { bucket: "real_world_assets", weight_bps: rwa },
+      ],
+    }) as ReceiptPayload;
+
+  it("is applied when the retired bucket recommends 0 bps and the rest match the router", () => {
+    expect(computeAppliedState(payload(0, 9500, 500, 0), ROUTER, THREE)).toBe("applied");
+  });
+
+  it("is not applied when the retired bucket recommends weight the router cannot route", () => {
+    expect(computeAppliedState(payload(500, 9000, 500, 0), ROUTER, THREE)).toBe("not_applied");
   });
 });

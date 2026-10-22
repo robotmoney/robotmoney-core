@@ -217,6 +217,13 @@ export const BUCKET_VAULT_SYMBOL: Readonly<Record<string, string>> = {
 };
 
 /**
+ * Buckets whose vault is retired (ADR-0017). The schema keeps the bucket, a deployment of
+ * the v0.6.0 line has no vault for it, and the router routes it nothing. A receipt that
+ * recommends 0 bps for it is applied. A non-zero recommendation is not applied.
+ */
+export const RETIRED_BUCKETS: ReadonlySet<string> = new Set(["agent_tokens"]);
+
+/**
  * Whether a receipt's recommendation is reflected in the live router weights.
  *
  * Deliberately three-valued. "Not applied" and "cannot tell" are different
@@ -261,7 +268,14 @@ export function computeAppliedState(
     const symbol = BUCKET_VAULT_SYMBOL[w.bucket];
     if (!symbol) return "unknown";
     const address = vaultAddressBySymbol[symbol];
-    if (!address) return "unknown";
+    if (!address) {
+      // A retired bucket has no vault in a three-vault deployment: the router routes it 0 bps.
+      if (RETIRED_BUCKETS.has(w.bucket)) {
+        if (w.weight_bps !== 0) return "not_applied";
+        continue;
+      }
+      return "unknown";
+    }
     // Absent from the live vector = routed 0 bps (see doc comment above).
     const liveBps = live.get(address.toLowerCase()) ?? 0;
     if (liveBps !== w.weight_bps) return "not_applied";
@@ -279,9 +293,9 @@ export function payloadSignatureCount(payload: ReceiptPayload | null): number | 
  * Parse the per-deployment vault-symbol → address map from configuration.
  *
  * The shape follows `deployment_address_contract` in
- * `tests/fixtures/consensus-receipt.bucket-vault-map.json`: the four symbols
- * `rmUSDC`, `rmPROTO`, `rmAGENT`, `rmRWA` and a `^0x[0-9a-fA-F]{40}$` address
- * each. That fixture's `missing_address_policy` is explicit — *"the deployment
+ * `tests/fixtures/consensus-receipt.bucket-vault-map.json`: the three symbols
+ * `rmUSDC`, `rmPROTO`, `rmRWA` and a `^0x[0-9a-fA-F]{40}$` address each. `rmAGENT` is
+ * retired (ADR-0017): it is accepted when present (the live v0.5.0 line) and not required. That fixture's `missing_address_policy` is explicit — *"the deployment
  * is not receipt-capable; never substitute a global or zero address"* — so an
  * absent, malformed, or incomplete map returns `undefined` and the surface
  * degrades to "cannot determine" rather than guessing.
@@ -298,7 +312,7 @@ export function parseVaultAddressMap(
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
 
-  const required = ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"];
+  const required = ["rmUSDC", "rmPROTO", "rmRWA"];
   const addressPattern = /^0x[0-9a-fA-F]{40}$/;
   const out: Record<string, string> = {};
   for (const symbol of required) {
@@ -306,5 +320,7 @@ export function parseVaultAddressMap(
     if (typeof value !== "string" || !addressPattern.test(value)) return undefined;
     out[symbol] = value;
   }
+  const retired = (parsed as Record<string, unknown>)["rmAGENT"];
+  if (typeof retired === "string" && addressPattern.test(retired)) out["rmAGENT"] = retired;
   return out;
 }

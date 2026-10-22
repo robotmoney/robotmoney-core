@@ -52,7 +52,7 @@ export interface ConsensusReceiptPanelProps {
   /** Base URL for the explorer-api service. */
   readonly explorerApiUrl: string;
   /**
-   * Deployment's vault symbol → address map (rmUSDC, rmPROTO, rmAGENT, rmRWA).
+   * Deployment's vault symbol → address map (rmUSDC, rmPROTO, rmRWA; rmAGENT only on the retired v0.5.0 line).
    * When absent, applied state renders as "cannot determine" rather than
    * guessing — the bucket-vault map is per-deployment and a global or zero
    * address must never be substituted.

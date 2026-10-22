@@ -14,7 +14,7 @@ use alloy_primitives::Address;
 use smoke_test::{require_prereqs, Fixture};
 
 /// One shared fixture for the whole suite — booting the Twin fork and
-/// publishing four vaults is slow; paying that per test would make the suite unusable.
+/// publishing three vaults is slow; paying that per test would make the suite unusable.
 /// Tests run with `--test-threads=1` so this static is safe.
 fn fixture() -> &'static Fixture {
     use std::sync::OnceLock;
@@ -206,14 +206,14 @@ fn approve_usdc_succeeds() {
     );
 }
 
-// -- One deployment scheme: four vaults, real Safe, timelock ------------
+// -- One deployment scheme: three vaults, real Safe, timelock ------------
 
-/// publish contracts wrote a manifest for each of the four vaults, and each has code.
+/// publish contracts wrote a manifest for each of the three vaults, and each has code.
 #[test]
-fn four_vault_manifests_exist_and_have_code() {
-    require_prereqs("four_vault_manifests_exist_and_have_code");
+fn three_vault_manifests_exist_and_have_code() {
+    require_prereqs("three_vault_manifests_exist_and_have_code");
     let fx = fixture();
-    for key in ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"] {
+    for key in ["rmUSDC", "rmPROTO", "rmRWA"] {
         let addr = fx.vault_by_key(key);
         assert_ne!(addr, Address::ZERO, "manifest for {key} is missing");
         let code = get_code(fx.rpc_url(), addr);
