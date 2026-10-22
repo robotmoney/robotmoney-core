@@ -186,7 +186,9 @@ test.describe("agent rotation flow — UI invariants", () => {
     await expect(step1.getByTestId("tx-preview-effect")).toContainText("loses AGENT_ROLE");
   });
 
-  test("the registration stays closed, with no commit control, before the revoke", async ({ page }) => {
+  test("the registration stays closed, with no commit control, before the revoke", async ({
+    page,
+  }) => {
     await fillRotationForm(page, {
       oldAgent: OLD_AGENT,
       newAgent: NEW_AGENT,
