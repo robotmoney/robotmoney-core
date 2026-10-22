@@ -5,7 +5,7 @@ description: "The manifest must answer, from one file: which chain, which addres
 
 # DeployTimelockManifestTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -165,15 +165,13 @@ There is no voting (issue 1698), so the manifest records no quorum.
 function test_manifestRecordsNoQuorum() public view;
 ```
 
-<a id="test_manifestrecordszerolistedagents_whennonelisted"></a>
+<a id="test_manifestrecordsnoagenthandover"></a>
 
-### test_manifestRecordsZeroListedAgents_whenNoneListed
+### test_manifestRecordsNoAgentHandover
 
-A run with no listed agent records a listed count of zero, so
-`deployer_owns_a_listed_gateway_agent = false` is not read as a
-check over every agent (issue #1476).
+The manifest carries no agent handover fields (ACL-9).
 
 ```solidity
-function test_manifestRecordsZeroListedAgents_whenNoneListed() public view;
+function test_manifestRecordsNoAgentHandover() public view;
 ```
 

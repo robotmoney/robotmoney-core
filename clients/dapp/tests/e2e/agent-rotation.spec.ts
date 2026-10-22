@@ -103,13 +103,13 @@ test.describe("agent rotation flow — UI invariants", () => {
 
   test("both rotation signing buttons disabled with empty inputs", async ({ page }) => {
     await expect(page.getByTestId("rotation-revoke-submit")).toBeDisabled();
-    await expect(page.getByTestId("rotation-authorize-submit")).toBeDisabled();
+    await expect(page.getByTestId("rotation-freeze")).toBeDisabled();
   });
 
   test("both rotation signing buttons disabled with only old agent address", async ({ page }) => {
     await page.getByTestId("rotation-old-agent-input").fill(OLD_AGENT);
     await expect(page.getByTestId("rotation-revoke-submit")).toBeDisabled();
-    await expect(page.getByTestId("rotation-authorize-submit")).toBeDisabled();
+    await expect(page.getByTestId("rotation-freeze")).toBeDisabled();
   });
 
   test("step-1 button enabled only after all rotation inputs valid and previews OK", async ({
@@ -121,9 +121,8 @@ test.describe("agent rotation flow — UI invariants", () => {
       shareReceiver: SHARE_RECEIVER,
     });
 
-    // The wallet lacks ADMIN_ROLE, so the dapp takes the depositor path.
-    await expect(page.getByTestId("rotation-depositor-path")).toBeVisible();
-    await expect(page.getByTestId("rotation-depositor-error")).toHaveCount(0);
+    // Every wallet takes the same consented registration path (issue 1890).
+    await expect(page.getByTestId("rotation-registration-path")).toBeVisible();
 
     // After valid inputs, step-1 button must be enabled (previews OK).
     await expect(page.getByTestId("rotation-revoke-submit")).toBeEnabled();
@@ -136,24 +135,27 @@ test.describe("agent rotation flow — UI invariants", () => {
       shareReceiver: SHARE_RECEIVER,
     });
 
-    // Step-2 must be disabled even after inputs are valid (awaiting step-1).
-    await expect(page.getByTestId("rotation-authorize-submit")).toBeDisabled();
+    // The registration is closed even after inputs are valid (awaiting step-1).
+    await expect(page.getByTestId("rotation-freeze")).toBeDisabled();
 
-    // After step-1 is submitted, step-2 becomes enabled.
+    // After step-1 is submitted, the registration opens.
     await page.getByTestId("rotation-revoke-submit").click();
-    await expect(page.getByTestId("rotation-authorize-submit")).toBeEnabled();
+    await expect(page.getByTestId("rotation-freeze")).toBeEnabled();
     // And step-1 is now disabled (already submitted).
     await expect(page.getByTestId("rotation-revoke-submit")).toBeDisabled();
 
     // The revoke mined: OLD_AGENT has no owner and no AGENT_ROLE.
     await waitForAgentState(endpoints, OLD_AGENT, zeroAddress);
 
-    // Step 2 (commit) then step 3 (reveal, one block later) authorize NEW_AGENT.
-    const reveal = page.getByTestId("rotation-reveal-submit");
-    await expect(reveal).toBeDisabled();
-    await page.getByTestId("rotation-authorize-submit").click();
-    // NEW_AGENT consents to the depositor before the reveal (core 1791).
+    // Freeze the inputs; NEW_AGENT consents first (core 1791); only then does the owner
+    // commit open; the reveal follows one block later.
+    await page.getByTestId("rotation-freeze").click();
+    const commit = page.getByTestId("rotation-authorize-submit");
+    await expect(commit).toBeDisabled();
     await consentFromDapp(page, endpoints, NEW_AGENT, "rotation-consent-hash");
+    await expect(commit).toBeEnabled({ timeout: 60_000 });
+    await commit.click();
+    const reveal = page.getByTestId("rotation-reveal-submit");
     await expect(reveal).toBeEnabled({ timeout: 60_000 });
     await reveal.click();
     await expect(page.getByTestId("rotation-complete")).toBeVisible();
@@ -184,25 +186,24 @@ test.describe("agent rotation flow — UI invariants", () => {
     await expect(step1.getByTestId("tx-preview-effect")).toContainText("loses AGENT_ROLE");
   });
 
-  test("commit and reveal previews for new address render structured fields", async ({ page }) => {
+  test("the registration stays closed, with no commit control, before the revoke", async ({
+    page,
+  }) => {
     await fillRotationForm(page, {
       oldAgent: OLD_AGENT,
       newAgent: NEW_AGENT,
       shareReceiver: SHARE_RECEIVER,
     });
 
-    // The depositor signs commitAuthorization in step 2 and revealAuthorization in
-    // step 3, so those are the previews (QA plan U4), never authorizeAgent.
-    const step2 = page.getByTestId("rotation-step2");
-    await expect(step2.locator('[data-testid="tx-preview"][data-ok="true"]')).toBeVisible();
-    await expect(step2.getByTestId("tx-preview-fn")).toHaveText("commitAuthorization");
-    const step3 = page.getByTestId("rotation-step3");
-    await expect(step3.locator('[data-testid="tx-preview"][data-ok="true"]')).toBeVisible();
-    await expect(step3.getByTestId("tx-preview-fn")).toHaveText("revealAuthorization");
-    await expect(step3.getByTestId("tx-preview-effect")).toContainText("AGENT_ROLE");
+    // The wallet signs commitAuthorization and revealAuthorization (QA plan U4), never
+    // authorizeAgent. Those previews come from the frozen inputs, which need the revoke first
+    // (the preview contents are pinned in commit-reveal-preview.test.tsx). Here: the
+    // registration is closed and shows no commit control before the revoke.
+    await expect(page.getByTestId("rotation-freeze")).toBeDisabled();
+    await expect(page.getByTestId("rotation-authorize-submit")).toHaveCount(0);
   });
 
-  test("combined risk annotation renders warning about TWO transactions", async ({ page }) => {
+  test("combined risk annotation renders warning about THREE transactions", async ({ page }) => {
     await fillRotationForm(page, {
       oldAgent: OLD_AGENT,
       newAgent: NEW_AGENT,
@@ -211,7 +212,7 @@ test.describe("agent rotation flow — UI invariants", () => {
 
     const riskBanner = page.getByTestId("rotation-combined-risk");
     await expect(riskBanner).toBeVisible();
-    await expect(riskBanner).toContainText("TWO");
+    await expect(riskBanner).toContainText("THREE");
   });
 
   test("identical old and new addresses show an error instead of previews", async ({ page }) => {
@@ -229,7 +230,7 @@ test.describe("agent rotation flow — UI invariants", () => {
 
     // Both buttons must stay disabled.
     await expect(page.getByTestId("rotation-revoke-submit")).toBeDisabled();
-    await expect(page.getByTestId("rotation-authorize-submit")).toBeDisabled();
+    await expect(page.getByTestId("rotation-freeze")).toBeDisabled();
   });
 
   test("no raw-calldata-only signing surface in rotation section", async ({ page }) => {

@@ -5,7 +5,7 @@ description: "Pins every authority invariant from the confused-deputy audit. Eac
 
 # ConfusedDeputyGuardsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/ConfusedDeputyGuards.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/ConfusedDeputyGuards.t.sol)
 
 **Inherits:** Test
 
@@ -142,6 +142,12 @@ function _policy(address shareReceiver_) internal view returns (IGateway.AgentPo
 
 ### _authorize
 
+<i>
+
+The owner is always `p.shareReceiver` (ACL-9); `owner_` is kept for call-site shape.
+
+</i>
+
 ```solidity
 function _authorize(address owner_, address agent_, IGateway.AgentPolicy memory p) internal;
 ```
@@ -240,23 +246,23 @@ A third party cannot revoke another depositor's agent.
 function test_invariant6_revokeAgent_requiresAgentOwner() public;
 ```
 
-<a id="test_invariant7_authorizeagent_rejectsdoubleregistration"></a>
+<a id="test_invariant7_reveal_rejectsdoubleregistration"></a>
 
-### test_invariant7_authorizeAgent_rejectsDoubleRegistration
+### test_invariant7_reveal_rejectsDoubleRegistration
 
-authorizeAgent on an already-owned agent reverts AgentAlreadyOwned.
+A reveal on an already-owned live agent reverts AgentAlreadyOwned.
 A second caller cannot steal ownership of an existing agent.
 
 ```solidity
-function test_invariant7_authorizeAgent_rejectsDoubleRegistration() public;
+function test_invariant7_reveal_rejectsDoubleRegistration() public;
 ```
 
 <a id="test_invariant7b_agentowner_boundtofirstdepositor"></a>
 
 ### test_invariant7b_agentOwner_boundToFirstDepositor
 
-agentOwner[agent] is set to msg.sender at first authorize and
-can only change via the recorded owner calling revokeAgent.
+agentOwner[agent] is set to msg.sender at registration and
+is cleared only by the owner's or the agent's revokeAgent.
 
 ```solidity
 function test_invariant7b_agentOwner_boundToFirstDepositor() public;

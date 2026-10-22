@@ -1,48 +1,46 @@
 /**
- * Unit tests — RotationTab + useRotationState (issue #254).
+ * Unit tests — RotationTab + useRotationState (issue #254, reworked by issue 1890).
  *
  * Focus:
  *  - composeRotationPreview error (same old/new address) surfaces in
  *    the rotation-preview-error element.
- *  - Step button gating: revoke-submit enabled only in `idle` step
- *    (when previews are ready); authorize-submit enabled only once the
- *    wallet accepted the revoke (`revoke-sent`).
+ *  - Step gating: revoke-submit is enabled only in `idle` step (when previews are
+ *    ready); the registration (freeze, consent, owner commit, reveal) opens only once
+ *    the wallet accepted the revoke, and the owner commit only after the new agent's
+ *    consent is on the gateway.
+ *  - Every wallet takes the same path. An ADMIN_ROLE wallet gets no authorizeAgent
+ *    button: the gateway has no such call.
  *
- * Both previews being ready (`previewsOk`) requires simulate to return
- * data. We set the step machine state via address inputs, and gate the
- * simulate mock so the error path and disable conditions are exercised.
+ * Both previews being ready (`previewsOk`) requires simulate to return data, which the
+ * shared wagmi mock provides for revokeAgent once its argument exists.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act } from "react";
-import { render, screen, fireEvent } from "../helpers/render";
+import { render, screen, fireEvent, waitFor } from "../helpers/render";
 import { RotationTab } from "../../../src/components/RotationTab";
 import type { PreviewContext } from "../../../src/lib/preview";
+import { REVOKE_TX, type RegState } from "../helpers/registrationWagmi";
 
-// Per-test wagmi state. Default: not connected, no reads, no simulate data
-// → buttons stay disabled.
-const wagmiState = vi.hoisted(() => {
-  const account: { isConnected: boolean; address?: `0x${string}`; chainId?: number } = {
-    isConnected: false,
-  };
-  return {
-    account,
-    hasAdmin: undefined as boolean | undefined,
-    agentOwner: undefined as string | undefined,
-    simData: undefined as unknown,
-    writeContract: undefined as unknown as (...args: unknown[]) => void,
-  };
+const state = vi.hoisted(
+  () =>
+    ({
+      account: { address: undefined, isConnected: false },
+      chainId: 918453,
+      block: 100n,
+      consent: undefined,
+      agentOwner: "0x0000000000000000000000000000000000000000",
+      hasAdmin: false,
+      receipts: new Map(),
+      calls: [],
+      reads: [],
+      callbacks: [],
+    }) as unknown as RegState,
+);
+
+vi.mock("wagmi", async (importOriginal) => {
+  const { makeWagmiMock } = await import("../helpers/registrationWagmi");
+  return makeWagmiMock(await importOriginal(), state);
 });
-
-vi.mock("wagmi", () => ({
-  useAccount: () => wagmiState.account,
-  useReadContract: (cfg: { functionName: string }) => ({
-    data: cfg.functionName === "hasRole" ? wagmiState.hasAdmin : wagmiState.agentOwner,
-  }),
-  useSimulateContract: () => ({ data: wagmiState.simData }),
-  useWriteContract: () => ({ writeContract: wagmiState.writeContract, isPending: false }),
-  useWaitForTransactionReceipt: () => ({ data: undefined }),
-  useBlockNumber: () => ({ data: undefined }),
-}));
 
 const GATEWAY = "0x1111111111111111111111111111111111111111" as const;
 const ctx: PreviewContext = {
@@ -51,17 +49,23 @@ const ctx: PreviewContext = {
   envClass: "fork",
 };
 const NOW = 1_893_456_000_000;
+const ZERO = "0x0000000000000000000000000000000000000000" as const;
 
 function renderTab() {
   return render(<RotationTab gatewayAddress={GATEWAY} ctx={ctx} now={NOW} />);
 }
 
 function resetWagmi() {
-  wagmiState.account = { isConnected: false };
-  wagmiState.hasAdmin = undefined;
-  wagmiState.agentOwner = undefined;
-  wagmiState.simData = undefined;
-  wagmiState.writeContract = vi.fn();
+  state.account = { address: undefined, isConnected: false };
+  state.chainId = 918453;
+  state.block = 100n;
+  state.consent = undefined;
+  state.agentOwner = ZERO;
+  state.hasAdmin = false;
+  state.receipts = new Map();
+  state.calls = [];
+  state.reads = [];
+  state.callbacks = [];
 }
 
 describe("RotationTab — error surfaces in rotation-preview-error", () => {
@@ -113,10 +117,10 @@ describe("RotationTab — step button gating (idle state)", () => {
     expect(screen.getByTestId("rotation-revoke-submit")).toBeDisabled();
   });
 
-  it("authorize-submit is disabled in idle state (must wait for revoke-sent)", () => {
+  it("the registration is closed in idle state (it waits for the revoke)", () => {
     renderTab();
-    // In idle state, step !== "revoke-sent" → authorize button disabled.
-    expect(screen.getByTestId("rotation-authorize-submit")).toBeDisabled();
+    expect(screen.getByTestId("rotation-freeze")).toBeDisabled();
+    expect(screen.queryByTestId("rotation-authorize-submit")).toBeNull();
   });
 
   it("rotation-complete message is absent in idle state", () => {
@@ -125,20 +129,19 @@ describe("RotationTab — step button gating (idle state)", () => {
   });
 });
 
-describe("RotationTab — depositor path (wallet without ADMIN_ROLE)", () => {
-  const DEPOSITOR = "0x4444444444444444444444444444444444444444" as const;
+describe.each([
+  { label: "depositor wallet (no ADMIN_ROLE)", admin: false },
+  { label: "ADMIN_ROLE wallet", admin: true },
+])("RotationTab — one registration path for a $label", ({ admin }) => {
+  const WALLET = "0x4444444444444444444444444444444444444444" as const;
   const OLD = "0x2222222222222222222222222222222222222222";
   const NEW = "0x5555555555555555555555555555555555555555";
-  const ZERO = "0x0000000000000000000000000000000000000000";
 
   beforeEach(() => {
     vi.clearAllMocks();
     resetWagmi();
-    wagmiState.account = { isConnected: true, address: DEPOSITOR, chainId: 918453 };
-    wagmiState.hasAdmin = false;
-    wagmiState.agentOwner = ZERO;
-    // revokeAgent simulate succeeds (the depositor owns OLD).
-    wagmiState.simData = { request: { functionName: "revokeAgent" } };
+    state.account = { address: WALLET, isConnected: true };
+    state.hasAdmin = admin;
   });
 
   function fill(receiver: string) {
@@ -149,73 +152,59 @@ describe("RotationTab — depositor path (wallet without ADMIN_ROLE)", () => {
     });
   }
 
-  it("labels the commit/reveal path and renders a step-3 reveal button", () => {
+  it("labels the one path and renders no authorizeAgent control", () => {
     renderTab();
-    fill(DEPOSITOR);
-    expect(screen.getByTestId("rotation-depositor-path")).toBeInTheDocument();
-    expect(screen.getByTestId("rotation-authorize-submit").textContent).toMatch(
-      /commitAuthorization/,
-    );
-    expect(screen.getByTestId("rotation-reveal-submit")).toBeDisabled();
-    expect(screen.queryByTestId("rotation-depositor-error")).toBeNull();
+    fill(WALLET);
+    expect(screen.getByTestId("rotation-registration-path")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/authorizeAgent/);
   });
 
-  it("enables step 1 when the depositor names itself as shareReceiver and the new agent is free", () => {
+  it("enables step 1 when the previews are ready, with the registration still closed", async () => {
     renderTab();
-    fill(DEPOSITOR);
-    expect(screen.getByTestId("rotation-revoke-submit")).toBeEnabled();
-    expect(screen.getByTestId("rotation-authorize-submit")).toBeDisabled();
+    fill(WALLET);
+    await waitFor(() => expect(screen.getByTestId("rotation-revoke-submit")).toBeEnabled());
+    expect(screen.getByTestId("rotation-freeze")).toBeDisabled();
   });
 
-  it("refuses a foreign shareReceiver with a visible reason", () => {
+  it("a foreign share receiver blocks the freeze with a visible reason", async () => {
     renderTab();
     fill("0x3333333333333333333333333333333333333333");
-    expect(screen.getByTestId("rotation-depositor-error").textContent).toMatch(/shareReceiver/);
-    expect(screen.getByTestId("rotation-revoke-submit")).toBeDisabled();
-  });
-
-  it("refuses a new agent that already has an owner", () => {
-    wagmiState.agentOwner = "0x6666666666666666666666666666666666666666";
-    renderTab();
-    fill(DEPOSITOR);
-    expect(screen.getByTestId("rotation-depositor-error").textContent).toMatch(/AgentAlreadyOwned/);
-    expect(screen.getByTestId("rotation-revoke-submit")).toBeDisabled();
-  });
-
-  it("step 2 signs commitAuthorization (not authorizeAgent) once the wallet accepted step 1", async () => {
-    renderTab();
-    fill(DEPOSITOR);
-    fireEvent.click(screen.getByTestId("rotation-revoke-submit"));
-    const write = vi.mocked(wagmiState.writeContract);
-    // Sent is not accepted: step 2 waits for the wallet to return the revoke's hash (QA plan U5).
-    expect(screen.getByTestId("rotation-authorize-submit")).toBeDisabled();
-    const opts = write.mock.calls[0][1] as { onSuccess: (hash: `0x${string}`) => void };
     await act(async () => {
-      opts.onSuccess(`0x${"de".repeat(32)}`);
+      state.callbacks.length = 0;
     });
-    expect(screen.getByTestId("rotation-authorize-submit")).toBeEnabled();
-    fireEvent.click(screen.getByTestId("rotation-authorize-submit"));
-    const calls = write.mock.calls.map((c) => (c[0] as { functionName?: string }).functionName);
-    expect(calls).toEqual(["revokeAgent", "commitAuthorization"]);
-  });
-});
-
-describe("RotationTab — admin path (wallet with ADMIN_ROLE) is kept", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    resetWagmi();
-    wagmiState.account = {
-      isConnected: true,
-      address: "0x7777777777777777777777777777777777777777",
-    };
-    wagmiState.hasAdmin = true;
-    wagmiState.simData = { request: { functionName: "sim" } };
+    expect(screen.getByTestId("rotation-freeze")).toBeDisabled();
   });
 
-  it("uses authorizeAgent and renders no reveal step", () => {
+  it("warns when the new agent already has an owner", () => {
+    state.agentOwner = "0x6666666666666666666666666666666666666666";
     renderTab();
-    expect(screen.queryByTestId("rotation-depositor-path")).toBeNull();
-    expect(screen.queryByTestId("rotation-reveal-submit")).toBeNull();
-    expect(screen.getByTestId("rotation-authorize-submit").textContent).toMatch(/authorizeAgent/);
+    fill(WALLET);
+    expect(screen.getByTestId("rotation-new-agent-owned").textContent).toMatch(/AgentAlreadyOwned/);
+  });
+
+  it("opens the registration once the wallet accepted the revoke, and the commit waits for the consent", async () => {
+    renderTab();
+    fill(WALLET);
+    await waitFor(() => expect(screen.getByTestId("rotation-revoke-submit")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("rotation-revoke-submit"));
+    // Sent is not accepted: the registration waits for the wallet to return the revoke's hash.
+    expect(screen.getByTestId("rotation-freeze")).toBeDisabled();
+    await act(async () => {
+      state.callbacks.pop()!(REVOKE_TX);
+    });
+    const freeze = screen.getByTestId("rotation-freeze");
+    await waitFor(() => expect(freeze).toBeEnabled());
+    fireEvent.click(freeze);
+    // No consent yet: the commit button is disabled and nothing but the revoke was signed.
+    expect(await screen.findByTestId("rotation-authorize-submit")).toBeDisabled();
+    expect(state.calls.map((c) => c.functionName)).toEqual(["revokeAgent"]);
+
+    // The new agent's consent appears on the gateway: a fresh freeze reads it and the commit opens.
+    state.consent = [NEW, 90n];
+    fireEvent.click(screen.getByTestId("rotation-reset"));
+    fireEvent.click(await screen.findByTestId("rotation-freeze"));
+    await waitFor(() => expect(screen.getByTestId("rotation-authorize-submit")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("rotation-authorize-submit"));
+    expect(state.calls.map((c) => c.functionName)).toEqual(["revokeAgent", "commitAuthorization"]);
   });
 });

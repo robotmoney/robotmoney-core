@@ -1,0 +1,77 @@
+---
+title: "GatewayAgentLifecycleInvariantTest"
+---
+
+# GatewayAgentLifecycleInvariantTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/GatewayAgentLifecycleInvariant.t.sol)
+
+**Inherits:** StdInvariant, Test
+
+## State Variables
+
+### gw
+
+```solidity
+RobotMoneyGateway internal gw;
+```
+
+### handler
+
+```solidity
+AgentLifecycleHandler internal handler;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="invariant_receiverisowner_androlematchesregistration"></a>
+
+### invariant_receiverIsOwner_andRoleMatchesRegistration
+
+<i>
+
+Every registered agent pays shares to its owner, and holds AGENT_ROLE; every
+unregistered agent holds no role.
+
+</i>
+
+```solidity
+function invariant_receiverIsOwner_andRoleMatchesRegistration() public view;
+```
+
+<a id="invariant_nopublicrolecallchangedagentrole"></a>
+
+### invariant_noPublicRoleCallChangedAgentRole
+
+```solidity
+function invariant_noPublicRoleCallChangedAgentRole() public view;
+```
+
+<a id="invariant_noliveownerchange_noforeignreceiver_nostalebudget"></a>
+
+### invariant_noLiveOwnerChange_noForeignReceiver_noStaleBudget
+
+```solidity
+function invariant_noLiveOwnerChange_noForeignReceiver_noStaleBudget() public view;
+```
+
+<a id="test_handlerreacheseverylifecyclepath"></a>
+
+### test_handlerReachesEveryLifecyclePath
+
+Execution floor: a scripted run of the handler reaches registration, replacement
+after expiry, owner revoke, agent self-revoke and a deposit. A handler that can no
+longer reach them fails here instead of letting the invariants pass vacuously.
+
+```solidity
+function test_handlerReachesEveryLifecyclePath() public;
+```
+

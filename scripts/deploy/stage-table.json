@@ -373,7 +373,6 @@
       "kind": "forge",
       "script": "contracts/script/DeployTimelock.s.sol:DeployTimelock",
       "requiredEnv": [
-        "AGENT_ADDRESSES",
         "VAULT_ADDRESSES",
         "GATEWAY_ADDRESS",
         "REGISTRY_ADDRESS",

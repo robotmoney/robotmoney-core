@@ -10,7 +10,7 @@
 // docs/technical/smart-contract-invariants.md appears here exactly once, tagged
 // with:
 //
-//   - status:    HOLDS (the spec marks it ✅/🟢/🟡/⚪ — has, or will get, a passing
+//   - status:    TOMBSTONE (the spec retired it: no surface, the ID stays), or HOLDS (the spec marks it ✅/🟢/🟡/⚪ — has, or will get, a passing
 //                test) or RED (the spec marks it 🔴 — currently breakable; the FV
 //                test for it is skipped/expected-fail until the linked remediation
 //                issue lands).
@@ -35,7 +35,8 @@ pragma solidity ^0.8.24;
 library InvariantRegistry {
     enum Status {
         HOLDS, // spec ✅/🟢/🟡/⚪ — a passing (or trivially-passing) FV test exists
-        RED // spec 🔴 — currently breakable; FV test skipped until remediation lands
+        RED, // spec 🔴 — currently breakable; FV test skipped until remediation lands
+        TOMBSTONE // spec retired the invariant (no surface); the ID stays, append-only
     }
 
     struct Entry {
@@ -48,7 +49,7 @@ library InvariantRegistry {
     /// @dev The full catalogue. Order mirrors the spec's section order. NEVER
     ///      reorder-and-renumber; append-only like the spec's IDs.
     function entries() internal pure returns (Entry[] memory e) {
-        e = new Entry[](65);
+        e = new Entry[](66);
         uint256 i;
 
         // ── 1. Custody & solvency (INV-1/2/3, CUST) ──────────────────────────
@@ -80,13 +81,15 @@ library InvariantRegistry {
         e[i++] = Entry("ACL-1", Status.HOLDS, "deploy-assertion", 0); // F-01 remediated (#965)
         e[i++] = Entry("ACL-2", Status.HOLDS, "symbolic", 0);
         e[i++] = Entry("ACL-3", Status.HOLDS, "symbolic", 0); // F-06 fixed (#966)
-        e[i++] = Entry("ACL-4", Status.HOLDS, "symbolic", 0);
+        e[i++] = Entry("ACL-4", Status.TOMBSTONE, "symbolic", 0); // retired 2026-10-20: no ownership transfer (ACL-9)
         e[i++] = Entry("ACL-5", Status.HOLDS, "static-guard", 0); // F-08 fixed (#966)
         e[i++] = Entry("ACL-6", Status.HOLDS, "stateful-invariant", 0);
         e[i++] = Entry("ACL-7", Status.HOLDS, "deploy-assertion", 0); // NC-10 fixed (#970)
-        // #1476: no gateway agent deployer-owned after handover. Deep proofs:
-        // DeployTimelock.t.sol::DeployTimelockAgentHandoverTest, SafeIntegration.t.sol.
-        e[i++] = Entry("ACL-8", Status.HOLDS, "deploy-assertion", 0);
+        // Retired 2026-10-20: the deploy registers no agent and hands none over (ACL-9).
+        e[i++] = Entry("ACL-8", Status.TOMBSTONE, "deploy-assertion", 0);
+        // Issue 1890: owner-consented agent lifecycle. Deep proofs:
+        // GatewayAgentPolicyAuthorization.t.sol, GatewayAgentLifecycleInvariant.t.sol.
+        e[i++] = Entry("ACL-9", Status.HOLDS, "static-guard", 0);
 
         // ── 5. Lifecycle & state machine (LIFE) ──────────────────────────────
         e[i++] = Entry("LIFE-1", Status.HOLDS, "stateful-invariant", 0); // F-04 fixed (#968)

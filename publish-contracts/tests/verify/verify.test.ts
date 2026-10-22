@@ -33,7 +33,7 @@ describe("healthy deployment", () => {
 describe("the deploy authorizes no agent (core 1527)", () => {
   test("agents: no agent authorized at handover is ok with zero gateway agent logs, and the manifest and role checks are ok", async () => {
     const r = await verifyDeployment(buildWorld().opts);
-    for (const l of ["agents: no agent authorized at handover", "agents: manifest lists zero agents", "agents: no address holds AGENT_ROLE after handover", "agents: manifest says deployer owns no listed agent"]) {
+    for (const l of ["agents: no agent authorized at handover", "agents: no address holds AGENT_ROLE after handover"]) {
       expect(r.checks.find((c) => c.label === l)?.ok, l).toBe(true);
     }
   });

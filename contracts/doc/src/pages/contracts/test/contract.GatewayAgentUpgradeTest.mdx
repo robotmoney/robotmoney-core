@@ -1,0 +1,51 @@
+---
+title: "GatewayAgentUpgradeTest"
+description: "A populated gateway proxy upgrades to a fresh implementation through its timelock. The stored registration (owner, role, policy tuple, deposit budget) survives, and the owner-consented lifecycle still holds afterwards (issue 1890, ACL-9)."
+---
+
+# GatewayAgentUpgradeTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/34be2354d6196134ae07e1a8abfe8fb55d079c61/contracts/test/GatewayAgentPolicyAuthorization.t.sol)
+
+**Inherits:** [GatewayAgentPolicyFixture](/contracts/test/abstract.GatewayAgentPolicyFixture)
+
+**Title:** GatewayAgentUpgradeTest
+
+A populated gateway proxy upgrades to a fresh implementation through its timelock.
+The stored registration (owner, role, policy tuple, deposit budget) survives, and
+the owner-consented lifecycle still holds afterwards (issue 1890, ACL-9).
+
+## Constants
+
+### UPGRADE_TIMELOCK
+
+```solidity
+address internal constant UPGRADE_TIMELOCK = address(0x7157);
+```
+
+## State Variables
+
+### agentU
+
+```solidity
+address internal agentU = makeAddr("agentU");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="test_populatedproxy_upgrade_keepsregistration_andlifecyclestillholds"></a>
+
+### test_populatedProxy_upgrade_keepsRegistration_andLifecycleStillHolds
+
+```solidity
+function test_populatedProxy_upgrade_keepsRegistration_andLifecycleStillHolds() public;
+```
+

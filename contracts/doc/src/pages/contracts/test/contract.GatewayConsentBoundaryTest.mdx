@@ -1,0 +1,172 @@
+---
+title: "GatewayConsentBoundaryTest"
+description: "Owner and agent commitments both live COMMIT_EXPIRY_BLOCKS blocks. A reveal needs a live owner commit and a live consent for the exact call."
+---
+
+# GatewayConsentBoundaryTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/GatewayAgentPolicyAuthorization.t.sol)
+
+**Inherits:** [GatewayAgentPolicyFixture](/contracts/test/abstract.GatewayAgentPolicyFixture)
+
+**Title:** GatewayConsentBoundaryTest
+
+Owner and agent commitments both live COMMIT_EXPIRY_BLOCKS blocks. A
+reveal needs a live owner commit and a live consent for the exact call.
+
+## Constants
+
+### SALT
+
+```solidity
+bytes32 internal constant SALT = keccak256("boundary-salt");
+```
+
+## State Variables
+
+### agentU
+
+```solidity
+address internal agentU = makeAddr("agentU");
+```
+
+## Functions
+
+<a id="_ownercommit-address-address-bytes32"></a>
+
+### _ownerCommit
+
+```solidity
+function _ownerCommit(address owner, address agent, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| agent | `address` |  |
+| salt | `bytes32` |  |
+
+<a id="_consent-address-address-bytes32-igateway-agentpolicy"></a>
+
+### _consent
+
+```solidity
+function _consent(address owner, address agent, bytes32 salt, IGateway.AgentPolicy memory p)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| agent | `address` |  |
+| salt | `bytes32` |  |
+| p | `IGateway.AgentPolicy` |  |
+
+<a id="_reveal-address-address-bytes32-igateway-agentpolicy"></a>
+
+### _reveal
+
+```solidity
+function _reveal(address owner, address agent, bytes32 salt, IGateway.AgentPolicy memory p)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| agent | `address` |  |
+| salt | `bytes32` |  |
+| p | `IGateway.AgentPolicy` |  |
+
+<a id="_assertnothingwritten-address"></a>
+
+### _assertNothingWritten
+
+```solidity
+function _assertNothingWritten(address agent) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+
+<a id="test_ownerandconsent_succeedattheirlimit"></a>
+
+### test_ownerAndConsent_succeedAtTheirLimit
+
+```solidity
+function test_ownerAndConsent_succeedAtTheirLimit() public;
+```
+
+<a id="test_ownercommit_failsoneblockafteritslimit"></a>
+
+### test_ownerCommit_failsOneBlockAfterItsLimit
+
+```solidity
+function test_ownerCommit_failsOneBlockAfterItsLimit() public;
+```
+
+<a id="test_consent_failsoneblockafteritslimit_evenwithfreshownercommit"></a>
+
+### test_consent_failsOneBlockAfterItsLimit_evenWithFreshOwnerCommit
+
+```solidity
+function test_consent_failsOneBlockAfterItsLimit_evenWithFreshOwnerCommit() public;
+```
+
+<a id="test_reveal_inthecommitblock_fails"></a>
+
+### test_reveal_inTheCommitBlock_fails
+
+```solidity
+function test_reveal_inTheCommitBlock_fails() public;
+```
+
+<a id="test_missingconsent_fails"></a>
+
+### test_missingConsent_fails
+
+```solidity
+function test_missingConsent_fails() public;
+```
+
+<a id="test_consumedconsent_cannotbereused"></a>
+
+### test_consumedConsent_cannotBeReused
+
+```solidity
+function test_consumedConsent_cannotBeReused() public;
+```
+
+<a id="test_changedpolicy_changedsalt_changedowner_changedagent_fail"></a>
+
+### test_changedPolicy_changedSalt_changedOwner_changedAgent_fail
+
+```solidity
+function test_changedPolicy_changedSalt_changedOwner_changedAgent_fail() public;
+```
+
+<a id="test_selfregistration_needsnoseparateconsent"></a>
+
+### test_selfRegistration_needsNoSeparateConsent
+
+```solidity
+function test_selfRegistration_needsNoSeparateConsent() public;
+```
+
+<a id="test_failedreveal_keepscommitments_andwritesnothing"></a>
+
+### test_failedReveal_keepsCommitments_andWritesNothing
+
+```solidity
+function test_failedReveal_keepsCommitments_andWritesNothing() public;
+```
+

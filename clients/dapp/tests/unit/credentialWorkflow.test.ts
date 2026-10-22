@@ -98,10 +98,10 @@ describe("composeRegisterPreview — happy path", () => {
     expect(preview.policy).toBe(BASE_POLICY);
   });
 
-  it("preview.target is 'gateway' and functionName is 'authorizeAgent'", () => {
+  it("preview.target is 'gateway' and functionName is 'revealAuthorization'", () => {
     const { preview } = composeRegisterPreview(AGENT, BASE_POLICY);
     expect(preview.target).toBe("gateway");
-    expect(preview.functionName).toBe("authorizeAgent");
+    expect(preview.functionName).toBe("revealAuthorization");
   });
 
   it("parameters include the agent address and share receiver", () => {
@@ -122,10 +122,10 @@ describe("composeRegisterPreview — happy path", () => {
     expect(preview.parameters.maxPerDepositFormatted).toContain("100");
   });
 
-  it("riskAnnotation mentions AGENT_ROLE and authorizeAgent", () => {
+  it("riskAnnotation mentions AGENT_ROLE and revealAuthorization", () => {
     const { preview } = composeRegisterPreview(AGENT, BASE_POLICY);
     expect(preview.riskAnnotation).toMatch(/AGENT_ROLE/);
-    expect(preview.riskAnnotation).toMatch(/authorizeAgent/i);
+    expect(preview.riskAnnotation).toMatch(/revealAuthorization/i);
   });
 
   it("riskAnnotation is marked as an on-chain state change", () => {
@@ -172,7 +172,7 @@ describe("composeRotationPreview — happy path", () => {
   it("authorizeStep targets the new agent address", () => {
     const rotation = composeRotationPreview(AGENT, NEW_AGENT, BASE_POLICY);
     expect(rotation.authorizeStep.agentAddress).toBe(NEW_AGENT);
-    expect(rotation.authorizeStep.preview.functionName).toBe("authorizeAgent");
+    expect(rotation.authorizeStep.preview.functionName).toBe("revealAuthorization");
   });
 
   it("revokeStep risk annotation mentions in-flight deposit impact", () => {
@@ -183,8 +183,8 @@ describe("composeRotationPreview — happy path", () => {
   it("combinedRiskAnnotation references both steps", () => {
     const rotation = composeRotationPreview(AGENT, NEW_AGENT, BASE_POLICY);
     expect(rotation.combinedRiskAnnotation).toMatch(/revokeAgent/i);
-    expect(rotation.combinedRiskAnnotation).toMatch(/authorizeAgent/i);
-    expect(rotation.combinedRiskAnnotation).toMatch(/TWO/i);
+    expect(rotation.combinedRiskAnnotation).toMatch(/revealAuthorization/i);
+    expect(rotation.combinedRiskAnnotation).toMatch(/THREE/i);
   });
 
   it("combinedRiskAnnotation warns not to close dialog between transactions", () => {

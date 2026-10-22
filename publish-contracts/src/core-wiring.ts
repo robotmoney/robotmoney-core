@@ -76,7 +76,6 @@ export const SHEET_RENAMES: Record<string, string> = {
 export function resolveEnv(env: string, vault: VaultKey | null): EnvSource {
   if (env === "EXPECTED_CHAIN_ID") return { from: "chain" };
   if (env === "DEPLOYMENT_OUT") return { from: "out" };
-  if (env === "AGENT_ADDRESSES") return { from: "literal", value: "none" };
   const m = MANIFEST_ENV[env];
   if (m) return { from: "manifest", ...m };
   if (env === ELIGIBILITY_BPS_ENV) return { from: "computed" };
@@ -115,7 +114,7 @@ export const MANIFEST_FIELDS_READ: { stage: string; field: string }[] = [
   ...Object.values(MANIFEST_ENV).filter((x) => x.stage !== SAFE_STAGE),
   ...CORE_CONTRACT_REFS.map(({ stage, field }) => ({ stage, field })),
   // the verifier reads these from the timelock manifest, and chain_id from every stage manifest
-  ...["safe", "emergency", "code_hashes", "roles", "gateway_agents_listed_count", "deployer_owns_a_listed_gateway_agent"].map((field) => ({ stage: "timelock", field })),
+  ...["safe", "emergency", "code_hashes", "roles"].map((field) => ({ stage: "timelock", field })),
   { stage: "libs", field: "chain_id" },
   // core 1676: the verifier reads the V4 adapter and the recorder a vault stage wrote, and the recorder stage's own manifest
   { stage: "agent", field: VAULT_ADAPTER_V4_FIELD },

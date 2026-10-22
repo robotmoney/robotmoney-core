@@ -38,12 +38,13 @@ export interface RegisterPreview {
   /** The policy parameters as a display-ready record. */
   policy: AgentPolicy;
   /**
-   * Decoded preview of the `authorizeAgent(address, AgentPolicy)` call.
-   * Shown to the operator before wallet signing is triggered.
+   * Decoded preview of the `revealAuthorization(address, bytes32, AgentPolicy)` call, the
+   * only registration entrypoint (issue 1890). It follows the agent's own consent commitment
+   * and the signing wallet's commitment. Shown to the operator before wallet signing is triggered.
    */
   preview: {
     target: "gateway";
-    functionName: "authorizeAgent";
+    functionName: "revealAuthorization";
     /** Human-readable parameter breakdown for display. */
     parameters: {
       agent: string;
@@ -54,8 +55,8 @@ export interface RegisterPreview {
     };
     /**
      * Risk annotation shown in the UI before signing.
-     * authorizeAgent grants AGENT_ROLE — an irreversible on-chain state
-     * change until revokeAgent is called. Operator must confirm intent.
+     * The reveal grants AGENT_ROLE — an on-chain state change until revokeAgent is
+     * called by the owner or by the agent itself. Operator must confirm intent.
      */
     riskAnnotation: string;
   };
@@ -79,7 +80,7 @@ export function validateEthereumAddress(addr: string): void {
 }
 
 /**
- * Compose the `authorizeAgent` preview for a register-existing-address flow.
+ * Compose the `revealAuthorization` preview for a register-existing-address flow.
  *
  * This is a pure function that constructs the display model for the
  * transaction preview step. No wallet interaction or on-chain read occurs here.
@@ -105,7 +106,7 @@ export function composeRegisterPreview(agentAddress: string, policy: AgentPolicy
     policy,
     preview: {
       target: "gateway",
-      functionName: "authorizeAgent",
+      functionName: "revealAuthorization",
       parameters: {
         agent: agentAddress,
         shareReceiver: policy.shareReceiver,
@@ -114,9 +115,9 @@ export function composeRegisterPreview(agentAddress: string, policy: AgentPolicy
         maxPerWindowFormatted,
       },
       riskAnnotation:
-        "authorizeAgent grants AGENT_ROLE on the gateway. " +
-        "The authorized address can call gateway.deposit() within the specified policy caps. " +
-        "This is an on-chain state change. Use revokeAgent to undo it.",
+        "revealAuthorization grants AGENT_ROLE on the gateway, after the agent's own consent and your commit. " +
+        "The authorized address can call gateway.deposit() within the specified policy caps, and shares go to the signing wallet. " +
+        "This is an on-chain state change. Use revokeAgent (the owner or the agent can sign it) to undo it.",
     },
   };
 }

@@ -4,7 +4,7 @@ title: "AccessRolesHarness"
 
 # AccessRolesHarness
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/AccessRoles.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/AccessRoles.t.sol)
 
 **Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles)
 
@@ -44,6 +44,27 @@ constructor(address admin);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | admin | `address` |  |
+
+<a id="exposed_grantagent-address"></a>
+
+### exposed_grantAgent
+
+<i>
+
+The gateway grants AGENT_ROLE only internally (a consented reveal); the
+public grantRole reverts for it (ACL-9), so the tests grant through here.
+
+</i>
+
+```solidity
+function exposed_grantAgent(address account) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
 
 <a id="exposed_assertroleseparation-address"></a>
 

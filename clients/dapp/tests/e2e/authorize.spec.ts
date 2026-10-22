@@ -30,7 +30,10 @@ test.describe("authorize agent — UI invariants", () => {
     await openDapp(page, endpoints);
 
     await page.getByTestId("agent-input").fill(endpoints.agent_addr);
-    await page.getByTestId("shareReceiver-input").fill(endpoints.share_receiver_addr);
+    // The share receiver is always the signing wallet (ACL-9): the admin EOA here.
+    await page.getByTestId("shareReceiver-input").fill(endpoints.admin_addr);
+    // The previews come from the frozen inputs.
+    await page.getByTestId("authorize-freeze").click();
 
     const previews = page.locator('[data-testid="tx-preview"][data-ok="true"]');
     await expect(previews.first()).toBeVisible();
@@ -39,7 +42,9 @@ test.describe("authorize agent — UI invariants", () => {
     // the previews (QA plan U4): never authorizeAgent, which this wallet does not sign.
     const commitPreview = page.getByTestId("authorize-commit-preview");
     await expect(commitPreview.getByTestId("tx-preview-fn")).toHaveText("commitAuthorization");
-    const revealPreview = page.getByTestId("authorize-next-reveal-preview");
+    // Consent comes first: the owner commit is disabled until the agent's consent is on chain.
+    await expect(page.getByTestId("authorize-submit")).toBeDisabled();
+    const revealPreview = page.getByTestId("authorize-reveal-preview");
     await expect(revealPreview.getByTestId("tx-preview-fn")).toHaveText("revealAuthorization");
     await expect(revealPreview.getByTestId("tx-preview-effect")).toContainText("AGENT_ROLE");
 

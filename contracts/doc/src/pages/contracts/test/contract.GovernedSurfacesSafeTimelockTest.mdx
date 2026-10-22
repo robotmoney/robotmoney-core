@@ -5,7 +5,7 @@ description: "One real Safe -> Timelock test for each governed surface that had 
 
 # GovernedSurfacesSafeTimelockTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/GovernedSurfacesSafeTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/18b3311e2cebb7a6f13d47076813825aead407c8/contracts/test/GovernedSurfacesSafeTimelock.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -191,12 +191,15 @@ function test_receiptSubmitter_directSafeCallIsRefused_exactReason() public;
 function test_adapterAdmin_allowAdapterAndCodeHash_viaSafeThenTimelock() public;
 ```
 
-<a id="test_rolerevoke_gatewayagentrole_viasafethentimelock"></a>
+<a id="test_agentrole_notmanageablebythetimelock"></a>
 
-### test_roleRevoke_gatewayAgentRole_viaSafeThenTimelock
+### test_agentRole_notManageableByTheTimelock
+
+ACL-9: no governance route reaches AGENT_ROLE. The timelock holds ADMIN_ROLE on
+the gateway, yet it can neither grant nor revoke the agent role.
 
 ```solidity
-function test_roleRevoke_gatewayAgentRole_viaSafeThenTimelock() public;
+function test_agentRole_notManageableByTheTimelock() public;
 ```
 
 <a id="test_routergovernance_setdefaultweights_afterhandover_viasafethentimelock"></a>

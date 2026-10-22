@@ -4,7 +4,7 @@ title: "GatewayWithdrawTest"
 
 # GatewayWithdrawTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:** Test
 
@@ -305,12 +305,12 @@ function test_withdraw_revertsOnExpiredDeadline() public;
 function test_withdraw_revertsOnDeadlineTooFar() public;
 ```
 
-<a id="test_authorizeagent_revertswhenwithdrawenabledbutnoassetrecipient"></a>
+<a id="test_register_revertswhenwithdrawenabledbutnoassetrecipient"></a>
 
-### test_authorizeAgent_revertsWhenWithdrawEnabledButNoAssetRecipient
+### test_register_revertsWhenWithdrawEnabledButNoAssetRecipient
 
 ```solidity
-function test_authorizeAgent_revertsWhenWithdrawEnabledButNoAssetRecipient() public;
+function test_register_revertsWhenWithdrawEnabledButNoAssetRecipient() public;
 ```
 
 <a id="test_withdraw_revertsonreplay"></a>
@@ -337,20 +337,20 @@ function test_withdraw_revertsWhenPolicyExpired() public;
 function test_withdraw_succeedsWhenSourceVaultInAllowedList() public;
 ```
 
-<a id="test_authorizeagent_revertswhenwithdrawwindowcapiszero"></a>
+<a id="test_register_revertswhenwithdrawwindowcapiszero"></a>
 
-### test_authorizeAgent_revertsWhenWithdrawWindowCapIsZero
+### test_register_revertsWhenWithdrawWindowCapIsZero
 
 ```solidity
-function test_authorizeAgent_revertsWhenWithdrawWindowCapIsZero() public;
+function test_register_revertsWhenWithdrawWindowCapIsZero() public;
 ```
 
-<a id="test_authorizeagent_revertswhenpaymentcapexceedswithdrawwindowcap"></a>
+<a id="test_register_revertswhenpaymentcapexceedswithdrawwindowcap"></a>
 
-### test_authorizeAgent_revertsWhenPaymentCapExceedsWithdrawWindowCap
+### test_register_revertsWhenPaymentCapExceedsWithdrawWindowCap
 
 ```solidity
-function test_authorizeAgent_revertsWhenPaymentCapExceedsWithdrawWindowCap() public;
+function test_register_revertsWhenPaymentCapExceedsWithdrawWindowCap() public;
 ```
 
 <a id="test_withdraw_revertsonunexpectedassetsreceived"></a>

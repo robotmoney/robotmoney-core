@@ -401,7 +401,8 @@ contract RobotMoneyRouterRedeemGasRootCauseTest is Test {
             _fund(user, vaults[i], address(s.router));
             _fund(shareReceiver, vaults[i], address(s.gateway));
         }
-        vm.prank(admin);
+        // The agent's owner is its share receiver (ACL-9).
+        vm.prank(shareReceiver);
         s.gateway
             .setPolicy(
                 agent,

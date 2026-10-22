@@ -9,7 +9,7 @@
  *
  * Withdrawal-enabled policy surfacing (issue #429 / security review
  * `docs/code-review/20260518-code-review-internal-codex.md` §5): a non-zero
- * `maxWithdrawPerPayment` on an `authorizeAgent`/`setPolicy` tx means
+ * `maxWithdrawPerPayment` on a `revealAuthorization`/`setPolicy` tx means
  * an agent-key compromise can redeem shares to `assetRecipient` up to
  * the per-window cap. The preview surfaces this explicitly:
  *   - args include the withdrawal caps and `assetRecipient`
@@ -22,7 +22,7 @@
  *
  * Commit/reveal (QA plan U4, finding DR-4): a depositor signs
  * `commitAuthorization` and then `revealAuthorization`, never
- * `authorizeAgent`. Each has its own preview kind, encoded from the call
+ * `authorizeAgent` (which no longer exists). Each has its own preview kind, encoded from the call
  * object in `commitReveal.ts` that the component also hands to the wallet,
  * so the previewed function and calldata are the signed ones.
  */
@@ -72,9 +72,8 @@ export interface AgentPolicy {
 }
 
 export type AdminAction =
-  | { kind: "authorizeAgent"; agent: Address; policy: AgentPolicy }
-  // The depositor path signs these two instead of `authorizeAgent` (QA plan U4,
-  // finding DR-4): the preview must name the call the wallet actually signs.
+  // The only registration path (issue 1890): the preview names the call the wallet signs
+  // (QA plan U4, finding DR-4).
   | ({ kind: "commitAuthorization" } & CommitInputs)
   | ({ kind: "revealAuthorization" } & RevealInputs)
   | { kind: "revokeAgent"; agent: Address }
@@ -170,7 +169,7 @@ export function targetCodeHashPinned(ctx: PreviewContext, target: Address): bool
  *     the dapp).
  *   - high:   granting AGENT_ROLE policy with a per-window cap above
  *             threshold, or unverified bytecode.
- *   - medium: standard authorizeAgent below threshold.
+ *   - medium: standard revealAuthorization below threshold.
  *   - low:    revokeAgent, pauseDeposits on a fork.
  */
 const HIGH_CAP_THRESHOLD = 1_000_000_000n; // 1,000 USDC in 6dp
@@ -198,7 +197,6 @@ export function classifyRisk(action: AdminAction, ctx: PreviewContext): RiskClas
       // A commitment stores a hash only. No role, policy or funds change until the reveal,
       // which is previewed and classified on its own.
       return "low";
-    case "authorizeAgent":
     case "revealAuthorization":
       // Issue #429: any withdrawal-enabled policy is "high" risk —
       // a stolen agent key can redeem shares to `assetRecipient`
@@ -236,34 +234,6 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
 
   try {
     switch (action.kind) {
-      case "authorizeAgent": {
-        functionName = "authorizeAgent";
-        calldata = encodeFunctionData({
-          abi: gatewayAbi,
-          functionName: "authorizeAgent",
-          args: [
-            getAddress(action.agent),
-            {
-              active: action.policy.active,
-              validUntil: action.policy.validUntil,
-              maxPerPayment: action.policy.maxPerPayment,
-              maxPerWindow: action.policy.maxPerWindow,
-              shareReceiver: getAddress(action.policy.shareReceiver),
-              allowedDestinations: action.policy.allowedDestinations,
-              assetRecipient: action.policy.assetRecipient,
-              maxWithdrawPerPayment: action.policy.maxWithdrawPerPayment,
-              maxWithdrawPerWindow: action.policy.maxWithdrawPerWindow,
-              allowedSourceVaults: action.policy.allowedSourceVaults,
-            },
-          ],
-        });
-        args = [
-          { name: "agent", raw: action.agent, gloss: `Agent EOA ${shorten(action.agent)}` },
-          ...policyArgs(action.policy),
-        ];
-        effect = policyEffect(action.agent, action.policy);
-        break;
-      }
       case "commitAuthorization": {
         // Encoded from the same call object the wallet signs (commitReveal.ts).
         functionName = "commitAuthorization";
@@ -307,7 +277,7 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
           args: [getAddress(action.agent)],
         });
         args = [{ name: "agent", raw: action.agent, gloss: `Agent EOA ${shorten(action.agent)}` }];
-        effect = `Address ${shorten(action.agent)} loses AGENT_ROLE and its policy is deleted; subsequent deposit() calls revert.`;
+        effect = `Address ${shorten(action.agent)} loses AGENT_ROLE, its policy and owner record are deleted and its rolling deposit budget is reset; subsequent deposit() calls revert. Only the agent's owner or the agent itself can sign this.`;
         break;
       case "pauseDeposits":
         functionName = "pauseDeposits";
@@ -410,7 +380,7 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
 }
 
 /**
- * Decoded-arg rows for an agent policy. `authorizeAgent` and `revealAuthorization`
+ * Decoded-arg rows for an agent policy. `revealAuthorization` and `setPolicy`
  * carry the same tuple, so both previews print it through this one function.
  */
 function policyArgs(policy: AgentPolicy): PreviewArg[] {
@@ -494,7 +464,7 @@ function roleEffectGrant(role: RoleName, account: Address): string {
   const who = shorten(account);
   switch (role) {
     case "ADMIN_ROLE":
-      return `Address ${who} will hold ADMIN_ROLE; this lets it authorize/revoke agents, edit policy, and call unpauseDeposits(). Mutually exclusive with AGENT_ROLE and DEPOSIT_PAUSER_ROLE on the same account (enforced by AccessRoles._grantRole).`;
+      return `Address ${who} will hold ADMIN_ROLE; this lets it call unpauseDeposits(). It grants no authority over any agent (owners register, edit and revoke their own). Mutually exclusive with AGENT_ROLE and DEPOSIT_PAUSER_ROLE on the same account (enforced by AccessRoles._grantRole).`;
     case "DEPOSIT_PAUSER_ROLE":
       return `Address ${who} will hold DEPOSIT_PAUSER_ROLE; this lets it call pauseDeposits(), which stops new deposits only and never blocks a withdrawal (asymmetric — unpauseDeposits requires ADMIN_ROLE). Mutually exclusive with AGENT_ROLE and ADMIN_ROLE on the same account.`;
   }
@@ -505,7 +475,7 @@ function roleEffectRevoke(role: RoleName, account: Address): string {
   const who = shorten(account);
   switch (role) {
     case "ADMIN_ROLE":
-      return `Address ${who} loses ADMIN_ROLE; subsequent authorizeAgent/revokeAgent/unpauseDeposits calls from this account revert. The contract still requires at least one DEFAULT_ADMIN_ROLE holder for recovery.`;
+      return `Address ${who} loses ADMIN_ROLE; subsequent unpauseDeposits calls from this account revert. The contract still requires at least one DEFAULT_ADMIN_ROLE holder for recovery.`;
     case "DEPOSIT_PAUSER_ROLE":
       return `Address ${who} loses DEPOSIT_PAUSER_ROLE; subsequent pauseDeposits() calls from this account revert. Other DEPOSIT_PAUSER_ROLE holders (if any) are unaffected.`;
   }

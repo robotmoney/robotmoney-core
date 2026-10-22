@@ -180,9 +180,7 @@ const RULES: Rule[] = [
   [/^vault\[rmUSDC\]: seed share receiver holds the seed shares$/, (w) => w.chain.set(VAULTS.rmUSDC.address, "balanceOf", 0n)],
   // agents and the role scan
   [/^agents: no agent authorized at handover$/, (w) => w.chain.logs.push({ address: GATEWAY, topics: [keccak256(toHex(SIG_AGENT_AUTHORIZED)), padTopic(OTHER), padTopic(DEPLOYER)], data: "0x", blockNumber: 300n })],
-  [/^agents: manifest lists zero agents$/, (w) => editManifest(w, timelockFile(), (o) => { o.roles.gateway_agents_listed_count = 1; })],
   [/^agents: no address holds AGENT_ROLE after handover$/, (w) => { w.chain.roleGrantedLog(GATEWAY, AGENT_ROLE, OTHER, 300n); w.chain.grant(GATEWAY, AGENT_ROLE, OTHER); }],
-  [/^agents: manifest says deployer owns no listed agent$/, (w) => editManifest(w, timelockFile(), (o) => { o.roles.deployer_owns_a_listed_gateway_agent = true; })],
   [/^roles: every holder of every role on every governed contract is an expected account \(log scan\)$/, (w) => { w.chain.grant(VAULTS.rmPROTO.address, ADMIN_ROLE, OTHER); w.chain.roleGrantedLog(VAULTS.rmPROTO.address, ADMIN_ROLE, OTHER, 400n); }],
   [/^deployer: holds no role on any contract \(log scan\)$/, (w) => w.chain.grant(TIMELOCK, ADMIN_ROLE, DEPLOYER)],
   // the Safe

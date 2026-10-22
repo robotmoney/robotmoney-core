@@ -195,15 +195,15 @@ impl Fixture {
             .reauthorize_agent(max_per_payment, max_per_window)
     }
 
-    /// `authorizeAgent(agent, policy)` through the real Safe and the timelock (see the smoke-test fixture).
-    pub fn authorize_agent_for(
+    /// A Safe -> Timelock call of `sig(args)` on `target` (admin authority, Twin only).
+    pub fn timelock_call(
         &self,
-        agent: Address,
-        max_per_payment: u128,
-        max_per_window: u128,
+        label: &str,
+        target: Address,
+        sig: &str,
+        args: &[&str],
     ) -> Result<String, HarnessError> {
-        self.devnet
-            .authorize_agent_for(agent, max_per_payment, max_per_window)
+        self.devnet.timelock_call(label, target, sig, args)
     }
 
     pub fn fund_usdc(&self, recipient: Address, amount: u128) -> Result<u128, HarnessError> {

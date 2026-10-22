@@ -13,6 +13,7 @@ import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
+import {AccessRoles} from "../gateway/AccessRoles.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
@@ -167,20 +168,16 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
 
     // ─── Role revoke ──────────────────────────────────────────────────────────
 
-    function test_roleRevoke_gatewayAgentRole_viaSafeThenTimelock() public {
-        _runChecked(
-            address(gateway),
-            abi.encodeCall(IAccessControl.grantRole, (AGENT_ROLE, agent)),
-            keccak256("grant-agent")
-        );
-        assertTrue(gateway.hasRole(AGENT_ROLE, agent), "agent role granted");
-
-        _runChecked(
-            address(gateway),
-            abi.encodeCall(IAccessControl.revokeRole, (AGENT_ROLE, agent)),
-            keccak256("revoke-agent")
-        );
-        assertFalse(gateway.hasRole(AGENT_ROLE, agent), "agent role revoked by the timelock");
+    /// @notice ACL-9: no governance route reaches AGENT_ROLE. The timelock holds ADMIN_ROLE on
+    ///         the gateway, yet it can neither grant nor revoke the agent role.
+    function test_agentRole_notManageableByTheTimelock() public {
+        vm.startPrank(address(timelock));
+        vm.expectRevert(AccessRoles.AgentRoleNotManageable.selector);
+        gateway.grantRole(AGENT_ROLE, agent);
+        vm.expectRevert(AccessRoles.AgentRoleNotManageable.selector);
+        gateway.revokeRole(AGENT_ROLE, agent);
+        vm.stopPrank();
+        assertFalse(gateway.hasRole(AGENT_ROLE, agent), "agent role changed by the timelock");
     }
 
     // ─── RouterGovernance after the handover ──────────────────────────────────

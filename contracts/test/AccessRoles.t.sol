@@ -17,6 +17,12 @@ contract AccessRolesHarness is AccessRoles {
         _grantRole(ADMIN_ROLE, admin);
     }
 
+    /// @dev The gateway grants AGENT_ROLE only internally (a consented reveal); the
+    ///      public grantRole reverts for it (ACL-9), so the tests grant through here.
+    function exposed_grantAgent(address account) external {
+        _grantRole(AGENT_ROLE, account);
+    }
+
     function exposed_assertRoleSeparation(address account) external view {
         _assertRoleSeparation(account);
     }
@@ -91,23 +97,20 @@ contract AccessRolesTest is Test {
     // --- Role-separation: AGENT must not also be ADMIN/PAUSER ---------------
 
     function test_grantAgent_revertsIfAlreadyAdmin() public {
-        vm.prank(admin);
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
-        roles.grantRole(AGENT, admin);
+        roles.exposed_grantAgent(admin);
     }
 
     function test_grantAgent_revertsIfAlreadyPauser() public {
         vm.prank(admin);
         roles.grantRole(PAUSER, pauser);
 
-        vm.prank(admin);
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
-        roles.grantRole(AGENT, pauser);
+        roles.exposed_grantAgent(pauser);
     }
 
     function test_grantAdmin_revertsIfAlreadyAgent() public {
-        vm.prank(admin);
-        roles.grantRole(AGENT, agent);
+        roles.exposed_grantAgent(agent);
 
         vm.prank(admin);
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
@@ -115,8 +118,7 @@ contract AccessRolesTest is Test {
     }
 
     function test_grantPauser_revertsIfAlreadyAgent() public {
-        vm.prank(admin);
-        roles.grantRole(AGENT, agent);
+        roles.exposed_grantAgent(agent);
 
         vm.prank(admin);
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
@@ -124,8 +126,7 @@ contract AccessRolesTest is Test {
     }
 
     function test_grantAgent_succeedsForFreshAccount() public {
-        vm.prank(admin);
-        roles.grantRole(AGENT, agent);
+        roles.exposed_grantAgent(agent);
         assertTrue(roles.hasRole(AGENT, agent));
     }
 
@@ -170,9 +171,8 @@ contract AccessRolesTest is Test {
         vm.prank(admin);
         roles.grantRole(bytes32(0), stranger);
 
-        vm.prank(admin);
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
-        roles.grantRole(AGENT, stranger);
+        roles.exposed_grantAgent(stranger);
     }
 
     function test_grantPauser_revertsIfAlreadyDefaultAdmin() public {
@@ -194,8 +194,7 @@ contract AccessRolesTest is Test {
     }
 
     function test_grantDefaultAdmin_revertsIfAlreadyAgent() public {
-        vm.prank(admin);
-        roles.grantRole(AGENT, agent);
+        roles.exposed_grantAgent(agent);
 
         vm.prank(admin);
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
@@ -211,8 +210,7 @@ contract AccessRolesTest is Test {
 
     function test_assertRoleSeparation_revertsOnDefaultAdminAgentOverlap() public {
         // Defense in depth: a forged DEFAULT_ADMIN + AGENT overlap must be caught.
-        vm.prank(admin);
-        roles.grantRole(AGENT, agent);
+        roles.exposed_grantAgent(agent);
         roles.unsafe_forgeRole(bytes32(0), agent);
 
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
@@ -230,8 +228,7 @@ contract AccessRolesTest is Test {
     }
 
     function test_assertRoleSeparation_passesForAgentOnly() public {
-        vm.prank(admin);
-        roles.grantRole(AGENT, agent);
+        roles.exposed_grantAgent(agent);
         roles.exposed_assertRoleSeparation(agent);
     }
 
@@ -257,6 +254,23 @@ contract AccessRolesTest is Test {
                 IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, bytes32(0)
             )
         );
-        roles.grantRole(AGENT, agent);
+        roles.grantRole(PAUSER, agent);
+    }
+
+    function test_publicAgentRoleMethods_alwaysRevert() public {
+        roles.exposed_grantAgent(agent);
+        address[3] memory callers = [admin, agent, stranger];
+        for (uint256 i = 0; i < callers.length; i++) {
+            vm.prank(callers[i]);
+            vm.expectRevert(AccessRoles.AgentRoleNotManageable.selector);
+            roles.grantRole(AGENT, stranger);
+            vm.prank(callers[i]);
+            vm.expectRevert(AccessRoles.AgentRoleNotManageable.selector);
+            roles.revokeRole(AGENT, agent);
+            vm.prank(callers[i]);
+            vm.expectRevert(AccessRoles.AgentRoleNotManageable.selector);
+            roles.renounceRole(AGENT, callers[i]);
+        }
+        assertTrue(roles.hasRole(AGENT, agent), "agent role changed");
     }
 }

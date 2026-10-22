@@ -23,7 +23,7 @@ MVP end-to-end:
 - Authorize agent flow with structured tx preview
 - Revoke agent flow with structured tx preview
 - TOML config export for hardware / KMS / encrypted-keystore signers
-- First-run onboarding wizard that hands the operator a paste-ready agent bootstrap prompt before the on-chain `authorizeAgent` step
+- First-run onboarding wizard that hands the operator a paste-ready agent bootstrap prompt before the on-chain registration (consent, commit, reveal)
 - Browser-side keypair generation is **not** supported: the dapp never sees or generates a private key (ADR §3.1)
 
 Deferred to follow-ups:

@@ -18,49 +18,31 @@
  *
  *   2. Paste the agent's address + shareReceiver + policy caps.
  *
- *   3. Two-step permissionless authorization (commit/reveal):
- *      a. Commit — generates a random salt, computes
- *         commitHash = keccak256(abi.encode(agent, caller, salt)), and calls
- *         commitAuthorization(commitHash). This does NOT require ADMIN_ROLE.
- *      b. Reveal — after at least one block has passed, calls
- *         revealAuthorization(agent, salt, policy). Once its
- *         receipt says success (never on wallet acceptance alone, QA plan U5)
- *         we mark this wallet registered (see useVaultRegistration) and
- *         unmount.
- *      An agent other than this wallet must consent (core 1791): the reveal
- *      screen shows the consent hash the agent commits from its own key
- *      (`AgentConsentNotice`) before the reveal can succeed.
- *      Each step previews the call it signs, built from the same inputs as
- *      the write (QA plan U4): the commit screen shows commitAuthorization and
- *      the reveal it leads to, and the reveal screen shows the reveal again.
+ *   3. Owner-consented registration (issue 1890). Every wallet takes the same
+ *      sequence; the gateway has no admin shortcut:
+ *      a. The inputs are frozen (agent, policy, salt, wallet, chain).
+ *      b. An agent other than this wallet consents first: it commits the
+ *         consent hash shown on screen from its own key. The wizard reads that
+ *         commitment from the gateway and keeps the owner commit disabled until
+ *         it is there (`AgentConsentNotice`, `RegistrationSteps`).
+ *      c. This wallet commits (commitAuthorization), then reveals
+ *         (revealAuthorization) one block later and within 256 blocks of both
+ *         commitments. Once the reveal receipt says success (never on wallet
+ *         acceptance alone, QA plan U5) we mark this wallet registered (see
+ *         useVaultRegistration).
+ *      Each step previews the call it signs, built from the frozen inputs the
+ *      write uses (QA plan U4). Any edit after the freeze disables every step.
  *
  * Browser-side keypair generation is intentionally NOT a supported path;
  * see docs/technical/dapp-credential-decisions.md §3.1.
  */
-import { useEffect, useState, type FormEvent } from "react";
-import {
-  useAccount,
-  useBalance,
-  useBlockNumber,
-  useChainId,
-  useReadContract,
-  useWaitForTransactionReceipt,
-} from "wagmi";
-import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
+import { useEffect, useState } from "react";
+import { useAccount, useBalance, useChainId, useReadContract } from "wagmi";
 import { isAddress, type Address, type Hex } from "viem";
 import { gatewayAbi, erc20Abi } from "../lib/abi";
-import { buildPreview, type AgentPolicy, type PreviewContext } from "../lib/preview";
-import {
-  commitAuthorizationCall,
-  computeConsentHash,
-  generateSalt,
-  policyTuple,
-  revealAuthorizationCall,
-  type CommitInputs,
-  type RevealInputs,
-} from "../lib/commitReveal";
+import { type AgentPolicy, type PreviewContext } from "../lib/preview";
+import { useConsentedRegistration } from "../lib/useConsentedRegistration";
 import { markRegistered } from "../lib/useVaultRegistration";
-import { AgentConsentNotice } from "./AgentConsentNotice";
 import { BOOTSTRAP_PROMPT, BOOTSTRAP_DOC_URL } from "../lib/bootstrapPrompts";
 import { seedOnboardingUsdc, type SeedResult } from "../lib/onboardingSeed";
 import { getInjectedProvider } from "../lib/syncDevnetChain";
@@ -73,8 +55,7 @@ import {
 } from "../lib/faucetClient";
 import { classifyChain } from "../lib/chainClassifier";
 import { PolicyFields } from "./PolicyFields";
-import { TxPreview } from "./TxPreview";
-import { WriteStatus } from "./WriteStatus";
+import { RegistrationSteps, registrationIds } from "./RegistrationSteps";
 
 type DripStatus =
   | { kind: "idle" }
@@ -102,15 +83,12 @@ type Props = Readonly<{
 }>;
 
 type Step = 1 | 2 | 3;
-type AuthPhase = "commit" | "reveal";
+
+const WIZARD_IDS = registrationIds("wizard");
 
 export function OnboardingWizard(props: Props) {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
-  // One hook per step, so each step shows its own refusal and receipt (QA plan U5).
-  const commitWrite = useGuardedWriteContract();
-  const revealWrite = useGuardedWriteContract();
-  const isPending = commitWrite.isPending || revealWrite.isPending;
   const [seedResult, setSeedResult] = useState<SeedResult | null>(null);
 
   // Drip button state — per-asset status for step-1 inline feedback (issue #614).
@@ -212,7 +190,6 @@ export function OnboardingWizard(props: Props) {
   };
 
   const [step, setStep] = useState<Step>(1);
-  const [authPhase, setAuthPhase] = useState<AuthPhase>("commit");
   const [agent, setAgent] = useState("");
   const [shareReceiver, setShareReceiver] = useState("");
   const [validUntil, setValidUntil] = useState(() =>
@@ -220,16 +197,6 @@ export function OnboardingWizard(props: Props) {
   );
   const [maxPerPayment, setMaxPerPayment] = useState("100000000");
   const [maxPerWindow, setMaxPerWindow] = useState("1000000000");
-
-  // Commit/reveal state — persisted between the two sub-steps of step 3.
-  // The salt exists before the commit so its preview shows the exact
-  // commitHash; `committed` freezes what the commit bound for the reveal.
-  const [salt] = useState<Hex>(generateSalt);
-  const [committed, setCommitted] = useState<RevealInputs | null>(null);
-  // commitTxHash is set when the commit tx hash comes back from the wallet.
-  // We wait for its receipt to get the actual on-chain block number.
-  const [commitTxHash, setCommitTxHash] = useState<Hex | null>(null);
-  const [revealTxHash, setRevealTxHash] = useState<Hex | null>(null);
 
   // strict: false — some wallets and rmpc print lowercase addresses without
   // EIP-55 checksum casing. The default strict check rejected those and left
@@ -253,84 +220,15 @@ export function OnboardingWizard(props: Props) {
         }
       : null;
 
-  // Each preview is built from the same inputs its write uses (QA plan U4, DR-4).
-  const commitInputs: CommitInputs | null =
-    address && validAgent && policy ? { agent: agent as Address, committer: address, salt } : null;
-  const revealInputs: RevealInputs | null =
-    committed ?? (validAgent && policy ? { agent: agent as Address, salt, policy } : null);
-
-  const commitPreview = commitInputs
-    ? buildPreview({ kind: "commitAuthorization", ...commitInputs }, props.ctx)
-    : null;
-  const revealPreview = revealInputs
-    ? buildPreview({ kind: "revealAuthorization", ...revealInputs }, props.ctx)
-    : null;
-
-  // Wait for the commit tx receipt to learn the exact block it mined in.
-  // This is needed to correctly gate the reveal: the contract rejects reveals
-  // in the same block as the commit (CommitmentTooRecent).
-  const commitReceipt = useWaitForTransactionReceipt({
-    hash: commitTxHash ?? undefined,
-    query: { enabled: commitTxHash !== null },
+  // Every wallet takes the same consented sequence (issue 1890): the agent's consent, this
+  // wallet's commit, then the reveal. The hook freezes the exact inputs first.
+  const r = useConsentedRegistration({
+    gatewayAddress: props.gatewayAddress,
+    ctx: props.ctx,
+    agent,
+    policy,
   });
-  const revealReceipt = useWaitForTransactionReceipt({
-    hash: revealTxHash ?? undefined,
-    query: { enabled: revealTxHash !== null },
-  });
-  const commitReverted = commitReceipt.data?.status === "reverted";
-  const revealMined = revealReceipt.data?.status === "success";
-
-  // The block the commit actually mined in (from the receipt). A reverted
-  // commit recorded nothing, so it never opens the reveal.
-  const commitBlockNumber = commitReverted ? null : (commitReceipt.data?.blockNumber ?? null);
-
-  // Current block number — polled while on step 3 reveal phase to detect
-  // when at least one block has passed since the commit.
-  const { data: currentBlock } = useBlockNumber({
-    watch: step === 3 && authPhase === "reveal",
-    query: { enabled: step === 3 && authPhase === "reveal" },
-  });
-
-  // Reveal is safe once block.number > commitBlockNumber (at least one block).
-  const revealReady =
-    authPhase === "reveal" &&
-    commitBlockNumber !== null &&
-    currentBlock !== undefined &&
-    currentBlock > commitBlockNumber;
-
-  const onCommit = (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!commitInputs || !revealInputs || commitPreview?.ok !== true) return;
-    // Captured in the closure: onSuccess freezes exactly what this commit bound.
-    const snapshot = revealInputs;
-    commitWrite.writeContract(
-      {
-        address: props.gatewayAddress,
-        abi: gatewayAbi,
-        ...commitAuthorizationCall(commitInputs),
-      },
-      {
-        onSuccess: (txHash) => {
-          setCommitted(snapshot);
-          setCommitTxHash(txHash);
-          setAuthPhase("reveal");
-        },
-      },
-    );
-  };
-
-  const onReveal = (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!committed || revealPreview?.ok !== true) return;
-    revealWrite.writeContract(
-      {
-        address: props.gatewayAddress,
-        abi: gatewayAbi,
-        ...revealAuthorizationCall(committed),
-      },
-      { onSuccess: (txHash) => setRevealTxHash(txHash) },
-    );
-  };
+  const revealMined = r.revealMined;
 
   // Registered only once the reveal is mined (QA plan U5): a reveal the wallet
   // accepted but the chain reverted binds nothing, and the wizard stays up to
@@ -498,126 +396,20 @@ export function OnboardingWizard(props: Props) {
         </section>
       )}
 
-      {step === 3 && authPhase === "commit" && (
+      {step === 3 && (
         <section data-testid="wizard-step-3">
-          <h2>Authorize the agent on-chain — step 1 of 2: commit</h2>
+          <h2>Authorize the agent on-chain</h2>
           <p>
-            This permissionless two-step flow does not require admin access. First, submit a
-            commitment transaction. After it confirms, you will sign the reveal transaction in the
-            next step.
+            Every wallet registers an agent the same way, with no admin shortcut. First the agent
+            consents from its own key. Then this wallet commits. Then, one block later, this wallet
+            reveals. This wallet becomes the agent&apos;s owner and the share receiver.
           </p>
-          {commitPreview && (
-            <div data-testid="wizard-commit-preview">
-              <TxPreview preview={commitPreview} />
-            </div>
-          )}
-          {revealPreview && (
-            <div data-testid="wizard-next-reveal-preview">
-              <p className="hint">
-                Step 2 signs this reveal, with this policy, after the commit mines:
-              </p>
-              <TxPreview preview={revealPreview} />
-            </div>
-          )}
-          <form data-testid="wizard-commit-form" onSubmit={onCommit}>
-            <div className="wizard-nav">
-              <button type="button" data-testid="step-3-back" onClick={() => setStep(2)}>
-                Back
-              </button>
-              <button
-                type="submit"
-                data-testid="wizard-commit-submit"
-                disabled={
-                  !isConnected ||
-                  isPending ||
-                  !validAgent ||
-                  !validReceiver ||
-                  commitPreview?.ok !== true ||
-                  revealPreview?.ok !== true
-                }
-              >
-                Sign commit transaction
-              </button>
-            </div>
-            {/* A refused or rejected commit says why (QA plan U5, finding DR-9). */}
-            <WriteStatus
-              testId="wizard-commit"
-              label="Commit"
-              write={{ error: commitWrite.error, isPending: commitWrite.isPending }}
-            />
-          </form>
-        </section>
-      )}
-
-      {step === 3 && authPhase === "reveal" && (
-        <section data-testid="wizard-step-3-reveal">
-          <h2>Authorize the agent on-chain — step 2 of 2: reveal</h2>
-          <p>
-            {commitBlockNumber === null
-              ? "Commit transaction submitted — waiting for it to mine…"
-              : "Commitment confirmed. Waiting for one block to pass before the reveal can be submitted."}
-            {!revealReady && (
-              <span data-testid="wizard-reveal-waiting">
-                {commitBlockNumber === null ? "Mining…" : "Waiting for next block…"}
-              </span>
-            )}
-          </p>
-          {/* The policy preview again, for the call this button signs (QA plan U4). */}
-          {revealPreview && (
-            <div data-testid="wizard-reveal-preview">
-              <TxPreview preview={revealPreview} />
-            </div>
-          )}
-          {/* Core 1791: the agent consents from its own key to exactly this reveal. */}
-          <AgentConsentNotice
-            testId="wizard-consent-hash"
-            hash={
-              address && committed
-                ? computeConsentHash(
-                    address,
-                    committed.agent,
-                    committed.salt,
-                    policyTuple(committed.policy),
-                  )
-                : null
-            }
-          />
-          <form data-testid="wizard-reveal-form" onSubmit={onReveal}>
-            <div className="wizard-nav">
-              <button
-                type="submit"
-                data-testid="wizard-reveal-submit"
-                disabled={
-                  !isConnected ||
-                  isPending ||
-                  !revealReady ||
-                  !committed ||
-                  revealPreview?.ok !== true ||
-                  revealTxHash !== null
-                }
-              >
-                Sign reveal transaction
-              </button>
-            </div>
-            {/* The commit's receipt (a reverted commit never opens the reveal) and the
-                reveal's refusal, wallet error and receipt (QA plan U5, finding DR-9). */}
-            <WriteStatus
-              testId="wizard-commit"
-              label="Commit"
-              write={{ error: commitWrite.error, data: commitTxHash ?? undefined }}
-              receipt={commitReceipt}
-            />
-            <WriteStatus
-              testId="wizard-reveal"
-              label="Reveal"
-              write={{
-                error: revealWrite.error,
-                isPending: revealWrite.isPending,
-                data: revealTxHash ?? undefined,
-              }}
-              receipt={revealReceipt}
-            />
-          </form>
+          <RegistrationSteps r={r} ids={WIZARD_IDS} />
+          <div className="wizard-nav">
+            <button type="button" data-testid="step-3-back" onClick={() => setStep(2)}>
+              Back
+            </button>
+          </div>
           {seedResult && (
             <p
               data-testid="wizard-seed-result"

@@ -5,7 +5,7 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/18b3311e2cebb7a6f13d47076813825aead407c8/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
@@ -19,21 +19,13 @@ emergency hot key.
 
 After this script runs (ACL-1 / F-01):
 - TimelockController holds ADMIN_ROLE on all five contracts AND the
-Gateway DEFAULT_ADMIN_ROLE (so it can rotate roles / authorizeAgent).
+Gateway DEFAULT_ADMIN_ROLE (so it can rotate roles).
 - The deployer EOA holds NO privileged role of any kind:
 no ADMIN_ROLE on any contract, no Gateway DEFAULT_ADMIN_ROLE, and
 no vault EMERGENCY_ROLE.
-- Every gateway agent listed in AGENT_ADDRESSES is owned by the
-TimelockController, not the deployer (issue #1476). The transfer
-does not change AGENT_ROLE: an agent that held it still holds it,
-and an agent that did not hold it is handed over without it.
-setPolicy / revokeAgent on those agents go Safe -> Timelock ->
-gateway. The guarantee covers the listed agents only: the
-gateway cannot enumerate an owner's agents, so the list must
-name every agent the deployer owns (the stage ceremony derives
-it from the gateway's AgentAuthorized and
-AgentOwnershipTransferred logs, keeping agents the deployer
-still owns).
+- The deploy registers no gateway agent and hands none over. An agent
+is registered only by its depositor through commit/reveal consent
+(ACL-9), so the handover carries no agent list.
 - The vault EMERGENCY_ROLE is held by the independent EMERGENCY_ADDRESS
 hot key, not the deployer.
 - The Safe multisig (SAFE_ADDRESS) holds PROPOSER_ROLE and
@@ -75,21 +67,6 @@ same rule). ADMIN_ROLE +
 DEFAULT_ADMIN_ROLE move to the timelock, which then
 holds the receipt ADMIN_ROLE alone. RouterGovernance
 keeps only RECEIPT_RELEASER_ROLE (issue 1888).
-AGENT_ADDRESSES        — comma-separated gateway agents the deployer
-owns (issue #1476): the deploy agent the
-gateway stage authorizes (DeployGateway.s.sol).
-Each is handed to the timelock with
-transferAgentOwnership while the timelock
-already holds gateway ADMIN_ROLE and before
-the deployer's ADMIN_ROLE is revoked. Every
-entry must be owned by the deployer, or the
-handover reverts. An entry is handed over
-whether or not it holds AGENT_ROLE; the
-transfer leaves AGENT_ROLE unchanged.
-Required, with no default:
-an unset or empty value reverts before any
-broadcast, and the literal `none` declares
-a run whose deployer owns no gateway agent.
 RECEIPT_ADMIN_ADDRESS  — the address that currently holds ADMIN_ROLE /
 DEFAULT_ADMIN_ROLE on the receipt contract (the
 RECEIPT_ADMIN_ADDRESS DeployConsensusRecommendation-
@@ -344,8 +321,8 @@ function _runFrom(string memory prefix) internal returns (Deployed memory d);
 In-process variant for Forge tests. Caller sets up prank context.
 No JSON is written; no env vars are read. Does not exercise the
 optional consensus receipt handover — use
-`runInProcessWithReceipt` for that. Hands over no gateway
-agent — use `runInProcessWithAgents` for that.
+`runInProcessWithReceipt` for that. The deploy hands over
+no gateway agent (ACL-9).
 
 ```solidity
 function runInProcess(
@@ -492,81 +469,6 @@ function runInProcessWithReceipt(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
-
-<a id="runinprocesswithagents-address-address-address-address-address-address-address-uint256-address-safespec"></a>
-
-### runInProcessWithAgents
-
-In-process variant that also hands the listed deployer-owned
-gateway agents to the timelock (issue #1476), the in-process
-form of AGENT_ADDRESSES. Caller sets up prank context. No JSON
-is written; no env vars are read.
-
-```solidity
-function runInProcessWithAgents(
-        address vault_,
-        address gateway_,
-        address registry_,
-        address router_,
-        address governance_,
-        address safe_,
-        address emergency_,
-        uint256 minDelay_,
-        address[] calldata agents_,
-        SafeSpec memory safeSpec_
-    ) external returns (Deployed memory d);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| vault_ | `address` |  |
-| gateway_ | `address` |  |
-| registry_ | `address` |  |
-| router_ | `address` |  |
-| governance_ | `address` |  |
-| safe_ | `address` |  |
-| emergency_ | `address` |  |
-| minDelay_ | `uint256` |  |
-| agents_ | `address[]` | Gateway agents the deployer (the caller) owns. |
-| safeSpec_ | `SafeSpec` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| d | `Deployed` |  |
-
-<a id="_readagentlist-string"></a>
-
-### _readAgentList
-
-<i>
-
-The deployer-owned gateway agent list from env var `name` (issue
-#1476). The variable must be set: a comma-separated list of
-agents, or the literal `none` for a run whose deployer owns no
-gateway agent. An unset or empty variable reverts, so a broadcast
-run never treats a missing list as an empty one.
-
-</i>
-
-```solidity
-function _readAgentList(string memory name) internal view returns (address[] memory);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| name | `string` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `address[]` |  |
 
 <a id="_readrehearsal-string"></a>
 
@@ -778,40 +680,6 @@ function _requireNamesTimelock(address proxy, address timelock) internal view;
 | proxy | `address` |  |
 | timelock | `address` |  |
 
-<a id="_transferagents-deployed-address"></a>
-
-### _transferAgents
-
-<i>
-
-Hand every listed agent from the deployer (msg.sender) to `timelock`.
-A listed agent the deployer does not own is an input error and
-reverts before any transfer of it is attempted. Ownership does not
-depend on AGENT_ROLE, so an agent without the role is handed over
-too. Returns, per listed agent, whether it held AGENT_ROLE before
-its transfer, for the caller's post-condition.
-
-</i>
-
-```solidity
-function _transferAgents(Deployed memory d, address timelock)
-        internal
-        returns (bool[] memory hadAgentRole);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| d | `Deployed` |  |
-| timelock | `address` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| hadAgentRole | `bool[]` |  |
-
 <a id="_logresult-deployed"></a>
 
 ### _logResult
@@ -1019,32 +887,6 @@ function _vaultRoleAggregates(Deployed memory d)
 | allEmergencyKey | `bool` |  |
 | deployerHoldsVaultRole | `bool` |  |
 
-<a id="_deployerownslistedagent-deployed"></a>
-
-### _deployerOwnsListedAgent
-
-<i>
-
-True when the deployer still owns any gateway agent in `d.agents`.
-
-</i>
-
-```solidity
-function _deployerOwnsListedAgent(Deployed memory d) internal view returns (bool owns);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| d | `Deployed` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| owns | `bool` |  |
-
 <a id="_serializeroles-deployed"></a>
 
 ### _serializeRoles
@@ -1135,8 +977,6 @@ struct Deployed {
         bool rehearsal;
         address consensusReceipt;
         address receiptAdmin;
-        /// Deployer-owned gateway agents handed to the timelock (issue #1476).
-        address[] agents;
     }
 ```
 
@@ -1156,5 +996,4 @@ struct Deployed {
 | rehearsal | `bool` |  |
 | consensusReceipt | `address` |  |
 | receiptAdmin | `address` |  |
-| agents | `address[]` |  |
 

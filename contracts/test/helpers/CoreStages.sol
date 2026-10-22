@@ -17,6 +17,7 @@ import {VaultRegistry} from "../../VaultRegistry.sol";
 import {PortfolioRouter} from "../../PortfolioRouter.sol";
 import {GovernedUUPS} from "../../lib/GovernedUUPS.sol";
 import {CoreProxies} from "./CoreProxies.sol";
+import {AgentRegistration} from "../helpers/AgentRegistration.sol";
 
 /// @notice Runs the core stage scripts in process, in production order:
 ///         libs, vault, registry, router, gateway. Tests use it where a single deploy script used to be called. The production gateway stage authorizes no agent. `run` authorizes
@@ -98,8 +99,7 @@ contract CoreStages {
             maxWithdrawPerWindow: DEFAULT_MAX_WITHDRAW_PER_WINDOW,
             allowedSourceVaults: none
         });
-        vm.prank(admin_);
-        s.gateway.authorizeAgent(agent_, policy);
+        AgentRegistration.register(s.gateway, agent_, policy);
     }
 
     /// @notice Runs the production stages exactly as the deploy does: no agent is authorized.

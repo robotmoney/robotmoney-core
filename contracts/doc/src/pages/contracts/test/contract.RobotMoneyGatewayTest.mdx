@@ -4,7 +4,7 @@ title: "RobotMoneyGatewayTest"
 
 # RobotMoneyGatewayTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/643087c97dd7b0025d8eb5fd7229922c2e605a16/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/18b3311e2cebb7a6f13d47076813825aead407c8/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:** Test
 
@@ -106,9 +106,8 @@ bytes32 internal agentRole;
 
 <i>
 
-Default owner used by `_authorize` when none is specified.
-Now uses `admin` since `authorizeAgent` requires
-DEFAULT_ADMIN_ROLE (issue #753).
+The owner of an agent registered by `_authorize` is the policy's
+`shareReceiver` (ACL-9).
 
 </i>
 
@@ -210,7 +209,7 @@ function test_lastAdminFloor_revokeAdminRevertsForSoleHolder() public;
 ### test_lastAdminFloor_revokeDefaultAdminRevertsForSoleHolder
 
 ACL-3 / F-06: the floor also covers DEFAULT_ADMIN_ROLE, which the
-gateway uses as a privileged tier (it gates authorizeAgent).
+gateway uses as a privileged tier.
 
 ```solidity
 function test_lastAdminFloor_revokeDefaultAdminRevertsForSoleHolder() public;
@@ -253,64 +252,41 @@ function test_constructor_revertsOnZeroAddresses() public;
 function test_constructor_revertsOnAssetMismatch() public;
 ```
 
-<a id="test_authorizeagent_grantsroleandstorespolicy"></a>
+<a id="test_register_grantsroleandstorespolicy"></a>
 
-### test_authorizeAgent_grantsRoleAndStoresPolicy
+### test_register_grantsRoleAndStoresPolicy
 
 ```solidity
-function test_authorizeAgent_grantsRoleAndStoresPolicy() public;
+function test_register_grantsRoleAndStoresPolicy() public;
 ```
 
-<a id="test_authorizeagent_permissionless"></a>
+<a id="test_register_noadminshortcutselector"></a>
 
-### test_authorizeAgent_permissionless
+### test_register_noAdminShortcutSelector
 
 <i>
 
-AC: a non-`ADMIN_ROLE` EOA calling `authorizeAgent` must revert
-(issue #753 — commit/reveal is the only permissionless first-time
-authorization path; #965/F-01 moved the admin gate from
-DEFAULT_ADMIN_ROLE to ADMIN_ROLE so the Timelock keeps onboarding
-authority after the deploy handover revokes the deployer's
-DEFAULT_ADMIN_ROLE).
+ACL-9: there is no admin registration shortcut. The old selector is absent.
 
 </i>
 
 ```solidity
-function test_authorizeAgent_permissionless() public;
+function test_register_noAdminShortcutSelector() public;
 ```
 
-<a id="test_authorizeagent_no_longer_requires_admin_role"></a>
+<a id="test_register_frontrunprotection"></a>
 
-### test_authorizeAgent_no_longer_requires_admin_role
+### test_register_frontRunProtection
 
 <i>
 
-AC: commit/reveal is the permissionless alternative to the
-admin-only `authorizeAgent` (issue #753).
+Front-run regression: an attacker observing a victim's commit cannot
+reveal for it. The commit hash binds the caller.
 
 </i>
 
 ```solidity
-function test_authorizeAgent_no_longer_requires_admin_role() public;
-```
-
-<a id="test_authorizeagent_frontrunprotection"></a>
-
-### test_authorizeAgent_frontRunProtection
-
-<i>
-
-Front-run regression: an attacker observing a victim's
-`revealAuthorization` cannot pre-empt it via the direct
-`authorizeAgent` because that function requires `ADMIN_ROLE`
-(issue #753; admin gate moved DEFAULT_ADMIN_ROLE → ADMIN_ROLE in
-#965/F-01).
-
-</i>
-
-```solidity
-function test_authorizeAgent_frontRunProtection() public;
+function test_register_frontRunProtection() public;
 ```
 
 <a id="test_revealauthorization_foranotheragentwithoutconsentreverts"></a>
@@ -325,67 +301,91 @@ lived in the retired committee suites; this keeps the branch executed.
 function test_revealAuthorization_forAnotherAgentWithoutConsentReverts() public;
 ```
 
-<a id="test_authorizeagent_revertsonroleseparation_grantingagenttoadmin"></a>
+<a id="test_register_revertsonroleseparation_grantingagenttoadmin"></a>
 
-### test_authorizeAgent_revertsOnRoleSeparation_grantingAgentToAdmin
-
-```solidity
-function test_authorizeAgent_revertsOnRoleSeparation_grantingAgentToAdmin() public;
-```
-
-<a id="test_authorizeagent_revertsonroleseparation_grantingagenttopauser"></a>
-
-### test_authorizeAgent_revertsOnRoleSeparation_grantingAgentToPauser
+### test_register_revertsOnRoleSeparation_grantingAgentToAdmin
 
 ```solidity
-function test_authorizeAgent_revertsOnRoleSeparation_grantingAgentToPauser() public;
+function test_register_revertsOnRoleSeparation_grantingAgentToAdmin() public;
 ```
 
-<a id="test_authorizeagent_revertsonzerosharereceiver"></a>
+<a id="test_register_revertsonroleseparation_grantingagenttopauser"></a>
 
-### test_authorizeAgent_revertsOnZeroShareReceiver
+### test_register_revertsOnRoleSeparation_grantingAgentToPauser
 
 ```solidity
-function test_authorizeAgent_revertsOnZeroShareReceiver() public;
+function test_register_revertsOnRoleSeparation_grantingAgentToPauser() public;
 ```
 
-<a id="test_authorizeagent_revertsoninactivepolicy"></a>
+<a id="_revealreverts-address-address-igateway-agentpolicy-bytes4"></a>
 
-### test_authorizeAgent_revertsOnInactivePolicy
-
-```solidity
-function test_authorizeAgent_revertsOnInactivePolicy() public;
-```
-
-<a id="test_authorizeagent_revertsonzerocaps"></a>
-
-### test_authorizeAgent_revertsOnZeroCaps
-
-```solidity
-function test_authorizeAgent_revertsOnZeroCaps() public;
-```
-
-<a id="test_authorizeagent_revertswhenpaymentcapexceedswindowcap"></a>
-
-### test_authorizeAgent_revertsWhenPaymentCapExceedsWindowCap
-
-```solidity
-function test_authorizeAgent_revertsWhenPaymentCapExceedsWindowCap() public;
-```
-
-<a id="test_authorizeagent_revertswhenalreadyowned"></a>
-
-### test_authorizeAgent_revertsWhenAlreadyOwned
+### _revealReverts
 
 <i>
 
-Re-authorizing an already-owned agent is rejected; the owner
+Reveals `p` for `agent` by `p.shareReceiver` and expects `err`.
+
+</i>
+
+```solidity
+function _revealReverts(address who, address ag, IGateway.AgentPolicy memory p, bytes4 err)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| ag | `address` |  |
+| p | `IGateway.AgentPolicy` |  |
+| err | `bytes4` |  |
+
+<a id="test_register_revertsonzerosharereceiver"></a>
+
+### test_register_revertsOnZeroShareReceiver
+
+```solidity
+function test_register_revertsOnZeroShareReceiver() public;
+```
+
+<a id="test_register_revertsoninactivepolicy"></a>
+
+### test_register_revertsOnInactivePolicy
+
+```solidity
+function test_register_revertsOnInactivePolicy() public;
+```
+
+<a id="test_register_revertsonzerocaps"></a>
+
+### test_register_revertsOnZeroCaps
+
+```solidity
+function test_register_revertsOnZeroCaps() public;
+```
+
+<a id="test_register_revertswhenpaymentcapexceedswindowcap"></a>
+
+### test_register_revertsWhenPaymentCapExceedsWindowCap
+
+```solidity
+function test_register_revertsWhenPaymentCapExceedsWindowCap() public;
+```
+
+<a id="test_register_revertswhenalreadyowned"></a>
+
+### test_register_revertsWhenAlreadyOwned
+
+<i>
+
+Registering an already-owned live agent is rejected; the owner
 must `setPolicy` (or `revokeAgent` first).
 
 </i>
 
 ```solidity
-function test_authorizeAgent_revertsWhenAlreadyOwned() public;
+function test_register_revertsWhenAlreadyOwned() public;
 ```
 
 <a id="test_setpolicy_updatespolicykeepsroleandowner"></a>
@@ -403,7 +403,7 @@ function test_setPolicy_updatesPolicyKeepsRoleAndOwner() public;
 <i>
 
 AC: only the recorded owner can update policy for an agent
-they authorized (issue #269).
+they registered (issue #269).
 
 </i>
 
@@ -443,24 +443,24 @@ function test_setPolicy_validatesPolicyShape() public;
 function test_revokeAgent_clearsPolicyAndRoleAndOwner() public;
 ```
 
-<a id="test_revokeagent_requires_recorded_owner"></a>
+<a id="test_revokeagent_requires_owner_or_agent"></a>
 
-### test_revokeAgent_requires_recorded_owner
+### test_revokeAgent_requires_owner_or_agent
 
 <i>
 
-AC: only the recorded owner can revoke; a third-party caller
-reverts with NotAgentOwner (issue #269).
+AC: only the recorded owner or the agent can revoke; a third-party
+caller, an admin included, reverts with NotAgentOwner.
 
 </i>
 
 ```solidity
-function test_revokeAgent_requires_recorded_owner() public;
+function test_revokeAgent_requires_owner_or_agent() public;
 ```
 
-<a id="test_revokeagent_then_authorizeagent_by_different_owner"></a>
+<a id="test_revokeagent_then_register_by_different_owner"></a>
 
-### test_revokeAgent_then_authorizeAgent_by_different_owner
+### test_revokeAgent_then_register_by_different_owner
 
 <i>
 
@@ -470,7 +470,7 @@ can claim it via commit/reveal (issue #753).
 </i>
 
 ```solidity
-function test_revokeAgent_then_authorizeAgent_by_different_owner() public;
+function test_revokeAgent_then_register_by_different_owner() public;
 ```
 
 <a id="test_pausedeposits_bypauser_unpause_byadmin"></a>
@@ -648,20 +648,20 @@ overlap on the roles that survive (issue #269).
 function test_role_separation_invariants_hold() public;
 ```
 
-<a id="test_authorizeagent_revertsonzeroagent"></a>
+<a id="test_register_revertsonzeroagent"></a>
 
-### test_authorizeAgent_revertsOnZeroAgent
+### test_register_revertsOnZeroAgent
 
 ```solidity
-function test_authorizeAgent_revertsOnZeroAgent() public;
+function test_register_revertsOnZeroAgent() public;
 ```
 
-<a id="test_authorizeagent_revertsonexpiredvaliduntil"></a>
+<a id="test_register_revertsonexpiredvaliduntil"></a>
 
-### test_authorizeAgent_revertsOnExpiredValidUntil
+### test_register_revertsOnExpiredValidUntil
 
 ```solidity
-function test_authorizeAgent_revertsOnExpiredValidUntil() public;
+function test_register_revertsOnExpiredValidUntil() public;
 ```
 
 <a id="test_revokeagent_revertsonzeroagent"></a>

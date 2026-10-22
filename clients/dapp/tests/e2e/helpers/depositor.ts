@@ -211,8 +211,8 @@ export async function waitForAgentState(
 
 /**
  * Drive the dapp's Authorize tab (commit, then reveal) as `depositor` so
- * `agent` becomes a depositor-owned agent. A caller without ADMIN_ROLE must
- * name itself as shareReceiver (RobotMoneyGateway._validatePolicy), so the
+ * `agent` becomes a depositor-owned agent. Every caller must name itself
+ * as shareReceiver (RobotMoneyGateway._validatePolicy, ACL-9), so the
  * depositor's own address is used. Resolves once the chain shows
  * `agentOwner(agent) == depositor` and AGENT_ROLE on the agent.
  */
@@ -227,13 +227,15 @@ export async function authorizeOwnAgentViaUi(
   await openTab(page, "authorize");
   await page.getByTestId("agent-input").fill(agent);
   await page.getByTestId("shareReceiver-input").fill(depositor.address);
+  // Freeze the exact inputs, then the agent consents from its own address, then this owner commits,
+  // then reveals one block later (issue 1890: consent first, then the owner commit).
+  await page.getByTestId("authorize-freeze").click();
   await expect(page.locator('[data-testid="tx-preview"][data-ok="true"]').first()).toBeVisible();
-
-  // Step 1 of 2: commit.
-  await page.getByTestId("authorize-submit").click();
-  // The agent consents to this owner from its own address (core 1791).
   await consentFromDapp(page, endpoints, agent, "authorize-consent-hash");
-  // Step 2 of 2: reveal, enabled once a block has passed since the commit.
+  const commit = page.getByTestId("authorize-submit");
+  await expect(commit).toBeEnabled({ timeout: 60_000 });
+  await commit.click();
+  // Reveal, enabled once a block has passed since the commit.
   const reveal = page.getByTestId("authorize-reveal-submit");
   await expect(reveal).toBeEnabled({ timeout: 60_000 });
   await reveal.click();

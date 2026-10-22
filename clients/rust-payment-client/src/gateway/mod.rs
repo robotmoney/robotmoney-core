@@ -100,13 +100,14 @@ mod tests {
         assert_eq!(&actual, expected, "depositTo selector drift");
     }
 
-    /// `authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))` —
-    /// ensure the tuple layout matches the on-chain ABI (withdrawal fields added in #311).
+    /// `revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))`:
+    /// the only registration entrypoint (issue 1890 removed `authorizeAgent`). Ensure the tuple
+    /// layout matches the on-chain ABI (withdrawal fields added in #311).
     #[test]
-    fn authorize_agent_selector_matches() {
-        let canonical = "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))";
+    fn reveal_authorization_selector_matches() {
+        let canonical = "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))";
         let expected = &keccak256(canonical.as_bytes())[..4];
-        let actual = RobotMoneyGateway::authorizeAgentCall::SELECTOR;
+        let actual = RobotMoneyGateway::revealAuthorizationCall::SELECTOR;
         assert_eq!(&actual, expected);
     }
 

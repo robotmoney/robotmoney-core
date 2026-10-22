@@ -1,0 +1,102 @@
+---
+title: "GatewayAgentRevokeTest"
+description: "The only exits are `revokeAgent` by the owner or by the agent. Both clear the registration and reset the deposit budget."
+---
+
+# GatewayAgentRevokeTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/GatewayAgentPolicyAuthorization.t.sol)
+
+**Inherits:** [GatewayAgentPolicyFixture](/contracts/test/abstract.GatewayAgentPolicyFixture)
+
+**Title:** GatewayAgentRevokeTest
+
+The only exits are `revokeAgent` by the owner or by the agent. Both
+clear the registration and reset the deposit budget.
+
+## State Variables
+
+### agentU
+
+```solidity
+address internal agentU = makeAddr("agentU");
+```
+
+## Functions
+
+<a id="_spendbudget"></a>
+
+### _spendBudget
+
+```solidity
+function _spendBudget() internal returns (uint256 spent);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| spent | `uint256` |  |
+
+<a id="_assertcleared"></a>
+
+### _assertCleared
+
+```solidity
+function _assertCleared() internal view;
+```
+
+<a id="_assertfreshbudget-address"></a>
+
+### _assertFreshBudget
+
+<i>
+
+After clearing, a fresh consented registration spends a full budget.
+
+</i>
+
+```solidity
+function _assertFreshBudget(address owner) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+
+<a id="test_ownerrevoke_afterspending_clearseverything_andreregistrationhasfreshbudget"></a>
+
+### test_ownerRevoke_afterSpending_clearsEverything_andReRegistrationHasFreshBudget
+
+```solidity
+function test_ownerRevoke_afterSpending_clearsEverything_andReRegistrationHasFreshBudget()
+        public;
+```
+
+<a id="test_agentselfrevoke_afterspending_clearseverything_andreregistrationhasfreshbudget"></a>
+
+### test_agentSelfRevoke_afterSpending_clearsEverything_andReRegistrationHasFreshBudget
+
+```solidity
+function test_agentSelfRevoke_afterSpending_clearsEverything_andReRegistrationHasFreshBudget()
+        public;
+```
+
+<a id="test_revokedagent_cannotdeposit"></a>
+
+### test_revokedAgent_cannotDeposit
+
+```solidity
+function test_revokedAgent_cannotDeposit() public;
+```
+
+<a id="test_revoke_bythirdparty_orunregistered_reverts"></a>
+
+### test_revoke_byThirdParty_orUnregistered_reverts
+
+```solidity
+function test_revoke_byThirdParty_orUnregistered_reverts() public;
+```
+

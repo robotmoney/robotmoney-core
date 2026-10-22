@@ -10,7 +10,7 @@
  *    balance increasing by exactly 100 USDC."
  *
  * This module exposes a pure async handler that the OnboardingWizard
- * invokes once per successful `authorizeAgent`. The handler:
+ * invokes once per successful registration reveal. The handler:
  *
  *   1. Classifies the active chain. If `mainnet`, returns
  *      `{ status: "skipped-mainnet" }` and does NOT touch the network.

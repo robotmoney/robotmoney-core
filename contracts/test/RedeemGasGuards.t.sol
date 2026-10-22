@@ -18,6 +18,7 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {AgentRegistration} from "./helpers/AgentRegistration.sol";
 
 /// @dev ERC-4626-shaped stub whose `redeem` burns `redeemCost` gas (a stand-in for the adapter
 ///      fan-out) and records `gasleft()` at entry. 1:1 shares to assets.
@@ -145,8 +146,8 @@ contract RedeemGasGuardsTest is Test {
         sources[2] = address(vault3);
         address[] memory dest = new address[](1);
         dest[0] = address(router);
-        vm.prank(admin);
-        gateway.authorizeAgent(
+        AgentRegistration.register(
+            gateway,
             agent,
             IGateway.AgentPolicy({
                 active: true,

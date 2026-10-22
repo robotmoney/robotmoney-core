@@ -986,12 +986,9 @@ mod tests {
                 "AgentAuthorized",
                 t.agent_authorized,
             ),
-            (
-                "RobotMoneyGateway.sol",
-                "RobotMoneyGateway",
-                "AgentOwnershipTransferred",
-                t.agent_ownership_transferred,
-            ),
+            // `AgentOwnershipTransferred` is no longer declared by the gateway (issue 1890
+            // removed `transferAgentOwnership`). The indexer keeps the topic only to decode
+            // historical logs of the deployed release, so it has no artifact entry here.
             (
                 "RobotMoneyGateway.sol",
                 "RobotMoneyGateway",

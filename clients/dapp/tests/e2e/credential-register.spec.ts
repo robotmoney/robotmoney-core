@@ -39,7 +39,9 @@ test.describe("register-existing-address flow — UI invariants", () => {
     await openDapp(page, endpoints);
 
     await page.getByTestId("agent-input").fill(AGENT_ADDRESS);
-    await page.getByTestId("shareReceiver-input").fill(SHARE_RECEIVER);
+    // The share receiver is always the signing wallet (ACL-9).
+    await page.getByTestId("shareReceiver-input").fill(endpoints.admin_addr);
+    await page.getByTestId("authorize-freeze").click();
 
     const preview = page.locator('[data-testid="tx-preview"][data-ok="true"]').first();
     await expect(preview).toBeVisible();
@@ -47,7 +49,7 @@ test.describe("register-existing-address flow — UI invariants", () => {
     // QA plan U4: the previews name the calls the wallet signs.
     const commitPreview = page.getByTestId("authorize-commit-preview");
     await expect(commitPreview.getByTestId("tx-preview-fn")).toHaveText("commitAuthorization");
-    const revealPreview = page.getByTestId("authorize-next-reveal-preview");
+    const revealPreview = page.getByTestId("authorize-reveal-preview");
     await expect(revealPreview.getByTestId("tx-preview-fn")).toHaveText("revealAuthorization");
     await expect(revealPreview.getByTestId("tx-preview-effect")).toContainText("AGENT_ROLE");
 
@@ -60,14 +62,20 @@ test.describe("register-existing-address flow — UI invariants", () => {
   }) => {
     await openDapp(page, endpoints);
 
-    const button = page.getByTestId("authorize-submit");
+    const button = page.getByTestId("authorize-freeze");
     await expect(button).toBeDisabled();
 
     await page.getByTestId("agent-input").fill(AGENT_ADDRESS);
     await expect(button).toBeDisabled();
 
+    // A receiver other than the signing wallet keeps the freeze closed (ACL-9).
     await page.getByTestId("shareReceiver-input").fill(SHARE_RECEIVER);
+    await expect(button).toBeDisabled();
+
+    await page.getByTestId("shareReceiver-input").fill(endpoints.admin_addr);
     await expect(button).toBeEnabled();
+    // No commit button exists before the freeze, and none is enabled before the agent consents.
+    await expect(page.getByTestId("authorize-submit")).toHaveCount(0);
   });
 
   test("config-export panel appears after valid register inputs are supplied", async ({ page }) => {

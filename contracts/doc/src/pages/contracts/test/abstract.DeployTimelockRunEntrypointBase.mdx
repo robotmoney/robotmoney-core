@@ -1,16 +1,15 @@
 ---
 title: "DeployTimelockRunEntrypointBase"
-description: "`run()` hands the AGENT_ADDRESSES list it reads to the handover (issue #1476). This drives run()'s own body, `_runFrom`, through the broadcast path against a core stack (CoreStages). Every env var it reads carries a prefix only this test sets, because env vars are process-wide and forge runs tests in parallel."
+description: "`run()` drives its own body, `_runFrom`, through the broadcast path against a core stack (CoreStages). Every env var it reads carries a prefix only this test sets, because env vars are process-wide and forge runs tests in parallel."
 ---
 
 # DeployTimelockRunEntrypointBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
-`run()` hands the AGENT_ADDRESSES list it reads to the handover
-(issue #1476). This drives run()'s own body, `_runFrom`, through
+`run()` drives its own body, `_runFrom`, through
 the broadcast path against a core stack (CoreStages). Every env var it
 reads carries a prefix only this test sets, because env vars are
 process-wide and forge runs tests in parallel.
@@ -59,12 +58,6 @@ address internal deployer;
 
 ```solidity
 address internal deployAgent = makeAddr("run-deploy-agent");
-```
-
-### submitter
-
-```solidity
-address internal submitter = makeAddr("run-stage-submitter");
 ```
 
 ### dep

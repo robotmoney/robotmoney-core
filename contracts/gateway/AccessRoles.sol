@@ -25,7 +25,7 @@ import {
 /// roles, and an admin compromise cannot also rapid-DoS the gateway.
 /// Enforced by overriding `_grantRole` to revert on any overlap, and
 /// exposed via `_assertRoleSeparation` for use in deploy scripts and
-/// the gateway's `authorizeAgent`.
+/// the gateway's agent registration.
 ///
 /// `DEFAULT_ADMIN_ROLE` is treated as part of the ADMIN tier
 /// (audit 2026-06-09, L-14): it may coexist with `ADMIN_ROLE` (the gateway
@@ -38,6 +38,12 @@ abstract contract AccessRoles is AccessControlUpgradeable {
     ///         any two of {ADMIN, DEPOSIT_PAUSER, AGENT} simultaneously.
     error RoleSeparationViolated();
 
+    /// @notice `grantRole`, `revokeRole` or `renounceRole` named `AGENT_ROLE`.
+    ///         Agent membership changes only through the gateway lifecycle
+    ///         (consented reveal grants, `revokeAgent` revokes), never through
+    ///         a public role call, whatever the stored role admin is (ACL-9).
+    error AgentRoleNotManageable();
+
     /// @notice Grants/revokes other roles, sets policy, resumes deposits.
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
@@ -47,6 +53,39 @@ abstract contract AccessRoles is AccessControlUpgradeable {
 
     /// @notice Only role allowed to call `deposit()`.
     bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
+
+    /// @dev Shared guard of the three public role methods (ACL-9).
+    function _denyAgentRole(bytes32 role) private pure {
+        if (role == AGENT_ROLE) revert AgentRoleNotManageable();
+    }
+
+    /// @notice Grants `role` to `account`, except `AGENT_ROLE`, which no caller can grant (ACL-9).
+    /// @dev Reverts `AgentRoleNotManageable` for `AGENT_ROLE` whatever the stored role admin is.
+    /// @param role    The role to grant.
+    /// @param account The account that receives it.
+    function grantRole(bytes32 role, address account) public virtual override {
+        _denyAgentRole(role);
+        super.grantRole(role, account);
+    }
+
+    /// @notice Revokes `role` from `account`, except `AGENT_ROLE`, which no caller can revoke (ACL-9).
+    /// @dev Reverts `AgentRoleNotManageable` for `AGENT_ROLE` whatever the stored role admin is.
+    ///      `revokeAgent` is the only exit and ends the registration internally.
+    /// @param role    The role to revoke.
+    /// @param account The account that loses it.
+    function revokeRole(bytes32 role, address account) public virtual override {
+        _denyAgentRole(role);
+        super.revokeRole(role, account);
+    }
+
+    /// @notice Renounces `role`, except `AGENT_ROLE`, which cannot be renounced (ACL-9).
+    /// @dev Reverts `AgentRoleNotManageable` for `AGENT_ROLE`. The agent exits through `revokeAgent`.
+    /// @param role               The role to renounce.
+    /// @param callerConfirmation The caller, as OpenZeppelin requires.
+    function renounceRole(bytes32 role, address callerConfirmation) public virtual override {
+        _denyAgentRole(role);
+        super.renounceRole(role, callerConfirmation);
+    }
 
     /// @dev Override that enforces full pairwise separation among the
     ///      {ADMIN-tier, DEPOSIT_PAUSER, AGENT} role tiers before any grant takes
@@ -79,7 +118,7 @@ abstract contract AccessRoles is AccessControlUpgradeable {
     ///      from any two of the {ADMIN-tier, DEPOSIT_PAUSER, AGENT} tiers
     ///      simultaneously (ADMIN_ROLE + DEFAULT_ADMIN_ROLE together count
     ///      as one tier). Intended for deploy scripts and the gateway's
-    ///      `authorizeAgent` to assert state explicitly.
+    ///      agent registration to assert state explicitly.
     function _assertRoleSeparation(address account) internal view {
         bool isAdmin = _isAdminTier(account);
         bool isPauser = hasRole(DEPOSIT_PAUSER_ROLE, account);

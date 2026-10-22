@@ -24,10 +24,11 @@ const ctx: PreviewContext = {
 
 const fixtures: { name: string; action: AdminAction }[] = [
   {
-    name: "authorizeAgent",
+    name: "revealAuthorization",
     action: {
-      kind: "authorizeAgent",
+      kind: "revealAuthorization",
       agent,
+      salt: "0x1111111111111111111111111111111111111111111111111111111111111111",
       policy: {
         active: true,
         validUntil: 1893456000n,

@@ -72,7 +72,7 @@ export function revealAuthorizationCall(r: RevealInputs) {
   } as const;
 }
 
-/** The ABI tuple for a policy, with the same address normalisation `authorizeAgent` uses. */
+/** The ABI tuple for a policy, with the same address normalisation the registration uses. */
 export function policyTuple(p: AgentPolicy): AgentPolicy {
   return {
     active: p.active,

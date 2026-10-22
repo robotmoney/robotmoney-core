@@ -50,6 +50,7 @@ import {
     RouterGovernanceV2,
     UPGRADE_V2_MARKER
 } from "./helpers/UpgradeV2.sol";
+import {AgentRegistration} from "./helpers/AgentRegistration.sol";
 
 interface IMarker {
     function upgradeMarker() external view returns (uint256);
@@ -249,7 +250,9 @@ contract UpgradeLifecycleForkTest is Test {
         proto.unpauseDeposits();
         router.setRouterCap(50_000e6);
         address[] memory none = new address[](0);
-        gateway.authorizeAgent(
+        vm.stopPrank();
+        AgentRegistration.register(
+            gateway,
             agent,
             IGateway.AgentPolicy({
                 active: true,
@@ -264,6 +267,7 @@ contract UpgradeLifecycleForkTest is Test {
                 allowedSourceVaults: none
             })
         );
+        vm.startPrank(deployer);
         receipts.grantRole(receipts.RECEIPT_SUBMITTER_ROLE(), submitter);
         vm.stopPrank();
 

@@ -230,9 +230,21 @@ jobs:
 
       - name: Gateway agent-policy gas report (issue 1476)
         # Measurement, not a budget: prints the RobotMoneyGateway rows for
-        # authorizeAgent, revealAuthorization, setPolicy and
-        # transferAgentOwnership so a change in their cost shows in the log.
+        # revealAuthorization, setPolicy and revokeAgent so a change in their
+        # cost shows in the log.
         run: bash .github/scripts/forge_test_require_executed.sh --match-contract "GatewayAgentPolicyAuthorizationTest" --gas-report
+
+      - name: Gateway owner-consented agent lifecycle (issue 1890, ACL-9)
+        # The lifecycle suites: role immunity (grantRole, revokeRole and renounceRole on AGENT_ROLE
+        # revert for every caller, also after a role-admin overwrite), owner and agent revoke with the
+        # deposit budget reset, expiry replacement with AgentRevoked before AgentAuthorized, and the
+        # consent and commit block boundaries. The floor is the count of tests in the file today: a
+        # renamed or emptied file, a skipped contract or a path filter that matches nothing reads red,
+        # never green. The stateful fuzz (GatewayAgentLifecycleInvariant.t.sol) runs in the
+        # forge-invariant-fuzz-tests job, in the step that pins its executed-test floor at 2.
+        env:
+          FORGE_TEST_MIN_EXECUTED: "35"
+        run: bash .github/scripts/forge_test_require_executed.sh --match-path "contracts/test/GatewayAgentPolicyAuthorization.t.sol"
 
       - name: forge test (basket vault production scripts and eligibility — core 1486)
         # Explicit, named guard for the three basket vault scripts (one deployment scheme):
@@ -322,6 +334,16 @@ jobs:
       # CustodyInvariant.t.sol as one passed test, so the floor is 1).
       - name: forge test (invariant / fuzz)
         run: bash .github/scripts/forge_test_require_executed.sh --match-path "contracts/test/*Invariant*.t.sol" --match-test "^invariant_" -vvv
+
+      - name: forge test (gateway agent lifecycle stateful fuzz, issue 1890)
+        # The dedicated floor for GatewayAgentLifecycleInvariant.t.sol. The step above runs every
+        # *Invariant*.t.sol with the default floor of 1, so deleting or renaming this file would
+        # stay green there. Here the file must execute 2 tests: the scripted handler-reach test and
+        # the stateful invariant group (forge reports the three invariant_* functions as one
+        # passed test, like CustodyInvariant.t.sol). Fewer means a deleted, renamed or emptied file.
+        env:
+          FORGE_TEST_MIN_EXECUTED: "2"
+        run: bash .github/scripts/forge_test_require_executed.sh --match-path "contracts/test/GatewayAgentLifecycleInvariant.t.sol" -vvv
 
       - name: forge executed-test guard self-test (planted empty match-path is red, issue 1643)
         run: bash .github/scripts/tests/test_forge_test_require_executed.sh

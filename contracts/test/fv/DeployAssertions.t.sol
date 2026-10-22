@@ -42,6 +42,7 @@ import {TestERC20} from "../helpers/TestERC20.sol";
 import {SafeFixture} from "../helpers/SafeFixture.sol";
 import {CoreProxies} from "../helpers/CoreProxies.sol";
 import {GovernedUUPS} from "../../lib/GovernedUUPS.sol";
+import {AgentRegistration} from "../helpers/AgentRegistration.sol";
 
 /// @dev Minimal 18-dec basket token for the ORA-3 addAsset rig.
 contract Ora3Token is ERC20 {
@@ -300,12 +301,10 @@ contract DeployAssertionsTest is SafeFixture {
         RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(usdc, v, admin, pauser, address(0));
 
         // An attacker pre-binds an INTENDED future admin address as an AGENT via
-        // the permissionless registration surface (modelled here by the
-        // ADMIN-gated authorizeAgent, which is the same grant path).
+        // the only registration surface, commit/reveal, with the address's own consent.
         address intendedAdmin = makeAddr("acl7-future-admin");
         IGateway.AgentPolicy memory p = _acl7Policy();
-        vm.prank(admin);
-        gw.authorizeAgent(intendedAdmin, p);
+        AgentRegistration.register(gw, intendedAdmin, p);
         assertTrue(gw.hasRole(AGENT_ROLE, intendedAdmin), "pre: intended admin pre-bound as AGENT");
 
         // Layer 1: granting ADMIN_ROLE to that pre-bound address now reverts —

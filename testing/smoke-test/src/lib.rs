@@ -1541,7 +1541,7 @@ impl Fixture {
     /// generic call). The calldata is built with `cast calldata`. `label` names the kind of call: a process-wide
     /// counter is appended so every call is its own timelock operation (the label is the salt, and a repeated
     /// label would reuse the earlier call's spent or reverted operation).
-    fn timelock_call(
+    pub fn timelock_call(
         &self,
         label: &str,
         target: Address,
@@ -1601,7 +1601,7 @@ impl Fixture {
     }
 
     /// The test depositor authorizes the harness agent: `commitAuthorization(keccak(agent, depositor, salt))`,
-    /// the agent's own `commitAuthorization` consent (core 1791), then `revealAuthorization(agent, salt, policy)` in a later block. The policy names the depositor as the
+    /// the agent's own `commitAuthorization` consent first (core 1791, ACL-9), then the depositor's commit, then `revealAuthorization(agent, salt, policy)` in a later block. The policy names the depositor as the
     /// share receiver (the permissionless path requires it). Returns the reveal transaction hash.
     pub fn depositor_authorize_agent(
         &self,
@@ -1617,13 +1617,6 @@ impl Fixture {
             preimage.extend_from_slice(addr.as_slice());
         }
         preimage.extend_from_slice(salt.as_slice());
-        let commit_hash = format!("0x{}", hex::encode(keccak256(&preimage).0));
-        self.cast_send(
-            SHARE_RECEIVER_PRIVATE_KEY_HEX,
-            self.gateway(),
-            "commitAuthorization(bytes32)",
-            &[&commit_hash],
-        )?;
         let receiver = format!("{depositor:#x}");
         // (active, validUntil, maxPerPayment, maxPerWindow, shareReceiver, allowedDestinations,
         //  assetRecipient, maxWithdrawPerPayment, maxWithdrawPerWindow, allowedSourceVaults)
@@ -1668,6 +1661,15 @@ impl Fixture {
             &[&consent_hash],
         )?;
 
+        // Then the depositor commits (consent first, owner second, reveal within 256 blocks of both: ACL-9).
+        let commit_hash = format!("0x{}", hex::encode(keccak256(&preimage).0));
+        self.cast_send(
+            SHARE_RECEIVER_PRIVATE_KEY_HEX,
+            self.gateway(),
+            "commitAuthorization(bytes32)",
+            &[&commit_hash],
+        )?;
+
         // The reveal must land in a later block than the commit (CommitmentTooRecent otherwise). A fork without a
         // block time mines only on transactions, so mine one block here (a one-second warp).
         let commit_head = self.nonce_tracker.eth_block_number()?;
@@ -1682,31 +1684,6 @@ impl Fixture {
             self.gateway(),
             reveal_sig,
             &[&agent_hex, &salt_hex, &policy],
-        )
-    }
-
-    /// `authorizeAgent(agent, policy)` through the real Safe and the timelock (a generic timelock call,
-    /// ADMIN_ROLE). Used to re-grant the fixture agent and to prove the role-separation invariant: an
-    /// address that already holds admin cannot be authorized as an agent, so the execute step reverts.
-    pub fn authorize_agent_for(
-        &self,
-        agent: Address,
-        max_per_payment: u128,
-        max_per_window: u128,
-    ) -> Result<String, HarnessError> {
-        let agent = format!("{agent:#x}");
-        let share_receiver = format!("{:#x}", self.share_receiver());
-        // (active, validUntil, maxPerPayment, maxPerWindow, shareReceiver, allowedDestinations,
-        //  assetRecipient, maxWithdrawPerPayment, maxWithdrawPerWindow, allowedSourceVaults)
-        // validUntil is the year 2100: the Twin chain time warps forward through every timelock delay.
-        let policy = format!(
-            "(true,4102444800,{max_per_payment},{max_per_window},{share_receiver},[],{share_receiver},{max_per_payment},{max_per_window},[])"
-        );
-        self.timelock_call(
-            "gateway-reauthorize-agent",
-            self.gateway(),
-            "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
-            &[&agent, &policy],
         )
     }
 

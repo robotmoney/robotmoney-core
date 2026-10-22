@@ -4,16 +4,16 @@ title: "GatewayAgentPolicyFixture"
 
 # GatewayAgentPolicyFixture
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/GatewayAgentPolicyAuthorization.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c5e9b52bb69b31a8de960c763311fda12f0a5551/contracts/test/GatewayAgentPolicyAuthorization.t.sol)
 
 **Inherits:** Test
 
 <i>
 
 Shared fixture: a gateway with two ADMIN_ROLE holders (`admin`, the
-constructor admin, and `adminOwner`, who owns agents in these tests)
-and a permissionless account (`user`) that authorizes through
-commit/reveal.
+constructor admin that also holds DEFAULT_ADMIN_ROLE, and `adminOwner`)
+and a permissionless account (`user`). Every account registers agents the
+same way: agent consent, owner commit, owner reveal.
 
 </i>
 
@@ -23,6 +23,12 @@ commit/reveal.
 
 ```solidity
 uint256 internal constant ONE_USDC = 1e6;
+```
+
+### COMMIT_EXPIRY
+
+```solidity
+uint256 internal constant COMMIT_EXPIRY = 256;
 ```
 
 ## State Variables
@@ -57,6 +63,12 @@ bytes32 internal ADMIN_ROLE;
 bytes32 internal AGENT_ROLE;
 ```
 
+### DEPOSIT_PAUSER_ROLE
+
+```solidity
+bytes32 internal DEPOSIT_PAUSER_ROLE;
+```
+
 ### admin
 
 ```solidity
@@ -79,7 +91,7 @@ address internal adminOwner = makeAddr("adminOwner");
 
 ### adminB
 
-A second ADMIN_ROLE holder, the destination of ownership transfers.
+A second ADMIN_ROLE holder.
 
 ```solidity
 address internal adminB = makeAddr("adminB");
@@ -135,30 +147,13 @@ function _policy(address receiver) internal view returns (IGateway.AgentPolicy m
 | ---- | ---- | ----------- |
 | p | `IGateway.AgentPolicy` |  |
 
-<a id="_commit-address-address-bytes32"></a>
-
-### _commit
-
-```solidity
-function _commit(address owner, address agent, bytes32 salt) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| owner | `address` |  |
-| agent | `address` |  |
-| salt | `bytes32` |  |
-
 <a id="_reveal-address-address-igateway-agentpolicy"></a>
 
 ### _reveal
 
 <i>
 
-Commit/reveal authorization by `owner`, waiting the one block the
-commitment requires.
+Full consented registration by `owner` (consent, commit, one block, reveal).
 
 </i>
 
@@ -247,4 +242,70 @@ function _storedShareReceiver(address agent) internal view returns (address rece
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | receiver | `address` |  |
+
+<a id="_storedvaliduntil-address"></a>
+
+### _storedValidUntil
+
+```solidity
+function _storedValidUntil(address agent) internal view returns (uint64 validUntil);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| validUntil | `uint64` |  |
+
+<a id="_deposit-address-uint256-bytes32"></a>
+
+### _deposit
+
+<i>
+
+The agent deposits `amount` USDC through the gateway.
+
+</i>
+
+```solidity
+function _deposit(address agent, uint256 amount, bytes32 key) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+| amount | `uint256` |  |
+| key | `bytes32` |  |
+
+<a id="_depositreverts-address-uint256-bytes32-bytes"></a>
+
+### _depositReverts
+
+<i>
+
+A deposit that must revert with `err`.
+
+</i>
+
+```solidity
+function _depositReverts(address agent, uint256 amount, bytes32 key, bytes memory err)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+| amount | `uint256` |  |
+| key | `bytes32` |  |
+| err | `bytes` |  |
 

@@ -125,19 +125,19 @@ jobs:
       - name: forge test (invariant spec harness, contracts/test/fv)
         # The coverage-map gate, the per-invariant tests and the dedicated harnesses.
         # A red invariant would be skipped; an un-skipped red test (landed
-        # remediation) must pass. Floor 37 is every test in contracts/test/fv/
+        # remediation) must pass. Floor 39 is every test in contracts/test/fv/
         # (QA plan v1 T5): CoverageMap 3, CustodyMultiVault 4, DeployAssertions 3,
-        # FvInvariants 25, TwapManipulation 2.
+        # FvInvariants 27, TwapManipulation 2.
         run: |
-          FORGE_TEST_MIN_EXECUTED=37 bash .github/scripts/forge_test_require_executed.sh \
+          FORGE_TEST_MIN_EXECUTED=39 bash .github/scripts/forge_test_require_executed.sh \
             --match-path 'contracts/test/fv/**' -vvv
 
       - name: forge test (custody invariant + guards — anchoring proofs)
         # The deep behavioural proofs the per-ID layer points at. Kept in the
         # same gate so a regression in the proven invariants surfaces here too.
-        # Floor 37 (QA plan v1 T5): AccessRolesTest 24, CustodyInvariantGuardTest 4,
+        # Floor 38 (QA plan v1 T5): AccessRolesTest 25, CustodyInvariantGuardTest 4,
         # AdapterDelegatecallGuardTest 8, CustodyInvariantTest 1 (forge reports its four
         # invariant_* functions as one passed test).
         run: |
-          FORGE_TEST_MIN_EXECUTED=37 bash .github/scripts/forge_test_require_executed.sh \
+          FORGE_TEST_MIN_EXECUTED=38 bash .github/scripts/forge_test_require_executed.sh \
             --match-contract 'CustodyInvariant|CustodyInvariantGuard|AdapterDelegatecallGuard|AccessRoles' -vvv
