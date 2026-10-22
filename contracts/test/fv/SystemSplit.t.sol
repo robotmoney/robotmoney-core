@@ -5,8 +5,8 @@
 // SYS-1  No vaults-system contract depends on the rmpc gateway; rebalancing works with no gateway deployed.
 // ACL-9  An agent's owner never changes, its share receiver is always its owner, no role registers an agent.
 //
-// Both registry entries are RED while the code the siblings remove is still on dev (SYS-1: the receipt binds a gateway,
-// issue 1888. ACL-9: authorizeAgent, transferAgentOwnership and the ADMIN_ROLE exception, issue 1890). The tests here
+// Both registry entries are RED while the code the siblings remove is still on dev (SYS-1: the receipt keeps a retired gateway slot,
+// issue 1906. ACL-9 holds since the agent lifecycle change, issue 1890). The tests here
 // execute the parts that hold today and pin the registry status to what the bytecode says, so the entry cannot stay RED
 // after the removal or flip HOLDS before it. They compile against names that survive both siblings (artifact names and
 // selectors by string, not by import).
@@ -179,7 +179,7 @@ contract SystemSplitSys1Test is Test {
     }
 
     /// @notice The registry status follows the code: SYS-1 is RED exactly while the receipt register still exposes a
-    ///         gateway binding. The removal (1888) must flip the entry to HOLDS in the same PR.
+    ///         gateway binding. The follow-up (1906) must flip the entry to HOLDS in the same PR.
     function test_SYS1_registryStatusFollowsReceiptBinding() public view {
         bytes memory code =
             vm.getDeployedCode("ConsensusRecommendationReceipt.sol:ConsensusRecommendationReceipt");
@@ -190,7 +190,7 @@ contract SystemSplitSys1Test is Test {
                 e.status == InvariantRegistry.Status.RED,
                 "SYS-1 must be RED while the receipt binds a gateway"
             );
-            assertEq(e.remediationIssue, 1888);
+            assertEq(e.remediationIssue, 1906);
         } else {
             assertTrue(
                 e.status == InvariantRegistry.Status.HOLDS,

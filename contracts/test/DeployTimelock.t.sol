@@ -15,9 +15,6 @@ import {DeployTimelock} from "../script/DeployTimelock.s.sol";
 import {ProposerFloorTimelock} from "../ProposerFloorTimelock.sol";
 import {CoreStages} from "./helpers/CoreStages.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
-import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
-import {IGateway} from "../gateway/interfaces/IGateway.sol";
-import {AccessRoles} from "../gateway/AccessRoles.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
@@ -62,7 +59,6 @@ contract DeployTimelockTest is SafeGovernance {
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
-    bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
 
     // ─── Test addresses ───────────────────────────────────────────────────────
@@ -963,7 +959,6 @@ contract DeployTimelockChainFloorTest is SafeGovernance {
     address internal safe;
     address internal emergency = makeAddr("floor-emergency");
     RobotMoneyVault internal vault;
-    RobotMoneyGateway internal gateway;
     VaultRegistry internal registry;
     PortfolioRouter internal router;
     RouterGovernance internal governance;
@@ -987,9 +982,6 @@ contract DeployTimelockChainFloorTest is SafeGovernance {
         );
         vault = CoreProxies.robotMoneyVault(
             usdc_, type(uint256).max, type(uint256).max, 0, safe, deployer, deployer
-        );
-        gateway = CoreProxies.robotMoneyGateway(
-            usdc_, vault, deployer, makeAddr("floor-pauser"), address(0)
         );
         registry = CoreProxies.vaultRegistry(deployer);
         router = CoreProxies.portfolioRouter(address(usdc_), address(registry), deployer);
@@ -1057,22 +1049,6 @@ contract DeployTimelockChainFloorTest is SafeGovernance {
     }
 }
 
-/// @dev A deliberately NAIVE gateway: plain AccessControl with AGENT_ROLE whose
-///      admin is left at the default (DEFAULT_ADMIN_ROLE), i.e. WITHOUT the
-///      `_setRoleAdmin(AGENT_ROLE, ADMIN_ROLE)` redirect the real
-///      RobotMoneyGateway constructor performs. Models the pre-fix gateway so the
-///      negative test can prove that a naked DEFAULT_ADMIN_ROLE revoke would
-///      brick AGENT_ROLE (fix-interaction warning, F-01).
-contract NaiveAgentGateway is AccessControl {
-    bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
-
-    constructor(address root) {
-        // Only the default root is granted; AGENT_ROLE's admin stays
-        // DEFAULT_ADMIN_ROLE (the bug condition). No _setRoleAdmin redirect.
-        _grantRole(DEFAULT_ADMIN_ROLE, root);
-    }
-}
-
 // ─── R7: the deployment manifest ──────────────────────────────────────────────
 
 /// @dev Exposes the script's internal manifest writer. `_writeJson` runs only
@@ -1121,9 +1097,6 @@ contract DeployTimelockManifestTest is SafeGovernance {
 
         RobotMoneyVault vault = CoreProxies.robotMoneyVault(
             usdc, type(uint256).max, type(uint256).max, 0, safe, deployer, deployer
-        );
-        RobotMoneyGateway gateway = CoreProxies.robotMoneyGateway(
-            usdc, vault, deployer, makeAddr("manifest-pauser"), address(0)
         );
         VaultRegistry registry = CoreProxies.vaultRegistry(deployer);
         PortfolioRouter router =
@@ -1283,7 +1256,6 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
     using stdJson for string;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
 
     /// @dev Overridden by subclasses so tests that mutate shared env vars
     ///      (vm.setEnv is process-wide) each get their own namespace.
@@ -1681,7 +1653,6 @@ contract DeployTimelockFourVaultsTest is SafeGovernance {
     TestERC20 internal usdc;
     address[] internal vaults;
     VaultRegistry internal registry;
-    RobotMoneyGateway internal gateway;
     PortfolioRouter internal router;
     RouterGovernance internal governance;
     DeployTimelock.Deployed internal d;
@@ -1744,9 +1715,6 @@ contract DeployTimelockFourVaultsTest is SafeGovernance {
             )
         );
 
-        gateway = CoreProxies.robotMoneyGateway(
-            usdc, rmUsdc, deployer, makeAddr("four-pauser"), address(0)
-        );
         registry = CoreProxies.vaultRegistry(deployer);
         router = CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
         governance = CoreProxies.routerGovernance(address(router), makeAddr("receipts"), deployer);

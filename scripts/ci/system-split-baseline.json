@@ -1,15 +1,23 @@
 {
-  "_comment": "Known violations of SYS-1 and ACL-9 on dev, each with the issue that removes it. check-system-split.ts refuses every violation not listed here and warns about an entry that no longer matches. Do not add entries: remove them.",
+  "_comment": "Known violations of SYS-1 and ACL-9 on dev, each with the open issue that removes it. check-system-split.ts refuses every violation not listed here and warns about an entry that no longer matches. Do not add entries: remove them.",
   "known": [
-    { "rule": "SYS-1:import", "file": "contracts/RouterGovernance.sol", "issue": 1888, "reason": "imports the receipt interface from contracts/gateway/interfaces; the receipt moves out of the gateway directory" },
-    { "rule": "SYS-1:name", "file": "contracts/RouterGovernance.sol", "issue": 1888, "reason": "names the gateway through the receipt interface" },
-    { "rule": "SYS-1:name", "file": "contracts/gateway/ConsensusRecommendationReceipt.sol", "issue": 1888, "reason": "the receipt still binds a gateway (initialize takes gateway_, onlyGateway); the receipt-only change removes it" },
-    { "rule": "SYS-1:name", "file": "contracts/gateway/InvestmentCommitteePolicy.sol", "issue": 1888, "reason": "the committee policy is deleted by the receipt-only change" },
-    { "rule": "SYS-1:name", "file": "contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol", "issue": 1888, "reason": "the receipt interface still declares gateway() and CallerNotGateway" },
-    { "rule": "SYS-1:name", "file": "contracts/gateway/interfaces/IInvestmentCommitteePolicy.sol", "issue": 1888, "reason": "the committee policy interface is deleted by the receipt-only change" },
-    { "rule": "ACL-9:authorizeAgent", "file": "contracts/gateway/RobotMoneyGateway.sol", "issue": 1890, "reason": "authorizeAgent is deleted by the agent lifecycle change" },
-    { "rule": "ACL-9:role-registers-agent", "file": "contracts/gateway/RobotMoneyGateway.sol", "issue": 1890, "reason": "the ADMIN_ROLE registration path is deleted by the agent lifecycle change" },
-    { "rule": "ACL-9:transferAgentOwnership", "file": "contracts/gateway/RobotMoneyGateway.sol", "issue": 1890, "reason": "transferAgentOwnership is deleted by the agent lifecycle change" },
-    { "rule": "ACL-9:share-receiver-exception", "file": "contracts/gateway/RobotMoneyGateway.sol", "issue": 1890, "reason": "the ADMIN_ROLE share receiver exception is deleted by the agent lifecycle change" }
+    {
+      "rule": "SYS-1:import",
+      "file": "contracts/RouterGovernance.sol",
+      "issue": 1906,
+      "reason": "imports the receipt interface from contracts/gateway/interfaces; the follow-up moves the receipt out of the gateway directory"
+    },
+    {
+      "rule": "SYS-1:name",
+      "file": "contracts/RouterGovernance.sol",
+      "issue": 1906,
+      "reason": "names the gateway through the receipt interface"
+    },
+    {
+      "rule": "SYS-1:name",
+      "file": "contracts/gateway/ConsensusRecommendationReceipt.sol",
+      "issue": 1906,
+      "reason": "the receipt keeps the retired public storage slot gateway (storage layout and the preserved getter); the follow-up decides how it is kept"
+    }
   ]
 }

@@ -229,7 +229,6 @@ contracts/test/contract.MockVaultForRouter.mdx
 contracts/test/contract.MockVaultTest.mdx
 contracts/test/contract.MorphoAdapterPositionTest.mdx
 contracts/test/contract.MorphoAdapterTest.mdx
-contracts/test/contract.NaiveAgentGateway.mdx
 contracts/test/contract.NoYieldTestAdapterTest.mdx
 contracts/test/contract.PartialAcceptVault.mdx
 contracts/test/contract.PartlyLiquidMockAdapter.mdx

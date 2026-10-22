@@ -348,7 +348,6 @@ export const sidebar = [
             { text: "MockVaultTest", link: "/contracts/test/contract.MockVaultTest" },
             { text: "MorphoAdapterPositionTest", link: "/contracts/test/contract.MorphoAdapterPositionTest" },
             { text: "MorphoAdapterTest", link: "/contracts/test/contract.MorphoAdapterTest" },
-            { text: "NaiveAgentGateway", link: "/contracts/test/contract.NaiveAgentGateway" },
             { text: "NoYieldTestAdapterTest", link: "/contracts/test/contract.NoYieldTestAdapterTest" },
             { text: "PartialAcceptVault", link: "/contracts/test/contract.PartialAcceptVault" },
             { text: "PartlyLiquidMockAdapter", link: "/contracts/test/contract.PartlyLiquidMockAdapter" },

@@ -72,7 +72,7 @@ The client boundary also requires human vault/router actions and
 vaults-system Safe/timelock operations to work without a configured or
 verified gateway (SS-1019-11). They keep their own target verification;
 gateway verification gates gateway actions only.
-Registry: `SYS-1` is RED with remediation issue 1888 (the receipt still binds a gateway). Executed assertions: `SystemSplitSys1Test`, `SystemSplitInvariant` and the static guard `scripts/ci/check-system-split.ts`, whose baseline `scripts/ci/system-split-baseline.json` lists each known violation with the issue that removes it.
+Registry: `SYS-1` is RED with remediation issue 1906 (the receipt keeps a retired gateway slot and RouterGovernance imports its interface from contracts/gateway). Executed assertions: `SystemSplitSys1Test`, `SystemSplitInvariant` and the static guard `scripts/ci/check-system-split.ts`, whose baseline `scripts/ci/system-split-baseline.json` lists each known violation with the issue that removes it.
 
 **`SYS-2` — ~~A committee vote is recorded only under the address that sent it.~~ Retired 2026-10-19, owner decision.**
 Tombstone · no surface. `InvestmentCommitteePolicy` is deleted in the target (owner decision 2026-10-19; still deployed and tested on v0.5.0): there is no on-chain committee vote or tilt. The consensus receipt is the only rebalancing signal the Safe may cite (the vector scheduled through `applyReceipt` is the input, owner decision 2026-10-20), and `ConsensusRecommendationReceipt.recordReceipt` stores `msg.sender` as its submitter. The ID stays because IDs are append-only. It never had an `InvariantRegistry` entry, so this entry keeps the non-heading form.
