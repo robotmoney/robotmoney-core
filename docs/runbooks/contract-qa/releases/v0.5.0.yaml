@@ -26,6 +26,11 @@ notes: |
   {gateSha}). The run continued at rc.10 (004b8c97, tools only) after the fee guard stop. A rehearsal run cuts no
   version tag.
 
+  Release line (owner decision 2026-10-22). v0.5.0 is the first release of the line v0.5, whose branch is releases-0.5.x
+  (policy docs/operations/contract-release-runbooks.md section 2). rc.1 to rc.13 and the record tag above predate the
+  QA branch model and stay as Deploy 3's history. The next rc of v0.5.0 is rc.14, cut at the squash of a QA branch
+  qa/0.5.x-<YYYY-MM-DD> onto releases-0.5.x. A run on 8453 runs only from an rc tag, with the owner's recorded go.
+
   Scope (owner review, 2026-10-19). This is the rehearsal deploy runbook: it deploys the contracts on a network,
   governs them and proves they work. The Twin chain and Base mainnet run the same steps. The review kept only the
   critical steps. It removed steps that re-check what an earlier step already proves, client checks (rmpc, the

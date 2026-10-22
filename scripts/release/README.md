@@ -15,6 +15,10 @@ Callers:
 
 The fixture `deployments/dependency-manifests/example.json` is an EXAMPLE generated from config and the checked-in Base snapshot. It is not a release record. The self-test `dependency-manifest-selftest.ts` reads it. It sits outside any chain directory so the nightly drift check never treats it as a release.
 
+## Release branches and tags
+
+Contract releases ship from `releases-A.B.x`, are rehearsed on `qa/A.B.x-<YYYY-MM-DD>` and run in production only from an rc tag (`release/vA.B.C-rc.N`) cut at the squash commit. The policy is `docs/operations/contract-release-runbooks.md` sections 2, 3 and 4.14. `record-release-dependencies.ts` records the dependency manifest for the release the rc names.
+
 ## Other files
 
 - `dependency-manifest-diff.ts`, `check-nightly-third-party-workflow.ts`: nightly drift (dispatch only).

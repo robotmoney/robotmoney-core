@@ -183,3 +183,27 @@ describe("the verify RPC requirement and the pause-all DEPLOY_SHA checkout are d
     expect(flat("scripts/deploy/README.md")).toContain("The emergency `pause-all` is the one exception");
   });
 });
+
+// Owner decision 2026-10-22: contract releases follow the frontend model (release branch, QA branch, squash, rc tag, production from the rc).
+describe("the release branch model is stated, and the old rule is gone", () => {
+  const policy = read("docs/operations/contract-release-runbooks.md").replace(/\s+/g, " ");
+  test("the policy names the branches, the squash, the rc tag and production from the rc", () => {
+    for (const s of [
+      "`releases-A.B.x`", "Feature PRs never target a release branch", "`qa/A.B.x-<YYYY-MM-DD>`", "A pushed QA branch is never rewritten",
+      "**squash-merged** onto `releases-A.B.x`", "The squash commit's tree must equal the tree QA passed", "`release/vA.B.C-rc.N`", "`release/vA.B.C-rc.N-rehearsal`",
+      "Production runs only from an rc tag", "`vA.B.C` and the final `vA.B.C-rc.N` point at the same commit", "`rm-core-stage-1`", "never on the operator machine",
+      "An agent never broadcasts a transaction to Base mainnet", "Adopting `releases-0.5.x` as the v0.5 line", "`git cherry-pick -x`",
+    ]) expect(policy, s).toContain(s);
+  });
+  test("the old no-release-branch rule is stated nowhere in the docs", () => {
+    for (const s of ["do not need a dedicated long-lived branch", "no long-lived release branch to keep in sync", "no release branch to backport from"]) {
+      expect(policy, s).not.toContain(s);
+      for (const f of ["docs/runbooks/contract-qa/README.md", "docs/development/ci-suites.md", "publish-contracts/README.md"]) expect(read(f).replace(/\s+/g, " "), `${f}: ${s}`).not.toContain(s);
+    }
+  });
+  test("the contract QA README, the template header and the CI doc name the same branches", () => {
+    expect(read("docs/runbooks/contract-qa/README.md")).toContain("`qa/A.B.x-<YYYY-MM-DD>`");
+    expect(read("docs/runbooks/contract-qa/template.yaml")).toContain("qa/A.B.x-<YYYY-MM-DD>");
+    expect(read("docs/development/ci-suites.md")).toContain("### Release and QA branches");
+  });
+});

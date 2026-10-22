@@ -221,6 +221,18 @@ assumed safe after a state migration. The rehearsal runs the operator rows
 1859); only the queued upgrade that never executes goes through the Safe tool
 library directly.
 
+## Release line and production upgrade (owner decision 2026-10-22)
+
+A release line ships from the branch `releases-A.B.x` (policy `docs/operations/contract-release-runbooks.md`,
+sections 2, 3 and 4.14). A governed upgrade of the line's live proxies is developed and passed in QA on a QA branch
+`qa/A.B.x-<YYYY-MM-DD>` (Twin chain, stage host), squash-merged onto the release branch, tagged as a release
+candidate (`release/vA.B.C-rc.N`) at the squash commit, and executed only from that rc tag through the governed upgrade
+procedure (`deploy-implementation`, `govern --row upgrade-proxy`, `verify`, evidence). The version tag `vA.B.C` is cut
+at the final rc's commit after the postflight is clean. The storage layout of every proxied contract stays append-only
+against the layout of the commit the live implementation was built from, at every QA commit and at the rc. An upgrade
+needs the owner's recorded go before any Base broadcast, and the timelock delay is the sheet's (48 hours in production,
+900 s in a rehearsal). After `freezeUpgrades` the line takes no contract change: a fix is a new deployment on a new line.
+
 ## Signing clients and disclosure (stage 3)
 
 Implemented by issue 1810. `rmpc`'s one on-chain write, the agent deposit

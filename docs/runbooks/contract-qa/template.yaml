@@ -8,6 +8,11 @@
 # reorders a step of this file. The policy is docs/operations/contract-release-runbooks.md (4.4) and
 # docs/runbooks/contract-qa/README.md.
 #
+# Where it runs (policy sections 2, 3 and 4.14): --target twin runs at a clean, pushed commit of the QA branch
+# qa/A.B.x-<YYYY-MM-DD>, cut from the release branch releases-A.B.x. After it passes, the QA branch is squash-merged onto
+# the release branch and the rc tag is cut at the squash commit. --target rehearsal and --target production run only from
+# that rc tag, with the owner's recorded go (an agent never broadcasts to Base 8453 without it).
+#
 # One runbook, three environments, chosen at run time with `--target twin|rehearsal|production` and the
 # environment's sheet (deployments/twin-918453/stage-sheet.env, deployments/base-8453-rehearsal/stage-sheet.example.env,
 # the frozen production sheet). Only parameters differ; a step that exists for one environment says so with onlyFor.

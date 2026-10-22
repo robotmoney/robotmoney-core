@@ -2,6 +2,7 @@
 
 - **Status:** Accepted (2026-10-16)
 - **Amendment 2026-10-19:** `InvestmentCommitteePolicy` is deleted (owner decision 2026-10-19), so nine contracts are proxied, not ten. Its row in the table below is history.
+- **Amendment 2026-10-22:** Governed upgrades are released from a release branch `releases-A.B.x`: QA on a QA branch, a squash onto the release branch, an rc tag at the squash commit, and production only from that tag (owner decision 2026-10-22; `docs/operations/contract-release-runbooks.md` sections 2, 3 and 4.14). The decision above is unchanged.
 - **Date:** 2026-10-15
 - **Deciders:** Product owner (accepted 2026-10-16: Deploy 3 launches as an upgradeable proving period, which this ADR governs)
 - **Related:**
