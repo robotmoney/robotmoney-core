@@ -195,6 +195,17 @@ impl Fixture {
             .reauthorize_agent(max_per_payment, max_per_window)
     }
 
+    /// A Safe -> Timelock call of `sig(args)` on `target` (admin authority, Twin only).
+    pub fn timelock_call(
+        &self,
+        label: &str,
+        target: Address,
+        sig: &str,
+        args: &[&str],
+    ) -> Result<String, HarnessError> {
+        self.devnet.timelock_call(label, target, sig, args)
+    }
+
     pub fn fund_usdc(&self, recipient: Address, amount: u128) -> Result<u128, HarnessError> {
         self.devnet.fund_usdc(recipient, amount)
     }

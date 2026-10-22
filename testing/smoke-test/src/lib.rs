@@ -1541,7 +1541,7 @@ impl Fixture {
     /// generic call). The calldata is built with `cast calldata`. `label` names the kind of call: a process-wide
     /// counter is appended so every call is its own timelock operation (the label is the salt, and a repeated
     /// label would reuse the earlier call's spent or reverted operation).
-    fn timelock_call(
+    pub fn timelock_call(
         &self,
         label: &str,
         target: Address,

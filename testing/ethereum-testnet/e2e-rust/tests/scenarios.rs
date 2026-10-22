@@ -697,6 +697,108 @@ fn unauthorized_agent_rejected() {
     });
 }
 
+// ------------------------------------------------------------ scenario 9b
+
+/// Issue 1890 (ACL-9): the owner-consented agent lifecycle, end to end through rmpc and the
+/// gateway. This replaces the retired admin-shortcut role-separation scenario.
+///
+/// 1. The owner revokes the agent: the registration is gone.
+/// 2. The owner registers it again the only way the gateway allows: the agent's consent, the
+///    owner's commit, then the reveal (`reauthorize_agent`).
+/// 3. rmpc deposits through the new registration.
+/// 4. The admin (the timelock, through the real Safe) cannot revoke the agent: the call
+///    reverts `NotAgentOwner` and the agent keeps its owner and role.
+/// 5. The agent revokes itself with its own key: owner and role are cleared.
+/// 6. rmpc is refused (`ErrAgentNotAuthorized`).
+/// 7. The registration is restored for any later scenario.
+#[test]
+fn agent_lifecycle_consent_deposit_selfrevoke_admin_cannot_revoke() {
+    require_prereqs("agent_lifecycle_consent_deposit_selfrevoke_admin_cannot_revoke");
+    with_fixture(|fx| {
+        let gateway = format!("{:#x}", fx.gateway());
+        let agent = format!("{:#x}", fx.agent());
+        let owner_of = || {
+            cast(
+                fx.rpc_url(),
+                &["call", &gateway, "agentOwner(address)(address)", &agent],
+            )
+            .to_lowercase()
+        };
+        let zero = "0x0000000000000000000000000000000000000000";
+
+        // 1. + 2. Owner revoke, then the consented registration.
+        fx.revoke_agent().expect("owner revokeAgent");
+        assert_eq!(owner_of(), zero, "owner revoke must clear the owner");
+        fx.reauthorize_agent(DEFAULT_MAX_PER_PAYMENT, DEFAULT_MAX_PER_WINDOW)
+            .expect("consent, commit and reveal");
+        let owner = format!("{:#x}", fx.share_receiver()).to_lowercase();
+        assert_eq!(owner_of(), owner, "the depositor owns the new registration");
+
+        // 3. A deposit through the new registration.
+        fx.approve_usdc_from_agent(SMALL_DEPOSIT)
+            .expect("approve usdc");
+        let oid = order_id("agent_lifecycle");
+        let run = fx
+            .run_rmpc_deposit(deposit_args(SMALL_DEPOSIT, &oid))
+            .expect("run rmpc deposit");
+        assert!(
+            run.status.success(),
+            "deposit must succeed; stdout={} stderr={}",
+            run.stdout,
+            run.stderr
+        );
+
+        // 4. The admin cannot revoke an agent it does not own.
+        let admin_attempt = fx.timelock_call(
+            "gateway-admin-revoke-agent",
+            fx.gateway(),
+            "revokeAgent(address)",
+            &[&agent],
+        );
+        let err = admin_attempt.expect_err("an admin revokeAgent must revert");
+        let text = err.to_string();
+        assert!(
+            text.contains("NotAgentOwner") || text.to_lowercase().contains("revert"),
+            "expected a NotAgentOwner revert; got {text}"
+        );
+        assert_eq!(
+            owner_of(),
+            owner,
+            "the admin attempt must not clear the owner"
+        );
+
+        // 5. The agent revokes itself with its own key.
+        let agent_pk = format!("0x{}", hex::encode(AGENT_PRIVATE_KEY));
+        fx.cast_send(&agent_pk, fx.gateway(), "revokeAgent(address)", &[&agent])
+            .expect("agent self-revoke");
+        assert_eq!(owner_of(), zero, "self-revoke must clear the owner");
+
+        // 6. rmpc is refused once the registration is gone.
+        let oid = order_id("agent_lifecycle_after_selfrevoke");
+        let refused = fx
+            .run_rmpc_deposit(deposit_args(SMALL_DEPOSIT, &oid))
+            .expect("run rmpc deposit");
+
+        // 7. Always restore the registration for later scenarios.
+        fx.reauthorize_agent(DEFAULT_MAX_PER_PAYMENT, DEFAULT_MAX_PER_WINDOW)
+            .expect("reauthorize agent to restore fixture");
+
+        assert_eq!(
+            refused.status.code(),
+            Some(2),
+            "a self-revoked agent must be refused; stdout={} stderr={}",
+            refused.stdout,
+            refused.stderr
+        );
+        let v = parse_json(&refused.stdout, "agent_lifecycle_after_selfrevoke");
+        assert_eq!(
+            v["error"], "ErrAgentNotAuthorized",
+            "stdout={}",
+            refused.stdout
+        );
+    });
+}
+
 // ------------------------------------------------------------- helpers
 
 #[test]
