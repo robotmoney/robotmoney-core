@@ -470,11 +470,8 @@ jobs:
       - name: forge test (each vault deploys with the stage table's deposit state — issue 1705)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/FourVaultInitialState.t.sol"
 
-      - name: forge test (split-stage router deposit and withdraw on the fork — core 1485)
+      - name: forge test (split-stage vault deposit through the gateway on the fork — core 1485)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/CoreStagesFork.t.sol"
-
-      - name: forge test (gateway router split stages on the fork)
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-contract "GatewayRouterSplitStagesForkTest"
 
       - name: Stop the Twin fork and save its RPC cache
         if: always()

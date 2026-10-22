@@ -87,16 +87,18 @@ contract CoreStages {
         s = runWithoutAgent(admin_, pauser_, shareReceiver_, usdc_);
         s.agent = agent_;
         address[] memory none = new address[](0);
+        address[] memory dests = new address[](1);
+        dests[0] = address(s.vault);
         IGateway.AgentPolicy memory policy = IGateway.AgentPolicy({
             active: true,
             validUntil: uint64(block.timestamp + DEFAULT_VALID_UNTIL_OFFSET),
             maxPerPayment: DEFAULT_MAX_PER_PAYMENT,
             maxPerWindow: DEFAULT_MAX_PER_WINDOW,
             shareReceiver: shareReceiver_,
-            allowedDestinations: none,
-            assetRecipient: shareReceiver_,
-            maxWithdrawPerPayment: DEFAULT_MAX_WITHDRAW_PER_PAYMENT,
-            maxWithdrawPerWindow: DEFAULT_MAX_WITHDRAW_PER_WINDOW,
+            allowedDestinations: dests,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
             allowedSourceVaults: none
         });
         AgentRegistration.register(s.gateway, agent_, policy);

@@ -9,13 +9,13 @@ import {IConsensusRecommendationReceipt} from "./IConsensusRecommendationReceipt
 /// @title IGateway
 /// @notice Minimal interface stub for the RobotMoney deposit gateway.
 /// @dev Per the MVP plan (`Plan tracking issue #109` §2.2), the gateway
-///      exposes state-mutating entrypoints for agents (`deposit` and
-///      friends), an owner-gated agent lifecycle surface
+///      exposes one state-mutating entrypoint for agents (`depositTo`), an owner-gated
+///      agent lifecycle surface
 ///      (`commitAuthorization`/`revealAuthorization`,
 ///      `setPolicy`, `revokeAgent`), and a
 ///      deposit-pause asymmetry (DEPOSIT_PAUSER pauses deposits, ADMIN
-///      resumes them). A pause stops new deposits only; withdrawals are never
-///      frozen (owner decision 2026-10-05, core 1494).
+///      resumes them). A pause stops new deposits. The gateway has no
+///      withdrawal path (owner decision 2026-10-19).
 ///
 /// Authority model (issues #269, #1476, ACL-9). Registration records
 /// `msg.sender` as the agent's owner, only through `commitAuthorization` +
@@ -39,22 +39,14 @@ interface IGateway {
     /// @param maxPerPayment           Maximum gross USDC per single `deposit` call.
     /// @param maxPerWindow            Maximum gross USDC per `WINDOW_SECONDS` window.
     /// @param shareReceiver           Address that receives minted vault shares.
-    /// @param allowedDestinations     Whitelist of deposit destinations (vault or router
-    ///                                addresses). When non-empty, `depositTo` requires the
-    ///                                supplied destination to appear in this list. An empty
-    ///                                array disables the allowlist — only the pinned vault
-    ///                                or the pinned router is permitted (no registry lookup).
-    /// @param assetRecipient          Address that receives redeemed USDC on `withdraw`.
-    ///                                Must be non-zero when `maxWithdrawPerPayment > 0`.
-    /// @param maxWithdrawPerPayment   Maximum vault shares redeemable per single `withdraw` call.
-    ///                                Set to zero to disable agent-initiated withdrawal.
-    /// @param maxWithdrawPerWindow    Maximum vault shares redeemable per `WINDOW_SECONDS` window.
-    ///                                Must be >= `maxWithdrawPerPayment` when non-zero.
-    /// @param allowedSourceVaults     Whitelist of vaults the agent may redeem from via `withdraw`.
-    ///                                When non-empty, the supplied `sourceVault` must appear in
-    ///                                this list. An empty array permits only the pinned vault
-    ///                                (no registry lookup; arbitrary vault addresses are never
-    ///                                accepted).
+    /// @param allowedDestinations     Contracts the agent may deposit into (ERC-4626 vaults the
+    ///                                owner selected). Must be non-empty with no zero entry.
+    ///                                `depositTo` requires the destination to appear here.
+    ///                                The router is never a destination.
+    /// @param assetRecipient          RETIRED. Must be zero.
+    /// @param maxWithdrawPerPayment   RETIRED. Must be zero.
+    /// @param maxWithdrawPerWindow    RETIRED. Must be zero.
+    /// @param allowedSourceVaults     RETIRED. Must be empty.
     struct AgentPolicy {
         bool active;
         uint64 validUntil;
@@ -112,13 +104,13 @@ interface IGateway {
     /// @param owner The registration's owner. Also emitted when a reveal replaces an
     ///              expired registration, before the new `AgentAuthorized`.
     event AgentRevoked(address indexed agent, address indexed owner);
-    /// @notice Emitted when gateway deposits are paused. Withdrawals stay open.
+    /// @notice Emitted when gateway deposits are paused.
     /// @param by Address that called `pauseDeposits()`.
     event DepositsPaused(address indexed by);
     /// @notice Emitted when gateway deposits are resumed.
     /// @param by Address that called `unpauseDeposits()`.
     event DepositsUnpaused(address indexed by);
-    /// @notice Emitted on every successful agent deposit to a single vault.
+    /// @notice Emitted on every successful agent deposit.
     /// @param paymentId     Replay-protection hash for this payment.
     /// @param orderId       Caller-supplied order identifier.
     /// @param agent         Agent address that made the deposit.
@@ -136,107 +128,25 @@ interface IGateway {
         uint64 windowId
     );
 
-    /// @notice Emitted on every successful agent deposit routed through the Portfolio Router.
-    /// @param paymentId       Replay-protection hash for this payment.
-    /// @param orderId         Caller-supplied order identifier.
-    /// @param agent           Agent address that made the deposit.
-    /// @param shareReceiver   Address that received the minted vault shares per leg.
-    /// @param router          Portfolio Router address used for this deposit.
-    /// @param amount          Gross USDC deposited (6-decimal units).
-    /// @param sharesPerLeg    Vault shares minted per leg (parallel to router weight list).
-    /// @param windowId        Rolling window identifier (`block.timestamp / WINDOW_SECONDS`).
-    event AgentDepositRouted(
-        bytes32 indexed paymentId,
-        bytes32 indexed orderId,
-        address indexed agent,
-        address shareReceiver,
-        address router,
-        uint256 amount,
-        uint256[] sharesPerLeg,
-        uint64 windowId
-    );
-
-    /// @notice Emitted on every successful agent withdrawal (vault redemption).
-    /// @param paymentId       Replay-protection hash for this payment.
-    /// @param orderId         Caller-supplied order identifier.
-    /// @param agent           Agent address that initiated the withdrawal.
-    /// @param sourceVault     Vault address shares were redeemed from.
-    /// @param shares          Vault shares burned.
-    /// @param assetsOut       USDC transferred to `assetRecipient`.
-    /// @param assetRecipient  Address that received the redeemed USDC.
-    /// @param windowId        Rolling window identifier (`block.timestamp / WINDOW_SECONDS`).
-    event AgentWithdrawal(
-        bytes32 indexed paymentId,
-        bytes32 indexed orderId,
-        address indexed agent,
-        address sourceVault,
-        uint256 shares,
-        uint256 assetsOut,
-        address assetRecipient,
-        uint64 windowId
-    );
-
-    /// @notice Emitted on every successful router withdrawal (multi-vault proportional redeem).
-    /// @param paymentId       Replay-protection hash for this payment.
-    /// @param orderId         Caller-supplied order identifier.
-    /// @param agent           Agent address that initiated the withdrawal.
-    /// @param router          Portfolio Router address used.
-    /// @param shareHolder     Address whose vault shares were redeemed.
-    /// @param sharesPerLeg    Vault shares redeemed per leg (parallel to router weight list).
-    /// @param assetsPerLeg    USDC received per leg.
-    /// @param assetRecipient  Address that received all redeemed USDC.
-    /// @param windowId        Rolling window identifier (`block.timestamp / WINDOW_SECONDS`).
-    event AgentWithdrawalRouted(
-        bytes32 indexed paymentId,
-        bytes32 indexed orderId,
-        address indexed agent,
-        address router,
-        address shareHolder,
-        uint256[] sharesPerLeg,
-        uint256[] assetsPerLeg,
-        address assetRecipient,
-        uint64 windowId
-    );
-
     // -------------------------------------------------------------------
     // State-changing functions
     // -------------------------------------------------------------------
 
-    /// @notice Pull `amount` USDC from caller, deposit into the vault, route
-    ///         resulting shares to the agent's configured `shareReceiver`.
-    /// @dev Restricted to `AGENT_ROLE`. Reverts `DepositsArePaused` while deposits are paused. See MVP §2.2 for
-    ///      the full preflight checklist (caps, window, deadline, idempotency).
-    /// @param orderId          Caller-supplied order identifier (echoed in event).
-    /// @param amount           Gross USDC amount, in 6-decimal base units.
-    /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`.
-    /// @param idempotencyKey   Caller-side dedup salt mixed into `paymentId`.
-    /// @return paymentId       keccak256(abi.encode(OP_DEPOSIT=1, chainId, gateway, agent,
-    ///                         orderId, amount, idempotencyKey)) — op-kind prefix ensures
-    ///                         deposit ids are disjoint from depositTo and withdraw ids.
-    /// @return sharesMinted    Vault shares minted to `shareReceiver`.
-    function deposit(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idempotencyKey)
-        external
-        returns (bytes32 paymentId, uint256 sharesMinted);
-
-    /// @notice Pull `amount` USDC from caller, route to `destination` (vault or
-    ///         Portfolio Router), and deliver resulting shares to the agent's
-    ///         configured `shareReceiver`. When `destination` is the router,
-    ///         `minSharesPerLeg` provides per-leg slippage protection.
+    /// @notice Pull `amount` USDC from caller, deposit it into `destination`, and
+    ///         deliver the resulting shares to the agent's `shareReceiver` (the owner).
+    ///         This is the gateway's only agent action.
     /// @dev Restricted to `AGENT_ROLE`. Reverts `DepositsArePaused` while deposits are
-    ///      paused. Enforces all the same caps, deadline, idempotency, and policy checks as `deposit`.
-    ///      `destination` must appear in the agent's `allowedDestinations` list
-    ///      (or the list must be empty, in which case only the pinned vault or
-    ///      the pinned router is accepted — no registry lookup is performed).
+    ///      paused. `destination` must appear in the agent's non-empty
+    ///      `allowedDestinations`; the gateway pins no vault, has no registry lookup, and
+    ///      never accepts the Portfolio Router as a target. An empty list authorizes nothing.
     /// @param orderId          Caller-supplied order identifier (echoed in event).
     /// @param amount           Gross USDC amount, in 6-decimal base units.
     /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`.
     /// @param idempotencyKey   Caller-side dedup salt mixed into `paymentId`.
-    /// @param destination      Vault address or Portfolio Router address.
-    /// @param minSharesPerLeg  Per-leg slippage floor (router path only). Pass
-    ///                         empty array when routing to a single vault.
+    /// @param destination      ERC-4626 vault named in the policy.
+    /// @param minSharesPerLeg  Bound into `paymentId` only. Pass an empty array.
     /// @return paymentId       keccak256(abi.encode(OP_DEPOSIT_TO=3, chainId, gateway, agent,
-    ///                         orderId, amount, idempotencyKey)) — op-kind prefix ensures
-    ///                         depositTo ids are disjoint from deposit and withdraw ids.
+    ///                         orderId, amount, idempotencyKey, destination, minSharesPerLeg)).
     function depositTo(
         bytes32 orderId,
         uint256 amount,
@@ -245,86 +155,6 @@ interface IGateway {
         address destination,
         uint256[] calldata minSharesPerLeg
     ) external returns (bytes32 paymentId);
-
-    /// @notice Redeem `shares` from `sourceVault` on behalf of the agent's
-    ///         configured depositor. USDC proceeds are sent only to the
-    ///         policy-configured `assetRecipient` — the agent cannot redirect
-    ///         funds. The gateway pulls shares from `msg.sender` via
-    ///         `transferFrom` (agent must have approved the gateway).
-    /// @dev Restricted to `AGENT_ROLE`. Works while deposits are paused: a pause
-    ///      never blocks a withdrawal (core 1494). Enforces the same deadline,
-    ///      idempotency, and policy checks as `deposit`. The
-    ///      agent must approve the gateway to spend its vault shares before
-    ///      calling this function.
-    /// @param orderId          Caller-supplied order identifier (echoed in event).
-    /// @param shares           Vault shares to redeem.
-    /// @param sourceVault      Vault address to redeem from.
-    /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`.
-    /// @param idempotencyKey   Caller-side dedup salt mixed into `paymentId`.
-    /// @return paymentId       keccak256(abi.encode(OP_WITHDRAW=2, chainId, gateway, agent,
-    ///                         orderId, shares, idempotencyKey)) — op-kind prefix ensures
-    ///                         withdraw ids are disjoint from deposit and depositTo ids.
-    /// @return assetsOut       USDC transferred to `assetRecipient`.
-    function withdraw(
-        bytes32 orderId,
-        uint256 shares,
-        address sourceVault,
-        uint64 deadline,
-        bytes32 idempotencyKey
-    ) external returns (bytes32 paymentId, uint256 assetsOut);
-
-    /// @notice Redeem vault shares proportionally across all Portfolio Router
-    ///         legs. Enforces the same policy checks (valid-until, per-payment
-    ///         cap, window cap, allowed-source-vaults, idempotency,
-    ///         recipient) as single-vault `withdraw`. Works while deposits are
-    ///         paused: a pause never blocks a withdrawal (core 1494). Each leg's vault must
-    ///         appear in `policy.allowedSourceVaults` (when non-empty). USDC
-    ///         is forwarded exclusively to the policy-configured `assetRecipient`.
-    ///
-    ///         `policy.shareReceiver` (the share holder) must have approved the
-    ///         gateway for each vault's share token prior to calling. The
-    ///         gateway temporarily holds the shares during the call frame and
-    ///         passes them through to the router — no outer share token is
-    ///         minted and no intermediate custody persists beyond the call.
-    ///
-    /// @dev Restricted to `AGENT_ROLE`. No pause applies. `totalShares` is
-    ///      the sum of `sharesPerLeg` and is checked against
-    ///      `maxWithdrawPerPayment` and the rolling window cap.
-    /// @param orderId          Caller-supplied order identifier (echoed in event).
-    /// @param vaults           Explicit list of vault addresses to redeem from
-    ///                         (issue #967, F-03). Drives the redeem legs directly
-    ///                         instead of the router's live weight vector, so a
-    ///                         holder can exit a reweighted-out or Retired position.
-    ///                         `sharesPerLeg[i]` binds to `vaults[i]` (NC-5) and the
-    ///                         array is committed to `paymentId`.
-    /// @param sharesPerLeg     Vault shares to redeem per leg (parallel to `vaults`).
-    /// @param minAssetsPerLeg  Per-leg minimum USDC out (slippage floor), parallel
-    ///                         to `vaults`/`sharesPerLeg`. The gateway forwards this
-    ///                         floor straight to `PortfolioRouter.redeemFor`, which
-    ///                         reverts each leg whose realized proceeds fall below it
-    ///                         (GW-5 / F-11). A floor of 0 disables the check for
-    ///                         that leg, but the caller is expected to pass a real,
-    ///                         off-chain-computed minimum — the gateway no longer
-    ///                         hardcodes an all-zero vector. Length must equal
-    ///                         `sharesPerLeg`. The floor vector is folded into
-    ///                         `paymentId` so a replay cannot re-execute the same
-    ///                         order under a weaker floor.
-    /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`. The
-    ///                         gateway forwards this same deadline to the router
-    ///                         (no longer `type(uint256).max`), so the router's own
-    ///                         deadline guard also bites (F-11).
-    /// @param idempotencyKey   Caller-side dedup salt mixed into `paymentId`.
-    /// @return paymentId       Hash committing chain/contract/agent/order/totalShares/
-    ///                         vaults/sharesPerLeg/minAssetsPerLeg/key.
-    /// @return assetsPerLeg    USDC received per leg.
-    function withdrawFromRouter(
-        bytes32 orderId,
-        address[] calldata vaults,
-        uint256[] calldata sharesPerLeg,
-        uint256[] calldata minAssetsPerLeg,
-        uint64 deadline,
-        bytes32 idempotencyKey
-    ) external returns (bytes32 paymentId, uint256[] memory assetsPerLeg);
 
     /// @notice Phase-1 of the two-phase commit/reveal agent authorization.
     ///         Submit `commitHash = keccak256(abi.encode(agent, msg.sender, salt))`
@@ -380,9 +210,8 @@ interface IGateway {
     /// @param agent The agent address whose policy and role are revoked.
     function revokeAgent(address agent) external;
 
-    /// @notice Pause new deposits (`deposit`, `depositTo`). Restricted to
-    ///         `DEPOSIT_PAUSER_ROLE`. Withdrawals (`withdraw`, `withdrawFromRouter`)
-    ///         stay open (owner decision 2026-10-05, core 1494).
+    /// @notice Pause new deposits (`depositTo`). Restricted to
+    ///         `DEPOSIT_PAUSER_ROLE`.
     function pauseDeposits() external;
 
     /// @notice Resume deposits. Restricted to `ADMIN_ROLE` (asymmetric).
@@ -401,13 +230,7 @@ interface IGateway {
     /// @notice Pinned USDC token address.
     function usdc() external view returns (address);
 
-    /// @notice Pinned ERC-4626 vault address.
-    function vault() external view returns (address);
-
-    /// @notice Portfolio Router address, or `address(0)` if not configured.
-    function router() external view returns (address);
-
-    /// @notice Whether gateway deposits are currently paused. Withdrawals are never paused.
+    /// @notice Whether gateway deposits are currently paused.
     function depositsPaused() external view returns (bool);
 
     /// @notice Retired storage slot (issue 1888): the on-chain committee is deleted. Read-only.
@@ -422,17 +245,6 @@ interface IGateway {
     /// @param agent The agent address whose recorded owner to look up.
     /// @return The account that registered `agent`, or zero if none.
     function agentOwner(address agent) external view returns (address);
-
-    /// @notice Cumulative vault shares the agent has redeemed in the current
-    ///         rolling withdrawal window. Returns zero when the agent has
-    ///         either never withdrawn or the last anchor lies more than
-    ///         `WINDOW_SECONDS` in the past. Use this — not the raw
-    ///         `agentWithdrawWindow` storage tuple — to project whether the
-    ///         next withdrawal would breach `maxWithdrawPerWindow` (issue
-    ///         #449).
-    /// @param agent The agent address to look up.
-    /// @return The agent's cumulative rolling-window withdrawal gross.
-    function effectiveWithdrawWindowGross(address agent) external view returns (uint256);
 
     /// @notice Cumulative USDC the agent has deposited in the current rolling
     ///         deposit window. Returns zero when the agent has either never

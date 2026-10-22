@@ -152,23 +152,10 @@ contract DeployGateway is UpgradeAuthority {
                 d.gatewayImplementation,
                 abi.encodeCall(
                     RobotMoneyGateway.initialize,
-                    (
-                        IERC20(d.usdc),
-                        IERC4626(d.vault),
-                        d.admin,
-                        d.pauser,
-                        d.router,
-                        u.timelock,
-                        u.mode
-                    )
+                    (IERC20(d.usdc), d.admin, d.pauser, u.timelock, u.mode)
                 )
             )
         );
-
-        // The core 1493 defect, closed: the immutable router must be the one the router
-        // stage deployed, and never zero.
-        require(d.gateway.router() != address(0), "gateway.router is zero");
-        require(d.gateway.router() == d.router, "gateway.router != ROUTER_ADDRESS");
 
         // Pin the code at the gateway address (the proxy) and the logic it runs.
         d.gatewayRuntimeHash = keccak256(address(d.gateway).code);

@@ -99,6 +99,8 @@ describe("AuthorizeTab — commit and reveal receipts (QA plan U5)", () => {
         setAgent={vi.fn()}
         shareReceiver={DEPOSITOR}
         setShareReceiver={vi.fn()}
+        destinations={["0x4444444444444444444444444444444444444444"]}
+        setDestinations={vi.fn()}
         now={NOW}
       />,
     );
@@ -171,6 +173,9 @@ describe("RotationTab — every step renders its receipt (QA plan U5)", () => {
     });
     fireEvent.change(screen.getByTestId("rotation-shareReceiver-input"), {
       target: { value: DEPOSITOR },
+    });
+    fireEvent.change(screen.getByTestId("rotation-destination-extra"), {
+      target: { value: "0x4444444444444444444444444444444444444444" },
     });
   }
 

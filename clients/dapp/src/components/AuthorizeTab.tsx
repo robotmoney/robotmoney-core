@@ -9,6 +9,8 @@ import { markRegistered } from "../lib/useVaultRegistration";
 import { useConsentedRegistration } from "../lib/useConsentedRegistration";
 import { PolicyFields } from "./PolicyFields";
 import { RegistrationSteps, registrationIds } from "./RegistrationSteps";
+import { DestinationPicker } from "./DestinationPicker";
+import { tryDepositOnlyPolicy } from "../lib/agentDestinations";
 
 type Props = Readonly<{
   gatewayAddress: Address;
@@ -17,6 +19,10 @@ type Props = Readonly<{
   setAgent: Dispatch<SetStateAction<string>>;
   shareReceiver: string;
   setShareReceiver: Dispatch<SetStateAction<string>>;
+  /** The owner's selected deposit destinations. Shared with the config export. */
+  destinations: string[];
+  setDestinations: Dispatch<SetStateAction<string[]>>;
+  routerAddress?: string;
   now: number;
 }>;
 
@@ -43,24 +49,19 @@ export function AuthorizeTab(props: Props) {
   const validAgent = isAddress(props.agent, { strict: false });
   const validReceiver = isAddress(props.shareReceiver, { strict: false });
 
+  // No policy until the owner has selected at least one vault: the gateway refuses an empty list.
   const policy: AgentPolicy | null =
-    validAgent &&
-    validReceiver &&
-    isUint(validUntil) &&
-    isUint(maxPerPayment) &&
-    isUint(maxPerWindow)
-      ? {
-          active: true,
-          validUntil: BigInt(validUntil),
-          maxPerPayment: BigInt(maxPerPayment),
-          maxPerWindow: BigInt(maxPerWindow),
-          shareReceiver: props.shareReceiver as Address,
-          allowedDestinations: [],
-          assetRecipient: "0x0000000000000000000000000000000000000000" as Address,
-          maxWithdrawPerPayment: 0n,
-          maxWithdrawPerWindow: 0n,
-          allowedSourceVaults: [],
-        }
+    validAgent && validReceiver
+      ? tryDepositOnlyPolicy(
+          {
+            validUntil: BigInt(validUntil),
+            maxPerPayment: BigInt(maxPerPayment),
+            maxPerWindow: BigInt(maxPerWindow),
+            shareReceiver: props.shareReceiver as Address,
+            destinations: props.destinations,
+          },
+          props.routerAddress,
+        )
       : null;
 
   const r = useConsentedRegistration({
@@ -98,11 +99,12 @@ export function AuthorizeTab(props: Props) {
         shareReceiver={props.shareReceiver}
         setShareReceiver={props.setShareReceiver}
       />
+      <DestinationPicker
+        selected={props.destinations}
+        setSelected={props.setDestinations}
+        routerAddress={props.routerAddress}
+      />
       <RegistrationSteps r={r} ids={IDS} />
     </section>
   );
-}
-
-function isUint(v: string): boolean {
-  return /^\d+$/.test(v.trim());
 }

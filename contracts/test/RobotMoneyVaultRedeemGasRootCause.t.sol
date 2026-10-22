@@ -395,11 +395,10 @@ contract RobotMoneyRouterRedeemGasRootCauseTest is Test {
                     })
                 );
         }
-        address[] memory sources = new address[](3);
+        address[] memory dests = new address[](3);
         for (uint256 i = 0; i < 3; i++) {
-            sources[i] = vaults[i];
+            dests[i] = vaults[i];
             _fund(user, vaults[i], address(s.router));
-            _fund(shareReceiver, vaults[i], address(s.gateway));
         }
         // The agent's owner is its share receiver (ACL-9).
         vm.prank(shareReceiver);
@@ -412,11 +411,11 @@ contract RobotMoneyRouterRedeemGasRootCauseTest is Test {
                     maxPerPayment: 1_000_000 * 1e6,
                     maxPerWindow: 1_000_000 * 1e6,
                     shareReceiver: shareReceiver,
-                    allowedDestinations: new address[](0),
-                    assetRecipient: shareReceiver,
-                    maxWithdrawPerPayment: type(uint128).max,
-                    maxWithdrawPerWindow: type(uint128).max,
-                    allowedSourceVaults: sources
+                    allowedDestinations: dests,
+                    assetRecipient: address(0),
+                    maxWithdrawPerPayment: 0,
+                    maxWithdrawPerWindow: 0,
+                    allowedSourceVaults: new address[](0)
                 })
             );
         // Accrue every venue at the current timestamp: the estimate then runs in the cheap state.
@@ -450,23 +449,8 @@ contract RobotMoneyRouterRedeemGasRootCauseTest is Test {
         internal
         returns (bool ok, bytes memory ret)
     {
-        if (viaGateway) {
-            (address[] memory vs, uint256[] memory sh) = _legs(shareReceiver, k);
-            vm.prank(agent);
-            (ok, ret) = address(s.gateway).call{gas: gasLimit}(
-                abi.encodeCall(
-                    s.gateway.withdrawFromRouter,
-                    (
-                        bytes32("gas-order"),
-                        vs,
-                        sh,
-                        new uint256[](k),
-                        uint64(block.timestamp + 300),
-                        bytes32("gas-idem")
-                    )
-                )
-            );
-        } else {
+        {
+            viaGateway;
             (address[] memory vs, uint256[] memory sh) = _legs(user, k);
             vm.prank(user);
             (ok, ret) = address(s.router).call{gas: gasLimit}(
@@ -510,10 +494,6 @@ contract RobotMoneyRouterRedeemGasRootCauseTest is Test {
         _includeLater(false, 1);
     }
 
-    function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_1leg() public {
-        _includeLater(true, 1);
-    }
-
     function test_router_estimateThenIncludeNextBlock_2legs() public {
         _includeLater(false, 2);
     }
@@ -522,15 +502,7 @@ contract RobotMoneyRouterRedeemGasRootCauseTest is Test {
         _includeLater(false, 3);
     }
 
-    function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_2legs() public {
-        _includeLater(true, 2);
-    }
-
-    function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_3legs() public {
-        _includeLater(true, 3);
-    }
-
-    // ─── Deposit paths (core 1482): router.deposit, gateway.depositTo(router), gateway.deposit ───
+    // ─── Deposit paths (core 1482): router.deposit, gateway.depositTo(vault) ───
 
     uint256 internal constant DEPOSIT_AMOUNT = 100 * 1e6;
 
@@ -552,7 +524,7 @@ contract RobotMoneyRouterRedeemGasRootCauseTest is Test {
         }
     }
 
-    /// @dev mode 0 = router.deposit, 1 = gateway.depositTo(router), 2 = gateway.deposit (one vault).
+    /// @dev mode 0 = router.deposit, 1 = gateway.depositTo(vault).
     function _depositCall(uint256 mode, uint256 gasLimit)
         internal
         returns (bool ok, bytes memory ret)
@@ -562,7 +534,7 @@ contract RobotMoneyRouterRedeemGasRootCauseTest is Test {
             (ok, ret) = address(s.router).call{gas: gasLimit}(
                 abi.encodeCall(s.router.deposit, (DEPOSIT_AMOUNT, new uint256[](0)))
             );
-        } else if (mode == 1) {
+        } else {
             vm.prank(agent);
             (ok, ret) = address(s.gateway).call{gas: gasLimit}(
                 abi.encodeCall(
@@ -572,21 +544,8 @@ contract RobotMoneyRouterRedeemGasRootCauseTest is Test {
                         DEPOSIT_AMOUNT,
                         uint64(block.timestamp + 300),
                         bytes32("dep-idem"),
-                        address(s.router),
+                        vaults[0],
                         new uint256[](0)
-                    )
-                )
-            );
-        } else {
-            vm.prank(agent);
-            (ok, ret) = address(s.gateway).call{gas: gasLimit}(
-                abi.encodeCall(
-                    s.gateway.deposit,
-                    (
-                        bytes32("dep-order"),
-                        DEPOSIT_AMOUNT,
-                        uint64(block.timestamp + 300),
-                        bytes32("dep-idem")
                     )
                 )
             );
@@ -645,15 +604,7 @@ contract RobotMoneyRouterRedeemGasRootCauseTest is Test {
         _depositIncludeLater(0, 3);
     }
 
-    function test_gateway_depositTo_router_estimateThenIncludeNextBlock_1leg() public {
+    function test_gateway_depositTo_vault_estimateThenIncludeNextBlock() public {
         _depositIncludeLater(1, 1);
-    }
-
-    function test_gateway_depositTo_router_estimateThenIncludeNextBlock_3legs() public {
-        _depositIncludeLater(1, 3);
-    }
-
-    function test_gateway_deposit_estimateThenIncludeNextBlock() public {
-        _depositIncludeLater(2, 1);
     }
 }

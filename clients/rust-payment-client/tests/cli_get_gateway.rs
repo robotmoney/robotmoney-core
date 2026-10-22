@@ -9,7 +9,7 @@ mod common;
 
 use crate::common::{
     enc_address, enc_bool, jrpc_result, match_eth_call_selector, selector_hex_of, Fixture,
-    GATEWAY_CODE, USDC, VAULT,
+    GATEWAY_CODE, USDC,
 };
 use alloy_primitives::{hex as ahex, keccak256};
 use assert_cmd::Command;
@@ -75,16 +75,6 @@ async fn install_gateway_mocks(server: &mut mockito::ServerGuard, chain_id: u64,
         .expect_at_least(0)
         .create_async()
         .await;
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::vaultCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_address(VAULT)))
-        .expect_at_least(0)
-        .create_async()
-        .await;
 }
 
 #[tokio::test]
@@ -122,10 +112,8 @@ async fn get_gateway_clean_envelope_shape() {
         d["usdc"].as_str().unwrap().to_lowercase(),
         format!("{USDC:#x}")
     );
-    assert_eq!(
-        d["vault"].as_str().unwrap().to_lowercase(),
-        format!("{VAULT:#x}")
-    );
+    // The gateway pins no vault, so the envelope carries no `vault` field.
+    assert!(d.get("vault").is_none(), "gateway.vault() is retired");
 }
 
 #[tokio::test]
@@ -177,16 +165,6 @@ async fn get_gateway_partial_when_deposits_paused_reverts() {
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_address(USDC)))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::vaultCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_address(VAULT)))
         .expect_at_least(0)
         .create_async()
         .await;

@@ -41,6 +41,8 @@ interface Props {
   agentOwner?: Address;
   /** The share receiver typed in the Authorize tab. Falls back to `agentOwner`. */
   shareReceiver?: string;
+  /** The destinations the owner selected in the Authorize tab (allowedDestinations). */
+  destinations?: readonly string[];
 }
 
 export function ConfigExportPanel(props: Props) {
@@ -86,6 +88,7 @@ export function ConfigExportPanel(props: Props) {
     proxy_implementation_hashes: props.proxyImplementationHashes,
     share_receiver: props.agentOwner ? shareReceiver : undefined,
     agent_owner: props.agentOwner,
+    allowed_destinations: props.destinations,
     signer,
   });
 

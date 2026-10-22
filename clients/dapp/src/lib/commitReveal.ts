@@ -72,7 +72,7 @@ export function revealAuthorizationCall(r: RevealInputs) {
   } as const;
 }
 
-/** The ABI tuple for a policy, with the same address normalisation the registration uses. */
+/** The ABI tuple for a policy, with address normalisation. The retired withdraw members pass through unchanged and must be zero. */
 export function policyTuple(p: AgentPolicy): AgentPolicy {
   return {
     active: p.active,

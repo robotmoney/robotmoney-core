@@ -1,0 +1,390 @@
+---
+title: "GatewayDepositOnlyTest"
+description: "Issue 1889: the gateway's only agent action is a deposit into a contract named in the depositor's non-empty `allowedDestinations`. The gateway pins no vault, has no registry lookup, never accepts the router, and has no withdrawal path."
+---
+
+# GatewayDepositOnlyTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/GatewayDepositOnly.t.sol)
+
+**Inherits:** Test
+
+**Title:** GatewayDepositOnlyTest
+
+Issue 1889: the gateway's only agent action is a deposit into a contract named in the
+depositor's non-empty `allowedDestinations`. The gateway pins no vault, has no registry
+lookup, never accepts the router, and has no withdrawal path.
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+### MAX_PER_PAYMENT
+
+```solidity
+uint256 internal constant MAX_PER_PAYMENT = 1_000 * ONE_USDC;
+```
+
+### MAX_PER_WINDOW
+
+```solidity
+uint256 internal constant MAX_PER_WINDOW = 5_000 * ONE_USDC;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### vaultA
+
+```solidity
+MockVault internal vaultA;
+```
+
+### vaultB
+
+```solidity
+MockVault internal vaultB;
+```
+
+### vaultC
+
+```solidity
+MockVault internal vaultC;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("pauser");
+```
+
+### owner
+
+```solidity
+address internal owner = makeAddr("owner");
+```
+
+### agent
+
+```solidity
+address internal agent = makeAddr("agent");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_policy-address"></a>
+
+### _policy
+
+```solidity
+function _policy(address[] memory dests) internal view returns (IGateway.AgentPolicy memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| dests | `address[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IGateway.AgentPolicy` |  |
+
+<a id="_two-address-address"></a>
+
+### _two
+
+```solidity
+function _two(address a, address b) internal pure returns (address[] memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address` |  |
+| b | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `address[]` |  |
+
+<a id="_one-address"></a>
+
+### _one
+
+```solidity
+function _one(address a) internal pure returns (address[] memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `address[]` |  |
+
+<a id="_register-igateway-agentpolicy"></a>
+
+### _register
+
+<i>
+
+Register `agent` for `owner` through consent + commit + reveal (the only path).
+
+</i>
+
+```solidity
+function _register(IGateway.AgentPolicy memory p) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `IGateway.AgentPolicy` |  |
+
+<a id="_fund-uint256"></a>
+
+### _fund
+
+```solidity
+function _fund(uint256 amt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amt | `uint256` |  |
+
+<a id="_giveshares-uint256"></a>
+
+### _giveShares
+
+<i>
+
+Give the agent vault shares directly (what an old withdraw would have pulled).
+
+</i>
+
+```solidity
+function _giveShares(uint256 amt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amt | `uint256` |  |
+
+<a id="_deposit-bytes32-uint256-address"></a>
+
+### _deposit
+
+```solidity
+function _deposit(bytes32 tag, uint256 amount, address dest) internal returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tag | `bytes32` |  |
+| amount | `uint256` |  |
+| dest | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_storedpolicyhash-address"></a>
+
+### _storedPolicyHash
+
+```solidity
+function _storedPolicyHash(address who) internal view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="test_depositsintotwodifferentallowedvaults_sharesreachowner"></a>
+
+### test_depositsIntoTwoDifferentAllowedVaults_sharesReachOwner
+
+```solidity
+function test_depositsIntoTwoDifferentAllowedVaults_sharesReachOwner() public;
+```
+
+<a id="test_unlisteddestinationrefused_evenwhencapsexpiryandreceiverpass"></a>
+
+### test_unlistedDestinationRefused_evenWhenCapsExpiryAndReceiverPass
+
+```solidity
+function test_unlistedDestinationRefused_evenWhenCapsExpiryAndReceiverPass() public;
+```
+
+<a id="test_nofixedgatewaytargetauthorizes_onlythepolicylist"></a>
+
+### test_noFixedGatewayTargetAuthorizes_onlyThePolicyList
+
+```solidity
+function test_noFixedGatewayTargetAuthorizes_onlyThePolicyList() public;
+```
+
+<a id="test_destinationmembership_hitssecondentryandmissesboth"></a>
+
+### test_destinationMembership_hitsSecondEntryAndMissesBoth
+
+```solidity
+function test_destinationMembership_hitsSecondEntryAndMissesBoth() public;
+```
+
+<a id="test_guards_cappauseexpirydeadlinereplay"></a>
+
+### test_guards_capPauseExpiryDeadlineReplay
+
+```solidity
+function test_guards_capPauseExpiryDeadlineReplay() public;
+```
+
+<a id="_expectrevealrevert-igateway-agentpolicy-bytes4"></a>
+
+### _expectRevealRevert
+
+```solidity
+function _expectRevealRevert(IGateway.AgentPolicy memory p, bytes4 sel) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `IGateway.AgentPolicy` |  |
+| sel | `bytes4` |  |
+
+<a id="_badpolicies"></a>
+
+### _badPolicies
+
+```solidity
+function _badPolicies() internal returns (IGateway.AgentPolicy[6] memory bad);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bad | `IGateway.AgentPolicy[6]` |  |
+
+<a id="_badselector-uint256"></a>
+
+### _badSelector
+
+```solidity
+function _badSelector(uint256 i) internal pure returns (bytes4);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes4` |  |
+
+<a id="test_reveal_rejectsemptydestinationsandeachretiredmember"></a>
+
+### test_reveal_rejectsEmptyDestinationsAndEachRetiredMember
+
+```solidity
+function test_reveal_rejectsEmptyDestinationsAndEachRetiredMember() public;
+```
+
+<a id="test_setpolicy_rejectsemptydestinationsandeachretiredmember_policyunchanged"></a>
+
+### test_setPolicy_rejectsEmptyDestinationsAndEachRetiredMember_policyUnchanged
+
+```solidity
+function test_setPolicy_rejectsEmptyDestinationsAndEachRetiredMember_policyUnchanged() public;
+```
+
+<a id="test_removedselectors_refusewithnomovement"></a>
+
+### test_removedSelectors_refuseWithNoMovement
+
+```solidity
+function test_removedSelectors_refuseWithNoMovement() public;
+```
+
+<a id="test_legacystoredpolicy_emptydestinationsandretiredfields_isinert"></a>
+
+### test_legacyStoredPolicy_emptyDestinationsAndRetiredFields_isInert
+
+<i>
+
+`agents` is the mapping at slot 4 (storage-layout snapshot). A policy struct is:
++0 active/validUntil, +1 maxPerPayment, +2 maxPerWindow, +3 shareReceiver,
++4 allowedDestinations length, +5 assetRecipient, +6 maxWithdrawPerPayment,
++7 maxWithdrawPerWindow, +8 allowedSourceVaults length.
+
+</i>
+
+```solidity
+function test_legacyStoredPolicy_emptyDestinationsAndRetiredFields_isInert() public;
+```
+

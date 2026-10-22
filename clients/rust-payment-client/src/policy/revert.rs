@@ -4,9 +4,9 @@
 //! Pre-sign simulation of a write, and the one table that turns a contract
 //! revert into a named [`RmpcError`] (QA plan U6, finding DR-7).
 //!
-//! The read-output contract documents `ErrVaultDisabled`, `ErrPolicyExpired`,
-//! `ErrLegUnavailable` and `ErrSlippageBoundExceeded` as "decoded from a mined
-//! or simulated transaction". Before U6 nothing decoded them: the variants
+//! The read-output contract documents `ErrVaultDisabled`, `ErrPolicyExpired`
+//! and `ErrDestinationNotSelected` as "decoded from a mined or simulated
+//! transaction". Before U6 nothing decoded them: the variants
 //! existed and no code path raised them. [`simulate`] runs the exact calldata
 //! the agent is about to sign as an `eth_call` from the agent's address. A
 //! revert whose selector is in [`refusal_from_revert`] becomes a refusal with
@@ -21,7 +21,7 @@ use alloy_primitives::{hex, Address, Bytes};
 use alloy_sol_types::SolError;
 
 use crate::errors::RmpcError;
-use crate::gateway::{PortfolioRouter, RobotMoneyGateway};
+use crate::gateway::RobotMoneyGateway;
 use crate::rpc::{CallOutcome, CallRequest, FailoverRpcClient};
 
 /// Vault-level errors a single-vault deposit can bubble up through the
@@ -33,11 +33,6 @@ mod vault_errors {
         error VaultShutdown();
     }
 }
-
-/// `VaultRegistry.VaultStatus.Retired`. `PortfolioRouter.VaultNotActive`
-/// carries the status: a retired vault is disabled (ADR-0009), any other
-/// non-active status is a leg that is unavailable for now.
-const VAULT_STATUS_RETIRED: u8 = 2;
 
 /// What the pre-sign simulation of a write found.
 #[derive(Debug)]
@@ -90,9 +85,7 @@ fn is<E: SolError>(data: &[u8]) -> bool {
 /// The named refusal for a revert payload, with the contract error's name.
 /// `None` for a payload rmpc has no product reason for.
 ///
-/// Gateway reverts come first, then router reverts the gateway bubbles up
-/// from `depositTo` / `withdrawFromRouter`, then vault reverts it bubbles up
-/// from a single-vault deposit. `DepositsArePaused()` is one selector on the
+/// Gateway reverts come first, then vault reverts `depositTo` bubbles up. `DepositsArePaused()` is one selector on the
 /// gateway and on every vault.
 pub fn refusal_from_revert(data: &[u8]) -> Option<(&'static str, RmpcError)> {
     // -- Gateway policy ---------------------------------------------------
@@ -116,67 +109,17 @@ pub fn refusal_from_revert(data: &[u8]) -> Option<(&'static str, RmpcError)> {
             ),
         ));
     }
-    if is::<RobotMoneyGateway::SharesExceedWithdrawPerPaymentCap>(data) {
+    if is::<RobotMoneyGateway::InvalidDestination>(data) {
+        // The gateway pins no vault: the destination is not in the policy list.
         return Some((
-            "SharesExceedWithdrawPerPaymentCap",
-            RmpcError::ErrWithdrawCapExceeded(
-                "shares exceed the agent's maxWithdrawPerPayment".into(),
-            ),
-        ));
-    }
-    if is::<RobotMoneyGateway::WithdrawWindowCapExceeded>(data) {
-        return Some((
-            "WithdrawWindowCapExceeded",
-            RmpcError::ErrWithdrawCapExceeded(
-                "rolling withdraw window gross plus shares exceeds the agent's maxWithdrawPerWindow"
-                    .into(),
+            "InvalidDestination",
+            RmpcError::ErrDestinationNotSelected(
+                "the gateway policy's allowedDestinations does not list this vault".into(),
             ),
         ));
     }
     if is::<RobotMoneyGateway::DepositsArePaused>(data) {
         return Some(("DepositsArePaused", RmpcError::ErrDepositsPaused));
-    }
-
-    // -- Router legs ------------------------------------------------------
-    if is::<PortfolioRouter::VaultNotRegistered>(data) {
-        return Some(("VaultNotRegistered", RmpcError::ErrVaultDisabled));
-    }
-    if is::<PortfolioRouter::RedeemVaultNotRegistered>(data) {
-        return Some(("RedeemVaultNotRegistered", RmpcError::ErrVaultDisabled));
-    }
-    if is::<PortfolioRouter::VaultNotActive>(data) {
-        // `VaultNotActive(address vault, uint8 status)`: the status is the
-        // last byte of the second argument word.
-        let status = data.get(4 + 63).copied();
-        let err = if status == Some(VAULT_STATUS_RETIRED) {
-            RmpcError::ErrVaultDisabled
-        } else {
-            RmpcError::ErrLegUnavailable
-        };
-        return Some(("VaultNotActive", err));
-    }
-    if is::<PortfolioRouter::VaultNotRouterEligible>(data) {
-        return Some(("VaultNotRouterEligible", RmpcError::ErrLegUnavailable));
-    }
-    if is::<PortfolioRouter::VaultCapExceeded>(data) {
-        return Some(("VaultCapExceeded", RmpcError::ErrLegUnavailable));
-    }
-    if is::<PortfolioRouter::NoWeightsSet>(data) {
-        // The router deposit reverts this when no leg is depositable.
-        return Some(("NoWeightsSet", RmpcError::ErrLegUnavailable));
-    }
-    if is::<PortfolioRouter::LegSkippedWithFloor>(data) {
-        // Security round 2: the call carries a non-zero `minSharesPerLeg`
-        // floor on a leg the router would skip (it turned unavailable after
-        // the preview: a full TVL cap, a pause, a basket out of its band).
-        return Some(("LegSkippedWithFloor", RmpcError::ErrLegUnavailable));
-    }
-    if is::<PortfolioRouter::NoFundedLeg>(data) {
-        // Every available leg's amount is 0: only 0 bps legs are available.
-        return Some(("NoFundedLeg", RmpcError::ErrLegUnavailable));
-    }
-    if is::<PortfolioRouter::SlippageExceeded>(data) {
-        return Some(("SlippageExceeded", RmpcError::ErrSlippageBoundExceeded));
     }
 
     // -- Vault ------------------------------------------------------------
@@ -219,30 +162,9 @@ mod tests {
                 RobotMoneyGateway::WindowCapExceeded::SELECTOR,
             ),
             (
-                "SharesExceedWithdrawPerPaymentCap()",
-                RobotMoneyGateway::SharesExceedWithdrawPerPaymentCap::SELECTOR,
+                "InvalidDestination()",
+                RobotMoneyGateway::InvalidDestination::SELECTOR,
             ),
-            (
-                "WithdrawWindowCapExceeded()",
-                RobotMoneyGateway::WithdrawWindowCapExceeded::SELECTOR,
-            ),
-            (
-                "VaultNotActive(address,uint8)",
-                PortfolioRouter::VaultNotActive::SELECTOR,
-            ),
-            (
-                "RedeemVaultNotRegistered(address)",
-                PortfolioRouter::RedeemVaultNotRegistered::SELECTOR,
-            ),
-            (
-                "SlippageExceeded()",
-                PortfolioRouter::SlippageExceeded::SELECTOR,
-            ),
-            (
-                "LegSkippedWithFloor(address)",
-                PortfolioRouter::LegSkippedWithFloor::SELECTOR,
-            ),
-            ("NoFundedLeg()", PortfolioRouter::NoFundedLeg::SELECTOR),
             ("VaultRetired()", vault_errors::VaultRetired::SELECTOR),
         ] {
             assert_eq!(got.to_vec(), sel(sig), "{sig}");
@@ -253,71 +175,20 @@ mod tests {
     /// (rmpc-read-output-contract.md §5).
     #[test]
     fn documented_reverts_map_to_their_reason_codes() {
-        let cases: [(&str, &str); 13] = [
+        let cases: [(&str, &str); 8] = [
             ("AgentPolicyExpired()", "ErrPolicyExpired"),
             ("AgentNotAuthorized()", "ErrAgentNotAuthorized"),
             ("AmountExceedsPerPaymentCap()", "ErrDepositCapExceeded"),
             ("WindowCapExceeded()", "ErrDepositCapExceeded"),
-            (
-                "SharesExceedWithdrawPerPaymentCap()",
-                "ErrWithdrawCapExceeded",
-            ),
-            ("WithdrawWindowCapExceeded()", "ErrWithdrawCapExceeded"),
+            ("InvalidDestination()", "ErrDestinationNotSelected"),
             ("DepositsArePaused()", "ErrDepositsPaused"),
-            ("VaultNotRegistered()", "ErrVaultDisabled"),
-            ("VaultCapExceeded()", "ErrLegUnavailable"),
-            ("NoWeightsSet()", "ErrLegUnavailable"),
-            ("NoFundedLeg()", "ErrLegUnavailable"),
-            ("SlippageExceeded()", "ErrSlippageBoundExceeded"),
+            ("VaultRetired()", "ErrVaultDisabled"),
             ("VaultShutdown()", "ErrVaultDisabled"),
         ];
         for (sig, want) in cases {
             let (_, err) = refusal_from_revert(&sel(sig)).unwrap_or_else(|| panic!("{sig}"));
             assert_eq!(err.name(), want, "{sig}");
         }
-        let mut redeem = sel("RedeemVaultNotRegistered(address)");
-        redeem.extend_from_slice(&[0u8; 32]);
-        assert_eq!(
-            refusal_from_revert(&redeem).unwrap().1.name(),
-            "ErrVaultDisabled"
-        );
-    }
-
-    /// `VaultNotActive` splits on the status it carries: Retired is a
-    /// disabled vault, DepositsPaused a leg that is unavailable for now.
-    #[test]
-    fn vault_not_active_splits_retired_from_paused() {
-        let encode = |status: u8| {
-            let mut d = sel("VaultNotActive(address,uint8)");
-            d.extend_from_slice(&[0u8; 31]);
-            d.push(0xd0);
-            let mut word = [0u8; 32];
-            word[31] = status;
-            d.extend_from_slice(&word);
-            d
-        };
-        assert_eq!(
-            refusal_from_revert(&encode(2)).unwrap().1.name(),
-            "ErrVaultDisabled"
-        );
-        assert_eq!(
-            refusal_from_revert(&encode(1)).unwrap().1.name(),
-            "ErrLegUnavailable"
-        );
-    }
-
-    /// Security round 3: a non-zero floor on a leg the router would skip
-    /// reverts `LegSkippedWithFloor(vault)` (security round 2). Unnamed, the
-    /// simulation was inconclusive and rmpc signed a deposit certain to
-    /// revert on chain.
-    #[test]
-    fn leg_skipped_with_floor_maps_to_leg_unavailable() {
-        let mut data = sel("LegSkippedWithFloor(address)");
-        data.extend_from_slice(&[0u8; 12]);
-        data.extend_from_slice(address!("00000000000000000000000000000000000000d0").as_slice());
-        let (revert, err) = refusal_from_revert(&data).expect("named");
-        assert_eq!(revert, "LegSkippedWithFloor");
-        assert_eq!(err.name(), "ErrLegUnavailable");
     }
 
     #[test]
@@ -329,10 +200,10 @@ mod tests {
         assert!(refusal_from_revert(&sel("Error(string)")).is_none());
     }
 
-    /// The simulation sends the write's calldata from the agent and names a
-    /// slippage revert before anything is signed.
+    /// The simulation sends the write's calldata from the agent and names an
+    /// unlisted-destination revert before anything is signed.
     #[tokio::test]
-    async fn simulate_names_a_router_slippage_revert() {
+    async fn simulate_names_an_invalid_destination_revert() {
         let agent = address!("00000000000000000000000000000000000000aa");
         let gateway = address!("0000000000000000000000000000000000000b00");
         let calldata = [0xde, 0xad, 0xbe, 0xef, 0x01];
@@ -347,7 +218,7 @@ mod tests {
             .with_status(200)
             .with_body(format!(
                 r#"{{"jsonrpc":"2.0","id":1,"error":{{"code":3,"message":"execution reverted","data":"0x{}"}}}}"#,
-                hex::encode(sel("SlippageExceeded()"))
+                hex::encode(sel("InvalidDestination()"))
             ))
             .expect(1)
             .create_async()
@@ -355,8 +226,8 @@ mod tests {
         let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
         match simulate(&rpc, agent, gateway, &calldata).await {
             Simulation::Refused { revert, err } => {
-                assert_eq!(revert, "SlippageExceeded");
-                assert_eq!(err.name(), "ErrSlippageBoundExceeded");
+                assert_eq!(revert, "InvalidDestination");
+                assert_eq!(err.name(), "ErrDestinationNotSelected");
             }
             other => panic!("expected Refused, got {other:?}"),
         }

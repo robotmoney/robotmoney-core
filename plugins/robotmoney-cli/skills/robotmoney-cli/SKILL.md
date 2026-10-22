@@ -17,7 +17,7 @@ description: >
 # robotmoney-cli (`rmpc`)
 
 > **Owner decisions 2026-10-19 and 2026-10-20 (noted 2026-10-20).** The tables below
-> document today's binary. These parts of it are deprecated: `withdraw`, `withdraw-router`, router deposits (any `deposit` routed through the Portfolio Router), `receipt submit`, `committee vote-submit`, `committee check-agent` and every Investment Committee policy section.
+> document today's binary. These parts of it are deprecated: `receipt submit`, `committee vote-submit`, `committee check-agent` and every Investment Committee policy section.
 > The only on-chain write `rmpc` keeps is `rmpc deposit` into an allowed vault.
 > Consensus receipts go on-chain only through the submitter Safe (the
 > publish-contracts `record-receipt` row), never through `rmpc`. Details: `docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-rmpc-scope.md` and `docs/code-review/20261019-vaults-gateway-split/20261019-code-review-internal-claude-opus-5-5-ic-policy-removal.md`.
@@ -37,7 +37,7 @@ Exit code 0 means success; non-zero means a named, structured error. Add
 ## Reference docs
 
 - **[Commands](references/commands.md)** — complete flag reference for every
-  subcommand: `deposit`, `withdraw`, `status`, `self-check`, `build-info`,
+  subcommand: `deposit`, `status`, `self-check`, `build-info`,
   `get-vault`,
   `get-vaults`, `get-router`, `get-governance`, `get-timelock`, `get-gateway`,
   `get-agent`, `get-roles`, `get-balance`, `get-allowance`, `get-deposit`,
@@ -49,7 +49,6 @@ The complete surface (mirrors `rmpc --help`):
 
 ```text
 rmpc deposit         Sign and broadcast a USDC deposit through the gateway
-rmpc withdraw        Redeem vault shares through the gateway (agent-initiated)
 rmpc status          Look up a previously submitted payment by its on-chain paymentId
 rmpc self-check      Print the signer-backend self-check report (v0 §9.2 JSON)
 rmpc build-info      Print the git commit this binary was compiled from (JSON)

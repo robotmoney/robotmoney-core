@@ -48,13 +48,14 @@
  * hashes whatever implementation is live (that would approve the very code
  * the check exists to refuse).
  *
- * Encrypted-keystore exports sign on every chain. `rmpc deposit`, `withdraw`
- * and `withdraw-router` sign with the software keystore on Base mainnet too,
+ * Encrypted-keystore exports sign on every chain. `rmpc deposit` signs with the software keystore on Base mainnet too,
  * after a production warning (owner decision 2026-10-06, issue #1545). A
  * hardware wallet, HSM or KMS is optional, never required (owner decision
  * 2026-10-14). The exported comment block says so: see
  * `SOFTWARE_KEYSTORE_COMMENT`.
  */
+
+import { destinationsExportLines } from "./agentDestinations";
 
 export type SignerKind = "encrypted_keystore" | "hardware" | "kms";
 
@@ -71,7 +72,7 @@ export type SignerKind = "encrypted_keystore" | "hardware" | "kms";
  * still loads through rmpc's `Config::from_str`. Keep one string per line.
  */
 export const SOFTWARE_KEYSTORE_COMMENT: readonly string[] = [
-  "# Software keystore: rmpc deposit, withdraw and withdraw-router sign with it on every",
+  "# Software keystore: rmpc deposit signs with it on every",
   "# chain, Base mainnet included, after a production warning (owner decision 2026-10-06).",
   "# A hardware wallet, HSM or KMS is optional, never required (owner decision 2026-10-14).",
   "# rmpc decrypts the key in memory: keep the keystore 0600 and the passphrase out of argv.",
@@ -118,6 +119,11 @@ interface RmpcExportInputs {
   share_receiver?: string;
   /** The wallet that revealed the authorization: rmpc refuses a binding owned by another. */
   agent_owner?: string;
+  /**
+   * The vaults the depositor's policy allows (`allowedDestinations`). Written as a comment:
+   * rmpc's `Config` has `deny_unknown_fields` and no such key, so a live key would not load.
+   */
+  allowed_destinations?: readonly string[];
   signer: SignerSpec;
 }
 
@@ -168,6 +174,7 @@ export function exportRmpcConfig(inputs: RmpcExportInputs): string {
     ...(inputs.agent_owner !== undefined
       ? [`agent_owner          = ${tomlStr(inputs.agent_owner)}`]
       : []),
+    ...destinationsExportLines(inputs.allowed_destinations ?? []),
     ``,
     `[signer]`,
     ...buildSignerLines(inputs.signer),

@@ -24,11 +24,10 @@
 //!    `ErrOrderIdAlreadySubmitted`.
 //! 5. `over_per_payment_cap_rejected` — `amount > maxPerPayment`
 //!    refused by preflight (`ErrDepositCapExceeded`, QA plan U6).
-//! 6. `deposits_paused_blocks_deposit_not_withdraw` — with
-//!    `depositsPaused() == true` a deposit is refused by preflight
-//!    (`ErrDepositsPaused`) and a withdrawal is never refused for the
-//!    pause (core 1494); test cleans up by calling `unpauseDeposits()`
-//!    so subsequent tests can deposit.
+//! 6. `deposits_paused_blocks_deposit` — with `depositsPaused() == true`
+//!    a deposit is refused by preflight (`ErrDepositsPaused`); test
+//!    cleans up by calling `unpauseDeposits()` so subsequent tests can
+//!    deposit. The gateway has no withdrawal path (issue 1889).
 //! 7. `role_separation_invariant` — admin granting itself
 //!    `AGENT_ROLE` reverts via `RoleSeparationViolated`.
 //! 8. `software_fallback_disabled_aborts_startup` — startup-time
@@ -471,13 +470,11 @@ fn over_per_payment_cap_rejected() {
 // ------------------------------------------------------------- scenario 6
 
 /// `depositsPaused() == true` causes the deposit preflight to refuse with
-/// `ErrDepositsPaused`. The client never broadcasts. A withdrawal under the
-/// same pause is never refused for it: a deposit pause never blocks a
-/// withdrawal (core 1494). Cleans up by calling `unpauseDeposits()` so
-/// subsequent tests can deposit.
+/// `ErrDepositsPaused`. The client never broadcasts. Cleans up by calling
+/// `unpauseDeposits()` so subsequent tests can deposit.
 #[test]
-fn deposits_paused_blocks_deposit_not_withdraw() {
-    require_prereqs("deposits_paused_blocks_deposit_not_withdraw");
+fn deposits_paused_blocks_deposit() {
+    require_prereqs("deposits_paused_blocks_deposit");
     with_fixture(|fx| {
         fx.approve_usdc_from_agent(SMALL_DEPOSIT)
             .expect("approve usdc");
@@ -487,19 +484,6 @@ fn deposits_paused_blocks_deposit_not_withdraw() {
         let run = fx
             .run_rmpc_deposit(deposit_args(SMALL_DEPOSIT, &oid))
             .expect("run rmpc deposit");
-        let withdraw_oid = order_id("deposits_paused_withdraw_not_refused");
-        let withdraw_run = fx
-            .run_rmpc_withdraw(vec![
-                "--shares".into(),
-                "1".into(),
-                "--source-vault".into(),
-                format!("{:#x}", fx.vault()),
-                "--order-id".into(),
-                withdraw_oid,
-                "--receipt-timeout-secs".into(),
-                "180".into(),
-            ])
-            .expect("run rmpc withdraw");
 
         // Always restore the gateway state, even if assertions panic.
         let pause_result = (|| -> Result<(), String> {
@@ -509,7 +493,7 @@ fn deposits_paused_blocks_deposit_not_withdraw() {
                     run.status, run.stdout, run.stderr
                 ));
             }
-            let v = parse_json(&run.stdout, "deposits_paused_blocks_deposit_not_withdraw");
+            let v = parse_json(&run.stdout, "deposits_paused_blocks_deposit");
             if v["status"] != "refused" {
                 return Err(format!("expected refused; stdout={}", run.stdout));
             }
@@ -528,20 +512,6 @@ fn deposits_paused_blocks_deposit_not_withdraw() {
                 return Err(format!(
                     "refusal must not carry a tx_hash; stdout={}",
                     run.stdout
-                ));
-            }
-            // The withdrawal is never refused for the deposit pause. The agent
-            // may hold no shares on this fixture, so a share-side refusal is
-            // allowed; a pause-named refusal is the failure this guards.
-            let w = parse_json(
-                &withdraw_run.stdout,
-                "deposits_paused_blocks_deposit_not_withdraw (withdraw)",
-            );
-            let werr = w.get("error").and_then(|e| e.as_str()).unwrap_or("");
-            if werr.to_ascii_lowercase().contains("paused") {
-                return Err(format!(
-                    "a deposit pause must never refuse a withdrawal; stdout={}",
-                    withdraw_run.stdout
                 ));
             }
             Ok(())

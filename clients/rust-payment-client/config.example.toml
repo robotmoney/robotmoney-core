@@ -40,8 +40,16 @@ gateway_address = "0xYOUR_GATEWAY_ADDRESS"
 # USDC token address on chain_id.
 usdc_address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 
-# Vault that receives deposits.
+# The vault `rmpc deposit` deposits into by default (override per call with
+# `--vault`). The gateway pins no vault: the owner's policy lists the allowed
+# destinations. When `allowed_destinations` is absent this is the only vault
+# rmpc will deposit into.
 vault_address = "0xYOUR_VAULT_ADDRESS"
+
+# The vaults the owner selected for this agent, mirroring the policy
+# `allowedDestinations` set on the gateway. `rmpc deposit --vault X` refuses
+# (`ErrDestinationNotSelected`) any vault not listed. Never list the router.
+# allowed_destinations = ["0xYOUR_VAULT_ADDRESS", "0xYOUR_SECOND_VAULT_ADDRESS"]
 
 # keccak256(eth_getCode(gateway_address)) pinned at deploy time (0x-hex).
 # Obtain with: cast keccak $(cast code $GATEWAY_ADDRESS)
@@ -57,14 +65,13 @@ gateway_runtime_hash = "0xYOUR_GATEWAY_RUNTIME_HASH"
 # gateway_implementation = "0xYOUR_GATEWAY_IMPLEMENTATION"
 # gateway_implementation_runtime_hash = "0xYOUR_GATEWAY_IMPLEMENTATION_RUNTIME_HASH"
 
-# The vaults and the router are ERC-1967 proxies too. The address pins do not
-# pin the logic behind them, so every write also reads the implementation of
-# each one it reaches (the vault a deposit lands in or a withdraw redeems from,
-# the router, every router leg) and refuses with `ErrImplementationNotApproved`
-# unless its code hash is listed here. Copy the reviewed implementation code
+# The vaults are ERC-1967 proxies too. The address pins do not pin the logic
+# behind them, so every deposit also reads the implementation of the requested
+# vault and refuses with `ErrImplementationNotApproved` unless its code hash is
+# listed here. Copy the reviewed implementation code
 # hashes from the release record, never from the live chain. Leave it out only
 # when none of them is a proxy.
-# proxy_implementation_hashes = ["0xYOUR_VAULT_IMPLEMENTATION_HASH", "0xYOUR_ROUTER_IMPLEMENTATION_HASH"]
+# proxy_implementation_hashes = ["0xYOUR_VAULT_IMPLEMENTATION_HASH"]
 
 # ── Optional contract addresses ───────────────────────────────────────────────
 
@@ -89,7 +96,7 @@ gateway_runtime_hash = "0xYOUR_GATEWAY_RUNTIME_HASH"
 # ── Agent binding ─────────────────────────────────────────────────────────────
 #
 # RECOMMENDED. Pin who this agent is bound to on the gateway. When set, every
-# deposit and withdraw refuses with ErrAgentBindingMismatch unless the chain
+# deposit refuses with ErrAgentBindingMismatch unless the chain
 # agrees, so an address that bound this agent before you did cannot receive
 # its deposits' shares.
 #

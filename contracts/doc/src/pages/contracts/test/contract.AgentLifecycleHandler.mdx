@@ -4,7 +4,7 @@ title: "AgentLifecycleHandler"
 
 # AgentLifecycleHandler
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/GatewayAgentLifecycleInvariant.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/GatewayAgentLifecycleInvariant.t.sol)
 
 **Inherits:** Test
 
@@ -38,6 +38,12 @@ address public immutable admin;
 
 ```solidity
 address public immutable pauser;
+```
+
+### destination
+
+```solidity
+address public immutable destination;
 ```
 
 ## State Variables
@@ -116,12 +122,18 @@ uint256 internal nonce;
 
 ## Functions
 
-<a id="constructor-robotmoneygateway-testerc20-address-address"></a>
+<a id="constructor-robotmoneygateway-testerc20-address-address-address"></a>
 
 ### constructor
 
 ```solidity
-constructor(RobotMoneyGateway gw_, TestERC20 usdc_, address admin_, address pauser_);
+constructor(
+        RobotMoneyGateway gw_,
+        TestERC20 usdc_,
+        address admin_,
+        address pauser_,
+        address destination_
+    );
 ```
 
 **Parameters**
@@ -132,6 +144,7 @@ constructor(RobotMoneyGateway gw_, TestERC20 usdc_, address admin_, address paus
 | usdc_ | `TestERC20` |  |
 | admin_ | `address` |  |
 | pauser_ | `address` |  |
+| destination_ | `address` |  |
 
 <a id="ownercount"></a>
 

@@ -188,13 +188,15 @@ contract ConfusedDeputyGuardsTest is Test {
 
     function _policy(address shareReceiver_) internal view returns (IGateway.AgentPolicy memory) {
         address[] memory empty = new address[](0);
+        address[] memory dests = new address[](1);
+        dests[0] = address(vault);
         return IGateway.AgentPolicy({
             active: true,
             validUntil: uint64(block.timestamp + 365 days),
             maxPerPayment: MAX_PER_PAYMENT,
             maxPerWindow: MAX_PER_WINDOW,
             shareReceiver: shareReceiver_,
-            allowedDestinations: empty,
+            allowedDestinations: dests,
             assetRecipient: address(0),
             maxWithdrawPerPayment: 0,
             maxWithdrawPerWindow: 0,
@@ -227,8 +229,15 @@ contract ConfusedDeputyGuardsTest is Test {
 
         uint64 deadline = uint64(block.timestamp + 60);
         vm.prank(agent);
-        (, uint256 sharesMinted) =
-            gateway.deposit(bytes32("order1"), MAX_PER_PAYMENT, deadline, bytes32("idem1"));
+        gateway.depositTo(
+            bytes32("order1"),
+            MAX_PER_PAYMENT,
+            deadline,
+            bytes32("idem1"),
+            address(vault),
+            new uint256[](0)
+        );
+        uint256 sharesMinted = MAX_PER_PAYMENT; // MockVault mints 1:1
 
         // Shares land at the policy-registered shareReceiver, never at the agent.
         assertEq(vault.balanceOf(shareReceiver), sharesMinted, "shares at policy shareReceiver");
@@ -237,54 +246,6 @@ contract ConfusedDeputyGuardsTest is Test {
     }
 
     // ─── Invariant 2: withdraw assetRecipient bound to policy, not calldata ───
-
-    /// @notice withdraw() forwards USDC only to policy.assetRecipient. There is
-    ///         no calldata receiver parameter the agent can supply.
-    function test_invariant2_withdraw_assetsGoToPolicyAssetRecipient() public {
-        address assetRecipient = makeAddr("assetRecipient");
-        address[] memory empty = new address[](0);
-        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
-            active: true,
-            validUntil: uint64(block.timestamp + 365 days),
-            maxPerPayment: MAX_PER_PAYMENT,
-            maxPerWindow: MAX_PER_WINDOW,
-            shareReceiver: shareReceiver,
-            allowedDestinations: empty,
-            assetRecipient: assetRecipient,
-            maxWithdrawPerPayment: MAX_PER_PAYMENT,
-            maxWithdrawPerWindow: MAX_PER_WINDOW,
-            allowedSourceVaults: empty
-        });
-        _authorize(admin, agent, p);
-
-        // Deposit first to have shares.
-        _fund(agent, MAX_PER_PAYMENT);
-        uint64 dl = uint64(block.timestamp + 60);
-        vm.prank(agent);
-        (, uint256 sharesMinted) =
-            gateway.deposit(bytes32("order1"), MAX_PER_PAYMENT, dl, bytes32("idem1"));
-
-        // The gateway's withdraw() pulls shares from the agent (msg.sender) via
-        // transferFrom(agent, gateway, shares). The agent must hold the shares.
-        // Transfer shares from shareReceiver → agent first, then agent approves gateway.
-        vm.prank(shareReceiver);
-        vault.transfer(agent, sharesMinted);
-        vm.prank(agent);
-        vault.approve(address(gateway), sharesMinted);
-
-        // Give the vault USDC to pay out on redeem (shares == USDC in MockVault).
-        usdc.mint(address(vault), sharesMinted);
-
-        // Agent calls withdraw — USDC must flow to assetRecipient, not to agent or attacker.
-        dl = uint64(block.timestamp + 60);
-        vm.prank(agent);
-        (, uint256 assetsOut) =
-            gateway.withdraw(bytes32("order2"), sharesMinted, address(vault), dl, bytes32("idem2"));
-
-        assertEq(usdc.balanceOf(assetRecipient), assetsOut, "USDC at policy assetRecipient");
-        assertEq(usdc.balanceOf(agent), 0, "agent received no USDC");
-        assertEq(usdc.balanceOf(attacker), 0, "attacker received no USDC");
-    }
 
     // ─── Invariant 3: depositTo destination whitelist ────────────────────────
 
@@ -312,33 +273,6 @@ contract ConfusedDeputyGuardsTest is Test {
     }
 
     // ─── Invariant 4: withdraw sourceVault pinned to gateway vault ────────────
-
-    /// @notice withdraw() rejects any sourceVault != gateway's pinned vault.
-    ///         An attacker cannot supply a foreign vault address to bypass
-    ///         the asset-redemption rail.
-    function test_invariant4_withdraw_rejectsForeignSourceVault() public {
-        address[] memory empty = new address[](0);
-        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
-            active: true,
-            validUntil: uint64(block.timestamp + 365 days),
-            maxPerPayment: MAX_PER_PAYMENT,
-            maxPerWindow: MAX_PER_WINDOW,
-            shareReceiver: shareReceiver,
-            allowedDestinations: empty,
-            assetRecipient: makeAddr("assetRecipient"),
-            maxWithdrawPerPayment: MAX_PER_PAYMENT,
-            maxWithdrawPerWindow: MAX_PER_WINDOW,
-            allowedSourceVaults: empty
-        });
-        _authorize(admin, agent, p);
-
-        address foreignVault = makeAddr("foreignVault");
-        uint64 dl = uint64(block.timestamp + 60);
-
-        vm.prank(agent);
-        vm.expectRevert(RobotMoneyGateway.InvalidSourceVault.selector);
-        gateway.withdraw(bytes32("order1"), 100, foreignVault, dl, bytes32("idem1"));
-    }
 
     // ─── Invariant 5: setPolicy requires msg.sender == agentOwner ─────────────
 

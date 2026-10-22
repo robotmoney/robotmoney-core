@@ -39,7 +39,7 @@ share_receiver       = "0x00000000000000000000000000000000000000ee"
 agent_owner          = "0x00000000000000000000000000000000000000ee"
 
 [signer]
-# Software keystore: rmpc deposit, withdraw and withdraw-router sign with it on every
+# Software keystore: rmpc deposit signs with it on every
 # chain, Base mainnet included, after a production warning (owner decision 2026-10-06).
 # A hardware wallet, HSM or KMS is optional, never required (owner decision 2026-10-14).
 # rmpc decrypts the key in memory: keep the keystore 0600 and the passphrase out of argv.

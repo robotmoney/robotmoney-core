@@ -49,6 +49,7 @@ fn config() -> Config {
         max_priority_fee_per_gas_cap: None,
         state_dir: None,
         registry_address: None,
+        allowed_destinations: None,
         router_address: None,
         governance_address: None,
         timelock_address: None,
@@ -71,6 +72,7 @@ fn inputs(amount: u64) -> PreflightInputs {
     PreflightInputs {
         signer_address: SIGNER,
         amount: U256::from(amount),
+        vault: VAULT,
     }
 }
 
@@ -238,17 +240,6 @@ async fn install_happy_path_mocks(server: &mut mockito::ServerGuard, cfg: &Confi
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_address(USDC)))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-    // vault()
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::vaultCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_address(VAULT)))
         .expect_at_least(0)
         .create_async()
         .await;
@@ -481,31 +472,6 @@ async fn usdc_address_mismatch_refuses() {
 }
 
 #[tokio::test]
-async fn vault_address_mismatch_refuses() {
-    let mut server = mockito::Server::new_async().await;
-    let cfg = config();
-    let wrong = address!("00000000000000000000000000000000feedface");
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::vaultCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_address(wrong)))
-        .create_async()
-        .await;
-    install_happy_path_mocks(&mut server, &cfg).await;
-
-    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
-    let pf = Preflight::new(&rpc, &cfg);
-    let err = pf.run(inputs(100)).await.unwrap_err();
-    match err {
-        RmpcError::ErrConfig(msg) => assert!(msg.contains("vault"), "msg = {msg}"),
-        other => panic!("expected ErrConfig (vault), got {other:?}"),
-    }
-}
-
-#[tokio::test]
 async fn inactive_agent_refuses() {
     let mut server = mockito::Server::new_async().await;
     let cfg = config();
@@ -668,236 +634,6 @@ async fn balance_too_low_refuses() {
     );
 }
 
-/// Wire up happy-path mocks for `run_withdraw_gateway`. Uses
-/// `enc_agents_full` so deposit caps and withdrawal caps can differ.
-/// `effectiveWithdrawWindowGross` is stubbed to `withdraw_window_gross`
-/// (issue #449 — rolling-window cap accounting).
-async fn install_withdraw_gateway_mocks(
-    server: &mut mockito::ServerGuard,
-    cfg: &Config,
-    max_per_payment: U256,
-    max_per_window: U256,
-    max_withdraw_per_payment: U256,
-    max_withdraw_per_window: U256,
-    withdraw_window_gross: U256,
-) {
-    // chain_id
-    server
-        .mock("POST", "/")
-        .match_body(Matcher::PartialJson(json!({"method": "eth_chainId"})))
-        .with_status(200)
-        .with_body(jrpc_result(&format!("0x{:x}", cfg.chain_id)))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-    install_direct_gateway_code_mocks(server).await;
-    // depositsPaused() = false (gateway and vault share the selector)
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::depositsPausedCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_bool(false)))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-    // usdc()
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::usdcCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_address(USDC)))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-    // vault()
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::vaultCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_address(VAULT)))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-    // agents() — with split deposit / withdrawal caps
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::agentsCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_agents_full(
-            true,
-            u64::MAX,
-            max_per_payment,
-            max_per_window,
-            address!("00000000000000000000000000000000000000ee"),
-            max_withdraw_per_payment,
-            max_withdraw_per_window,
-        )))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-    // effectiveWithdrawWindowGross() — issue #449
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::effectiveWithdrawWindowGrossCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_u256(withdraw_window_gross)))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-}
-
-/// Issue #371 — deposit caps are high but withdrawal caps are low.
-/// A medium-sized withdrawal must be rejected even though the deposit
-/// caps would allow it.
-#[tokio::test]
-async fn withdraw_gateway_rejects_when_deposit_caps_high_withdraw_caps_low() {
-    let mut server = mockito::Server::new_async().await;
-    let cfg = config();
-    // deposit caps: 10 USDC per payment, 1000 USDC per window (generous)
-    // withdrawal caps: 50 shares per payment, 500 shares per window (tight)
-    // attempt: 100 shares — within deposit caps but exceeds withdrawal cap
-    install_withdraw_gateway_mocks(
-        &mut server,
-        &cfg,
-        U256::from(10_000_000u64),    // maxPerPayment (deposit) = 10 USDC
-        U256::from(1_000_000_000u64), // maxPerWindow (deposit)  = 1000 USDC
-        U256::from(50u64),            // maxWithdrawPerPayment   = 50 shares
-        U256::from(500u64),           // maxWithdrawPerWindow    = 500 shares
-        U256::ZERO,                   // withdrawWindowGross     = 0
-    )
-    .await;
-    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
-    let pf = Preflight::new(&rpc, &cfg);
-    let err = pf
-        .run_withdraw_gateway(PreflightInputs {
-            signer_address: SIGNER,
-            amount: U256::from(100u64), // exceeds maxWithdrawPerPayment=50
-        })
-        .await
-        .unwrap_err();
-    match err {
-        RmpcError::ErrWithdrawCapExceeded(m) => assert!(
-            m.contains("maxWithdrawPerPayment"),
-            "expected maxWithdrawPerPayment in msg, got: {m}"
-        ),
-        other => panic!("expected ErrWithdrawCapExceeded(maxWithdrawPerPayment), got {other:?}"),
-    }
-}
-
-/// Issue #371 — deposit caps are low but withdrawal caps are high.
-/// A medium-sized withdrawal must be accepted even though the deposit
-/// caps would reject it.
-#[tokio::test]
-async fn withdraw_gateway_allows_when_deposit_caps_low_withdraw_caps_high() {
-    let mut server = mockito::Server::new_async().await;
-    let cfg = config();
-    // deposit caps: 50 shares per payment, 500 shares per window (tight)
-    // withdrawal caps: 10_000 shares per payment, 100_000 per window (generous)
-    // attempt: 100 shares — within withdrawal caps, would exceed deposit caps
-    install_withdraw_gateway_mocks(
-        &mut server,
-        &cfg,
-        U256::from(50u64),      // maxPerPayment (deposit)  = 50 (tight)
-        U256::from(500u64),     // maxPerWindow  (deposit)  = 500 (tight)
-        U256::from(10_000u64),  // maxWithdrawPerPayment    = 10_000
-        U256::from(100_000u64), // maxWithdrawPerWindow     = 100_000
-        U256::ZERO,             // withdrawWindowGross      = 0
-    )
-    .await;
-    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
-    let pf = Preflight::new(&rpc, &cfg);
-    let result = pf
-        .run_withdraw_gateway(PreflightInputs {
-            signer_address: SIGNER,
-            amount: U256::from(100u64), // within withdrawal caps
-        })
-        .await;
-    assert!(result.is_ok(), "expected ok, got {result:?}");
-}
-
-/// A deposit pause on the gateway never refuses a withdrawal (core 1494).
-/// The preflight passes and reports the flag as information.
-#[tokio::test]
-async fn withdraw_gateway_passes_and_reports_while_deposits_paused() {
-    let mut server = mockito::Server::new_async().await;
-    let cfg = config();
-    // Higher-priority depositsPaused() = true.
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::depositsPausedCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_bool(true)))
-        .create_async()
-        .await;
-    install_withdraw_gateway_mocks(
-        &mut server,
-        &cfg,
-        U256::from(50u64),
-        U256::from(500u64),
-        U256::from(10_000u64),
-        U256::from(100_000u64),
-        U256::ZERO,
-    )
-    .await;
-    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
-    let report = Preflight::new(&rpc, &cfg)
-        .run_withdraw_gateway(PreflightInputs {
-            signer_address: SIGNER,
-            amount: U256::from(100u64),
-        })
-        .await
-        .expect("a deposit pause must not refuse a withdrawal");
-    assert!(report.deposits_paused);
-}
-
-/// The deposit-pause flag is information only on a withdrawal, so a failed
-/// read of it cannot refuse the withdrawal either.
-#[tokio::test]
-async fn withdraw_gateway_passes_when_deposits_paused_read_fails() {
-    let mut server = mockito::Server::new_async().await;
-    let cfg = config();
-    // Higher-priority depositsPaused() returns a JSON-RPC error.
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::depositsPausedCall,
-        >()))
-        .with_status(200)
-        .with_body(r#"{"jsonrpc":"2.0","id":1,"error":{"code":3,"message":"execution reverted"}}"#)
-        .create_async()
-        .await;
-    install_withdraw_gateway_mocks(
-        &mut server,
-        &cfg,
-        U256::from(50u64),
-        U256::from(500u64),
-        U256::from(10_000u64),
-        U256::from(100_000u64),
-        U256::ZERO,
-    )
-    .await;
-    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
-    let result = Preflight::new(&rpc, &cfg)
-        .run_withdraw_gateway(PreflightInputs {
-            signer_address: SIGNER,
-            amount: U256::from(100u64),
-        })
-        .await;
-    assert!(result.is_ok(), "expected ok, got {result:?}");
-}
-
 // ── Agent binding (QA plan D2, finding CS-1) ───────────────────────────
 //
 // A squatter can bind a fresh agent address first, naming itself as
@@ -962,13 +698,6 @@ async fn preflight_refuses_foreign_share_receiver() {
     assert_eq!(err.name(), "ErrAgentBindingMismatch");
     // Refused at check 6b: the USDC reads after it never ran.
     usdc_reads.assert_async().await;
-
-    // The withdraw preflight reads the same binding and refuses the same way.
-    let err = Preflight::new(&rpc, &cfg)
-        .run_withdraw_gateway(inputs(100))
-        .await
-        .unwrap_err();
-    assert_eq!(err.name(), "ErrAgentBindingMismatch", "got {err:?}");
 }
 
 #[tokio::test]
@@ -1037,35 +766,6 @@ async fn preflight_passes_when_binding_matches_config() {
     no_owner_read.assert_async().await;
 }
 
-/// The withdraw preflight names a rolling-window breach with its reason
-/// code, not `ErrConfig` (QA plan U6).
-#[tokio::test]
-async fn withdraw_gateway_names_window_cap_breach() {
-    let mut server = mockito::Server::new_async().await;
-    let cfg = config();
-    install_withdraw_gateway_mocks(
-        &mut server,
-        &cfg,
-        U256::from(10_000u64),
-        U256::from(100_000u64),
-        U256::from(10_000u64),
-        U256::from(500u64),
-        U256::from(450u64),
-    )
-    .await;
-    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
-    let err = Preflight::new(&rpc, &cfg)
-        .run_withdraw_gateway(inputs(100))
-        .await
-        .unwrap_err();
-    match err {
-        RmpcError::ErrWithdrawCapExceeded(m) => {
-            assert!(m.contains("maxWithdrawPerWindow"), "m = {m}")
-        }
-        other => panic!("expected ErrWithdrawCapExceeded, got {other:?}"),
-    }
-}
-
 #[test]
 fn parse_b256_hex_round_trip() {
     let h = B256::from(keccak256(b"ok"));
@@ -1085,110 +785,6 @@ fn parse_b256_hex_rejects_wrong_length() {
 // previously lived in `commands::withdraw` and `commands::withdraw_router`
 // as two near-identical copies, because the rule itself lived in a command
 // module rather than in the policy layer.
-
-/// Install the two vault reads the withdraw preflight makes: the share
-/// allowance/balance reads, plain ERC-20 calls against the vault. It never
-/// reads `depositsPaused()` (core 1494).
-async fn install_vault_mocks(server: &mut mockito::ServerGuard, allowance: U256, balance: U256) {
-    // The vault's ERC-1967 slot read (check 5c): empty, a direct vault.
-    install_direct_gateway_code_mocks(server).await;
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            Erc20::allowanceCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_u256(allowance)))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            Erc20::balanceOfCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_u256(balance)))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-}
-
-/// A vault whose deposits are paused still passes the withdraw preflight:
-/// a deposit pause never blocks a redeem (core 1494). The preflight does not
-/// even read the flag; the `expect(0)` mock proves it.
-#[tokio::test]
-async fn withdraw_vault_deposits_paused_still_passes() {
-    let mut server = mockito::Server::new_async().await;
-    let paused_read = server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::depositsPausedCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_bool(true)))
-        .expect(0)
-        .create_async()
-        .await;
-    install_vault_mocks(&mut server, U256::from(u128::MAX), U256::from(u128::MAX)).await;
-    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
-    let cfg = config();
-    let result = Preflight::new(&rpc, &cfg)
-        .run_withdraw_vault(VAULT, GATEWAY, SIGNER, U256::from(100u64), PINNED_BLOCK)
-        .await;
-    assert!(result.is_ok(), "expected ok, got {result:?}");
-    paused_read.assert_async().await;
-}
-
-/// RPC-7: the withdraw and router-withdraw paths must REFUSE when the
-/// agent's vault-share allowance to the gateway cannot cover the shares,
-/// rather than reporting success right up to an on-chain revert.
-#[tokio::test]
-async fn withdraw_vault_allowance_insufficient_refuses() {
-    let mut server = mockito::Server::new_async().await;
-    install_vault_mocks(&mut server, U256::from(1u64), U256::from(u128::MAX)).await;
-    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
-    let cfg = config();
-    let err = Preflight::new(&rpc, &cfg)
-        .run_withdraw_vault(VAULT, GATEWAY, SIGNER, U256::from(1_000u64), PINNED_BLOCK)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(err, RmpcError::ErrShareAllowanceInsufficient),
-        "got {err:?}"
-    );
-}
-
-/// RPC-7: same, for a share balance that cannot cover the shares.
-#[tokio::test]
-async fn withdraw_vault_balance_insufficient_refuses() {
-    let mut server = mockito::Server::new_async().await;
-    install_vault_mocks(&mut server, U256::from(u128::MAX), U256::from(1u64)).await;
-    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
-    let cfg = config();
-    let err = Preflight::new(&rpc, &cfg)
-        .run_withdraw_vault(VAULT, GATEWAY, SIGNER, U256::from(1_000u64), PINNED_BLOCK)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(err, RmpcError::ErrShareBalanceInsufficient),
-        "got {err:?}"
-    );
-}
-
-/// With ample allowance and balance the check passes — confirming it reads
-/// real values rather than always refusing.
-#[tokio::test]
-async fn withdraw_vault_preflight_happy_path() {
-    let mut server = mockito::Server::new_async().await;
-    install_vault_mocks(&mut server, U256::from(u128::MAX), U256::from(u128::MAX)).await;
-    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
-    let cfg = config();
-    let result = Preflight::new(&rpc, &cfg)
-        .run_withdraw_vault(VAULT, GATEWAY, SIGNER, U256::from(100u64), PINNED_BLOCK)
-        .await;
-    assert!(result.is_ok(), "expected ok, got {result:?}");
-}
 
 // ── Gateway implementation verification (issue 1810) ──────────────────
 //
@@ -1292,24 +888,17 @@ async fn swapped_implementation_refuses_while_the_proxy_hash_is_unchanged() {
     install_proxy_slot(&mut server, IMPL_B, IMPL_B_CODE).await;
 
     let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
-    for err in [
-        Preflight::new(&rpc, &cfg)
-            .run(inputs(100))
-            .await
-            .unwrap_err(),
-        Preflight::new(&rpc, &cfg)
-            .run_withdraw_gateway(inputs(100))
-            .await
-            .unwrap_err(),
-    ] {
-        assert!(
-            matches!(&err, RmpcError::ErrImplementationNotApproved(m) if m.contains(&format!("{IMPL_B:#x}"))),
-            "got {err:?}"
-        );
-        let checks = ChecksOutput::from_err_partial(&err);
-        assert!(checks.gateway_code_hash_match, "the proxy pin passed");
-        assert!(!checks.gateway_implementation_match);
-    }
+    let err = Preflight::new(&rpc, &cfg)
+        .run(inputs(100))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, RmpcError::ErrImplementationNotApproved(m) if m.contains(&format!("{IMPL_B:#x}"))),
+        "got {err:?}"
+    );
+    let checks = ChecksOutput::from_err_partial(&err);
+    assert!(checks.gateway_code_hash_match, "the proxy pin passed");
+    assert!(!checks.gateway_implementation_match);
     proxy_code_read.assert_async().await;
 }
 
@@ -1501,8 +1090,8 @@ fn approved_implementation_must_be_configured_as_a_pair() {
 
 // ─── The vault behind the gateway is a proxy too ────────────────────────────
 //
-// `vault_address` and `gateway.vault()` pin the vault's address, not the logic
-// behind it. Check 5c (deposit) and the withdraw vault preflight read the
+// `vault_address` pins the vault's address, not the logic
+// behind it. Check 5c reads the
 // vault's implementation at the pinned block and refuse unless its code hash
 // is in `proxy_implementation_hashes` (QA plan P3, review-security-008/-016).
 
@@ -1582,19 +1171,124 @@ async fn deposit_passes_with_the_vault_implementation_pinned() {
         .expect("a pinned vault implementation passes");
 }
 
+// --- requested vault (issue 1889) ------------------------------------------
+// The gateway pins no vault. The preflight checks the vault the caller asked
+// for: the owner's selection, then that vault's own pause state and
+// implementation. `gateway.vault()` is never read (no mock exists for it).
+
+const VAULT_B: Address = address!("0000000000000000000000000000000000000d0b");
+
+fn two_vault_config() -> Config {
+    Config {
+        allowed_destinations: Some(vec![format!("{VAULT:#x}"), format!("{VAULT_B:#x}")]),
+        ..config()
+    }
+}
+
+fn inputs_for(vault: Address) -> PreflightInputs {
+    PreflightInputs {
+        vault,
+        ..inputs(100)
+    }
+}
+
 #[tokio::test]
-async fn withdraw_vault_refuses_a_proxied_vault_without_a_pin() {
+async fn requested_vault_b_passes_and_its_state_is_read() {
     let mut server = mockito::Server::new_async().await;
-    install_vault_mocks(&mut server, U256::from(u128::MAX), U256::from(u128::MAX)).await;
-    install_proxy_slot_for(&mut server, VAULT, VAULT_IMPL, VAULT_IMPL_CODE).await;
+    let cfg = two_vault_config();
+    install_happy_path_mocks(&mut server, &cfg).await;
+    // B's depositsPaused() is read (expect >= 1); A's must never be read.
+    let b_read = server
+        .mock("POST", "/")
+        .match_body(match_eth_call_to(
+            &selector_hex_of::<RobotMoneyGateway::depositsPausedCall>(),
+            VAULT_B,
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_bool(false)))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let a_read = server
+        .mock("POST", "/")
+        .match_body(match_eth_call_to(
+            &selector_hex_of::<RobotMoneyGateway::depositsPausedCall>(),
+            VAULT,
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_bool(true)))
+        .expect(0)
+        .create_async()
+        .await;
+
     let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
-    let cfg = config();
+    Preflight::new(&rpc, &cfg)
+        .run(inputs_for(VAULT_B))
+        .await
+        .expect("selected vault B passes");
+    b_read.assert_async().await;
+    a_read.assert_async().await;
+}
+
+#[tokio::test]
+async fn paused_requested_vault_b_refuses_even_though_a_is_fine() {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = two_vault_config();
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_to(
+            &selector_hex_of::<RobotMoneyGateway::depositsPausedCall>(),
+            VAULT_B,
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_bool(true)))
+        .create_async()
+        .await;
+    install_happy_path_mocks(&mut server, &cfg).await;
+
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let err = Preflight::new(&rpc, &cfg)
-        .run_withdraw_vault(VAULT, GATEWAY, SIGNER, U256::from(100u64), PINNED_BLOCK)
+        .run(inputs_for(VAULT_B))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RmpcError::ErrDepositsPaused), "got {err:?}");
+}
+
+#[tokio::test]
+async fn unselected_vault_refuses_before_any_vault_read() {
+    let mut server = mockito::Server::new_async().await;
+    // Only VAULT is selected (no allowed_destinations): B is not.
+    let cfg = config();
+    install_happy_path_mocks(&mut server, &cfg).await;
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let err = Preflight::new(&rpc, &cfg)
+        .run(inputs_for(VAULT_B))
         .await
         .unwrap_err();
     match err {
-        RmpcError::ErrImplementationNotApproved(m) => assert!(m.contains("not set"), "{m}"),
+        RmpcError::ErrDestinationNotSelected(m) => {
+            assert!(m.contains(&format!("{VAULT_B:#x}")), "{m}")
+        }
+        other => panic!("expected ErrDestinationNotSelected, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn proxied_requested_vault_b_needs_its_own_implementation_pinned() {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = vault_pinned(two_vault_config(), &[IMPL_A_CODE]);
+    install_happy_path_mocks(&mut server, &cfg).await;
+    install_proxy_slot_for(&mut server, VAULT_B, VAULT_IMPL, VAULT_IMPL_CODE).await;
+
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let err = Preflight::new(&rpc, &cfg)
+        .run(inputs_for(VAULT_B))
+        .await
+        .unwrap_err();
+    match &err {
+        RmpcError::ErrImplementationNotApproved(m) => {
+            assert!(m.starts_with(&format!("vault {VAULT_B:#x}")), "{m}")
+        }
         other => panic!("expected ErrImplementationNotApproved, got {other:?}"),
     }
 }

@@ -123,6 +123,8 @@ test.describe("onboarding USDC seed — testnet/devnet drip", () => {
     const FRESH_AGENT_ADDR = "0x000000000000000000000000000000000000fa11" as Address;
     await page.getByTestId("wizard-agent-input").fill(FRESH_AGENT_ADDR);
     await page.getByTestId("wizard-shareReceiver-input").fill(depositor.address);
+    // The owner selects the vault the agent may deposit into (issue 1889); nothing is implied.
+    await page.getByTestId("wizard-destination-extra").fill(endpoints.vault_addr);
     await page.getByTestId("step-2-next").click();
 
     // Step 3: commit/reveal authorize (two-step flow, AZ-DAPP-1).

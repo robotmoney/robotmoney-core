@@ -293,16 +293,6 @@ pub async fn install_happy_path_mocks(
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::vaultCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_address(VAULT)))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
             RobotMoneyGateway::agentsCall,
         >()))
         .with_status(200)
@@ -440,76 +430,6 @@ pub async fn install_gateway_implementation(
         ]))
         .with_status(200)
         .with_body(jrpc_result(&format!("0x{}", ahex::encode(code))))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-}
-
-/// Wire the withdraw-path preflight reads on top of
-/// [`install_happy_path_mocks`].
-///
-/// **Call this AFTER `install_happy_path_mocks`.** Both mock sets are
-/// registered with `expect_at_least(0)`, which mockito never treats as
-/// "missing hits", so it falls through to the *last* registered matching
-/// mock. Registering this set first would leave the generic `agents()`
-/// mock — which reports zero withdrawal caps — serving every request, and
-/// every withdrawal would refuse before reaching the path under test.
-/// A per-test override registered with the default expectation still wins
-/// its first hit ahead of both sets.
-///
-/// The two vault reads the withdraw preflight makes are already covered
-/// by `install_happy_path_mocks`: the share allowance/balance reads are
-/// the same ERC-20 selectors it stubs at `u128::MAX`. The withdraw path
-/// never reads the vault's `depositsPaused()` (core 1494).
-pub async fn install_withdraw_preflight_mocks(
-    server: &mut mockito::Server,
-    max_withdraw_per_payment: U256,
-    max_withdraw_per_window: U256,
-    withdraw_window_gross: U256,
-) {
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::agentsCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_agents_with_withdrawal(
-            true,
-            u64::MAX,
-            U256::from(1_000_000u64),
-            U256::from(100_000_000u64),
-            SHARE_RECEIVER,
-            ASSET_RECIPIENT,
-            max_withdraw_per_payment,
-            max_withdraw_per_window,
-        )))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-    // effectiveWithdrawWindowGross(agent) — issue #449's rolling window.
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::effectiveWithdrawWindowGrossCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_u256(withdraw_window_gross)))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-    // gateway.router(): `withdraw-router` checks the router it redeems
-    // through (ADR-0014). Its ERC-1967 slot reads empty (the shared storage
-    // mock), so it is a direct router and needs no pin.
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::routerCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&format!(
-            "0x{}",
-            abi_addr_hex(Address::with_last_byte(0xf0))
-        )))
         .expect_at_least(0)
         .create_async()
         .await;

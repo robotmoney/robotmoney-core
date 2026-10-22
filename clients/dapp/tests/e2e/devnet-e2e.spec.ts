@@ -139,6 +139,8 @@ test.describe("devnet E2E — full-stack Twin chain", () => {
     const FRESH_AGENT_ADDR = "0x000000000000000000000000000000000000BB01" as Address;
     await page.getByTestId("agent-input").fill(FRESH_AGENT_ADDR);
     await page.getByTestId("shareReceiver-input").fill(depositor.address);
+    // The owner selects the vault the agent may deposit into (issue 1889); nothing is implied.
+    await page.getByTestId("destination-extra").fill(endpoints.vault_addr);
 
     // Freeze the inputs; the previews come from the frozen values.
     await page.getByTestId("authorize-freeze").click();

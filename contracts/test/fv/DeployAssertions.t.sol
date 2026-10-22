@@ -337,7 +337,7 @@ contract DeployAssertionsTest is SafeFixture {
             maxPerPayment: 1,
             maxPerWindow: 1,
             shareReceiver: makeAddr("acl7-receiver"),
-            allowedDestinations: empty,
+            allowedDestinations: CoreProxies.oneDestination(address(0xD357)),
             assetRecipient: address(0),
             maxWithdrawPerPayment: 0,
             maxWithdrawPerWindow: 0,

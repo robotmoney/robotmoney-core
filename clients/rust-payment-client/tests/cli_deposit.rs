@@ -17,7 +17,7 @@ use crate::common::{
     GATEWAY_CODE, SHARE_RECEIVER, SIGNER_ADDRESS, TEST_PASSPHRASE,
 };
 use alloy_primitives::{address, b256, hex as ahex, Address, Bytes, LogData, B256, U256};
-use alloy_sol_types::SolEvent;
+use alloy_sol_types::{SolCall, SolEvent};
 use assert_cmd::Command;
 use mockito::Matcher;
 use rust_payment_client::gateway::RobotMoneyGateway;
@@ -964,4 +964,300 @@ async fn deposit_retries_the_executed_block_read_when_the_node_is_behind() {
     assert_eq!(code, Some(0), "{v}");
     assert_eq!(v["status"], "success");
     behind.assert_async().await;
+}
+
+// ── Requested vault (issue 1889) ────────────────────────────────────────
+//
+// The gateway pins no vault. `rmpc deposit --vault B` deposits into B through
+// `gateway.depositTo`, with the config's `vault_address` (A) only the default.
+// The preflight reads B's state, never `gateway.vault()`, and a vault the owner
+// did not select, a paused B, or a B whose implementation changed before
+// broadcast reaches no broadcast.
+
+const VAULT_B: Address = address!("0000000000000000000000000000000000000d0b");
+const VAULT_B_IMPL: Address = address!("000000000000000000000000000b1b1b1b1b1b1b");
+const VAULT_B_IMPL_CODE: &[u8] = &[0x60, 0x0b, 0x60, 0x01, 0xfe];
+const VAULT_B_OTHER_IMPL: Address = address!("000000000000000000000000000b2b2b2b2b2b2b");
+const VAULT_B_OTHER_IMPL_CODE: &[u8] = &[0x60, 0x0b, 0x60, 0x02, 0xfe];
+
+fn two_vault_extra() -> String {
+    format!(
+        "allowed_destinations = [\"{:#x}\", \"{VAULT_B:#x}\"]\n",
+        common::VAULT
+    )
+}
+
+/// `rmpc deposit --vault <vault>` against `fix`; returns (exit code, stdout JSON).
+fn run_deposit_vault(fix: &Fixture, vault: Address) -> (Option<i32>, Value) {
+    let out = rmpc()
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
+        .env("RMPC_STATE_DIR", unique_state_dir())
+        .args([
+            "deposit",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "--amount",
+            "1000",
+            "--order-id",
+            &format!("{ORDER_ID:#x}"),
+            "--vault",
+            &format!("{vault:#x}"),
+            "--receipt-timeout-secs",
+            "5",
+        ])
+        .output()
+        .expect("rmpc ran");
+    eprintln!("STDERR: {}", String::from_utf8_lossy(&out.stderr));
+    let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim())
+        .expect("stdout is JSON");
+    (out.status.code(), v)
+}
+
+/// An `eth_call` to `to` whose calldata starts with `selector`.
+fn eth_call_to(selector: &str, to: Address) -> Matcher {
+    Matcher::AllOf(vec![
+        Matcher::PartialJson(json!({"method": "eth_call"})),
+        Matcher::Regex(format!(r#""data":"{selector}"#)),
+        Matcher::Regex(format!(r#"(?i)"to":"{to:#x}""#)),
+    ])
+}
+
+/// Make `proxy` an ERC-1967 proxy over `implementation` (code `code`) for reads
+/// tagged `tag` (every read when `None`).
+async fn install_vault_proxy(
+    server: &mut mockito::ServerGuard,
+    proxy: Address,
+    implementation: Address,
+    code: &[u8],
+    tag: Option<&str>,
+) {
+    let mut slot_word = [0u8; 32];
+    slot_word[12..].copy_from_slice(implementation.as_slice());
+    let mut slot = vec![
+        Matcher::PartialJson(json!({"method": "eth_getStorageAt"})),
+        Matcher::Regex(format!(r#""params":\["{proxy:#x}""#)),
+    ];
+    if let Some(tag) = tag {
+        slot.push(common::at_block(tag));
+    }
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(slot))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{}", ahex::encode(slot_word))))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_getCode"})),
+            Matcher::Regex(format!(r#""params":\["{implementation:#x}""#)),
+        ]))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{}", ahex::encode(code))))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+}
+
+#[tokio::test]
+async fn deposit_into_requested_vault_b_calls_depositto_with_b_and_reads_b() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    let amount = U256::from(1000u64);
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_post_preflight_mocks(
+        &mut server,
+        &receipt_with_agent_deposit_body(amount, amount),
+    )
+    .await;
+    // B's pause flag is read. A's is never read.
+    let paused = selector_hex_of::<RobotMoneyGateway::depositsPausedCall>();
+    let b_read = server
+        .mock("POST", "/")
+        .match_body(eth_call_to(&paused, VAULT_B))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_bool(false)))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let a_read = server
+        .mock("POST", "/")
+        .match_body(eth_call_to(&paused, common::VAULT))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_bool(false)))
+        .expect(0)
+        .create_async()
+        .await;
+    // The pre-sign simulation carries `depositTo(.., B, [])`.
+    let deposit_to = format!(
+        "0x{}",
+        ahex::encode(RobotMoneyGateway::depositToCall::SELECTOR)
+    );
+    let b_word = common::abi_addr_hex(VAULT_B);
+    let sim = server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_call"})),
+            Matcher::Regex(format!(r#""data":"{deposit_to}[0-9a-f]*{b_word}"#)),
+        ]))
+        .with_status(200)
+        .with_body(jrpc_result("0x"))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    // `gateway.vault()` no longer exists and must never be called.
+    let vault_selector = format!(
+        "0x{}",
+        ahex::encode(&alloy_primitives::keccak256(b"vault()")[..4])
+    );
+    let vault_call = server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&vault_selector))
+        .with_status(200)
+        .with_body(jrpc_result("0x"))
+        .expect(0)
+        .create_async()
+        .await;
+
+    let fix = Fixture::build_with(&server.url(), chain_id, &two_vault_extra());
+    let (code, v) = run_deposit_vault(&fix, VAULT_B);
+    assert_eq!(code, Some(0), "{v}");
+    assert_eq!(v["status"], "success");
+    assert_eq!(v["vault"], format!("{VAULT_B:#x}"));
+    b_read.assert_async().await;
+    a_read.assert_async().await;
+    sim.assert_async().await;
+    vault_call.assert_async().await;
+}
+
+#[tokio::test]
+async fn deposit_into_paused_vault_b_refuses_with_no_broadcast() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_post_preflight_mocks(
+        &mut server,
+        &receipt_with_agent_deposit_body(U256::from(1000u64), U256::from(1000u64)),
+    )
+    .await;
+    // A is fine (happy path); only B is paused.
+    server
+        .mock("POST", "/")
+        .match_body(eth_call_to(
+            &selector_hex_of::<RobotMoneyGateway::depositsPausedCall>(),
+            VAULT_B,
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_bool(true)))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let send = forbid_broadcast(&mut server).await;
+
+    let fix = Fixture::build_with(&server.url(), chain_id, &two_vault_extra());
+    let (code, v) = run_deposit_vault(&fix, VAULT_B);
+    assert_eq!(code, Some(2), "{v}");
+    assert_eq!(v["error"], "ErrDepositsPaused");
+    send.assert_async().await;
+}
+
+#[tokio::test]
+async fn deposit_into_an_unselected_vault_refuses_with_no_broadcast() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_post_preflight_mocks(
+        &mut server,
+        &receipt_with_agent_deposit_body(U256::from(1000u64), U256::from(1000u64)),
+    )
+    .await;
+    let send = forbid_broadcast(&mut server).await;
+
+    // No allowed_destinations: only A (`vault_address`) is selected.
+    let fix = Fixture::build(&server.url(), chain_id);
+    let (code, v) = run_deposit_vault(&fix, VAULT_B);
+    assert_eq!(code, Some(2), "{v}");
+    assert_eq!(v["error"], "ErrDestinationNotSelected");
+    assert!(
+        v["message"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("{VAULT_B:#x}")),
+        "{v}"
+    );
+    send.assert_async().await;
+}
+
+#[tokio::test]
+async fn deposit_discards_the_signed_transaction_when_vault_b_implementation_changes() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_post_preflight_mocks(
+        &mut server,
+        &receipt_with_agent_deposit_body(U256::from(1000u64), U256::from(1000u64)),
+    )
+    .await;
+    // B is a proxy over VAULT_B_IMPL at the preflight block and over another
+    // implementation at `latest`, after signing. Both are approved, so only
+    // the binding to the implementation verified before signing catches it.
+    install_vault_proxy(
+        &mut server,
+        VAULT_B,
+        VAULT_B_IMPL,
+        VAULT_B_IMPL_CODE,
+        Some(FIXTURE_BLOCK_TAG),
+    )
+    .await;
+    install_vault_proxy(
+        &mut server,
+        VAULT_B,
+        VAULT_B_OTHER_IMPL,
+        VAULT_B_OTHER_IMPL_CODE,
+        Some("latest"),
+    )
+    .await;
+    let send = forbid_broadcast(&mut server).await;
+
+    let extra = format!(
+        "{}proxy_implementation_hashes = [\"0x{}\", \"0x{}\"]\n",
+        two_vault_extra(),
+        ahex::encode(alloy_primitives::keccak256(VAULT_B_IMPL_CODE)),
+        ahex::encode(alloy_primitives::keccak256(VAULT_B_OTHER_IMPL_CODE)),
+    );
+    let fix = Fixture::build_with(&server.url(), chain_id, &extra);
+    let (code, v) = run_deposit_vault(&fix, VAULT_B);
+    assert_eq!(code, Some(2), "{v}");
+    assert_eq!(v["error"], "ErrImplementationChanged");
+    assert!(
+        v["message"].as_str().unwrap().contains("discarded unsent"),
+        "{v}"
+    );
+    send.assert_async().await;
+}
+
+#[tokio::test]
+async fn deposit_refuses_a_proxied_vault_b_whose_implementation_is_not_approved() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_post_preflight_mocks(
+        &mut server,
+        &receipt_with_agent_deposit_body(U256::from(1000u64), U256::from(1000u64)),
+    )
+    .await;
+    install_vault_proxy(&mut server, VAULT_B, VAULT_B_IMPL, VAULT_B_IMPL_CODE, None).await;
+    let send = forbid_broadcast(&mut server).await;
+
+    // proxy_implementation_hashes is unset: B's implementation is unverified.
+    let fix = Fixture::build_with(&server.url(), chain_id, &two_vault_extra());
+    let (code, v) = run_deposit_vault(&fix, VAULT_B);
+    assert_eq!(code, Some(2), "{v}");
+    assert_eq!(v["error"], "ErrImplementationNotApproved");
+    send.assert_async().await;
 }

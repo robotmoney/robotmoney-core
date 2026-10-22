@@ -5,7 +5,7 @@ description: "Multi-leg estimate-then-include on the fork (core 1482 review). Th
 
 # RobotMoneyRouterRedeemGasRootCauseTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/RobotMoneyVaultRedeemGasRootCause.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/RobotMoneyVaultRedeemGasRootCause.t.sol)
 
 **Inherits:** Test
 
@@ -192,14 +192,6 @@ function _includeLater(bool viaGateway, uint256 k) internal;
 function test_router_estimateThenIncludeNextBlock_1leg() public;
 ```
 
-<a id="test_gateway_withdrawfromrouter_estimatethenincludenextblock_1leg"></a>
-
-### test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_1leg
-
-```solidity
-function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_1leg() public;
-```
-
 <a id="test_router_estimatethenincludenextblock_2legs"></a>
 
 ### test_router_estimateThenIncludeNextBlock_2legs
@@ -214,22 +206,6 @@ function test_router_estimateThenIncludeNextBlock_2legs() public;
 
 ```solidity
 function test_router_estimateThenIncludeNextBlock_3legs() public;
-```
-
-<a id="test_gateway_withdrawfromrouter_estimatethenincludenextblock_2legs"></a>
-
-### test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_2legs
-
-```solidity
-function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_2legs() public;
-```
-
-<a id="test_gateway_withdrawfromrouter_estimatethenincludenextblock_3legs"></a>
-
-### test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_3legs
-
-```solidity
-function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_3legs() public;
 ```
 
 <a id="_weightlegs-uint256"></a>
@@ -259,7 +235,7 @@ function _weightLegs(uint256 k) internal;
 
 <i>
 
-mode 0 = router.deposit, 1 = gateway.depositTo(router), 2 = gateway.deposit (one vault).
+mode 0 = router.deposit, 1 = gateway.depositTo(vault).
 
 </i>
 
@@ -342,27 +318,11 @@ function test_router_deposit_estimateThenIncludeNextBlock_2legs() public;
 function test_router_deposit_estimateThenIncludeNextBlock_3legs() public;
 ```
 
-<a id="test_gateway_depositto_router_estimatethenincludenextblock_1leg"></a>
+<a id="test_gateway_depositto_vault_estimatethenincludenextblock"></a>
 
-### test_gateway_depositTo_router_estimateThenIncludeNextBlock_1leg
-
-```solidity
-function test_gateway_depositTo_router_estimateThenIncludeNextBlock_1leg() public;
-```
-
-<a id="test_gateway_depositto_router_estimatethenincludenextblock_3legs"></a>
-
-### test_gateway_depositTo_router_estimateThenIncludeNextBlock_3legs
+### test_gateway_depositTo_vault_estimateThenIncludeNextBlock
 
 ```solidity
-function test_gateway_depositTo_router_estimateThenIncludeNextBlock_3legs() public;
-```
-
-<a id="test_gateway_deposit_estimatethenincludenextblock"></a>
-
-### test_gateway_deposit_estimateThenIncludeNextBlock
-
-```solidity
-function test_gateway_deposit_estimateThenIncludeNextBlock() public;
+function test_gateway_depositTo_vault_estimateThenIncludeNextBlock() public;
 ```
 

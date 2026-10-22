@@ -69,12 +69,17 @@ async function accept(hash: Hex, blockNumber: bigint) {
   });
 }
 
+const VAULT_SELECTED = "0x4444444444444444444444444444444444444444";
+
 async function wizardToFrozen() {
   render(<OnboardingWizard gatewayAddress={GATEWAY} ctx={ctx} env={{}} now={NOW} />);
   fireEvent.click(screen.getByTestId("step-1-next"));
   fireEvent.change(screen.getByTestId("wizard-agent-input"), { target: { value: WALLET } });
   fireEvent.change(screen.getByTestId("wizard-shareReceiver-input"), {
     target: { value: WALLET },
+  });
+  fireEvent.change(screen.getByTestId("wizard-destination-extra"), {
+    target: { value: VAULT_SELECTED },
   });
   fireEvent.click(screen.getByTestId("step-2-next"));
   const freeze = await screen.findByTestId("wizard-freeze");
@@ -91,6 +96,8 @@ function renderAuthorizeTab() {
       setAgent={vi.fn()}
       shareReceiver={WALLET}
       setShareReceiver={vi.fn()}
+      destinations={[VAULT_SELECTED]}
+      setDestinations={vi.fn()}
       now={NOW}
     />,
   );
@@ -103,6 +110,9 @@ describe("OnboardingWizard — commit/reveal authorization flow", () => {
     fireEvent.change(screen.getByTestId("wizard-agent-input"), { target: { value: WALLET } });
     fireEvent.change(screen.getByTestId("wizard-shareReceiver-input"), {
       target: { value: WALLET },
+    });
+    fireEvent.change(screen.getByTestId("wizard-destination-extra"), {
+      target: { value: VAULT_SELECTED },
     });
     fireEvent.click(screen.getByTestId("step-2-next"));
     expect(await screen.findByTestId("wizard-freeze")).toBeInTheDocument();
@@ -141,7 +151,15 @@ describe("OnboardingWizard — commit/reveal authorization flow", () => {
     const args = state.calls[1].args as readonly unknown[];
     expect(args[0]).toBe(getAddress(WALLET));
     expect(args[1]).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(args[2]).toMatchObject({ shareReceiver: getAddress(WALLET), active: true });
+    expect(args[2]).toMatchObject({
+      shareReceiver: getAddress(WALLET),
+      active: true,
+      allowedDestinations: [getAddress(VAULT_SELECTED)],
+      assetRecipient: "0x0000000000000000000000000000000000000000",
+      maxWithdrawPerPayment: 0n,
+      maxWithdrawPerWindow: 0n,
+      allowedSourceVaults: [],
+    });
     // The commit hash is the one for exactly this agent, wallet and salt.
     expect(state.calls[0].args).toEqual([
       computeCommitHash(getAddress(WALLET), getAddress(WALLET), args[1] as Hex),

@@ -78,20 +78,39 @@ mod tests {
     use alloy_primitives::{address, b256, keccak256, Address, Bytes, LogData, B256, U256};
     use alloy_sol_types::{sol, SolCall, SolError, SolEvent};
 
-    /// The `deposit` selector must match `keccak256("deposit(bytes32,uint256,uint64,bytes32)")[..4]`.
-    /// This is the load-bearing cross-check that the generated bindings line
-    /// up with the Solidity ABI committed in `contracts/gateway/`.
+    /// The gateway ABI rmpc binds has no legacy `deposit`, no `withdraw`, no
+    /// `withdrawFromRouter` and no `vault()` / `router()` pin getters
+    /// (architecture 5.2). A regenerated ABI that brings one back fails here.
     #[test]
-    fn deposit_selector_matches_canonical_signature() {
-        let canonical = "deposit(bytes32,uint256,uint64,bytes32)";
-        let expected = &keccak256(canonical.as_bytes())[..4];
-        let actual = RobotMoneyGateway::depositCall::SELECTOR;
-        assert_eq!(&actual, expected, "deposit selector drift");
+    fn gateway_abi_has_no_retired_agent_surface() {
+        let abi: serde_json::Value =
+            serde_json::from_str(include_str!("../../abi/RobotMoneyGateway.json")).unwrap();
+        let names: Vec<&str> = abi
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["type"] == "function" || e["type"] == "event")
+            .filter_map(|e| e["name"].as_str())
+            .collect();
+        for retired in [
+            "deposit",
+            "withdraw",
+            "withdrawFromRouter",
+            "vault",
+            "router",
+            "effectiveWithdrawWindowGross",
+            "AgentDepositRouted",
+            "AgentWithdrawal",
+            "AgentWithdrawalRouted",
+        ] {
+            assert!(!names.contains(&retired), "{retired} is back in the ABI");
+        }
+        assert!(names.contains(&"depositTo"));
     }
 
     /// The `depositTo` selector must match
     /// `keccak256("depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])")[..4]`.
-    /// This cross-checks the router-deposit ABI binding added in issue #649.
+    /// `depositTo` is the gateway's only agent deposit.
     #[test]
     fn deposit_to_selector_matches_canonical_signature() {
         let canonical = "depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])";
@@ -121,8 +140,7 @@ mod tests {
         assert_eq!(&IVault::depositsPausedCall::SELECTOR, expected);
     }
 
-    /// The gateway's pause errors rmpc may see in revert data. `withdraw`
-    /// and `withdrawFromRouter` never raise either one (core 1494).
+    /// The gateway's pause errors rmpc may see in revert data.
     #[test]
     fn deposit_pause_error_selectors_match() {
         assert_eq!(

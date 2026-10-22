@@ -118,18 +118,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # QA plan U3: the sixth test drives the shipping rmpc through a five-leg router deposit and
-          # prints the marker only after the gas-floor assertions passed.
+          # The router tests exercise the human-wallet Portfolio Router only. The gateway has no
+          # router path and no agent withdrawal (issue 1889), so the gateway scenarios are gone.
           - group: twin-router
             cargo_tests: --test router
             mode: shared
-            min_executed: 6
-            required_markers: |
-              [deposit_router_default_gas_clears_gateway_floor] passed
-          - group: twin-withdrawal-registry
-            cargo_tests: --test withdrawal --test registry
+            min_executed: 4
+          - group: twin-registry
+            cargo_tests: --test registry
             mode: shared
-            min_executed: 8
+            min_executed: 3
           - group: twin-light
             cargo_tests: >-
               --test failure_surface_smoke

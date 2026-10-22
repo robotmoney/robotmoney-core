@@ -112,7 +112,7 @@ library InvariantRegistry {
         e[i++] = Entry("GW-2", Status.HOLDS, "symbolic", 0); // NC-9 fixed (#970)
         e[i++] = Entry("GW-3", Status.HOLDS, "stateful-invariant", 0);
         e[i++] = Entry("GW-4", Status.HOLDS, "stateful-invariant", 0); // 🟡 partial
-        e[i++] = Entry("GW-5", Status.HOLDS, "static-guard", 0); // F-11 fixed (#969)
+        e[i++] = Entry("GW-5", Status.TOMBSTONE, "static-guard", 0); // retired 2026-10-19: no gateway redemption path
         e[i++] = Entry("GW-6", Status.HOLDS, "symbolic", 0);
         // #1476: one shared policy validator for every agents[...] writer. Deep
         // proof: GatewayAgentPolicyAuthorization.t.sol (differential fuzz).

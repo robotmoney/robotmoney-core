@@ -99,7 +99,6 @@ const RULES: Rule[] = [
   [/^gateway: DEPOSIT_PAUSER_ROLE held by pauser$/, (w) => w.chain.revoke(GATEWAY, DEPOSIT_PAUSER_ROLE, PAUSER)],
   [/^gateway: DEPOSIT_PAUSER_ROLE not held by deployer$/, (w) => w.chain.grant(GATEWAY, DEPOSIT_PAUSER_ROLE, DEPLOYER)],
   [/^gateway: not paused$/, (w) => w.chain.set(GATEWAY, "depositsPaused", true)],
-  [/^gateway: router\(\) equals the deployed router$/, (w) => w.chain.set(GATEWAY, "router", OTHER)],
   [/^registry: router\(\) equals the deployed router$/, (w) => w.chain.set(REGISTRY, "router", OTHER)],
   [/^(.+): ADMIN_ROLE held by timelock$/, (w, m) => w.chain.revoke(subject(m[1]), ADMIN_ROLE, TIMELOCK)],
   [/^(.+): DEFAULT_ADMIN held by timelock$/, (w, m) => w.chain.revoke(subject(m[1]), Z32, TIMELOCK)],

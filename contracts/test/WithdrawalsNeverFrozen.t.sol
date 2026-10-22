@@ -323,20 +323,28 @@ contract WithdrawalsNeverFrozenTest is Test {
         assertEq(usdc.balanceOf(alice), AMOUNT, "alice exits in full through the router");
     }
 
-    /// @notice A gateway agent withdraws on both paths while the deposit pauser has
-    ///         paused gateway deposits and the emergency key has paused vault deposits.
-    ///         Gateway deposits revert DepositsArePaused; the Safe resumes them.
-    function test_gateway_withdrawsWhileGatewayAndVaultDepositsPaused() public {
+    /// @notice The gateway has no withdrawal path. The owner of gateway-minted shares redeems
+    ///         them directly on the vault while the deposit pauser has paused gateway deposits
+    ///         and the emergency key has paused vault deposits. Gateway deposits revert
+    ///         DepositsArePaused; the Safe resumes them.
+    function test_gateway_ownerRedeemsDirectlyWhileGatewayAndVaultDepositsPaused() public {
         address agent = makeAddr("agent");
-        address recipient = makeAddr("recipient");
-        _selfAuthorize(agent, recipient);
+        _selfAuthorize(agent, address(0));
 
         usdc.mint(agent, 2 * AMOUNT);
         vm.startPrank(agent);
         usdc.approve(address(gateway), 2 * AMOUNT);
-        (, uint256 shares) =
-            gateway.deposit(bytes32("o-dep"), AMOUNT, uint64(block.timestamp + 60), bytes32("i"));
+        gateway.depositTo(
+            bytes32("o-dep"),
+            AMOUNT,
+            uint64(block.timestamp + 60),
+            bytes32("i"),
+            address(rmUsdc),
+            new uint256[](0)
+        );
         vm.stopPrank();
+        uint256 shares = rmUsdc.balanceOf(agent);
+        assertGt(shares, 0, "shares minted to the owner");
 
         vm.prank(pauser);
         gateway.pauseDeposits();
@@ -346,31 +354,18 @@ contract WithdrawalsNeverFrozenTest is Test {
 
         vm.prank(agent);
         vm.expectRevert(RobotMoneyGateway.DepositsArePaused.selector);
-        gateway.deposit(bytes32("o-dep2"), AMOUNT, uint64(block.timestamp + 60), bytes32("j"));
-
-        vm.startPrank(agent);
-        rmUsdc.approve(address(gateway), shares);
-        (, uint256 assetsOut) = gateway.withdraw(
-            bytes32("o-wd"), shares / 2, address(rmUsdc), uint64(block.timestamp + 60), "i"
-        );
-        vm.stopPrank();
-        assertEq(assetsOut, AMOUNT / 2, "gateway withdraw pays while deposits are paused");
-
-        address[] memory legs = new address[](1);
-        legs[0] = address(rmUsdc);
-        uint256[] memory legShares = new uint256[](1);
-        legShares[0] = rmUsdc.balanceOf(agent);
-        vm.prank(agent);
-        (, uint256[] memory perLeg) = gateway.withdrawFromRouter(
-            bytes32("o-wr"),
-            legs,
-            legShares,
-            new uint256[](1),
+        gateway.depositTo(
+            bytes32("o-dep2"),
+            AMOUNT,
             uint64(block.timestamp + 60),
-            bytes32("k")
+            bytes32("j"),
+            address(rmUsdc),
+            new uint256[](0)
         );
-        assertEq(perLeg[0], AMOUNT / 2, "router withdrawal pays while deposits are paused");
-        assertEq(usdc.balanceOf(recipient), AMOUNT, "USDC to the policy recipient in full");
+
+        vm.prank(agent);
+        uint256 assetsOut = rmUsdc.redeem(shares, agent, agent);
+        assertEq(assetsOut, AMOUNT, "owner redeems on the vault while deposits are paused");
 
         vm.prank(pauser);
         vm.expectRevert(
@@ -511,17 +506,23 @@ contract WithdrawalsNeverFrozenTest is Test {
 
     /// @dev The permissionless commit/reveal route; a non-admin agent names itself as
     ///      share receiver.
+    function _rmUsdcDest() internal view returns (address[] memory d) {
+        d = new address[](1);
+        d[0] = address(rmUsdc);
+    }
+
     function _selfAuthorize(address agent, address recipient) internal {
+        recipient;
         IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
             active: true,
             validUntil: uint64(block.timestamp + 30 days),
             maxPerPayment: 2 * AMOUNT,
             maxPerWindow: 10 * AMOUNT,
             shareReceiver: agent,
-            allowedDestinations: new address[](0),
-            assetRecipient: recipient,
-            maxWithdrawPerPayment: type(uint128).max,
-            maxWithdrawPerWindow: type(uint128).max,
+            allowedDestinations: _rmUsdcDest(),
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
             allowedSourceVaults: new address[](0)
         });
         bytes32 salt = keccak256("agent-salt");

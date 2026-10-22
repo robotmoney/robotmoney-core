@@ -32,6 +32,8 @@ const baseArgs: BuildAdminTabsArgs = {
   setAgent: () => undefined,
   shareReceiver: "",
   setShareReceiver: () => undefined,
+  destinations: [],
+  setDestinations: () => undefined,
   faucetWalletAddresses: [],
   now: 0,
 };

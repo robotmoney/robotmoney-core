@@ -31,11 +31,17 @@ import { gatewayAbi } from "./abi";
 import { buildPreview, type AdminAction, type AgentPolicy, type PreviewContext } from "./preview";
 import { composeRotationPreview } from "./rotation";
 import { useConsentedRegistration } from "./useConsentedRegistration";
+import { tryDepositOnlyPolicy } from "./agentDestinations";
 
 /** Which transaction the wallet last accepted. */
 type RotationStep = "idle" | "revoke-sent";
 
-export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, now: number) {
+export function useRotationState(
+  gatewayAddress: Address,
+  ctx: PreviewContext,
+  now: number,
+  routerAddress?: string,
+) {
   // One hook for the revoke step, so it shows its own refusal and receipt (QA plan U5).
   const revokeWrite = useGuardedWriteContract();
 
@@ -45,6 +51,8 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
   const [maxPerPayment, setMaxPerPayment] = useState("100000000");
   const [maxPerWindow, setMaxPerWindow] = useState("1000000000");
   const [shareReceiver, setShareReceiver] = useState("");
+  // The owner's explicit vault selection for the new agent. Nothing is pre-selected.
+  const [destinations, setDestinations] = useState<string[]>([]);
   const [step, setStep] = useState<RotationStep>("idle");
   const [revokeTxHash, setRevokeTxHash] = useState<Hex | null>(null);
 
@@ -54,20 +62,20 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
   const validNew = isAddress(newAgentRaw, { strict: false });
   const validReceiver = isAddress(shareReceiver, { strict: false });
 
+  // The owner's explicit vault selection becomes the policy's allowedDestinations, retired
+  // withdraw members zero. No selection, no policy, so no consent and no commit.
   const policy: AgentPolicy | null =
     validNew && validReceiver && isUint(validUntil) && isUint(maxPerPayment) && isUint(maxPerWindow)
-      ? {
-          active: true,
-          validUntil: BigInt(validUntil),
-          maxPerPayment: BigInt(maxPerPayment),
-          maxPerWindow: BigInt(maxPerWindow),
-          shareReceiver: shareReceiver as Address,
-          allowedDestinations: [],
-          assetRecipient: zeroAddress,
-          maxWithdrawPerPayment: 0n,
-          maxWithdrawPerWindow: 0n,
-          allowedSourceVaults: [],
-        }
+      ? tryDepositOnlyPolicy(
+          {
+            validUntil: BigInt(validUntil),
+            maxPerPayment: BigInt(maxPerPayment),
+            maxPerWindow: BigInt(maxPerWindow),
+            shareReceiver: shareReceiver as Address,
+            destinations,
+          },
+          routerAddress,
+        )
       : null;
 
   const registration = useConsentedRegistration({
@@ -175,6 +183,8 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
     setMaxPerWindow,
     shareReceiver,
     setShareReceiver,
+    destinations,
+    setDestinations,
     step,
     /** True only when the reveal is mined with status success. */
     done: registration.revealMined,

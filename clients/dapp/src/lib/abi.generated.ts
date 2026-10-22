@@ -185,30 +185,6 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
-    name: "agentWithdrawWindow",
-    inputs: [
-      {
-        name: "",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    outputs: [
-      {
-        name: "windowStart",
-        type: "uint64",
-        internalType: "uint64",
-      },
-      {
-        name: "gross",
-        type: "uint256",
-        internalType: "uint256",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
     name: "agents",
     inputs: [
       {
@@ -313,45 +289,6 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
-    name: "deposit",
-    inputs: [
-      {
-        name: "orderId",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-      {
-        name: "amount",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "deadline",
-        type: "uint64",
-        internalType: "uint64",
-      },
-      {
-        name: "idempotencyKey",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
-    outputs: [
-      {
-        name: "paymentId",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-      {
-        name: "sharesMinted",
-        type: "uint256",
-        internalType: "uint256",
-      },
-    ],
-    stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
     name: "depositTo",
     inputs: [
       {
@@ -410,25 +347,6 @@ export const gatewayAbiGenerated = [
   {
     type: "function",
     name: "effectiveDepositWindowGross",
-    inputs: [
-      {
-        name: "agent",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    outputs: [
-      {
-        name: "",
-        type: "uint256",
-        internalType: "uint256",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "effectiveWithdrawWindowGross",
     inputs: [
       {
         name: "agent",
@@ -547,22 +465,12 @@ export const gatewayAbiGenerated = [
         internalType: "contract IERC20",
       },
       {
-        name: "vault_",
-        type: "address",
-        internalType: "contract IERC4626",
-      },
-      {
         name: "admin_",
         type: "address",
         internalType: "address",
       },
       {
         name: "pauser_",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "router_",
         type: "address",
         internalType: "address",
       },
@@ -723,32 +631,6 @@ export const gatewayAbiGenerated = [
     ],
     outputs: [],
     stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "router",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "routerContract",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "address",
-        internalType: "contract IPortfolioRouter",
-      },
-    ],
-    stateMutability: "view",
   },
   {
     type: "function",
@@ -936,125 +818,6 @@ export const gatewayAbiGenerated = [
     stateMutability: "view",
   },
   {
-    type: "function",
-    name: "vault",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "vaultContract",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "address",
-        internalType: "contract IERC4626",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "withdraw",
-    inputs: [
-      {
-        name: "orderId",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-      {
-        name: "shares",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "sourceVault",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "deadline",
-        type: "uint64",
-        internalType: "uint64",
-      },
-      {
-        name: "idempotencyKey",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
-    outputs: [
-      {
-        name: "paymentId",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-      {
-        name: "assetsOut",
-        type: "uint256",
-        internalType: "uint256",
-      },
-    ],
-    stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "withdrawFromRouter",
-    inputs: [
-      {
-        name: "orderId",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-      {
-        name: "vaults",
-        type: "address[]",
-        internalType: "address[]",
-      },
-      {
-        name: "sharesPerLeg",
-        type: "uint256[]",
-        internalType: "uint256[]",
-      },
-      {
-        name: "minAssetsPerLeg",
-        type: "uint256[]",
-        internalType: "uint256[]",
-      },
-      {
-        name: "deadline",
-        type: "uint64",
-        internalType: "uint64",
-      },
-      {
-        name: "idempotencyKey",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
-    outputs: [
-      {
-        name: "paymentId",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-      {
-        name: "assetsPerLeg",
-        type: "uint256[]",
-        internalType: "uint256[]",
-      },
-    ],
-    stateMutability: "nonpayable",
-  },
-  {
     type: "event",
     name: "AgentAuthorized",
     inputs: [
@@ -1148,61 +911,6 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "event",
-    name: "AgentDepositRouted",
-    inputs: [
-      {
-        name: "paymentId",
-        type: "bytes32",
-        indexed: true,
-        internalType: "bytes32",
-      },
-      {
-        name: "orderId",
-        type: "bytes32",
-        indexed: true,
-        internalType: "bytes32",
-      },
-      {
-        name: "agent",
-        type: "address",
-        indexed: true,
-        internalType: "address",
-      },
-      {
-        name: "shareReceiver",
-        type: "address",
-        indexed: false,
-        internalType: "address",
-      },
-      {
-        name: "router",
-        type: "address",
-        indexed: false,
-        internalType: "address",
-      },
-      {
-        name: "amount",
-        type: "uint256",
-        indexed: false,
-        internalType: "uint256",
-      },
-      {
-        name: "sharesPerLeg",
-        type: "uint256[]",
-        indexed: false,
-        internalType: "uint256[]",
-      },
-      {
-        name: "windowId",
-        type: "uint64",
-        indexed: false,
-        internalType: "uint64",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
     name: "AgentRevoked",
     inputs: [
       {
@@ -1216,122 +924,6 @@ export const gatewayAbiGenerated = [
         type: "address",
         indexed: true,
         internalType: "address",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
-    name: "AgentWithdrawal",
-    inputs: [
-      {
-        name: "paymentId",
-        type: "bytes32",
-        indexed: true,
-        internalType: "bytes32",
-      },
-      {
-        name: "orderId",
-        type: "bytes32",
-        indexed: true,
-        internalType: "bytes32",
-      },
-      {
-        name: "agent",
-        type: "address",
-        indexed: true,
-        internalType: "address",
-      },
-      {
-        name: "sourceVault",
-        type: "address",
-        indexed: false,
-        internalType: "address",
-      },
-      {
-        name: "shares",
-        type: "uint256",
-        indexed: false,
-        internalType: "uint256",
-      },
-      {
-        name: "assetsOut",
-        type: "uint256",
-        indexed: false,
-        internalType: "uint256",
-      },
-      {
-        name: "assetRecipient",
-        type: "address",
-        indexed: false,
-        internalType: "address",
-      },
-      {
-        name: "windowId",
-        type: "uint64",
-        indexed: false,
-        internalType: "uint64",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
-    name: "AgentWithdrawalRouted",
-    inputs: [
-      {
-        name: "paymentId",
-        type: "bytes32",
-        indexed: true,
-        internalType: "bytes32",
-      },
-      {
-        name: "orderId",
-        type: "bytes32",
-        indexed: true,
-        internalType: "bytes32",
-      },
-      {
-        name: "agent",
-        type: "address",
-        indexed: true,
-        internalType: "address",
-      },
-      {
-        name: "router",
-        type: "address",
-        indexed: false,
-        internalType: "address",
-      },
-      {
-        name: "shareHolder",
-        type: "address",
-        indexed: false,
-        internalType: "address",
-      },
-      {
-        name: "sharesPerLeg",
-        type: "uint256[]",
-        indexed: false,
-        internalType: "uint256[]",
-      },
-      {
-        name: "assetsPerLeg",
-        type: "uint256[]",
-        indexed: false,
-        internalType: "uint256[]",
-      },
-      {
-        name: "assetRecipient",
-        type: "address",
-        indexed: false,
-        internalType: "address",
-      },
-      {
-        name: "windowId",
-        type: "uint64",
-        indexed: false,
-        internalType: "uint64",
       },
     ],
     anonymous: false,
@@ -1608,11 +1200,6 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
-    name: "AssetMismatch",
-    inputs: [],
-  },
-  {
-    type: "error",
     name: "CommitmentExpired",
     inputs: [],
   },
@@ -1658,6 +1245,11 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
+    name: "EmptyAllowedDestinations",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "FailedInnerCall",
     inputs: [],
   },
@@ -1689,11 +1281,6 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
-    name: "InvalidAssetRecipient",
-    inputs: [],
-  },
-  {
-    type: "error",
     name: "InvalidDestination",
     inputs: [],
   },
@@ -1705,11 +1292,6 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "InvalidShareReceiver",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "InvalidSourceVault",
     inputs: [],
   },
   {
@@ -1749,17 +1331,12 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
+    name: "RetiredPolicyFieldNonZero",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "RoleSeparationViolated",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "RouterLegLengthMismatch",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "RouterNotConfigured",
     inputs: [],
   },
   {
@@ -1785,17 +1362,7 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
-    name: "SharesExceedWithdrawPerPaymentCap",
-    inputs: [],
-  },
-  {
-    type: "error",
     name: "UUPSUnauthorizedCallContext",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "UnexpectedAssetsReceived",
     inputs: [],
   },
   {
@@ -1806,16 +1373,6 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "WindowCapExceeded",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "WithdrawWindowCapExceeded",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "WithdrawalNotEnabled",
     inputs: [],
   },
   {

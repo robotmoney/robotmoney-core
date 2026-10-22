@@ -1621,8 +1621,11 @@ impl Fixture {
         // (active, validUntil, maxPerPayment, maxPerWindow, shareReceiver, allowedDestinations,
         //  assetRecipient, maxWithdrawPerPayment, maxWithdrawPerWindow, allowedSourceVaults)
         // validUntil is the year 2100: the Twin chain time warps forward through every timelock delay.
+        // allowedDestinations names the fixture vault (the gateway pins none and an empty list is
+        // refused). The four retired withdraw members are zero.
+        let vault = format!("{:#x}", self.vault());
         let policy = format!(
-            "(true,4102444800,{max_per_payment},{max_per_window},{receiver},[],{receiver},{max_per_payment},{max_per_window},[])"
+            "(true,4102444800,{max_per_payment},{max_per_window},{receiver},[{vault}],0x0000000000000000000000000000000000000000,0,0,[])"
         );
         let reveal_sig = "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))";
         let agent_hex = format!("{agent:#x}");

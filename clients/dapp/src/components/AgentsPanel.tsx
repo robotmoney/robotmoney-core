@@ -154,6 +154,7 @@ export function AgentsPanel(props: Props) {
           gatewayAddress={props.gatewayAddress}
           ctx={ctx}
           env={props.flagEnv}
+          routerAddress={props.routerAddress}
           now={props.now}
           onDismiss={() => {
             if (address) markOnboardingDismissed(address);

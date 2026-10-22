@@ -71,10 +71,10 @@ abstract contract GatewayAgentPolicyFixture is Test {
             maxPerPayment: 100 * ONE_USDC,
             maxPerWindow: 1_000 * ONE_USDC,
             shareReceiver: receiver,
-            allowedDestinations: empty,
-            assetRecipient: receiver,
-            maxWithdrawPerPayment: 10 * ONE_USDC,
-            maxWithdrawPerWindow: 100 * ONE_USDC,
+            allowedDestinations: CoreProxies.oneDestination(address(vault)),
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
             allowedSourceVaults: empty
         });
     }
@@ -134,8 +134,13 @@ abstract contract GatewayAgentPolicyFixture is Test {
         usdc.mint(agent, amount);
         vm.startPrank(agent);
         usdc.approve(address(gateway), amount);
-        gateway.deposit(
-            keccak256(abi.encode("order", key)), amount, uint64(block.timestamp + 60), key
+        gateway.depositTo(
+            keccak256(abi.encode("order", key)),
+            amount,
+            uint64(block.timestamp + 60),
+            key,
+            address(vault),
+            new uint256[](0)
         );
         vm.stopPrank();
     }
@@ -148,8 +153,13 @@ abstract contract GatewayAgentPolicyFixture is Test {
         vm.startPrank(agent);
         usdc.approve(address(gateway), amount);
         vm.expectRevert(err);
-        gateway.deposit(
-            keccak256(abi.encode("order", key)), amount, uint64(block.timestamp + 60), key
+        gateway.depositTo(
+            keccak256(abi.encode("order", key)),
+            amount,
+            uint64(block.timestamp + 60),
+            key,
+            address(vault),
+            new uint256[](0)
         );
         vm.stopPrank();
     }

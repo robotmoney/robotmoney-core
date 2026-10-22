@@ -455,7 +455,7 @@ contract SafeIntegrationTest is Test {
             maxPerPayment: 1e6,
             maxPerWindow: 10e6,
             shareReceiver: receiver,
-            allowedDestinations: empty,
+            allowedDestinations: CoreProxies.oneDestination(address(0xD357)),
             assetRecipient: address(0),
             maxWithdrawPerPayment: 0,
             maxWithdrawPerWindow: 0,

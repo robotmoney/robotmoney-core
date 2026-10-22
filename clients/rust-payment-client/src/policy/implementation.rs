@@ -29,15 +29,12 @@
 //!
 //! # The other proxies a write reaches
 //!
-//! The vaults and the router are ERC-1967 proxies too (issue 1808). The
-//! address pins (`vault_address`, `gateway.vault()`, `gateway.router()`) do
+//! The vaults are ERC-1967 proxies too (issue 1808). The
+//! address pin (`vault_address`) does
 //! not pin the logic behind a proxy, so a write also reads the implementation
-//! of every vault or router it reaches and refuses unless that
+//! of the vault it reaches and refuses unless that
 //! implementation's code hash is in `proxy_implementation_hashes`
-//! ([`verify_reached_proxy`]): the vault a deposit lands in or a withdraw
-//! redeems from, the router a withdraw redeems through, and the router plus
-//! every leg of its effective weight vector for a router deposit
-//! ([`verify_router_and_legs`]). A direct (non-proxy) contract needs no entry:
+//! ([`verify_reached_proxy`]): the requested vault a deposit lands in. A direct (non-proxy) contract needs no entry:
 //! its address pin covers its whole code. The same fail-closed rules apply:
 //! a failed read is `ErrImplementationUnverified`, an unlisted, codeless or
 //! unpinned implementation is `ErrImplementationNotApproved` naming the proxy
@@ -50,7 +47,6 @@ use alloy_sol_types::SolCall;
 
 use crate::config::Config;
 use crate::errors::{Result, RmpcError};
-use crate::gateway::{PortfolioRouter, RobotMoneyGateway};
 use crate::rpc::{CallRequest, FailoverRpcClient};
 
 /// ERC-1967 implementation slot:
@@ -204,6 +200,29 @@ pub async fn reverify_gateway_after_signing(
     verify_gateway_code(rpc, cfg, "latest").await.map(|_| ())
 }
 
+/// After signing, before broadcast: `Ok` when the requested vault still runs
+/// the `bound` implementation preflight verified, and still passes
+/// [`verify_reached_proxy`] at `latest`. Otherwise the caller discards the
+/// signed envelope unsent (`ErrImplementationChanged`, or the verification's
+/// own error).
+pub async fn reverify_vault_after_signing(
+    rpc: &FailoverRpcClient,
+    cfg: &Config,
+    vault: Address,
+    bound: Option<Address>,
+) -> Result<()> {
+    let live = read_implementation(rpc, vault, "latest").await?;
+    if live != bound {
+        return Err(RmpcError::ErrImplementationChanged(format!(
+            "vault {vault:#x} implementation changed from {} to {} after preflight; the signed \
+             transaction was discarded unsent",
+            fmt_implementation(bound),
+            fmt_implementation(live)
+        )));
+    }
+    verify_reached_proxy(rpc, cfg, "vault", vault, "latest").await
+}
+
 /// Reads of the executed block: a load-balanced RPC can return the receipt
 /// from one node and answer the next read from a node that has not reached
 /// its block yet ("block not found", Deploy 3 P6.55 on mainnet.base.org). A
@@ -326,47 +345,6 @@ pub fn check_reached_proxy(
         }
         Some(_) => Ok(()),
     }
-}
-
-/// A router-destination deposit reaches the router and every vault of its
-/// effective weight vector (0 bps legs included). Check each of them at
-/// `block_tag`.
-pub async fn verify_router_and_legs(
-    rpc: &FailoverRpcClient,
-    cfg: &Config,
-    router: Address,
-    block_tag: &str,
-) -> Result<()> {
-    verify_reached_proxy(rpc, cfg, "router", router, block_tag).await?;
-    let weights = call_at(
-        rpc,
-        router,
-        block_tag,
-        PortfolioRouter::getEffectiveWeightsCall {},
-    )
-    .await?;
-    for vault in weights.vaults {
-        verify_reached_proxy(rpc, cfg, "router leg vault", vault, block_tag).await?;
-    }
-    Ok(())
-}
-
-/// `gateway.router()` at `block_tag`, checked like any other reached proxy
-/// (the router a withdraw redeems through). A zero router has no router path
-/// and is returned unchecked: the gateway then refuses the call itself.
-pub async fn verify_gateway_router(
-    rpc: &FailoverRpcClient,
-    cfg: &Config,
-    gateway: Address,
-    block_tag: &str,
-) -> Result<Address> {
-    let router = call_at(rpc, gateway, block_tag, RobotMoneyGateway::routerCall {})
-        .await?
-        ._0;
-    if router != Address::ZERO {
-        verify_reached_proxy(rpc, cfg, "router", router, block_tag).await?;
-    }
-    Ok(router)
 }
 
 /// One `eth_call` at `tag`, decoded. A revert or a transport error is `Err`.

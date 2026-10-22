@@ -11,9 +11,9 @@
 //!   hash" field). The configured `gateway_runtime_hash` from the operator
 //!   TOML is also reported so callers can diff observed-vs-pinned without
 //!   a second tool.
-//! - `usdc()` and `vault()` → addresses the gateway will route deposits to.
-//! - `depositsPaused()` → deposit-pause flag. It stops new deposits only;
-//!   withdrawals stay open while it is set (core 1494).
+//! - `usdc()` → the token the gateway pulls. The gateway pins no vault, so
+//!   there is no `vault` field (architecture 5.2).
+//! - `depositsPaused()` → deposit-pause flag.
 //! - `eth_chainId` → the §9 `chain_id` envelope field.
 //! - The ERC-1967 implementation slot (issue 1810). For a proxied gateway:
 //!   the implementation address and its code hash, `upgradesFrozen()` and
@@ -68,10 +68,7 @@ pub struct GatewayData {
     pub configured_code_hash: String,
     /// `gateway.usdc()` lowercase 0x-hex.
     pub usdc: String,
-    /// `gateway.vault()` lowercase 0x-hex.
-    pub vault: String,
-    /// `gateway.depositsPaused()` boolean. True stops new deposits only;
-    /// withdrawals stay open (core 1494).
+    /// `gateway.depositsPaused()` boolean. True stops new deposits.
     pub deposits_paused: bool,
     /// The live ERC-1967 implementation behind the gateway proxy; `null` for
     /// a direct (non-proxy) gateway.
@@ -193,19 +190,6 @@ async fn read_gateway(
         Err(e) => b.record_err("usdc", e),
     }
 
-    // vault()
-    match call_view_address(
-        rpc,
-        gateway_addr,
-        &block_tag,
-        RobotMoneyGateway::vaultCall {},
-    )
-    .await
-    {
-        Ok(addr) => b.data_mut().vault = format!("{addr:#x}"),
-        Err(e) => b.record_err("vault", e),
-    }
-
     // depositsPaused()
     match call_view_deposits_paused(rpc, gateway_addr, &block_tag).await {
         Ok(p) => b.data_mut().deposits_paused = p,
@@ -316,11 +300,6 @@ trait ReturnAddress {
     fn address(self) -> Address;
 }
 impl ReturnAddress for RobotMoneyGateway::usdcReturn {
-    fn address(self) -> Address {
-        self._0
-    }
-}
-impl ReturnAddress for RobotMoneyGateway::vaultReturn {
     fn address(self) -> Address {
         self._0
     }

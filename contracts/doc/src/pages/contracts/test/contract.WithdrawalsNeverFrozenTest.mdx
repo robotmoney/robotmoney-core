@@ -5,7 +5,7 @@ description: "Withdrawals are never frozen, by anyone. Every shipped vault (rmUS
 
 # WithdrawalsNeverFrozenTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/WithdrawalsNeverFrozen.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/WithdrawalsNeverFrozen.t.sol)
 
 **Inherits:** Test
 
@@ -331,16 +331,17 @@ registry status is DepositsPaused, then Retired.
 function test_router_redeemsWhileVaultDepositsPausedAndRetired() public;
 ```
 
-<a id="test_gateway_withdrawswhilegatewayandvaultdepositspaused"></a>
+<a id="test_gateway_ownerredeemsdirectlywhilegatewayandvaultdepositspaused"></a>
 
-### test_gateway_withdrawsWhileGatewayAndVaultDepositsPaused
+### test_gateway_ownerRedeemsDirectlyWhileGatewayAndVaultDepositsPaused
 
-A gateway agent withdraws on both paths while the deposit pauser has
-paused gateway deposits and the emergency key has paused vault deposits.
-Gateway deposits revert DepositsArePaused; the Safe resumes them.
+The gateway has no withdrawal path. The owner of gateway-minted shares redeems
+them directly on the vault while the deposit pauser has paused gateway deposits
+and the emergency key has paused vault deposits. Gateway deposits revert
+DepositsArePaused; the Safe resumes them.
 
 ```solidity
-function test_gateway_withdrawsWhileGatewayAndVaultDepositsPaused() public;
+function test_gateway_ownerRedeemsDirectlyWhileGatewayAndVaultDepositsPaused() public;
 ```
 
 <a id="_buildothervaults-address"></a>
@@ -502,9 +503,9 @@ function _expectEmergencyCannotUnpause(address v) internal;
 | ---- | ---- | ----------- |
 | v | `address` |  |
 
-<a id="_selfauthorize-address-address"></a>
+<a id="_rmusdcdest"></a>
 
-### _selfAuthorize
+### _rmUsdcDest
 
 <i>
 
@@ -512,6 +513,20 @@ The permissionless commit/reveal route; a non-admin agent names itself as
 share receiver.
 
 </i>
+
+```solidity
+function _rmUsdcDest() internal view returns (address[] memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `address[]` |  |
+
+<a id="_selfauthorize-address-address"></a>
+
+### _selfAuthorize
 
 ```solidity
 function _selfAuthorize(address agent, address recipient) internal;

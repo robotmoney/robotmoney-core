@@ -173,6 +173,8 @@ describe("AuthorizeTab — commit and reveal previews (QA plan U4)", () => {
         setAgent={vi.fn()}
         shareReceiver={DEPOSITOR}
         setShareReceiver={vi.fn()}
+        destinations={["0x4444444444444444444444444444444444444444"]}
+        setDestinations={vi.fn()}
         now={NOW}
       />,
     );
@@ -210,6 +212,8 @@ describe("AuthorizeTab — commit and reveal previews (QA plan U4)", () => {
         setAgent={vi.fn()}
         shareReceiver={DEPOSITOR}
         setShareReceiver={vi.fn()}
+        destinations={["0x4444444444444444444444444444444444444444"]}
+        setDestinations={vi.fn()}
         now={NOW}
       />,
     );
@@ -226,6 +230,9 @@ describe("OnboardingWizard — commit and reveal previews (QA plan U4)", () => {
     fireEvent.change(screen.getByTestId("wizard-agent-input"), { target: { value: AGENT } });
     fireEvent.change(screen.getByTestId("wizard-shareReceiver-input"), {
       target: { value: DEPOSITOR },
+    });
+    fireEvent.change(screen.getByTestId("wizard-destination-extra"), {
+      target: { value: "0x4444444444444444444444444444444444444444" },
     });
     fireEvent.click(screen.getByTestId("step-2-next"));
     const freeze = await screen.findByTestId("wizard-freeze");
@@ -251,6 +258,9 @@ describe("RotationTab — commit and reveal previews (QA plan U4)", () => {
     fireEvent.change(screen.getByTestId("rotation-new-agent-input"), { target: { value: AGENT } });
     fireEvent.change(screen.getByTestId("rotation-shareReceiver-input"), {
       target: { value: DEPOSITOR },
+    });
+    fireEvent.change(screen.getByTestId("rotation-destination-extra"), {
+      target: { value: "0x4444444444444444444444444444444444444444" },
     });
     expectNoAuthorizeAgentPreview();
 

@@ -12,7 +12,7 @@ use alloy_primitives::{hex as ahex, U256};
 use alloy_sol_types::SolCall;
 use assert_cmd::Command;
 use mockito::Matcher;
-use rust_payment_client::gateway::{IVault, RobotMoneyGateway};
+use rust_payment_client::gateway::IVault;
 use serde_json::{json, Value};
 
 fn rmpc() -> Command {
@@ -69,16 +69,6 @@ async fn get_vault_clean_envelope_with_share_price() {
         .await;
 
     // gateway.vault()
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::vaultCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_address(VAULT)))
-        .expect_at_least(0)
-        .create_async()
-        .await;
     // vault.asset()
     server
         .mock("POST", "/")
@@ -170,9 +160,9 @@ async fn get_vault_clean_envelope_with_share_price() {
         d["address"].as_str().unwrap().to_lowercase(),
         format!("{VAULT:#x}")
     );
-    assert_eq!(
-        d["gateway_vault"].as_str().unwrap().to_lowercase(),
-        format!("{VAULT:#x}")
+    assert!(
+        d.get("gateway_vault").is_none(),
+        "gateway.vault() is retired"
     );
     assert_eq!(
         d["asset"].as_str().unwrap().to_lowercase(),
@@ -216,16 +206,6 @@ async fn get_vault_partial_when_total_assets_reverts() {
         .create_async()
         .await;
     // gateway.vault, asset, name, symbol, decimals — all OK.
-    server
-        .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::vaultCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_address(VAULT)))
-        .expect_at_least(0)
-        .create_async()
-        .await;
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(
@@ -341,16 +321,6 @@ async fn get_vault_partial_when_total_supply_reverts() {
     // gateway.vault, asset, name, symbol, decimals — all OK.
     server
         .mock("POST", "/")
-        .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::vaultCall,
-        >()))
-        .with_status(200)
-        .with_body(jrpc_result(&enc_address(VAULT)))
-        .expect_at_least(0)
-        .create_async()
-        .await;
-    server
-        .mock("POST", "/")
         .match_body(match_eth_call_selector(
             &selector_hex_of::<IVault::assetCall>(),
         ))
@@ -439,9 +409,9 @@ async fn get_vault_partial_when_total_supply_reverts() {
     // Sibling reads that succeeded still carry their values.
     let d = &v["data"];
     assert_eq!(d["total_assets"], "2000000");
-    assert_eq!(
-        d["gateway_vault"].as_str().unwrap().to_lowercase(),
-        format!("{VAULT:#x}")
+    assert!(
+        d.get("gateway_vault").is_none(),
+        "gateway.vault() is retired"
     );
     assert_eq!(
         d["asset"].as_str().unwrap().to_lowercase(),
@@ -480,10 +450,6 @@ async fn get_vault_genuine_zero_supply_renders_zero_not_null() {
         .create_async()
         .await;
     let calls: Vec<(String, String)> = vec![
-        (
-            selector_hex_of::<RobotMoneyGateway::vaultCall>(),
-            enc_address(VAULT),
-        ),
         (selector_hex_of::<IVault::assetCall>(), enc_address(USDC)),
         (
             selector_hex_of::<IVault::nameCall>(),

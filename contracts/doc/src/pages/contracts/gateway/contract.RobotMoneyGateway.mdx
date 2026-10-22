@@ -1,107 +1,51 @@
 ---
 title: "RobotMoneyGateway"
-description: "Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC from the agent, enforces per-agent caps and a per-window gross cap, calls the vault, and routes the resulting `rmUSDC` shares to a per-agent configured receiver."
+description: "Policy-gated agent deposit into an owner-selected ERC-4626 vault. Pulls USDC from the agent, enforces per-agent caps and a rolling per-window cap, deposits into a destination named in the depositor's `allowedDestinations`, and mints the shares to the policy's share receiver (the owner)."
 ---
 
 # RobotMoneyGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/18b3311e2cebb7a6f13d47076813825aead407c8/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles), ReentrancyGuardUpgradeable, [IGateway](/contracts/gateway/interfaces/interface.IGateway), [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
 **Title:** RobotMoneyGateway
 
-Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC from
-the agent, enforces per-agent caps and a per-window gross cap,
-calls the vault, and routes the resulting `rmUSDC` shares to a
-per-agent configured receiver.
+Policy-gated agent deposit into an owner-selected ERC-4626 vault. Pulls USDC
+from the agent, enforces per-agent caps and a rolling per-window cap, deposits
+into a destination named in the depositor's `allowedDestinations`, and mints
+the shares to the policy's share receiver (the owner).
 
 <i>
 
-Implements `Plan tracking issue #109` §2.2. Custom errors only;
-OZ v5 SafeERC20; the gateway must never custody `rmUSDC`. Idempotency
-hash deliberately excludes `deadline`.
+Canonical: docs/architecture.md §5.2. The gateway pins no vault list and has no
+registry lookup: the policy list is the only destination authority, and the
+Portfolio Router is never a destination. The agent has no withdrawal path.
+Custom errors only; OZ v5 SafeERC20; the gateway never custodies vault shares.
+The idempotency hash deliberately excludes `deadline`.
 
 </i>
 
 Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the
 constructor, the implementation is locked, and only `upgradeTimelock()` can upgrade
-or freeze it (`GovernedUUPS`). No gateway role carries upgrade power. `usdcToken`,
-`vaultContract` and `routerContract` are set once at initialization, no setter.
+or freeze it (`GovernedUUPS`). No gateway role carries upgrade power. `usdcToken`
+is set once at initialization, no setter. `vaultContract`, `routerContract` and the
+withdraw window state are retired storage kept only for the proxy layout gate.
 
 ## Constants
-
-### WITHDRAW_GAS_FLOOR
-
-<i>
-
-Gas `withdraw` needs, checked at entry before any state-dependent work (core 1482).
-The vault's entry floor is 1_600_000 after the 63/64 forward (about 1_625_400 at the
-call), and the gateway spends its policy reads, window and payment-id writes and the
-share pull before the call. A floor checked after that work would move with the
-state, so eth_estimateGas could land on it and fail at inclusion.
-See docs/technical/redeem-gas-1482.md.
-
-</i>
-
-```solidity
-uint256 internal constant WITHDRAW_GAS_FLOOR = 2_000_000;
-```
-
-### ROUTER_WITHDRAW_BASE_GAS
-
-<i>
-
-`withdrawFromRouter` needs this fixed part plus `ROUTER_WITHDRAW_GAS_PER_LEG` per
-non-zero leg, checked at entry. Per leg the router needs 1_700_000 after the 63/64
-forward (about 1_727_000 at the call) plus the gateway's share pull, approvals and
-custody reads for that leg.
-
-</i>
-
-```solidity
-uint256 internal constant ROUTER_WITHDRAW_BASE_GAS = 400_000;
-```
-
-### ROUTER_WITHDRAW_GAS_PER_LEG
-
-```solidity
-uint256 internal constant ROUTER_WITHDRAW_GAS_PER_LEG = 1_850_000;
-```
 
 ### DEPOSIT_GAS_FLOOR
 
 <i>
 
-`deposit` and a vault-destination `depositTo` need this at entry. The vault's deposit
-entry floor is 1_600_000 after the 63/64 forward, and the gateway spends its policy
-reads, window and payment-id writes and the USDC pull before the call.
+Gas `depositTo` needs at entry. The vault's deposit entry floor is 1_600_000 after
+the 63/64 forward, and the gateway spends its policy reads, window and payment-id
+writes and the USDC pull before the call.
 
 </i>
 
 ```solidity
 uint256 internal constant DEPOSIT_GAS_FLOOR = 2_000_000;
-```
-
-### ROUTER_DEPOSIT_BASE_GAS
-
-<i>
-
-A router-destination `depositTo` needs this fixed part plus
-`ROUTER_DEPOSIT_GAS_PER_LEG` per effective weight leg, checked before the first
-vault call. Per leg the router needs 2_400_000 after the 63/64 forward
-(`PortfolioRouter.DEPOSIT_GAS_PER_LEG`).
-
-</i>
-
-```solidity
-uint256 internal constant ROUTER_DEPOSIT_BASE_GAS = 400_000;
-```
-
-### ROUTER_DEPOSIT_GAS_PER_LEG
-
-```solidity
-uint256 internal constant ROUTER_DEPOSIT_GAS_PER_LEG = 2_550_000;
 ```
 
 ### WINDOW_SECONDS
@@ -131,33 +75,14 @@ no longer be revealed and the depositor must re-commit.
 uint256 public constant COMMIT_EXPIRY_BLOCKS = 256;
 ```
 
-### OP_DEPOSIT
-
-Op-kind discriminators prepended to every `paymentId` hash to
-prevent cross-operation replay (deposit id ≠ depositTo id ≠
-withdrawal id ≠ router-withdrawal id even when all other inputs
-are identical).
-
-```solidity
-uint8 internal constant OP_DEPOSIT = 1;
-```
-
-### OP_WITHDRAW
-
-```solidity
-uint8 internal constant OP_WITHDRAW = 2;
-```
-
 ### OP_DEPOSIT_TO
+
+Op-kind discriminator prepended to the `paymentId` hash. The value 3 is kept
+from the deployed release so ids stay stable, and the retired kinds (1, 2, 4)
+are never reused.
 
 ```solidity
 uint8 internal constant OP_DEPOSIT_TO = 3;
-```
-
-### OP_WITHDRAW_ROUTER
-
-```solidity
-uint8 internal constant OP_WITHDRAW_ROUTER = 4;
 ```
 
 ### MAX_WINDOW_ENTRIES
@@ -186,19 +111,29 @@ IERC20 public usdcToken;
 
 ### vaultContract
 
-Pinned ERC-4626 vault.
+<i>
+
+RETIRED. Held the pinned vault. Never written or read; the slot stays because the
+proxy storage layout gate (scripts/ci/check-core-storage-layout.sh) allows no
+removal. The policy's `allowedDestinations` is the only destination authority.
+
+</i>
 
 ```solidity
-IERC4626 public vaultContract;
+IERC4626 internal vaultContract;
 ```
 
 ### routerContract
 
-Portfolio Router for multi-vault agent deposits. May be `address(0)`
-if the gateway was deployed without router support.
+<i>
+
+RETIRED. Held the Portfolio Router. Never written or read, same reason as
+`vaultContract`. The router is never a destination.
+
+</i>
 
 ```solidity
-IPortfolioRouter public routerContract;
+IPortfolioRouter internal routerContract;
 ```
 
 ### commitments
@@ -253,10 +188,14 @@ mapping(address => DepositWindow) public agentDepositWindow;
 
 ### agentWithdrawWindow
 
-Per-agent rolling withdrawal window state. See `WithdrawWindow`.
+<i>
+
+RETIRED with the withdraw path; never written. Kept for the layout gate.
+
+</i>
 
 ```solidity
-mapping(address => WithdrawWindow) public agentWithdrawWindow;
+mapping(address => WithdrawWindow) internal agentWithdrawWindow;
 ```
 
 ### _depositWindow
@@ -266,6 +205,12 @@ mapping(address => GatewayWindows.RollingWindow) private _depositWindow;
 ```
 
 ### _withdrawWindow
+
+<i>
+
+RETIRED with the withdraw path; never written. Kept for the layout gate.
+
+</i>
 
 ```solidity
 mapping(address => GatewayWindows.RollingWindow) private _withdrawWindow;
@@ -281,8 +226,7 @@ mapping(bytes32 => bool) public usedPaymentIds;
 
 ### _depositsPaused
 
-Deposit pause flag. Blocks `deposit` and `depositTo` only. Withdrawals
-are never frozen (owner decision 2026-10-05, core 1494).
+Deposit pause flag. Blocks `depositTo`. The gateway has no withdrawal path.
 
 ```solidity
 bool private _depositsPaused;
@@ -385,19 +329,24 @@ function _revokeRole(bytes32 role, address account) internal override returns (b
 | ---- | ---- | ----------- |
 | revoked | `bool` |  |
 
-<a id="initialize-ierc20-ierc4626-address-address-address-address-upgrademode"></a>
+<a id="initialize-ierc20-address-address-address-upgrademode"></a>
 
 ### initialize
 
 Atomic proxy initialization (the ERC1967Proxy constructor calls it).
 
+<i>
+
+The gateway pins no vault and no router. Destinations come from each depositor's
+policy (architecture 5.2).
+
+</i>
+
 ```solidity
 function initialize(
         IERC20 usdc_,
-        IERC4626 vault_,
         address admin_,
         address pauser_,
-        address router_,
         address upgradeTimelock_,
         UpgradeMode upgradeMode_
     ) external initializer;
@@ -408,10 +357,8 @@ function initialize(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | usdc_ | `IERC20` | USDC (or 6-decimal stand-in) token address. |
-| vault_ | `IERC4626` | ERC-4626 vault whose `asset()` MUST equal `usdc_`. |
 | admin_ | `address` | Holder of `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`. |
 | pauser_ | `address` | Holder of `DEPOSIT_PAUSER_ROLE`. Must be distinct from agents. |
-| router_ | `address` | Portfolio Router address, or `address(0)` to deploy without<br/>router support (single-vault mode). |
 | upgradeTimelock_ | `address` | The Safe-controlled timelock: the only upgrade and freeze authority. |
 | upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
 
@@ -431,43 +378,11 @@ function usdc() external view returns (address);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `address` |  |
 
-<a id="vault"></a>
-
-### vault
-
-Pinned ERC-4626 vault address.
-
-```solidity
-function vault() external view returns (address);
-```
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `address` |  |
-
-<a id="router"></a>
-
-### router
-
-Portfolio Router address, or `address(0)` if not configured.
-
-```solidity
-function router() external view returns (address);
-```
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `address` |  |
-
 <a id="depositspaused"></a>
 
 ### depositsPaused
 
-Whether gateway deposits are currently paused. Withdrawals are never paused.
+Whether gateway deposits are currently paused.
 
 ```solidity
 function depositsPaused() external view returns (bool);
@@ -478,34 +393,6 @@ function depositsPaused() external view returns (bool);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bool` |  |
-
-<a id="effectivewithdrawwindowgross-address"></a>
-
-### effectiveWithdrawWindowGross
-
-Cumulative vault shares the agent has redeemed in the current
-rolling withdrawal window. Returns zero when the agent has
-either never withdrawn or the last anchor lies more than
-`WINDOW_SECONDS` in the past. Use this — not the raw
-`agentWithdrawWindow` storage tuple — to project whether the
-next withdrawal would breach `maxWithdrawPerWindow` (issue
-#449).
-
-```solidity
-function effectiveWithdrawWindowGross(address agent) external view returns (uint256);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| agent | `address` | The agent address to look up. |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` | The agent's cumulative rolling-window withdrawal gross. |
 
 <a id="effectivedepositwindowgross-address"></a>
 
@@ -534,32 +421,6 @@ function effectiveDepositWindowGross(address agent) external view returns (uint2
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` | The agent's cumulative rolling-window deposit gross. |
 
-<a id="_accruerollingwithdraw-address-uint256-uint256"></a>
-
-### _accrueRollingWithdraw
-
-<i>
-
-Apply a `shares` redemption against the agent's rolling-window
-withdrawal budget (#449). Reverts with `WithdrawWindowCapExceeded`
-when the projected cumulative draw would breach `cap`. On success
-writes the updated `WithdrawWindow` to storage. Extracted from
-`withdraw` to keep the entrypoint within EVM stack-depth limits.
-
-</i>
-
-```solidity
-function _accrueRollingWithdraw(address agent, uint256 shares, uint256 cap) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| agent | `address` |  |
-| shares | `uint256` |  |
-| cap | `uint256` |  |
-
 <a id="_accruerollingdeposit-address-uint256-uint256"></a>
 
 ### _accrueRollingDeposit
@@ -569,8 +430,8 @@ function _accrueRollingWithdraw(address agent, uint256 shares, uint256 cap) inte
 Apply an `amount` deposit against the agent's rolling-window deposit
 budget (#497). Reverts with `WindowCapExceeded` when the projected
 cumulative deposit would breach `cap`. On success writes the updated
-`DepositWindow` to storage. Mirrors `_accrueRollingWithdraw` so
-the deposit side is equally hardened against calendar-boundary bursts.
+`DepositWindow` to storage. Keeps the window write
+out of the entrypoint.
 
 </i>
 
@@ -792,9 +653,8 @@ function _validatePolicy(address caller, AgentPolicy calldata p) internal view;
 
 ### pauseDeposits
 
-Pause new deposits (`deposit`, `depositTo`). Restricted to
-`DEPOSIT_PAUSER_ROLE`. Withdrawals (`withdraw`, `withdrawFromRouter`)
-stay open (owner decision 2026-10-05, core 1494).
+Pause new deposits (`depositTo`). Restricted to
+`DEPOSIT_PAUSER_ROLE`.
 
 ```solidity
 function pauseDeposits() external onlyRole(DEPOSIT_PAUSER_ROLE);
@@ -813,63 +673,20 @@ lifecycle of an agent it does not own.
 function unpauseDeposits() external onlyRole(ADMIN_ROLE);
 ```
 
-<a id="deposit-bytes32-uint256-uint64-bytes32"></a>
-
-### deposit
-
-Pull `amount` USDC from caller, deposit into the vault, route
-resulting shares to the agent's configured `shareReceiver`.
-
-<i>
-
-Implements §2.2 steps 1–12. Effects (`usedPaymentIds`, rolling
-deposit window) are written before external calls (CEI pattern).
-`nonReentrant` provides defense-in-depth.
-
-</i>
-
-```solidity
-function deposit(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idempotencyKey)
-        external
-        nonReentrant
-        onlyRole(AGENT_ROLE)
-        returns (bytes32 paymentId, uint256 sharesMinted);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| orderId | `bytes32` | Caller-supplied order identifier (echoed in event). |
-| amount | `uint256` | Gross USDC amount, in 6-decimal base units. |
-| deadline | `uint64` | Hard expiry; must be `&lt;= block.timestamp + 600`. |
-| idempotencyKey | `bytes32` | Caller-side dedup salt mixed into `paymentId`. |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| paymentId | `bytes32` | keccak256(abi.encode(OP_DEPOSIT=1, chainId, gateway, agent,<br/>orderId, amount, idempotencyKey)) — op-kind prefix ensures<br/>deposit ids are disjoint from depositTo and withdraw ids. |
-| sharesMinted | `uint256` | Vault shares minted to `shareReceiver`. |
-
 <a id="depositto-bytes32-uint256-uint64-bytes32-address-uint256"></a>
 
 ### depositTo
 
-Pull `amount` USDC from caller, route to `destination` (vault or
-Portfolio Router), and deliver resulting shares to the agent's
-configured `shareReceiver`. When `destination` is the router,
-`minSharesPerLeg` provides per-leg slippage protection.
+Pull `amount` USDC from caller, deposit it into `destination`, and
+deliver the resulting shares to the agent's `shareReceiver` (the owner).
+This is the gateway's only agent action.
 
 <i>
 
-Routes to a specific `destination` (vault or Portfolio Router). All the
-same caps, deadline, idempotency, and policy checks as `deposit` apply.
-When `destination` is the router, `minSharesPerLeg` is forwarded to
-`router.depositFor(shareReceiver, amount, minSharesPerLeg)` and shares
-are minted directly to `shareReceiver`. When `destination` is a vault,
-it behaves identically to `deposit` except the vault is user-specified
-and must pass the allowedDestinations check.
+The only agent action. Deposits into `destination`, which must appear in the
+policy's non-empty `allowedDestinations`. No registry lookup, no pinned vault.
+Shares are minted to `shareReceiver`. `minSharesPerLeg` is bound into the
+`paymentId` (GW-2) and is not otherwise enforced: the gateway has no router leg.
 
 </i>
 
@@ -892,14 +709,14 @@ function depositTo(
 | amount | `uint256` | Gross USDC amount, in 6-decimal base units. |
 | deadline | `uint64` | Hard expiry; must be `&lt;= block.timestamp + 600`. |
 | idempotencyKey | `bytes32` | Caller-side dedup salt mixed into `paymentId`. |
-| destination | `address` | Vault address or Portfolio Router address. |
-| minSharesPerLeg | `uint256[]` | Per-leg slippage floor (router path only). Pass<br/>empty array when routing to a single vault. |
+| destination | `address` | ERC-4626 vault named in the policy. |
+| minSharesPerLeg | `uint256[]` | Bound into `paymentId` only. Pass an empty array. |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| paymentId | `bytes32` | keccak256(abi.encode(OP_DEPOSIT_TO=3, chainId, gateway, agent,<br/>orderId, amount, idempotencyKey)) — op-kind prefix ensures<br/>depositTo ids are disjoint from deposit and withdraw ids. |
+| paymentId | `bytes32` | keccak256(abi.encode(OP_DEPOSIT_TO=3, chainId, gateway, agent,<br/>orderId, amount, idempotencyKey, destination, minSharesPerLeg)). |
 
 <a id="_requiregas-uint256"></a>
 
@@ -907,8 +724,7 @@ function depositTo(
 
 <i>
 
-Revert `InsufficientGas` when less than `floor` gas is left. One copy for all
-four entry checks keeps the gateway under the EIP-170 size limit (core 1791).
+Revert `InsufficientGas` when less than `floor` gas is left.
 
 </i>
 
@@ -922,43 +738,22 @@ function _requireGas(uint256 floor) internal view;
 | ---- | ---- | ----------- |
 | floor | `uint256` |  |
 
-<a id="_requiredepositgas-bool"></a>
-
-### _requireDepositGas
-
-<i>
-
-Entry gas floor for `depositTo`. The router floor scales with the effective legs.
-
-</i>
-
-```solidity
-function _requireDepositGas(bool isRouter) internal view;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| isRouter | `bool` |  |
-
 <a id="_validatedestination-address-address"></a>
 
 ### _validateDestination
 
 <i>
 
-Validates `destination` against the pinned vault and router, and
-enforces the policy allowedDestinations whitelist when non-empty.
-Returns `true` when destination is the router, `false` for a vault.
+Reverts `InvalidDestination` unless `destination` appears in the policy list. An
+empty list authorizes nothing, so a legacy stored policy with no destinations is
+inert rather than a wildcard.
 
 </i>
 
 ```solidity
 function _validateDestination(address destination, address[] memory allowedDestinations)
         internal
-        view
-        returns (bool isRouter);
+        pure;
 ```
 
 **Parameters**
@@ -968,65 +763,13 @@ function _validateDestination(address destination, address[] memory allowedDesti
 | destination | `address` |  |
 | allowedDestinations | `address[]` |  |
 
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| isRouter | `bool` |  |
-
-<a id="_executedeposit-depositargs-uint256"></a>
-
-### _executeDeposit
-
-<i>
-
-Dispatches to router or vault deposit execution based on `args.isRouter`.
-Separated into two internal calls to give viaIR coverage instrumentation
-a reliable source-map anchor for each path.
-
-</i>
-
-```solidity
-function _executeDeposit(DepositArgs memory args, uint256[] calldata minSharesPerLeg) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| args | `DepositArgs` |  |
-| minSharesPerLeg | `uint256[]` |  |
-
-<a id="_executerouterdeposit-depositargs-uint256"></a>
-
-### _executeRouterDeposit
-
-<i>
-
-Router-path deposit: approve router, call `depositFor`, clear allowance,
-check USDC custody invariant, emit event.
-
-</i>
-
-```solidity
-function _executeRouterDeposit(DepositArgs memory args, uint256[] calldata minSharesPerLeg)
-        internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| args | `DepositArgs` |  |
-| minSharesPerLeg | `uint256[]` |  |
-
 <a id="_executevaultdeposit-depositargs"></a>
 
 ### _executeVaultDeposit
 
 <i>
 
-Vault-path deposit: pre-call share custody check, approve vault, deposit,
+Deposit execution: pre-call share custody check, approve vault, deposit,
 clear allowance, post-call custody invariants, emit event.
 
 </i>
@@ -1041,215 +784,13 @@ function _executeVaultDeposit(DepositArgs memory args) internal;
 | ---- | ---- | ----------- |
 | args | `DepositArgs` |  |
 
-<a id="withdraw-bytes32-uint256-address-uint64-bytes32"></a>
-
-### withdraw
-
-<i>
-
-The agent must have approved the gateway to spend its vault shares
-before calling this function. The gateway pulls shares via
-`transferFrom(agent, gateway, shares)`, calls `vault.redeem`, and
-forwards USDC only to `policy.assetRecipient`. CEI pattern: state
-effects written before external calls. `nonReentrant` provides
-defense-in-depth.
-
-</i>
-
-Share custody requirement (audit 2026-06-09, L-13 — intentional):
-this single-vault path pulls shares from the AGENT (`msg.sender`),
-while `deposit` mints shares to `policy.shareReceiver` and the
-router path (`withdrawFromRouter`) pulls from `policy.shareReceiver`.
-Single-vault withdrawal therefore requires `agent == shareReceiver`,
-or the share holder to have transferred shares to the agent first.
-This matches the production client contract: rmpc preflights
-`vault.allowance(agent, gateway)` and `vault.balanceOf(agent)`
-(clients/rust-payment-client/src/commands/withdraw.rs) before
-submitting, so changing the pull source here would break the only
-production caller. No funds are at risk either way: USDC always
-settles to `policy.assetRecipient`.
-
-```solidity
-function withdraw(
-        bytes32 orderId,
-        uint256 shares,
-        address sourceVault,
-        uint64 deadline,
-        bytes32 idempotencyKey
-    ) external nonReentrant onlyRole(AGENT_ROLE) returns (bytes32 paymentId, uint256 assetsOut);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| orderId | `bytes32` | Caller-supplied order identifier (echoed in event). |
-| shares | `uint256` | Vault shares to redeem. |
-| sourceVault | `address` | Vault address to redeem from. |
-| deadline | `uint64` | Hard expiry; must be `&lt;= block.timestamp + 600`. |
-| idempotencyKey | `bytes32` | Caller-side dedup salt mixed into `paymentId`. |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| paymentId | `bytes32` | keccak256(abi.encode(OP_WITHDRAW=2, chainId, gateway, agent,<br/>orderId, shares, idempotencyKey)) — op-kind prefix ensures<br/>withdraw ids are disjoint from deposit and depositTo ids. |
-| assetsOut | `uint256` | USDC transferred to `assetRecipient`. |
-
-<a id="withdrawfromrouter-bytes32-address-uint256-uint256-uint64-bytes32"></a>
-
-### withdrawFromRouter
-
-Redeem vault shares proportionally across all Portfolio Router
-legs. Enforces the same policy checks (valid-until, per-payment
-cap, window cap, allowed-source-vaults, idempotency,
-recipient) as single-vault `withdraw`. Works while deposits are
-paused: a pause never blocks a withdrawal (core 1494). Each leg's vault must
-appear in `policy.allowedSourceVaults` (when non-empty). USDC
-is forwarded exclusively to the policy-configured `assetRecipient`.
-
-`policy.shareReceiver` (the share holder) must have approved the
-
-gateway for each vault's share token prior to calling. The
-
-gateway temporarily holds the shares during the call frame and
-
-passes them through to the router — no outer share token is
-
-minted and no intermediate custody persists beyond the call.
-
-<i>
-
-Proportional multi-vault redemption through the Portfolio Router.
-All legs must succeed (all-or-revert). No outer share token is
-minted; the gateway temporarily holds each vault's shares during the
-call frame and passes them to the router's `redeemFor`, which calls
-`vault.redeem` per leg and delivers USDC directly to `assetRecipient`.
-CEI pattern: all state effects written before external calls.
-`nonReentrant` provides defense-in-depth.
-
-</i>
-
-```solidity
-function withdrawFromRouter(
-        bytes32 orderId,
-        address[] calldata vaults,
-        uint256[] calldata sharesPerLeg,
-        uint256[] calldata minAssetsPerLeg,
-        uint64 deadline,
-        bytes32 idempotencyKey
-    )
-        external
-        nonReentrant
-        onlyRole(AGENT_ROLE)
-        returns (bytes32 paymentId, uint256[] memory assetsPerLeg);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| orderId | `bytes32` | Caller-supplied order identifier (echoed in event). |
-| vaults | `address[]` | Explicit list of vault addresses to redeem from<br/>(issue #967, F-03). Drives the redeem legs directly<br/>instead of the router's live weight vector, so a<br/>holder can exit a reweighted-out or Retired position.<br/>`sharesPerLeg[i]` binds to `vaults[i]` (NC-5) and the<br/>array is committed to `paymentId`. |
-| sharesPerLeg | `uint256[]` | Vault shares to redeem per leg (parallel to `vaults`). |
-| minAssetsPerLeg | `uint256[]` | Per-leg minimum USDC out (slippage floor), parallel<br/>to `vaults`/`sharesPerLeg`. The gateway forwards this<br/>floor straight to `PortfolioRouter.redeemFor`, which<br/>reverts each leg whose realized proceeds fall below it<br/>(GW-5 / F-11). A floor of 0 disables the check for<br/>that leg, but the caller is expected to pass a real,<br/>off-chain-computed minimum — the gateway no longer<br/>hardcodes an all-zero vector. Length must equal<br/>`sharesPerLeg`. The floor vector is folded into<br/>`paymentId` so a replay cannot re-execute the same<br/>order under a weaker floor. |
-| deadline | `uint64` | Hard expiry; must be `&lt;= block.timestamp + 600`. The<br/>gateway forwards this same deadline to the router<br/>(no longer `type(uint256).max`), so the router's own<br/>deadline guard also bites (F-11). |
-| idempotencyKey | `bytes32` | Caller-side dedup salt mixed into `paymentId`. |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| paymentId | `bytes32` | Hash committing chain/contract/agent/order/totalShares/<br/>vaults/sharesPerLeg/minAssetsPerLeg/key. |
-| assetsPerLeg | `uint256[]` | USDC received per leg. |
-
-<a id="_routerwithdrawpaymentid-bytes32-uint256-address-uint256-uint256-bytes32"></a>
-
-### _routerWithdrawPaymentId
-
-<i>
-
-Compute the router-withdrawal paymentId. DEADLINE INTENTIONALLY
-EXCLUDED (a deadline is liveness, not intent). `OP_WITHDRAW_ROUTER`
-prefix namespaces these ids from the three sibling op kinds (L-12).
-The explicit `vaults`/`sharesPerLeg` are committed so two withdrawals
-that name different vaults or per-leg shares can never collide (#967,
-NC-5), and `minAssetsPerLeg` is bound so a replay can never re-execute
-the same order under a weaker (e.g. zeroed) slippage floor (GW-5 /
-F-11). Extracted to a helper to keep `withdrawFromRouter` under the
-EVM stack-depth limit.
-
-</i>
-
-```solidity
-function _routerWithdrawPaymentId(
-        bytes32 orderId,
-        uint256 totalShares,
-        address[] calldata vaults,
-        uint256[] calldata sharesPerLeg,
-        uint256[] calldata minAssetsPerLeg,
-        bytes32 idempotencyKey
-    ) internal view returns (bytes32);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| orderId | `bytes32` |  |
-| totalShares | `uint256` |  |
-| vaults | `address[]` |  |
-| sharesPerLeg | `uint256[]` |  |
-| minAssetsPerLeg | `uint256[]` |  |
-| idempotencyKey | `bytes32` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `bytes32` |  |
-
-<a id="_executerouterwithdraw-routerwithdrawargs-uint256-uint256"></a>
-
-### _executeRouterWithdraw
-
-<i>
-
-Execute the multi-leg router withdrawal: pull shares from shareHolder,
-approve router, call redeemFor, clear allowances, verify custody.
-Separated to avoid stack-too-deep in `withdrawFromRouter`.
-
-</i>
-
-```solidity
-function _executeRouterWithdraw(
-        RouterWithdrawArgs memory args,
-        uint256[] calldata sharesPerLeg,
-        uint256[] calldata minAssetsPerLeg
-    ) internal returns (uint256[] memory assetsPerLeg);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| args | `RouterWithdrawArgs` |  |
-| sharesPerLeg | `uint256[]` |  |
-| minAssetsPerLeg | `uint256[]` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| assetsPerLeg | `uint256[]` |  |
-
 ## Errors
 
 ### InsufficientGas
 
-Gas left is below the floor a withdraw needs before it fans out to the vault
-(or to the router and its vaults). Raised before the external call so a
-gas limit that is too low reverts with a reason. Retry with more gas. (core 1482.)
+Gas left is below the floor a deposit needs before it calls the destination vault.
+Raised before the external call so a gas limit that is too low reverts with a
+reason. Retry with more gas. (core 1482.)
 
 ```solidity
 error InsufficientGas(uint256 available, uint256 required);
@@ -1270,18 +811,10 @@ Constructor or admin call passed `address(0)` where a real address is required.
 error ZeroAddress();
 ```
 
-### AssetMismatch
-
-Constructor-time check: vault.asset() does not match the configured USDC token.
-
-```solidity
-error AssetMismatch();
-```
-
 ### DepositsArePaused
 
 Deposit rejected because gateway deposits are paused (also raised by
-`pauseDeposits()` if deposits are already paused). Withdrawals never raise it.
+`pauseDeposits()` if deposits are already paused).
 
 ```solidity
 error DepositsArePaused();
@@ -1483,63 +1016,29 @@ error ShareReceiverNotAuthorized();
 ### InvalidDestination
 
 `depositTo` was called with a destination not in the agent's
-`allowedDestinations` list (when the list is non-empty), or the
-destination is neither the pinned vault nor the router.
+`allowedDestinations` list. An empty list authorizes nothing. The policy list is
+the only destination authority: the gateway pins no vault and has no registry.
 
 ```solidity
 error InvalidDestination();
 ```
 
-### WithdrawalNotEnabled
+### EmptyAllowedDestinations
 
-`withdraw()` called but the agent's policy has withdrawal disabled
-(`maxWithdrawPerPayment == 0`).
+A policy named no `allowedDestinations`, or named the zero address as one.
 
 ```solidity
-error WithdrawalNotEnabled();
+error EmptyAllowedDestinations();
 ```
 
-### SharesExceedWithdrawPerPaymentCap
+### RetiredPolicyFieldNonZero
 
-`withdraw()` shares argument exceeds `maxWithdrawPerPayment` cap.
-
-```solidity
-error SharesExceedWithdrawPerPaymentCap();
-```
-
-### WithdrawWindowCapExceeded
-
-`withdraw()` cumulative shares in the current window would exceed `maxWithdrawPerWindow`.
+A policy set a retired withdraw member (`assetRecipient`, `maxWithdrawPerPayment`,
+`maxWithdrawPerWindow`, `allowedSourceVaults`). The gateway has no withdraw path,
+so the members must be zero or empty (architecture 5.2).
 
 ```solidity
-error WithdrawWindowCapExceeded();
-```
-
-### InvalidSourceVault
-
-`withdraw()` called with a `sourceVault` not in the agent's
-`allowedSourceVaults` list (when the list is non-empty), or the
-vault is not the pinned vault.
-
-```solidity
-error InvalidSourceVault();
-```
-
-### InvalidAssetRecipient
-
-`withdraw()` policy has `assetRecipient == address(0)`.
-
-```solidity
-error InvalidAssetRecipient();
-```
-
-### UnexpectedAssetsReceived
-
-`withdraw()` USDC balance did not increase by the expected amount,
-indicating a malicious or fee-on-transfer vault.
-
-```solidity
-error UnexpectedAssetsReceived();
+error RetiredPolicyFieldNonZero();
 ```
 
 ### WindowBufferFull
@@ -1559,24 +1058,6 @@ Revoking/renouncing the sole holder of an admin tier is forbidden.
 
 ```solidity
 error LastAdminFloor();
-```
-
-### RouterNotConfigured
-
-Error: `withdrawFromRouter()` called but no router is configured
-(`routerContract == address(0)`).
-
-```solidity
-error RouterNotConfigured();
-```
-
-### RouterLegLengthMismatch
-
-Error: `sharesPerLeg` length does not match the router's current
-effective weight vector length.
-
-```solidity
-error RouterLegLengthMismatch();
 ```
 
 ## Structs
@@ -1604,8 +1085,7 @@ struct Commitment {
 ### DepositWindow
 
 Per-agent rolling-window deposit accounting (issue #497).
-Mirrors the withdrawal rolling-window pattern (`agentWithdrawWindow`)
-to eliminate the fixed-window boundary burst on the deposit side.
+Eliminates the fixed-window boundary burst on the deposit side.
 An agent cannot deposit more than `maxPerWindow` in any contiguous
 `WINDOW_SECONDS`-wide interval regardless of calendar boundary.
 
@@ -1667,7 +1147,6 @@ struct DepositArgs {
         address destination;
         uint64 windowId;
         uint256 balBefore;
-        bool isRouter;
         /// @dev Captured from the in-memory policy snapshot so the rolling-window
         ///      cap check never performs a second cold SLOAD on `agents[msg.sender]`.
         uint256 maxPerWindow;
@@ -1685,42 +1164,5 @@ struct DepositArgs {
 | destination | `address` |  |
 | windowId | `uint64` |  |
 | balBefore | `uint256` |  |
-| isRouter | `bool` |  |
 | maxPerWindow | `uint256` |  |
-
-### RouterWithdrawArgs
-
-<i>
-
-Internal args struct to avoid stack-too-deep in `withdrawFromRouter`.
-
-</i>
-
-```solidity
-struct RouterWithdrawArgs {
-        bytes32 paymentId;
-        bytes32 orderId;
-        address shareHolder;
-        address assetRecipient;
-        uint256 totalShares;
-        uint64 windowId;
-        uint64 deadline;
-        address[] vaultList;
-        uint256[] shareBalancesBefore;
-    }
-```
-
-**Properties**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| paymentId | `bytes32` |  |
-| orderId | `bytes32` |  |
-| shareHolder | `address` |  |
-| assetRecipient | `address` |  |
-| totalShares | `uint256` |  |
-| windowId | `uint64` |  |
-| deadline | `uint64` |  |
-| vaultList | `address[]` |  |
-| shareBalancesBefore | `uint256[]` |  |
 

@@ -76,7 +76,6 @@ contracts/script/contract.DeployUniswapV4PriceRecorder.mdx
 contracts/script/contract.DeployVault.mdx
 contracts/script/contract.DeployVaultRegistry.mdx
 contracts/script/contract.RedeployProtocolAssetVault.mdx
-contracts/script/interface.IGatewayAgentOwnership.mdx
 contracts/script/interface.IRetirableVaultLink.mdx
 contracts/script/interface.ISafeFull.mdx
 contracts/script/interface.IVaultRegistryLink.mdx
@@ -94,6 +93,7 @@ contracts/test/contract.AdapterDelegatecallGuardTest.mdx
 contracts/test/contract.AdapterWriteOffRuleTest.mdx
 contracts/test/contract.AgentDeployHarness.mdx
 contracts/test/contract.AgentGuardHarness.mdx
+contracts/test/contract.AgentLifecycleHandler.mdx
 contracts/test/contract.AgentTokenVaultGovernanceTest.mdx
 contracts/test/contract.AgentTokenVaultScriptGuardsTest.mdx
 contracts/test/contract.AgentTokenVaultTest.mdx
@@ -142,8 +142,6 @@ contracts/test/contract.DeployScriptChainGuardsTwinTest.mdx
 contracts/test/contract.DeploySeedDeposit.mdx
 contracts/test/contract.DeployTest.mdx
 contracts/test/contract.DeployTimeEligibilityTest.mdx
-contracts/test/contract.DeployTimelockAgentHandoverTest.mdx
-contracts/test/contract.DeployTimelockAgentListInputTest.mdx
 contracts/test/contract.DeployTimelockChainFloorTest.mdx
 contracts/test/contract.DeployTimelockDelayBoundaryTest.mdx
 contracts/test/contract.DeployTimelockDelayFloorTest.mdx
@@ -176,15 +174,19 @@ contracts/test/contract.FourVaultInitialStateForkTest.mdx
 contracts/test/contract.GasBurningAdapter.mdx
 contracts/test/contract.GasMeteredStubVault.mdx
 contracts/test/contract.GasUSDC.mdx
+contracts/test/contract.GatewayAgentExpiryTest.mdx
+contracts/test/contract.GatewayAgentLifecycleInvariantTest.mdx
 contracts/test/contract.GatewayAgentPolicyAuthorizationTest.mdx
 contracts/test/contract.GatewayAgentPolicyCodeSizeGuard.mdx
+contracts/test/contract.GatewayAgentRevokeTest.mdx
+contracts/test/contract.GatewayAgentRoleImmunityTest.mdx
+contracts/test/contract.GatewayAgentUpgradeTest.mdx
 contracts/test/contract.GatewayCommitRevealTest.mdx
+contracts/test/contract.GatewayConsentBoundaryTest.mdx
+contracts/test/contract.GatewayDepositOnlyTest.mdx
 contracts/test/contract.GatewayInputsHarness.mdx
 contracts/test/contract.GatewayRollingDepositWindowTest.mdx
-contracts/test/contract.GatewayRouterSplitStagesForkTest.mdx
-contracts/test/contract.GatewayRouterSplitStagesTest.mdx
 contracts/test/contract.GatewayRouterTest.mdx
-contracts/test/contract.GatewayWithdrawTest.mdx
 contracts/test/contract.GovernanceExecutePathAfterHandoverTest.mdx
 contracts/test/contract.GovernanceSeparationInvariant.mdx
 contracts/test/contract.GovernedSurfacesSafeTimelockTest.mdx
@@ -196,7 +198,6 @@ contracts/test/contract.InterlockMockVault.mdx
 contracts/test/contract.InterruptedRedeploy.mdx
 contracts/test/contract.InvForeignToken.mdx
 contracts/test/contract.InvUSDC.mdx
-contracts/test/contract.LeakyRedeemRouterVault.mdx
 contracts/test/contract.LowCardinalityPool.mdx
 contracts/test/contract.ManifestHarness.mdx
 contracts/test/contract.MigUsdc.mdx
@@ -291,7 +292,6 @@ contracts/test/contract.SafeIntegrationTest.mdx
 contracts/test/contract.SecurityReviewPoc.mdx
 contracts/test/contract.SecurityReviewRecheckReceiptPoc.mdx
 contracts/test/contract.SecurityReviewRecheckVaultPoc.mdx
-contracts/test/contract.ShareLeakRedeemVault.mdx
 contracts/test/contract.ShareLeakVault.mdx
 contracts/test/contract.ShortfallAdapter.mdx
 contracts/test/contract.ShortfallMorphoVault.mdx
@@ -302,9 +302,7 @@ contracts/test/contract.StubSwapRouter.mdx
 contracts/test/contract.TestUSDC.mdx
 contracts/test/contract.TwapTickMathHarness.mdx
 contracts/test/contract.TwapTickMathTest.mdx
-contracts/test/contract.UnderPullRouter.mdx
 contracts/test/contract.UnderPullVault.mdx
-contracts/test/contract.UnexpectedAssetsRedeemVault.mdx
 contracts/test/contract.UniswapV4PriceRecorderTest.mdx
 contracts/test/contract.UniswapV4SwapAdapterForkTest.mdx
 contracts/test/contract.UniswapV4SwapAdapterTest.mdx
@@ -382,6 +380,7 @@ contracts/test/helpers/interface.ISafeSetupCall.mdx
 contracts/test/helpers/interface.ISafeTx.mdx
 contracts/test/helpers/interface.VmLoad.mdx
 contracts/test/helpers/interface.Vm__.mdx
+contracts/test/helpers/library.AgentRegistration.mdx
 contracts/test/helpers/library.CoreProxies.mdx
 contracts/test/helpers/library.ForkSelect.mdx
 contracts/test/helpers/library.RoleHolders.mdx

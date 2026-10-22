@@ -86,6 +86,8 @@ async function fillRotationForm(
   await page.getByTestId("rotation-old-agent-input").fill(oldAgent);
   await page.getByTestId("rotation-new-agent-input").fill(newAgent);
   await page.getByTestId("rotation-shareReceiver-input").fill(shareReceiver);
+  // The owner selects the vault the agent may deposit into (issue 1889); nothing is implied.
+  await page.getByTestId("rotation-destination-extra").fill(endpoints.vault_addr);
 }
 
 test.describe("agent rotation flow — UI invariants", () => {

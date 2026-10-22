@@ -4,7 +4,7 @@ title: "DeployTest"
 
 # DeployTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/Deploy.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/Deploy.t.sol)
 
 **Inherits:** Test
 
@@ -87,16 +87,6 @@ function _run() internal returns (CoreStages.Stack memory);
 
 ```solidity
 function test_stages_runInProductionOrder() public;
-```
-
-<a id="test_gateway_routerequalsdeployedrouter_notzero"></a>
-
-### test_gateway_routerEqualsDeployedRouter_notZero
-
-The gateway is built with the deployed router: not zero, and equal to it.
-
-```solidity
-function test_gateway_routerEqualsDeployedRouter_notZero() public;
 ```
 
 <a id="test_routerstage_callsregistrysetrouteronce"></a>
@@ -344,15 +334,13 @@ library — proving the deploy assertion fails closed on mislink.
 function test_tickMathLink_deployAssertionRevertsOnMislink() public;
 ```
 
-<a id="test_routerdepositandwithdraw_throughsplitstagegateway_roundtrip"></a>
+<a id="test_vaultdeposit_throughsplitstagegateway"></a>
 
-### test_routerDepositAndWithdraw_throughSplitStageGateway_roundTrip
+### test_vaultDeposit_throughSplitStageGateway
 
-The gateway the split stages built completes a router deposit and a router withdraw.
-Unit, not fork: the three external lending venues are etched at their real addresses
-(`VenueEtcher`). Gateway, router, registry and vault are production code.
+The gateway the split stages built completes a vault deposit into the policy's vault.
 
 ```solidity
-function test_routerDepositAndWithdraw_throughSplitStageGateway_roundTrip() public;
+function test_vaultDeposit_throughSplitStageGateway() public;
 ```
 

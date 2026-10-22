@@ -23,11 +23,9 @@ Before signing any deposit transaction, the client RPC-reads:
 - the gateway's ERC-1967 implementation slot names the configured
   `gateway_implementation`, and that implementation's code hash matches
   `gateway_implementation_runtime_hash`
-- when the vault the write reaches (or the router and its legs) is a proxy:
+- when the vault the write reaches is a proxy:
   its implementation's code hash is listed in `proxy_implementation_hashes`
-- for a router deposit (`--destination <router>`): `router.previewDeposit(amount)`,
-  which marks each leg the router would skip and quotes the shares of the
-  rest. Without `--min-shares-per-leg` the floors are those quotes less 0.50%
+- the requested vault (`--vault`, default `vault_address`): it must be in the policy's selected destinations (`allowed_destinations`), and its pause state and implementation are read
 
 Every read runs at one pinned block. The same gateway check runs before
 any write signs.
@@ -50,21 +48,13 @@ and the name in `error`, and exits 2. Match on `error`, never on `message`.
 | The implementation slot names another address, the implementation code hash differs, a proxy has no approved implementation configured, or an approved implementation is configured for a gateway with an empty slot | `ErrImplementationNotApproved` | The gateway proxy points at logic the operator did not approve. The proxy hash can still match. |
 | The implementation slot or the implementation code cannot be read | `ErrImplementationUnverified` | The client cannot prove which logic would run. It never signs on an unverified implementation. |
 | The implementation changed after preflight (the signed transaction is discarded unsent), or the transaction executed under another implementation (carries `tx_hash`) | `ErrImplementationChanged` | Review what changed before any retry. A write that executed is not reported as a success. |
-| The vault the write reaches, the router or a router leg is a proxy and its implementation's code hash is not in `proxy_implementation_hashes` (or the key is missing) | `ErrImplementationNotApproved` | Same as above, for that contract: the message names it (`vault 0x…`, `router 0x…`). Do not retry. Tell the operator. |
-| Router deposit: `router.previewDeposit` marks a leg with weight above 0 unavailable (paused, at its TVL cap, an open exclusion, a basket outside its price band), and `--allow-unavailable-legs` was not passed | `ErrLegUnavailable` | The router would skip that leg and deposit its whole share into the other legs, so the split would not be the governed weights. The message names each leg and its bps. Wait and retry, or pass `--allow-unavailable-legs` only with the user's approval. |
+| The vault the write reaches is a proxy and its implementation's code hash is not in `proxy_implementation_hashes` (or the key is missing) | `ErrImplementationNotApproved` | Same as above, for that contract: the message names it (`vault 0x…`, `router 0x…`). Do not retry. Tell the operator. |
 
-## Withdraw refusals
-
-`withdraw` and `withdraw-router` run the same chain id, code hash, agent,
-binding and expiry checks, then these. A deposit pause never refuses them.
+## Destination refusals
 
 | Condition | Error code | Meaning |
 |---|---|---|
-| `shares > maxWithdrawPerPayment`, or rolling withdraw gross + shares > `maxWithdrawPerWindow` | `ErrWithdrawCapExceeded` | Operator-set withdraw cap. The message names the cap. `withdraw-router` checks the sum of its legs. |
-| Vault share `allowance(holder, gateway) < shares` | `ErrShareAllowanceInsufficient` | The share holder (the agent for `withdraw`, the policy's `shareReceiver` for `withdraw-router`) has not approved the gateway. |
-| Vault share `balanceOf(holder) < shares` | `ErrShareBalanceInsufficient` | The share holder does not hold the shares. |
-| `withdraw-router` without `--min-assets-per-leg` | `ErrMinAssetsPerLegRequired` | Pass one USDC floor per leg. `--min-assets-per-leg 0` sends no floor, and only on purpose. |
-| `withdraw-router` without `--confirm` | `ErrConfirmNotProvided` | Not an error: the JSON `preview` names each vault with its shares and floor, the share holder, the `assetRecipient`, and the gas limit against the gateway's floor. Show it to the user. Re-run with `--confirm` only after they approve it. |
+| `--vault` is not in the agent's selected destinations, or the gateway reverts `InvalidDestination` | `ErrDestinationNotSelected` | The depositor did not select this vault. Nothing is signed. Ask the depositor to update the policy. |
 
 ## Simulation refusals
 
@@ -76,11 +66,7 @@ anything is signed, so no gas is spent. The message names the contract error.
 |---|---|---|
 | `AgentPolicyExpired` | `ErrPolicyExpired` | Expired by chain time. |
 | `VaultNotRegistered`, `RedeemVaultNotRegistered`, `VaultNotActive` (Retired), `VaultRetired`, `VaultShutdown` | `ErrVaultDisabled` | The target vault is not registered or is disabled. A retired vault is withdraw-only through its own `redeem`. |
-| `VaultNotActive` (deposits paused), `VaultNotRouterEligible`, `VaultCapExceeded`, `NoWeightsSet`, `NoFundedLeg` | `ErrLegUnavailable` | A router deposit leg cannot take deposits now. |
-| `LegSkippedWithFloor` | `ErrLegUnavailable` | A leg with a non-zero `--min-shares-per-leg` floor turned unavailable after the preview, so the router would skip it. A non-zero floor means the leg must be funded, so the deposit is refused instead of moving that leg's share onto the others. |
-| `SlippageExceeded` | `ErrSlippageBoundExceeded` | A router leg would fall below its `--min-shares-per-leg` or `--min-assets-per-leg` floor. Do not lower the floor without the user. |
 | `AmountExceedsPerPaymentCap`, `WindowCapExceeded` | `ErrDepositCapExceeded` | As in the preflight table. |
-| `SharesExceedWithdrawPerPaymentCap`, `WithdrawWindowCapExceeded` | `ErrWithdrawCapExceeded` | As in the withdraw table. |
 
 Any other simulated revert is not named. The transaction is sent. If it then
 reverts on chain the refusal is `ErrTxReverted` with the `tx_hash`.

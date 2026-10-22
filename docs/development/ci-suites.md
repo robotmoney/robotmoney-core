@@ -137,7 +137,7 @@ stale docs). For Twin chain work, match CI with `foundryup --install v1.8.5`.
 
 #### Fork tests on the Twin chain (core 1498, 1496; replaces the live-RPC steps of issue #1239)
 
-The `fork-regressions` job (`forge-fork-vault-regressions`) runs the forge fork tests (`VaultForkRegressions`, `DeploySeedDeposit`, `SafeIntegration`, `GovernanceExecutePathAfterHandover`, `RwaBasketVaultFork`, `CoreStagesFork`, `GatewayRouterSplitStagesForkTest`) on the Twin chain: a pinned lazy anvil fork of real Base state. There is no saved state file, no golden fixture and no live-RPC runner any more.
+The `fork-regressions` job (`forge-fork-vault-regressions`) runs the forge fork tests (`VaultForkRegressions`, `DeploySeedDeposit`, `SafeIntegration`, `GovernanceExecutePathAfterHandover`, `RwaBasketVaultFork`, `CoreStagesFork`) on the Twin chain: a pinned lazy anvil fork of real Base state. There is no saved state file, no golden fixture and no live-RPC runner any more.
 
 - **One pin.** The `twin-pin` job chooses the upstream head at the start of the run minus 2 (`.github/actions/twin-pin`). `fork-regressions` needs it and starts the fork with `.github/actions/twin-fork` at that block. Anvil's RPC cache is persisted per pin block.
 - **Endpoint.** The upstream is the public `https://mainnet.base.org` (no key, no archive node). The optional secret `BASE_UPSTREAM_RPC` names a paid upstream. It is a secret, not a variable (this repo is public and GitHub does not mask `vars.*`), and the tools never print it. HTTP 429 is retried by anvil (`--retries`, `--fork-retry-backoff`, `--compute-units-per-second`) and by the tool at start up.
@@ -231,7 +231,7 @@ A `pin` job chooses ONE pinned Base block per workflow run (upstream head minus 
 | Slot | Tests | Mode |
 |---|---|---|
 | `twin-router` | `router` | straight on the Twin fork (`RMPC_TESTNET_RPC_URL`) |
-| `twin-withdrawal-registry` | `withdrawal`, `registry` | straight on the Twin fork |
+| `twin-registry` | `registry` | straight on the Twin fork |
 | `twin-light` | `failure_surface_smoke`, the `rmpc_get_*` fork tests | straight on the Twin fork |
 | `anvil-devnet-adapters` | `devnet_adapter_round_trip`, `gas_estimate_reality_check`, `landing_price_strip_fork`, `basket_vault_round_trip` (core 1656: `skip_if_no_devnet_fork!` needs `RMPC_FORK_RPC_URL`, so they silently skipped in `twin-light`). `gas_estimate_reality_check` holds deposit gas to 920,000 (measured 833,900 plus about 10%, issue #1683). The slot requires the marker `[gas_estimate_reality_check] deposit gasUsed=`, which the test prints only after that assertion passes (QA plan T3) | each test forks the Twin |
 | `anvil-goldens` | `abi_address_sanity`, `dex_route_smoke`, `vault_deposit_redeem_smoke` | each test forks the Twin (`RMPC_FORK_RPC_URL=$TWIN_RPC_URL`, `RMPC_FORK_BLOCK=$TWIN_PIN_BLOCK`) |
@@ -320,9 +320,9 @@ the false-green shape #1199/#1203 were filed about (issue #1231).
 - `.github/scripts/tests/test_assert_manifest_ahead_of_tags.sh` and `.github/scripts/tests/test_bump_rmpc_manifest.sh` — synthetic-repository exercises for the two scripts above, neither of whose real caller runs on a PR. See `docs/development/releasing.md`.
 
 **CLI surface — `rmpc-parity` job (issue #1282):** one further step,
-*rmpc CLI surface (deposit, router, status, self-check, get-\*)*, runs the sixteen
+*rmpc CLI surface (deposit, status, self-check, get-\*)*, runs the fifteen
 mockito-backed targets that no workflow named before: `cli`, `cli_deposit`,
-`cli_status`, `cli_self_check`, `deposit_router` and the twelve `cli_get_*`
+`cli_status`, `cli_self_check` and the eleven `cli_get_*`
 suites. They drive the built `rmpc` binary through `assert_cmd` against a
 mockito JSON-RPC server — no chain, no Docker — which is why they belong in this
 binary-only job rather than the devnet matrix. `cli_deposit.rs` alone is 687
@@ -1054,7 +1054,7 @@ file no longer exists). It is a debt ledger, not a mute button.
 
 | Target | Suite / job | Tier | Resource | Measured |
 |--------|-------------|------|----------|----------|
-| `rust-payment-client::cli`, `cli_deposit`, `cli_status`, `cli_self_check`, `deposit_router`, and the twelve `cli_get_*` | 7 — `rmpc-parity`, step *rmpc CLI surface* | heavy | mockito + the built `rmpc` binary; **no chain, no Docker** | 67 tests, ~22s |
+| `rust-payment-client::cli`, `cli_deposit`, `cli_status`, `cli_self_check`, and the eleven `cli_get_*` | 7 — `rmpc-parity`, step *rmpc CLI surface* | heavy | mockito + the built `rmpc` binary; **no chain, no Docker** | 67 tests, ~22s |
 | `explorer-indexer::cursor_header_reorg`, `reorg_cursor_vault_status`, `account_history`, `account_position_vote_power`, `committee_indexing`, `multi_vault`, `vault_detail`, `vault_registry` | 8 — `explorer-indexer-fast`, step *Indexer reorg + read-path suites* | quick | Postgres testcontainer (Docker only; no compose stack) | 37 tests, ~2m10s |
 | `explorer-api::endpoints`, `router_introspection`, `cors`, `canonical_schema` | 8 — `explorer-api-committee-regime` (the committee and regime suites in this job are deprecated 2026-10-20, see IC-1019; CI still runs them today), step *explorer-api HTTP contract, CORS, router shape, schema parity* | quick | Postgres testcontainer; `router_introspection` needs none | 49 tests, ~2m40s |
 | `watchdog::cursor_and_volume` | 20 — `watchdog-integration` | quick | Postgres testcontainer | 7 tests, ~25s |

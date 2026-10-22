@@ -162,8 +162,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const weightSetter = await weightSetterGating(chain, { router, timelock: tl, artifactsDir: originalDir ?? opts.artifactsDir, governanceArtifact: core.find((x) => x.name === "governance")!.artifact });
   c.push(WEIGHT_SETTER_GATING_LABEL, weightSetter.gating === "timelock", gatingDetail(weightSetter));
   await c.runEq("gateway: not paused", () => chain.read(gateway, "function depositsPaused() view returns (bool)"), false);
-  // The router-first split (core 1493): the gateway and the registry both name the router the router stage deployed.
-  await c.runEq("gateway: router() equals the deployed router", async () => lc((await chain.read(gateway, "function router() view returns (address)")) as string), lc(router));
+  // The router-first split (core 1493): the registry names the router the router stage deployed. The gateway binds no router.
   await c.runEq("registry: router() equals the deployed router", async () => lc((await chain.read(registry, "function router() view returns (address)")) as string), lc(router));
 
   // ---- the weight setter (issue 1698): applyReceipt is gated by governance's own WEIGHT_SETTER_ROLE, held by the timelock alone, and releases receipts on the deployed

@@ -5,7 +5,7 @@ description: "Test helper (issue 1808): every proxied core contract is deployed 
 
 # CoreProxies
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/helpers/CoreProxies.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/helpers/CoreProxies.sol)
 
 **Title:** CoreProxies
 
@@ -41,6 +41,32 @@ bytes32 private constant CONFIG_SLOT = keccak256("robotmoney.test.CoreProxies.co
 ```
 
 ## Functions
+
+<a id="onedestination-address"></a>
+
+### oneDestination
+
+<i>
+
+One-element destination list for a gateway policy (a policy must name at least one).
+
+</i>
+
+```solidity
+function oneDestination(address d) internal pure returns (address[] memory out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `address[]` |  |
 
 <a id="useupgradeconfig-address-governeduups-upgrademode"></a>
 
@@ -337,14 +363,17 @@ function routerGovernance(address router, address receipts, address admin)
 
 ### robotMoneyGateway
 
+<i>
+
+The gateway pins no vault and no router (architecture 5.2). The unnamed
+parameters keep the call shape of the many fixtures that predate that.
+
+</i>
+
 ```solidity
-function robotMoneyGateway(
-        IERC20 usdc,
-        IERC4626 vault,
-        address admin,
-        address pauser,
-        address router
-    ) internal returns (RobotMoneyGateway);
+function robotMoneyGateway(IERC20 usdc, IERC4626, address admin, address pauser, address)
+        internal
+        returns (RobotMoneyGateway);
 ```
 
 **Parameters**
@@ -352,10 +381,10 @@ function robotMoneyGateway(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | usdc | `IERC20` |  |
-| vault | `IERC4626` |  |
+| _ | `IERC4626` |  |
 | admin | `address` |  |
 | pauser | `address` |  |
-| router | `address` |  |
+| _ | `address` |  |
 
 **Returns**
 

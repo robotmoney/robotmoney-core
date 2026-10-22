@@ -56,28 +56,8 @@ contract BasketVaultCeilingProbe is BasketVault {
 
 /// @dev Probe for the gateway's `internal` gas floors.
 contract RobotMoneyGatewayCeilingProbe is RobotMoneyGateway {
-    function withdrawGasFloor() external pure returns (uint256) {
-        return WITHDRAW_GAS_FLOOR;
-    }
-
-    function routerWithdrawBaseGas() external pure returns (uint256) {
-        return ROUTER_WITHDRAW_BASE_GAS;
-    }
-
-    function routerWithdrawGasPerLeg() external pure returns (uint256) {
-        return ROUTER_WITHDRAW_GAS_PER_LEG;
-    }
-
     function depositGasFloor() external pure returns (uint256) {
         return DEPOSIT_GAS_FLOOR;
-    }
-
-    function routerDepositBaseGas() external pure returns (uint256) {
-        return ROUTER_DEPOSIT_BASE_GAS;
-    }
-
-    function routerDepositGasPerLeg() external pure returns (uint256) {
-        return ROUTER_DEPOSIT_GAS_PER_LEG;
     }
 }
 
@@ -127,16 +107,7 @@ contract UpgradeCeilingsTest is Test {
         RobotMoneyGatewayCeilingProbe g = new RobotMoneyGatewayCeilingProbe();
         assertLe(g.MAX_DEADLINE_SKEW(), 600, "gateway MAX_DEADLINE_SKEW loosened");
         assertLe(g.MAX_WINDOW_ENTRIES(), 86_400, "gateway MAX_WINDOW_ENTRIES loosened");
-        assertGe(g.withdrawGasFloor(), 2_000_000, "gateway WITHDRAW_GAS_FLOOR lowered");
-        assertGe(g.routerWithdrawBaseGas(), 400_000, "gateway ROUTER_WITHDRAW_BASE_GAS lowered");
-        assertGe(
-            g.routerWithdrawGasPerLeg(), 1_850_000, "gateway ROUTER_WITHDRAW_GAS_PER_LEG lowered"
-        );
         assertGe(g.depositGasFloor(), 2_000_000, "gateway DEPOSIT_GAS_FLOOR lowered");
-        assertGe(g.routerDepositBaseGas(), 400_000, "gateway ROUTER_DEPOSIT_BASE_GAS lowered");
-        assertGe(
-            g.routerDepositGasPerLeg(), 2_550_000, "gateway ROUTER_DEPOSIT_GAS_PER_LEG lowered"
-        );
     }
 
     /// @notice A ceiling bounds the initializer exactly as it bounds the setter (ADR-0014 §7): an

@@ -24,28 +24,14 @@
  * via their own `useReadContract` rather than trusting the cached status.
  * This context is for display and routing only.
  */
-import React, { createContext, useContext, useMemo } from "react";
+import React, { useMemo } from "react";
 import { useReadContract, useReadContracts } from "wagmi";
 import type { Address } from "viem";
 import { registryAbi, VaultStatus, type VaultRecord, type VaultStatusValue } from "./abi";
+import { VaultRegistryContext, useVaultRegistry } from "./vaultRegistryState";
 
 export type { VaultRecord };
-
-interface VaultRegistryState {
-  /** All registered vaults from the latest registry read. Empty during load. */
-  vaults: readonly VaultRecord[];
-  isLoading: boolean;
-  error: Error | null;
-  /** Trigger a re-fetch of the entire registry. */
-  refresh: () => void;
-}
-
-const VaultRegistryContext = createContext<VaultRegistryState>({
-  vaults: [],
-  isLoading: false,
-  error: null,
-  refresh: () => undefined,
-});
+export { useVaultRegistry };
 
 export interface VaultRegistryProviderProps {
   registryAddress: Address;
@@ -135,12 +121,4 @@ export function VaultRegistryProvider({ registryAddress, children }: VaultRegist
   );
 
   return <VaultRegistryContext.Provider value={value}>{children}</VaultRegistryContext.Provider>;
-}
-
-/**
- * Hook for consuming vault registry state in any descendant component.
- * Must be used inside a VaultRegistryProvider tree.
- */
-export function useVaultRegistry(): VaultRegistryState {
-  return useContext(VaultRegistryContext);
 }

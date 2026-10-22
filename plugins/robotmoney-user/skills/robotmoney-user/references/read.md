@@ -133,7 +133,7 @@ rmpc get-gateway --config ./config.toml [--pretty]
 Reads the configured `RobotMoneyGateway`. Returns gateway address, chain id,
 configured USDC and vault addresses, the runtime code hash (compared against
 `gateway_runtime_hash` in config), and the deposit-pause flag (`deposits_paused`,
-from `depositsPaused()`). It stops deposits only. A withdrawal still works. A code-hash mismatch is
+from `depositsPaused()`). It stops deposits only. A code-hash mismatch is
 a hard refusal at write time (see `references/safety.md`). For a proxied gateway it also returns
 `implementation` and `implementation_code_hash` (read at the same block), the approved
 pair from config (`configured_implementation`, `configured_implementation_code_hash`; a
@@ -150,13 +150,12 @@ rmpc get-agent --config ./config.toml --agent <0x...> [--pretty]
 ```
 
 Reads `agents[address]` policy: `active`, `validUntil`, `maxPerPayment`,
-`maxPerWindow`, `shareReceiver`, `assetRecipient`, the withdraw caps, the
-gateway's share allowance, and the rolling-window deposit gross
+`maxPerWindow`, `shareReceiver`, and the rolling-window deposit gross
 (`effectiveDepositWindowGross`). Use it before any deposit to confirm the
 agent is authorized and has remaining cap.
 
 A sub-read that fails renders its fields as `null`, with `partial: true` and
-the failed read named in `errors`. A `null` `active` or `withdrawals_enabled`
+the failed read named in `errors`. A `null` `active`
 means unknown. Never treat it as `false`, and never treat a `null` cap as
 zero.
 

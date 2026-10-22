@@ -316,13 +316,12 @@ jobs:
             --test cli_version -- --nocapture
 
       # CLI SURFACE TESTS THAT NOTHING EXECUTED (issue #1282)
-      # These sixteen targets existed and were dark: no job named them, so a
+      # These fifteen targets existed and were dark: no job named them, so a
       # `grep -rn cli_deposit .github/` matched only an unrelated JSON fixture.
       # cli_deposit.rs alone is 687 lines and ten subprocess scenarios (happy
       # path, chain-id mismatch, paused gateway, fee cap, concurrent lock,
       # receipt timeout, duplicate replay, revert); the twelve cli_get_*.rs
-      # suites are the entire read-command surface; deposit_router.rs covers
-      # the multi-leg router deposit. Every one of them is mockito-backed and
+      # suites are the entire read-command surface. Every one of them is mockito-backed and
       # drives the built rmpc binary through assert_cmd -- no chain, no Docker,
       # no fixture beyond a temp keystore -- which is why they belong in this
       # binary-only parity job and not the devnet matrix. Measured cost: 67
@@ -334,18 +333,19 @@ jobs:
       # RED rather than passing as a silent skip. The permanent guard against
       # this whole class -- a tests/*.rs file no workflow names -- is
       # .github/scripts/check_cargo_test_target_coverage.py, run in suite 4.
-      - name: rmpc CLI surface (deposit, withdraw, router, status, self-check, get-*)
+      - name: rmpc CLI surface (deposit, status, self-check, get-*)
+        env:
+          # Executed floor: the 79 tests of these targets in a green run (issue 1889 retired the
+          # withdraw and router targets). A silent drop in collected tests fails RED.
+          CARGO_TEST_MIN_EXECUTED: 79
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             --release \
             --manifest-path clients/rust-payment-client/Cargo.toml \
             --test cli \
             --test cli_deposit \
-            --test cli_withdraw \
-            --test cli_withdraw_router \
             --test cli_status \
             --test cli_self_check \
-            --test deposit_router \
             --test cli_get_agent \
             --test cli_get_allowance \
             --test cli_get_balance \
@@ -396,7 +396,6 @@ jobs:
           - { binary: smoke, min_executed: 1 }
           - { binary: scenarios, min_executed: 11 }
           - { binary: window_cap, min_executed: 1 }
-          - { binary: withdraw, min_executed: 4 }
     steps:
       - uses: actions/checkout@v4
         with:

@@ -137,6 +137,9 @@ async function commitFromAgentsPanel() {
   fireEvent.change(screen.getByTestId("wizard-shareReceiver-input"), {
     target: { value: USER },
   });
+  fireEvent.change(screen.getByTestId("wizard-destination-extra"), {
+    target: { value: "0x4444444444444444444444444444444444444444" },
+  });
   fireEvent.click(screen.getByTestId("step-2-next"));
   await waitFor(() => expect(screen.getByTestId("wizard-freeze")).not.toBeDisabled());
   fireEvent.click(screen.getByTestId("wizard-freeze"));

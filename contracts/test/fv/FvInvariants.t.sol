@@ -701,18 +701,15 @@ contract FvInvariantsTest is Test {
         _assertHolds("SUP-3");
     }
 
-    /// @notice GW-5 (FLIPPED GREEN by #969) — every agent redemption through the
-    ///         gateway carries a real, caller-meaningful per-leg slippage floor.
-    ///         Fix (F-11): `RobotMoneyGateway.withdrawFromRouter` takes a
-    ///         `minAssetsPerLeg` vector and forwards it verbatim to
-    ///         `PortfolioRouter.redeemFor` (no more `new uint256[](n)` zero
-    ///         literal) AND forwards the real agent deadline (no more
-    ///         `type(uint256).max`); the floor vector is folded into `paymentId`
-    ///         so a replay cannot weaken it. Deep proofs:
-    ///         GatewayRouter.t.sol::test_withdrawFromRouter_realFloor_revertsBelowMinimum,
-    ///         ::test_withdrawFromRouter_floorIsBoundIntoPaymentId.
-    function test_GW5_agentRedeemCarriesRealFloor() public pure {
-        _assertHolds("GW-5");
+    /// @notice GW-5 (TOMBSTONE, owner decision 2026-10-19) — the gateway has no
+    ///         redemption path, so there is no surface left to carry a slippage
+    ///         floor. The registry keeps the ID as a tombstone because IDs are
+    ///         append-only. The withdrawal selectors are proven absent by
+    ///         RobotMoneyGateway.t.sol::test_removedSelectors_refuseWithNoMovement.
+    function test_GW5_retiredTombstone() public pure {
+        InvariantRegistry.Entry memory e = InvariantRegistry.get("GW-5");
+        require(e.status == InvariantRegistry.Status.TOMBSTONE, "GW-5 must be a TOMBSTONE");
+        require(e.remediationIssue == 0, "TOMBSTONE GW-5 must carry no remediation issue");
     }
 
     /// @notice ORA-4 (FLIPPED GREEN by #969) — deposits/redemptions never settle
@@ -878,7 +875,7 @@ contract FvInvariantsTest is Test {
             maxPerPayment: 1e6,
             maxPerWindow: 1e6,
             shareReceiver: owner,
-            allowedDestinations: none,
+            allowedDestinations: CoreProxies.oneDestination(address(0xD357)),
             assetRecipient: address(0),
             maxWithdrawPerPayment: 0,
             maxWithdrawPerWindow: 0,

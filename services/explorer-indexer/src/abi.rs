@@ -1001,18 +1001,9 @@ mod tests {
                 "AgentDeposit",
                 t.agent_deposit,
             ),
-            (
-                "RobotMoneyGateway.sol",
-                "RobotMoneyGateway",
-                "AgentDepositRouted",
-                t.agent_deposit_routed,
-            ),
-            (
-                "RobotMoneyGateway.sol",
-                "RobotMoneyGateway",
-                "AgentWithdrawal",
-                t.agent_withdrawal,
-            ),
+            // `AgentDepositRouted`, `AgentWithdrawal` and `AgentWithdrawalRouted` left the
+            // gateway ABI (issue 1889). The indexer still decodes them as history of older
+            // deployments, so they have no compiled artifact to cross-check.
             (
                 "RobotMoneyGateway.sol",
                 "RobotMoneyGateway",

@@ -80,8 +80,15 @@ pub struct Config {
     pub gateway_address: String,
     /// USDC token address on `chain_id`.
     pub usdc_address: String,
-    /// Vault address that receives deposits.
+    /// The default vault `rmpc deposit` deposits into, and the owner's only
+    /// selected destination when `allowed_destinations` is absent.
     pub vault_address: String,
+    /// The vaults the owner selected for this agent (0x-prefixed hex). Optional.
+    /// `rmpc deposit --vault X` refuses (`ErrDestinationNotSelected`) any vault
+    /// not listed here. When absent, only `vault_address` is selected. Mirror
+    /// of the policy `allowedDestinations` the owner set on the gateway.
+    #[serde(default)]
+    pub allowed_destinations: Option<Vec<String>>,
     /// `VaultRegistry` contract address (0x-prefixed hex). Optional — only
     /// required for the `get-vaults` and `get-vault <address>` protocol-scope
     /// registry reads. When absent those commands exit with `EXIT_STARTUP_FAIL`.
@@ -115,7 +122,7 @@ pub struct Config {
     #[serde(default)]
     pub gateway_from_block: Option<u64>,
     /// The address this agent's deposits must mint shares to (0x-prefixed
-    /// hex). Optional. When set, every deposit and withdraw preflight
+    /// hex). Optional. When set, every deposit preflight
     /// refuses with `ErrAgentBindingMismatch` unless
     /// `gateway.agents(self).shareReceiver` equals it. Without it, an
     /// address that bound this agent before the operator did would receive
@@ -125,7 +132,7 @@ pub struct Config {
     pub share_receiver: Option<String>,
     /// The address that owns this agent's gateway binding (0x-prefixed
     /// hex): the account that revealed the authorization. Optional. When
-    /// set, every deposit and withdraw preflight refuses with
+    /// set, every deposit preflight refuses with
     /// `ErrAgentBindingMismatch` unless `gateway.agentOwner(self)` equals it
     /// (QA plan D2).
     #[serde(default)]
@@ -150,13 +157,12 @@ pub struct Config {
     #[serde(default)]
     pub gateway_implementation_runtime_hash: Option<String>,
     /// Runtime code hashes of the implementations the operator approved for
-    /// the other proxies a write reaches through the gateway: the vault a
-    /// deposit lands in or a withdraw redeems from, every router leg, and the
-    /// router itself (0x-prefixed hex, `keccak256(eth_getCode(implementation))`).
-    /// Required as soon as one of them is an ERC-1967 proxy (issue 1808): the
-    /// address pins (`vault_address`, `gateway.vault()`, `gateway.router()`)
-    /// do not pin the logic behind a proxy. A write reads each one's
-    /// implementation slot and code at one block and refuses with
+    /// the vault a deposit reaches through the gateway (0x-prefixed hex,
+    /// `keccak256(eth_getCode(implementation))`). Required as soon as the
+    /// requested vault is an ERC-1967 proxy (issue 1808): the address pin
+    /// (`vault_address`, `allowed_destinations`) does not pin the logic behind
+    /// a proxy. A deposit reads the requested vault's implementation slot and
+    /// code at one block, binds the signed transaction to it, and refuses with
     /// `ErrImplementationNotApproved` unless the hash is listed. A direct
     /// (non-proxy) contract needs no entry. The gateway is pinned by
     /// `gateway_implementation` + `gateway_implementation_runtime_hash`, never
