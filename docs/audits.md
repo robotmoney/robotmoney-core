@@ -639,10 +639,10 @@ Internal review of the code that still gives rmpc and the gateway jobs beyond an
 
 | Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |
 |---|---|---|---|---|---|---|
-| RS-1019-1 | RS-1019 | Medium | accepted-with-rationale | RobotMoneyGateway | — | Gateway still carries agent withdrawals (withdraw, withdrawFromRouter). Open. |
-| RS-1019-2 | RS-1019 | Low | accepted-with-rationale | RobotMoneyGateway | — | Gateway still deposits into the Portfolio Router. Open. |
-| RS-1019-3 | RS-1019 | Medium | accepted-with-rationale | rmpc | — | rmpc still sends withdraw and withdraw-router. Open. |
-| RS-1019-4 | RS-1019 | Low | accepted-with-rationale | rmpc | — | rmpc deposit still accepts a router destination. Open. |
+| RS-1019-1 | RS-1019 | Medium | fixed | RobotMoneyGateway | #1895 (core 1889) | Gateway withdraw and withdrawFromRouter removed. Fixed by issue 1889. |
+| RS-1019-2 | RS-1019 | Low | fixed | RobotMoneyGateway | #1895 (core 1889) | Gateway router deposit branch removed. Fixed by issue 1889. |
+| RS-1019-3 | RS-1019 | Medium | fixed | rmpc | #1895 (core 1889) | rmpc withdraw and withdraw-router removed. Fixed by issue 1889. |
+| RS-1019-4 | RS-1019 | Low | fixed | rmpc | #1895 (core 1889) | rmpc deposit router destination removed. Fixed by issue 1889. |
 | RS-1019-5 | RS-1019 | Low | accepted-with-rationale | rmpc, scripts/fusion, publish-contracts cli and record-receipt | — | rmpc receipt submit still records receipts on-chain and the fusion worker uses it. Independent CLI and recordReceipt guards refuse Base production; elsewhere Safe mode is optional and a dedicated EOA can submit. Remove both refusals and require a submitter Safe on every chain. Open. |
 | RS-1019-6 | RS-1019 | Low | accepted-with-rationale | clients/dapp configExport and preview | — | Export comments still teach withdrawals; agent-policy preview descriptions still advertise withdrawal/router permissions and the admin authorizeAgent preview remains. Retain zero-valued retired fields in the policy ABI tuple and keep human vault/router actions, while fixing their shared gateway verification dependency under SS-1019-11. Open. |
 | RS-1019-7 | RS-1019 | Info | accepted-with-rationale | services/explorer-indexer | — | Indexer still decodes agent withdrawals. Open. |
