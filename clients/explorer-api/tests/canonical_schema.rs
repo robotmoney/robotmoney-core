@@ -132,3 +132,71 @@ fn docker_usable() -> bool {
         .output()
         .is_ok_and(|o| o.status.success())
 }
+
+/// Core 1891: the schema this harness stands up and the one the indexer's migrator builds agree on the
+/// registration columns, and neither has the retired committee and regime tables. The harness applies a
+/// hand-picked list of migrations, so this is what keeps it from drifting away from the real set.
+#[tokio::test]
+async fn registration_columns_match_the_full_migrator_and_committee_tables_are_gone() {
+    type ColumnRow = (String, String, String, String);
+    async fn columns(pool: &PgPool) -> Vec<ColumnRow> {
+        sqlx::query_as(
+            "SELECT table_name::text, column_name::text, data_type::text, is_nullable::text \
+             FROM information_schema.columns \
+             WHERE table_schema = 'public' AND table_name IN ('agent_policies', 'agent_deposits') \
+             ORDER BY table_name, column_name",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+    async fn retired_tables(pool: &PgPool) -> Vec<(String,)> {
+        sqlx::query_as(
+            "SELECT table_name::text FROM information_schema.tables \
+             WHERE table_schema = 'public' \
+               AND table_name IN ('committee_agents', 'committee_votes', \
+                                  'committee_agent_events', 'regime_snapshots')",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    // The harness list (what the endpoint tests run against).
+    let harness = pg_pool().await;
+    apply_migrations(&harness).await;
+    // The real, complete migrator.
+    let full = pg_pool().await;
+    explorer_indexer::Db::from_pool(full.clone())
+        .migrate()
+        .await
+        .expect("full migrator");
+
+    let from_harness = columns(&harness).await;
+    let from_full = columns(&full).await;
+    for wanted in ["gateway", "registration_block", "registration_log_index"] {
+        for table in ["agent_policies", "agent_deposits"] {
+            assert!(
+                from_full
+                    .iter()
+                    .any(|(t, c, _, _)| t == table && c == wanted),
+                "{wanted} must exist on {table} (migration 0031)"
+            );
+        }
+    }
+    assert!(
+        from_full
+            .iter()
+            .any(|(t, c, _, _)| t == "agent_policies" && c == "event_kind"),
+        "event_kind must exist on agent_policies (migration 0031)"
+    );
+    assert_eq!(
+        from_harness, from_full,
+        "the API test harness and the full migrator must agree on the gateway-system columns"
+    );
+    assert!(
+        retired_tables(&full).await.is_empty(),
+        "the committee and regime tables must be dropped by migration 0030"
+    );
+    assert!(retired_tables(&harness).await.is_empty());
+}

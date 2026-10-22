@@ -38,6 +38,7 @@ async fn agent_deposit_insert_is_idempotent() {
             U256::from(1_000_000u64),
             42,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -57,6 +58,7 @@ async fn agent_deposit_insert_is_idempotent() {
             U256::from(1_000_000u64),
             U256::from(1_000_000u64),
             42,
+            None,
             None,
         )
         .await
@@ -145,6 +147,7 @@ async fn agent_policy_insert_roundtrip_with_owner() {
             Some(U256::from(1_000_000_u64)),
             Some(U256::from(123_456_u64)),
             Some(owner),
+            None,
         )
         .await
         .unwrap();
@@ -166,6 +169,7 @@ async fn agent_policy_insert_roundtrip_with_owner() {
             Some(U256::from(1_000_000_u64)),
             Some(U256::from(123_456_u64)),
             Some(owner),
+            None,
         )
         .await
         .unwrap();

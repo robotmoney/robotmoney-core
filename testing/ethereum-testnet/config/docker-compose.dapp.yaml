@@ -154,7 +154,8 @@ services:
       INDEXER_CHAIN_ID: ${INDEXER_CHAIN_ID:-918453}
       INDEXER_CHAIN_NAME: ${INDEXER_CHAIN_NAME:-devnet}
       INDEXER_RPC_LABEL: ${INDEXER_CHAIN_NAME:-devnet}
-      INDEXER_GATEWAY: ${INDEXER_GATEWAY:?INDEXER_GATEWAY must be set}
+      # Optional (core 1891): empty indexes the vaults system alone and writes no gateway table.
+      INDEXER_GATEWAY: ${INDEXER_GATEWAY:-}
       INDEXER_VAULT: ${INDEXER_VAULT:?INDEXER_VAULT must be set}
       INDEXER_REGISTRY: ${INDEXER_REGISTRY:-}
       # Issue #1294: INDEXER_CONSENSUS_RECEIPT enables ReceiptRecorded /

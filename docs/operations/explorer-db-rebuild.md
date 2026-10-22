@@ -183,3 +183,47 @@ cutover window, between the contract deploy and the manual QA pass. See
 `docs/operations/contract-release-runbooks.md` §4.2 and §4.3 — a release that
 ships a refusing migration must name this document in its per-release runbook
 and record the §2 dump and the §6 verification output as release evidence.
+
+---
+
+## 8. Migrations 0030 and 0031: retire the committee tables, derive agent registrations
+
+Core 1891 adds two forward-only migrations. Applied migrations are never edited, so the checksums of
+`0001` to `0029` stay as they were.
+
+- `0030_drop_committee_and_regime.sql` drops `committee_votes`, `committee_agent_events`,
+  `committee_agents` and `regime_snapshots`. Nothing writes them any more, because the indexer has no
+  `INDEXER_INVESTMENT_COMMITTEE` input and the API serves no `/v1/committee/*` or `/v1/regime/feed`.
+  Take the section 2 dump first if the committee history matters: the rows are not rebuilt.
+- `0031_agent_registrations.sql` adds `gateway`, `registration_block` and `registration_log_index` to
+  `agent_policies` and `agent_deposits`, and `event_kind` to `agent_policies`. It backfills them from the rows
+  already there, in `(chain_id, gateway, agent)` and `(block_number, log_index)` order. A row starts a
+  registration when it is the first of its agent, follows a revoke, or re-authorizes an expired one. A
+  deposit takes the registration live at its position, and a deposit with none keeps `NULL`.
+  `gateway` is filled from the chain's only `contracts` row of kind `gateway`. With several, it stays `NULL`
+  and the old rows share one group.
+
+`0031` refuses to run when it cannot trust the replay. If any `agent_policies` row after the first of its
+agent sits in a block with no `blocks` row, the migration raises
+`cannot derive agent registrations: N agent_policies rows sit in blocks with no stored header`. The
+expiry test needs that block's timestamp, and a guess would attach deposits to the wrong owner. The
+`--migrate-only` step exits nonzero and the schema stays at `0030`. Rebuild the index from chain
+(section 5 Option A: drop the database and let the indexer reindex from `INDEXER_START_BLOCK`), then migrate.
+
+After the migration, verify:
+
+```bash
+docker compose exec -T dapp-postgres psql -U "$PGUSER" -d "$PGDATABASE" -At -c "
+  SELECT count(*) FILTER (WHERE registration_block IS NULL) AS unlinked_policies
+  FROM agent_policies;
+  SELECT count(*) FILTER (WHERE registration_block IS NULL) AS unlinked_deposits,
+         count(*)                                           AS deposits
+  FROM agent_deposits;"
+```
+
+`unlinked_policies` must be `0`. A non-zero `unlinked_deposits` is a deposit with no indexed registration
+before it. It stays unlinked on purpose, and `GET /v1/agents/:address/deposits` reports its
+`registration_id` as `null`.
+
+A gateway-free run (`INDEXER_GATEWAY` unset) indexes the vaults, the router, governance and the receipts
+and writes no gateway table. A set but malformed `INDEXER_GATEWAY` makes the indexer exit nonzero.

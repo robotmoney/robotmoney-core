@@ -126,27 +126,33 @@ internal client field name appears on the wire.
 > **Prerequisites:** Issue #366 (ABI drift fix for `AgentAuthorized` — adds
 > `address indexed owner` field so the indexer knows which depositor owns an agent).
 
-**Status at `48923e37` (2026-10-20):** implemented with latest state per
-agent address, as shown below. The target specified by architecture §5.2
-and the explorer-schema ADR §3.4 retains separate registrations of the same
-address. That migration remains open as RS-1019-18; this response does not
-yet expose a registration identity.
-
 **Request:**
 ```
-GET /v1/accounts/{address}/policies
+GET /v1/accounts/{address}/policies[?active=true][&gateway=0x{gateway}]
 ```
 
 Path parameter `address`: 0x-prefixed Ethereum address (20 bytes hex).
 
-**Current response (200 OK):**
+Agent identity is `(address, registration)` (architecture section 5.2, ACL-9). A registration is derived
+from the event that starts it. A later registration of the same address, by the same or another owner,
+never replaces an earlier one. The response lists one entry per registration the account owns or owned.
+Without `?active=true` it is the history projection. With `?active=true` it keeps only live registrations
+(not revoked, not expired). With `?gateway=` it keeps one gateway deployment's registrations.
+
+**Response (200 OK):**
 ```json
 {
   "address": "0x{address}",
   "policies": [{
+    "registration_id":        "8453:0x{gateway}:12345:3",
+    "gateway":                "0x{gateway}",
     "agent":                  "0xabcdef...",
     "owner":                  "0x{address}",
-    "revoked":                false,
+    "revoked":                true,
+    "status":                 "revoked",
+    "started_block":          12345,
+    "closed_block":           12400,
+    "closed_tx_hash":         "0x...",
     "valid_until":            1735689600,
     "max_per_payment":        "1000000000000000000",
     "max_per_window":         "5000000000000000000",
@@ -159,35 +165,43 @@ Path parameter `address`: 0x-prefixed Ethereum address (20 bytes hex).
 }
 ```
 
-Returns `"policies": []` (not 404) when the owner has no matching policies.
+`registration_id` is `chain_id:gateway:block:log_index` of the event that started the registration, so it
+is the same after a rollback and replay. Deposits carry the same id. `status` is `active`, `revoked`, or
+`expired` (`valid_until` before the newest indexed block's timestamp). `closed_block` and `closed_tx_hash`
+are the revoke's. `owner` is `null` when the indexed row does not name one. Policy fields come from the
+registration's newest authorization, so a revoked registration still reports the policy it had.
+A `setPolicy` update stays inside its registration. A historical `AgentOwnershipTransferred` (old
+deployments only) keeps the registration, leaves the old owner's entry as it was, and adds one for the new
+owner.
 
-All `uint256` fields are decimal strings (NUMERIC(78,0) wire format).
-`valid_until` is a Unix timestamp seconds (i64). `indexed_at` is ISO-8601 UTC.
+Returns `"policies": []` (not 404) when the account has none. All `uint256` fields are decimal strings
+(NUMERIC(78,0) wire format). `valid_until` is a Unix timestamp in seconds (i64). `indexed_at` is
+ISO-8601 UTC.
 
-**Current DB projection (simplified from `routes.rs:get_account_policies`):**
-```sql
-SELECT * FROM (
-    SELECT DISTINCT ON (chain_id, agent) *
-    FROM agent_policies
-    WHERE chain_id = $1
-    ORDER BY chain_id, agent, block_number DESC, log_index DESC
-) AS latest
-WHERE owner = $2
-ORDER BY agent
-```
+### Agent routes
 
-**Registration migration target.** Keep event idempotency keys, derive a
-registration identity from its starting event, and project latest policy
-state within each registration before applying account/history filters.
-Earlier registrations remain associated with their original owner after a
-revoke or expiry and re-registration. `setPolicy` updates the same
-registration. Update the schema, response and consumers together; the
-current address-only projection above is not the target for registration
-history. See `docs/technical/explorer-schema-decisions.md` §3.4 and
-RS-1019-18 for replay and same-block ordering requirements.
+- `GET /v1/agents/:address` returns the newest **live** registration of the address as `policy`, or
+  `null` when it has none. A revoked or expired registration is history, not the current policy.
+- `GET /v1/agents/:address/registrations` returns every registration of the address, oldest first, in the
+  shape above, whatever its status.
+- `GET /v1/agents/:address/deposits` and `GET /v1/deposits/:id` return `registration_id` (or `null` when the
+  indexed history shows no registration before the deposit).
 
-**Migration dependency:** `0007_account_history_and_vault_detail_stubs.sql`
-adds `owner` and `window_usage_to_date` columns to `agent_policies`.
+### Retired routes
+
+`GET /v1/committee/agents`, `GET /v1/committee/agents/:address/track-record`, `GET /v1/committee/tilts`
+and `GET /v1/regime/feed` were removed with the Investment Committee policy (core 1891). They return 404.
+Migration `0030` drops their tables.
+
+**DB projection (from `routes.rs:query_registrations`):** group `agent_policies` rows by
+`(gateway, agent, registration_block, registration_log_index)`. Take the status and the closing evidence from
+the group, and the policy fields and owner from the owner's newest authorization in it, before any owner,
+agent or gateway filter applies. See `docs/technical/explorer-schema-decisions.md` section 3.4 and
+`docs/operations/explorer-db-rebuild.md` section 8.
+
+**Migration dependency:** `0007_account_history_and_vault_detail_stubs.sql` adds `owner` and
+`window_usage_to_date` to `agent_policies`. `0031_agent_registrations.sql` adds `gateway`, `event_kind` and the
+registration columns.
 
 ---
 

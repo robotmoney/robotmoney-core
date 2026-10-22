@@ -57,7 +57,7 @@ testcontainers-modules = { version = "0.11", features = ["postgres"] }
 smoke-test = { path = "../../testing/smoke-test" }
 which = "6"
 tempfile = "3"
-# Issue #1790: committee_indexing.rs ingests IC events through `run_once`, then
+# Issue #1790: fork_indexer.rs ingests a chain through `run_once`, then
 # serves the explorer-api router over the same database to check what the dapp
 # renders. A dev-dependency cycle (explorer-api depends on this crate) is legal:
 # integration tests link the one regular build of this library.

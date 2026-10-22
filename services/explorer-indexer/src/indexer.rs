@@ -15,8 +15,11 @@
 //!    the chain's hash at the same height. On mismatch walk back, then
 //!    `DELETE WHERE block_number > root` and reset `last_indexed_block`.
 //!    The rows that are not block-numbered are reconciled in the same
-//!    transaction: `vaults` (a registration above the root is deleted) and
-//!    `committee_agents` (derived again from its history, X7 / DI-8).
+//!    transaction: `vaults` (a registration above the root is deleted).
+//!    Agent registrations need no reconciliation: every `agent_policies` and
+//!    `agent_deposits` row carries its registration, derived when it was
+//!    inserted, so deleting the rows above the root and replaying them
+//!    reproduces the same boundaries (migration 0031).
 //! 4. For the range `[last+1, target]`: fetch all watched logs (the configured
 //!    contracts, every `vaults` row whatever its status (DI-2), and each of
 //!    those vaults' ExclusionLedger (X7)), fetch the header of each block
@@ -44,9 +47,6 @@
 //!    share pays after the exit costs; the API prices a position with it
 //!    (core 1795, QA plan X8). A row without it (older than migration 0026)
 //!    is filled the same way.
-//!    Committee regime snapshots are re-derived at the target block as well,
-//!    so a signal that ages out of the freshness window leaves
-//!    `/v1/regime/feed` within one tick, with no event to trigger it (DI-3).
 //! 6. Close the run with `last_indexed_block = target`.
 //!
 //! All errors short-circuit and write to the run's `error` column;
@@ -57,9 +57,8 @@
 
 use crate::abi::{
     IConsensusRecommendationReceiptEvents, IExclusionLedgerEvents, IExclusionLedgerReads,
-    IGatewayEvents, IGovernedUpgradeEvents, IInvestmentCommitteePolicyEvents,
-    IPortfolioRouterEvents, IRobotMoneyVaultReads, ITimelockEvents, IVaultEvents, IVaultReads,
-    IVaultRegistryEvents, Topics,
+    IGatewayEvents, IGovernedUpgradeEvents, IPortfolioRouterEvents, IRobotMoneyVaultReads,
+    ITimelockEvents, IVaultEvents, IVaultReads, IVaultRegistryEvents, Topics,
 };
 use crate::db::{Db, DbError, ProxyBackfillProgress, ReceiptVerification};
 use crate::rpc::{JsonRpc, LogEntry, RpcError};
@@ -83,8 +82,10 @@ pub struct IndexerConfig {
     pub chain_id: i64,
     pub chain_name: String,
     pub rpc_label: String,
-    /// Watched gateway address (one per chain).
-    pub gateway: Address,
+    /// Optional watched gateway address (one per chain). The gateway system is indexed independently of
+    /// the vaults system (docs/architecture.md section 5.4): with `None` no gateway address is watched,
+    /// registered or called, and no gateway table is written.
+    pub gateway: Option<Address>,
     /// Watched vault address (one per chain, legacy single-vault config).
     pub vault: Address,
     /// Optional on-chain VaultRegistry contract address.  When set, the
@@ -107,11 +108,6 @@ pub struct IndexerConfig {
     /// ensuring deposits via the router are reflected in the TVL index without
     /// waiting for the SNAPSHOT_HEARTBEAT_BLOCKS interval.
     pub portfolio_router: Option<Address>,
-    /// Optional InvestmentCommitteePolicy contract address.
-    /// When set, the indexer ingests `AgentRegistered`, `AgentRevoked`, and
-    /// `VoteSubmitted` events and writes to `committee_agents`,
-    /// `committee_votes`, and `regime_snapshots` tables (issue #1053).
-    pub investment_committee: Option<Address>,
     /// Optional ConsensusRecommendationReceipt contract address.
     /// When set, the indexer ingests `ReceiptRecorded` and `ReceiptReleased`
     /// events, fetches each receipt's `payloadUri` to recompute its keccak256
@@ -145,7 +141,10 @@ pub struct IndexerConfig {
 
 impl IndexerConfig {
     pub fn watched_addresses(&self) -> Vec<Address> {
-        let mut addrs = vec![self.gateway, self.vault];
+        let mut addrs = vec![self.vault];
+        if let Some(gw) = self.gateway {
+            addrs.insert(0, gw);
+        }
         // Gate VaultRegistry event ingestion behind INDEXER_MULTI_VAULT_EVENTS
         // (config/feature-flags.json id=2).
         if crate::feature_flags::is_enabled(
@@ -159,11 +158,6 @@ impl IndexerConfig {
         if let Some(pr) = self.portfolio_router {
             if !addrs.contains(&pr) {
                 addrs.push(pr);
-            }
-        }
-        if let Some(ic) = self.investment_committee {
-            if !addrs.contains(&ic) {
-                addrs.push(ic);
             }
         }
         if let Some(cr) = self.consensus_receipt {
@@ -230,7 +224,9 @@ impl IndexerConfig {
                 out.push((addr, kind));
             }
         };
-        push(self.gateway, "gateway");
+        if let Some(gw) = self.gateway {
+            push(gw, "gateway");
+        }
         push(self.vault, "vault");
         if let Some(reg) = self.registry {
             push(reg, "vault_registry");
@@ -240,9 +236,6 @@ impl IndexerConfig {
         }
         if let Some(pr) = self.portfolio_router {
             push(pr, "portfolio_router");
-        }
-        if let Some(ic) = self.investment_committee {
-            push(ic, "investment_committee");
         }
         if let Some(cr) = self.consensus_receipt {
             push(cr, "consensus_receipt");
@@ -962,21 +955,13 @@ pub async fn run_once(
     // fails: repairing a stale `verified = false` must not depend on the chain
     // being reachable, and the payload host and the RPC fail independently.
     //
-    // Security round 3: the vote memo sweep runs after it under the same deadline, so both sweeps
-    // together cost a tick at most SWEEP_TIME_BUDGET.
+    // The sweep runs under a SWEEP_TIME_BUDGET deadline.
     let sweep_deadline = tokio::time::Instant::now() + SWEEP_TIME_BUDGET;
     let repaired = sweep_unverified_receipts(db, cfg, sweep_deadline).await;
     if repaired > 0 {
         tracing::info!(
             repaired,
             "consensus receipt re-verification sweep repaired rows this tick"
-        );
-    }
-    let repaired_votes = sweep_unverified_votes(db, cfg, sweep_deadline).await;
-    if repaired_votes > 0 {
-        tracing::info!(
-            repaired_votes,
-            "committee vote re-verification sweep verified votes this tick"
         );
     }
 
@@ -1898,17 +1883,6 @@ async fn run_inner(
     // The holders of each record's snapshot, under a per-tick budget (security round 2).
     rows_inserted += read_snapshot_balances(db, rpc, cfg.chain_id, safe_head).await? as i64;
 
-    // Committee regime snapshots at the tick's target (DI-3). A committee signal stops counting
-    // once it is older than COMMITTEE_VOTE_FRESHNESS_BLOCKS, and no log announces that, so the
-    // event-time refresh in `handle_log` never sees it. Re-deriving the tilt here writes a row only
-    // for a vault whose aggregate changed (a zero-count row when nobody counts any more), so
-    // `/v1/regime/feed` agrees with `/v1/committee/tilts` at the cursor this tick advances to.
-    if cfg.investment_committee.is_some() {
-        rows_inserted += db
-            .refresh_regime_snapshots(cfg.chain_id, target as i64, None)
-            .await? as i64;
-    }
-
     // Reuse the registered-vault set gathered above for the watched-address
     // union; it drives both the event-driven snapshot (router-deposit path) and
     // the heartbeat. Like the watched set it holds every status (DI-2): a retired
@@ -1955,7 +1929,10 @@ async fn run_inner(
             .topics
             .first()
             .is_some_and(|t| *t == topics.deposits_paused || *t == topics.deposits_unpaused);
-        if is_pause_log && log.address != cfg.gateway && heartbeat_vaults.contains(&log.address) {
+        if is_pause_log
+            && Some(log.address) != cfg.gateway
+            && heartbeat_vaults.contains(&log.address)
+        {
             rows_inserted +=
                 snapshot_vault_or_skip(db, rpc, cfg.chain_id, log.address, log.block_number, None)
                     .await;
@@ -2680,6 +2657,20 @@ async fn handle_log_within(
         None => return Ok(0),
     };
 
+    // GATEWAY SYSTEM ISOLATION. The agent_* events write the gateway tables, so only the configured
+    // gateway may emit them. With no gateway configured nothing here is written.
+    let from_gateway = cfg.gateway == Some(log.address);
+    if !from_gateway
+        && (topic0 == topics.agent_deposit
+            || topic0 == topics.agent_deposit_routed
+            || topic0 == topics.agent_withdrawal
+            || topic0 == topics.agent_authorized
+            || topic0 == topics.agent_ownership_transferred
+            || topic0 == topics.agent_revoked)
+    {
+        return Ok(0);
+    }
+
     if topic0 == topics.agent_deposit {
         let decoded = IGatewayEvents::AgentDeposit::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("AgentDeposit: {e}")))?;
@@ -2698,6 +2689,7 @@ async fn handle_log_within(
                 decoded.windowId as i64,
                 // Single-vault path: the deposit went to the gateway's pinned vault.
                 Some(cfg.vault.into_array()),
+                Some(log.address.into_array()),
             )
             .await?;
         // Store in account_history_events for the share_receiver.
@@ -2744,6 +2736,7 @@ async fn handle_log_within(
                 decoded.windowId as i64,
                 // Router path: vault is NULL; per-leg rows carry the vault address.
                 None,
+                Some(log.address.into_array()),
             )
             .await?;
         // Store in account_history_events for the share_receiver (vault=NULL for routed).
@@ -2803,6 +2796,7 @@ async fn handle_log_within(
                 Some(decoded.maxPerWindow),
                 None, // window_usage_to_date not available from AgentAuthorized event
                 Some(decoded.shareReceiver.into_array()),
+                Some(log.address.into_array()),
             )
             .await?;
         // Store policy change in account history for the agent.
@@ -2838,6 +2832,7 @@ async fn handle_log_within(
                 log.tx_hash.0,
                 decoded.agent.into_array(),
                 decoded.newOwner.into_array(),
+                Some(log.address.into_array()),
             )
             .await?;
         r += db
@@ -2873,6 +2868,7 @@ async fn handle_log_within(
                 None,
                 None, // window_usage_to_date not available from AgentRevoked event
                 None,
+                Some(log.address.into_array()),
             )
             .await?;
         // Store policy change (revocation) in account history for the agent.
@@ -3226,192 +3222,6 @@ async fn handle_log_within(
         return Ok(r);
     }
 
-    // ─── InvestmentCommitteePolicy event handlers ─────────────────────────────
-    // Canonical: docs/architecture.md §5.4 — issue #1053.
-    //
-    // Three events: AgentRegistered, AgentRevoked (IC-specific), VoteSubmitted.
-    // Note: IC AgentRevoked has signature `AgentRevoked(address)` — one indexed
-    // field — which is distinct from IGateway AgentRevoked `AgentRevoked(address,address)`
-    // (two indexed fields).  They have different topic-0 hashes and are dispatched
-    // independently.
-
-    if topic0 == topics.ic_agent_registered {
-        let decoded = IInvestmentCommitteePolicyEvents::AgentRegistered::decode_log(
-            &into_alloy_log(log),
-            true,
-        )
-        .map_err(|e| IndexerError::Decode(format!("IC AgentRegistered: {e}")))?;
-        let mut r = db
-            .upsert_committee_agent(
-                cfg.chain_id,
-                decoded.agent.into_array(),
-                &decoded.agentId,
-                log.block_number as i64,
-                log.log_index as i32,
-            )
-            .await?;
-        // `registerAgent` on a member that is already registered only relabels it on chain, but
-        // the tilt then counts none of its earlier signals (they predate its latest
-        // registration), so every vault it voted on can move (DI-3).
-        r += db
-            .refresh_regime_snapshots(cfg.chain_id, log.block_number as i64, None)
-            .await?;
-        return Ok(r);
-    }
-
-    if topic0 == topics.ic_agent_revoked {
-        let decoded =
-            IInvestmentCommitteePolicyEvents::AgentRevoked::decode_log(&into_alloy_log(log), true)
-                .map_err(|e| IndexerError::Decode(format!("IC AgentRevoked: {e}")))?;
-        let mut r = db
-            .revoke_committee_agent(
-                cfg.chain_id,
-                decoded.agent.into_array(),
-                log.block_number as i64,
-                log.log_index as i32,
-            )
-            .await?;
-        // The revoked member's signals stop counting on every vault it voted on. Write the new
-        // aggregate now, a zero-count row where it was the last member, so `/v1/regime/feed`
-        // drops it in the same block `/v1/committee/tilts` does (DI-3).
-        r += db
-            .refresh_regime_snapshots(cfg.chain_id, log.block_number as i64, None)
-            .await?;
-        return Ok(r);
-    }
-
-    if topic0 == topics.ic_vote_submitted {
-        let decoded =
-            IInvestmentCommitteePolicyEvents::VoteSubmitted::decode_log(&into_alloy_log(log), true)
-                .map_err(|e| IndexerError::Decode(format!("IC VoteSubmitted: {e}")))?;
-        let vote_id: i64 = decoded.voteId.try_into().unwrap_or(i64::MAX);
-        let agent = decoded.agent.into_array();
-        let vault = decoded.vault.into_array();
-        let vote_json_hash: [u8; 32] = decoded.voteJsonHash.0;
-
-        // Memo fetch + keccak256 verification.
-        // If rationaleUri is empty or the fetch fails, store with verified=false.
-        // If the memo's keccak256 matches voteJsonHash, store with verified=true.
-        //
-        // Security round 3: the fetch shares the tick's INLINE_FETCH_TIME_BUDGET with the receipts'
-        // payload fetches. It had no deadline: up to 10 s of DNS plus 10 s of request per vote, and
-        // any committee agent key can submit unlimited votes with any URI, so 1,000 votes at a
-        // blackholed host held the tick for hours and the watchdog's evaluation behind it. Past the
-        // budget the vote is stored unfetched, and `sweep_unverified_votes` fetches it later.
-        let (verified, attempts, last_error): (bool, i32, Option<String>) =
-            if decoded.rationaleUri.is_empty() {
-                (false, 0, Some("rationale_uri is empty".to_string()))
-            } else if inline_fetch_deadline.is_some_and(|d| tokio::time::Instant::now() >= d) {
-                (
-                    false,
-                    0,
-                    Some(format!(
-                        "not fetched at index time: the tick's {}s inline fetch budget was spent; \
-                         the vote re-verification sweep fetches it",
-                        INLINE_FETCH_TIME_BUDGET.as_secs()
-                    )),
-                )
-            } else {
-                let fetch = fetch_and_verify_memo(&decoded.rationaleUri, vote_json_hash);
-                let outcome = match inline_fetch_deadline {
-                    Some(deadline) => tokio::time::timeout_at(deadline, fetch)
-                        .await
-                        .unwrap_or_else(|_| {
-                            Err(format!(
-                                "memo fetch cut by the tick's {}s inline fetch budget",
-                                INLINE_FETCH_TIME_BUDGET.as_secs()
-                            ))
-                        }),
-                    None => fetch.await,
-                };
-                match outcome {
-                    Ok(true) => (true, 1, None),
-                    Ok(false) => (
-                        false,
-                        1,
-                        Some("memo keccak256 does not match voteJsonHash".to_string()),
-                    ),
-                    Err(e) => {
-                        tracing::warn!(
-                            vote_id,
-                            rationale_uri = %decoded.rationaleUri,
-                            error = %e,
-                            "memo fetch/verify failed; storing vote with verified=false \
-                             (the vote re-verification sweep retries it)"
-                        );
-                        (false, 1, Some(e))
-                    }
-                }
-            };
-
-        // A member registered before the indexed range has no `committee_agents` row, and the
-        // vote's foreign key used to fail this tick on every retry (DI-4). Write an inactive
-        // placeholder first, so the vote is stored, tilts nothing, and the cursor moves on.
-        let mut r = db
-            .insert_committee_agent_placeholder(
-                cfg.chain_id,
-                agent,
-                log.block_number as i64,
-                log.log_index as i32,
-            )
-            .await?;
-        if r > 0 {
-            tracing::warn!(
-                vote_id,
-                agent = %decoded.agent,
-                block_number = log.block_number,
-                "VoteSubmitted from a committee member with no indexed AgentRegistered; \
-                 stored an inactive placeholder agent row, so this vote does not count \
-                 toward the tilt (set INDEXER_START_BLOCK at or below the IC deploy block \
-                 to index the registration)"
-            );
-        }
-
-        // The emitting policy is part of the vote key: a redeployed policy restarts `voteId`
-        // (DI-10, migration 0023).
-        let inserted = db
-            .insert_committee_vote(
-                cfg.chain_id,
-                log.address.into_array(),
-                vote_id,
-                log.block_number as i64,
-                log.log_index as i32,
-                log.tx_hash.0,
-                agent,
-                vault,
-                decoded.stance as i16,
-                decoded.targetWeightBps as i16,
-                decoded.confidence as i16,
-                &decoded.rationaleUri,
-                vote_json_hash,
-                decoded.timestamp as i64,
-                verified,
-            )
-            .await?;
-        r += inserted;
-        // The sweep's state for a vote this tick stored unverified (migration 0029). A re-index of
-        // a stored vote inserts nothing and keeps its attempt count.
-        if inserted > 0 && !verified {
-            db.note_vote_verification(
-                cfg.chain_id,
-                log.address.into_array(),
-                vote_id,
-                attempts,
-                last_error.as_deref(),
-            )
-            .await?;
-        }
-
-        // Refresh the regime snapshot for this vault on every vote, verified or not (DI-3). An
-        // unverified vote still replaces the member's older signal, so its newest view no longer
-        // counts and the aggregate can drop.
-        r += db
-            .refresh_regime_snapshots(cfg.chain_id, log.block_number as i64, Some(vault))
-            .await?;
-
-        return Ok(r);
-    }
-
     // ─── ExclusionLedger event handlers ───────────────────────────────────────────
     // Implements: QA plan v1 task X7, core issue 1820 (indexer half). Migration 0025.
     //
@@ -3516,8 +3326,7 @@ async fn handle_log_within(
     // T20 — GATE ON THE EMITTING CONTRACT.
     //
     // `handle_log` dispatches on `topic0` alone, over a watched-address set that
-    // also carries the gateway, the vaults, the registry, the router
-    // and the IC policy. `ReceiptRecorded`'s topic0 is just a hash: ANY watched
+    // also carries the gateway, the vaults, the registry and the router. `ReceiptRecorded`'s topic0 is just a hash: ANY watched
     // contract that emits an event with that signature lands in the branches
     // below. Only the configured ConsensusRecommendationReceipt deployment may
     // write the receipt register, so check the address before decoding rather
@@ -3800,102 +3609,6 @@ async fn sweep_unverified_receipts(
                 error = %e,
                 receipt_id = %alloy_primitives::hex::encode(&row.receipt_id),
                 "consensus receipt re-verification sweep: repair write failed"
-            ),
-        }
-    }
-    repaired
-}
-
-/// Security round 3: the vote memo re-verification sweep, [`sweep_unverified_receipts`] for
-/// `committee_votes` (migration 0029).
-///
-/// A vote's memo is fetched inline under the tick's [`INLINE_FETCH_TIME_BUDGET`]. A vote stored
-/// past it, or whose memo host was briefly unreachable, used to stay `verified = false` for ever,
-/// and a tilt counts only verified votes. Each tick this re-fetches a bounded batch of unverified
-/// votes, newest first, until `deadline` (shared with the receipt sweep, [`SWEEP_TIME_BUDGET`]),
-/// and marks the ones whose memo now hashes to `voteJsonHash`. The digest is still compared with
-/// the on-chain hash, the write never downgrades, and every attempt (a cut one included) counts
-/// toward [`SWEEP_MAX_ATTEMPTS`], so a host that never answers stops taking the budget. The tick's
-/// regime refresh at its target counts a vote verified here (DI-3).
-///
-/// A sweep failure is never fatal to the tick: the votes are already stored.
-async fn sweep_unverified_votes(
-    db: &Db,
-    cfg: &IndexerConfig,
-    deadline: tokio::time::Instant,
-) -> u64 {
-    if cfg.investment_committee.is_none() || tokio::time::Instant::now() >= deadline {
-        return 0;
-    }
-    let pending = match db
-        .list_unverified_votes(cfg.chain_id, SWEEP_MAX_ATTEMPTS, SWEEP_BATCH)
-        .await
-    {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(error = %e, "committee vote re-verification sweep: query failed");
-            return 0;
-        }
-    };
-
-    let mut repaired = 0u64;
-    for row in pending {
-        let Ok(expected) = <[u8; 32]>::try_from(row.vote_json_hash.as_slice()) else {
-            tracing::warn!(
-                vote_id = row.vote_id,
-                "committee vote re-verification sweep: vote_json_hash is not 32 bytes; skipping"
-            );
-            continue;
-        };
-        if tokio::time::Instant::now() >= deadline {
-            tracing::info!(
-                budget_secs = SWEEP_TIME_BUDGET.as_secs(),
-                "committee vote re-verification sweep: time budget spent; the rest waits for \
-                 the next tick"
-            );
-            break;
-        }
-        let outcome = tokio::time::timeout_at(
-            deadline,
-            fetch_and_verify_memo(&row.rationale_uri, expected),
-        )
-        .await
-        .unwrap_or_else(|_| {
-            Err(format!(
-                "memo fetch cut by the sweep's {}s per-tick budget",
-                SWEEP_TIME_BUDGET.as_secs()
-            ))
-        });
-        let (verified, last_error) = match outcome {
-            Ok(true) => (true, None),
-            Ok(false) => (
-                false,
-                Some("memo keccak256 does not match voteJsonHash".to_string()),
-            ),
-            Err(e) => (false, Some(e)),
-        };
-        match db
-            .repair_vote_verification(
-                cfg.chain_id,
-                &row.contract_address,
-                row.vote_id,
-                verified,
-                last_error.as_deref(),
-            )
-            .await
-        {
-            Ok(_) if verified => {
-                repaired += 1;
-                tracing::info!(
-                    vote_id = row.vote_id,
-                    "committee vote re-verification sweep: memo verified"
-                );
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!(
-                error = %e,
-                vote_id = row.vote_id,
-                "committee vote re-verification sweep: repair write failed"
             ),
         }
     }
@@ -4190,37 +3903,6 @@ fn digest_matches(body: &[u8], expected_digest: [u8; 32]) -> (bool, Option<Strin
             )),
         ),
     }
-}
-
-/// Fetch the JSON memo from `rationale_uri` and verify its keccak256 against
-/// `expected_hash`.  Returns `true` if the hash matches, `false` otherwise.
-/// Errors on network failure, non-200 HTTP, or response body too large.
-async fn fetch_and_verify_memo(
-    rationale_uri: &str,
-    expected_hash: [u8; 32],
-) -> Result<bool, String> {
-    // A one-off client: the indexer is single-tick, so no pool is needed. The URI
-    // is checked and the body streamed with a 1 MiB cap (security round 1), as
-    // `fetch_payload_once`.
-    let (client, url) =
-        guarded_fetch_client(rationale_uri, std::time::Duration::from_secs(10)).await?;
-
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("GET {rationale_uri}: {e}"))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("GET {rationale_uri} returned {}", resp.status()));
-    }
-
-    let body = read_capped_body(resp, MAX_FETCH_BODY)
-        .await
-        .map_err(|e| format!("memo body {e}"))?;
-
-    let actual = alloy_primitives::keccak256(&body);
-    Ok(actual.0 == expected_hash)
 }
 
 /// IDX-3: persist the owner's resulting `wallet_positions` share balance after
@@ -4943,12 +4625,11 @@ mod tests {
             chain_id: 918_453,
             chain_name: "devnet".into(),
             rpc_label: "stub".into(),
-            gateway: Address::from([0x11u8; 20]),
+            gateway: Some(Address::from([0x11u8; 20])),
             vault: Address::from([0x22u8; 20]),
             registry: None,
             router_governance: Some(router),
             portfolio_router: Some(router),
-            investment_committee: None,
             consensus_receipt: None,
             timelock: None,
             safe: None,
@@ -4986,12 +4667,11 @@ mod tests {
             chain_id: 8453,
             chain_name: "base".into(),
             rpc_label: "t".into(),
-            gateway: Address::from([0x11u8; 20]),
+            gateway: Some(Address::from([0x11u8; 20])),
             vault: Address::from([0x22u8; 20]),
             registry: None,
             router_governance: None,
             portfolio_router: None,
-            investment_committee: None,
             consensus_receipt: None,
             timelock: None,
             safe: None,
@@ -5117,12 +4797,11 @@ mod tests {
             chain_id: 8453,
             chain_name: "base".into(),
             rpc_label: "t".into(),
-            gateway: Address::from([0x11; 20]),
+            gateway: Some(Address::from([0x11; 20])),
             vault: Address::from([0x22; 20]),
             registry: None,
             router_governance: None,
             portfolio_router: None,
-            investment_committee: None,
             consensus_receipt: None,
             timelock: Some(Address::from([0x7a; 20])),
             safe: Some(Address::from([0x5e; 20])),
@@ -5211,7 +4890,7 @@ mod tests {
         use alloy_sol_types::SolEvent as _;
         let cfg = admin_cfg();
         let topics = Topics::new();
-        let gateway = cfg.gateway;
+        let gateway = cfg.gateway.expect("test config has a gateway");
         let implementation = Address::from([0x1c; 20]);
 
         let up = IGovernedUpgradeEvents::Upgraded { implementation }.encode_log_data();

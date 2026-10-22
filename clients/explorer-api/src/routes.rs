@@ -59,15 +59,14 @@ use crate::model::{
     dec_to_string, exclusion_finalize_reason_label, headroom_of, position_exit_value,
     AccountExclusionClaimsResponse, AccountHistoryEntry, AccountHistoryResponse,
     AccountPoliciesResponse, AccountPolicy, AccountPositionsResponse, ActivityEvent,
-    AdapterAllocationEntry, AdminEventEntry, AdminEventsResponse, AgentPolicy, AgentResponse,
-    CommitteeAgent, CommitteeAgentsResponse, CommitteeTilt, CommitteeTiltsResponse,
-    CommitteeTrackRecordResponse, CommitteeVoteEntry, ConsensusReceipt, ConsensusReceiptResponse,
+    AdapterAllocationEntry, AdminEventEntry, AdminEventsResponse, AgentPolicy,
+    AgentRegistrationsResponse, AgentResponse, ConsensusReceipt, ConsensusReceiptResponse,
     ConsensusReceiptsResponse, Contract, ContractsResponse, Deposit, DepositResponse,
     DepositsResponse, EventKind, ExclusionClaim, Freshness, Health, ProxyBackfillHealth,
-    RegimeFeedResponse, RegimeSnapshot, RouterStateResponse, RouterWeightsResponse, StatsResponse,
-    Transaction, TransactionResponse, UpgradeState, Vault, VaultDetail, VaultDetailResponse,
-    VaultFeeEntry, VaultPosition, VaultSnapshot, VaultSnapshotsResponse, VaultTransferEntry,
-    VaultTvlPoint, VaultWeight, VaultsResponse, WeightHistoryEntry,
+    RouterStateResponse, RouterWeightsResponse, StatsResponse, Transaction, TransactionResponse,
+    UpgradeState, Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry, VaultPosition,
+    VaultSnapshot, VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint, VaultWeight,
+    VaultsResponse, WeightHistoryEntry,
 };
 use crate::state::AppState;
 
@@ -85,7 +84,15 @@ type DepositRow = (
     Vec<u8>,
     BigDecimal,
     DateTime<Utc>,
+    Option<String>,
 );
+
+/// SQL for the id of the registration an `agent_deposits` / `agent_policies` row belongs to, or NULL.
+/// Deterministic: chain, gateway deployment and the position of the event that started the registration
+/// (migration 0031). The id is the wire identity of a registration.
+const REGISTRATION_ID_SQL: &str = "CASE WHEN registration_block IS NULL THEN NULL ELSE \
+    chain_id::TEXT || ':' || COALESCE('0x' || encode(gateway, 'hex'), 'none') || ':' || \
+    registration_block::TEXT || ':' || registration_log_index::TEXT END";
 type SnapshotRow = (i64, Vec<u8>, i64, BigDecimal, BigDecimal, DateTime<Utc>);
 type TxRow = (i64, i64, Vec<u8>, Option<Vec<u8>>, i16, DateTime<Utc>);
 
@@ -196,22 +203,6 @@ type DepositFeedRow = (
     DateTime<Utc>,
 );
 
-// (agent BYTEA, owner BYTEA, revoked BOOL, valid_until BIGINT?,
-//  max_per_payment NUMERIC?, max_per_window NUMERIC?, window_usage_to_date NUMERIC?,
-//  share_receiver BYTEA?, tx_hash BYTEA)
-// Used by get_account_policies — latest policy state per agent for a given owner.
-type PolicyRow = (
-    Vec<u8>,
-    Vec<u8>,
-    bool,
-    Option<i64>,
-    Option<BigDecimal>,
-    Option<BigDecimal>,
-    Option<BigDecimal>,
-    Option<Vec<u8>>,
-    Vec<u8>,
-);
-
 /// Build the application router. All routes are GET-only.
 ///
 /// `#[rustfmt::skip]` is intentional: the router-introspection test
@@ -228,6 +219,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/vault/snapshots", get(list_vault_snapshots))
         .route("/v1/agents/:address", get(get_agent))
         .route("/v1/agents/:address/deposits", get(list_agent_deposits))
+        .route("/v1/agents/:address/registrations", get(list_agent_registrations))
         .route("/v1/transactions/:tx_hash", get(get_transaction))
         .route("/v1/deposits/:deposit_id", get(get_deposit))
         .route("/v1/vaults", get(list_vaults))
@@ -244,14 +236,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/accounts/:address/policies", get(get_account_policies))
         // Exclusion-record claims — core issue 1820, QA plan X7.
         .route("/v1/accounts/:address/exclusion-claims", get(get_account_exclusion_claims))
-        // Investment Committee — issue #1053.
-        .route("/v1/committee/agents", get(list_committee_agents))
-        .route(
-            "/v1/committee/agents/:address/track-record",
-            get(get_committee_track_record),
-        )
-        .route("/v1/committee/tilts", get(get_committee_tilts))
-        .route("/v1/regime/feed", get(get_regime_feed))
+        // Agent registration history (issue 1891): every registration of an agent address.
+        // The committee and regime routes were retired with the IC policy; they fall through to 404.
         // Consensus recommendation receipts — issue #1247, docs/architecture.md §4.9.
         // Protocol scope (§5.0): no :address segment.
         .route("/v1/consensus-receipts", get(list_consensus_receipts))
@@ -564,28 +550,46 @@ async fn get_agent(
     Path(address): Path<String>,
 ) -> ApiResult<Json<AgentResponse>> {
     let address_bytes = decode_address_param(&address)?;
-    // The canonical schema stores tombstones via `revoked = true`; the
-    // wire format keeps the legacy `authorized` boolean (= !revoked) and
-    // surfaces `max_per_window` as `cap` (the closest fit per ADR §3.5).
-    // Chain scoping: filter agent_policies to state.chain_id so a shared agent
-    // address on another chain is invisible here (issue #178).
-    let row: Option<(i64, bool, Option<BigDecimal>)> = sqlx::query_as(
-        "SELECT block_number, revoked, max_per_window FROM agent_policies \
-         WHERE chain_id = $1 AND agent = $2 \
-         ORDER BY block_number DESC, log_index DESC LIMIT 1",
-    )
-    .bind(state.chain_id)
-    .bind(&address_bytes[..])
-    .fetch_optional(&state.pool)
-    .await?;
-    let policy = row.map(|(block_number, revoked, cap)| AgentPolicy {
+    // The current policy is the newest LIVE registration of the address: a revoked or expired
+    // registration is history and is listed by `/v1/agents/:address/registrations`, never here
+    // (issue 1891). `authorized` is kept for the wire format and is true whenever a policy is
+    // returned; `cap` is `max_per_window`.
+    // Chain scoping: the registration projection filters agent_policies to state.chain_id so a
+    // shared agent address on another chain is invisible here (issue #178).
+    let live = query_registrations(&state, None, Some(address_bytes.clone()), None)
+        .await?
+        .into_iter()
+        .filter(|p| p.status == "active")
+        .max_by_key(|p| p.started_block);
+    let policy = live.map(|p| AgentPolicy {
         agent: addr_to_hex(&address_bytes),
-        authorized: !revoked,
-        cap: cap.as_ref().map(dec_to_string),
-        block_number,
+        authorized: true,
+        cap: p.max_per_window,
+        block_number: p.last_block,
     });
     let freshness = latest_freshness(&state).await?;
     Ok(Json(AgentResponse { policy, freshness }))
+}
+
+/// GET /v1/agents/:address/registrations — every registration of an agent address, live or closed,
+/// with the owner it had, its status (`active`, `revoked` or `expired`) and its closing evidence.
+/// Earlier registrations are never overwritten by a later one (issue 1891, RS-1019-18).
+async fn list_agent_registrations(
+    State(state): State<AppState>,
+    Path(address): Path<String>,
+) -> ApiResult<Json<AgentRegistrationsResponse>> {
+    let address_bytes = decode_address_param(&address)?;
+    let registrations = query_registrations(&state, None, Some(address_bytes.clone()), None)
+        .await?
+        .into_iter()
+        .map(AccountPolicy::from)
+        .collect();
+    let freshness = latest_freshness(&state).await?;
+    Ok(Json(AgentRegistrationsResponse {
+        agent: addr_to_hex(&address_bytes),
+        registrations,
+        freshness,
+    }))
 }
 
 async fn list_agent_deposits(
@@ -596,10 +600,13 @@ async fn list_agent_deposits(
     // Chain scoping: filter agent_deposits to state.chain_id so deposits from
     // the same agent address on another chain are excluded (issue #178).
     let rows: Vec<DepositRow> = sqlx::query_as(
-        "SELECT chain_id, block_number, log_index, tx_hash, payment_id, agent, share_receiver, amount, indexed_at \
-         FROM agent_deposits \
-         WHERE chain_id = $1 AND agent = $2 \
-         ORDER BY block_number DESC, log_index DESC LIMIT 500",
+        &format!(
+            "SELECT chain_id, block_number, log_index, tx_hash, payment_id, agent, share_receiver, amount, indexed_at, \
+                    {REGISTRATION_ID_SQL} AS registration_id \
+             FROM agent_deposits \
+             WHERE chain_id = $1 AND agent = $2 \
+             ORDER BY block_number DESC, log_index DESC LIMIT 500"
+        ),
     )
     .bind(state.chain_id)
     .bind(&address_bytes[..])
@@ -664,8 +671,11 @@ async fn get_deposit(
     // by payment_id so a deposit on another chain with the same bytes32 id
     // cannot collide (issue #178).
     let row: Option<DepositRow> = sqlx::query_as(
-        "SELECT chain_id, block_number, log_index, tx_hash, payment_id, agent, share_receiver, amount, indexed_at \
-         FROM agent_deposits WHERE chain_id = $1 AND payment_id = $2 LIMIT 1",
+        &format!(
+            "SELECT chain_id, block_number, log_index, tx_hash, payment_id, agent, share_receiver, amount, indexed_at, \
+                    {REGISTRATION_ID_SQL} AS registration_id \
+             FROM agent_deposits WHERE chain_id = $1 AND payment_id = $2 LIMIT 1"
+        ),
     )
     .bind(state.chain_id)
     .bind(&payment_bytes[..])
@@ -1574,77 +1584,233 @@ async fn get_account_history(
     }))
 }
 
-/// GET /v1/accounts/:address/policies — all gateway agent-policy states owned by a depositor.
-///
-/// Returns the latest-state row per agent, for every agent whose latest row
-/// names the queried address as `owner`.  Uses `DISTINCT ON (agent)` ordered by
-/// block_number DESC to surface only the most recent authorization, ownership
-/// transfer or revocation for each agent.
-/// Returns an empty array (not 404) when the owner has no policies.
-/// Chain-scoped to state.chain_id.
-async fn get_account_policies(
-    State(state): State<AppState>,
-    Path(address): Path<String>,
-) -> ApiResult<Json<AccountPoliciesResponse>> {
-    let address_bytes = decode_address_param(&address)?;
+/// Optional filters of `GET /v1/accounts/:address/policies`.
+#[derive(Debug, Deserialize)]
+struct PoliciesQuery {
+    /// `true` keeps only live registrations (not revoked, not expired). Default: every registration.
+    active: Option<bool>,
+    /// 0x-prefixed gateway deployment address; keeps only that deployment's registrations.
+    gateway: Option<String>,
+}
 
-    // Latest policy state per agent, kept when its latest row names this
-    // owner. DISTINCT ON picks the highest-block row per (chain_id, agent)
-    // pair over every row of the agent, matching the tombstone pattern from
-    // migration 0001: `revoked = true` rows supersede older authorization
-    // rows. The owner filter runs on that latest row, so an agent handed to
-    // another owner with `AgentOwnershipTransferred` (issue #1476) is listed
-    // under its new owner only.
-    let rows: Vec<PolicyRow> = sqlx::query_as(
-        "SELECT agent, owner, revoked, valid_until, \
-                max_per_payment, max_per_window, window_usage_to_date, \
-                share_receiver, tx_hash \
-         FROM ( \
-             SELECT DISTINCT ON (chain_id, agent) \
-                    agent, owner, revoked, valid_until, \
-                    max_per_payment, max_per_window, window_usage_to_date, \
-                    share_receiver, tx_hash, block_number \
+/// One registration as projected from `agent_policies` (migration 0031).
+struct RegistrationRow {
+    registration_id: String,
+    gateway: Option<Vec<u8>>,
+    agent: Vec<u8>,
+    owner: Option<Vec<u8>>,
+    status: String,
+    closed: bool,
+    started_block: i64,
+    closed_block: Option<i64>,
+    closed_tx_hash: Option<Vec<u8>>,
+    valid_until: Option<i64>,
+    max_per_payment: Option<String>,
+    max_per_window: Option<String>,
+    window_usage_to_date: Option<String>,
+    share_receiver: Option<Vec<u8>>,
+    tx_hash: Vec<u8>,
+    last_block: i64,
+}
+
+impl From<RegistrationRow> for AccountPolicy {
+    fn from(p: RegistrationRow) -> Self {
+        AccountPolicy {
+            registration_id: p.registration_id,
+            gateway: p.gateway.as_deref().map(addr_to_hex),
+            agent: addr_to_hex(&p.agent),
+            owner: p.owner.as_deref().map(addr_to_hex),
+            revoked: p.closed,
+            status: p.status,
+            started_block: p.started_block,
+            closed_block: p.closed_block,
+            closed_tx_hash: p.closed_tx_hash.as_deref().map(hash_to_hex),
+            valid_until: p.valid_until,
+            max_per_payment: p.max_per_payment,
+            max_per_window: p.max_per_window,
+            window_usage_to_date: p.window_usage_to_date,
+            share_receiver: p.share_receiver.as_deref().map(addr_to_hex),
+            tx_hash: hash_to_hex(&p.tx_hash),
+        }
+    }
+}
+
+/// The registration projection behind `/v1/accounts/:address/policies`, `/v1/agents/:address` and
+/// `/v1/agents/:address/registrations` (issue 1891, RS-1019-18).
+///
+/// A registration is the group of `agent_policies` rows that share `(gateway, agent,
+/// registration_block, registration_log_index)`. Its latest state is projected inside the group before
+/// any owner filter runs, so a later registration of the same address by another owner (or by the same
+/// one) never hides or overwrites an earlier one.
+///
+/// - Policy fields and owner come from the owner's newest authorization row in the registration, so a
+///   revoked registration still reports the policy it had. A historical `AgentOwnershipTransferred`
+///   keeps the old owner's view as it was and adds one for the new owner.
+/// - The status is the registration's: `revoked` once any row of it is a revoke, `expired` when its
+///   newest authorization's `valid_until` is before the newest indexed block's timestamp, else `active`.
+///   A pre-chain-tip wall clock stands in only when no block is indexed.
+/// - The closing block and transaction are those of the revoke row.
+///
+/// `owner`, `agent` and `gateway` narrow the result when given. Chain-scoped to `state.chain_id`.
+async fn query_registrations(
+    state: &AppState,
+    owner: Option<Vec<u8>>,
+    agent: Option<Vec<u8>>,
+    gateway: Option<Vec<u8>>,
+) -> ApiResult<Vec<RegistrationRow>> {
+    type Row = (
+        Option<Vec<u8>>,
+        Vec<u8>,
+        i64,
+        i32,
+        Option<Vec<u8>>,
+        String,
+        bool,
+        Option<i64>,
+        Option<Vec<u8>>,
+        Option<i64>,
+        Option<BigDecimal>,
+        Option<BigDecimal>,
+        Option<BigDecimal>,
+        Option<Vec<u8>>,
+        Vec<u8>,
+        i64,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "WITH tip AS ( \
+             SELECT COALESCE( \
+                 (SELECT timestamp FROM blocks WHERE chain_id = $1 ORDER BY block_number DESC LIMIT 1), \
+                 EXTRACT(EPOCH FROM now())::BIGINT) AS ts \
+         ), reg AS ( \
+             SELECT gateway, agent, registration_block, registration_log_index, \
+                    bool_or(revoked) AS closed, \
+                    MAX(block_number) AS last_block, \
+                    (array_agg(valid_until ORDER BY block_number DESC, log_index DESC) \
+                        FILTER (WHERE NOT revoked))[1] AS live_valid_until, \
+                    (array_agg(block_number ORDER BY block_number DESC, log_index DESC) \
+                        FILTER (WHERE revoked))[1] AS closed_block, \
+                    (array_agg(tx_hash ORDER BY block_number DESC, log_index DESC) \
+                        FILTER (WHERE revoked))[1] AS closed_tx \
              FROM agent_policies \
-             WHERE chain_id = $1 \
-               AND agent IN ( \
-                   SELECT agent FROM agent_policies WHERE chain_id = $1 AND owner = $2 \
-               ) \
-             ORDER BY chain_id, agent, block_number DESC, log_index DESC \
-         ) AS latest \
-         WHERE owner = $2 \
-         ORDER BY agent ASC",
+             WHERE chain_id = $1 AND registration_block IS NOT NULL \
+               AND ($3::BYTEA IS NULL OR agent = $3) \
+               AND ($4::BYTEA IS NULL OR gateway = $4) \
+             GROUP BY gateway, agent, registration_block, registration_log_index \
+         ), mine AS ( \
+             SELECT DISTINCT ON (gateway, agent, registration_block, registration_log_index, owner) \
+                    gateway, agent, registration_block, registration_log_index, owner, \
+                    valid_until, max_per_payment, max_per_window, window_usage_to_date, \
+                    share_receiver, tx_hash \
+             FROM agent_policies \
+             WHERE chain_id = $1 AND registration_block IS NOT NULL \
+               AND ($2::BYTEA IS NULL OR owner = $2) \
+               AND ($3::BYTEA IS NULL OR agent = $3) \
+               AND ($4::BYTEA IS NULL OR gateway = $4) \
+             ORDER BY gateway, agent, registration_block, registration_log_index, owner, \
+                      revoked ASC, block_number DESC, log_index DESC \
+         ) \
+         SELECT m.gateway, m.agent, m.registration_block, m.registration_log_index, m.owner, \
+                CASE WHEN reg.closed THEN 'revoked' \
+                     WHEN reg.live_valid_until IS NOT NULL AND reg.live_valid_until < tip.ts THEN 'expired' \
+                     ELSE 'active' END AS status, \
+                reg.closed, reg.closed_block, reg.closed_tx, \
+                m.valid_until, m.max_per_payment, m.max_per_window, m.window_usage_to_date, \
+                m.share_receiver, m.tx_hash, reg.last_block \
+         FROM mine m \
+         JOIN reg ON reg.gateway IS NOT DISTINCT FROM m.gateway AND reg.agent = m.agent \
+                 AND reg.registration_block = m.registration_block \
+                 AND reg.registration_log_index = m.registration_log_index \
+         CROSS JOIN tip \
+         ORDER BY m.agent, m.registration_block, m.registration_log_index, m.owner",
     )
     .bind(state.chain_id)
-    .bind(&address_bytes[..])
+    .bind(owner)
+    .bind(agent)
+    .bind(gateway)
     .fetch_all(&state.pool)
     .await?;
-
-    let policies: Vec<AccountPolicy> = rows
+    Ok(rows
         .into_iter()
         .map(
             |(
+                gateway,
                 agent,
+                registration_block,
+                registration_log_index,
                 owner,
-                revoked,
+                status,
+                closed,
+                closed_block,
+                closed_tx_hash,
                 valid_until,
                 max_per_payment,
                 max_per_window,
                 window_usage_to_date,
                 share_receiver,
                 tx_hash,
-            )| AccountPolicy {
-                agent: addr_to_hex(&agent),
-                owner: addr_to_hex(&owner),
-                revoked,
+                last_block,
+            )| RegistrationRow {
+                registration_id: registration_id(
+                    state.chain_id,
+                    gateway.as_deref(),
+                    registration_block,
+                    registration_log_index,
+                ),
+                gateway,
+                agent,
+                owner,
+                status,
+                closed,
+                started_block: registration_block,
+                closed_block,
+                closed_tx_hash,
                 valid_until,
                 max_per_payment: max_per_payment.as_ref().map(dec_to_string),
                 max_per_window: max_per_window.as_ref().map(dec_to_string),
                 window_usage_to_date: window_usage_to_date.as_ref().map(dec_to_string),
-                share_receiver: share_receiver.as_deref().map(addr_to_hex),
-                tx_hash: hash_to_hex(&tx_hash),
+                share_receiver,
+                tx_hash,
+                last_block,
             },
         )
-        .collect();
+        .collect())
+}
+
+/// The wire id of a registration, the same text [`REGISTRATION_ID_SQL`] builds for a deposit.
+fn registration_id(
+    chain_id: i64,
+    gateway: Option<&[u8]>,
+    registration_block: i64,
+    registration_log_index: i32,
+) -> String {
+    let gateway = gateway
+        .map(addr_to_hex)
+        .unwrap_or_else(|| "none".to_string());
+    format!("{chain_id}:{gateway}:{registration_block}:{registration_log_index}")
+}
+
+/// GET /v1/accounts/:address/policies — every agent registration an account owns or owned.
+///
+/// Registration-aware (issue 1891, RS-1019-18): one entry per registration whose owner is the queried
+/// address, with its own policy, status and closing evidence. A registration revoked, or expired and
+/// registered again by the same or another owner, stays listed under the owner it had. `?active=true`
+/// keeps only the live ones, and `?gateway=0x..` only one gateway deployment's. Returns an empty array
+/// (not 404) when the account has none. Chain-scoped to state.chain_id.
+async fn get_account_policies(
+    State(state): State<AppState>,
+    Path(address): Path<String>,
+    Query(q): Query<PoliciesQuery>,
+) -> ApiResult<Json<AccountPoliciesResponse>> {
+    let address_bytes = decode_address_param(&address)?;
+    let gateway = q.gateway.as_deref().map(decode_address_param).transpose()?;
+    let active_only = q.active.unwrap_or(false);
+    let policies: Vec<AccountPolicy> =
+        query_registrations(&state, Some(address_bytes.clone()), None, gateway)
+            .await?
+            .into_iter()
+            .filter(|p| !active_only || p.status == "active")
+            .map(AccountPolicy::from)
+            .collect();
 
     let freshness = latest_freshness(&state).await?;
     Ok(Json(AccountPoliciesResponse {
@@ -1665,6 +1831,7 @@ fn deposit_from_row(row: DepositRow) -> Deposit {
         share_receiver,
         amount,
         indexed_at,
+        registration_id,
     ) = row;
     Deposit {
         chain_id,
@@ -1676,6 +1843,7 @@ fn deposit_from_row(row: DepositRow) -> Deposit {
         share_receiver: addr_to_hex(&share_receiver),
         amount: dec_to_string(&amount),
         indexed_at,
+        registration_id,
     }
 }
 
@@ -1757,182 +1925,6 @@ async fn latest_freshness(state: &AppState) -> ApiResult<Freshness> {
         block_number,
         indexed_at,
     })
-}
-
-// ─── Investment Committee endpoints ──────────────────────────────────────────
-// Canonical: docs/architecture.md §5.4 — issue #1053.
-
-// (agent_address BYTEA, agent_id TEXT, active BOOL, registered_at BIGINT, revoked_at BIGINT?)
-type CommitteeAgentRow = (Vec<u8>, String, bool, i64, Option<i64>);
-
-/// GET /v1/committee/agents
-///
-/// Returns all registered committee agents (active and revoked).
-///
-/// A member whose `AgentRegistered` lies below the indexed range shows up once
-/// it votes, with an empty `agent_id`, `active = false` and no `revoked_at`.
-/// That is the indexer's placeholder row (DI-4): it knows the address voted,
-/// not when or under what label it was registered.
-async fn list_committee_agents(
-    State(state): State<AppState>,
-) -> ApiResult<Json<CommitteeAgentsResponse>> {
-    let rows: Vec<CommitteeAgentRow> = sqlx::query_as(
-        "SELECT agent_address, agent_id, active, registered_at, revoked_at \
-         FROM committee_agents \
-         WHERE chain_id = $1 \
-         ORDER BY registered_at ASC",
-    )
-    .bind(state.chain_id)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let agents = rows
-        .into_iter()
-        .map(|(addr, id, active, reg, rev)| CommitteeAgent {
-            address: format!("0x{}", hex::encode(addr)),
-            agent_id: id,
-            active,
-            registered_at: reg,
-            revoked_at: rev,
-        })
-        .collect();
-
-    let freshness = latest_freshness(&state).await?;
-    Ok(Json(CommitteeAgentsResponse { agents, freshness }))
-}
-
-// (contract_address, vote_id, vault_address, stance, target_weight_bps, confidence, rationale_uri, verified,
-//  block_number, timestamp_secs)
-type TrackRecordRow = (Vec<u8>, i64, Vec<u8>, i16, i16, i16, String, bool, i64, i64);
-
-/// GET /v1/committee/agents/:address/track-record
-///
-/// Returns all votes (verified and unverified) for a given agent, newest first.
-async fn get_committee_track_record(
-    State(state): State<AppState>,
-    Path(address): Path<String>,
-) -> ApiResult<Json<CommitteeTrackRecordResponse>> {
-    let addr_bytes = decode_address_param(&address)?;
-
-    let rows: Vec<TrackRecordRow> = sqlx::query_as(
-        "SELECT contract_address, vote_id, vault_address, stance, target_weight_bps, confidence, \
-                rationale_uri, verified, block_number, timestamp_secs \
-         FROM committee_votes \
-         WHERE chain_id = $1 AND agent_address = $2 \
-         ORDER BY block_number DESC, log_index DESC",
-    )
-    .bind(state.chain_id)
-    .bind(&addr_bytes)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let votes = rows
-        .into_iter()
-        .map(
-            |(contract, vote_id, vault, stance, weight, conf, uri, verified, block, ts)| {
-                CommitteeVoteEntry {
-                    contract_address: format!("0x{}", hex::encode(contract)),
-                    vote_id,
-                    vault: format!("0x{}", hex::encode(vault)),
-                    stance,
-                    target_weight_bps: weight,
-                    confidence: conf,
-                    rationale_uri: uri,
-                    verified,
-                    block_number: block,
-                    timestamp_secs: ts,
-                }
-            },
-        )
-        .collect();
-
-    let freshness = latest_freshness(&state).await?;
-    Ok(Json(CommitteeTrackRecordResponse {
-        agent: address,
-        votes,
-        freshness,
-    }))
-}
-
-/// GET /v1/committee/tilts
-///
-/// Returns the per-vault committee tilt as of the indexer cursor, from
-/// `explorer_indexer::db::committee_tilts`: each active member's latest
-/// signal per vault, counted only when verified and fresh (issue #1790). The
-/// indexer's regime snapshots use the same function. Vaults with no counted
-/// signal are omitted.
-async fn get_committee_tilts(
-    State(state): State<AppState>,
-) -> ApiResult<Json<CommitteeTiltsResponse>> {
-    let freshness = latest_freshness(&state).await?;
-    let rows = explorer_indexer::db::committee_tilts(
-        &state.pool,
-        state.chain_id,
-        freshness.block_number,
-        None,
-    )
-    .await?;
-
-    let tilts = rows
-        .into_iter()
-        .map(|(vault, avg, cnt)| CommitteeTilt {
-            vault: format!("0x{}", hex::encode(vault)),
-            avg_weight_bps: avg.to_string(),
-            vote_count: cnt,
-        })
-        .collect();
-
-    Ok(Json(CommitteeTiltsResponse { tilts, freshness }))
-}
-
-// (vault_address, avg_weight_bps, vote_count, block_number, indexed_at)
-type RegimeSnapshotRow = (Vec<u8>, BigDecimal, i32, i64, DateTime<Utc>);
-
-/// GET /v1/regime/feed
-///
-/// Returns the latest regime snapshot per vault (most recent block_number).
-///
-/// The indexer writes a new snapshot whenever a vault's tilt changes: on every
-/// committee vote, registration and revocation, and at each tick when a signal
-/// ages out of the freshness window (DI-3). When no member counts any more it
-/// writes a zero-count row. A vault whose latest row is that zero-count row is
-/// left out here, as `/v1/committee/tilts` leaves out a vault with no counted
-/// signal: an `avg_weight_bps` of 0 from nobody would read as a committee view
-/// of 0 bps. The filter runs after the latest row is picked, so an older
-/// non-zero row never comes back.
-async fn get_regime_feed(State(state): State<AppState>) -> ApiResult<Json<RegimeFeedResponse>> {
-    let rows: Vec<RegimeSnapshotRow> = sqlx::query_as(
-        "SELECT vault_address, avg_weight_bps, vote_count, block_number, indexed_at \
-         FROM ( \
-             SELECT DISTINCT ON (vault_address) \
-                    vault_address, avg_weight_bps, vote_count, block_number, indexed_at \
-             FROM regime_snapshots \
-             WHERE chain_id = $1 \
-             ORDER BY vault_address, block_number DESC \
-         ) latest \
-         WHERE vote_count > 0 \
-         ORDER BY vault_address",
-    )
-    .bind(state.chain_id)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let snapshots = rows
-        .into_iter()
-        .map(|(vault, avg, cnt, block, indexed_at)| RegimeSnapshot {
-            vault: format!("0x{}", hex::encode(vault)),
-            avg_weight_bps: avg.to_string(),
-            vote_count: cnt,
-            block_number: block,
-            indexed_at,
-        })
-        .collect();
-
-    let freshness = latest_freshness(&state).await?;
-    Ok(Json(RegimeFeedResponse {
-        snapshots,
-        freshness,
-    }))
 }
 
 // ─── Consensus recommendation receipt endpoints ───────────────────────────────────

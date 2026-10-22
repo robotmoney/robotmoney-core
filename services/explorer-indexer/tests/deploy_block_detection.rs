@@ -257,12 +257,11 @@ fn cfg() -> IndexerConfig {
         chain_id: CHAIN_ID,
         chain_name: "devnet".into(),
         rpc_label: "twin-fork-stub".into(),
-        gateway: gateway_addr(),
+        gateway: Some(gateway_addr()),
         vault: vault_addr(),
         registry: None,
         router_governance: None,
         portfolio_router: None,
-        investment_committee: None,
         consensus_receipt: None,
         // Small on purpose: one tick must advance a knowable amount, so the
         // asserted `from_block` of the NEXT tick is unambiguous.

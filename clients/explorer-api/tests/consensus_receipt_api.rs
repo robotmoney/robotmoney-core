@@ -88,6 +88,9 @@ const MIGRATIONS: &[&str] = &[
     include_str!(
         "../../../services/explorer-indexer/migrations/0029_committee_votes_verify_attempts.sql"
     ),
+    // Core 1891: the committee and regime tables are dropped, agent registrations are derived.
+    include_str!("../../../services/explorer-indexer/migrations/0030_drop_committee_and_regime.sql"),
+    include_str!("../../../services/explorer-indexer/migrations/0031_agent_registrations.sql"),
 ];
 
 /// The `MIGRATIONS` list above is hand-maintained, and a migration missing from

@@ -212,7 +212,7 @@ Dapp overlay (`docker-compose.dapp.yaml`) requires:
 |-----|---------|---------|
 | `VITE_GATEWAY_ADDRESS` | _(none — required)_ | Deployed gateway contract address |
 | `VITE_VAULT_ADDRESS` | _(none — required)_ | Deployed vault contract address |
-| `INDEXER_GATEWAY` | _(none — required)_ | Same as `VITE_GATEWAY_ADDRESS` |
+| `INDEXER_GATEWAY` | _(none — optional)_ | Same as `VITE_GATEWAY_ADDRESS`. Unset or empty indexes the vaults system alone; set but malformed exits nonzero |
 | `INDEXER_VAULT` | _(none — required)_ | Same as `VITE_VAULT_ADDRESS` |
 | `VITE_EXPLORER_API_URL` | `http://localhost:8080` | Explorer API base URL |
 | `INDEXER_RPC_URL` | `http://host.docker.internal:8545` | Twin chain RPC URL for the indexer, as seen from the container |

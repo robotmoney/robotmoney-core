@@ -40,12 +40,11 @@ fn cfg() -> IndexerConfig {
         chain_id: CHAIN,
         chain_name: "base".into(),
         rpc_label: "stub".into(),
-        gateway: Address::from([0x11u8; 20]),
+        gateway: Some(Address::from([0x11u8; 20])),
         vault: Address::from([0x22u8; 20]),
         registry: None,
         router_governance: None,
         portfolio_router: None,
-        investment_committee: None,
         consensus_receipt: None,
         timelock: Some(timelock()),
         safe: Some(safe()),
@@ -183,7 +182,7 @@ async fn timelock_and_safe_events_are_indexed_listed_and_rolled_back_on_reorg() 
 #[tokio::test]
 async fn proxy_upgrade_and_freeze_events_are_indexed_and_rolled_back_on_reorg() {
     let fx = pg_fixture().await;
-    let gateway = cfg().gateway;
+    let gateway = cfg().gateway.unwrap();
     let governance = Address::from([0x66u8; 20]);
     let impl_v1 = Address::from([0x1au8; 20]);
     let impl_v2 = Address::from([0x2bu8; 20]);
@@ -542,7 +541,7 @@ async fn a_failed_depositspaused_read_skips_the_snapshot_instead_of_recording_op
 #[tokio::test]
 async fn the_startup_backfill_indexes_proxy_events_below_the_cursor_once() {
     let fx = pg_fixture().await;
-    let gateway = cfg().gateway;
+    let gateway = cfg().gateway.unwrap();
     let late_vault = Address::from([0x33u8; 20]);
     register_vault(&fx, late_vault).await;
     let impl_v1 = Address::from([0x1au8; 20]);
@@ -799,7 +798,7 @@ async fn a_refused_or_cursorless_backfill_is_reported_and_retried_not_marked_don
 #[tokio::test]
 async fn the_backfill_scans_one_slice_per_tick_and_resumes_from_the_checkpoint() {
     let fx = pg_fixture().await;
-    let gateway = cfg().gateway;
+    let gateway = cfg().gateway.unwrap();
     let impl_v2 = Address::from([0x2bu8; 20]);
     let upgraded = IGovernedUpgradeEvents::Upgraded {
         implementation: impl_v2,
@@ -893,7 +892,7 @@ async fn a_rollback_mid_pass_clamps_the_backfill_to_the_cursor() {
     let fx = pg_fixture().await;
     let stub = StubRpcServer::start().await;
     program(&stub, 20);
-    let gateway = cfg().gateway;
+    let gateway = cfg().gateway.unwrap();
     let upgraded = IGovernedUpgradeEvents::Upgraded {
         implementation: Address::from([0x2bu8; 20]),
     }
@@ -1031,11 +1030,12 @@ async fn registry_proxy_events_are_indexed_with_multi_vault_events_off() {
 /// watchdog pages it. When the transaction created the proxy itself, the row is marked.
 #[tokio::test]
 async fn a_proxy_row_is_the_deployment_only_when_its_transaction_created_that_proxy() {
-    for (created, expect_deployment) in
-        [(Address::from([0x99u8; 20]), false), (cfg().gateway, true)]
-    {
+    for (created, expect_deployment) in [
+        (Address::from([0x99u8; 20]), false),
+        (cfg().gateway.unwrap(), true),
+    ] {
         let fx = pg_fixture().await;
-        let gateway = cfg().gateway;
+        let gateway = cfg().gateway.unwrap();
         let upgraded = IGovernedUpgradeEvents::Upgraded {
             implementation: Address::from([0x2bu8; 20]),
         }

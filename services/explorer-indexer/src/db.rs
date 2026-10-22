@@ -70,66 +70,6 @@ pub struct Db {
 /// (which does not call sqlx-cli) can still apply schema.
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
-/// How far back, in blocks, a committee signal still counts toward the tilt
-/// aggregate: 7 days of 2-second Base blocks. Committee agents form a tilt on
-/// the daily regime feed, which the product renders unavailable after 48 hours
-/// (`docs/product/20260623-product-proposal-investment-committee-v0.md` §3.2),
-/// so a signal a week old no longer describes the member's current view.
-pub const COMMITTEE_VOTE_FRESHNESS_BLOCKS: i64 = 7 * 24 * 60 * 60 / 2;
-
-/// Per-vault committee tilt as of `as_of_block`: `(vault_address, avg
-/// target_weight_bps, member count)`, ordered by vault.
-///
-/// One definition shared by the indexer's regime snapshots and the API's
-/// `/v1/committee/tilts` (issue #1790), so the two surfaces cannot disagree:
-///
-/// - **Latest per member and vault.** Only each member's newest signal on a
-///   vault counts, ordered by chain position (`block_number`, `log_index`),
-///   never by the caller-supplied `timestamp_secs`. A newer signal replaces an
-///   older one even when the newer memo failed verification.
-/// - **Membership.** The member must be active in `committee_agents`, and a
-///   signal from before its latest registration does not count.
-/// - **Verified.** The member's latest signal counts only if its memo hash
-///   verified (architecture §5.4).
-/// - **Freshness.** The latest signal must sit within
-///   [`COMMITTEE_VOTE_FRESHNESS_BLOCKS`] of `as_of_block`. Signals above
-///   `as_of_block` are ignored.
-///
-/// `vault` narrows the result to one vault; `None` returns every vault.
-pub async fn committee_tilts(
-    pool: &PgPool,
-    chain_id: i64,
-    as_of_block: i64,
-    vault: Option<[u8; 20]>,
-) -> Result<Vec<(Vec<u8>, BigDecimal, i64)>, sqlx::Error> {
-    sqlx::query_as(
-        "WITH latest AS ( \
-           SELECT DISTINCT ON (v.vault_address, v.agent_address) \
-                  v.vault_address, v.target_weight_bps, v.verified, v.block_number \
-           FROM committee_votes v \
-           JOIN committee_agents a \
-             ON a.chain_id = v.chain_id AND a.agent_address = v.agent_address \
-           WHERE v.chain_id = $1 \
-             AND v.block_number <= $2 \
-             AND a.active = TRUE \
-             AND v.block_number >= a.registered_at \
-             AND ($3::BYTEA IS NULL OR v.vault_address = $3) \
-           ORDER BY v.vault_address, v.agent_address, v.block_number DESC, v.log_index DESC \
-         ) \
-         SELECT vault_address, AVG(target_weight_bps::NUMERIC), COUNT(*) \
-         FROM latest \
-         WHERE verified = TRUE AND block_number > $2 - $4 \
-         GROUP BY vault_address \
-         ORDER BY vault_address",
-    )
-    .bind(chain_id)
-    .bind(as_of_block)
-    .bind(vault.map(|v| v.to_vec()))
-    .bind(COMMITTEE_VOTE_FRESHNESS_BLOCKS)
-    .fetch_all(pool)
-    .await
-}
-
 /// One way the database's applied schema disagrees with the migration set this
 /// binary embeds.
 ///
@@ -408,12 +348,6 @@ pub enum CountTable {
     VaultTransferEvents,
     /// Added in migration 0009 — full account history events (issue #654).
     AccountHistoryEvents,
-    /// Added in migration 0014 — committee agent registry (issue #1053).
-    CommitteeAgents,
-    /// Added in migration 0014 — per-vote commitments (issue #1053).
-    CommitteeVotes,
-    /// Added in migration 0014 — aggregated per-vault tilt snapshots (issue #1053).
-    RegimeSnapshots,
     /// Added in migration 0015 — on-chain consensus recommendation receipt
     /// commitments (issue #1247, docs/architecture.md §4.9).
     ConsensusReceipts,
@@ -441,9 +375,6 @@ impl CountTable {
             CountTable::VaultFeeEvents => "vault_fee_events",
             CountTable::VaultTransferEvents => "vault_transfer_events",
             CountTable::AccountHistoryEvents => "account_history_events",
-            CountTable::CommitteeAgents => "committee_agents",
-            CountTable::CommitteeVotes => "committee_votes",
-            CountTable::RegimeSnapshots => "regime_snapshots",
             CountTable::ConsensusReceipts => "consensus_receipts",
             CountTable::AdminEvents => "admin_events",
         }
@@ -482,9 +413,6 @@ impl TryFrom<&str> for CountTable {
             "vault_fee_events" => Ok(CountTable::VaultFeeEvents),
             "vault_transfer_events" => Ok(CountTable::VaultTransferEvents),
             "account_history_events" => Ok(CountTable::AccountHistoryEvents),
-            "committee_agents" => Ok(CountTable::CommitteeAgents),
-            "committee_votes" => Ok(CountTable::CommitteeVotes),
-            "regime_snapshots" => Ok(CountTable::RegimeSnapshots),
             "consensus_receipts" => Ok(CountTable::ConsensusReceipts),
             "admin_events" => Ok(CountTable::AdminEvents),
             other => Err(DbError::UnknownTable(other.to_owned())),
@@ -535,17 +463,6 @@ pub struct UnverifiedReceipt {
     pub receipt_id: Vec<u8>,
     pub payload_uri: String,
     pub payload_digest: Vec<u8>,
-}
-
-/// Security round 3: one row of the vote re-verification sweep's working set
-/// ([`Db::list_unverified_votes`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnverifiedVote {
-    /// The policy deployment that emitted the vote (part of the key, DI-10).
-    pub contract_address: Vec<u8>,
-    pub vote_id: i64,
-    pub rationale_uri: String,
-    pub vote_json_hash: Vec<u8>,
 }
 
 /// Marker column that makes a table **block-scoped**: every row belongs to one
@@ -714,164 +631,6 @@ async fn derive_rollback_tables(conn: &mut sqlx::PgConnection) -> Result<Vec<Str
     .await?;
 
     Ok(fk_child_first_order(&tables, &edges))
-}
-
-/// `committee_agent_events.kind` of an `AgentRegistered` (migration 0024).
-pub const AGENT_EVENT_REGISTERED: i16 = 0;
-/// `committee_agent_events.kind` of an `AgentRevoked`.
-pub const AGENT_EVENT_REVOKED: i16 = 1;
-/// `committee_agent_events.kind` of a DI-4 placeholder: the first vote from a
-/// member that had no row.
-pub const AGENT_EVENT_PLACEHOLDER: i16 = 2;
-
-/// Append one entry to a member's `committee_agent_events` history (X7, DI-8).
-/// Idempotent on (chain, member, block, log index).
-async fn insert_committee_agent_event(
-    conn: &mut sqlx::PgConnection,
-    chain_id: i64,
-    agent_address: [u8; 20],
-    block_number: i64,
-    log_index: i32,
-    kind: i16,
-    agent_id: &str,
-) -> Result<u64, DbError> {
-    let r = sqlx::query(
-        "INSERT INTO committee_agent_events \
-           (chain_id, agent_address, block_number, log_index, kind, agent_id) \
-         VALUES ($1, $2, $3, $4, $5, $6) \
-         ON CONFLICT (chain_id, agent_address, block_number, log_index) DO NOTHING",
-    )
-    .bind(chain_id)
-    .bind(&agent_address[..])
-    .bind(block_number)
-    .bind(log_index)
-    .bind(kind)
-    .bind(agent_id)
-    .execute(&mut *conn)
-    .await?;
-    Ok(r.rows_affected())
-}
-
-/// Write the `committee_agents` row of each member in `agents` from its
-/// `committee_agent_events` history (X7, DI-8). Returns the rows written.
-///
-/// The newest registration or placeholder entry gives `registered_at` and
-/// `agent_id`. A revoke after it makes the row inactive with that
-/// `revoked_at`. Only a registration with no revoke after it is active, so a
-/// placeholder stays inactive. Ordering is chain position (block, log index),
-/// never processing order, so replaying events out of order derives the same
-/// row.
-///
-/// A member with no registration or placeholder entry is left alone here: it
-/// has no row unless something outside the history wrote one, and
-/// [`reconcile_committee_agents`] decides what a rollback does with it.
-async fn derive_committee_agents(
-    conn: &mut sqlx::PgConnection,
-    chain_id: i64,
-    agents: &[Vec<u8>],
-) -> Result<u64, DbError> {
-    if agents.is_empty() {
-        return Ok(0);
-    }
-    let r = sqlx::query(
-        "WITH latest_reg AS ( \
-           SELECT DISTINCT ON (e.agent_address) \
-                  e.agent_address, e.block_number, e.log_index, e.kind, e.agent_id \
-           FROM committee_agent_events e \
-           WHERE e.chain_id = $1 AND e.agent_address = ANY($2) AND e.kind IN ($3, $5) \
-           ORDER BY e.agent_address, e.block_number DESC, e.log_index DESC \
-         ), latest_rev AS ( \
-           SELECT DISTINCT ON (e.agent_address) e.agent_address, e.block_number \
-           FROM committee_agent_events e \
-           JOIN latest_reg r ON r.agent_address = e.agent_address \
-           WHERE e.chain_id = $1 AND e.kind = $4 \
-             AND (e.block_number, e.log_index) > (r.block_number, r.log_index) \
-           ORDER BY e.agent_address, e.block_number DESC, e.log_index DESC \
-         ) \
-         INSERT INTO committee_agents \
-           (chain_id, agent_address, agent_id, active, registered_at, revoked_at) \
-         SELECT $1, r.agent_address, r.agent_id, (r.kind = $3 AND v.block_number IS NULL), \
-                r.block_number, v.block_number \
-         FROM latest_reg r \
-         LEFT JOIN latest_rev v ON v.agent_address = r.agent_address \
-         ORDER BY r.agent_address \
-         ON CONFLICT (chain_id, agent_address) DO UPDATE \
-           SET agent_id      = EXCLUDED.agent_id, \
-               active        = EXCLUDED.active, \
-               registered_at = EXCLUDED.registered_at, \
-               revoked_at    = EXCLUDED.revoked_at, \
-               indexed_at    = now()",
-    )
-    .bind(chain_id)
-    .bind(agents)
-    .bind(AGENT_EVENT_REGISTERED)
-    .bind(AGENT_EVENT_REVOKED)
-    .bind(AGENT_EVENT_PLACEHOLDER)
-    .execute(&mut *conn)
-    .await?;
-    Ok(r.rows_affected())
-}
-
-/// After a rollback deleted the history above the root, bring the rows of the
-/// members in `agents` (those that lost a history entry) back in line with the
-/// surviving history (X7, DI-8).
-///
-/// - A member whose registration or placeholder survives is derived again: an
-///   orphaned revoke is undone, an orphaned re-registration falls back to the
-///   one before it.
-/// - A member left with neither is a row the orphaned blocks created. It is
-///   deleted, unless a surviving vote still references it through the
-///   `committee_votes` foreign key. That can only be a member whose earlier
-///   registration predates the migration-0021 backfill (which kept only the
-///   newest one), and it becomes the inactive placeholder DI-4 would have
-///   written for its earliest surviving vote.
-///
-/// Votes above the root are already gone when this runs: `committee_votes` is
-/// block-scoped and the rollback deletes it first.
-async fn reconcile_committee_agents(
-    conn: &mut sqlx::PgConnection,
-    chain_id: i64,
-    agents: &[Vec<u8>],
-) -> Result<(), DbError> {
-    if agents.is_empty() {
-        return Ok(());
-    }
-    sqlx::query(
-        "INSERT INTO committee_agent_events \
-           (chain_id, agent_address, block_number, log_index, kind, agent_id) \
-         SELECT DISTINCT ON (v.agent_address) \
-                v.chain_id, v.agent_address, v.block_number, v.log_index, $3, '' \
-         FROM committee_votes v \
-         WHERE v.chain_id = $1 AND v.agent_address = ANY($2) \
-           AND NOT EXISTS ( \
-             SELECT 1 FROM committee_agent_events e \
-             WHERE e.chain_id = $1 AND e.agent_address = v.agent_address \
-               AND e.kind IN ($3, $4)) \
-         ORDER BY v.agent_address, v.block_number, v.log_index \
-         ON CONFLICT (chain_id, agent_address, block_number, log_index) DO NOTHING",
-    )
-    .bind(chain_id)
-    .bind(agents)
-    .bind(AGENT_EVENT_PLACEHOLDER)
-    .bind(AGENT_EVENT_REGISTERED)
-    .execute(&mut *conn)
-    .await?;
-    sqlx::query(
-        "DELETE FROM committee_agents a \
-         WHERE a.chain_id = $1 AND a.agent_address = ANY($2) \
-           AND NOT EXISTS ( \
-             SELECT 1 FROM committee_agent_events e \
-             WHERE e.chain_id = $1 AND e.agent_address = a.agent_address \
-               AND e.kind IN ($3, $4))",
-    )
-    .bind(chain_id)
-    .bind(agents)
-    .bind(AGENT_EVENT_REGISTERED)
-    .bind(AGENT_EVENT_PLACEHOLDER)
-    .execute(&mut *conn)
-    .await?;
-    derive_committee_agents(conn, chain_id, agents).await?;
-    Ok(())
 }
 
 impl Db {
@@ -1158,12 +917,6 @@ impl Db {
     ///   This makes the cursor reorg-safe even if the run that performed the
     ///   rollback subsequently fails: the next [`Db::last_indexed_block`]
     ///   resolves to `root`, so indexing resumes at `root + 1` with no gap.
-    /// - **`committee_agents` (X7, DI-8)** — the row is derived from the
-    ///   block-numbered `committee_agent_events` history (migration 0024). Every
-    ///   member that lost a history entry above `root` is derived again from
-    ///   what survives ([`reconcile_committee_agents`]): an orphaned
-    ///   `AgentRevoked` is undone, an orphaned re-registration falls back to the
-    ///   earlier one, and a row that only orphaned blocks created is deleted.
     /// - **`vaults` (X7, DI-8)** — the row is written once, by the vault's
     ///   first `VaultRegistered` (the registry refuses a second registration,
     ///   and `upsert_vault` keeps the first). A row whose `registered_block` is
@@ -1174,18 +927,6 @@ impl Db {
     ///   idempotent.
     pub async fn delete_above_block(&self, chain_id: i64, root: i64) -> Result<u64, DbError> {
         let mut tx = self.pool.begin().await?;
-
-        // X7 (DI-8): the members whose history loses an entry in this rollback,
-        // read before the history is deleted.
-        let reorged_agents: Vec<Vec<u8>> = sqlx::query_scalar(
-            "SELECT DISTINCT agent_address FROM committee_agent_events \
-             WHERE chain_id = $1 AND block_number > $2 \
-             ORDER BY agent_address",
-        )
-        .bind(chain_id)
-        .bind(root)
-        .fetch_all(&mut *tx)
-        .await?;
 
         // Issue #1283: the table set is DERIVED from the live schema inside the
         // same transaction as the deletes, never hand-copied. Any migration that
@@ -1217,11 +958,6 @@ impl Db {
             .execute(&mut *tx)
             .await?;
         total += r.rows_affected();
-
-        // X7 (DI-8): committee members whose revoke, registration or placeholder
-        // was orphaned. Runs after the loop, which deleted their history and
-        // their votes above `root`.
-        reconcile_committee_agents(&mut tx, chain_id, &reorged_agents).await?;
 
         // IDX-8: re-derive the in-place vaults.status from the surviving
         // (block_number <= root) status history.  A vault whose latest event
@@ -1328,6 +1064,11 @@ impl Db {
     /// single-vault `AgentDeposit` events, pass the gateway's pinned vault
     /// address.  For multi-leg `AgentDepositRouted` events, pass `None`
     /// (per-leg vault addresses are stored in `router_deposit_legs`).
+    ///
+    /// `gateway` is the deployment that emitted the event. The row is associated with the registration
+    /// of the latest `agent_policies` row of the same (chain, gateway, agent) before it in
+    /// (block, log index) order, unless that row is a revoke. With no such row the registration stays
+    /// NULL: nothing fabricates an owner (migration 0031).
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_agent_deposit(
         &self,
@@ -1343,11 +1084,24 @@ impl Db {
         shares_minted: U256,
         window_id: i64,
         vault: Option<[u8; 20]>,
+        gateway: Option<[u8; 20]>,
     ) -> Result<u64, DbError> {
         let vault_bytes: Option<&[u8]> = vault.as_ref().map(|a| &a[..]);
+        let gateway_bytes: Option<&[u8]> = gateway.as_ref().map(|a| &a[..]);
         let r = sqlx::query(
-            "INSERT INTO agent_deposits (chain_id, block_number, log_index, tx_hash, payment_id, order_id, agent, share_receiver, amount, shares_minted, window_id, vault) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+            "INSERT INTO agent_deposits (chain_id, block_number, log_index, tx_hash, payment_id, order_id, agent, share_receiver, amount, shares_minted, window_id, vault, gateway, registration_block, registration_log_index) \
+             SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::BYTEA, \
+                    CASE WHEN prev.revoked = FALSE THEN prev.registration_block END, \
+                    CASE WHEN prev.revoked = FALSE THEN prev.registration_log_index END \
+             FROM (SELECT 1) AS one \
+             LEFT JOIN LATERAL ( \
+                 SELECT p.revoked, p.registration_block, p.registration_log_index \
+                 FROM agent_policies p \
+                 WHERE p.chain_id = $1 AND p.gateway IS NOT DISTINCT FROM $13::BYTEA AND p.agent = $7 \
+                   AND (p.block_number, p.log_index) < ($2, $3) \
+                 ORDER BY p.block_number DESC, p.log_index DESC \
+                 LIMIT 1 \
+             ) AS prev ON TRUE \
              ON CONFLICT (chain_id, block_number, log_index) DO NOTHING",
         )
         .bind(chain_id)
@@ -1362,6 +1116,7 @@ impl Db {
         .bind(u256_to_decimal(shares_minted))
         .bind(window_id)
         .bind(vault_bytes)
+        .bind(gateway_bytes)
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())
@@ -1405,6 +1160,14 @@ impl Db {
         Ok(r.rows_affected())
     }
 
+    /// Insert an `AgentAuthorized` (`event_kind` "authorized") or `AgentRevoked` ("revoked") row.
+    ///
+    /// The row is assigned to a registration (migration 0031). It starts a new one when no row of the
+    /// same (chain, gateway, agent) precedes it in (block, log index) order, when the row before it is a
+    /// revoke, or when this is an authorization and the row before it had expired at this block's
+    /// timestamp. Otherwise it joins the registration of the row before it, so a `setPolicy` update
+    /// stays in its registration. Same-block rows are ordered by log index, so callers must insert in
+    /// log order. A rollback deletes the rows above the root, and the replay reassigns the same ids.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_agent_policy(
         &self,
@@ -1420,14 +1183,41 @@ impl Db {
         max_per_window: Option<U256>,
         window_usage_to_date: Option<U256>,
         share_receiver: Option<[u8; 20]>,
+        gateway: Option<[u8; 20]>,
     ) -> Result<u64, DbError> {
         let sr_bytes: Option<&[u8]> = share_receiver.as_ref().map(|a| &a[..]);
         let owner_bytes: Option<&[u8]> = owner.as_ref().map(|a| &a[..]);
+        let gateway_bytes: Option<&[u8]> = gateway.as_ref().map(|a| &a[..]);
+        let kind = if revoked { "revoked" } else { "authorized" };
         let r = sqlx::query(
             "INSERT INTO agent_policies \
              (chain_id, block_number, log_index, tx_hash, agent, owner, revoked, valid_until, \
-              max_per_payment, max_per_window, window_usage_to_date, share_receiver) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+              max_per_payment, max_per_window, window_usage_to_date, share_receiver, \
+              gateway, event_kind, registration_block, registration_log_index) \
+             SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::BYTEA, $14::TEXT, \
+                    CASE WHEN s.is_start THEN $2 ELSE prev.registration_block END, \
+                    CASE WHEN s.is_start THEN $3 ELSE prev.registration_log_index END \
+             FROM (SELECT 1) AS one \
+             LEFT JOIN LATERAL ( \
+                 SELECT p.revoked, p.valid_until, p.registration_block, p.registration_log_index \
+                 FROM agent_policies p \
+                 WHERE p.chain_id = $1 AND p.gateway IS NOT DISTINCT FROM $13::BYTEA AND p.agent = $5 \
+                   AND (p.block_number, p.log_index) < ($2, $3) \
+                 ORDER BY p.block_number DESC, p.log_index DESC \
+                 LIMIT 1 \
+             ) AS prev ON TRUE \
+             LEFT JOIN LATERAL ( \
+                 SELECT b.timestamp AS ts FROM blocks b \
+                 WHERE b.chain_id = $1 AND b.block_number = $2 \
+             ) AS blk ON TRUE \
+             CROSS JOIN LATERAL ( \
+                 SELECT (prev.registration_block IS NULL \
+                         OR prev.revoked \
+                         OR ($14::TEXT = 'authorized' \
+                             AND prev.valid_until IS NOT NULL \
+                             AND blk.ts IS NOT NULL \
+                             AND prev.valid_until < blk.ts)) AS is_start \
+             ) AS s \
              ON CONFLICT (chain_id, block_number, log_index) DO NOTHING",
         )
         .bind(chain_id)
@@ -1442,19 +1232,22 @@ impl Db {
         .bind(max_per_window.map(u256_to_decimal))
         .bind(window_usage_to_date.map(u256_to_decimal))
         .bind(sr_bytes)
+        .bind(gateway_bytes)
+        .bind(kind)
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())
     }
 
-    /// Record an `AgentOwnershipTransferred` log (issue #1476) as a new
-    /// event-sourced `agent_policies` row owned by `new_owner`.
+    /// Record a historical `AgentOwnershipTransferred` log (issue #1476) as a new event-sourced
+    /// `agent_policies` row owned by `new_owner`. Old deployments emitted it; the target gateway does not.
     ///
-    /// The transfer changes only the recorded owner, and the event carries no
-    /// policy fields, so the row copies them from the agent's latest earlier
-    /// row on the same chain. With no earlier row indexed they stay NULL.
-    /// Idempotent on `(chain_id, block_number, log_index)` like every other
-    /// writer of this table.
+    /// The transfer changes only the recorded owner and keeps the registration, so earlier rows keep
+    /// the owner they had: the old owner's history is not rewritten. The event carries no policy
+    /// fields, so the row copies them from the agent's latest earlier row of the same gateway. With no
+    /// earlier row indexed they stay NULL and the row starts a registration of its own. Idempotent on
+    /// `(chain_id, block_number, log_index)` like every other writer of this table.
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_agent_owner_transfer(
         &self,
         chain_id: i64,
@@ -1463,19 +1256,25 @@ impl Db {
         tx_hash: [u8; 32],
         agent: [u8; 20],
         new_owner: [u8; 20],
+        gateway: Option<[u8; 20]>,
     ) -> Result<u64, DbError> {
+        let gateway_bytes: Option<&[u8]> = gateway.as_ref().map(|a| &a[..]);
         let r = sqlx::query(
             "INSERT INTO agent_policies \
              (chain_id, block_number, log_index, tx_hash, agent, owner, revoked, valid_until, \
-              max_per_payment, max_per_window, window_usage_to_date, share_receiver) \
+              max_per_payment, max_per_window, window_usage_to_date, share_receiver, \
+              gateway, event_kind, registration_block, registration_log_index) \
              SELECT $1, $2, $3, $4, $5, $6, FALSE, prev.valid_until, prev.max_per_payment, \
-                    prev.max_per_window, prev.window_usage_to_date, prev.share_receiver \
+                    prev.max_per_window, prev.window_usage_to_date, prev.share_receiver, \
+                    $7::BYTEA, 'transferred', \
+                    COALESCE(prev.registration_block, $2), \
+                    COALESCE(prev.registration_log_index, $3) \
              FROM (SELECT 1) AS one \
              LEFT JOIN LATERAL ( \
                  SELECT valid_until, max_per_payment, max_per_window, window_usage_to_date, \
-                        share_receiver \
+                        share_receiver, registration_block, registration_log_index \
                  FROM agent_policies \
-                 WHERE chain_id = $1 AND agent = $5 \
+                 WHERE chain_id = $1 AND agent = $5 AND gateway IS NOT DISTINCT FROM $7::BYTEA \
                    AND (block_number, log_index) < ($2, $3) \
                  ORDER BY block_number DESC, log_index DESC \
                  LIMIT 1 \
@@ -1488,6 +1287,7 @@ impl Db {
         .bind(&tx_hash[..])
         .bind(&agent[..])
         .bind(&new_owner[..])
+        .bind(gateway_bytes)
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())
@@ -2142,418 +1942,6 @@ impl Db {
         .await?;
         Ok(r.rows_affected())
     }
-
-    // ─── InvestmentCommitteePolicy writers ───────────────────────────────────
-    // Canonical: docs/architecture.md §5.4 — issue #1053.
-    //
-    // Three events drive three tables:
-    //   AgentRegistered → upsert_committee_agent (sets active=true)
-    //   AgentRevoked    → revoke_committee_agent (sets active=false)
-    //   VoteSubmitted   → insert_committee_agent_placeholder + insert_committee_vote
-    // Each of the three is followed by refresh_regime_snapshots, and so is
-    // every tick (freshness expiry has no event), DI-3.
-    //
-    // QA plan X7 (DI-8): each writer first appends the event to the
-    // block-numbered `committee_agent_events` history (migration 0024), and the
-    // `committee_agents` row is derived from that history
-    // ([`derive_committee_agents`]). A reorg rollback deletes the orphaned
-    // history with its block and derives the row again, so an orphaned revoke
-    // or re-registration is undone.
-
-    /// Record an `AgentRegistered` at (`registered_at`, `log_index`) and derive
-    /// the member's row: active, with this label and `registered_at`.
-    ///
-    /// Re-indexing the same event is a no-op on the history and derives the
-    /// same row. A previously revoked member that registers again is active
-    /// again, because no revoke follows the new registration.
-    pub async fn upsert_committee_agent(
-        &self,
-        chain_id: i64,
-        agent_address: [u8; 20],
-        agent_id: &str,
-        registered_at: i64,
-        log_index: i32,
-    ) -> Result<u64, DbError> {
-        let mut tx = self.pool.begin().await?;
-        insert_committee_agent_event(
-            &mut tx,
-            chain_id,
-            agent_address,
-            registered_at,
-            log_index,
-            AGENT_EVENT_REGISTERED,
-            agent_id,
-        )
-        .await?;
-        let r = derive_committee_agents(&mut tx, chain_id, &[agent_address.to_vec()]).await?;
-        tx.commit().await?;
-        Ok(r)
-    }
-
-    /// Record an `AgentRevoked` at (`revoked_at`, `log_index`) and derive the
-    /// member's row: inactive, with this `revoked_at`.
-    ///
-    /// A member with no indexed registration and no placeholder has no row, and
-    /// still has none afterwards (the AgentRegistered event may lie below the
-    /// indexed range). The revoke stays in the history, so a registration
-    /// indexed later is ordered against it.
-    pub async fn revoke_committee_agent(
-        &self,
-        chain_id: i64,
-        agent_address: [u8; 20],
-        revoked_at: i64,
-        log_index: i32,
-    ) -> Result<u64, DbError> {
-        let mut tx = self.pool.begin().await?;
-        insert_committee_agent_event(
-            &mut tx,
-            chain_id,
-            agent_address,
-            revoked_at,
-            log_index,
-            AGENT_EVENT_REVOKED,
-            "",
-        )
-        .await?;
-        let r = derive_committee_agents(&mut tx, chain_id, &[agent_address.to_vec()]).await?;
-        tx.commit().await?;
-        Ok(r)
-    }
-
-    /// Give a voting member a `committee_agents` row when it has none, so its
-    /// vote can be stored (DI-4). Returns 1 when a placeholder was written and
-    /// 0 when the member already had a row.
-    ///
-    /// `committee_votes` has a foreign key to `committee_agents`. A member
-    /// registered before the indexed range (below `INDEXER_START_BLOCK`, or
-    /// before the IC policy was configured) has no row. Its first
-    /// `VoteSubmitted` failed that foreign key, the tick errored before the
-    /// cursor advanced, and every retry read the same vote again: the indexer
-    /// was stuck for good.
-    ///
-    /// The placeholder records only what the indexer saw, that the address
-    /// voted at `first_seen_block`: `active = FALSE`, an empty `agent_id`,
-    /// `registered_at = first_seen_block`, `revoked_at = NULL`. An inactive row
-    /// never counts toward [`committee_tilts`], so the vote is stored and tilts
-    /// nothing. A later `AgentRegistered` for the member replaces the
-    /// placeholder through [`Db::upsert_committee_agent`], and votes from
-    /// before that registration still do not count.
-    ///
-    /// `ON CONFLICT DO NOTHING`: a row that exists, registered or revoked, is
-    /// never touched.
-    ///
-    /// A placeholder that is written is also recorded in the history at the
-    /// vote's (`first_seen_block`, `log_index`), so a reorg that orphans the
-    /// vote removes the placeholder with it (X7, DI-8).
-    pub async fn insert_committee_agent_placeholder(
-        &self,
-        chain_id: i64,
-        agent_address: [u8; 20],
-        first_seen_block: i64,
-        log_index: i32,
-    ) -> Result<u64, DbError> {
-        let mut tx = self.pool.begin().await?;
-        let r = sqlx::query(
-            "INSERT INTO committee_agents \
-               (chain_id, agent_address, agent_id, active, registered_at) \
-             VALUES ($1, $2, '', FALSE, $3) \
-             ON CONFLICT (chain_id, agent_address) DO NOTHING",
-        )
-        .bind(chain_id)
-        .bind(&agent_address[..])
-        .bind(first_seen_block)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-        if r > 0 {
-            insert_committee_agent_event(
-                &mut tx,
-                chain_id,
-                agent_address,
-                first_seen_block,
-                log_index,
-                AGENT_EVENT_PLACEHOLDER,
-                "",
-            )
-            .await?;
-        }
-        tx.commit().await?;
-        Ok(r)
-    }
-
-    /// Insert a committee vote row on VoteSubmitted.
-    ///
-    /// `verified` is set by the caller after memo fetch + keccak256 check.
-    /// Uses ON CONFLICT DO NOTHING for idempotent re-indexing.
-    ///
-    /// `contract_address` is the policy deployment that emitted the event, and
-    /// it is part of the key (migration 0023, DI-10). `vote_id` is an index
-    /// into one deployment's vote array, so a redeployed policy reuses every
-    /// id. Under the old `(chain_id, vote_id)` key the new policy's votes hit
-    /// the conflict clause and were dropped with no error.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn insert_committee_vote(
-        &self,
-        chain_id: i64,
-        contract_address: [u8; 20],
-        vote_id: i64,
-        block_number: i64,
-        log_index: i32,
-        tx_hash: [u8; 32],
-        agent_address: [u8; 20],
-        vault_address: [u8; 20],
-        stance: i16,
-        target_weight_bps: i16,
-        confidence: i16,
-        rationale_uri: &str,
-        vote_json_hash: [u8; 32],
-        timestamp_secs: i64,
-        verified: bool,
-    ) -> Result<u64, DbError> {
-        let r = sqlx::query(
-            "INSERT INTO committee_votes \
-               (chain_id, contract_address, vote_id, block_number, log_index, tx_hash, \
-                agent_address, vault_address, stance, target_weight_bps, \
-                confidence, rationale_uri, vote_json_hash, timestamp_secs, verified) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) \
-             ON CONFLICT (chain_id, contract_address, vote_id) DO NOTHING",
-        )
-        .bind(chain_id)
-        .bind(&contract_address[..])
-        .bind(vote_id)
-        .bind(block_number)
-        .bind(log_index)
-        .bind(&tx_hash[..])
-        .bind(&agent_address[..])
-        .bind(&vault_address[..])
-        .bind(stance)
-        .bind(target_weight_bps)
-        .bind(confidence)
-        .bind(rationale_uri)
-        .bind(&vote_json_hash[..])
-        .bind(timestamp_secs)
-        .bind(verified)
-        .execute(&self.pool)
-        .await?;
-        Ok(r.rows_affected())
-    }
-
-    /// Security round 3: record how the index-time memo fetch of a vote that did not verify went
-    /// (migration 0029): `attempts` fetches (0 when the tick's inline fetch budget was spent and
-    /// nothing was fetched) and the reason. Call it only for a vote this tick inserted, so a
-    /// re-index of a stored vote does not reset its attempt count. Never touches a verified vote.
-    pub async fn note_vote_verification(
-        &self,
-        chain_id: i64,
-        contract_address: [u8; 20],
-        vote_id: i64,
-        attempts: i32,
-        last_error: Option<&str>,
-    ) -> Result<u64, DbError> {
-        let r = sqlx::query(
-            "UPDATE committee_votes SET verify_attempts = $4, last_verify_error = $5 \
-             WHERE chain_id = $1 AND contract_address = $2 AND vote_id = $3 \
-               AND verified = FALSE",
-        )
-        .bind(chain_id)
-        .bind(&contract_address[..])
-        .bind(vote_id)
-        .bind(attempts)
-        .bind(last_error)
-        .execute(&self.pool)
-        .await?;
-        Ok(r.rows_affected())
-    }
-
-    /// Security round 3: the vote re-verification sweep's working set, newest first: votes still
-    /// unverified, with a memo URI, and fewer than `max_attempts` fetches. Newest first because
-    /// only a member's newest vote, and only a fresh one, counts toward a tilt.
-    pub async fn list_unverified_votes(
-        &self,
-        chain_id: i64,
-        max_attempts: i32,
-        limit: i64,
-    ) -> Result<Vec<UnverifiedVote>, DbError> {
-        /// `(contract_address, vote_id, rationale_uri, vote_json_hash)`.
-        type SweepRow = (Vec<u8>, i64, String, Vec<u8>);
-        let rows: Vec<SweepRow> = sqlx::query_as(
-            "SELECT contract_address, vote_id, rationale_uri, vote_json_hash \
-             FROM committee_votes \
-             WHERE chain_id = $1 \
-               AND verified = FALSE \
-               AND rationale_uri <> '' \
-               AND verify_attempts < $2 \
-             ORDER BY block_number DESC, log_index DESC \
-             LIMIT $3",
-        )
-        .bind(chain_id)
-        .bind(max_attempts)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows
-            .into_iter()
-            .map(
-                |(contract_address, vote_id, rationale_uri, vote_json_hash)| UnverifiedVote {
-                    contract_address,
-                    vote_id,
-                    rationale_uri,
-                    vote_json_hash,
-                },
-            )
-            .collect())
-    }
-
-    /// Security round 3: record one re-verification attempt of a vote's memo. Like
-    /// [`Db::repair_receipt_verification`] it never downgrades (`verified = FALSE` guard) and
-    /// counts every attempt, so the sweep stops at its ceiling. A vote it marks verified counts
-    /// toward the tilt from the next regime refresh on (the tick's DI-3 refresh at its target).
-    pub async fn repair_vote_verification(
-        &self,
-        chain_id: i64,
-        contract_address: &[u8],
-        vote_id: i64,
-        verified: bool,
-        last_error: Option<&str>,
-    ) -> Result<u64, DbError> {
-        let r = sqlx::query(
-            "UPDATE committee_votes SET \
-                 verified          = $4, \
-                 verify_attempts   = verify_attempts + 1, \
-                 last_verify_error = $5, \
-                 indexed_at        = now() \
-             WHERE chain_id = $1 AND contract_address = $2 AND vote_id = $3 \
-               AND verified = FALSE",
-        )
-        .bind(chain_id)
-        .bind(contract_address)
-        .bind(vote_id)
-        .bind(verified)
-        .bind(last_error)
-        .execute(&self.pool)
-        .await?;
-        Ok(r.rows_affected())
-    }
-
-    /// Upsert a regime snapshot for (chain_id, vault_address, block_number).
-    ///
-    /// Writes the aggregate (avg_weight_bps, vote_count) as given. The indexer
-    /// writes through [`Db::refresh_regime_snapshots`], which decides whether
-    /// a row is due. Uses ON CONFLICT DO UPDATE so that re-indexing is
-    /// idempotent.
-    pub async fn upsert_regime_snapshot(
-        &self,
-        chain_id: i64,
-        vault_address: [u8; 20],
-        block_number: i64,
-        avg_weight_bps: f64,
-        vote_count: i32,
-    ) -> Result<u64, DbError> {
-        let avg_bps = BigDecimal::from_str(&format!("{avg_weight_bps:.2}"))
-            .unwrap_or_else(|_| BigDecimal::from(0));
-        self.write_regime_snapshot(chain_id, &vault_address, block_number, &avg_bps, vote_count)
-            .await
-    }
-
-    /// The one INSERT behind [`Db::upsert_regime_snapshot`] and
-    /// [`Db::refresh_regime_snapshots`]. `avg_weight_bps` is already at the
-    /// column's scale (two decimals).
-    async fn write_regime_snapshot(
-        &self,
-        chain_id: i64,
-        vault_address: &[u8],
-        block_number: i64,
-        avg_weight_bps: &BigDecimal,
-        vote_count: i32,
-    ) -> Result<u64, DbError> {
-        let r = sqlx::query(
-            "INSERT INTO regime_snapshots \
-               (chain_id, vault_address, block_number, avg_weight_bps, vote_count) \
-             VALUES ($1, $2, $3, $4, $5) \
-             ON CONFLICT (chain_id, vault_address, block_number) DO UPDATE \
-               SET avg_weight_bps = EXCLUDED.avg_weight_bps, \
-                   vote_count     = EXCLUDED.vote_count, \
-                   indexed_at     = now()",
-        )
-        .bind(chain_id)
-        .bind(vault_address)
-        .bind(block_number)
-        .bind(avg_weight_bps)
-        .bind(vote_count)
-        .execute(&self.pool)
-        .await?;
-        Ok(r.rows_affected())
-    }
-
-    /// Bring `regime_snapshots` in line with the committee tilt as of
-    /// `block_number`, for `vault` or, with `None`, for every vault. Returns
-    /// the number of rows written.
-    ///
-    /// The aggregate is [`committee_tilts`]: one signal per active member
-    /// (issue #1790), so a flood of votes from one member moves it by one vote.
-    ///
-    /// A vault gets a row at `block_number` when its tilt there differs from
-    /// its newest stored row at or below that block (DI-3). When no member
-    /// counts any more, that row says so: `vote_count = 0` and
-    /// `avg_weight_bps = 0`. A vault with no stored row and no counted member
-    /// gets none, because it never had a tilt. An unchanged tilt writes
-    /// nothing, so calling this every tick does not grow the table.
-    ///
-    /// Before DI-3 the snapshot was refreshed only on a verified vote, and an
-    /// empty tilt wrote nothing. A revoke, a newer unverified vote, or a signal
-    /// ageing out of the freshness window then left the old aggregate as the
-    /// newest row, and `/v1/regime/feed` kept a member that
-    /// `/v1/committee/tilts` had dropped. The indexer now calls this after
-    /// every committee event and once per tick at the tick's target block,
-    /// which is what catches expiry: no event announces it.
-    pub async fn refresh_regime_snapshots(
-        &self,
-        chain_id: i64,
-        block_number: i64,
-        vault: Option<[u8; 20]>,
-    ) -> Result<u64, DbError> {
-        let live = committee_tilts(&self.pool, chain_id, block_number, vault).await?;
-        let stored: Vec<(Vec<u8>, BigDecimal, i32)> = sqlx::query_as(
-            "SELECT DISTINCT ON (vault_address) vault_address, avg_weight_bps, vote_count \
-             FROM regime_snapshots \
-             WHERE chain_id = $1 \
-               AND block_number <= $2 \
-               AND ($3::BYTEA IS NULL OR vault_address = $3) \
-             ORDER BY vault_address, block_number DESC",
-        )
-        .bind(chain_id)
-        .bind(block_number)
-        .bind(vault.map(|v| v.to_vec()))
-        .fetch_all(&self.pool)
-        .await?;
-
-        // The tilt as the column stores it (two decimals). `committee_tilts`
-        // lists only vaults with at least one counted member.
-        let mut due: std::collections::BTreeMap<Vec<u8>, (BigDecimal, i32)> = live
-            .into_iter()
-            .map(|(v, avg, cnt)| {
-                let avg = avg.with_scale_round(2, bigdecimal::RoundingMode::HalfEven);
-                (v, (avg, i32::try_from(cnt).unwrap_or(i32::MAX)))
-            })
-            .collect();
-        for (v, avg, cnt) in stored {
-            // A stored vault the live tilt no longer lists has nobody counted.
-            let now = due.remove(&v).unwrap_or_else(|| (BigDecimal::from(0), 0));
-            if now != (avg, cnt) {
-                due.insert(v, now);
-            }
-        }
-
-        let mut written = 0;
-        for (v, (avg, cnt)) in due {
-            written += self
-                .write_regime_snapshot(chain_id, &v, block_number, &avg, cnt)
-                .await?;
-        }
-        Ok(written)
-    }
-
-    // ─── End InvestmentCommitteePolicy writers ────────────────────────────────
 
     // ─── ConsensusRecommendationReceipt writers ────────────────────────────────────
     // Canonical: docs/architecture.md §4.9 — issue #1247.
@@ -3391,9 +2779,6 @@ mod count_guard_tests {
             "vault_status_events",
             "router_weight_snapshots",
             "router_deposit_legs",
-            "committee_agents",
-            "committee_votes",
-            "regime_snapshots",
             // Migration 0015 — issue #1247.
             "consensus_receipts",
             // Migration 0017 — issue #1731.
