@@ -831,11 +831,23 @@ async function governRun(s: Stack, extra: string[] = []): Promise<void> {
  * the stage sheet's GOVERN_UNPAUSE_VAULTS opens, through the real Safe and timelock, before the verifier runs. The stage baskets hold nothing, so the values prove the row
  * and the label, never a sizing. A guard already in effect is skipped by the row, so a rerun of ensure is safe. 8453 is untouched: the runbook runs the row there.
  */
+/** RM_PARKED: the shortlist is empty and RM sits under parked.entries. A missing or unreadable file is not parked. */
+function rmParkedConfig(path: string): boolean {
+  try {
+    const j = JSON.parse(readFileSync(path, "utf8")) as { shortlist?: unknown[]; parked?: { entries?: unknown[] } };
+    return (j.shortlist ?? []).length === 0 && (j.parked?.entries ?? []).length > 0;
+  } catch {
+    return false;
+  }
+}
+
 async function governUnwindGuards(s: Stack): Promise<void> {
   const unpaused = parseSheet(readFileSync(s.sv("sheet_path"), "utf8")).get("GOVERN_UNPAUSE_VAULTS");
   if (unpaused === undefined) throw fail(`the stage sheet (${s.sv("sheet_path")}) has no GOVERN_UNPAUSE_VAULTS: cannot tell which baskets stage 13 opened`, EXIT.INPUT);
   const opened = unpaused.split(",").map((x) => x.trim());
-  for (const k of BASKET_KEYS.filter((b) => opened.includes(b))) await governRun(s, twinUnwindGuardArgs(k));
+  // RM_PARKED (core issue 1903, ADR-0015): an empty rmAGENT has no active asset, so the row refuses ("nothing to guard"). The verifier passes an empty vault.
+  const agentEmpty = rmParkedConfig(join(s.deps.repoRoot, "config/agent-token-shortlist.json"));
+  for (const k of BASKET_KEYS.filter((b) => opened.includes(b) && !(b === "AGENT" && agentEmpty))) await governRun(s, twinUnwindGuardArgs(k));
 }
 
 async function governanceVerb(s: Stack, verb: string): Promise<void> {

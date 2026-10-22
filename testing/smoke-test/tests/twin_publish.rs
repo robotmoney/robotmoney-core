@@ -265,6 +265,10 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     // one `govern --row set-unwind-guard` round per basket (token=all), as the twin-publish step does, before the post-govern verify. The baskets hold nothing yet:
     // these values prove the row and the label on the real contracts, not a sizing (on 8453 the operator sizes min-usdc-out from each vault's holding).
     for basket in ["PROTO", "AGENT", "RWA"] {
+        // RM_PARKED (core issue 1903, ADR-0015): an empty rmAGENT has no asset to guard, so the row refuses. The verifier passes an empty vault.
+        if basket == "AGENT" && rm_parked(&fx) {
+            continue;
+        }
         let vault_arg = format!("vault={basket}");
         let guarded = fx
             .published()
