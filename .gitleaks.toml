@@ -45,6 +45,9 @@ regexes = [
   # secret. It was committed in config/agent-token-shortlist.json (commit b4e6476d, since
   # reverted) and gitleaks scans the whole PR commit range. Delete this entry with the history.
   '''0x7c678e2a3551a8d92c49819894c995e9b973a885b1ca5ab096853095e9a329d6''',
+  # keccak256 code hash of the live BNKR (BankrCoin) token, a public on-chain value, never a secret.
+  # It is pinned in config/agent-token-shortlist.json (the rmAGENT test asset, ADR-0016) like USDC and RM.
+  '''0x334311ad8d9f8a10d5d16d38bc215d0de7f8204d332a6f1a060ebb3f4adbc57f''',
   # Dummy credential value used by the evidence secret-scan regression tests
   # (publish-contracts/tests/evidence-secret-scan.test.ts) and quoted in the security review
   # (docs/code-review/20261015-review-security-claude.{md,json}). It is the literal placeholder

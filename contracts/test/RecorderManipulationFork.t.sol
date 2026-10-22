@@ -81,7 +81,11 @@ contract RecorderManipulationForkTest is Test {
         });
         // The recorder stage exactly as shipped (ring of RING_SLOTS).
         DeployUniswapV4PriceRecorder stage = new DeployUniswapV4PriceRecorder();
-        rec = UniswapV4PriceRecorder(stage.runInProcess(cfg).recorder);
+        // RM_PARKED (core 1903): the shipped shortlist lists BNKR, so while RM is parked the RM recorder is built from the RM-listed fixture.
+        string memory recorderCfg = vm.keyExistsJson(cfg, ".parked.entries[0]")
+            ? vm.readFile("contracts/test/fixtures/agent-token-shortlist.rm-listed.json")
+            : cfg;
+        rec = UniswapV4PriceRecorder(stage.runInProcess(recorderCfg).recorder);
         adapter = new UniswapV4SwapAdapter(poolManager, key, address(rec), USDC);
 
         deal(USDC, attacker, 10_000e6);

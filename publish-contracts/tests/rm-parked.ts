@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 const CONFIG = join(import.meta.dir, "..", "..", "config", "agent-token-shortlist.json");
 
-type AgentJson = { shortlist: Record<string, unknown>[]; parked?: { entries?: Record<string, unknown>[] }; [k: string]: unknown };
+type AgentJson = { shortlist: Record<string, unknown>[]; parked?: { entries?: Record<string, unknown>[]; maxSlippageBps?: number }; [k: string]: unknown };
 const committed = (): AgentJson => JSON.parse(readFileSync(CONFIG, "utf8")) as AgentJson;
 
 /** RM_PARKED: the committed config holds RM under parked.entries. */
