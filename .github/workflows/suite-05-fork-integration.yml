@@ -118,16 +118,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The router tests exercise the human-wallet Portfolio Router only. The gateway has no
-          # router path and no agent withdrawal (issue 1889), so the gateway scenarios are gone.
+          # Issue 1889: the gateway has no router path and no agent withdrawal. The router file keeps
+          # its four human-wallet tests and adds two that prove the router is never a gateway
+          # destination (six, as before). The gateway_deposit file replaces the five retired
+          # agent-withdrawal tests with five depositTo tests (eight with the three registry tests, as before).
           - group: twin-router
             cargo_tests: --test router
             mode: shared
-            min_executed: 4
-          - group: twin-registry
-            cargo_tests: --test registry
+            min_executed: 6
+          - group: twin-gateway-registry
+            cargo_tests: --test gateway_deposit --test registry
             mode: shared
-            min_executed: 3
+            min_executed: 8
           - group: twin-light
             cargo_tests: >-
               --test failure_surface_smoke

@@ -231,7 +231,7 @@ A `pin` job chooses ONE pinned Base block per workflow run (upstream head minus 
 | Slot | Tests | Mode |
 |---|---|---|
 | `twin-router` | `router` | straight on the Twin fork (`RMPC_TESTNET_RPC_URL`) |
-| `twin-registry` | `registry` | straight on the Twin fork |
+| `twin-gateway-registry` | `gateway_deposit`, `registry` | straight on the Twin fork |
 | `twin-light` | `failure_surface_smoke`, the `rmpc_get_*` fork tests | straight on the Twin fork |
 | `anvil-devnet-adapters` | `devnet_adapter_round_trip`, `gas_estimate_reality_check`, `landing_price_strip_fork`, `basket_vault_round_trip` (core 1656: `skip_if_no_devnet_fork!` needs `RMPC_FORK_RPC_URL`, so they silently skipped in `twin-light`). `gas_estimate_reality_check` holds deposit gas to 920,000 (measured 833,900 plus about 10%, issue #1683). The slot requires the marker `[gas_estimate_reality_check] deposit gasUsed=`, which the test prints only after that assertion passes (QA plan T3) | each test forks the Twin |
 | `anvil-goldens` | `abi_address_sanity`, `dex_route_smoke`, `vault_deposit_redeem_smoke` | each test forks the Twin (`RMPC_FORK_RPC_URL=$TWIN_RPC_URL`, `RMPC_FORK_BLOCK=$TWIN_PIN_BLOCK`) |

@@ -25,6 +25,11 @@
 //!   the attempted deposit amount and assert the tx reverts with a stable
 //!   `RouterCapExceeded` error selector.
 //!
+//! - `router_is_not_a_gateway_destination` and `listed_router_is_not_an_erc4626_destination`: the
+//!   gateway has no router path (issue 1889). `depositTo(router)` reverts whether the policy omits
+//!   the router (`InvalidDestination`) or lists it (the router is not an ERC-4626 vault), and no
+//!   USDC moves.
+//!
 //! Each test boots its own anvil fork backend (per ADR §3.5), providing
 //! full state isolation without snapshot/revert coordination.
 
@@ -145,6 +150,56 @@ sol! {
         function transfer(address to, uint256 amount) external returns (bool);
         function allowance(address owner, address spender) external view returns (uint256);
     }
+}
+
+sol! {
+    /// Gateway interface: enough to register an agent and call `depositTo`.
+    #[allow(missing_docs)]
+    interface IGateway {
+        struct AgentPolicy {
+            bool active;
+            uint64 validUntil;
+            uint256 maxPerPayment;
+            uint256 maxPerWindow;
+            address shareReceiver;
+            address[] allowedDestinations;
+            address assetRecipient;
+            uint256 maxWithdrawPerPayment;
+            uint256 maxWithdrawPerWindow;
+            address[] allowedSourceVaults;
+        }
+
+        function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external;
+        function depositTo(
+            bytes32 orderId,
+            uint256 amount,
+            uint64 deadline,
+            bytes32 idempotencyKey,
+            address destination,
+            uint256[] calldata minSharesPerLeg
+        ) external returns (bytes32 paymentId);
+    }
+}
+
+/// Deploy `RobotMoneyGateway`: it pins no vault and no router.
+fn deploy_gateway(
+    deployer: &rmpc_fork_e2e::Account<'_>,
+    usdc: Address,
+    admin: Address,
+    pauser: Address,
+) -> Address {
+    let mut args = [0u8; 96];
+    args[12..32].copy_from_slice(usdc.as_slice());
+    args[44..64].copy_from_slice(admin.as_slice());
+    args[76..96].copy_from_slice(pauser.as_slice());
+    rmpc_fork_e2e::governed::deploy_governed(
+        deployer,
+        "RobotMoneyGateway.sol",
+        "RobotMoneyGateway",
+        &args,
+        8_000_000,
+    )
+    .expect("deploy RobotMoneyGateway")
 }
 
 // ── Event signature helpers ──────────────────────────────────────────────────
@@ -749,4 +804,109 @@ fn router_cap_exceeded_reverts() {
     }
 
     eprintln!("[router_cap_exceeded_reverts] passed");
+}
+
+// ── Scenarios 5 and 6: the router is never a gateway destination ─────────────
+
+/// Register an agent whose policy lists the vault (and the router when `list_router`), then try
+/// `depositTo(router)`. Returns the agent's USDC before and after, and the call result.
+fn try_gateway_deposit_to_router(
+    fx: &ForkFixture,
+    list_router: bool,
+) -> (
+    U256,
+    U256,
+    Result<rmpc_fork_e2e::Receipt, rmpc_fork_e2e::HarnessError>,
+) {
+    let usdc = rmpc_fork_e2e::addresses::USDC;
+    let one_eth = U256::from(10u64).pow(U256::from(18u64));
+    let amount = U256::from(100_000_000u64);
+
+    let owner = fx
+        .ephemeral(one_eth * U256::from(3u64), U256::ZERO)
+        .expect("fund owner");
+    let pauser = fx.ephemeral(one_eth, U256::ZERO).expect("fund pauser");
+    let agent = fx
+        .ephemeral(one_eth * U256::from(2u64), amount)
+        .expect("fund agent");
+
+    let registry = deploy_registry(&owner, owner.address);
+    let vault_a = deploy_mock_vault(&owner, usdc);
+    let router = deploy_portfolio_router(&owner, usdc, registry, owner.address);
+    register_vault(&owner, registry, vault_a, usdc, "Vault A");
+    mark_router_eligible(&owner, registry, vault_a);
+    let gateway = deploy_gateway(&owner, usdc, owner.address, pauser.address);
+
+    let now_secs: u64 = fx.chain_now().expect("read chain time");
+    let destinations = if list_router {
+        vec![vault_a, router]
+    } else {
+        vec![vault_a]
+    };
+    let policy = IGateway::AgentPolicy {
+        active: true,
+        validUntil: now_secs + 3600,
+        maxPerPayment: amount,
+        maxPerWindow: amount,
+        shareReceiver: owner.address,
+        allowedDestinations: destinations,
+        assetRecipient: Address::ZERO,
+        maxWithdrawPerPayment: U256::ZERO,
+        maxWithdrawPerWindow: U256::ZERO,
+        allowedSourceVaults: vec![],
+    };
+    register_agent(fx, gateway, &owner, &agent, |salt| {
+        IGateway::revealAuthorizationCall {
+            agent: agent.address,
+            salt,
+            p: policy.clone(),
+        }
+    });
+    approve_usdc(&agent, usdc, gateway, amount);
+
+    let before = usdc_balance_of(&agent, usdc, agent.address);
+    let result = agent.send(
+        gateway,
+        &IGateway::depositToCall {
+            orderId: alloy_primitives::B256::from([7u8; 32]),
+            amount,
+            deadline: now_secs + 300,
+            idempotencyKey: alloy_primitives::B256::from([8u8; 32]),
+            destination: router,
+            minSharesPerLeg: vec![],
+        },
+        U256::ZERO,
+        4_000_000,
+    );
+    let after = usdc_balance_of(&agent, usdc, agent.address);
+    (before, after, result)
+}
+
+/// The router is not in the policy list, so `depositTo(router)` reverts `InvalidDestination`.
+#[test]
+fn router_is_not_a_gateway_destination() {
+    skip_if_no_fork!();
+    let fx = ForkFixture::new().expect("boot fork");
+    let (before, after, result) = try_gateway_deposit_to_router(&fx, false);
+    match result {
+        Err(rmpc_fork_e2e::HarnessError::Reverted(_)) => {}
+        other => panic!("expected Reverted (InvalidDestination), got {other:?}"),
+    }
+    assert_eq!(before, after, "no USDC may leave the agent");
+    eprintln!("[router_is_not_a_gateway_destination] passed");
+}
+
+/// Even when an owner lists the router, it is not an ERC-4626 vault, so the deposit reverts and
+/// no USDC moves.
+#[test]
+fn listed_router_is_not_an_erc4626_destination() {
+    skip_if_no_fork!();
+    let fx = ForkFixture::new().expect("boot fork");
+    let (before, after, result) = try_gateway_deposit_to_router(&fx, true);
+    match result {
+        Err(rmpc_fork_e2e::HarnessError::Reverted(_)) => {}
+        other => panic!("expected Reverted (router has no ERC-4626 deposit), got {other:?}"),
+    }
+    assert_eq!(before, after, "no USDC may leave the agent");
+    eprintln!("[listed_router_is_not_an_erc4626_destination] passed");
 }
