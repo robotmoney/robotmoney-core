@@ -139,6 +139,12 @@ export function RegistrationSteps({ r, ids, enabled = true, completeText }: Prop
           <TxPreview preview={r.commitPreview} />
         </div>
       )}
+      {r.revealPreview && (
+        <div data-testid={ids.revealPreview}>
+          <p className="hint">The reveal this registration will sign, with this policy:</p>
+          <TxPreview preview={r.revealPreview} />
+        </div>
+      )}
       <form onSubmit={onCommit}>
         <button
           type="submit"
@@ -171,11 +177,6 @@ export function RegistrationSteps({ r, ids, enabled = true, completeText }: Prop
                 ? `The owner commit is older than ${COMMIT_EXPIRY_BLOCKS} blocks. Start over and commit again.`
                 : `The agent's consent is older than ${COMMIT_EXPIRY_BLOCKS} blocks. The agent must consent again.`}
             </p>
-          )}
-          {r.revealPreview && (
-            <div data-testid={ids.revealPreview}>
-              <TxPreview preview={r.revealPreview} />
-            </div>
           )}
           <form onSubmit={onReveal}>
             <button type="submit" data-testid={ids.revealSubmit} disabled={!r.revealReady}>

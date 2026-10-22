@@ -186,22 +186,19 @@ test.describe("agent rotation flow — UI invariants", () => {
     await expect(step1.getByTestId("tx-preview-effect")).toContainText("loses AGENT_ROLE");
   });
 
-  test("commit and reveal previews for new address render structured fields", async ({ page }) => {
+  test("the registration stays closed, with no commit control, before the revoke", async ({ page }) => {
     await fillRotationForm(page, {
       oldAgent: OLD_AGENT,
       newAgent: NEW_AGENT,
       shareReceiver: SHARE_RECEIVER,
     });
 
-    // The wallet signs commitAuthorization and revealAuthorization, so those are the
-    // previews (QA plan U4), never authorizeAgent. They appear once the inputs are frozen,
-    // which needs the revoke first.
-    await page.getByTestId("rotation-revoke-submit").click();
-    await page.getByTestId("rotation-freeze").click();
-    const commitPreview = page.getByTestId("rotation-commit-preview");
-    await expect(commitPreview.locator('[data-testid="tx-preview"][data-ok="true"]')).toBeVisible();
-    await expect(commitPreview.getByTestId("tx-preview-fn")).toHaveText("commitAuthorization");
-    await expect(page.getByTestId("rotation-authorize-submit")).toBeDisabled();
+    // The wallet signs commitAuthorization and revealAuthorization (QA plan U4), never
+    // authorizeAgent. Those previews come from the frozen inputs, which need the revoke first
+    // (the preview contents are pinned in commit-reveal-preview.test.tsx). Here: the
+    // registration is closed and shows no commit control before the revoke.
+    await expect(page.getByTestId("rotation-freeze")).toBeDisabled();
+    await expect(page.getByTestId("rotation-authorize-submit")).toHaveCount(0);
   });
 
   test("combined risk annotation renders warning about THREE transactions", async ({ page }) => {
