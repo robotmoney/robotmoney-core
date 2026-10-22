@@ -66,7 +66,9 @@ contract RecorderManipulationForkTest is Test {
         if (!ForkSelect.selectOrSkip(rpc)) return;
 
         cfg = vm.readFile("config/agent-token-shortlist.json");
-        string memory b = ".shortlist[0]";
+        // RM_PARKED (core issue 1903, ADR-0015): RM sits under parked.entries while it is parked.
+        string memory b =
+            vm.keyExistsJson(cfg, ".parked.entries[0]") ? ".parked.entries[0]" : ".shortlist[0]";
         rmToken = cfg.readAddress(string.concat(b, ".token"));
         poolManager = cfg.readAddress(string.concat(b, ".poolManager"));
         swapRouter02 = cfg.readAddress(".swapRouter02");
@@ -79,7 +81,11 @@ contract RecorderManipulationForkTest is Test {
         });
         // The recorder stage exactly as shipped (ring of RING_SLOTS).
         DeployUniswapV4PriceRecorder stage = new DeployUniswapV4PriceRecorder();
-        rec = UniswapV4PriceRecorder(stage.runInProcess(cfg).recorder);
+        // RM_PARKED (core 1903): the shipped shortlist lists BNKR, so while RM is parked the RM recorder is built from the RM-listed fixture.
+        string memory recorderCfg = vm.keyExistsJson(cfg, ".parked.entries[0]")
+            ? vm.readFile("contracts/test/fixtures/agent-token-shortlist.rm-listed.json")
+            : cfg;
+        rec = UniswapV4PriceRecorder(stage.runInProcess(recorderCfg).recorder);
         adapter = new UniswapV4SwapAdapter(poolManager, key, address(rec), USDC);
 
         deal(USDC, attacker, 10_000e6);
@@ -154,6 +160,14 @@ contract RecorderManipulationForkTest is Test {
     ///         refuses with `SpotBelowSellAnchor` and the lowest price a USDC redeem could execute at stays inside the bar.
     ///         `redeemInKind` still pays the RM. The logs carry the pool depth and the attack's cost for the report.
     function test_recorder_heldDisplacementDragsSellFloorUnderKeeperCadence() public {
+        // RM_PARKED (core issue 1903, ADR-0015): the live RM/USDC pool holds L 6.476e13 (about 0.11 USDC), so buying inventory moves the price past the
+        // 400 bps NAV guard before the displacement under test starts. The test runs again when RM leaves `parked.entries`. No bound is changed.
+        if (vm.keyExistsJson(cfg, ".parked.entries[0]")) {
+            vm.skip(
+                true,
+                "RM_PARKED (core 1903, ADR-0015): the live RM/USDC pool is too thin for this displacement test"
+            );
+        }
         _buyInventory();
         _honestHistory();
         _push();

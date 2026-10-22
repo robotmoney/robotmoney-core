@@ -147,7 +147,7 @@ gateway reports `implementation: null`. These names match `GatewayData` in
 
 **Consent correction (2026-10-20).** The gateway uses an on-chain consent
 commitment and three-argument `revealAuthorization`, not an EIP-712
-consent signature. The former `rmpc agent-consent` and
+consent signature. The former agent-consent command and
 `implementation_version` descriptions belonged to the superseded QA design;
 the current gateway has no `implementationVersion()` getter. Follow
 architecture §5.2 and `docs/technical/dapp-credential-decisions.md` §3.3:

@@ -29,7 +29,7 @@ Every stage service runs in a container (core 1549). `core-stack.ts` only calls 
    ```
 
    Publish contracts deploys all four vaults, creates the real Safe (Safe SDK, `@safe-global/protocol-kit`), hands over to the Safe and the timelock, and verifies. It refuses a checkout that is not the DEPLOY_SHA or has uncommitted changes, so the stage host checkout must be a normal clone (not a git worktree) at the ref.
-4. The job reads the manifests (`libs.json`, `recorder.json`, `vault.json`, `registry.json`, `router.json`, `gateway.json`, `ic-policy.json` on the deployed release (v0.5.0; the target writes `receipt.json` instead), `governance.json`, `protocol-asset-vault.json`, `agent-token-vault.json`, `rwa-basket-vault.json`, `timelock.json`), writes the endpoint summary and the dapp compose environment (`dapp-env.json`) to the work directory, and **exits**. It owns nothing afterwards.
+4. The job reads the manifests (`libs.json`, `recorder.json`, `vault.json`, `registry.json`, `router.json`, `gateway.json`, `ic-policy.json`, `governance.json`, `protocol-asset-vault.json`, `agent-token-vault.json`, `rwa-basket-vault.json`, `timelock.json`), writes the endpoint summary and the dapp compose environment (`dapp-env.json`) to the work directory, and **exits**. It owns nothing afterwards. On the deployed release v0.5.0 the target writes `receipt.json` instead of `ic-policy.json`.
    The signer is the string publish contracts accepts, `keystore:PATH:PASSFILE`. Only paths are passed. The passphrase stays in its 0600 file.
 5. `chain up` starts the **dapp stack** from that environment: `docker-compose.dapp.yaml` plus `docker-compose.dapp.stage.yaml` (project `robotmoney-dapp`). The overlay joins the indexer to the chain network (it dials `twin-chain:8545`) and publishes no postgres host port. Ports (`18545`, `18546`, `5173`) and the public stage URLs are unchanged.
    `chain status` checks the stamp, that the chain container runs, `eth_chainId` on 18545, a healthy `robotmoney-dapp` container and the rmpc build commit. A stamp from the host-process era (it names a pid) reads as `not-booted`: run `chain down` and `chain up` once on the new ref. There is no data to migrate.
@@ -119,6 +119,7 @@ Deploy 2 is devops run 2 on Base 8453: release `release/v0.4.0-base.3-rehearsal`
   | `VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH` | `timelock.json` `code_hashes.router_implementation` when `router.json` names a `router_implementation` | empty (Deploy 2 is direct) |
   | `VITE_REGISTRY_ADDRESS`, `INDEXER_REGISTRY` | `registry.json` `registry` | `0x686EbEFda732DffA988253Ecf9c012946B8066A3` |
   | `INDEXER_ROUTER_GOVERNANCE` | `governance.json` `governance` | `0x59b593ab06bB5587534EfE255f6C614858b32754` |
+  | `INDEXER_INVESTMENT_COMMITTEE` | `timelock.json` `addresses.ic_policy` (applies to the deployed release v0.5.0) | `0x820A3874A8B44D7e1D4C67B3Bf5619CFAe06907e` |
   | `INDEXER_CONSENSUS_RECEIPT` | `timelock.json` `addresses.consensus_receipt` | `0xEfEe1c9881D1291460f72dA7000bA53e42eb36E2` |
   | `VITE_TIMELOCK_ADDRESS`, `INDEXER_TIMELOCK` | `timelock.json` `addresses.timelock` | `0xd65165AF0Fb4062ED0da5D119d4B56B92b15356b` |
   | `VITE_SAFE_ADDRESS`, `INDEXER_SAFE` | `timelock.json` `addresses.safe` | `0xdFDea0E1AdF55a9a938bD34ead7920175b47Cb4b` |
@@ -187,7 +188,7 @@ Every line above is required. No script has a default for it (`scripts/deploy/RE
 | Four vault manifests after a publish run | `core-stack publish run` (exit 66 on a short count) |
 | Verifier labels on stage equal the mainnet label set | `scripts/stage/parity.ts` runs `label-diff.ts` on the verifier output the Twin chain smoke job saved (`SMOKE_TEST_VERIFY_OUT`) |
 | Stage sheet versus production sheet differ only in parameter lines | `scripts/stage/parity.ts` runs `sheet-diff.ts` on the run sheet the smoke job saved (`SMOKE_TEST_SHEET_OUT`) |
-| Router, basket vault and timelock role proofs | Labels of the one verifier (`publish-contracts/src/verify`): `gateway: router() equals the deployed router` (deployed release v0.5.0 only; the target gateway binds no router), `registry: router() equals the deployed router`, `vault[KEY]: a second setRegistry reverts`, the role matrix, the asset config and `vault[rmAGENT]: holds RM as its one asset` |
+| Router, basket vault and timelock role proofs | Labels of the one verifier (`publish-contracts/src/verify`): `gateway: router() equals the deployed router` (deployed release v0.5.0 only; the target gateway binds no router), `registry: router() equals the deployed router`, `vault[KEY]: a second setRegistry reverts`, the role matrix, the asset config and `vault[rmAGENT]: lists exactly the shortlist asset of the config` |
 | Every govern row has a tx hash and receipt status 1 | `scripts/stage/govern-rows.ts` |
 | Deleted paths stay deleted | `scripts/stage/check-deleted-stage-scripts.ts` |
 

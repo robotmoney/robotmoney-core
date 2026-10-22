@@ -45,12 +45,20 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
 
     DeployAgentTokenVault internal script;
     address internal constant RM_TOKEN = 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3;
+    /// @dev BNKR (BankrCoin), the rmAGENT test asset while RM is parked (ADR-0016).
+    address internal constant BNKR_TOKEN = 0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b;
+    bytes32 internal constant BNKR_POOL_ID =
+        0x87a44b2ff90d59448342017e80c513fd469c9f5edc34db815436a5d984000f52;
 
     address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
     address internal constant PM_ADDR = 0x498581fF718922c3f8e6A244956aF099B2652b2b;
     bytes32 internal constant RM_POOL_ID =
         0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391;
     string internal constant SHIPPED = "config/agent-token-shortlist.json";
+    /// @dev RM_PARKED (core issue 1903, ADR-0015): the shipped config parks RM and ships an empty shortlist. The tests that need RM and its V4 pool
+    ///      run on this reactivated copy (RM moved back into the shortlist), never skipped. `test_rmParked_fixtureEqualsTheShippedRmEntry` pins it.
+    string internal constant LISTED =
+        "contracts/test/fixtures/agent-token-shortlist.rm-listed.json";
 
     UniswapV4PriceRecorder internal recorder;
 
@@ -85,7 +93,7 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
     }
 
     function _launchConfig() internal view returns (string memory) {
-        return vm.readFile("config/agent-token-shortlist.json");
+        return vm.readFile(LISTED);
     }
 
     /// @dev The shipped file's router with no assets, for the paused-and-empty deploy path.
@@ -105,7 +113,7 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
     /// @dev Runs the SHIPPED config (RM on the V4 pool) through the script with the recorder from `_v4World`.
     function _runLaunch() internal returns (BasketVaultDeployBase.Deployed memory) {
         _v4World();
-        string memory json = vm.readFile(SHIPPED);
+        string memory json = vm.readFile(LISTED);
         BasketVaultDeployBase.Params memory p = _params();
         p.swapRouter = _configRouter(json);
         p.recorder = address(recorder);
@@ -212,10 +220,152 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
 
     // ─── Launch path ──────────────────────────────────────────────────────────
 
-    function test_launchConfigShortlistIsRmOnly() public view {
-        string memory j = _launchConfig();
-        assertEq(j.readString(".shortlist[0].symbol"), "RM");
-        assertFalse(vm.keyExistsJson(j, ".shortlist[1]"), "RM only");
+    /// @dev RM_PARKED: true exactly while the shipped config holds RM under `parked.entries`.
+    function _rmParked() internal view returns (bool) {
+        return vm.keyExistsJson(vm.readFile(SHIPPED), ".parked.entries[0]");
+    }
+
+    /// @notice The shipped launch config lists BNKR alone (the rmAGENT test asset, ADR-0016) and parks RM (owner decisions 2026-10-21 and 2026-10-22), or lists exactly RM once reactivated.
+    function test_launchConfigShortlistIsBnkrWithRmParkedOrRmOnly() public view {
+        string memory j = vm.readFile(SHIPPED);
+        if (_rmParked()) {
+            assertEq(j.readString(".shortlist[0].symbol"), "BNKR");
+            assertFalse(vm.keyExistsJson(j, ".shortlist[1]"), "BNKR only");
+            assertEq(j.readString(".parked.entries[0].symbol"), "RM");
+            assertFalse(vm.keyExistsJson(j, ".parked.entries[1]"), "only RM is parked");
+        } else {
+            assertEq(j.readString(".shortlist[0].symbol"), "RM");
+            assertFalse(vm.keyExistsJson(j, ".shortlist[1]"), "RM only");
+        }
+    }
+
+    /// @dev The V4 world of the SHIPPED shortlist entry, whatever its symbol (BNKR while RM is parked, ADR-0016, or RM once reactivated): the PoolManager double
+    ///      with the entry's pool initialised, the token code at its real address and a warm recorder for the entry's PoolKey.
+    function _v4WorldOf(string memory json) internal {
+        vm.warp(1_700_000_000);
+        address token = json.readAddress(".shortlist[0].token");
+        uint24 fee = uint24(json.readUint(".shortlist[0].poolKey.fee"));
+        int24 spacing = int24(json.readInt(".shortlist[0].poolKey.tickSpacing"));
+        vm.etch(PM_ADDR, address(new MockV4PoolManager()).code);
+        vm.etch(token, address(new TestERC20()).code);
+        IPoolManagerV4.PoolKey memory k =
+            IPoolManagerV4.PoolKey(token, BASE_USDC, fee, spacing, address(0));
+        MockV4PoolManager(PM_ADDR).initializePool(k, -356605, 1e18);
+        recorder = new UniswapV4PriceRecorder(PM_ADDR, token, BASE_USDC, fee, spacing, address(0));
+        _warm(recorder);
+    }
+
+    /// @notice The SHIPPED config runs through the real script: a paused, registered rmAGENT with exactly the one V4 asset the config lists (BNKR while RM is parked),
+    ///         the recorder as its pool and the swap bound the config sets.
+    function test_shippedShortlist_deploysItsOneV4AssetPausedAndRegistered() public {
+        string memory json = vm.readFile(SHIPPED);
+        _v4WorldOf(json);
+        BasketVaultDeployBase.Params memory p = _params();
+        p.swapRouter = _configRouter(json);
+        p.recorder = address(recorder);
+        BasketVaultDeployBase.Deployed memory d = script.runInProcess(p, json);
+        AgentTokenVault v = AgentTokenVault(d.vault);
+        assertTrue(v.depositsPaused(), "paused");
+        assertEq(v.assetCount(), 1, "the shortlist lists one asset");
+        (address t, address pool, uint24 fee, bool active,, BasketVault.Venue venue) = v.assets(0);
+        assertEq(t, json.readAddress(".shortlist[0].token"), "the asset is the listed token");
+        assertEq(pool, address(recorder), "the registered pool is the price recorder");
+        assertEq(
+            uint256(fee), json.readUint(".shortlist[0].poolFee"), "the swap fee is the pool fee"
+        );
+        assertTrue(active, "active");
+        assertEq(uint256(venue), uint256(BasketVault.Venue.V4), "venue V4");
+        assertEq(d.tokens.length, 1);
+        assertEq(d.recorder, address(recorder));
+        assertTrue(d.adapterV4 != address(0), "V4 adapter deployed");
+        assertEq(
+            v.maxSlippageBps(), json.readUint(".maxSlippageBps"), "the swap bound of the config"
+        );
+        assertEq(v.maxDeposit(address(this)), 0, "paused: no deposit");
+        assertEq(registry.listVaults().length, 1, "registered once");
+    }
+
+    /// @notice The shipped shortlist entry parses through the script parser: one hookless V4 asset whose key hashes to its pool id, with BNKR's pins asserted while it is listed.
+    function test_shippedShortlist_parsesAsOneHooklessV4AssetWithItsPins() public {
+        string memory json = vm.readFile(SHIPPED);
+        AgentDeployHarness h = new AgentDeployHarness();
+        BasketVaultDeployBase.Cfg memory cfg = h.parse(json);
+        assertEq(cfg.assets.length, 1, "one asset");
+        BasketVaultDeployBase.AssetCfg memory a = cfg.assets[0];
+        assertTrue(a.isV4, "a UniswapV4 asset");
+        assertEq(a.pool, address(0), "no V3 pool");
+        assertEq(a.key.hooks, address(0), "hookless pool");
+        assertEq(a.key.currency1, BASE_USDC, "paired with USDC");
+        assertEq(a.key.currency0, a.token, "token sorts first");
+        assertEq(uint256(a.poolFee), uint256(a.key.fee), "pool fee equals the key fee");
+        assertEq(keccak256(abi.encode(a.key)), a.poolId, "the key hashes to the pool id");
+        if (a.token == BNKR_TOKEN) {
+            assertEq(a.symbol, "BNKR");
+            assertEq(a.poolFee, 3000);
+            assertEq(int256(a.key.tickSpacing), int256(60));
+            assertEq(a.poolId, BNKR_POOL_ID);
+        } else {
+            assertEq(a.token, RM_TOKEN, "the shortlist lists BNKR or RM, nothing else");
+            assertEq(a.poolFee, 29100);
+            assertEq(int256(a.key.tickSpacing), int256(582));
+            assertEq(a.poolId, RM_POOL_ID);
+        }
+    }
+
+    /// @notice An empty rmAGENT refuses a deposit even when unpaused: maxDeposit is 0.
+    function test_rmParked_emptyVaultRevertsExceededMaxDepositEvenUnpaused() public {
+        BasketVaultDeployBase.Deployed memory d = _runEmpty();
+        AgentTokenVault v = AgentTokenVault(d.vault);
+        vm.prank(deployer);
+        v.unpauseDeposits();
+        assertEq(v.maxDeposit(address(this)), 0);
+        usdc.mint(address(this), 10e6);
+        usdc.approve(d.vault, 10e6);
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "ERC4626ExceededMaxDeposit(address,uint256,uint256)", address(this), 10e6, 0
+            )
+        );
+        v.deposit(10e6, address(this));
+    }
+
+    /// @notice The reactivated fixture used by the RM-pool tests is the shipped RM entry, field by field.
+    function test_rmParked_fixtureEqualsTheShippedRmEntry() public view {
+        string memory s = vm.readFile(SHIPPED);
+        string memory f = vm.readFile(LISTED);
+        string memory src = _rmParked() ? ".parked.entries[0]" : ".shortlist[0]"; // RM sits in parked.entries while parked
+        string[10] memory fields = [
+            ".symbol",
+            ".token",
+            ".tokenCodeHash",
+            ".venue",
+            ".poolManager",
+            ".stateView",
+            ".poolId",
+            ".poolKey.currency0",
+            ".poolKey.currency1",
+            ".poolKey.hooks"
+        ];
+        for (uint256 i = 0; i < fields.length; i++) {
+            assertEq(
+                f.readString(string.concat(".shortlist[0]", fields[i])),
+                s.readString(string.concat(src, fields[i])),
+                fields[i]
+            );
+        }
+        assertEq(f.readUint(".shortlist[0].poolFee"), s.readUint(string.concat(src, ".poolFee")));
+        assertEq(
+            f.readUint(".shortlist[0].poolKey.fee"), s.readUint(string.concat(src, ".poolKey.fee"))
+        );
+        assertEq(
+            f.readInt(".shortlist[0].poolKey.tickSpacing"),
+            s.readInt(string.concat(src, ".poolKey.tickSpacing"))
+        );
+        assertEq(
+            f.readUint(".maxSlippageBps"),
+            _rmParked() ? s.readUint(".parked.maxSlippageBps") : s.readUint(".maxSlippageBps")
+        );
+        assertEq(f.readAddress(".swapRouter02"), s.readAddress(".swapRouter02"));
     }
 
     /// @notice The shipped launch config deploys rmAGENT holding RM, registered and paused.
@@ -342,7 +492,7 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
 
     function _prepare(BasketVaultDeployBase.Params memory p) internal returns (string memory json) {
         _v4World();
-        json = vm.readFile(SHIPPED);
+        json = vm.readFile(LISTED);
         p.swapRouter = _configRouter(json);
         p.recorder = address(recorder);
     }
@@ -421,7 +571,7 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
             "deployments/twin-918453/stage-sheet.env",
             "deployments/base-8453-rehearsal/stage-sheet.example.env"
         ];
-        uint256 fee = vm.readFile(SHIPPED).readUint(".shortlist[0].poolFee");
+        uint256 fee = vm.readFile(LISTED).readUint(".shortlist[0].poolFee");
         for (uint256 i = 0; i < sheets.length; i++) {
             uint256 nav = _sheetUint(vm.readFile(sheets[i]), "VAULT_AGENT_NAV_DEVIATION_BPS");
             assertEq(nav, 400, sheets[i]);

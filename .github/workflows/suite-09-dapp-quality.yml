@@ -72,7 +72,7 @@ permissions:
 jobs:
   lint-build:
     name: dapp-lint-build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 20 (was 15): the mainnet-class Playwright step builds a second bundle and runs a browser (QA plan v1 U5).
     timeout-minutes: 20
     defaults:

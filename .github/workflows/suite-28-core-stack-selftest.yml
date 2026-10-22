@@ -25,7 +25,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: ["releases-*"]
+    branches: [dev, "releases-*"]
     tags: ["v*.*.*"]
   workflow_dispatch:
 

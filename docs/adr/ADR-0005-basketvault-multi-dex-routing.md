@@ -365,3 +365,7 @@ multi-hop route. The USDC-only pairing rule is unchanged.
   adjusted preview).
 - Shortlist governance for AgentTokenVault — separate ADR (issue #546).
 - Any oracle source for ProtocolAssetVault assets that already have V3 pools.
+
+## Amendment — 2026-10-21 (RM parked)
+
+The owner parked RM out of rmAGENT until its market is deep enough ([ADR-0015](ADR-0015-rm-parked-from-rmagent-until-market-depth.md)). BNKR is the rmAGENT test asset on Uniswap V4 meanwhile, inside the contained test scope only ([ADR-0016](ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md)). Tokens are added and removed through the timelock. The text above is unchanged.

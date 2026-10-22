@@ -116,6 +116,12 @@ test("a sheet for the wrong chain or a bad seed fails", () => {
   expect(badSeed.join("\n")).toContain("SEED_DEPOSIT_USDC");
 });
 
+test("a rehearsal sheet caps the rmAGENT deposit at 5 USDC (the BNKR test pool, ADR-0016) and accepts exactly 5", () => {
+  const withCap = (cap: string) => sheetProblems(parseSheetText(TWIN_SHEET.replace(/^VAULT_AGENT_PER_DEPOSIT_CAP=.*$/m, `VAULT_AGENT_PER_DEPOSIT_CAP=${cap}`)), "rehearsal");
+  expect(withCap("5000001").join("\n")).toContain("VAULT_AGENT_PER_DEPOSIT_CAP is above 5 USDC");
+  expect(withCap("5000000").join("\n")).not.toContain("VAULT_AGENT_PER_DEPOSIT_CAP is above");
+});
+
 test("an 8453 sheet needs an owner signer for every sheet owner", () => {
   const p = sheetProblems(parseSheetText(TWIN_SHEET), "rehearsal");
   expect(p.join("\n")).toContain("--owner-signers");

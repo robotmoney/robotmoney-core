@@ -762,13 +762,19 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
             .expect("read the shipped agent config"),
     )
     .expect("agent config is JSON");
+    // The listed V4 asset: BNKR, the rmAGENT test asset while RM is parked (ADR-0016), or RM once reactivated. Every pin below comes from the config.
     let rm_cfg = &cfg["shortlist"][0];
-    assert_eq!(rm_cfg["venue"], "UniswapV4", "RM is a Uniswap V4 asset");
-    let pool_id = rm_cfg["poolId"].as_str().expect("poolId").to_string();
     assert_eq!(
-        pool_id,
-        "0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391"
+        rm_cfg["venue"], "UniswapV4",
+        "the listed asset is a Uniswap V4 asset"
     );
+    let pool_id = rm_cfg["poolId"].as_str().expect("poolId").to_string();
+    let pool_fee = rm_cfg["poolFee"].as_u64().expect("poolFee");
+    let token_hex = rm_cfg["token"]
+        .as_str()
+        .expect("token")
+        .trim_start_matches("0x")
+        .to_lowercase();
     let state_view: alloy_primitives::Address = rm_cfg["stateView"]
         .as_str()
         .expect("stateView")
@@ -799,8 +805,8 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
         .cast_call_raw(agent_vault, "assets(uint256)", &["0"])
         .expect("read rmAGENT assets(0)");
     assert!(
-        word(&first, 0).ends_with("65021a79aeef22b17cdc1b768f5e79a8618beba3"),
-        "rmAGENT asset 0 must be RM, got {first}"
+        word(&first, 0).ends_with(&token_hex),
+        "rmAGENT asset 0 must be the listed asset {token_hex}, got {first}"
     );
     assert!(
         word(&first, 1).ends_with(
@@ -812,8 +818,8 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
     );
     assert_eq!(
         u64::from_str_radix(word(&first, 2).trim_start_matches('0').max("0"), 16).unwrap(),
-        29100,
-        "the swap fee is the pool fee 29100"
+        pool_fee,
+        "the swap fee is the pool fee {pool_fee}"
     );
     assert!(
         word(&first, 4).ends_with(&v4_adapter.trim_start_matches("0x").to_lowercase()),
@@ -830,7 +836,9 @@ fn rm_v4_flows(fx: &Fixture, dir: &Path) {
     let pk = format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY));
     fx.fund_gas(user, 10_000_000_000_000_000_000)
         .expect("fund gas for the depositor");
-    let deposit: u128 = 10_000_000; // 10 USDC: the live pool is unfunded (owner 2026-10-09), one swap above about 18 USDC exceeds the 209 bps margin
+    // 5 USDC: the largest safe deposit into the BNKR test pool (about 706 USD of virtual depth: 5 USDC costs 1.05 percent against the 300 bps swap bound,
+    // 10 USDC 1.75 percent, 100 USDC 11.7 percent). The Twin forks the live pool and never funds it.
+    let deposit: u128 = 5_000_000;
     fx.fund_usdc(user, deposit * 4)
         .expect("fund USDC for the depositor");
     let (vault_s, dep_s) = (format!("{agent_vault:#x}"), deposit.to_string());

@@ -1,28 +1,81 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "rmAGENT (AgentTokenVault) launch shortlist: RM only, the live ROBOTMONEY token pinned by code hash like USDC, on the Uniswap V4 RM/USDC 2.91% pool (owner decision 2026-10-08; the V3 RM pool has no in-range liquidity). V4 has no pool address and a hookless V4 pool records no observations, so rmAGENT prices RM through the permissionless UniswapV4PriceRecorder, which the agent stage reads from RECORDER_ADDRESS. Other agent tokens are added later through the timelock. One list for every chain. swapRouter02 is the Uniswap V3 SwapRouter02 the vault constructor takes; the V4 adapter trades through the PoolManager, not the router. maxSlippageBps raises the vault swap bound to the 500 bps ceiling because the pool fee alone is 291 bps.",
+  "description": "rmAGENT (AgentTokenVault) shortlist: BNKR ONLY, as a TEST ASSET. Robotmoney (RM) is parked (owner decision 2026-10-21, ADR-0015) because its V4 RM/USDC pool is too thin (see 'parked.measured'). The owner chose BNKR (BankrCoin, the Base agent-economy token named in ADR-0001) for the contained mainnet test on 2026-10-22: 'Lets keep bnkr, $400 is fine for our tests' (ADR-0016). The BNKR/USDC Uniswap V4 pool is thin on purpose of the test: about 706 USD of virtual depth (L 3.9e16), so the largest safe deposit is about 5 USD (shortfall against spot, fees included: 1 USDC 0.50 percent, 5 USDC 1.05 percent, 10 USDC 1.75 percent, 100 USDC 11.7 percent). That is NOT a production sizing and NOT a listing approval: it is allowed only inside the contained test scope of ADR-0001 (1 USDC seed, low caps, pause available, no announcement). The vault pool-depth guard VAULT_AGENT_MIN_POOL_LIQUIDITY stays 1e15 (the BNKR pool holds 39 times that in raw L). JSON has no comments, so the parked RM entry sits in 'parked.entries', which no deploy script, recorder script or vault reads. RM_PARKED is true exactly while 'parked.entries' is not empty: the tests and checks that need RM and its pool read it from here (docs/adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md and docs/code-review/20261021-code-review-internal-claude-rm-parked-from-rmagent.md name them). Reactivating RM means removing BNKR through the timelock, then moving 'parked.entries[0]' into 'shortlist' once 'parked.reactivation.criteria' hold, then the steps in 'parked.reactivation.steps'. Each entry pins its token by code hash like USDC. V4 has no pool address and a hookless V4 pool records no observations, so a V4 asset is priced through the permissionless UniswapV4PriceRecorder (stage 1b), built from the V4 entry of 'shortlist' and read by the agent stage from RECORDER_ADDRESS. One list for every chain. swapRouter02 is the Uniswap V3 SwapRouter02 the vault constructor takes; the V4 adapter trades through the PoolManager, not the router. maxSlippageBps is the vault default 300: the BNKR pool fee is 30 bps (plus a 5 bps protocol fee) and a 5 USDC deposit loses about 105 bps against spot, fees included. RM needs 500 because its pool fee alone is 291 bps (parked.maxSlippageBps).",
   "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   "uniswapV3Factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
   "swapRouter02": "0x2626664c2603336E57B271c5C0b26F421741e481",
   "shortlist": [
     {
-      "symbol": "RM",
-      "token": "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3",
+      "symbol": "BNKR",
+      "token": "0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b",
       "tokenDecimals": 18,
-      "tokenCodeHash": "0x7c678e2a3551a8d92c49819894c995e9b973a885b1ca5ab096853095e9a329d6",
+      "tokenCodeHash": "0x334311ad8d9f8a10d5d16d38bc215d0de7f8204d332a6f1a060ebb3f4adbc57f",
       "venue": "UniswapV4",
       "poolManager": "0x498581fF718922c3f8e6A244956aF099B2652b2b",
       "stateView": "0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71",
-      "poolId": "0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391",
+      "poolId": "0x87a44b2ff90d59448342017e80c513fd469c9f5edc34db815436a5d984000f52",
       "poolKey": {
-        "currency0": "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3",
+        "currency0": "0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b",
         "currency1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "fee": 29100,
-        "tickSpacing": 582,
+        "fee": 3000,
+        "tickSpacing": 60,
         "hooks": "0x0000000000000000000000000000000000000000"
       },
-      "poolFee": 29100
+      "poolFee": 3000
     }
   ],
-  "maxSlippageBps": 500
+  "parked": {
+    "decision": "Owner, 2026-10-21: 'I think we need to provisionally drop Robotmoney from the rmAgent. Comment it out, such that we can bring it back when there is sufficient volume.' Core issue 1903.",
+    "reason": "The Uniswap RM/USDC pool (fee 2.91 percent) is too thin for the vault swap bound: a 1 USDC buy takes 90 percent of its RM. The deep RM market (about $154,000) is the Uniswap RM/WETH pool the design does not use.",
+    "maxSlippageBps": 500,
+    "measured": {
+      "chain": "Base 8453",
+      "block": 52916480,
+      "poolId": "0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391",
+      "positions": "one full-range position",
+      "inRangeLiquidityL": "6.476e13",
+      "usdcReserveInRange": "about 0.11 USDC",
+      "rmReserveInRange": "about 37,223 RM",
+      "oneUsdcBuyTakesOfRmReserve": "90 percent",
+      "guardVaultAgentMinPoolLiquidity": "1e15, unchanged. The pool is 15 times below it.",
+      "unitsNote": "The guard is raw liquidity L, which is a different dollar depth at every price. At the RM price measured here (about 2.96e-6 USDC per RM) L 1e15 is only about 1.7 USDC of in-range USDC reserve. The guard cannot tell a 2 dollar pool from a 5,000 dollar pool, so the reactivation criteria are in dollars."
+    },
+    "reactivation": {
+      "criteria": [
+        "Depth: the in-range USDC reserve of the RM/USDC pool (L times sqrtPrice, read from the PoolManager at the pool id) is at least 5,000 USD at the live price, and at least 48 times the AGENT per-deposit cap on the frozen sheet. A swap of one cap then stays inside the 209 bps price-impact budget (the 500 bps swap bound minus the 291 bps pool fee), because impact is about swap size divided by reserve.",
+        "Volume: the pool trades at least 1,000 USD of volume on each of the last 7 days (about 10 times the per-deposit cap), so the recorder TWAP is formed by real trades and not by one holder.",
+        "Price: the pool price is within 5 percent of the RM price implied by the deep Uniswap RM/WETH pool, measured at the same block.",
+        "Raw guard: VAULT_AGENT_MIN_POOL_LIQUIDITY stays 1e15 or higher. At the price measured here the dollar depth above needs L of about 2.9e15, so the guard is met and is not the binding limit."
+      ],
+      "steps": [
+        "Re-measure the four criteria on Base at one block and record the numbers in a new docs/code-review file.",
+        "Remove BNKR from the deployed rmAGENT through the Safe and the timelock (ADR-0004 SHORTLIST_REMOVE_DELAY), and set maxSlippageBps to 500 for the RM pool fee.",
+        "Move the BNKR entry out of 'shortlist' and parked.entries[0] into it, set parked.entries to [] and maxSlippageBps to 500. RM_PARKED is then false and the RM-pool tests run. Run bun scripts/ci/config-check.ts.",
+        "Deploy the permissionless price recorder for the RM pool (stage 1b), start the recorder keeper (scripts/ops/recorder-keeper.sh) and wait for 1800 s of history.",
+        "Schedule addAsset(RM) on the deployed rmAGENT through the Safe and the timelock (ADR-0004 SHORTLIST_ADD_DELAY). Deploy the vault swap adapter first and allow its codehash, as DeployAgentTokenVault does.",
+        "Run the verifier, the Twin and the fork RM-pool tests with RM_PARKED false and record the result."
+      ]
+    },
+    "entries": [
+      {
+        "symbol": "RM",
+        "token": "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3",
+        "tokenDecimals": 18,
+        "tokenCodeHash": "0x7c678e2a3551a8d92c49819894c995e9b973a885b1ca5ab096853095e9a329d6",
+        "venue": "UniswapV4",
+        "poolManager": "0x498581fF718922c3f8e6A244956aF099B2652b2b",
+        "stateView": "0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71",
+        "poolId": "0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391",
+        "poolKey": {
+          "currency0": "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3",
+          "currency1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "fee": 29100,
+          "tickSpacing": 582,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "poolFee": 29100
+      }
+    ]
+  },
+  "maxSlippageBps": 300
 }

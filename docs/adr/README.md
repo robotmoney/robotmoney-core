@@ -29,3 +29,5 @@ ADR takes the next number after the highest one in the table.
 | 0012 | [Ed25519 is the default identity algorithm; secp256k1 is confined to the EVM boundary; one keystore primitive serves both curves](ADR-0012-dual-curve-identity-policy.md) | Accepted |
 | 0013 | [Verify deploy tooling and dapp integration against the Robot Money Devnet ("Twin"), not public Base Sepolia](ADR-0013-twin-devnet-over-base-sepolia-for-testnet-verification.md) | Accepted |
 | 0014 | [Governed per-instance UUPS proxies with a one-way, target-bound freeze for the core contracts](ADR-0014-governed-uups-upgrades-and-freeze.md) | Accepted |
+| 0015 | [Robotmoney (RM) is parked out of rmAGENT until its market is deep enough](ADR-0015-rm-parked-from-rmagent-until-market-depth.md) | Accepted |
+| 0016 | [BNKR is the rmAGENT test asset on Uniswap V4 while RM is parked](ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md) | Accepted |

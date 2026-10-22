@@ -10,7 +10,7 @@ import { kindLabel, rehearsalDelayProblem } from "../chains.ts";
 import { ERC1967_PROXY_ARTIFACT, compareDeployedCode, loadArtifact, logicCode, tryLoadArtifact } from "./codehash.ts";
 import {
   ADMIN_ROLE, AGENT_ROLE, COMMITTEE_AGENT_ROLE, KEEPER_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
-  RM_TOKEN, SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
+  SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
 import { manifestBase } from "../stage-table.ts";
 import { SAFE_MANIFEST, VAULT_ADAPTER_V4_FIELD, V4_ADAPTER_ARTIFACT_KEY, VENUE_V4 } from "../core-wiring.ts";
@@ -184,7 +184,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   await deployTimeChecks(c, chain, sheet, { router, vaults: man.vaults, receipt: byName.receipt!, applied: opts.appliedReceipt });
 
   // ---- vaults
-  for (const v of man.vaults) await vaultChecks(c, chain, v, sheet.vaults[v.key], { tl, registry, safe, sheet, recorder: byName.recorder!, artifactsDir: opts.artifactsDir, v4AdapterArtifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY] });
+  for (const v of man.vaults) await vaultChecks(c, chain, v, sheet.vaults[v.key], { tl, registry, safe, sheet, recorder: byName.recorder!, artifactsDir: opts.artifactsDir, v4AdapterArtifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY], shortlistTokens: readShortlistTokens(opts.coreDir) });
 
   // ---- gateway agents, derived from logs
   const head = await chain.blockNumber().catch(() => undefined);
@@ -407,7 +407,7 @@ export function votingSelectorsIn(code: Hex): string[] {
 
 async function vaultChecks(
   c: Collector, chain: ChainReader, v: ManifestVault, vs: VaultSheet | undefined,
-  ctx: { tl: Address; registry: Address; safe: Address; sheet: VerifyOptions["sheet"]; recorder: Address; artifactsDir: string; v4AdapterArtifact?: string },
+  ctx: { tl: Address; registry: Address; safe: Address; sheet: VerifyOptions["sheet"]; recorder: Address; artifactsDir: string; v4AdapterArtifact?: string; shortlistTokens?: string[] },
 ): Promise<void> {
   const p = `vault[${v.key}]`;
   const { tl, registry, safe, sheet } = ctx;
@@ -455,8 +455,14 @@ async function vaultChecks(
     await c.run(`${p}: asset config equals sheet`, async () => assetReadBack(chain, a, vs.assets));
     await basketGuardChecks(c, chain, a, p, vs);
     await unwindGuardCheck(c, chain, a, p, vs);
-    // rmAGENT launches holding RM only (core 1554). "asset config equals sheet" ties the chain to the sheet, so this ties the sheet to RM.
-    if (v.kind === "agent") await c.run(`${p}: holds RM as its one asset`, async () => ({ ok: vs.assets.length === 1 && lc(vs.assets[0]!.token) === lc(RM_TOKEN), detail: `sheet lists [${vs.assets.map((a) => a.token).join(", ")}], expected only ${RM_TOKEN}` }));
+    // The sheet's expected assets come from config/agent-token-shortlist.json at the DEPLOY_SHA. This ties the asset list the chain was checked against to the shortlist read
+    // from the core checkout, whatever its symbol (RM, or BNKR the test asset while RM is parked, ADR-0016). The pins by symbol are enforced by core's config-check.
+    if (v.kind === "agent") await c.run(`${p}: lists exactly the shortlist asset of the config`, async () => {
+      const cfg = ctx.shortlistTokens;
+      if (cfg === undefined) return { ok: false, detail: "config/agent-token-shortlist.json is not readable from the core checkout, so the asset list cannot be tied to it" };
+      const want = cfg.map(lc).sort(), got = vs.assets.map((a) => lc(a.token)).sort();
+      return { ok: want.length === got.length && want.every((t, i) => t === got[i]), detail: `sheet lists [${got.join(", ")}], the config shortlist lists [${want.join(", ")}]` };
+    });
     // core 1676: every UniswapV4 asset is wired to the permissionless price recorder, the V4 adapter and the configured PoolKey.
     for (const asset of vs.assets.filter((x) => x.venue === VENUE_V4)) await v4AssetChecks(c, chain, v, asset, ctx);
     // core 1695, issue 1705 C4: the swap bound is read back from every basket and compared with the config (its maxSlippageBps, else the vault default).
@@ -1043,4 +1049,15 @@ async function redeployChecks(
     const ok = vs.length === 4 && new Set(vs.map(lc)).size === 4 && vs.filter((v) => lc(v) === lc(r.newVault)).length === 1 && !vs.some((v) => lc(v) === lc(r.oldVault));
     return { ok, detail: `[${vs.join(", ")}]` };
   });
+}
+
+/** The tokens of `shortlist` in config/agent-token-shortlist.json of the core checkout, or undefined when the file is absent or unreadable. */
+export function readShortlistTokens(coreDir: string | undefined): string[] | undefined {
+  if (!coreDir) return undefined;
+  try {
+    const j = JSON.parse(readFileSync(join(coreDir, "config", "agent-token-shortlist.json"), "utf8")) as { shortlist?: { token?: string }[] };
+    return (j.shortlist ?? []).map((e) => String(e.token));
+  } catch {
+    return undefined;
+  }
 }

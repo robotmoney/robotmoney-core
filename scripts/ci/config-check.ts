@@ -6,11 +6,11 @@
 // Static rules (always run, no network):
 //   - every 0x string in config/ is exactly 40 hex digits (catches the 39-digit addresses)
 //   - deSPXA is listed with Uniswap V3 fee 500 and nothing else in rwa-assets.json
-//   - wSOL, BNKR and JUNO are absent; RM appears only in agent-token-shortlist.json
+//   - wSOL and JUNO are absent; RM and BNKR appear only in agent-token-shortlist.json
 //   - no Chronicle, Aerodrome, mainnet or devnet key anywhere in config/
-//   - agent-token-shortlist.json launch list is exactly RM (live ROBOTMONEY token, code-hash pinned) on the Uniswap V4
-//     RM/USDC 2.91% pool (owner decision 2026-10-08, core 1676): venue UniswapV4, fee 29100, tickSpacing 582, hooks 0x0,
-//     and the PoolKey hashes to pool id 0xf2e7b957...; it records swapRouter02 (the script parser needs it)
+//   - agent-token-shortlist.json launch list is BNKR alone as the rmAGENT TEST asset with RM parked under `parked.entries` (owner decisions 2026-10-21 and 2026-10-22,
+//     ADR-0015 and ADR-0016), or exactly RM once reactivated, never both. Each entry is code-hash pinned and pinned to its hookless Uniswap V4 USDC pool by PoolKey and pool id
+//     (RM: fee 29100, tickSpacing 582, pool id 0xf2e7b957...; BNKR: fee 3000, tickSpacing 60, pool id 0x87a44b2f...). The file records swapRouter02 (the script parser needs it).
 // Live rules (per V3 asset, pinned to one block): token, pool, factory and router have code,
 //   pool fee() equals config, factory.getPool equals config, observationCardinality >= 901 (1800 s default TWAP window / 2 s Base blocks + 1, core 1665),
 //   liquidity() > 0, USD TVL (USDC reserve plus other side at slot0 price) >= the file's
@@ -45,7 +45,7 @@ export const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
  * mainnet: this slot holds 0x2Ce6311ddAE708829bc0784C967b7d77D19FD779, equal to implementation().
  */
 export const USDC_IMPL_SLOT = "0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3";
-export const FORBIDDEN_SYMBOLS = ["wsol", "bnkr", "juno"];
+export const FORBIDDEN_SYMBOLS = ["wsol", "juno"]; // rm and bnkr are forbidden outside the agent file by the rule below (BNKR is the rmAGENT test asset, ADR-0016)
 const AGENT_FILE = "agent-token-shortlist.json";
 export const RM = {
   token: "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3",
@@ -62,6 +62,24 @@ export const RM = {
   /** The vault swap bound the deploy script applies: above the 291 bps pool fee, at the vault ceiling. */
   maxSlippageBps: 500,
 };
+/**
+ * BNKR (BankrCoin), the rmAGENT TEST asset while RM is parked (owner decision 2026-10-22, ADR-0016). The Uniswap V4 BNKR/USDC 0.30% pool holds about 706 USD of
+ * virtual depth, so it is allowed for contained tests only (ADR-0001 test scope) and is not a production sizing.
+ */
+export const BNKR = {
+  token: "0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b",
+  venue: "UniswapV4",
+  poolManager: RM.poolManager,
+  stateView: RM.stateView,
+  poolId: "0x87a44b2ff90d59448342017e80c513fd469c9f5edc34db815436a5d984000f52",
+  fee: 3000,
+  tickSpacing: 60,
+  hooks: "0x0000000000000000000000000000000000000000",
+  /** The vault default swap bound: above the 30 bps pool fee and the 5 bps protocol fee, with room for the price impact of a 5 USDC deposit. */
+  maxSlippageBps: 300,
+};
+/** The V4 pins by symbol: the only two assets rmAGENT may list. */
+const V4_PINS: Record<string, typeof RM> = { RM, BNKR };
 /** The addAsset in-range liquidity floor (BasketVault.MIN_POOL_LIQUIDITY). For V4 the unit is the pool's liquidity L. */
 export const MIN_POOL_LIQUIDITY = 1_000_000n;
 const FORBIDDEN_KEY = /chronicle|aerodrome|slipstream|^mainnet$|^devnet$|^wsol|^bnkr|^juno/i;
@@ -92,6 +110,27 @@ export interface AgentEntry extends Omit<Asset, "pool"> {
   poolId?: string;
   poolKey?: PoolKey;
 }
+/**
+ * config/agent-token-shortlist.json. `parked` holds the entries dropped from rmAGENT by the owner decision of 2026-10-21 (core issue 1903): no deploy script,
+ * recorder script, vault or live check reads it. RM_PARKED is true exactly while `parked.entries` is not empty (`rmParked`).
+ */
+export interface AgentFile {
+  usdc: string;
+  uniswapV3Factory: string;
+  swapRouter02: string;
+  maxSlippageBps?: number;
+  shortlist: AgentEntry[];
+  parked?: {
+    decision?: string;
+    reason?: string;
+    maxSlippageBps?: number;
+    measured?: Record<string, unknown>;
+    reactivation?: { criteria?: string[]; steps?: string[] };
+    entries?: AgentEntry[];
+  };
+}
+/** RM_PARKED (core issue 1903): RM is out of rmAGENT while the config holds it under `parked.entries`. The tests that need RM and its pool read this flag. */
+export const rmParked = (agent: Pick<AgentFile, "parked">): boolean => (agent.parked?.entries ?? []).length > 0;
 export interface AssetFile {
   usdc: string;
   uniswapV3Factory: string;
@@ -102,7 +141,7 @@ export interface AssetFile {
 export interface Configs {
   protocol: AssetFile;
   rwa: AssetFile;
-  agent: { usdc: string; uniswapV3Factory: string; swapRouter02: string; maxSlippageBps?: number; shortlist: AgentEntry[] };
+  agent: AgentFile;
   dexPools: Record<string, unknown>;
   /** Pinned USDC code hashes (config/usdc-hashes.json). null means not pinned yet: refused. */
   usdcHashes: UsdcHashes;
@@ -163,7 +202,7 @@ export function staticFindings(c: Configs): Finding[] {
         const isHashKey = key !== null && /CodeHash$|^poolId$/.test(key);
         if (!isHashKey && /^0x[0-9a-fA-F]*$/.test(val) && val.length > 2 && val.length !== 42) badAddr.push(`${path}=${val} (${val.length - 2} digits)`);
         const lower = val.toLowerCase();
-        if (FORBIDDEN_SYMBOLS.includes(lower) || (lower === "rm" && file !== AGENT_FILE) || /wsol/.test(lower) || /chronicle|aerodrome|slipstream/.test(lower)) badSym.push(`${path}=${val}`);
+        if (FORBIDDEN_SYMBOLS.includes(lower) || ((lower === "rm" || lower === "bnkr") && file !== AGENT_FILE) || /wsol/.test(lower) || /chronicle|aerodrome|slipstream/.test(lower)) badSym.push(`${path}=${val}`);
       }
     });
     add(file, "address-format", badAddr.length === 0, badAddr.join("; ") || "all 0x values are 40 hex digits");
@@ -183,26 +222,41 @@ export function staticFindings(c: Configs): Finding[] {
   add("rwa-assets.json", "despxa-venue", d?.venue === "UniswapV3", `venue=${d?.venue}`);
   const protoSyms = (c.protocol.assets ?? []).map((a) => a.symbol).sort();
   add("protocol-assets.json", "weth-cbbtc-only", JSON.stringify(protoSyms) === JSON.stringify(["cbBTC", "wETH"]), `symbols=${protoSyms.join(",")}`);
+  // Core issue 1903, ADR-0015 and ADR-0016. The launch list is BNKR alone as the test asset with RM parked (owner decisions 2026-10-21 and 2026-10-22), or RM alone once
+  // reactivated. Never both, never anything else.
   const sl = c.agent.shortlist ?? [];
-  const rm = sl[0];
-  const k = rm?.poolKey;
+  const parkedEntries = c.agent.parked?.entries ?? [];
   const eq = (a: string | undefined, b: string) => a?.toLowerCase() === b.toLowerCase();
-  add(AGENT_FILE, "launch-list-is-rm-only",
-    sl.length === 1 && rm.symbol === "RM" && eq(rm.token, RM.token) && rm.venue === RM.venue && rm.poolFee === RM.fee &&
-      HASH_RE.test(rm.tokenCodeHash ?? ""),
-    `entries=${sl.length} ${rm ? `${rm.symbol} fee=${rm.poolFee} venue=${rm.venue}` : ""}`);
-  // Core 1676: the V4 PoolKey. Every field is pinned, and the key must hash to the configured pool id (a spoofed key cannot share the id).
-  let derived = "";
-  try { derived = k ? poolIdOfKey(k) : ""; } catch { derived = ""; }
-  add(AGENT_FILE, "rm-v4-poolkey",
-    !!k && eq(k.currency0, RM.token) && eq(k.currency1, USDC) && k.fee === RM.fee && k.tickSpacing === RM.tickSpacing && eq(k.hooks, RM.hooks) &&
-      rm.pool === undefined,
-    k ? `currency0=${k.currency0} currency1=${k.currency1} fee=${k.fee} tickSpacing=${k.tickSpacing} hooks=${k.hooks} pool=${rm.pool}` : "no poolKey");
-  add(AGENT_FILE, "rm-v4-pool-id", eq(rm?.poolId, RM.poolId) && eq(derived, RM.poolId), `configured=${rm?.poolId} hash-of-poolKey=${derived} pinned=${RM.poolId}`);
-  add(AGENT_FILE, "rm-v4-managers", eq(rm?.poolManager, RM.poolManager) && eq(rm?.stateView, RM.stateView), `poolManager=${rm?.poolManager} stateView=${rm?.stateView}`);
-  // The pool charges 291 bps. The vault swap bound must clear it and stay at or under the vault ceiling of 500.
-  const slip = c.agent.maxSlippageBps;
-  add(AGENT_FILE, "rm-v4-slippage-clears-the-pool-fee", slip === RM.maxSlippageBps, `maxSlippageBps=${slip}`);
+  const bnkrTestAsset = sl.length === 1 && sl[0]!.symbol === "BNKR" && parkedEntries.length === 1 && parkedEntries[0]!.symbol === "RM";
+  const rmOnly = sl.length === 1 && sl[0]!.symbol === "RM" && parkedEntries.length === 0;
+  const listed = sl[0];
+  const isParked = parkedEntries.length === 1;
+  add(AGENT_FILE, "launch-list-is-bnkr-test-asset-with-rm-parked-or-rm-only", bnkrTestAsset || rmOnly,
+    `shortlist=${sl.map((e) => e.symbol).join(",")} parked=${parkedEntries.map((e) => e.symbol).join(",")}`);
+  // A parked RM must carry the decision, the reason, the measured numbers and reactivation criteria stated in dollars, or nobody can tell when to bring it back.
+  const pk = c.agent.parked;
+  add(AGENT_FILE, "rm-parked-states-reactivation",
+    !isParked || (!!pk?.decision && !!pk.reason && Object.keys(pk.measured ?? {}).length > 0 && (pk.reactivation?.steps ?? []).length > 0 &&
+      (pk.reactivation?.criteria ?? []).length > 0 && /USD/.test((pk.reactivation?.criteria ?? []).join(" "))),
+    isParked ? `criteria=${pk?.reactivation?.criteria?.length ?? 0} steps=${pk?.reactivation?.steps?.length ?? 0}` : "RM is listed, nothing is parked");
+  // Core 1676: the V4 PoolKey of every V4 entry (listed and parked). Every field is pinned by symbol, and the key must hash to the configured pool id.
+  const v4Rules = (e: AgentEntry | undefined, slip: number | undefined, label: string) => {
+    const pin = e ? V4_PINS[e.symbol] : undefined;
+    const sym = (e?.symbol ?? label).toLowerCase();
+    const k = e?.poolKey;
+    let derived = "";
+    try { derived = k ? poolIdOfKey(k) : ""; } catch { derived = ""; }
+    add(AGENT_FILE, `${sym}-v4-poolkey`,
+      !!pin && !!e && !!k && eq(e.token, pin.token) && e.venue === pin.venue && e.poolFee === pin.fee && HASH_RE.test(e.tokenCodeHash ?? "") &&
+        eq(k.currency0, pin.token) && eq(k.currency1, USDC) && k.fee === pin.fee && k.tickSpacing === pin.tickSpacing && eq(k.hooks, pin.hooks) && e.pool === undefined,
+      k ? `currency0=${k.currency0} currency1=${k.currency1} fee=${k.fee} tickSpacing=${k.tickSpacing} hooks=${k.hooks} pool=${e?.pool}` : "no poolKey");
+    add(AGENT_FILE, `${sym}-v4-pool-id`, !!pin && eq(e?.poolId, pin.poolId) && eq(derived, pin.poolId), `configured=${e?.poolId} hash-of-poolKey=${derived} pinned=${pin?.poolId}`);
+    add(AGENT_FILE, `${sym}-v4-managers`, !!pin && eq(e?.poolManager, pin.poolManager) && eq(e?.stateView, pin.stateView), `poolManager=${e?.poolManager} stateView=${e?.stateView}`);
+    // The vault swap bound must clear the pool fee and stay at or under the vault ceiling of 500: RM needs 500 (291 bps fee), BNKR keeps the vault default 300.
+    add(AGENT_FILE, `${sym}-v4-slippage-clears-the-pool-fee`, !!pin && slip === pin.maxSlippageBps, `maxSlippageBps=${slip}`);
+  };
+  v4Rules(listed, c.agent.maxSlippageBps, "listed");
+  if (isParked) v4Rules(parkedEntries[0], c.agent.parked?.maxSlippageBps, "parked");
   add("agent-token-shortlist.json", "swap-router-recorded",
     c.agent.swapRouter02?.toLowerCase() === "0x2626664c2603336e57b271c5c0b26f421741e481", `router=${c.agent.swapRouter02}`);
   for (const [name, f] of [["protocol-assets.json", c.protocol], ["rwa-assets.json", c.rwa]] as const) {

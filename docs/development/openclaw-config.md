@@ -90,7 +90,7 @@ implementation address and code hash match `gateway_implementation` and
 Agent setup uses the on-chain consent commitment described in
 `docs/architecture.md` §5.2: confirm the agent's consent before the owner's
 commit, then reveal while both commitments are live. The former
-`rmpc agent-consent` EIP-712 flow is superseded. Implementation hashes copied
+agent-consent EIP-712 flow is superseded. Implementation hashes copied
 from the chain must be matched to a reviewed release before setting the
 configured pins; reading a live hash alone is not approval. Inspect the live
 implementation with:

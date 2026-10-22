@@ -139,7 +139,7 @@ const RULES: Rule[] = [
     // the recorder code gains the `owner()` selector 0x8da5cb5b, as a PUSH4 would carry it
     w.chain.codes.set(RECORDER.toLowerCase(), `${w.chain.codes.get(RECORDER.toLowerCase())!}638da5cb5b` as `0x${string}`);
   }],
-  [/^vault\[rmAGENT\]: holds RM as its one asset$/, (w) => { w.sheet.vaults.rmAGENT.assets = [{ token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01) }]; }],
+  [/^vault\[rmAGENT\]: lists exactly the shortlist asset of the config$/, (w) => { w.sheet.vaults.rmAGENT.assets = [{ token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01) }]; }],
   [/^(vault\[\w+\]): tvlCap equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "tvlCap", 1n)],
   [/^(vault\[\w+\]): perDepositCap equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "perDepositCap", 1n)],
   [/^(vault\[\w+\]): exitFeeBps equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "exitFeeBps", 999n)],

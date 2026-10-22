@@ -569,7 +569,7 @@ export function sheetProblems(sheet: Record<string, string>, target: string, own
     if (BigInt(per) < 1000000n) out.push(`sheet: VAULT_${k}_PER_DEPOSIT_CAP ${per} is below the 1 USDC test deposit (1000000)`);
     if (target === "rehearsal" && BigInt(tvl) > 1000000000n) out.push(`sheet: VAULT_${k}_TVL_CAP ${tvl} is above 1000 USDC; a rehearsal is a contained test`);
   }
-  if (target === "rehearsal" && sheet.VAULT_AGENT_PER_DEPOSIT_CAP !== undefined && BigInt(sheet.VAULT_AGENT_PER_DEPOSIT_CAP) > 18000000n) out.push("sheet: VAULT_AGENT_PER_DEPOSIT_CAP is above 18 USDC; the RM V4 pool is shallow and a larger swap fails the 5 percent slippage bound (runbook 4.3)");
+  if (target === "rehearsal" && sheet.VAULT_AGENT_PER_DEPOSIT_CAP !== undefined && BigInt(sheet.VAULT_AGENT_PER_DEPOSIT_CAP) > 5000000n) out.push("sheet: VAULT_AGENT_PER_DEPOSIT_CAP is above 5 USDC; the BNKR test pool holds about 706 USD of virtual depth, a 10 USDC swap already loses 1.75 percent and a 100 USDC swap 11.7 percent against the 300 bps swap bound (ADR-0016)");
   const mode = need("UPGRADE_MODE");
   if (mode !== undefined && !["upgradeable", "frozen"].includes(mode)) out.push(`sheet: UPGRADE_MODE is '${mode}', not upgradeable or frozen`);
   if (target === "production" && mode === "upgradeable" && !sheet.UPGRADE_FREEZE_DEADLINE) out.push("sheet: an upgradeable production release needs UPGRADE_FREEZE_DEADLINE");
