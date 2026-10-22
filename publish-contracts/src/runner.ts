@@ -1338,11 +1338,25 @@ export async function runStages(ctx: RunContext, names: string[], handlers: Hand
         throw e;
       }
     }
+    await restoreVaultsBuild(ctx, ran);
   } finally {
     ctx.dryFiles?.restore();
     await stop();
   }
   return { manifest, ran, skipped };
+}
+
+/**
+ * Issue 1892: the gateway system's forge scripts compile with their own `--libraries` and rebuild out/. The vaults verifier compares the deployed libraries and implementations with the
+ * artifacts in out/, so a gateway run leaves out/ rebuilt without libraries, the state the last vaults stage (timelock) leaves it in. A vaults verify after a gateway run then reads the
+ * same build as before it. Failing loudly: a stale out/ would fail the vaults verifier with a hash mismatch that looks like a bad deployment.
+ */
+export async function restoreVaultsBuild(ctx: RunContext, ran: readonly string[]): Promise<void> {
+  if (ACTIVE_SYSTEM !== "gateway" || ctx.dryRun) return;
+  if (!ran.some((n) => stageByName(n).kind === "forge")) return;
+  const r = await ctx.run("forge", ["build"], { env: childEnv(ctx), cwd: ctx.coreDir });
+  if (r.code !== 0) throw new PublishError("TOOL", `forge build after the gateway system run failed (exit ${r.code}): ${r.stderr.trim().split("\n").slice(-2).join(" ")}. The vaults verifier reads out/, rebuild it before verifying the vaults system.`);
+  ctx.log.log("info", "build.vaults_restored", { reason: "the gateway system rebuilt out/ with its own libraries" });
 }
 
 /** True once the govern stage has started or finished: it sends transactions from the deployer keystore (Safe execTransaction gas). */

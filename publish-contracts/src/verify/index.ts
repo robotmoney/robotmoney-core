@@ -298,7 +298,11 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     // at the end of the deploy stages stands in for it, and the live nonce may only be at or above that record.
     const rec = opts.deployerNonceAtDeployEnd;
     if (rec !== undefined) return { ok: frozen && rec === want && got >= rec, detail: `recorded nonce at deploy end ${rec}, frozen sum plus the prove-control transaction ${want}, live nonce ${got} (govern ran)` };
-    return { ok: frozen && got === wantNow, detail: `nonce ${got}, frozen sum plus the prove-control transaction ${want}${wantNow !== want ? ` plus ${wantNow - want} redeploy transaction(s)` : ""}` };
+    // Issue 1892: the gateway system runs after this one with the same deployer. When the frozen file holds its counts it ran or was measured, and its transactions are the only other
+    // thing the deployer may have sent: the nonce is then this system's sum or this system's sum plus the other system's, nothing in between.
+    const otherSum = sys === "vaults" ? (opts.table.stages ?? []).filter((s) => s.system !== undefined && s.system !== "vaults").reduce((a, s) => a + (opts.frozenCounts[s.name] ?? 0), 0) : 0;
+    const afterOther = otherSum > 0 && got === wantNow + otherSum;
+    return { ok: frozen && (got === wantNow || afterOther), detail: `nonce ${got}, frozen sum plus the prove-control transaction ${want}${wantNow !== want ? ` plus ${wantNow - want} redeploy transaction(s)` : ""}${otherSum > 0 ? `, or plus the gateway system's ${otherSum}` : ""}` };
   });
 
   // ---- the immutability claim (issue 1809), last: it needs every other check of the run

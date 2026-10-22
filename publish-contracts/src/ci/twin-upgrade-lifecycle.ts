@@ -29,7 +29,7 @@ import { httpRpc, latestTimestamp, requireTwin, warpTo } from "../rehearsal/twin
 import { connectSafe, executeOnTimelock, executeTx, jsonLogger, keystoreSigner, operationId, operationState, scheduleOnTimelock, signTx, timelockMinDelay, verifyTimelockEffect, type SafeTxBundle, type TimelockCall } from "../safe/index.ts";
 import { loadStageTable, manifestBase, scopeTable } from "../stage-table.ts";
 import { ERC1967_IMPLEMENTATION_SLOT } from "../verify/codehash.ts";
-import { proxySpecs } from "../verify/upgradeability.ts";
+import { PINNED_PROXIES, proxySpecs } from "../verify/upgradeability.ts";
 import { UPGRADED_PROXY, UPGRADES_ARE_FROZEN_SELECTOR, executeCalldata, freezeCalldata, upgradeCalldata, LIFECYCLE_KIND, type FreezeTarget, type UpgradeLifecycleRecord } from "../upgrade-lifecycle.ts";
 import { governedUpgradeProblems, rpcCallRevert } from "../evidence-check.ts";
 import { governSalt } from "../govern.ts";
@@ -142,7 +142,9 @@ if (!isTx(upEntry.schedule_tx) || !isTx(upEntry.execute_tx)) fail(`the proxy_upg
 const upSchedTx = upEntry.schedule_tx as Hex, upExecTx = upEntry.execute_tx as Hex;
 if ((await implOf(gwProxy)).toLowerCase() !== toImpl.toLowerCase()) fail(`after the upgrade the gateway proxy's implementation slot reads ${await implOf(gwProxy)}, not ${toImpl}`);
 const gm = json(gwManifestPath);
-if (String(gm[gw.implementationField]).toLowerCase() !== toImpl.toLowerCase() || String(gm[`${gw.implementationField}_runtime_hash`]).toLowerCase() !== toHash.toLowerCase()) fail(`govern --row ${UPGRADE_ROW} did not re-record ${gwManifestPath}: ${gw.implementationField} ${gm[gw.implementationField]}, runtime hash ${gm[`${gw.implementationField}_runtime_hash`]}`);
+// only a pinned proxy (the gateway) records its implementation runtime hash; the router, upgraded since issue 1892, records the implementation address only
+const pinnedUpgrade = PINNED_PROXIES.includes(UPGRADED_PROXY);
+if (String(gm[gw.implementationField]).toLowerCase() !== toImpl.toLowerCase() || (pinnedUpgrade && String(gm[`${gw.implementationField}_runtime_hash`]).toLowerCase() !== toHash.toLowerCase())) fail(`govern --row ${UPGRADE_ROW} did not re-record ${gwManifestPath}: ${gw.implementationField} ${gm[gw.implementationField]}, runtime hash ${gm[`${gw.implementationField}_runtime_hash`]}`);
 say("upgraded", { operation_id: upId, schedule_tx: upSchedTx, execute_tx: upExecTx, manifest_fields: upEntry.manifest_fields });
 stage("verify", join(rh, "verify-labels-post-upgrade.txt"));
 const upgradeRec = upgradeabilityNow();

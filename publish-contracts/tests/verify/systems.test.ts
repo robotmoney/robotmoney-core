@@ -64,11 +64,17 @@ describe("the vaults system verifier needs no gateway (issue 1892, SYS-1)", () =
     for (const sig of [SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP]) w.chain.logs.push({ address: GATEWAY, topics: [keccak256(toHex(sig)), padTopic(OWNERS[0]!), padTopic(OWNERS[1]!)], data: "0x", blockNumber: 300n });
     expect(failed(await verifyDeployment(vaultsOpts(w)))).toEqual([]);
   });
-  test("the vaults nonce counts the vaults stages only: the gateway system's counts in the same frozen file are not added", async () => {
+  test("the vaults nonce is the vaults sum, or the vaults sum plus the gateway system's counts when the frozen file holds them, and nothing in between", async () => {
     const w = buildWorld();
     const o = vaultsOpts(w);
-    w.chain.noncesMap.set(DEPLOYER.toLowerCase(), Object.values(VAULT_COUNTS).reduce((a, b) => a + b, 0) + 1 + 7);
-    expect(failed(await verifyDeployment(o))).toEqual(["deployer: nonce equals sum of frozen counts"]);
+    const sum = Object.values(VAULT_COUNTS).reduce((a, b) => a + b, 0) + 1;
+    for (const [nonce, ok] of [[sum, true], [sum + 7, true], [sum + 3, false], [sum + 8, false]] as const) {
+      w.chain.noncesMap.set(DEPLOYER.toLowerCase(), nonce);
+      expect(failed(await verifyDeployment(o)), `nonce ${nonce}`).toEqual(ok ? [] : ["deployer: nonce equals sum of frozen counts"]);
+    }
+    // a frozen file with no gateway counts: the gateway system never ran, its transactions are strays
+    w.chain.noncesMap.set(DEPLOYER.toLowerCase(), sum + 7);
+    expect(failed(await verifyDeployment({ ...o, frozenCounts: VAULT_COUNTS }))).toEqual(["deployer: nonce equals sum of frozen counts"]);
   });
   test("a combined (legacy) reading keeps the gateway and agent labels and still fails an agent authorized before handover", async () => {
     const w = buildWorld();

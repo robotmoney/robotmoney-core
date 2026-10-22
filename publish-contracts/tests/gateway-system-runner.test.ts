@@ -43,6 +43,19 @@ describe("the gateway system run (issue 1892)", () => {
     expect(m.stages.gateway.startNonce).toBe(40);
     expect(m.stages["gateway-handover"].startNonce).toBe(43);
     expect(w.state().nonces[ADMIN.toLowerCase()]).toBe(47);
+    // the gateway scripts rebuilt out/ with their own libraries: one `forge build` after the last stage restores the build the vaults verifier reads
+    const calls = w.state().calls as any[];
+    const isForge = (c: any, verb: string) => c.tool === "forge" && c.args[0] === verb;
+    expect(calls.filter((c) => isForge(c, "build")).length).toBe(1);
+    const lastScript = calls.map((c, i) => (isForge(c, "script") && c.args.includes("--broadcast") ? i : -1)).reduce((a, b) => Math.max(a, b), -1);
+    expect(calls.findIndex((c) => isForge(c, "build"))).toBeGreaterThan(lastScript);
+    expect(w.logs().some((l) => l.event === "build.vaults_restored")).toBe(true);
+  });
+
+  test("a vaults run never runs forge build: only the gateway system rebuilds out/", async () => {
+    const w = world({ startNonce: 0 });
+    expect(await w.run(["--stage", "deploy"])).toBe(0);
+    expect(w.state().calls.filter((c: any) => c.tool === "forge" && c.args[0] === "build")).toEqual([]);
   });
 
   test("the vaults manifests are consumed and left unchanged: their hashes are recorded when the run begins", async () => {
