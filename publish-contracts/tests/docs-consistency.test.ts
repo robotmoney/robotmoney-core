@@ -198,7 +198,7 @@ describe("the release branch model is stated, and the old rule is gone", () => {
   test("the old no-release-branch rule is stated nowhere in the docs", () => {
     for (const s of ["do not need a dedicated long-lived branch", "no long-lived release branch to keep in sync", "no release branch to backport from"]) {
       expect(policy, s).not.toContain(s);
-      for (const f of ["docs/runbooks/contract-qa/README.md", "docs/development/ci-suites.md", "publish-contracts/README.md"]) expect(read(f).replace(/\s+/g, " "), `${f}: ${s}`).not.toContain(s);
+      for (const f of ["docs/runbooks/contract-qa/README.md", "docs/development/ci-suites.md", "publish-contracts/README.md", "docs/technical/contract-upgradeability-plan.md", "docs/operations/manual-admin-actions.md"]) expect(read(f).replace(/\s+/g, " "), `${f}: ${s}`).not.toContain(s);
     }
   });
   test("the contract QA README, the template header and the CI doc name the same branches", () => {
