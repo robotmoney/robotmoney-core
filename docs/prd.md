@@ -597,12 +597,14 @@ Router allocation.
 
 Shortlist curation is admin-controlled for the MVP, with an
 equal-weighted target basket drawn from BNKR, JUNO, RM (Base-chain
-only). rmAGENT launches with an empty shortlist: RM, the existing ROBOTMONEY token on
+only). rmAGENT's shortlist is BNKR alone, as a TEST asset: RM, the existing ROBOTMONEY token on
 Base at `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (core #1491), is parked until its market is deep enough
-(owner, 2026-10-21, [ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md)). An empty rmAGENT is deployed and paused, takes no deposits and holds nothing.
-RM, BNKR and JUNO are added later through the timelock, RM only after the dollar criteria in [ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md) hold. Each token
+(owner, 2026-10-21, [ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md)). BNKR (BankrCoin, `0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b`) is the Base
+agent-economy token named in ADR-0001. It sits on a thin Uniswap V4 pool (about 706 USD of virtual depth), so it is allowed
+for the contained mainnet test only, with deposits of at most 5 USDC, and it is not a production sizing
+(owner, 2026-10-22, [ADR-0016](adr/ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md)). RM returns only after the dollar criteria in [ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md) hold. RM and JUNO are added later through the timelock. Each token
 routes through one venue under the per-asset venue abstraction in
-[ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md). RM's venue, once it is listed, is
+[ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md). RM's venue, once it is listed again, is
 decided (owner, 2026-10-08; supersedes 2026-10-06): the Uniswap V4 RM/USDC pool with fee 2.91%
 (id `0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391`, tickSpacing 582, no hooks). The vault
 swaps through `UniswapV4SwapAdapter` and prices RM from `UniswapV4PriceRecorder`, a permissionless in-protocol

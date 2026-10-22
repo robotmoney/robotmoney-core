@@ -188,7 +188,7 @@ export interface RmPoolFacts {
 export function readRmPoolFacts(coreDir: string): RmPoolFacts {
   const p = `${coreDir}/config/agent-token-shortlist.json`;
   const j = JSON.parse(readFileSync(p, "utf8"));
-  const rm = j.shortlist?.[0] ?? j.parked?.entries?.[0]; // RM_PARKED (core 1903): the entry sits under parked.entries while RM is parked
+  const rm = j.parked?.entries?.[0] ?? j.shortlist?.[0]; // RM_PARKED (core 1903): this helper funds the RM pool, which sits under parked.entries while the shortlist lists BNKR (ADR-0016)
   const k = rm?.poolKey;
   const hash = (v: unknown): boolean => typeof v === "string" && /^0x[0-9a-fA-F]{64}$/.test(v);
   if (!rm || rm.symbol !== "RM" || rm.venue !== "UniswapV4" || !ADDR.test(rm.token) || !ADDR.test(rm.poolManager) || !ADDR.test(rm.stateView) || !hash(rm.poolId) || !k

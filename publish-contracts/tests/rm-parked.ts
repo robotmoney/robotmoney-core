@@ -1,6 +1,6 @@
 // RM_PARKED test support (core issue 1903, ADR-0015, owner decision 2026-10-21).
 //
-// The committed config/agent-token-shortlist.json parks RM under `parked.entries` and ships an empty `shortlist`. The publish-contracts tests that
+// The committed config/agent-token-shortlist.json parks RM under `parked.entries` and lists BNKR (the test asset, ADR-0016) in `shortlist`. The publish-contracts tests that
 // need RM and its V4 pool (the recorder wait, the verifier's V4 expectations, the config-check of the V4 pool) run on a COPY of the committed
 // config with RM moved back into the shortlist, which is exactly the reactivation move. They are not skipped, no bound is lowered and no pool is
 // seeded. `RM_PARKED` is true exactly while the committed config parks RM.
@@ -18,7 +18,9 @@ export const RM_PARKED: boolean = (committed().parked?.entries ?? []).length > 0
 /** The committed config with parked.entries moved back into the shortlist (the reactivated config). */
 export function activatedAgentConfig(): AgentJson {
   const j = committed();
-  return { ...j, shortlist: [...j.shortlist, ...(j.parked?.entries ?? [])], parked: { ...j.parked, entries: [] } };
+  // The shipped config lists BNKR (ADR-0016) and parks RM. The reactivated config lists RM alone, with the 500 bps swap bound RM needs.
+  const slip = j.parked?.maxSlippageBps;
+  return { ...j, shortlist: [...(j.parked?.entries ?? [])], ...(slip !== undefined ? { maxSlippageBps: slip } : {}), parked: { ...j.parked, entries: [] } };
 }
 
 /** The RM entry, wherever the committed config keeps it. */

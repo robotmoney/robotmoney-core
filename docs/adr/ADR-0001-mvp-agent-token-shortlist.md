@@ -205,4 +205,4 @@ There is no voting by token holders or anyone else. The Safe multisig, through t
 
 ## Amendment — 2026-10-21 (RM parked)
 
-The owner parked RM out of rmAGENT until its market is deep enough. rmAGENT launches with an empty shortlist, and tokens are added later through the timelock. See [ADR-0015](ADR-0015-rm-parked-from-rmagent-until-market-depth.md). The text above is unchanged.
+The owner parked RM out of rmAGENT until its market is deep enough ([ADR-0015](ADR-0015-rm-parked-from-rmagent-until-market-depth.md)). BNKR is the rmAGENT test asset on Uniswap V4 meanwhile, inside the contained test scope only ([ADR-0016](ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md)). Tokens are added and removed through the timelock. The text above is unchanged.

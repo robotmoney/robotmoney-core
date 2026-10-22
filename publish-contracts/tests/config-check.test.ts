@@ -236,15 +236,15 @@ describe.skipIf(!coreAvailable())(`core parity: the real core config files in ${
       expect(a.token).toMatch(/^0x[0-9a-fA-F]{40}$/);
       expect(a.pool).toMatch(/^0x[0-9a-fA-F]{40}$/);
       expect(a.swapFee).toBeGreaterThan(0);
-      // RM is the one Uniswap V4 asset (core 1676): it has no pool address, its PoolKey is in v4. Every other asset is V3.
-      if (a.symbol === "RM") { expect(a.venue).toBe(1); expect(a.v4?.key.fee).toBe(29100); } else expect(a.venue).toBe(0);
+      // BNKR, the rmAGENT test asset (ADR-0016), is the one Uniswap V4 asset (core 1676): it has no pool address, its PoolKey is in v4. Every other asset is V3.
+      if (a.symbol === "BNKR") { expect(a.venue).toBe(1); expect(a.v4?.key.fee).toBe(3000); } else expect(a.venue).toBe(0);
     }
   });
-  test("rmPROTO lists wETH and cbBTC, rmRWA lists deSPXA only, rmAGENT lists nothing while RM is parked (core 1903, ADR-0015)", () => {
+  test("rmPROTO lists wETH and cbBTC, rmRWA lists deSPXA only, rmAGENT lists BNKR alone while RM is parked (core 1903, ADR-0015, ADR-0016)", () => {
     expect(loadVaultConfiguredAssets(REPO_ROOT, "PROTO").map((a) => a.symbol)).toEqual(["wETH", "cbBTC"]);
     expect(loadVaultConfiguredAssets(REPO_ROOT, "RWA").map((a) => a.symbol)).toEqual(["deSPXA"]);
-    // RM_PARKED: the committed shortlist is empty. The parked RM entry is checked on the reactivated copy.
-    expect(loadVaultConfiguredAssets(REPO_ROOT, "AGENT")).toEqual([]);
+    // RM_PARKED: the committed shortlist is BNKR, the test asset. The parked RM entry is checked on the reactivated copy.
+    expect(loadVaultConfiguredAssets(REPO_ROOT, "AGENT").map((a) => a.symbol)).toEqual(["BNKR"]);
     const dir = tmp("cc-rm-"); writeCoreAssetConfig(dir, { shortlist: [rmEntry()] });
     const agent = loadVaultConfiguredAssets(dir, "AGENT");
     expect(agent.map((a) => a.symbol)).toEqual(["RM"]);

@@ -666,7 +666,7 @@ Internal review of the owner decision to park RM out of rmAGENT until its market
 | Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |
 |---|---|---|---|---|---|---|
 | RP-1021-1 | RP-1021 | Medium | accepted-with-rationale | BasketVault, DeployAgentTokenVault, config-check | — | The pool-depth guard is raw liquidity L, a different dollar depth at every price (L 1e15 is about 1.7 USDC at the measured RM price). The guard stays at 1e15. Reactivation is decided by dollar criteria in the shortlist config and ADR-0015. |
-| RP-1021-2 | RP-1021 | Medium | accepted-with-rationale | AgentTokenVault, config/agent-token-shortlist.json | — | rmAGENT launches with no asset (RM parked by the owner, 2026-10-21). Open until the criteria hold and a timelock addAsset lands. |
+| RP-1021-2 | RP-1021 | Medium | accepted-with-rationale | AgentTokenVault, config/agent-token-shortlist.json | — | rmAGENT launches with BNKR as a test asset on a thin pool (about 706 USD virtual, ADR-0016) while RM is parked by the owner (2026-10-21). Open until the RM criteria hold, or a deeper venue is decided, and a timelock addAsset lands. |
 | RP-1021-3 | RP-1021 | Low | accepted-with-rationale | testing/smoke-test twin_publish, contracts/test fork tests, scripts/ci | — | Tests that need RM and its pool run on a reactivated copy of the config (RM_PARKED), never skipped, no bound lowered, no liquidity seeded. Issue 1900 (seed the Twin pool) is superseded. |
 
 ### Gap analysis — process & coverage backlog (20260607-code-review-internal-claude-gap-analysis.md)

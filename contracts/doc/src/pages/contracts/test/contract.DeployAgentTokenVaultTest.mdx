@@ -5,7 +5,7 @@ description: "rmAGENT script: paused and registered at launch, holding RM on the
 
 # DeployAgentTokenVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9b1477e1ade28b3357b8d3032a304bb71d43b867/contracts/test/DeployAgentTokenVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/74e0ed2d92d98f84ac717869d06a1091d6abb6a6/contracts/test/DeployAgentTokenVault.t.sol)
 
 **Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
 
@@ -19,6 +19,25 @@ from one config entry (adapter deployed, code hash allowed, `addAsset` called).
 
 ```solidity
 address internal constant RM_TOKEN = 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3;
+```
+
+### BNKR_TOKEN
+
+<i>
+
+BNKR (BankrCoin), the rmAGENT test asset while RM is parked (ADR-0016).
+
+</i>
+
+```solidity
+address internal constant BNKR_TOKEN = 0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b;
+```
+
+### BNKR_POOL_ID
+
+```solidity
+bytes32 internal constant BNKR_POOL_ID =
+        0x87a44b2ff90d59448342017e80c513fd469c9f5edc34db815436a5d984000f52;
 ```
 
 ### BASE_USDC
@@ -296,24 +315,48 @@ function _rmParked() internal view returns (bool);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bool` |  |
 
-<a id="test_launchconfigshortlistisemptywithrmparkedorrmonly"></a>
+<a id="test_launchconfigshortlistisbnkrwithrmparkedorrmonly"></a>
 
-### test_launchConfigShortlistIsEmptyWithRmParkedOrRmOnly
+### test_launchConfigShortlistIsBnkrWithRmParkedOrRmOnly
 
-The shipped launch config is EMPTY with RM parked (owner decision 2026-10-21, ADR-0015), or exactly RM once reactivated.
+The shipped launch config lists BNKR alone (the rmAGENT test asset, ADR-0016) and parks RM (owner decisions 2026-10-21 and 2026-10-22), or lists exactly RM once reactivated.
 
 ```solidity
-function test_launchConfigShortlistIsEmptyWithRmParkedOrRmOnly() public view;
+function test_launchConfigShortlistIsBnkrWithRmParkedOrRmOnly() public view;
 ```
 
-<a id="test_rmparked_shippedconfigdeploysanemptypausedregisteredvault"></a>
+<a id="_v4worldbnkr"></a>
 
-### test_rmParked_shippedConfigDeploysAnEmptyPausedRegisteredVault
+### _v4WorldBnkr
 
-The shipped config (RM parked) runs through the real script: a paused, registered, EMPTY rmAGENT with no adapter and no recorder.
+<i>
+
+The V4 world of the BNKR test asset: the PoolManager double with the BNKR/USDC 0.30% pool, BNKR code at its real address and a warm recorder.
+
+</i>
 
 ```solidity
-function test_rmParked_shippedConfigDeploysAnEmptyPausedRegisteredVault() public;
+function _v4WorldBnkr() internal;
+```
+
+<a id="test_bnkrtestasset_shippedconfigdeploysanonemptypausedregisteredvault"></a>
+
+### test_bnkrTestAsset_shippedConfigDeploysANonEmptyPausedRegisteredVault
+
+The SHIPPED config (BNKR test asset, RM parked) runs through the real script: a paused, registered rmAGENT with one V4 asset, BNKR, the recorder as its pool.
+
+```solidity
+function test_bnkrTestAsset_shippedConfigDeploysANonEmptyPausedRegisteredVault() public;
+```
+
+<a id="test_bnkrtestasset_shippedconfigparses"></a>
+
+### test_bnkrTestAsset_shippedConfigParses
+
+The shipped BNKR entry parses through the script parser: hookless, sorted, and the key hashes to the pinned pool id.
+
+```solidity
+function test_bnkrTestAsset_shippedConfigParses() public;
 ```
 
 <a id="test_rmparked_emptyvaultrevertsexceededmaxdepositevenunpaused"></a>

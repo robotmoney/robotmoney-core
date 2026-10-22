@@ -286,21 +286,23 @@ same contracts ship into test, demo, and mainnet — only the registry
 flag's value differs across environments. See
 `docs/development/single-production-codebase.md` for the principle.
 
-At launch rmAGENT (`AgentTokenVault`) deploys empty and paused: RM, the existing Base token at
+At launch rmAGENT (`AgentTokenVault`) holds BNKR alone, as a TEST asset, and deploys paused. RM, the existing Base token at
 `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`, is parked until its market is deep enough (owner, 2026-10-21,
-[ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md)). An empty vault has no active asset, so
-`maxDeposit` is 0 and `deposit` reverts `ERC4626ExceededMaxDeposit`. Tokens are added later through the timelock (ADR-0004).
-Nothing deploys RM in production. RM's venue, once listed, is decided (owner, 2026-10-08; supersedes 2026-10-06): the Uniswap V4 RM/USDC pool
+[ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md)). BNKR (BankrCoin, `0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b`) is the owner's test choice of 2026-10-22
+([ADR-0016](adr/ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md)): its Uniswap V4 BNKR/USDC pool (fee 0.30%, tickSpacing 60, hooks zero, id `0x87a44b2f...0f52`) holds about 706 USD
+of virtual depth and L 3.9e16, 39 times the 1e15 floor. It is allowed for the contained mainnet test only, with deposits of at most 5 USDC,
+and it is not a production sizing. Tokens are added and removed through the timelock (ADR-0004). Nothing deploys RM or BNKR in
+production code. RM's venue, once listed again, is decided (owner, 2026-10-08; supersedes 2026-10-06): the Uniswap V4 RM/USDC pool
 with fee 2.91% (id `0xf2e7b957...2391`, tickSpacing 582, hooks zero). `UniswapV4SwapAdapter` swaps through the real
 PoolManager (unlock callback, full PoolKey). Because a hookless V4 pool records no observations, rmAGENT registers
-`UniswapV4PriceRecorder` as RM's pool: a permissionless, admin-free recorder that stores the pool tick in a V3-style
+`UniswapV4PriceRecorder` as the V4 asset's pool: a permissionless, admin-free recorder that stores the pool tick in a V3-style
 ring (one snapshot per block, lagged tick, clamp of 10 ticks per second) and answers `observe()` for the unchanged
 `BasketVault` TWAP math. This is sufficient for the Base mainnet test, not the final deployment; its security bound
 is the pool depth, so `perDepositCap` and `tvlCap` stay below it. The recorder stage (`recorder`, right after `libs`)
 deploys it, and the runner waits for a full window of history before the `agent` stage. A stale recorder (no record for
 over 1800 s) fails deposits and USDC redeems closed, and `redeemInKind` needs no oracle. `config/agent-token-shortlist.json`
-holds RM with its PoolKey under `parked` while RM is parked (core 1676). The recorder stage still deploys the recorder for the
-parked pool, so reactivation needs no wait for price history.
+lists BNKR with its PoolKey and holds RM with its PoolKey under `parked` while RM is parked (core 1676). The recorder stage records
+the pool of the listed V4 entry.
 
 The source tree also contains `RwaBasketVault`, the rmRWA vault. rmRWA is
 a plain basket row: it holds deSPXA (Centrifuge / Janus Henderson / Anemoy
@@ -1272,8 +1274,8 @@ The main-page balances panel reads the RM balance at
 to the live address. No test needs to hold RM. `RouterGovernance` reads no RM
 balance: router weights are applied by the weight setter through the
 timelock, and nothing in governance reads a token balance. rmAGENT
-launches paused and empty: `config/agent-token-shortlist.json` has an empty
-`shortlist` and parks RM (ADR-0015). A listed RM trades on the Uniswap V4 RM/USDC pool with fee 2.91% (§4.1; owner decision
+launches paused with BNKR as its test asset: `config/agent-token-shortlist.json` lists BNKR
+and parks RM (ADR-0015, ADR-0016). A listed RM trades on the Uniswap V4 RM/USDC pool with fee 2.91% (§4.1; owner decision
 2026-10-08, which replaced the V3 RM/USDC pool at fee 10000 because that
 pool has no in-range liquidity). rmAGENT registers `UniswapV4PriceRecorder`
 as RM's pool, and `BasketVault.addAsset` refuses it below the observation

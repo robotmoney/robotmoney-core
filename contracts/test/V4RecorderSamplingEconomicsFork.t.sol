@@ -275,7 +275,9 @@ contract V4RecorderSamplingEconomicsForkTest is Test {
         // RM_PARKED (core issue 1903, ADR-0015): the attack cycle pushes the price through the live RM/USDC pool, which now holds L 6.476e13
         // (about 0.11 USDC), so the push reverts SlippageExceeded before the economics are measured. The test runs again when RM leaves
         // `parked.entries`. No bound is changed.
-        if (vm.keyExistsJson(vm.readFile("config/agent-token-shortlist.json"), ".parked.entries[0]")) {
+        if (vm.keyExistsJson(
+                vm.readFile("config/agent-token-shortlist.json"), ".parked.entries[0]"
+            )) {
             vm.skip(
                 true,
                 "RM_PARKED (core 1903, ADR-0015): the live RM/USDC pool is too thin for the sampling attack cycle"

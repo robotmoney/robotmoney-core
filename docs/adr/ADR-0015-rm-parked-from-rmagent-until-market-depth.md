@@ -29,11 +29,11 @@ Owner decision, verbatim: "I think we need to provisionally drop Robotmoney from
 
 ## Decision
 
-1. RM is parked. `config/agent-token-shortlist.json` ships `shortlist: []`. The RM entry, the reason, the measurements and the reactivation criteria live under `parked`, which no script or contract reads.
-2. rmAGENT still deploys at stage 9, empty and paused, so the four-vault topology, the registry row and the handover are unchanged. With zero active assets `maxDeposit` is 0 and `deposit` reverts `ERC4626ExceededMaxDeposit`. A token is added later through the Safe and the timelock (ADR-0004).
-3. The V4 price recorder stage (1b) still deploys, against the parked pool. The recorder is permissionless, holds no role and is read by nothing while rmAGENT is empty. Deploying it keeps the stage table, the verifier and the frozen-count process unchanged, and pre-positions the price history and the 7,201-slot ring so reactivation needs no wait. The recorder script reads `parked.entries` when the shortlist has no V4 entry. The recorder code and its tests stay.
+1. RM is parked. The RM entry, the reason, the measurements and the reactivation criteria live under `parked` in `config/agent-token-shortlist.json`, which no script or contract reads.
+2. The `shortlist` is not empty: the owner chose BNKR as the rmAGENT test asset on 2026-10-22 ([ADR-0016](ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md)). The vault still deploys at stage 9, paused, so the four-vault topology, the registry row and the handover are unchanged. Tokens are added and removed through the Safe and the timelock (ADR-0004).
+3. The V4 price recorder stage (1b) is unchanged: it builds the recorder from the V4 entry of `shortlist`. The recorder code and its tests stay.
 4. `VAULT_AGENT_MIN_POOL_LIQUIDITY` is not changed. No test bound is loosened. No liquidity is seeded.
-5. The tests that need RM and its pool are gated by one flag, `RM_PARKED`, true exactly while `parked.entries` is not empty. Reactivation flips it by the same edit that restores the entry.
+5. The tests that need RM and its pool are gated by one flag, `RM_PARKED`, true exactly while `parked.entries` is not empty. RM-pool tests run on a reactivated copy of the config where they are generic. Reactivation flips the flag by the same edit that restores the entry.
 
 ### Reactivation criteria (dollars at the live price, measured at one Base block)
 
@@ -59,7 +59,10 @@ Each needs its own ADR.
 
 ## Consequences
 
-- rmAGENT is live but empty at launch. Its share price and TVL are zero and it takes no deposits. The router weight for rmAGENT is already 0.
-- The recorder keeper is optional for this release (nothing reads the recorder). The agent stage sends fewer transactions: no adapter, no allowlist, no `addAsset`.
+- rmAGENT carries no RM. What it carries instead is decided in ADR-0016.
 - Issue 1900 (seed the Twin pool) is superseded by this decision.
-- Reactivation is a config move, the recorder keeper and a timelock `addAsset`, with the criteria re-measured first.
+- Reactivation is: remove the test asset through the timelock, move the RM entry back, run the recorder keeper, and schedule a timelock `addAsset`, with the criteria re-measured first.
+
+## Amendment — 2026-10-22 (BNKR test asset)
+
+The first version of this ADR shipped rmAGENT empty. The owner replaced that outcome the next day: BNKR is the test asset. See [ADR-0016](ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md).
