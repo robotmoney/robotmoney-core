@@ -33,8 +33,7 @@
 //!    executed floor of 2 (QA plan T2; the same shape as the indexer suite's
 //!    `EXPLORER_INDEXER_REQUIRE_PG`);
 //! 2. the mocked twins in `tests/committee.rs`, `tests/receipt.rs`,
-//!    `tests/cli_deposit.rs`, `tests/cli_withdraw.rs` and
-//!    `tests/cli_withdraw_router.rs` run unconditionally, so the seam is never
+//!    and `tests/cli_deposit.rs` run unconditionally, so the seam is never
 //!    at zero coverage on a runner without Foundry.
 
 use alloy_primitives::B256;

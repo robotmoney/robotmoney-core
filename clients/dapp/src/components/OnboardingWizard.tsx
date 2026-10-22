@@ -56,6 +56,8 @@ import {
 import { classifyChain } from "../lib/chainClassifier";
 import { PolicyFields } from "./PolicyFields";
 import { RegistrationSteps, registrationIds } from "./RegistrationSteps";
+import { DestinationPicker } from "./DestinationPicker";
+import { tryDepositOnlyPolicy } from "../lib/agentDestinations";
 
 type DripStatus =
   | { kind: "idle" }
@@ -69,6 +71,8 @@ type Props = Readonly<{
   /** Vite build env. Read here only to look up VITE_FAUCET_HARNESS_PRIVATE_KEY for the testnet seed step. */
   env: Record<string, string | undefined>;
   now: number;
+  /** The Portfolio Router is never an agent destination. */
+  routerAddress?: string;
   onDismiss?: () => void;
   /**
    * Injected USDC drip handler for tests. Production uses `dripUsdc` from faucetClient.
@@ -192,6 +196,8 @@ export function OnboardingWizard(props: Props) {
   const [step, setStep] = useState<Step>(1);
   const [agent, setAgent] = useState("");
   const [shareReceiver, setShareReceiver] = useState("");
+  // The owner's explicit vault selection. Nothing is pre-selected.
+  const [destinations, setDestinations] = useState<string[]>([]);
   const [validUntil, setValidUntil] = useState(() =>
     Math.floor(props.now / 1000 + 86400).toString(),
   );
@@ -206,18 +212,16 @@ export function OnboardingWizard(props: Props) {
 
   const policy: AgentPolicy | null =
     validAgent && validReceiver
-      ? {
-          active: true,
-          validUntil: BigInt(validUntil),
-          maxPerPayment: BigInt(maxPerPayment),
-          maxPerWindow: BigInt(maxPerWindow),
-          shareReceiver: shareReceiver as Address,
-          allowedDestinations: [],
-          assetRecipient: "0x0000000000000000000000000000000000000000" as Address,
-          maxWithdrawPerPayment: 0n,
-          maxWithdrawPerWindow: 0n,
-          allowedSourceVaults: [],
-        }
+      ? tryDepositOnlyPolicy(
+          {
+            validUntil: BigInt(validUntil),
+            maxPerPayment: BigInt(maxPerPayment),
+            maxPerWindow: BigInt(maxPerWindow),
+            shareReceiver: shareReceiver as Address,
+            destinations,
+          },
+          props.routerAddress,
+        )
       : null;
 
   // Every wallet takes the same consented sequence (issue 1890): the agent's consent, this
@@ -380,6 +384,12 @@ export function OnboardingWizard(props: Props) {
             setShareReceiver={setShareReceiver}
             testIdPrefix="wizard-"
           />
+          <DestinationPicker
+            testIdPrefix="wizard-"
+            selected={destinations}
+            setSelected={setDestinations}
+            routerAddress={props.routerAddress}
+          />
           <div className="wizard-nav">
             <button type="button" data-testid="step-2-back" onClick={() => setStep(1)}>
               Back
@@ -387,7 +397,7 @@ export function OnboardingWizard(props: Props) {
             <button
               type="button"
               data-testid="step-2-next"
-              disabled={!validAgent || !validReceiver}
+              disabled={!validAgent || !validReceiver || policy === null}
               onClick={() => setStep(3)}
             >
               Next: review &amp; sign

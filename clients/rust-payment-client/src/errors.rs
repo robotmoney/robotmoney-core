@@ -38,9 +38,8 @@ pub enum RmpcError {
     /// the gateway differs from the config. The proxy's own code hash can
     /// still match. Issue 1810.
     ///
-    /// Also raised for a vault or the router a write reaches through the
-    /// gateway (a deposit's vault, a withdraw's router and vault, every leg of
-    /// a router deposit) when it is a proxy whose implementation code hash is
+    /// Also raised for the requested vault a deposit reaches through the
+    /// gateway when it is a proxy whose implementation code hash is
     /// not in `proxy_implementation_hashes`; the detail names that proxy.
     #[error("ErrImplementationNotApproved: {0}")]
     ErrImplementationNotApproved(String),
@@ -59,10 +58,9 @@ pub enum RmpcError {
     #[error("ErrImplementationChanged: {0}")]
     ErrImplementationChanged(String),
 
-    /// Deposits are paused: the gateway or its vault reports
-    /// `depositsPaused() == true`. Deposit-only refusal: a deposit pause
-    /// never blocks a withdrawal, so no withdraw path raises it (core 1494).
-    #[error("ErrDepositsPaused: deposits are paused (depositsPaused() == true on the gateway or vault); withdrawals stay open")]
+    /// Deposits are paused: the gateway or the requested vault reports
+    /// `depositsPaused() == true`.
+    #[error("ErrDepositsPaused: deposits are paused (depositsPaused() == true on the gateway or the requested vault)")]
     ErrDepositsPaused,
 
     #[error("ErrAllowanceInsufficient: USDC allowance(self, gateway) < amount")]
@@ -90,16 +88,12 @@ pub enum RmpcError {
     ErrTxReverted { tx_hash: String },
 
     /// The deposit landed in a block but the gateway emitted no
-    /// `AgentDeposit` log (`AgentDepositRouted` on the router path) —
-    /// invariant violation. Operator must inspect.
-    #[error(
-        "ErrAgentDepositLogMissing: receipt has no AgentDeposit or AgentDepositRouted log (tx_hash={tx_hash})"
-    )]
+    /// `AgentDeposit` log — invariant violation. Operator must inspect.
+    #[error("ErrAgentDepositLogMissing: receipt has no AgentDeposit log (tx_hash={tx_hash})")]
     ErrAgentDepositLogMissing { tx_hash: String },
 
     /// `--gas-limit` is below the gateway's entry floor for this deposit
-    /// (2_000_000 for the vault path, 400_000 + 2_550_000 per effective
-    /// router leg for `--destination <router>`). The gateway checks
+    /// (2_000_000). The gateway checks
     /// `gasleft()` against that floor at entry and reverts
     /// `InsufficientGas`, which burns the gas and the nonce, so the client
     /// refuses before signing (QA plan U3).
@@ -109,23 +103,19 @@ pub enum RmpcError {
     )]
     ErrGasLimitBelowFloor { gas_limit: u64, floor: u64 },
 
-    /// Shares to withdraw exceed the agent's `maxWithdrawPerPayment` cap, or
-    /// the rolling withdraw window gross plus the shares exceeds
-    /// `maxWithdrawPerWindow`. Raised by the withdraw preflight and decoded
-    /// from a simulated `SharesExceedWithdrawPerPaymentCap` /
-    /// `WithdrawWindowCapExceeded` revert. The detail names the cap.
-    /// QA plan U6: before it this breach printed `ErrConfig`.
-    /// Maps to the `cap_exceeded` product reason code.
-    #[error("ErrWithdrawCapExceeded: {0}")]
-    ErrWithdrawCapExceeded(String),
-
     /// The deposit amount exceeds the agent's `maxPerPayment` cap, or the
     /// rolling deposit window gross plus the amount exceeds `maxPerWindow`.
-    /// The deposit mirror of [`RmpcError::ErrWithdrawCapExceeded`]; before
-    /// QA plan U6 this breach printed `ErrConfig`. The detail names the cap.
+    /// Before QA plan U6 this breach printed `ErrConfig`. The detail names the cap.
     /// Maps to the `cap_exceeded` product reason code.
     #[error("ErrDepositCapExceeded: {0}")]
     ErrDepositCapExceeded(String),
+
+    /// The requested deposit vault is not one the owner selected: it is not in
+    /// the config's `allowed_destinations` (or `vault_address` when that list
+    /// is absent). The gateway would revert `InvalidDestination`; rmpc refuses
+    /// before signing.
+    #[error("ErrDestinationNotSelected: {0}")]
+    ErrDestinationNotSelected(String),
 
     /// `agents(self).shareReceiver` or `agentOwner(self)` differs from the
     /// value the operator pinned in the config (`share_receiver`,
@@ -142,26 +132,6 @@ pub enum RmpcError {
         configured: String,
     },
 
-    /// `withdraw-router` was run without `--min-assets-per-leg`. Omitting
-    /// the flag used to sign an all-zero slippage floor silently. A floor of
-    /// zero now has to be asked for with `--min-assets-per-leg 0`
-    /// (QA plan U6, finding DR-6).
-    #[error(
-        "ErrMinAssetsPerLegRequired: pass --min-assets-per-leg with one USDC floor per leg, \
-         or --min-assets-per-leg 0 to send no floor"
-    )]
-    ErrMinAssetsPerLegRequired,
-
-    /// The agent holds fewer vault shares than the requested withdrawal amount.
-    #[error("ErrShareBalanceInsufficient: agent vault share balance < requested shares")]
-    ErrShareBalanceInsufficient,
-
-    /// The vault share allowance(agent, gateway) is less than the requested shares.
-    #[error(
-        "ErrShareAllowanceInsufficient: vault share allowance(agent, gateway) < requested shares"
-    )]
-    ErrShareAllowanceInsufficient,
-
     // ── Architecture §7.2 product reason codes ─────────────────────────────
     // `policy::revert` decodes these from the pre-sign simulation of the
     // exact calldata (QA plan U6). `ErrPolicyExpired` is also raised by the
@@ -175,30 +145,6 @@ pub enum RmpcError {
     /// Maps to the `expired_policy` product reason code.
     #[error("ErrPolicyExpired: agent policy has expired (validUntil < block.timestamp)")]
     ErrPolicyExpired,
-
-    /// A required router deposit leg is unavailable (vault deposits paused,
-    /// full, or de-listed). Never raised for a redeem: every status redeems.
-    /// Maps to the `unavailable_leg` product reason code.
-    #[error(
-        "ErrLegUnavailable: router leg vault is unavailable (deposits paused, full, or de-listed)"
-    )]
-    ErrLegUnavailable,
-
-    /// A router leg would not meet the caller's per-leg slippage floor
-    /// (`minSharesPerLeg` on a deposit, `minAssetsPerLeg` on a redeem).
-    /// Maps to the `slippage_bound_exceeded` product reason code.
-    #[error(
-        "ErrSlippageBoundExceeded: a router leg falls below the caller's per-leg minimum bound"
-    )]
-    ErrSlippageBoundExceeded,
-
-    /// The withdraw landed in a block but the gateway emitted no
-    /// `AgentWithdrawal` log (`AgentWithdrawalRouted` on the router route,
-    /// QA plan D9) — invariant violation. Operator must inspect.
-    #[error(
-        "ErrAgentWithdrawLogMissing: receipt has no AgentWithdrawal or AgentWithdrawalRouted log (tx_hash={tx_hash})"
-    )]
-    ErrAgentWithdrawLogMissing { tx_hash: String },
 
     #[error("ErrConfig: configuration error: {0}")]
     ErrConfig(String),
@@ -257,17 +203,11 @@ impl RmpcError {
             RmpcError::ErrTxReverted { .. } => "ErrTxReverted",
             RmpcError::ErrAgentDepositLogMissing { .. } => "ErrAgentDepositLogMissing",
             RmpcError::ErrGasLimitBelowFloor { .. } => "ErrGasLimitBelowFloor",
-            RmpcError::ErrWithdrawCapExceeded(_) => "ErrWithdrawCapExceeded",
             RmpcError::ErrDepositCapExceeded(_) => "ErrDepositCapExceeded",
+            RmpcError::ErrDestinationNotSelected(_) => "ErrDestinationNotSelected",
             RmpcError::ErrAgentBindingMismatch { .. } => "ErrAgentBindingMismatch",
-            RmpcError::ErrMinAssetsPerLegRequired => "ErrMinAssetsPerLegRequired",
-            RmpcError::ErrShareBalanceInsufficient => "ErrShareBalanceInsufficient",
-            RmpcError::ErrShareAllowanceInsufficient => "ErrShareAllowanceInsufficient",
             RmpcError::ErrVaultDisabled => "ErrVaultDisabled",
             RmpcError::ErrPolicyExpired => "ErrPolicyExpired",
-            RmpcError::ErrLegUnavailable => "ErrLegUnavailable",
-            RmpcError::ErrSlippageBoundExceeded => "ErrSlippageBoundExceeded",
-            RmpcError::ErrAgentWithdrawLogMissing { .. } => "ErrAgentWithdrawLogMissing",
             RmpcError::ErrConfig(_) => "ErrConfig",
             RmpcError::ErrIo(_) => "ErrIo",
             RmpcError::ErrTomlParse(_) => "ErrTomlParse",
@@ -315,26 +255,18 @@ mod tests {
                 tx_hash: "0x00".into(),
             },
             RmpcError::ErrGasLimitBelowFloor {
-                gas_limit: 3_000_000,
-                floor: 10_600_000,
+                gas_limit: 1_000_000,
+                floor: 2_000_000,
             },
-            RmpcError::ErrWithdrawCapExceeded("maxWithdrawPerPayment".into()),
             RmpcError::ErrDepositCapExceeded("maxPerPayment".into()),
+            RmpcError::ErrDestinationNotSelected("0x01".into()),
             RmpcError::ErrAgentBindingMismatch {
                 field: "shareReceiver",
                 on_chain: "0x01".into(),
                 configured: "0x02".into(),
             },
-            RmpcError::ErrMinAssetsPerLegRequired,
-            RmpcError::ErrShareBalanceInsufficient,
-            RmpcError::ErrShareAllowanceInsufficient,
             RmpcError::ErrVaultDisabled,
             RmpcError::ErrPolicyExpired,
-            RmpcError::ErrLegUnavailable,
-            RmpcError::ErrSlippageBoundExceeded,
-            RmpcError::ErrAgentWithdrawLogMissing {
-                tx_hash: "0x00".into(),
-            },
             RmpcError::ErrConfig("bad field".into()),
             RmpcError::ErrIo(std::io::Error::other("io")),
             RmpcError::ErrTomlParse(toml::from_str::<toml::Value>("=").unwrap_err()),

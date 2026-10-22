@@ -23,22 +23,14 @@ pub mod get_vaults;
 pub mod receipt;
 pub mod self_check;
 pub mod status;
-pub mod withdraw;
-pub mod withdraw_router;
 
 #[cfg(test)]
 mod boundary_tests {
     //! Lint: a command module must not import from a sibling command
     //! module (issue #1285).
     //!
-    //! Before this rule, `withdraw_router` imported the policy rule
-    //! `withdraw_vault_preflight` from `withdraw`, `withdraw` and
-    //! `withdraw_router` imported `MAX_DEADLINE_SKEW_SECS` from `deposit`,
-    //! and three write commands imported the refusal payload type
-    //! `ChecksOutput` from the `self_check` diagnostic command. Each of
-    //! those is a shared concern that belongs to a layer — `policy`,
-    //! `write_path`, `output` — not to whichever command happened to need
-    //! it first.
+    //! Shared concerns belong to a layer (`policy`, `write_path`, `output`),
+    //! not to whichever command happened to need them first.
     //!
     //! The rule is enforced by reading the source tree rather than by a
     //! visibility rule, because `pub(crate)` items are legitimately
@@ -88,7 +80,7 @@ mod boundary_tests {
         }
 
         assert!(
-            checked >= 20,
+            checked >= 17,
             "expected to scan the whole commands/ directory, only saw {checked} modules — \
              the scan has drifted from the source layout",
         );

@@ -171,17 +171,9 @@ fn rmpc_get_vault_fork_robotmoney_devnet() {
 
     // ---- get-vault: happy path against the real Base vault. -------
     let v = run_rmpc(&cfg, &["get-vault"], fx.chain_id);
-    // gateway.vault() can't succeed (DEAD_GATEWAY has no code), so the
-    // envelope is partial. Vault sub-reads still resolve from the
-    // pinned deployed bytecode.
-    assert_eq!(v["partial"], true, "get-vault expected partial=true: {v}");
-    let errors = v["errors"]
-        .as_array()
-        .expect("errors must be an array when partial=true");
-    assert!(
-        errors.iter().any(|e| e["field"] == "gateway_vault"),
-        "expected per-field error for gateway_vault: {errors:?}"
-    );
+    // The gateway pins no vault, so get-vault reads only the vault itself and
+    // the envelope is complete even though DEAD_GATEWAY has no code.
+    assert_eq!(v["partial"], false, "get-vault expected partial=false: {v}");
 
     let d = &v["data"];
     assert_eq!(

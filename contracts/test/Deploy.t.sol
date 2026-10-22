@@ -109,14 +109,6 @@ contract DeployTest is Test {
         assertEq(stages.stages(4), "gateway");
     }
 
-    /// @notice The gateway is built with the deployed router: not zero, and equal to it.
-    function test_gateway_routerEqualsDeployedRouter_notZero() public {
-        CoreStages.Stack memory s = _run();
-        assertTrue(address(s.router) != address(0), "router deployed");
-        assertTrue(s.gateway.router() != address(0), "gateway.router is zero");
-        assertEq(s.gateway.router(), address(s.router), "gateway.router != deployed router");
-    }
-
     /// @notice The router stage links the registry exactly once and the link equals the router.
     function test_routerStage_callsRegistrySetRouterOnce() public {
         vm.recordLogs();
@@ -212,7 +204,6 @@ contract DeployTest is Test {
         DeployVault.Deployed memory d = s.vaultStage;
 
         assertEq(s.gateway.usdc(), s.usdc, "usdc mismatch");
-        assertEq(s.gateway.vault(), address(s.vault), "vault mismatch");
         assertEq(s.vault.asset(), s.usdc, "vault.asset mismatch");
         assertEq(s.usdc, address(usdc), "usdc passthrough");
 
@@ -322,7 +313,7 @@ contract DeployTest is Test {
             maxPerPayment: 1e6,
             maxPerWindow: 1e6,
             shareReceiver: shareReceiver,
-            allowedDestinations: noDestinations,
+            allowedDestinations: CoreProxies.oneDestination(address(0xD357)),
             assetRecipient: address(0),
             maxWithdrawPerPayment: 0,
             maxWithdrawPerWindow: 0,
@@ -400,7 +391,6 @@ contract DeployTest is Test {
         DeployGateway.Deployed memory g = stages.gatewayScript().runInProcess();
         assertEq(g.admin, admin);
         assertEq(g.pauser, pauser);
-        assertEq(g.gateway.router(), address(rt.router));
     }
 
     // --- L3-D1: TickMath link integrity ------------------------------------
@@ -512,13 +502,10 @@ contract DeployTest is Test {
 
     // --- Router deposit through the split-stage gateway (core 1485) --------------------------
 
-    /// @notice The gateway the split stages built completes a router deposit and a router withdraw.
-    ///         Unit, not fork: the three external lending venues are etched at their real addresses
-    ///         (`VenueEtcher`). Gateway, router, registry and vault are production code.
-    function test_routerDepositAndWithdraw_throughSplitStageGateway_roundTrip() public {
+    /// @notice The gateway the split stages built completes a vault deposit into the policy's vault.
+    function test_vaultDeposit_throughSplitStageGateway() public {
         VenueEtcher.etchAll(address(usdc));
         CoreStages.Stack memory s = _run();
-        assertEq(s.gateway.router(), address(s.router), "gateway.router != router");
 
         uint256 amount = 5 * 1e6;
         usdc.mint(agent, amount);
@@ -532,33 +519,12 @@ contract DeployTest is Test {
                 amount,
                 deadline,
                 bytes32("dep-idem"),
-                address(s.router),
+                address(s.vault),
                 new uint256[](0)
             );
         vm.stopPrank();
 
-        uint256 minted = s.vault.balanceOf(shareReceiver);
-        assertGt(minted, 0, "router deposit minted rmUSDC shares");
+        assertGt(s.vault.balanceOf(shareReceiver), 0, "vault deposit minted rmUSDC shares");
         assertEq(usdc.balanceOf(address(s.gateway)), 0, "gateway holds USDC");
-
-        vm.prank(shareReceiver);
-        s.vault.approve(address(s.gateway), minted);
-        address[] memory vaults = new address[](1);
-        vaults[0] = address(s.vault);
-        uint256[] memory shares = new uint256[](1);
-        shares[0] = minted;
-
-        uint256 before = usdc.balanceOf(shareReceiver);
-        vm.prank(agent);
-        s.gateway
-            .withdrawFromRouter(
-                bytes32("wd-order"), vaults, shares, new uint256[](1), deadline, bytes32("wd-idem")
-            );
-        assertGe(
-            usdc.balanceOf(shareReceiver) - before,
-            (amount * 9_999) / 10_000,
-            "USDC returned within one bps"
-        );
-        assertEq(s.vault.balanceOf(shareReceiver), 0, "shares left after full withdraw");
     }
 }

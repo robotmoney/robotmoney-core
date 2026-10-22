@@ -9,10 +9,9 @@
 //! owns preflight, [`crate::fees`] owns the fee bid, [`crate::nonce`]
 //! owns the single-flight lock, [`crate::tx`] owns envelope build /
 //! broadcast / receipt polling. What had **no owner** was the code that
-//! *sequences* them, so `deposit`, `withdraw` and `withdraw-router` each
-//! carried their own verbatim copy of it — 465 of `withdraw`'s 577 lines
-//! appeared in order in `withdraw_router`, and drift had already started
-//! (issue #1285).
+//! *sequences* them, so the write commands each carried their own
+//! verbatim copy of it, and drift had already started (issue #1285). `deposit`
+//! is the only write command left (issue 1889).
 //!
 //! This module owns that sequence, in two halves:
 //!
@@ -31,8 +30,8 @@
 //!
 //! Every refusal these commands emit is a [`WriteFailure`], built here.
 //! That is what makes the refusal JSON field set identical across
-//! `deposit`, `withdraw` and `withdraw-router` by construction rather
-//! than by three hand-maintained structs happening to agree.
+//! write commands by construction rather than by hand-maintained structs
+//! happening to agree.
 //!
 //! # Injected RPC
 //!
@@ -62,8 +61,6 @@
 //! | command | on-chain `deadline` | replay entry deadline | re-verify before broadcast | check after receipt |
 //! |---|---|---|---|---|
 //! | `deposit` | yes | the deadline | yes | yes |
-//! | `withdraw-router` | yes | the deadline | yes | yes |
-//! | `withdraw` | yes | `0` | yes | yes |
 //! | `committee vote-submit` | none | no replay cache | yes | yes |
 //! | `receipt submit` | none | no replay cache | yes | yes |
 //!
@@ -71,9 +68,7 @@
 //! on-chain `deadline` in the calldata (at most `MAX_DEADLINE_SKEW_SECS` past
 //! the chain's block time) bounds how long the signed transaction can wait to
 //! execute, so an upgrade queued in the timelock (minimum delay far above that
-//! bound) cannot apply to an old signature. `withdraw` passes that deadline in
-//! its calldata but stores `replay_deadline: 0`, because its `paymentId`
-//! excludes the deadline. `committee vote-submit` and `receipt submit` build
+//! bound) cannot apply to an old signature. `committee vote-submit` and `receipt submit` build
 //! and broadcast their own envelope: they verify the gateway before signing
 //! (`verify_gateway_code_now`), re-verify it between signing and broadcast
 //! through the same `reverify_gateway_after_signing` that `submit` calls
@@ -108,7 +103,9 @@ use crate::logging::{record_audit, AuditDecision, AuditRecordBuilder};
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::output::emit;
-use crate::policy::implementation::{check_executed_under, reverify_gateway_after_signing};
+use crate::policy::implementation::{
+    check_executed_under, reverify_gateway_after_signing, reverify_vault_after_signing,
+};
 use crate::policy::revert::{simulate, Simulation};
 use crate::policy::ChecksOutput;
 use crate::replay_cache::ReplayCache;
@@ -141,7 +138,7 @@ pub const MAX_DEADLINE_SKEW_SECS: u64 = 600;
 ///
 /// `error` is the [`RmpcError::name`] of the underlying failure (or a
 /// command-specific name for the handful of refusals that have no
-/// `RmpcError` variant, such as `ErrConfirmNotProvided`). `checks` is
+/// `RmpcError` variant). `checks` is
 /// populated when the refusal came from preflight, so operators get the
 /// same snapshot `rmpc self-check` would give them.
 #[derive(Debug, Serialize)]
@@ -159,7 +156,7 @@ pub struct WriteFailure {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checks: Option<ChecksOutput>,
     /// What `--confirm` would sign, on a preview refusal
-    /// (`ErrConfirmNotProvided`). Command-specific shape; only
+    /// . Command-specific shape; only
     /// `withdraw-router` sets it today (QA plan U6).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<serde_json::Value>,
@@ -604,6 +601,10 @@ pub struct Submission<'a> {
     /// ([`crate::policy::PreflightReport::gateway_implementation`]); `None`
     /// for a direct gateway. The signed transaction is bound to it.
     pub gateway_implementation: Option<Address>,
+    /// The vault the call deposits into and the implementation preflight
+    /// verified behind it (`None` inside for a direct vault). Re-verified
+    /// between signing and broadcast, like the gateway.
+    pub reached_vault: Option<(Address, Option<Address>)>,
 }
 
 /// A signed, mined, non-reverted transaction and its receipt.
@@ -651,6 +652,7 @@ impl WriteSession {
             replay_deadline,
             checks,
             gateway_implementation,
+            reached_vault,
         } = submission;
 
         // -- Pre-sign simulation (QA plan U6) ----------------------------
@@ -720,6 +722,22 @@ impl WriteSession {
                     .message(format!("{e}"))
                     .checks(checks()),
             ));
+        }
+
+        // -- The vault reached through the gateway, before broadcast ------
+        if let Some((vault, bound)) = reached_vault {
+            if let Err(e) = self
+                .rt
+                .block_on(reverify_vault_after_signing(&self.rpc, cfg, vault, bound))
+            {
+                log::error!("rmpc {cmd}: {e}");
+                self.record(AuditDecision::Refused, Some(e.name().to_string()));
+                return Err(WriteAbort::refused(
+                    self.refusal(e.name())
+                        .message(format!("{e}"))
+                        .checks(checks()),
+                ));
+            }
         }
 
         // -- Broadcast ----------------------------------------------------

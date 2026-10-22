@@ -118,16 +118,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # QA plan U3: the sixth test drives the shipping rmpc through a five-leg router deposit and
-          # prints the marker only after the gas-floor assertions passed.
+          # Issue 1889: the gateway has no router path and no agent withdrawal. The router file keeps
+          # its four human-wallet tests and adds two that prove the router is never a gateway
+          # destination (six, as before). The gateway_deposit file replaces the five retired
+          # agent-withdrawal tests with five depositTo tests (eight with the three registry tests, as before).
           - group: twin-router
             cargo_tests: --test router
             mode: shared
             min_executed: 6
-            required_markers: |
-              [deposit_router_default_gas_clears_gateway_floor] passed
-          - group: twin-withdrawal-registry
-            cargo_tests: --test withdrawal --test registry
+          - group: twin-gateway-registry
+            cargo_tests: --test gateway_deposit --test registry
             mode: shared
             min_executed: 8
           - group: twin-light

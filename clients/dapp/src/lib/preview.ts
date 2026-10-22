@@ -7,18 +7,11 @@
  * class, and raw calldata. Decoder failure is a HARD refusal; callers
  * must never fall back to raw-calldata signing.
  *
- * Withdrawal-enabled policy surfacing (issue #429 / security review
- * `docs/code-review/20260518-code-review-internal-codex.md` §5): a non-zero
- * `maxWithdrawPerPayment` on a `revealAuthorization`/`setPolicy` tx means
- * an agent-key compromise can redeem shares to `assetRecipient` up to
- * the per-window cap. The preview surfaces this explicitly:
- *   - args include the withdrawal caps and `assetRecipient`
- *   - `effect` carries a one-line risk callout when withdrawals are
- *     enabled
- *   - the risk classifier upgrades withdrawal-enabled policies to
- *     "high"
- * so the user cannot sign a withdrawal-enabled policy without seeing
- * what it permits.
+ * Deposit-only policy (issue 1889, architecture 5.2): the gateway's only agent action is a
+ * deposit into a contract named in `allowedDestinations`. The four withdraw members of the
+ * tuple are retired and must be zero or empty, and the list must be non-empty, or the
+ * gateway reverts the write. The preview prints the destinations and says so when a policy
+ * would revert.
  *
  * Commit/reveal (QA plan U4, finding DR-4): a depositor signs
  * `commitAuthorization` and then `revealAuthorization`, never
@@ -32,7 +25,7 @@ import { gatewayAbi, ROLE_HASH } from "./abi";
 import type { AdminActionName, RoleName, RouterActionName, VaultActionName } from "./abi";
 import type { ProductReasonCode } from "./productReasonCode";
 export type { ProductReasonCode } from "./productReasonCode";
-import { formatUsdc, formatShares } from "./format";
+import { formatUsdc } from "./format";
 import {
   commitAuthorizationCall,
   revealAuthorizationCall,
@@ -59,15 +52,15 @@ export interface AgentPolicy {
   maxPerPayment: bigint;
   maxPerWindow: bigint;
   shareReceiver: Address;
-  /** Whitelist of deposit destinations (vault or router). Empty array = open policy. */
+  /** ERC-4626 vaults the agent may deposit into. Must be non-empty; the router is never one. */
   allowedDestinations: Address[];
-  /** USDC recipient for agent-initiated withdrawals. Zero address = withdrawal disabled. */
+  /** RETIRED withdraw member. Must be the zero address. */
   assetRecipient: Address;
-  /** Max shares per withdrawal payment (0 = withdrawal disabled). */
+  /** RETIRED withdraw member. Must be 0. */
   maxWithdrawPerPayment: bigint;
-  /** Max shares per withdrawal window (0 = withdrawal disabled). */
+  /** RETIRED withdraw member. Must be 0. */
   maxWithdrawPerWindow: bigint;
-  /** Whitelist of source vaults for withdrawal. Empty = any registered vault. */
+  /** RETIRED withdraw member. Must be empty. */
   allowedSourceVaults: Address[];
 }
 
@@ -174,15 +167,24 @@ export function targetCodeHashPinned(ctx: PreviewContext, target: Address): bool
  */
 const HIGH_CAP_THRESHOLD = 1_000_000_000n; // 1,000 USDC in 6dp
 
-/**
- * True when the agent policy permits agent-initiated withdrawals. The
- * gateway treats `maxWithdrawPerPayment > 0` as the canonical
- * "withdrawals enabled" flag (`contracts/gateway/RobotMoneyGateway.sol`
- * `WithdrawalNotEnabled` guard). Issue #429: surfacing this is the
- * hinge for the high-risk classification and the user-facing warning.
- */
-export function isWithdrawalEnabled(policy: AgentPolicy): boolean {
-  return policy.maxWithdrawPerPayment > 0n;
+const ZERO = "0x0000000000000000000000000000000000000000";
+
+/** Why the gateway would revert `policy` on a write: empty destinations or a non-zero retired member. */
+export function policyViolations(policy: AgentPolicy): string[] {
+  const out: string[] = [];
+  if (policy.allowedDestinations.length === 0) out.push("allowedDestinations is empty");
+  if (policy.allowedDestinations.some((d) => d.toLowerCase() === ZERO)) {
+    out.push("allowedDestinations has a zero address");
+  }
+  if (
+    policy.assetRecipient.toLowerCase() !== ZERO ||
+    policy.maxWithdrawPerPayment !== 0n ||
+    policy.maxWithdrawPerWindow !== 0n ||
+    policy.allowedSourceVaults.length !== 0
+  ) {
+    out.push("a retired withdraw member is non-zero");
+  }
+  return out;
 }
 
 export function classifyRisk(action: AdminAction, ctx: PreviewContext): RiskClass {
@@ -198,11 +200,8 @@ export function classifyRisk(action: AdminAction, ctx: PreviewContext): RiskClas
       // which is previewed and classified on its own.
       return "low";
     case "revealAuthorization":
-      // Issue #429: any withdrawal-enabled policy is "high" risk —
-      // a stolen agent key can redeem shares to `assetRecipient`
-      // within the policy caps. This overrides the deposit-cap
-      // threshold so even a modest withdrawal cap still surfaces.
-      if (isWithdrawalEnabled(action.policy)) return "high";
+      // A policy the gateway would revert is surfaced as "high" so it is never signed unread.
+      if (policyViolations(action.policy).length > 0) return "high";
       return action.policy.maxPerWindow > HIGH_CAP_THRESHOLD ? "high" : "medium";
     case "grantRole":
       // Granting any admin-tier role is "high" per ADR §3.3 risk table
@@ -277,7 +276,7 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
           args: [getAddress(action.agent)],
         });
         args = [{ name: "agent", raw: action.agent, gloss: `Agent EOA ${shorten(action.agent)}` }];
-        effect = `Address ${shorten(action.agent)} loses AGENT_ROLE, its policy and owner record are deleted and its rolling deposit budget is reset; subsequent deposit() calls revert. Only the agent's owner or the agent itself can sign this.`;
+        effect = `Address ${shorten(action.agent)} loses AGENT_ROLE, its policy and owner record are deleted and its rolling deposit budget is reset; subsequent depositTo() calls revert. Only the agent's owner or the agent itself can sign this.`;
         break;
       case "pauseDeposits":
         functionName = "pauseDeposits";
@@ -288,7 +287,7 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
         });
         args = [];
         effect =
-          "Gateway deposits are paused; deposit() and depositTo() revert with DepositsArePaused until unpauseDeposits() is called. Withdrawals stay open.";
+          "Gateway deposits are paused; depositTo() reverts with DepositsArePaused until unpauseDeposits() is called. Withdrawals stay open.";
         break;
       case "unpauseDeposits":
         functionName = "unpauseDeposits";
@@ -384,11 +383,6 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
  * carry the same tuple, so both previews print it through this one function.
  */
 function policyArgs(policy: AgentPolicy): PreviewArg[] {
-  // Issue #429: surface withdrawal-policy fields and the assetRecipient
-  // destination explicitly. These are decoded from the same calldata as the
-  // deposit caps and form the agent-key compromise blast radius on the
-  // withdraw path.
-  const withdrawalsEnabled = isWithdrawalEnabled(policy);
   return [
     {
       name: "policy.active",
@@ -416,25 +410,12 @@ function policyArgs(policy: AgentPolicy): PreviewArg[] {
       gloss: `shares -> ${shorten(policy.shareReceiver)}`,
     },
     {
-      name: "policy.assetRecipient",
-      raw: policy.assetRecipient,
-      gloss: withdrawalsEnabled
-        ? `withdrawn USDC -> ${shorten(policy.assetRecipient)} (WARNING: agent can move funds here on key compromise)`
-        : "withdrawals DISABLED (assetRecipient unused)",
-    },
-    {
-      name: "policy.maxWithdrawPerPayment",
-      raw: policy.maxWithdrawPerPayment.toString(),
-      gloss: withdrawalsEnabled
-        ? `${formatShares(policy.maxWithdrawPerPayment)} per withdrawal`
-        : "withdrawals DISABLED (no per-call cap)",
-    },
-    {
-      name: "policy.maxWithdrawPerWindow",
-      raw: policy.maxWithdrawPerWindow.toString(),
-      gloss: withdrawalsEnabled
-        ? `${formatShares(policy.maxWithdrawPerWindow)} per window (max stolen on agent-key compromise)`
-        : "withdrawals DISABLED (no per-window cap)",
+      name: "policy.allowedDestinations",
+      raw: policy.allowedDestinations.join(","),
+      gloss:
+        policy.allowedDestinations.length > 0
+          ? `the agent may deposit only into: ${policy.allowedDestinations.map(shorten).join(", ")}`
+          : "NO destinations selected (the gateway reverts an empty list)",
     },
   ];
 }
@@ -442,17 +423,14 @@ function policyArgs(policy: AgentPolicy): PreviewArg[] {
 /** The post-state sentence for `agent` holding AGENT_ROLE under `policy`. */
 function policyEffect(agent: Address, policy: AgentPolicy): string {
   const expiryIso = new Date(Number(policy.validUntil) * 1000).toISOString();
-  if (isWithdrawalEnabled(policy)) {
-    // WARNING is load-bearing — the test asserts it appears
-    // verbatim in the effect copy so a regression in this
-    // string is caught at CI time. See security review §5.
-    return (
-      `Address ${shorten(agent)} will hold AGENT_ROLE and can call deposit() AND withdraw() within policy caps until ${expiryIso}. ` +
-      `WARNING: withdrawals enabled — up to ${formatShares(policy.maxWithdrawPerWindow)} per window can be redeemed by this agent to ${shorten(policy.assetRecipient)} (assetRecipient). ` +
-      "If the agent key is compromised, an attacker can drain shares up to the per-window cap. Keep assetRecipient under your sole control and revoke gateway share allowance when unused."
-    );
-  }
-  return `Address ${shorten(agent)} will hold AGENT_ROLE; this lets it call deposit() within policy caps until ${expiryIso}. Withdrawals DISABLED (maxWithdrawPerPayment = 0).`;
+  const issues = policyViolations(policy);
+  const refusal =
+    issues.length > 0 ? ` WARNING: the gateway reverts this policy (${issues.join("; ")}).` : "";
+  return (
+    `Address ${shorten(agent)} will hold AGENT_ROLE; this lets it call depositTo() within policy caps until ${expiryIso}, ` +
+    `only into: ${policy.allowedDestinations.map(shorten).join(", ") || "(none)"}. The agent has no withdrawal path.` +
+    refusal
+  );
 }
 
 /**

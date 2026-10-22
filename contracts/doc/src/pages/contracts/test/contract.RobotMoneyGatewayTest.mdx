@@ -4,7 +4,7 @@ title: "RobotMoneyGatewayTest"
 
 # RobotMoneyGatewayTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/18b3311e2cebb7a6f13d47076813825aead407c8/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:** Test
 
@@ -125,6 +125,20 @@ address internal depositor = makeAddr("depositor");
 function setUp() public;
 ```
 
+<a id="_vaultdest"></a>
+
+### _vaultDest
+
+```solidity
+function _vaultDest() internal view returns (address[] memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `address[]` |  |
+
 <a id="_defaultpolicy"></a>
 
 ### _defaultPolicy
@@ -242,14 +256,6 @@ function test_lastAdminFloor_revokeDefaultAdminSucceedsWithTwoHolders() public;
 
 ```solidity
 function test_constructor_revertsOnZeroAddresses() public;
-```
-
-<a id="test_constructor_revertsonassetmismatch"></a>
-
-### test_constructor_revertsOnAssetMismatch
-
-```solidity
-function test_constructor_revertsOnAssetMismatch() public;
 ```
 
 <a id="test_register_grantsroleandstorespolicy"></a>
@@ -703,34 +709,4 @@ function test_deposit_revertsOnPostCallUsdcCustodyInvariant() public;
 ```solidity
 function test_deposit_revertsOnReentrancyAttempt() public;
 ```
-
-<a id="testfuzz_paymentid_opkinddiscriminates-bytes32-uint256-bytes32"></a>
-
-### testFuzz_paymentId_opKindDiscriminates
-
-<i>
-
-For any (orderId, amount, shares, idempotencyKey) with amount == shares,
-the three paymentId namespaces are pairwise distinct:
-depositPaymentId != depositToPaymentId
-depositPaymentId != withdrawPaymentId
-depositToPaymentId != withdrawPaymentId
-
-</i>
-
-```solidity
-function testFuzz_paymentId_opKindDiscriminates(
-        bytes32 orderId,
-        uint256 amount,
-        bytes32 idempotencyKey
-    ) public view;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| orderId | `bytes32` |  |
-| amount | `uint256` |  |
-| idempotencyKey | `bytes32` |  |
 

@@ -34,6 +34,12 @@ import {ISwapRouter} from "../../interfaces/ISwapRouter.sol";
 ///         earlier deploy of the same type binds to the proxy creation (the initializer), the
 ///         way it bound to the constructor before.
 library CoreProxies {
+    /// @dev One-element destination list for a gateway policy (a policy must name at least one).
+    function oneDestination(address d) internal pure returns (address[] memory out) {
+        out = new address[](1);
+        out[0] = d;
+    }
+
     /// @notice The default upgrade timelock of a test proxy (any test may prank it).
     address internal constant TEST_UPGRADE_TIMELOCK =
         address(uint160(uint256(keccak256("robotmoney.test.upgrade-timelock"))));
@@ -225,22 +231,16 @@ library CoreProxies {
         );
     }
 
-    function robotMoneyGateway(
-        IERC20 usdc,
-        IERC4626 vault,
-        address admin,
-        address pauser,
-        address router
-    ) internal returns (RobotMoneyGateway) {
+    /// @dev The gateway pins no vault and no router (architecture 5.2). The unnamed
+    ///      parameters keep the call shape of the many fixtures that predate that.
+    function robotMoneyGateway(IERC20 usdc, IERC4626, address admin, address pauser, address)
+        internal
+        returns (RobotMoneyGateway)
+    {
         address impl = _impl("RobotMoneyGateway", type(RobotMoneyGateway).creationCode);
         (address t, GovernedUUPS.UpgradeMode m) = config();
         return RobotMoneyGateway(
-            proxy(
-                impl,
-                abi.encodeCall(
-                    RobotMoneyGateway.initialize, (usdc, vault, admin, pauser, router, t, m)
-                )
-            )
+            proxy(impl, abi.encodeCall(RobotMoneyGateway.initialize, (usdc, admin, pauser, t, m)))
         );
     }
 

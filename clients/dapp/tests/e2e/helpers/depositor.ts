@@ -227,6 +227,8 @@ export async function authorizeOwnAgentViaUi(
   await openTab(page, "authorize");
   await page.getByTestId("agent-input").fill(agent);
   await page.getByTestId("shareReceiver-input").fill(depositor.address);
+  // The owner selects the vault the agent may deposit into (issue 1889); nothing is implied.
+  await page.getByTestId("destination-extra").fill(endpoints.vault_addr);
   // Freeze the exact inputs, then the agent consents from its own address, then this owner commits,
   // then reveals one block later (issue 1890: consent first, then the owner commit).
   await page.getByTestId("authorize-freeze").click();

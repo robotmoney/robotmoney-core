@@ -58,6 +58,7 @@ const GATEWAY = "0x1111111111111111111111111111111111111111" as const;
 const AGENT = "0x2222222222222222222222222222222222222222" as const;
 const OLD_AGENT = "0x5555555555555555555555555555555555555555" as const;
 const OTHER_AGENT = "0x6666666666666666666666666666666666666666" as const;
+const VAULT = "0x4444444444444444444444444444444444444444" as const;
 const WALLET = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as const;
 const OTHER_WALLET = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" as const;
 const ctx: PreviewContext = { gateway: GATEWAY, gatewayCodeHashVerified: true, envClass: "fork" };
@@ -116,6 +117,8 @@ function AuthorizeHarness(props: { initialAgent?: string; receiver?: string }) {
       setAgent={setAgent}
       shareReceiver={receiver}
       setShareReceiver={setReceiver}
+      destinations={[VAULT]}
+      setDestinations={vi.fn()}
       now={NOW}
     />
   );
@@ -209,7 +212,7 @@ describe.each(WALLETS)("Authorize tab with $label", ({ admin }) => {
         maxPerPayment: 100000000n,
         maxPerWindow: 1000000000n,
         shareReceiver: WALLET,
-        allowedDestinations: [],
+        allowedDestinations: [VAULT],
         assetRecipient: ZERO,
         maxWithdrawPerPayment: 0n,
         maxWithdrawPerWindow: 0n,
@@ -412,6 +415,7 @@ async function wizardToStep3(agent: string) {
   fireEvent.change(screen.getByTestId("wizard-shareReceiver-input"), {
     target: { value: WALLET },
   });
+  fireEvent.change(screen.getByTestId("wizard-destination-extra"), { target: { value: VAULT } });
   fireEvent.click(screen.getByTestId("step-2-next"));
   const freeze = await screen.findByTestId("wizard-freeze");
   await waitFor(() => expect(freeze).toBeEnabled());
@@ -454,6 +458,7 @@ function fillRotation(receiver: string = WALLET) {
   fireEvent.change(screen.getByTestId("rotation-shareReceiver-input"), {
     target: { value: receiver },
   });
+  fireEvent.change(screen.getByTestId("rotation-destination-extra"), { target: { value: VAULT } });
 }
 
 describe.each(WALLETS)("Rotation tab with $label", ({ admin }) => {

@@ -25,12 +25,13 @@
 //!    [`implementation`])
 //! 3. `gateway.depositsPaused() == false`
 //! 4. `gateway.usdc()` matches `config.usdc_address`
-//! 5. `gateway.vault()` matches `config.vault_address`, and
-//!    `vault.depositsPaused() == false`. 5c: when that vault is an ERC-1967
-//!    proxy, its implementation's code hash is in
-//!    `config.proxy_implementation_hashes` (the same rule runs on every vault
-//!    a withdraw redeems from, and on the router and its legs for a router
-//!    deposit or withdraw).
+//! 5. The REQUESTED vault (`PreflightInputs::vault`) is one the owner selected:
+//!    in `config.allowed_destinations`, or equal to `config.vault_address` when
+//!    that list is absent (`ErrDestinationNotSelected`). The gateway pins no
+//!    vault, so `gateway.vault()` is never read. Then
+//!    `vault.depositsPaused() == false`, and 5c: when that vault is an
+//!    ERC-1967 proxy, its implementation's code hash is in
+//!    `config.proxy_implementation_hashes`.
 //! 6. `gateway.agents(self).active && validUntil >= now`
 //!    (`ErrAgentNotAuthorized`, then `ErrPolicyExpired`); and (6b) when the
 //!    config pins them, `agents(self).shareReceiver == config.share_receiver`
@@ -45,23 +46,13 @@
 //! 9. `usdc.allowance(self, gateway) >= amount`
 //! 10. `usdc.balanceOf(self) >= amount`
 //!
-//! For withdrawals, checks 7–8 use the withdrawal-specific cap fields
-//! `maxWithdrawPerPayment` and `maxWithdrawPerWindow` together with
-//! `agentWithdrawWindowGross` instead of the deposit fields, and refuse with
-//! `ErrWithdrawCapExceeded`. See `run_withdraw_gateway` and issue #371.
-//!
 //! After the preflight, [`revert::simulate`] runs the exact calldata as an
 //! `eth_call` and names the contract reverts the preflight cannot see
 //! (router legs, slippage floors), QA plan U6.
 //!
-//! A deposit pause never refuses a withdrawal (core 1494). Checks 3 and 5
-//! refuse deposits only: the withdraw preflight reads the gateway's
-//! `depositsPaused()` as information and never reads it on the vault.
-//!
 //! Every read runs at ONE block, pinned with `eth_blockNumber` before the
 //! first check (issue 1810), so the checks describe one consistent chain
-//! state. [`PreflightReport::block_number`] carries that block; the vault
-//! share check ([`Preflight::run_withdraw_vault`]) reads at it too.
+//! state. [`PreflightReport::block_number`] carries that block.
 //!
 //! Each rule maps onto a specific [`RmpcError`] variant. Operator tooling
 //! matches on those names; renaming them is a breaking change.
@@ -96,6 +87,9 @@ pub const WINDOW_SECONDS: u64 = 86_400;
 pub struct PreflightInputs {
     pub signer_address: Address,
     pub amount: U256,
+    /// The vault the deposit goes into. Its pause state and implementation
+    /// are checked, and it must be one the owner selected.
+    pub vault: Address,
 }
 
 /// Structured report returned on success. Callers (self-check, deposit,
@@ -110,16 +104,15 @@ pub struct PreflightReport {
     /// The verified implementation behind the gateway proxy; `None` for a
     /// direct gateway. The write path binds the signed transaction to it.
     pub gateway_implementation: Option<Address>,
-    /// `gateway.depositsPaused()`. Refuses a deposit; information only on
-    /// a withdrawal.
+    /// The verified implementation behind the requested vault; `None` for a
+    /// direct vault. The write path re-checks it between signing and broadcast.
+    pub vault_implementation: Option<Address>,
+    /// `gateway.depositsPaused()`.
     pub deposits_paused: bool,
     pub agent_active: bool,
     pub agent_valid_until: u64,
-    /// `agents(self).shareReceiver`: who receives a deposit's shares, and
-    /// whose shares `withdrawFromRouter` redeems.
+    /// `agents(self).shareReceiver`: who receives a deposit's shares.
     pub share_receiver: Address,
-    /// `agents(self).assetRecipient`: where a redemption's USDC lands.
-    pub asset_recipient: Address,
     pub max_per_payment: U256,
     pub max_per_window: U256,
     pub window_gross: U256,
@@ -142,46 +135,10 @@ impl<'a> Preflight<'a> {
 
     /// Execute every preflight rule. Returns on the first refusal. The
     /// order is: cheap chain-level checks first (chain id, code hash,
-    /// deposits paused, addresses), then per-agent reads, then balance/allowance.
-    /// This minimises wasted RPC on the unhappy path.
+    /// deposits paused, addresses), then the requested vault, then per-agent
+    /// reads, then balance/allowance. This minimises wasted RPC on the
+    /// unhappy path.
     pub async fn run(&self, inputs: PreflightInputs) -> Result<PreflightReport> {
-        self.run_inner(inputs, true).await
-    }
-
-    /// Gateway-level preflight only (checks 1–8). Skips the USDC
-    /// allowance and balance checks (9–10) which are deposit-specific.
-    /// Withdraw callers use this and then run vault-specific checks
-    /// separately via `withdraw_vault_preflight`.
-    pub async fn run_gateway_only(&self, inputs: PreflightInputs) -> Result<PreflightReport> {
-        self.run_inner(inputs, false).await
-    }
-
-    /// Withdraw-specific gateway preflight. Runs checks 1–6 (chain id, code
-    /// hash, usdc/vault addresses, agent active+expiry) then checks
-    /// 7–8 using the withdrawal-specific caps:
-    ///   7w. `shares <= agents(self).maxWithdrawPerPayment`
-    ///   8w. `agentWithdrawWindowGross(self, window) + shares <=
-    ///         agents(self).maxWithdrawPerWindow`
-    ///
-    /// USDC allowance/balance checks are skipped (N/A for withdrawals).
-    /// Vault-level share checks run separately in `withdraw_vault_preflight`.
-    ///
-    /// `gateway.depositsPaused()` is read and reported, never a refusal: a
-    /// deposit pause never blocks a withdrawal (core 1494). A failed read of
-    /// that flag is not a refusal either.
-    ///
-    /// Addresses issue #371: the old `run_gateway_only` path checked the
-    /// deposit caps (`maxPerPayment`, `maxPerWindow`) instead of the
-    /// withdrawal caps, which could reject valid withdrawals and pass
-    /// invalid ones.
-    pub async fn run_withdraw_gateway(&self, inputs: PreflightInputs) -> Result<PreflightReport> {
-        self.run_withdraw_inner(inputs).await
-    }
-
-    /// Inner implementation of the withdrawal gateway preflight.
-    /// Uses `maxWithdrawPerPayment`, `maxWithdrawPerWindow`, and
-    /// `agentWithdrawWindowGross` for cap checks (issue #371).
-    async fn run_withdraw_inner(&self, inputs: PreflightInputs) -> Result<PreflightReport> {
         // 1. chain id
         let chain_id = self.rpc.chain_id().await?;
         if chain_id != self.config.chain_id {
@@ -197,103 +154,12 @@ impl<'a> Preflight<'a> {
         // 2. proxy code hash pin + live implementation check
         let gateway_implementation = verify_gateway_code(self.rpc, self.config, &tag).await?;
 
-        // 3. depositsPaused() — information only. A deposit pause never
-        //    blocks a withdrawal (core 1494), so neither the flag nor a
-        //    failed read of it refuses here.
-        let deposits_paused = self
-            .call_view_deposits_paused(gateway_addr, &tag)
-            .await
-            .unwrap_or(false);
-
-        // 4-5. usdc()/vault() addresses pinned in config
-        let usdc_addr_on_chain = self.call_view_usdc(gateway_addr, &tag).await?;
-        let usdc_addr_cfg = parse_addr(&self.config.usdc_address, "usdc_address")?;
-        if usdc_addr_on_chain != usdc_addr_cfg {
-            return Err(RmpcError::ErrConfig(format!(
-                "gateway.usdc() = {usdc_addr_on_chain:?} does not match configured usdc_address = {usdc_addr_cfg:?}"
-            )));
-        }
-        let vault_addr_on_chain = self.call_view_vault(gateway_addr, &tag).await?;
-        let vault_addr_cfg = parse_addr(&self.config.vault_address, "vault_address")?;
-        if vault_addr_on_chain != vault_addr_cfg {
-            return Err(RmpcError::ErrConfig(format!(
-                "gateway.vault() = {vault_addr_on_chain:?} does not match configured vault_address = {vault_addr_cfg:?}"
-            )));
-        }
-
-        // 6. agents(self) — active, binding, validUntil
-        let agent = self
-            .check_agent(gateway_addr, inputs.signer_address, &tag)
-            .await?;
-
-        // 7w. shares <= maxWithdrawPerPayment
-        if inputs.amount > agent.maxWithdrawPerPayment {
-            return Err(RmpcError::ErrWithdrawCapExceeded(format!(
-                "shares {} exceeds agent maxWithdrawPerPayment {}",
-                inputs.amount, agent.maxWithdrawPerPayment,
-            )));
-        }
-
-        // 8w. effectiveWithdrawWindowGross + shares <= maxWithdrawPerWindow.
-        //     Issue #449 — the on-chain cap is now enforced on a strict
-        //     rolling window, so the preflight reads the rolling gross
-        //     (zero when the agent's anchor has aged past WINDOW_SECONDS)
-        //     instead of the per-calendar-window mapping.
-        let window_gross = self
-            .call_view_agent_withdraw_window_gross(gateway_addr, inputs.signer_address, &tag)
-            .await?;
-        let projected = window_gross.saturating_add(inputs.amount);
-        if projected > agent.maxWithdrawPerWindow {
-            return Err(RmpcError::ErrWithdrawCapExceeded(format!(
-                "rollingWithdrawGross {} + shares {} exceeds maxWithdrawPerWindow {}",
-                window_gross, inputs.amount, agent.maxWithdrawPerWindow,
-            )));
-        }
-
-        Ok(PreflightReport {
-            chain_id,
-            block_number,
-            gateway_runtime_hash_ok: true,
-            gateway_implementation,
-            deposits_paused,
-            agent_active: agent.active,
-            agent_valid_until: agent.validUntil,
-            share_receiver: agent.shareReceiver,
-            asset_recipient: agent.assetRecipient,
-            max_per_payment: agent.maxWithdrawPerPayment,
-            max_per_window: agent.maxWithdrawPerWindow,
-            window_gross,
-            allowance: U256::ZERO,
-            balance: U256::ZERO,
-        })
-    }
-
-    async fn run_inner(
-        &self,
-        inputs: PreflightInputs,
-        check_usdc: bool,
-    ) -> Result<PreflightReport> {
-        // 1. chain id
-        let chain_id = self.rpc.chain_id().await?;
-        if chain_id != self.config.chain_id {
-            return Err(RmpcError::ErrChainIdMismatch);
-        }
-
-        let gateway_addr = parse_addr(&self.config.gateway_address, "gateway_address")?;
-
-        // Pin one block for every read below (issue 1810).
-        let block_number = self.rpc.block_number().await?;
-        let tag = block_tag(block_number);
-
-        // 2. proxy code hash pin + live implementation check
-        let gateway_implementation = verify_gateway_code(self.rpc, self.config, &tag).await?;
-
-        // 3. depositsPaused() on the gateway — a deposit refusal.
+        // 3. depositsPaused() on the gateway.
         if self.call_view_deposits_paused(gateway_addr, &tag).await? {
             return Err(RmpcError::ErrDepositsPaused);
         }
 
-        // 4-5. usdc()/vault() addresses pinned in config
+        // 4. usdc() address pinned in config
         let usdc_addr_on_chain = self.call_view_usdc(gateway_addr, &tag).await?;
         let usdc_addr_cfg = parse_addr(&self.config.usdc_address, "usdc_address")?;
         if usdc_addr_on_chain != usdc_addr_cfg {
@@ -301,22 +167,21 @@ impl<'a> Preflight<'a> {
                 "gateway.usdc() = {usdc_addr_on_chain:?} does not match configured usdc_address = {usdc_addr_cfg:?}"
             )));
         }
-        let vault_addr_on_chain = self.call_view_vault(gateway_addr, &tag).await?;
-        let vault_addr_cfg = parse_addr(&self.config.vault_address, "vault_address")?;
-        if vault_addr_on_chain != vault_addr_cfg {
-            return Err(RmpcError::ErrConfig(format!(
-                "gateway.vault() = {vault_addr_on_chain:?} does not match configured vault_address = {vault_addr_cfg:?}"
-            )));
-        }
-        // 5b. depositsPaused() on the vault the gateway deposits into. The
-        //     vault's deposit() reverts DepositsArePaused while it is set.
-        if self.call_view_deposits_paused(vault_addr_cfg, &tag).await? {
+
+        // 5. The requested vault. The gateway pins none, so nothing is read
+        //    from `gateway.vault()`. The owner's selection comes first, then
+        //    the live state of the vault actually requested.
+        let vault = inputs.vault;
+        self.require_selected_destination(vault)?;
+        // 5b. depositsPaused() on the requested vault.
+        if self.call_view_deposits_paused(vault, &tag).await? {
             return Err(RmpcError::ErrDepositsPaused);
         }
-        // 5c. The vault behind the address pin: when it is a proxy, its
-        //     implementation must be in proxy_implementation_hashes
-        //     (`implementation::verify_reached_proxy`).
-        verify_reached_proxy(self.rpc, self.config, "vault", vault_addr_cfg, &tag).await?;
+        // 5c. The requested vault behind its address: when it is a proxy, its
+        //     implementation must be in proxy_implementation_hashes.
+        verify_reached_proxy(self.rpc, self.config, "vault", vault, &tag).await?;
+        let vault_implementation =
+            implementation::read_implementation(self.rpc, vault, &tag).await?;
 
         // 6. agents(self) — active, binding, validUntil
         let agent = self
@@ -332,10 +197,6 @@ impl<'a> Preflight<'a> {
         }
 
         // 8. effectiveDepositWindowGross + amount <= maxPerWindow
-        //    Issue #497 — deposit accounting switched to a rolling window
-        //    (agentDepositWindow) matching the withdrawal-side pattern. The
-        //    preflight now reads the rolling gross via effectiveDepositWindowGross
-        //    instead of the deprecated per-calendar-window agentWindowGross.
         let window_gross = self
             .call_view_agent_deposit_window_gross(gateway_addr, inputs.signer_address, &tag)
             .await?;
@@ -347,37 +208,32 @@ impl<'a> Preflight<'a> {
             )));
         }
 
-        let (allowance, balance) = if check_usdc {
-            // 9. allowance(self, gateway) >= amount
-            let allowance = self
-                .call_view_allowance(usdc_addr_cfg, inputs.signer_address, gateway_addr, &tag)
-                .await?;
-            if allowance < inputs.amount {
-                return Err(RmpcError::ErrAllowanceInsufficient);
-            }
+        // 9. allowance(self, gateway) >= amount
+        let allowance = self
+            .call_view_allowance(usdc_addr_cfg, inputs.signer_address, gateway_addr, &tag)
+            .await?;
+        if allowance < inputs.amount {
+            return Err(RmpcError::ErrAllowanceInsufficient);
+        }
 
-            // 10. balanceOf(self) >= amount
-            let balance = self
-                .call_view_balance_of(usdc_addr_cfg, inputs.signer_address, &tag)
-                .await?;
-            if balance < inputs.amount {
-                return Err(RmpcError::ErrBalanceInsufficient);
-            }
-            (allowance, balance)
-        } else {
-            (U256::ZERO, U256::ZERO)
-        };
+        // 10. balanceOf(self) >= amount
+        let balance = self
+            .call_view_balance_of(usdc_addr_cfg, inputs.signer_address, &tag)
+            .await?;
+        if balance < inputs.amount {
+            return Err(RmpcError::ErrBalanceInsufficient);
+        }
 
         Ok(PreflightReport {
             chain_id,
             block_number,
             gateway_runtime_hash_ok: true,
             gateway_implementation,
+            vault_implementation,
             deposits_paused: false,
             agent_active: agent.active,
             agent_valid_until: agent.validUntil,
             share_receiver: agent.shareReceiver,
-            asset_recipient: agent.assetRecipient,
             max_per_payment: agent.maxPerPayment,
             max_per_window: agent.maxPerWindow,
             window_gross,
@@ -386,51 +242,25 @@ impl<'a> Preflight<'a> {
         })
     }
 
-    /// Vault-side preflight for a redemption leg (issue #312, #1285):
-    ///
-    /// 1. `vault.allowance(agent, gateway) >= shares`
-    /// 2. `vault.balanceOf(agent) >= shares`
-    ///
-    /// It never reads `depositsPaused()`: a deposit pause never blocks a
-    /// redeem, in any vault status (core 1494).
-    ///
-    /// The redeem burns the agent's *vault shares*, which the gateway
-    /// pulls from the source vault, so these are the share-side mirror of
-    /// the USDC allowance/balance checks in [`Self::run`]. `withdraw` runs
-    /// it once for the source vault; `withdraw-router` runs it per
-    /// identity-bound `(vault, shares)` leg.
-    ///
-    /// This is the policy layer's rule. It previously lived in
-    /// `commands::withdraw` with its own private copies of the
-    /// `eth_call` decoders, which made `commands::withdraw_router` import
-    /// a policy rule from a sibling command module.
-    ///
-    /// `block_number` is the gateway preflight's pinned block
-    /// ([`PreflightReport::block_number`]), so the share reads describe the
-    /// same chain state as the gateway checks.
-    pub async fn run_withdraw_vault(
-        &self,
-        vault: Address,
-        gateway: Address,
-        agent: Address,
-        shares: U256,
-        block_number: u64,
-    ) -> Result<()> {
-        let tag = block_tag(block_number);
-        // The vault the gateway redeems from: when it is a proxy, its
-        // implementation must be in proxy_implementation_hashes.
-        verify_reached_proxy(self.rpc, self.config, "vault", vault, &tag).await?;
-        if self
-            .call_view_allowance(vault, agent, gateway, &tag)
-            .await?
-            < shares
-        {
-            return Err(RmpcError::ErrShareAllowanceInsufficient);
+    /// The owner selects deposit vaults offline; the gateway checks only
+    /// membership in the policy list. rmpc mirrors that with the config's
+    /// `allowed_destinations` (else `vault_address` alone) and refuses any other
+    /// vault before signing. The gateway policy list itself is not readable
+    /// (the `agents` getter omits array members), so the pre-sign simulation
+    /// (`InvalidDestination`) covers a config that is wider than the policy.
+    fn require_selected_destination(&self, vault: Address) -> Result<()> {
+        let selected = selected_destinations(self.config)?;
+        if selected.contains(&vault) {
+            return Ok(());
         }
-        if self.call_view_balance_of(vault, agent, &tag).await? < shares {
-            return Err(RmpcError::ErrShareBalanceInsufficient);
-        }
-        Ok(())
+        Err(RmpcError::ErrDestinationNotSelected(format!(
+            "vault {vault:#x} is not one the owner selected; the config selects {}. Nothing was signed",
+            selected
+                .iter()
+                .map(|a| format!("{a:#x}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )))
     }
 
     /// Check 6 and 6b, shared by the deposit and withdraw preflights.
@@ -545,24 +375,6 @@ impl<'a> Preflight<'a> {
         Ok(decoded._0)
     }
 
-    async fn call_view_vault(&self, gateway: Address, tag: &str) -> Result<Address> {
-        let data = RobotMoneyGateway::vaultCall {}.abi_encode();
-        let out = self
-            .rpc
-            .eth_call(
-                &CallRequest {
-                    to: gateway,
-                    from: None,
-                    data: data.into(),
-                },
-                Some(tag),
-            )
-            .await?;
-        let decoded = RobotMoneyGateway::vaultCall::abi_decode_returns(&out, true)
-            .map_err(|e| RmpcError::ErrRpcDecode(format!("vault() decode: {e}")))?;
-        Ok(decoded._0)
-    }
-
     async fn call_view_agents(
         &self,
         gateway: Address,
@@ -644,38 +456,6 @@ impl<'a> Preflight<'a> {
         Ok(decoded._0)
     }
 
-    /// Read the agent's rolling-window withdrawal gross from the gateway
-    /// via `effectiveWithdrawWindowGross(agent)`. Issue #449 replaced the
-    /// fixed `agentWithdrawWindowGross(agent, windowId)` mapping with a
-    /// rolling-window accumulator anchored on the agent's first withdrawal
-    /// of each window — the view returns the cumulative shares redeemed
-    /// against the current rolling cap (zero when the anchor has aged out).
-    async fn call_view_agent_withdraw_window_gross(
-        &self,
-        gateway: Address,
-        agent: Address,
-        tag: &str,
-    ) -> Result<U256> {
-        let data = RobotMoneyGateway::effectiveWithdrawWindowGrossCall { agent }.abi_encode();
-        let out = self
-            .rpc
-            .eth_call(
-                &CallRequest {
-                    to: gateway,
-                    from: None,
-                    data: data.into(),
-                },
-                Some(tag),
-            )
-            .await?;
-        let decoded =
-            RobotMoneyGateway::effectiveWithdrawWindowGrossCall::abi_decode_returns(&out, true)
-                .map_err(|e| {
-                    RmpcError::ErrRpcDecode(format!("effectiveWithdrawWindowGross decode: {e}"))
-                })?;
-        Ok(decoded._0)
-    }
-
     async fn call_view_allowance(
         &self,
         token: Address,
@@ -732,8 +512,7 @@ pub struct ChecksOutput {
     /// The verified implementation behind the gateway proxy; `null` for a
     /// direct gateway or when it was not verified.
     pub gateway_implementation: Option<String>,
-    /// `depositsPaused()` was observed true. A refusal on a deposit;
-    /// information only on a withdrawal, which proceeds regardless.
+    /// `depositsPaused()` was observed true.
     pub deposits_paused: bool,
     pub agent_active: bool,
     pub agent_valid_until: u64,
@@ -772,8 +551,8 @@ impl ChecksOutput {
             RmpcError::ErrCodeHashMismatch => {
                 c.chain_id_match = true;
             }
-            // The gateway implementation check (check 2) or a reached vault
-            // or router proxy (check 5c, a withdraw leg) refused. The detail
+            // The gateway implementation check (check 2) or the requested
+            // vault's proxy (check 5c) refused. The detail
             // names which; the snapshot cannot, so it never claims check 2's
             // implementation half passed.
             RmpcError::ErrImplementationNotApproved(_)
@@ -791,8 +570,7 @@ impl ChecksOutput {
             // Raised after `agents(self)` read an active record.
             RmpcError::ErrPolicyExpired
             | RmpcError::ErrAgentBindingMismatch { .. }
-            | RmpcError::ErrDepositCapExceeded(_)
-            | RmpcError::ErrWithdrawCapExceeded(_) => {
+            | RmpcError::ErrDepositCapExceeded(_) => {
                 c.chain_id_match = true;
                 c.gateway_code_hash_match = true;
                 c.gateway_implementation_match = true;
@@ -803,8 +581,7 @@ impl ChecksOutput {
             RmpcError::ErrAgentNotAuthorized
             | RmpcError::ErrAllowanceInsufficient
             | RmpcError::ErrBalanceInsufficient
-            | RmpcError::ErrShareAllowanceInsufficient
-            | RmpcError::ErrShareBalanceInsufficient => {
+            | RmpcError::ErrDestinationNotSelected(_) => {
                 c.chain_id_match = true;
                 c.gateway_code_hash_match = true;
                 c.gateway_implementation_match = true;
@@ -837,6 +614,19 @@ impl ChecksOutput {
 }
 
 // --- helpers ------------------------------------------------------------
+
+/// The vaults the owner selected for this agent: the config's
+/// `allowed_destinations` when set and non-empty, else `vault_address` alone.
+pub fn selected_destinations(config: &Config) -> Result<Vec<Address>> {
+    match config.allowed_destinations.as_deref() {
+        Some(list) if !list.is_empty() => list
+            .iter()
+            .enumerate()
+            .map(|(i, a)| parse_addr(a, &format!("allowed_destinations[{i}]")))
+            .collect(),
+        _ => Ok(vec![parse_addr(&config.vault_address, "vault_address")?]),
+    }
+}
 
 fn parse_addr(s: &str, field: &str) -> Result<Address> {
     Address::from_str(s).map_err(|e| RmpcError::ErrConfig(format!("{field}: {e}")))

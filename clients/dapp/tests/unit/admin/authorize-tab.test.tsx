@@ -55,6 +55,8 @@ function renderTab(agent = "", shareReceiver = "") {
       setAgent={setAgent}
       shareReceiver={shareReceiver}
       setShareReceiver={setShareReceiver}
+      destinations={["0x4444444444444444444444444444444444444444"]}
+      setDestinations={vi.fn()}
       now={NOW}
     />,
   );

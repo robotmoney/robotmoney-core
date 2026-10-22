@@ -30,6 +30,9 @@ export type BuildAdminTabsArgs = Readonly<{
   setAgent: Dispatch<SetStateAction<string>>;
   shareReceiver: string;
   setShareReceiver: Dispatch<SetStateAction<string>>;
+  /** The owner's selected agent deposit destinations (AuthorizeTab input, config export). */
+  destinations: string[];
+  setDestinations: Dispatch<SetStateAction<string[]>>;
   /**
    * Wallets shown in the testnet/devnet Faucet tab dropdown. Caller
    * passes the connected EOA list; empty on mainnet builds, which is
@@ -99,6 +102,9 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
                   setAgent={a.setAgent}
                   shareReceiver={a.shareReceiver}
                   setShareReceiver={a.setShareReceiver}
+                  destinations={a.destinations}
+                  setDestinations={a.setDestinations}
+                  routerAddress={a.routerAddress}
                   now={a.now}
                 />
               ),
@@ -111,7 +117,14 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
             {
               id: "rotation",
               label: "Rotation",
-              content: <RotationTab gatewayAddress={a.gatewayAddress} ctx={a.ctx} now={a.now} />,
+              content: (
+                <RotationTab
+                  gatewayAddress={a.gatewayAddress}
+                  ctx={a.ctx}
+                  now={a.now}
+                  routerAddress={a.routerAddress}
+                />
+              ),
             },
             {
               id: "admin-role",
@@ -217,6 +230,7 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
           agent={a.agent as Address}
           agentOwner={a.walletAddress}
           shareReceiver={a.shareReceiver}
+          destinations={a.destinations}
         />
       ),
     });

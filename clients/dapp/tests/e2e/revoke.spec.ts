@@ -19,6 +19,8 @@ test("revoke preview renders structured fields", async ({ page }) => {
   await openTab(page, "authorize");
   await page.getByTestId("agent-input").fill(endpoints.agent_addr);
   await page.getByTestId("shareReceiver-input").fill(endpoints.share_receiver_addr);
+  // The owner selects the vault the agent may deposit into (issue 1889); nothing is implied.
+  await page.getByTestId("destination-extra").fill(endpoints.vault_addr);
   await openTab(page, "revoke");
 
   const revokeForm = page.getByTestId("revoke-form");

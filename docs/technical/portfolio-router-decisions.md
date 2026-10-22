@@ -294,8 +294,8 @@ The `shareReceiver` routing rule:
   receives it as `orderId` and emits it in `RouterDeposit` for correlation but
   does not re-check it.
 - Pause: the gateway deposit pause blocks new deposits to all destinations,
-  the router included. It never blocks `withdrawFromRouter`. Exits stay open
-  while deposits are paused (core 1494).
+  the router included. The gateway has no withdrawal path (issue 1889).
+  Exits stay open on the vault and the router while deposits are paused (core 1494).
 
 ### 3.6 Unavailable-leg detection logic
 

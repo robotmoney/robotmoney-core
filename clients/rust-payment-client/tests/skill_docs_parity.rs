@@ -681,7 +681,7 @@ fn rmpc_error_names() -> BTreeSet<String> {
 fn every_documented_error_name_is_one_rmpc_prints() {
     let real = rmpc_error_names();
     assert!(
-        real.contains("ErrPolicyExpired") && real.contains("ErrConfirmNotProvided"),
+        real.contains("ErrPolicyExpired") && real.contains("ErrDestinationNotSelected"),
         "the source scraper drifted; it found {real:?}"
     );
     let mut fake: Vec<String> = Vec::new();
@@ -701,7 +701,7 @@ fn every_documented_error_name_is_one_rmpc_prints() {
 }
 
 /// The user skill's refusal table lists every named refusal the write
-/// preflight, the pre-sign simulation and `withdraw-router` raise, so an
+/// preflight and the pre-sign simulation raise, so an
 /// agent can look up any refusal it is shown.
 #[test]
 fn safety_doc_lists_every_named_write_refusal() {
@@ -718,16 +718,10 @@ fn safety_doc_lists_every_named_write_refusal() {
         "ErrAgentBindingMismatch",
         "ErrPolicyExpired",
         "ErrDepositCapExceeded",
-        "ErrWithdrawCapExceeded",
+        "ErrDestinationNotSelected",
         "ErrAllowanceInsufficient",
         "ErrBalanceInsufficient",
-        "ErrShareAllowanceInsufficient",
-        "ErrShareBalanceInsufficient",
         "ErrVaultDisabled",
-        "ErrLegUnavailable",
-        "ErrSlippageBoundExceeded",
-        "ErrMinAssetsPerLegRequired",
-        "ErrConfirmNotProvided",
         "ErrGasLimitBelowFloor",
         "ErrFeeCapExceeded",
         "ErrConcurrentInvocation",

@@ -39,6 +39,7 @@ fn config(max_fee_cap: u64) -> Config {
         max_priority_fee_per_gas_cap: None,
         state_dir: None,
         registry_address: None,
+        allowed_destinations: None,
         router_address: None,
         governance_address: None,
         timelock_address: None,
@@ -116,14 +117,7 @@ async fn chain_deadline_uses_block_timestamp_not_wall_clock() {
 /// the host clock, so a new command cannot silently opt out.
 #[test]
 fn every_write_command_takes_its_deadline_from_chain_deadline() {
-    let consumers = [
-        ("deposit", include_str!("../commands/deposit.rs")),
-        ("withdraw", include_str!("../commands/withdraw.rs")),
-        (
-            "withdraw_router",
-            include_str!("../commands/withdraw_router.rs"),
-        ),
-    ];
+    let consumers = [("deposit", include_str!("../commands/deposit.rs"))];
     for (name, src) in consumers {
         assert!(
             src.contains("chain_deadline(&session.rpc"),

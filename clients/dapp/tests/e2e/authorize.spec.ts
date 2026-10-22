@@ -26,12 +26,36 @@ test.describe("authorize agent — UI invariants", () => {
     endpoints = loadEndpoints();
   });
 
+  test("an agent with no selected vault is refused before signing", async ({ page }) => {
+    await openDapp(page, endpoints);
+
+    await page.getByTestId("agent-input").fill(endpoints.agent_addr);
+    // The share receiver is the signing wallet (ACL-9), so the only thing missing is a vault.
+    await page.getByTestId("shareReceiver-input").fill(endpoints.admin_addr);
+
+    // Nothing is pre-selected and the gateway reverts an empty list, so the dapp builds no
+    // preview, the freeze stays closed and no commit control of the registration sequence exists.
+    await expect(page.getByTestId("destinations-empty")).toBeVisible();
+    await expect(page.getByTestId("authorize-freeze")).toBeDisabled();
+    await expect(page.getByTestId("authorize-submit")).toHaveCount(0);
+    await expect(page.locator('[data-testid="tx-preview"][data-ok="true"]')).toHaveCount(0);
+
+    // Selecting the vault opens the freeze. The frozen reveal preview names the destination.
+    await page.getByTestId("destination-extra").fill(endpoints.vault_addr);
+    await expect(page.getByTestId("destinations-empty")).toHaveCount(0);
+    await expect(page.getByTestId("authorize-freeze")).toBeEnabled();
+    await page.getByTestId("authorize-freeze").click();
+    await expect(page.getByTestId("authorize-reveal-preview")).toContainText("allowedDestinations");
+  });
+
   test("structured preview renders for authorize, not raw calldata", async ({ page }) => {
     await openDapp(page, endpoints);
 
     await page.getByTestId("agent-input").fill(endpoints.agent_addr);
     // The share receiver is always the signing wallet (ACL-9): the admin EOA here.
     await page.getByTestId("shareReceiver-input").fill(endpoints.admin_addr);
+    // The owner selects the vault the agent may deposit into (issue 1889); nothing is implied.
+    await page.getByTestId("destination-extra").fill(endpoints.vault_addr);
     // The previews come from the frozen inputs.
     await page.getByTestId("authorize-freeze").click();
 

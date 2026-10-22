@@ -83,8 +83,7 @@ the approved pair from the config (`configured_implementation`,
 A direct gateway reports `null` for all of them. Every write, the committee
 `vote-submit` and `receipt submit` included, checks the gateway's
 implementation against that pair before it signs, and refuses with
-`ErrImplementationNotApproved` on a mismatch. Writes also check the vault, the
-router and each router leg they reach against `proxy_implementation_hashes`.
+`ErrImplementationNotApproved` on a mismatch. Writes also check the vault they reach against `proxy_implementation_hashes`.
 
 ```
 rmpc get-gateway --config <CONFIG> [--pretty]
@@ -144,72 +143,17 @@ rmpc get-tx --config <CONFIG> --tx-hash <HASH> [--pretty]
 
 Sign and broadcast a USDC deposit through the gateway.
 
-`--destination <ROUTER>` routes it through the Portfolio Router
-(`gateway.depositTo`). rmpc then reads `router.previewDeposit(amount)`. A leg
-with weight above 0 that the router would skip is refused with
-`ErrLegUnavailable` unless `--allow-unavailable-legs` is passed. With
-`--min-shares-per-leg` omitted, each funded leg's floor is its quoted shares
-less 0.50%, so a leg that turns unavailable before inclusion reverts
-`LegSkippedWithFloor` instead of moving its share onto the other legs. A
-single `--min-shares-per-leg 0` sends no floor.
+`--vault <ADDR>` names the vault to deposit into (default: the config's
+`vault_address`). It must be one the depositor selected in the agent's policy
+(`allowed_destinations` in the config). rmpc reads that vault's pause state
+and implementation and refuses with `ErrDestinationNotSelected` otherwise.
+The deposit is `gateway.depositTo`. The Portfolio Router is never a target.
 
 ```
 rmpc deposit --config <CONFIG> --amount <UNITS> --order-id <HEX>
   [--idempotency-key <HEX>] [--deadline-secs <N>]
   [--receipt-timeout-secs <N>] [--gas-limit <N>] [--fee-cap <WEI>]
-  [--destination <ADDR>] [--min-shares-per-leg <N>]
-  [--allow-unavailable-legs] [--pretty]
-```
-
-### `rmpc withdraw`
-
-Redeem vault shares from one vault through the gateway (agent-initiated
-redemption). On a gateway with a Portfolio Router this signs the one-leg
-`gateway.withdrawFromRouter(orderId, [sourceVault], [shares], [minAssets],
-deadline, idempotencyKey)`, so the redemption reverts when the vault pays less
-than `minAssets` (QA plan D9: a direct `vault.redeem` has no minimum-out). The
-shares are pulled from the policy's `shareReceiver`.
-
-`--min-assets` is the floor in USDC base units. When omitted, rmpc reads the
-vault's `previewRedeem(shares)` before signing and uses it less 0.50%.
-`--min-assets 0` sends no floor. A gateway without a router (single-vault mode)
-can only call `gateway.withdraw`, which has no floor: rmpc uses it only with
-`--min-assets 0` and refuses otherwise with `ErrConfig`. A `--gas-limit` below
-the gateway's entry floor is refused with `ErrGasLimitBelowFloor`. The output
-adds `route` (`router` or `vault`), `min_assets` and `share_holder`.
-
-```
-rmpc withdraw --config <CONFIG> --shares <N> --source-vault <ADDR>
-  --order-id <HEX> [--min-assets <N>] [--idempotency-key <HEX>]
-  [--deadline-secs <N>] [--receipt-timeout-secs <N>] [--gas-limit <N>]
-  [--fee-cap <WEI>] [--pretty]
-```
-
-### `rmpc withdraw-router`
-
-Redeem vault shares via the Portfolio Router (multi-vault redemption,
-agent-initiated). Calls `gateway.withdrawFromRouter(orderId, vaults,
-sharesPerLeg, minAssetsPerLeg, deadline, idempotencyKey)`: `--shares-per-leg[i]`
-is redeemed from `--vaults[i]`, pulled from the policy's `shareReceiver`, and
-the USDC lands at the policy-configured `assetRecipient`.
-
-`--min-assets-per-leg` is required: one USDC floor per leg, or a single `0` to
-send no floor. Omitting it is refused with `ErrMinAssetsPerLegRequired`.
-Without `--confirm` nothing is signed: the command exits 2 with
-`ErrConfirmNotProvided` and a JSON `preview` of each vault with its shares and
-floor, the share holder, the `assetRecipient`, the gas limit and the gas floor.
-A `--gas-limit` below that floor is refused with `ErrGasLimitBelowFloor`.
-
-Run `rmpc get-router` first to inspect the router's current vault order and
-decide per-leg share amounts.
-
-```
-rmpc withdraw-router --config <CONFIG>
-  --vaults <ADDR,ADDR,...> --shares-per-leg <N,N,...>
-  --min-assets-per-leg <N,N,...> --order-id <HEX>
-  [--idempotency-key <HEX>] [--deadline-secs <N>]
-  [--receipt-timeout-secs <N>] [--gas-limit <N>] [--fee-cap <WEI>]
-  --confirm [--pretty]
+  [--vault <ADDR>] [--pretty]
 ```
 
 ### `rmpc status`

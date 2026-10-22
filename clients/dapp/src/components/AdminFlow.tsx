@@ -57,6 +57,7 @@ export function AdminFlow(props: Props) {
   // and Export tabs — RevokeTab intentionally has no input of its own.
   const [agent, setAgent] = useState("");
   const [shareReceiver, setShareReceiver] = useState("");
+  const [destinations, setDestinations] = useState<string[]>([]);
 
   const { gatewayVerificationState } = props;
   // Vaults and the router whose code and implementation matched their build-time pins (QA plan
@@ -108,6 +109,8 @@ export function AdminFlow(props: Props) {
     setAgent,
     shareReceiver,
     setShareReceiver,
+    destinations,
+    setDestinations,
     // Today the dapp only knows the single connected EOA; once
     // multi-wallet onboarding lands we widen this list. The Faucet tab
     // gracefully renders "(no wallets connected)" when empty.

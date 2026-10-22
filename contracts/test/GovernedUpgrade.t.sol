@@ -182,10 +182,7 @@ contract GovernedUpgradeTest is SafeGovernance {
             );
         }
         if (i == 6) {
-            return abi.encodeCall(
-                RobotMoneyGateway.initialize,
-                (usdc, IERC4626(address(vault)), admin, pauser, address(router), t, m)
-            );
+            return abi.encodeCall(RobotMoneyGateway.initialize, (usdc, admin, pauser, t, m));
         }
         if (i == 7) {
             return abi.encodeCall(ConsensusRecommendationReceipt.initialize, (admin, t, m));
@@ -284,8 +281,6 @@ contract GovernedUpgradeTest is SafeGovernance {
         assertEq(address(router.usdc()), address(usdc));
         assertEq(address(router.registry()), address(registry));
         assertEq(gateway.usdc(), address(usdc));
-        assertEq(gateway.vault(), address(vault));
-        assertEq(gateway.router(), address(router));
         assertTrue(gateway.hasRole(gateway.DEPOSIT_PAUSER_ROLE(), pauser));
         assertEq(receipts.gateway(), address(0), "retired receipt gateway slot");
         assertEq(receipts.icPolicy(), address(0), "retired receipt IC slot");
@@ -567,8 +562,8 @@ contract GovernedUpgradeTest is SafeGovernance {
                 maxPerPayment: 1_000e6,
                 maxPerWindow: 10_000e6,
                 shareReceiver: agent,
-                allowedDestinations: none,
-                assetRecipient: agent,
+                allowedDestinations: CoreProxies.oneDestination(address(0xD357)),
+                assetRecipient: address(0),
                 maxWithdrawPerPayment: 0,
                 maxWithdrawPerWindow: 0,
                 allowedSourceVaults: none

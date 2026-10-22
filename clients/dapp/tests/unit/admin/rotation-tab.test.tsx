@@ -98,6 +98,9 @@ describe("RotationTab — error surfaces in rotation-preview-error", () => {
     fireEvent.change(screen.getByTestId("rotation-shareReceiver-input"), {
       target: { value: RECEIVER },
     });
+    fireEvent.change(screen.getByTestId("rotation-destination-extra"), {
+      target: { value: "0x4444444444444444444444444444444444444444" },
+    });
 
     // composeRotationPreview throws when old === new; useRotationState
     // surfaces it as combinedError → rotation-preview-error.
@@ -149,6 +152,9 @@ describe.each([
     fireEvent.change(screen.getByTestId("rotation-new-agent-input"), { target: { value: NEW } });
     fireEvent.change(screen.getByTestId("rotation-shareReceiver-input"), {
       target: { value: receiver },
+    });
+    fireEvent.change(screen.getByTestId("rotation-destination-extra"), {
+      target: { value: "0x4444444444444444444444444444444444444444" },
     });
   }
 

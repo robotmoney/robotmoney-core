@@ -4,7 +4,7 @@ title: "GatewayCommitRevealTest"
 
 # GatewayCommitRevealTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:** Test
 
@@ -94,9 +94,9 @@ bytes32 internal agentRole;
 function setUp() public;
 ```
 
-<a id="_defaultpolicy"></a>
+<a id="_vaultdest"></a>
 
-### _defaultPolicy
+### _vaultDest
 
 <i>
 
@@ -107,6 +107,20 @@ address other than `depositor` should build the policy inline with
 `shareReceiver` set to that caller.
 
 </i>
+
+```solidity
+function _vaultDest() internal view returns (address[] memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `address[]` |  |
+
+<a id="_defaultpolicy"></a>
+
+### _defaultPolicy
 
 ```solidity
 function _defaultPolicy() internal view returns (IGateway.AgentPolicy memory);

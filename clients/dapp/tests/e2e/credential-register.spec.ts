@@ -41,6 +41,8 @@ test.describe("register-existing-address flow — UI invariants", () => {
     await page.getByTestId("agent-input").fill(AGENT_ADDRESS);
     // The share receiver is always the signing wallet (ACL-9).
     await page.getByTestId("shareReceiver-input").fill(endpoints.admin_addr);
+    // The owner selects the vault the agent may deposit into (issue 1889); nothing is implied.
+    await page.getByTestId("destination-extra").fill(endpoints.vault_addr);
     await page.getByTestId("authorize-freeze").click();
 
     const preview = page.locator('[data-testid="tx-preview"][data-ok="true"]').first();
@@ -73,6 +75,10 @@ test.describe("register-existing-address flow — UI invariants", () => {
     await expect(button).toBeDisabled();
 
     await page.getByTestId("shareReceiver-input").fill(endpoints.admin_addr);
+    // No vault selected yet: the gateway refuses an empty destination list, so the freeze stays closed.
+    await expect(button).toBeDisabled();
+    // The owner selects the vault the agent may deposit into (issue 1889); nothing is implied.
+    await page.getByTestId("destination-extra").fill(endpoints.vault_addr);
     await expect(button).toBeEnabled();
     // No commit button exists before the freeze, and none is enabled before the agent consents.
     await expect(page.getByTestId("authorize-submit")).toHaveCount(0);
@@ -83,6 +89,8 @@ test.describe("register-existing-address flow — UI invariants", () => {
 
     await page.getByTestId("agent-input").fill(AGENT_ADDRESS);
     await page.getByTestId("shareReceiver-input").fill(SHARE_RECEIVER);
+    // The owner selects the vault the agent may deposit into (issue 1889); nothing is implied.
+    await page.getByTestId("destination-extra").fill(endpoints.vault_addr);
     await openTab(page, "export");
 
     const exportPanel = page.getByTestId("config-export");

@@ -20,7 +20,7 @@ bun test scripts/devnet --timeout 60000
 bun scripts/devnet/check-twin-chain-ci-selftest.ts     # needs yq
 ```
 
-The fork tests of the contracts (`VaultForkRegressions`, `DeploySeedDeposit`, `SafeIntegration`, `GovernanceExecutePathAfterHandover`, `RwaBasketVaultFork`, `CoreStagesFork`, `GatewayRouterSplitStagesForkTest`) read `FORK_RPC_URL`. Unset, each skips with a named reason. Set, an unreachable endpoint fails the test.
+The fork tests of the contracts (`VaultForkRegressions`, `DeploySeedDeposit`, `SafeIntegration`, `GovernanceExecutePathAfterHandover`, `RwaBasketVaultFork`, `CoreStagesFork`) read `FORK_RPC_URL`. Unset, each skips with a named reason. Set, an unreachable endpoint fails the test.
 
 ```
 bun scripts/devnet/twin-fork.ts start

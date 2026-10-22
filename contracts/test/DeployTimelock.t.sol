@@ -916,7 +916,7 @@ contract DeployTimelockTest is SafeGovernance {
             maxPerPayment: 1e6,
             maxPerWindow: 1e6,
             shareReceiver: makeAddr("share-receiver"),
-            allowedDestinations: empty,
+            allowedDestinations: CoreProxies.oneDestination(address(0xD357)),
             assetRecipient: address(0),
             maxWithdrawPerPayment: 0,
             maxWithdrawPerWindow: 0,

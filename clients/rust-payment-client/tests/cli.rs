@@ -15,37 +15,55 @@ fn rmpc() -> Command {
 }
 
 // ------------------------------------------------------------------
-// withdraw-router subcommand parser tests
+// Retired commands and options (issue 1889): clap rejects them before any I/O
 // ------------------------------------------------------------------
 
 #[test]
-fn withdraw_router_requires_config_and_order_id() {
-    // No flags at all — clap must reject before any I/O.
-    // (--shares-per-leg is a Vec<String> so clap accepts zero entries;
-    //  it is validated at runtime rather than parse time.)
-    rmpc()
-        .args(["withdraw-router"])
-        .assert()
-        .failure()
-        .stderr(contains("--config"))
-        .stderr(contains("--order-id"));
+fn withdraw_and_withdraw_router_are_retired_subcommands() {
+    for retired in ["withdraw", "withdraw-router"] {
+        rmpc()
+            .args([retired, "--config", "/nonexistent.toml"])
+            .assert()
+            .failure()
+            .code(2)
+            .stderr(contains("unrecognized subcommand"));
+    }
 }
 
 #[test]
-fn withdraw_router_help_includes_confirm_and_deadline_flags() {
-    let out = rmpc()
-        .args(["withdraw-router", "--help"])
-        .assert()
-        .success()
-        .get_output()
-        .clone();
+fn rmpc_help_lists_no_withdraw_command() {
+    let out = rmpc().arg("--help").assert().success().get_output().clone();
     let s = String::from_utf8(out.stdout).unwrap();
-    assert!(s.contains("--confirm"), "{s}");
-    assert!(s.contains("--deadline-secs"), "{s}");
-    assert!(s.contains("--receipt-timeout-secs"), "{s}");
-    assert!(s.contains("--gas-limit"), "{s}");
-    assert!(s.contains("--pretty"), "{s}");
-    assert!(s.contains("--idempotency-key"), "{s}");
+    assert!(s.contains("deposit"), "{s}");
+    assert!(!s.contains("withdraw"), "{s}");
+}
+
+#[test]
+fn deposit_rejects_the_router_options() {
+    for opt in [
+        [
+            "--destination",
+            "0x0000000000000000000000000000000000000f00",
+        ],
+        ["--min-shares-per-leg", "1"],
+        ["--allow-unavailable-legs", "x"],
+    ] {
+        rmpc()
+            .args([
+                "deposit",
+                "--config",
+                "/nonexistent.toml",
+                "--amount",
+                "1",
+                "--order-id",
+                "0x0000000000000000000000000000000000000000000000000000000000000001",
+            ])
+            .args(opt)
+            .assert()
+            .failure()
+            .code(2)
+            .stderr(contains("unexpected argument"));
+    }
 }
 
 #[test]
@@ -75,6 +93,7 @@ fn deposit_help_includes_idempotency_and_deadline_flags() {
     assert!(s.contains("--deadline-secs"), "{s}");
     assert!(s.contains("--receipt-timeout-secs"), "{s}");
     assert!(s.contains("--gas-limit"), "{s}");
+    assert!(s.contains("--vault"), "{s}");
     assert!(s.contains("--pretty"), "{s}");
 }
 

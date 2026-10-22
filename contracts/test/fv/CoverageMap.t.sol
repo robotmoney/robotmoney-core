@@ -60,7 +60,7 @@ contract CoverageMapTest is Test {
         );
     }
 
-    /// @notice Every RED registry entry names a remediation issue; every HOLDS
+    /// @notice Every RED registry entry names a remediation issue; every HOLDS or RETIRED
     ///         entry has none. Guards the invariant that an expected-fail test can
     ///         always tell its downstream issue which test to flip green.
     function test_everyRedEntryNamesRemediationIssue() public pure {
@@ -74,7 +74,9 @@ contract CoverageMapTest is Test {
             } else {
                 require(
                     reg[i].remediationIssue == 0,
-                    string.concat("HOLDS entry ", reg[i].id, " must not name a remediation issue")
+                    string.concat(
+                        "HOLDS or RETIRED entry ", reg[i].id, " must not name a remediation issue"
+                    )
                 );
             }
         }

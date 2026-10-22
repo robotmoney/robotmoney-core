@@ -260,8 +260,8 @@ contract UpgradeLifecycleForkTest is Test {
                 maxPerPayment: 10_000e6,
                 maxPerWindow: 100_000e6,
                 shareReceiver: shareReceiver,
-                allowedDestinations: none,
-                assetRecipient: shareReceiver,
+                allowedDestinations: CoreProxies.oneDestination(address(vault)),
+                assetRecipient: address(0),
                 maxWithdrawPerPayment: 0,
                 maxWithdrawPerWindow: 0,
                 allowedSourceVaults: none
@@ -275,8 +275,13 @@ contract UpgradeLifecycleForkTest is Test {
         deal(USDC, agent, 1_000e6);
         vm.startPrank(agent);
         IERC20(USDC).approve(address(gateway), 1_000e6);
-        gateway.deposit(
-            bytes32("fork-order"), 1_000e6, uint64(block.timestamp + 300), bytes32("fork-idem")
+        gateway.depositTo(
+            bytes32("fork-order"),
+            1_000e6,
+            uint64(block.timestamp + 300),
+            bytes32("fork-idem"),
+            address(vault),
+            new uint256[](0)
         );
         vm.stopPrank();
         vm.prank(shareReceiver);

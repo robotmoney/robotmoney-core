@@ -140,12 +140,8 @@ contract RedeemGasGuardsTest is Test {
         );
         vm.stopPrank();
 
-        address[] memory sources = new address[](3);
-        sources[0] = address(vault);
-        sources[1] = address(vault2);
-        sources[2] = address(vault3);
         address[] memory dest = new address[](1);
-        dest[0] = address(router);
+        dest[0] = address(vault);
         AgentRegistration.register(
             gateway,
             agent,
@@ -156,10 +152,10 @@ contract RedeemGasGuardsTest is Test {
                 maxPerWindow: 5_000 * ONE,
                 shareReceiver: shareReceiver,
                 allowedDestinations: dest,
-                assetRecipient: assetRecipient,
-                maxWithdrawPerPayment: 1_000 * ONE,
-                maxWithdrawPerWindow: 5_000 * ONE,
-                allowedSourceVaults: sources
+                assetRecipient: address(0),
+                maxWithdrawPerPayment: 0,
+                maxWithdrawPerWindow: 0,
+                allowedSourceVaults: new address[](0)
             })
         );
 
@@ -200,37 +196,6 @@ contract RedeemGasGuardsTest is Test {
         );
     }
 
-    function _gatewayWithdrawCall(uint256 gasLimit, bytes32 salt)
-        internal
-        returns (bool ok, bytes memory ret)
-    {
-        vm.prank(agent);
-        (ok, ret) = address(gateway).call{gas: gasLimit}(
-            abi.encodeCall(
-                gateway.withdraw,
-                (salt, 10 * ONE, address(vault), uint64(block.timestamp + 60), salt)
-            )
-        );
-    }
-
-    function _gatewayRouterCall(uint256 gasLimit, bytes32 salt)
-        internal
-        returns (bool ok, bytes memory ret)
-    {
-        address[] memory vs = new address[](1);
-        vs[0] = address(vault);
-        uint256[] memory sh = new uint256[](1);
-        sh[0] = 10 * ONE;
-        // The gateway pulls from shareReceiver and the router redeems for the gateway.
-        vm.prank(agent);
-        (ok, ret) = address(gateway).call{gas: gasLimit}(
-            abi.encodeCall(
-                gateway.withdrawFromRouter,
-                (salt, vs, sh, new uint256[](1), uint64(block.timestamp + 60), salt)
-            )
-        );
-    }
-
     function _sel(bytes memory ret) internal pure returns (bytes4 s) {
         require(ret.length >= 4, "opaque revert: no reason returned");
         assembly {
@@ -246,9 +211,8 @@ contract RedeemGasGuardsTest is Test {
         while (lo + 1 < hi) {
             uint256 mid = (lo + hi) / 2;
             bool ok;
-            if (which == 0) (ok,) = _routerCall(mid);
-            else if (which == 1) (ok,) = _gatewayWithdrawCall(mid, bytes32(uint256(1)));
-            else (ok,) = _gatewayRouterCall(mid, bytes32(uint256(1)));
+            which;
+            (ok,) = _routerCall(mid);
             vm.revertToState(snap);
             snap = vm.snapshotState();
             if (ok) hi = mid;
@@ -260,12 +224,9 @@ contract RedeemGasGuardsTest is Test {
     // --- router.redeemFor --------------------------------------------------------------------
 
     uint256 internal constant ROUTER_PER_LEG = 1_700_000;
-    uint256 internal constant GATEWAY_WITHDRAW = 2_000_000;
-    uint256 internal constant GATEWAY_ROUTER_BASE = 400_000;
-    uint256 internal constant GATEWAY_ROUTER_PER_LEG = 1_850_000;
+    uint256 internal constant GATEWAY_DEPOSIT_FLOOR = 2_000_000;
     /// @dev The deposit side runs the availability pass before any vault (QA plan D4), so its per-leg floors are above the redeem ones.
     uint256 internal constant ROUTER_DEPOSIT_PER_LEG = 2_400_000;
-    uint256 internal constant GATEWAY_ROUTER_DEPOSIT_PER_LEG = 2_550_000;
     uint256 internal constant VAULT_FLOOR = 1_600_000;
 
     function test_router_redeemFor_belowFloor_revertsInsufficientGas() public {
@@ -339,9 +300,8 @@ contract RedeemGasGuardsTest is Test {
         while (lo + 1 < hi) {
             uint256 mid = (lo + hi) / 2;
             bool ok;
-            if (which == 0) (ok,) = _routerCallN(mid, k, false);
-            else if (which == 1) (ok,) = _gatewayWithdrawCall(mid, bytes32(uint256(1)));
-            else (ok,) = _gatewayRouterCallN(mid, bytes32(uint256(1)), k);
+            which;
+            (ok,) = _routerCallN(mid, k, false);
             vm.revertToState(snap);
             snap = vm.snapshotState();
             if (ok) hi = mid;
@@ -357,9 +317,8 @@ contract RedeemGasGuardsTest is Test {
         vm.roll(block.number + 1);
         bool ok;
         bytes memory ret;
-        if (which == 0) (ok, ret) = _routerCallN(est, k, false);
-        else if (which == 1) (ok, ret) = _gatewayWithdrawCall(est, bytes32(uint256(1)));
-        else (ok, ret) = _gatewayRouterCallN(est, bytes32(uint256(1)), k);
+        which;
+        (ok, ret) = _routerCallN(est, k, false);
         emit log_named_uint("estimate", est);
         assertTrue(ok, "failed at the estimate one block later");
     }
@@ -376,72 +335,9 @@ contract RedeemGasGuardsTest is Test {
         _includeLater(0, 3);
     }
 
-    function test_gateway_withdraw_estimateThenIncludeNextBlock() public {
-        _includeLater(1, 1);
-    }
-
-    function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_1leg() public {
-        _includeLater(2, 1);
-    }
-
-    function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_2legs() public {
-        _includeLater(2, 2);
-    }
-
-    function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_3legs() public {
-        _includeLater(2, 3);
-    }
-
     // --- gateway.withdraw --------------------------------------------------------------------
 
-    function test_gateway_withdraw_belowFloor_revertsInsufficientGas() public {
-        (bool ok, bytes memory ret) = _gatewayWithdrawCall(900_000, bytes32(uint256(7)));
-        assertFalse(ok);
-        assertEq(_sel(ret), RobotMoneyGateway.InsufficientGas.selector, "expected InsufficientGas");
-        (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
-        assertEq(required, GATEWAY_WITHDRAW, "gateway withdraw floor");
-    }
-
-    function test_gateway_withdraw_estimateThenExecute() public {
-        uint256 est = _estimate(1);
-        // The floor is checked at entry, so the estimate is the floor plus the call prelude.
-        assertGe(est, GATEWAY_WITHDRAW, "estimate below the gateway floor");
-        assertLe(est, GATEWAY_WITHDRAW + 50_000, "estimate far above the floor");
-        (bool ok,) = _gatewayWithdrawCall(est, bytes32(uint256(1)));
-        assertTrue(ok, "gateway withdraw failed at the exact estimate");
-        assertEq(usdc.balanceOf(assetRecipient), 10 * ONE, "short payout at the estimate");
-        assertGe(vault.entryGas(), VAULT_FLOOR, "vault entered below its own floor");
-    }
-
     // --- gateway.withdrawFromRouter ----------------------------------------------------------
-
-    function test_gateway_withdrawFromRouter_belowFloor_revertsInsufficientGas() public {
-        for (uint256 k = 1; k <= 3; k++) {
-            (bool ok, bytes memory ret) = _gatewayRouterCallN(900_000, bytes32(uint256(9)), k);
-            assertFalse(ok);
-            assertEq(
-                _sel(ret), RobotMoneyGateway.InsufficientGas.selector, "expected InsufficientGas"
-            );
-            (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
-            assertEq(
-                required, GATEWAY_ROUTER_BASE + k * GATEWAY_ROUTER_PER_LEG, "gateway router floor"
-            );
-        }
-    }
-
-    function test_gateway_withdrawFromRouter_estimateThenExecute() public {
-        uint256 floor = GATEWAY_ROUTER_BASE + GATEWAY_ROUTER_PER_LEG;
-        uint256 est = _estimate(2);
-        assertGe(est, floor, "estimate below the gateway floor");
-        // The gateway is an ERC-1967 proxy (issue 1808): its DELEGATECALL keeps back 1/64 of
-        // the gas it forwards, so the floor checked inside the implementation needs floor / 63
-        // more at the proxy entry. The rest of the slack is the call prelude, as before.
-        assertLe(est, floor + floor / 63 + 50_000, "estimate far above the floor");
-        (bool ok,) = _gatewayRouterCall(est, bytes32(uint256(1)));
-        assertTrue(ok, "router withdraw failed at the exact estimate");
-        assertEq(usdc.balanceOf(assetRecipient), 10 * ONE, "short payout at the estimate");
-        assertGe(vault.entryGas(), VAULT_FLOOR, "vault entered below its own floor");
-    }
 
     // --- multi-leg call builders -------------------------------------------------------------
 
@@ -469,20 +365,6 @@ contract RedeemGasGuardsTest is Test {
         (ok, ret) = address(router).call{gas: gasLimit}(
             abi.encodeCall(
                 router.redeemFor, (alice, alice, vs, sh, new uint256[](k), type(uint256).max)
-            )
-        );
-    }
-
-    function _gatewayRouterCallN(uint256 gasLimit, bytes32 salt, uint256 k)
-        internal
-        returns (bool ok, bytes memory ret)
-    {
-        (address[] memory vs, uint256[] memory sh) = _legs(k, false);
-        vm.prank(agent);
-        (ok, ret) = address(gateway).call{gas: gasLimit}(
-            abi.encodeCall(
-                gateway.withdrawFromRouter,
-                (salt, vs, sh, new uint256[](k), uint64(block.timestamp + 60), salt)
             )
         );
     }
@@ -530,47 +412,25 @@ contract RedeemGasGuardsTest is Test {
         }
     }
 
-    function test_gateway_deposit_belowFloor_revertsInsufficientGas() public {
+    /// @notice The gateway's single deposit path keeps its 2M entry floor and reverts typed below it.
+    function test_gateway_depositTo_belowFloor_revertsInsufficientGas() public {
         vm.prank(agent);
         (bool ok, bytes memory ret) = address(gateway).call{gas: 900_000}(
             abi.encodeCall(
-                gateway.deposit,
-                (bytes32(uint256(5)), 10 * ONE, uint64(block.timestamp + 60), bytes32(uint256(5)))
+                gateway.depositTo,
+                (
+                    bytes32(uint256(6)),
+                    10 * ONE,
+                    uint64(block.timestamp + 60),
+                    bytes32(uint256(6)),
+                    address(vault),
+                    new uint256[](0)
+                )
             )
         );
         assertFalse(ok);
         assertEq(_sel(ret), RobotMoneyGateway.InsufficientGas.selector, "expected InsufficientGas");
         (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
-        assertEq(required, GATEWAY_WITHDRAW, "gateway deposit floor");
-    }
-
-    function test_gateway_depositTo_router_belowFloor_scalesWithWeightedLegs() public {
-        for (uint256 k = 1; k <= 3; k++) {
-            _weigh(k);
-            vm.prank(agent);
-            (bool ok, bytes memory ret) = address(gateway).call{gas: 900_000}(
-                abi.encodeCall(
-                    gateway.depositTo,
-                    (
-                        bytes32(uint256(6)),
-                        10 * ONE,
-                        uint64(block.timestamp + 60),
-                        bytes32(uint256(6)),
-                        address(router),
-                        new uint256[](0)
-                    )
-                )
-            );
-            assertFalse(ok);
-            assertEq(
-                _sel(ret), RobotMoneyGateway.InsufficientGas.selector, "expected InsufficientGas"
-            );
-            (, uint256 required) = abi.decode(_slice(ret), (uint256, uint256));
-            assertEq(
-                required,
-                400_000 + k * GATEWAY_ROUTER_DEPOSIT_PER_LEG,
-                "gateway deposit router floor"
-            );
-        }
+        assertEq(required, GATEWAY_DEPOSIT_FLOOR, "gateway deposit floor");
     }
 }

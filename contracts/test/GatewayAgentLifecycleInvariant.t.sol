@@ -31,6 +31,7 @@ contract AgentLifecycleHandler is Test {
     TestERC20 public immutable usdc;
     address public immutable admin;
     address public immutable pauser;
+    address public immutable destination;
 
     address[] public owners;
     address[] public agents;
@@ -47,11 +48,18 @@ contract AgentLifecycleHandler is Test {
     uint256 public deposits;
     uint256 internal nonce;
 
-    constructor(RobotMoneyGateway gw_, TestERC20 usdc_, address admin_, address pauser_) {
+    constructor(
+        RobotMoneyGateway gw_,
+        TestERC20 usdc_,
+        address admin_,
+        address pauser_,
+        address destination_
+    ) {
         gw = gw_;
         usdc = usdc_;
         admin = admin_;
         pauser = pauser_;
+        destination = destination_;
         for (uint256 i = 0; i < 4; i++) {
             owners.push(makeAddr(string.concat("owner", vm.toString(i))));
         }
@@ -81,7 +89,7 @@ contract AgentLifecycleHandler is Test {
             maxPerPayment: 100e6,
             maxPerWindow: 1_000e6,
             shareReceiver: receiver,
-            allowedDestinations: none,
+            allowedDestinations: CoreProxies.oneDestination(destination),
             assetRecipient: address(0),
             maxWithdrawPerPayment: 0,
             maxWithdrawPerWindow: 0,
@@ -188,11 +196,13 @@ contract AgentLifecycleHandler is Test {
         usdc.mint(agent, amount);
         vm.startPrank(agent);
         usdc.approve(address(gw), amount);
-        try gw.deposit(
+        try gw.depositTo(
             keccak256(abi.encode("o", nonce)),
             amount,
             uint64(block.timestamp + 60),
-            keccak256(abi.encode("k", nonce++))
+            keccak256(abi.encode("k", nonce++)),
+            destination,
+            new uint256[](0)
         ) {
             deposits++;
         } catch {}
@@ -217,7 +227,7 @@ contract GatewayAgentLifecycleInvariantTest is StdInvariant, Test {
         gw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
-        handler = new AgentLifecycleHandler(gw, usdc, admin, pauser);
+        handler = new AgentLifecycleHandler(gw, usdc, admin, pauser, address(vault));
         targetContract(address(handler));
     }
 

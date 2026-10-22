@@ -6,8 +6,8 @@
 //! Two modes:
 //!
 //! 1. **Config-vault mode** (no `--address` flag): reads the single vault
-//!    pinned in the operator config via the gateway's `vault()` view.
-//!    Sub-reads: `gateway.vault()`, `vault.asset()`, `vault.name()`,
+//!    pinned in the operator config as `vault_address` (the gateway pins no
+//!    vault). Sub-reads: `vault.asset()`, `vault.name()`,
 //!    `vault.symbol()`, `vault.decimals()`, `vault.totalAssets()`,
 //!    `vault.totalSupply()`. Legacy mode — kept for backwards compatibility.
 //!
@@ -40,7 +40,7 @@ use alloy_sol_types::SolCall;
 use serde::Serialize;
 
 use crate::config::Config;
-use crate::gateway::{IVault, RobotMoneyGateway, VaultRegistry};
+use crate::gateway::{IVault, VaultRegistry};
 use crate::network_env::NetworkEnv;
 use crate::output::emit;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
@@ -55,11 +55,6 @@ const EXIT_STARTUP_FAIL: i32 = 3;
 pub struct VaultData {
     /// Vault address as resolved from the operator config.
     pub address: String,
-    /// `gateway.vault()` — what the gateway *actually* routes to. Empty
-    /// when the cross-check sub-read failed; consumers can compare
-    /// `gateway_vault` and `address` to detect drift between operator
-    /// config and the deployed gateway.
-    pub gateway_vault: String,
     /// `vault.asset()` lowercase 0x-hex.
     pub asset: String,
     /// `vault.name()`. Empty string when the read failed.
@@ -229,13 +224,6 @@ pub fn run(config_path: &Path, address: Option<&str>, pretty: bool) -> i32 {
         }
     } else {
         // Config-vault mode (legacy): read the single vault pinned in operator config.
-        let gateway_addr = match Address::from_str(&cfg.gateway_address) {
-            Ok(a) => a,
-            Err(e) => {
-                log::error!("rmpc get-vault: gateway_address parse error: {e}");
-                return EXIT_STARTUP_FAIL;
-            }
-        };
         let vault_addr = match Address::from_str(&cfg.vault_address) {
             Ok(a) => a,
             Err(e) => {
@@ -243,7 +231,7 @@ pub fn run(config_path: &Path, address: Option<&str>, pretty: bool) -> i32 {
                 return EXIT_STARTUP_FAIL;
             }
         };
-        let env = match rt.block_on(read_vault(&rpc, gateway_addr, vault_addr)) {
+        let env = match rt.block_on(read_vault(&rpc, vault_addr)) {
             Ok(e) => e,
             Err(e) => {
                 log::error!("rmpc get-vault: pre-read setup failed: {e}");
@@ -257,7 +245,6 @@ pub fn run(config_path: &Path, address: Option<&str>, pretty: bool) -> i32 {
 
 async fn read_vault(
     rpc: &FailoverRpcClient,
-    gateway: Address,
     vault: Address,
 ) -> crate::errors::Result<Envelope<VaultData>> {
     let chain_id = rpc.chain_id().await?;
@@ -269,12 +256,6 @@ async fn read_vault(
         ..Default::default()
     };
     let mut b = PartialBuilder::new(chain_id, block_number, data);
-
-    // gateway.vault()
-    match call_vault_addr(rpc, gateway, &block_tag).await {
-        Ok(addr) => b.data_mut().gateway_vault = format!("{addr:#x}"),
-        Err(e) => b.record_err("gateway_vault", e),
-    }
 
     // vault.asset()
     match call_asset(rpc, vault, &block_tag).await {
@@ -443,28 +424,6 @@ fn compute_share_price(total_assets: U256, total_supply: U256, decimals: u8) -> 
 }
 
 // ---- typed view helpers --------------------------------------------------
-
-async fn call_vault_addr(
-    rpc: &FailoverRpcClient,
-    gateway: Address,
-    block_tag: &str,
-) -> std::result::Result<Address, String> {
-    let data = RobotMoneyGateway::vaultCall {}.abi_encode();
-    let out = rpc
-        .eth_call(
-            &CallRequest {
-                to: gateway,
-                from: None,
-                data: data.into(),
-            },
-            Some(block_tag),
-        )
-        .await
-        .map_err(|e| format!("eth_call failed: {e}"))?;
-    let r = RobotMoneyGateway::vaultCall::abi_decode_returns(&out, true)
-        .map_err(|e| format!("abi decode: {e}"))?;
-    Ok(r._0)
-}
 
 async fn call_asset(
     rpc: &FailoverRpcClient,

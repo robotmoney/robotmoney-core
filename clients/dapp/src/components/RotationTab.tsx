@@ -8,6 +8,7 @@ import type { PreviewContext } from "../lib/preview";
 import { useRotationState } from "../lib/useRotationState";
 import { TxPreview } from "./TxPreview";
 import { PolicyFields } from "./PolicyFields";
+import { DestinationPicker } from "./DestinationPicker";
 import { WriteStatus } from "./WriteStatus";
 import { RegistrationSteps, registrationIds } from "./RegistrationSteps";
 
@@ -15,6 +16,7 @@ type Props = Readonly<{
   gatewayAddress: Address;
   ctx: PreviewContext;
   now: number;
+  routerAddress?: string;
 }>;
 
 const IDS = registrationIds("rotation", {
@@ -25,7 +27,7 @@ const IDS = registrationIds("rotation", {
 
 export function RotationTab(props: Props) {
   const { isConnected } = useAccount();
-  const r = useRotationState(props.gatewayAddress, props.ctx, props.now);
+  const r = useRotationState(props.gatewayAddress, props.ctx, props.now, props.routerAddress);
 
   const disableRevoke = !isConnected || !r.previewsOk || r.step !== "idle" || r.isPending;
 
@@ -86,6 +88,12 @@ export function RotationTab(props: Props) {
         setMaxPerWindow={r.setMaxPerWindow}
         shareReceiver={r.shareReceiver}
         setShareReceiver={r.setShareReceiver}
+      />
+      <DestinationPicker
+        testIdPrefix="rotation-"
+        selected={r.destinations}
+        setSelected={r.setDestinations}
+        routerAddress={props.routerAddress}
       />
 
       <form

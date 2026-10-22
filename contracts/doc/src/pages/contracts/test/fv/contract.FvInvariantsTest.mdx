@@ -4,7 +4,7 @@ title: "FvInvariantsTest"
 
 # FvInvariantsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5be2e7be63d58c4a38ea155357305b04ecf381b7/contracts/test/fv/FvInvariants.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/fv/FvInvariants.t.sol)
 
 **Inherits:** Test
 
@@ -400,23 +400,18 @@ BasketVault.t.sol::test_SUP3_statefulDepositRedeemNeverProfits
 function test_SUP3_roundTripNeverProfits() public pure;
 ```
 
-<a id="test_gw5_agentredeemcarriesrealfloor"></a>
+<a id="test_gw5_retiredtombstone"></a>
 
-### test_GW5_agentRedeemCarriesRealFloor
+### test_GW5_retiredTombstone
 
-GW-5 (FLIPPED GREEN by #969) — every agent redemption through the
-gateway carries a real, caller-meaningful per-leg slippage floor.
-Fix (F-11): `RobotMoneyGateway.withdrawFromRouter` takes a
-`minAssetsPerLeg` vector and forwards it verbatim to
-`PortfolioRouter.redeemFor` (no more `new uint256[](n)` zero
-literal) AND forwards the real agent deadline (no more
-`type(uint256).max`); the floor vector is folded into `paymentId`
-so a replay cannot weaken it. Deep proofs:
-GatewayRouter.t.sol::test_withdrawFromRouter_realFloor_revertsBelowMinimum,
-::test_withdrawFromRouter_floorIsBoundIntoPaymentId.
+GW-5 (TOMBSTONE, owner decision 2026-10-19) — the gateway has no
+redemption path, so there is no surface left to carry a slippage
+floor. The registry keeps the ID as a tombstone because IDs are
+append-only. The withdrawal selectors are proven absent by
+RobotMoneyGateway.t.sol::test_removedSelectors_refuseWithNoMovement.
 
 ```solidity
-function test_GW5_agentRedeemCarriesRealFloor() public pure;
+function test_GW5_retiredTombstone() public pure;
 ```
 
 <a id="test_ora4_deviationguardblockssettlement"></a>
