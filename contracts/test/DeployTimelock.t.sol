@@ -24,7 +24,6 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
 import {claimTmpPath, releaseTmpPath, uniqueTmpPath} from "./helpers/TmpPaths.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
-import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
 import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
@@ -2048,17 +2047,16 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
         VaultRegistry registry = CoreProxies.vaultRegistry(deployer);
         PortfolioRouter router =
             CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
-        // The committee contracts are required inputs on every chain. The deployer
-        // holds their admin roles until the handover. The receipt register exists
+        // The receipt contract is a required input on every chain. The deployer
+        // holds its admin roles until the handover. The receipt register exists
         // before governance, which releases receipts through it (issue 1698).
-        InvestmentCommitteePolicy ic =
-            CoreProxies.investmentCommitteePolicy(deployer, address(gateway));
         ConsensusRecommendationReceipt receipt =
-            CoreProxies.consensusRecommendationReceipt(deployer, address(gateway), address(ic));
+            CoreProxies.consensusRecommendationReceipt(deployer);
         RouterGovernance governance =
             CoreProxies.routerGovernance(address(router), address(receipt), deployer);
+        bytes32 releaserRole = receipt.RECEIPT_RELEASER_ROLE();
         vm.prank(deployer);
-        receipt.grantRole(ADMIN_ROLE, address(governance));
+        receipt.grantRole(releaserRole, address(governance));
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
         vm.prank(deployer);
@@ -2084,7 +2082,6 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
         _set("TIMELOCK_MIN_DELAY", "172800");
         OUT_PATH = uniqueTmpPath(vm, string.concat("1476-run-entrypoint", _prefix()));
         _set("DEPLOYMENT_OUT", OUT_PATH);
-        _set("IC_POLICY_ADDRESS", vm.toString(address(ic)));
         _set("CONSENSUS_RECEIPT_ADDRESS", vm.toString(address(receipt)));
         _set("RECEIPT_ADMIN_ADDRESS", vm.toString(deployer));
     }
@@ -2274,14 +2271,14 @@ contract DeployTimelockStrictChainGuardTest is DeployTimelockRunEntrypointBase {
 /// @notice Required inputs: unset or malformed values revert on every chain. One contract per
 ///         test with its own prefix: forge runs the tests of a contract in parallel over a
 ///         process-wide environment, so two tests that mutate inputs would leak into each other.
-contract DeployTimelockRequiredIcPolicyTest is DeployTimelockRunEntrypointBase {
+contract DeployTimelockRequiredReceiptTest is DeployTimelockRunEntrypointBase {
     function _prefix() internal pure override returns (string memory) {
-        return "RM_S1_REQUIRED_IC_";
+        return "RM_S1_REQUIRED_RECEIPT_";
     }
 
-    function test_run_revertsWhenIcPolicyUnset() public removesOwnManifest {
-        _set("IC_POLICY_ADDRESS", vm.toString(address(0)));
-        vm.expectRevert(bytes("IC_POLICY_ADDRESS=0"));
+    function test_run_revertsWhenReceiptUnset() public removesOwnManifest {
+        _set("CONSENSUS_RECEIPT_ADDRESS", vm.toString(address(0)));
+        vm.expectRevert(bytes("CONSENSUS_RECEIPT_ADDRESS=0"));
         RunEntrypointRelay(deployer).runFrom(harness, _prefix());
     }
 }

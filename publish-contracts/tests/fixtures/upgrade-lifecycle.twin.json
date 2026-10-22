@@ -75,22 +75,8 @@
           "initialized_version": "1",
           "manifest_upgrade_mode": "upgradeable"
         },
-        "icpolicy": {
-          "stage": "ic-policy",
-          "contract": "InvestmentCommitteePolicy",
-          "proxy": "0x1A6AD08ECF6a1b8E0d421b97B54C9F6777b2A63b",
-          "implementation": "0x63534138552609388923cfcd93e596e4ea66c75c",
-          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
-          "implementation_code_hash": "0x9a5c83c1bec1015e249b92c40f2d366d5d3e3291b73db91ab1724bbdebdb58ce",
-          "layout": "contracts/test/fixtures/storage-layout/InvestmentCommitteePolicy.json",
-          "layout_id": "0x3a441f765dd8379dbc25492781c2122d12c540fc0cddb02f21b1112b16fe93ef",
-          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
-          "upgrades_frozen": false,
-          "initialized_version": "1",
-          "manifest_upgrade_mode": "upgradeable"
-        },
         "receipt": {
-          "stage": "ic-policy",
+          "stage": "receipt",
           "contract": "ConsensusRecommendationReceipt",
           "proxy": "0xB5BA019528d8339B14773697d8237f3B0572D2AE",
           "implementation": "0xddda88be0ea293b11e84afe32b0bef2ddb6b17da",
@@ -162,7 +148,7 @@
       },
       "core_immutable": false,
       "immutability_refused_because": [
-        "not frozen on chain (upgradeable release, proving period open): vault[rmUSDC], registry, router, gateway, icpolicy, receipt, governance, vault[rmPROTO], vault[rmAGENT], vault[rmRWA]"
+        "not frozen on chain (upgradeable release, proving period open): vault[rmUSDC], registry, router, gateway, receipt, governance, vault[rmPROTO], vault[rmAGENT], vault[rmRWA]"
       ],
       "remaining_governed_parameters": [
         "vault caps (tvlCap, perDepositCap), exitFeeBps and feeRecipient on every vault: ADMIN_ROLE, the Safe through the timelock",
@@ -172,7 +158,7 @@
         "router eligibility, vault registration and retirement on the VaultRegistry: ADMIN_ROLE, the Safe through the timelock",
         "the router weight setter (WEIGHT_SETTER_ROLE): rotated by the Safe and executed by the timelock",
         "deposit pauses: the pauser key (gateway DEPOSIT_PAUSER_ROLE) and the emergency key (vault EMERGENCY_ROLE levers) with no timelock, unpauses through the timelock",
-        "investment committee membership and receipts: the IC policy and the consensus receipt register (ADMIN_ROLE, COMMITTEE_AGENT_ROLE)",
+        "consensus receipt authority: the receipt submitter role (RECEIPT_SUBMITTER_ROLE) and the release role (RECEIPT_RELEASER_ROLE), both granted by the timelock (ADMIN_ROLE)",
         "the timelock delay and its proposers: TimelockController self-administration by the Safe (updateDelay, grantRole)",
         "depositor agent authorizations on the gateway: each depositor's own commitAuthorization and revealAuthorization"
       ],
@@ -264,22 +250,8 @@
           "initialized_version": "1",
           "manifest_upgrade_mode": "upgradeable"
         },
-        "icpolicy": {
-          "stage": "ic-policy",
-          "contract": "InvestmentCommitteePolicy",
-          "proxy": "0x1A6AD08ECF6a1b8E0d421b97B54C9F6777b2A63b",
-          "implementation": "0x63534138552609388923cfcd93e596e4ea66c75c",
-          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
-          "implementation_code_hash": "0x9a5c83c1bec1015e249b92c40f2d366d5d3e3291b73db91ab1724bbdebdb58ce",
-          "layout": "contracts/test/fixtures/storage-layout/InvestmentCommitteePolicy.json",
-          "layout_id": "0x3a441f765dd8379dbc25492781c2122d12c540fc0cddb02f21b1112b16fe93ef",
-          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
-          "upgrades_frozen": false,
-          "initialized_version": "1",
-          "manifest_upgrade_mode": "upgradeable"
-        },
         "receipt": {
-          "stage": "ic-policy",
+          "stage": "receipt",
           "contract": "ConsensusRecommendationReceipt",
           "proxy": "0xB5BA019528d8339B14773697d8237f3B0572D2AE",
           "implementation": "0xddda88be0ea293b11e84afe32b0bef2ddb6b17da",
@@ -351,7 +323,7 @@
       },
       "core_immutable": false,
       "immutability_refused_because": [
-        "not frozen on chain (upgradeable release, proving period open): vault[rmUSDC], registry, router, gateway, icpolicy, receipt, governance, vault[rmPROTO], vault[rmAGENT], vault[rmRWA]"
+        "not frozen on chain (upgradeable release, proving period open): vault[rmUSDC], registry, router, gateway, receipt, governance, vault[rmPROTO], vault[rmAGENT], vault[rmRWA]"
       ],
       "remaining_governed_parameters": [
         "vault caps (tvlCap, perDepositCap), exitFeeBps and feeRecipient on every vault: ADMIN_ROLE, the Safe through the timelock",
@@ -361,7 +333,7 @@
         "router eligibility, vault registration and retirement on the VaultRegistry: ADMIN_ROLE, the Safe through the timelock",
         "the router weight setter (WEIGHT_SETTER_ROLE): rotated by the Safe and executed by the timelock",
         "deposit pauses: the pauser key (gateway DEPOSIT_PAUSER_ROLE) and the emergency key (vault EMERGENCY_ROLE levers) with no timelock, unpauses through the timelock",
-        "investment committee membership and receipts: the IC policy and the consensus receipt register (ADMIN_ROLE, COMMITTEE_AGENT_ROLE)",
+        "consensus receipt authority: the receipt submitter role (RECEIPT_SUBMITTER_ROLE) and the release role (RECEIPT_RELEASER_ROLE), both granted by the timelock (ADMIN_ROLE)",
         "the timelock delay and its proposers: TimelockController self-administration by the Safe (updateDelay, grantRole)",
         "depositor agent authorizations on the gateway: each depositor's own commitAuthorization and revealAuthorization"
       ],
@@ -411,11 +383,6 @@
         "proxy": "0x0a41235DC87688EC14279889FD90Ab28856591F2",
         "implementation": "0x20b009d5f65ea8d393a89a02468bd8160461f189",
         "implementation_code_hash": "0xa0c5075726daef32167ac7b884da0600efc6ea8bae03bf434a51b6025ad5e4cf"
-      },
-      "icpolicy": {
-        "proxy": "0x1A6AD08ECF6a1b8E0d421b97B54C9F6777b2A63b",
-        "implementation": "0x63534138552609388923cfcd93e596e4ea66c75c",
-        "implementation_code_hash": "0x9a5c83c1bec1015e249b92c40f2d366d5d3e3291b73db91ab1724bbdebdb58ce"
       },
       "receipt": {
         "proxy": "0xB5BA019528d8339B14773697d8237f3B0572D2AE",
@@ -512,22 +479,8 @@
           "initialized_version": "18446744073709551615",
           "manifest_upgrade_mode": "upgradeable"
         },
-        "icpolicy": {
-          "stage": "ic-policy",
-          "contract": "InvestmentCommitteePolicy",
-          "proxy": "0x1A6AD08ECF6a1b8E0d421b97B54C9F6777b2A63b",
-          "implementation": "0x63534138552609388923cfcd93e596e4ea66c75c",
-          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
-          "implementation_code_hash": "0x9a5c83c1bec1015e249b92c40f2d366d5d3e3291b73db91ab1724bbdebdb58ce",
-          "layout": "contracts/test/fixtures/storage-layout/InvestmentCommitteePolicy.json",
-          "layout_id": "0x3a441f765dd8379dbc25492781c2122d12c540fc0cddb02f21b1112b16fe93ef",
-          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
-          "upgrades_frozen": true,
-          "initialized_version": "18446744073709551615",
-          "manifest_upgrade_mode": "upgradeable"
-        },
         "receipt": {
-          "stage": "ic-policy",
+          "stage": "receipt",
           "contract": "ConsensusRecommendationReceipt",
           "proxy": "0xB5BA019528d8339B14773697d8237f3B0572D2AE",
           "implementation": "0xddda88be0ea293b11e84afe32b0bef2ddb6b17da",
@@ -607,7 +560,7 @@
         "router eligibility, vault registration and retirement on the VaultRegistry: ADMIN_ROLE, the Safe through the timelock",
         "the router weight setter (WEIGHT_SETTER_ROLE): rotated by the Safe and executed by the timelock",
         "deposit pauses: the pauser key (gateway DEPOSIT_PAUSER_ROLE) and the emergency key (vault EMERGENCY_ROLE levers) with no timelock, unpauses through the timelock",
-        "investment committee membership and receipts: the IC policy and the consensus receipt register (ADMIN_ROLE, COMMITTEE_AGENT_ROLE)",
+        "consensus receipt authority: the receipt submitter role (RECEIPT_SUBMITTER_ROLE) and the release role (RECEIPT_RELEASER_ROLE), both granted by the timelock (ADMIN_ROLE)",
         "the timelock delay and its proposers: TimelockController self-administration by the Safe (updateDelay, grantRole)",
         "depositor agent authorizations on the gateway: each depositor's own commitAuthorization and revealAuthorization"
       ],

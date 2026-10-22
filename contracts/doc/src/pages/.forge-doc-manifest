@@ -13,7 +13,6 @@ contracts/contract.RouterGovernance.mdx
 contracts/contract.VaultRegistry.mdx
 contracts/gateway/abstract.AccessRoles.mdx
 contracts/gateway/contract.ConsensusRecommendationReceipt.mdx
-contracts/gateway/contract.InvestmentCommitteePolicy.mdx
 contracts/gateway/contract.RobotMoneyGateway.mdx
 contracts/gateway/interfaces/interface.IConsensusRecommendationReceipt.mdx
 contracts/gateway/interfaces/interface.IGateway.mdx
@@ -65,8 +64,8 @@ contracts/script/abstract.ExpectedChainGuard.mdx
 contracts/script/abstract.UpgradeAuthority.mdx
 contracts/script/constants.DeployVault.s.mdx
 contracts/script/contract.DeployAgentTokenVault.mdx
+contracts/script/contract.DeployConsensusRecommendationReceipt.mdx
 contracts/script/contract.DeployGateway.mdx
-contracts/script/contract.DeployInvestmentCommitteePolicy.mdx
 contracts/script/contract.DeployLibs.mdx
 contracts/script/contract.DeployPortfolioRouter.mdx
 contracts/script/contract.DeployProtocolAssetVault.mdx
@@ -120,6 +119,7 @@ contracts/test/contract.CardinalityBelowFloorPool.mdx
 contracts/test/contract.CompoundV3AdapterPositionTest.mdx
 contracts/test/contract.ConfigFilesTest.mdx
 contracts/test/contract.ConfusedDeputyGuardsTest.mdx
+contracts/test/contract.ConsensusReceiptMigrationTest.mdx
 contracts/test/contract.ConsensusReceiptSafeSubmitterTest.mdx
 contracts/test/contract.ConsensusRecommendationReceiptTest.mdx
 contracts/test/contract.ConstPoolFee100.mdx
@@ -145,7 +145,6 @@ contracts/test/contract.DeployTimeEligibilityTest.mdx
 contracts/test/contract.DeployTimelockAgentHandoverTest.mdx
 contracts/test/contract.DeployTimelockAgentListInputTest.mdx
 contracts/test/contract.DeployTimelockChainFloorTest.mdx
-contracts/test/contract.DeployTimelockCommitteeTest.mdx
 contracts/test/contract.DeployTimelockDelayBoundaryTest.mdx
 contracts/test/contract.DeployTimelockDelayFloorTest.mdx
 contracts/test/contract.DeployTimelockExpectedChainTest.mdx
@@ -153,9 +152,10 @@ contracts/test/contract.DeployTimelockFourVaultsTest.mdx
 contracts/test/contract.DeployTimelockManifestTest.mdx
 contracts/test/contract.DeployTimelockProductionKindTest.mdx
 contracts/test/contract.DeployTimelockReceiptAdminTest.mdx
+contracts/test/contract.DeployTimelockReceiptTest.mdx
 contracts/test/contract.DeployTimelockRehearsalKindTest.mdx
 contracts/test/contract.DeployTimelockRequiredDelayTest.mdx
-contracts/test/contract.DeployTimelockRequiredIcPolicyTest.mdx
+contracts/test/contract.DeployTimelockRequiredReceiptTest.mdx
 contracts/test/contract.DeployTimelockRequiredSafeOwnersTest.mdx
 contracts/test/contract.DeployTimelockRunEntrypointTest.mdx
 contracts/test/contract.DeployTimelockStrictChainGuardTest.mdx
@@ -191,13 +191,11 @@ contracts/test/contract.GovernedSurfacesSafeTimelockTest.mdx
 contracts/test/contract.GovernedUpgradeTest.mdx
 contracts/test/contract.GovernedVaultSafeTimelockTest.mdx
 contracts/test/contract.GuardHarness.mdx
-contracts/test/contract.ICGatewayIntegration.mdx
 contracts/test/contract.IlliquidMockAdapter.mdx
 contracts/test/contract.InterlockMockVault.mdx
 contracts/test/contract.InterruptedRedeploy.mdx
 contracts/test/contract.InvForeignToken.mdx
 contracts/test/contract.InvUSDC.mdx
-contracts/test/contract.InvestmentCommitteePolicyTest.mdx
 contracts/test/contract.LeakyRedeemRouterVault.mdx
 contracts/test/contract.LowCardinalityPool.mdx
 contracts/test/contract.ManifestHarness.mdx
@@ -209,7 +207,6 @@ contracts/test/contract.MockAerodromePool.mdx
 contracts/test/contract.MockAerodromeRouter.mdx
 contracts/test/contract.MockBasketLikeVault.mdx
 contracts/test/contract.MockDefaultWeightsRouter.mdx
-contracts/test/contract.MockGateway.mdx
 contracts/test/contract.MockGovVault.mdx
 contracts/test/contract.MockMorpho4626.mdx
 contracts/test/contract.MockMorphoVault.mdx
@@ -262,7 +259,6 @@ contracts/test/contract.ReentrantHookToken.mdx
 contracts/test/contract.ReentrantToken.mdx
 contracts/test/contract.ReentrantVault.mdx
 contracts/test/contract.RevertingRetireVault.mdx
-contracts/test/contract.RevisionCommitteeAssessment.mdx
 contracts/test/contract.RevisionRecorderAssessment.mdx
 contracts/test/contract.RevisionVaultAssessment.mdx
 contracts/test/contract.RobotMoneyGatewayCeilingProbe.mdx
@@ -292,9 +288,8 @@ contracts/test/contract.RwaGuardHarness.mdx
 contracts/test/contract.RwaVaultB20ForkTest.mdx
 contracts/test/contract.RwaVaultB20Test.mdx
 contracts/test/contract.SafeIntegrationTest.mdx
-contracts/test/contract.SecurityReviewCommitteePoc.mdx
 contracts/test/contract.SecurityReviewPoc.mdx
-contracts/test/contract.SecurityReviewRecheckCommitteePoc.mdx
+contracts/test/contract.SecurityReviewRecheckReceiptPoc.mdx
 contracts/test/contract.SecurityReviewRecheckVaultPoc.mdx
 contracts/test/contract.ShareLeakRedeemVault.mdx
 contracts/test/contract.ShareLeakVault.mdx
@@ -362,7 +357,8 @@ contracts/test/helpers/contract.CoreStages.mdx
 contracts/test/helpers/contract.EtchAavePool.mdx
 contracts/test/helpers/contract.EtchComet.mdx
 contracts/test/helpers/contract.EtchErc4626Venue.mdx
-contracts/test/helpers/contract.InvestmentCommitteePolicyV2.mdx
+contracts/test/helpers/contract.LegacyCommitteeAlwaysAllows.mdx
+contracts/test/helpers/contract.LegacyConsensusRecommendationReceipt.mdx
 contracts/test/helpers/contract.MockV4PoolManager.mdx
 contracts/test/helpers/contract.MockVault.mdx
 contracts/test/helpers/contract.NoYieldTestAdapter.mdx

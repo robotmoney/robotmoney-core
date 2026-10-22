@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 // Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §2.1
+// Canonical: docs/architecture.md §4.8 — Receipt Submitter Authority
 // Implements: issue #1247 — (fusion) anchor the receipt on chain
 pragma solidity ^0.8.24;
 
@@ -8,9 +9,7 @@ import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
 import {
     ReentrancyGuardUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
-
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {GovernedUUPS, GovernedUpgrade} from "../lib/GovernedUUPS.sol";
 
 import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommendationReceipt.sol";
 
@@ -42,10 +41,12 @@ import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommenda
 ///   Staleness is a property of the recommendation, derived off-chain from the
 ///   payload's `created_at`. An unreleased receipt stays an immutable public
 ///   record forever; nothing deletes it or changes its on-chain state.
-/// - **Role administration stays on one contract.** There is no second agent
-///   registry: submitters are gated by `COMMITTEE_AGENT_ROLE` on the shipped
-///   `InvestmentCommitteePolicy`.
-/// - `ADMIN_ROLE` is held by the `TimelockController` (INV-3).
+/// - **The receipt owns its roles.** There is no committee registry and no gateway
+///   route. Submitters hold `RECEIPT_SUBMITTER_ROLE` on this contract and call
+///   `recordReceipt` directly. The submitter is `msg.sender`.
+/// - `ADMIN_ROLE` is held by the `TimelockController` alone (INV-3). It administers
+///   `RECEIPT_SUBMITTER_ROLE` and `RECEIPT_RELEASER_ROLE`. RouterGovernance holds only
+///   the narrow `RECEIPT_RELEASER_ROLE`.
 ///
 /// Payload contract: `tests/fixtures/consensus-receipt.schema.json` and
 /// `consensus-receipt.canonicalization.json`, byte-identical to
@@ -55,7 +56,8 @@ import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommenda
 ///
 /// Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
 /// the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
-/// (`GovernedUUPS`). `gateway` and `icPolicy` are set once at initialization and have no setter.
+/// (`GovernedUUPS`). `gateway` and `icPolicy` are retired storage slots: they are kept so the
+/// proxy layout never changes, they are never written again and nothing reads them.
 contract ConsensusRecommendationReceipt is
     AdminFloorAccessControl,
     ReentrancyGuardUpgradeable,
@@ -64,15 +66,17 @@ contract ConsensusRecommendationReceipt is
 {
     // ─── Roles ───────────────────────────────────────────────────────────────
 
-    /// @notice Releases receipts. Held by the `TimelockController` (INV-3) and
-    ///         by RouterGovernance, whose `applyReceipt` releases a receipt in
-    ///         the same call that sets its weights (issue 1698).
+    /// @notice Administers the two receipt roles below. Held by the `TimelockController`
+    ///         alone (INV-3). RouterGovernance does not hold it.
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
-    /// @notice Mirror of `InvestmentCommitteePolicy.COMMITTEE_AGENT_ROLE`. This
-    ///         contract keeps no agent registry of its own — membership is read
-    ///         from the IC policy so role administration stays on one contract.
-    bytes32 public constant COMMITTEE_AGENT_ROLE = keccak256("COMMITTEE_AGENT_ROLE");
+    /// @notice May call `recordReceipt`. Granted and revoked only by `ADMIN_ROLE`.
+    bytes32 public constant RECEIPT_SUBMITTER_ROLE = keccak256("RECEIPT_SUBMITTER_ROLE");
+
+    /// @notice May call `releaseReceipt`. Held by RouterGovernance, whose `applyReceipt`
+    ///         releases a receipt in the same call that sets its weights (issue 1698).
+    ///         It is a single-purpose role: it cannot grant or revoke any role.
+    bytes32 public constant RECEIPT_RELEASER_ROLE = keccak256("RECEIPT_RELEASER_ROLE");
 
     // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -82,10 +86,10 @@ contract ConsensusRecommendationReceipt is
 
     // ─── State ───────────────────────────────────────────────────────────────
 
-    /// @inheritdoc IConsensusRecommendationReceipt
+    /// @notice Retired slot. Formerly the only permitted writer. Never written, never read.
     address public gateway;
 
-    /// @inheritdoc IConsensusRecommendationReceipt
+    /// @notice Retired slot. Formerly the committee role source. Never written, never read.
     address public icPolicy;
 
     /// @dev Append-only receipt log.
@@ -100,29 +104,37 @@ contract ConsensusRecommendationReceipt is
     /// @param admin_     Address granted `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
     ///                   In every non-test deployment this is the
     ///                   `TimelockController` (INV-3).
-    /// @param gateway_   Deployed `RobotMoneyGateway`; sole permitted writer.
-    /// @param icPolicy_  Deployed `InvestmentCommitteePolicy`; the single source
-    ///                   of `COMMITTEE_AGENT_ROLE` membership.
     /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
     /// @param upgradeMode_ The release mode. `Undeclared` reverts.
-    function initialize(
-        address admin_,
-        address gateway_,
-        address icPolicy_,
-        address upgradeTimelock_,
-        UpgradeMode upgradeMode_
-    ) external initializer {
+    function initialize(address admin_, address upgradeTimelock_, UpgradeMode upgradeMode_)
+        external
+        initializer
+    {
         __AccessControlEnumerable_init();
         __ReentrancyGuard_init();
         __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
-        if (admin_ == address(0) || gateway_ == address(0) || icPolicy_ == address(0)) {
-            revert ZeroAddress();
-        }
-        gateway = gateway_;
-        icPolicy = icPolicy_;
+        if (admin_ == address(0)) revert ZeroAddress();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _grantRole(ADMIN_ROLE, admin_);
+        _setRoleAdmin(RECEIPT_SUBMITTER_ROLE, ADMIN_ROLE);
+        _setRoleAdmin(RECEIPT_RELEASER_ROLE, ADMIN_ROLE);
+    }
+
+    /// @notice One-time migration for a live proxy created before the receipt owned its roles.
+    ///         Run it through the timelock's `upgradeToAndCall`. It wires the role admins,
+    ///         grants `releaser` the narrow release role and removes `ADMIN_ROLE` from it if
+    ///         it held that role. Receipts, slots and every other role are untouched.
+    /// @param releaser RouterGovernance.
+    function migrateToSubmitterRoles(address releaser) external reinitializer(2) {
+        if (msg.sender != GovernedUpgrade.layout().upgradeTimelock) {
+            revert MigrationCallerNotTimelock();
+        }
+        if (releaser == address(0)) revert ZeroAddress();
+        _setRoleAdmin(RECEIPT_SUBMITTER_ROLE, ADMIN_ROLE);
+        _setRoleAdmin(RECEIPT_RELEASER_ROLE, ADMIN_ROLE);
+        _grantRole(RECEIPT_RELEASER_ROLE, releaser);
+        if (hasRole(ADMIN_ROLE, releaser)) _revokeRole(ADMIN_ROLE, releaser);
     }
 
     /// @dev Last-admin floor for `DEFAULT_ADMIN_ROLE` (ADMIN_ROLE is covered by
@@ -135,26 +147,16 @@ contract ConsensusRecommendationReceipt is
         return super._revokeRole(role, account);
     }
 
-    // ─── Modifiers ───────────────────────────────────────────────────────────
-
-    /// @dev Reverts unless `msg.sender` is the registered RobotMoneyGateway.
-    modifier onlyGateway() {
-        if (msg.sender != gateway) revert CallerNotGateway();
-        _;
-    }
-
     // ─── Write surface ───────────────────────────────────────────────────────
 
     /// @inheritdoc IConsensusRecommendationReceipt
-    function recordReceipt(
-        address submitter,
-        bytes32 receiptId,
-        bytes32 payloadDigest,
-        string calldata payloadUri
-    ) external onlyGateway nonReentrant returns (uint256 index) {
-        if (!IAccessControl(icPolicy).hasRole(COMMITTEE_AGENT_ROLE, submitter)) {
-            revert SubmitterNotAllowlisted();
-        }
+    function recordReceipt(bytes32 receiptId, bytes32 payloadDigest, string calldata payloadUri)
+        external
+        nonReentrant
+        returns (uint256 index)
+    {
+        address submitter = msg.sender;
+        if (!hasRole(RECEIPT_SUBMITTER_ROLE, submitter)) revert SubmitterNotAllowlisted();
         if (receiptId == bytes32(0)) revert EmptyReceiptId();
         if (payloadDigest == bytes32(0)) revert EmptyPayloadDigest();
         if (bytes(payloadUri).length == 0) revert EmptyPayloadUri();
@@ -179,7 +181,11 @@ contract ConsensusRecommendationReceipt is
     }
 
     /// @inheritdoc IConsensusRecommendationReceipt
-    function releaseReceipt(bytes32 receiptId) external onlyRole(ADMIN_ROLE) nonReentrant {
+    function releaseReceipt(bytes32 receiptId)
+        external
+        onlyRole(RECEIPT_RELEASER_ROLE)
+        nonReentrant
+    {
         uint256 slot = _indexPlusOne[receiptId];
         if (slot == 0) revert ReceiptNotFound();
 
@@ -240,6 +246,6 @@ contract ConsensusRecommendationReceipt is
     // `RouterGovernance.applyReceipt()`, `PortfolioRouter.setWeights()` or
     // `RobotMoneyGateway.deposit()`. Verified by
     // ConsensusRecommendationReceiptTest.testSignallingOnlyBoundary. The
-    // weight setter calls `releaseReceipt` (it holds `ADMIN_ROLE` here), never
+    // weight setter calls `releaseReceipt` (it holds `RECEIPT_RELEASER_ROLE` here), never
     // the other way round.
 }

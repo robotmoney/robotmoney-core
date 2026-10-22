@@ -1,20 +1,21 @@
 ---
 title: "ConsensusRecommendationReceiptTest"
-description: "Full on-chain path for the consensus receipt anchor: gateway → receipt contract → event, plus the signalling-only boundary, the timelock-held `ADMIN_ROLE`, the 3-topic event limit, and the anchoring-digest assertion that closes issue #1280."
+description: "Full on-chain path for the consensus receipt anchor: submitter Safe-held role → receipt contract → event, with no gateway and no committee registry, plus the signalling-only boundary, the timelock-held `ADMIN_ROLE`, the 3-topic event limit, and the anchoring-digest assertion that closes issue #1280."
 ---
 
 # ConsensusRecommendationReceiptTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/ConsensusRecommendationReceipt.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/ConsensusRecommendationReceipt.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
 **Title:** ConsensusRecommendationReceiptTest
 
 Full on-chain path for the consensus receipt anchor:
-gateway → receipt contract → event, plus the signalling-only
-boundary, the timelock-held `ADMIN_ROLE`, the 3-topic event limit,
-and the anchoring-digest assertion that closes issue #1280.
+submitter Safe-held role → receipt contract → event, with no gateway and no
+committee registry, plus the signalling-only boundary, the timelock-held
+`ADMIN_ROLE`, the 3-topic event limit, and the anchoring-digest assertion that
+closes issue #1280.
 
 ## Constants
 
@@ -75,28 +76,18 @@ string constant PAYLOAD_URI = "https://robotmoney.net/api/swarm/receipts/session
 
 ## State Variables
 
-### admin
-
-```solidity
-address admin = address(0xA0);
-```
-
-### pauser
-
-```solidity
-address pauser = address(0xA1);
-```
-
-### shareReceiver
-
-```solidity
-address shareReceiver = address(0xA2);
-```
-
 ### submitter
 
 ```solidity
 address submitter = address(0xB1);
+```
+
+### releaser
+
+Stands in for RouterGovernance: holds only RECEIPT_RELEASER_ROLE.
+
+```solidity
+address releaser = address(0xC1);
 ```
 
 ### stranger
@@ -125,18 +116,6 @@ TestERC20 usdc;
 MockVault vault;
 ```
 
-### gateway
-
-```solidity
-RobotMoneyGateway gateway;
-```
-
-### ic
-
-```solidity
-InvestmentCommitteePolicy ic;
-```
-
 ### receipts
 
 ```solidity
@@ -158,6 +137,22 @@ TimelockController timelock;
 ```solidity
 function setUp() public;
 ```
+
+<a id="_grantviatimelock-bytes32-address-bytes32"></a>
+
+### _grantViaTimelock
+
+```solidity
+function _grantViaTimelock(bytes32 role, address who, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` |  |
+| who | `address` |  |
+| salt | `bytes32` |  |
 
 <a id="_goldenbytes-string"></a>
 
@@ -260,70 +255,91 @@ function _record(bytes32 receiptId, bytes32 digest) internal returns (uint256);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
 
-<a id="testdirectrecordreverts"></a>
+<a id="_release-bytes32"></a>
 
-### testDirectRecordReverts
+### _release
+
+```solidity
+function _release(bytes32 id) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+
+<a id="testdirectrecordbyroleholderstoresmsgsender"></a>
+
+### testDirectRecordByRoleHolderStoresMsgSender
 
 <i>
 
-A direct call to `recordReceipt` reverts even from the allowlisted
-submitter: the gateway is the sole choke point.
+Direct recording by the role holder succeeds with no gateway and no IC registry,
+and the stored submitter is `msg.sender`.
 
 </i>
 
 ```solidity
-function testDirectRecordReverts() public;
+function testDirectRecordByRoleHolderStoresMsgSender() public;
 ```
 
-<a id="testdirectrecordfromtimelockreverts"></a>
+<a id="testrecordwithoutsubmitterrolereverts"></a>
 
-### testDirectRecordFromTimelockReverts
+### testRecordWithoutSubmitterRoleReverts
 
 <i>
 
-Even an ADMIN_ROLE holder cannot bypass the gateway.
+Without the submitter role every caller reverts: EOAs, the timelock (which holds
+ADMIN_ROLE but not the submitter role) and the releaser.
 
 </i>
 
 ```solidity
-function testDirectRecordFromTimelockReverts() public;
+function testRecordWithoutSubmitterRoleReverts() public;
 ```
 
-<a id="testnonagentcannotrecordviagateway"></a>
+<a id="testrevokedsubmittercannotrecord"></a>
 
-### testNonAgentCannotRecordViaGateway
+### testRevokedSubmitterCannotRecord
 
 <i>
 
-A gateway caller without `AGENT_ROLE` is rejected by the gateway.
+A revoked submitter can no longer record. The revoke is a delayed timelock call.
 
 </i>
 
 ```solidity
-function testNonAgentCannotRecordViaGateway() public;
+function testRevokedSubmitterCannotRecord() public;
 ```
 
-<a id="testsubmitternotallowlistedreverts"></a>
+<a id="testonlyadminroleadministersthereceiptroles"></a>
 
-### testSubmitterNotAllowlistedReverts
+### testOnlyAdminRoleAdministersTheReceiptRoles
 
 <i>
 
-A gateway agent that is not on the IC allowlist is rejected by the
-receipt contract — role administration stays on the IC policy.
+Only the timelock (ADMIN_ROLE) administers the two roles. Neither the submitter,
+the releaser nor a stranger can grant or revoke either.
 
 </i>
 
 ```solidity
-function testSubmitterNotAllowlistedReverts() public;
+function testOnlyAdminRoleAdministersTheReceiptRoles() public;
 ```
 
-<a id="testrecordrequiresconfiguredreceiptcontract"></a>
+<a id="testretiredslotsareempty"></a>
 
-### testRecordRequiresConfiguredReceiptContract
+### testRetiredSlotsAreEmpty
+
+<i>
+
+The retired gateway and IC slots are never written by a fresh deploy.
+
+</i>
 
 ```solidity
-function testRecordRequiresConfiguredReceiptContract() public;
+function testRetiredSlotsAreEmpty() public view;
 ```
 
 <a id="testemptyreceiptidreverts"></a>
@@ -372,7 +388,7 @@ function testDuplicateReceiptIdReverts() public;
 <i>
 
 The timelock, and only the timelock, holds `ADMIN_ROLE`. The
-deployer, the gateway and the protocol admin all do not.
+releaser (RouterGovernance's stand-in), the submitter and the deployer do not.
 
 </i>
 
@@ -380,19 +396,34 @@ deployer, the gateway and the protocol admin all do not.
 function testAdminRoleHeldByTimelock() public view;
 ```
 
-<a id="testreleaserevertsunlessroutedthroughtimelock"></a>
+<a id="testreleaserevertswithoutthereleaserole"></a>
 
-### testReleaseRevertsUnlessRoutedThroughTimelock
+### testReleaseRevertsWithoutTheReleaseRole
 
 <i>
 
-Test plan 3: `ADMIN_ROLE` operations revert unless routed through
-the timelock — and succeed when they are, only after `minDelay`.
+Release needs the narrow release role. The timelock cannot release directly, and
+neither can the submitter or a stranger.
 
 </i>
 
 ```solidity
-function testReleaseRevertsUnlessRoutedThroughTimelock() public;
+function testReleaseRevertsWithoutTheReleaseRole() public;
+```
+
+<a id="testgrantrevertsunlessroutedthroughtimelock"></a>
+
+### testGrantRevertsUnlessRoutedThroughTimelock
+
+<i>
+
+Test plan 3: the timelock path (a delayed grant) works only after `minDelay`,
+with the exact refusal reasons for early execution and for replay.
+
+</i>
+
+```solidity
+function testGrantRevertsUnlessRoutedThroughTimelock() public;
 ```
 
 <a id="testdoublereleasereverts"></a>
@@ -459,7 +490,7 @@ function testEventsCarryNoIndexedSignatureParameter() public;
 
 <i>
 
-AC1, mirroring `InvestmentCommitteePolicyTest.testSignallingOnlyBoundary`.
+AC1, the signalling-only boundary of the receipt contract.
 No path from any receipt entrypoint reaches `setWeights` or moves
 value: the contract has no `receive`/`fallback`, no ERC-20 surface,
 no router or governance selector, and its only state effect is an

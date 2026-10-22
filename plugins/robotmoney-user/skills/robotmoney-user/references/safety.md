@@ -30,7 +30,7 @@ Before signing any deposit transaction, the client RPC-reads:
   rest. Without `--min-shares-per-leg` the floors are those quotes less 0.50%
 
 Every read runs at one pinned block. The same gateway check runs before
-the committee's signed tilt (`committee vote-submit`) and `receipt submit` sign.
+any write signs.
 
 Every refusal prints one JSON document on stdout with `"status":"refused"`
 and the name in `error`, and exits 2. Match on `error`, never on `message`.

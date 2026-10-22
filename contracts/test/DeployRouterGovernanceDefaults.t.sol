@@ -9,7 +9,6 @@ import {Test} from "forge-std/Test.sol";
 import {DeployRouterGovernance} from "../script/DeployRouterGovernance.s.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
-import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
@@ -33,8 +32,7 @@ contract DeployRouterGovernanceDefaultsTest is Test {
         TestERC20 usdc = new TestERC20();
         VaultRegistry registry = CoreProxies.vaultRegistry(admin);
         router = CoreProxies.portfolioRouter(address(usdc), address(registry), admin);
-        InvestmentCommitteePolicy ic = CoreProxies.investmentCommitteePolicy(admin, address(this));
-        receipts = CoreProxies.consensusRecommendationReceipt(admin, address(this), address(ic));
+        receipts = CoreProxies.consensusRecommendationReceipt(admin);
     }
 
     function test_stage_wiresTheWeightSetter() public {
@@ -46,7 +44,8 @@ contract DeployRouterGovernanceDefaultsTest is Test {
         assertTrue(router.hasRole(router.ADMIN_ROLE(), gov), "router ADMIN_ROLE");
         assertTrue(router.hasRole(router.WEIGHT_SETTER_ROLE(), gov), "router WEIGHT_SETTER_ROLE");
         assertEq(router.getRoleMemberCount(router.WEIGHT_SETTER_ROLE()), 1, "one router setter");
-        assertTrue(receipts.hasRole(ADMIN_ROLE, gov), "receipt ADMIN_ROLE (release)");
+        assertTrue(receipts.hasRole(receipts.RECEIPT_RELEASER_ROLE(), gov), "receipt release role");
+        assertFalse(receipts.hasRole(ADMIN_ROLE, gov), "governance never holds receipt ADMIN_ROLE");
         assertTrue(
             d.governance.hasRole(ADMIN_ROLE, admin), "deployer admin until the timelock stage"
         );
@@ -70,10 +69,8 @@ contract DeployRouterGovernanceDefaultsTest is Test {
     /// @notice A deployer that does not administer the receipt register cannot wire the
     ///         release grant, and the stage stops instead of leaving applyReceipt dead.
     function test_stage_refusesWithoutReceiptAdmin() public {
-        InvestmentCommitteePolicy ic = CoreProxies.investmentCommitteePolicy(admin, address(this));
-        ConsensusRecommendationReceipt foreign = CoreProxies.consensusRecommendationReceipt(
-            makeAddr("someone-else"), address(this), address(ic)
-        );
+        ConsensusRecommendationReceipt foreign =
+            CoreProxies.consensusRecommendationReceipt(makeAddr("someone-else"));
         vm.expectRevert();
         script.runInProcessWith(admin, address(router), address(foreign));
     }

@@ -390,29 +390,13 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
-    /// Investment Committee v0 — submit a signed allocation vote through the
-    /// InvestmentCommitteePolicy contract. Registering agents is an
-    /// ADMIN_ROLE (Safe) action and is not an rmpc command.
-    /// Implements: issue #1044.
-    Committee {
-        /// Path to the operator config TOML. Requires `ic_policy_address`.
-        #[arg(long, short = 'c')]
-        config: PathBuf,
-        #[command(subcommand)]
-        subcommand: CommitteeSubcommand,
-        /// Pretty-print the JSON output.
-        #[arg(long, global = true)]
-        pretty: bool,
-    },
     /// Consensus recommendation receipt (Project Fusion) — verify a receipt
-    /// off-chain, and anchor its digest on chain through
-    /// `RobotMoneyGateway.consensusRecordReceipt`.
+    /// off-chain.
     ///
     /// The chain proves that one submitter attested to the receipt; it cannot
     /// prove each named analyst signed, because the EVM has no Ed25519
     /// precompile. The embedded analyst signatures are therefore verified
-    /// off-chain here, and `submit` REFUSES to broadcast when the derived
-    /// digest or any embedded signature fails. Implements: issue #1247.
+    /// off-chain here. Implements: issue #1247.
     Receipt {
         /// Path to the operator config TOML.
         #[arg(long, short = 'c')]
@@ -471,43 +455,6 @@ pub enum ReceiptSubcommand {
         #[arg(long = "receipt-file", conflicts_with = "receipt_url")]
         receipt_file: Option<PathBuf>,
     },
-    /// Anchor a verified receipt's digest on chain.
-    ///
-    /// Canonicalizes the receipt, derives `payload_digest` and `receipt_id`,
-    /// verifies EVERY embedded analyst Ed25519 signature, and refuses to
-    /// broadcast if any check fails — including a mismatch against
-    /// `--expected-digest`. Only then does it encode
-    /// `consensusRecordReceipt(receiptId, payloadDigest, payloadUri)` and send
-    /// it to the GATEWAY address (the receipt contract is `onlyGateway`).
-    ///
-    /// Requires `AGENT_ROLE` on the gateway and `COMMITTEE_AGENT_ROLE` on the
-    /// IC policy.
-    Submit {
-        /// Public URL serving these exact bytes. Anchored on chain as
-        /// `payloadUri`, so it is required even when `--receipt-file` supplies
-        /// the bytes.
-        #[arg(long = "receipt-url")]
-        receipt_url: String,
-        /// Read the receipt bytes from this file instead of fetching
-        /// `--receipt-url`. The URL is still what gets anchored.
-        #[arg(long = "receipt-file")]
-        receipt_file: Option<PathBuf>,
-        /// 32-byte digest, 0x-prefixed hex, that the derived `payload_digest`
-        /// must equal. When it does not, the command refuses and no
-        /// transaction is sent.
-        #[arg(long = "expected-digest")]
-        expected_digest: Option<String>,
-        /// Maximum seconds to wait for the receipt. Default 60.
-        #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
-        receipt_timeout_secs: u64,
-        /// Gas limit for the anchor tx. Default 300_000 — recording appends one
-        /// row and stores a short URI string.
-        #[arg(long = "gas-limit", default_value_t = 300_000)]
-        gas_limit: u64,
-        /// Optional override for `max_fee_per_gas_cap` in wei.
-        #[arg(long = "fee-cap")]
-        fee_cap: Option<u64>,
-    },
 }
 
 /// Subcommands for `rmpc committee-identity`.
@@ -540,84 +487,5 @@ pub enum CommitteeIdentitySubcommand {
         /// over `--payload` for payloads containing shell-sensitive characters.
         #[arg(long = "payload-file", conflicts_with = "payload")]
         payload_file: Option<PathBuf>,
-    },
-}
-
-/// Subcommands for `rmpc committee`.
-// `VoteSubmit` carries every vote field and `CheckAgent` one optional address.
-// The enum is parsed once per process, so boxing the large variant buys nothing.
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug, Subcommand)]
-pub enum CommitteeSubcommand {
-    /// Submit a signed allocation vote for a vault. Sent to
-    /// `RobotMoneyGateway.committeeVoteSubmit`, which forwards it to the
-    /// InvestmentCommitteePolicy contract (the policy is `onlyGateway`).
-    /// Caller must hold AGENT_ROLE on the gateway and COMMITTEE_AGENT_ROLE
-    /// on the IC policy contract.
-    ///
-    /// `--order-id` and `--deadline-secs` are accepted but not sent:
-    /// `committeeVoteSubmit` takes no idempotency key or deadline.
-    VoteSubmit {
-        /// Target vault address (0x-prefixed hex).
-        #[arg(long)]
-        vault: String,
-        /// Allocation stance: overweight | neutral | underweight.
-        #[arg(long)]
-        stance: String,
-        /// Target allocation weight in basis points (0–10 000).
-        #[arg(long = "weight-bps")]
-        target_weight_bps: u16,
-        /// Confidence score 0–100.
-        #[arg(long)]
-        confidence: u8,
-        /// Public URI to the narrative chain-of-thought / memo.
-        #[arg(long = "rationale-uri")]
-        rationale_uri: String,
-        /// keccak256 of the full vote JSON (0x-prefixed hex).
-        #[arg(long = "vote-json-hash")]
-        vote_json_hash: String,
-        /// keccak256 of the agent prompt (0x-prefixed hex).
-        #[arg(long = "prompt-hash")]
-        prompt_hash: String,
-        /// keccak256 of the inputs consumed (0x-prefixed hex).
-        #[arg(long = "inputs-digest")]
-        inputs_digest: String,
-        /// Vote JSON schema version. Default "1.0".
-        #[arg(long = "schema-version", default_value = "1.0")]
-        schema_version: String,
-        /// Unix seconds when the vote was formed.
-        #[arg(long)]
-        timestamp: u64,
-        /// 32-byte order id / idempotency key, 0x-prefixed hex.
-        #[arg(long = "order-id")]
-        order_id: String,
-        /// Deadline horizon in seconds from now. Default 300.
-        #[arg(long = "deadline-secs", default_value_t = 300)]
-        deadline_secs: u64,
-        /// Maximum seconds to wait for the receipt. Default 60.
-        #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
-        receipt_timeout_secs: u64,
-        /// Gas limit for the vote-submit tx. Default 500_000.
-        #[arg(long = "gas-limit", default_value_t = 500_000)]
-        gas_limit: u64,
-        /// Optional override for `max_fee_per_gas_cap` in wei.
-        #[arg(long = "fee-cap")]
-        fee_cap: Option<u64>,
-    },
-    /// Read-only preflight for `vote-submit`: does the agent hold
-    /// `COMMITTEE_AGENT_ROLE` on the IC policy contract? Reads
-    /// `COMMITTEE_AGENT_ROLE()` and `hasRole(role, agent)` on
-    /// `ic_policy_address`, both at one block. Signs nothing, takes no lock
-    /// and needs no passphrase.
-    ///
-    /// Exit 0 when the agent holds the role, 2 (`ErrNotAllowlisted`) when the
-    /// read says it does not, 3 when the read could not run. Treat 3 as
-    /// unknown, never as registered.
-    CheckAgent {
-        /// Address to check (0x-prefixed hex). Default: the cleartext
-        /// `address` field of `[signer].keystore_path`, which is the address
-        /// `vote-submit` signs as.
-        #[arg(long)]
-        agent: Option<String>,
     },
 }

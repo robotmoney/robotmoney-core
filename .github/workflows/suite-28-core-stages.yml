@@ -78,6 +78,17 @@ jobs:
           set -euo pipefail
           bun test --timeout 60000 2>&1 | tee ../publish-contracts-tests.log
           grep -Eq '^ *[1-9][0-9]* pass' ../publish-contracts-tests.log || { echo "zero tests passed" >&2; exit 1; }
+      # Issue 1888: each receipt target runs on its own with a positive pass count and no failure, so an emptied or renamed target is red even while the rest of the suite is green.
+      - name: Receipt targets run with a positive count each
+        working-directory: publish-contracts
+        run: |
+          set -euo pipefail
+          for target in tests/record-receipt.test.ts tests/receipt-digest.test.ts tests/submitter-safe.test.ts tests/govern.test.ts tests/evidence-check.test.ts tests/evidence-kind.test.ts; do
+            test -f "$target" || { echo "missing test target $target" >&2; exit 1; }
+            bun test --timeout 60000 "$target" 2>&1 | tee "../receipt-target.log"
+            grep -Eq '^ *[1-9][0-9]* pass' ../receipt-target.log || { echo "zero tests passed in $target" >&2; exit 1; }
+            ! grep -Eq '^ *[1-9][0-9]* fail' ../receipt-target.log || { echo "failures in $target" >&2; exit 1; }
+          done
 
   pin:
     name: twin-pin

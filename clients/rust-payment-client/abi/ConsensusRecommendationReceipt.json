@@ -14,7 +14,7 @@
   },
   {
     "type": "function",
-    "name": "COMMITTEE_AGENT_ROLE",
+    "name": "DEFAULT_ADMIN_ROLE",
     "inputs": [],
     "outputs": [
       {
@@ -27,7 +27,20 @@
   },
   {
     "type": "function",
-    "name": "DEFAULT_ADMIN_ROLE",
+    "name": "RECEIPT_RELEASER_ROLE",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "RECEIPT_SUBMITTER_ROLE",
     "inputs": [],
     "outputs": [
       {
@@ -332,16 +345,6 @@
         "internalType": "address"
       },
       {
-        "name": "gateway_",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "icPolicy_",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
         "name": "upgradeTimelock_",
         "type": "address",
         "internalType": "address"
@@ -395,6 +398,19 @@
   },
   {
     "type": "function",
+    "name": "migrateToSubmitterRoles",
+    "inputs": [
+      {
+        "name": "releaser",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "proxiableUUID",
     "inputs": [],
     "outputs": [
@@ -423,11 +439,6 @@
     "type": "function",
     "name": "recordReceipt",
     "inputs": [
-      {
-        "name": "submitter",
-        "type": "address",
-        "internalType": "address"
-      },
       {
         "name": "receiptId",
         "type": "bytes32",
@@ -782,11 +793,6 @@
   },
   {
     "type": "error",
-    "name": "CallerNotGateway",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "EmptyPayloadDigest",
     "inputs": []
   },
@@ -808,6 +814,11 @@
   {
     "type": "error",
     "name": "LastAdminFloor",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "MigrationCallerNotTimelock",
     "inputs": []
   },
   {

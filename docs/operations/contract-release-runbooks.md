@@ -695,7 +695,7 @@ Upgradeability stage 2. The contracts (issue 1808) and the clients (issue 1810) 
 
 The committed Twin sheet, the 8453 rehearsal example and the production fixture sheet declare `frozen`.
 
-**Stage order and transactions.** Deployed release (v0.5.0): the proxy stages run in this order, each before the `timelock` stage, which deploys the upgrade authority LAST (the table is pinned to `scripts/deploy/stage-table.json` by `tests/upgrade-runbook-drift.test.ts`; the target drops the `gateway` row and replaces the two `ic-policy` rows with one `receipt` row, `consensus_receipt` / `consensus_receipt_implementation` / `ConsensusRecommendationReceipt`, still before `governance`):
+**Stage order and transactions.** Deployed release (v0.5.0): the proxy stages run in this order, each before the `timelock` stage, which deploys the upgrade authority LAST (the table is pinned to `scripts/deploy/stage-table.json` by `tests/upgrade-runbook-drift.test.ts`; the table below already carries the one `receipt` row of issue 1888 in place of the two v0.5.0 `ic-policy` rows, still before `governance`, and the system split drops the `gateway` row):
 
 | Stage | Proxy (manifest field) | Implementation (manifest field) | Implementation contract |
 | --- | --- | --- | --- |
@@ -703,8 +703,7 @@ The committed Twin sheet, the 8453 rehearsal example and the production fixture 
 | `registry` | `registry` | `registry_implementation` | `VaultRegistry` |
 | `router` | `router` | `router_implementation` | `PortfolioRouter` |
 | `gateway` | `gateway` | `gateway_implementation` | `RobotMoneyGateway` |
-| `ic-policy` | `policy` | `policy_implementation` | `InvestmentCommitteePolicy` |
-| `ic-policy` | `consensus_receipt` | `consensus_receipt_implementation` | `ConsensusRecommendationReceipt` |
+| `receipt` | `consensus_receipt` | `consensus_receipt_implementation` | `ConsensusRecommendationReceipt` |
 | `governance` | `governance` | `governance_implementation` | `RouterGovernance` |
 | `proto` | `vault` | `implementation` | `ProtocolAssetVault` |
 | `agent` | `vault` | `implementation` | `AgentTokenVault` |

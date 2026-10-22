@@ -49,11 +49,11 @@ REPO_ROOT="$(cd "$FUSION_DIR/../.." && pwd)"
 # step to the apply-receipt row and its checks make it 129. The QA reconcile onto
 # dev (QA plan v1 leftovers L1) adds six: the cross-repo receipt-weights refusal
 # and apply-path binding (three), and the submit worker's no-rmpc-before-refusal
-# and outage-resolve checks (three), which makes it 135. Raise it whenever
+# and outage-resolve checks (three), which makes it 135. Issue 1888 (the Safe recording path: exact bytes, digest and id, invalid signatures, no rmpc submit, no blind rebroadcast, no duplicate send) makes it 168. Raise it whenever
 # assertions are added; lowering it is a deliberate, reviewable act and the
 # workflow re-checks the same number independently (see below), so lowering it
 # here alone buys nothing.
-MIN_EXPECTED_ASSERTIONS=135
+MIN_EXPECTED_ASSERTIONS=168
 
 # The workflow that runs this suite re-asserts the same floor against the
 # machine-readable FUSION_SELFTESTS_EXECUTED line, precisely so a silently
@@ -80,8 +80,11 @@ check(){ if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (want: $3, got: $2)";
 
 # ─── Stub harness ────────────────────────────────────────────────────────────
 # STUB_DIR/chain_digest   — digest getReceiptById reports ("" = not recorded)
-# STUB_DIR/submit_fail_n  — number of leading submit attempts that fail
-# STUB_DIR/attempts       — one line per rmpc submit attempt
+# STUB_DIR/submit_fail_n  — number of leading record attempts that fail
+# STUB_DIR/attempts       — one line per Safe record-receipt attempt (issue 1888)
+# STUB_DIR/record_calls   — every record-receipt argv, one line each
+# STUB_DIR/recorded_payload — the bytes the last record-receipt attempt was handed
+# STUB_DIR/rmpc_submit    — one line per call of the removed rmpc receipt submit (must stay empty)
 # STUB_DIR/rmpc_calls     — every rmpc argv, one line each
 # STUB_DIR/submit_no_anchor   — non-empty: submit exits 0 WITHOUT anchoring
 # STUB_DIR/uri_embeds_digest  — non-empty: payloadUri contains the derived digest
@@ -97,7 +100,8 @@ check(){ if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (want: $3, got: $2)";
 # STUB_DIR/setter_weights_drift — non-empty: currentWeights reports a new vector
 #                               on every read after the first (a weight change)
 # STUB_DIR/receipt_contract   — what the weight setter's receipts() returns
-# STUB_DIR/submit_refuses_tampered — non-empty: rmpc receipt submit refuses neg-* files
+# STUB_DIR/submit_refuses_tampered — non-empty: record-receipt refuses neg-* files
+# STUB_DIR/verify_unverified  — non-empty: rmpc receipt verify reports an unverified analyst signature
 # STUB_DIR/api_json           — body curl returns for an explorer-API GET
 # STUB_DIR/alert_posts        — one line per webhook POST body
 # STUB_DIR/alert_post_fail    — non-empty: every webhook POST fails
@@ -108,6 +112,10 @@ new_stubs() {
   echo 0 >"$STUB_DIR/submit_fail_n"
   : >"$STUB_DIR/attempts"
   : >"$STUB_DIR/rmpc_calls"
+  : >"$STUB_DIR/record_calls"
+  : >"$STUB_DIR/recorded_payload"
+  : >"$STUB_DIR/rmpc_submit"
+  : >"$STUB_DIR/verify_unverified"
   : >"$STUB_DIR/submit_no_anchor"
   : >"$STUB_DIR/uri_embeds_digest"
   : >"$STUB_DIR/malformed_tuple"
@@ -148,39 +156,69 @@ case "$1" in
         echo '{"ok":false,"error":"ErrReceiptTampered"}'
         exit 1
       fi
-      printf '{"ok":true,"action":"verify","receipt_id":"%s","payload_digest":"%s","analyst_signatures":[{"member_id":"a1","verified":true},{"member_id":"a2","verified":true}]}\n' \
-        "$FUSION_TEST_RECEIPT_ID" "$FUSION_TEST_DIGEST"
+      # A signature that does not verify: rmpc exits non-zero in real life, but the
+      # worker must not depend on it, so this stub exits 0 with verified:false.
+      verified_b=true; [[ -s "$STUB_DIR/verify_unverified" ]] && verified_b=false
+      printf '{"ok":true,"action":"verify","receipt_id":"%s","payload_digest":"%s","analyst_signatures":[{"member_id":"a1","verified":true},{"member_id":"a2","verified":%s}]}\n' \
+        "$FUSION_TEST_RECEIPT_ID" "$FUSION_TEST_DIGEST" "$verified_b"
       exit 0
     fi
-    # A tampered receipt file must be refused against the anchored digest, and
-    # must never reach a broadcast. `neg-` is how the orchestrator names them.
-    if [[ -s "$STUB_DIR/submit_refuses_tampered" && "$*" == *neg-* ]]; then
-      if [[ "$*" == *neg-schema* ]]; then
-        echo '{"ok":false,"error":"ErrUnsupportedSchema","detail":"schema_version 2.0 is not supported"}' >&2
-      else
-        echo '{"ok":false,"error":"ErrPayloadDigestMismatch"}' >&2
-      fi
-      exit 1
-    fi
-    echo "submit" >>"$STUB_DIR/attempts"
-    n="$(cat "$STUB_DIR/submit_fail_n")"
-    if (( $(wc -l <"$STUB_DIR/attempts") <= n )); then
-      echo "stub: broadcast failed" >&2
-      exit 1
-    fi
-    # A submit that reports success but anchors nothing: the exact shape the
-    # post-submit re-read exists to catch (AC-CORE-09, "a missing expected
-    # anchor is not silent").
-    if [[ ! -s "$STUB_DIR/submit_no_anchor" ]]; then
-      printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"
-    fi
-    echo '{"ok":true,"action":"submit"}'
-    exit 0
+    # Issue 1888: rmpc receipt submit does not exist. A call is recorded and refused,
+    # so a harness that still reaches it fails its own assertion AND this one.
+    echo "$*" >>"$STUB_DIR/rmpc_submit"
+    echo "stub rmpc: receipt submit is gone (issue 1888)" >&2
+    exit 2
     ;;
 esac
 echo "stub rmpc: unexpected argv: $*" >&2
 exit 2
 STUB
+
+  # The Safe recording path (issue 1888): publish-contracts `record-receipt`, reached through
+  # FUSION_RECORD_CMD. It checks what the real verb checks first: the --payload bytes, and that
+  # --payload-digest and --receipt-id are the ones it is handed (it recomputes nothing here:
+  # the test asserts the exact bytes, digest and id it received). It anchors by writing chain_digest.
+  cat >"$STUB_DIR/bin/record-stub" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >>"$STUB_DIR/record_calls"
+[[ "$1" == "record-receipt" ]] || { echo "stub record: unexpected verb: $1" >&2; exit 2; }
+id=""; digest=""; payload=""; uri=""; prev=""
+for a in "$@"; do
+  [[ "$prev" == "--receipt-id" ]] && id="$a"
+  [[ "$prev" == "--payload-digest" ]] && digest="$a"
+  [[ "$prev" == "--payload" ]] && payload="$a"
+  [[ "$prev" == "--payload-uri" ]] && uri="$a"
+  prev="$a"
+done
+if [[ -z "$id" || -z "$digest" || -z "$uri" || -z "$payload" || ! -s "$payload" ]]; then
+  echo "stub record: record-receipt needs --receipt-id, --payload-digest, --payload-uri and a readable --payload" >&2
+  exit 64
+fi
+cp "$payload" "$STUB_DIR/recorded_payload"
+# A tampered file (`neg-`) is refused by the real verb before any signer: the digest is not the bytes' digest.
+if [[ -s "$STUB_DIR/submit_refuses_tampered" && "$payload" == *neg-* ]]; then
+  if [[ "$payload" == *neg-schema* ]]; then
+    echo "record-receipt: the receipt payload schema_version is \"2.0\": only \"1.0\" is supported. Nothing sent." >&2
+  else
+    echo "record-receipt: --payload-digest $digest is not the receipt digest of the payload bytes. Nothing sent." >&2
+  fi
+  exit 2
+fi
+echo "submit" >>"$STUB_DIR/attempts"
+n="$(cat "$STUB_DIR/submit_fail_n")"
+if (( $(wc -l <"$STUB_DIR/attempts") <= n )); then
+  echo "stub: broadcast failed" >&2
+  exit 1
+fi
+# A record that reports success but anchors nothing: the exact shape the post-record
+# re-read exists to catch (AC-CORE-09, "a missing expected anchor is not silent").
+if [[ ! -s "$STUB_DIR/submit_no_anchor" ]]; then
+  printf '%s\n' "$digest" >"$STUB_DIR/chain_digest"
+fi
+printf '{"event":"record_receipt","receipt_id":"%s","tx_hash":"0x%064d","status":1}\n' "$id" 1
+exit 0
+STUB
+  chmod +x "$STUB_DIR/bin/record-stub"
 
   # The release stage runs the govern apply command (publish contracts govern,
   # row apply-receipt, through the real Safe and the timelock; issue 1849), so
@@ -266,10 +304,10 @@ case "$1" in
       isRecorded*) [[ -n "$d" ]] && echo true || echo false; exit 0 ;;
       isReleased*) [[ -s "$STUB_DIR/released" ]] && echo true || echo false; exit 0 ;;
       releaseReceipt*)
-        # An eth_call of releaseReceipt. onlyRole(ADMIN_ROLE) runs first: only the
-        # timelock holds ADMIN_ROLE, so any other --from reverts on authority and
-        # never reaches the one-shot check (issue 1647).
-        if [[ "$*" != *"--from $FUSION_TIMELOCK_ADDRESS"* ]]; then
+        # An eth_call of releaseReceipt. onlyRole(RECEIPT_RELEASER_ROLE) runs first: only
+        # RouterGovernance holds it (issue 1888), so any other --from reverts on authority
+        # and never reaches the one-shot check (issue 1647).
+        if [[ "$*" != *"--from $FUSION_GOVERNANCE_ADDRESS"* ]]; then
           echo "server returned an error response: execution reverted: AccessControlUnauthorizedAccount()" >&2
           exit 1
         fi
@@ -279,7 +317,7 @@ case "$1" in
           exit 1
         fi
         exit 0 ;;
-      consensusRecordReceipt*)
+      recordReceipt*)
         if [[ -n "$d" ]]; then
           echo "server returned an error response: execution reverted: ReceiptAlreadyRecorded()" >&2
           exit 1
@@ -361,6 +399,9 @@ RJSON
 }
 
 worker_env() {
+  new_curl_stub; receipt_fixture   # the worker fetches the exact bytes once (issue 1888)
+  export FUSION_RECORD_CMD="record-stub"
+  unset FUSION_RECORD_ARGS || true
   export FUSION_RMPC_CONFIG="$STUB_DIR/rmpc.toml"
   : >"$FUSION_RMPC_CONFIG"
   export FUSION_RECEIPT_URL="https://example.invalid/receipt.json"
@@ -477,6 +518,106 @@ else
   bad "a read-side outage was silent: $err"
 fi
 
+# ─── Issue 1888: the Safe recording path ─────────────────────────────────────
+# The worker hands the exact signature-verified bytes, digest and id to the Safe
+# recording path, stops before submission on an invalid signature, never calls
+# rmpc receipt submit, never re-broadcasts blindly on unreadable chain state and
+# finishes without a duplicate send when a matching anchor exists.
+echo
+echo "Issue 1888 — the worker records through the Safe path"
+
+new_stubs; worker_env
+export FUSION_MAX_ATTEMPTS=3
+export FUSION_RECORD_ARGS="--chain 8453 --submitter 0x00000000000000000000000000000000000000dd"
+out="$("$FUSION_DIR/submit-receipt-worker.sh" 2>/dev/null)"; rc=$?
+check "an unanchored receipt is recorded through FUSION_RECORD_CMD and exits 0" "$rc" "0"
+check "…with exactly one record-receipt call" "$(wc -l <"$STUB_DIR/record_calls" | tr -d ' ')" "1"
+check "…which is the record-receipt verb with the run's own flags first" \
+  "$(cut -d' ' -f1-5 "$STUB_DIR/record_calls")" "record-receipt --chain 8453 --submitter 0x00000000000000000000000000000000000000dd"
+check "…handing over the derived receipt id" \
+  "$(grep -c -- "--receipt-id $FUSION_TEST_RECEIPT_ID " "$STUB_DIR/record_calls")" "1"
+check "…the derived payload digest" \
+  "$(grep -c -- "--payload-digest $FUSION_TEST_DIGEST " "$STUB_DIR/record_calls")" "1"
+check "…and the public URI" \
+  "$(grep -c -- "--payload-uri $FUSION_RECEIPT_URL " "$STUB_DIR/record_calls")" "1"
+# THE EXACT BYTES: what rmpc verified is what the Safe path was given.
+if cmp -s "$STUB_DIR/recorded_payload" "$STUB_DIR/receipt.json"; then
+  ok "the record command received the exact bytes the URL served"
+else
+  bad "the bytes handed to the Safe recording path differ from the served bytes"
+fi
+verified_file="$(grep -o -- '--receipt-file [^ ]*' "$STUB_DIR/rmpc_calls" | head -1 | cut -d' ' -f2)"
+check "rmpc verified a local file of those bytes (not a second fetch of the URL)" "$(grep -c -- '--receipt-url' "$STUB_DIR/rmpc_calls")" "0"
+check "…and verify ran exactly once before the record" "$(grep -c ' verify ' "$STUB_DIR/rmpc_calls")" "1"
+check "rmpc receipt submit is never called" "$(wc -l <"$STUB_DIR/rmpc_submit" | tr -d ' ')" "0"
+check "…and no rmpc call names submit at all" "$(grep -c ' submit' "$STUB_DIR/rmpc_calls")" "0"
+[[ -n "$verified_file" ]] && ok "the verified file name was captured from the rmpc argv" || bad "no --receipt-file in the rmpc argv"
+
+# INVALID SIGNATURES STOP BEFORE SUBMISSION.
+new_stubs; worker_env
+echo 1 >"$STUB_DIR/verify_unverified"
+export FUSION_MAX_ATTEMPTS=3
+err="$("$FUSION_DIR/submit-receipt-worker.sh" 2>&1 >/dev/null)"; rc=$?
+check "an unverified analyst signature exits non-zero" "$rc" "1"
+check "…and nothing is handed to the Safe recording path" "$(wc -l <"$STUB_DIR/record_calls" | tr -d ' ')" "0"
+check "…and no attempt is made" "$(wc -l <"$STUB_DIR/attempts" | tr -d ' ')" "0"
+if grep -q "did not confirm every analyst signature; no submission attempted" <<<"$err"; then
+  ok "the unverified signature is named, with no submission"
+else
+  bad "an unverified signature was not diagnosable: $err"
+fi
+# NEGATIVE CONTROL: the same world with every signature verified records.
+new_stubs; worker_env
+export FUSION_MAX_ATTEMPTS=3
+"$FUSION_DIR/submit-receipt-worker.sh" >/dev/null 2>&1; rc=$?
+check "…while the same receipt with every signature verified is recorded" "$rc" "0"
+
+# A refusal reported as ok:false WITH exit 0 is not a verification.
+new_stubs; worker_env
+echo 1 >"$STUB_DIR/verify_ok_false_exit_zero"
+err="$("$FUSION_DIR/submit-receipt-worker.sh" 2>&1 >/dev/null)"; rc=$?
+check "an ok:false verify with exit 0 stops the worker" "$rc" "1"
+check "…before any record-receipt call" "$(wc -l <"$STUB_DIR/record_calls" | tr -d ' ')" "0"
+
+# The bytes cannot be fetched: nothing is verified and nothing is recorded.
+new_stubs; worker_env
+echo 1 >"$STUB_DIR/curl_fetch_fail"
+err="$("$FUSION_DIR/submit-receipt-worker.sh" 2>&1 >/dev/null)"; rc=$?
+check "a failed fetch of the receipt bytes exits non-zero" "$rc" "1"
+check "…without calling rmpc at all" "$(wc -l <"$STUB_DIR/rmpc_calls" | tr -d ' ')" "0"
+check "…or the Safe recording path" "$(wc -l <"$STUB_DIR/record_calls" | tr -d ' ')" "0"
+
+# No record command is a startup refusal, never a silent no-op.
+new_stubs; worker_env
+unset FUSION_RECORD_CMD
+err="$("$FUSION_DIR/submit-receipt-worker.sh" 2>&1 >/dev/null)"; rc=$?
+check "a worker with no FUSION_RECORD_CMD refuses to start" "$rc" "1"
+check "…before calling rmpc" "$(wc -l <"$STUB_DIR/rmpc_calls" | tr -d ' ')" "0"
+export FUSION_RECORD_CMD="record-stub"
+
+# UNREADABLE CHAIN STATE NEVER REBROADCASTS BLINDLY (the Safe path is not reached).
+new_stubs; worker_env
+echo 1 >"$STUB_DIR/rpc_down"
+export FUSION_MAX_ATTEMPTS=1
+timeout 8 "$FUSION_DIR/submit-receipt-worker.sh" >/dev/null 2>&1; rc=$?
+check "an unreadable chain keeps waiting (no exit success)" "$rc" "124"
+check "…and never calls the Safe recording path" "$(wc -l <"$STUB_DIR/record_calls" | tr -d ' ')" "0"
+
+# A MATCHING ANCHOR FINISHES WITHOUT A DUPLICATE SEND.
+new_stubs; worker_env
+printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"
+out="$("$FUSION_DIR/submit-receipt-worker.sh" 2>/dev/null)"; rc=$?
+check "a matching anchor exits 0" "$rc" "0"
+check "…reports already_anchored" "$(jq -r '.action' <<<"$out")" "already_anchored"
+check "…with no record-receipt call" "$(wc -l <"$STUB_DIR/record_calls" | tr -d ' ')" "0"
+
+# A CONFLICTING ANCHOR IS FATAL AND IS NEVER RECORDED OVER.
+new_stubs; worker_env
+printf '0x%s\n' "$(printf 'ef%.0s' {1..32})" >"$STUB_DIR/chain_digest"
+"$FUSION_DIR/submit-receipt-worker.sh" >/dev/null 2>&1; rc=$?
+check "a conflicting anchor exits non-zero" "$rc" "1"
+check "…without a record-receipt call" "$(wc -l <"$STUB_DIR/record_calls" | tr -d ' ')" "0"
+
 # ─── devnet-acceptance.sh ────────────────────────────────────────────────────
 # The orchestrator (AC-E2E-05). What is worth executing about it is not the
 # happy path — that needs a chain — but the three ways it could LIE: skipping a
@@ -491,7 +632,7 @@ acceptance_env() {
   export RMPC_BIN=rmpc CAST_BIN=cast
   export FUSION_RMPC_CONFIG="$STUB_DIR/config.toml"
   export FUSION_RPC_URL="http://127.0.0.1:1"
-  export FUSION_GATEWAY_ADDRESS=0x0000000000000000000000000000000000000001
+  export FUSION_RECORD_CMD="record-stub"
   export FUSION_RECEIPT_ADDRESS=0x0000000000000000000000000000000000000002
   export FUSION_GOVERNANCE_ADDRESS=0x0000000000000000000000000000000000000003
   export FUSION_ROUTER_ADDRESS=0x0000000000000000000000000000000000000004
@@ -591,7 +732,6 @@ printf '{"schema_version":"1.0"}' >"$STUB_DIR/receipt.json"
 printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"   # already anchored
 echo 1 >"$STUB_DIR/released"                                     # already released
 export FUSION_GOVERN_CMD="$STUB_DIR/bin/govern-apply" \
-       FUSION_TIMELOCK_ADDRESS=0x00000000000000000000000000000000000000cc \
        FUSION_SUBMITTER_ADDRESS=0x00000000000000000000000000000000000000dd
 cat >"$STUB_DIR/bin/curl" <<'CURLSTUB'
 #!/usr/bin/env bash
@@ -618,7 +758,6 @@ new_stubs; acceptance_env
 receipt_fixture   # four bucket weights, so the verify stage is all PASS
 printf '%s\n' "$FUSION_TEST_DIGEST" >"$STUB_DIR/chain_digest"
 export FUSION_GOVERN_CMD="$STUB_DIR/bin/govern-apply" \
-       FUSION_TIMELOCK_ADDRESS=0x00000000000000000000000000000000000000cc \
        FUSION_SUBMITTER_ADDRESS=0x00000000000000000000000000000000000000dd
 cat >"$STUB_DIR/bin/curl" <<'CURLSTUB'
 #!/usr/bin/env bash
@@ -645,9 +784,9 @@ check "INV-4 closes its window before the apply, which moves the weights by desi
   "$(assertion_result 'up to the apply-receipt call')" "PASS"
 check "AC-E2E-04 compares the weights from before the apply" \
   "$(assertion_result 'recording a receipt sets no router weights')" "PASS"
-# The duplicate probe must reach ReceiptAlreadyReleased: it is sent from the
-# timelock (the only ADMIN_ROLE holder), so it passes onlyRole first (issue 1647).
-check "the duplicate-release probe reaches ReceiptAlreadyReleased (sent from the timelock)" \
+# The duplicate probe must reach ReceiptAlreadyReleased: it is sent from RouterGovernance
+# (the only RECEIPT_RELEASER_ROLE holder, issue 1888), so it passes onlyRole first.
+check "the duplicate-release probe reaches ReceiptAlreadyReleased (sent from RouterGovernance)" \
   "$(jq -r '[.assertions[]|select(.assertion|test("duplicate release is rejected"))|.result]|first' "$RESULT" 2>/dev/null)" "PASS"
 # The SAME stub chain, run again: exactly one apply across the two runs.
 "$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,release,govern \
@@ -730,6 +869,7 @@ cross_repo_env() {
   export FUSION_ROUTER_ADDRESS=0x0000000000000000000000000000000000000004
   export FUSION_VAULT_ADDRESSES=0x0000000000000000000000000000000000000005,0x0000000000000000000000000000000000000006,0x0000000000000000000000000000000000000007,0x0000000000000000000000000000000000000008
   export FUSION_GOVERN_CMD="$STUB_DIR/bin/govern-apply"
+  export FUSION_RECORD_CMD="record-stub"
   export FUSION_EVIDENCE_DIR="$STUB_DIR/evidence"
   export FUSION_MAX_ATTEMPTS=3
   export RMPC_BIN=rmpc CAST_BIN=cast
@@ -756,7 +896,7 @@ echo
 echo "T11 — the acceptance verdict"
 
 new_stubs; acceptance_env; new_curl_stub; receipt_fixture
-unset FUSION_GOVERN_CMD FUSION_TIMELOCK_ADDRESS \
+unset FUSION_GOVERN_CMD \
       FUSION_EXPLORER_API FUSION_DAPP_URL FUSION_UNAUTHORIZED_SUBMITTER FUSION_SUBMITTER_ADDRESS || true
 "$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages release --out "$RESULT" >/dev/null 2>&1
 check "a SELECTED but unconfigured release stage exits non-zero" "$?" "1"
@@ -828,8 +968,8 @@ export FUSION_UNAUTHORIZED_SUBMITTER=0x00000000000000000000000000000000000000ee
 export FUSION_SUBMITTER_ADDRESS=0x00000000000000000000000000000000000000dd
 "$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,negative --out "$RESULT" >/dev/null 2>&1
 check "a weights-tampered receipt is refused against the anchored digest" "$(assertion_result 'rewritten to 10000/0/0/0')" "PASS"
-if grep -q 'neg-weights' "$STUB_DIR/rmpc_calls"; then
-  ok "the weights-tamper case actually reached rmpc"
+if grep -q 'neg-weights' "$STUB_DIR/record_calls"; then
+  ok "the weights-tamper case actually reached the Safe recording path"
 else
   bad "the weights-tamper negative case never ran"
 fi
@@ -906,6 +1046,13 @@ check "an API body that agrees field-for-field PASSES" "$(assertion_result 'same
 check "…including the payload URL field" "$(assertion_result 'same payload URL FIELD')" "PASS"
 unset FUSION_EXPLORER_API FUSION_INDEX_TIMEOUT_SECS
 
+# Issue 1888: the cross-repo seam records through the Safe path, so it refuses to start without it.
+new_stubs; cross_repo_env; new_curl_stub; receipt_fixture
+unset FUSION_RECORD_CMD
+err="$("$FUSION_DIR/cross-repo-acceptance.sh" 2>&1 >/dev/null)"; rc=$?
+check "cross-repo-acceptance refuses to start without FUSION_RECORD_CMD" "$rc" "1"
+check "…before calling rmpc or the Safe recording path" "$(wc -l <"$STUB_DIR/rmpc_calls" | tr -d ' ')$(wc -l <"$STUB_DIR/record_calls" | tr -d ' ')" "00"
+
 # ─── T29: cross-repo-acceptance.sh's release stage is idempotent ────────────
 # The script the runbook calls "the AC-E2E-05 seam" sent unconditionally under
 # `set -euo pipefail`, so the SECOND run aborted at that line: the INV-4
@@ -958,10 +1105,10 @@ echo "T25 — the Fusion harness alert path"
 path_without_curl() {
   local d="$STUB_DIR/nocurl" b src
   mkdir -p "$d"
-  for b in bash env jq mktemp tr sleep dirname cat rm mv wc grep date sed cut diff timeout basename mkdir touch printf; do
+  for b in bash env jq mktemp tr sleep dirname cat rm mv wc grep date sed cut diff timeout basename mkdir touch printf cp head; do
     src="$(command -v "$b" 2>/dev/null)" && ln -sf "$src" "$d/$b"
   done
-  cp "$STUB_DIR/bin/rmpc" "$STUB_DIR/bin/cast" "$d/"
+  cp "$STUB_DIR/bin/rmpc" "$STUB_DIR/bin/cast" "$STUB_DIR/bin/record-stub" "$d/"
   printf '%s' "$d"
 }
 
@@ -980,6 +1127,7 @@ else
 fi
 # NEGATIVE CONTROL: the same PATH with no webhook must START and warn.
 unset FUSION_ALERT_WEBHOOK
+export FUSION_RECEIPT_FILE="$STUB_DIR/receipt.json"   # no curl on this PATH: the bytes come from a file
 err="$(PATH="$NOCURL" bash "$FUSION_DIR/submit-receipt-worker.sh" 2>&1 >/dev/null)"; rc=$?
 check "…but an unset webhook still starts" "$rc" "0"
 if grep -q "WARNING FUSION_ALERT_WEBHOOK is unset" <<<"$err"; then

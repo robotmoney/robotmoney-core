@@ -1,41 +1,16 @@
 //! Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 //! Implements: issue #1247 — anchor the consensus receipt on chain (rmpc side).
 //!
-//! `rmpc receipt` — verify a consensus recommendation receipt off-chain, and anchor
-//! its digest on chain through `RobotMoneyGateway.consensusRecordReceipt`.
+//! `rmpc receipt` — verify a consensus recommendation receipt off-chain.
 //!
 //! Subcommands:
 //! - `verify` — fetch/read the receipt JSON, canonicalize it, print the derived
 //!   `payload_digest` and `receipt_id`, and report per-analyst Ed25519
 //!   verification. Read-only: no signer, no nonce, no chain.
-//! - `submit` — the same checks, and only if EVERY one passes, broadcast
-//!   `consensusRecordReceipt(receiptId, payloadDigest, payloadUri)`.
 //!
-//! # Why the refusal is load-bearing (issue #1247 AC4)
-//!
-//! The chain proves that one submitter attested to a receipt; it cannot prove
-//! that each named analyst signed, because the EVM has no Ed25519 precompile
-//! (ADR-0012 §5) and the analyst signatures ride inside the payload as data.
-//! A compromised submitter could therefore publish a receipt the analysts never
-//! agreed to. `submit` is the check that closes that: it refuses to broadcast
-//! when the derived digest disagrees with `--expected-digest`, or when any
-//! embedded signature fails. Both refusals happen **before** the signer is
-//! loaded, before the nonce lock is taken and before any RPC call, so a refused
-//! receipt costs nothing and cannot leave a half-built transaction behind.
-//!
-//! # Why the call goes to the gateway, not to the receipt contract
-//!
-//! `ConsensusRecommendationReceipt.recordReceipt` is `onlyGateway`. The calldata is
-//! `RobotMoneyGateway::consensusRecordReceiptCall` and it is sent to
-//! `cfg.gateway_address`; the caller must hold `AGENT_ROLE` on the gateway and
-//! `COMMITTEE_AGENT_ROLE` on the IC policy (docs/architecture.md §4.9.2).
-//!
-//! Before it signs, `submit` verifies the gateway proxy code and its live
-//! implementation at one pinned block (issue 1810,
-//! `policy::implementation::verify_gateway_code_now`): the gateway's code
-//! hashes to `gateway_runtime_hash`, and a proxied gateway runs the approved
-//! `gateway_implementation` with code hash
-//! `gateway_implementation_runtime_hash`. A mismatch or a failed read exits 2.
+//! The chain cannot prove each named analyst signed, because the EVM has no
+//! Ed25519 precompile (ADR-0012 §5). The embedded signatures are verified
+//! off-chain here.
 //!
 //! Exit codes:
 //! - 0 — success.
@@ -43,31 +18,14 @@
 //! - 3 — startup failure (missing config, keystore, RPC, etc.).
 
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::time::Duration;
 
-use alloy_primitives::{Address, Bytes, B256, U256};
-use alloy_sol_types::SolCall;
+use alloy_primitives::B256;
 use serde::Serialize;
 
 use crate::config::Config;
 use crate::consensus_receipt::{ConsensusReceipt, ReceiptError, SignatureCheck};
-use crate::errors::RmpcError;
-use crate::fees::{compute_fees, FeeBid};
-use crate::gateway::RobotMoneyGateway;
-use crate::network_env::NetworkEnv;
-use crate::nonce::AgentLock;
 use crate::output::emit;
-use crate::policy::implementation::{
-    check_executed_under, reverify_gateway_after_signing, verify_gateway_code_now,
-};
-use crate::rpc::FailoverRpcClient;
-use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
-use crate::signer::AgentSigner;
-use crate::tx::{
-    broadcast, build_eip1559, encode_signed, signing_hash, wait_for_successful_receipt,
-    Eip1559Inputs,
-};
 
 const EXIT_OK: i32 = 0;
 const EXIT_REFUSAL: i32 = 2;
@@ -101,30 +59,6 @@ pub struct VerifyArgs {
     pub config_path: PathBuf,
     /// Where to read the receipt from.
     pub source: ReceiptSource,
-    /// Pretty-print the JSON output.
-    pub pretty: bool,
-}
-
-/// Args for `rmpc receipt submit`.
-#[derive(Debug, Clone)]
-pub struct SubmitArgs {
-    /// Path to the operator config TOML.
-    pub config_path: PathBuf,
-    /// The public URI serving these exact bytes. Anchored on chain as
-    /// `payloadUri`, so it is required even when `--receipt-file` supplies the
-    /// bytes.
-    pub receipt_url: String,
-    /// Optional local override for the bytes. When absent the receipt is
-    /// fetched from `receipt_url`.
-    pub receipt_file: Option<PathBuf>,
-    /// Optional 0x-prefixed digest the derived `payload_digest` must equal.
-    pub expected_digest: Option<String>,
-    /// Maximum seconds to wait for the receipt.
-    pub receipt_timeout_secs: u64,
-    /// Gas limit for the anchor tx envelope.
-    pub gas_limit: u64,
-    /// Optional override for `max_fee_per_gas_cap` in wei.
-    pub fee_cap_wei: Option<u64>,
     /// Pretty-print the JSON output.
     pub pretty: bool,
 }
@@ -225,361 +159,6 @@ pub fn run_verify(args: VerifyArgs) -> i32 {
         args.pretty,
     );
     EXIT_OK
-}
-
-/// Run `rmpc receipt submit`. Returns the process exit code.
-///
-/// The digest check and the Ed25519 check both run before any signer, lock or
-/// RPC work; a receipt that fails either is refused with **no transaction
-/// sent**.
-pub fn run_submit(args: SubmitArgs) -> i32 {
-    let cfg = match Config::from_path(&args.config_path) {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("rmpc receipt submit: failed to load config: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
-
-    let gateway_addr = match Address::from_str(&cfg.gateway_address) {
-        Ok(a) => a,
-        Err(e) => {
-            log::error!("rmpc receipt submit: gateway_address parse error: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
-
-    let expected_digest = match args.expected_digest.as_deref() {
-        None => None,
-        Some(s) => match parse_b256(s) {
-            Ok(h) => Some(h),
-            Err(msg) => {
-                log::error!("rmpc receipt submit: --expected-digest: {msg}");
-                emit_failure(
-                    &ReceiptFailure {
-                        ok: false,
-                        error: "ErrReceiptDigestMalformed".to_string(),
-                        message: Some(format!("--expected-digest: {msg}")),
-                    },
-                    args.pretty,
-                );
-                return EXIT_REFUSAL;
-            }
-        },
-    };
-
-    let rt = match build_rt("submit") {
-        Ok(rt) => rt,
-        Err(code) => return code,
-    };
-
-    let source = match &args.receipt_file {
-        Some(p) => ReceiptSource::File(p.clone()),
-        None => ReceiptSource::Url(args.receipt_url.clone()),
-    };
-    let raw = match load_receipt_bytes(&rt, &source, "submit", args.pretty) {
-        Ok(b) => b,
-        Err(code) => return code,
-    };
-
-    // ── THE REFUSAL GATE (issue #1247 AC4) ───────────────────────────────────
-    // Canonicalize, derive the digest, compare it against --expected-digest if
-    // one was supplied, and verify EVERY embedded analyst signature. Nothing
-    // below this point runs unless all of it passed, so a bad receipt never
-    // reaches a keystore, a nonce, or the network.
-    let checked = match check_receipt(&raw, expected_digest, "submit", args.pretty) {
-        Ok(c) => c,
-        Err(code) => return code,
-    };
-
-    // A software keystore signs on every chain, Base mainnet included; a
-    // hardware wallet, HSM or KMS is optional, never required (owner decision
-    // 2026-10-14, QA plan Decision D12). Base mainnet only adds the warning.
-    if let Some(warn) = NetworkEnv::from_chain_id(cfg.chain_id).production_warning() {
-        log::warn!("rmpc receipt submit: {warn}");
-    }
-
-    let signer = match load_signer(&cfg, "submit", args.pretty) {
-        Ok(s) => s,
-        Err(code) => return code,
-    };
-    let caller = signer.public_address();
-
-    let network_env = NetworkEnv::from_chain_id(cfg.chain_id);
-    log::info!(
-        "rmpc receipt submit: caller={caller:#x} gateway={gateway_addr:#x} \
-         receipt_id={:#x} payload_digest={:#x} chain_id={} env={}",
-        checked.receipt_id,
-        checked.payload_digest,
-        cfg.chain_id,
-        network_env.as_str()
-    );
-
-    let state_dir = match cfg.resolve_state_dir() {
-        Ok(p) => p,
-        Err(e) => {
-            log::error!("rmpc receipt submit: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
-    let _lock = match AgentLock::acquire(&state_dir, &caller) {
-        Ok(l) => l,
-        Err(RmpcError::ErrConcurrentInvocation) => {
-            emit_failure(
-                &ReceiptFailure {
-                    ok: false,
-                    error: "ErrConcurrentInvocation".to_string(),
-                    message: Some(format!(
-                        "another rmpc invocation already holds the lock for {caller:#x}"
-                    )),
-                },
-                args.pretty,
-            );
-            return EXIT_REFUSAL;
-        }
-        Err(e) => {
-            log::error!("rmpc receipt submit: lock acquire failed: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
-
-    let rpc = match cfg.rpc_client() {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("rmpc receipt submit: rpc client init failed: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
-
-    // The gateway proxy and its live implementation must be the approved
-    // ones before anything is signed (issue 1810).
-    let gateway_implementation = match rt.block_on(verify_gateway_code_now(&rpc, &cfg)) {
-        Ok(i) => i,
-        Err(e) => {
-            log::error!("rmpc receipt submit: {e}");
-            emit_failure(
-                &ReceiptFailure {
-                    ok: false,
-                    error: e.name().to_string(),
-                    message: Some(format!("{e}")),
-                },
-                args.pretty,
-            );
-            return EXIT_REFUSAL;
-        }
-    };
-
-    let fees = match fetch_fees(&rt, &rpc, &cfg, args.fee_cap_wei, args.pretty, "submit") {
-        Ok(f) => f,
-        Err(code) => return code,
-    };
-
-    let nonce =
-        match rt.block_on(async { rpc.get_transaction_count(caller, Some("pending")).await }) {
-            Ok(n) => n,
-            Err(e) => {
-                log::error!("rmpc receipt submit: eth_getTransactionCount failed: {e}");
-                return EXIT_STARTUP_FAIL;
-            }
-        };
-
-    let calldata = encode_record_receipt_call(
-        checked.receipt_id,
-        checked.payload_digest,
-        &args.receipt_url,
-    );
-
-    // TO THE GATEWAY, never to the receipt contract: `recordReceipt` is
-    // `onlyGateway` (docs/architecture.md §4.9.2).
-    let tx = build_eip1559(Eip1559Inputs {
-        chain_id: cfg.chain_id,
-        nonce,
-        to: gateway_addr,
-        gas_limit: args.gas_limit,
-        fees,
-        value: U256::ZERO,
-        input: Bytes::from(calldata),
-    });
-
-    let hash = signing_hash(&tx);
-    let mut hash_bytes = [0u8; 32];
-    hash_bytes.copy_from_slice(hash.as_slice());
-    let alloy_sig = match signer.sign_eip1559_hash(&hash_bytes) {
-        Ok(s) => s,
-        Err(e) => {
-            log::error!("rmpc receipt submit: envelope signing failed: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
-    let raw_tx = encode_signed(tx, alloy_sig);
-
-    // Re-verify the gateway now that the envelope is signed (issue 1856), as
-    // `WriteSession::submit` does. A changed or unapproved implementation
-    // discards the envelope: it is never sent, so it can never execute.
-    if let Err(e) = rt.block_on(reverify_gateway_after_signing(
-        &rpc,
-        &cfg,
-        gateway_addr,
-        gateway_implementation,
-    )) {
-        log::error!("rmpc receipt submit: {e}");
-        emit_failure(
-            &ReceiptFailure {
-                ok: false,
-                error: e.name().to_string(),
-                message: Some(format!("{e}")),
-            },
-            args.pretty,
-        );
-        return EXIT_REFUSAL;
-    }
-
-    let tx_hash = match rt.block_on(async { broadcast(&rpc, &raw_tx).await }) {
-        Ok(h) => h,
-        Err(e) => {
-            log::error!("rmpc receipt submit: broadcast failed: {e}");
-            let err_str = format!("{e}");
-            // A node that simulates the tx returns `execution reverted` when the
-            // caller lacks AGENT_ROLE/COMMITTEE_AGENT_ROLE, or when this
-            // receipt_id is already recorded (one receipt per session per
-            // subject). Both are refusals, not transport failures.
-            let (error_name, message) = if err_str.contains("revert") {
-                (
-                    "ErrReceiptRecordReverted",
-                    Some(format!(
-                        "transaction reverted — the caller may lack AGENT_ROLE on the gateway \
-                         or COMMITTEE_AGENT_ROLE on the IC policy, or this receipt_id is \
-                         already recorded: {err_str}"
-                    )),
-                )
-            } else {
-                ("ErrBroadcastFailed", Some(err_str))
-            };
-            emit_failure(
-                &ReceiptFailure {
-                    ok: false,
-                    error: error_name.to_string(),
-                    message,
-                },
-                args.pretty,
-            );
-            return EXIT_REFUSAL;
-        }
-    };
-
-    let max_attempts = args.receipt_timeout_secs.min(u32::MAX as u64) as u32;
-    // A MINED TRANSACTION IS NOT AN ANCHORED RECEIPT. `consensusRecordReceipt`
-    // is `onlyRole(AGENT_ROLE)` and the receipt contract additionally requires
-    // `COMMITTEE_AGENT_ROLE` on the IC policy, so an unauthorized submitter's
-    // transaction is accepted by the node, mined, and reverted — status 0, no
-    // `ReceiptRecorded` log, `receiptCount()` unchanged. Before `1854fe6e` this
-    // command printed `{"ok":true, tx_hash, block_number}` and exited 0 for
-    // exactly that case, which is the "transaction failure is silent" condition
-    // project-fusion.md AC-CORE-09 forbids. Observed on devnet 918453 during QA
-    // step 3.7 with two reverted anchors both reported as successes.
-    //
-    // T23: `1854fe6e` closed it by adding a SIXTH inline copy of the status
-    // check; the copy is gone and the refusal now comes from the shared write
-    // seam. The COMMAND-SPECIFIC ERROR CODE STAYS — `ErrReceiptRecordReverted`
-    // is part of the agent-visible CLI contract and says which write reverted,
-    // which the generic `ErrTxReverted` does not — so this call site maps the
-    // seam's error rather than forwarding `e.name()` the way propose and vote do.
-    let receipt = match rt.block_on(async {
-        wait_for_successful_receipt(&rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1))
-            .await
-    }) {
-        Ok(r) => r,
-        Err(RmpcError::ErrTxReverted { .. }) => {
-            emit_failure(
-                &ReceiptFailure {
-                    ok: false,
-                    error: "ErrReceiptRecordReverted".to_string(),
-                    message: Some(format!(
-                        "the anchor transaction was mined but REVERTED \
-                         (tx_hash={tx_hash:#x}); nothing was recorded — the caller may lack \
-                         AGENT_ROLE on the gateway or COMMITTEE_AGENT_ROLE on the IC policy, or \
-                         this receipt_id is already recorded"
-                    )),
-                },
-                args.pretty,
-            );
-            return EXIT_REFUSAL;
-        }
-        Err(e) => {
-            emit_failure(
-                &ReceiptFailure {
-                    ok: false,
-                    error: "ErrReceiptTimeout".to_string(),
-                    message: Some(format!("{e}")),
-                },
-                args.pretty,
-            );
-            return EXIT_REFUSAL;
-        }
-    };
-
-    // The anchor is a success only if it executed under the implementation
-    // it was signed against (issue 1810). The message names the tx_hash.
-    if let Err(e) = rt.block_on(check_executed_under(
-        &rpc,
-        gateway_addr,
-        gateway_implementation,
-        receipt.block_number,
-        &format!("{tx_hash:#x}"),
-    )) {
-        log::error!("rmpc receipt submit: {e}");
-        emit_failure(
-            &ReceiptFailure {
-                ok: false,
-                error: e.name().to_string(),
-                message: Some(format!("{e}")),
-            },
-            args.pretty,
-        );
-        return EXIT_REFUSAL;
-    }
-
-    let block_number = receipt.block_number.unwrap_or(0);
-
-    log::info!("rmpc receipt submit: ok tx_hash={tx_hash:#x} block={block_number}");
-    emit_output(
-        &ReceiptOutput {
-            ok: true,
-            action: "submit".to_string(),
-            receipt_id: format!("{:#x}", checked.receipt_id),
-            payload_digest: format!("{:#x}", checked.payload_digest),
-            canonical_bytes: checked.canonical_len,
-            session_id: checked.receipt.session_id.clone(),
-            subject_id: checked.receipt.subject_id.clone(),
-            payload_uri: Some(args.receipt_url.clone()),
-            analyst_signatures: checked.signatures,
-            tx_hash: Some(format!("{tx_hash:#x}")),
-            block_number: Some(block_number),
-        },
-        args.pretty,
-    );
-    EXIT_OK
-}
-
-/// Encode `RobotMoneyGateway.consensusRecordReceipt(receiptId, payloadDigest,
-/// payloadUri)`.
-///
-/// Public so the integration tests can ABI-decode the calldata this exact
-/// function produces and assert the `payloadDigest` argument equals the digest
-/// derived from the pinned golden — which is what discharges the second half of
-/// issue #1280 on the rmpc side. A test that re-encoded the call itself would
-/// only ever agree with itself.
-pub fn encode_record_receipt_call(
-    receipt_id: B256,
-    payload_digest: B256,
-    payload_uri: &str,
-) -> Vec<u8> {
-    RobotMoneyGateway::consensusRecordReceiptCall {
-        receiptId: receipt_id,
-        payloadDigest: payload_digest,
-        payloadUri: payload_uri.to_string(),
-    }
-    .abi_encode()
 }
 
 // ─── The check ───────────────────────────────────────────────────────────────
@@ -740,58 +319,6 @@ async fn fetch_receipt(url: &str) -> Result<Vec<u8>, String> {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-fn parse_b256(s: &str) -> Result<B256, String> {
-    let hex = s.strip_prefix("0x").unwrap_or(s);
-    let bytes = hex::decode(hex).map_err(|e| format!("hex decode error: {e}"))?;
-    if bytes.len() != 32 {
-        return Err(format!(
-            "must be exactly 32 bytes (64 hex chars), got {}",
-            bytes.len()
-        ));
-    }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    Ok(B256::from(arr))
-}
-
-fn load_signer(cfg: &Config, subcommand: &str, pretty: bool) -> Result<SoftwareSigner, i32> {
-    let passphrase = match std::env::var(PASSPHRASE_ENV_VAR) {
-        Ok(s) => s,
-        Err(_) => {
-            log::error!(
-                "rmpc receipt {subcommand}: ${PASSPHRASE_ENV_VAR} is unset; \
-                 refusing to prompt on stdin from a non-interactive command"
-            );
-            return Err(EXIT_STARTUP_FAIL);
-        }
-    };
-    SoftwareSigner::load_with_passphrase(
-        &cfg.signer.keystore_path,
-        passphrase.as_bytes(),
-        cfg.signer.allow_software_fallback,
-    )
-    .map_err(|e| {
-        use crate::signer::SignerError;
-        if let SignerError::ErrSoftwareSignerDisallowed = e {
-            emit_failure(
-                &ReceiptFailure {
-                    ok: false,
-                    error: "ErrSoftwareSignerDisallowed".to_string(),
-                    message: Some(
-                        "[signer].allow_software_fallback must be true to use the software keystore"
-                            .to_string(),
-                    ),
-                },
-                pretty,
-            );
-            EXIT_REFUSAL
-        } else {
-            log::error!("rmpc receipt {subcommand}: signer load failed: {e}");
-            EXIT_STARTUP_FAIL
-        }
-    })
-}
-
 fn build_rt(subcommand: &str) -> Result<tokio::runtime::Runtime, i32> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -802,81 +329,10 @@ fn build_rt(subcommand: &str) -> Result<tokio::runtime::Runtime, i32> {
         })
 }
 
-fn fetch_fees(
-    rt: &tokio::runtime::Runtime,
-    rpc: &FailoverRpcClient,
-    cfg: &Config,
-    fee_cap_wei: Option<u64>,
-    pretty: bool,
-    subcommand: &str,
-) -> Result<FeeBid, i32> {
-    let fh = rt
-        .block_on(async { rpc.fee_history(5, "latest", &[50.0]).await })
-        .map_err(|e| {
-            log::error!("rmpc receipt {subcommand}: eth_feeHistory failed: {e}");
-            EXIT_STARTUP_FAIL
-        })?;
-
-    compute_fees(
-        &fh,
-        cfg.effective_max_fee_per_gas_cap(fee_cap_wei) as u128,
-        cfg.max_priority_fee_per_gas_cap
-            .map_or(u128::MAX, |v| v as u128),
-    )
-    .map_err(|e| {
-        emit_failure(
-            &ReceiptFailure {
-                ok: false,
-                error: e.name().to_string(),
-                message: Some(format!("{e}")),
-            },
-            pretty,
-        );
-        EXIT_REFUSAL
-    })
-}
-
 fn emit_output(out: &ReceiptOutput, pretty: bool) {
     emit(out, pretty);
 }
 
 fn emit_failure(out: &ReceiptFailure, pretty: bool) {
     emit(out, pretty);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alloy_sol_types::SolCall;
-
-    /// The calldata the anchoring path builds must ABI-decode back to exactly
-    /// the arguments it was handed. The end-to-end version of this — decoding
-    /// the digest derived from the pinned golden — lives in
-    /// `tests/receipt.rs::submitted_calldata_carries_the_pinned_digest`.
-    #[test]
-    fn record_receipt_calldata_round_trips() {
-        let receipt_id = B256::repeat_byte(0xab);
-        let digest = B256::repeat_byte(0xcd);
-        let uri = "https://robotmoney.net/api/swarm/receipts/12440000-0000-4000-8000-000000000001";
-
-        let calldata = encode_record_receipt_call(receipt_id, digest, uri);
-        let decoded =
-            RobotMoneyGateway::consensusRecordReceiptCall::abi_decode(&calldata, true).unwrap();
-
-        assert_eq!(decoded.receiptId, receipt_id);
-        assert_eq!(decoded.payloadDigest, digest);
-        assert_eq!(decoded.payloadUri, uri);
-    }
-
-    #[test]
-    fn expected_digest_parsing_accepts_both_spellings_and_refuses_short_input() {
-        let with_prefix = format!("0x{}", "ab".repeat(32));
-        let without = "ab".repeat(32);
-        assert_eq!(
-            parse_b256(&with_prefix).unwrap(),
-            parse_b256(&without).unwrap()
-        );
-        assert!(parse_b256("0xabcd").is_err());
-        assert!(parse_b256("nothex").is_err());
-    }
 }

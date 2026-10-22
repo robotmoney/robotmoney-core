@@ -304,7 +304,7 @@ describe("ConsensusReceiptPanel", () => {
     expect(el.textContent).toContain("not on-chain approvals");
     // The whole panel must never claim the record is tamper-proof at v0.1.
     const disclosure = screen.getByTestId("consensus-receipt-disclosure");
-    expect(disclosure.textContent).toContain("single submitter");
+    expect(disclosure.textContent).toContain("submitter Safe");
     expect(disclosure.textContent?.toLowerCase()).not.toContain("tamper-proof");
     expect(disclosure.textContent?.toLowerCase()).not.toContain("censorship-resistant");
   });

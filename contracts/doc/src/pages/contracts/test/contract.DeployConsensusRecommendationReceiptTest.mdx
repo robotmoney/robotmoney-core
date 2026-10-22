@@ -1,40 +1,32 @@
 ---
 title: "DeployConsensusRecommendationReceiptTest"
-description: "AC10: the receipt contract deploys **alongside** InvestmentCommitteePolicy in one ceremony, and AC2: `ADMIN_ROLE` on the receipt contract lands on the `TimelockController` and nowhere else. This is a single greenfield rollout — no migration and no registered agent to preserve."
+description: "The receipt contract deploys ALONE (no gateway, no committee registry), and `ADMIN_ROLE` on it lands on the `TimelockController` and nowhere else. The as-deployed wiring records directly through a Safe-granted submitter."
 ---
 
 # DeployConsensusRecommendationReceiptTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/DeployConsensusRecommendationReceipt.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/DeployConsensusRecommendationReceipt.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
 **Title:** DeployConsensusRecommendationReceiptTest
 
-AC10: the receipt contract deploys **alongside**
-InvestmentCommitteePolicy in one ceremony, and AC2: `ADMIN_ROLE` on
-the receipt contract lands on the `TimelockController` and nowhere
-else. This is a single greenfield rollout — no migration and no
-registered agent to preserve.
+The receipt contract deploys ALONE (no gateway, no committee registry), and
+`ADMIN_ROLE` on it lands on the `TimelockController` and nowhere else. The
+as-deployed wiring records directly through a Safe-granted submitter.
 
 ## State Variables
-
-### admin
-
-```solidity
-address admin = address(0xA0);
-```
-
-### pauser
-
-```solidity
-address pauser = address(0xA1);
-```
 
 ### submitter
 
 ```solidity
 address submitter = address(0xB1);
+```
+
+### stranger
+
+```solidity
+address stranger = address(0xDEAD);
 ```
 
 ### safe
@@ -43,24 +35,6 @@ A real SafeL2 1.4.1 proxy: the only proposer and canceller on the timelock.
 
 ```solidity
 address safe;
-```
-
-### usdc
-
-```solidity
-TestERC20 usdc;
-```
-
-### vault
-
-```solidity
-MockVault vault;
-```
-
-### gateway
-
-```solidity
-RobotMoneyGateway gateway;
 ```
 
 ### timelock
@@ -72,13 +46,13 @@ TimelockController timelock;
 ### script
 
 ```solidity
-DeployInvestmentCommitteePolicy script;
+DeployConsensusRecommendationReceipt script;
 ```
 
 ### d
 
 ```solidity
-DeployInvestmentCommitteePolicy.Deployed d;
+DeployConsensusRecommendationReceipt.Deployed d;
 ```
 
 ## Functions
@@ -91,19 +65,18 @@ DeployInvestmentCommitteePolicy.Deployed d;
 function setUp() public;
 ```
 
-<a id="testoneceremonydeploysandwiresboth"></a>
+<a id="testreceiptdeploysalonewithretiredslotsempty"></a>
 
-### testOneCeremonyDeploysAndWiresBoth
+### testReceiptDeploysAloneWithRetiredSlotsEmpty
 
 <i>
 
-AC10: both contracts exist after a single ceremony, and both are
-wired into the gateway.
+The receipt deploys alone: its retired gateway and IC slots stay empty.
 
 </i>
 
 ```solidity
-function testOneCeremonyDeploysAndWiresBoth() public view;
+function testReceiptDeploysAloneWithRetiredSlotsEmpty() public view;
 ```
 
 <a id="testreceiptadminroleistimelockonly"></a>
@@ -112,9 +85,8 @@ function testOneCeremonyDeploysAndWiresBoth() public view;
 
 <i>
 
-AC2 / INV-3: `ADMIN_ROLE` on the receipt contract is held by the
-TimelockController — and by nobody else, including the gateway,
-the deployer, and the protocol admin.
+INV-3: `ADMIN_ROLE` on the receipt contract is held by the TimelockController
+and by nobody else.
 
 </i>
 
@@ -122,18 +94,19 @@ the deployer, and the protocol admin.
 function testReceiptAdminRoleIsTimelockOnly() public view;
 ```
 
-<a id="testdeployedwiringanchorsandreleases"></a>
+<a id="testdeployedwiringanchorsdirectly"></a>
 
-### testDeployedWiringAnchorsAndReleases
+### testDeployedWiringAnchorsDirectly
 
 <i>
 
-The as-deployed wiring actually anchors: an allowlisted submitter
-records through the gateway and only the timelock can release.
+The as-deployed wiring anchors: the Safe, through the timelock, grants the submitter
+role, the submitter records directly, and the timelock cannot release (no release
+role) while a stranger cannot record.
 
 </i>
 
 ```solidity
-function testDeployedWiringAnchorsAndReleases() public;
+function testDeployedWiringAnchorsDirectly() public;
 ```
 

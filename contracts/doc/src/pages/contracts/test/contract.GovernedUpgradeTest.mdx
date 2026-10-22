@@ -1,15 +1,15 @@
 ---
 title: "GovernedUpgradeTest"
-description: "Issue 1808: the ten proxied core contracts, their one upgrade authority (the Safe-controlled timelock) and the one-way, target-bound freeze. Every governed call here goes through a real SafeL2 1.4.1 (2-of-3) and a real `TimelockController` with the production shape. The populated v1 -> v2 upgrade of the deployed stack on the Base fork is UpgradeLifecycleFork.t.sol."
+description: "Issue 1808: the nine proxied core contracts, their one upgrade authority (the Safe-controlled timelock) and the one-way, target-bound freeze. Every governed call here goes through a real SafeL2 1.4.1 (2-of-3) and a real `TimelockController` with the production shape. The populated v1 -> v2 upgrade of the deployed stack on the Base fork is UpgradeLifecycleFork.t.sol."
 ---
 
 # GovernedUpgradeTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c4a1d1a75d078415bc79e2b2c5cf0da7b21df3c4/contracts/test/GovernedUpgrade.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/GovernedUpgrade.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
-Issue 1808: the ten proxied core contracts, their one upgrade authority (the Safe-controlled
+Issue 1808: the nine proxied core contracts, their one upgrade authority (the Safe-controlled
 timelock) and the one-way, target-bound freeze. Every governed call here goes through a
 real SafeL2 1.4.1 (2-of-3) and a real `TimelockController` with the production shape.
 The populated v1 -> v2 upgrade of the deployed stack on the Base fork is
@@ -26,7 +26,7 @@ uint256 internal constant DELAY = 2 days;
 ### N
 
 ```solidity
-uint256 internal constant N = 10;
+uint256 internal constant N = 9;
 ```
 
 ### CAP
@@ -169,12 +169,6 @@ PortfolioRouter internal router;
 
 ```solidity
 RobotMoneyGateway internal gateway;
-```
-
-### ic
-
-```solidity
-InvestmentCommitteePolicy internal ic;
 ```
 
 ### receipts
@@ -644,7 +638,7 @@ function _populate() internal;
 
 Every proxy goes v1 -> v2 through Safe -> timelock with its address, implementation
 slot history and state intact: balances, allowances, roles, caps, fees, weights,
-gateway policies, IC agents and receipts read the same before and after, and the
+gateway policies, receipt submitters and receipts read the same before and after, and the
 redeem path still pays.
 
 ```solidity

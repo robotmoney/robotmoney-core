@@ -44,7 +44,6 @@ fn config(max_fee_cap: u64) -> Config {
         timelock_address: None,
         timelock_from_block: None,
         gateway_from_block: None,
-        ic_policy_address: None,
         share_receiver: None,
         agent_owner: None,
         gateway_implementation: None,

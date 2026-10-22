@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { keccak256, pad, toFunctionSelector, toHex } from "viem";
 import { RECORDER_RING_SLOTS, verifyDeployment } from "../../src/verify/index.ts";
 import {
-  ADMIN_ROLE, AGENT_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_GUARD_SLOT, SAFE_FALLBACK_SLOT, SAFE_PROBE_ADDRESS,
+  ADMIN_ROLE, AGENT_ROLE, RECEIPT_RELEASER_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_GUARD_SLOT, SAFE_FALLBACK_SLOT, SAFE_PROBE_ADDRESS,
   SAFE_PROBE_ADDRESS_2, SIG_AGENT_AUTHORIZED, Z32, ZERO,
 } from "../../src/verify/constants.ts";
 import { padTopic } from "../../src/verify/logs.ts";
@@ -17,10 +17,10 @@ import { USDC_ADDRESS } from "../../src/usdc.ts";
 import { ERC1967_ADMIN_SLOT } from "../../src/verify/upgradeability.ts";
 import { getStageTable } from "../../src/stages.ts";
 import { manifestBase } from "../../src/stage-table.ts";
-import { buildWorld, failed, addr, GOVERNED_UPGRADE_LIB, IMPL_SLOT, INIT_SLOT, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, RECORDER, V4_ADAPTER, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
+import { buildWorld, failed, addr, GOVERNED_UPGRADE_LIB, IMPL_SLOT, INIT_SLOT, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, REC, RECORDER, V4_ADAPTER, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
 
 const LABELS = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "expected-labels.json"), "utf8")) as string[];
-const CORE: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, icpolicy: ICP, receipt: REC, timelock: TIMELOCK, recorder: RECORDER };
+const CORE: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, receipt: REC, timelock: TIMELOCK, recorder: RECORDER };
 const LIB_TICK_MATH = addr(0x11b1);
 const WHO: Record<string, `0x${string}`> = { deployer: DEPLOYER, pauser: PAUSER, emergency: EMERGENCY, safe: SAFE };
 const OTHER = addr(0x0bad);
@@ -113,7 +113,9 @@ const RULES: Rule[] = [
   [/^governance: WEIGHT_SETTER_ROLE \(applyReceipt\) has exactly one holder$/, (w) => w.chain.grant(GOV, WEIGHT_SETTER_ROLE, OTHER)],
   [/^governance: router\(\) equals the deployed router$/, (w) => w.chain.set(GOV, "router", OTHER)],
   [/^governance: receipts\(\) equals the deployed receipt register$/, (w) => w.chain.set(GOV, "receipts", OTHER)],
-  [/^receipt: ADMIN_ROLE held by governance \(applyReceipt releases\)$/, (w) => w.chain.revoke(REC, ADMIN_ROLE, GOV)],
+  [/^receipt: RECEIPT_RELEASER_ROLE held by governance \(applyReceipt releases\)$/, (w) => w.chain.revoke(REC, RECEIPT_RELEASER_ROLE, GOV)],
+  [/^receipt: ADMIN_ROLE not held by governance$/, (w) => w.chain.grant(REC, ADMIN_ROLE, GOV)],
+  [/^receipt: RECEIPT_RELEASER_ROLE not held by timelock$/, (w) => w.chain.grant(REC, RECEIPT_RELEASER_ROLE, TIMELOCK)],
   [/^governance: runtime code has no voting function$/, (w) => w.chain.codes.set(GOV.toLowerCase(), `0x63${toFunctionSelector("quorumThreshold()").slice(2)}${w.chain.codes.get(GOV.toLowerCase())!.slice(2)}` as `0x${string}`)],
   [/^router: default weights equal sheet$/, (w) => w.chain.set(ROUTER, "getDefaultWeights", [Object.values(VAULTS).map((v) => v.address), [5000n, 5000n, 0n, 0n]])],
   // issue 1743: a voted vector on the router overrides the default vector
@@ -314,7 +316,7 @@ describe("issue 1842: fail-closed gateway pins and the governed freeze of an upg
     const w = buildWorld(918453);
     w.sheet.upgradeMode = "upgradeable";
     for (const s of getStageTable().stages.filter((x) => x.proxies)) editManifest(w, `${manifestBase(s.manifest)}.json`, (o) => { o.upgrade_mode = "upgradeable"; });
-    for (const a of [GATEWAY, REGISTRY, ROUTER, GOV, ICP, REC, ...Object.values(VAULTS).map((v) => v.address)]) w.chain.set(a, "upgradesFrozen", a === GOV);
+    for (const a of [GATEWAY, REGISTRY, ROUTER, GOV, REC, ...Object.values(VAULTS).map((v) => v.address)]) w.chain.set(a, "upgradesFrozen", a === GOV);
     expect(failed(await verifyDeployment(w.opts))).toEqual(["governance: upgradesFrozen() agrees with the release mode"]);
   });
 });

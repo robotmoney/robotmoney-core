@@ -807,12 +807,6 @@ impl Fixture {
     pub fn governance_hex(&self) -> &str {
         &self.topology.governance
     }
-    pub fn ic_policy(&self) -> Address {
-        parse_addr(&self.topology.ic_policy)
-    }
-    pub fn ic_policy_hex(&self) -> &str {
-        &self.topology.ic_policy
-    }
     pub fn consensus_receipt(&self) -> Address {
         parse_addr(&self.topology.consensus_receipt)
     }
@@ -1727,13 +1721,15 @@ impl Fixture {
     ///   the live vector, so it renders "Unverified", "Recorded, not released" and "Not applied".
     ///
     /// Authorities are the mainnet ones (docs/architecture.md §4.9.2). No test-only admin grant exists:
-    /// - `committeeRegister` needs the gateway's ADMIN_ROLE, held by the timelock after handover: a Safe -> Timelock
-    ///   generic call ([`Self::timelock_call`]).
-    /// - `consensusRecordReceipt` needs AGENT_ROLE plus COMMITTEE_AGENT_ROLE: the harness agent key signs it.
-    /// - `releaseReceipt` needs the receipt contract's ADMIN_ROLE, held by the timelock: a Safe -> Timelock generic
-    ///   call ([`Self::timelock_call`], Twin-only). The govern row `release-receipt` is refused once RouterGovernance
-    ///   holds that role (issue 1831: a release alone burns a receipt in production), and receipt A's plain digest is
-    ///   not the `apply-receipt` digest, so the harness sends the bare `releaseReceipt` the dapp needs to render.
+    /// - `grantRole(RECEIPT_SUBMITTER_ROLE, agent)` on the receipt contract needs its ADMIN_ROLE, held by the
+    ///   timelock after handover: a Safe -> Timelock generic call ([`Self::timelock_call`]).
+    /// - `recordReceipt` needs RECEIPT_SUBMITTER_ROLE and is called directly on the receipt contract (no gateway):
+    ///   the harness agent key signs it.
+    /// - `releaseReceipt` needs RECEIPT_RELEASER_ROLE. The timelock administers it (ADMIN_ROLE) but cannot release, so
+    ///   the harness agent is granted the role and revoked again around the one release, each a Safe -> Timelock
+    ///   generic call ([`Self::timelock_call`], Twin-only). The govern row `release-receipt` is refused once
+    ///   RouterGovernance holds the role (issue 1831: a release alone burns a receipt in production), and receipt A's
+    ///   plain digest is not the `apply-receipt` digest, so the harness sends the bare `releaseReceipt` the dapp needs.
     ///
     /// Both payloads are served by the `receipt-fixtures` compose service at [`RECEIPT_FIXTURES_PORT`] under the
     /// hostname `receipt-fixtures`: the indexer reaches it over the compose network, and the Playwright browser maps
@@ -1743,20 +1739,15 @@ impl Fixture {
         let a = load_fixture_receipt(&self.repo_root, "receipt-a.json")?;
         let b = load_fixture_receipt(&self.repo_root, "receipt-b.json")?;
         let agent_hex = format!("{:#x}", self.agent());
-        self.timelock_call(
-            "gateway-committee-register",
-            self.gateway(),
-            "committeeRegister(address,string)",
-            &[&agent_hex, RECEIPT_AGENT_ID],
-        )?;
+        self.grant_receipt_submitter(&agent_hex)?;
 
         let agent_pk_hex = format!("0x{}", hex::encode(AGENT_PRIVATE_KEY));
         let id_a = format!("0x{}", hex::encode(a.receipt_id));
         let digest_a = format!("0x{}", hex::encode(keccak256(&a.bytes).0));
         self.cast_send(
             &agent_pk_hex,
-            self.gateway(),
-            "consensusRecordReceipt(bytes32,bytes32,string)",
+            self.consensus_receipt(),
+            "recordReceipt(bytes32,bytes32,string)",
             &[&id_a, &digest_a, &a.payload_uri],
         )?;
         let id_b = format!("0x{}", hex::encode(b.receipt_id));
@@ -1766,24 +1757,51 @@ impl Fixture {
         );
         self.cast_send(
             &agent_pk_hex,
-            self.gateway(),
-            "consensusRecordReceipt(bytes32,bytes32,string)",
+            self.consensus_receipt(),
+            "recordReceipt(bytes32,bytes32,string)",
             &[&id_b, &digest_b, &b.payload_uri],
         )?;
 
         // Release receipt A only: a signalling-only act (no funds move, no router weight changes). Receipt B stays
         // recorded, not released.
+        // The timelock holds only the receipt ADMIN_ROLE, which cannot release (issue 1888). The release role is
+        // granted to the harness agent through the Safe -> Timelock path for this one release, then revoked, so the
+        // role table is back to "RouterGovernance alone releases" before any verify runs.
+        let releaser_role = format!("0x{}", hex::encode(keccak256(b"RECEIPT_RELEASER_ROLE").0));
         self.timelock_call(
-            "receipt-release",
+            "receipt-grant-releaser",
+            self.consensus_receipt(),
+            "grantRole(bytes32,address)",
+            &[&releaser_role, &agent_hex],
+        )?;
+        self.cast_send(
+            &agent_pk_hex,
             self.consensus_receipt(),
             "releaseReceipt(bytes32)",
             &[&id_a],
+        )?;
+        self.timelock_call(
+            "receipt-revoke-releaser",
+            self.consensus_receipt(),
+            "revokeRole(bytes32,address)",
+            &[&releaser_role, &agent_hex],
         )?;
         logging::info(
             "smoke-test",
             format!("seeded consensus receipts: a={id_a} (released) b={id_b} (recorded only)"),
         );
         Ok(())
+    }
+
+    /// Grant RECEIPT_SUBMITTER_ROLE on the receipt contract to `agent_hex` through the Safe -> Timelock path.
+    fn grant_receipt_submitter(&self, agent_hex: &str) -> Result<String, HarnessError> {
+        let role = format!("0x{}", hex::encode(keccak256(b"RECEIPT_SUBMITTER_ROLE").0));
+        self.timelock_call(
+            "receipt-grant-submitter",
+            self.consensus_receipt(),
+            "grantRole(bytes32,address)",
+            &[&role, agent_hex],
+        )
     }
 
     /// Record a fixture payload on the receipt contract with its OWN digest, as the harness agent (issue 1696). The agent must be registered
@@ -1798,8 +1816,8 @@ impl Fixture {
         let agent_pk_hex = format!("0x{}", hex::encode(AGENT_PRIVATE_KEY));
         self.cast_send(
             &agent_pk_hex,
-            self.gateway(),
-            "consensusRecordReceipt(bytes32,bytes32,string)",
+            self.consensus_receipt(),
+            "recordReceipt(bytes32,bytes32,string)",
             &[&id, &digest, &r.payload_uri],
         )?;
         Ok(id)
@@ -3051,10 +3069,8 @@ fn dapp_compose_env(
         kv("INDEXER_ROUTER_GOVERNANCE", &d.governance),
         // Issue #1294: ReceiptRecorded/ReceiptReleased events from ConsensusRebalanceReceipt.
         kv("INDEXER_CONSENSUS_RECEIPT", &d.consensus_receipt),
-        // Security round 2: the IC policy proxy (committee events, and its Upgraded / UpgradesFrozen
-        // that the watchdog pages on), the timelock and the Safe (governance admin events), as the
-        // 8453 stack watches them. docker-compose.dapp.yaml maps each; an unset one was never watched.
-        kv("INDEXER_INVESTMENT_COMMITTEE", &d.ic_policy),
+        // Security round 2: the timelock and the Safe (governance admin events), as the 8453 stack
+        // watches them. docker-compose.dapp.yaml maps each; an unset one was never watched.
         kv("INDEXER_TIMELOCK", &d.timelock),
         kv("INDEXER_SAFE", &d.safe),
         // Issue #1294: fixed port for the receipt-fixtures compose service.
@@ -3088,8 +3104,6 @@ struct DappDeployed {
     governance: String,
     timelock: String,
     safe: String,
-    /// The InvestmentCommitteePolicy proxy.
-    ic_policy: String,
     consensus_receipt: String,
     vault_addresses_json: String,
 }
@@ -3109,7 +3123,6 @@ impl DappDeployed {
             governance: fixture.governance_hex().to_string(),
             timelock: fixture.timelock_hex().to_string(),
             safe: fixture.safe_hex().to_string(),
-            ic_policy: fixture.ic_policy_hex().to_string(),
             consensus_receipt: fixture.consensus_receipt_hex().to_string(),
             vault_addresses_json: fixture.vault_address_map_json(),
         }
@@ -4190,7 +4203,6 @@ ccc333\t\teth-beacon
             governance: a(6),
             timelock: a(7),
             safe: a(8),
-            ic_policy: a(11),
             consensus_receipt: a(9),
             vault_addresses_json: "{\"rmUSDC\":\"0x01\"}".to_string(),
         }
@@ -4272,19 +4284,15 @@ ccc333\t\teth-beacon
         assert_eq!(get("EXPLORER_API_PORT"), Some("18546"));
     }
 
-    /// Security round 2: the stage stack's indexer watches the InvestmentCommitteePolicy proxy, the
+    /// Security round 2: the stage stack's indexer watches the
     /// timelock and the Safe, as the 8453 stack does. Without them an `Upgraded` of the IC policy
     /// proxy never reached the indexed proxy admin events, the watchdog's upgrade page stayed silent for it,
     /// and `/v1/committee/*` and `/v1/governance/admin-events` stayed empty on the rehearsal chain.
     #[test]
-    fn dapp_compose_env_watches_the_ic_policy_timelock_and_safe() {
+    fn dapp_compose_env_watches_the_timelock_and_safe() {
         let env = sample_env();
         let deployed = sample_deployed();
         let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
-        assert_eq!(
-            get("INDEXER_INVESTMENT_COMMITTEE"),
-            Some(deployed.ic_policy.as_str())
-        );
         assert_eq!(get("INDEXER_TIMELOCK"), Some(deployed.timelock.as_str()));
         assert_eq!(get("INDEXER_SAFE"), Some(deployed.safe.as_str()));
         // Each is a variable the compose file hands the indexer container.
@@ -4293,11 +4301,7 @@ ccc333\t\teth-beacon
             root.join("testing/ethereum-testnet/config/docker-compose.dapp.yaml"),
         )
         .expect("compose file");
-        for name in [
-            "INDEXER_INVESTMENT_COMMITTEE",
-            "INDEXER_TIMELOCK",
-            "INDEXER_SAFE",
-        ] {
+        for name in ["INDEXER_TIMELOCK", "INDEXER_SAFE"] {
             assert!(
                 compose.contains(&format!("{name}: ${{{name}")),
                 "docker-compose.dapp.yaml must map {name} into the indexer"

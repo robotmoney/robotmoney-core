@@ -10,7 +10,9 @@ import {DeployLibs} from "../script/DeployLibs.s.sol";
 import {DeployVault} from "../script/DeployVault.s.sol";
 import {DeployGateway} from "../script/DeployGateway.s.sol";
 import {DeployPortfolioRouter} from "../script/DeployPortfolioRouter.s.sol";
-import {DeployInvestmentCommitteePolicy} from "../script/DeployInvestmentCommitteePolicy.s.sol";
+import {
+    DeployConsensusRecommendationReceipt
+} from "../script/DeployConsensusRecommendationReceipt.s.sol";
 import {CoreStages} from "./helpers/CoreStages.sol";
 import {claimTmpPath, releaseTmpPath} from "./helpers/TmpPaths.sol";
 
@@ -162,18 +164,13 @@ contract DeployTest is Test {
         assertTrue(authorized, "agent authorized through the final gateway");
         assertTrue(s.gateway.hasRole(s.gateway.AGENT_ROLE(), agent), "agent role");
 
-        // In process the IC script is its own deployer and IC admin, so it needs the gateway's
-        // ADMIN_ROLE the way the broadcast deployer holds it. Capture the role before pranking.
-        DeployInvestmentCommitteePolicy ic = new DeployInvestmentCommitteePolicy();
-        bytes32 gatewayAdminRole = s.gateway.ADMIN_ROLE();
-        vm.prank(admin);
-        s.gateway.grantRole(gatewayAdminRole, address(ic));
-        DeployInvestmentCommitteePolicy.Deployed memory d =
-            ic.runInProcessWith(address(ic), address(s.gateway));
-        ic.wireGatewayInProcess(d);
-        assertEq(d.gateway, address(s.gateway), "IC stage binds the final gateway");
-        assertEq(d.policy.gateway(), address(s.gateway), "policy.gateway is the final gateway");
-        assertEq(address(s.gateway.icPolicy()), address(d.policy), "gateway.icPolicy is the policy");
+        // The receipt stage deploys alone: it binds no gateway and wires nothing into it.
+        DeployConsensusRecommendationReceipt rs = new DeployConsensusRecommendationReceipt();
+        DeployConsensusRecommendationReceipt.Deployed memory d = rs.runInProcessWith(admin);
+        assertEq(d.receipts.gateway(), address(0), "receipt binds no gateway");
+        assertEq(d.receipts.icPolicy(), address(0), "receipt binds no IC policy");
+        assertEq(address(s.gateway.icPolicy()), address(0), "gateway has no IC policy");
+        assertEq(address(s.gateway.consensusReceipt()), address(0), "gateway has no receipt route");
     }
 
     // --- Manifest ----------------------------------------------------------

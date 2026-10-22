@@ -25,7 +25,6 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
-import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockUsdc, MockGovVault} from "./RouterGovernance.t.sol";
@@ -81,7 +80,6 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
     RouterGovernance internal gov;
     RobotMoneyVault internal vault;
     RobotMoneyGateway internal gateway;
-    InvestmentCommitteePolicy internal icPolicy;
     ConsensusRecommendationReceipt internal receipts;
     TimelockController internal timelock;
 
@@ -106,9 +104,9 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
     address internal emergency = makeAddr("emergency");
     address internal pauser = makeAddr("pauser");
 
-    // Recommending body: committee agents, deliberately disjoint (INV-4).
-    address internal agentAthena = makeAddr("committee-athena");
-    address internal agentWoon = makeAddr("committee-woon");
+    // Recommending body: receipt submitters, deliberately disjoint (INV-4).
+    address internal agentAthena = makeAddr("submitter-athena");
+    address internal agentWoon = makeAddr("submitter-woon");
 
     uint256 internal constant MIN_DELAY = 2 days;
 
@@ -160,15 +158,11 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         registry.setRouterEligible(address(vaultB), true);
         vm.stopPrank();
 
-        // The committee body. Separately administered; no weight authority.
-        // The receipt register's gateway is this test contract, so the test can
-        // record a receipt directly (the committee's record path is not under test).
-        icPolicy = CoreProxies.investmentCommitteePolicy(deployer, address(gateway));
-        receipts =
-            CoreProxies.consensusRecommendationReceipt(deployer, address(this), address(icPolicy));
+        // The recommending body: receipt submitters. Separately administered; no weight authority.
+        receipts = CoreProxies.consensusRecommendationReceipt(deployer);
         vm.startPrank(deployer);
-        icPolicy.grantRole(icPolicy.COMMITTEE_AGENT_ROLE(), agentAthena);
-        icPolicy.grantRole(icPolicy.COMMITTEE_AGENT_ROLE(), agentWoon);
+        receipts.grantRole(receipts.RECEIPT_SUBMITTER_ROLE(), agentAthena);
+        receipts.grantRole(receipts.RECEIPT_SUBMITTER_ROLE(), agentWoon);
         vm.stopPrank();
 
         // The deployment under test: the governance script.
@@ -186,7 +180,7 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         // role, and the script's "deployer no longer has ADMIN_ROLE" requires
         // pass vacuously.)
         vm.prank(deployer);
-        DeployTimelock.Deployed memory t = timelockScript.runInProcessWithCommittee(
+        DeployTimelock.Deployed memory t = timelockScript.runInProcessWithReceipt(
             address(vault),
             address(gateway),
             address(registry),
@@ -195,17 +189,16 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
             address(safe),
             emergency,
             MIN_DELAY,
-            DeployTimelock.Committee({
-                icPolicy: address(icPolicy),
-                consensusReceipt: address(receipts),
-                receiptAdmin: deployer
+            DeployTimelock.ReceiptHandover({
+                consensusReceipt: address(receipts), receiptAdmin: deployer
             }),
             DeployTimelock.SafeSpec({owners: _ownersOfSafe(), threshold: 2})
         );
         timelock = t.timelock;
 
-        // The committee records a receipt (this contract is the register's gateway).
-        receipts.recordReceipt(agentAthena, RECEIPT_ID, DIGEST, "https://example.invalid/r1");
+        // A submitter records a receipt directly.
+        vm.prank(agentAthena);
+        receipts.recordReceipt(RECEIPT_ID, DIGEST, "https://example.invalid/r1");
     }
 
     // ─── Half 1: the approving body can act ──────────────────────────────────
@@ -268,8 +261,13 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         assertEq(gov.getRoleMemberCount(WEIGHT_SETTER_ROLE), 1, "one applyReceipt caller");
         assertEq(gov.getRoleMember(WEIGHT_SETTER_ROLE, 0), address(timelock));
         assertTrue(
-            IAccessControl(address(receipts)).hasRole(ADMIN_ROLE, address(gov)),
+            IAccessControl(address(receipts))
+                .hasRole(receipts.RECEIPT_RELEASER_ROLE(), address(gov)),
             "governance cannot release the receipt it applies"
+        );
+        assertFalse(
+            IAccessControl(address(receipts)).hasRole(ADMIN_ROLE, address(gov)),
+            "governance must not hold the receipt ADMIN_ROLE"
         );
         assertEq(address(gov.receipts()), address(receipts));
     }
@@ -354,9 +352,9 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
 
     // ─── INV-4: the two bodies are disjoint ──────────────────────────────────
 
-    /// @notice No committee agent holds any weight authority: not the
+    /// @notice No receipt submitter holds any weight authority: not the
     ///         governance WEIGHT_SETTER_ROLE or ADMIN_ROLE, not the router's.
-    function test_committeeHoldsNoWeightAuthority() public view {
+    function test_submittersHoldNoWeightAuthority() public view {
         address[2] memory agents = [agentAthena, agentWoon];
         for (uint256 i = 0; i < agents.length; i++) {
             assertFalse(gov.hasRole(WEIGHT_SETTER_ROLE, agents[i]), "agent can apply receipts");

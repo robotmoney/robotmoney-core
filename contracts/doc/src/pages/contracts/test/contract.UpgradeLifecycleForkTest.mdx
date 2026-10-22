@@ -5,7 +5,7 @@ description: "Issue 1808, on the Twin chain (a pinned lazy fork of real Base). T
 
 # UpgradeLifecycleForkTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/UpgradeLifecycleFork.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/UpgradeLifecycleFork.t.sol)
 
 **Inherits:** Test
 
@@ -163,12 +163,6 @@ PortfolioRouter internal router;
 RobotMoneyGateway internal gateway;
 ```
 
-### ic
-
-```solidity
-InvestmentCommitteePolicy internal ic;
-```
-
 ### receipts
 
 ```solidity
@@ -278,14 +272,14 @@ function _vaults() internal view returns (address[] memory v);
 ### _proxies
 
 ```solidity
-function _proxies() internal view returns (address[10] memory);
+function _proxies() internal view returns (address[9] memory);
 ```
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| &lt;none&gt; | `address[10]` |  |
+| &lt;none&gt; | `address[9]` |  |
 
 <a id="_v2-uint256"></a>
 

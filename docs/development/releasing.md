@@ -190,7 +190,7 @@ that must not silently rot is exercised by:
 
 The first two run in `suite-07-rmpc-integration.yml` (job `rmpc-parity`), ahead of
 `Build rmpc binary` so a version problem does not cost a release build first. The
-last two are both `install-rmpc-selftest.sh` and run in `suite-17-swarm-plugin.yml`.
+last two are both `install-rmpc-selftest.sh` and run in `suite-23-skill-url-monitor-selftest.yml`.
 
 ## Who holds the write token
 

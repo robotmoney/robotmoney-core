@@ -161,17 +161,6 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
     /// @notice `withdraw()` USDC balance did not increase by the expected amount,
     ///         indicating a malicious or fee-on-transfer vault.
     error UnexpectedAssetsReceived();
-    /// @notice `committeeRegister()` or `committeeVoteSubmit()` called but no IC
-    ///         policy contract is configured (`icPolicy == address(0)`).
-    error ICPolicyNotSet();
-    /// @notice `committeeVoteSubmit()` called with `p.agent != msg.sender`. A
-    ///         committee signal is the caller's own (architecture §4.8 identity
-    ///         model), so one gateway agent cannot file it under another
-    ///         member's address (issue #1790).
-    error CommitteeAgentNotCaller();
-    /// @notice `consensusRecordReceipt()` called but no consensus receipt contract
-    ///         is configured (`consensusReceipt == address(0)`).
-    error ConsensusReceiptNotSet();
 
     // -------------------------------------------------------------------
     // Constants
@@ -316,9 +305,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
     ///         are never frozen (owner decision 2026-10-05, core 1494).
     bool private _depositsPaused;
 
-    /// @notice Investment Committee Policy contract. When set, `committeeRegister`
-    ///         and `committeeVoteSubmit` forward calls here. Settable by
-    ///         `ADMIN_ROLE` via `setICPolicy`. `address(0)` means not configured.
+    /// @notice Retired storage slot (issue 1888). The on-chain committee is deleted and nothing
+    ///         writes or reads this. The getter stays so the slot keeps its type and its value
+    ///         on deployed proxies stays readable. `IInvestmentCommitteePolicy` is empty.
     IInvestmentCommitteePolicy public icPolicy;
 
     // ─── Last-admin floor (ACL-3 / F-06) ──────────────────────────────
@@ -336,11 +325,10 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
     /// @notice Number of accounts currently holding `DEFAULT_ADMIN_ROLE`.
     uint256 private _defaultAdminCount;
 
-    /// @notice Consensus Recommendation Receipt contract. When set,
-    ///         `consensusRecordReceipt` forwards calls here. Settable by
-    ///         `ADMIN_ROLE` via `setConsensusReceipt`. `address(0)` means not
-    ///         configured. Appended after the admin-tier counters so no
-    ///         preceding storage slot moves.
+    /// @notice Retired storage slot (issue 1888). Receipts are recorded directly on the
+    ///         receipt contract by its submitter, never through the gateway. Nothing writes
+    ///         or reads this. The getter stays so the slot keeps its value on deployed proxies.
+    ///         Appended after the admin-tier counters so no preceding storage slot moves.
     IConsensusRecommendationReceipt public consensusReceipt;
 
     /// @notice Revoking/renouncing the sole holder of an admin tier is forbidden.
@@ -1355,122 +1343,6 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
                 idempotencyKey
             )
         );
-    }
-
-    // -------------------------------------------------------------------
-    // Investment Committee routing (issue #1049)
-    // -------------------------------------------------------------------
-
-    /// @notice Emitted when the IC policy contract address is set or updated.
-    /// @param by     Address that called `setICPolicy` (must hold `ADMIN_ROLE`).
-    /// @param policy New IC policy contract address (`address(0)` clears it).
-    event ICPolicySet(address indexed by, address indexed policy);
-
-    /// @notice Set or update the Investment Committee policy contract address.
-    ///         Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear (disable).
-    /// @param policy_ Address of the deployed `InvestmentCommitteePolicy` contract,
-    ///                or `address(0)` to disable committee routing.
-    function setICPolicy(address policy_) external onlyRole(ADMIN_ROLE) {
-        icPolicy = IInvestmentCommitteePolicy(policy_);
-        emit ICPolicySet(msg.sender, policy_);
-    }
-
-    /// @notice Forward a committee agent registration to the IC policy contract.
-    ///         Restricted to `ADMIN_ROLE` (mirrors IC contract's own `ADMIN_ROLE`
-    ///         requirement on `registerAgent`). Reverts if `icPolicy` is not set.
-    ///
-    ///         All committee writes pass through the gateway so that the IC
-    ///         contract's `onlyGateway` modifier enforcement is the single
-    ///         choke point — no committee side channel exists.
-    ///
-    /// @param agent    Address to grant `COMMITTEE_AGENT_ROLE` on the IC contract.
-    /// @param agentId_ Human-readable label (e.g. "athena-v1").
-    function committeeRegister(address agent, string calldata agentId_)
-        external
-        onlyRole(ADMIN_ROLE)
-    {
-        if (address(icPolicy) == address(0)) revert ICPolicyNotSet();
-        icPolicy.registerAgent(agent, agentId_);
-    }
-
-    /// @notice Forward a signed committee vote to the IC policy contract.
-    ///         Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set,
-    ///         if `p.agent` is not the caller (`CommitteeAgentNotCaller`), or
-    ///         if the IC contract's own guards fail (agent not allowlisted,
-    ///         invalid vote fields, etc.).
-    ///
-    ///         `p.agent` must equal `msg.sender` (issue #1790): the IC contract
-    ///         checks `COMMITTEE_AGENT_ROLE` on `p.agent`, so without this bind
-    ///         any `AGENT_ROLE` holder could file a signal under a registered
-    ///         member's address.
-    ///
-    ///         The gateway is the sole permitted caller of `IC.submitVote`
-    ///         (enforced by the IC contract's `onlyGateway` modifier). This
-    ///         function is the only path through which an agent may reach the
-    ///         IC contract.
-    ///
-    /// @param p  All vote fields packed into a `VoteParams` struct.
-    /// @return voteId  Index of the newly appended vote in the IC contract.
-    function committeeVoteSubmit(IInvestmentCommitteePolicy.VoteParams calldata p)
-        external
-        onlyRole(AGENT_ROLE)
-        returns (uint256 voteId)
-    {
-        if (address(icPolicy) == address(0)) revert ICPolicyNotSet();
-        if (p.agent != msg.sender) revert CommitteeAgentNotCaller();
-        voteId = icPolicy.submitVote(p);
-    }
-
-    // -------------------------------------------------------------------
-    // Consensus recommendation receipt routing (issue #1247)
-    // -------------------------------------------------------------------
-
-    /// @notice Emitted when the consensus receipt contract address is set or updated.
-    /// @param by      Address that called `setConsensusReceipt` (must hold `ADMIN_ROLE`).
-    /// @param receipt New receipt contract address (`address(0)` clears it).
-    event ConsensusReceiptSet(address indexed by, address indexed receipt);
-
-    /// @notice Set or update the ConsensusRecommendationReceipt contract address.
-    ///         Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear (disable).
-    /// @param receipt_ Address of the deployed `ConsensusRecommendationReceipt`
-    ///                 contract, or `address(0)` to disable receipt routing.
-    function setConsensusReceipt(address receipt_) external onlyRole(ADMIN_ROLE) {
-        consensusReceipt = IConsensusRecommendationReceipt(receipt_);
-        emit ConsensusReceiptSet(msg.sender, receipt_);
-    }
-
-    /// @notice Record a consensus recommendation receipt commitment on chain.
-    ///         Restricted to `AGENT_ROLE`; the caller is the single submitter
-    ///         attesting for the committee, and it must additionally hold
-    ///         `COMMITTEE_AGENT_ROLE` on the IC policy (checked by the receipt
-    ///         contract, which keeps no registry of its own).
-    ///
-    ///         This is the whole write surface for anchoring. There is no
-    ///         `consensusSubmitSignature`: the rejected multi-signer design was
-    ///         replaced by one submitter carrying the analysts' ed25519
-    ///         signatures as payload data verified off-chain (ADR-0012 §5,
-    ///         `docs/architecture.md` §4.9). Recording is **signalling only**.
-    ///
-    ///         Release is deliberately NOT routed through the gateway: routing
-    ///         it here would require granting the gateway `ADMIN_ROLE` on the
-    ///         receipt contract, and INV-3 requires that role to be held by the
-    ///         `TimelockController`. The timelock calls
-    ///         `ConsensusRecommendationReceipt.releaseReceipt` directly.
-    ///
-    /// @param receiptId     `keccak256("robotmoney:consensus-receipt-id:v1\n" +
-    ///                      session_id + "\n" + subject_id)`.
-    /// @param payloadDigest `keccak256` of the receipt's canonical bytes.
-    /// @param payloadUri    Public route serving those exact bytes.
-    /// @return index Index of the newly appended receipt.
-    function consensusRecordReceipt(
-        bytes32 receiptId,
-        bytes32 payloadDigest,
-        string calldata payloadUri
-    ) external onlyRole(AGENT_ROLE) returns (uint256 index) {
-        if (address(consensusReceipt) == address(0)) {
-            revert ConsensusReceiptNotSet();
-        }
-        index = consensusReceipt.recordReceipt(msg.sender, receiptId, payloadDigest, payloadUri);
     }
 
     /// @dev Execute the multi-leg router withdrawal: pull shares from shareHolder,

@@ -13,7 +13,7 @@ import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
-import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
+import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
@@ -25,14 +25,14 @@ import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @title GovernedSurfacesSafeTimelockTest
 /// @notice One real Safe -> Timelock test for each governed surface that had none: the
-///         InvestmentCommitteePolicy, adapter admin, role revoke, `setDefaultWeights` after the
+///         receipt submitter role, adapter admin, role revoke, `setDefaultWeights` after the
 ///         handover, `RouterGovernance.clearVotedWeights` after the handover, and the AgentTokenVault
 ///         non-asset setters. Two owners sign, the real SafeL2 proxy runs `execTransaction`,
 ///         the timelock waits, the timelock calls the contract. Nothing pranks the Safe.
 contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant AGENT_ROLE = keccak256("AGENT_ROLE");
-    bytes32 internal constant COMMITTEE_AGENT_ROLE = keccak256("COMMITTEE_AGENT_ROLE");
+    bytes32 internal constant RECEIPT_SUBMITTER_ROLE = keccak256("RECEIPT_SUBMITTER_ROLE");
     uint256 internal constant DELAY = 2 days;
     uint256 internal constant ONE_USDC = 1e6;
 
@@ -42,7 +42,7 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
 
     RobotMoneyVault internal core;
     RobotMoneyGateway internal gateway;
-    InvestmentCommitteePolicy internal ic;
+    ConsensusRecommendationReceipt internal ic;
     VaultRegistry internal registry;
     PortfolioRouter internal router;
     RouterGovernance internal gov;
@@ -63,7 +63,7 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
             usdc, type(uint256).max, type(uint256).max, 0, safe, address(this), address(this)
         );
         gateway = CoreProxies.robotMoneyGateway(usdc, core, address(this), pauser, address(0));
-        ic = CoreProxies.investmentCommitteePolicy(address(this), address(gateway));
+        ic = CoreProxies.consensusRecommendationReceipt(address(this));
         registry = CoreProxies.vaultRegistry(address(this));
         router = CoreProxies.portfolioRouter(address(usdc), address(registry), address(this));
         gov = CoreProxies.routerGovernance(address(router), makeAddr("receipts"), address(this));
@@ -112,30 +112,28 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
         _expectExecuteRefused(safe, timelock, target, data, salt);
     }
 
-    // ─── InvestmentCommitteePolicy ────────────────────────────────────────────
+    // ─── ConsensusRecommendationReceipt submitter role ────────────────────────
 
-    function test_icPolicy_registerAndRevokeAgent_viaSafeThenTimelock() public {
+    function test_receiptSubmitter_grantAndRevoke_viaSafeThenTimelock() public {
         _runChecked(
             address(ic),
-            abi.encodeCall(InvestmentCommitteePolicy.registerAgent, (agent, "agent-1")),
-            keccak256("ic-register")
+            abi.encodeCall(ic.grantRole, (RECEIPT_SUBMITTER_ROLE, agent)),
+            keccak256("receipt-register")
         );
-        assertTrue(ic.hasRole(COMMITTEE_AGENT_ROLE, agent), "agent registered by the timelock");
+        assertTrue(ic.hasRole(RECEIPT_SUBMITTER_ROLE, agent), "submitter granted by the timelock");
 
         // Role revoke on the same surface.
         _runChecked(
             address(ic),
-            abi.encodeCall(InvestmentCommitteePolicy.revokeAgent, (agent)),
-            keccak256("ic-revoke")
+            abi.encodeCall(ic.revokeRole, (RECEIPT_SUBMITTER_ROLE, agent)),
+            keccak256("receipt-revoke")
         );
-        assertFalse(ic.hasRole(COMMITTEE_AGENT_ROLE, agent), "agent revoked by the timelock");
+        assertFalse(ic.hasRole(RECEIPT_SUBMITTER_ROLE, agent), "submitter revoked by the timelock");
     }
 
-    function test_icPolicy_directSafeCallIsRefused_exactReason() public {
+    function test_receiptSubmitter_directSafeCallIsRefused_exactReason() public {
         _expectDirectSafeCallRefused(
-            safe,
-            address(ic),
-            abi.encodeCall(InvestmentCommitteePolicy.registerAgent, (agent, "agent-1"))
+            safe, address(ic), abi.encodeCall(ic.grantRole, (RECEIPT_SUBMITTER_ROLE, agent))
         );
     }
 

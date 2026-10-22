@@ -1,0 +1,158 @@
+---
+title: "DeployConsensusRecommendationReceipt"
+description: "Foundry deploy script for the receipt contract alone. The receipt is a vaults-system contract: it binds no gateway and no committee registry. `RECEIPT_ADMIN_ADDRESS` receives `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE` (the deployer until DeployTimelock hands both to the timelock). The timelock then alone grants `RECEIPT_SUBMITTER_ROLE` and `RECEIPT_RELEASER_ROLE`."
+---
+
+# DeployConsensusRecommendationReceipt
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/script/DeployConsensusRecommendationReceipt.s.sol)
+
+**Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
+
+**Title:** DeployConsensusRecommendationReceipt
+
+Foundry deploy script for the receipt contract alone. The receipt is a
+vaults-system contract: it binds no gateway and no committee registry.
+`RECEIPT_ADMIN_ADDRESS` receives `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`
+(the deployer until DeployTimelock hands both to the timelock). The
+timelock then alone grants `RECEIPT_SUBMITTER_ROLE` and
+`RECEIPT_RELEASER_ROLE`.
+
+Required env vars (unset or malformed reverts, there is no default):
+RECEIPT_ADMIN_ADDRESS — holder of ADMIN_ROLE until the timelock stage
+DEPLOYMENT_OUT        — path for the output JSON
+EXPECTED_CHAIN_ID     — mandatory and equal to 8453 on Base mainnet
+SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE — the upgrade authority and
+release mode (`UpgradeAuthority`, issue 1808).
+The manifest `consensus_receipt` is the ERC-1967 proxy and
+`consensus_receipt_implementation` is its implementation.
+
+## Constants
+
+### MANIFEST_FILE
+
+<i>
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+
+</i>
+
+```solidity
+string public constant MANIFEST_FILE = "receipt.json";
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+Forge broadcast entrypoint.
+
+```solidity
+function run() external returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="runinprocesswith-address"></a>
+
+### runInProcessWith
+
+In-process variant for forge tests. No broadcast, no JSON written.
+
+```solidity
+function runInProcessWith(address receiptAdmin_) external returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiptAdmin_ | `address` | Holder of `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE` on the receipt. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_deploy-address-upgradeconfig"></a>
+
+### _deploy
+
+```solidity
+function _deploy(address receiptAdmin_, UpgradeConfig memory u)
+        internal
+        returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiptAdmin_ | `address` |  |
+| u | `UpgradeConfig` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_logresult-deployed"></a>
+
+### _logResult
+
+```solidity
+function _logResult(Deployed memory d) internal pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_writedeploymentjson-deployed"></a>
+
+### _writeDeploymentJson
+
+```solidity
+function _writeDeploymentJson(Deployed memory d) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+## Structs
+
+### Deployed
+
+Result struct returned to in-process callers (e.g. forge tests).
+
+```solidity
+struct Deployed {
+        ConsensusRecommendationReceipt receipts;
+        address receiptAdmin;
+        address receiptsImplementation;
+        UpgradeConfig upgrade;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receipts | `ConsensusRecommendationReceipt` |  |
+| receiptAdmin | `address` |  |
+| receiptsImplementation | `address` |  |
+| upgrade | `UpgradeConfig` |  |
+

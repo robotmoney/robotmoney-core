@@ -5,7 +5,7 @@ description: "R7's two halves, proved on one topology built the way the deploy s
 
 # GovernanceExecutePathAfterHandoverTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
 
 **Inherits:** Test
 
@@ -178,12 +178,6 @@ RobotMoneyVault internal vault;
 RobotMoneyGateway internal gateway;
 ```
 
-### icPolicy
-
-```solidity
-InvestmentCommitteePolicy internal icPolicy;
-```
-
 ### receipts
 
 ```solidity
@@ -243,13 +237,13 @@ address internal pauser = makeAddr("pauser");
 ### agentAthena
 
 ```solidity
-address internal agentAthena = makeAddr("committee-athena");
+address internal agentAthena = makeAddr("submitter-athena");
 ```
 
 ### agentWoon
 
 ```solidity
-address internal agentWoon = makeAddr("committee-woon");
+address internal agentWoon = makeAddr("submitter-woon");
 ```
 
 ### adapterA
@@ -375,15 +369,15 @@ the fallback the timelock keeps through ADMIN_ROLE.
 function test_timelockSetDefaultWeightsThroughRealSafeScheduleExecute_succeeds() public;
 ```
 
-<a id="test_committeeholdsnoweightauthority"></a>
+<a id="test_submittersholdnoweightauthority"></a>
 
-### test_committeeHoldsNoWeightAuthority
+### test_submittersHoldNoWeightAuthority
 
-No committee agent holds any weight authority: not the
+No receipt submitter holds any weight authority: not the
 governance WEIGHT_SETTER_ROLE or ADMIN_ROLE, not the router's.
 
 ```solidity
-function test_committeeHoldsNoWeightAuthority() public view;
+function test_submittersHoldNoWeightAuthority() public view;
 ```
 
 <a id="test_safeisthetimelockdriverandistwoofthree"></a>

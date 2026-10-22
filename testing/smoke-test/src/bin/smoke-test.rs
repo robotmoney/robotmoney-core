@@ -570,10 +570,9 @@ fn print_endpoint_summary(
     // Issue #477: surface the governance address so the dapp E2E specs
     // can locate RouterGovernance without hard-coding it.
     let _ = writeln!(out, "governance_addr={:#x}", fixture.governance());
-    // Issue #1294: surface the IC policy + consensus receipt addresses so
+    // Issue #1294: surface the consensus receipt address so
     // the dapp e2e consensus-receipts spec can locate them without
     // hard-coding devnet addresses.
-    let _ = writeln!(out, "ic_policy_addr={:#x}", fixture.ic_policy());
     let _ = writeln!(
         out,
         "consensus_receipt_addr={:#x}",

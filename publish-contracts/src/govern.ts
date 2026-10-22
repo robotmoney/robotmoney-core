@@ -101,13 +101,8 @@ import { ERC1967_IMPLEMENTATION_SLOT } from "./verify/codehash.ts";
 import { UPGRADEABILITY_MANIFEST } from "./verify-stage.ts";
 import { getStageTable } from "./stages.ts";
 import { manifestBase } from "./stage-table.ts";
-import {
-  REGISTER_ROW, COMMIT_EXPIRY_BLOCKS, COMMIT_REVEAL_MARGIN_BLOCKS, GATEWAY_REGISTER_ABI, IC_REGISTER_ABI, SUBMITTER_POLICY_SECONDS, assertAgentLabel, assertSubmitter, buildRegisterCalls,
-  buildSelfAuthCalls, registerReadBackProblems, registerRecordKey, selfAuthCommitHash, selfAuthCommitmentKey, selfAuthEvidence, selfAuthPolicyProblems, selfAuthStateOf,
-  type RegisterCall, type SelfAuthPhase, type SelfAuthRecord,
-} from "./committee-register.ts";
-import { ADMIN_ROLE, AGENT_ROLE, DEPOSIT_PAUSER_ROLE } from "./verify/constants.ts";
-import { COMMITTEE_AGENT_ROLE } from "./record-receipt.ts";
+import { REGISTER_ROW, RECEIPT_ROLE_ABI, assertSubmitter, buildRegisterCall, registerReadBackProblems, registerRecordKey } from "./submitter-register.ts";
+import { ADMIN_ROLE, RECEIPT_RELEASER_ROLE, RECEIPT_SUBMITTER_ROLE } from "./verify/constants.ts";
 import { forbiddenSubmitters, inspectSubmitterSafe, chainFromClient, submitterSafeEvidence, type SubmitterSafeEvidence, type SubmitterSafeInfo } from "./submitter-safe.ts";
 import type { DeploymentKind } from "./chains.ts";
 import { BASE_CHAIN_ID, httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
@@ -182,16 +177,11 @@ export const isTwinOnlyRow = (row: string): boolean => (TWIN_ONLY_ROWS as readon
 export const twinOnlyRefused = (row: string, chainId: number, kind: DeploymentKind): boolean => isTwinOnlyRow(row) && chainId === BASE_CHAIN_ID && kind !== "rehearsal";
 /**
  * The refusal of a `--row` on this chain and kind, or undefined. ONE place: the CLI applies it right after the floors, BEFORE any signer or passphrase prompt (review of PR 1728:
- * production keeps refusing update-delay, batch, cancel and register-committee on 8453 without asking for a single passphrase), and runGovern applies it again.
+ * production keeps refusing update-delay, batch and cancel on 8453 without asking for a single passphrase), and runGovern applies it again.
  */
 export function govRowRefusal(row: string | undefined, chainId: number, kind: DeploymentKind): string | undefined {
   if (row === REDEPLOY_ROW) return redeployRefusal(chainId, kind);
-  if (row === undefined || row === RECEIPT_ROW || row === APPLY_ROW || row === CLEAR_ROW || row === UNWIND_GUARD_ROW || row === FREEZE_ROW || row === UPGRADE_ROW) return undefined;
-  if (row === REGISTER_ROW) {
-    return chainId === BASE_CHAIN_ID && kind !== "rehearsal"
-      ? `--row ${REGISTER_ROW} is refused on chain 8453 in production: the production govern surface is the four unpauses, ${RECEIPT_ROW}, ${APPLY_ROW}, ${CLEAR_ROW} and ${UNWIND_GUARD_ROW}. It runs on a Base mainnet REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) and on the Twin chain.`
-      : undefined;
-  }
+  if (row === undefined || row === RECEIPT_ROW || row === REGISTER_ROW || row === APPLY_ROW || row === CLEAR_ROW || row === UNWIND_GUARD_ROW || row === FREEZE_ROW || row === UPGRADE_ROW) return undefined;
   let name: string;
   try { name = resolveGovernRow(row); } catch { return undefined; } // an unknown row is a usage error raised where it always was
   return twinOnlyRefused(name, chainId, kind)
@@ -228,8 +218,8 @@ export function buildReleaseCall(receipt: Address, receiptId: Hex): LabelledCall
   return { label: `receipt.releaseReceipt(${receiptId})`, target: receipt, data: encodeFunctionData({ abi: RECEIPT_ABI, functionName: "releaseReceipt", args: [receiptId] }) };
 }
 
-/** The deployed ConsensusRecommendationReceipt, from the ic-policy stage manifest (field consensus_receipt). */
-export const loadReceiptAddr = (ctx: Pick<RunContext, "coreDir" | "chainId" | "manifestOut">): Address => readManifestField(ctx, manifestRef("ic-policy", "consensus_receipt")) as Address;
+/** The deployed ConsensusRecommendationReceipt, from the receipt stage manifest (field consensus_receipt). */
+export const loadReceiptAddr = (ctx: Pick<RunContext, "coreDir" | "chainId" | "manifestOut">): Address => readManifestField(ctx, manifestRef("receipt", "consensus_receipt")) as Address;
 
 // ---- Safe and timelock self-administration (issue 1645) --------------------------------------------------------------------
 
@@ -466,7 +456,7 @@ export const selfAdminRecordKey = (row: SelfAdminRow, data: Hex, nonce: number):
 /** `--row` value to a row name: a 1-based number or a name. Anything else is a usage error. */
 export function resolveGovernRow(row: string): PlannedRow {
   if (row === RECEIPT_ROW) throw new PublishError("USAGE", `--row ${RECEIPT_ROW} is the on-demand receipt release: it needs --receipt-id 0x<bytes32>`);
-  if (row === REGISTER_ROW) throw new PublishError("USAGE", `--row ${REGISTER_ROW} is the on-demand committee submitter registration: it needs --submitter 0x<address>`);
+  if (row === REGISTER_ROW) throw new PublishError("USAGE", `--row ${REGISTER_ROW} is the on-demand receipt submitter registration (one delayed receipt.grantRole): it needs --submitter 0x<the submitter Safe>`);
   if (row === APPLY_ROW) throw new PublishError("USAGE", `--row ${APPLY_ROW} is the on-demand receipt application: it needs --receipt-id 0x<bytes32> and --payload FILE`);
   if (row === CLEAR_ROW) throw new PublishError("USAGE", `--row ${CLEAR_ROW} is the on-demand clear of the router's voted weight vector: it is run by name only (runGovern)`);
   if (row === REDEPLOY_ROW) throw new PublishError("USAGE", `--row ${REDEPLOY_ROW} is the on-demand replacement of one redeployed vault: it is run by name only (runGovern)`);
@@ -559,9 +549,8 @@ export type GovernPhase = "scheduled" | "executed" | "cancelled";
 export interface GovernRowLine { row: string; phase: GovernPhase; txHash: string; status: 0 | 1; readyAt: number }
 
 export interface GovernOpts {
-  /** With --row register-committee only (issue 1727): the submitter's address and its label on the IC policy. */
+  /** With --row register-submitter only (issue 1888): the submitter Safe's address. */
   submitter?: string;
-  agentLabel?: string;
   ownerSigners: Signer[];
   /** Pays gas for execTransaction. Holds no role. */
   sender: Signer;
@@ -616,8 +605,8 @@ export interface GuardRecord { vault: string; vault_address: string; tokens: str
 /** What the run manifest keeps per row. A row is complete when it is skipped, executed or (for cancel) cancelled. */
 export interface RowRecord { round?: number; admin?: SelfAdminRecord; guard?: GuardRecord; apply?: { vaults: string[]; bps: number[]; payload_digest: string }; observed?: { voted_weights_active: boolean; effective_vaults: string[]; effective_bps: number[] }; skipped?: { at: string; reason: string }; scheduled?: PhaseRecord; executed?: PhaseRecord; cancelled?: PhaseRecord }
 type GovernState = Record<string, RowRecord>;
-/** The `register` part of a register-committee record: what the batch was built from, and (QA plan v1 B6) the private self-authorization with its salt. */
-interface RegisterState { submitter: string; agent_label: string; gateway: string; ic_policy: string; valid_until: string; submitter_safe?: SubmitterSafeEvidence; self_authorization?: SelfAuthRecord }
+/** The `register` part of a register-submitter record: what the grant was built from, and the submitter Safe's facts. */
+interface RegisterState { submitter: string; receipt: string; submitter_safe: SubmitterSafeEvidence }
 
 const rowComplete = (r: RowRecord | undefined): boolean => !!r && !!(r.skipped || r.executed || r.cancelled);
 
@@ -666,6 +655,7 @@ export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha"> & { e
   const same = "--admin-arg K=V (the same --admin-arg values as this run)";
   if (row?.startsWith(`${UNWIND_GUARD_ROW}-`)) row = `${UNWIND_GUARD_ROW} ${guard ? unwindGuardArgsText(guard) : same}`;
   else if (row?.startsWith(`${RECEIPT_ROW}-`)) row = `${RECEIPT_ROW} --receipt-id ${row.slice(RECEIPT_ROW.length + 1)}`;
+  else if (row?.startsWith(`${REGISTER_ROW}-`)) row = `${REGISTER_ROW} --submitter ${row.slice(REGISTER_ROW.length + 1)}`;
   else if (row?.startsWith(`${REDEPLOY_ROW}-`)) row = REDEPLOY_ROW;
   else if (row?.startsWith(`${APPLY_ROW}-`)) row = `${APPLY_ROW} --receipt-id ${row.slice(APPLY_ROW.length + 1)}${payload === undefined ? " --payload FILE" : ` --payload ${payload}`}`;
   else if (selfAdmin !== undefined) row = `${selfAdmin} ${same}`; // the record key carries the calldata hash and the Safe nonce, not the arguments
@@ -770,7 +760,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   const freezing = o.row === FREEZE_ROW;
   const upgrading = o.row === UPGRADE_ROW;
   if ((o.proxy !== undefined || o.implementation !== undefined || o.upgradeBuild !== undefined) && !upgrading) throw new PublishError("USAGE", `--proxy, --implementation and --upgrade-build go with --row ${UPGRADE_ROW} only`);
-  if ((o.submitter !== undefined || o.agentLabel !== undefined) && !registering) throw new PublishError("USAGE", `--submitter and --agent-label go with --row ${REGISTER_ROW} only`);
+  if (o.submitter !== undefined && !registering) throw new PublishError("USAGE", `--submitter goes with --row ${REGISTER_ROW} only`);
   if (o.unwindGuard !== undefined && !guarding) throw new PublishError("USAGE", `--admin-arg vault, token, min-usdc-out, max-loss-bps and override-allowed go with --row ${UNWIND_GUARD_ROW} only`);
   // QA plan v1 D7: the row's arguments are checked before the Safe is read or anything is sent
   const guardWant = guarding ? parseUnwindGuardArgs(o.unwindGuard) : undefined;
@@ -1044,7 +1034,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     }
   }
 
-  /** The evidence entry of an executed registration round (`committee_registrations` of the run manifest, checked by evidence-check). */
+  /** The evidence entry of an executed registration round (`submitter_registrations` of the run manifest, checked by evidence-check). */
   async function recordRegistration(name: string): Promise<void> {
     const r = state[name] as (RowRecord & { register?: RegisterState }) | undefined;
     if (!r?.executed?.tx_hash || !r.scheduled?.tx_hash || !r.register) return;
@@ -1052,141 +1042,49 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       const rc = await handle.client.getTransactionReceipt({ hash: hash as Hex });
       return Number((await handle.client.getBlock({ blockNumber: rc.blockNumber })).timestamp);
     };
-    // QA plan v1 B6: the private self-authorization goes into the evidence as its three transactions; the salt stays in the govern state only
-    const { self_authorization: sa, ...reg } = r.register;
-    const selfAuthorization = selfAuthEvidence(sa);
     const entry = {
-      step: REGISTER_ROW, ...reg, ...(selfAuthorization ? { self_authorization: selfAuthorization } : {}), timelock: a.timelock,
+      step: REGISTER_ROW, ...r.register, timelock: a.timelock,
       operation_id: r.scheduled.operation_id, schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await at(r.scheduled.tx_hash),
       execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await at(r.executed.tx_hash),
     };
-    const list = ((manifest as { committee_registrations?: { submitter?: string }[] }).committee_registrations ??= []);
+    const list = ((manifest as { submitter_registrations?: { submitter?: string }[] }).submitter_registrations ??= []);
     const i = list.findIndex((x) => x.submitter?.toLowerCase() === entry.submitter.toLowerCase());
     if (i >= 0) list[i] = entry; else list.push(entry);
     save();
   }
 
   if (registering) {
-    // Issue 1727, QA plan v1 B6 (review CS-2): the submitter Safe first authorizes ITSELF in private (commit, reveal, hand-over to the timelock), THEN one public timelock batch,
-    // setPolicy + committeeRegister, which nothing a stranger does during the delay can break. Never part of the matrix. Rehearsal and Twin only. committee-register.ts has the why.
+    // Issue 1888: ONE delayed timelock call, ConsensusRecommendationReceipt.grantRole(RECEIPT_SUBMITTER_ROLE, submitter). No private half, no batch, no gateway. Never part of the
+    // matrix. Every chain and kind. submitter-register.ts has the why. Every pre-check runs BEFORE the timelock round is scheduled, so a refused submitter spends no delay.
     const submitter = assertSubmitter(o.submitter);
-    const agentLabel = assertAgentLabel(o.agentLabel);
-    const gateway = readManifestField(ctx, manifestRef("gateway", "gateway")) as Address;
-    const icPolicy = readManifestField(ctx, manifestRef("ic-policy", "policy")) as Address;
+    const receipt = loadReceiptAddr(ctx);
     const name = registerRecordKey(submitter);
     const rd = reader(handle);
     const read = async <T,>(addr: Address, abi: readonly unknown[], fn: string, args: unknown[] = []): Promise<T> => rd<T>(addr, abi, fn, args);
+    const c = buildRegisterCall(receipt, submitter);
+    const p = { timelock: a.timelock, calls: [{ target: c.target, data: c.data }], salt: salt(name), form: "single" as const };
+    const id = await api.operationId(handle, p);
+    // One submitter is one operation: a record under this key for a different operation (another receipt contract, say) would adopt the wrong round.
+    const prior = state[name]?.scheduled?.operation_id;
+    if (prior !== undefined && prior.toLowerCase() !== id.toLowerCase()) throw new PublishError("USAGE", `${name} was already used for a different call (operation ${prior}, this call is ${id})`, { row: REGISTER_ROW, submitter, prior, id });
+    const readBack = async () => registerReadBackProblems({ submitterRole: await read<boolean>(receipt, RECEIPT_ROLE_ABI, "hasRole", [RECEIPT_SUBMITTER_ROLE, submitter]) });
     if (!rowComplete(state[name])) {
-      const cur = state[name];
-      const prevReg = (cur as { register?: Partial<RegisterState> } | undefined)?.register;
-      let submitterSafe: SubmitterSafeEvidence | undefined = prevReg?.submitter_safe;
-      // validUntil is fixed at the FIRST plan (the private reveal uses it too) and read back from the manifest after that, so a resume rebuilds the same calldata and finds the same operation id
-      const validUntil = BigInt(prevReg?.valid_until ?? (await chainTime(handle)) + BigInt(SUBMITTER_POLICY_SECONDS));
-      const selfAuth: SelfAuthRecord = { ...(prevReg?.self_authorization ?? {}) };
-      const keep = (): void => {
-        state[name] = { ...(state[name] ?? { round: 1 }), register: { submitter, agent_label: agentLabel, gateway, ic_policy: icPolicy, valid_until: validUntil.toString(), ...(submitterSafe ? { submitter_safe: submitterSafe } : {}), ...(Object.keys(selfAuth).length ? { self_authorization: selfAuth } : {}) } } as RowRecord;
-        save();
-      };
-      /** The reveal must land in a later block than the commit (CommitmentTooRecent), and executeTx simulates it at the head first: wait until the head is past `block`. */
-      const waitPastBlock = async (block: bigint): Promise<void> => {
-        const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-        for (let i = 0; i < 120; i++) {
-          if ((await handle.client.getBlockNumber({ cacheTime: 0 })) > block) return; // no cached head: a warp or a new block must be seen at once
-          const warp = await warpFor(ctx, o);
-          if (warp) { await warp(1n); continue; } // a Twin fork mines on demand: one second, one block
-          await sleep(o.pollMs ?? 2000);
-        }
-        throw new PublishError("GOVERN", `the chain head did not move past block ${block}, the block of the submitter Safe's commit: the reveal needs a later block. Nothing was scheduled. Run the row again: the commitment is revealed while its window lasts`, { submitter, block: block.toString() });
-      };
-      /**
-       * QA plan v1 B6, the PRIVATE half: before the batch is visible on the timelock the submitter Safe authorizes itself on the gateway (a commit that names no agent,
-       * a reveal at least one block later) and hands the agent to the timelock. Each step is a submitter-Safe transaction signed by its owners (--owner-signer) and paid by
-       * --signer. Resumable from the chain: agentOwner(submitter) says which steps are done, and a stored commitment is reused while enough of its window is left.
-       */
-      const selfAuthorize = async (isSafe: boolean): Promise<void> => {
-        const ownerNow = async () => read<string>(gateway, GATEWAY_REGISTER_ABI, "agentOwner", [submitter]);
-        const stateNow = async () => selfAuthStateOf({ owner: await ownerNow(), agentRole: await read<boolean>(gateway, GATEWAY_REGISTER_ABI, "hasRole", [AGENT_ROLE, submitter]), submitter, timelock: a.timelock });
-        let st = await stateNow();
-        if (st === "squatted") throw new PublishError("GOVERN", `${submitter} already has an agent owner on the gateway, ${await ownerNow()}, that is neither the submitter Safe nor the timelock: another account authorized this address first, and the gateway has no way to take it back. This Safe can never be the submitter. Nothing was scheduled. Create a NEW submitter Safe and run the row with it`, { submitter });
-        if (st === "foreign-role") throw new PublishError("GOVERN", `${submitter} already holds AGENT_ROLE on the gateway with no agent owner: the role came from elsewhere, nothing to schedule`, { submitter });
-        if (st === "handed-over") {
-          // The timelock owns it: this row's own hand-over (an earlier run), or another agent the timelock owns. Only the signalling-only policy shape is taken as this submitter's.
-          const [, , maxPerPayment, maxPerWindow, shareReceiver, , maxWithdrawPerPayment, maxWithdrawPerWindow] = await read<readonly [boolean, bigint, bigint, bigint, Address, Address, bigint, bigint]>(gateway, GATEWAY_REGISTER_ABI, "agents", [submitter]);
-          const bad = selfAuthPolicyProblems({ maxPerPayment, maxPerWindow, shareReceiver, maxWithdrawPerPayment, maxWithdrawPerWindow }, submitter, a.timelock);
-          if (bad.length) throw new PublishError("GOVERN", `${submitter} already holds AGENT_ROLE on the gateway and the timelock owns it, but its policy is not the submitter's signalling-only one (${bad.join("; ")}): it is another agent, a depositor's. Nothing to schedule`, { submitter, problems: bad });
-          ctx.log.log("info", "govern.self_authorized", { row: REGISTER_ROW, submitter, owner: a.timelock });
-          return;
-        }
-        if (!isSafe) {
-          throw new PublishError("GOVERN", `--submitter ${submitter} is a single key and this tool cannot sign for it. Before the batch is scheduled the key authorizes itself in private: gateway.commitAuthorization(keccak256(abi.encode(${submitter}, ${submitter}, salt))) with a random salt, at least one block later gateway.revealAuthorization(${submitter}, salt, a policy paying shares to itself), then gateway.transferAgentOwnership(${submitter}, ${a.timelock}). Run this row again after that. Nothing scheduled.`, { submitter });
-        }
-        const sub = await api.connectSafe({ rpcUrl: ctx.rpc, chainId: ctx.chainId, safeAddress: submitter, logger: ctx.log });
-        if (sub.address.toLowerCase() !== submitter.toLowerCase()) throw new PublishError("GOVERN", `the Safe the tool connected to (${sub.address}) is not --submitter ${submitter}: nothing sent`, { submitter, connected: sub.address });
-        const propose = api.proposeTx ?? proposeTx;
-        const send = async (call: RegisterCall, action: string): Promise<SelfAuthPhase> => {
-          const b = await signAndExecute(ctx, o, api, sub, await propose(sub, { to: call.target, data: call.data, action, description: `${REGISTER_ROW} private ${action}: ${call.label}` }));
-          if (!b.executed?.tx_hash) throw new PublishError("GOVERN", `the submitter Safe transaction ${action} (${call.label}) was not sent`, { submitter, action });
-          const block = Number((await handle.client.getTransactionReceipt({ hash: b.executed.tx_hash as Hex })).blockNumber);
-          return { tx_hash: b.executed.tx_hash, safe_tx_hash: b.safe_tx_hash, status: b.executed.status, at: new Date().toISOString(), block };
-        };
-        // the hand-over carries no salt: a Safe whose reveal was made outside this run (no stored salt) is handed over all the same
-        const callsFor = (x: Hex | undefined) => buildSelfAuthCalls(gateway, a.timelock, submitter, x ?? `0x${"00".repeat(32)}`, validUntil);
-        if (st === "fresh") {
-          let live = false;
-          if (selfAuth.salt && selfAuth.commit?.block !== undefined) {
-            const [committer] = await read<readonly [Address, bigint]>(gateway, GATEWAY_REGISTER_ABI, "commitments", [selfAuthCommitmentKey(selfAuthCommitHash(submitter, selfAuth.salt), submitter)]);
-            const head = await handle.client.getBlockNumber({ cacheTime: 0 });
-            live = committer.toLowerCase() === submitter.toLowerCase() && head + COMMIT_REVEAL_MARGIN_BLOCKS <= BigInt(selfAuth.commit.block) + COMMIT_EXPIRY_BLOCKS;
-          }
-          if (!live) {
-            // a new random salt hides the agent until the reveal; it is on disk BEFORE the commit is sent, so a run that dies after the commit lands can still reveal
-            selfAuth.salt = toHex(randomBytes(32));
-            delete selfAuth.commit; delete selfAuth.reveal;
-            keep();
-            selfAuth.commit = await send(callsFor(selfAuth.salt).commit, "submitter-commit");
-            keep();
-          }
-          await waitPastBlock(BigInt(selfAuth.commit!.block ?? 0));
-          selfAuth.reveal = await send(callsFor(selfAuth.salt).reveal, "submitter-reveal");
-          keep();
-          st = await stateNow();
-          if (st !== "self-owned") throw new PublishError("GOVERN", `after the reveal ${submitter} reads '${st}' on the gateway (owner ${await ownerNow()}), not owned by itself. Nothing was scheduled. A squatter that won the reveal race makes this Safe unusable: create a NEW submitter Safe`, { submitter, state: st });
-        }
-        selfAuth.hand_over = await send(callsFor(selfAuth.salt).handOver, "submitter-hand-over");
-        keep();
-        st = await stateNow();
-        if (st !== "handed-over") throw new PublishError("GOVERN", `after the hand-over ${submitter} reads '${st}' on the gateway (owner ${await ownerNow()}), not owned by the timelock ${a.timelock}. Nothing was scheduled`, { submitter, state: st });
-        ctx.log.log("info", "govern.self_authorized", { row: REGISTER_ROW, submitter, owner: a.timelock, commit_tx: selfAuth.commit?.tx_hash, reveal_tx: selfAuth.reveal?.tx_hash, hand_over_tx: selfAuth.hand_over.tx_hash });
-      };
-      if (cur?.scheduled === undefined) {
-        // Nothing of this round is on the timelock yet: refuse what can only revert, before the Safe schedules it and the delay is spent.
-        const owners = new Set([...sheet.safeOwners, sheet.admin, sheet.pauser, sheet.emergency, a.safe, a.timelock].map((x) => x.toLowerCase()));
-        if (owners.has(submitter.toLowerCase())) throw new PublishError("USAGE", `--submitter ${submitter} is a Safe owner, a role key, the Safe or the timelock: the submitter holds AGENT_ROLE and COMMITTEE_AGENT_ROLE and nothing else`, { submitter });
-        // Issue 1750 (owner decision 2026-10-10): the submitter is a multisig, a separate canonical SafeL2 1.4.1 Safe. On 8453 a key (no code) is refused.
-        const kind = await api.inspectSubmitter(handle, submitter, forbiddenSubmitters({ governingSafe: a.safe, timelock: a.timelock, admin: sheet.admin, pauser: sheet.pauser, emergency: sheet.emergency }));
-        if (kind === null && ctx.chainId === BASE_CHAIN_ID) throw new PublishError("USAGE", `--submitter ${submitter} has no code: it is a single key. On 8453 the consensus receipt submitter is a multisig (a SafeL2 1.4.1 proxy with threshold 2 or more, separate from the governing Safe). Nothing scheduled.`, { submitter });
-        submitterSafe = kind === null ? undefined : submitterSafeEvidence(kind);
-        if ((await read<Address>(gateway, GATEWAY_REGISTER_ABI, "icPolicy")).toLowerCase() !== icPolicy.toLowerCase()) throw new PublishError("GOVERN", `the gateway's icPolicy is not the run's IC policy ${icPolicy}: committeeRegister would reach another contract`, { icPolicy });
-        for (const [nm, r] of [["ADMIN_ROLE", ADMIN_ROLE], ["DEPOSIT_PAUSER_ROLE", DEPOSIT_PAUSER_ROLE]] as const) {
-          if (await read<boolean>(gateway, GATEWAY_REGISTER_ABI, "hasRole", [r, submitter])) throw new PublishError("GOVERN", `${submitter} holds ${nm} on the gateway: role separation refuses it as an agent`, { submitter });
-        }
-        if (await read<boolean>(icPolicy, IC_REGISTER_ABI, "hasRole", [COMMITTEE_AGENT_ROLE, submitter])) throw new PublishError("GOVERN", `${submitter} already holds COMMITTEE_AGENT_ROLE on the IC policy: it is registered already, nothing to schedule`, { submitter });
-        await selfAuthorize(kind !== null);
+      let submitterSafe = (state[name] as { register?: RegisterState } | undefined)?.register?.submitter_safe;
+      if (state[name]?.scheduled === undefined && !(await api.operationState(handle, a.timelock, id)).exists) {
+        // Nothing of this round is on the timelock yet: refuse what can only revert or can never record, before the Safe schedules it and the delay is spent.
+        // The submitter MAY be the governing Safe and its owners may be shared (issue 1888). It may not be the timelock or a deployment role address.
+        const kind = await api.inspectSubmitter(handle, submitter, forbiddenSubmitters({ timelock: a.timelock, admin: sheet.admin, pauser: sheet.pauser, emergency: sheet.emergency }));
+        if (kind === null) throw new PublishError("USAGE", `--submitter ${submitter} has no code: it is a single key. The consensus receipt submitter is a multisig on every chain (a SafeL2 1.4.1 proxy with threshold 2 or more). Nothing scheduled.`, { submitter });
+        submitterSafe = submitterSafeEvidence(kind);
+        const roleAdmin = await read<Hex>(receipt, RECEIPT_ROLE_ABI, "getRoleAdmin", [RECEIPT_SUBMITTER_ROLE]);
+        if (!(await read<boolean>(receipt, RECEIPT_ROLE_ABI, "hasRole", [roleAdmin, a.timelock]))) throw new PublishError("GOVERN", `the timelock ${a.timelock} does not hold the admin role of RECEIPT_SUBMITTER_ROLE (${roleAdmin}) on the receipt ${receipt}: the grant would revert after the delay. Nothing scheduled.`, { receipt, role_admin: roleAdmin });
+        if (await read<boolean>(receipt, RECEIPT_ROLE_ABI, "hasRole", [RECEIPT_SUBMITTER_ROLE, submitter])) throw new PublishError("GOVERN", `${submitter} already holds RECEIPT_SUBMITTER_ROLE on the receipt ${receipt}: it is registered already, nothing to schedule`, { submitter });
       }
-      const calls = buildRegisterCalls(gateway, a.timelock, submitter, agentLabel, validUntil);
-      const p = { timelock: a.timelock, calls: calls.map(({ target, data }) => ({ target, data })), salt: salt(name), form: "batch" as const };
-      const id = await api.operationId(handle, p);
-      const prior = state[name]?.scheduled?.operation_id;
-      if (prior !== undefined && prior.toLowerCase() !== id.toLowerCase()) throw new PublishError("USAGE", `${name} was already used for a different call (operation ${prior}, this call is ${id})`, { row: REGISTER_ROW, submitter, prior, id });
-      const readBack = async () => registerReadBackProblems({
-        agentRole: await read<boolean>(gateway, GATEWAY_REGISTER_ABI, "hasRole", [AGENT_ROLE, submitter]), committeeRole: await read<boolean>(icPolicy, IC_REGISTER_ABI, "hasRole", [COMMITTEE_AGENT_ROLE, submitter]),
-        label: await read<string>(icPolicy, IC_REGISTER_ABI, "agentId", [submitter]), wantLabel: agentLabel, owner: await read<string>(gateway, GATEWAY_REGISTER_ABI, "agentOwner", [submitter]), timelock: a.timelock,
-        shareReceiver: (await read<readonly unknown[]>(gateway, GATEWAY_REGISTER_ABI, "agents", [submitter]))[4] as string,
-      });
-      keep();
+      state[name] = { ...(state[name] ?? { round: 1 }), register: { submitter, receipt, ...(submitterSafe ? { submitter_safe: submitterSafe } : {}) } } as RowRecord;
+      save();
       await round(name, {
-        id, description: `register committee submitter ${submitter}`, readBack,
-        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${REGISTER_ROW}: ${calls.map((c) => c.label).join("; ")}` }),
+        id, description: `register receipt submitter ${submitter}`, readBack,
+        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${REGISTER_ROW}: ${c.label}` }),
         execute: () => api.executeOnTimelock(handle, { ...p, description: `${REGISTER_ROW} execute` }),
       }, REGISTER_ROW);
     } else {
@@ -1826,10 +1724,13 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     if (o.receiptId === undefined) throw new PublishError("USAGE", `--row ${RECEIPT_ROW} needs --receipt-id 0x<bytes32>`);
     const receiptId = assertReceiptId(o.receiptId);
     const receipt = loadReceiptAddr(ctx);
-    // Issue 1831: once RouterGovernance holds the receipt ADMIN_ROLE (every deploy since issue 1698), a release without the apply burns the receipt: applyReceipt
-    // would then revert ReceiptAlreadyReleased and its vector could never land. Refused before anything is scheduled.
-    if (await reader(handle)<boolean>(receipt, ROLE_ABI, "hasRole", [ADMIN_ROLE, a.governance])) {
-      throw new PublishError("USAGE", `--row ${RECEIPT_ROW} is refused: RouterGovernance ${a.governance} holds the receipt contract's ADMIN_ROLE, so a receipt is released only by applying it. A release alone would burn receipt ${receiptId} (applyReceipt then reverts ReceiptAlreadyReleased). Use --row ${APPLY_ROW} --receipt-id ${receiptId} --payload FILE. Nothing was sent.`, { row: RECEIPT_ROW, receipt_id: receiptId, governance: a.governance });
+    // Issue 1831, amended by issue 1888: RouterGovernance holds the receipt's RECEIPT_RELEASER_ROLE (the narrow role, never ADMIN_ROLE), so a receipt is released only by applying
+    // it: the timelock holds no release role, and a release alone would burn the receipt (applyReceipt then reverts ReceiptAlreadyReleased). A proxy not yet migrated still has
+    // RouterGovernance as an ADMIN_ROLE holder, which refuses for the same reason. Refused before anything is scheduled.
+    const rdRole = reader(handle);
+    const narrow = await rdRole<boolean>(receipt, ROLE_ABI, "hasRole", [RECEIPT_RELEASER_ROLE, a.governance]);
+    if (narrow || await rdRole<boolean>(receipt, ROLE_ABI, "hasRole", [ADMIN_ROLE, a.governance])) {
+      throw new PublishError("USAGE", `--row ${RECEIPT_ROW} is refused: RouterGovernance ${a.governance} holds the receipt contract's ${narrow ? "RECEIPT_RELEASER_ROLE" : "ADMIN_ROLE"}, so a receipt is released only by applying it (the timelock cannot release directly). A release alone would burn receipt ${receiptId} (applyReceipt then reverts ReceiptAlreadyReleased). Use --row ${APPLY_ROW} --receipt-id ${receiptId} --payload FILE. Nothing was sent.`, { row: RECEIPT_ROW, receipt_id: receiptId, governance: a.governance });
     }
     const name = releaseRecordKey(receiptId);
     const c = buildReleaseCall(receipt, receiptId);

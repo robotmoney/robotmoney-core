@@ -5,7 +5,7 @@ description: "Minimal interface stub for the RobotMoney deposit gateway."
 
 # IGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/725de7a46a2d46fd825ed75f010959b8c56b8591/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:** IGateway
 
@@ -411,117 +411,6 @@ lifecycle of an agent it does not own.
 function unpauseDeposits() external;
 ```
 
-<a id="seticpolicy-address"></a>
-
-### setICPolicy
-
-Set or update the Investment Committee policy contract address.
-Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear.
-
-```solidity
-function setICPolicy(address policy_) external;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| policy_ | `address` | Address of the deployed `InvestmentCommitteePolicy` contract,<br/>or `address(0)` to disable committee routing. |
-
-<a id="committeeregister-address-string"></a>
-
-### committeeRegister
-
-Forward a committee agent registration to the IC policy contract.
-Restricted to `ADMIN_ROLE`. Reverts if `icPolicy` is not set.
-
-```solidity
-function committeeRegister(address agent, string calldata agentId_) external;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| agent | `address` | Address to register on the IC contract. |
-| agentId_ | `string` | Human-readable label (e.g. "athena-v1"). |
-
-<a id="committeevotesubmit-iinvestmentcommitteepolicy-voteparams"></a>
-
-### committeeVoteSubmit
-
-Forward a signed committee vote to the IC policy contract.
-Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set or
-if `p.agent != msg.sender` (issue #1790).
-
-```solidity
-function committeeVoteSubmit(IInvestmentCommitteePolicy.VoteParams calldata p)
-        external
-        returns (uint256 voteId);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| p | `IInvestmentCommitteePolicy.VoteParams` | All vote fields packed into a `VoteParams` struct. |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| voteId | `uint256` |  Index of the newly appended vote in the IC contract. |
-
-<a id="setconsensusreceipt-address"></a>
-
-### setConsensusReceipt
-
-Set or update the ConsensusRecommendationReceipt contract address.
-Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear.
-
-```solidity
-function setConsensusReceipt(address receipt_) external;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| receipt_ | `address` | Address of the deployed `ConsensusRecommendationReceipt`<br/>contract, or `address(0)` to disable receipt routing. |
-
-<a id="consensusrecordreceipt-bytes32-bytes32-string"></a>
-
-### consensusRecordReceipt
-
-Record a consensus recommendation receipt commitment. Restricted to
-`AGENT_ROLE`. Reverts if `consensusReceipt` is not set.
-Signalling only — see `docs/architecture.md` §4.9 and INV-4.
-There is no gateway release entrypoint: `ADMIN_ROLE` on the
-receipt contract is held by the `TimelockController` (INV-3),
-which calls `releaseReceipt` there directly.
-
-```solidity
-function consensusRecordReceipt(
-        bytes32 receiptId,
-        bytes32 payloadDigest,
-        string calldata payloadUri
-    ) external returns (uint256 index);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| receiptId | `bytes32` | Unique receipt id (one per session per subject). |
-| payloadDigest | `bytes32` | `keccak256` of the receipt's canonical bytes. |
-| payloadUri | `string` | Public route serving those exact bytes. |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| index | `uint256` | Index of the newly appended receipt. |
-
 <a id="window_seconds"></a>
 
 ### WINDOW_SECONDS
@@ -606,7 +495,7 @@ function depositsPaused() external view returns (bool);
 
 ### icPolicy
 
-Investment Committee policy contract, or `address(0)` if not configured.
+Retired storage slot (issue 1888): the on-chain committee is deleted. Read-only.
 
 ```solidity
 function icPolicy() external view returns (IInvestmentCommitteePolicy);
@@ -622,7 +511,8 @@ function icPolicy() external view returns (IInvestmentCommitteePolicy);
 
 ### consensusReceipt
 
-Consensus recommendation receipt contract, or `address(0)` if not configured.
+Retired storage slot (issue 1888): receipts are recorded directly on the receipt
+contract, never through the gateway. Read-only.
 
 ```solidity
 function consensusReceipt() external view returns (IConsensusRecommendationReceipt);

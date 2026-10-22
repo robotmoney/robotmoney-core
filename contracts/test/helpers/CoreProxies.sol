@@ -16,7 +16,6 @@ import {VaultRegistry} from "../../VaultRegistry.sol";
 import {PortfolioRouter} from "../../PortfolioRouter.sol";
 import {RouterGovernance} from "../../RouterGovernance.sol";
 import {RobotMoneyGateway} from "../../gateway/RobotMoneyGateway.sol";
-import {InvestmentCommitteePolicy} from "../../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../../gateway/ConsensusRecommendationReceipt.sol";
 import {ISwapRouter} from "../../interfaces/ISwapRouter.sol";
 
@@ -245,22 +244,7 @@ library CoreProxies {
         );
     }
 
-    function investmentCommitteePolicy(address admin, address gateway)
-        internal
-        returns (InvestmentCommitteePolicy)
-    {
-        address impl = _impl(
-            "InvestmentCommitteePolicy", type(InvestmentCommitteePolicy).creationCode
-        );
-        (address t, GovernedUUPS.UpgradeMode m) = config();
-        return InvestmentCommitteePolicy(
-            proxy(
-                impl, abi.encodeCall(InvestmentCommitteePolicy.initialize, (admin, gateway, t, m))
-            )
-        );
-    }
-
-    function consensusRecommendationReceipt(address admin, address gateway, address icPolicy)
+    function consensusRecommendationReceipt(address admin)
         internal
         returns (ConsensusRecommendationReceipt)
     {
@@ -269,12 +253,7 @@ library CoreProxies {
         );
         (address t, GovernedUUPS.UpgradeMode m) = config();
         return ConsensusRecommendationReceipt(
-            proxy(
-                impl,
-                abi.encodeCall(
-                    ConsensusRecommendationReceipt.initialize, (admin, gateway, icPolicy, t, m)
-                )
-            )
+            proxy(impl, abi.encodeCall(ConsensusRecommendationReceipt.initialize, (admin, t, m)))
         );
     }
 

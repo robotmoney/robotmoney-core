@@ -266,14 +266,14 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
                     <RouterView apiUrl={cfg.explorerApiUrl} routerAddress={cfg.router} />
                     {/* Issue 1698: there is no proposal or vote surface. Router weights change
                         only when the Safe schedules RouterGovernance.applyReceipt through the
-                        timelock, which applies the Investment Committee's consensus receipt. */}
+                        timelock, which applies a consensus receipt. */}
                     <section data-testid="router-governance-note">
                       <h2>How router weights change</h2>
                       <p className="hint">
-                        There is no voting. The Safe, through the timelock, applies the Investment
-                        Committee&apos;s consensus receipt in one call (
-                        <code>RouterGovernance.applyReceipt</code>), which writes its weights to the
-                        router. The Consensus Receipts tab shows each receipt.
+                        There is no voting. The Safe, through the timelock, applies a consensus
+                        receipt in one call (<code>RouterGovernance.applyReceipt</code>), which
+                        writes its weights to the router. The Consensus Receipts tab shows each
+                        receipt.
                       </p>
                     </section>
                   </div>

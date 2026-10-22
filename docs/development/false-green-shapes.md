@@ -99,7 +99,7 @@ assertion runs and counts, it just cannot see anything.
 
 ### Instance
 `plugins/robotmoney-swarm/tests/check-restricted-paths.sh`'s restricted-path
-coupling guard, run from `.github/workflows/suite-17-swarm-plugin.yml`. The
+coupling guard, run from `.github/workflows/suite-23-skill-url-monitor-selftest.yml`. The
 job's `actions/checkout@v4` had no `fetch-depth`, so the runner got a
 depth-1 clone: `git merge-base HEAD origin/dev` failed, `HEAD~1` did not
 exist either, and the swallowed failures left `grep -q` with nothing to
@@ -110,7 +110,7 @@ exists to catch (issue #1232).
 ### Detecting check
 `check-restricted-paths.sh --self-test`'s "unresolvable base" case asserts
 that a base commit that cannot be resolved makes the guard exit non-zero
-(loud failure) rather than PASS. In CI, `suite-17-swarm-plugin.yml` now uses
+(loud failure) rather than PASS. In CI, `suite-23-skill-url-monitor-selftest.yml` now uses
 `fetch-depth: 0` and resolves the base from
 `github.event.pull_request.base.sha` rather than guessing.
 
@@ -140,7 +140,7 @@ file to `contracts/plain.sol` made the identical branch exit 1 (issue
 planned**: zero tracked paths in the repo currently contain such a byte
 (`git ls-files | LC_ALL=C grep -cP '[^\x20-\x7e]'` → 0), so the hole is
 accepted as a residual, unreachable-by-accident risk rather than fixed, and
-`.github/workflows/suite-17-swarm-plugin.yml` ships the guard unchanged.
+`.github/workflows/suite-23-skill-url-monitor-selftest.yml` ships the guard unchanged.
 
 ### Detecting check
 None. This is the one shape in this catalogue with no automated detector —
@@ -184,7 +184,7 @@ while still printing that it had proven the macOS no-`sha256sum` case
 `duplicate-step`, `env-moved-up`) run a hostile copy of `release-rmpc.yml`
 through the same extractor and assert each bypass is refused as an
 extractor error. Invoked via `plugins/robotmoney-swarm/tests/run-tests.sh`
-in `.github/workflows/suite-17-swarm-plugin.yml` on every PR.
+in `.github/workflows/suite-23-skill-url-monitor-selftest.yml` on every PR.
 
 ---
 
@@ -255,7 +255,7 @@ from `release-rmpc.yml` directly — not a grep of the step text, an actual
 run — so the trigger-scoped logic is exercised on every PR despite the
 workflow itself never firing on one. Invoked via
 `plugins/robotmoney-swarm/tests/run-tests.sh` in
-`.github/workflows/suite-17-swarm-plugin.yml`. A reviewer citing this shape
+`.github/workflows/suite-23-skill-url-monitor-selftest.yml`. A reviewer citing this shape
 should ask, for any tag/dispatch-only job: what PR-time proxy actually runs
 this code, and does `--self-test` prove that proxy itself can fail.
 
@@ -298,7 +298,7 @@ skip. `scripts/release/install-rmpc-selftest.sh` extracts this exact step
 with `sha256sum` removed from `PATH` and asserts it still produces a
 checksum (via the `shasum` branch) rather than silently producing nothing,
 run via `plugins/robotmoney-swarm/tests/run-tests.sh` in
-`.github/workflows/suite-17-swarm-plugin.yml` on every PR.
+`.github/workflows/suite-23-skill-url-monitor-selftest.yml` on every PR.
 
 ---
 

@@ -236,7 +236,7 @@ describe("twin-publish in the rehearsal kind (issue 1727)", () => {
         if (a[0] === "publish") {
           fs.writeFileSync(v("--counts-dir") + "/" + v("--core-sha") + ".json", JSON.stringify({ deploySha: v("--core-sha"), measured: { chainId: 918453, at: "now" }, counts: JSON.parse(process.env.STUB_COUNTS) }));
           const m = process.env.PUBLISH_MANIFEST_DIR;
-          fs.writeFileSync(m + "/ic-policy.json", JSON.stringify({ consensus_receipt: "0x00000000000000000000000000000000000000c1" }));
+          fs.writeFileSync(m + "/receipt.json", JSON.stringify({ consensus_receipt: "0x00000000000000000000000000000000000000c1" }));
           fs.writeFileSync(m + "/governance.json", JSON.stringify({ governance: "0x00000000000000000000000000000000000000c2" }));
           fs.writeFileSync(m + "/timelock.json", JSON.stringify({ timelock: "0x00000000000000000000000000000000000000c3" }));
         }`),
@@ -286,9 +286,9 @@ fi
     const cli = r.logText.split("\n").filter((l) => l.startsWith("line ") && !l.startsWith("line evidence")).map((l) => l.slice(5));
     const verb = (l: string) => l.split(" ")[0]!;
     const row = (l: string) => (l.includes("--row ") ? l.split("--row ")[1]!.split(" ")[0] : "");
-    // QA plan v1 B5: the safe-change-threshold pair runs after the post-govern verify and before the receipt path, so the restored threshold is what register-committee compares with the sheet
+    // QA plan v1 B5: the safe-change-threshold pair runs after the post-govern verify and before the receipt path, so the restored threshold is what register-submitter compares with the sheet
     // QA plan v1 D7: the three set-unwind-guard rounds run between stage 13 and the post-govern verify
-    expect(cli.map((l) => verb(l) + (row(l) ? ":" + row(l) : ""))).toEqual(["publish", "verify", "govern", "govern:set-unwind-guard", "govern:set-unwind-guard", "govern:set-unwind-guard", "verify", "govern:safe-change-threshold", "govern:safe-change-threshold", "govern:register-committee", "record-receipt", "govern:apply-receipt", "verify"]);
+    expect(cli.map((l) => verb(l) + (row(l) ? ":" + row(l) : ""))).toEqual(["publish", "verify", "govern", "govern:set-unwind-guard", "govern:set-unwind-guard", "govern:set-unwind-guard", "verify", "govern:safe-change-threshold", "govern:safe-change-threshold", "govern:register-submitter", "record-receipt", "govern:apply-receipt", "verify"]);
     const reg = cli[9]!, rec = cli[10]!, app = cli[11]!;
     const submitterAddr = /--submitter (0x[0-9a-fA-F]{40})/.exec(reg)![1]!;
     expect(submitterAddr).toBe("0x00000000000000000000000000000000005afe01"); // the Safe the Safe tool created
@@ -335,7 +335,7 @@ fi
     const admin = r.logText.split("\n").filter((l) => l.startsWith("line govern") && l.includes("--row safe-change-threshold")).map((l) => l.slice(5));
     expect(admin).toHaveLength(2);
     expect(admin[0]).toContain("--row safe-change-threshold --admin-arg threshold=3"); // the owner count of the merged sheet: every owner must sign the next Safe transaction
-    expect(admin[1]).toContain("--row safe-change-threshold --admin-arg threshold=2"); // the sheet's SAFE_THRESHOLD: the live roster matches the sheet again before register-committee
+    expect(admin[1]).toContain("--row safe-change-threshold --admin-arg threshold=2"); // the sheet's SAFE_THRESHOLD: the live roster matches the sheet again before register-submitter
     for (const l of admin) {
       expect(l).toContain("/keys/DEPLOYER:"); // --signer is the deployer, the gas payer of the Safe execution
       expect(l).not.toContain("--owner-signer"); // the Twin chain run names no owner: the SAFE_OWNER_A/B/C keystores beside the deployer sign (owner-signers.ts)

@@ -5,7 +5,7 @@ description: "Stage 5 of the core deploy (libs, vault, registry, router, gateway
 
 # DeployGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/script/DeployGateway.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/script/DeployGateway.s.sol)
 
 **Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
@@ -18,8 +18,8 @@ agent: an agent belongs to a depositor, who authorizes it through commitAuthoriz
 and revealAuthorization (architecture 5.2 and 6.3). The router must exist first: the gateway stores it as an immutable,
 so a gateway deployed with a zero router can never route (core 1493).
 
-The IC policy and the consensus receipt bind the gateway address, so they run in
-their own stage AFTER this one (`DeployInvestmentCommitteePolicy`).
+The consensus receipt does not bind the gateway: it deploys in its own stage
+(`DeployConsensusRecommendationReceipt`).
 
 <i>
 

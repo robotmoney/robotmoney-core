@@ -34,7 +34,7 @@ export const GOVERNED_PARAMETERS: readonly string[] = [
   "router eligibility, vault registration and retirement on the VaultRegistry: ADMIN_ROLE, the Safe through the timelock",
   "the router weight setter (WEIGHT_SETTER_ROLE): rotated by the Safe and executed by the timelock",
   "deposit pauses: the pauser key (gateway DEPOSIT_PAUSER_ROLE) and the emergency key (vault EMERGENCY_ROLE levers) with no timelock, unpauses through the timelock",
-  "investment committee membership and receipts: the IC policy and the consensus receipt register (ADMIN_ROLE, COMMITTEE_AGENT_ROLE)",
+  "consensus receipt authority: the receipt submitter role (RECEIPT_SUBMITTER_ROLE) and the release role (RECEIPT_RELEASER_ROLE), both granted by the timelock (ADMIN_ROLE)",
   "the timelock delay and its proposers: TimelockController self-administration by the Safe (updateDelay, grantRole)",
   "depositor agent authorizations on the gateway: each depositor's own commitAuthorization and revealAuthorization",
 ];

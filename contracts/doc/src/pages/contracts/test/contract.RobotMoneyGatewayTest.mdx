@@ -4,7 +4,7 @@ title: "RobotMoneyGatewayTest"
 
 # RobotMoneyGatewayTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/643087c97dd7b0025d8eb5fd7229922c2e605a16/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:** Test
 
@@ -311,6 +311,18 @@ Front-run regression: an attacker observing a victim's
 
 ```solidity
 function test_authorizeAgent_frontRunProtection() public;
+```
+
+<a id="test_revealauthorization_foranotheragentwithoutconsentreverts"></a>
+
+### test_revealAuthorization_forAnotherAgentWithoutConsentReverts
+
+A reveal for another address needs that address's own prior consent
+(core 1791). Without it the reveal reverts `OwnerConsentMissing`. The case
+lived in the retired committee suites; this keeps the branch executed.
+
+```solidity
+function test_revealAuthorization_forAnotherAgentWithoutConsentReverts() public;
 ```
 
 <a id="test_authorizeagent_revertsonroleseparation_grantingagenttoadmin"></a>

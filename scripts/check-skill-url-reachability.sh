@@ -2,47 +2,47 @@
 # check-skill-url-reachability.sh — assert every published raw SKILL.md URL
 # that an external consumer hardcodes still returns HTTP 200.
 #
-# Canonical docs: plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md
-# Filed by:       robotmoney-core#1199
+# Canonical docs: plugins/robotmoney-committee/skills/robotmoney-committee/SKILL.md
+# Filed by:       robotmoney-core#1199, amended by robotmoney-core#1888
 #
 # WHY THIS EXISTS
 # robotmoney-frontend ships skill-URL constants as literal
-# raw.githubusercontent.com URLs into this repo. Nothing in either repo's CI
-# ever fetched them, so when this repo's plugin tree was renamed, an operator
-# following a stale URL got a 404 and no build ever went red. Renaming a
-# directory in this repo is a breaking change to a shipped constant in another
-# repo; this script is the only thing that notices.
+# raw.githubusercontent.com URLs into this repo. Renaming or deleting a file in
+# this repo is a breaking change to a shipped constant in another repo; this
+# script is the only thing that notices.
 #
-# WHAT IT CHECKS
-# Each path in SKILL_PATHS below, fetched at $REF (default: dev), must return
-# 200. That includes the deprecation compat stub at the OLD committee path
-# (plugins/robotmoney-committee/skills/robotmoney-committee/SKILL.md):
-# consumers shipped that URL too, and a stub that 404s is exactly the bug this
-# check exists to catch.
+# COMPATIBILITY MAPPING (selected in robotmoney-core#1888, swarm plugin retired)
+# The swarm plugin is deleted, so core can no longer serve
+#   plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md
+# (raw.githubusercontent.com cannot redirect). The decided mapping is:
+#   - the LEGACY swarm URL is served by robotmoney-frontend, which maps it to
+#     the content of the retained committee stub; core must answer 404 for the
+#     legacy path (a 200 would mean the plugin crept back);
+#   - the committee stub URL
+#       plugins/robotmoney-committee/skills/robotmoney-committee/SKILL.md
+#     stays served by core and must answer 200 (a 404 is a hard failure);
+#   - when FRONTEND_SKILL_URL is set, that frontend URL must answer 200 with
+#     bytes identical to the committee stub, which proves the mapping.
+# Product-owner note: the frontend URL itself is owned by robotmoney-frontend,
+# so CI leaves FRONTEND_SKILL_URL unset until that URL is recorded.
+# The mapping is asserted without network by
+# scripts/check-skill-url-reachability.test.sh (local HTTP fixture server).
 #
 # ONBOARDING IS DELIBERATELY NOT CHECKED HERE
-# robotmoney-swarm/skills/swarm-onboarding/SKILL.md and
-# robotmoney-committee/skills/committee-onboarding/SKILL.md used to be in
-# SKILL_PATHS below. Both were removed from this repo outright: onboarding is
-# no longer core's concern. robotmoney-frontend's own copy
-# (frontend/public/skills/swarm-onboarding/SKILL.md, served from
-# https://robotmoney.net/skills/swarm-onboarding/SKILL.md) is now the single
-# source of truth, and core deliberately ships no compat stub pointing at it —
-# an old cached URL into core's onboarding paths should 404, not redirect. Do
-# not re-add those two paths here: checking their reachability would now be
-# meaningless at best (core never serves them again) and actively wrong at
-# worst (asserting they return 200 would contradict the deletion). See
-# docs/technical/mcp-decision.md for the reasoning.
+# Core ships no onboarding skills (robotmoney-frontend owns them). Do not
+# re-add those paths: see docs/technical/mcp-decision.md.
 #
 # LOUD FAILURE, NEVER SILENT SKIP
-# curl is required and network access is required. If either is missing the
-# script exits non-zero — it never prints "skipping" and exits 0, because a
+# curl is required and network access is required. If either is missing, or a
+# path answers anything other than its expected status, the script exits non-zero — it never prints "skipping" and exits 0, because a
 # reachability check that quietly no-ops is worse than no check at all.
 #
 # USAGE
 #   scripts/check-skill-url-reachability.sh
 #   REF=my-branch scripts/check-skill-url-reachability.sh
 #   REPO=owner/name REF=<sha> scripts/check-skill-url-reachability.sh
+#   RAW_BASE=http://127.0.0.1:PORT scripts/check-skill-url-reachability.sh  (tests)
+#   FRONTEND_SKILL_URL=https://... scripts/check-skill-url-reachability.sh
 
 set -euo pipefail
 
@@ -50,14 +50,16 @@ REPO="${REPO:-robotmoney/robotmoney-core}"
 # dev is the ref the frontend's shipped constant points at. Override REF to
 # validate a branch or commit before merge.
 REF="${REF:-dev}"
-BASE="https://raw.githubusercontent.com/${REPO}/${REF}"
+BASE="${RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${REF}}"
+FRONTEND_SKILL_URL="${FRONTEND_SKILL_URL:-}"
 
-# Every raw path an external consumer may have hardcoded.
-#   1. the live vote-submission skill
-#   2. the deprecation compat stub at the pre-#1199 committee path
+COMMITTEE_STUB="plugins/robotmoney-committee/skills/robotmoney-committee/SKILL.md"
+LEGACY_SWARM="plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md"
+
+# "<expected status> <path>". See COMPATIBILITY MAPPING above.
 SKILL_PATHS=(
-  "plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md"
-  "plugins/robotmoney-committee/skills/robotmoney-committee/SKILL.md"
+  "200 $COMMITTEE_STUB"
+  "404 $LEGACY_SWARM"
 )
 
 if ! command -v curl &>/dev/null; then
@@ -74,26 +76,48 @@ echo ""
 CHECKED=0
 FAILED=0
 
-for path in "${SKILL_PATHS[@]}"; do
+fetch_status() {
+  # Prints the HTTP status, or 000 when curl itself fails.
+  curl --silent --show-error --location \
+       --output /dev/null \
+       --write-out '%{http_code}' \
+       --max-time 20 \
+       --retry 3 --retry-delay 2 --retry-connrefused \
+       "$1" || echo "000"
+}
+
+for entry in "${SKILL_PATHS[@]}"; do
+  want="${entry%% *}"
+  path="${entry#* }"
   url="$BASE/$path"
   CHECKED=$((CHECKED + 1))
 
-  # --retry rides out transient raw.githubusercontent hiccups so a flake does
-  # not read as a broken URL. A real 404 is not retried.
-  status=$(curl --silent --show-error --location \
-                --output /dev/null \
-                --write-out '%{http_code}' \
-                --max-time 20 \
-                --retry 3 --retry-delay 2 --retry-connrefused \
-                "$url" || echo "000")
+  # --retry rides out transient hiccups. A real 404 is not retried.
+  status=$(fetch_status "$url")
 
-  if [[ "$status" == "200" ]]; then
-    echo "  200 OK   $url"
+  if [[ "$status" == "$want" ]]; then
+    echo "  $status OK   (expected $want) $url"
   else
-    echo "  $status FAIL $url" >&2
+    echo "  $status FAIL (expected $want) $url" >&2
     FAILED=$((FAILED + 1))
   fi
 done
+
+if [[ -n "$FRONTEND_SKILL_URL" ]]; then
+  CHECKED=$((CHECKED + 1))
+  stub_body=$(curl --silent --show-error --location --max-time 20 \
+                   --retry 3 --retry-delay 2 --retry-connrefused \
+                   --fail "$BASE/$COMMITTEE_STUB" || echo "__FETCH_FAILED__")
+  front_body=$(curl --silent --show-error --location --max-time 20 \
+                    --retry 3 --retry-delay 2 --retry-connrefused \
+                    --fail "$FRONTEND_SKILL_URL" || echo "__FETCH_FAILED__")
+  if [[ "$stub_body" != "__FETCH_FAILED__" && "$stub_body" == "$front_body" ]]; then
+    echo "  200 OK   frontend legacy URL serves the committee stub: $FRONTEND_SKILL_URL"
+  else
+    echo "  FAIL frontend legacy URL does not serve the committee stub: $FRONTEND_SKILL_URL" >&2
+    FAILED=$((FAILED + 1))
+  fi
+fi
 
 echo ""
 echo "SKILL_URLS_CHECKED=$CHECKED"
@@ -106,10 +130,10 @@ if [[ "$CHECKED" -eq 0 ]]; then
 fi
 
 if [[ "$FAILED" -ne 0 ]]; then
-  echo "FATAL: $FAILED of $CHECKED published skill URLs did not return 200." >&2
-  echo "       A shipped robotmoney-frontend consumer is 404ing right now." >&2
-  echo "       Restore the path or add a compat stub." >&2
+  echo "FATAL: $FAILED of $CHECKED published skill URLs did not return its expected status." >&2
+  echo "       A shipped robotmoney-frontend consumer may be broken right now." >&2
+  echo "       Restore the committee stub or fix the frontend mapping." >&2
   exit 1
 fi
 
-echo "All $CHECKED published skill URLs return 200."
+echo "All $CHECKED published skill URLs returned their expected status."

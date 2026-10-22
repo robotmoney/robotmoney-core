@@ -50,7 +50,6 @@ const REQUIRED_KEYS = [
   "registry_addr",
   "router_addr",
   // Issue #1294: consensus receipt dapp e2e against the full-stack devnet.
-  "ic_policy_addr",
   "consensus_receipt_addr",
   // Core 1544: the real 2-of-3 SafeL2 and the timelock it proposes to, plus the
   // rehearsal keystores (SAFE_OWNER_A/B/C) and their passphrase file. Paths only.
@@ -201,7 +200,6 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     registry_addr: raw.registry_addr,
     router_addr: raw.router_addr,
     // Issue #1294: consensus receipt dapp e2e against the full-stack devnet.
-    ic_policy_addr: raw.ic_policy_addr,
     consensus_receipt_addr: raw.consensus_receipt_addr,
     // Core 1544: Safe -> Timelock governance through the dapp.
     safe_addr: raw.safe_addr,

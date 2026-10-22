@@ -1,6 +1,6 @@
 // Issue 1750: the consensus receipt SUBMITTER is a multisig. Owner decision 2026-10-10: no single key anchors a receipt. The submitter is a SafeL2 v1.4.1 proxy,
-// a SECOND Safe, separate from the governing Safe. It holds AGENT_ROLE on the gateway and COMMITTEE_AGENT_ROLE on the IC policy (given by `govern --row register-committee`)
-// and nothing else. Docs: docs/technical/consensus-receipt-submitter-runbook.md.
+// a Safe that holds RECEIPT_SUBMITTER_ROLE on the receipt contract (given by `govern --row register-submitter`, issue 1888) and nothing else. It MAY be the governing Safe, and
+// its owners may be shared with it. Docs: docs/technical/consensus-receipt-submitter-runbook.md.
 //
 // The contracts accept a contract account as the role holder (no msg.sender, tx.origin, isContract or ecrecover check applies to it), so this is a tooling rule: this module
 // pins what a submitter Safe must be BEFORE the governing Safe spends a timelock round registering it and BEFORE the operator signs a receipt through it. It mirrors the
@@ -35,10 +35,10 @@ const slotAddr = (v: Hex | undefined): string => `0x${(v ?? "0x").replace(/^0x/,
 const ZERO = "0x0000000000000000000000000000000000000000";
 
 /** Addresses that may never be the submitter, each with the reason that is shown to the operator. First name wins. */
-export function forbiddenSubmitters(f: { governingSafe: string; timelock: string; admin: string; pauser: string; emergency: string }): Map<string, string> {
+export function forbiddenSubmitters(f: { timelock: string; admin: string; pauser: string; emergency: string }): Map<string, string> {
   const m = new Map<string, string>();
   for (const [who, why] of [
-    [f.governingSafe, "the governing Safe (the submitter is a separate Safe)"], [f.timelock, "the timelock"], [f.admin, "ADMIN_ADDRESS (the deployer)"],
+    [f.timelock, "the timelock"], [f.admin, "ADMIN_ADDRESS (the deployer)"],
     [f.pauser, "PAUSER_ADDRESS"], [f.emergency, "EMERGENCY_ADDRESS"],
   ] as const) if (!m.has(lc(who))) m.set(lc(who), why);
   return m;
@@ -47,7 +47,7 @@ export function forbiddenSubmitters(f: { governingSafe: string; timelock: string
 /** Throws USAGE when `address` is one of the forbidden addresses. Needs no chain. */
 export function assertNotForbiddenSubmitter(address: string, forbidden: ReadonlyMap<string, string>): void {
   const why = forbidden.get(lc(address));
-  if (why) throw new PublishError("USAGE", `the submitter ${address} is ${why}: the submitter holds AGENT_ROLE and COMMITTEE_AGENT_ROLE and nothing else. Use a dedicated submitter Safe. Nothing sent.`, { submitter: address });
+  if (why) throw new PublishError("USAGE", `the submitter ${address} is ${why}: the submitter holds RECEIPT_SUBMITTER_ROLE and nothing else. Use a Safe that is not a deployment role address. Nothing sent.`, { submitter: address });
 }
 
 /**

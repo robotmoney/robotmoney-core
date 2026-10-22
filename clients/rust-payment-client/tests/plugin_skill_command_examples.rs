@@ -77,15 +77,6 @@ fn repo_root() -> PathBuf {
     }
 }
 
-fn swarm_skill_path() -> PathBuf {
-    repo_root().join("plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md")
-}
-
-fn swarm_skill() -> String {
-    let path = swarm_skill_path();
-    fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
-}
-
 /// Recursion cap for [`walk`]. `plugins/` is a handful of levels deep in
 /// practice; this is a generous backstop against a directory tree deep
 /// enough to blow the stack, kept as a distinct guard from the symlink skip
@@ -260,6 +251,13 @@ fn substitute_placeholders(argv: &mut [String]) {
     }
 }
 
+/// Commands issue 1888 removed from the binary. The plugin docs still mention
+/// them until issue 1889 rewrites those docs, so the harvest skips them.
+fn is_removed_command(argv: &[String]) -> bool {
+    argv.get(1).is_some_and(|c| c == "committee")
+        || (argv.get(1).is_some_and(|c| c == "receipt") && argv.iter().any(|a| a == "submit"))
+}
+
 /// Harvest every `rmpc` invocation from every shipped plugin skill document.
 fn harvest_invocations() -> Vec<Invocation> {
     let root = repo_root();
@@ -290,6 +288,9 @@ fn harvest_invocations() -> Vec<Invocation> {
                         if SHELL_FENCE_LANGS.contains(&lang.as_str()) {
                             for (start, joined) in logical_lines(&block) {
                                 if let Some((argv, partial)) = parse_command_line(&joined) {
+                                    if is_removed_command(&argv) {
+                                        continue;
+                                    }
                                     invocations.push(Invocation {
                                         file: relative.clone(),
                                         line: start,
@@ -318,6 +319,9 @@ fn harvest_invocations() -> Vec<Invocation> {
                     continue;
                 }
                 if let Some((argv, _)) = parse_command_line(span) {
+                    if is_removed_command(&argv) {
+                        continue;
+                    }
                     invocations.push(Invocation {
                         file: relative.clone(),
                         line: line_number,
@@ -536,123 +540,18 @@ fn every_abbreviated_plugin_skill_invocation_names_real_arguments() {
 // to go red on the exact drift issue #1203 was filed for.
 // ---------------------------------------------------------------------------
 
-/// The concrete Swarm vote-submit example, in the order the skill publishes it.
-const VOTE_SUBMIT_EXAMPLE: &[&str] = &[
-    "rmpc",
-    "committee",
-    "--config",
-    "rmpc.toml",
-    "vote-submit",
-    "--vault",
-    "0x1111111111111111111111111111111111111111",
-    "--stance",
-    "overweight",
-    "--weight-bps",
-    "6000",
-    "--confidence",
-    "70",
-    "--rationale-uri",
-    "https://example.test/rationale",
-    "--vote-json-hash",
-    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "--prompt-hash",
-    "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "--inputs-digest",
-    "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "--timestamp",
-    "1735689600",
-    "--order-id",
-    "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    "--pretty",
-];
-
-#[test]
-fn swarm_skill_publishes_both_vote_submit_examples_in_parser_correct_order() {
-    let documented = swarm_skill();
-    assert_eq!(
-        documented
-            .matches("rmpc committee --config <CONFIG> vote-submit")
-            .count(),
-        2,
-        "the Swarm skill must publish both vote-submit examples in parser-correct order"
-    );
-    assert!(
-        documented.contains("--weight-bps <BPS>"),
-        "the workflow example must use the real --weight-bps flag"
-    );
-    assert!(
-        documented.contains("--weight-bps <0-10000>"),
-        "the reference example must use the real --weight-bps flag"
-    );
-    assert!(
-        !documented.contains("--target-weight-bps"),
-        "the Swarm skill must not reintroduce the non-existent --target-weight-bps flag"
-    );
-    Cli::try_parse_from(VOTE_SUBMIT_EXAMPLE).expect("the Swarm vote-submit example must parse");
-}
-
-#[test]
-fn swarm_skill_rejects_the_previously_documented_weight_flag() {
-    let mut invalid = VOTE_SUBMIT_EXAMPLE.to_vec();
-    let flag = invalid
-        .iter_mut()
-        .find(|argument| **argument == "--weight-bps")
-        .expect("example contains --weight-bps");
-    *flag = "--target-weight-bps";
-
-    let error = Cli::try_parse_from(&invalid).expect_err("stale flag must fail clap parsing");
-    assert!(
-        error.to_string().contains("--target-weight-bps"),
-        "unexpected clap error: {error}"
-    );
-
-    // The abbreviated tier must reject it too, so the same mistake cannot hide
-    // in prose or behind an elided example.
-    let argv: Vec<String> = invalid.iter().map(|s| (*s).to_string()).collect();
-    let rejection =
-        check_partial_invocation(&argv).expect_err("stale flag must fail the abbreviated check");
-    assert!(
-        rejection.contains("--target-weight-bps"),
-        "unexpected rejection: {rejection}"
-    );
-}
-
-#[test]
-fn swarm_skill_rejects_the_previously_documented_config_position() {
-    let mut invalid = VOTE_SUBMIT_EXAMPLE.to_vec();
-    let config_index = invalid
-        .iter()
-        .position(|argument| *argument == "--config")
-        .expect("example contains --config");
-    let config = invalid.remove(config_index);
-    let config_path = invalid.remove(config_index);
-    let vote_submit_index = invalid
-        .iter()
-        .position(|argument| *argument == "vote-submit")
-        .expect("example contains vote-submit");
-    invalid.insert(vote_submit_index + 1, config_path);
-    invalid.insert(vote_submit_index + 1, config);
-
-    let error =
-        Cli::try_parse_from(invalid).expect_err("stale config position must fail clap parsing");
-    assert!(
-        error.to_string().contains("--config"),
-        "unexpected clap error: {error}"
-    );
-}
-
 /// A guard on the guard: an unknown subcommand must be rejected by the
 /// abbreviated tier, not silently accepted as a positional value.
 #[test]
 fn abbreviated_check_rejects_an_unknown_subcommand() {
-    let argv: Vec<String> = ["rmpc", "committee", "vote-sumbit"]
+    let argv: Vec<String> = ["rmpc", "receipt", "verfy"]
         .iter()
         .map(|s| (*s).to_string())
         .collect();
     let rejection = check_partial_invocation(&argv)
         .expect_err("a misspelled subcommand must fail the abbreviated check");
     assert!(
-        rejection.contains("vote-sumbit"),
+        rejection.contains("verfy"),
         "unexpected rejection: {rejection}"
     );
 }
@@ -748,14 +647,14 @@ fn flag_value_arity_is_read_from_the_real_parser() {
     let cli = Cli::command();
     let committee = cli
         .get_subcommands()
-        .find(|sub| sub.get_name() == "committee")
-        .expect("rmpc committee exists");
-    let config = long_flag(committee, "config").expect("committee has --config");
+        .find(|sub| sub.get_name() == "receipt")
+        .expect("rmpc receipt exists");
+    let config = long_flag(committee, "config").expect("receipt has --config");
     assert!(
         config.get_action().takes_values(),
         "--config must consume a value"
     );
-    let pretty = long_flag(committee, "pretty").expect("committee has --pretty");
+    let pretty = long_flag(committee, "pretty").expect("receipt has --pretty");
     assert!(
         matches!(pretty.get_action(), ArgAction::SetTrue),
         "--pretty must be a boolean flag"

@@ -103,7 +103,7 @@ describe("whitelist parser", () => {
   });
 
   test("values that stages produce are refused: nothing is typed or silently skipped", () => {
-    for (const n of ["REGISTRY_ADDRESS", "IC_POLICY_ADDRESS", "CONSENSUS_RECEIPT_ADDRESS", "DEPLOYMENT_OUT", "SAFE_ADDRESS", "VAULT_ADDRESSES"]) {
+    for (const n of ["REGISTRY_ADDRESS", "CONSENSUS_RECEIPT_ADDRESS", "DEPLOYMENT_OUT", "SAFE_ADDRESS", "VAULT_ADDRESSES"]) {
       expect(refused(sheetText({}, [`${n}=0x000000000000000000000000000000000000dEaD`])).message).toContain("manifests");
     }
   });

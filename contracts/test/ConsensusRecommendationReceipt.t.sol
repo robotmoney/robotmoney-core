@@ -5,18 +5,16 @@
 pragma solidity ^0.8.24;
 
 import {Test, Vm} from "forge-std/Test.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import {
+    IAccessControlEnumerable
+} from "@openzeppelin/contracts/access/extensions/IAccessControlEnumerable.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
-import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
-import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {
     IConsensusRecommendationReceipt
 } from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
-import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "./helpers/MockVault.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
@@ -24,9 +22,10 @@ import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @title ConsensusRecommendationReceiptTest
 /// @notice Full on-chain path for the consensus receipt anchor:
-///         gateway → receipt contract → event, plus the signalling-only
-///         boundary, the timelock-held `ADMIN_ROLE`, the 3-topic event limit,
-///         and the anchoring-digest assertion that closes issue #1280.
+///         submitter Safe-held role → receipt contract → event, with no gateway and no
+///         committee registry, plus the signalling-only boundary, the timelock-held
+///         `ADMIN_ROLE`, the 3-topic event limit, and the anchoring-digest assertion that
+///         closes issue #1280.
 contract ConsensusRecommendationReceiptTest is SafeGovernance {
     // ─── Fixture paths (goldens are byte-identical to robotmoney-frontend's
     //     contract/src/__fixtures__/ — that byte identity IS the cross-repo
@@ -44,10 +43,9 @@ contract ConsensusRecommendationReceiptTest is SafeGovernance {
 
     // ─── Actors ──────────────────────────────────────────────────────────────
 
-    address admin = address(0xA0);
-    address pauser = address(0xA1);
-    address shareReceiver = address(0xA2);
     address submitter = address(0xB1);
+    /// Stands in for RouterGovernance: holds only RECEIPT_RELEASER_ROLE.
+    address releaser = address(0xC1);
     address stranger = address(0xDEAD);
     /// A real SafeL2 1.4.1 proxy: the only proposer and canceller on the timelock.
     address safe;
@@ -56,8 +54,6 @@ contract ConsensusRecommendationReceiptTest is SafeGovernance {
 
     TestERC20 usdc;
     MockVault vault;
-    RobotMoneyGateway gateway;
-    InvestmentCommitteePolicy ic;
     ConsensusRecommendationReceipt receipts;
     TimelockController timelock;
 
@@ -71,52 +67,26 @@ contract ConsensusRecommendationReceiptTest is SafeGovernance {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
 
-        gateway = CoreProxies.robotMoneyGateway(
-            IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
-        );
-        ic = CoreProxies.investmentCommitteePolicy(admin, address(gateway));
-
         // Timelock that will hold ADMIN_ROLE on the receipt contract (INV-3). The Safe is its
         // only proposer and canceller and EXECUTOR_ROLE is open, as in DeployTimelock.
         _installSafeSet();
         safe = _newDefaultSafe();
         timelock = _newGovTimelock(safe, MIN_DELAY);
 
-        // The receipt contract's ADMIN_ROLE goes to the timelock and nowhere
-        // else — deliberately NOT to the gateway, because a gateway-routed
-        // release would need the gateway to hold it (see docs/architecture.md
-        // §4.9, "why release is not a gateway entrypoint").
-        receipts = CoreProxies.consensusRecommendationReceipt(
-            address(timelock), address(gateway), address(ic)
-        );
+        // The receipt contract's ADMIN_ROLE goes to the timelock and nowhere else.
+        receipts = CoreProxies.consensusRecommendationReceipt(address(timelock));
 
-        bytes32 icAdminRole = ic.ADMIN_ROLE();
-        vm.prank(admin);
-        ic.grantRole(icAdminRole, address(gateway));
+        // The Safe, through the timelock, grants the submitter and the releaser: the only
+        // path that can (the timelock alone holds the role admin).
+        _grantViaTimelock(receipts.RECEIPT_SUBMITTER_ROLE(), submitter, bytes32(uint256(11)));
+        _grantViaTimelock(receipts.RECEIPT_RELEASER_ROLE(), releaser, bytes32(uint256(12)));
+    }
 
-        vm.prank(admin);
-        gateway.setICPolicy(address(ic));
-        vm.prank(admin);
-        gateway.setConsensusReceipt(address(receipts));
-
-        address[] memory noList = new address[](0);
-        IGateway.AgentPolicy memory policy = IGateway.AgentPolicy({
-            active: true,
-            validUntil: uint64(block.timestamp + 30 days),
-            maxPerPayment: 1e6,
-            maxPerWindow: 10e6,
-            shareReceiver: shareReceiver,
-            allowedDestinations: noList,
-            assetRecipient: address(0),
-            maxWithdrawPerPayment: 0,
-            maxWithdrawPerWindow: 0,
-            allowedSourceVaults: noList
-        });
-        vm.prank(admin);
-        gateway.authorizeAgent(submitter, policy);
-
-        vm.prank(admin);
-        gateway.committeeRegister(submitter, "swarm-submitter-v1");
+    function _grantViaTimelock(bytes32 role, address who, bytes32 salt) internal {
+        bytes memory payload = abi.encodeCall(receipts.grantRole, (role, who));
+        _govSchedule(safe, timelock, address(receipts), payload, salt, MIN_DELAY);
+        vm.warp(block.timestamp + MIN_DELAY);
+        _govExecute(safe, timelock, address(receipts), payload, salt);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -151,64 +121,76 @@ contract ConsensusRecommendationReceiptTest is SafeGovernance {
 
     function _record(bytes32 receiptId, bytes32 digest) internal returns (uint256) {
         vm.prank(submitter);
-        return gateway.consensusRecordReceipt(receiptId, digest, PAYLOAD_URI);
+        return receipts.recordReceipt(receiptId, digest, PAYLOAD_URI);
     }
 
-    // ─── AC1 / Test plan 2: only the gateway may write ───────────────────────
+    function _release(bytes32 id) internal {
+        vm.prank(releaser);
+        receipts.releaseReceipt(id);
+    }
 
-    /// @dev A direct call to `recordReceipt` reverts even from the allowlisted
-    ///      submitter: the gateway is the sole choke point.
-    function testDirectRecordReverts() public {
+    // ─── Direct recording: the submitter role is the only gate ───────────────
+
+    /// @dev Direct recording by the role holder succeeds with no gateway and no IC registry,
+    ///      and the stored submitter is `msg.sender`.
+    function testDirectRecordByRoleHolderStoresMsgSender() public {
+        _record(keccak256("r"), keccak256("d"));
+        assertEq(receipts.getReceiptById(keccak256("r")).submitter, submitter);
+    }
+
+    /// @dev Without the submitter role every caller reverts: EOAs, the timelock (which holds
+    ///      ADMIN_ROLE but not the submitter role) and the releaser.
+    function testRecordWithoutSubmitterRoleReverts() public {
+        address[3] memory callers = [stranger, address(timelock), releaser];
+        for (uint256 i = 0; i < callers.length; i++) {
+            vm.prank(callers[i]);
+            vm.expectRevert(IConsensusRecommendationReceipt.SubmitterNotAllowlisted.selector);
+            receipts.recordReceipt(keccak256("r"), keccak256("d"), PAYLOAD_URI);
+        }
+        assertEq(receipts.receiptCount(), 0);
+    }
+
+    /// @dev A revoked submitter can no longer record. The revoke is a delayed timelock call.
+    function testRevokedSubmitterCannotRecord() public {
+        bytes32 role = receipts.RECEIPT_SUBMITTER_ROLE();
+        bytes memory payload = abi.encodeCall(receipts.revokeRole, (role, submitter));
+        _govSchedule(safe, timelock, address(receipts), payload, bytes32(uint256(21)), MIN_DELAY);
+        _expectExecuteRefused(safe, timelock, address(receipts), payload, bytes32(uint256(21)));
+        vm.warp(block.timestamp + MIN_DELAY);
+        _govExecute(safe, timelock, address(receipts), payload, bytes32(uint256(21)));
+
+        assertFalse(receipts.hasRole(role, submitter));
         vm.prank(submitter);
-        vm.expectRevert(IConsensusRecommendationReceipt.CallerNotGateway.selector);
-        receipts.recordReceipt(submitter, keccak256("r"), keccak256("d"), PAYLOAD_URI);
-    }
-
-    /// @dev Even an ADMIN_ROLE holder cannot bypass the gateway.
-    function testDirectRecordFromTimelockReverts() public {
-        vm.prank(address(timelock));
-        vm.expectRevert(IConsensusRecommendationReceipt.CallerNotGateway.selector);
-        receipts.recordReceipt(submitter, keccak256("r"), keccak256("d"), PAYLOAD_URI);
-    }
-
-    /// @dev A gateway caller without `AGENT_ROLE` is rejected by the gateway.
-    function testNonAgentCannotRecordViaGateway() public {
-        vm.prank(stranger);
-        vm.expectRevert();
-        gateway.consensusRecordReceipt(keccak256("r"), keccak256("d"), PAYLOAD_URI);
-    }
-
-    /// @dev A gateway agent that is not on the IC allowlist is rejected by the
-    ///      receipt contract — role administration stays on the IC policy.
-    function testSubmitterNotAllowlistedReverts() public {
-        address[] memory noList = new address[](0);
-        IGateway.AgentPolicy memory policy = IGateway.AgentPolicy({
-            active: true,
-            validUntil: uint64(block.timestamp + 30 days),
-            maxPerPayment: 1e6,
-            maxPerWindow: 10e6,
-            shareReceiver: shareReceiver,
-            allowedDestinations: noList,
-            assetRecipient: address(0),
-            maxWithdrawPerPayment: 0,
-            maxWithdrawPerWindow: 0,
-            allowedSourceVaults: noList
-        });
-        address rogue = address(0xB9);
-        vm.prank(admin);
-        gateway.authorizeAgent(rogue, policy);
-
-        vm.prank(rogue);
         vm.expectRevert(IConsensusRecommendationReceipt.SubmitterNotAllowlisted.selector);
-        gateway.consensusRecordReceipt(keccak256("r"), keccak256("d"), PAYLOAD_URI);
+        receipts.recordReceipt(keccak256("r"), keccak256("d"), PAYLOAD_URI);
     }
 
-    function testRecordRequiresConfiguredReceiptContract() public {
-        vm.prank(admin);
-        gateway.setConsensusReceipt(address(0));
-        vm.prank(submitter);
-        vm.expectRevert(RobotMoneyGateway.ConsensusReceiptNotSet.selector);
-        gateway.consensusRecordReceipt(keccak256("r"), keccak256("d"), PAYLOAD_URI);
+    /// @dev Only the timelock (ADMIN_ROLE) administers the two roles. Neither the submitter,
+    ///      the releaser nor a stranger can grant or revoke either.
+    function testOnlyAdminRoleAdministersTheReceiptRoles() public {
+        bytes32 sub = receipts.RECEIPT_SUBMITTER_ROLE();
+        bytes32 rel = receipts.RECEIPT_RELEASER_ROLE();
+        assertEq(receipts.getRoleAdmin(sub), receipts.ADMIN_ROLE());
+        assertEq(receipts.getRoleAdmin(rel), receipts.ADMIN_ROLE());
+        address[3] memory callers = [stranger, submitter, releaser];
+        for (uint256 i = 0; i < callers.length; i++) {
+            vm.startPrank(callers[i]);
+            vm.expectRevert();
+            receipts.grantRole(sub, stranger);
+            vm.expectRevert();
+            receipts.grantRole(rel, stranger);
+            vm.expectRevert();
+            receipts.revokeRole(sub, submitter);
+            vm.expectRevert();
+            receipts.revokeRole(rel, releaser);
+            vm.stopPrank();
+        }
+    }
+
+    /// @dev The retired gateway and IC slots are never written by a fresh deploy.
+    function testRetiredSlotsAreEmpty() public view {
+        assertEq(receipts.gateway(), address(0));
+        assertEq(receipts.icPolicy(), address(0));
     }
 
     // ─── Field guards ────────────────────────────────────────────────────────
@@ -216,19 +198,19 @@ contract ConsensusRecommendationReceiptTest is SafeGovernance {
     function testEmptyReceiptIdReverts() public {
         vm.prank(submitter);
         vm.expectRevert(IConsensusRecommendationReceipt.EmptyReceiptId.selector);
-        gateway.consensusRecordReceipt(bytes32(0), keccak256("d"), PAYLOAD_URI);
+        receipts.recordReceipt(bytes32(0), keccak256("d"), PAYLOAD_URI);
     }
 
     function testEmptyPayloadDigestReverts() public {
         vm.prank(submitter);
         vm.expectRevert(IConsensusRecommendationReceipt.EmptyPayloadDigest.selector);
-        gateway.consensusRecordReceipt(keccak256("r"), bytes32(0), PAYLOAD_URI);
+        receipts.recordReceipt(keccak256("r"), bytes32(0), PAYLOAD_URI);
     }
 
     function testEmptyPayloadUriReverts() public {
         vm.prank(submitter);
         vm.expectRevert(IConsensusRecommendationReceipt.EmptyPayloadUri.selector);
-        gateway.consensusRecordReceipt(keccak256("r"), keccak256("d"), "");
+        receipts.recordReceipt(keccak256("r"), keccak256("d"), "");
     }
 
     /// @dev One receipt per session per subject — the uniqueness property the
@@ -238,41 +220,59 @@ contract ConsensusRecommendationReceiptTest is SafeGovernance {
         _record(id, keccak256("d"));
         vm.prank(submitter);
         vm.expectRevert(IConsensusRecommendationReceipt.ReceiptAlreadyRecorded.selector);
-        gateway.consensusRecordReceipt(id, keccak256("d2"), PAYLOAD_URI);
+        receipts.recordReceipt(id, keccak256("d2"), PAYLOAD_URI);
     }
 
     // ─── AC2 / Test plan 3: ADMIN_ROLE is the timelock ───────────────────────
 
     /// @dev The timelock, and only the timelock, holds `ADMIN_ROLE`. The
-    ///      deployer, the gateway and the protocol admin all do not.
+    ///      releaser (RouterGovernance's stand-in), the submitter and the deployer do not.
     function testAdminRoleHeldByTimelock() public view {
         bytes32 role = receipts.ADMIN_ROLE();
         assertTrue(receipts.hasRole(role, address(timelock)), "timelock must hold ADMIN_ROLE");
-        assertFalse(receipts.hasRole(role, admin), "protocol admin must not hold ADMIN_ROLE");
-        assertFalse(receipts.hasRole(role, address(gateway)), "gateway must not hold ADMIN_ROLE");
+        assertFalse(receipts.hasRole(role, releaser), "releaser must not hold ADMIN_ROLE");
+        assertFalse(receipts.hasRole(role, submitter), "submitter must not hold ADMIN_ROLE");
         assertFalse(receipts.hasRole(role, address(this)), "deployer must not hold ADMIN_ROLE");
+        assertEq(
+            IAccessControlEnumerable(address(receipts)).getRoleMemberCount(role),
+            1,
+            "ADMIN_ROLE holders are the timelock alone"
+        );
         assertTrue(
             receipts.hasRole(receipts.DEFAULT_ADMIN_ROLE(), address(timelock)),
             "timelock must hold DEFAULT_ADMIN_ROLE"
         );
     }
 
-    /// @dev Test plan 3: `ADMIN_ROLE` operations revert unless routed through
-    ///      the timelock — and succeed when they are, only after `minDelay`.
-    function testReleaseRevertsUnlessRoutedThroughTimelock() public {
+    /// @dev Release needs the narrow release role. The timelock cannot release directly, and
+    ///      neither can the submitter or a stranger.
+    function testReleaseRevertsWithoutTheReleaseRole() public {
         bytes32 id = keccak256("r");
         _record(id, keccak256("d"));
 
-        vm.prank(admin);
-        vm.expectRevert();
-        receipts.releaseReceipt(id);
+        address[3] memory callers = [address(timelock), submitter, stranger];
+        for (uint256 i = 0; i < callers.length; i++) {
+            vm.prank(callers[i]);
+            vm.expectRevert();
+            receipts.releaseReceipt(id);
+        }
+        assertFalse(receipts.isReleased(id));
+        _release(id);
+        assertTrue(receipts.isReleased(id));
+    }
 
+    /// @dev Test plan 3: the timelock path (a delayed grant) works only after `minDelay`,
+    ///      with the exact refusal reasons for early execution and for replay.
+    function testGrantRevertsUnlessRoutedThroughTimelock() public {
+        bytes32 id = keccak256("r");
+        _record(id, keccak256("d"));
+        bytes memory payload =
+            abi.encodeCall(receipts.grantRole, (receipts.RECEIPT_SUBMITTER_ROLE(), stranger));
+
+        bytes32 submitterRole = receipts.RECEIPT_SUBMITTER_ROLE();
         vm.prank(stranger);
         vm.expectRevert();
-        receipts.releaseReceipt(id);
-
-        // Routed through the timelock: schedule, wait out the delay, execute.
-        bytes memory payload = abi.encodeCall(IConsensusRecommendationReceipt.releaseReceipt, (id));
+        receipts.grantRole(submitterRole, stranger);
         _govSchedule(safe, timelock, address(receipts), payload, bytes32(0), MIN_DELAY);
 
         // One owner signature is below the 2-of-3 threshold: the Safe itself refuses.
@@ -294,23 +294,23 @@ contract ConsensusRecommendationReceiptTest is SafeGovernance {
         // Replay of the executed release is refused with the exact reasons.
         _expectExecuteRefused(safe, timelock, address(receipts), payload, bytes32(0));
 
-        assertTrue(receipts.isReleased(id), "timelock-routed release must succeed");
-        IConsensusRecommendationReceipt.Receipt memory r = receipts.getReceiptById(id);
-        assertEq(r.releasedAt, uint64(block.timestamp));
+        assertTrue(
+            receipts.hasRole(receipts.RECEIPT_SUBMITTER_ROLE(), stranger),
+            "timelock-routed grant must succeed"
+        );
     }
 
     function testDoubleReleaseReverts() public {
         bytes32 id = keccak256("r");
         _record(id, keccak256("d"));
-        vm.prank(address(timelock));
-        receipts.releaseReceipt(id);
-        vm.prank(address(timelock));
+        _release(id);
+        vm.prank(releaser);
         vm.expectRevert(IConsensusRecommendationReceipt.ReceiptAlreadyReleased.selector);
         receipts.releaseReceipt(id);
     }
 
     function testReleaseUnknownReceiptReverts() public {
-        vm.prank(address(timelock));
+        vm.prank(releaser);
         vm.expectRevert(IConsensusRecommendationReceipt.ReceiptNotFound.selector);
         receipts.releaseReceipt(keccak256("never-recorded"));
     }
@@ -379,8 +379,7 @@ contract ConsensusRecommendationReceiptTest is SafeGovernance {
         assertTrue(sawRecorded, "ReceiptRecorded must be emitted");
 
         vm.recordLogs();
-        vm.prank(address(timelock));
-        receipts.releaseReceipt(id);
+        _release(id);
         Vm.Log[] memory releaseLogs = vm.getRecordedLogs();
         bool sawReleased;
         for (uint256 i = 0; i < releaseLogs.length; i++) {
@@ -393,7 +392,7 @@ contract ConsensusRecommendationReceiptTest is SafeGovernance {
 
     // ─── AC1 / Test plan 1: signalling-only boundary ─────────────────────────
 
-    /// @dev AC1, mirroring `InvestmentCommitteePolicyTest.testSignallingOnlyBoundary`.
+    /// @dev AC1, the signalling-only boundary of the receipt contract.
     ///      No path from any receipt entrypoint reaches `setWeights` or moves
     ///      value: the contract has no `receive`/`fallback`, no ERC-20 surface,
     ///      no router or governance selector, and its only state effect is an
@@ -449,8 +448,7 @@ contract ConsensusRecommendationReceiptTest is SafeGovernance {
         uint256 vaultAssetsBefore = usdc.balanceOf(address(vault));
         bytes32 id = keccak256("r");
         _record(id, keccak256("d"));
-        vm.prank(address(timelock));
-        receipts.releaseReceipt(id);
+        _release(id);
 
         assertEq(address(receipts).balance, 0, "receipt contract balance must stay zero");
         assertEq(usdc.balanceOf(address(receipts)), 0, "receipt contract must hold no USDC");

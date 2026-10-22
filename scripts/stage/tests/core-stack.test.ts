@@ -408,7 +408,7 @@ describe("record", () => {
   const SCHEMA = JSON.parse(readFileSync(join(CORE_ROOT, "schemas/fusion-stage-record.schema.json"), "utf8"));
   const good = () => ({
     chain_id: 918453, run_id: "r1", core_tag: "t", core_sha: SHA, generated_at: "2026-10-02T00:00:00Z", min_delay: 60, deployer: a(1),
-    addresses: { gateway: a(2), vault: a(3), registry: a(4), router: a(5), governance: a(6), consensus_receipt: a(7), ic_policy: a(8), timelock: a(9), safe: a(10), emergency: a(11) },
+    addresses: { gateway: a(2), vault: a(3), registry: a(4), router: a(5), governance: a(6), consensus_receipt: a(7), timelock: a(9), safe: a(10), emergency: a(11) },
     code_hashes: { gateway: h(12) },
     vault_addresses: { rmUSDC: a(3), rmPROTO: a(13), rmAGENT: a(14), rmRWA: a(15) },
     ephemeral: {

@@ -5,7 +5,7 @@ description: "Test helper (issue 1808): every proxied core contract is deployed 
 
 # CoreProxies
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/helpers/CoreProxies.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/helpers/CoreProxies.sol)
 
 **Title:** CoreProxies
 
@@ -363,35 +363,12 @@ function robotMoneyGateway(
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `RobotMoneyGateway` |  |
 
-<a id="investmentcommitteepolicy-address-address"></a>
-
-### investmentCommitteePolicy
-
-```solidity
-function investmentCommitteePolicy(address admin, address gateway)
-        internal
-        returns (InvestmentCommitteePolicy);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| admin | `address` |  |
-| gateway | `address` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `InvestmentCommitteePolicy` |  |
-
-<a id="consensusrecommendationreceipt-address-address-address"></a>
+<a id="consensusrecommendationreceipt-address"></a>
 
 ### consensusRecommendationReceipt
 
 ```solidity
-function consensusRecommendationReceipt(address admin, address gateway, address icPolicy)
+function consensusRecommendationReceipt(address admin)
         internal
         returns (ConsensusRecommendationReceipt);
 ```
@@ -401,8 +378,6 @@ function consensusRecommendationReceipt(address admin, address gateway, address 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | admin | `address` |  |
-| gateway | `address` |  |
-| icPolicy | `address` |  |
 
 **Returns**
 

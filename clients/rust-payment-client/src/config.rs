@@ -114,11 +114,6 @@ pub struct Config {
     /// long chain. Set it to the block the gateway was deployed in.
     #[serde(default)]
     pub gateway_from_block: Option<u64>,
-    /// `InvestmentCommitteePolicy` contract address (0x-prefixed hex). Optional —
-    /// only required for `rmpc committee vote-submit`.
-    /// When absent that subcommand exits with `EXIT_STARTUP_FAIL`.
-    #[serde(default)]
-    pub ic_policy_address: Option<String>,
     /// The address this agent's deposits must mint shares to (0x-prefixed
     /// hex). Optional. When set, every deposit and withdraw preflight
     /// refuses with `ErrAgentBindingMismatch` unless

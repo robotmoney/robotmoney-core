@@ -1,0 +1,292 @@
+---
+title: "DeployTimelockReceiptTest"
+description: "Issue #1319: `DeployTimelock.s.sol` hands ADMIN_ROLE and DEFAULT_ADMIN_ROLE on the ConsensusRecommendationReceipt to the timelock (INV-3). Issue 1888: RouterGovernance holds only the narrow RECEIPT_RELEASER_ROLE, never the receipt ADMIN_ROLE. These tests exercise `runInProcessWithReceipt` and prove: (1) the timelock ends up holding both roles, (2) the real deployer identity loses both roles, (3) the timelock is the ONLY ADMIN_ROLE holder and governance holds the release role, (4) the ceremony fails loudly when the configured receipt admin does not match who is actually authorized to run the handover, and (5) the handover refuses a governance that still holds the receipt ADMIN_ROLE."
+---
+
+# DeployTimelockReceiptTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/DeployTimelockReceipt.t.sol)
+
+**Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
+
+**Title:** DeployTimelockReceiptTest
+
+Issue #1319: `DeployTimelock.s.sol` hands ADMIN_ROLE and DEFAULT_ADMIN_ROLE on the
+ConsensusRecommendationReceipt to the timelock (INV-3). Issue 1888: RouterGovernance holds
+only the narrow RECEIPT_RELEASER_ROLE, never the receipt ADMIN_ROLE. These tests exercise
+`runInProcessWithReceipt` and prove: (1) the timelock ends up holding both roles, (2) the
+real deployer identity loses both roles, (3) the timelock is the ONLY ADMIN_ROLE holder
+and governance holds the release role, (4) the ceremony fails loudly when the configured
+receipt admin does not match who is actually authorized to run the handover, and (5) the
+handover refuses a governance that still holds the receipt ADMIN_ROLE.
+
+In-process identity note (mirrors contracts/test/fv/DeployAssertions.t.sol): when a test
+calls `script.runInProcessWithReceipt(..., _fixtureSpec())` directly, `msg.sender` INSIDE
+the script's own code is `address(this)` (the test contract). When the script calls OUT to
+a target contract, that target sees `address(script)`. So the receipt is constructed with
+`address(this)` as its admin AND separately grants `address(script)` the same roles.
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### DEFAULT_ADMIN_ROLE
+
+```solidity
+bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
+```
+
+### MIN_DELAY
+
+```solidity
+uint256 public constant MIN_DELAY = 2 days;
+```
+
+## State Variables
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("pauser");
+```
+
+### safe
+
+```solidity
+address internal safe;
+```
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("emergency");
+```
+
+### independentReceiptAdmin
+
+<i>
+
+A genuinely independent receipt admin (issue #1319 amendment: the
+receipt's admin is RECEIPT_ADMIN_ADDRESS, "not necessarily the
+deployer"). Used only in the negative/loud-failure test.
+
+</i>
+
+```solidity
+address internal independentReceiptAdmin = makeAddr("independentReceiptAdmin");
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### vault
+
+```solidity
+RobotMoneyVault internal vault;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### governance
+
+```solidity
+RouterGovernance internal governance;
+```
+
+### script
+
+```solidity
+DeployTimelock internal script;
+```
+
+### d
+
+```solidity
+DeployTimelock.Deployed internal d;
+```
+
+### runAsDeployer
+
+<i>
+
+When set, the ceremony runs with address(script) as `msg.sender`, which is what a
+real `forge script --broadcast` run is: one address both sends the grants and is
+the deployer the script revokes. The role-holder tests need it, because only then
+does the revoke target the address that actually holds the roles.
+
+</i>
+
+```solidity
+bool internal runAsDeployer;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_wiregovernance-address"></a>
+
+### _wireGovernance
+
+<i>
+
+Build RouterGovernance against `receipts_` and mirror DeployRouterGovernance's
+router ADMIN_ROLE and WEIGHT_SETTER_ROLE grants (R7), then hand every router
+role to address(script).
+
+</i>
+
+```solidity
+function _wireGovernance(address receipts_) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receipts_ | `address` |  |
+
+<a id="_deployreceiptandrun-address-address"></a>
+
+### _deployReceiptAndRun
+
+<i>
+
+Deploys the receipt contract with the given constructor admin and
+runs the full ceremony through `runInProcessWithReceipt`.
+
+</i>
+
+```solidity
+function _deployReceiptAndRun(address receiptConstructedAdmin, address receiptAdminArg)
+        internal
+        returns (ConsensusRecommendationReceipt receipts);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiptConstructedAdmin | `address` |  |
+| receiptAdminArg | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receipts | `ConsensusRecommendationReceipt` |  |
+
+<a id="test_timelock_holdsbothrolesonreceipt"></a>
+
+### test_timelock_holdsBothRolesOnReceipt
+
+```solidity
+function test_timelock_holdsBothRolesOnReceipt() public;
+```
+
+<a id="test_deployer_nolongerhasrolesonreceipt"></a>
+
+### test_deployer_noLongerHasRolesOnReceipt
+
+```solidity
+function test_deployer_noLongerHasRolesOnReceipt() public;
+```
+
+<a id="test_receiptadminexplicit_handoversucceeds"></a>
+
+### test_receiptAdminExplicit_handoverSucceeds
+
+```solidity
+function test_receiptAdminExplicit_handoverSucceeds() public;
+```
+
+<a id="_becomescriptdeployer"></a>
+
+### _becomeScriptDeployer
+
+<i>
+
+Makes the deployer identity match a real broadcast: address(script) is the only deployer.
+
+</i>
+
+```solidity
+function _becomeScriptDeployer() internal;
+```
+
+<a id="test_timelockistheonlyadminroleholder_onthereceipt"></a>
+
+### test_timelockIsTheOnlyAdminRoleHolder_onTheReceipt
+
+```solidity
+function test_timelockIsTheOnlyAdminRoleHolder_onTheReceipt() public;
+```
+
+<a id="test_handoverrefusesgovernanceholdingreceiptadminrole"></a>
+
+### test_handoverRefusesGovernanceHoldingReceiptAdminRole
+
+<i>
+
+A deploy whose governance still holds the receipt ADMIN_ROLE (the v0.5.0 shape) is
+refused by the handover's R7 check.
+
+</i>
+
+```solidity
+function test_handoverRefusesGovernanceHoldingReceiptAdminRole() public;
+```
+
+<a id="test_timelockistheonlyadminroleholder_onthefivecorecontracts"></a>
+
+### test_timelockIsTheOnlyAdminRoleHolder_onTheFiveCoreContracts
+
+```solidity
+function test_timelockIsTheOnlyAdminRoleHolder_onTheFiveCoreContracts() public;
+```
+
+<a id="test_zeroreceiptaddress_skipshandover_fivecorestillworks"></a>
+
+### test_zeroReceiptAddress_skipsHandover_fiveCoreStillWorks
+
+```solidity
+function test_zeroReceiptAddress_skipsHandover_fiveCoreStillWorks() public;
+```
+
+<a id="test_receiptadmin_notauthorized_revertsloudly"></a>
+
+### test_receiptAdmin_notAuthorized_revertsLoudly
+
+```solidity
+function test_receiptAdmin_notAuthorized_revertsLoudly() public;
+```
+

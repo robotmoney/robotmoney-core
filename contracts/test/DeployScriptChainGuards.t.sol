@@ -12,7 +12,9 @@ import {DeployTimelock} from "../script/DeployTimelock.s.sol";
 import {DeployPortfolioRouter} from "../script/DeployPortfolioRouter.s.sol";
 import {DeployVaultRegistry} from "../script/DeployVaultRegistry.s.sol";
 import {DeployRouterGovernance} from "../script/DeployRouterGovernance.s.sol";
-import {DeployInvestmentCommitteePolicy} from "../script/DeployInvestmentCommitteePolicy.s.sol";
+import {
+    DeployConsensusRecommendationReceipt
+} from "../script/DeployConsensusRecommendationReceipt.s.sol";
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
 import {DeployAgentTokenVault} from "../script/DeployAgentTokenVault.s.sol";
 import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
@@ -75,8 +77,8 @@ contract DeployScriptChainGuardsTest is Test {
         s.run();
     }
 
-    function test_icPolicy_run_requiresExpectedChainOnBase() public {
-        DeployInvestmentCommitteePolicy s = new DeployInvestmentCommitteePolicy();
+    function test_receipt_run_requiresExpectedChainOnBase() public {
+        DeployConsensusRecommendationReceipt s = new DeployConsensusRecommendationReceipt();
         vm.expectRevert(bytes(MSG));
         s.run();
     }

@@ -47,8 +47,8 @@
 # its --base-url seam, so the production code path is the one under test.
 #
 # Output contract: one `PASS: ...` / `FAIL: ...` line per assertion plus a final
-# RMPC_INSTALL_SELFTEST_EXECUTED=<n>. plugins/robotmoney-swarm/tests/run-tests.sh
-# folds these into its own counters; the script is also runnable on its own.
+# RMPC_INSTALL_SELFTEST_EXECUTED=<n>. suite-23-skill-url-monitor-selftest.yml
+# runs it and re-checks the count; the script is also runnable on its own.
 
 # ERREXIT IS DELIBERATELY OFF, ONCE, FOR THE WHOLE FILE.
 # Every case here runs a command that is EXPECTED to fail (a tampered archive, a

@@ -173,10 +173,6 @@ services:
       # the explorer's contract list. It is not watched for logs: issue 1698 deleted its voting,
       # so it emits no proposal or vote events. Weight changes are indexed from the router.
       INDEXER_ROUTER_GOVERNANCE: ${INDEXER_ROUTER_GOVERNANCE:-}
-      # Security round 1: INDEXER_INVESTMENT_COMMITTEE puts the InvestmentCommitteePolicy proxy in the
-      # watched set: its committee events, and its Upgraded / UpgradesFrozen events that the watchdog
-      # pages on (admin_events, contract_kind 'proxy'). Without this mapping an exported value never reached the container.
-      INDEXER_INVESTMENT_COMMITTEE: ${INDEXER_INVESTMENT_COMMITTEE:-}
       # Issue 1731: INDEXER_TIMELOCK and INDEXER_SAFE put the TimelockController and the Safe in the
       # watched set. The explorer then lists both in /v1/chains/{id}/contracts and serves their
       # CallScheduled, CallExecuted, Cancelled, MinDelayChange and Safe execution and owner events at

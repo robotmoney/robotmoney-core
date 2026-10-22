@@ -2,7 +2,7 @@
 //   - Only the names in SPEC are accepted. An unknown name is refused.
 //   - YES and CONFIRM never come from the sheet. They come from the caller environment only (callerInputs).
 //   - Every required name has no default. A missing name is an error, never a silent skip.
-//   - Values that a stage produces (REGISTRY_ADDRESS, IC_POLICY_ADDRESS, DEPLOYMENT_OUT ...) are refused: they come from manifests.
+//   - Values that a stage produces (REGISTRY_ADDRESS, CONSENSUS_RECEIPT_ADDRESS, DEPLOYMENT_OUT ...) are refused: they come from manifests.
 // Plan: one-deployment-scheme principles 16, 18, 19, 20 (devops issue 53); issue devops 55 (S6).
 import { USDC_ADDRESS } from "./usdc.ts";
 import { STAGE13_UNPAUSE_VAULTS } from "./vault-rules.ts";
@@ -88,7 +88,7 @@ const REFUSED: [RegExp, string][] = [
   [/^(REHEARSAL|ALLOW_SHORT_TIMELOCK_DELAY|SKIP_ROUTER_ADMIN_GRANT|BASKET_VAULT_AUDIT_COMPLETE|MOCK_ALL|CONFIG_PATH)$/, "this switch is deleted: one deployment scheme, floors are keyed to the chain id"],
   [/^(RPC|RPC_URL|ETH_RPC_URL|RPC_ENDPOINT)$/, "the RPC is a CLI argument, never a sheet value"],
   [/^(PRIVATE_KEY|ETH_PRIVATE_KEY|MNEMONIC|ETH_MNEMONIC|ETH_PASSWORD|CHAIN_SIGNER_KEYSTORE|CHAIN_SIGNER_PASSWORD|[A-Z_]*(PRIVATE_KEY|PASSWORD|PASSPHRASE|SECRET|MNEMONIC)[A-Z_]*)$/, "a secret never goes in a sheet: use the credential engine or an encrypted keystore with a typed passphrase"],
-  [/^(SAFE_ADDRESS|REGISTRY_ADDRESS|ROUTER_ADDRESS|GATEWAY_ADDRESS|GOVERNANCE_ADDRESS|IC_POLICY_ADDRESS|CONSENSUS_RECEIPT_ADDRESS|VAULT_ADDRESS|VAULT_ADDRESSES|TIMELOCK_ADDRESS|AGENT_ADDRESSES|DEPLOYMENT_OUT|DEPLOY_SHA)$/, "this value is produced by a stage or given as an argument: it is read from manifests, never typed"],
+  [/^(SAFE_ADDRESS|REGISTRY_ADDRESS|ROUTER_ADDRESS|GATEWAY_ADDRESS|GOVERNANCE_ADDRESS|CONSENSUS_RECEIPT_ADDRESS|VAULT_ADDRESS|VAULT_ADDRESSES|TIMELOCK_ADDRESS|AGENT_ADDRESSES|DEPLOYMENT_OUT|DEPLOY_SHA)$/, "this value is produced by a stage or given as an argument: it is read from manifests, never typed"],
   [/^(AGENT_ADDRESS|AGENT_VALID_UNTIL|AGENT_MAX_PER_PAYMENT|AGENT_MAX_PER_WINDOW|AGENT_MAX_WITHDRAW_PER_PAYMENT|AGENT_MAX_WITHDRAW_PER_WINDOW)$/, "the deploy authorizes no agent: an agent belongs to a depositor, who authorizes it through commitAuthorization and revealAuthorization (architecture 5.2 and 6.3)"],
   [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the four vault unpauses only. Vault setters, eligibility and router default weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VAULT_<KEY>_*). Router weights change on demand through the apply-receipt row (--row apply-receipt), never through a GOVERN_ sheet name"],
   [/^(VOTER_ADDRESSES|VOTER_POWER|QUORUM_THRESHOLD|VOTING_PERIOD|EXECUTION_DELAY)$/, "there is no voting by anyone: RouterGovernance has no voter, voting power, quorum, voting period or execution delay (issue 1698). Router weights change only when the Safe applies a consensus receipt through the timelock (govern row apply-receipt). Delete the line"],
@@ -272,7 +272,7 @@ export function parseSheet(text: string, opts: ParseSheetOpts = {}): Sheet {
   const safeThreshold = asSafeInt("SAFE_THRESHOLD", v.SAFE_THRESHOLD!);
   if (v.SAFE_VERSION !== undefined && v.SAFE_VERSION !== "1.4.1") throw err(`SAFE_VERSION must be 1.4.1 (the only supported version), got '${v.SAFE_VERSION}'`);
 
-  // The receipt contract's admin roles go to RECEIPT_ADMIN_ADDRESS at the ic-policy stage and the timelock stage revokes them with the
+  // The receipt contract's admin roles go to RECEIPT_ADMIN_ADDRESS at the receipt stage and the timelock stage revokes them with the
   // deployer's transaction (core: "the deployer until DeployTimelock hands it over"). Any other address leaves the timelock stage reverting
   // with AccessControlUnauthorizedAccount (found in the first Twin rehearsal), after the vaults are already deployed.
   if (lc(receiptAdmin) !== lc(admin)) throw err(`RECEIPT_ADMIN_ADDRESS ${receiptAdmin} must equal ADMIN_ADDRESS ${admin}: the deployer holds the receipt roles until the timelock stage revokes them`);

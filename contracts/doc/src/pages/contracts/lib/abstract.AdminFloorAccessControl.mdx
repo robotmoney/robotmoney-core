@@ -5,7 +5,7 @@ description: "`AccessControlEnumerable` with a \"last-admin floor\": the final h
 
 # AdminFloorAccessControl
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/lib/AdminFloorAccessControl.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/05f46fe9fda41bd67b759a9c0812478a2a67a935/contracts/lib/AdminFloorAccessControl.sol)
 
 **Inherits:** AccessControlEnumerableUpgradeable
 
@@ -16,9 +16,9 @@ holder of the contract's `ADMIN_ROLE` cannot be revoked or
 renounced down to zero holders.
 
 `ADMIN_ROLE` is self-administered on RouterGovernance,
-PortfolioRouter and VaultRegistry. On InvestmentCommitteePolicy and
-ConsensusRecommendationReceipt `DEFAULT_ADMIN_ROLE` administers it,
-so those two contracts also floor `DEFAULT_ADMIN_ROLE` (#1447).
+PortfolioRouter and VaultRegistry. On ConsensusRecommendationReceipt
+`DEFAULT_ADMIN_ROLE` administers it, so that contract also floors
+`DEFAULT_ADMIN_ROLE` (#1447).
 
 Finding L-10 (2026-06-18 holistic review): the floored contracts use a
 single `ADMIN_ROLE` for configuration. OZ's

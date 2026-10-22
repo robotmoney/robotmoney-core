@@ -3,6 +3,23 @@
 # Idempotency is the on-chain (receipt_id, payload_digest) pair: before and after
 # every submission attempt we accept success only when the existing receipt has
 # the same digest. A conflicting digest is fatal and is never overwritten.
+#
+# Issue 1888: the receipt is recorded DIRECTLY on the receipt contract by the
+# submitter SAFE, through publish-contracts' `record-receipt` verb. This worker
+# never calls the removed rmpc receipt submit (rmpc has no write path for receipts). The
+# order is fixed:
+#   1. fetch (or copy) the payload bytes ONCE into a work file,
+#   2. `rmpc receipt verify --receipt-file` those exact bytes: an invalid
+#      signature, a refusal reported as ok:false, or an unverified analyst stops
+#      the worker BEFORE any submission,
+#   3. hand THOSE bytes, with the digest and id rmpc derived from them, to the
+#      Safe recording path (--payload FILE). record-receipt recomputes the
+#      digest and id from the bytes and refuses a mismatch before it builds a
+#      signer, so a different digest cannot be recorded by this path.
+# Required: FUSION_RECORD_CMD, the record command prefix, for example
+#   `bun publish-contracts/src/cli.ts`. Optional: FUSION_RECORD_ARGS, the run's
+#   flags for it (--chain, --rpc, --sheet, --signer, --environment, --core-sha,
+#   --submitter, --owner-signer ...), split on spaces.
 set -euo pipefail
 
 FUSION_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/lib" && pwd)"
@@ -23,6 +40,7 @@ alert_resolve() { fusion_alert_resolve "$COMPONENT" "$@"; }
 : "${FUSION_RECEIPT_URL:?set FUSION_RECEIPT_URL}"
 : "${FUSION_RECEIPT_ADDRESS:?set FUSION_RECEIPT_ADDRESS}"
 : "${FUSION_RPC_URL:?set FUSION_RPC_URL}"
+: "${FUSION_RECORD_CMD:?set FUSION_RECORD_CMD (the command prefix that runs the record-receipt verb for the submitter Safe)}"
 
 RMPC_BIN="${RMPC_BIN:-rmpc}"
 CAST_BIN="${CAST_BIN:-cast}"
@@ -45,19 +63,34 @@ done
 (( READ_RETRIES > 0 && POST_SUBMIT_READ_RETRIES > 0 )) || fail "read retry counts must be > 0"
 
 RPC_ERR="$(mktemp)"
-trap 'rm -f "$RPC_ERR"' EXIT
+WORK="$(mktemp -d)"
+trap 'rm -rf "$RPC_ERR" "$WORK"' EXIT
 
-verify_args=(--receipt-url "$FUSION_RECEIPT_URL")
-submit_args=(--receipt-url "$FUSION_RECEIPT_URL")
+# The ONE copy of the bytes: what is verified below is what is recorded.
+PAYLOAD_FILE="$WORK/payload.bytes"
 if [[ -n "${FUSION_RECEIPT_FILE:-}" ]]; then
-  verify_args=(--receipt-file "$FUSION_RECEIPT_FILE")
-  submit_args+=(--receipt-file "$FUSION_RECEIPT_FILE")
+  cp "$FUSION_RECEIPT_FILE" "$PAYLOAD_FILE" || fail "cannot read FUSION_RECEIPT_FILE; no submission attempted"
+else
+  command -v curl >/dev/null || fail "curl is required to fetch the receipt bytes"
+  curl -fsS --max-time 60 -o "$PAYLOAD_FILE" "$FUSION_RECEIPT_URL" \
+    || fail "could not fetch the receipt bytes from $FUSION_RECEIPT_URL; no submission attempted"
 fi
+[[ -s "$PAYLOAD_FILE" ]] || fail "the receipt bytes are empty; no submission attempted"
 
-verified="$("$RMPC_BIN" receipt -c "$FUSION_RMPC_CONFIG" verify "${verify_args[@]}")" \
+verified="$("$RMPC_BIN" receipt -c "$FUSION_RMPC_CONFIG" verify --receipt-file "$PAYLOAD_FILE")" \
   || fail "receipt verification failed; no submission attempted"
-receipt_id="$(jq -er '.receipt_id' <<<"$verified")"
-payload_digest="$(jq -er '.payload_digest' <<<"$verified")"
+# A refusal can be reported as ok:false with exit 0, and a signature list that is
+# empty or holds an unverified analyst is not a verified receipt: stop here.
+jq -e '.ok == true and ((.analyst_signatures // []) | length > 0) and all((.analyst_signatures // [])[]; .verified == true)' \
+  <<<"$verified" >/dev/null 2>&1 \
+  || fail "receipt verification did not confirm every analyst signature; no submission attempted: $(tr -d '\n' <<<"$verified" | head -c 300)"
+receipt_id="$(jq -er '.receipt_id' <<<"$verified")" \
+  || fail "receipt verification printed no receipt_id; no submission attempted"
+payload_digest="$(jq -er '.payload_digest' <<<"$verified")" \
+  || fail "receipt verification printed no payload_digest; no submission attempted"
+
+read -r -a RECORD_CMD <<<"$FUSION_RECORD_CMD"
+read -r -a RECORD_ARGS <<<"${FUSION_RECORD_ARGS:-}"
 
 # Read the chain once and classify the answer into exactly one of three states,
 # because conflating two of them is how this worker used to misbehave:
@@ -164,8 +197,11 @@ $FUSION_RPC_URL; anchor state for $receipt_id is unknown"
 
   attempt=$((attempt + 1))
   echo "fusion-submit-worker: attempt $attempt receipt_id=$receipt_id" >&2
-  if "$RMPC_BIN" receipt -c "$FUSION_RMPC_CONFIG" submit \
-      "${submit_args[@]}" --expected-digest "$payload_digest"; then
+  if "${RECORD_CMD[@]}" record-receipt ${RECORD_ARGS[@]+"${RECORD_ARGS[@]}"} \
+      --receipt-id "$receipt_id" --payload-digest "$payload_digest" \
+      --payload-uri "$FUSION_RECEIPT_URL" --payload "$PAYLOAD_FILE"; then
+    # The Safe path reports success only after ExecutionSuccess, ReceiptRecorded and
+    # its own readback; this loop still re-reads the chain independently.
     # Confirmation gets its own bounded read loop: "I could not read the chain"
     # must never be reported as "the anchor is missing" right after a success.
     read_anchor_state "$POST_SUBMIT_READ_RETRIES" || \

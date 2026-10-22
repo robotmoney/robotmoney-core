@@ -14,7 +14,7 @@ import { adoptedFromRunManifest, buildCountsJson, checkCountsJson } from "../src
 import { freezeFromAdoptedRun } from "../scripts/freeze-counts.ts";
 import { getStageTable } from "../src/stages.ts";
 import { EXIT_CODES } from "../src/errors.ts";
-import { REPO, tmp } from "./fixtures.ts";
+import { REPO, refFrozenPath, tmp } from "./fixtures.ts";
 import { world } from "./harness.ts";
 
 const SHA = "c".repeat(40);
@@ -24,7 +24,7 @@ const kind = async (f: () => unknown): Promise<string | undefined> => { try { aw
 const msg = async (f: () => unknown): Promise<string> => { try { await f(); } catch (e) { return (e as Error).message; } return ""; };
 
 // The frozen counts of the first real release (9a768bb9), read from the repo: the reference a rebuilt baseline must equal.
-const REF_PATH = join(REPO, "deployments", "frozen-counts", "9a768bb9cc66d4485470a99a068ba7477604501a.json");
+const REF_PATH = refFrozenPath(); // the pinned first-release counts, `ic-policy` keyed as the table's `receipt` (issue 1888)
 const REF = JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>;
 
 // Build artifacts and what the chain holds, derived with the code under test's own inputs but compared with hand-built values below.

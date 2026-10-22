@@ -23,7 +23,6 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
-import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {
     IConsensusRecommendationReceipt
@@ -42,7 +41,6 @@ import {
     VaultRegistryV2,
     PortfolioRouterV2,
     RobotMoneyGatewayV2,
-    InvestmentCommitteePolicyV2,
     ConsensusRecommendationReceiptV2,
     RouterGovernanceV2,
     VaultRegistryV2Reinit,
@@ -55,7 +53,7 @@ interface IUpgradeMarker {
     function upgradeMarker() external view returns (uint256);
 }
 
-/// @notice Issue 1808: the ten proxied core contracts, their one upgrade authority (the Safe-controlled
+/// @notice Issue 1808: the nine proxied core contracts, their one upgrade authority (the Safe-controlled
 ///         timelock) and the one-way, target-bound freeze. Every governed call here goes through a
 ///         real SafeL2 1.4.1 (2-of-3) and a real `TimelockController` with the production shape.
 ///         The populated v1 -> v2 upgrade of the deployed stack on the Base fork is
@@ -64,7 +62,7 @@ contract GovernedUpgradeTest is SafeGovernance {
     using stdJson for string;
 
     uint256 internal constant DELAY = 2 days;
-    uint256 internal constant N = 10;
+    uint256 internal constant N = 9;
     uint256 internal constant CAP = 1_000_000e6;
 
     /// @dev keccak256(abi.encode(uint256(keccak256("openzeppelin.storage.Initializable")) - 1)) & ~0xff
@@ -94,7 +92,6 @@ contract GovernedUpgradeTest is SafeGovernance {
     VaultRegistry internal registry;
     PortfolioRouter internal router;
     RobotMoneyGateway internal gateway;
-    InvestmentCommitteePolicy internal ic;
     ConsensusRecommendationReceipt internal receipts;
     RouterGovernance internal governance;
 
@@ -121,12 +118,11 @@ contract GovernedUpgradeTest is SafeGovernance {
         registry = CoreProxies.vaultRegistry(admin);
         router = CoreProxies.portfolioRouter(address(usdc), address(registry), admin);
         gateway = CoreProxies.robotMoneyGateway(usdc, vault, admin, pauser, address(router));
-        ic = CoreProxies.investmentCommitteePolicy(admin, address(gateway));
-        receipts = CoreProxies.consensusRecommendationReceipt(admin, address(gateway), address(ic));
+        receipts = CoreProxies.consensusRecommendationReceipt(admin);
         governance = CoreProxies.routerGovernance(address(router), address(receipts), admin);
     }
 
-    // ─── Tables over the ten contracts ─────────────────────────────────────────
+    // ─── Tables over the nine contracts ─────────────────────────────────────────
 
     function _proxies() internal view returns (address[N] memory p) {
         p = [
@@ -137,7 +133,6 @@ contract GovernedUpgradeTest is SafeGovernance {
             address(registry),
             address(router),
             address(gateway),
-            address(ic),
             address(receipts),
             address(governance)
         ];
@@ -152,7 +147,6 @@ contract GovernedUpgradeTest is SafeGovernance {
             "VaultRegistry",
             "PortfolioRouter",
             "RobotMoneyGateway",
-            "InvestmentCommitteePolicy",
             "ConsensusRecommendationReceipt",
             "RouterGovernance"
         ];
@@ -193,16 +187,7 @@ contract GovernedUpgradeTest is SafeGovernance {
             );
         }
         if (i == 7) {
-            return
-                abi.encodeCall(
-                    InvestmentCommitteePolicy.initialize, (admin, address(gateway), t, m)
-                );
-        }
-        if (i == 8) {
-            return abi.encodeCall(
-                ConsensusRecommendationReceipt.initialize,
-                (admin, address(gateway), address(ic), t, m)
-            );
+            return abi.encodeCall(ConsensusRecommendationReceipt.initialize, (admin, t, m));
         }
         return abi.encodeCall(
             RouterGovernance.initialize, (address(router), address(receipts), admin, t, m)
@@ -218,8 +203,7 @@ contract GovernedUpgradeTest is SafeGovernance {
         if (i == 4) return address(new VaultRegistry());
         if (i == 5) return address(new PortfolioRouter());
         if (i == 6) return address(new RobotMoneyGateway());
-        if (i == 7) return address(new InvestmentCommitteePolicy());
-        if (i == 8) return address(new ConsensusRecommendationReceipt());
+        if (i == 7) return address(new ConsensusRecommendationReceipt());
         return address(new RouterGovernance());
     }
 
@@ -232,8 +216,7 @@ contract GovernedUpgradeTest is SafeGovernance {
         if (i == 4) return address(new VaultRegistryV2());
         if (i == 5) return address(new PortfolioRouterV2());
         if (i == 6) return address(new RobotMoneyGatewayV2());
-        if (i == 7) return address(new InvestmentCommitteePolicyV2());
-        if (i == 8) return address(new ConsensusRecommendationReceiptV2());
+        if (i == 7) return address(new ConsensusRecommendationReceiptV2());
         return address(new RouterGovernanceV2());
     }
 
@@ -303,8 +286,8 @@ contract GovernedUpgradeTest is SafeGovernance {
         assertEq(gateway.vault(), address(vault));
         assertEq(gateway.router(), address(router));
         assertTrue(gateway.hasRole(gateway.DEPOSIT_PAUSER_ROLE(), pauser));
-        assertEq(ic.gateway(), address(gateway));
-        assertEq(receipts.icPolicy(), address(ic));
+        assertEq(receipts.gateway(), address(0), "retired receipt gateway slot");
+        assertEq(receipts.icPolicy(), address(0), "retired receipt IC slot");
         assertEq(address(governance.receipts()), address(receipts));
         address[N] memory p = _proxies();
         for (uint256 i = 0; i < N; i++) {
@@ -588,12 +571,10 @@ contract GovernedUpgradeTest is SafeGovernance {
                 allowedSourceVaults: none
             })
         );
-        ic.registerAgent(submitter, "submitter");
+        receipts.grantRole(receipts.RECEIPT_SUBMITTER_ROLE(), submitter);
         vm.stopPrank();
-        vm.prank(address(gateway));
-        receipts.recordReceipt(
-            submitter, keccak256("r1"), keccak256("bytes"), "https://x.invalid/r1"
-        );
+        vm.prank(submitter);
+        receipts.recordReceipt(keccak256("r1"), keccak256("bytes"), "https://x.invalid/r1");
         // An adapter position: rmUSDC routes the deposit into a no-yield test adapter.
         NoYieldTestAdapter adapter = new NoYieldTestAdapter(address(usdc), address(vault));
         vm.startPrank(admin);
@@ -613,7 +594,7 @@ contract GovernedUpgradeTest is SafeGovernance {
 
     /// @notice Every proxy goes v1 -> v2 through Safe -> timelock with its address, implementation
     ///         slot history and state intact: balances, allowances, roles, caps, fees, weights,
-    ///         gateway policies, IC agents and receipts read the same before and after, and the
+    ///         gateway policies, receipt submitters and receipts read the same before and after, and the
     ///         redeem path still pays.
     function test_upgradeEveryProxy_throughSafeAndTimelock_keepsState() public {
         _populate();
@@ -660,7 +641,7 @@ contract GovernedUpgradeTest is SafeGovernance {
         assertEq(receiverAfter, receiverBefore, "gateway policy");
         assertEq(gateway.agentOwner(agent), admin, "agent owner");
         assertTrue(gateway.hasRole(gateway.AGENT_ROLE(), agent), "agent role");
-        assertTrue(ic.hasRole(ic.COMMITTEE_AGENT_ROLE(), submitter), "committee agent");
+        assertTrue(receipts.hasRole(receipts.RECEIPT_SUBMITTER_ROLE(), submitter), "submitter");
         assertEq(receipts.receiptCount(), 1, "receipt");
         IConsensusRecommendationReceipt.Receipt memory r = receipts.getReceiptById(keccak256("r1"));
         assertEq(r.payloadDigest, keccak256("bytes"), "receipt digest");

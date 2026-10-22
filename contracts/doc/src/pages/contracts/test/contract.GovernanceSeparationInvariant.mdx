@@ -1,19 +1,19 @@
 ---
 title: "GovernanceSeparationInvariant"
-description: "Verifies the decision that the committee and the weight setter are separate bodies: no address may hold both `COMMITTEE_AGENT_ROLE` on the InvestmentCommitteePolicy and any weight authority, meaning `WEIGHT_SETTER_ROLE` or `ADMIN_ROLE` on `RouterGovernance`, or `WEIGHT_SETTER_ROLE` on the `PortfolioRouter`."
+description: "Verifies the decision that the committee and the weight setter are separate bodies: no address may hold both `RECEIPT_SUBMITTER_ROLE` on the ConsensusRecommendationReceipt and any weight authority, meaning `WEIGHT_SETTER_ROLE` or `ADMIN_ROLE` on `RouterGovernance`, or `WEIGHT_SETTER_ROLE` on the `PortfolioRouter`."
 ---
 
 # GovernanceSeparationInvariant
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/test/GovernanceSeparationInvariant.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/GovernanceSeparationInvariant.t.sol)
 
 **Inherits:** Test
 
 **Title:** GovernanceSeparationInvariant
 
 Verifies the decision that the committee and the weight setter are
-separate bodies: no address may hold both `COMMITTEE_AGENT_ROLE` on
-the InvestmentCommitteePolicy and any weight authority, meaning
+separate bodies: no address may hold both `RECEIPT_SUBMITTER_ROLE` on
+the ConsensusRecommendationReceipt and any weight authority, meaning
 `WEIGHT_SETTER_ROLE` or `ADMIN_ROLE` on `RouterGovernance`, or
 `WEIGHT_SETTER_ROLE` on the `PortfolioRouter`.
 
@@ -80,7 +80,7 @@ address internal intruder = makeAddr("intruder");
 ### ic
 
 ```solidity
-InvestmentCommitteePolicy internal ic;
+ConsensusRecommendationReceipt internal ic;
 ```
 
 ### router
@@ -125,7 +125,7 @@ function _swept() internal view returns (address[6] memory);
 
 <i>
 
-True iff no swept address holds both COMMITTEE_AGENT_ROLE and any
+True iff no swept address holds both RECEIPT_SUBMITTER_ROLE and any
 weight authority.
 
 </i>
@@ -166,7 +166,7 @@ function _hasWeightAuthority(address account) internal view returns (bool);
 
 <i>
 
-True iff `account` has COMMITTEE_AGENT_ROLE AND weight authority.
+True iff `account` has RECEIPT_SUBMITTER_ROLE AND weight authority.
 
 </i>
 
@@ -211,7 +211,7 @@ function test_weightSetterIsNotACommitteeAgent() public view;
 
 ### test_committeeHoldersAreRecognisedByPolicy
 
-The committee holders are recognised by the policy.
+The committee holders are recognised by the receipt contract.
 
 ```solidity
 function test_committeeHoldersAreRecognisedByPolicy() public view;
@@ -231,7 +231,7 @@ function test_separationInvariantHolds() public view;
 
 ### test_invariantFlagsCommitteeAgentWithWeightAuthority
 
-A committee agent granted governance ADMIN_ROLE is flagged.
+A receipt submitter granted governance ADMIN_ROLE is flagged.
 
 ```solidity
 function test_invariantFlagsCommitteeAgentWithWeightAuthority() public;
@@ -241,7 +241,7 @@ function test_invariantFlagsCommitteeAgentWithWeightAuthority() public;
 
 ### test_invariantFlagsWeightSetterGivenCommitteeRole
 
-The weight setter additionally granted COMMITTEE_AGENT_ROLE is flagged.
+The weight setter additionally granted RECEIPT_SUBMITTER_ROLE is flagged.
 
 ```solidity
 function test_invariantFlagsWeightSetterGivenCommitteeRole() public;

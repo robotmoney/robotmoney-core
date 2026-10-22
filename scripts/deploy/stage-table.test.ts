@@ -20,7 +20,7 @@ function scriptSource(path: string): string {
   return own + extra + upgrade + read(`${base}ExpectedChainGuard.sol`);
 }
 
-const EXPECTED = ["libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa", "timelock"];
+const EXPECTED = ["libs", "recorder", "vault", "registry", "router", "gateway", "receipt", "governance", "proto", "agent", "rwa", "timelock"];
 
 describe("stage-table.json", () => {
   test("version 1 with every stage, in deploy order", () => {
@@ -111,7 +111,7 @@ describe("stage-table.json", () => {
       registry: ["contracts/VaultRegistry.sol"],
       router: ["contracts/PortfolioRouter.sol"],
       gateway: ["contracts/gateway/RobotMoneyGateway.sol"],
-      "ic-policy": ["contracts/gateway/InvestmentCommitteePolicy.sol", "contracts/gateway/ConsensusRecommendationReceipt.sol"],
+      receipt: ["contracts/gateway/ConsensusRecommendationReceipt.sol"],
       governance: ["contracts/RouterGovernance.sol"],
       proto: ["contracts/vaults/BasketVault.sol"],
       agent: ["contracts/vaults/BasketVault.sol"],
@@ -127,7 +127,7 @@ describe("stage-table.json", () => {
     }
     // Every proxied core contract links GovernedUpgrade (issue 1808): every stage that deploys one lists it.
     expect((table.stages as any[]).filter((s) => s.create2Libraries?.includes("GovernedUpgrade")).map((s) => s.name)).toEqual([
-      "vault", "registry", "router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa",
+      "vault", "registry", "router", "gateway", "receipt", "governance", "proto", "agent", "rwa",
     ]);
   });
 
@@ -140,7 +140,7 @@ describe("stage-table.json", () => {
     for (const [k, name] of Object.entries(table.artifacts)) {
       expect([k, new RegExp(`contract ${name}\\b`).test(src)]).toEqual([k, true]);
     }
-    expect(Object.keys(table.artifacts).sort()).toEqual(["gateway", "governance", "icPolicy", "receipt", "recorder", "registry", "router", "timelock", "v4Adapter"]);
+    expect(Object.keys(table.artifacts).sort()).toEqual(["gateway", "governance", "receipt", "recorder", "registry", "router", "timelock", "v4Adapter"]);
   });
 
   test("stage 13 is the four vault unpauses only, with the deploy-time configuration set in stages 4 to 10 (issue 1520)", () => {
@@ -276,16 +276,16 @@ describe("stage-table.json", () => {
     test("every stage that reads UPGRADE_MODE lists its proxies, and the timelock stage, deployed last, lists none", () => {
       expect(u.modeEnv).toBe("UPGRADE_MODE");
       expect(proxyStages.map((s) => s.name)).toEqual(cli.stages.filter((s) => s.requiredEnv.includes("UPGRADE_MODE")).map((s) => s.name));
-      expect(proxyStages.map((s) => s.name)).toEqual(["vault", "registry", "router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa"]);
+      expect(proxyStages.map((s) => s.name)).toEqual(["vault", "registry", "router", "gateway", "receipt", "governance", "proto", "agent", "rwa"]);
       expect(cli.stages[cli.stages.length - 1]!.name).toBe(u.stage);
       expect(cli.stages.find((s) => s.name === u.stage)!.proxies).toBeUndefined();
     });
-    test("the ten proxied core contracts are exactly the contracts the storage-layout gate snapshots", () => {
+    test("the nine proxied core contracts are exactly the contracts the storage-layout gate snapshots", () => {
       const gate = read("scripts/ci/check-core-storage-layout.sh");
       const gated = [...gate.matchAll(/^\s*"(\w+):contracts\/[\w/]+\.sol"$/gm)].map((m) => m[1]!).sort();
       const listed = proxyStages.flatMap((s) => s.proxies!.map((p) => p.contract)).sort();
       expect(listed).toEqual(gated);
-      expect(listed).toHaveLength(10);
+      expect(listed).toHaveLength(9);
       for (const s of proxyStages) for (const p of s.proxies!) {
         expect(existsSync(join(ROOT, p.layout)), p.layout).toBe(true);
         expect(p.layout).toBe(`contracts/test/fixtures/storage-layout/${p.contract}.json`);

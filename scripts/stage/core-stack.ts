@@ -106,7 +106,7 @@ export const SAFE_SET: [string, string][] = [
 export const RECORD_REQUIRED_FIELDS = [
   ".chain_id", ".run_id", ".core_tag", ".core_sha", ".generated_at", ".min_delay", ".deployer",
   ".addresses.gateway", ".addresses.vault", ".addresses.registry", ".addresses.router", ".addresses.governance",
-  ".addresses.consensus_receipt", ".addresses.ic_policy", ".addresses.timelock", ".addresses.safe", ".addresses.emergency",
+  ".addresses.consensus_receipt", ".addresses.timelock", ".addresses.safe", ".addresses.emergency",
   ".code_hashes.gateway",
   ".vault_addresses.rmUSDC", ".vault_addresses.rmPROTO", ".vault_addresses.rmAGENT", ".vault_addresses.rmRWA",
   ".ephemeral.approver", ".ephemeral.emergency",
@@ -797,7 +797,7 @@ async function governancePreflight(s: Stack): Promise<void> {
   for (const [name, addr] of SAFE_SET) {
     if (!(await hasCode(s, addr))) throw unsatisfied("safe-set-missing", `canonical ${name} ${addr} has no code: this chain lacks the Safe v1.4.1 set`);
   }
-  for (const key of ["gateway_addr", "vault_addr", "registry_addr", "router_addr", "governance_addr", "ic_policy_addr", "consensus_receipt_addr", "safe_addr", "timelock_addr"]) {
+  for (const key of ["gateway_addr", "vault_addr", "registry_addr", "router_addr", "governance_addr", "consensus_receipt_addr", "safe_addr", "timelock_addr"]) {
     const a = s.sv(key);
     if (!ADDR.test(a)) throw unsatisfied("summary-malformed", `${key} is not address-shaped ('${a}')`);
     if (!(await hasCode(s, a))) throw unsatisfied("no-code", `${key} ${a} has no code on ${s.rpcUrl}: the summary is from an older boot`);
@@ -1032,7 +1032,7 @@ async function recordWrite(s: Stack): Promise<void> {
   const reg = m(manifestOf("registry"));
   const rtr = m(manifestOf("router"));
   const gov = m(manifestOf("governance"));
-  const ic = m(manifestOf("ic-policy"));
+  const receipt = m(manifestOf("receipt"));
   const tlk = m(manifestOf("timelock"));
   // The timelock manifest carries the Safe address; the table has no separate Safe manifest.
   const safe = tlk;
@@ -1065,8 +1065,7 @@ async function recordWrite(s: Stack): Promise<void> {
       registry: reg.registry,
       router: rtr.router,
       governance: gov.governance,
-      consensus_receipt: ic.consensus_receipt,
-      ic_policy: ic.policy,
+      consensus_receipt: receipt.consensus_receipt,
       timelock: tlk.timelock,
       safe: safe.safe,
       emergency,
@@ -1108,7 +1107,7 @@ export function validateRecord(rec: Json, recordPath: string): void {
   if (!/^[1-9][0-9]*$/.test(get(".min_delay"))) throw recordBad("record-field-malformed", `.min_delay is not a positive number of seconds ('${get(".min_delay")}')`);
   for (const f of [
     ".deployer", ".addresses.gateway", ".addresses.vault", ".addresses.registry", ".addresses.router", ".addresses.governance",
-    ".addresses.consensus_receipt", ".addresses.ic_policy", ".addresses.timelock", ".addresses.safe", ".addresses.emergency",
+    ".addresses.consensus_receipt", ".addresses.timelock", ".addresses.safe", ".addresses.emergency",
     ".vault_addresses.rmUSDC", ".vault_addresses.rmPROTO", ".vault_addresses.rmAGENT", ".vault_addresses.rmRWA",
     ".ephemeral.approver", ".ephemeral.emergency",
   ]) addr(f);

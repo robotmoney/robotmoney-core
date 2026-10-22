@@ -191,13 +191,13 @@ asks for the full router state rather than a weights-only summary.
 This skill has no governance write command, and neither does `rmpc`. The Safe
 multisig, through the `TimelockController`, is the only body that changes any
 Robot Money contract configuration, router weights included. `WEIGHT_SETTER_ROLE`
-is the only authority over router weights. It submits the Investment
-Committee's consensus receipt, and that submission is the rebalance: one
+is the only authority over router weights. The Safe, through the timelock,
+applies a recorded consensus receipt, and that application is the rebalance: one
 timelock operation releases the receipt and applies its weights
 (publish-contracts govern row `apply-receipt`, core 1696). There is no voting
 by token holders or anyone else: no voter set, no voting power, no quorum, no
 voting period, no execution delay, no propose, vote or execute. The one call
 that moves the weights is `RouterGovernance.applyReceipt` (issue 1698). An analyst's
-weight recommendation reaches the chain only as a committee tilt
-(`rmpc committee vote-submit`, a signed tilt that is not a vote on anything)
-and then as the committee's consensus receipt.
+weight recommendation reaches the chain only as part of a consensus receipt:
+analysts sign the payload off-chain, and the submitter Safe records its digest.
+There is no on-chain committee and no on-chain tilt.

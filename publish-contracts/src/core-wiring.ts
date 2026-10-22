@@ -45,8 +45,7 @@ export const MANIFEST_ENV: Record<string, { stage: string; field: string }> = {
   ROUTER_ADDRESS: { stage: "router", field: "router" },
   GATEWAY_ADDRESS: { stage: "gateway", field: "gateway" },
   GOVERNANCE_ADDRESS: { stage: "governance", field: "governance" },
-  IC_POLICY_ADDRESS: { stage: "ic-policy", field: "policy" },
-  CONSENSUS_RECEIPT_ADDRESS: { stage: "ic-policy", field: "consensus_receipt" },
+  CONSENSUS_RECEIPT_ADDRESS: { stage: "receipt", field: "consensus_receipt" },
   SAFE_ADDRESS: { stage: SAFE_STAGE, field: "safe" },
   /** The single-vault redeploy (issue 1796) hands the new vault to the live timelock. */
   TIMELOCK_ADDRESS: { stage: "timelock", field: "timelock" },
@@ -105,8 +104,7 @@ export const CORE_CONTRACT_REFS: { name: string; stage: string; field: string; a
   { name: "registry", stage: "registry", field: "registry", artifactKey: "registry" },
   { name: "router", stage: "router", field: "router", artifactKey: "router" },
   { name: "governance", stage: "governance", field: "governance", artifactKey: "governance" },
-  { name: "icpolicy", stage: "ic-policy", field: "policy", artifactKey: "icPolicy" },
-  { name: "receipt", stage: "ic-policy", field: "consensus_receipt", artifactKey: "receipt" },
+  { name: "receipt", stage: "receipt", field: "consensus_receipt", artifactKey: "receipt" },
   { name: "timelock", stage: "timelock", field: "timelock", artifactKey: "timelock" },
   // core 1676: the price recorder is a core contract of the deploy. It has no role, so the role matrix skips it.
   { name: "recorder", stage: RECORDER_STAGE, field: "recorder", artifactKey: RECORDER_ARTIFACT_KEY },

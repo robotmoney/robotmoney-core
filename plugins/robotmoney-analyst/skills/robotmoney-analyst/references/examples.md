@@ -82,10 +82,9 @@ The agent drafts the recommendation rationale citing both sources:
 > growth vault weight. The recommended change is consistent with documented allocation
 > logic.
 
-### Step 5: Hand the recommendation to the committee
+### Step 5: Hand the recommendation to the analysts
 
 The agent surfaces the rationale text to the user. There is no governance
-write command: the recommendation reaches the chain only as a committee tilt
-(`rmpc committee vote-submit`, a signed tilt that is not a vote on anything)
-and then as the committee's consensus receipt, which `WEIGHT_SETTER_ROLE`
-applies through the Safe and the timelock.
+write command: the recommendation reaches the chain only inside a consensus
+receipt. Analysts sign the payload off-chain, the submitter Safe records its
+digest, and `WEIGHT_SETTER_ROLE` applies it through the Safe and the timelock.

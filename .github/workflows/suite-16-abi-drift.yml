@@ -21,7 +21,6 @@
 # - clients/rust-payment-client/abi/PortfolioRouter.json        (added #1362)
 # - clients/rust-payment-client/abi/RouterGovernance.json       (added #1362)
 # - clients/rust-payment-client/abi/TimelockController.json     (added #1362)
-# - clients/rust-payment-client/abi/InvestmentCommitteePolicy.json (added #1362)
 # - clients/rust-payment-client/abi/ConsensusRecommendationReceipt.json (added #1362)
 # - clients/rust-payment-client/abi/IVault.json                 (added #1464)
 # - clients/dapp/src/lib/abi.generated.ts
@@ -216,7 +215,6 @@ jobs:
                clients/rust-payment-client/abi/PortfolioRouter.json \
                clients/rust-payment-client/abi/RouterGovernance.json \
                clients/rust-payment-client/abi/TimelockController.json \
-               clients/rust-payment-client/abi/InvestmentCommitteePolicy.json \
                clients/rust-payment-client/abi/ConsensusRecommendationReceipt.json \
                clients/rust-payment-client/abi/IVault.json \
                clients/dapp/src/lib/abi.generated.ts; then

@@ -23,12 +23,14 @@ import {UpgradeAuthority} from "./UpgradeAuthority.sol";
 ///           forward;
 ///         - router `WEIGHT_SETTER_ROLE`, the only gate on `setWeights`, after
 ///           which the deployer's own copy is dropped;
-///         - `ADMIN_ROLE` on the ConsensusRecommendationReceipt, so
-///           `applyReceipt` can release the receipt it applies.
+///         - `RECEIPT_RELEASER_ROLE` on the ConsensusRecommendationReceipt, so
+///           `applyReceipt` can release the receipt it applies. It is a narrow,
+///           single-purpose role: RouterGovernance never holds the receipt
+///           `ADMIN_ROLE`, which the timelock alone holds (issue 1888).
 ///
 ///         Every grant is read back: a silent failure produces a deployment that
 ///         looks complete and fails only when the first receipt is applied.
-///         The stage runs after `ic-policy` because the receipt register must
+///         The stage runs after `receipt` because the receipt register must
 ///         exist, and before `timelock`, while the deployer still holds the
 ///         router and receipt admin roles.
 ///
@@ -47,7 +49,7 @@ contract DeployRouterGovernance is UpgradeAuthority {
     /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "governance.json";
 
-    bytes32 internal constant RECEIPT_ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 internal constant RECEIPT_RELEASER_ROLE = keccak256("RECEIPT_RELEASER_ROLE");
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
     struct Deployed {
@@ -82,7 +84,7 @@ contract DeployRouterGovernance is UpgradeAuthority {
     /// @notice In-process variant for forge tests. No broadcast, no JSON written.
     /// @param admin_    Address to receive ADMIN_ROLE and WEIGHT_SETTER_ROLE; must
     ///                  hold router ADMIN_ROLE, router WEIGHT_SETTER_ROLE and the
-    ///                  receipt register's DEFAULT_ADMIN_ROLE.
+    ///                  receipt register's ADMIN_ROLE.
     /// @param router_   Deployed PortfolioRouter address.
     /// @param receipts_ Deployed ConsensusRecommendationReceipt address.
     function runInProcessWith(address admin_, address router_, address receipts_)
@@ -162,13 +164,14 @@ contract DeployRouterGovernance is UpgradeAuthority {
         require(!router.hasRole(role, granter_), "deployer still holds router WEIGHT_SETTER_ROLE");
     }
 
-    /// @dev Receipt `ADMIN_ROLE`, so `applyReceipt` can release the receipt it
-    ///      applies in the same call. Read back.
+    /// @dev Receipt `RECEIPT_RELEASER_ROLE`, so `applyReceipt` can release the receipt it
+    ///      applies in the same call. Read back. The granter holds the receipt `ADMIN_ROLE`
+    ///      until the timelock stage.
     function _grantReceiptRelease(Deployed memory d) internal {
-        IAccessControl(d.receipts).grantRole(RECEIPT_ADMIN_ROLE, address(d.governance));
+        IAccessControl(d.receipts).grantRole(RECEIPT_RELEASER_ROLE, address(d.governance));
         require(
-            IAccessControl(d.receipts).hasRole(RECEIPT_ADMIN_ROLE, address(d.governance)),
-            "RouterGovernance missing receipt ADMIN_ROLE: applyReceipt would revert in releaseReceipt"
+            IAccessControl(d.receipts).hasRole(RECEIPT_RELEASER_ROLE, address(d.governance)),
+            "RouterGovernance missing RECEIPT_RELEASER_ROLE: applyReceipt would revert in releaseReceipt"
         );
     }
 

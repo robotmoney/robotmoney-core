@@ -22,7 +22,8 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { MAINNET_CHAIN_ID, MAINNET_DELAY_FLOOR, delayFloor, rehearsalDelayProblem } from "./floors.ts";
 import { DEPLOYMENT_KINDS, kindLabel, type DeploymentKind } from "./chains.ts";
-import { REGISTER_ROW, buildRegisterCalls } from "./committee-register.ts";
+import { HISTORICAL_REGISTER_ROW, buildHistoricalRegisterCalls } from "./committee-register.ts";
+import { REGISTER_ROW, buildRegisterCall } from "./submitter-register.ts";
 import { CLEAR_ROW, clearCalldata } from "./clear-voted-weights.ts";
 import { REDEPLOY_ROW, buildRedeployCalls, createdVaultProblems, vectorsFromFinal, type DeployReceipt } from "./redeploy-vault.ts";
 import { assertOwnerExceptions } from "./plan.ts";
@@ -341,27 +342,31 @@ export function governedUpgradeProblems(ev: any, floor: number = MAINNET_DELAY_F
 }
 
 /**
- * Issue 1727, the receipt path of a rehearsal. `committee_registrations`: one entry per submitter, ONE timelock batch (setPolicy, committeeRegister; QA plan v1 B6), one schedule and one execute at
- * least the floor apart. `recorded_receipts`: one entry per receipt the submitter anchored through the gateway (receipt_id, payload_digest, payload_uri, submitter ADDRESS, tx_hash; never a key).
- * Both are refused in a production evidence. In a rehearsal every receipt_applications entry must trace to a recorded receipt with the same digest, by a registered submitter.
+ * Issue 1888, the receipt path. `submitter_registrations`: one entry per submitter, ONE delayed timelock call (receipt.grantRole(RECEIPT_SUBMITTER_ROLE, submitter)), one schedule and one execute
+ * at least the floor apart. `committee_registrations` is HISTORICAL (issues 1727 and 1750: the retired two-call gateway batch, step register-committee): it is still decoded so pinned releases and
+ * rehearsal fixtures validate, and a new run never writes it. `recorded_receipts`: one entry per receipt the submitter Safe anchored directly on the receipt contract (receipt_id, payload_digest,
+ * payload_uri, submitter ADDRESS, tx_hash, submitter_safe; never a key). All three may appear in any evidence kind. In a rehearsal every receipt_applications entry must trace to a recorded
+ * receipt with the same digest, by a registered submitter.
  */
 /**
- * Issue 1750 (owner decision 2026-10-10): the consensus receipt submitter is a multisig. An entry's `submitter_safe` names the Safe's threshold (2 or more), owners and proxy code
- * hash; a recorded receipt's also the Safe transaction hash, the nonce and the owners that signed (at least the threshold, all owners). An entry WITHOUT it is a single key:
- * refused on 8453, and refused anywhere when that key is a role key (the deployer/admin, a governing Safe owner) or when the submitter is the governing Safe or the timelock.
+ * The consensus receipt submitter is a Safe (issue 1750, owner decision 2026-10-10; on every chain and in every mode since issue 1888). An entry's `submitter_safe` names the Safe's threshold
+ * (2 or more), owners and proxy code hash; a recorded receipt's also the Safe transaction hash, the nonce and the owners that signed (at least the threshold, all owners). An entry WITHOUT it is a
+ * single key: refused everywhere, except for a HISTORICAL committee registration (and the receipts of a historical submitter) off 8453, which pinned rehearsal fixtures carry. The submitter may
+ * be the governing Safe and its owners may be shared (issue 1888); it may not be the timelock or the deployer.
  */
-function submitterSafeProblems(ev: any, r: any, w: string, recorded: boolean, bad: (m: string) => void): void {
+function submitterSafeProblems(ev: any, r: any, w: string, recorded: boolean, bad: (m: string) => void, historical = false): void {
   const sub = String(r?.submitter ?? "");
   const roleKeys = new Map<string, string>([
-    [lc(ev?.safe?.address ?? ""), "the governing Safe"], [lc(ev?.timelock?.address ?? ""), "the timelock"], [lc(ev?.deployer ?? ""), "the deployer (admin)"],
-    ...((Array.isArray(ev?.safe?.owners) ? ev.safe.owners : []) as string[]).map((o, i) => [lc(o), `governing Safe owner ${i + 1}`] as [string, string]),
+    [lc(ev?.timelock?.address ?? ""), "the timelock"], [lc(ev?.deployer ?? ""), "the deployer (admin)"],
+    ...(historical ? ((Array.isArray(ev?.safe?.owners) ? ev.safe.owners : []) as string[]).map((o, i) => [lc(o), `governing Safe owner ${i + 1}`] as [string, string]) : []),
+    ...(historical ? [[lc(ev?.safe?.address ?? ""), "the governing Safe"] as [string, string]] : []),
   ]);
   roleKeys.delete("");
   const why = roleKeys.get(lc(sub));
   const sf = r?.submitter_safe;
-  if (why) bad(`${w}: the submitter ${sub} is ${why}: the submitter is a separate multisig Safe that holds AGENT_ROLE and COMMITTEE_AGENT_ROLE and nothing else`);
+  if (why) bad(`${w}: the submitter ${sub} is ${why}: the submitter is a Safe that holds RECEIPT_SUBMITTER_ROLE and nothing else`);
   if (sf === undefined) {
-    if (ev?.chain_id === MAINNET_CHAIN_ID) bad(`${w}: no submitter_safe: on 8453 the consensus receipt submitter is a multisig Safe, never a single key`);
+    if (!historical || ev?.chain_id === MAINNET_CHAIN_ID) bad(`${w}: no submitter_safe: the consensus receipt submitter is a multisig Safe on every chain, never a single key`);
     return;
   }
   const owners: string[] = Array.isArray(sf?.owners) ? sf.owners : [];
@@ -380,30 +385,41 @@ function submitterSafeProblems(ev: any, r: any, w: string, recorded: boolean, ba
   if (strangers.length) bad(`${w}: submitter_safe.signers ${strangers.join(", ")} are not owners of the submitter Safe`);
 }
 const regLabel = (r: any) => `${REGISTER_ROW} ${r?.submitter}`;
+const histLabel = (r: any) => `${HISTORICAL_REGISTER_ROW} ${r?.submitter}`;
 const recLabel = (r: any) => `recorded receipt ${r?.receipt_id}`;
 function receiptPathProblems(ev: any, kind: DeploymentKind, applications: any[], bad: (m: string) => void): any[] {
-  const regs: any[] = ev?.committee_registrations === undefined ? [] : Array.isArray(ev.committee_registrations) ? ev.committee_registrations : (bad("committee_registrations is not a list"), []);
+  const hist: any[] = ev?.committee_registrations === undefined ? [] : Array.isArray(ev.committee_registrations) ? ev.committee_registrations : (bad("committee_registrations is not a list"), []);
+  const news: any[] = ev?.submitter_registrations === undefined ? [] : Array.isArray(ev.submitter_registrations) ? ev.submitter_registrations : (bad("submitter_registrations is not a list"), []);
   const recs: any[] = ev?.recorded_receipts === undefined ? [] : Array.isArray(ev.recorded_receipts) ? ev.recorded_receipts : (bad("recorded_receipts is not a list"), []);
-  if (kind !== "rehearsal") {
-    if (regs.length > 0) bad("committee_registrations is present in a production evidence: the production govern surface on 8453 is the four unpauses, release-receipt and apply-receipt");
-    if (recs.length > 0) bad("recorded_receipts is present in a production evidence: production records receipts with rmpc and an HSM or KMS signer, outside this evidence");
-    return [];
-  }
   const seenSub = new Set<string>();
-  for (const r of regs) {
-    const w = regLabel(r);
+  const histSub = new Set<string>();
+  // HISTORICAL registrations (issues 1727, 1750): the retired gateway batch. Decoded as before so pinned evidence validates. A new run never writes them.
+  for (const r of hist) {
+    const w = histLabel(r);
     if (!ADDR.test(r?.submitter ?? "")) bad(`${w}: submitter is not an address`);
     else if (seenSub.has(lc(r.submitter))) bad(`${w}: submitter has more than one evidence entry`);
-    else seenSub.add(lc(r.submitter));
-    if (r?.step !== undefined && r.step !== REGISTER_ROW) bad(`${w}: step '${r.step}' is not ${REGISTER_ROW}`);
+    else { seenSub.add(lc(r.submitter)); histSub.add(lc(r.submitter)); }
+    if (r?.step !== undefined && r.step !== HISTORICAL_REGISTER_ROW) bad(`${w}: step '${r.step}' is not ${HISTORICAL_REGISTER_ROW}`);
     for (const k of ["gateway", "ic_policy", "timelock"]) if (!ADDR.test(r?.[k] ?? "")) bad(`${w}: ${k} is not an address`);
     if (ADDR.test(r?.timelock ?? "") && lc(r.timelock) !== lc(ev?.timelock?.address ?? "")) bad(`${w}: timelock ${r.timelock} is not the run's timelock ${ev?.timelock?.address}`);
-    submitterSafeProblems(ev, r, w, false, bad);
+    submitterSafeProblems(ev, r, w, false, bad, true);
     if (typeof r?.agent_label !== "string" || r.agent_label === "") bad(`${w}: agent_label is missing`);
     if (!/^[0-9]+$/.test(String(r?.valid_until ?? ""))) bad(`${w}: valid_until is not a decimal timestamp`);
     // QA plan v1 B6: the submitter Safe's private self-authorization, as its three transactions (the chain check orders the hand-over before the schedule)
     const sa = r?.self_authorization;
     if (sa !== undefined) for (const k of ["commit_tx", "reveal_tx", "hand_over_tx"]) if (sa?.[k] !== undefined && !TX.test(String(sa[k]))) bad(`${w}: self_authorization.${k} is not a transaction hash`);
+  }
+  // The live registration (issue 1888): ONE receipt.grantRole(RECEIPT_SUBMITTER_ROLE, submitter), a Safe, on any chain and kind.
+  for (const r of news) {
+    const w = regLabel(r);
+    if (!ADDR.test(r?.submitter ?? "")) bad(`${w}: submitter is not an address`);
+    else if (seenSub.has(lc(r.submitter))) bad(`${w}: submitter has more than one evidence entry`);
+    else seenSub.add(lc(r.submitter));
+    if (r?.step !== undefined && r.step !== REGISTER_ROW) bad(`${w}: step '${r.step}' is not ${REGISTER_ROW}`);
+    for (const k of ["receipt", "timelock"]) if (!ADDR.test(r?.[k] ?? "")) bad(`${w}: ${k} is not an address`);
+    if (ADDR.test(r?.timelock ?? "") && lc(r.timelock) !== lc(ev?.timelock?.address ?? "")) bad(`${w}: timelock ${r.timelock} is not the run's timelock ${ev?.timelock?.address}`);
+    if (ADDR.test(r?.receipt ?? "") && ADDR.test(ev?.consensus_receipt?.address ?? "") && lc(r.receipt) !== lc(ev.consensus_receipt.address)) bad(`${w}: receipt ${r.receipt} is not the run's receipt contract ${ev.consensus_receipt.address}`);
+    submitterSafeProblems(ev, r, w, false, bad);
   }
   const seenRec = new Set<string>();
   for (const r of recs) {
@@ -414,19 +430,21 @@ function receiptPathProblems(ev: any, kind: DeploymentKind, applications: any[],
     if (!TX.test(r?.payload_digest ?? "")) bad(`${w}: payload_digest is not a bytes32`);
     if (typeof r?.payload_uri !== "string" || !/^https?:\/\//.test(r.payload_uri)) bad(`${w}: payload_uri is not an http(s) route`);
     if (!ADDR.test(r?.submitter ?? "")) bad(`${w}: submitter is not an address`);
-    else if (!seenSub.has(lc(r.submitter))) bad(`${w}: submitter ${r.submitter} has no committee_registrations entry: a receipt is recorded only by a registered submitter`);
-    submitterSafeProblems(ev, r, w, true, bad);
+    else if (kind === "rehearsal" && !seenSub.has(lc(r.submitter))) bad(`${w}: submitter ${r.submitter} has no submitter_registrations (or historical committee_registrations) entry: a receipt is recorded only by a registered submitter`);
+    submitterSafeProblems(ev, r, w, true, bad, ADDR.test(r?.submitter ?? "") && histSub.has(lc(r.submitter)));
     if (r?.already_recorded !== true && !TX.test(r?.tx_hash ?? "")) bad(`${w}: tx_hash is missing`);
     if (r?.status !== 1) bad(`${w}: status is ${r?.status}`);
   }
-  for (const a of applications) {
-    const rec = recs.find((x) => lc(x?.receipt_id ?? "") === lc(a?.receipt_id ?? ""));
-    if (!rec) bad(`${applyLabel(a)}: the receipt was not recorded through the gateway in this run (no recorded_receipts entry): a rehearsal applies a REAL recorded receipt`);
-    else if (lc(rec.payload_digest ?? "") !== lc(a?.payload_digest ?? "")) bad(`${applyLabel(a)}: payload_digest ${a?.payload_digest} differs from the recorded receipt's ${rec.payload_digest}`);
+  if (kind === "rehearsal") {
+    for (const a of applications) {
+      const rec = recs.find((x) => lc(x?.receipt_id ?? "") === lc(a?.receipt_id ?? ""));
+      if (!rec) bad(`${applyLabel(a)}: the receipt was not recorded by the submitter Safe in this run (no recorded_receipts entry): a rehearsal applies a REAL recorded receipt`);
+      else if (lc(rec.payload_digest ?? "") !== lc(a?.payload_digest ?? "")) bad(`${applyLabel(a)}: payload_digest ${a?.payload_digest} differs from the recorded receipt's ${rec.payload_digest}`);
+    }
   }
-  return regs;
+  return [...hist, ...news];
 }
-const registrationOperations = (regs: any[]): any[] => regs.map((r) => ({ ...r, step: regLabel(r) }));
+const registrationOperations = (regs: any[]): any[] => regs.map((r) => ({ ...r, step: r?.step === REGISTER_ROW ? regLabel(r) : histLabel(r) }));
 
 /** How the evidence is read (issue 1727). `kind` is the deployment kind the caller expects: production unless the operator passed --deployment-kind rehearsal. */
 export interface EvidenceOpts {
@@ -588,6 +606,9 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   }
   const releases: any[] = ev?.receipt_releases === undefined ? [] : Array.isArray(ev.receipt_releases) ? ev.receipt_releases : (bad("receipt_releases is not a list"), []);
   if (releases.length > 0 && !ADDR.test(ev?.consensus_receipt?.address ?? "")) bad("consensus_receipt.address is missing: a receipt release has no target to check");
+  // Issue 1888: once RouterGovernance holds RECEIPT_RELEASER_ROLE (the timelock manifest's roles.governance_has_receipt_release_role, copied to consensus_receipt.governance_has_release_role), the timelock cannot
+  // release a receipt directly: a standalone release is impossible, and a release entry in such an evidence is a forgery. Historical evidence carries no such flag.
+  if (releases.length > 0 && ev?.consensus_receipt?.governance_has_release_role === true) bad(`receipt_releases has ${releases.length} entr${releases.length === 1 ? "y" : "ies"} but RouterGovernance holds RECEIPT_RELEASER_ROLE on the receipt (consensus_receipt.governance_has_release_role): after the narrow-role handover a receipt is released only by apply-receipt`);
   const seenIds = new Set<string>();
   for (const r of releases) {
     const w = releaseLabel(r);
@@ -601,7 +622,7 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   const clears = clearShapeProblems(ev, bad);
   const redeploys = redeployShapeProblems(ev, kind, bad);
   // one operation per unpause, release or application: no schedule or execute transaction, and no timelock operation id, is shared by two operations
-  forbidCancelFields([...govern, ...releases, ...applications, ...clears, ...redeploys, ...(Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : [])], (e) => String(e?.step ?? "entry"), bad);
+  forbidCancelFields([...govern, ...releases, ...applications, ...clears, ...redeploys, ...(Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : []), ...(Array.isArray(ev?.submitter_registrations) ? ev.submitter_registrations : [])], (e) => String(e?.step ?? "entry"), bad);
   const rrows = rehearsalRowProblems(ev, kind, bad);
   const regs = receiptPathProblems(ev, kind, applications, bad);
   operationProblems([...govern.map((g) => ({ ...g, step: stepLabel(g) })), ...releases.map((r) => ({ ...r, step: releaseLabel(r) })), ...applications.map((r) => ({ ...r, step: applyLabel(r) })), ...clears.map((r) => ({ ...r, step: clearLabel(r) })), ...redeploys.map((r) => ({ ...r, step: redeployLabel(r) })), ...rowOperations(rrows), ...registrationOperations(regs)], bad, floor);
@@ -917,7 +938,7 @@ export async function checkVaultRedeploysOnChain(ev: any, chain: ChainReader, fl
 }
 
 /**
- * Chain check of `committee_registrations` and `recorded_receipts` (issue 1727). A registration is ONE batch: the schedule tx has exactly two CallScheduled events with one operation id,
+ * Chain check of `submitter_registrations`, the HISTORICAL `committee_registrations` and `recorded_receipts` (issues 1727, 1888). A registration is ONE grantRole call (below). A HISTORICAL registration is ONE batch: the schedule tx has exactly two CallScheduled events with one operation id,
  * setPolicy then committeeRegister on the gateway with the calldata rebuilt from the recorded submitter, label and validUntil; the execute tx has the two CallExecuted events;
  * the block gap is at least the floor. QA plan v1 B6: an entry that records the submitter Safe's private self-authorization (`self_authorization.hand_over_tx`) must have
  * handed the agent to the timelock in a block BEFORE the batch was scheduled, so the address was never public while unowned. A recorded receipt's transaction must have succeeded.
@@ -934,12 +955,12 @@ export async function checkReceiptPathOnChain(ev: any, chain: ChainReader, floor
     } catch (e) { bad(`${what}: receipt not readable on chain (${(e as Error).message})`); return undefined; }
   };
   for (const r of Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : []) {
-    const w = regLabel(r);
+    const w = histLabel(r);
     if (!ADDR.test(r?.submitter ?? "") || !ADDR.test(r?.gateway ?? "") || !ADDR.test(r?.timelock ?? "") || typeof r?.agent_label !== "string" || !/^[0-9]+$/.test(String(r?.valid_until ?? "")) || !TX.test(r?.schedule_tx ?? "")) continue; // the offline check already named it
     const sc = await rcOf(`${w} schedule`, r.schedule_tx);
     if (!sc) continue;
     const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled").sort((x, y) => Number(x.index - y.index));
-    const want = buildRegisterCalls(r.gateway, r.timelock, r.submitter, r.agent_label, BigInt(r.valid_until));
+    const want = buildHistoricalRegisterCalls(r.gateway, r.timelock, r.submitter, r.agent_label, BigInt(r.valid_until));
     if (scheduled.length !== want.length) bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, a registration is exactly ${want.length} calls (setPolicy, committeeRegister) in one batch`);
     scheduled.forEach((e, i) => {
       const c = want[i];
@@ -968,11 +989,41 @@ export async function checkReceiptPathOnChain(ev: any, chain: ChainReader, floor
     if (executed.length !== want.length) bad(`${w}: the execute tx has ${executed.length} CallExecuted events for the scheduled id, want ${want.length}`);
     if (!((await ts(ex)) - schedTs >= floor)) bad(`${w}: on-chain schedule-to-execute gap is under ${floor} s`);
   }
+  // Issue 1888: a registration is ONE call: the schedule tx has exactly one CallScheduled event, receipt.grantRole(RECEIPT_SUBMITTER_ROLE, submitter), and the execute tx has its CallExecuted.
+  for (const r of Array.isArray(ev?.submitter_registrations) ? ev.submitter_registrations : []) {
+    const w = regLabel(r);
+    if (!ADDR.test(r?.submitter ?? "") || !ADDR.test(r?.receipt ?? "") || !ADDR.test(r?.timelock ?? "") || !TX.test(r?.schedule_tx ?? "")) continue; // the offline check already named it
+    const sc = await rcOf(`${w} schedule`, r.schedule_tx);
+    if (!sc) continue;
+    const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled").sort((x, y) => Number(x.index - y.index));
+    const want = buildRegisterCall(r.receipt, r.submitter);
+    if (scheduled.length !== 1) bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, a registration is exactly one call (${want.label})`);
+    const e = scheduled[0];
+    if (e) {
+      if (lc(e.target) !== lc(want.target)) bad(`${w}: CallScheduled target ${e.target} is not the receipt contract ${want.target}`);
+      else if (lc(e.data) !== lc(want.data)) bad(`${w}: CallScheduled calldata is not ${want.label}`);
+      if (!(e.delay !== undefined && e.delay >= BigInt(floor))) bad(`${w}: CallScheduled delay ${e.delay} is under ${floor} s`);
+      else if (rehearsalDelayProblem(e.delay)) bad(`${w}: CallScheduled delay ${rehearsalDelayProblem(e.delay)}`);
+      if (typeof r.operation_id === "string" && lc(r.operation_id) !== lc(e.id)) bad(`${w}: operation_id ${r.operation_id} is not the scheduled operation ${e.id}`);
+    }
+    const schedTs = await ts(sc);
+    const ex = await rcOf(`${w} execute`, r.execute_tx);
+    if (!ex || !e) continue;
+    const executed = timelockEvents(ex, ev.timelock.address, "CallExecuted").filter((x) => lc(x.id) === lc(e.id));
+    if (executed.length !== 1) bad(`${w}: the execute tx has ${executed.length} CallExecuted events for the scheduled id, want 1`);
+    if (!((await ts(ex)) - schedTs >= floor)) bad(`${w}: on-chain schedule-to-execute gap is under ${floor} s`);
+  }
   for (const r of Array.isArray(ev?.recorded_receipts) ? ev.recorded_receipts : []) {
     if (!TX.test(r?.tx_hash ?? "")) continue;
     const rc = await rcOf(`${recLabel(r)} tx`, r.tx_hash);
     // Issue 1750: a Safe submitter. The Safe itself emitted ExecutionSuccess for the recorded Safe transaction hash, and its threshold on chain is the recorded one.
     const sf = r?.submitter_safe;
+    // Issue 1888: the receipt contract emitted ReceiptRecorded for this id in that transaction (a record is a receipt-contract event, not only a Safe success). Skipped for a HISTORICAL submitter (pinned fixtures).
+    const historicalSubmitter = (Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : []).some((x: any) => lc(x?.submitter ?? "") === lc(r?.submitter ?? ""));
+    if (rc && !historicalSubmitter && ADDR.test(ev?.consensus_receipt?.address ?? "") && TX.test(r?.receipt_id ?? "")) {
+      const recTopic = keccak256(toBytes("ReceiptRecorded(bytes32,address,uint256,bytes32,string,uint64)"));
+      if (!rc.logs.some((l) => lc(l.address) === lc(ev.consensus_receipt.address) && l.topics[0] === recTopic && lc(l.topics[1] ?? "") === lc(r.receipt_id))) bad(`${recLabel(r)}: the receipt contract ${ev.consensus_receipt.address} emitted no ReceiptRecorded for ${r.receipt_id} in ${r.tx_hash}`);
+    }
     if (!rc || !sf || !ADDR.test(r?.submitter ?? "") || !TX.test(sf?.safe_tx_hash ?? "")) continue;
     const topic0 = keccak256(toBytes("ExecutionSuccess(bytes32,uint256)"));
     const ok = rc.logs.some((l) => lc(l.address) === lc(r.submitter) && l.topics[0] === topic0 && lc(l.topics[1] ?? "") === lc(sf.safe_tx_hash));
@@ -1219,20 +1270,20 @@ async function checkApplicationsMain(values: Record<string, string | boolean | u
   if (need.length) { console.error(`evidence: --receipt-applications needs ${need.map((k) => `--${k}`).join(", ")}`); process.exit(2); }
   const m = JSON.parse(readFileSync(values["receipt-applications"] as string, "utf8"));
   const ev = { deployment_kind: kind, consensus_receipt: { address: values["consensus-receipt"] }, governance: { address: values.governance }, timelock: { address: values.timelock }, receipt_applications: m.receipt_applications, voted_weights_clears: m.voted_weights_clears,
-    ...(kind === "rehearsal" ? { committee_registrations: m.committee_registrations, recorded_receipts: m.recorded_receipts } : {}) };
+    committee_registrations: m.committee_registrations, submitter_registrations: m.submitter_registrations, recorded_receipts: m.recorded_receipts };
   const { createPublicClient, http } = await import("viem");
   const reader = typeof values.rpc === "string" ? createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader : undefined;
   const floor = await floorArg(values, kind, reader);
   const problems = [...(Array.isArray(m.receipt_applications) && m.receipt_applications.length > 0 ? [] : ["the run manifest has no receipt_applications entry"]), ...checkReceiptApplications(ev, floor), ...checkVotedWeightsClears(ev, floor)];
-  // issue 1727: a rehearsal's receipt path (registration, REAL recorded receipt, application) must trace end to end. A production run manifest has none of the first two.
-  if (kind === "rehearsal") {
-    receiptPathProblems(ev, kind, Array.isArray(m.receipt_applications) ? m.receipt_applications : [], (x) => problems.push(x));
-    operationProblems((Array.isArray(m.committee_registrations) ? m.committee_registrations : []).map((r: any) => ({ ...r, step: regLabel(r) })), (x) => problems.push(x), floor);
+  // issue 1727, 1888: the receipt path (registration, REAL recorded receipt, application) is checked in every kind; a rehearsal also must trace it end to end.
+  {
+    const regs = receiptPathProblems(ev, kind, Array.isArray(m.receipt_applications) ? m.receipt_applications : [], (x) => problems.push(x));
+    operationProblems(registrationOperations(regs), (x) => problems.push(x), floor);
   }
   if (reader) {
     problems.push(...(await checkReceiptApplicationsOnChain(ev, reader, floor)));
     problems.push(...(await checkVotedWeightsClearsOnChain(ev, reader, floor)));
-    if (kind === "rehearsal") problems.push(...(await checkReceiptPathOnChain(ev, reader, floor)));
+    problems.push(...(await checkReceiptPathOnChain(ev, reader, floor)));
   }
   if (problems.length) { for (const x of problems) console.error(`evidence: ${x}`); process.exit(1); }
   console.log(`evidence ok (${m.receipt_applications.length} receipt application(s)${values.rpc ? ", chain read" : ", offline shape only"})`);

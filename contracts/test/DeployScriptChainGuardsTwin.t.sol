@@ -12,7 +12,9 @@ import {DeployTimelock} from "../script/DeployTimelock.s.sol";
 import {DeployPortfolioRouter} from "../script/DeployPortfolioRouter.s.sol";
 import {DeployVaultRegistry} from "../script/DeployVaultRegistry.s.sol";
 import {DeployRouterGovernance} from "../script/DeployRouterGovernance.s.sol";
-import {DeployInvestmentCommitteePolicy} from "../script/DeployInvestmentCommitteePolicy.s.sol";
+import {
+    DeployConsensusRecommendationReceipt
+} from "../script/DeployConsensusRecommendationReceipt.s.sol";
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
 import {DeployAgentTokenVault} from "../script/DeployAgentTokenVault.s.sol";
 import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
@@ -81,9 +83,9 @@ contract DeployScriptChainGuardsTwinTest is Test {
         _notGuard(ok, d);
     }
 
-    function test_icPolicy_run_guardSilentOnTwinChain() public {
-        (bool ok, bytes memory d) =
-            address(new DeployInvestmentCommitteePolicy()).call(abi.encodeWithSignature("run()"));
+    function test_receipt_run_guardSilentOnTwinChain() public {
+        (bool ok, bytes memory d) = address(new DeployConsensusRecommendationReceipt())
+            .call(abi.encodeWithSignature("run()"));
         _notGuard(ok, d);
     }
 

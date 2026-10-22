@@ -20,12 +20,12 @@
 #           rename a shipped SKILL.md and this goes red on the PR that did it,
 #           not on a schedule days later.
 #
-# NOTE: the swarm-onboarding and committee-onboarding paths that used to be
-# checked here were removed along with the skills they pointed at (core no
-# longer serves onboarding; see scripts/check-skill-url-reachability.sh). The
-# script now checks 2 paths, not 4 — see the hardcoded SKILL_URLS_FAILED=2
-# below, which must track scripts/check-skill-url-reachability.sh's
-# SKILL_PATHS array length.
+# NOTE (robotmoney-core#1888): the swarm plugin is retired. The script requires
+# the committee stub (200) and expects core to answer 404 for the legacy swarm
+# path, which robotmoney-frontend maps to the stub. Against a bogus ref only the
+# stub check fails, hence the hardcoded SKILL_URLS_FAILED=1 below. The
+# url-mapping-fixture-tests job asserts the mapping over local HTTP, and the
+# install-rmpc-selftest job keeps the checksum selftest that suite-17 hosted.
 #
 # Same shape as suite-18-upstream-monitoring.yml's `mock-tests` job, which
 # proves the venue/governance/USDC monitors fire before trusting their silence.
@@ -85,12 +85,12 @@ jobs:
             echo "::error::check-skill-url-reachability.sh exited 0 against a ref where every URL 404s — the monitor cannot detect the outage it exists to detect"
             exit 1
           fi
-          if ! grep -q 'did not return 200' <<<"$out"; then
+          if ! grep -q 'expected status' <<<"$out"; then
             echo "::error::the failure output does not name the non-200 URLs, so an operator reading a red run learns nothing"
             exit 1
           fi
-          if ! grep -q 'SKILL_URLS_FAILED=2' <<<"$out"; then
-            echo "::error::expected all 2 published URLs to be reported failed against a bogus ref"
+          if ! grep -q 'SKILL_URLS_FAILED=1' <<<"$out"; then
+            echo "::error::expected the committee stub to be reported failed against a bogus ref"
             exit 1
           fi
           echo "OK: the monitor fails red, names the broken URLs, and counts them."
@@ -102,3 +102,43 @@ jobs:
           REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           REF: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bash scripts/check-skill-url-reachability.sh
+
+  url-mapping-fixture-tests:
+    name: url-mapping-fixture-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skill URL compatibility mapping — local HTTP fixture assertions
+        # The script prints the executed count and refuses to pass below its
+        # floor; the second check re-reads it so a degraded run is red here too.
+        run: |
+          set -euo pipefail
+          bash scripts/check-skill-url-reachability.test.sh | tee url-fixture.log
+          count=$(grep -o 'SKILL_URL_FIXTURE_TESTS_EXECUTED=[0-9]\+' url-fixture.log | tail -1 | cut -d= -f2)
+          test "${count:-0}" -ge 27 || { echo "::error::only ${count:-0} fixture assertions executed (expected >= 27)"; exit 1; }
+
+  install-rmpc-selftest:
+    name: install-rmpc-selftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (jq, perl for shasum)
+        # shasum is a hard prerequisite of the selftest, never a skip.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq perl
+
+      - name: Checksum-verified rmpc install path (issue 1204)
+        run: |
+          set -euo pipefail
+          bash scripts/release/install-rmpc-selftest.sh | tee install-selftest.log
+          count=$(grep -o 'RMPC_INSTALL_SELFTEST_EXECUTED=[0-9]\+' install-selftest.log | tail -1 | cut -d= -f2)
+          test "${count:-0}" -ge 79 || { echo "::error::only ${count:-0} install selftest assertions executed (expected >= 79)"; exit 1; }

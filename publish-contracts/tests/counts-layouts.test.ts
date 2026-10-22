@@ -20,11 +20,11 @@ import { STUB_DIR } from "./harness.ts";
 import { spawnTool } from "../src/runner.ts";
 import { getStageTable } from "../src/stages.ts";
 import { freezeFromAdoptedRun } from "../scripts/freeze-counts.ts";
-import { REPO, tmp } from "./fixtures.ts";
+import { REPO, refFrozenPath, tmp } from "./fixtures.ts";
 import { world, type World } from "./harness.ts";
 
 const PREV = "9a768bb9cc66d4485470a99a068ba7477604501a";
-const REF_PATH = join(REPO, "deployments", "frozen-counts", `${PREV}.json`);
+const REF_PATH = refFrozenPath(); // the pinned first-release counts, `ic-policy` keyed as the table's `receipt` (issue 1888)
 const REF = JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>;
 const OUT = join(import.meta.dir, "fixtures", "build-out");
 const table = getStageTable();

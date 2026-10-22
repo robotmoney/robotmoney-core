@@ -1,151 +1,96 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
-// Implements: issue #1247 acceptance criteria 2 and 10, task 4.10
+// Canonical: docs/architecture.md §4.8, §4.9 — Receipt Submitter Authority, Consensus Receipt
+// Implements: issue #1247 acceptance criteria 2 and 10, task 4.10; issue 1888 (receipt deploys alone)
 pragma solidity ^0.8.24;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
-import {DeployInvestmentCommitteePolicy} from "../script/DeployInvestmentCommitteePolicy.s.sol";
-import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
-import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
+import {
+    DeployConsensusRecommendationReceipt
+} from "../script/DeployConsensusRecommendationReceipt.s.sol";
 import {
     IConsensusRecommendationReceipt
 } from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
-import {IGateway} from "../gateway/interfaces/IGateway.sol";
-import {TestERC20} from "./helpers/TestERC20.sol";
-import {MockVault} from "./helpers/MockVault.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
-import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @title DeployConsensusRecommendationReceiptTest
-/// @notice AC10: the receipt contract deploys **alongside**
-///         InvestmentCommitteePolicy in one ceremony, and AC2: `ADMIN_ROLE` on
-///         the receipt contract lands on the `TimelockController` and nowhere
-///         else. This is a single greenfield rollout — no migration and no
-///         registered agent to preserve.
+/// @notice The receipt contract deploys ALONE (no gateway, no committee registry), and
+///         `ADMIN_ROLE` on it lands on the `TimelockController` and nowhere else. The
+///         as-deployed wiring records directly through a Safe-granted submitter.
 contract DeployConsensusRecommendationReceiptTest is SafeGovernance {
-    address admin = address(0xA0);
-    address pauser = address(0xA1);
     address submitter = address(0xB1);
+    address stranger = address(0xDEAD);
     /// A real SafeL2 1.4.1 proxy: the only proposer and canceller on the timelock.
     address safe;
 
-    TestERC20 usdc;
-    MockVault vault;
-    RobotMoneyGateway gateway;
     TimelockController timelock;
-    DeployInvestmentCommitteePolicy script;
-    DeployInvestmentCommitteePolicy.Deployed d;
+    DeployConsensusRecommendationReceipt script;
+    DeployConsensusRecommendationReceipt.Deployed d;
 
     function setUp() public {
-        usdc = new TestERC20();
-        vault = new MockVault(address(usdc));
-        gateway = CoreProxies.robotMoneyGateway(
-            IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
-        );
-
         _installSafeSet();
         safe = _newDefaultSafe();
         timelock = _newGovTimelock(safe, 1 hours);
 
-        script = new DeployInvestmentCommitteePolicy();
-
-        // Mirror the production ceremony: the deployer holds gateway
-        // ADMIN_ROLE and is the IC admin at construction time (handover to the
-        // timelock is DeployTimelock's job). In process, the deployer is the
-        // script contract itself.
-        // Capture the constant before pranking: a staticcall would otherwise
-        // consume the prank (same gotcha as ICGatewayIntegration).
-        bytes32 gatewayAdminRole = gateway.ADMIN_ROLE();
-        vm.prank(admin);
-        gateway.grantRole(gatewayAdminRole, address(script));
-
-        // One ceremony deploys both. The receipt contract's ADMIN_ROLE goes to
-        // the timelock and to nothing else.
-        d = script.runInProcessWith(address(script), address(timelock), address(gateway));
-        script.wireGatewayInProcess(d);
+        script = new DeployConsensusRecommendationReceipt();
+        d = script.runInProcessWith(address(timelock));
     }
 
-    /// @dev AC10: both contracts exist after a single ceremony, and both are
-    ///      wired into the gateway.
-    function testOneCeremonyDeploysAndWiresBoth() public view {
-        assertTrue(address(d.policy) != address(0), "IC policy deployed");
+    /// @dev The receipt deploys alone: its retired gateway and IC slots stay empty.
+    function testReceiptDeploysAloneWithRetiredSlotsEmpty() public view {
         assertTrue(address(d.receipts) != address(0), "receipt contract deployed");
-        assertEq(address(gateway.icPolicy()), address(d.policy), "IC wired into gateway");
-        assertEq(
-            address(gateway.consensusReceipt()),
-            address(d.receipts),
-            "receipt contract wired into gateway"
-        );
-        assertEq(d.receipts.gateway(), address(gateway), "receipt gateway pinned");
-        assertEq(
-            d.receipts.icPolicy(),
-            address(d.policy),
-            "receipt reads membership off the same IC policy"
-        );
+        assertEq(d.receipts.gateway(), address(0), "no gateway binding");
+        assertEq(d.receipts.icPolicy(), address(0), "no IC policy binding");
     }
 
-    /// @dev AC2 / INV-3: `ADMIN_ROLE` on the receipt contract is held by the
-    ///      TimelockController — and by nobody else, including the gateway,
-    ///      the deployer, and the protocol admin.
+    /// @dev INV-3: `ADMIN_ROLE` on the receipt contract is held by the TimelockController
+    ///      and by nobody else.
     function testReceiptAdminRoleIsTimelockOnly() public view {
         bytes32 role = d.receipts.ADMIN_ROLE();
         assertTrue(d.receipts.hasRole(role, address(timelock)), "timelock holds ADMIN_ROLE");
-        assertFalse(d.receipts.hasRole(role, address(gateway)), "gateway must not hold it");
-        assertFalse(d.receipts.hasRole(role, admin), "protocol admin must not hold it");
+        assertEq(d.receipts.getRoleMemberCount(role), 1, "the timelock alone holds ADMIN_ROLE");
         assertFalse(d.receipts.hasRole(role, address(script)), "deployer must not hold it");
-        assertFalse(d.receipts.hasRole(role, address(d.policy)), "IC policy must not hold it");
         assertTrue(
             d.receipts.hasRole(d.receipts.DEFAULT_ADMIN_ROLE(), address(timelock)),
             "timelock holds DEFAULT_ADMIN_ROLE"
         );
-        assertFalse(
-            d.receipts.hasRole(d.receipts.DEFAULT_ADMIN_ROLE(), admin),
-            "protocol admin must not hold DEFAULT_ADMIN_ROLE"
+        assertEq(
+            d.receipts.getRoleMemberCount(d.receipts.RECEIPT_SUBMITTER_ROLE()),
+            0,
+            "no submitter at deploy"
+        );
+        assertEq(
+            d.receipts.getRoleMemberCount(d.receipts.RECEIPT_RELEASER_ROLE()),
+            0,
+            "no releaser at deploy"
         );
     }
 
-    /// @dev The as-deployed wiring actually anchors: an allowlisted submitter
-    ///      records through the gateway and only the timelock can release.
-    function testDeployedWiringAnchorsAndReleases() public {
-        address[] memory noList = new address[](0);
-        IGateway.AgentPolicy memory policy = IGateway.AgentPolicy({
-            active: true,
-            validUntil: uint64(block.timestamp + 30 days),
-            maxPerPayment: 1e6,
-            maxPerWindow: 10e6,
-            shareReceiver: address(0xA2),
-            allowedDestinations: noList,
-            assetRecipient: address(0),
-            maxWithdrawPerPayment: 0,
-            maxWithdrawPerWindow: 0,
-            allowedSourceVaults: noList
-        });
-        vm.prank(admin);
-        gateway.authorizeAgent(submitter, policy);
-        vm.prank(admin);
-        gateway.committeeRegister(submitter, "swarm-submitter-v1");
+    /// @dev The as-deployed wiring anchors: the Safe, through the timelock, grants the submitter
+    ///      role, the submitter records directly, and the timelock cannot release (no release
+    ///      role) while a stranger cannot record.
+    function testDeployedWiringAnchorsDirectly() public {
+        bytes32 submitterRole = d.receipts.RECEIPT_SUBMITTER_ROLE();
+        bytes memory grant = abi.encodeCall(d.receipts.grantRole, (submitterRole, submitter));
+        _govSchedule(safe, timelock, address(d.receipts), grant, bytes32(0), 1 hours);
+        _expectExecuteRefused(safe, timelock, address(d.receipts), grant, bytes32(0));
+        vm.warp(block.timestamp + 1 hours);
+        _govExecute(safe, timelock, address(d.receipts), grant, bytes32(0));
+        assertTrue(d.receipts.hasRole(submitterRole, submitter));
 
         bytes32 id = keccak256("ceremony-receipt");
         bytes32 digest = keccak256("ceremony-digest");
+        vm.prank(stranger);
+        vm.expectRevert(IConsensusRecommendationReceipt.SubmitterNotAllowlisted.selector);
+        d.receipts.recordReceipt(id, digest, "https://robotmoney.net/api/swarm/receipts/s1");
+
         vm.prank(submitter);
-        gateway.consensusRecordReceipt(id, digest, "https://robotmoney.net/api/swarm/receipts/s1");
-
+        d.receipts.recordReceipt(id, digest, "https://robotmoney.net/api/swarm/receipts/s1");
         assertEq(d.receipts.getReceiptById(id).payloadDigest, digest);
+        assertEq(d.receipts.getReceiptById(id).submitter, submitter);
 
-        vm.prank(admin);
+        vm.prank(address(timelock));
         vm.expectRevert();
         d.receipts.releaseReceipt(id);
-
-        // Release the way production does: Safe (two signatures) -> timelock -> receipt.
-        bytes memory release = abi.encodeCall(IConsensusRecommendationReceipt.releaseReceipt, (id));
-        _govSchedule(safe, timelock, address(d.receipts), release, bytes32(0), 1 hours);
-        _expectExecuteRefused(safe, timelock, address(d.receipts), release, bytes32(0));
-        vm.warp(block.timestamp + 1 hours);
-        _govExecute(safe, timelock, address(d.receipts), release, bytes32(0));
-        assertTrue(d.receipts.isReleased(id));
-        _expectExecuteRefused(safe, timelock, address(d.receipts), release, bytes32(0));
     }
 }

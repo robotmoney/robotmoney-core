@@ -16,7 +16,6 @@ import { SAFE_141, type Signer } from "../src/safe/index.ts";
 import { RECEIPT_ABI, SAFE_ADMIN_ABI, SAFE_SENTINEL_OWNER, VAULT_ABI, type GovernApi } from "../src/govern.ts";
 import { GOVERNANCE_APPLY_ABI } from "../src/apply-receipt.ts";
 import { GOVERNANCE_CLEAR_ABI } from "../src/clear-voted-weights.ts";
-import { COMMIT_EXPIRY_BLOCKS, GATEWAY_REGISTER_ABI, selfAuthCommitmentKey } from "../src/committee-register.ts";
 import { REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI } from "../src/redeploy-vault.ts";
 import { VAULT_UNWIND_GUARD_ABI } from "../src/unwind-guard.ts";
 import { GOVERNED_PROXY_ABI } from "../src/upgrade-rows.ts";
@@ -24,9 +23,9 @@ import { ERC1967_IMPLEMENTATION_SLOT } from "../src/verify/codehash.ts";
 import { SHA, sheetText, tmp } from "./fixtures.ts";
 
 export const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as Address;
-export const A = { icPolicy: addr(0x1007), timelock: addr(0x2001), safe: addr(0x2002), router: addr(0x1003), registry: addr(0x1002), gateway: addr(0x1004), governance: addr(0x1005), receipt: addr(0x1006), vaults: { USDC: addr(0x3001), PROTO: addr(0x3002), AGENT: addr(0x3003), RWA: addr(0x3004) } };
+export const A = { timelock: addr(0x2001), safe: addr(0x2002), router: addr(0x1003), registry: addr(0x1002), gateway: addr(0x1004), governance: addr(0x1005), receipt: addr(0x1006), vaults: { USDC: addr(0x3001), PROTO: addr(0x3002), AGENT: addr(0x3003), RWA: addr(0x3004) } };
 
-/** Writes the manifests govern reads (timelock, safe, router, registry, gateway, governance, ic-policy's receipt, one per vault) into `dir`. */
+/** Writes the manifests govern reads (timelock, safe, router, registry, gateway, governance, the receipt stage's receipt, one per vault) into `dir`. */
 export function writeGovernManifests(dir: string): void {
   mkdirSync(dir, { recursive: true });
   const w = (f: string, o: object) => writeFileSync(join(dir, `${f}.json`), JSON.stringify(o));
@@ -34,7 +33,7 @@ export function writeGovernManifests(dir: string): void {
   const n = (stage: string) => stageManifestName(t, stage);
   w(n("timelock"), { timelock: A.timelock }); w("safe", { safe: A.safe }); w(n("router"), { router: A.router }); w(n("registry"), { registry: A.registry });
   w(n("recorder"), { recorder: "0x00000000000000000000000000000000000c0c0c" });
-  w(n("gateway"), { gateway: A.gateway }); w(n("governance"), { governance: A.governance }); w(n("ic-policy"), { consensus_receipt: A.receipt, policy: A.icPolicy });
+  w(n("gateway"), { gateway: A.gateway }); w(n("governance"), { governance: A.governance }); w(n("receipt"), { consensus_receipt: A.receipt });
   for (const v of t.vaults) w(manifestBase(v.manifest), { vault: A.vaults[v.key] });
 }
 
@@ -70,7 +69,9 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     digests: new Map<string, Hex>(),
     /** Issue 1831: a receipt's recordedAt (default: its 1-based position in `recorded`, so receipts seeded in order are recorded in order), RouterGovernance's
      *  lastAppliedRecordedAt (an executed applyReceipt raises it and refuses a receipt not newer), and whether RouterGovernance holds the receipt ADMIN_ROLE. */
-    recordedAt: new Map<string, bigint>(), lastAppliedRecordedAt: 0n, governanceIsReceiptAdmin: true,
+    recordedAt: new Map<string, bigint>(), lastAppliedRecordedAt: 0n,
+    /** Issue 1888: who holds what on the receipt. RouterGovernance holds RECEIPT_RELEASER_ROLE (not ADMIN_ROLE), the timelock holds ADMIN_ROLE, and the submitter Safes granted RECEIPT_SUBMITTER_ROLE (lowercase). */
+    governanceIsReceiptReleaser: true, governanceIsReceiptAdmin: false, timelockIsReceiptAdmin: true, submitterRoles: new Set<string>(),
     vaultCaps: new Map<string, bigint>(),
     weights: { vaults: [] as Address[], bps: [] as bigint[] },
     /** Issue 1743: the ACTIVE ("voted") vector on the router. An executed applyReceipt sets it (issue 1698). While set, votedWeightsActive reads true and getEffectiveWeights reads it
@@ -110,6 +111,13 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     timelockLogs: new Map<string, Hex>(),
   };
   const recordedAtOf = (rid: string): bigint => s.recordedAt.get(rid.toLowerCase()) ?? BigInt([...s.recorded].map((x) => x.toLowerCase()).indexOf(rid.toLowerCase()) + 1);
+  const receiptHasRole = (role: string, who: string): boolean => {
+    const r = role.toLowerCase(), w = who.toLowerCase();
+    if (r === ADMIN_ROLE_ID.toLowerCase()) return w === A.timelock.toLowerCase() ? s.timelockIsReceiptAdmin : w === A.governance.toLowerCase() ? s.governanceIsReceiptAdmin : false;
+    if (r === RELEASER_ROLE_ID.toLowerCase()) return w === A.governance.toLowerCase() && s.governanceIsReceiptReleaser;
+    if (r === SUBMITTER_ROLE_ID.toLowerCase()) return s.submitterRoles.has(w);
+    return false;
+  };
   const rowOf = (d?: string) => (d ?? "").split(/[ :]/)[0]!;
   const idOf = (p: { calls: { target: string; data: string }[]; salt: string; form?: string; predecessor?: string }): Hex => keccak256(toBytes(JSON.stringify([p.calls.map((c) => [c.target, c.data]), p.salt, p.form ?? "batch", p.predecessor ?? null])));
   const handle: any = {
@@ -156,10 +164,9 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "commitments": { const c = s.commitments.get(String(args?.[0]).toLowerCase()); return c ? [c.committer, c.block] : [addr(0), 0n]; }
           // the ProposerFloorTimelock counter the tool reads before a PROPOSER_ROLE revoke (B3)
           case "proposerCount": return BigInt([...s.roles].filter((k) => k.startsWith(`${PROPOSER_ROLE_ID}:`)).length);
-          case "hasRole": if (address === A.receipt && String(args?.[1]).toLowerCase() === A.governance.toLowerCase()) return s.governanceIsReceiptAdmin; if (address === A.registry) return s.timelockIsRegistryAdmin; if (address === A.router) return String(args?.[1]).toLowerCase() === A.timelock.toLowerCase() && s.timelockIsRouterAdmin; if (s.governed.has(address)) return String(args?.[1]).toLowerCase() === A.timelock.toLowerCase(); if (address === A.timelock) return s.roles.has(`${String(args?.[0])}:${String(args?.[1]).toLowerCase()}`); if (address === A.gateway) return String(args?.[0]).toLowerCase() === AGENT_ROLE.toLowerCase() ? s.agentRole.has(String(args?.[1]).toLowerCase()) : s.gatewayAdmins.has(String(args?.[1]).toLowerCase()); return address === A.icPolicy ? s.committee.has(String(args?.[1]).toLowerCase()) : s.agentRole.has(String(args?.[1]).toLowerCase()) || s.gatewayAdmins.has(String(args?.[1]).toLowerCase());
+          case "hasRole": if (address === A.receipt) return receiptHasRole(String(args?.[0]), String(args?.[1])); if (address === A.registry) return s.timelockIsRegistryAdmin; if (address === A.router) return String(args?.[1]).toLowerCase() === A.timelock.toLowerCase() && s.timelockIsRouterAdmin; if (s.governed.has(address)) return String(args?.[1]).toLowerCase() === A.timelock.toLowerCase(); if (address === A.timelock) return s.roles.has(`${String(args?.[0])}:${String(args?.[1]).toLowerCase()}`); if (address === A.gateway) return String(args?.[0]).toLowerCase() === AGENT_ROLE.toLowerCase() ? s.agentRole.has(String(args?.[1]).toLowerCase()) : s.gatewayAdmins.has(String(args?.[1]).toLowerCase()); return s.agentRole.has(String(args?.[1]).toLowerCase()) || s.gatewayAdmins.has(String(args?.[1]).toLowerCase());
           case "agentOwner": return s.agentOwner.get(String(args?.[0]).toLowerCase()) ?? addr(0);
-          case "icPolicy": return A.icPolicy;
-          case "agentId": return s.committee.get(String(args?.[0]).toLowerCase()) ?? "";
+          case "getRoleAdmin": return ADMIN_ROLE_ID;
           case "isRecorded": return s.recorded.has(String(args?.[0]).toLowerCase());
           case "getOwners": return s.owners;
           case "getThreshold": return s.threshold;
@@ -211,34 +218,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       const threshold: number = _h?.threshold ?? handle.threshold;
       if (b.signatures.length < threshold) throw new Error(`GS020: below threshold (${b.signatures.length} of ${threshold})`);
       const id: string = b.timelock_operation_id;
-      if (String(b.action).startsWith("submitter-")) {
-        // QA plan v1 B6: the submitter Safe's own gateway calls, as RobotMoneyGateway runs them with msg.sender = that Safe (commit, reveal, hand-over)
-        const lc = (x: unknown) => String(x).toLowerCase();
-        const me = lc(_h?.address);
-        const d = decodeFunctionData({ abi: GATEWAY_REGISTER_ABI, data: b.data });
-        if (d.functionName === "commitAuthorization") s.commitments.set(lc(selfAuthCommitmentKey(d.args[0] as Hex, me as Address)), { committer: me, block: s.clock });
-        else if (d.functionName === "revealAuthorization") {
-          const [agent, salt, p] = d.args as unknown as [Address, Hex, { shareReceiver: string; maxPerPayment: bigint; maxPerWindow: bigint; maxWithdrawPerPayment: bigint; maxWithdrawPerWindow: bigint }];
-          const commitHash = keccak256(encodeAbiParameters([{ type: "address" }, { type: "address" }, { type: "bytes32" }], [agent, me as Address, salt]));
-          const key = lc(selfAuthCommitmentKey(commitHash, me as Address));
-          const c = s.commitments.get(key);
-          if (!c) throw new Error("CommitmentNotFound");
-          if (s.clock <= c.block) throw new Error("CommitmentTooRecent");
-          if (s.clock > c.block + COMMIT_EXPIRY_BLOCKS) throw new Error("CommitmentExpired");
-          s.commitments.delete(key);
-          if (s.agentOwner.has(lc(agent))) throw new Error("AgentAlreadyOwned");
-          if (lc(p.shareReceiver) !== me) throw new Error("ShareReceiverNotAuthorized");
-          // core 1791: a reveal for an address other than the caller needs that address's own consent commitment; the Safe reveals for itself, so it consents by calling
-          if (lc(agent) !== me) throw new Error("OwnerConsentMissing");
-          s.agentOwner.set(lc(agent), me); s.agentRole.add(lc(agent));
-          s.policies.set(lc(agent), { maxPerPayment: p.maxPerPayment, maxPerWindow: p.maxPerWindow, shareReceiver: lc(p.shareReceiver), maxWithdrawPerPayment: p.maxWithdrawPerPayment, maxWithdrawPerWindow: p.maxWithdrawPerWindow });
-        } else if (d.functionName === "transferAgentOwnership") {
-          if (s.agentOwner.get(lc(d.args[0])) !== me) throw new Error("NotAgentOwner");
-          if (lc(d.args[1]) !== lc(A.timelock)) throw new Error("NewAgentOwnerNotAdmin");
-          s.agentOwner.set(lc(d.args[0]), lc(A.timelock));
-        } else throw new Error(`fake: the submitter Safe does not send ${d.functionName}`);
-      }
-      else if (String(b.action).startsWith("safe-")) {
+      if (String(b.action).startsWith("safe-")) {
         // The Safe's own rules (OwnerManager, B4 / T5): the fake reverts what a real SafeL2 1.4.1 reverts, with the Safe's error codes.
         const d = decodeFunctionData({ abi: SAFE_ADMIN_ABI, data: b.data });
         const lc = (x: unknown) => String(x).toLowerCase();
@@ -337,17 +317,6 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
             }
             continue;
           }
-          if (c.target === A.gateway) {
-            let d: ReturnType<typeof decodeFunctionData<typeof GATEWAY_REGISTER_ABI>>;
-            try { d = decodeFunctionData({ abi: GATEWAY_REGISTER_ABI, data: c.data }); } catch { continue; } // a generic test call with junk calldata changes nothing here
-            const who = String(d.args[0]).toLowerCase();
-            // the gateway's owner rules: a first-time authorization reverts on an owned agent (the squat the old batch suffered); setPolicy needs the timelock to be the owner (QA plan v1 B6)
-            const policyOf = (p: any) => ({ maxPerPayment: p.maxPerPayment, maxPerWindow: p.maxPerWindow, shareReceiver: String(p.shareReceiver).toLowerCase(), maxWithdrawPerPayment: p.maxWithdrawPerPayment, maxWithdrawPerWindow: p.maxWithdrawPerWindow });
-            if (d.functionName === "authorizeAgent") { if (s.agentOwner.has(who)) throw new Error("AgentAlreadyOwned"); s.agentRole.add(who); s.agentOwner.set(who, A.timelock.toLowerCase()); s.policies.set(who, policyOf(d.args[1])); }
-            if (d.functionName === "setPolicy") { if (s.agentOwner.get(who) !== A.timelock.toLowerCase()) throw new Error("NotAgentOwner"); s.policies.set(who, policyOf(d.args[1])); }
-            if (d.functionName === "committeeRegister") s.committee.set(who, String(d.args[1]));
-            continue;
-          }
           if (c.target === A.timelock) {
             try {
               const d = decodeFunctionData({ abi: ROLE_ABI_FAKE, data: c.data });
@@ -369,6 +338,14 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
             if ((Object.values(A.vaults).includes(c.target as Address) || s.paused.has(c.target)) && decodeFunctionData({ abi: VAULT_ABI, data: c.data }).functionName === "unpauseDeposits") s.paused.delete(c.target);
             continue;
           }
+          try {
+            const g = decodeFunctionData({ abi: ROLE_ABI_FAKE, data: c.data });
+            if (String(g.args[0]).toLowerCase() === SUBMITTER_ROLE_ID.toLowerCase()) {
+              if (!s.timelockIsReceiptAdmin) throw new Error("AccessControlUnauthorizedAccount");
+              if (g.functionName === "grantRole") s.submitterRoles.add(String(g.args[1]).toLowerCase()); else s.submitterRoles.delete(String(g.args[1]).toLowerCase());
+            }
+            continue;
+          } catch (e) { if (String((e as Error).message).includes("AccessControl")) throw e; /* not a role call: the release below */ }
           const d = decodeFunctionData({ abi: RECEIPT_ABI, data: c.data });
           if (d.functionName === "releaseReceipt") s.released.add(String(d.args[0]).toLowerCase());
         }
@@ -392,6 +369,9 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
 const ROLE_ABI_FAKE = parseAbi(["function grantRole(bytes32 role, address account)", "function revokeRole(bytes32 role, address account)"]);
 const SET_GUARD_SELECTOR = encodeFunctionData({ abi: VAULT_UNWIND_GUARD_ABI, functionName: "setEmergencyUnwindGuard", args: [addr(1), 1n, true, 0n] }).slice(0, 10);
 /** The timelock role ids the fake seeds for the Safe (keccak256 of the role name, as TimelockController declares them). */
+export const ADMIN_ROLE_ID: Hex = keccak256(toBytes("ADMIN_ROLE"));
+export const SUBMITTER_ROLE_ID: Hex = keccak256(toBytes("RECEIPT_SUBMITTER_ROLE"));
+export const RELEASER_ROLE_ID: Hex = keccak256(toBytes("RECEIPT_RELEASER_ROLE"));
 export const PROPOSER_ROLE_ID: Hex = keccak256(toBytes("PROPOSER_ROLE"));
 export const CANCELLER_ROLE_ID: Hex = keccak256(toBytes("CANCELLER_ROLE"));
 export const decodeKey = (d: bigint) => encodeFunctionData({ abi: parseAbi(["function updateDelay(uint256 newDelay)"]), functionName: "updateDelay", args: [d] });

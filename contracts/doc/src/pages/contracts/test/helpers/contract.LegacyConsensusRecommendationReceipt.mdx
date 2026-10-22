@@ -1,0 +1,236 @@
+---
+title: "LegacyConsensusRecommendationReceipt"
+description: "A faithful copy of the v0.5.0 receipt's state and write surface, used ONLY to build a populated proxy that the migration test upgrades to the current receipt. Its storage layout is identical to `ConsensusRecommendationReceipt`: `gateway`, `icPolicy`, the receipt log and the index map, in that order, behind the same bases."
+---
+
+# LegacyConsensusRecommendationReceipt
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/helpers/LegacyConsensusRecommendationReceipt.sol)
+
+**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
+
+**Title:** LegacyConsensusRecommendationReceipt
+
+A faithful copy of the v0.5.0 receipt's state and write surface, used ONLY to build a
+populated proxy that the migration test upgrades to the current receipt. Its storage
+layout is identical to `ConsensusRecommendationReceipt`: `gateway`, `icPolicy`, the
+receipt log and the index map, in that order, behind the same bases.
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### COMMITTEE_AGENT_ROLE
+
+```solidity
+bytes32 public constant COMMITTEE_AGENT_ROLE = keccak256("COMMITTEE_AGENT_ROLE");
+```
+
+## State Variables
+
+### gateway
+
+```solidity
+address public gateway;
+```
+
+### icPolicy
+
+```solidity
+address public icPolicy;
+```
+
+### _receipts
+
+```solidity
+Receipt[] private _receipts;
+```
+
+### _indexPlusOne
+
+```solidity
+mapping(bytes32 => uint256) private _indexPlusOne;
+```
+
+## Functions
+
+<a id="initialize-address-address-address-address-upgrademode"></a>
+
+### initialize
+
+```solidity
+function initialize(
+        address admin_,
+        address gateway_,
+        address icPolicy_,
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
+    ) external initializer;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin_ | `address` |  |
+| gateway_ | `address` |  |
+| icPolicy_ | `address` |  |
+| upgradeTimelock_ | `address` |  |
+| upgradeMode_ | `UpgradeMode` |  |
+
+<a id="_revokerole-bytes32-address"></a>
+
+### _revokeRole
+
+<i>
+
+Reverts when the revoke would remove the final `ADMIN_ROLE` holder.
+Covers both `revokeRole` and `renounceRole`, which both route here.
+
+</i>
+
+```solidity
+function _revokeRole(bytes32 role, address account) internal virtual override returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` |  |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="recordreceipt-address-bytes32-bytes32-string"></a>
+
+### recordReceipt
+
+```solidity
+function recordReceipt(
+        address submitter,
+        bytes32 receiptId,
+        bytes32 payloadDigest,
+        string calldata payloadUri
+    ) external nonReentrant returns (uint256 index);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| submitter | `address` |  |
+| receiptId | `bytes32` |  |
+| payloadDigest | `bytes32` |  |
+| payloadUri | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+<a id="releasereceipt-bytes32"></a>
+
+### releaseReceipt
+
+```solidity
+function releaseReceipt(bytes32 receiptId) external onlyRole(ADMIN_ROLE) nonReentrant;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiptId | `bytes32` |  |
+
+<a id="receiptcount"></a>
+
+### receiptCount
+
+```solidity
+function receiptCount() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="getreceiptbyid-bytes32"></a>
+
+### getReceiptById
+
+```solidity
+function getReceiptById(bytes32 receiptId) external view returns (Receipt memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiptId | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Receipt` |  |
+
+## Errors
+
+### CallerNotGateway
+
+```solidity
+error CallerNotGateway();
+```
+
+### ReceiptAlreadyRecorded
+
+```solidity
+error ReceiptAlreadyRecorded();
+```
+
+### ReceiptNotFound
+
+```solidity
+error ReceiptNotFound();
+```
+
+## Structs
+
+### Receipt
+
+```solidity
+struct Receipt {
+        bytes32 receiptId;
+        bytes32 payloadDigest;
+        string payloadUri;
+        address submitter;
+        uint64 recordedAt;
+        uint64 releasedAt;
+        bool released;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiptId | `bytes32` |  |
+| payloadDigest | `bytes32` |  |
+| payloadUri | `string` |  |
+| submitter | `address` |  |
+| recordedAt | `uint64` |  |
+| releasedAt | `uint64` |  |
+| released | `bool` |  |
+

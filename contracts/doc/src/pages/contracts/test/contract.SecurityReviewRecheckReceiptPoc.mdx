@@ -1,0 +1,83 @@
+---
+title: "SecurityReviewRecheckReceiptPoc"
+---
+
+# SecurityReviewRecheckReceiptPoc
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/SecurityReviewRecheckReceiptPoc.t.sol)
+
+**Inherits:** Test
+
+## State Variables
+
+### attacker
+
+```solidity
+address attacker = address(0xB2);
+```
+
+### member
+
+```solidity
+address member = address(0xB1);
+```
+
+### receipt
+
+```solidity
+ConsensusRecommendationReceipt receipt;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_addresswithouttherolecannotanchorreceipt"></a>
+
+### test_addressWithoutTheRoleCannotAnchorReceipt
+
+<i>
+
+An address with no submitter role cannot anchor, whatever else it holds elsewhere.
+
+</i>
+
+```solidity
+function test_addressWithoutTheRoleCannotAnchorReceipt() public;
+```
+
+<a id="test_submittercannotbespoofedbyargument"></a>
+
+### test_submitterCannotBeSpoofedByArgument
+
+<i>
+
+The submitter is `msg.sender`: there is no argument through which a caller could
+file a receipt under another member's address.
+
+</i>
+
+```solidity
+function test_submitterCannotBeSpoofedByArgument() public;
+```
+
+<a id="test_submittercannotgranttheroletoanotheraccount"></a>
+
+### test_submitterCannotGrantTheRoleToAnotherAccount
+
+<i>
+
+The role admin is ADMIN_ROLE only: a submitter cannot grant the role to another account.
+
+</i>
+
+```solidity
+function test_submitterCannotGrantTheRoleToAnotherAccount() public;
+```
+

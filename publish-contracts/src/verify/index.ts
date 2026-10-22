@@ -9,8 +9,8 @@ import { PROOF_TX_NONCES } from "../counts.ts";
 import { kindLabel, rehearsalDelayProblem } from "../chains.ts";
 import { ERC1967_PROXY_ARTIFACT, compareDeployedCode, loadArtifact, logicCode, tryLoadArtifact } from "./codehash.ts";
 import {
-  ADMIN_ROLE, AGENT_ROLE, COMMITTEE_AGENT_ROLE, KEEPER_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
-  SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
+  ADMIN_ROLE, AGENT_ROLE, RECEIPT_SUBMITTER_ROLE, RECEIPT_RELEASER_ROLE, KEEPER_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
+    SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
 import { manifestBase } from "../stage-table.ts";
 import { SAFE_MANIFEST, VAULT_ADAPTER_V4_FIELD, V4_ADAPTER_ARTIFACT_KEY, VENUE_V4 } from "../core-wiring.ts";
@@ -127,8 +127,8 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     await c.runEq(`${name}: ADMIN_ROLE not held by emergency`, () => hasRole(chain, at, ADMIN_ROLE, sheet.emergency), false);
     await c.runEq(`${name}: ADMIN_ROLE not held by safe`, () => hasRole(chain, at, ADMIN_ROLE, safe), false);
   };
-  for (const n of ["gateway", "registry", "router", "governance", "icpolicy", "receipt"]) await roleChecks(n, byName[n]);
-  for (const n of ["gateway", "icpolicy", "receipt"]) await c.runEq(`${n}: DEFAULT_ADMIN held by timelock`, () => hasRole(chain, byName[n], Z32, tl), true);
+  for (const n of ["gateway", "registry", "router", "governance", "receipt"]) await roleChecks(n, byName[n]);
+  for (const n of ["gateway", "receipt"]) await c.runEq(`${n}: DEFAULT_ADMIN held by timelock`, () => hasRole(chain, byName[n], Z32, tl), true);
   await c.runEq("gateway: DEPOSIT_PAUSER_ROLE held by pauser", () => hasRole(chain, gateway, DEPOSIT_PAUSER_ROLE, sheet.pauser), true);
   await c.runEq("gateway: DEPOSIT_PAUSER_ROLE not held by deployer", () => hasRole(chain, gateway, DEPOSIT_PAUSER_ROLE, D), false);
   await c.runEq("router: ADMIN_ROLE held by governance", () => hasRole(chain, router, ADMIN_ROLE, byName.governance), true);
@@ -167,13 +167,16 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   await c.runEq("registry: router() equals the deployed router", async () => lc((await chain.read(registry, "function router() view returns (address)")) as string), lc(router));
 
   // ---- the weight setter (issue 1698): applyReceipt is gated by governance's own WEIGHT_SETTER_ROLE, held by the timelock alone, and releases receipts on the deployed
-  // receipt register, whose ADMIN_ROLE it holds. Its runtime code has no voting function.
+  // receipt register, whose RECEIPT_RELEASER_ROLE it holds. Its runtime code has no voting function.
   const gov = byName.governance!;
   await c.runEq("governance: WEIGHT_SETTER_ROLE (applyReceipt) held by timelock", () => hasRole(chain, gov, WEIGHT_SETTER_ROLE, tl), true);
   await c.runEq("governance: WEIGHT_SETTER_ROLE (applyReceipt) has exactly one holder", async () => (await chain.read(gov, "function getRoleMemberCount(bytes32 role) view returns (uint256)", [WEIGHT_SETTER_ROLE])) as bigint, 1n);
   await c.runEq("governance: router() equals the deployed router", async () => lc((await chain.read(gov, "function router() view returns (address)")) as string), lc(router));
   await c.runEq("governance: receipts() equals the deployed receipt register", async () => lc((await chain.read(gov, "function receipts() view returns (address)")) as string), lc(byName.receipt!));
-  await c.runEq("receipt: ADMIN_ROLE held by governance (applyReceipt releases)", () => hasRole(chain, byName.receipt!, ADMIN_ROLE, gov), true);
+  // Issue 1888: RouterGovernance releases through the NARROW role, never ADMIN_ROLE (the timelock alone administers the receipt), and the timelock holds no release role.
+  await c.runEq("receipt: RECEIPT_RELEASER_ROLE held by governance (applyReceipt releases)", () => hasRole(chain, byName.receipt!, RECEIPT_RELEASER_ROLE, gov), true);
+  await c.runEq("receipt: ADMIN_ROLE not held by governance", () => hasRole(chain, byName.receipt!, ADMIN_ROLE, gov), false);
+  await c.runEq("receipt: RECEIPT_RELEASER_ROLE not held by timelock", () => hasRole(chain, byName.receipt!, RECEIPT_RELEASER_ROLE, tl), false);
   await c.run("governance: runtime code has no voting function", async () => {
     // Issue 1808: RouterGovernance runs behind an ERC-1967 proxy, so the scan reads the implementation's code.
     const found = votingSelectorsIn(await logicCode(chain, gov, tryLoadArtifact(opts.artifactsDir, ERC1967_PROXY_ARTIFACT)));
@@ -204,7 +207,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     // Issue 1851: the deployer can only have been granted a role on a contract that exists, so the scan start must precede the creation of every governed contract.
     await roleScan(c, chain, D, governed, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
     await roleHolderEnumeration(c, chain, governed, {
-      timelock: tl, accounts: [tl, safe, byName.governance!, sheet.emergency, sheet.pauser], icPolicy: byName.icpolicy!, gateway, router,
+      timelock: tl, accounts: [tl, safe, byName.governance!, sheet.emergency, sheet.pauser], receipt: byName.receipt!, gateway, router,
     }, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
   }
 
@@ -938,12 +941,12 @@ const ROLE_HOLDERS_LABEL = "roles: every holder of every role on every governed 
  * Core 1668. The named checks above ask about the accounts we expect to hold (or not hold) a role, so a fourth holder passes them.
  * This lists every account that was ever granted any role on a governed contract (RoleGranted), keeps those that hold it now, and
  * fails naming each one that is not the timelock, the Safe, RouterGovernance, the emergency key or the pauser. The open executor
- * (address zero) is expected on the timelock's EXECUTOR_ROLE only. The gateway holds ADMIN_ROLE on the IC policy by design (the
- * IC deploy script grants it so committeeRegister can call registerAgent): that one pair is expected.
+ * (address zero) is expected on the timelock's EXECUTOR_ROLE only. The receipt submitter Safe holds RECEIPT_SUBMITTER_ROLE on the
+ * receipt by design (issue 1888): that one role is expected for any holder the timelock granted it to.
  */
 async function roleHolderEnumeration(
   c: Collector, chain: ChainReader, governed: { name: string; address: Address }[],
-  expect: { timelock: Address; accounts: Address[]; icPolicy: Address; gateway: Address; router: Address },
+  expect: { timelock: Address; accounts: Address[]; receipt: Address; gateway: Address; router: Address },
   s: { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number; created: CreationProof },
 ): Promise<void> {
   const late = await s.created(governed);
@@ -965,11 +968,10 @@ async function roleHolderEnumeration(
         // A depositor authorizes its own agent on the gateway after handover (architecture 5.2): AGENT_ROLE holders are users, not
         // governance accounts. "agents: no address holds AGENT_ROLE after handover" already pins zero holders up to the handover block.
         if (lc(g.address) === lc(expect.gateway) && role === AGENT_ROLE) continue;
-        // The consensus receipt submitter Safe (issue 1750) holds COMMITTEE_AGENT_ROLE on the IC policy by design.
-        if (lc(g.address) === lc(expect.icPolicy) && role === COMMITTEE_AGENT_ROLE) continue;
+        // The consensus receipt submitter Safe holds RECEIPT_SUBMITTER_ROLE on the receipt by design (issue 1888).
+        if (lc(g.address) === lc(expect.receipt) && role === RECEIPT_SUBMITTER_ROLE) continue;
         const expected = ok.has(lc(who))
-          || (lc(g.address) === lc(expect.timelock) && role === EXECUTOR_ROLE && lc(who) === lc(ZERO))
-          || (lc(g.address) === lc(expect.icPolicy) && role === ADMIN_ROLE && lc(who) === lc(expect.gateway));
+          || (lc(g.address) === lc(expect.timelock) && role === EXECUTOR_ROLE && lc(who) === lc(ZERO));
         if (!expected) bad.push(`${who} holds ${role} on ${g.name}`);
       }
     }

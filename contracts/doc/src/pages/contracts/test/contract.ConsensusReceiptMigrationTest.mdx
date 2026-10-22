@@ -1,0 +1,219 @@
+---
+title: "ConsensusReceiptMigrationTest"
+description: "The deployed receipt (v0.5.0) gates `recordReceipt` on the gateway, reads the committee registry, and lets RouterGovernance release as the receipt `ADMIN_ROLE` holder. The timelock upgrades the populated proxy with `upgradeToAndCall(newImpl, migrateToSubmitterRoles(governance))`. After it: the role admins are wired, governance holds only the release role, the timelock holds the receipt `ADMIN_ROLE` alone, the retired slots and every historical receipt are unchanged, and record and release work."
+---
+
+# ConsensusReceiptMigrationTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5023b571e018713d76fbfec5a50bf139e4147d15/contracts/test/ConsensusReceiptMigration.t.sol)
+
+**Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
+
+**Title:** ConsensusReceiptMigrationTest
+
+The deployed receipt (v0.5.0) gates `recordReceipt` on the gateway, reads the committee
+registry, and lets RouterGovernance release as the receipt `ADMIN_ROLE` holder. The
+timelock upgrades the populated proxy with `upgradeToAndCall(newImpl,
+migrateToSubmitterRoles(governance))`. After it: the role admins are wired, governance
+holds only the release role, the timelock holds the receipt `ADMIN_ROLE` alone, the
+retired slots and every historical receipt are unchanged, and record and release work.
+
+## Constants
+
+### DELAY
+
+```solidity
+uint256 internal constant DELAY = 1 hours;
+```
+
+### INITIALIZABLE_SLOT
+
+```solidity
+bytes32 internal constant INITIALIZABLE_SLOT =
+        0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00;
+```
+
+## State Variables
+
+### safe
+
+```solidity
+address internal safe;
+```
+
+### timelock
+
+```solidity
+TimelockController internal timelock;
+```
+
+### gatewayStandIn
+
+```solidity
+address internal gatewayStandIn = makeAddr("gateway");
+```
+
+### committeeStandIn
+
+```solidity
+address internal committeeStandIn;
+```
+
+### governance
+
+```solidity
+address internal governance = makeAddr("router-governance");
+```
+
+### submitter
+
+```solidity
+address internal submitter = makeAddr("safe-submitter");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+### legacy
+
+```solidity
+LegacyConsensusRecommendationReceipt internal legacy;
+```
+
+### receipts
+
+```solidity
+ConsensusRecommendationReceipt internal receipts;
+```
+
+### newImpl
+
+```solidity
+address internal newImpl;
+```
+
+### salt
+
+```solidity
+uint256 internal salt;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_salt"></a>
+
+### _salt
+
+```solidity
+function _salt() internal returns (bytes32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_migrationcall"></a>
+
+### _migrationCall
+
+```solidity
+function _migrationCall() internal view returns (bytes memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_migrate"></a>
+
+### _migrate
+
+```solidity
+function _migrate() internal;
+```
+
+<a id="_initializedversion"></a>
+
+### _initializedVersion
+
+```solidity
+function _initializedVersion() internal view returns (uint64);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint64` |  |
+
+<a id="test_migration_wiresroleadminsandmovesgovernancetothereleaserole"></a>
+
+### test_migration_wiresRoleAdminsAndMovesGovernanceToTheReleaseRole
+
+```solidity
+function test_migration_wiresRoleAdminsAndMovesGovernanceToTheReleaseRole() public;
+```
+
+<a id="test_migration_keepsslotsandhistoricalreceiptsunchanged"></a>
+
+### test_migration_keepsSlotsAndHistoricalReceiptsUnchanged
+
+```solidity
+function test_migration_keepsSlotsAndHistoricalReceiptsUnchanged() public;
+```
+
+<a id="test_migration_postupgraderecordandreleasework"></a>
+
+### test_migration_postUpgradeRecordAndReleaseWork
+
+```solidity
+function test_migration_postUpgradeRecordAndReleaseWork() public;
+```
+
+<a id="test_migration_repeatisrejected"></a>
+
+### test_migration_repeatIsRejected
+
+```solidity
+function test_migration_repeatIsRejected() public;
+```
+
+<a id="test_migration_unauthorizedupgradeandunauthorizedmigrationarerejected"></a>
+
+### test_migration_unauthorizedUpgradeAndUnauthorizedMigrationAreRejected
+
+```solidity
+function test_migration_unauthorizedUpgradeAndUnauthorizedMigrationAreRejected() public;
+```
+
+<a id="test_migration_zeroreleaserisrejected"></a>
+
+### test_migration_zeroReleaserIsRejected
+
+```solidity
+function test_migration_zeroReleaserIsRejected() public;
+```
+
+<a id="test_migration_frozenproxycannotupgradeormigrate"></a>
+
+### test_migration_frozenProxyCannotUpgradeOrMigrate
+
+```solidity
+function test_migration_frozenProxyCannotUpgradeOrMigrate() public;
+```
+

@@ -17,8 +17,9 @@ pragma solidity ^0.8.24;
 /// - **No contract expiry.** The rejected multi-signer design's 7-day window is
 ///   deleted, not repurposed. Staleness is derived off-chain from the payload's
 ///   `created_at`.
-/// - `recordReceipt` is `onlyGateway`; `releaseReceipt` is `ADMIN_ROLE`, which
-///   the `TimelockController` holds (INV-3).
+/// - `recordReceipt` is called directly by a `RECEIPT_SUBMITTER_ROLE` holder (the submitter
+///   Safe). `releaseReceipt` needs `RECEIPT_RELEASER_ROLE`, held by RouterGovernance.
+///   `ADMIN_ROLE`, held by the `TimelockController` alone (INV-3), administers both.
 interface IConsensusRecommendationReceipt {
     // ─── Types ───────────────────────────────────────────────────────────────
 
@@ -28,10 +29,10 @@ interface IConsensusRecommendationReceipt {
     /// @param payloadDigest `keccak256` of the receipt's canonical bytes, per
     ///                      `tests/fixtures/consensus-receipt.canonicalization.json`.
     /// @param payloadUri    Stable public route serving those exact bytes.
-    /// @param submitter     Committee agent EOA that attested for the committee.
+    /// @param submitter     The `RECEIPT_SUBMITTER_ROLE` holder that recorded the receipt (`msg.sender`).
     /// @param recordedAt    Block timestamp of `recordReceipt`.
     /// @param releasedAt    Block timestamp of `releaseReceipt`, or 0.
-    /// @param released      Whether an admin has released the receipt.
+    /// @param released      Whether the release role has released the receipt.
     struct Receipt {
         bytes32 receiptId;
         bytes32 payloadDigest;
@@ -44,7 +45,7 @@ interface IConsensusRecommendationReceipt {
 
     // ─── Events ──────────────────────────────────────────────────────────────
 
-    /// @notice Emitted when a committee submitter records a receipt commitment.
+    /// @notice Emitted when a submitter records a receipt commitment.
     /// @dev Exactly three indexed parameters (the EVM's non-anonymous limit).
     ///      No parameter is an analyst signature — the payload signatures are
     ///      never event data, on-chain or indexed. See issue #1247 AC3.
@@ -57,7 +58,7 @@ interface IConsensusRecommendationReceipt {
         uint64 recordedAt
     );
 
-    /// @notice Emitted when `ADMIN_ROLE` releases a recorded receipt.
+    /// @notice Emitted when `RECEIPT_RELEASER_ROLE` releases a recorded receipt.
     /// @dev Signalling only: sets `released = true` and emits. No fund movement,
     ///      no `setWeights` call (INV-4).
     event ReceiptReleased(bytes32 indexed receiptId, address indexed releasedBy, uint64 releasedAt);
@@ -66,9 +67,9 @@ interface IConsensusRecommendationReceipt {
 
     /// @notice Constructor passed `address(0)`.
     error ZeroAddress();
-    /// @notice Caller is not the registered RobotMoneyGateway.
-    error CallerNotGateway();
-    /// @notice Submitter does not hold `COMMITTEE_AGENT_ROLE` on the IC policy.
+    /// @notice `migrateToSubmitterRoles` was called by an account other than the upgrade timelock.
+    error MigrationCallerNotTimelock();
+    /// @notice Caller does not hold `RECEIPT_SUBMITTER_ROLE`.
     error SubmitterNotAllowlisted();
     /// @notice `receiptId` was `bytes32(0)`.
     error EmptyReceiptId();
@@ -85,21 +86,17 @@ interface IConsensusRecommendationReceipt {
 
     // ─── Write surface ───────────────────────────────────────────────────────
 
-    /// @notice Record an unreleased consensus-receipt commitment.
-    ///         Must be called via the RobotMoneyGateway (`onlyGateway`).
-    /// @param submitter     Committee agent that attested (the gateway's `msg.sender`).
+    /// @notice Record an unreleased consensus-receipt commitment. The caller must hold
+    ///         `RECEIPT_SUBMITTER_ROLE` and is stored as the submitter.
     /// @param receiptId     Unique receipt id; see `computeReceiptId`.
     /// @param payloadDigest `keccak256` of the receipt's canonical bytes.
     /// @param payloadUri    Public route serving those exact bytes.
     /// @return index Index of the newly appended receipt.
-    function recordReceipt(
-        address submitter,
-        bytes32 receiptId,
-        bytes32 payloadDigest,
-        string calldata payloadUri
-    ) external returns (uint256 index);
+    function recordReceipt(bytes32 receiptId, bytes32 payloadDigest, string calldata payloadUri)
+        external
+        returns (uint256 index);
 
-    /// @notice Release a recorded receipt. `ADMIN_ROLE` only (the timelock).
+    /// @notice Release a recorded receipt. `RECEIPT_RELEASER_ROLE` only (RouterGovernance).
     ///         Signalling only — see INV-4.
     /// @param receiptId The receipt to release.
     function releaseReceipt(bytes32 receiptId) external;
@@ -128,10 +125,4 @@ interface IConsensusRecommendationReceipt {
         external
         pure
         returns (bytes32);
-
-    /// @notice The RobotMoneyGateway. All receipt writes must originate here.
-    function gateway() external view returns (address);
-
-    /// @notice The InvestmentCommitteePolicy whose `COMMITTEE_AGENT_ROLE` gates submitters.
-    function icPolicy() external view returns (address);
 }

@@ -31,7 +31,7 @@ describe("the stage runner on stub forge and cast", () => {
     expect(lastError(w)).toBeUndefined();
     expect(code).toBe(0);
     expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.recorder, SCRIPT.vault, SCRIPT.registry, SCRIPT.router, SCRIPT.gateway,
-      SCRIPT["ic-policy"], SCRIPT.governance, SCRIPT.proto, SCRIPT.agent, SCRIPT.rwa, SCRIPT.timelock]);
+      SCRIPT.receipt, SCRIPT.governance, SCRIPT.proto, SCRIPT.agent, SCRIPT.rwa, SCRIPT.timelock]);
     expect(w.safeCalls[0]).toBe("createSafe");
     const m = manifest(w);
     expect(Object.keys(m.stages)).toEqual(DEPLOY);
@@ -442,7 +442,7 @@ describe("the core timelock: pinned at the first proxy stage, adopted when someo
     expect(m.stages.timelock.adopted).toBeUndefined();
     // issue 1853: every proxy stage after the first and the timelock stage recompute the pin before they broadcast
     const ok = w.logs().filter((l) => l.event === "stage.timelock_pin_ok");
-    expect(ok.map((l) => l.stage)).toEqual(["registry", "router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa", "timelock"]);
+    expect(ok.map((l) => l.stage)).toEqual(["registry", "router", "gateway", "receipt", "governance", "proto", "agent", "rwa", "timelock"]);
     for (const l of ok) expect(l).toMatchObject({ timelock: TL.address, init_code_hash: TL.initCodeHash });
   });
 
