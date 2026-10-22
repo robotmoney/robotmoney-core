@@ -16,7 +16,7 @@ import {GatewayWindows} from "../lib/GatewayWindows.sol";
 import {IGateway} from "./interfaces/IGateway.sol";
 import {IPortfolioRouter} from "./interfaces/IPortfolioRouter.sol";
 import {IInvestmentCommitteePolicy} from "./interfaces/IInvestmentCommitteePolicy.sol";
-import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommendationReceipt.sol";
+import {IConsensusRecommendationReceipt} from "../interfaces/IConsensusRecommendationReceipt.sol";
 
 /// @title RobotMoneyGateway
 /// @notice Policy-gated agent deposit into an owner-selected ERC-4626 vault. Pulls USDC

@@ -120,7 +120,7 @@ pub const RECEIPT_AGENT_ID: &str = "smoke-test-receipt-agent";
 pub const RECEIPT_B_WRONG_DIGEST_PREIMAGE: &[u8] = b"smoke-test-wrong-digest-marker-for-1294";
 
 /// `keccak256(abi.encodePacked("robotmoney:consensus-receipt-id:v1\n", sessionId, "\n", subjectId))`, mirroring
-/// `ConsensusRecommendationReceipt.computeReceiptId` exactly (contracts/gateway/ConsensusRecommendationReceipt.sol).
+/// `ConsensusRecommendationReceipt.computeReceiptId` exactly (contracts/ConsensusRecommendationReceipt.sol).
 /// `abi.encodePacked` on `string` params is a plain byte concatenation, so this needs no RPC round trip.
 pub fn compute_receipt_id(session_id: &str, subject_id: &str) -> [u8; 32] {
     const RECEIPT_ID_DOMAIN: &str = "robotmoney:consensus-receipt-id:v1\n";

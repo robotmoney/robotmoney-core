@@ -146,7 +146,11 @@ contract DeployTest is Test {
         // The receipt stage deploys alone: it binds no gateway and wires nothing into it.
         DeployConsensusRecommendationReceipt rs = new DeployConsensusRecommendationReceipt();
         DeployConsensusRecommendationReceipt.Deployed memory d = rs.runInProcessWith(admin);
-        assertEq(d.receipts.gateway(), address(0), "receipt binds no gateway");
+        assertEq(
+            address(uint160(uint256(vm.load(address(d.receipts), bytes32(0))))),
+            address(0),
+            "receipt retired writer slot empty"
+        );
         assertEq(d.receipts.icPolicy(), address(0), "receipt binds no IC policy");
         assertEq(address(s.gateway.icPolicy()), address(0), "gateway has no IC policy");
         assertEq(address(s.gateway.consensusReceipt()), address(0), "gateway has no receipt route");

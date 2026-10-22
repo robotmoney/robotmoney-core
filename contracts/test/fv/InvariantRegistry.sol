@@ -53,10 +53,10 @@ library InvariantRegistry {
         uint256 i;
 
         // ── 0. System boundary (SYS) ─────────────────────────────────────────
-        // Issue 1892 (SS-1019-10): no vaults-system contract depends on the gateway. RED until the follow-up (1906)
-        // moves the receipt out of contracts/gateway and settles its retired gateway slot. Executed assertions: SystemSplitSys1Test, SystemSplitInvariant,
+        // Issue 1892 (SS-1019-10): no vaults-system contract depends on the gateway. HOLDS since the receipt left
+        // contracts/gateway and its retired slot was renamed (issue 1906). Executed assertions: SystemSplitSys1Test, SystemSplitInvariant,
         // the static guard scripts/ci/check-system-split.ts. SYS-2 is retired and was never a registry ID.
-        e[i++] = Entry("SYS-1", Status.RED, "static-guard", 1906);
+        e[i++] = Entry("SYS-1", Status.HOLDS, "static-guard", 0);
 
         // ── 1. Custody & solvency (INV-1/2/3, CUST) ──────────────────────────
         e[i++] = Entry("INV-1", Status.HOLDS, "static-guard", 0);

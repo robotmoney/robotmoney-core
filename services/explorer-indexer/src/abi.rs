@@ -319,8 +319,8 @@ sol! {
 
     /// Event surface from `ConsensusRecommendationReceipt`.
     ///
-    /// Signatures match `contracts/gateway/ConsensusRecommendationReceipt.sol` and
-    /// `contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol` exactly.
+    /// Signatures match `contracts/ConsensusRecommendationReceipt.sol` and
+    /// `contracts/interfaces/IConsensusRecommendationReceipt.sol` exactly.
     /// See `docs/architecture.md §4.9` and issue #1247.
     ///
     /// Two events are indexed:

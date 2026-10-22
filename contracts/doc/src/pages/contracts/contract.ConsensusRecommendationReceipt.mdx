@@ -5,9 +5,9 @@ description: "On-chain commitment register for the swarm's consensus recommendat
 
 # ConsensusRecommendationReceipt
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/gateway/ConsensusRecommendationReceipt.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/ConsensusRecommendationReceipt.sol)
 
-**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IConsensusRecommendationReceipt](/contracts/gateway/interfaces/interface.IConsensusRecommendationReceipt)
+**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IConsensusRecommendationReceipt](/contracts/interfaces/interface.IConsensusRecommendationReceipt)
 
 **Title:** ConsensusRecommendationReceipt
 
@@ -53,7 +53,7 @@ Emits: `ReceiptRecorded`, `ReceiptReleased`.
 
 Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
 the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
-(`GovernedUUPS`). `gateway` and `icPolicy` are retired storage slots: they are kept so the
+(`GovernedUUPS`). `_retiredWriterSlot` (slot 0) and `icPolicy` are retired storage slots: they are kept so the
 proxy layout never changes, they are never written again and nothing reads them.
 
 ## Constants
@@ -96,12 +96,18 @@ string internal constant RECEIPT_ID_DOMAIN = "robotmoney:consensus-receipt-id:v1
 
 ## State Variables
 
-### gateway
+### _retiredWriterSlot
 
-Retired slot. Formerly the only permitted writer. Never written, never read.
+<i>
+
+Retired slot 0. Formerly the only permitted writer (it held the gateway address). Never written, never read.
+It stays so the proxy layout never changes (ADR-0014). The public getter is gone: the vaults system names no
+gateway (SYS-1, issue 1906). The ABI drops the retired getter and the storage-layout gate records the rename.
+
+</i>
 
 ```solidity
-address public gateway;
+address private _retiredWriterSlot;
 ```
 
 ### icPolicy

@@ -12,7 +12,7 @@ import {RouterGovernance} from "../RouterGovernance.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
-import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../ConsensusRecommendationReceipt.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────

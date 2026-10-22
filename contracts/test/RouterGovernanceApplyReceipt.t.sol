@@ -12,7 +12,7 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
-import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../ConsensusRecommendationReceipt.sol";
 import {DeployRouterGovernance} from "../script/DeployRouterGovernance.s.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 import {MockUsdc, MockGovVault} from "./RouterGovernance.t.sol";

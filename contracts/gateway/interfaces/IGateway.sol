@@ -4,7 +4,9 @@
 pragma solidity ^0.8.24;
 
 import {IInvestmentCommitteePolicy} from "./IInvestmentCommitteePolicy.sol";
-import {IConsensusRecommendationReceipt} from "./IConsensusRecommendationReceipt.sol";
+import {
+    IConsensusRecommendationReceipt
+} from "../../interfaces/IConsensusRecommendationReceipt.sol";
 
 /// @title IGateway
 /// @notice Minimal interface stub for the RobotMoney deposit gateway.

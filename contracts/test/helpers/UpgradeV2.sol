@@ -9,7 +9,7 @@ import {RwaBasketVault} from "../../vaults/RwaBasketVault.sol";
 import {VaultRegistry} from "../../VaultRegistry.sol";
 import {PortfolioRouter} from "../../PortfolioRouter.sol";
 import {RobotMoneyGateway} from "../../gateway/RobotMoneyGateway.sol";
-import {ConsensusRecommendationReceipt} from "../../gateway/ConsensusRecommendationReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../../ConsensusRecommendationReceipt.sol";
 import {RouterGovernance} from "../../RouterGovernance.sol";
 
 // Test-only v2 implementations (issue 1808). Each is the v1 contract plus one marker getter, so a

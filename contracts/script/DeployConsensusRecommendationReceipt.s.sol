@@ -6,7 +6,7 @@ pragma solidity ^0.8.24;
 import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
-import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../ConsensusRecommendationReceipt.sol";
 import {UpgradeAuthority} from "./UpgradeAuthority.sol";
 
 /// @title DeployConsensusRecommendationReceipt

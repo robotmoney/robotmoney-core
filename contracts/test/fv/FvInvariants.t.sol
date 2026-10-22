@@ -51,7 +51,7 @@ import {InvariantRegistry} from "./InvariantRegistry.sol";
 import {VaultRegistry} from "../../VaultRegistry.sol";
 import {PortfolioRouter} from "../../PortfolioRouter.sol";
 import {RouterGovernance} from "../../RouterGovernance.sol";
-import {ConsensusRecommendationReceipt} from "../../gateway/ConsensusRecommendationReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../../ConsensusRecommendationReceipt.sol";
 import {CoreProxies} from "../helpers/CoreProxies.sol";
 
 /// @dev Minimal USDC for the router-deposit FV harness.

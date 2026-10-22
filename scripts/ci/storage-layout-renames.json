@@ -1,0 +1,15 @@
+{
+  "_comment": "Reviewed label-only renames of proxy storage rows. The slot, offset and type are pinned: only the name changes, so the proxy layout is untouched. check-core-storage-layout.sh applies these to a baseline snapshot before it checks that the live layout extends it. Do not add entries for a moved or retyped variable.",
+  "renames": [
+    {
+      "contract": "ConsensusRecommendationReceipt",
+      "from": "gateway",
+      "to": "_retiredWriterSlot",
+      "slot": "0",
+      "offset": 0,
+      "type": "t_address",
+      "issue": 1906,
+      "reason": "SYS-1: a vaults-system contract names no gateway. The slot is retired (never written, never read) and keeps its position. The public getter gateway() is dropped from the ABI."
+    }
+  ]
+}

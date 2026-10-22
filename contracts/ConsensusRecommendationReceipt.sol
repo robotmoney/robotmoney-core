@@ -5,11 +5,11 @@
 // Implements: issue #1247 — (fusion) anchor the receipt on chain
 pragma solidity ^0.8.24;
 
-import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
+import {AdminFloorAccessControl} from "./lib/AdminFloorAccessControl.sol";
 import {
     ReentrancyGuardUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import {GovernedUUPS, GovernedUpgrade} from "../lib/GovernedUUPS.sol";
+import {GovernedUUPS, GovernedUpgrade} from "./lib/GovernedUUPS.sol";
 
 import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommendationReceipt.sol";
 
@@ -56,7 +56,7 @@ import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommenda
 ///
 /// Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
 /// the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
-/// (`GovernedUUPS`). `gateway` and `icPolicy` are retired storage slots: they are kept so the
+/// (`GovernedUUPS`). `_retiredWriterSlot` (slot 0) and `icPolicy` are retired storage slots: they are kept so the
 /// proxy layout never changes, they are never written again and nothing reads them.
 contract ConsensusRecommendationReceipt is
     AdminFloorAccessControl,
@@ -86,8 +86,10 @@ contract ConsensusRecommendationReceipt is
 
     // ─── State ───────────────────────────────────────────────────────────────
 
-    /// @notice Retired slot. Formerly the only permitted writer. Never written, never read.
-    address public gateway;
+    /// @dev Retired slot 0. Formerly the only permitted writer (it held the gateway address). Never written, never read.
+    ///      It stays so the proxy layout never changes (ADR-0014). The public getter is gone: the vaults system names no
+    ///      gateway (SYS-1, issue 1906). The ABI drops the retired getter and the storage-layout gate records the rename.
+    address private _retiredWriterSlot;
 
     /// @notice Retired slot. Formerly the committee role source. Never written, never read.
     address public icPolicy;

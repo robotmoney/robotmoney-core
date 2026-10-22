@@ -9,7 +9,7 @@ import {Test} from "forge-std/Test.sol";
 import {DeployRouterGovernance} from "../script/DeployRouterGovernance.s.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
-import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../ConsensusRecommendationReceipt.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
 
