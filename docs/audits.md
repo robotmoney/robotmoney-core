@@ -668,6 +668,22 @@ Internal review of the owner decision to park RM out of rmAGENT until its market
 | RP-1021-2 | RP-1021 | Medium | accepted-with-rationale | AgentTokenVault, config/agent-token-shortlist.json | — | rmAGENT launches with BNKR as a test asset on a thin pool (about 706 USD virtual, ADR-0016) while RM is parked by the owner (2026-10-21). Open until the RM criteria hold, or a deeper venue is decided, and a timelock addAsset lands. |
 | RP-1021-3 | RP-1021 | Low | accepted-with-rationale | testing/smoke-test twin_publish, contracts/test fork tests, scripts/ci | — | Tests that need RM and its pool run on a reactivated copy of the config (RM_PARKED), never skipped, no bound lowered, no liquidity seeded. Issue 1900 (seed the Twin pool) is superseded. |
 
+### RB-1022 — Release branch model: tooling and CI gaps (2026-10-22, 9 findings)
+
+Internal review of the gaps between the release branch policy (`docs/operations/contract-release-runbooks.md` sections 2, 3, 4.5, 4.14 and 7) and today's tooling, CI and repository settings (`docs/code-review/20261022-code-review-internal-claude-release-branch-model-gaps.md`). The review also records how `releases-0.5.x` relates to its rc tags and to `dev`. Row `RB-1022-N` is the review's finding heading `### N.`.
+
+| Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |
+|---|---|---|---|---|---|---|
+| RB-1022-1 | RB-1022 | Medium | accepted-with-rationale | release-tag.ts, release-gate.ts | — | The release gate binds an rc tag to a sha only. It does not check the release branch, the rc name grammar or the QA-passed tree. Open until a tool and the gate enforce them. |
+| RB-1022-2 | RB-1022 | Medium | accepted-with-rationale | release-gate.ts, cli.ts (counts-require-origin-dev) | — | The counts-checkout flag proves reachability from origin/dev only, so a counts commit on releases-A.B.x is refused. Open until the flag takes the release line's origin ref. |
+| RB-1022-3 | RB-1022 | Medium | accepted-with-rationale | suite-01-02 to suite-28 triggers, check-sha-green, deploy-gate-jobs | — | No workflow runs on qa/** and only six name releases-*, so a squash commit on the release branch lacks the required jobs. Open until the push triggers and the deploy-gate derivation cover both. |
+| RB-1022-4 | RB-1022 | Low | accepted-with-rationale | check-core-storage-layout.sh --releases | — | The layout baseline reads every non-rehearsal release/* tag, so an undeployed rc becomes a baseline. Open until it reads the version tags of deployed releases. |
+| RB-1022-5 | RB-1022 | Medium | accepted-with-rationale | scripts/release, contract QA runbook runner | — | No tool cuts the rc, checks the squash or keeps the QA journal with the tree hash. Open until a tool in scripts/release does. |
+| RB-1022-6 | RB-1022 | Low | accepted-with-rationale | validate-contract-qa.ts, template pin | — | The validator does not bind a target to its ref, and a templateSha on a QA branch commit depends on the branch being kept. Open until the validator checks both. |
+| RB-1022-7 | RB-1022 | Low | accepted-with-rationale | branch protection, tag rulesets | — | The never-rewritten, squash-only and tag-immutability rules are conventions because branch protection is a won't-fix. The release/* ruleset is an owner setting still to do. |
+| RB-1022-8 | RB-1022 | Low | accepted-with-rationale | validate-contract-qa.ts scopeProblems | — | The scope list is checked for shape, not against the commits between the deployed version and the rc. Open until a scope step compares them. |
+| RB-1022-9 | RB-1022 | Low | accepted-with-rationale | fusion-devnet-ci.md, legacy releases-v0.4.0-base branches | — | A doc names a releases-0.4.x branch that is not on origin, and four legacy branches use the old naming. Open until the owner archives or deletes them. |
+
 ### Gap analysis — process & coverage backlog (20260607-code-review-internal-claude-gap-analysis.md)
 
 > The gap analysis enumerates 50 tracked-as-future-work items (issues #643–#692),

@@ -9,19 +9,25 @@
 > Markdown example is [`docs/runbooks/v0-1-0-devnet-verification.md`](../runbooks/v0-1-0-devnet-verification.md).
 >
 > Modeled on the sibling frontend repo's `docs/technical/release-runbooks.md`
-> policy, currently written for direct Solidity contract deployments rather than a
-> mutable Postgres-backed application: there is no in-place upgrade of the
-> existing direct contracts and no in-place rollback. The planned UUPS/freeze
-> release path requires the mode and verification gates in
-> [`docs/technical/contract-upgradeability-plan.md`](../technical/contract-upgradeability-plan.md)
-> before it can be used. "The release branch" is the stage scripts under `contracts/script/` (listed in
-> `scripts/deploy/stage-table.json`) at a specific commit, not a database.
+> policy (owner decision 2026-10-22): release branches `releases-A.B.x`, QA on a
+> `qa/` branch with every patch merged there, a squash of the passed QA branch onto
+> the release branch, a release candidate tag at the squash commit, and production
+> executed only from that tag. It is written for Solidity contracts rather than a
+> mutable Postgres-backed application. "The release" is the stage scripts under
+> `contracts/script/` (listed in `scripts/deploy/stage-table.json`), the contracts,
+> the `publish-contracts` tool and the release runbook YAML, at one commit of the
+> release branch. A release either deploys a NEW set of contracts (the first release of a line) or
+> upgrades the live governed proxies of the line through the Safe and the timelock
+> (§4.14). There is no in-place upgrade of the existing direct contracts and no
+> in-place rollback of any contract: a governed proxy rolls back by another governed
+> upgrade (§4.12). The governed upgrade path requires the mode and verification
+> gates in [`docs/technical/contract-upgradeability-plan.md`](../technical/contract-upgradeability-plan.md).
 
 This is not the process for landing ordinary feature work — that is PR review
 against `dev`, covered by the repo's CI taxonomy. This document is
-specifically about the step where a set of already-merged `dev` history is
-packaged, rehearsed, and cut over into a real chain deployment — Robot Money
-Devnet or Base mainnet.
+specifically about the step where a release's scope is carried onto a release
+branch, rehearsed on a QA branch, cut as a release candidate and cut over into
+a real chain deployment — Robot Money Devnet or Base mainnet.
 
 ## 1. Scope and authority
 
@@ -36,56 +42,149 @@ No deployment may skip a gate described here unless the release tracking
 issue explicitly records the exception, the reason for it, and operator
 sign-off.
 
-## 2. Release identity and target network
+**Owner-gated broadcast.** An agent drives the runbook, and the owner holds the
+keys and the go. An agent never broadcasts a transaction to Base mainnet (chain
+8453, rehearsal or production kind) without the owner's explicit, recorded go
+for that run (the `go` of the step, `docs/runbooks/contract-qa/README.md`).
+The Twin chain needs no go. Owners and operators sign Safe transactions with
+their own keystores or hardware wallets, and the passphrase is typed by the
+owner at the hidden prompt.
+
+## 2. Release identity, branches and target network
 
 Each contract release is identified by a semantic version `vA.B.C`, minted
 **only for a change that actually ships** — i.e. a real, addressed deployment
-to a real network (Robot Money Devnet or Base mainnet). A
-rehearsal that does not produce a lasting, addressed deployment record does
-not consume a version number.
+to a real network (Robot Money Devnet or Base mainnet), or a governed upgrade
+of one. A rehearsal that does not produce a lasting, addressed deployment
+record does not consume a version number.
 
-Unlike the frontend's `releases-A.B.x` branch convention, contract releases
-do not need a dedicated long-lived branch: the scripts under `contracts/script/`
-already read every deploy-time parameter from
-environment variables, so the same scripts at a single commit on `dev`
-deploy to every target network. The version tag `vA.B.C` is cut on `dev` at
-the exact commit that was deployed and verified — there is no cherry-pick
-dance, because there is no long-lived release branch to keep in sync.
+**Release branches (owner decision 2026-10-22).** Each release line ships from
+`releases-A.B.x` (literal `releases`, the integer major and minor, a literal
+`x`). Example: `releases-0.5.x`. The scripts under `contracts/script/` read every
+deploy-time parameter from environment variables, so one commit deploys to
+every target network. The release branch fixes which commit that is, and keeps
+the line's tags, QA evidence and patches in one history. Feature PRs never
+target a release branch. The first release of a line (`vA.B.0`) cuts
+`releases-A.B.x` from `dev` at the tip its scope names. `dev` carries the next
+line. A line frozen on chain (`freezeUpgrades`, §4.12) takes only tooling,
+runbook and documentation patches, and never a change to `contracts/`.
+
+The release branch takes changes by three routes only:
+
+- **(a) Scope.** Before a QA session starts, the release's scope reaches
+  `releases-A.B.x` from `dev` by a pull request whose base is the release
+  branch, carrying a merge of, or `git cherry-pick -x` of, the named `dev`
+  commits. The release YAML's `scope:` lists every PR the release ships (§5).
+- **(b) The passed QA branch.** After the QA runbook passes on the Twin at a
+  commit of `qa/A.B.x-<YYYY-MM-DD>`, that branch is **squash-merged** onto
+  `releases-A.B.x`. The squash commit's tree must equal the tree QA passed, and
+  the release branch must not have moved since the QA branch was cut.
+- **(c) The frozen-counts record.** After an rc tag is cut at the squash
+  commit and the Twin rehearsal has run there, the data-only pull request that
+  adds `deployments/frozen-counts/<sha>.json` and nothing else (§3, §4.3). It
+  lands before the next QA session is cut.
+
+No other commit lands on the release branch, and no commit lands on it during a QA
+session. Session fixes reach `dev` afterwards by a separate PR from the QA
+branch (§7). A release branch is force-pushed only on an explicit owner
+instruction, after `archive/releases-A.B.x-<YYYY-MM-DD>` is pushed. Release tags
+land on the release branch, never on `dev` or a QA branch.
+
+**QA branches.** A QA session cuts one `qa/A.B.x-<YYYY-MM-DD>` branch from the
+release branch tip and pushes it. Every patch of the session, runbook
+corrections included, merges there by PR. A pushed QA branch is never
+rewritten: no force push, reset or rebase. A new base means a new branch,
+`qa/A.B.x-<YYYY-MM-DD>-2`, and the session report names which branch each piece
+of evidence ran on. Every CI workflow runs on a push to `qa/**`, so the commit
+QA runs carries its own green CI. A QA branch is kept after its squash: the
+session report and a release file's `templateSha` name its commits.
+
+**Where QA runs.** QA runs the release's runbook YAML on the Twin chain (918453)
+at a clean, pushed QA commit, never a PR head or a fix branch
+(`docs/runbooks/contract-qa/README.md`, Targets). The Twin fork, any anvil and any fork of Base
+run on the stage host `rm-core-stage-1`, never on the operator machine. The
+operator machine holds the keys and drives the run over ssh. A host runs a clean
+checkout of a pushed commit (`git status --porcelain` empty), and a fix is
+developed in a development worktree, never on a host. The QA runbook, and the
+freeze gate's Twin job, `core-stages-twin-upgrade-lifecycle` (§4.1), run at the
+QA commit. The Twin proves execution and ordering. It does not prove the 48 hour delay or the mainnet signers.
+
+**Rehearsal kind.** A release of the rehearsal kind (`DEPLOYMENT_KIND=rehearsal`,
+§4.10) is deployed to Base 8453 with a 900 s timelock. That deployment is the
+release itself, so it runs from the rc tag exactly as a production release does
+(§4.14), after the Twin QA passed. A tool-only fix found during such a run is made on a new
+QA branch, squashed and tagged as the next rc, and the run continues at that
+commit, gated at the sha the deployment started at (`publish-contracts/src/tooling-sha.ts`).
+
+**The squash.** Before squashing, confirm all of the following, and record them
+in the QA report: the QA branch's tip is the commit the QA runbook passed; its
+tree hash is recorded; `origin/releases-A.B.x` is the commit the QA branch was
+cut from; CI is green on the QA tip. After squashing, confirm the squash
+commit's tree hash equals the recorded one. A mismatch, or a release branch
+that moved, means the QA branch is abandoned and a new one is cut from the new
+tip.
+
+**Adopting `releases-0.5.x` as the v0.5 line.** The live Deploy 3 line is the
+branch `releases-0.5.x`, whose name already follows this policy. It is adopted
+as it stands. Its tip (`077de79c`, 2026-10-19) is the line's baseline. Its rc
+tags `release/v0.5.0-rc.1-rehearsal` to `release/v0.5.0-rc.13-rehearsal` and the record tag
+`release/v0.5.0-rehearsal` (cut at the `rc.9` commit, `57fbe618`) stay where they are, as
+the history of Deploy 3 before this policy. The tip's tree equals `dev`'s tree at the merge of the
+runbook pull request (1877, `e362df0c`), which squashed the branch's commits
+onto `dev`. From the adoption on, the branch takes changes by routes (a) to (c) only. The
+next v0.5 session cuts `qa/0.5.x-<YYYY-MM-DD>` from the tip, and the next rc of
+`v0.5.0` is `rc.14`. A `dev` change reaches the line only by route (a), and the
+owner names it: everything else on `dev` ships on the next line,
+`releases-0.6.x`.
 
 From v0.5.0 (owner decision 2026-10-16) the version tag of a Base mainnet
 production deployment is `vA.B.C` with no network suffix. A rehearsal-kind
 deployment (§4.10, Deploy 3 included) cuts no version tag: its record is the
 `release/<version>-rehearsal` tag and its evidence. Earlier tags keep their old names (`release/v0.4.0-base`).
-The release gate only needs an annotated tag of the sheet's kind at the sha a run names (`release-tag.ts`: a rehearsal tag ends in
-`-rehearsal`), so each run of a rehearsal is gated on its release candidate tag `release/<version>-rc.N-rehearsal`. The record tag
-`release/<version>-rehearsal` is cut once, at the sha the run manifest names (the sha the deployment started at), and is never moved.
-A rehearsal that continues at a later tool-only commit (`publish-contracts/src/tooling-sha.ts`) keeps its record tag where the
-deployment started; the rc tags mark every commit a run ran at. A rehearsal that continues at such a tool-only commit is gated
-at the sha the deployment started at: the tag, the green CI and the frozen counts of that sha cover it (owner decision 2026-10-19,
-`publish-contracts/src/cli.ts`). A production run is always gated at its own sha.
 A Devnet (Twin chain) verification pass is not tagged: its record is the CI
-run and the evidence folder.
+run, the QA journal and the evidence folder.
 
-`v*.*.*` is also the dApp's release namespace (`release-dapp.yml`, issue 1243).
-Pushing `vA.B.C` builds the dApp image at that commit, pushes it to GHCR as
-`vA.B.C` and `:latest`, and starts the release-tag suite dispatch. One tag
-therefore names the contracts and the dApp of a release. Do not push a
-contract version tag whose number a dApp release already used.
+## 3. Release candidates and version tags
 
-## 3. Version tags and rehearsal candidates
+**Tag names.** There are three kinds of tag. Do not confuse them.
 
-This section covers two different tags. Do not confuse them.
+| Tag | Name | Cut at | Meaning |
+| --- | --- | --- | --- |
+| Release candidate (rc) | `release/vA.B.C-rc.N` (production kind) or `release/vA.B.C-rc.N-rehearsal` (rehearsal kind), annotated, `N` from 0 | The squash commit on `releases-A.B.x` | The commit whose tree passed Twin QA. The contracts-freeze gate tag. Production runs only from it (§4.14) |
+| Record (rehearsal kind only) | `release/vA.B.C-rehearsal`, annotated | The sha the deployment started at | The deployment's record. Cut once, never moved |
+| Version | `vA.B.C`, annotated | The commit of the final rc | What production was proven deployed at. Production kind only |
 
-- The **release tag** (`release/<version>`, annotated) names the release SHA
-  *before* the final Twin rehearsal. It is the contracts-freeze gate: tag the
-  release SHA, run the final Twin rehearsal at that SHA, then commit its
+The kind of an rc tag is its suffix: `-rehearsal` means rehearsal, anything else
+means production, and a name that mentions rehearsal anywhere else satisfies
+neither (`release-tag.ts`). The release gate needs an annotated tag of the sheet's
+kind at the sha a run names, so each run is gated on its rc tag. The rc tag lives in the `release/` namespace on purpose:
+`v*.*.*` is also the dApp's release namespace (`release-dapp.yml`, issue 1243), and
+pushing `vA.B.C-rc.N` would build and publish the dApp image. Pushing `vA.B.C`
+builds the dApp image at that commit, pushes it to GHCR as `vA.B.C` and `:latest`,
+and starts the release-tag suite dispatch. One version tag therefore names the
+contracts and the dApp of a release. Do not push a contract version tag whose
+number a dApp release already used.
+
+A rehearsal that continues at a later tool-only commit
+(`publish-contracts/src/tooling-sha.ts`) keeps its record tag where the
+deployment started. The rc tags mark every commit a run ran at, and that run is gated at the sha the
+deployment started at: the tag, the green CI and the frozen counts of that sha
+cover it (owner decision 2026-10-19, `publish-contracts/src/cli.ts`). A production run is always gated at its own sha.
+
+This section covers the rc tag and the version tag. The first bullet is the
+contracts-freeze gate that the rc tag satisfies.
+
+- The **release candidate tag** (the rc tag, annotated; its name is in "Tag names" above)
+  names the release SHA, the squash commit on the release branch, *before* the
+  final Twin rehearsal. It is the contracts-freeze gate: tag the squash commit,
+  run the final Twin rehearsal at that SHA, then commit its
   frozen per-stage transaction counts to
-  `deployments/frozen-counts/<sha>.json`. The rehearsal is the `core-stages-twin-chain`
-  job of suite 28 (every push to `dev` and the nightly). Download the `rehearsal-counts-<sha>`
+  `deployments/frozen-counts/<sha>.json` by §2 route (c). The rehearsal is the `core-stages-twin-chain`
+  job of suite 28 (every push to `dev`, `releases-*` and `qa/**`, and the nightly). Download the `rehearsal-counts-<sha>`
   artifact of the release SHA's run, review `counts.json`, and write its `counts` (with `deploySha` and
   the `measured` chain id and time) to that file with
   `bun publish-contracts/scripts/freeze-counts.ts --counts counts.json`. Take the artifact from the
-  **push** run of the tagged SHA: on a pull request `github.sha` is the merge commit, not the release SHA.
+  **push** run of the tagged SHA, the push of the squash commit to `releases-A.B.x`: on a pull request `github.sha` is the merge commit, not the release SHA.
   - **The normal case since Base block 52401633: the run adopted the CREATE2 libraries (issue 1733).** Every Twin fork pinned at or after that block already holds
     TickMath, BasketAssetConfigGuard, TwapTickMath and BasketViews, so the measuring run ADOPTS them (libs 0, proto 7) and its `counts.json` carries `adopted`.
     `freeze-counts.ts --counts` refuses it, and so does every 8453 path. Rebuild the BASELINE for the new sha from that same `counts.json` instead:
@@ -113,7 +212,7 @@ This section covers two different tags. Do not confuse them.
   frozen counts (`COUNTS_MISSING`), whose counts file is untracked, staged, modified or ignored in its git work tree (`COUNTS_UNTRACKED`, exit 31; a reconstructed baseline gets the stricter whole-dir proof instead, see **Release layout of a reconstructed baseline**) or is not green in `check-sha-green` (`CI_NOT_GREEN`; the check always names `robotmoney/robotmoney-core`, never the caller's `GITHUB_REPOSITORY`).
   The same gate runs before any signer exists and before forge on every other broadcasting 8453 run (issue 1816): `publish`, the default stage set, `--stage deploy` or `all`, any stage list naming a deployer stage, `safe`, `prove-control` or `govern`, the `govern` verb (every row, stage 13 and on demand) and the `redeploy-vault` verb. The redeploy verb and the `govern --row redeploy-vault` run at its round's SHA skip only the counts step (they have no frozen file of their own). A verify-only run, `pause-all`, `record-receipt` and a `--dry-run` of the stages are exempt. Hardware signing (`ledger`, `trezor`) is optional for a Safe owner signer, never required (owner decision 2026-10-14): a software keystore (`keystore:PATH`, passphrase typed at the hidden prompt) stays valid on 8453, while plaintext keys and passphrase files are refused. A device is bound to its owner as `ledger:PATH@0xOWNER` / `trezor:PATH@0xOWNER`. A publish with fewer `--owner-signer` specs than sheet owners is refused before stage 1 (`CONTROL_NOT_PROVEN`), never after stages 1–10 have broadcast.
   Any later commit that changes `contracts/` has a new SHA with no tag and no
-  counts, so it needs a new rehearsal and tag. This flow is enforced by the plan job (core #1524) and by every broadcasting 8453 run (QA plan v1 E4).
+  counts, so it needs a new QA branch, a squash, a new rc tag and a new rehearsal. This flow is enforced by the plan job (core #1524) and by every broadcasting 8453 run (QA plan v1 E4).
   - **Green rehearsal only.** The artifact uploads even when the rehearsal failed. The job therefore records its
     own conclusion in `counts.json` (`rehearsal.conclusion`), and `freeze-counts.ts` refuses any file whose
     conclusion is not `success` (core #1602). `core-stages-twin-chain` is deliberately not in
@@ -145,35 +244,34 @@ This section covers two different tags. Do not confuse them.
 A version tag is **never** cut before **both** a completed preflight and a
 completed postflight on the target network. The version tag records what has
 been *proven deployed*, not what is *intended for deployment*. Everything
-before that point is a rehearsal candidate, referenced by commit SHA (and,
-for mainnet, by its release tag), not a version tag.
+before that point is a release candidate, referenced by its rc tag and commit SHA, not a version tag.
 
-The cycle:
+The cycle (owner decision 2026-10-22):
 
-1. Pick the `dev` commit SHA you intend to deploy. For mainnet this is the
-   release-tagged SHA with committed frozen counts (see above).
-2. Run preflight against that SHA (§4.1-4.2). **Preflight fails** → fix on
-   `dev`, pick the new tip, return to step 2.
-3. **Preflight passes** → run the deploy ceremony against the target network.
-4. Run postflight (§4.3-4.4). **Postflight fails** → see §4.5 (fix loop) —
-   patch on `dev`, and go back through preflight (step 2) before deploying
-   again. A contract deployment cannot be "patched in place": a postflight
-   failure after broadcast means either the deployed contracts are
-   unusable (redeploy fresh addresses) or a mitigating admin action (deposit pause,
-   role revocation) contains the issue while a fix lands (§4.6).
-5. **Postflight clean** → tag `vA.B.C` at the exact commit that was
-   deployed and verified.
+1. **Scope reaches the release branch** by §2 route (a). The counts record of the previous rc (route (c)) is on it.
+2. **Cut `qa/A.B.x-<YYYY-MM-DD>`** from the release branch tip and push it (§2).
+3. **QA runs on the Twin** at a clean, pushed QA commit (§4.1 to §4.4). **A QA failure** consumes no rc number: the fix merges into the QA branch by PR and QA reruns on its new tip. The storage layout of a proxied contract stays append-only against the deployed baseline (§4.12 step 1) at every QA commit.
+4. **The QA runbook passes.** Record the commit and its tree hash.
+5. **Squash the QA branch onto the release branch** (§2 route (b)). The release branch must not have moved since the QA branch was cut, and the squash tree must equal the passed tree.
+6. **Cut the rc tag** at the squash commit and push it. Run the Twin rehearsal at that SHA, rebuild the frozen counts, and land them by §2 route (c) (the freeze gate above).
+7. **Production runs only from that rc tag** (§4.14), with the owner's recorded go, a new deployment or a governed upgrade. A failure before the first irreversible broadcast of the run means the rc never
+   reaches production: fix it on a new QA branch, run QA again, squash again, cut `vA.B.C-rc.(N+1)`. A failure after a broadcast is handled by §4.5 and §4.6, and the next attempt is also `rc.(N+1)`.
+8. **A clean postflight** → tag `vA.B.C` at the exact commit that was
+   deployed and verified, the final rc's commit.
 
 Two consequences, stated outright because each one looks unusual and neither
 is a mistake:
 
 - **The version tag can never be cut at a commit that was not actually
   deployed and verified.** A fix that lands after the deployment requires a
-  new deployment (and, for anything past the Devnet, a new tag) — it cannot
-  be "rolled into" a tag for a commit that was never broadcast.
-- **A version tag may exist on multiple networks at different times**, each
+  new deployment or a new governed upgrade from a new rc, and a version tag only after
+  that one is verified. It cannot be "rolled into" a tag for a commit that was never broadcast.
+- **`vA.B.C` and the final `vA.B.C-rc.N` point at the same commit.** An rc number counts
+  production attempts stopped before a clean postflight. Five Twin QA attempts and a clean first
+  production attempt is `rc.0`. A version tag may exist on multiple networks at different times, each
   its own deploy record under `deployments/<network>.json` (§8's naming) —
-  this is expected, not duplication.
+  this is expected, not duplication. Twin QA and production run different commits with the
+  same tree (the QA tip and the squash commit): the tree hash ties them together.
 
 ## 4. Foundational release workflow
 
@@ -210,6 +308,10 @@ Before any deployment activity, verify all of the following:
 
 Do not begin preflight, rehearsal, or any other deployment step while any
 item above that applies to this deployment is incomplete.
+
+Every commit expected to ship is on `releases-A.B.x` by §2 route (a) before
+the QA session starts. Every deployment step runs at an rc tag of that branch
+(§4.14), never at a `dev` commit, a QA branch commit or a pull request head.
 
 ### 4.2. Preflight
 
@@ -273,7 +375,7 @@ and the mainnet canary, stage hosts, the operator runbook
 (`docs/runbooks/publish-contracts.md` in devops), and the mainnet workflows
 that check out core. `--dry-run` is the preflight: it simulates every
 deployer stage on a local anvil and broadcasts nothing. A Twin-chain
-rehearsal of publish, verify and govern runs on every push to `dev`
+rehearsal of publish, verify and govern runs on every push to `dev`, a release branch and a QA branch
 (`core-stages-twin-chain` in `.github/workflows/suite-28-core-stages.yml`, core #1523).
 
 > **System split (owner decision, 2026-10-19).** The vaults system and the
@@ -334,11 +436,11 @@ delay and the Safe signers are proven on 8453 through the real Safe.
 **Mainnet test run-day steps (issue 1695).** The run checks core out at the release tag commit (`9a768bb9`, `release/v0.4.0-base`) and passes `--counts-dir` pointing at a dev checkout (`0d40e671` or later) `deployments/frozen-counts`.
 
 **Release layout of a reconstructed baseline (issue 1740).** The baseline file is named by the release sha X (`deployments/frozen-counts/<X>.json`), so it can never be inside the checkout at X: it holds X, and X is the hash of the tree that would hold it. Putting it untracked in the checkout at X makes the tree dirty and the run refuses (`USAGE`, "uncommitted changes"). The steps:
-1. Tag X (`release/<version>`, annotated, pushed). Run the Twin rehearsal at X and rebuild the baseline with `freeze-counts.ts --from-adopted-run` in a dev checkout (any commit at or after X).
-2. Merge the file as a data-only change (`deployments/frozen-counts/<X>.json` only) after the tag. Call the merged commit Y. `git pull` the dev checkout to Y or later. It must be clean.
-3. Check core out at X for the code (`--core-dir`, clean, HEAD equals the tag target). Keep the dev checkout at Y or later for the counts (`--counts-dir <dev>/deployments/frozen-counts`). They are two checkouts of the same repository.
+1. Tag X, the squash commit (the rc tag, annotated, pushed, §3). Run the Twin rehearsal at X and rebuild the baseline with `freeze-counts.ts --from-adopted-run` in a checkout of the release branch (any commit at or after X).
+2. Merge the file into `releases-A.B.x` as a data-only change (`deployments/frozen-counts/<X>.json` only, §2 route (c)) after the tag. Call the merged commit Y. `git pull` the release-branch checkout to Y or later. It must be clean. The rc tag stays at X, and so does the version tag.
+3. Check core out at X for the code (`--core-dir`, clean, HEAD equals the tag target). Keep the release-branch checkout at Y or later for the counts (`--counts-dir <release-branch checkout>/deployments/frozen-counts`). They are two checkouts of the same repository.
 4. The plan and every broadcasting run on 8453 (issue 1816: deploy stages, `prove-control`, `govern`) refuse (`COUNTS_MISSING`, before any signer) a RECONSTRUCTED baseline unless, in the COUNTS checkout: it is a git work tree; its HEAD is X or a descendant of X (a shallow clone without X, an older commit or another repository is refused); every `<sha>.json` in the dir (the baseline, every anchor) is tracked at HEAD with identical bytes; every `<sha>.json` tracked at HEAD is in the dir; and nothing under the dir is modified or untracked. The anchor proof (`git show HEAD:<anchor>`) also runs in the counts checkout. Nothing is read from the core checkout but its HEAD. Every git child runs with every `GIT_*` variable removed, no system or global config, replace refs off (`--no-replace-objects`) and the fsmonitor hook off, so the environment cannot redirect the checks and a `refs/replace` ref cannot fake ancestry. Ignored files in the dir are refused too. A plain measured baseline gets the lighter proof of the same issue: its one file must be committed and clean in its git work tree (`COUNTS_UNTRACKED`, exit 31: untracked, staged-new, modified or ignored is refused), checked with replace refs off and no `GIT_*` variable. A counts checkout owned by another user is refused by git (safe.directory) and the message says so. With no `--counts-dir` the default dir is the core checkout's own and cannot satisfy this; the refusal says to pass `--counts-dir`.
-5. **The counts checkout MUST be a reviewed, merged commit reachable from origin/dev.** The code checks history and bytes, not review: a clone with a local descendant Y' that adds a forged X.json is accepted by the checks of step 4 alone. So in the counts checkout run `git fetch origin dev`, check out the merged commit Y (or later), and pass `--counts-require-origin-dev` on every 8453 plan and broadcasting run (deploy, `prove-control`, `govern`). The flag (off by default in code, REQUIRED here) refuses unless HEAD of the counts checkout is an ancestor of, or equal to, its local `origin/dev` ref. It reads only that local ref, so the fetch is the operator's step. That ref is LOCAL: anyone with write access to the operator's clone can forge it, so the flag proves only that the operator fetched and that the counts HEAD is on or behind their local origin/dev, NOT provenance or review. The review of the data-only PR is the control.
+5. **The counts checkout MUST be a reviewed, merged commit reachable from the release line's origin ref, `origin/releases-A.B.x`.** The code checks history and bytes, not review: a clone with a local descendant Y' that adds a forged X.json is accepted by the checks of step 4 alone. So in the counts checkout run `git fetch origin releases-A.B.x`, check out the merged commit Y (or later), and pass the origin-ref flag (`--counts-require-origin-dev` in the CLI) on every 8453 plan and broadcasting run (deploy, `prove-control`, `govern`). The flag (off by default in code, REQUIRED here) refuses unless HEAD of the counts checkout is an ancestor of, or equal to, the local origin ref of the release line. It reads only that local ref, so the fetch is the operator's step. That ref is LOCAL: anyone with write access to the operator's clone can forge it, so the flag proves only that the operator fetched and that the counts HEAD is on or behind their local origin ref, NOT provenance or review. The review of the data-only PR is the control.
 Tested with real git repositories in `publish-contracts/tests/counts-layouts.test.ts`.
 
 1. **Make the keys.** Run `bun run rehearsal keys --dir <backed-up folder> --chain-id 8453` and type the passphrase at the hidden prompt. Never pass `--password-file` for the mainnet test, and never put the passphrase in an argument or the environment. The helper makes no voter keys: there is no voting (issue 1698). `--chain-id 8453` puts `CHAIN_ID=8453` in the printed sheet fragment. Back the folder up before any funds move. The Safe owners made here are encrypted keystores, named `--owner-signer keystore:PATH` at prove-control and govern with the passphrase typed at the hidden prompt. An owner may instead keep their key on a hardware wallet: put that owner's address in `SAFE_OWNERS` and name it `--owner-signer ledger:PATH@0xOWNER` (or `trezor:`). Hardware is optional, never required (owner decision 2026-10-14).
@@ -428,7 +530,9 @@ minimum:
 
 The contract QA runbook (§5) carries these checks as its phase 2 (verify), 4
 (verify again), 6 (deposits) and 8 (observability). A contract release runs
-those phases instead of writing its own postflight list.
+those phases instead of writing its own postflight list. QA runs them on the
+Twin at the QA branch commit (§2). Production runs the same phases at the rc tag
+(§4.14), unmodified: the same step list, with only the target and sheet different.
 
 The postflight gate is satisfied only when every check above passes and the
 operator has signed off. Write the results into the stage rehearsal or
@@ -436,11 +540,16 @@ production rollout report (§4.5/§4.9).
 
 ### 4.5. Fix loop
 
-If preflight, the cutover, or postflight finds any issue:
+If QA, preflight, the cutover, or postflight finds any issue:
 
-1. Open PRs with fixes against `dev`.
-2. Merge the fixes to `dev`.
-3. Restart the runbook from §4.1 at the new `dev` tip.
+1. Develop the fix in a development worktree, never on a host.
+2. Open a PR with the fix against the session's QA branch `qa/A.B.x-<YYYY-MM-DD>` (§2) and merge it there.
+   A pushed QA branch is never rewritten. If the release branch moved, cut a new
+   QA branch from its tip (`-2` suffix).
+3. Run the QA runbook on the Twin at the QA branch's new tip. A QA failure consumes no rc number.
+4. When QA passes, squash the QA branch onto `releases-A.B.x`, cut the next rc
+   (`vA.B.C-rc.(N+1)`, §3) and restart from §4.1 at that rc. The fix reaches `dev`
+   afterwards by a separate PR (§7).
 
 If verify (stage 12) or the postflight is what failed, the publish-contracts
 CLI has already paused deposits on all four vaults (rmUSDC, rmPROTO, rmAGENT,
@@ -492,9 +601,9 @@ lists open vaults, `details.manifest_recorded: false` marks an unrecorded pause.
 
 An apply-receipt operation scheduled before a pause-all can still execute after it (issue 1701): govern's pause check (`refuseIfPausedSince` in `src/govern.ts`) ignores every row that is not an unpause or a redeploy round, so it refuses no `apply-receipt` (nor `clear-voted-weights`, `release-receipt` or a Twin-only row) scheduled before a recorded pause-all. If its weights must not land after the pause, cancel that operation through the Safe on the timelock by hand.
 
-There is no branch to cherry-pick onto and no rc-numbering cost — every
-contract deployment is a fresh broadcast, so "try again" is simply "deploy
-the fixed commit."
+A contract deployment cannot be patched in place, so "try again" after a
+broadcast is a fresh deployment, or a further governed upgrade, from the next rc. An rc that
+failed after a broadcast is never reused, and no version tag exists for it (§3).
 
 ### 4.6. Rollback
 
@@ -539,11 +648,12 @@ mainnet deployment.
 
 After a deployment (successful or not), produce a report covering at least:
 
-- the commit SHA and target network deployed,
+- the commit SHA, the rc tag and the QA branch it was squashed from, the QA
+  tree hash, and the target network deployed,
 - preflight and postflight results (and, when verify or the postflight
   failed, the `pause-all` result: each vault's `depositsPaused`),
 - any issues encountered and their resolution,
-- the final version tag applied (if any — see §3),
+- the final version tag applied (if any — see §3), and the backport TODOs (§7),
 - operator sign-off.
 
 The report is the closing artifact of the release. The release tracking
@@ -596,7 +706,7 @@ Owner decision 2026-10-10 (reverses the 2026-10-02 rule that a short-delay run i
 | Safe tool `updateDelay` | floor 172800 on 8453 | floor 900, below 172800 |
 | verifier | delay at least 172800 on 8453, label `deployment kind: the timelock delay agrees with the kind` | delay 900 to 172799 (a rehearsal verify against 172800 fails, a production verify against 900 fails) |
 | `evidence-check` | floor 172800, kind production | `--deployment-kind rehearsal`: floor 900. Rehearsal evidence checked as production fails, and the reverse |
-| release tag | annotated `release/<version>` (no `rehearsal` in the name) | annotated `release/<version>-rehearsal`, or the run's rc tag `release/<version>-rc.N-rehearsal` (any annotated tag ending in `-rehearsal` at the sha). A mismatch fails `RELEASE_TAG_KIND` (exit 28) before any signer exists |
+| release tag | the annotated rc tag `release/vA.B.C-rc.N` (no `rehearsal` in the name; an annotated `release/<version>` of an older line also passes) | annotated `release/<version>-rehearsal`, or the run's rc tag `release/<version>-rc.N-rehearsal` (any annotated tag ending in `-rehearsal` at the sha). A mismatch fails `RELEASE_TAG_KIND` (exit 28) before any signer exists |
 
 **What records the kind.** The run manifest (`deploymentKind`), the evidence (`deployment_kind`), the verifier label detail and the `verify.deployment_kind` log event (`[rehearsal 900s]`), the isomorphism notes, `timelock.json` (`deployment_kind`), the tag name, and the timelock `minDelay` itself on chain (900).
 
@@ -798,6 +908,35 @@ The rmpc gateway system (`RobotMoneyGateway` and its `GatewayWindows` library) d
 
 **Historical combined manifests.** A table without `systems` (a core checkout at the combined release SHA, for example the one behind `deployments/8453/deploy-2`) is read as one combined run: the gateway stage sits after the router, the verifier keeps its gateway, `AgentAuthorized` and `AgentOwnershipTransferred` checks and the `gateway_agents_listed_count` and `deployer_owns_a_listed_gateway_agent` manifest fields keep their meaning. Nothing here rewrites a historical manifest or a completed release record.
 
+### 4.14. Production execution from the rc tag: a new deployment or a governed upgrade
+
+Production runs only from an rc tag. The checkout is a clean checkout of the
+tag, DEPLOY_SHA is the rc commit, and the release gate (tag, remote tag, committed counts,
+green CI) runs before any signer exists (§3). The rc tag must be annotated, on
+`releases-A.B.x` (its commit is an ancestor of the branch tip), and its tree must equal the
+tree the Twin QA run passed. A run refuses an rc whose tree differs, a tag
+on a QA branch or on `dev`, and a version tag.
+
+The owner writes the go for the run (§1). The runbook then runs unmodified, as
+QA ran it, with the production sheet. A mainnet broadcast without the owner's
+go is never started by an agent.
+
+**Two shapes of a production release.**
+
+| Shape | When | Procedure |
+| --- | --- | --- |
+| New deployment | The first release of a line (`vA.B.0`), or any release of a line with no live governed proxy to upgrade | The cutover of §4.3 and §4.12 at new addresses, then verify, govern (stage 13) and the postflight of §4.4. Holders move by their own choice (§4.12, voluntary cutover) |
+| Governed upgrade | A later release of a line whose proxies are live and not frozen | **The governed upgrade procedure of §4.12**, in order: layout review; `deploy-implementation --proxy NAME --upgrade-build DIR` at the rc checkout; `govern --row upgrade-proxy` to schedule; execute after the delay; re-record the manifests; `verify`; evidence (copy `upgradeability.json`, run the evidence check) |
+
+The timelock delay of the run is the sheet's: 48 hours (172800 s) in the production kind and 900 s in the
+rehearsal kind (§4.10). On 8453 the schedule exits `GOVERN_PENDING` and the same command executes it after
+the delay. Safe signers sign through the real Safe, as in §4.3. After the postflight (§4.4) is clean, cut `vA.B.C` at the rc's commit (§3).
+A rehearsal-kind release cuts no version tag. Every signing client's implementation pin is updated from the
+new gateway manifest after a governed upgrade (§4.12), before the version tag.
+
+A frozen proxy takes no upgrade. A fix to frozen contracts is a new deployment on a new line, never an rc of
+the frozen line. Recovery follows §4.5 and §4.6: another rc, another governed upgrade or a new deployment.
+
 ## 5. Per-release runbook format
 
 A contract release is executed from YAML under `docs/runbooks/contract-qa/`,
@@ -838,7 +977,8 @@ kebab-case: `vA-B-C-<network>-<short-description>.md`.
 
 ## 6. Per-release GitHub tracking issue
 
-Each release has one GitHub tracking issue. The tracking issue states the
+Each release has one GitHub tracking issue, labelled `release:vA.B.C`. It names the
+release branch, each QA branch and each rc tag with the QA journal that earned it. The tracking issue states the
 release's **objective** — what should be true after deployment (which
 contracts, on which network, with what role wiring) — not just a list of
 merged PRs.
@@ -857,16 +997,28 @@ in `docs/audits.md`" (§4.1, item 3). Every release also carries
 
 ## 7. Backporting
 
-Not applicable in the frontend's sense (§7 of that repo's policy) — there is
-no release branch to backport from, since every deployment runs the same
-`dev`-tip scripts (§2). A fix discovered during a deployment simply merges to
-`dev` like any other change (§4.5).
+Not a gate. Scope and fixes move in two directions between `dev` and a release line.
+
+- **`dev` to the release line (scope).** A change made on `dev` that a live line
+  needs reaches `releases-A.B.x` by §2 route (a): a PR with the base
+  `releases-A.B.x` that merges, or `git cherry-pick -x`'s, the named `dev`
+  commits, before the next QA session. The release YAML's `scope:` lists it (§5).
+  A `dev` change that renumbers or retypes proxied storage cannot be carried to
+  a line that is live, because the layout stays append-only against the
+  deployed baseline (§4.12 step 1). A change to `contracts/` on a line whose proxies are frozen is not
+  possible (§2). Both ship on the next line.
+- **The release line to `dev` (fixes).** Every fix made on a QA branch reaches the
+  release branch in the stage-passed squash (§2 route (b)), and reaches `dev`
+  afterwards by a separate PR from the QA branch (the squash commit, or the
+  QA PRs, cherry-picked with `-x`), evaluated against `dev` as it is then. The
+  production report lists each backport TODO (§4.7). The next QA session does not start
+  before a TODO that would conflict with it is landed or dropped with a reason.
 
 ## 8. Target networks
 
 | Network | Chain id | Default per ADR-0013 | Notes |
 | --- | --- | --- | --- |
-| Robot Money Devnet | `918453` | **Yes — the default verification target.** | The Twin chain: a pinned lazy anvil fork of real Base at the upstream head minus 2 per CI run (`scripts/devnet/twin-fork.ts`, `docs/technical/full-stack-devnet.md`). Tests deploy their own vault (clean room). Full production-parity for all three yield adapters (Aave V3, Compound V3, Morpho). No lasting address record and no version tag: a verification pass is recorded by its CI run and evidence folder (§3). |
+| Robot Money Devnet | `918453` | **Yes — the default verification target.** | The Twin chain: a pinned lazy anvil fork of real Base at the upstream head minus 2 per CI run (`scripts/devnet/twin-fork.ts`, `docs/technical/full-stack-devnet.md`). Tests deploy their own vault (clean room). Full production-parity for all three yield adapters (Aave V3, Compound V3, Morpho). No lasting address record and no version tag: a verification pass is recorded by its CI run, the QA journal with its commit and tree hash, and the evidence folder (§3). It is the QA target of every release (§2). |
 | Base mainnet | `8453` | The eventual real target — a separate, deliberately-costed decision (D9). | Requires an audit pass, and Safe owners signing with encrypted keystores (passphrase typed) or, at each owner's choice, hardware wallets (optional, never required). The submitter is a Safe: the deployer pays its gas. |
 
 ## 9. Safe and timelock self-administration (Twin-only)

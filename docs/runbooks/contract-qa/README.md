@@ -1,6 +1,15 @@
 # Contract QA runbook
 
-The rehearsal deploy runbook deploys a contract release on a network, governs it and proves it works. It runs in three environments. The policy is `docs/operations/contract-release-runbooks.md` (4.4 and 4.12). The format follows the frontend release runbooks.
+The rehearsal deploy runbook deploys a contract release on a network, governs it and proves it works. It runs in three environments. The policy is `docs/operations/contract-release-runbooks.md` (4.4, 4.12 and 4.14). The format follows the frontend release runbooks.
+
+## Branches and tags
+
+The release line is the branch `releases-A.B.x` (for example `releases-0.5.x`). Feature PRs never target it. The policy (sections 2, 3 and 4.14) is the rule. In short:
+
+1. QA runs the release file on the `twin` target (the stage host `rm-core-stage-1`) at a clean, pushed commit of `qa/A.B.x-<YYYY-MM-DD>`, cut from the release branch tip. Every patch of the session merges into that QA branch by PR. A pushed QA branch is never rewritten, and it is kept after its squash.
+2. When the run passes at a commit, the QA branch is squash-merged onto `releases-A.B.x`. The squash tree equals the passed tree, and the release branch has not moved since the QA branch was cut.
+3. The rc tag is cut at the squash commit: `release/vA.B.C-rc.N` (production kind) or `release/vA.B.C-rc.N-rehearsal` (rehearsal kind). It is annotated and pushed.
+4. The `rehearsal` and `production` targets run only from that rc tag, with the owner's recorded go. An agent never broadcasts to Base 8453 without it. The version tag `vA.B.C` is cut at the final rc's commit after the postflight is clean (production kind only).
 
 ## Files
 
@@ -21,11 +30,12 @@ The template itself can change. When a release is finished, its file pins `templ
 
 ## Next release
 
+0. Land the release's scope on `releases-A.B.x` and cut the QA branch (policy section 2). Do the steps below on the QA branch.
 1. Create `releases/<next>.yaml` with no `templateSha`. Copy the current template steps into it, unchanged and in order.
 2. Add the steps only that release needs, each marked `added: <next>`, with an id the template lacks.
 3. Run `bun scripts/runbook/validate-contract-qa.ts`. The unpinned file is checked against the current template and the current CLIs.
-4. Run the release.
-5. After the run, pin `templateSha` to the commit of the template the steps were copied from (`git log -1 --format=%H -- docs/runbooks/contract-qa/template.yaml`). From then on the validator checks the file add-only against the template at that commit, read from git, and the template is free to change.
+4. Run the release on the QA branch (the `twin` target), then squash and run it from the rc tag (`rehearsal` or `production`, policy section 4.14).
+5. After the production run, pin `templateSha` to the commit of the template the steps were copied from (`git log -1 --format=%H -- docs/runbooks/contract-qa/template.yaml`). From then on the validator checks the file add-only against the template at that commit, read from git, and the template is free to change.
 
 ## Targets
 
@@ -61,13 +71,13 @@ Every step names its `host`. There are two.
 
 `{gateSha}` is the sha whose tag, green CI and frozen counts gate the run (P0.20, P10.01). It is `{coreSha}`, except on a rehearsal that continues at a tool-only commit (`publish-contracts/src/tooling-sha.ts`): there it is the sha the deployment started at, the `coreSha` of `{evidenceDir}/publish-run.json`, as the publish CLI's own release gate does (owner decision 2026-10-19). A production run is always gated at its own sha.
 
-`{releaseTag}` is the release candidate tag at `{gateSha}` (`release/<version>-rc.N-rehearsal` on a rehearsal): the release gate (P0.20) needs an annotated tag of the sheet's kind at that sha, nothing more. The record tag `release/<version>-rehearsal` is cut once, at the sha the deployment's run manifest names, and never moved (policy `docs/operations/contract-release-runbooks.md`, version tags).
+`{releaseTag}` is the release candidate tag at `{gateSha}`, the squash commit on the release branch (`release/<version>-rc.N-rehearsal` on a rehearsal, `release/<version>-rc.N` on a production run): the release gate (P0.20) needs an annotated tag of the sheet's kind at that sha, nothing more. The record tag `release/<version>-rehearsal` is cut once, at the sha the deployment's run manifest names, and never moved (policy `docs/operations/contract-release-runbooks.md`, version tags).
 
 A whole-element list placeholder expands to several argv elements: `{common}`, `{owners}`, `{gate}`, `{wait}`, `{emergency}`, `{cast}`. The definitions are `LIST_PLACEHOLDERS` in the validator. The scalar names are `SCALARS` in the same file.
 
 ## Run it
 
-Until a runner is ported, an operator or an agent follows the YAML by hand. Each step's commands run in order from the root of the core checkout at the deploy sha. Pipe every command's stdout through `tee -a {runDir}/journal/<id>.out` (the verifier labels the later steps grep). Keep stderr, the JSON logs, apart in `{runDir}/journal/<id>.err`: a log field named `label` is not a verifier label. Write receipts to the paths the step names. Record each step's outcome in `{runDir}/journal/<id>.result` as one line: `pass`, `skip <reason>` or `fail exit <n>`. A retry that passes overwrites it. The rollout report (P10.51) lists a failed step, or a journaled step with no result, as an issue, and the sign-off (P10.52) is then refused.
+Until a runner is ported, an operator or an agent follows the YAML by hand. Each step's commands run in order from the root of the core checkout at the deploy sha: the QA branch commit on the `twin` target, the rc tag's commit on `rehearsal` and `production`. Pipe every command's stdout through `tee -a {runDir}/journal/<id>.out` (the verifier labels the later steps grep). Keep stderr, the JSON logs, apart in `{runDir}/journal/<id>.err`: a log field named `label` is not a verifier label. Write receipts to the paths the step names. Record each step's outcome in `{runDir}/journal/<id>.result` as one line: `pass`, `skip <reason>` or `fail exit <n>`. A retry that passes overwrites it. The rollout report (P10.51) lists a failed step, or a journaled step with no result, as an issue, and the sign-off (P10.52) is then refused.
 
 Check before any run:
 

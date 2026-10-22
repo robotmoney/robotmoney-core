@@ -242,7 +242,7 @@ so fund the emergency key when you need to pause: if the key that must send
 holds no ETH, `pause-all` stops before the first send, exits 25 and names the
 address to fund (then run it again). Unpausing is a different
 operation (`ADMIN_ROLE` through the timelock). The fix then follows the release
-runbook fix loop: merge the fix on `dev`, redeploy to fresh addresses.
+runbook fix loop: merge the fix into the session's QA branch, pass QA on the Twin, squash it onto the release branch, cut the next rc and redeploy to fresh addresses from that rc (`docs/operations/contract-release-runbooks.md` 4.5).
 
 ---
 
