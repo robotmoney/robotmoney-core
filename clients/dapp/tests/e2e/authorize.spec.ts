@@ -30,20 +30,22 @@ test.describe("authorize agent — UI invariants", () => {
     await openDapp(page, endpoints);
 
     await page.getByTestId("agent-input").fill(endpoints.agent_addr);
-    await page.getByTestId("shareReceiver-input").fill(endpoints.share_receiver_addr);
+    // The share receiver is the signing wallet (ACL-9), so the only thing missing is a vault.
+    await page.getByTestId("shareReceiver-input").fill(endpoints.admin_addr);
 
     // Nothing is pre-selected and the gateway reverts an empty list, so the dapp builds no
-    // preview and keeps the commit button disabled.
+    // preview, the freeze stays closed and no commit control of the registration sequence exists.
     await expect(page.getByTestId("destinations-empty")).toBeVisible();
-    await expect(page.getByTestId("authorize-submit")).toBeDisabled();
+    await expect(page.getByTestId("authorize-freeze")).toBeDisabled();
+    await expect(page.getByTestId("authorize-submit")).toHaveCount(0);
     await expect(page.locator('[data-testid="tx-preview"][data-ok="true"]')).toHaveCount(0);
 
-    // Selecting the vault opens the commit.
+    // Selecting the vault opens the freeze. The frozen reveal preview names the destination.
     await page.getByTestId("destination-extra").fill(endpoints.vault_addr);
     await expect(page.getByTestId("destinations-empty")).toHaveCount(0);
-    await expect(page.getByTestId("authorize-next-reveal-preview")).toContainText(
-      "allowedDestinations",
-    );
+    await expect(page.getByTestId("authorize-freeze")).toBeEnabled();
+    await page.getByTestId("authorize-freeze").click();
+    await expect(page.getByTestId("authorize-reveal-preview")).toContainText("allowedDestinations");
   });
 
   test("structured preview renders for authorize, not raw calldata", async ({ page }) => {
