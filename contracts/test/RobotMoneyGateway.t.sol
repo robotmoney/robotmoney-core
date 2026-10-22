@@ -377,6 +377,7 @@ contract RobotMoneyGatewayTest is Test {
         gateway.revealAuthorization(agent, salt, p);
         assertEq(gateway.agentOwner(agent), address(0));
     }
+
     function test_register_revertsOnRoleSeparation_grantingAgentToAdmin() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
         p.shareReceiver = admin;

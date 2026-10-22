@@ -48,6 +48,7 @@ import {
     WrongUUID,
     UPGRADE_V2_MARKER
 } from "./helpers/UpgradeV2.sol";
+import {AgentRegistration} from "./helpers/AgentRegistration.sol";
 
 interface IUpgradeMarker {
     function upgradeMarker() external view returns (uint256);
@@ -556,7 +557,9 @@ contract GovernedUpgradeTest is SafeGovernance {
         vault.setTvlCap(900_000e6);
         vault.setExitFeeBps(7);
         address[] memory none = new address[](0);
-        gateway.authorizeAgent(
+        vm.stopPrank();
+        AgentRegistration.register(
+            gateway,
             agent,
             IGateway.AgentPolicy({
                 active: true,
@@ -571,6 +574,7 @@ contract GovernedUpgradeTest is SafeGovernance {
                 allowedSourceVaults: none
             })
         );
+        vm.startPrank(admin);
         receipts.grantRole(receipts.RECEIPT_SUBMITTER_ROLE(), submitter);
         vm.stopPrank();
         vm.prank(submitter);
@@ -639,7 +643,7 @@ contract GovernedUpgradeTest is SafeGovernance {
         assertEq(router.routerCap(), 5_000e6, "router cap");
         (,,,, address receiverAfter,,,) = gateway.agents(agent);
         assertEq(receiverAfter, receiverBefore, "gateway policy");
-        assertEq(gateway.agentOwner(agent), admin, "agent owner");
+        assertEq(gateway.agentOwner(agent), agent, "agent owner");
         assertTrue(gateway.hasRole(gateway.AGENT_ROLE(), agent), "agent role");
         assertTrue(receipts.hasRole(receipts.RECEIPT_SUBMITTER_ROLE(), submitter), "submitter");
         assertEq(receipts.receiptCount(), 1, "receipt");

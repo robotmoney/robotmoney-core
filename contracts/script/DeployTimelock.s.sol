@@ -240,8 +240,8 @@ contract DeployTimelock is UpgradeAuthority {
     /// @notice In-process variant for Forge tests. Caller sets up prank context.
     ///         No JSON is written; no env vars are read. Does not exercise the
     ///         optional consensus receipt handover — use
-    ///         `runInProcessWithReceipt` for that. Hands over no gateway
-    ///         agent — use `runInProcessWithAgents` for that.
+    ///         `runInProcessWithReceipt` for that. The deploy hands over
+    ///         no gateway agent (ACL-9).
     function runInProcess(
         address vault_,
         address gateway_,
