@@ -331,6 +331,106 @@ async fn get_vaults_deposits_paused_vault_status() {
     assert_eq!(vaults[0]["total_assets"], "0");
 }
 
+/// ADR-0017: the retired rmAGENT is reported as `retired` (withdraw-only), read from the registry
+/// and never hard-coded. The three live vaults stay `active` beside it.
+#[tokio::test]
+async fn get_vaults_reports_retired_rmagent_as_withdraw_only() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    let agent = address!("00000000000000000000000000000000000000a9");
+    for (method, body) in [
+        ("eth_chainId", format!("0x{chain_id:x}")),
+        ("eth_blockNumber", "0x30".to_string()),
+    ] {
+        server
+            .mock("POST", "/")
+            .match_body(Matcher::PartialJson(json!({ "method": method })))
+            .with_status(200)
+            .with_body(jrpc_result(&body))
+            .expect_at_least(0)
+            .create_async()
+            .await;
+    }
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            VaultRegistry::listVaultsCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_address_array(&[VAULT, agent])))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    // One mock per vault: getVault(address) is matched on the encoded argument.
+    for (addr, name, status) in [
+        (VAULT, "Robot Money USDC", 0u8),
+        (agent, "Robot Money Agent Tokens", 2u8),
+    ] {
+        let arg = format!("{:0>64}", ahex::encode(addr.as_slice()));
+        server
+            .mock("POST", "/")
+            .match_body(Matcher::Regex(format!(
+                "{}{}",
+                selector_hex_of::<VaultRegistry::getVaultCall>().trim_start_matches("0x"),
+                arg
+            )))
+            .with_status(200)
+            .with_body(jrpc_result(&enc_vault_record(
+                name,
+                USDC,
+                1_700_000_000,
+                status,
+            )))
+            .expect_at_least(0)
+            .create_async()
+            .await;
+    }
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            IVault::totalAssetsCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_u256(U256::ZERO)))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+
+    let fix = RegistryFixture::build(&server.url(), chain_id);
+    let out = rmpc()
+        .args(["get-vaults", "--config", fix.config_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let vaults = v["data"]["vaults"].as_array().unwrap();
+    assert_eq!(vaults.len(), 2);
+    let status_of = |name: &str| {
+        vaults
+            .iter()
+            .find(|x| x["name"] == name)
+            .unwrap_or_else(|| panic!("{name} listed"))["status"]
+            .clone()
+    };
+    assert_eq!(status_of("Robot Money Agent Tokens"), "retired");
+    assert_eq!(status_of("Robot Money USDC"), "active");
+}
+
+/// ADR-0017: the shipped example config names no rmAGENT destination.
+#[test]
+fn example_config_names_no_rmagent_destination() {
+    let example = include_str!("../config.example.toml").to_lowercase();
+    assert!(
+        !example.contains("rmagent"),
+        "example config must not name rmAGENT"
+    );
+    assert!(
+        !example.contains("agent_tokens"),
+        "example config must not name the agent_tokens bucket"
+    );
+}
+
 /// A reverting `totalAssets()` must not be reported as the in-domain value
 /// `"0"` — the exact string `get_vaults_deposits_paused_vault_status` above proves a
 /// genuinely empty vault emits (issue #1390). The degraded value is `null`.

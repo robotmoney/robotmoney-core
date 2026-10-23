@@ -1102,6 +1102,104 @@ async fn stats_total_tvl_leaves_out_retired_vaults() {
     assert_eq!(old["total_assets"], "5000000");
 }
 
+/// ADR-0017: the retired rmAGENT is served as Retired (withdraw-only), is not hidden, and no longer
+/// counts toward protocol TVL. The list and the detail route agree, and the response names no
+/// deposit destination for it.
+#[tokio::test]
+async fn retired_rmagent_is_served_withdraw_only_and_out_of_tvl() {
+    let s = start_with_seed().await;
+    let tvl = |addr: std::net::SocketAddr| async move {
+        let body: serde_json::Value = http()
+            .get(format!("http://{addr}/v1/stats"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        body["total_tvl"]
+            .as_str()
+            .expect("total_tvl string")
+            .to_string()
+    };
+    let before = tvl(s.addr).await;
+
+    let agent = vec![0xa9u8; 20];
+    sqlx::query(
+        "INSERT INTO vaults (chain_id, vault_address, name, risk_label, deposit_cap, status, \
+                              registered_at, registered_block, registered_tx) \
+         VALUES ($1, $2, 'Robot Money Agent Tokens', 'SPECULATIVE', 0, 2, 1748000000, 900, $3)",
+    )
+    .bind(8453_i64)
+    .bind(&agent[..])
+    .bind(&[0x11u8; 32][..])
+    .execute(&s._pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO contracts (chain_id, address, kind, deployed_block) VALUES ($1, $2, 'vault', 900) \
+         ON CONFLICT (chain_id, address) DO NOTHING",
+    )
+    .bind(8453_i64)
+    .bind(&agent[..])
+    .execute(&s._pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, \
+                                       exit_fee_bps, tvl_cap, paused) \
+         VALUES ($1, $2, 620, 4000000::NUMERIC, 4000000::NUMERIC, 0, 20000000, true)",
+    )
+    .bind(8453_i64)
+    .bind(&agent[..])
+    .execute(&s._pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        tvl(s.addr).await,
+        before,
+        "retired rmAGENT adds nothing to total_tvl"
+    );
+
+    let list: serde_json::Value = http()
+        .get(format!("http://{}/v1/vaults", s.addr))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let listed = list["vaults"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["address"].as_str() == Some("0xa9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9"))
+        .expect("the retired rmAGENT stays listed for its holders")
+        .clone();
+    assert_eq!(listed["status"], 2);
+    assert_eq!(listed["total_assets"], "4000000");
+
+    let detail: serde_json::Value = http()
+        .get(format!(
+            "http://{}/v1/vaults/0xa9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9",
+            s.addr
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detail["vault"]["status"], 2, "{detail}");
+    assert_eq!(detail["vault"]["deposits_paused"], true, "{detail}");
+    let text = detail.to_string().to_lowercase();
+    assert!(
+        !text.contains("destination") && !text.contains("deposit_to"),
+        "a retired vault response names no deposit destination: {detail}"
+    );
+}
+
 /// Suite-08 AC: GET /v1/stats activity feed entries have correct shape.
 #[tokio::test]
 async fn stats_activity_feed_entry_shape() {
