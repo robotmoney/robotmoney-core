@@ -75,6 +75,10 @@ Every step names its `host`. There are two.
 
 A whole-element list placeholder expands to several argv elements: `{common}`, `{owners}`, `{gate}`, `{wait}`, `{emergency}`, `{cast}`. The definitions are `LIST_PLACEHOLDERS` in the validator. The scalar names are `SCALARS` in the same file.
 
+## Target
+
+The target deployment has three vaults: rmUSDC, rmPROTO and rmRWA (ADR-0017). A new release record has no `agent` or `recorder` stage. The v0.4.0 and v0.5.0 records are released and keep their rmAGENT steps.
+
 ## Run it
 
 Until a runner is ported, an operator or an agent follows the YAML by hand. Each step's commands run in order from the root of the core checkout at the deploy sha: the QA branch commit on the `twin` target, the rc tag's commit on `rehearsal` and `production`. Pipe every command's stdout through `tee -a {runDir}/journal/<id>.out` (the verifier labels the later steps grep). Keep stderr, the JSON logs, apart in `{runDir}/journal/<id>.err`: a log field named `label` is not a verifier label. Write receipts to the paths the step names. Record each step's outcome in `{runDir}/journal/<id>.result` as one line: `pass`, `skip <reason>` or `fail exit <n>`. A retry that passes overwrites it. The rollout report (P10.51) lists a failed step, or a journaled step with no result, as an issue, and the sign-off (P10.52) is then refused.

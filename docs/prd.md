@@ -597,30 +597,7 @@ Router allocation.
 | Withdrawal | Holders redeem shares for current value in a single transaction, subject to available liquidity within the stated limit |
 | Status | Retired (ADR-0017): withdraw-only, not router-eligible |
 
-Shortlist curation is admin-controlled for the MVP, with an
-equal-weighted target basket drawn from BNKR, JUNO, RM (Base-chain
-only). rmAGENT's shortlist is BNKR alone, as a TEST asset: RM, the existing ROBOTMONEY token on
-Base at `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (core #1491), is parked until its market is deep enough
-(owner, 2026-10-21, [ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md)). BNKR (BankrCoin, `0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b`) is the Base
-agent-economy token named in ADR-0001. It sits on a thin Uniswap V4 pool (about 706 USD of virtual depth), so it is allowed
-for the contained mainnet test only, with deposits of at most 5 USDC, and it is not a production sizing
-(owner, 2026-10-22, [ADR-0016](adr/ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md)). RM returns only after the dollar criteria in [ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md) hold. RM and JUNO are added later through the timelock. Each token
-routes through one venue under the per-asset venue abstraction in
-[ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md). RM's venue, once it is listed again, is
-decided (owner, 2026-10-08; supersedes 2026-10-06): the Uniswap V4 RM/USDC pool with fee 2.91%
-(id `0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391`, tickSpacing 582, no hooks). The vault
-swaps through `UniswapV4SwapAdapter` and prices RM from `UniswapV4PriceRecorder`, a permissionless in-protocol
-observation recorder (a hookless V4 pool keeps none). The owner called this sufficient for the Base mainnet
-test, not for the final deployment: the first mainnet run is a contained test with low caps sized below the pool depth,
-and a stronger price source is a later decision. If no one has recorded for 30 minutes deposits and USDC redeems fail
-closed, and `redeemInKind` still pays RM. Current
-membership, venues, and pool parameters live in
-`config/agent-token-shortlist.json`. Changes flow through the Safe →
-Timelock → `ADMIN_ROLE` path with a mandatory timelock delay and public
-veto window (see
-[ADR-0004](adr/ADR-0004-agent-token-shortlist-governance.md)); there is
-no token-holder vote over shortlist membership, and no token-based
-governance is foreseen. Basket products are valued using a manipulation-resistant
+The retired vault's shortlist was BNKR alone, as a contained TEST asset on a hookless Uniswap V4 pool ([ADR-0016](adr/ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md)), with RM parked ([ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md)). A new deployment lists no agent token and has no price recorder. The live vault pays holders through `redeem` or `redeemInKind` only. Shortlist membership changed only through the Safe, Timelock and `ADMIN_ROLE` path ([ADR-0004](adr/ADR-0004-agent-token-shortlist-governance.md)), with no token-holder vote. Basket products are valued using a manipulation-resistant
 on-chain price for each asset held.
 
 This product has no in-product agent trading authority or strategy: it is
@@ -645,8 +622,8 @@ limits:
 2. **Valuation-and-liquidity criterion** — same requirement as rmPROTO
    (§11.2).
 3. **Shortlist-governance criterion** — the process for curating basket
-   membership is specified and in force, and the deployed shortlist
-   consists exclusively of the Base-chain set {BNKR, JUNO, RM}.
+   membership is specified and in force. The vault is retired (ADR-0017), so
+   this review no longer applies to a new deployment.
 
 A product must pass this readiness review before it can receive Portfolio
 Router allocation.

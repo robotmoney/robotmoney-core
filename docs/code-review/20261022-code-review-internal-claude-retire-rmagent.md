@@ -41,6 +41,10 @@ Its tooling, frozen counts and the QA release records stay at the v0.5.0 tag. `d
 
 A v0.6.0 rc loses the `agent` and `recorder` counts. They are measured and frozen at the rc, as for every release (section 3 of the release runbooks). This change freezes nothing.
 
+### 8. Docs audited for the three-vault target
+
+`docs/prd.md`, `docs/architecture.md`, `docs/technical/smart-contracts.md`, `docs/technical/portfolio-router-decisions.md` (no rmAGENT text), the invariants registry (`docs/technical/smart-contract-invariants.md`), the release runbook and `docs/runbooks/contract-qa/` describe the three-vault target. The released v0.4.0 and v0.5.0 records are untouched. Older review and QA notes still name rmAGENT as history.
+
 ## Guards, bounds and floors
 
 No guard, bound or executed-test floor is lowered. `VAULT_AGENT_MIN_POOL_LIQUIDITY` stays 1e15. No test is skipped. The new tests run in CI with non-zero executed floors (`RetireVaultBatch.t.sol` forge floor, the publish-contracts `retire` suite, the Twin upgrade-lifecycle job).

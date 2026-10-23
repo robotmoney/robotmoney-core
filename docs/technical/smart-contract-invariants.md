@@ -243,6 +243,8 @@ The GW invariants belong to the rmpc gateway system. They now sit in Part B, [§
 > **`GOV-4` — A weight vector that would render router deposits non-executable can never be applied (no self-DoS).**
 > ✅ HOLDS · the router rejects any weight vector with a non-eligible-or-non-Active vault (via `router.isRouterEligibleAndActive`), and `apply-receipt` refuses a vector whose vault set differs from the registry's eligible list before anything is sent (F-05 / RTR-4 fixed, #968) · symbolic — `FvInvariants.t.sol::test_GOV4_receiptCannotSelfDosRouter`.
 
+> **Retired vault (ADR-0017, core 1912).** A retired vault fails RTR-4 by construction: `registry.retire` reverts `RetireWhileRouterEligible` until `migrateEligibility(vault, false, ...)` clears the flag in the same timelock batch, and the router vector length must equal `registry.routerEligibleCount()`. The target router set is rmUSDC, rmPROTO and rmRWA.
+
 > **`GOV-5` — The timelock/Safe is never the *sole* unrecoverable point of liveness that the admin-floor masks.**
 > 🟡 TRUSTED · admin-floor protects the timelock's membership, not the off-chain Safe quorum — see Layer-2 note in the audit doc · documented assumption (not directly FV-able; track operationally).
 
