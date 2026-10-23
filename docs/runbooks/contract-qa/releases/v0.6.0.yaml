@@ -1,0 +1,634 @@
+# docs/runbooks/contract-qa/releases/v0.6.0.yaml: the contract QA runbook of the v0.6.0 line (issue 1912, ADR-0017). A NEW deployment
+# of three vaults (rmUSDC, rmPROTO, rmRWA). rmAGENT is retired on the live v0.5.0 line (govern --row retire-vault, policy section 4.14)
+# and is not deployed again. A full copy of template.yaml's steps at templateSha, unchanged and in order. It has no rmAGENT deposit,
+# no unwind-guard step and no redeemInKind step. It adds the check that a retired vault is withdraw-only (P6.24-redeem-retired-vault,
+# a template step). scripts/runbook/validate-contract-qa.ts checks it. releases/v0.4.0.yaml and v0.5.0.yaml stay as records.
+release: v0.6.0
+template: contract-qa
+templateSha: 8c7eb73321ffb3990beee1d91cc520336a704e12
+productionReady: false
+notes: |
+  Identity. v0.6.0 deploys three vaults. The vaults release has no recorder stage and no agent stage (ADR-0017). The router default
+  vector is rmUSDC 9500, rmPROTO 500, rmRWA 0 bps. The VAULT_AGENT_MIN_POOL_LIQUIDITY floor is not lowered.
+
+  Retired vault. The live v0.5.0 rmAGENT leaves the router through one governed timelock batch (govern --row retire-vault, runbook
+  4.14). It is owner-gated and never run by an agent. After it executes, rmAGENT is withdraw-only: deposit reverts, the router never
+  routes into it, redeem and redeemInKind pay existing holders (ADR-0009, no assisted migration). P6.24-redeem-retired-vault checks
+  every vault the run retired. A run that retired none passes with nothing to check.
+
+  Until the retire executes, pause-all does not cover the live v0.5.0 rmAGENT: pause it by hand with EMERGENCY_ROLE, or run the retire first.
+
+  Open owner decisions are the decisions: list below. A production run refuses while any is open, and so does productionReady: true.
+decisions:
+  - id: rmagent-retired
+    question: "Retire rmAGENT and deploy three vaults from v0.6.0"
+    status: decided
+    answer: "Yes. rmAGENT is retired withdraw-only through one governed batch; the router uses three vaults."
+    decidedOn: "2026-10-22"
+    ref: "docs/adr/ADR-0017-rmagent-retired-router-uses-three-vaults.md"
+recovery: |
+  Contracts are immutable; there is no in-place rollback (runbook 4.6). Before P1.02-publish nothing was sent: fix on dev and restart at
+  P0.01. A failed P1.02-publish reruns the same command with --resume. After the handover the EMERGENCY key pauses deposits
+  (pause-all, P9.01) and withdrawals stay open. A failed verify (P2.01, P4.01) pauses all three vaults and exits 13: fix on dev and plan a
+  new deployment. A retire batch that must not run is cancelled through the Safe on the timelock before it is ready.
+scope:
+  - {pr: 1913, what: "retire rmAGENT per ADR-0009 so the router uses three vaults (retire-vault govern row, three-vault stage table, dapp withdraw-only presentation)", check: "P6.24-redeem-retired-vault"}
+steps:
+  - id: "P0.01-runbook-valid"
+    standing: ["4.1"]
+    description: "The release runbook is the template plus additions, the sheet and target make sense, and a production run has no open owner decision"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "scripts/runbook/validate-contract-qa.ts", "--release", "{release}", "--target", "{target}", "--runnable"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P0.02-run-dirs"
+    standing: ["4.3"]
+    description: "The run directory layout every later receipt and state file lives in; the run directory is outside the core checkout, which must stay clean"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["mkdir", "-p", "{runDir}/state", "{runDir}/journal", "{runDir}/go", "{runDir}/evidence", "{runDir}/manifests", "{runDir}/counts"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "state", "required": true}
+    irreversible: false
+  - id: "P0.04-checkout"
+    standing: ["4.1"]
+    description: "The core checkout is clean and its HEAD is the DEPLOY_SHA (the CLI refuses anything else)"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bash", "-c", 'test -z "$(git status --porcelain)" && test "$(git rev-parse HEAD)" = "{coreSha}"']
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P0.05-install"
+    standing: ["4.1"]
+    description: "publish-contracts dependencies come from the committed lockfile"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "install", "--frozen-lockfile", "--cwd", "publish-contracts"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P0.06-forge-build"
+    standing: ["4.1"]
+    description: "forge build succeeds at the DEPLOY_SHA"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["forge", "build"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    maxMinutes: 30
+  - id: "P0.08-dependency-manifest"
+    standing: ["4.2"]
+    description: "The third-party dependency manifest for this release is recorded at the deploy block; run from the dev checkout, because it writes a file under deployments/ that would dirty the DEPLOY_SHA checkout"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bash", "{countsCheckout}/scripts/release/preflight-guards.sh", "--dependency-manifest", "8453:{release}"]
+    env:
+      DEPENDENCY_MANIFEST_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{countsCheckout}/deployments/dependency-manifests/8453", "pattern": "{release}.json", "required": true}
+    irreversible: false
+    onlyFor: ["rehearsal", "production"]
+  - id: "P0.12-twin-fork"
+    standing: ["9"]
+    description: "The Twin chain (918453), a pinned lazy fork of Base, answers on the RPC the run uses"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "scripts/devnet/twin-fork.ts", "start", "--port", "8545", "--state-dir", "{runDir}/twin"]
+      - ["bun", "scripts/devnet/twin-fork.ts", "wait-ready", "--port", "8545", "--state-dir", "{runDir}/twin"]
+    env:
+      BASE_UPSTREAM_RPC: "{env:BASE_UPSTREAM_RPC}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/twin", "pattern": "anvil.json", "required": true}
+    irreversible: false
+    onlyFor: "twin"
+    maxMinutes: 15
+  - id: "P0.13-twin-keys"
+    standing: ["4.3"]
+    description: "Throwaway keystores for the deployer, pauser, emergency key and three Safe owners; the passphrase stays in a 0600 file; the public addresses become the sheet fragment"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bash", "-c", "umask 077 && head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \\n' > {runDir}/passphrase"]
+      - ["bash", "-c", "bun publish-contracts/src/rehearsal/cli.ts keys --dir {runDir}/keys --password-file {runDir}/passphrase --chain-id 918453 > {runDir}/fragment.env"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "fragment.env", "required": true}
+    irreversible: false
+    onlyFor: "twin"
+    gateAbsent: "{runDir}/fragment.env"
+  - id: "P0.15-sheet-merge"
+    standing: ["4.3"]
+    description: "The run sheet is the environment's committed sheet with the fragment's lines, through the real sheet parser"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "publish-contracts/src/ci/merge-sheet.ts", "--template", "{sheetTemplate}", "--fragment", "{runDir}/fragment.env", "--out", "{sheet}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "sheet.env", "required": true}
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+  - id: "P0.17-check-sheet"
+    standing: ["4.2", "4.10"]
+    description: "The sheet agrees with the environment: chain id, deployment kind, timelock delay band, 1 USDC seed, caps, and as many owner signer specs as Safe owners"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "scripts/runbook/validate-contract-qa.ts", "--check-sheet", "{sheet}", "--target", "{target}", "--owner-signers", "{ownerSignerCount}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P0.07-preflight-guards"
+    standing: ["4.2"]
+    description: "EIP-170 size gate and the zero timelock delay guard pass on the exact build artifacts"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bash", "scripts/release/preflight-guards.sh"]
+    env:
+      TIMELOCK_MIN_DELAY: "{sheet:TIMELOCK_MIN_DELAY}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P0.18-twin-fund"
+    standing: ["9"]
+    description: "Gas for every throwaway key and the real FiatToken balance of the deployer, on the Twin fork only"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "publish-contracts/src/rehearsal/cli.ts", "fund-gas", "--rpc", "{rpcUrl}", "--sheet", "{sheet}"]
+      - ["bun", "publish-contracts/src/rehearsal/cli.ts", "fund-usdc", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--usdc-units", "2000000000"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
+  - id: "P0.19-funding"
+    standing: ["4.2"]
+    description: "The deployer holds 0.005 ETH and 5 USDC (1 seed plus 4 test deposits). The gas the run burns is about 0.003 ETH; every send goes through cast at the network fee"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bash", "-c", 'cast balance "{sheet:ADMIN_ADDRESS}" > {runDir}/state/deployer-eth']
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-eth}", "5000000000000000"]
+      - ["bash", "-c", 'cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/deployer-usdc']
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-usdc}", "5000000"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["rehearsal", "production"]
+    writes: ["deployer-eth", "deployer-usdc"]
+  - id: "P0.20-plan"
+    standing: ["3", "4.3"]
+    description: "The plan job: sheet, floors, chain id, release tag of the sheet's kind, committed frozen counts, green CI and core's config-check, with no signer"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "--stage", "plan", "--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--environment", "{environmentName}", "--core-sha", "{coreSha}", "--counts-dir", "{countsDir}", "--evidence", "{evidenceDir}", "{gate}"]
+    env:
+      GITHUB_TOKEN: "{env:GITHUB_TOKEN}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["rehearsal", "production"]
+  - id: "P0.21-dry-run"
+    standing: ["4.3"]
+    description: "Every deployer stage simulates in order on a blank local anvil and sends nothing"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "publish", "--dry-run", "--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--signer", "address:{sheet:ADMIN_ADDRESS}", "--environment", "{environmentName}", "--core-sha", "{coreSha}", "--counts-dir", "{countsDir}", "--evidence", "{runDir}/evidence-dry", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{runDir}/manifests-dry"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["rehearsal", "production"]
+    maxMinutes: 60
+
+  # ── Phase 1, publish: stages 0 to 11. The first send of the run. ──
+  - id: "P1.50-record-go"
+    standing: ["4.3"]
+    description: "The publish go is written by the run: the sha, the environment and the hash of the merged sheet it proceeds with. Starting the run is the go"
+    host: "control"
+    phase: 1
+    cmds:
+      - ["bun", "scripts/runbook/run-record.ts", "go", "--kind", "publish", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/go", "pattern": "publish.json", "required": true}
+    irreversible: false
+  - id: "P1.02-publish"
+    standing: ["4.3"]
+    description: "Safe, libs, vault, registry, router, ic-policy, governance, proto, rwa, prove-control signed by every owner, then the timelock handover; each stage matches its frozen count"
+    host: "control"
+    phase: 1
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "publish", "{common}", "{owners}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{evidenceDir}", "pattern": "publish-run.json", "required": true}
+      - {"dir": "{manifestDir}", "pattern": "timelock.json", "required": true}
+    irreversible: true
+    notBefore: {"afterStep": "P1.50-record-go", "hours": 0}
+    maxMinutes: 180
+  - id: "P1.04-twin-counts"
+    standing: ["3"]
+    description: "The Twin run measured and wrote the per-stage counts for the sha"
+    host: "control"
+    phase: 1
+    cmds:
+      - ["test", "-s", "{countsDir}/{coreSha}.json"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
+
+  # ── Phase 2, verify: the pre-govern state. All three vaults deploy paused. ──
+  - id: "P2.01-verify-pre-govern"
+    standing: ["4.3"]
+    description: "Stage 12 reads the chain, not the manifests: roles, Safe, timelock, per-vault rules, the deployer nonce. A failure pauses all three vaults and exits 13"
+    host: "control"
+    phase: 2
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{common}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{evidenceDir}", "pattern": "isomorphism-{chainId}.json", "required": true}
+    irreversible: false
+    maxMinutes: 60
+  - id: "P3.01-govern-schedule"
+    standing: ["4.3"]
+    description: "Stage 13 schedules the three vault unpauses through the real Safe, one timelock operation each, in one sitting; on 8453 it exits 15 with the resume command"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: [0, 15]
+    receipts:
+      - {"dir": "{evidenceDir}", "pattern": "publish-run.json", "required": true}
+    irreversible: false
+    maxMinutes: 60
+  - id: "P3.02-govern-execute"
+    standing: ["4.3"]
+    description: "After the timelock delay the same command executes the three unpauses and reads depositsPaused back; every printed row has a transaction hash and status 1"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{evidenceDir}", "pattern": "publish-run.json", "required": true}
+    irreversible: false
+    notBefore: {"afterStep": "P3.01-govern-schedule", "hours": "timelockDelay"}
+    maxMinutes: 60
+  - id: "P3.03-submitter-safe"
+    standing: ["4.10"]
+    description: "The consensus receipt submitter is a second SafeL2 1.4.1 multisig, with the governing Safe's owners and a different salt, never a key"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/safe/cli.ts", "create", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--owners", "{sheet:SAFE_OWNERS}", "--threshold", "2", "--signer", "{signer}", "--salt-nonce", "{submitterSaltNonce}", "--yes", "--out", "{runDir}/submitter-safe.json"]
+      - ["bash", "-c", "jq -r .safe {runDir}/submitter-safe.json > {runDir}/state/submitter-safe"]
+    env:
+      ADMIN_ADDRESS: "{sheet:ADMIN_ADDRESS}"
+      PAUSER_ADDRESS: "{sheet:PAUSER_ADDRESS}"
+      EMERGENCY_ADDRESS: "{sheet:EMERGENCY_ADDRESS}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "submitter-safe.json", "required": true}
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    gateAbsent: "{runDir}/state/submitter-safe"
+    writes: ["submitter-safe"]
+  - id: "P3.04-register-submitter-schedule"
+    standing: ["4.10"]
+    description: "The governing Safe schedules ONE delayed timelock call, receipt.grantRole(RECEIPT_SUBMITTER_ROLE, the submitter Safe), after the submitter is checked as a canonical SafeL2 1.4.1 multisig"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "register-submitter", "--submitter", "{state:submitter-safe}", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: [0, 15]
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    maxMinutes: 60
+  - id: "P3.05-register-submitter-execute"
+    standing: ["4.10"]
+    description: "After the delay the call executes and RECEIPT_SUBMITTER_ROLE reads back for the submitter Safe"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "register-submitter", "--submitter", "{state:submitter-safe}", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P3.04-register-submitter-schedule", "hours": "timelockDelay"}
+    maxMinutes: 60
+
+  # ── Phase 4, verify again: the post-govern state. ──
+  - id: "P4.01-verify-post-govern"
+    standing: ["4.3"]
+    description: "Stage 12 again: all three unpause rows executed, all three vaults read depositsPaused false; a manifest that disagrees with the chain fails closed"
+    host: "control"
+    phase: 4
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{common}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    maxMinutes: 60
+  - id: "P5.01-receipt-offline"
+    standing: ["4.10"]
+    description: "The receipt id and the payload digest come from the one shared definition, never a plain keccak256 of the file"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bash", "-c", "bun scripts/runbook/qa-assert.ts receipt-id {receiptFile} > {runDir}/state/receipt-id"]
+      - ["bash", "-c", "bun scripts/runbook/qa-assert.ts receipt-digest {receiptFile} > {runDir}/state/receipt-digest"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["receipt-id", "receipt-digest"]
+  - id: "P5.02-record-receipt"
+    standing: ["4.10"]
+    description: "The submitter Safe records the receipt directly on the receipt contract: threshold owners sign, the deployer pays; the digest and id are recomputed from the served bytes before any signer exists; the stored submitter reads back as the Safe. A receipt id is unique, so a wrong digest cannot be corrected"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "record-receipt", "{common}", "{owners}", "{gate}", "--receipt-id", "{state:receipt-id}", "--payload-digest", "{state:receipt-digest}", "--payload", "{receiptFile}", "--payload-uri", "{receiptUri}", "--submitter", "{state:submitter-safe}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: true
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P4.01-verify-post-govern", "hours": 0}
+  - id: "P6.10-deposit-rmusdc"
+    standing: ["4.3", "4.4"]
+    description: "1 USDC into rmUSDC at the 2,500,000 gas limit; the shares equal previewDeposit within 0.5 percent"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'cast call "{m:vault.vault}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/preview-USDC']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "2500000", "{cast}"]
+      - ["bash", "-c", 'cast call "{m:vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-USDC']
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-USDC}", "{state:preview-USDC}", "50"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    writes: ["preview-USDC", "shares-USDC"]
+  - id: "P6.11-deposit-rmproto"
+    standing: ["4.3", "4.4"]
+    description: "1 USDC into rmPROTO; the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'cast call "{m:protocol-asset-vault.vault}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/preview-PROTO']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:protocol-asset-vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:protocol-asset-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "-c", 'cast call "{m:protocol-asset-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-PROTO']
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-PROTO}", "{state:preview-PROTO}"]
+      - ["bash", "-c", 'b=$(cast call "{m:protocol-asset-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-PROTO']
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-PROTO}", "{state:preview-PROTO}", "{state:share-bound-PROTO}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    writes: ["preview-PROTO", "shares-PROTO", "share-bound-PROTO"]
+  - id: "P6.13-deposit-rmrwa"
+    standing: ["4.3", "4.4"]
+    description: "1 USDC into rmRWA; the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'cast call "{m:rwa-basket-vault.vault}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/preview-RWA']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:rwa-basket-vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:rwa-basket-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "-c", 'cast call "{m:rwa-basket-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-RWA']
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-RWA}", "{state:preview-RWA}"]
+      - ["bash", "-c", 'b=$(cast call "{m:rwa-basket-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-RWA']
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-RWA}", "{state:preview-RWA}", "{state:share-bound-RWA}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    writes: ["preview-RWA", "shares-RWA", "share-bound-RWA"]
+  - id: "P6.20-redeem-rmusdc"
+    standing: ["4.4"]
+    description: "Full redeem of rmUSDC to USDC; the deployer's share balance is zero afterwards"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.vault}", "redeem(uint256,address,address)", "{state:shares-USDC}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "3000000", "{cast}"]
+      - ["bash", "-c", 'test "$(cast call "{m:vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P6.21-redeem-in-kind-rmproto"
+    standing: ["4.4"]
+    description: "Full redeemInKind of rmPROTO, which reads no oracle and always pays in the underlying assets"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:protocol-asset-vault.vault}", "redeemInKind(uint256,address,address)", "{state:shares-PROTO}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "-c", 'test "$(cast call "{m:protocol-asset-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P6.23-redeem-rmrwa"
+    standing: ["4.4"]
+    description: "Full redeem of rmRWA to USDC"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:rwa-basket-vault.vault}", "redeem(uint256,address,address)", "{state:shares-RWA}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "-c", 'test "$(cast call "{m:rwa-basket-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P6.24-redeem-retired-vault"
+    standing: ["4.4", "4.14"]
+    description: "Every vault the run retired (evidence vault_retirements, ADR-0017) is withdraw-only: retired() is true, maxDeposit is 0, and the admin's shares in it, if any, redeem to USDC. A run that retired no vault passes with nothing to check"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'for v in $(jq -r ".vault_retirements // [] | .[].vault" "{evidenceDir}/evidence.json"); do test "$(cast call "$v" "retired()(bool)")" = true && test "$(cast call "$v" "maxDeposit(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; b=$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$b" != 0 ]; then bash scripts/runbook/cast-send.sh "$v" "redeem(uint256,address,address)" "$b" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" --gas-limit 5000000 "$@" || exit 1; test "$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; fi; done', "_", "{cast}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+
+  # ── Phase 9, failure drills: the pause path and the recovery path run on real contracts. ──
+  - id: "P9.01-pause-all"
+    standing: ["4.5", "4.6"]
+    description: "pause-all pauses deposits on all three vaults with the emergency key, reads each back and writes the rollout report; withdrawals stay open"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "pause-all", "{common}", "{emergency}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{evidenceDir}", "pattern": "rollout-report-{chainId}.json", "required": true}
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+  - id: "P9.03-resume-schedule"
+    standing: ["4.5"]
+    description: "Each paused vault comes back through a new numbered unpause round of the Safe; the three are scheduled together"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-USDC", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-PROTO", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-RWA", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: [0, 15]
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+  - id: "P9.04-resume-execute"
+    standing: ["4.5"]
+    description: "After the delay the same three commands execute the unpauses"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-USDC", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-PROTO", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-RWA", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P9.03-resume-schedule", "hours": "timelockDelay"}
+  - id: "P9.05-verify-after-resume"
+    standing: ["4.5"]
+    description: "Verify passes again with all three vaults open"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{common}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+
+  # ── Phase 10, evidence and teardown. ──
+  - id: "P10.01-evidence-check"
+    standing: ["4.7"]
+    description: "The evidence file is checked against the frozen counts and the chain: nonce, every receipt status, the unpause operations and their delay, the registry, the secret scan"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--evidence", "{evidenceDir}/evidence.json", "--frozen", "{countsDir}/{gateSha}.json", "--deploy-sha", "{gateSha}", "--deployment-kind", "{deploymentKind}", "--rpc", "{rpcUrl}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{evidenceDir}", "pattern": "evidence.json", "required": true}
+    irreversible: false
+    onlyFor: ["rehearsal", "production"]
+  - id: "P10.02-secret-scan"
+    standing: ["4.7"]
+    description: "No key, passphrase or keystore path is in the run's evidence folder"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bun", "publish-contracts/src/ci/scan-rehearsal-secrets.ts", "--evidence", "{evidenceDir}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P10.51-write-rollout-report"
+    standing: ["4.7"]
+    description: "The rollout report is written from the run: sha, network, sheet hash, tag, every step's journal, every evidence file's sha256; a failed step, a journaled step with no result and a vault still paused at report time are issues, a pause report from a drill is listed only"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--step", "P10.51-write-rollout-report"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}
+    irreversible: false
+  - id: "P10.52-record-signoff"
+    standing: ["4.4"]
+    description: "The sign-off is written by the run, and only when the report lists no issue and matches the publish go"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bun", "scripts/runbook/run-record.ts", "signoff", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/go", "pattern": "signoff.json", "required": true}
+    irreversible: false
+  - id: "P10.07-twin-teardown"
+    standing: ["9"]
+    description: "The Twin fork stops and the throwaway keystores and the passphrase file are destroyed"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bun", "scripts/devnet/twin-fork.ts", "stop", "--port", "8545", "--state-dir", "{runDir}/twin"]
+      - ["shred", "-u", "{runDir}/passphrase"]
+      - ["rm", "-rf", "{runDir}/keys"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
