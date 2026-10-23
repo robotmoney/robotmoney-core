@@ -694,6 +694,20 @@ Internal review of the typed `--migration` option of `govern --row upgrade-proxy
 | RM-1022-2 | RM-1022 | Low | accepted-with-rationale | publish-contracts govern upgrade-proxy, ConsensusRecommendationReceipt | — | The row does not read the live proxy's initialized version or ADMIN_ROLE holders before it schedules. A proxy already at version 2 reverts atomically at the timelock execute with InvalidInitialization, so no half state exists. The operator reads the live pre-state before the schedule (runbook). |
 | RM-1022-3 | RM-1022 | Low | accepted-with-rationale | twin-upgrade-lifecycle, LegacyConsensusRecommendationReceipt, ConsensusReceiptMigration.t.sol | — | The Twin proof uses a source-level copy of the v0.5.0 receipt (same state, write surface and storage layout), not the byte-identical deployed code. Verify compares the live implementation with the DEPLOY_SHA build. |
 
+### RR-1022 — Retire rmAGENT, router uses three vaults (2026-10-22, 7 findings)
+
+Internal review of the rmAGENT retirement (`docs/code-review/20261022-code-review-internal-claude-retire-rmagent.md`, core issue 1912, ADR-0017). Row `RR-1022-N` is the review's finding heading `### N.`.
+
+| Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |
+|---|---|---|---|---|---|---|
+| RR-1022-1 | RR-1022 | Medium | accepted-with-rationale | retire-vault row, runbook 4.14 | — | The live router still holds four legs until the owner-gated timelock batch runs. Open until the owner schedules it (runbook 4.14). |
+| RR-1022-2 | RR-1022 | Low | accepted-with-rationale | AgentTokenVault redeem, ADR-0009 | — | ADR-0009 forbids assisted migration. A holder exits with redeem or redeemInKind. |
+| RR-1022-3 | RR-1022 | Low | accepted-with-rationale | recorder-keeper.sh, UniswapV4PriceRecorder | — | redeem reads the V4 recorder while holders remain. The keeper keeps running, or holders use redeemInKind. A v0.6.0 deployment has no recorder. |
+| RR-1022-4 | RR-1022 | Low | accepted-with-rationale | apply-receipt, consensus-receipt.bucket-vault-map.json | — | The bucket is the Investment Committee's cross-repository contract. apply-receipt accepts it at 0 bps and refuses any weight. The IC repository decision is the owner's. |
+| RR-1022-5 | RR-1022 | Low | accepted-with-rationale | DeployAgentTokenVault.s.sol, DeployUniswapV4PriceRecorder.s.sol, agent-token-shortlist.json | — | No stage reads the parked code. Deleting it is a later decision. |
+| RR-1022-6 | RR-1022 | Low | accepted-with-rationale | deploy-3.env, v0.5.0 tag | — | v0.5.0 tooling, frozen counts and QA records stay at the tag. deploy-3.env is the v0.5.0 record. |
+| RR-1022-7 | RR-1022 | Low | accepted-with-rationale | contract release runbooks section 3 | — | A v0.6.0 rc loses the agent and recorder counts. They are measured and frozen at the rc as for every release. |
+
 ### Gap analysis — process & coverage backlog (20260607-code-review-internal-claude-gap-analysis.md)
 
 > The gap analysis enumerates 50 tracked-as-future-work items (issues #643–#692),

@@ -30,8 +30,8 @@ describe("the stage runner on stub forge and cast", () => {
     const code = await w.run(["--stage", "deploy"]);
     expect(lastError(w)).toBeUndefined();
     expect(code).toBe(0);
-    expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.recorder, SCRIPT.vault, SCRIPT.registry, SCRIPT.router,
-      SCRIPT.receipt, SCRIPT.governance, SCRIPT.proto, SCRIPT.agent, SCRIPT.rwa, SCRIPT.timelock]);
+    expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.vault, SCRIPT.registry, SCRIPT.router,
+      SCRIPT.receipt, SCRIPT.governance, SCRIPT.proto, SCRIPT.rwa, SCRIPT.timelock]);
     expect(w.safeCalls[0]).toBe("createSafe");
     const m = manifest(w);
     expect(Object.keys(m.stages)).toEqual(DEPLOY);
@@ -101,7 +101,7 @@ describe("the stage runner on stub forge and cast", () => {
     const code = await w.run(["--stage", "deploy"]);
     expect(code).toBe(EXIT_CODES.SIMULATION);
     expect(code).not.toBe(0);
-    expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.recorder, SCRIPT.vault]);
+    expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.vault]);
     expect(lastError(w).kind).toBe("SIMULATION");
     expect(forgeScripts(w).some((c: any) => c.args[1].includes(SCRIPT.router.replace(".s.sol", "")))).toBe(false);
   });
@@ -120,7 +120,7 @@ describe("the stage runner on stub forge and cast", () => {
     w.cfg.counts[SCRIPT.vault] = COUNTS.vault! + 2;
     const code = await w.run(["--stage", "deploy"]);
     expect(code).toBe(EXIT_CODES.COUNT_MISMATCH);
-    expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.recorder]);
+    expect(broadcasts(w)).toEqual([SCRIPT.libs]);
   });
 
   test("a missing frozen file on 8453 fails before any chain work (hard error)", async () => {
@@ -195,7 +195,7 @@ describe("the stage runner on stub forge and cast", () => {
     w.safeCalls.length = 0;
     expect(await w.run(["--stage", "deploy", "--resume"])).toBe(0);
     expect(w.safeCalls.filter((c) => c === "createSafe" || c === "verifyCreatedSafe")).toEqual([]);
-    expect(w.logs().filter((l) => l.event === "stage.skipped").map((l) => l.stage)).toEqual(["safe", "libs", "recorder"]);
+    expect(w.logs().filter((l) => l.event === "stage.skipped").map((l) => l.stage)).toEqual(["safe", "libs"]);
     const resumed = forgeScripts(w).filter((c: any) => c.args.includes("--resume")).map((c: any) => c.args[1].split(":")[0].split("/").pop());
     expect(resumed).toEqual([SCRIPT.vault]);
     expect(w.state().nonces["0x000000000000000000000000000000000000a001"]).toBe(Object.values(COUNTS).reduce((a, b) => a + b, 0) + PROOF_TX_NONCES);
@@ -442,7 +442,7 @@ describe("the core timelock: pinned at the first proxy stage, adopted when someo
     expect(m.stages.timelock.adopted).toBeUndefined();
     // issue 1853: every proxy stage after the first and the timelock stage recompute the pin before they broadcast
     const ok = w.logs().filter((l) => l.event === "stage.timelock_pin_ok");
-    expect(ok.map((l) => l.stage)).toEqual(["registry", "router", "receipt", "governance", "proto", "agent", "rwa", "timelock"]);
+    expect(ok.map((l) => l.stage)).toEqual(["registry", "router", "receipt", "governance", "proto", "rwa", "timelock"]);
     for (const l of ok) expect(l).toMatchObject({ timelock: TL.address, init_code_hash: TL.initCodeHash });
   });
 

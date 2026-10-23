@@ -14,7 +14,7 @@ function fullManifests(): Record<string, Record<string, unknown>> {
 }
 const runManifest = () => ({ stages: Object.fromEntries(table.stages.map((s, i) => [s.name, { count: i + 1 }])) });
 
-test("a complete run reports every stage, the four vaults and the transaction total", () => {
+test("a complete run reports every stage, the three vaults and the transaction total", () => {
   const r = buildReport({ table, manifests: fullManifests(), runManifest: runManifest(), labelsText: "PASS a: x\nPASS b\nRESULT: VERIFIED\n" });
   expect(r.problems).toEqual([]);
   expect(r.stages.length).toBe(table.stages.length);

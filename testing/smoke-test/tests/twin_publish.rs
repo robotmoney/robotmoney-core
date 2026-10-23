@@ -1,7 +1,7 @@
 //! The Twin chain run of publish contracts, end to end (core 1488).
 //!
 //! One test boots the Twin chain (918453) through the harness. The harness has already called
-//! `publish` (deploy all four vaults, real Safe handover). This test then asserts the four
+//! `publish` (deploy all three vaults, real Safe handover). This test then asserts the three
 //! manifests, runs the one verifier (which holds the router, basket and timelock role proofs), runs the stage 13 govern matrix through the real Safe,
 //! runs the verifier again (the order is publish, verify, govern, verify: issue 1667), then one Safe self-administration row on the real SafeL2
 //! (`govern --row safe-change-threshold` raised to the owner count and restored to the sheet's value: QA plan v1 B5, finding T5).
@@ -139,7 +139,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
             std::fs::write(p, format!("{marker}\n")).expect("write the scenario marker");
         }
     }
-    // Core 1710, issue 1705: each vault's deposit state before govern is the stage table's deployPaused (all four deploy paused, rmUSDC included),
+    // Core 1710, issue 1705: each vault's deposit state before govern is the stage table's deployPaused (all three deploy paused, rmUSDC included),
     // and after govern it is open where the table makes the unpause a stage 13 row. The verifier below expects exactly that.
     let rules = table.vault_deposit_rules();
     let deposits_paused = |vault: alloy_primitives::Address| -> bool {
@@ -147,18 +147,17 @@ fn twin_chain_publish_verify_and_govern_matrix() {
             .expect("read depositsPaused")
             .ends_with('1')
     };
-    let four_vaults = [
+    let three_vaults = [
         ("rmUSDC", fx.vault()),
         ("rmPROTO", fx.proto_vault()),
-        ("rmAGENT", fx.agent_vault()),
         ("rmRWA", fx.rwa_vault()),
     ];
     assert_eq!(
         rules.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
-        four_vaults.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
-        "the stage table's vault rows and the harness vaults must be the same four, in order"
+        three_vaults.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+        "the stage table's vault rows and the harness vaults must be the same three, in order"
     );
-    for (rule, (name, vault)) in rules.iter().zip(four_vaults) {
+    for (rule, (name, vault)) in rules.iter().zip(three_vaults) {
         assert_eq!(
             deposits_paused(vault),
             rule.deploy_paused,
@@ -171,7 +170,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         .expect("the verifier must pass on the Twin chain");
     assert!(!verified.trim().is_empty(), "the verifier printed nothing");
     // Core 1618: before the stage 11 handover the real Safe executed one self-call signed by EVERY owner. The verifier read it back
-    // from the chain (four `safe:` labels, all passed or `verify()` above would have failed), and the run manifest records it.
+    // from the chain (the `safe:` labels, all passed or `verify()` above would have failed), and the run manifest records it.
     for label in [
         "safe: control proof transaction recorded",
         "safe: control proof transaction succeeded",
@@ -185,7 +184,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     }
     // Issue 1666: every basket ships with a nonzero NAV deviation guard from the sheet and sits on pools at or above the sheet liquidity
     // floor. The verifier read both back from the chain; `verify()` above would have failed on any of these labels failing.
-    for vault in ["rmPROTO", "rmAGENT", "rmRWA"] {
+    for vault in ["rmPROTO", "rmRWA"] {
         for what in [
             "navDeviationGuardBps equals sheet",
             "navDeviationGuardBps above zero",
@@ -332,20 +331,15 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         .govern_matrix()
         .expect("the govern matrix must pass through the real Safe");
     assert!(!rows.is_empty(), "the govern matrix ran no rows");
-    // Core 1710: stage 13 is four unpauses, rmUSDC first. Each is its own scheduled and executed line, and each vault reads open afterwards.
-    for row in [
-        "unpause-USDC",
-        "unpause-PROTO",
-        "unpause-AGENT",
-        "unpause-RWA",
-    ] {
+    // Core 1710: stage 13 is three unpauses, rmUSDC first. Each is its own scheduled and executed line, and each vault reads open afterwards.
+    for row in ["unpause-USDC", "unpause-PROTO", "unpause-RWA"] {
         assert_eq!(
             rows.iter().filter(|r| r.row == row).count(),
             2,
             "the govern matrix must print one scheduled and one executed line for {row}"
         );
     }
-    for (rule, (name, vault)) in rules.iter().zip(four_vaults) {
+    for (rule, (name, vault)) in rules.iter().zip(three_vaults) {
         assert_eq!(
             deposits_paused(vault),
             rule.paused_after_stage13(),
@@ -356,7 +350,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     // QA plan v1 D7: the verifier requires a non-zero emergency unwind guard on every active asset of an OPEN basket. The Safe sets it through the real timelock,
     // one `govern --row set-unwind-guard` round per basket (token=all), as the twin-publish step does, before the post-govern verify. The baskets hold nothing yet:
     // these values prove the row and the label on the real contracts, not a sizing (on 8453 the operator sizes min-usdc-out from each vault's holding).
-    for basket in ["PROTO", "AGENT", "RWA"] {
+    for basket in ["PROTO", "RWA"] {
         let vault_arg = format!("vault={basket}");
         let guarded = fx
             .published()
@@ -381,7 +375,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         );
     }
 
-    // Issue 1667: the order is publish, verify, govern, verify. The first verify above passed before govern (all four vaults paused). This second verify reads the
+    // Issue 1667: the order is publish, verify, govern, verify. The first verify above passed before govern (all three vaults paused). This second verify reads the
     // post-govern state: the unpause rows are executed, so the verifier expects those vaults open. The Twin run only checks that the scripts execute in this
     // order. The 48 hour delay and the Safe signers are proven on chain 8453 through the real Safe.
     let verified_after = fx
@@ -544,27 +538,22 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     };
     assert!(!c_released(&fx), "receipt C is recorded, not released");
     let before = router_weights(&fx);
-    let want_vaults: Vec<String> = [
-        fx.vault(),
-        fx.proto_vault(),
-        fx.agent_vault(),
-        fx.rwa_vault(),
-    ]
-    .iter()
-    .map(|a| format!("{a:#x}"))
-    .collect();
+    let want_vaults: Vec<String> = [fx.vault(), fx.proto_vault(), fx.rwa_vault()]
+        .iter()
+        .map(|a| format!("{a:#x}"))
+        .collect();
     assert_eq!(
         before.0, want_vaults,
         "the router lists the eligible vaults in registry order"
     );
     assert_eq!(
         before.1,
-        vec![9500, 500, 0, 0],
-        "the deployer left the 8453 launch vector on the router (rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0)"
+        vec![9500, 500, 0],
+        "the deployer left the 8453 launch vector on the router (rmUSDC 9500, rmPROTO 500, rmRWA 0)"
     );
     assert_ne!(
         before.1,
-        vec![5000, 3000, 0, 2000],
+        vec![5000, 3000, 2000],
         "the router must not already hold receipt C's vector"
     );
     // Issue 1743 (the real 8453 deploy failure): the router stage must not leave a voted vector. Effective routing after the deploy IS the sheet's launch
@@ -608,7 +597,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     assert_eq!(after.0, want_vaults, "the vault list is unchanged");
     assert_eq!(
         after.1,
-        vec![5000, 3000, 0, 2000],
+        vec![5000, 3000, 2000],
         "the router's active vector is receipt C's vector after the call"
     );
     // Issue 1743: a receipt-driven rebalance must change the EFFECTIVE routing.
@@ -689,30 +678,11 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     // The clear undoes the routing, never the release.
     assert!(c_released(&fx), "the clear does not un-release receipt C");
 
-    // Core 1676 (owner decision 2026-10-08): rmAGENT holds RM on the Uniswap V4 RM/USDC pool. The verifier read the venue, the V4 adapter, the
-    // recorder PoolKey and the absence of any recorder admin back from the chain: each label is in the output or `verify()` above would have failed.
-    for label in [
-        "vault[rmAGENT]: asset row is venue V4 with the price recorder as its pool",
-        "vault[rmAGENT]: V4 adapter codehash is allowed",
-        "vault[rmAGENT]: V4 adapter is bound to the recorder, the PoolManager and the pool key",
-        "recorder: PoolKey and PoolManager equal config",
-        "recorder: observation ring holds the full window floor",
-        "recorder: has no owner, role or setter",
-        "recorder: runtime code equals build artifact (masked)",
-        "adapter[V4:rmAGENT]: runtime code equals build artifact (masked)",
-    ] {
-        assert!(
-            verified.lines().any(|l| l.trim() == label),
-            "the verifier output lacks the label '{label}'"
-        );
-    }
-    rm_v4_flows(&fx, dir);
-
     // Issues 1485 (AC7) and 1493 (AC5): a router deposit and a router withdraw both succeed on the Twin chain after the full publish and govern run.
     // `cast_send` fails on a reverted receipt.
     //
     // Issue 1746: the router skips every leg whose computed amount is 0 (no vault call). At this point of the run the EFFECTIVE vector is the default launch vector
-    // again (9500/500/0/0 after the clear above: rmAGENT and rmRWA are 0 bps). Before the fix a 0 bps rmAGENT leg reverted the whole router deposit (`rmAGENT.deposit(0)` reverts).
+    // again (9500/500/0 after the clear above: rmRWA is 0 bps). Before the fix a 0 bps leg reverted the whole router deposit (`deposit(0)` reverts).
     let user = fx.agent();
     let pk = format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY));
     let amount: u128 = 100_000_000; // 100 USDC
@@ -735,7 +705,6 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     let legs = [
         ("rmUSDC", fx.vault()),
         ("rmPROTO", fx.proto_vault()),
-        ("rmAGENT", fx.agent_vault()),
         ("rmRWA", fx.rwa_vault()),
     ];
     let (leg_vaults, leg_bps) = effective_weights(&fx);
@@ -744,7 +713,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         legs.iter()
             .map(|(_, a)| format!("{a:#x}"))
             .collect::<Vec<_>>(),
-        "the effective vector lists the four vaults in registry order"
+        "the effective vector lists the three vaults in registry order"
     );
     assert!(
         leg_bps.contains(&0) && leg_bps.iter().any(|b| *b > 0),
@@ -833,236 +802,4 @@ fn twin_chain_publish_verify_and_govern_matrix() {
 fn word(raw: &str, i: usize) -> String {
     let h = raw.trim_start_matches("0x");
     h[i * 64..(i + 1) * 64].to_string()
-}
-
-/// A signed 24-bit tick from a 32-byte ABI word (sign-extended).
-fn tick_of(raw: &str, i: usize) -> i32 {
-    let w = word(raw, i);
-    u32::from_str_radix(&w[w.len() - 8..], 16).expect("tick word") as i32
-}
-
-/// Core 1676. rmAGENT holds RM through the REAL Uniswap V4 PoolManager pool `0xf2e7b957...`, priced by the REAL recorder, on the Twin chain
-/// after the full publish and govern run. Nothing is mocked: the pool is real Base state (the live pool, never funded), the vault is opened by the real Safe and timelock, and every swap goes through the real PoolManager.
-///  1. the asset row is RM, venue V4, pool = the recorder, adapter = the V4 adapter the vault manifest names;
-///  2. after the 48 hour govern warp the recorder is stale: a deposit fails closed until someone pokes it (permissionless);
-///  3. a deposit swaps USDC to RM through the PoolManager (the pool tick moves) and the swap pokes the recorder (its index advances);
-///  4. a USDC redeem returns USDC;
-///  5. left unpoked for more than one window the recorder is stale: a deposit and a USDC redeem fail, and redeemInKind still pays RM.
-fn rm_v4_flows(fx: &Fixture, dir: &Path) {
-    let cfg: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(fx.repo_root().join("config/agent-token-shortlist.json"))
-            .expect("read the shipped agent config"),
-    )
-    .expect("agent config is JSON");
-    // The listed V4 asset: BNKR, the rmAGENT test asset while RM is parked (ADR-0016), or RM once reactivated. Every pin below comes from the config.
-    let rm_cfg = &cfg["shortlist"][0];
-    assert_eq!(
-        rm_cfg["venue"], "UniswapV4",
-        "the listed asset is a Uniswap V4 asset"
-    );
-    let pool_id = rm_cfg["poolId"].as_str().expect("poolId").to_string();
-    let pool_fee = rm_cfg["poolFee"].as_u64().expect("poolFee");
-    let token_hex = rm_cfg["token"]
-        .as_str()
-        .expect("token")
-        .trim_start_matches("0x")
-        .to_lowercase();
-    let state_view: alloy_primitives::Address = rm_cfg["stateView"]
-        .as_str()
-        .expect("stateView")
-        .parse()
-        .expect("stateView address");
-    let rm: alloy_primitives::Address = rm_cfg["token"]
-        .as_str()
-        .expect("token")
-        .parse()
-        .expect("RM address");
-    let read_json = |f: &str| -> serde_json::Value {
-        serde_json::from_str(
-            &std::fs::read_to_string(dir.join(f)).unwrap_or_else(|_| panic!("read {f}")),
-        )
-        .unwrap_or_else(|_| panic!("{f} is JSON"))
-    };
-    let recorder: alloy_primitives::Address = read_json("recorder.json")["recorder"]
-        .as_str()
-        .expect("recorder manifest")
-        .parse()
-        .expect("recorder address");
-    let agent_manifest = read_json("agent-token-vault.json");
-    let v4_adapter = agent_manifest["adapter_v4"].as_str().expect("adapter_v4");
-
-    // 1. The asset row.
-    let agent_vault = fx.agent_vault();
-    let first = fx
-        .cast_call_raw(agent_vault, "assets(uint256)", &["0"])
-        .expect("read rmAGENT assets(0)");
-    assert!(
-        word(&first, 0).ends_with(&token_hex),
-        "rmAGENT asset 0 must be the listed asset {token_hex}, got {first}"
-    );
-    assert!(
-        word(&first, 1).ends_with(
-            &format!("{recorder:#x}")
-                .trim_start_matches("0x")
-                .to_lowercase()
-        ),
-        "rmAGENT asset 0 pool must be the recorder {recorder:#x}, got {first}"
-    );
-    assert_eq!(
-        u64::from_str_radix(word(&first, 2).trim_start_matches('0').max("0"), 16).unwrap(),
-        pool_fee,
-        "the swap fee is the pool fee {pool_fee}"
-    );
-    assert!(
-        word(&first, 4).ends_with(&v4_adapter.trim_start_matches("0x").to_lowercase()),
-        "rmAGENT asset 0 adapter must be the V4 adapter {v4_adapter}, got {first}"
-    );
-    assert_eq!(
-        word(&first, 5).trim_start_matches('0'),
-        "1",
-        "venue is V4 (1)"
-    );
-
-    // The depositor: a funded EOA. rmAGENT is already open: the govern matrix above unpaused it through the real Safe and timelock.
-    let user = fx.agent();
-    let pk = format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY));
-    fx.fund_gas(user, 10_000_000_000_000_000_000)
-        .expect("fund gas for the depositor");
-    // 5 USDC: the largest safe deposit into the BNKR test pool (about 706 USD of virtual depth: 5 USDC costs 1.05 percent against the 300 bps swap bound,
-    // 10 USDC 1.75 percent, 100 USDC 11.7 percent). The Twin forks the live pool and never funds it.
-    let deposit: u128 = 5_000_000;
-    fx.fund_usdc(user, deposit * 4)
-        .expect("fund USDC for the depositor");
-    let (vault_s, dep_s) = (format!("{agent_vault:#x}"), deposit.to_string());
-    let user_s = format!("{user:#x}");
-    let slot0 = |fx: &Fixture| {
-        fx.cast_call_raw(state_view, "getSlot0(bytes32)", &[&pool_id])
-            .expect("StateView.getSlot0")
-    };
-    let latest = |fx: &Fixture| {
-        // latest() -> (lastTick, lastRecordedAt, index, cardinality, cardinalityNext)
-        let raw = fx
-            .cast_call_raw(recorder, "latest()", &[])
-            .expect("recorder.latest()");
-        let at = u64::from_str_radix(word(&raw, 1).trim_start_matches('0').max("0"), 16).unwrap();
-        let idx = u64::from_str_radix(word(&raw, 2).trim_start_matches('0').max("0"), 16).unwrap();
-        let card = u64::from_str_radix(word(&raw, 3).trim_start_matches('0').max("0"), 16).unwrap();
-        (at, idx, card)
-    };
-
-    // 2. Stale after the govern warp: the deposit fails closed. (Anyone may poke the recorder: `record()` has no role.)
-    fx.cast_send(
-        &pk,
-        fx.usdc(),
-        "approve(address,uint256)",
-        &[&vault_s, &dep_s],
-    )
-    .expect("approve rmAGENT");
-    assert!(
-        fx.cast_send(
-            &pk,
-            agent_vault,
-            "deposit(uint256,address)",
-            &[&dep_s, &user_s]
-        )
-        .is_err(),
-        "a deposit into rmAGENT must fail closed while the recorder is stale"
-    );
-    fx.cast_send(&pk, recorder, "record()", &[])
-        .expect("anyone may poke the recorder");
-    let (poked_at, idx_before, card) = latest(fx);
-    assert!(card >= 901, "the ring holds the 901 slot floor, got {card}");
-    let tick_before = tick_of(&slot0(fx), 1);
-
-    // 3. A deposit, one block later, routed through the real PoolManager pool.
-    fx.warp(10).expect("one block later");
-    let rm_before = fx.erc20_balance_of(rm, agent_vault).expect("RM balance");
-    fx.cast_send(
-        &pk,
-        agent_vault,
-        "deposit(uint256,address)",
-        &[&dep_s, &user_s],
-    )
-    .expect("the rmAGENT deposit must succeed through the V4 PoolManager");
-    let shares = fx
-        .erc20_balance_of(agent_vault, user)
-        .expect("rmAGENT shares");
-    assert!(shares > 0, "the rmAGENT deposit minted no shares");
-    let rm_after = fx.erc20_balance_of(rm, agent_vault).expect("RM balance");
-    assert!(
-        rm_after > rm_before,
-        "rmAGENT holds no RM after the deposit"
-    );
-    assert_ne!(
-        tick_of(&slot0(fx), 1),
-        tick_before,
-        "the deposit must move the tick of PoolManager pool {pool_id}: the swap went through it"
-    );
-    let (swap_at, idx_after, _) = latest(fx);
-    assert!(
-        swap_at > poked_at && idx_after != idx_before,
-        "the recorder index must advance during the swap (index {idx_before} -> {idx_after}, time {poked_at} -> {swap_at})"
-    );
-
-    // 4. A USDC redeem returns USDC.
-    let half = (shares / 2).to_string();
-    let usdc_before = fx.erc20_balance_of(fx.usdc(), user).expect("USDC balance");
-    fx.cast_send(
-        &pk,
-        agent_vault,
-        "redeem(uint256,address,address)",
-        &[&half, &user_s, &user_s],
-    )
-    .expect("the rmAGENT USDC redeem must succeed while the recorder is fresh");
-    assert!(
-        fx.erc20_balance_of(fx.usdc(), user).expect("USDC balance") > usdc_before,
-        "the USDC redeem returned no USDC"
-    );
-
-    // 5. Left unpoked for more than one window: deposits and USDC redeems fail closed, redeemInKind pays RM with no oracle read.
-    fx.warp(1900)
-        .expect("leave the recorder unpoked for more than one 1800 s window");
-    let rest = fx
-        .erc20_balance_of(agent_vault, user)
-        .expect("rmAGENT shares");
-    assert!(rest > 0, "no shares left for the in-kind exit");
-    fx.cast_send(
-        &pk,
-        fx.usdc(),
-        "approve(address,uint256)",
-        &[&vault_s, &dep_s],
-    )
-    .expect("approve rmAGENT");
-    assert!(
-        fx.cast_send(
-            &pk,
-            agent_vault,
-            "deposit(uint256,address)",
-            &[&dep_s, &user_s]
-        )
-        .is_err(),
-        "a deposit must fail closed with a stale recorder"
-    );
-    assert!(
-        fx.cast_send(
-            &pk,
-            agent_vault,
-            "redeem(uint256,address,address)",
-            &[&rest.to_string(), &user_s, &user_s]
-        )
-        .is_err(),
-        "a USDC redeem must fail closed with a stale recorder"
-    );
-    let rm_user_before = fx.erc20_balance_of(rm, user).expect("RM balance");
-    fx.cast_send(
-        &pk,
-        agent_vault,
-        "redeemInKind(uint256,address,address)",
-        &[&rest.to_string(), &user_s, &user_s],
-    )
-    .expect("redeemInKind must pay with a stale recorder (withdrawals are never frozen)");
-    assert!(
-        fx.erc20_balance_of(rm, user).expect("RM balance") > rm_user_before,
-        "redeemInKind returned no RM"
-    );
 }

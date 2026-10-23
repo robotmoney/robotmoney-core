@@ -16,10 +16,10 @@ agents. It is built as **two separate systems** (owner decision,
 2026-10-19):
 
 - **The vaults system** is the treasury product. It holds the Robot Money
-  vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), their adapters and libraries
+  vaults (rmUSDC, rmPROTO, rmRWA), their adapters and libraries
   (every library in `contracts/lib/` except `GatewayWindows`, which is the
   gateway's rolling-window library),
-  the rmAGENT price recorder, `VaultRegistry`, `PortfolioRouter`,
+  `VaultRegistry`, `PortfolioRouter`,
   `RouterGovernance`, and the rebalancing signal contract
   `ConsensusRecommendationReceipt`. A Safe
   multisig governs it through a TimelockController. It is deployed in its
@@ -286,23 +286,7 @@ same contracts ship into test, demo, and mainnet — only the registry
 flag's value differs across environments. See
 `docs/development/single-production-codebase.md` for the principle.
 
-At launch rmAGENT (`AgentTokenVault`) holds BNKR alone, as a TEST asset, and deploys paused. RM, the existing Base token at
-`0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`, is parked until its market is deep enough (owner, 2026-10-21,
-[ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md)). BNKR (BankrCoin, `0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b`) is the owner's test choice of 2026-10-22
-([ADR-0016](adr/ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md)): its Uniswap V4 BNKR/USDC pool (fee 0.30%, tickSpacing 60, hooks zero, id `0x87a44b2f...0f52`) holds about 706 USD
-of virtual depth and L 3.9e16, 39 times the 1e15 floor. It is allowed for the contained mainnet test only, with deposits of at most 5 USDC,
-and it is not a production sizing. Tokens are added and removed through the timelock (ADR-0004). Nothing deploys RM or BNKR in
-production code. RM's venue, once listed again, is decided (owner, 2026-10-08; supersedes 2026-10-06): the Uniswap V4 RM/USDC pool
-with fee 2.91% (id `0xf2e7b957...2391`, tickSpacing 582, hooks zero). `UniswapV4SwapAdapter` swaps through the real
-PoolManager (unlock callback, full PoolKey). Because a hookless V4 pool records no observations, rmAGENT registers
-`UniswapV4PriceRecorder` as the V4 asset's pool: a permissionless, admin-free recorder that stores the pool tick in a V3-style
-ring (one snapshot per block, lagged tick, clamp of 10 ticks per second) and answers `observe()` for the unchanged
-`BasketVault` TWAP math. This is sufficient for the Base mainnet test, not the final deployment; its security bound
-is the pool depth, so `perDepositCap` and `tvlCap` stay below it. The recorder stage (`recorder`, right after `libs`)
-deploys it, and the runner waits for a full window of history before the `agent` stage. A stale recorder (no record for
-over 1800 s) fails deposits and USDC redeems closed, and `redeemInKind` needs no oracle. `config/agent-token-shortlist.json`
-lists BNKR with its PoolKey and holds RM with its PoolKey under `parked` while RM is parked (core 1676). The recorder stage records
-the pool of the listed V4 entry.
+rmAGENT is retired and the router routes across three vaults: rmUSDC, rmPROTO and rmRWA ([ADR-0017](adr/ADR-0017-rmagent-retired-router-uses-three-vaults.md), core 1912). A new deployment has no `agent` stage and no `recorder` stage. The live v0.5.0 rmAGENT (`AgentTokenVault`) is retired through the Safe and the timelock by one batch, `registry.migrateEligibility(rmAGENT, false, three legs)` then `registry.retire(rmAGENT)` (`govern --row retire-vault`, runbook 4.14). After it the vault is withdraw-only (ADR-0009): deposits revert, `redeem` and `redeemInKind` stay open, and nothing migrates holder funds. `redeem` reads the V4 price recorder, so a retired vault with holders needs a recorded price, and `redeemInKind` needs no oracle. `AgentTokenVault`, `UniswapV4SwapAdapter`, `UniswapV4PriceRecorder` and `config/agent-token-shortlist.json` stay in the repository as parked code that no stage reads. RM and BNKR are not listed anywhere (ADR-0015 and ADR-0016 are superseded by ADR-0017). `VAULT_AGENT_MIN_POOL_LIQUIDITY` stays 1e15 for any future agent-token vault.
 
 The source tree also contains `RwaBasketVault`, the rmRWA vault. rmRWA is
 a plain basket row: it holds deSPXA (Centrifuge / Janus Henderson / Anemoy
@@ -330,7 +314,7 @@ Characteristics:
 `Vault` contract composed with a position-adapter interface. It is
 Rejected. A fifth contract kind breaks the one-deployment-scheme rule, so
 that contract, its interface, its asset adapters and its theme deploy script
-are deleted. Four vault kinds ship: `RobotMoneyVault`
+are deleted. Three vaults deploy (ADR-0017); four vault kinds exist in code: `RobotMoneyVault`
 (rmUSDC, lending adapters) and the `BasketVault` family (`ProtocolAssetVault`,
 `AgentTokenVault`, `RwaBasketVault`) that swap through `IBasketSwapAdapter`.
 The registry-eligibility model (`isRouterEligible`), the lifecycle in §4.7
@@ -409,7 +393,7 @@ as 0). A leg that fails it is skipped. The full amount is split pro rata across 
 remaining legs, by each leg's share of the available bps, and the rounding
 remainder goes to the last available leg with non-zero bps. Each funded leg
 is then quoted with the vault's `previewDeposit` at its split amount. A leg
-whose quote reverts (for example rmAGENT on a stale price recorder) is
+whose quote reverts (for example a vault whose price source is stale) is
 skipped too, and the split reruns over the survivors until every funded leg
 quotes (QA plan D4). A leg whose
 computed amount is 0 is skipped like an unavailable leg (issue 1746). No USDC is left with the router
@@ -444,9 +428,8 @@ withdrawals too (Aave reserve paused or inactive, Comet withdraw pause) is
 not handed back: rmUSDC's `maxDeposit` reads 0, so the router skips the
 leg, and the adapter's `deploy` reverts `VenueWithdrawalsClosed` (security
 round 3). The basket deploy script refuses a `NAV_DEVIATION_BPS` at or
-below any configured pool fee in bps, and the rmAGENT sheet value is 400
-against the RM pool's 291 bps fee, so ordinary drift inside the fee band
-does not take rmAGENT out of routing.
+below any configured pool fee in bps, and a basket sheet value must be above the pool fee, so ordinary drift inside the fee band
+does not take a basket out of routing.
 
 ### 4.3 Vault Adapters
 
@@ -512,9 +495,9 @@ background implementation details.
 ### 4.5 Protocol Admin Authority
 
 Every protocol contract uses OpenZeppelin `AccessControl` with an
-`ADMIN_ROLE`. A vaults-system deployment has eight of them: the four vaults
+`ADMIN_ROLE`. A vaults-system deployment has seven of them: the three vaults
 (`RobotMoneyVault` for rmUSDC, and the `BasketVault` kinds
-`ProtocolAssetVault`, `AgentTokenVault` and `RwaBasketVault`) and four
+`ProtocolAssetVault` and `RwaBasketVault`) and four
 singletons, `VaultRegistry`, `PortfolioRouter`, `RouterGovernance` and
 `ConsensusRecommendationReceipt` (§4.8, §4.9). `RobotMoneyGateway` also has an `ADMIN_ROLE`, but it belongs to
 the gateway system. Who governs it is an open question for the gateway's
@@ -1273,14 +1256,7 @@ The main-page balances panel reads the RM balance at
 `VITE_RM_TOKEN_ADDRESS`, which every smoke-test env-injection site sets
 to the live address. No test needs to hold RM. `RouterGovernance` reads no RM
 balance: router weights are applied by the weight setter through the
-timelock, and nothing in governance reads a token balance. rmAGENT
-launches paused with BNKR as its test asset: `config/agent-token-shortlist.json` lists BNKR
-and parks RM (ADR-0015, ADR-0016). A listed RM trades on the Uniswap V4 RM/USDC pool with fee 2.91% (§4.1; owner decision
-2026-10-08, which replaced the V3 RM/USDC pool at fee 10000 because that
-pool has no in-range liquidity). rmAGENT registers `UniswapV4PriceRecorder`
-as RM's pool, and `BasketVault.addAsset` refuses it below the observation
-floors (core 1554), so the deploy waits for a full TWAP window of recorded
-history before the `agent` stage (core 1676).
+timelock, and nothing in governance reads a token balance. rmAGENT is retired (ADR-0017): a new deployment has no `agent` stage, no recorder and no RM or BNKR listing. A reactivated RM would trade on the Uniswap V4 RM/USDC pool (fee 2.91%, §4.1) through a new vault and a new ADR.
 
 ### 5.4 Explorer Indexer and API
 
@@ -1808,7 +1784,7 @@ stays §8 because other documents cite it by number.
 | Protocol-asset and agent-token vault execution | Resolved (contracts shipped): `contracts/vaults/ProtocolAssetVault.sol` (wETH/cbBTC at launch; wSOL has no usable pool) and `contracts/vaults/AgentTokenVault.sol` (admin-curated agent-economy tokens) are in the source tree. Router eligibility for each vault remains ADMIN_ROLE-gated via `VaultRegistry.setRouterEligible`: both vaults stay ineligible by default until pool cardinality, per-asset TWAP windows, and the intra-vault rebalancing model are certified (see `docs/development/open-questions.md` §3.15). | Flip `isRouterEligible` only after TWAP windows, pool cardinality, and the rebalancing model are certified per §4.1. |
 | Management fee and swap-fee-share mechanism | Resolved: deferred to a future phase. Current phase ships exit-fee-only disclosure. | Require a separate ADR and contract design before management fee or swap-fee-share are implemented. |
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |
-| On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All eight vaults-system contracts of §4.5 (four vaults and four singletons) must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all eight contracts to it (stage 11); configure the stage 0 SafeL2 (threshold ≥ 2) as proposer and canceller; executor open (`address(0)`, core #1521). See §4.5 and issue #414. |
+| On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All seven vaults-system contracts of §4.5 (three vaults and four singletons; the live v0.5.0 line also has the retired rmAGENT) must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all eight contracts to it (stage 11); configure the stage 0 SafeL2 (threshold ≥ 2) as proposer and canceller; executor open (`address(0)`, core #1521). See §4.5 and issue #414. |
 | Production JSON-RPC provider | Resolved: automatic failover shipped in issue #667 through the ordered `rpc_urls` array in `clients/rust-payment-client/src/config.rs` and endpoint rotation in `clients/rust-payment-client/src/rpc/mod.rs`. Safety-critical reads depend on provider correctness and availability; cross-provider consensus checking remains a separate, deferred decision. | Configure the ordered `rpc_urls` list so `rmpc` rotates to the next endpoint on transport failure. Multi-RPC consensus comparison for high-value reads stays deferred until a specific risk justifies it. |
 | Production signer vendor | No HSM/KMS/device-bound signer vendor is chosen, and none is required: the rmpc deposit signs with the software keystore on every chain and prints the production warning first on Base mainnet (owner decisions 2026-10-06, issue #1545, and 2026-10-14, QA plan Decision D12). | Keep the signer backend trait stable so an operator who picks HSM/KMS can add it. Hardware stays optional, never required. |
 | Dapp hosting and CSP | Resolved: strict CSP shipped in PR #735 via `clients/dapp/src/lib/csp.ts` Vite plugin and `clients/dapp/scripts/check-csp.sh` CI check. | Maintain strict CSP policy; enforce via CI `check-csp.sh`; require static hosting with pinned dependencies and release provenance before public mainnet use. |

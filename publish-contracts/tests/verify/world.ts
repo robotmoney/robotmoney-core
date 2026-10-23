@@ -1,4 +1,4 @@
-// A healthy four-vault deployment as in-memory chain state plus manifests and artifacts on disk.
+// A healthy three-vault deployment as in-memory chain state plus manifests and artifacts on disk.
 // The FakeChain implements the read-only ChainReader surface. It is a unit-test fixture for verifier logic:
 // it proves what the verifier reports for a given chain state. The real-chain proof is the Twin chain run (S9) and the mainnet run (S13).
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
@@ -10,7 +10,7 @@ import { secp256k1 } from "@noble/curves/secp256k1";
 import { localSafeTxHash } from "../../src/safe/tx.ts";
 import {
   ADMIN_ROLE, RECEIPT_RELEASER_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, coreContracts, stageManifestFile, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT,
-  RM_TOKEN, SAFE_GUARD_SLOT, SAFE_L2_141_SINGLETON, SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED, Z32, ZERO,
+  SAFE_GUARD_SLOT, SAFE_L2_141_SINGLETON, SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED, Z32, ZERO,
 } from "../../src/verify/constants.ts";
 import { PROOF_TX_NONCES } from "../../src/counts.ts";
 import { getStageTable } from "../../src/stages.ts";
@@ -46,35 +46,23 @@ export const ROUTER = addr(0x40a7e4);
 export const GATEWAY = addr(0x6a7e);
 export const GOV = addr(0x60b);
 export const REC = addr(0x4ec);
-/** Core 1676: the permissionless Uniswap V4 price recorder and the V4 swap adapter bound to it. */
-export const RECORDER = addr(0x4ec0de);
-export const V4_ADAPTER = addr(0xad04);
-export const POOL_MANAGER = addr(0x9a4);
-export const STATE_VIEW = addr(0x5748);
-export const RM_POOL_ID = "0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391" as const;
-/** RM then USDC, fee 29100, tickSpacing 582, no hooks: the shipped config PoolKey, whose hash is RM_POOL_ID. */
-export const RM_POOL_KEY = { currency0: RM_TOKEN, currency1: USDC_ADDRESS as Address, fee: 29100, tickSpacing: 582, hooks: ZERO } as const;
-export const V4_EXPECTED = { poolManager: POOL_MANAGER, stateView: STATE_VIEW, poolId: RM_POOL_ID as Hex, key: { ...RM_POOL_KEY } };
 export const AGENT = addr(0xa6e47);
 export const SEED_RECEIVER = addr(0x5eed);
 export const SEED_SHARES = 1_000_000n * 10n ** 12n;
 /** Stands in for the FiatTokenProxy code: the world pins its hash through VerifyOptions.usdcCodeHash. */
 export const USDC_CODE = "0x6080604052600436106100" as const;
-export const VAULTS: Record<string, { address: Address; kind: "usdc" | "basket" | "agent" }> = {
+export const VAULTS: Record<string, { address: Address; kind: "usdc" | "basket" }> = {
   rmUSDC: { address: addr(0xb0001), kind: "usdc" },
   rmPROTO: { address: addr(0xb0002), kind: "basket" },
-  rmAGENT: { address: addr(0xb0003), kind: "agent" },
-  rmRWA: { address: addr(0xb0004), kind: "basket" },
+  rmRWA: { address: addr(0xb0003), kind: "basket" },
 };
 /** Library name (the table'"'"'s `libraries[].name`) -> address. */
 const LIBS: Record<string, Address> = { tick_math: addr(0x11b1) };
-const ASSETS: Record<string, { token: Address; pool: Address; swapFee: number; adapter: Address; venue: number; v4?: typeof V4_EXPECTED }[]> = {
+const ASSETS: Record<string, { token: Address; pool: Address; swapFee: number; adapter: Address; venue: number }[]> = {
   rmPROTO: [
     { token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01), venue: 0 },
     { token: addr(0xcb), pool: addr(0xf002), swapFee: 500, adapter: addr(0xad01), venue: 0 },
   ],
-  // core 1676: RM is a Uniswap V4 asset. The vault pool is the price recorder, the adapter is the V4 swap adapter, the venue is V4 (1).
-  rmAGENT: [{ token: RM_TOKEN, pool: RECORDER, swapFee: 29100, adapter: V4_ADAPTER, venue: 1, v4: V4_EXPECTED }],
   rmRWA: [{ token: addr(0xde5), pool: addr(0xf003), swapFee: 500, adapter: addr(0xad01), venue: 0 }],
 };
 
@@ -84,7 +72,7 @@ export const USDC_ADAPTERS = [
   { adapter: addr(0xaa02), capBps: 3333, field: "compound_adapter" },
   { adapter: addr(0xaa03), capBps: 3333, field: "moonwell_flagship_adapter" },
 ] as const;
-export const SLIPPAGE: Record<string, bigint> = { rmPROTO: 100n, rmAGENT: 500n, rmRWA: 100n };
+export const SLIPPAGE: Record<string, bigint> = { rmPROTO: 100n, rmRWA: 100n };
 export const SIG_ADAPTER_ALLOWED = "AdapterAllowedSet(address,bool)";
 export const SIG_CODEHASH_ALLOWED = "AdapterCodeHashAllowedSet(bytes32,bool)";
 
@@ -95,7 +83,7 @@ export const UNWIND_MIN_USDC_OUT = 1_000_000n;
 export const UNWIND_MAX_LOSS_BPS = 500n;
 export const POOL_LIQUIDITY = 10n ** 18n;
 export const POOL_LIQUIDITY_FLOOR = 10n ** 12n;
-const DEFAULT_BPS = [9500, 500, 0, 0];
+const DEFAULT_BPS = [9500, 500, 0];
 
 type Handler = (args: any[]) => unknown;
 const SET_REGISTRY_SELECTOR = toFunctionSelector("function setRegistry(address)");
@@ -224,7 +212,7 @@ export const INIT_SLOT = "0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662e
 /** Verifier name of each proxied core contract -> its implementation address in the world. */
 export const IMPLS: Record<string, Address> = {
   gateway: addr(0x1e01), registry: addr(0x1e02), router: addr(0x1e03), governance: addr(0x1e04), receipt: addr(0x1e06),
-  "vault[rmUSDC]": addr(0x1e11), "vault[rmPROTO]": addr(0x1e12), "vault[rmAGENT]": addr(0x1e13), "vault[rmRWA]": addr(0x1e14),
+  "vault[rmUSDC]": addr(0x1e11), "vault[rmPROTO]": addr(0x1e12), "vault[rmRWA]": addr(0x1e13),
 };
 
 export interface World {
@@ -252,8 +240,8 @@ export function buildWorld(chainId = 8453): World {
   const table = getStageTable();
   const CORE_CONTRACTS = coreContracts(table);
   const libArtifact = (n: string) => table.libraries.find((l) => l.name === n)!.artifact;
-  const vaultArtifactOf = (key: string) => table.vaults.find((v) => ({ rmUSDC: "USDC", rmPROTO: "PROTO", rmAGENT: "AGENT", rmRWA: "RWA" })[key] === v.key)!.artifact;
-  const names = [...new Set([...CORE_CONTRACTS.map((c) => c.artifact), ...table.vaults.map((v) => v.artifact), ...Object.keys(LIBS).map(libArtifact), table.artifacts.v4Adapter!])];
+  const vaultArtifactOf = (key: string) => table.vaults.find((v) => ({ rmUSDC: "USDC", rmPROTO: "PROTO", rmRWA: "RWA" })[key] === v.key)!.artifact;
+  const names = [...new Set([...CORE_CONTRACTS.map((c) => c.artifact), ...table.vaults.map((v) => v.artifact), ...Object.keys(LIBS).map(libArtifact)])];
   const proxied = new Set(table.stages.flatMap((s) => (s.proxies ?? []).map((p) => p.contract)));
   const codeByName: Record<string, Hex> = {};
   const writeArtifact = (n: string, artifact: string, linkReferences: unknown = {}, immutables = true) => {
@@ -287,10 +275,9 @@ export function buildWorld(chainId = 8453): World {
     proxy(a, impl);
   };
 
-  const byName: Record<string, Address> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, receipt: REC, timelock: TIMELOCK, recorder: RECORDER };
+  const byName: Record<string, Address> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, receipt: REC, timelock: TIMELOCK };
   for (const c of CORE_CONTRACTS) (IMPLS[c.name] ? setProxy(c.name, byName[c.name]!, c.artifact) : setCode(byName[c.name], c.artifact));
   for (const [k, v] of Object.entries(VAULTS)) setProxy(`vault[${k}]`, v.address, vaultArtifactOf(k));
-  setCode(V4_ADAPTER, table.artifacts.v4Adapter!);
   for (const [n, a] of Object.entries(LIBS)) setCode(a, libArtifact(n));
   ch.codes.set(SAFE.toLowerCase(), "0x608060405234801561001057600080fd5b50");
   const safeHash = keccak256(ch.codes.get(SAFE.toLowerCase())!);
@@ -321,7 +308,7 @@ export function buildWorld(chainId = 8453): World {
   ch.set(GATEWAY, "router", ROUTER);
   ch.set(REGISTRY, "router", ROUTER);
   ch.set(REGISTRY, "listVaults", Object.values(VAULTS).map((v) => v.address));
-  ch.set(REGISTRY, "vaultCount", 4n);
+  ch.set(REGISTRY, "vaultCount", 3n);
   ch.set(REGISTRY, "isRouterEligible", () => true);
   // the weight setter (issue 1698): applyReceipt is gated by governance's own WEIGHT_SETTER_ROLE (the timelock) and releases on the receipt register
   ch.grant(GOV, WEIGHT_SETTER_ROLE, TIMELOCK);
@@ -367,8 +354,6 @@ export function buildWorld(chainId = 8453): World {
       const guards = new Map(assets.map((x) => [x.token.toLowerCase(), [UNWIND_MIN_USDC_OUT, true, UNWIND_MAX_LOSS_BPS] as const]));
       ch.set(v.address, "emergencyUnwindGuard", (a: any[]) => guards.get(String(a[0]).toLowerCase()) ?? [0n, false, 0n]);
     }
-    // core 1676: the vault allowlists the codehash of the V4 adapter it was deployed with
-    ch.set(v.address, "adapterCodeHashAllowed", (a: any[]) => String(a[0]).toLowerCase() === keccak256(ch.codes.get(V4_ADAPTER.toLowerCase())!).toLowerCase());
     if (v.kind === "usdc") {
       // issue 1705 C4: the three strategy adapters, active with the script caps, and exactly their addresses and code hashes on the allowlists
       USDC_ADAPTERS.forEach((x, i) => ch.codes.set(x.adapter.toLowerCase(), `0x6080${(0xa0 + i).toString(16)}`));
@@ -386,25 +371,7 @@ export function buildWorld(chainId = 8453): World {
     };
   }
 
-  // core 1676: the recorder and the V4 adapter read back the configured PoolKey. The recorder keeps a live ring of 7,201 slots (core 1793,
-  // the 4 h sell anchor window) and holds no admin.
-  ch.set(RECORDER, "POOL_MANAGER", POOL_MANAGER);
-  ch.set(RECORDER, "POOL_ID", RM_POOL_ID);
-  ch.set(RECORDER, "token0", RM_POOL_KEY.currency0);
-  ch.set(RECORDER, "token1", RM_POOL_KEY.currency1);
-  ch.set(RECORDER, "fee", RM_POOL_KEY.fee);
-  ch.set(RECORDER, "tickSpacing", RM_POOL_KEY.tickSpacing);
-  ch.set(RECORDER, "hooks", ZERO);
-  ch.set(RECORDER, "slot0", [1n << 96n, -403009, 3, 7201]);
-  ch.set(V4_ADAPTER, "POOL_MANAGER", POOL_MANAGER);
-  ch.set(V4_ADAPTER, "RECORDER", RECORDER);
-  ch.set(V4_ADAPTER, "POOL_ID", RM_POOL_ID);
-  ch.set(V4_ADAPTER, "CURRENCY0", RM_POOL_KEY.currency0);
-  ch.set(V4_ADAPTER, "CURRENCY1", RM_POOL_KEY.currency1);
-  ch.set(V4_ADAPTER, "POOL_FEE", RM_POOL_KEY.fee);
-  ch.set(V4_ADAPTER, "TICK_SPACING", RM_POOL_KEY.tickSpacing);
-
-  const frozenCounts = { safe: 1, libs: 4, recorder: 6, vault: 12, registry: 2, router: 2, gateway: 3, governance: 2, receipt: 2, "vault-proto": 6, "vault-agent": 3, "vault-rwa": 6, timelock: 18 };
+  const frozenCounts = { safe: 1, libs: 4, vault: 12, registry: 2, router: 2, gateway: 3, governance: 2, receipt: 2, "vault-proto": 6, "vault-rwa": 6, timelock: 18 };
   ch.noncesMap.set(DEPLOYER.toLowerCase(), Object.values(frozenCounts).reduce((a, b) => a + b, 0) + PROOF_TX_NONCES); // the stages plus the deployer's prove-control transaction (core 1712)
 
   const w = (f: string, o: unknown) => writeFileSync(join(manifestDir, f), JSON.stringify(o, null, 2));
@@ -421,15 +388,13 @@ export function buildWorld(chainId = 8453): World {
   });
   w("safe.json", { chain_id: chainId, safe: SAFE });
   w(file("libs"), { chain_id: chainId, tick_math: LIBS.tick_math });
-  w(file("recorder"), { chain_id: chainId, recorder: RECORDER, pool_manager: POOL_MANAGER, pool_id: RM_POOL_ID, ring_slots: 7201 });
   for (const v of table.vaults) if (v.key !== "USDC") {
-    const vkey = ({ PROTO: "rmPROTO", AGENT: "rmAGENT", RWA: "rmRWA" } as Record<string, string>)[v.key]!;
-    w(basename(v.manifest), { chain_id: chainId, vault: VAULTS[vkey]!.address, implementation: IMPLS[`vault[${vkey}]`], ...up, ...(v.key === "AGENT" ? { adapter: ZERO, adapter_v4: V4_ADAPTER, recorder: RECORDER } : {}) });
+    const vkey = ({ PROTO: "rmPROTO", RWA: "rmRWA" } as Record<string, string>)[v.key]!;
+    w(basename(v.manifest), { chain_id: chainId, vault: VAULTS[vkey]!.address, implementation: IMPLS[`vault[${vkey}]`], ...up });
   }
   // the storage-layout snapshots and the pins the layout identifiers hash, as in the core checkout
   const coreDir = join(dir, "core");
   mkdirSync(join(coreDir, "config"), { recursive: true });
-  writeFileSync(join(coreDir, "config", "agent-token-shortlist.json"), JSON.stringify({ shortlist: [{ symbol: "RM", token: RM_TOKEN }] }));
   for (const s of table.stages) for (const p of s.proxies ?? []) { mkdirSync(join(coreDir, dirname(p.layout)), { recursive: true }); writeFileSync(join(coreDir, p.layout), JSON.stringify({ contract: p.contract })); }
   writeFileSync(join(coreDir, table.upgradeAuthority!.layoutPins), JSON.stringify({ pins: true }));
 
@@ -456,7 +421,7 @@ export const WORLD_CREATE2_FACTORY = "0x4e59b44847b379578588920cA78FbF26c0B4956C
 export function deployedWorld(blocks: Record<string, bigint> = {}): World {
   const w = buildWorld();
   w.opts.fromBlock = 100n;
-  const contracts: Record<string, Address> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, receipt: REC, recorder: RECORDER, ...Object.fromEntries(Object.entries(VAULTS).map(([k, v]) => [k, v.address])) };
+  const contracts: Record<string, Address> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, receipt: REC, ...Object.fromEntries(Object.entries(VAULTS).map(([k, v]) => [k, v.address])) };
   const txs = Object.entries(contracts).map(([n, a]) => w.chain.created(a, blocks[n] ?? 100n));
   const tl = keccak256(toHex("timelock factory call"));
   w.chain.receipts.set(tl.toLowerCase(), { blockNumber: blocks.timelock ?? 100n, status: "success", contractAddress: null, to: WORLD_CREATE2_FACTORY, logs: [{ address: TIMELOCK }] });

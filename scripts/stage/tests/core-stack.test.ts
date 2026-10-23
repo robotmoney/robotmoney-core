@@ -97,7 +97,7 @@ beforeEach(() => {
   rmSync(OUT, { recursive: true, force: true });
   mkdirSync(join(OUT, "manifests"), { recursive: true });
   mkdirSync(join(OUT, "keys"), { recursive: true });
-  writeFileSync(join(OUT, "sheet.env"), "GOVERN_UNPAUSE_VAULTS=USDC,PROTO,AGENT,RWA\n");
+  writeFileSync(join(OUT, "sheet.env"), "GOVERN_UNPAUSE_VAULTS=USDC,PROTO,RWA\n");
   writeFileSync(join(OUT, "pw"), "x".repeat(48), { mode: 0o600 });
   writeFileSync(join(OUT, "core-smoke.log"), summary());
   calls = { cmds: [] };
@@ -193,7 +193,7 @@ describe("publish", () => {
   describe("publish gateway", () => {
     const fullSheet = [
       "ADMIN_ADDRESS=0x00000000000000000000000000000000000000aa", "PAUSER_ADDRESS=0x00000000000000000000000000000000000000bb", "SHARE_RECEIVER_ADDRESS=0x00000000000000000000000000000000000000cc",
-      "EMERGENCY_ADDRESS=0x00000000000000000000000000000000000000dd", "UPGRADE_MODE=frozen", "GOVERN_UNPAUSE_VAULTS=USDC,PROTO,AGENT,RWA",
+      "EMERGENCY_ADDRESS=0x00000000000000000000000000000000000000dd", "UPGRADE_MODE=frozen", "GOVERN_UNPAUSE_VAULTS=USDC,PROTO,RWA",
     ].join("\n") + "\n";
     const seedVaultsRun = () => {
       writeFileSync(join(OUT, "sheet.env"), fullSheet);
@@ -271,9 +271,9 @@ describe("governance", () => {
       const r = await run("governance", "ensure");
       expect(r.code).toBe(0);
       const g = govern();
-      expect(g).toHaveLength(4);
+      expect(g).toHaveLength(3);
       expect(g[0]).not.toContain("--row");
-      for (const [i, k] of ["PROTO", "AGENT", "RWA"].entries()) {
+      for (const [i, k] of ["PROTO", "RWA"].entries()) {
         expect(g[i + 1]).toContain(`--row set-unwind-guard --admin-arg vault=${k} --admin-arg token=all --admin-arg min-usdc-out=1000000 --admin-arg max-loss-bps=500`);
       }
       expect(calls.cmds.some((c) => c.cmd[2] === "verify")).toBe(false);
@@ -464,7 +464,7 @@ describe("record", () => {
     chain_id: 918453, run_id: "r1", core_tag: "t", core_sha: SHA, generated_at: "2026-10-02T00:00:00Z", min_delay: 60, deployer: a(1),
     addresses: { gateway: a(2), vault: a(3), registry: a(4), router: a(5), governance: a(6), consensus_receipt: a(7), timelock: a(9), safe: a(10), emergency: a(11) },
     code_hashes: { gateway: h(12) },
-    vault_addresses: { rmUSDC: a(3), rmPROTO: a(13), rmAGENT: a(14), rmRWA: a(15) },
+    vault_addresses: { rmUSDC: a(3), rmPROTO: a(13), rmRWA: a(14) },
     ephemeral: {
       approver: a(17), emergency: a(11), keystore_dir: join(OUT, "keys"),
       safe_signers: [{ role: "approver", address: a(17) }, { role: "approver-b", address: a(20) }, { role: "approver-c", address: a(21) }],

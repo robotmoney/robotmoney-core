@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { keccak256, pad, toFunctionSelector, toHex } from "viem";
-import { RECORDER_RING_SLOTS, verifyDeployment } from "../../src/verify/index.ts";
+import { verifyDeployment } from "../../src/verify/index.ts";
 import {
   ADMIN_ROLE, AGENT_ROLE, RECEIPT_RELEASER_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_GUARD_SLOT, SAFE_FALLBACK_SLOT, SAFE_PROBE_ADDRESS,
   SAFE_PROBE_ADDRESS_2, SIG_AGENT_AUTHORIZED, Z32, ZERO,
@@ -17,10 +17,10 @@ import { USDC_ADDRESS } from "../../src/usdc.ts";
 import { ERC1967_ADMIN_SLOT } from "../../src/verify/upgradeability.ts";
 import { getStageTable } from "../../src/stages.ts";
 import { manifestBase } from "../../src/stage-table.ts";
-import { buildWorld, failed, addr, GOVERNED_UPGRADE_LIB, IMPL_SLOT, INIT_SLOT, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, REC, RECORDER, V4_ADAPTER, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
+import { buildWorld, failed, addr, GOVERNED_UPGRADE_LIB, IMPL_SLOT, INIT_SLOT, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, REC, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
 
 const LABELS = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "expected-labels.json"), "utf8")) as string[];
-const CORE: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, receipt: REC, timelock: TIMELOCK, recorder: RECORDER };
+const CORE: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, receipt: REC, timelock: TIMELOCK };
 const LIB_TICK_MATH = addr(0x11b1);
 const WHO: Record<string, `0x${string}`> = { deployer: DEPLOYER, pauser: PAUSER, emergency: EMERGENCY, safe: SAFE };
 const OTHER = addr(0x0bad);
@@ -30,7 +30,6 @@ function subject(name: string): `0x${string}` {
   const v = /^vault\[(\w+)\]$/.exec(name); if (v) return VAULTS[v[1]].address;
   if (/^library\[tick_math\]$/.test(name)) return LIB_TICK_MATH;
   if (name === "safe") return SAFE;
-  if (name === "adapter[V4:rmAGENT]") return V4_ADAPTER;
   const c = CORE[name]; if (c) return c;
   throw new Error(`no subject for '${name}'`);
 }
@@ -48,7 +47,7 @@ const RULES: Rule[] = [
   [/^manifest: timelock\.json safe equals safe\.json$/, (w) => editManifest(w, timelockFile(), (o) => { o.safe = OTHER; })],
   [/^manifest: timelock\.json emergency equals sheet$/, (w) => editManifest(w, timelockFile(), (o) => { o.emergency = OTHER; })],
   [/^vault set: registry\.listVaults readable$/, (w) => { w.chain.handlers.delete(`${REGISTRY.toLowerCase()}:listVaults`); }],
-  [/^vault set: manifests equal registry\.listVaults$/, (w) => w.chain.set(REGISTRY, "listVaults", Object.values(VAULTS).slice(0, 3).map((v) => v.address))],
+  [/^vault set: manifests equal registry\.listVaults$/, (w) => w.chain.set(REGISTRY, "listVaults", Object.values(VAULTS).slice(0, 2).map((v) => v.address))],
   [/^vault set: registry vaultCount equals listVaults length$/, (w) => w.chain.set(REGISTRY, "vaultCount", 5n)],
   [/^vault set: sheet and manifests name the same vaults$/, (w) => { delete w.sheet.vaults.rmPROTO; }],
   [/^usdc: code hash equals pinned FiatTokenProxy$/, (w) => { w.chain.codes.set(USDC_ADDRESS.toLowerCase(), "0x6000"); }],
@@ -126,21 +125,6 @@ const RULES: Rule[] = [
   // vault facts
   [/^(vault\[\w+\]): registry link$/, (w, m) => w.chain.set(subject(m[1]), "registry", OTHER)],
   [/^(vault\[\w+\]): a second setRegistry reverts$/, (w) => { w.chain.setRegistryOpen = true; }],
-  // core 1676: the Uniswap V4 asset of rmAGENT. Each label has the one fault it exists to catch.
-  [/^vault\[rmAGENT\]: asset row is venue V4 with the price recorder as its pool$/, (w) => {
-    const rm = VAULTS.rmAGENT.address;
-    w.chain.set(rm, "assets", (a: any[]) => { if (Number(a[0]) !== 0) throw new Error("execution reverted"); return [w.sheet.vaults.rmAGENT.assets[0]!.token, OTHER, 29100, true, V4_ADAPTER, 1]; });
-  }],
-  [/^vault\[rmAGENT\]: V4 adapter codehash is allowed$/, (w) => w.chain.set(VAULTS.rmAGENT.address, "adapterCodeHashAllowed", false)],
-  [/^vault\[rmAGENT\]: V4 adapter is bound to the recorder, the PoolManager and the pool key$/, (w) => w.chain.set(V4_ADAPTER, "RECORDER", OTHER)],
-  [/^recorder: PoolKey and PoolManager equal config$/, (w) => w.chain.set(RECORDER, "tickSpacing", 200)],
-  // core 1793: one slot below the 7,201-slot ring the 4 h sell anchor needs
-  [/^recorder: observation ring holds the full window floor$/, (w) => w.chain.set(RECORDER, "slot0", [1n << 96n, -403009, 3, 7200])],
-  [/^recorder: has no owner, role or setter$/, (w) => {
-    // the recorder code gains the `owner()` selector 0x8da5cb5b, as a PUSH4 would carry it
-    w.chain.codes.set(RECORDER.toLowerCase(), `${w.chain.codes.get(RECORDER.toLowerCase())!}638da5cb5b` as `0x${string}`);
-  }],
-  [/^vault\[rmAGENT\]: lists exactly the shortlist asset of the config$/, (w) => { w.sheet.vaults.rmAGENT.assets = [{ token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01) }]; }],
   [/^(vault\[\w+\]): tvlCap equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "tvlCap", 1n)],
   [/^(vault\[\w+\]): perDepositCap equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "perDepositCap", 1n)],
   [/^(vault\[\w+\]): exitFeeBps equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "exitFeeBps", 999n)],
@@ -168,7 +152,6 @@ const RULES: Rule[] = [
   [/^(vault\[\w+\]): KEEPER_ROLE has no holder$/, (w, m) => { const k = keccak256(toHex("KEEPER_ROLE")); w.chain.grant(subject(m[1]), k, OTHER); w.chain.roleGrantedLog(subject(m[1]), k, OTHER, 400n); }],
   [/^(vault\[\w+\]): EMERGENCY_ROLE has exactly one holder$/, (w, m) => { w.chain.grant(subject(m[1]), EMERGENCY_ROLE, OTHER); w.chain.roleGrantedLog(subject(m[1]), EMERGENCY_ROLE, OTHER, 400n); }],
   [/^vault\[rmUSDC\]: adapter set, caps and code-hash allowlist equal the deploy script$/, (w) => { w.sheet.vaults.rmUSDC.adapters![0]!.capBps = 1; }],
-  [/^vault\[rmAGENT\]: asset config equals sheet$/, (w) => { w.sheet.vaults.rmAGENT.assets = [{ token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01) }]; }],
   [/^(vault\[\w+\]): asset config equals sheet$/, (w, m) => { w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].assets = []; }],
   [/^vault\[rmUSDC\]: seed present$/, (w) => w.chain.set(VAULTS.rmUSDC.address, "totalAssets", 0n)],
   [/^vault\[rmUSDC\]: totalSupply above zero$/, (w) => w.chain.set(VAULTS.rmUSDC.address, "totalSupply", 0n)],
@@ -225,47 +208,12 @@ describe("negative fixture for every verifier label", () => {
     expect(failed(await verifyDeployment(buildWorld().opts))).toEqual([]);
   });
 
-  test("rmAGENT asset row on the wrong venue (V3, not V4) fails the V4 asset-row label even with the recorder pool and fee right", async () => {
-    const label = "vault[rmAGENT]: asset row is venue V4 with the price recorder as its pool";
-    const w = buildWorld(8453);
-    w.chain.set(VAULTS.rmAGENT.address, "assets", (a: any[]) => {
-      if (Number(a[0]) !== 0) throw new Error("execution reverted");
-      return [w.sheet.vaults.rmAGENT.assets[0]!.token, RECORDER, 29100, true, V4_ADAPTER, 0];
-    });
-    expect(failed(await verifyDeployment(w.opts))).toContain(label);
-  });
-
   test.each(LABELS)("%s fails when its fault is planted", async (label) => {
     const w = buildWorld(8453);
     plant(w, label);
     const r = await verifyDeployment(w.opts);
     expect(r.ok).toBe(false);
     expect(failed(r)).toContain(label);
-  });
-});
-
-describe("the recorder ring holds the 4 h sell anchor window (core 1793, QA plan D5)", () => {
-  const label = "recorder: observation ring holds the full window floor";
-  const ROOT = join(import.meta.dir, "../../..");
-  test("the floor is the deploy script's RING_SLOTS and the sell anchor window / 2 s + 1", () => {
-    const script = readFileSync(join(ROOT, "contracts/script/DeployUniswapV4PriceRecorder.s.sol"), "utf8");
-    const views = readFileSync(join(ROOT, "contracts/lib/BasketViews.sol"), "utf8");
-    const ring = Number(/uint16 public constant RING_SLOTS = ([\d_]+);/.exec(script)![1]!.replaceAll("_", ""));
-    const anchorWindow = Number(/uint32 internal constant SELL_ANCHOR_WINDOW = ([\d_]+);/.exec(views)![1]!.replaceAll("_", ""));
-    expect(RECORDER_RING_SLOTS).toBe(ring);
-    expect(RECORDER_RING_SLOTS).toBe(anchorWindow / 2 + 1);
-  });
-  test("a 901-slot recorder (Deploy 2's ring, the 1800 s NAV floor) fails the ring label", async () => {
-    const w = buildWorld(8453);
-    w.chain.set(RECORDER, "slot0", [1n << 96n, -403009, 3, 901]);
-    const r = await verifyDeployment(w.opts);
-    expect(failed(r)).toContain(label);
-    expect(r.checks.find((x) => x.label === label)!.detail).toContain(`needs ${RECORDER_RING_SLOTS}`);
-  });
-  test("a ring of exactly 7,201 live slots passes", async () => {
-    const w = buildWorld(8453);
-    w.chain.set(RECORDER, "slot0", [1n << 96n, -403009, 3, RECORDER_RING_SLOTS]);
-    expect(failed(await verifyDeployment(w.opts))).not.toContain(label);
   });
 });
 

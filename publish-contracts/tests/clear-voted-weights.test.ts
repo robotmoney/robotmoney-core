@@ -13,7 +13,7 @@ import { newManifest } from "../src/runner.ts";
 import { stageByName } from "../src/stages.ts";
 import { A, addr, fakeTimelock, sender, setup, signers } from "./govern-world.ts";
 
-const ALL = { ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:5000,PROTO:2500,AGENT:1000,RWA:1500" };
+const ALL = { ELIGIBLE_VAULTS: "PROTO,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,RWA", ROUTER_WEIGHTS: "USDC:5000,PROTO:3500,RWA:1500" };
 const DELAY = 172800n;
 const RID = `0x${"ab".repeat(32)}` as `0x${string}`;
 const noWarp = async () => { throw new Error("no anvil_ or evm_ method on 8453"); };
@@ -30,7 +30,6 @@ const WANT_VAULTS = [A.vaults.USDC, A.vaults.PROTO, A.vaults.RWA];
 function world(chainId = 918453, voted = true) {
   const d = setup(ALL, chainId);
   const tl = fakeTimelock(d.sheet, DELAY);
-  tl.s.ineligible.add(A.vaults.AGENT);
   tl.s.recorded.add(RID);
   const file = join(d.ctx.coreDir, "payload.json");
   const text = JSON.stringify({ schema_version: "1.0", weights: GOOD });

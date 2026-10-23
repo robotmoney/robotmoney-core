@@ -53,7 +53,6 @@ describe("the tools read the vault rules from the stage table (issue 1705)", () 
       mkdirSync(m, { recursive: true });
       const strategy = { aave_adapter: "0x00000000000000000000000000000000000000e1", compound_adapter: "0x00000000000000000000000000000000000000e2", moonwell_flagship_adapter: "0x00000000000000000000000000000000000000e3" };
       for (const v of getStageTable().vaults) writeFileSync(join(m, `${manifestBase(v.manifest)}.json`), JSON.stringify({ chain_id: 918453, vault: "0x00000000000000000000000000000000000000c1", adapter: "0x00000000000000000000000000000000000000a1", adapter_v4: "0x00000000000000000000000000000000000000a4", recorder: "0x00000000000000000000000000000000000000d5", ...strategy }));
-      writeFileSync(join(m, "recorder.json"), JSON.stringify({ chain_id: 918453, recorder: "0x00000000000000000000000000000000000000d5" }));
       writeCoreAssetConfig(coreDir);
       return { coreDir, chainId: 918453, sheet: parseSheet(sheetText()) } as never;
     }
@@ -90,7 +89,7 @@ describe("the tools read the vault rules from the stage table (issue 1705)", () 
     for (const f of ["govern.ts", "evidence-check.ts", "verify-stage.ts"]) {
       const src = code(f);
       expect([f, src.match(/["'`]USDC["'`]/g)]).toEqual([f, null]);
-      expect([f, src.match(/["'`]unpause-(?:USDC|PROTO|AGENT|RWA)["'`]/g)]).toEqual([f, null]);
+      expect([f, src.match(/["'`]unpause-(?:USDC|PROTO|RWA)["'`]/g)]).toEqual([f, null]);
       expect([f, src.match(/\bk\s*[!=]==\s*["'`]\w+["'`]/g)]).toEqual([f, null]);
       expect([f, src.match(/\[\s*["'`]rmUSDC["'`]\s*,/g)]).toEqual([f, null]);
     }
@@ -128,8 +127,8 @@ describe("the CLI's vault rules equal the --core-dir stage table (issue 1833, 18
     expect(g.message).not.toContain("same core sha as DEPLOY_SHA");
   });
   for (const [what, edit] of [
-    ["deployPaused", (t: any) => { const v = t.vaults.find((x: any) => x.key === "AGENT"); v.deployPaused = !v.deployPaused; }],
-    ["unpauseRow", (t: any) => { t.vaults.find((x: any) => x.key === "AGENT").unpauseRow = "unpause-RWA"; }],
+    ["deployPaused", (t: any) => { const v = t.vaults.find((x: any) => x.key === "RWA"); v.deployPaused = !v.deployPaused; }],
+    ["unpauseRow", (t: any) => { t.vaults.find((x: any) => x.key === "PROTO").unpauseRow = "unpause-RWA"; }],
   ] as const) {
     test(`one vault's ${what} differs: govern is refused at startup with INPUT_MISSING naming both table paths, before any stage runs`, async () => {
       const r = await runWith("govern", edit);
@@ -138,7 +137,7 @@ describe("the CLI's vault rules equal the --core-dir stage table (issue 1833, 18
       expect(r.message).toContain(VAULT_RULES_PATH);
       expect(r.message).toContain(r.corePath);
       expect(r.corePath).not.toBe(VAULT_RULES_PATH);
-      expect(r.message).toContain("for vault AGENT");
+      expect(r.message).toMatch(/for vault (PROTO|RWA)/);
       expect(r.message).toContain("same core sha as DEPLOY_SHA");
     });
     test(`one vault's ${what} differs: the emergency pause-all still runs (exit 0, one pause) with one warning naming both table paths`, async () => {

@@ -562,44 +562,6 @@ One bps above the RM pool fee is the smallest accepted guard.
 function test_guard_acceptsOneBpsAboveThePoolFee() public;
 ```
 
-<a id="test_sheets_agentnavdeviationisabovethepoolfee"></a>
-
-### test_sheets_agentNavDeviationIsAboveThePoolFee
-
-Every committed sheet sets the rmAGENT guard to the D10 value, 400 bps (the 291 bps fee plus a TWAP lag
-budget), so the agent stage passes the assertion above on the Twin and in a rehearsal.
-
-```solidity
-function test_sheets_agentNavDeviationIsAboveThePoolFee() public view;
-```
-
-<a id="_sheetuint-string-string"></a>
-
-### _sheetUint
-
-<i>
-
-The value of `name=` in a stage sheet, with any trailing comment dropped.
-
-</i>
-
-```solidity
-function _sheetUint(string memory text, string memory name) internal pure returns (uint256);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| text | `string` |  |
-| name | `string` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
-
 <a id="test_reverts_whenminpoolliquidityunset"></a>
 
 ### test_reverts_whenMinPoolLiquidityUnset

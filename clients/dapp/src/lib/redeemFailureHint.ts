@@ -1,7 +1,7 @@
 // Canonical: docs/technical/redeem-gas-1482.md (core issue 1778)
 
 /**
- * A basket vault (rmPROTO, rmAGENT, rmRWA) sells every leg through a DEX with a 1 percent price floor.
+ * A basket vault (rmPROTO, rmRWA) sells every leg through a DEX with a 1 percent price floor.
  * A position of a few cents leaves a leg of a handful of token base units, and the pool's one-unit
  * rounding then misses the floor: the simulated USDC redeem reverts "Too little received". The
  * supported exit is `redeemInKind(shares, receiver, owner)`, which pays the basket tokens and swaps nothing.

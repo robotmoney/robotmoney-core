@@ -309,17 +309,16 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     await expect(page.getByTestId("vault-detail-freshness")).toBeVisible();
   });
 
-  // Four-vault conformance (core 1488, one deployment scheme): the landing
-  // VaultCards render one tile per registered vault. All four vaults ship
-  // (rmUSDC, rmPROTO, rmAGENT, rmRWA); rmAGENT is deployed holding RM and paused, so
-  // this test no longer asserts that every tile is Active.
+  // Three-vault conformance (ADR-0017, rmAGENT retired): the landing
+  // VaultCards render one tile per registered vault. Three vaults ship
+  // (rmUSDC, rmPROTO, rmRWA), so this test does not assert that every tile is Active.
   test("landing renders a tile per registered vault", async ({ page }) => {
     // Ground truth: the chain-registered vault set.
     const registeredVaults = await listVaults(rpcUrl, registryAddr);
     expect(
       registeredVaults.length,
-      "expected all four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) in the registry",
-    ).toBe(4);
+      "expected all three vaults (rmUSDC, rmPROTO, rmRWA) in the registry",
+    ).toBe(3);
 
     await page.goto(dappUrl);
 

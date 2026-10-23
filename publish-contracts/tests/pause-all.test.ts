@@ -1,4 +1,4 @@
-// pause-all (core 1619, plan decision 22): a failed verify or postflight pauses deposits on ALL FOUR vaults, rmUSDC included.
+// pause-all (core 1619, plan decision 22): a failed verify or postflight pauses deposits on ALL THREE vaults, rmUSDC included.
 // What is real here: the CLI, the stage order, the signer choice, the argument vector of every `cast send`, the read-back and the rollout report file.
 // What is a fake: the chain. A recording `cast send` / `cast call` stands in for the node (every other tool call goes to the stub forge and cast).
 // The vaults themselves, the real keys and a real redeem on every paused vault are the Twin rehearsal: testing/smoke-test/tests/twin_pause_all.rs (suite 14).
@@ -87,19 +87,19 @@ describe("pause-all: the signer is chosen by stage", () => {
     expect(pauseSignerRole({ stages: AFTER_HANDOVER } as never)).toBe("emergency");
   });
 
-  test("before the stage 11 handover the DEPLOYER signs all four sends", async () => {
+  test("before the stage 11 handover the DEPLOYER signs all three sends", async () => {
     const w = world({ writeSafeManifest: true }), c = newChain();
     seed(w, BEFORE_HANDOVER);
     expect(await w.run(["pause-all"], deps(c))).toBe(0);
-    expect(c.sends).toHaveLength(4);
+    expect(c.sends).toHaveLength(3);
     for (const s of c.sends) expect(s).toMatchObject({ keystore: DEPLOYER_KS, from: ADMIN });
   });
 
-  test("after the handover the EMERGENCY key signs all four sends, never the deployer", async () => {
+  test("after the handover the EMERGENCY key signs all three sends, never the deployer", async () => {
     const w = world({ writeSafeManifest: true }), c = newChain();
     seed(w, AFTER_HANDOVER);
     expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
-    expect(c.sends).toHaveLength(4);
+    expect(c.sends).toHaveLength(3);
     for (const s of c.sends) expect(s).toMatchObject({ keystore: "/k/EMERGENCY", from: EMERGENCY });
   });
 
@@ -122,13 +122,13 @@ describe("pause-all: the signer is chosen by stage", () => {
   test("a handover that started but did not finish: each vault takes the key that holds EMERGENCY_ROLE on it now", async () => {
     const w = world({ writeSafeManifest: true }), c = newChain();
     seed(w, { ...BEFORE_HANDOVER, timelock: rec("started") });
-    c.emergencyHolds.add(vaultAddr(1)).add(vaultAddr(3)); // rmPROTO and rmRWA were already moved
+    c.emergencyHolds.add(vaultAddr(1)).add(vaultAddr(2)); // rmPROTO and rmRWA were already moved
     expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
-    expect(c.sends.map((s) => [s.to, s.keystore])).toEqual([[vaultAddr(0), DEPLOYER_KS], [vaultAddr(1), "/k/EMERGENCY"], [vaultAddr(2), DEPLOYER_KS], [vaultAddr(3), "/k/EMERGENCY"]]);
+    expect(c.sends.map((s) => [s.to, s.keystore])).toEqual([[vaultAddr(0), DEPLOYER_KS], [vaultAddr(1), "/k/EMERGENCY"], [vaultAddr(2), "/k/EMERGENCY"]]);
   });
 });
 
-describe("pause-all: all four vaults, read back, in the rollout report", () => {
+describe("pause-all: all three vaults, read back, in the rollout report", () => {
   test("every vault is paused, rmUSDC included, and the report records each vault's depositsPaused", async () => {
     const w = world({ writeSafeManifest: true }), c = newChain();
     seed(w, AFTER_HANDOVER);
@@ -137,13 +137,13 @@ describe("pause-all: all four vaults, read back, in the rollout report", () => {
     const r = report(w);
     expect(r).toMatchObject({ chainId: 918453, coreSha: SHA });
     expect(r.pauseAll).toMatchObject({ trigger: "manual", allPaused: true });
-    expect(r.pauseAll.vaults.map((v: any) => v.vault)).toEqual(["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]);
-    expect(VAULTS.map((v) => VAULT_NAME[v.key])).toEqual(["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]);
+    expect(r.pauseAll.vaults.map((v: any) => v.vault)).toEqual(["rmUSDC", "rmPROTO", "rmRWA"]);
+    expect(VAULTS.map((v) => VAULT_NAME[v.key])).toEqual(["rmUSDC", "rmPROTO", "rmRWA"]);
     for (const v of r.pauseAll.vaults) expect(v).toMatchObject({ depositsPaused: true, signerRole: "emergency", signer: EMERGENCY, txHash: `0x${"ab".repeat(32)}` });
   });
 
   // Issue 1833: an operator sheet made before issue 1705 still has VAULT_NAME. The emergency pause must not stop at startup on it.
-  test("a sheet that still carries VAULT_NAME: pause-all exits 0, sends all four pauses and logs one warning naming VAULT_NAME", async () => {
+  test("a sheet that still carries VAULT_NAME: pause-all exits 0, sends all three pauses and logs one warning naming VAULT_NAME", async () => {
     const w = world({ writeSafeManifest: true }), c = newChain();
     seed(w, AFTER_HANDOVER);
     appendFileSync(w.sheetPath, 'VAULT_NAME="Robot Money USDC"\n');
@@ -163,15 +163,15 @@ describe("pause-all: all four vaults, read back, in the rollout report", () => {
     expect(c.sends).toEqual([]);
   });
 
-  test("one send fails: the other three are still paused, the report says which vault is open, the exit is PAUSE", async () => {
+  test("one send fails: the other two are still paused, the report says which vault is open, the exit is PAUSE", async () => {
     const w = world({ writeSafeManifest: true }), c = newChain();
     seed(w, BEFORE_HANDOVER);
     c.failSendTo = vaultAddr(0); // rmUSDC
     expect(await w.run(["pause-all"], deps(c))).toBe(EXIT_CODES.PAUSE);
     expect(EXIT_CODES.PAUSE).toBe(25);
-    expect(c.sends).toHaveLength(4);
+    expect(c.sends).toHaveLength(3);
     const vaults = report(w).pauseAll.vaults;
-    expect(vaults.map((v: any) => v.depositsPaused)).toEqual([false, true, true, true]);
+    expect(vaults.map((v: any) => v.depositsPaused)).toEqual([false, true, true]);
     expect(vaults[0].error).toContain("AccessControl");
     expect(report(w).pauseAll.allPaused).toBe(false);
     expect(lastError(w).message).toContain("rmUSDC");
@@ -183,7 +183,7 @@ describe("pause-all: all four vaults, read back, in the rollout report", () => {
     const run = chainRunner(c);
     // the node accepts the send and the vault does not change (a wrong target, a no-op): only the read-back can tell
     expect(await w.run(["pause-all"], { run: async (t, a, o) => { const r = await run(t, a, o); if (t === "cast" && a[0] === "send") delete c.paused[a[1]!]; return r; }, makeSigner: signerFor })).toBe(EXIT_CODES.PAUSE);
-    expect(report(w).pauseAll.vaults.map((v: any) => v.depositsPaused)).toEqual([false, false, false, false]);
+    expect(report(w).pauseAll.vaults.map((v: any) => v.depositsPaused)).toEqual([false, false, false]);
   });
 
   test("no run manifest: pause-all says so instead of guessing the signer", async () => {
@@ -212,14 +212,14 @@ describe("pause-all: all four vaults, read back, in the rollout report", () => {
 });
 
 describe("a failed verify or postflight pauses the vaults by itself", () => {
-  test("a failed verify after the handover pauses all four with the EMERGENCY key and the run still exits VERIFY (13)", async () => {
+  test("a failed verify after the handover pauses all three with the EMERGENCY key and the run still exits VERIFY (13)", async () => {
     const w = world({ writeSafeManifest: true }), c = newChain();
     seed(w, AFTER_HANDOVER);
     const code = await w.run(["verify", "--emergency-signer", EMERGENCY_SPEC], { ...deps(c), verify: failingVerifier });
     expect(code).toBe(EXIT_CODES.VERIFY);
-    expect(c.sends).toHaveLength(4);
+    expect(c.sends).toHaveLength(3);
     for (const s of c.sends) expect(s.keystore).toBe("/k/EMERGENCY");
-    expect(Object.keys(c.paused)).toHaveLength(4);
+    expect(Object.keys(c.paused)).toHaveLength(3);
     expect(report(w).pauseAll).toMatchObject({ trigger: "verify", allPaused: true });
     expect(report(w).pauseAll.reason).toContain("safe: nonce at least 1");
     expect(w.logs().some((l) => l.event === "pause_all.auto" && l.trigger === "verify")).toBe(true);
@@ -229,16 +229,16 @@ describe("a failed verify or postflight pauses the vaults by itself", () => {
     const w = world({ writeSafeManifest: true }), c = newChain();
     seed(w, BEFORE_HANDOVER);
     expect(await w.run(["verify"], { ...deps(c), verify: failingVerifier })).toBe(EXIT_CODES.VERIFY);
-    expect(c.sends).toHaveLength(4);
+    expect(c.sends).toHaveLength(3);
     for (const s of c.sends) expect(s.keystore).toBe(DEPLOYER_KS);
   });
 
   test("a failed verify whose pause also fails exits PAUSE and names the vaults still open", async () => {
     const w = world({ writeSafeManifest: true }), c = newChain();
     seed(w, BEFORE_HANDOVER);
-    c.failSendTo = vaultAddr(2);
+    c.failSendTo = vaultAddr(1);
     expect(await w.run(["verify"], { ...deps(c), verify: failingVerifier })).toBe(EXIT_CODES.PAUSE);
-    expect(lastError(w).message).toContain("rmAGENT");
+    expect(lastError(w).message).toContain("rmPROTO");
     expect(lastError(w).message).toContain("safe: nonce at least 1"); // the original failure is still in the message
   });
 
@@ -277,7 +277,7 @@ describe("a failed verify or postflight pauses the vaults by itself", () => {
     const code = await w.run(["--emergency-signer", EMERGENCY_SPEC], { ...deps(c), verify: stray });
     expect(lastError(w).message).toContain("nonce");
     expect(code).toBe(EXIT_CODES.NONCE);
-    expect(c.sends).toHaveLength(4);
+    expect(c.sends).toHaveLength(3);
     expect(report(w).pauseAll.trigger).toBe("postflight");
   });
 });
@@ -293,7 +293,7 @@ describe("issue 1686: pause-all records a pause entry in the run manifest", () =
     expect(m.pauses).toHaveLength(1);
     expect(m.pauses[0]).toMatchObject({ seq: 1, trigger: "manual", status: "done", allPaused: true });
     expect(Number.isNaN(Date.parse(m.pauses[0].at))).toBe(false);
-    expect(m.pauses[0].vaults.map((v: any) => [v.vault, v.depositsPaused])).toEqual([["rmUSDC", true], ["rmPROTO", true], ["rmAGENT", true], ["rmRWA", true]]);
+    expect(m.pauses[0].vaults.map((v: any) => [v.vault, v.depositsPaused])).toEqual([["rmUSDC", true], ["rmPROTO", true], ["rmRWA", true]]);
     expect(m.stages).toEqual(AFTER_HANDOVER); // the rest of the manifest is untouched
     expect(report(w).pauseAll).toMatchObject({ trigger: "manual", allPaused: true });
     expect(existsSync(rolloutReportPath({ evidenceDir: w.evidence, chainId: 918453 }))).toBe(true);
@@ -308,7 +308,7 @@ describe("issue 1686: pause-all records a pause entry in the run manifest", () =
       if (t === "cast" && a[0] === "send") { const e = manifestOf(w).pauses?.[0]; seen.push({ sendNo: c.sends.length + 1, status: e?.status, vaults: e?.vaults.length }); }
       return run(t, a, o);
     }, makeSigner: signerFor });
-    expect(seen).toEqual([{ sendNo: 1, status: "started", vaults: 0 }, { sendNo: 2, status: "started", vaults: 1 }, { sendNo: 3, status: "started", vaults: 2 }, { sendNo: 4, status: "started", vaults: 3 }]);
+    expect(seen).toEqual([{ sendNo: 1, status: "started", vaults: 0 }, { sendNo: 2, status: "started", vaults: 1 }, { sendNo: 3, status: "started", vaults: 2 }]);
     expect(manifestOf(w).pauses[0].status).toBe("done");
   });
 
@@ -320,7 +320,7 @@ describe("issue 1686: pause-all records a pause entry in the run manifest", () =
     expect(manifestOf(w).pauses.map((p: any) => [p.seq, p.trigger])).toEqual([[1, "verify"], [2, "manual"]]);
   });
 
-  test("a stale manifest lock (a crashed holder) is taken over: the entry is still written and all four vaults are paused", async () => {
+  test("a stale manifest lock (a crashed holder) is taken over: the entry is still written and all three vaults are paused", async () => {
     const w = world({ writeSafeManifest: true }), c = newChain();
     seed(w, BEFORE_HANDOVER);
     const lock = join(w.evidence, "publish-run.json.lock");
@@ -328,29 +328,29 @@ describe("issue 1686: pause-all records a pause entry in the run manifest", () =
     const old = new Date(Date.now() - 120_000);
     utimesSync(lock, old, old);
     expect(await w.run(["pause-all"], deps(c))).toBe(0);
-    expect(c.sends).toHaveLength(4);
+    expect(c.sends).toHaveLength(3);
     expect(manifestOf(w).pauses).toHaveLength(1);
     expect(existsSync(lock)).toBe(false);
   });
 
-  test("issue 1688: a pause entry that cannot be written does NOT stop the pause (all four vaults are paused), is reported unrecorded, and the manual verb exits PAUSE", async () => {
+  test("issue 1688: a pause entry that cannot be written does NOT stop the pause (all three vaults are paused), is reported unrecorded, and the manual verb exits PAUSE", async () => {
     const w = world({ writeSafeManifest: true }), c = newChain();
     seed(w, AFTER_HANDOVER);
     mkdirSync(join(w.evidence, `publish-run.json.${process.pid}.tmp`)); // every manifest write fails: the temp file name is a directory
     const code = await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c));
-    expect(c.sends).toHaveLength(4);
+    expect(c.sends).toHaveLength(3);
     expect(code).toBe(EXIT_CODES.PAUSE);
     expect(lastError(w).message).toContain("could NOT be recorded");
     expect(lastError(w).message).toContain("Cancel every pending unpause");
     expect(report(w).pauseAll).toMatchObject({ allPaused: true, manifestRecorded: false });
   });
 
-  test("issue 1688: the automatic pause after a failed verify, with the entry unwritable, still pauses all four and fails with the PAUSE error (not the bare verify error)", async () => {
+  test("issue 1688: the automatic pause after a failed verify, with the entry unwritable, still pauses all three and fails with the PAUSE error (not the bare verify error)", async () => {
     const w = world({ writeSafeManifest: true }), c = newChain();
     seed(w, BEFORE_HANDOVER);
     mkdirSync(join(w.evidence, `publish-run.json.${process.pid}.tmp`));
     expect(await w.run(["verify"], { ...deps(c), verify: failingVerifier })).toBe(EXIT_CODES.PAUSE);
-    expect(c.sends).toHaveLength(4);
+    expect(c.sends).toHaveLength(3);
     expect(lastError(w).message).toContain("could NOT be recorded");
   });
 
@@ -422,7 +422,7 @@ describe("issue 1712: an unfunded signer stops pause-all BEFORE the first send",
     // the owner funds the key and runs it again: the pause goes out and takes the next seq
     c.balances[EMERGENCY.toLowerCase()] = "1";
     expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
-    expect(c.sends).toHaveLength(4);
+    expect(c.sends).toHaveLength(3);
     expect(manifestOf(w).pauses.map((p: any) => [p.seq, p.allPaused])).toEqual([[1, false], [2, true]]);
   });
 
@@ -456,7 +456,7 @@ describe("issue 1712: an unfunded signer stops pause-all BEFORE the first send",
     seed(w, AFTER_HANDOVER);
     c.balances[EMERGENCY.toLowerCase()] = "1";
     expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
-    expect(c.sends).toHaveLength(4);
+    expect(c.sends).toHaveLength(3);
     expect(report(w).pauseAll.blocked).toBeUndefined();
   });
 
@@ -465,7 +465,7 @@ describe("issue 1712: an unfunded signer stops pause-all BEFORE the first send",
     seed(w, AFTER_HANDOVER);
     const run = chainRunner(c);
     expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], { run: async (t, a, o) => (t === "cast" && a[0] === "balance" ? { code: 1, stdout: "", stderr: "rpc down" } : run(t, a, o)), makeSigner: signerFor })).toBe(0);
-    expect(c.sends).toHaveLength(4);
+    expect(c.sends).toHaveLength(3);
     expect(w.logs().some((l) => l.event === "pause_all.balance_unread")).toBe(true);
   });
 
@@ -492,9 +492,9 @@ describe("issue 1712: an unfunded signer stops pause-all BEFORE the first send",
   test("a handover that started with the unfunded key holding no vault: only the deployer is needed and the pause goes out", async () => {
     const w = world({ writeSafeManifest: true }), c = newChain();
     seed(w, { ...BEFORE_HANDOVER, timelock: rec("started") });
-    unfundEmergency(c); // the deployer still holds EMERGENCY_ROLE on all four: the EMERGENCY key sends nothing
+    unfundEmergency(c); // the deployer still holds EMERGENCY_ROLE on all three: the EMERGENCY key sends nothing
     expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
-    expect(c.sends).toHaveLength(4);
+    expect(c.sends).toHaveLength(3);
     expect(c.balanceReads).toEqual([ADMIN]);
   });
 

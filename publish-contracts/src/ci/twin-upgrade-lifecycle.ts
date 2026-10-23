@@ -30,7 +30,7 @@ import { appendFileSync, cpSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createPublicClient, encodeFunctionData, getAddress, http, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
 import { TWIN_CHAIN_ID } from "../chains.ts";
-import { httpRpc, latestTimestamp, requireTwin, warpTo } from "../rehearsal/twin.ts";
+import { fundUsdc, httpRpc, latestTimestamp, requireTwin, warpTo } from "../rehearsal/twin.ts";
 import { connectSafe, executeOnTimelock, executeTx, jsonLogger, keystoreSigner, operationId, operationState, scheduleOnTimelock, signTx, timelockMinDelay, verifyTimelockEffect, type SafeTxBundle, type TimelockCall } from "../safe/index.ts";
 import { loadStageTable, manifestBase, scopeTable } from "../stage-table.ts";
 import { ERC1967_IMPLEMENTATION_SLOT } from "../verify/codehash.ts";
@@ -43,6 +43,9 @@ import { FREEZE_ROW, UPGRADE_ROW, pinnedMigrationData, upgradeRecordKey } from "
 import { UPGRADEABILITY_MANIFEST } from "../verify-stage.ts";
 import { DEPLOY_IMPL_VERB } from "../deploy-implementation.ts";
 import { ADMIN_ROLE, IC_POLICY_STANDIN, RECEIPT_IDS, castSender, deployPopulatedLegacyReceipt, keystoreAddress } from "./twin-legacy-receipt.ts";
+import { ERC20_ABI, LEG_ABI, REGISTRY_READ_ABI, ROUTER_READ_ABI, deployRetirableLeg, fourthVaultBatch } from "./twin-retire-vault.ts";
+import { RETIRE_ROW } from "../retire-vault.ts";
+import { USDC_ADDRESS } from "../usdc.ts";
 
 const env = (k: string, d = ""): string => process.env[k] ?? d;
 const fail = (m: string): never => { console.error(`twin-upgrade-lifecycle: ${m}`); process.exit(1); };
@@ -247,6 +250,78 @@ const hiddenFile = join(rh, "publish-run-hidden-migration.json");
 writeFileSync(hiddenFile, JSON.stringify(hidden, null, 2) + "\n");
 run(evidenceArgs(hiddenFile), { cwd: pc, stdoutTo: join(rh, "governed-upgrades-evidence-hidden.txt"), exitCode: 1 });
 say("receipt_migrated", { legacy_proxy: legacyProxy, legacy_implementation: legacyImpl, implementation: rcNewImpl, operation_id: rcEntry.operation_id, schedule_tx: rcEntry.schedule_tx, execute_tx: rcEntry.execute_tx, releaser: governanceAddr, data_hash: keccak256(rcMigrationData) });
+
+// ---- 2c. the retirement of a populated fourth vault (issue 1912, ADR-0017, ADR-0009) ----
+// The Twin deploys the three-vault target. The retire row acts on the live four-vault v0.5.0 deployment, so the step builds that state through governance first: the deployer deploys a
+// fourth router leg (contracts/test/helpers/RetirableLegVault.sol, a stand-in for rmAGENT), the SAFE registers it and makes it router-eligible with the default vector grown to four legs
+// in ONE timelock batch, and a holder deposits into it. Then `govern --row retire-vault` (the product row) retires it through the real Safe and timelock, and the end state is read back from
+// the chain: eligible count 4 to 3, a three-entry default vector, a deposit into it reverting, redeem still paying the holder, and the router quote never naming it.
+{
+  const registryAddr = getAddress(json(join(manifests, `${manifestBase(table.stages.find((x) => x.name === "registry")!.manifest)}.json`)).registry as string) as Address;
+  const routerAddr = getAddress(json(join(manifests, `${manifestBase(table.stages.find((x) => x.name === "router")!.manifest)}.json`)).router as string) as Address;
+  const legs = (["USDC", "PROTO", "RWA"] as const).map((k) => getAddress(json(join(manifests, `${manifestBase(table.vaults.find((v) => v.key === k)!.manifest)}.json`)).vault as string) as Address) as [Address, Address, Address];
+  const send = castSender({ rpc, keystore: key("DEPLOYER"), passFile: pass, from: deployerAddr, scratchDir: rh });
+  const readReg = <T>(functionName: string, args: unknown[] = []): Promise<T> => client.readContract({ address: registryAddr, abi: REGISTRY_READ_ABI, functionName, args } as any) as Promise<T>;
+  const readRouter = <T>(functionName: string, args: unknown[] = []): Promise<T> => client.readContract({ address: routerAddr, abi: ROUTER_READ_ABI, functionName, args } as any) as Promise<T>;
+  const fourth = deployRetirableLeg({ send, outDir, usdc: USDC_ADDRESS, registry: registryAddr });
+  const readLeg = <T>(functionName: string, args: unknown[] = []): Promise<T> => client.readContract({ address: fourth, abi: LEG_ABI, functionName, args } as any) as Promise<T>;
+  if (!lcEq(await readLeg<string>("registry"), registryAddr)) fail("the fourth vault is not linked to the registry");
+  // the Safe grows the deployment to four vaults: registerVault + migrateEligibility(vault, true, four legs), one batch
+  const grow = fourthVaultBatch({ registry: registryAddr, vault: fourth, usdc: USDC_ADDRESS, legs });
+  const growSalt = saltOf("register-fourth-vault");
+  const growSched = await scheduleOnTimelock(handle, { timelock, calls: grow, salt: growSalt, form: "batch", description: "rehearsal: register the fourth vault and make it router-eligible" });
+  await safeTx(growSched);
+  await waitReady([growSched.timelock_operation_id as Hex]);
+  await safeTx(await executeOnTimelock(handle, { timelock, calls: grow, salt: growSalt, form: "batch" }));
+  // a holder deposits into the fourth vault while it is Active (the deployer is the holder, funded on the fork)
+  const HOLD = 100_000_000n, OUT = 40_000_000n;
+  await fundUsdc(rpcFn, [deployerAddr], 1_000_000_000n);
+  send([USDC_ADDRESS, "approve(address,uint256)", fourth, String(HOLD)]);
+  send([fourth, "deposit(uint256,address)", String(HOLD), deployerAddr]);
+  const sharesBefore = await readLeg<bigint>("balanceOf", [deployerAddr]);
+  if (sharesBefore !== HOLD) fail(`the holder has ${sharesBefore} shares of the fourth vault, want ${HOLD}`);
+  // the four-vault state the row starts from
+  if ((await readReg<bigint>("routerEligibleCount")) !== 4n || !(await readReg<boolean>("isRouterEligible", [fourth]))) fail("the fourth vault is not router-eligible before the retire row");
+  const [dvBefore, dbBefore] = await readRouter<readonly [readonly Address[], readonly bigint[]]>("getDefaultWeights");
+  if (dvBefore.length !== 4 || !dvBefore.some((v) => lcEq(v, fourth)) || dbBefore.reduce((t, x) => t + x, 0n) !== 10000n) fail(`the default vector before the retire row is not four legs naming the fourth vault: [${dvBefore.join(", ")}]`);
+  say("fourth_vault_registered", { vault: fourth, eligible_count: 4, default_legs: dvBefore.length, holder_shares: String(sharesBefore) });
+
+  // the product row: the Safe retires the vault through the timelock (the Twin warps the real delay), then reads the end state back and records vault_retirements
+  const weights = "USDC:9500,PROTO:500,RWA:0";
+  stage("govern", join(rh, "govern-retire-vault.txt"), ["--row", RETIRE_ROW, "--admin-arg", `vault=${fourth}`, "--admin-arg", `weights=${weights}`]);
+  const retirement = (runManifest().vault_retirements ?? []).find((e: any) => lcEq(e?.vault, fourth)) ?? fail(`govern --row ${RETIRE_ROW} wrote no vault_retirements entry for ${fourth}`);
+  if (!isTx(retirement.schedule_tx) || !isTx(retirement.execute_tx)) fail(`the vault_retirements entry has no schedule or execute transaction: ${JSON.stringify(retirement)}`);
+
+  // the end state, read from the chain
+  const status = ((await readReg<readonly [unknown, number]>("getVault", [fourth]))[1]) as number;
+  if (Number(status) !== 2) fail(`the fourth vault's registry status is ${status}, want 2 (Retired)`);
+  if (await readReg<boolean>("isRouterEligible", [fourth])) fail("the fourth vault is still router-eligible after the retire row");
+  if ((await readReg<bigint>("routerEligibleCount")) !== 3n) fail(`registry.routerEligibleCount() is ${await readReg<bigint>("routerEligibleCount")}, want 3`);
+  const [dv, db] = await readRouter<readonly [readonly Address[], readonly bigint[]]>("getDefaultWeights");
+  const [ev, eb] = await readRouter<readonly [readonly Address[], readonly bigint[]]>("getEffectiveWeights");
+  const want = legs.map((v, i) => `${v.toLowerCase()}:${[9500, 500, 0][i]}`).join(",");
+  const key3 = (v: readonly Address[], b: readonly bigint[]) => v.map((a, i) => `${a.toLowerCase()}:${b[i]}`).join(",");
+  if (key3(dv, db) !== want || key3(ev, eb) !== want) fail(`the router vectors after the retire row are default [${key3(dv, db)}] effective [${key3(ev, eb)}], want [${want}]`);
+  if (await readRouter<boolean>("votedWeightsActive")) fail("an active (voted) vector is in effect after the retire row");
+  if ((await readLeg<boolean>("retired")) !== true || (await readLeg<bigint>("maxDeposit", [deployerAddr])) !== 0n) fail("the fourth vault still takes deposits after the retire row");
+  // a deposit into it reverts (the vault is withdraw-only); a quote of a router deposit lists the three remaining legs and never the fourth
+  const depositRevert = await rpcCallRevert(rpc)({ from: deployerAddr, to: fourth, data: encodeFunctionData({ abi: LEG_ABI, functionName: "deposit", args: [1_000_000n, deployerAddr] }) });
+  if (depositRevert === undefined) fail("a deposit into the retired vault SUCCEEDS in a simulation");
+  const quote = await readRouter<readonly { vault: Address; weightBps: bigint; legAmount: bigint; estShares: bigint; unavailable: boolean }[]>("previewDeposit", [1_000_000_000n]);
+  if (quote.length !== 3 || quote.some((l) => lcEq(l.vault, fourth)) || quote.reduce((t, l) => t + l.legAmount, 0n) !== 1_000_000_000n) fail(`the router quote after the retire row is not the three remaining legs: ${JSON.stringify(quote.map((l) => [l.vault, String(l.legAmount)]))}`);
+  // redeem still pays the existing holder
+  const usdcOf = (): Promise<bigint> => client.readContract({ address: USDC_ADDRESS, abi: ERC20_ABI, functionName: "balanceOf", args: [deployerAddr] }) as Promise<bigint>;
+  const usdcBefore = await usdcOf();
+  send([fourth, "redeem(uint256,address,address)", String(OUT), deployerAddr, deployerAddr]);
+  if ((await usdcOf()) - usdcBefore !== OUT || (await readLeg<bigint>("balanceOf", [deployerAddr])) !== sharesBefore - OUT) fail("redeem on the retired vault did not pay the holder");
+  // evidence-check reads the retirement back from the chain: two calls, one batch, one delay apart
+  const retireEvidence = join(rh, "vault-retirements-evidence.txt");
+  run([bun, env("TWIN_EVIDENCE_CHECK", "src/evidence-check.ts"), "--vault-retirements", join(evidenceDir, "publish-run.json"), "--registry", registryAddr, "--timelock", timelock, "--delay-floor", String(await timelockMinDelay(handle, timelock)), "--rpc", rpc], { cwd: pc, stdoutTo: retireEvidence });
+  if (!/^evidence ok \(vault retirements: 1 retirement\(s\), chain read\)$/m.test(readFileSync(retireEvidence, "utf8"))) fail(`evidence-check --vault-retirements did not read the retirement from the chain: ${readFileSync(retireEvidence, "utf8")}`);
+  // verify reads the four-vault registry as the three manifests plus the retired vault (the run manifest names it)
+  stage("verify", join(rh, "verify-labels-post-retire.txt"));
+  say("vault_retired", { vault: fourth, operation_id: retirement.operation_id, schedule_tx: retirement.schedule_tx, execute_tx: retirement.execute_tx, eligible_count: 3, default_legs: dv.length, holder_redeemed: String(OUT) });
+}
 
 // ---- 3. the freeze schedule: the row binds the batch to the record verify wrote after the upgrade, schedules it and stops (no warp: exit 15, GOVERN_PENDING) ----
 stage("govern", join(rh, "govern-freeze-schedule.txt"), ["--row", FREEZE_ROW, "--no-warp", "--max-wait", "0"], 15);

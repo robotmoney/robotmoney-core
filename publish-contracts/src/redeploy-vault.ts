@@ -154,10 +154,10 @@ export const redeploysOf = (m: Pick<RunManifest, "vault_redeploys">): RedeployRe
 // one: the govern row that executes the round, and the verify after it. That verify compares the replacing vault with the build of its own checkout (the redeploy sha)
 // and every other contract (core, libraries, adapters, the three vaults not replaced, the retired one) with --prior-out, the out/ of a checkout at the original sha.
 // Neither run deploys anything, so neither needs a frozen counts file for the redeploy sha (counts.ts resolveCounts). Every other run names the original sha.
-// A verify at the original sha after a round at another sha would compare the replacing vault with the wrong build, fail, and pause all four vaults: it is refused
+// A verify at the original sha after a round at another sha would compare the replacing vault with the wrong build, fail, and pause all three vaults: it is refused
 // before any signer exists, and the refusal names the command that works. That holds for EVERY run that reaches the verify stage, not only the verify verb: the
 // default stage set (on --resume every finished deployer stage is skipped, verify never is), `--stage all` and any list naming verify ("stage-set"). The verify stage
-// checks it once more itself (verifyBuildRefusal), so a caller that skipped this model still cannot fail the verify on the wrong build and pause the four vaults.
+// checks it once more itself (verifyBuildRefusal), so a caller that skipped this model still cannot fail the verify on the wrong build and pause the three vaults.
 
 /**
  * The runs the sha model covers. `stage-set`: a run of several stages that reaches the verify stage (the default set, `all`, a list naming verify and another
@@ -192,7 +192,7 @@ export interface RedeployShaRun { originalSha: string; redeploySha: string }
  *               rounds at two other shas or an earlier round at another sha than the last (the verifier holds two builds), and a --prior-out that is not inside a
  *               git checkout of the original sha (`priorOutSha`: the HEAD of the checkout that holds it, undefined outside one).
  *   stage-set   never a pair. Refused with USAGE before any signer exists, like the verify: a --prior-out that is not a checkout of the original sha, and, after rounds
- *               at another sha, the original sha (its verify stage would compare the replacing vault with the wrong build, fail and pause all four vaults) and the
+ *               at another sha, the original sha (its verify stage would compare the replacing vault with the wrong build, fail and pause all three vaults) and the
  *               redeploy sha (only the verify alone may name it). Rounds at the original sha only, or a third sha (runStages refuses it, RESUME): undefined.
  * No run manifest yet (a first run): a --prior-out must still be a checkout of this run's own sha, the sha the deployment will run.
  */
@@ -217,7 +217,7 @@ export function redeployShaRun(manifest: Pick<RunManifest, "coreSha" | "vault_re
   if (foreign.length > 1 || shaOf(last) !== foreign[0]) throw new PublishError("USAGE", `${what} refused: the redeploy-vault rounds of this run were deployed at ${[...new Set(recs.map(shaOf))].join(", ")} (the last at ${shaOf(last)}), and the verifier compares with two builds only (the checkout and --prior-out). ${nothing}`);
   const redeploySha = foreign[0]!;
   const verifyAlone = `bun publish-contracts/src/cli.ts verify --core-sha ${redeploySha} --prior-out <forge out/ of a checkout at ${original}> (plus the same --chain, --rpc, --sheet, --signer, --environment and --evidence arguments)`;
-  if (i.coreSha === original) throw new PublishError("USAGE", `${what} refused at the original sha ${original}: ${last.vault} was redeployed at ${redeploySha} (round ${last.ordinal}), so the build of this checkout is not the replacing vault's, and a failed verify pauses all four vaults. Run the verify ${i.path === "stage-set" ? "alone, " : ""}at the redeploy sha: ${verifyAlone}${i.path === "stage-set" ? `, and name the other stages with a --stage list without verify` : ""}. ${nothing}`);
+  if (i.coreSha === original) throw new PublishError("USAGE", `${what} refused at the original sha ${original}: ${last.vault} was redeployed at ${redeploySha} (round ${last.ordinal}), so the build of this checkout is not the replacing vault's, and a failed verify pauses all three vaults. Run the verify ${i.path === "stage-set" ? "alone, " : ""}at the redeploy sha: ${verifyAlone}${i.path === "stage-set" ? `, and name the other stages with a --stage list without verify` : ""}. ${nothing}`);
   if (i.coreSha !== redeploySha) return undefined; // a third sha: runStages refuses it (RESUME)
   if (i.path === "stage-set") throw new PublishError("USAGE", `${what} refused at the redeploy sha ${redeploySha}: only the verify alone (the verify verb or --stage verify) may name the sha a redeploy-vault round was deployed at, every other stage runs at the original sha ${original}. Run the verify alone: ${verifyAlone}. ${nothing}`);
   if (i.priorOut === undefined) throw new PublishError("USAGE", `verify at the redeploy sha ${redeploySha} needs --prior-out <forge out/ of a checkout at the original sha ${original}>: every contract the redeploy did not replace runs that build. ${nothing}`);
@@ -227,7 +227,7 @@ export function redeployShaRun(manifest: Pick<RunManifest, "coreSha" | "vault_re
 /**
  * QA plan v1 E1 (DT-2): the verify stage's own guard, behind redeployShaRun in cli.ts. After a governed round at another sha than the run manifest's, the verify
  * must run at that sha with --prior-out of a checkout at the original sha: the replacing vault runs the redeploy build, every other contract the original one.
- * Any other verify would compare a contract with the wrong build, fail and pause all four vaults. Returns that refusal (USAGE, `details.refused_before_verify`,
+ * Any other verify would compare a contract with the wrong build, fail and pause all three vaults. Returns that refusal (USAGE, `details.refused_before_verify`,
  * so cli.ts pauses nothing) or undefined. Rounds at the original sha only: undefined (one build serves all).
  */
 export function verifyBuildRefusal(manifest: Pick<RunManifest, "coreSha" | "vault_redeploys">, ctx: { coreSha: string; priorArtifactsDir?: string; priorArtifactsSha?: string }): PublishError | undefined {

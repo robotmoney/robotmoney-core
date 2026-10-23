@@ -1,11 +1,11 @@
-//! A failed verify pauses deposits on all four vaults, on the Twin chain (core 1619, plan decision 22).
+//! A failed verify pauses deposits on all three vaults, on the Twin chain (core 1619, plan decision 22).
 //!
-//! Everything here is real. The chain is the Twin fork (a pinned lazy fork of Base). The vaults are the four production vaults the
+//! Everything here is real. The chain is the Twin fork (a pinned lazy fork of Base). The vaults are the three production vaults the
 //! harness deployed through publish contracts, handed over to the real Safe and timelock. The signer of the pause is the EMERGENCY
 //! keystore the rehearsal key helper minted, because the stage 11 handover has run. No mock, no stand-in contract, no faked receipt.
 //!
 //! The test forces a real stage 12 failure: it runs the one verifier against a sheet that disagrees with the chain by one unit of
-//! one cap. The CLI must then pause rmUSDC, rmPROTO, rmAGENT and rmRWA by itself, read `depositsPaused` back on each and write the
+//! one cap. The CLI must then pause rmUSDC, rmPROTO and rmRWA by itself, read `depositsPaused` back on each and write the
 //! rollout report. Then a holder redeems on every paused vault that holds shares (withdrawals stay open, core 1494).
 //!
 //! Run with:
@@ -14,7 +14,7 @@
 use smoke_test::{require_prereqs, Fixture};
 use std::process::Command;
 
-const VAULT_NAMES: [&str; 4] = ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"];
+const VAULT_NAMES: [&str; 3] = ["rmUSDC", "rmPROTO", "rmRWA"];
 /// The verifier's own exit code (publish-contracts EXIT_CODES.VERIFY).
 const EXIT_VERIFY: i32 = 13;
 
@@ -51,9 +51,9 @@ fn balance_of(rpc: &str, token: &str, owner: &str) -> u128 {
 }
 
 #[test]
-fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_works() {
+fn twin_forced_verify_failure_pauses_all_three_vaults_and_every_redeem_still_works() {
     require_prereqs(
-        "twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_works",
+        "twin_forced_verify_failure_pauses_all_three_vaults_and_every_redeem_still_works",
     );
     let fx = Fixture::new_closed().expect("smoke-test fixture boot failed");
     let rpc = fx.rpc_url().to_string();
@@ -63,16 +63,16 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
     }
     let published = fx.published();
 
-    // After the deploy: all four vaults ship paused (core 1710: rmUSDC takes its seed deposit, then pauses).
+    // After the deploy: all three vaults ship paused (core 1710: rmUSDC takes its seed deposit, then pauses).
     for n in VAULT_NAMES {
         assert!(deposits_paused(&rpc, &vaults[n]), "{n} must deploy paused");
     }
 
-    // Stage 13 through the real Safe and timelock opens the four vaults the sheet names (rmUSDC, rmPROTO, rmAGENT and rmRWA).
+    // Stage 13 through the real Safe and timelock opens the three vaults the sheet names (rmUSDC, rmPROTO and rmRWA).
     published
         .govern_matrix()
         .expect("the govern matrix must pass through the real Safe");
-    for n in ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"] {
+    for n in ["rmUSDC", "rmPROTO", "rmRWA"] {
         assert!(
             !deposits_paused(&rpc, &vaults[n]),
             "{n} must be open after stage 13"
@@ -111,12 +111,10 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
         .map(|n| (*n, balance_of(&rpc, &vaults[*n], &user_s)))
         .collect();
     for (n, shares) in &before {
-        if *n != "rmAGENT" {
-            assert!(
-                *shares > 0,
-                "the depositor holds no {n} shares before the pause"
-            );
-        }
+        assert!(
+            *shares > 0,
+            "the depositor holds no {n} shares before the pause"
+        );
     }
 
     // Force a real stage 12 failure: the sheet says one rmRWA cap, the chain holds another.
@@ -143,7 +141,7 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
         "the CLI must have run pause-all by itself"
     );
 
-    // The result, read from the chain and not from the CLI: deposits are paused on all four vaults.
+    // The result, read from the chain and not from the CLI: deposits are paused on all three vaults.
     for n in VAULT_NAMES {
         assert!(
             deposits_paused(&rpc, &vaults[n]),
@@ -179,7 +177,7 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
     assert_eq!(pause["trigger"], "verify");
     assert_eq!(pause["allPaused"], true);
     let rows = pause["vaults"].as_array().expect("a vaults array");
-    assert_eq!(rows.len(), 4, "the report must list all four vaults");
+    assert_eq!(rows.len(), 3, "the report must list all three vaults");
     for (row, name) in rows.iter().zip(VAULT_NAMES) {
         assert_eq!(row["vault"], name);
         assert_eq!(
@@ -226,14 +224,6 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
             "{name} must still be paused"
         );
     }
-    // rmAGENT holds RM and the test deposits nothing there (a deposit needs a V4 swap): there are no shares to redeem.
-    assert_eq!(
-        before
-            .iter()
-            .find(|(n, _)| *n == "rmAGENT")
-            .map(|(_, s)| *s),
-        Some(0)
-    );
 
     // pause-all by hand is the same path and idempotent: it exits 0 with every vault already paused.
     published
@@ -248,12 +238,11 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
     assert_eq!(manual["pauseAll"]["trigger"], "manual");
     assert_eq!(manual["pauseAll"]["allPaused"], true);
 
-    // Core 1710: the on-demand reopen round works for all four vaults. Each `govern --row unpause-X` after the pause-all is a new numbered round
+    // Core 1710: the on-demand reopen round works for all three vaults. Each `govern --row unpause-X` after the pause-all is a new numbered round
     // (its own timelock operation) through the real Safe, ordered after the pause entry. Every vault reads open again.
     for (name, row) in [
         ("rmUSDC", "unpause-USDC"),
         ("rmPROTO", "unpause-PROTO"),
-        ("rmAGENT", "unpause-AGENT"),
         ("rmRWA", "unpause-RWA"),
     ] {
         let lines = published

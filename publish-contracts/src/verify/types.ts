@@ -55,27 +55,17 @@ export interface WeightSetterHolder {
   timelockGated: boolean;
 }
 
-export type VaultKind = "usdc" | "basket" | "agent";
-
-/** The Uniswap V4 facts of an expected asset (core 1676): the PoolManager, StateView, pool id and the full PoolKey, all from core's config. */
-export interface ExpectedV4 {
-  poolManager: Address;
-  stateView: Address;
-  poolId: Hex;
-  key: { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
-}
+export type VaultKind = "usdc" | "basket";
 
 export interface ExpectedAsset {
   token: Address;
-  /** The pool the vault registers. For a UniswapV4 asset this is the price recorder, not a pool: V4 has no pool address. */
+  /** The pool the vault registers. */
   pool: Address;
   swapFee: number;
   adapter: Address;
-  /** Venue enum index as stored on chain (0 = V3, 1 = V4). Optional per asset. */
+  /** Venue enum index as stored on chain (0 = V3). Optional per asset. */
   venue?: number;
   active?: boolean;
-  /** UniswapV4 only: what the recorder and the V4 adapter must be bound to. */
-  v4?: ExpectedV4;
 }
 
 /** Everything the frozen sheet says about one vault. All fields are required: nothing is skipped silently. */
@@ -83,14 +73,14 @@ export interface VaultSheet {
   tvlCap: bigint;
   perDepositCap: bigint;
   exitFeeBps: bigint;
-  /** Baskets only (issue 1666): the ORA-4 guard the deployer set, in bps. Required for kind basket and agent: a missing value fails the label. */
+  /** Baskets only (issue 1666): the ORA-4 guard the deployer set, in bps. Required for kind basket: a missing value fails the label. */
   navDeviationBps?: bigint;
-  /** Baskets only (issue 1666): floor for `liquidity()` (uint128 L, not USDC) of every asset pool. Required for kind basket and agent. */
+  /** Baskets only (issue 1666): floor for `liquidity()` (uint128 L, not USDC) of every asset pool. Required for kind basket. */
   minPoolLiquidity?: bigint;
   feeRecipient: Address;
-  /** True for vaults that ship paused (rmAGENT and the basket vaults until stage 13). */
+  /** True for vaults that ship paused (the basket vaults until stage 13). */
   expectPaused: boolean;
-  /** Basket and agent vaults: the exact asset set. rmAGENT is the single RM asset. Ignored for kind usdc. */
+  /** Basket vaults: the exact asset set. Ignored for kind usdc. */
   assets: ExpectedAsset[];
   /** rmUSDC only: the frozen seed in 6-decimal units. */
   seed?: bigint;
@@ -100,7 +90,7 @@ export interface VaultSheet {
   routerEligible: boolean;
   /** Build artifact contract name when it is not implied by the kind. */
   contract?: string;
-  /** Baskets (issue 1705 C4): the maxSlippageBps the config sets, else the vault's constructor default. Required for kind basket and agent. */
+  /** Baskets (issue 1705 C4): the maxSlippageBps the config sets, else the vault's constructor default. Required for kind basket. */
   maxSlippageBps?: bigint;
   /** rmUSDC (issue 1705 C4): the strategy adapters the vault stage registered, in order, with the bps cap the deploy script gives each. Required for kind usdc. */
   adapters?: { adapter: Address; capBps: number }[];
@@ -121,7 +111,7 @@ export interface VerifySheet {
   upgradeMode?: "upgradeable" | "frozen";
   /** Issue 1809: the sheet's UPGRADE_FREEZE_DEADLINE (ISO 8601 UTC), the proving-period deadline of an upgradeable release. */
   freezeDeadline?: string;
-  /** Keyed by vault key (rmUSDC, rmPROTO, rmAGENT, rmRWA). */
+  /** Keyed by vault key (rmUSDC, rmPROTO, rmRWA). */
   vaults: Record<string, VaultSheet>;
   /** The router default weights the deployer left in place, in router order (rmUSDC, then the eligible baskets): vault key and bps. */
   defaultWeights: { vault: string; bps: number }[];
@@ -204,6 +194,11 @@ export interface VerifyOptions {
    * contract reads `artifactsDir`. Absent or no entry: `artifactsDir`.
    */
   proxyBuildDirs?: Record<string, string>;
+  /**
+   * Issue 1912, ADR-0017: the vaults the Safe retired through `govern --row retire-vault` (the run manifest's `vault_retirements`). The registry still lists them, so the vault set check expects
+   * the manifests plus these retired vaults, and each gets its own labels: Retired in the registry, out of the router's default and effective vectors, deposits halted, still holding code.
+   */
+  retirements?: { vault: Address }[];
   /** Issue 1796: the deployer transactions the redeploys sent (the sum of their deploy counts). They are outside every frozen stage count and move the deployer nonce. */
   redeployDeployerTxs?: number;
   /** Test seam only: the pinned FiatTokenProxy code hash. Production never sets it (src/usdc.ts holds the pin). */

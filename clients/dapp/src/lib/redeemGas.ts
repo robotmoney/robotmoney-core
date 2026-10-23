@@ -13,7 +13,7 @@ import type { RuntimeConfig } from "./runtimeConfig";
  * redeem is sent with a fixed gas limit and the wallet never estimates it. The same call uses about
  * 0.94M to 1.0M gas at `latest`.
  *
- * Basket vaults (rmPROTO, rmAGENT, rmRWA) have no Morpho adapter and need MORE than this limit:
+ * Basket vaults (rmPROTO, rmRWA) have no Morpho adapter and need MORE than this limit:
  * `BasketVault.redeem` requires 300,000 + 400,000 per basket asset at entry (about 3.8M for a full
  * basket). A fixed 2.5M on a basket redeem reverts `InsufficientGas`, so the limit applies only to a
  * redeem whose target is a configured RobotMoneyVault address (QA plan U3). Every other redeem is

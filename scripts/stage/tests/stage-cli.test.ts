@@ -1,7 +1,7 @@
 // Canonical: core issue 1499, core S9 (issue 1488).
 // Process-level tests of the stage parity tools: the exit code is the contract each acceptance
 // criterion states ("exits non-zero on any difference", "every govern row has a tx hash and receipt
-// status 1", "a manifest for each of the four vaults").
+// status 1", "a manifest for each of the three vaults").
 // Run: bun test scripts/stage/tests/stage-cli.test.ts --timeout 60000
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -104,7 +104,7 @@ describe("govern-rows CLI reads the govern run stdout", () => {
   });
 });
 
-describe("twin-run-report CLI: a manifest for each of the four vaults", () => {
+describe("twin-run-report CLI: a manifest for each of the three vaults", () => {
   const table = loadStageTable();
   const A = (n: number) => "0x" + n.toString(16).padStart(40, "0");
   /** Writes one manifest per table stage (a vault stage holds its vault address). */
@@ -121,8 +121,8 @@ describe("twin-run-report CLI: a manifest for each of the four vaults", () => {
     return d;
   }
 
-  test("the table lists exactly four vaults", () => {
-    expect(table.vaults.length).toBe(4);
+  test("the table lists exactly three vaults", () => {
+    expect(table.vaults.length).toBe(3);
   });
   test("a complete run exits 0 and lists every vault address", () => {
     const out = join(tmp(), "report.json");
@@ -131,7 +131,7 @@ describe("twin-run-report CLI: a manifest for each of the four vaults", () => {
     for (const v of table.vaults) expect(r.out).toContain(v.key);
     expect(r.out).not.toContain("MISSING");
     const j = JSON.parse(require("node:fs").readFileSync(out, "utf8"));
-    expect(j.vaults.length).toBe(4);
+    expect(j.vaults.length).toBe(3);
     expect(j.vaults.every((v: { address: string | null }) => v.address)).toBe(true);
   });
   test("a missing stage manifest exits non-zero and says MISSING", () => {

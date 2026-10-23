@@ -4,26 +4,22 @@
 [verify]
 chain: id equals sheet
 manifest: libs.json present
-manifest: recorder.json present
 manifest: vault.json present
 manifest: registry.json present
 manifest: router.json present
 manifest: receipt.json present
 manifest: governance.json present
 manifest: protocol-asset-vault.json present
-manifest: agent-token-vault.json present
 manifest: rwa-basket-vault.json present
 manifest: timelock.json present
 manifest: safe.json present
 manifest: libs.json chain_id equals sheet
-manifest: recorder.json chain_id equals sheet
 manifest: vault.json chain_id equals sheet
 manifest: registry.json chain_id equals sheet
 manifest: router.json chain_id equals sheet
 manifest: receipt.json chain_id equals sheet
 manifest: governance.json chain_id equals sheet
 manifest: protocol-asset-vault.json chain_id equals sheet
-manifest: agent-token-vault.json chain_id equals sheet
 manifest: rwa-basket-vault.json chain_id equals sheet
 manifest: timelock.json chain_id equals sheet
 manifest: safe.json has a valid safe address
@@ -39,12 +35,9 @@ router: has code
 governance: has code
 receipt: has code
 timelock: has code
-recorder: has code
 vault[rmUSDC]: has code
 vault[rmPROTO]: has code
-vault[rmAGENT]: has code
 vault[rmRWA]: has code
-adapter[V4:rmAGENT]: has code
 registry: ADMIN_ROLE held by timelock
 registry: ADMIN_ROLE not held by deployer
 registry: DEFAULT_ADMIN not held by deployer
@@ -154,36 +147,6 @@ vault[rmPROTO]: navDeviationGuardBps above zero
 vault[rmPROTO]: pool liquidity meets the sheet floor
 vault[rmPROTO]: emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault
 vault[rmPROTO]: maxSlippageBps equals config
-vault[rmAGENT]: ADMIN_ROLE held by timelock
-vault[rmAGENT]: ADMIN_ROLE not held by deployer
-vault[rmAGENT]: DEFAULT_ADMIN not held by deployer
-vault[rmAGENT]: ADMIN_ROLE not held by pauser
-vault[rmAGENT]: ADMIN_ROLE not held by emergency
-vault[rmAGENT]: ADMIN_ROLE not held by safe
-vault[rmAGENT]: EMERGENCY_ROLE held by emergency key
-vault[rmAGENT]: EMERGENCY_ROLE not held by deployer
-vault[rmAGENT]: registry link
-vault[rmAGENT]: a second setRegistry reverts
-vault[rmAGENT]: tvlCap equals sheet
-vault[rmAGENT]: perDepositCap equals sheet
-vault[rmAGENT]: exitFeeBps equals sheet
-vault[rmAGENT]: feeRecipient equals sheet
-vault[rmAGENT]: feeRecipient is not deployer
-vault[rmAGENT]: paused state equals sheet
-vault[rmAGENT]: router eligibility equals sheet
-vault[rmAGENT]: asset config equals sheet
-vault[rmAGENT]: navDeviationGuardBps equals sheet
-vault[rmAGENT]: navDeviationGuardBps above zero
-vault[rmAGENT]: pool liquidity meets the sheet floor
-vault[rmAGENT]: emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault
-vault[rmAGENT]: lists exactly the shortlist asset of the config
-vault[rmAGENT]: asset row is venue V4 with the price recorder as its pool
-vault[rmAGENT]: V4 adapter codehash is allowed
-vault[rmAGENT]: V4 adapter is bound to the recorder, the PoolManager and the pool key
-recorder: PoolKey and PoolManager equal config
-recorder: observation ring holds the full window floor
-recorder: has no owner, role or setter
-vault[rmAGENT]: maxSlippageBps equals config
 vault[rmRWA]: ADMIN_ROLE held by timelock
 vault[rmRWA]: ADMIN_ROLE not held by deployer
 vault[rmRWA]: DEFAULT_ADMIN not held by deployer
@@ -212,8 +175,6 @@ vault[rmUSDC]: EMERGENCY_ROLE has exactly one holder
 vault[rmUSDC]: adapter set, caps and code-hash allowlist equal the deploy script
 vault[rmPROTO]: KEEPER_ROLE has no holder
 vault[rmPROTO]: EMERGENCY_ROLE has exactly one holder
-vault[rmAGENT]: KEEPER_ROLE has no holder
-vault[rmAGENT]: EMERGENCY_ROLE has exactly one holder
 vault[rmRWA]: KEEPER_ROLE has no holder
 vault[rmRWA]: EMERGENCY_ROLE has exactly one holder
 deployer: holds no role on any contract (log scan)
@@ -264,12 +225,9 @@ router: runtime code equals build artifact (masked)
 governance: runtime code equals build artifact (masked)
 receipt: runtime code equals build artifact (masked)
 timelock: runtime code equals build artifact (masked)
-recorder: runtime code equals build artifact (masked)
 vault[rmUSDC]: runtime code equals build artifact (masked)
 vault[rmPROTO]: runtime code equals build artifact (masked)
-vault[rmAGENT]: runtime code equals build artifact (masked)
 vault[rmRWA]: runtime code equals build artifact (masked)
-adapter[V4:rmAGENT]: runtime code equals build artifact (masked)
 library[tick_math]: runtime code equals build artifact (masked)
 vault[rmUSDC]: is the build's proxy with no admin and no beacon
 vault[rmUSDC]: implementation slot equals the manifest
@@ -319,14 +277,6 @@ vault[rmPROTO]: initialized once and not initializing
 vault[rmPROTO]: upgradesFrozen() agrees with the release mode
 vault[rmPROTO]: manifest upgrade_mode equals the release sheet
 vault[rmPROTO]: storage layout identifier recorded
-vault[rmAGENT]: is the build's proxy with no admin and no beacon
-vault[rmAGENT]: implementation slot equals the manifest
-vault[rmAGENT]: implementation links the build's libraries
-vault[rmAGENT]: upgradeTimelock() is the deployed timelock
-vault[rmAGENT]: initialized once and not initializing
-vault[rmAGENT]: upgradesFrozen() agrees with the release mode
-vault[rmAGENT]: manifest upgrade_mode equals the release sheet
-vault[rmAGENT]: storage layout identifier recorded
 vault[rmRWA]: is the build's proxy with no admin and no beacon
 vault[rmRWA]: implementation slot equals the manifest
 vault[rmRWA]: implementation links the build's libraries

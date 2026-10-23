@@ -15,7 +15,7 @@ import { runAdoptedContracts, runDeployTxs } from "./verify/manifests.ts";
 import { adoptedTxs, governHasRun, measuredCounts, manifestDir, saveRunManifest, readManifestField, type RunContext, type RunManifest } from "./runner.ts";
 import { BASKET_KEYS, VAULT_KEYS, VAULT_NAME, eligibleInOrder, type VaultKey } from "./sheet.ts";
 import { ROUTER_STAGE_ELIGIBLE, SEEDED_VAULTS, STAGE13_UNPAUSE_VAULTS, expectPaused, routerEligible, vaultRule } from "./vault-rules.ts";
-import { RECORDER_STAGE, STRATEGY_ADAPTER_VAULT_ARTIFACT, STRATEGY_ADAPTER_WIRING, VAULT_RECORDER_FIELD, VENUE_V4, adapterFieldFor } from "./core-wiring.ts";
+import { STRATEGY_ADAPTER_VAULT_ARTIFACT, STRATEGY_ADAPTER_WIRING, VAULT_ADAPTER_FIELD } from "./core-wiring.ts";
 import { PROOF_STAGE } from "./control-proof.ts";
 import { loadConfigAssets, loadExpectedMaxSlippageBps } from "./asset-config.ts";
 import { manifestBase } from "./stage-table.ts";
@@ -24,6 +24,7 @@ import { RPC_REFUSED_DETAIL, verifyDeployment, verifySources, viemReader, type C
 import { recordDependencyManifest, type RecorderSpawn } from "./record-dependencies.ts";
 import { contractsFromManifests } from "./verify/sources.ts";
 import { runGatewayVerifyStage } from "./verify-gateway-stage.ts";
+import { retiredVaultsOf } from "./retire-vault.ts";
 import { REDEPLOY_ROW, oldVaultBuild, redeploysOf, verifyBuildRefusal } from "./redeploy-vault.ts";
 
 /** Issue 1809: the record of the upgradeability labels, written by verify under deployments/<chain>/. */
@@ -31,7 +32,7 @@ export const UPGRADEABILITY_MANIFEST = "upgradeability.json";
 
 /**
  * The expected asset config of one vault: core's config files (poolFee becomes swapFee) with the adapter this run deployed, read from the
- * vault manifest. rmUSDC holds no basket assets and rmAGENT launches with RM only.
+ * vault manifest. rmUSDC holds no basket assets.
  */
 export function loadExpectedAssets(ctx: Pick<RunContext, "coreDir" | "chainId" | "manifestOut">, key: VaultKey): VaultSheet["assets"] {
   const configured = loadConfigAssets(ctx.coreDir, key);
@@ -39,10 +40,8 @@ export function loadExpectedAssets(ctx: Pick<RunContext, "coreDir" | "chainId" |
   const vaultStage = getStageTable().vaults.find((v) => v.key === key)!.stage;
   const vaultManifest = manifestBase(getStageTable().stages.find((s) => s.name === vaultStage)!.manifest);
   return configured.map((a) => {
-    // A UniswapV4 asset is registered with the price recorder as its pool (V4 has no pool address) and the V4 adapter the vault stage deployed.
-    const adapter = readManifestField(ctx, `${vaultManifest}:${adapterFieldFor(a.venue)}`) as `0x${string}`;
-    const pool = a.venue === VENUE_V4 ? (readManifestField(ctx, `${manifestBase(getStageTable().stages.find((s) => s.name === RECORDER_STAGE)!.manifest)}:${VAULT_RECORDER_FIELD}`) as `0x${string}`) : a.pool;
-    return { token: a.token, pool, swapFee: a.swapFee, adapter, venue: a.venue, ...(a.v4 ? { v4: a.v4 } : {}) };
+    const adapter = readManifestField(ctx, `${vaultManifest}:${VAULT_ADAPTER_FIELD}`) as `0x${string}`;
+    return { token: a.token, pool: a.pool, swapFee: a.swapFee, adapter, venue: a.venue };
   });
 }
 
@@ -80,9 +79,9 @@ const phaseOf = (g: Record<string, { scheduled?: unknown; executed?: unknown } |
   g?.[row]?.executed ? "executed" : g?.[row]?.scheduled ? "scheduled" : "none";
 
 /**
- * The govern state stage 12 verifies on 8453 (issue 1667, four vaults since issue 1710), read from the run manifest's CURRENT round of each unpause row.
- *   pre-govern   no unpause row is scheduled: all four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) must read paused.
- *   post-govern  all four unpause rows are executed: all four vaults must read unpaused.
+ * The govern state stage 12 verifies on 8453 (issue 1667, three vaults since ADR-0017), read from the run manifest's CURRENT round of each unpause row.
+ *   pre-govern   no unpause row is scheduled: all three vaults (rmUSDC, rmPROTO, rmRWA) must read paused.
+ *   post-govern  all three unpause rows are executed: all three vaults must read unpaused.
  *   part-way     anything else (some but not all rows scheduled or executed): verify refuses.
  * The manifest picks the mode only. runVerifyStage then confirms it against the chain and fails closed when they disagree.
  */
@@ -210,7 +209,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   const safe = readManifestField(ctx, manifestRef("safe", "safe"));
   const startedAt = Date.now();
   const mainnet = ctx.chainId === MAINNET_CHAIN_ID;
-  // 8453 (issue 1667): verify runs before govern (all four paused) and after it (all four open). The manifest names the mode, the chain is read
+  // 8453 (issue 1667): verify runs before govern (all three paused) and after it (all three open). The manifest names the mode, the chain is read
   // below to confirm it. A part-way govern run is neither: verify refuses, names the govern command and pauses nothing (GOVERN_PENDING is not a VERIFY failure).
   let mode: "pre-govern" | "post-govern" | undefined;
   if (mainnet) {
@@ -231,7 +230,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   }
   const governedRedeploys = redeployRecs.filter((r) => r.status === "governed" && r.new_vault);
   // QA plan v1 E1 (DT-2): after a round at another sha this verify must run at that sha with --prior-out of the original build. cli.ts refuses every other run
-  // before any signer (redeployShaRun); this is the stage's own check, so no caller can compare the replacing vault with the wrong build and pause all four vaults.
+  // before any signer (redeployShaRun); this is the stage's own check, so no caller can compare the replacing vault with the wrong build and pause all three vaults.
   const buildRefusal = verifyBuildRefusal(manifest, ctx);
   if (buildRefusal) throw buildRefusal;
   const unpaused = mode ? (mode === "post-govern" ? [...MAINNET_UNPAUSE_VAULTS] : []) : unpausedByGovern(manifest, ctx.sheet);
@@ -245,6 +244,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     ...(ctx.sheet.kind === "rehearsal" ? { deployerStartNonce: manifest.deployerStartNonce } : {}),
     handoverBlock: handoverBlock(manifest),
     controlProof: controlProofOf(manifest),
+    ...(retiredVaultsOf(manifest).length > 0 ? { retirements: retiredVaultsOf(manifest) } : {}),
     appliedReceipt: appliedReceiptOf(manifest),
     ...(governedRedeploys.length > 0 ? {
       // QA plan v1 E1: artifactsDir is the build of this checkout. After a round at another sha that is the redeploy sha (cli.ts accepts it with --prior-out only):
@@ -255,7 +255,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     } : {}),
   });
   if (mainnet) {
-    // The mode came from the manifest, which an operator can edit or lose: read depositsPaused of all four vaults and fail on any disagreement with it.
+    // The mode came from the manifest, which an operator can edit or lose: read depositsPaused of all three vaults and fail on any disagreement with it.
     const read = deps.depositsPaused ?? readDepositsPaused;
     for (const v of VAULT_STAGES) {
       // pre-govern: the table's deployPaused. post-govern: open when the vault's unpause row is a stage 13 row, else still its deploy state.

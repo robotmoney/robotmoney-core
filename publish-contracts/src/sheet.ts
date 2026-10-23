@@ -15,7 +15,7 @@ import { MAINNET_CHAIN_ID, DEPLOYMENT_KINDS, REHEARSAL_DELAY_FLOOR, rehearsalDel
 export type Address = `0x${string}`;
 export { VAULT_KEYS, BASKET_KEYS, type VaultKey } from "./vault-keys.ts";
 /** Manifest and verifier name of each vault. */
-export const VAULT_NAME: Record<VaultKey, string> = { USDC: "rmUSDC", PROTO: "rmPROTO", AGENT: "rmAGENT", RWA: "rmRWA" };
+export const VAULT_NAME: Record<VaultKey, string> = { USDC: "rmUSDC", PROTO: "rmPROTO", RWA: "rmRWA" };
 
 /** Per-vault sheet names. Always required, never defaulted. */
 export const vaultSheetNames = (k: VaultKey): string[] => [`VAULT_${k}_TVL_CAP`, `VAULT_${k}_PER_DEPOSIT_CAP`, `VAULT_${k}_EXIT_FEE_BPS`];
@@ -69,7 +69,7 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   // deploy-time router configuration, set by the deployer in the basket vault stages (before the timelock handover). Lists of vault keys, or the word none.
   ELIGIBLE_VAULTS: { kind: "string" },
   ROUTER_WEIGHTS: { kind: "string" },
-  // govern stage (stage 13): the unpauses of the four vaults are the only mainnet operation after the handover. GOVERN_NEW_DELAY feeds the Twin-only update-delay demonstration.
+  // govern stage (stage 13): the unpauses of the three vaults are the only mainnet operation after the handover. GOVERN_NEW_DELAY feeds the Twin-only update-delay demonstration.
   GOVERN_UNPAUSE_VAULTS: { kind: "string" },
   GOVERN_NEW_DELAY: { kind: "uint" },
 };
@@ -101,9 +101,9 @@ const REFUSED: [RegExp, string][] = [
   [/^(AGENT_ADDRESS|AGENT_VALID_UNTIL|AGENT_MAX_PER_PAYMENT|AGENT_MAX_PER_WINDOW|AGENT_MAX_WITHDRAW_PER_PAYMENT|AGENT_MAX_WITHDRAW_PER_WINDOW)$/, "the deploy authorizes no agent: an agent belongs to a depositor, who authorizes it through commitAuthorization and revealAuthorization (architecture 5.2 and 6.3)"],
   [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the four vault unpauses only. Vault setters, eligibility and router default weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VAULT_<KEY>_*). Router weights change on demand through the apply-receipt row (--row apply-receipt), never through a GOVERN_ sheet name"],
   [/^(VOTER_ADDRESSES|VOTER_POWER|QUORUM_THRESHOLD|VOTING_PERIOD|EXECUTION_DELAY)$/, "there is no voting by anyone: RouterGovernance has no voter, voting power, quorum, voting period or execution delay (issue 1698). Router weights change only when the Safe applies a consensus receipt through the timelock (govern row apply-receipt). Delete the line"],
-  [/^VAULT_NAME$/, "the registry name of every vault is a constant of its own vault stage script (rmUSDC included), never a sheet value (issue 1705: one registry-name source for all four vaults). Delete the line"],
-  [/^(VAULT_TVL_CAP|VAULT_PER_DEPOSIT_CAP|VAULT_EXIT_FEE_BPS)$/, "there is no unprefixed vault cap name: each vault has its own, and the name carries the vault key (USDC, PROTO, AGENT or RWA), for example VAULT_PROTO_TVL_CAP"],
-  [/^VAULT_(?:USDC_)?(?:NAV_DEVIATION_BPS|MIN_POOL_LIQUIDITY)$/, "the NAV deviation guard and the pool liquidity floor belong to the baskets only: name the basket (PROTO, AGENT or RWA), for example VAULT_AGENT_NAV_DEVIATION_BPS. rmUSDC has no navDeviationGuardBps and no pool"],
+  [/^VAULT_NAME$/, "the registry name of every vault is a constant of its own vault stage script (rmUSDC included), never a sheet value (issue 1705: one registry-name source for all three vaults). Delete the line"],
+  [/^(VAULT_TVL_CAP|VAULT_PER_DEPOSIT_CAP|VAULT_EXIT_FEE_BPS)$/, "there is no unprefixed vault cap name: each vault has its own, and the name carries the vault key (USDC, PROTO or RWA), for example VAULT_PROTO_TVL_CAP"],
+  [/^VAULT_(?:USDC_)?(?:NAV_DEVIATION_BPS|MIN_POOL_LIQUIDITY)$/, "the NAV deviation guard and the pool liquidity floor belong to the baskets only: name the basket (PROTO or RWA), for example VAULT_PROTO_NAV_DEVIATION_BPS. rmUSDC has no navDeviationGuardBps and no pool"],
 ];
 
 export interface SheetVault {
@@ -372,7 +372,7 @@ export function parseSheet(text: string, opts: ParseSheetOpts = {}): Sheet {
   // issue 1580 (owner amendment 2026-10-06 on the stage 13 issue): mainnet launches on exactly this vector. Twin sheets keep their own weights.
   if (chainId === MAINNET_CHAIN_ID) {
     const got = weights.map((w) => `${w.key}:${w.bps}`).sort().join(",");
-    if (got !== LAUNCH_ROUTER_WEIGHTS_8453) throw err(`ROUTER_WEIGHTS must be the launch vector on chain 8453 (USDC:9500,PROTO:500,AGENT:0,RWA:0, every vault named), got ${v.ROUTER_WEIGHTS}`, { name: "ROUTER_WEIGHTS" });
+    if (got !== LAUNCH_ROUTER_WEIGHTS_8453) throw err(`ROUTER_WEIGHTS must be the launch vector on chain 8453 (USDC:9500,PROTO:500,RWA:0, every vault named), got ${v.ROUTER_WEIGHTS}`, { name: "ROUTER_WEIGHTS" });
   }
   const newDelay = asUint("GOVERN_NEW_DELAY", v.GOVERN_NEW_DELAY!);
   const newDelayMin = kind === "rehearsal" ? BigInt(REHEARSAL_DELAY_FLOOR) : 3600n;
@@ -455,7 +455,7 @@ export function parseUpgrade(v: Record<string, string | undefined>, chainId: num
   return { mode: mode as UpgradeMode, freezeDeadline: raw };
 }
 
-const LAUNCH_ROUTER_WEIGHTS_8453 = ["USDC:9500", "PROTO:500", "AGENT:0", "RWA:0"].sort().join(",");
+const LAUNCH_ROUTER_WEIGHTS_8453 = ["USDC:9500", "PROTO:500", "RWA:0"].sort().join(",");
 
 /** "USDC:6000,PROTO:3000,RWA:1000": every key once, bps sum 10000. */
 export function parseWeights(text: string): { key: VaultKey; bps: number }[] {

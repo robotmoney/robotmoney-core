@@ -33,7 +33,7 @@ a transparent, multi-party, reproducible allocation rationale.
 Robot Money is two separate systems (owner decision, 2026-10-19).
 
 - **Vaults system.** The treasury product. It holds the Robot Money
-  vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), the vault registry, the
+  vaults (rmUSDC, rmPROTO, rmRWA), the vault registry, the
   Portfolio Router and router-weight governance. Its only rebalancing
   signal is the consensus recommendation receipt, recorded on the consensus
   receipt contract. The vector the Safe schedules through `applyReceipt`
@@ -80,7 +80,7 @@ open question for the gateway's own release.
 - Product failures are explicit: users receive a product-level reason
   when an operation cannot proceed or only partially succeeds.
 - Consensus sessions publish one subject-scoped receipt with a
-  deterministic four-vault bps mean, judge-authored prose, and the analysts'
+  deterministic four-bucket bps mean, judge-authored prose, and the analysts'
   off-chain Ed25519 signatures, committed on-chain by one submitter the Safe
   authorized through the timelock. Any user can inspect each receipt, its
   verification state, and whether the Safe applied it.
@@ -509,20 +509,20 @@ risk label, fee structure, accepted asset, withdrawal model, and status.
 | Per-deposit cap | Configurable |
 | Status | Deployed on Base mainnet |
 
-**Initial deposit state, one rule for all four vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all four vaults deploy paused, and stage 13 unpauses all four through the Safe and the timelock.
-All four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) open deposits on day 2
-of the mainnet launch. All four vaults are deployed paused (rmUSDC pauses
+**Initial deposit state, one rule for all three vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all three vaults deploy paused, and stage 13 unpauses all three through the Safe and the timelock.
+All three vaults (rmUSDC, rmPROTO, rmRWA) open deposits on day 2
+of the mainnet launch. All three vaults are deployed paused (rmUSDC pauses
 right after its seed deposit) and are unpaused only by Safe → Timelock
 governance, one timelock operation per vault, executed after the timelock
-delay (stage 13: four unpause rows, core #1710).
+delay (stage 13: three unpause rows, core #1710).
 The timelock's proposer and canceller is the Safe (2-of-3), any address may
 execute a ready operation after the delay, and the delay floor on Base is
 48 hours (core #1521: `DeployTimelock` opens `EXECUTOR_ROLE` to
 `address(0)` and the stage 12 verifier checks it). All products are
-eligible for Portfolio Router allocation — four initially, extensible to
+eligible for Portfolio Router allocation — three initially (rmAGENT is retired, ADR-0017), extensible to
 more — weighted by recommendation, once each passes its readiness review.
 The router default weights at
-launch are rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps; later changes
+launch are rmUSDC 9500, rmPROTO 500, rmRWA 0 bps; later changes
 come only from the Safe applying an Investment Committee consensus receipt
 through the weight setter (`RouterGovernance.applyReceipt`, through the
 timelock, core #1698). There is no voting. The
@@ -580,7 +580,9 @@ limits:
 A product must pass this readiness review before it can receive Portfolio
 Router allocation.
 
-### 11.3 Agent Token Vault
+### 11.3 Agent Token Vault (retired)
+
+**Retired (ADR-0017, core 1912).** rmAGENT is retired and the Portfolio Router routes across three vaults: rmUSDC, rmPROTO and rmRWA. A new deployment has no rmAGENT. The live v0.5.0 rmAGENT is retired through the Safe and the timelock and is withdraw-only (ADR-0009): deposits are closed, `redeem` and `redeemInKind` stay open, and nothing migrates holder funds. The table below describes the vault as it was specified. The consensus receipt keeps its `agent_tokens` bucket, which now maps to no vault and carries 0 bps.
 
 | Property | Value |
 | --- | --- |
@@ -593,32 +595,9 @@ Router allocation.
 | Allocation model | Equal-weight target across shortlisted tokens at deposit time; not actively rebalanced |
 | Exit fee | Configurable 0–1% for rmAGENT on its own; the rmUSDC rate does not apply. The rate is set at deploy and changes only through the timelock; its current value must be disclosed before approval |
 | Withdrawal | Holders redeem shares for current value in a single transaction, subject to available liquidity within the stated limit |
-| Status | Router-eligible after readiness review (see below) |
+| Status | Retired (ADR-0017): withdraw-only, not router-eligible |
 
-Shortlist curation is admin-controlled for the MVP, with an
-equal-weighted target basket drawn from BNKR, JUNO, RM (Base-chain
-only). rmAGENT's shortlist is BNKR alone, as a TEST asset: RM, the existing ROBOTMONEY token on
-Base at `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (core #1491), is parked until its market is deep enough
-(owner, 2026-10-21, [ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md)). BNKR (BankrCoin, `0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b`) is the Base
-agent-economy token named in ADR-0001. It sits on a thin Uniswap V4 pool (about 706 USD of virtual depth), so it is allowed
-for the contained mainnet test only, with deposits of at most 5 USDC, and it is not a production sizing
-(owner, 2026-10-22, [ADR-0016](adr/ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md)). RM returns only after the dollar criteria in [ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md) hold. RM and JUNO are added later through the timelock. Each token
-routes through one venue under the per-asset venue abstraction in
-[ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md). RM's venue, once it is listed again, is
-decided (owner, 2026-10-08; supersedes 2026-10-06): the Uniswap V4 RM/USDC pool with fee 2.91%
-(id `0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391`, tickSpacing 582, no hooks). The vault
-swaps through `UniswapV4SwapAdapter` and prices RM from `UniswapV4PriceRecorder`, a permissionless in-protocol
-observation recorder (a hookless V4 pool keeps none). The owner called this sufficient for the Base mainnet
-test, not for the final deployment: the first mainnet run is a contained test with low caps sized below the pool depth,
-and a stronger price source is a later decision. If no one has recorded for 30 minutes deposits and USDC redeems fail
-closed, and `redeemInKind` still pays RM. Current
-membership, venues, and pool parameters live in
-`config/agent-token-shortlist.json`. Changes flow through the Safe →
-Timelock → `ADMIN_ROLE` path with a mandatory timelock delay and public
-veto window (see
-[ADR-0004](adr/ADR-0004-agent-token-shortlist-governance.md)); there is
-no token-holder vote over shortlist membership, and no token-based
-governance is foreseen. Basket products are valued using a manipulation-resistant
+The retired vault's shortlist was BNKR alone, as a contained TEST asset on a hookless Uniswap V4 pool ([ADR-0016](adr/ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md)), with RM parked ([ADR-0015](adr/ADR-0015-rm-parked-from-rmagent-until-market-depth.md)). A new deployment lists no agent token and has no price recorder. The live vault pays holders through `redeem` or `redeemInKind` only. Shortlist membership changed only through the Safe, Timelock and `ADMIN_ROLE` path ([ADR-0004](adr/ADR-0004-agent-token-shortlist-governance.md)), with no token-holder vote. Basket products are valued using a manipulation-resistant
 on-chain price for each asset held.
 
 This product has no in-product agent trading authority or strategy: it is
@@ -643,8 +622,8 @@ limits:
 2. **Valuation-and-liquidity criterion** — same requirement as rmPROTO
    (§11.2).
 3. **Shortlist-governance criterion** — the process for curating basket
-   membership is specified and in force, and the deployed shortlist
-   consists exclusively of the Base-chain set {BNKR, JUNO, RM}.
+   membership is specified and in force. The vault is retired (ADR-0017), so
+   this review no longer applies to a new deployment.
 
 A product must pass this readiness review before it can receive Portfolio
 Router allocation.

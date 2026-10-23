@@ -1,7 +1,5 @@
-import { writeActivatedAgentConfig } from "./rm-parked.ts";
 import { describe, expect, test } from "bun:test";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { RM_TOKEN } from "../src/verify/constants.ts";
 import { join } from "node:path";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
 import { RPC_REFUSED_DETAIL, verifyDeployment } from "../src/verify/index.ts";
@@ -21,9 +19,7 @@ import { manifestBase } from "../src/stage-table.ts";
 import { CONFIG_ASSET, MANIFEST_ADAPTER, writeCoreAssetConfig } from "./fixtures.ts";
 
 /** One distinct address per vault, so a test can say which vault reads paused. */
-const vaultAddr = (key: string): `0x${string}` => `0x00000000000000000000000000000000000000c${["USDC", "PROTO", "AGENT", "RWA"].indexOf(key) + 1}`;
-const MANIFEST_ADAPTER_V4 = "0x00000000000000000000000000000000000000a4";
-const MANIFEST_RECORDER = "0x00000000000000000000000000000000000000d5";
+const vaultAddr = (key: string): `0x${string}` => `0x00000000000000000000000000000000000000c${["USDC", "PROTO", "RWA"].indexOf(key) + 1}`;
 /** rmUSDC's three strategy adapters in the vault stage manifest (issue 1705 C4). */
 const STRATEGY_ADAPTERS = { aave_adapter: "0x00000000000000000000000000000000000000e1", compound_adapter: "0x00000000000000000000000000000000000000e2", moonwell_flagship_adapter: "0x00000000000000000000000000000000000000e3" };
 
@@ -35,8 +31,7 @@ function setup(config: { proto?: object[]; rwa?: object[]; shortlist?: object[] 
   mkdirSync(m, { recursive: true });
   writeFileSync(join(m, "safe.json"), JSON.stringify({ safe: "0x00000000000000000000000000000000000050fe" }));
   if (o.adapters !== false) {
-    for (const v of getStageTable().vaults) writeFileSync(join(m, `${manifestBase(v.manifest)}.json`), JSON.stringify({ chain_id: chain, vault: vaultAddr(v.key), ...(v.key !== "USDC" ? { adapter: MANIFEST_ADAPTER, adapter_v4: MANIFEST_ADAPTER_V4, recorder: MANIFEST_RECORDER } : STRATEGY_ADAPTERS) }));
-    writeFileSync(join(m, "recorder.json"), JSON.stringify({ chain_id: chain, recorder: MANIFEST_RECORDER }));
+    for (const v of getStageTable().vaults) writeFileSync(join(m, `${manifestBase(v.manifest)}.json`), JSON.stringify({ chain_id: chain, vault: vaultAddr(v.key), ...(v.key !== "USDC" ? { adapter: MANIFEST_ADAPTER } : STRATEGY_ADAPTERS) }));
   }
   if (config) writeCoreAssetConfig(coreDir, config);
   const sheet = parseSheet(sheetText());
@@ -56,13 +51,13 @@ describe("stage 12: the agent scan ends at the handover block (core 1527)", () =
 });
 
 describe("stage 12: the one verifier", () => {
-  test("the verifier sheet covers all four vaults, with all four vaults paused (rmUSDC deploys paused too, core 1710) and the seed on rmUSDC only", () => {
+  test("the verifier sheet covers all three vaults, with all three vaults paused (rmUSDC deploys paused too, core 1710) and the seed on rmUSDC only", () => {
     const { ctx, sheet } = setup();
     const v = buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe");
-    expect(Object.keys(v.vaults)).toEqual(["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]);
-    for (const k of ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]) expect(v.vaults[k]!.expectPaused).toBe(true);
+    expect(Object.keys(v.vaults)).toEqual(["rmUSDC", "rmPROTO", "rmRWA"]);
+    for (const k of ["rmUSDC", "rmPROTO", "rmRWA"]) expect(v.vaults[k]!.expectPaused).toBe(true);
     expect(v.vaults.rmUSDC!.seed).toBe(1000000n);
-    expect(v.vaults.rmAGENT!.assets).toEqual([]);
+    expect(v.vaults.rmAGENT).toBeUndefined();
     expect(v.vaults.rmPROTO!.assets).toEqual([{ token: CONFIG_ASSET.token, pool: CONFIG_ASSET.pool, swapFee: 500, adapter: MANIFEST_ADAPTER, venue: 0 }]);
     expect(v.vaults.rmUSDC!.seedShareReceiver).toBe(sheet.shareReceiver);
     expect(v.vaults.rmPROTO!.feeRecipient).toBe("0x00000000000000000000000000000000000050fe"); // @safe resolves to the created Safe
@@ -72,7 +67,7 @@ describe("stage 12: the one verifier", () => {
   test("the verifier sheet carries the NAV deviation guard and the pool liquidity floor of every basket, and none for rmUSDC (issue 1666)", () => {
     const { ctx, sheet } = setup();
     const v = buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe");
-    for (const [k, key] of [["rmPROTO", "PROTO"], ["rmAGENT", "AGENT"], ["rmRWA", "RWA"]] as const) {
+    for (const [k, key] of [["rmPROTO", "PROTO"], ["rmRWA", "RWA"]] as const) {
       expect(v.vaults[k]!.navDeviationBps).toBe(sheet.vaults[key].navDeviationBps!);
       expect(v.vaults[k]!.minPoolLiquidity).toBe(sheet.vaults[key].minPoolLiquidity!);
       expect(v.vaults[k]!.navDeviationBps!).toBeGreaterThan(0n);
@@ -85,9 +80,9 @@ describe("stage 12: the one verifier", () => {
     const { ctx } = setup();
     const v = buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe");
     expect(v).not.toHaveProperty("governance");
-    // the example sheet makes PROTO, AGENT and RWA eligible: rmUSDC always is
-    expect(Object.fromEntries(Object.entries(v.vaults).map(([k, x]) => [k, x.routerEligible]))).toEqual({ rmUSDC: true, rmPROTO: true, rmAGENT: true, rmRWA: true });
-    expect(v.defaultWeights).toEqual([{ vault: "rmUSDC", bps: 9500 }, { vault: "rmPROTO", bps: 500 }, { vault: "rmAGENT", bps: 0 }, { vault: "rmRWA", bps: 0 }]);
+    // the example sheet makes PROTO and RWA eligible: rmUSDC always is
+    expect(Object.fromEntries(Object.entries(v.vaults).map(([k, x]) => [k, x.routerEligible]))).toEqual({ rmUSDC: true, rmPROTO: true, rmRWA: true });
+    expect(v.defaultWeights).toEqual([{ vault: "rmUSDC", bps: 9500 }, { vault: "rmPROTO", bps: 500 }, { vault: "rmRWA", bps: 0 }]);
   });
 
   test("a missing asset config is an error, not a silent skip", () => {
@@ -104,29 +99,14 @@ describe("stage 12: the one verifier", () => {
     expect(() => loadExpectedAssets(none, "PROTO")).toThrow(/manifest .* is missing|has no adapter/);
   });
 
-  test("an empty agent list needs no adapter, and rmUSDC holds no basket assets", () => {
+  test("rmUSDC holds no basket assets", () => {
     const { ctx } = setup({}, { adapters: false });
-    expect(loadExpectedAssets(ctx, "AGENT")).toEqual([]);
     expect(loadExpectedAssets(ctx, "USDC")).toEqual([]);
   });
 
-  test("the committed agent shortlist expects RM as rmAGENT's one asset, on the V4 venue (1) at fee 29100, with the recorder as its pool and the run's V4 adapter (core 1676)", () => {
-    const { ctx } = setup({}, {});
-    writeActivatedAgentConfig(join(ctx.coreDir, "config", "agent-token-shortlist.json")); // RM_PARKED: the reactivated copy
-    const want = loadExpectedAssets(ctx, "AGENT");
-    expect(want.map((a) => [a.token.toLowerCase(), a.pool, a.swapFee, a.adapter, a.venue])).toEqual([
-      [RM_TOKEN.toLowerCase(), MANIFEST_RECORDER, 29100, MANIFEST_ADAPTER_V4, 1],
-    ]);
-    // the PoolKey the verifier compares the recorder and the adapter with comes from the config, hooks zero, tickSpacing 582
-    expect(want[0]!.v4).toMatchObject({ poolId: "0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391", key: { fee: 29100, tickSpacing: 582, hooks: "0x0000000000000000000000000000000000000000" } });
-  });
-
-  test("a V4 asset whose vault manifest has no adapter_v4 is an error, not a silent V3 fallback", () => {
-    const { ctx } = setup({}, {});
-    writeActivatedAgentConfig(join(ctx.coreDir, "config", "agent-token-shortlist.json")); // RM_PARKED: the reactivated copy
-    const m = join(ctx.coreDir, "deployments", String(ctx.chainId), "agent-token-vault.json");
-    writeFileSync(m, JSON.stringify({ chain_id: ctx.chainId, vault: "0x00000000000000000000000000000000000000b1", adapter: MANIFEST_ADAPTER }));
-    expect(() => loadExpectedAssets(ctx, "AGENT")).toThrow(/adapter_v4/);
+  test("a V4 asset in a basket's config is refused: the three-vault deployment has no V4 venue (ADR-0017)", () => {
+    const { ctx } = setup({ proto: [{ ...CONFIG_ASSET, venue: "UniswapV4" }] }, {});
+    expect(() => loadExpectedAssets(ctx, "PROTO")).toThrow(/venue 'UniswapV4' is not one of/);
   });
 
   test("a failing check fails the stage with the VERIFY exit class", async () => {
@@ -180,14 +160,14 @@ describe("stage 12: the one verifier", () => {
 import { expectedTimelockDelay, unpausedByGovern } from "../src/verify-stage.ts";
 
 describe("stage 12 after govern: the unpause rows are linked to the paused reads", () => {
-  test("before the govern execute row, every basket and agent vault is expected paused", () => {
+  test("before the govern execute row, every basket vault is expected paused", () => {
     const { ctx, sheet } = setup();
     const m = newManifest(ctx, "0xa");
     expect(unpausedByGovern(m, sheet)).toEqual([]);
     m.govern = { "unpause-PROTO": { scheduled: { at: "t", tx_hash: "0x1" } } };
     expect(unpausedByGovern(m, sheet)).toEqual([]);
     const v = buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe", unpausedByGovern(m, sheet));
-    for (const k of ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]) expect(v.vaults[k]!.expectPaused).toBe(true);
+    for (const k of ["rmUSDC", "rmPROTO", "rmRWA"]) expect(v.vaults[k]!.expectPaused).toBe(true);
   });
 
   test("once an unpause row's executed phase is recorded, that vault (and no other) is expected paused=false", () => {
@@ -198,9 +178,7 @@ describe("stage 12 after govern: the unpause rows are linked to the paused reads
     expect(unpaused).toEqual(sheet.govern.unpauseVaults);
     expect(unpaused.length).toBeGreaterThan(0);
     const v = buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe", unpaused);
-    for (const [k, name] of [["USDC", "rmUSDC"], ["PROTO", "rmPROTO"], ["AGENT", "rmAGENT"], ["RWA", "rmRWA"]] as const) expect(v.vaults[name]!.expectPaused).toBe(!unpaused.includes(k));
-    // rmAGENT is expected paused only when the sheet does not list it: pause semantics are sheet data
-    expect(v.vaults.rmAGENT!.expectPaused).toBe(!sheet.govern.unpauseVaults.includes("AGENT"));
+    for (const [k, name] of [["USDC", "rmUSDC"], ["PROTO", "rmPROTO"], ["RWA", "rmRWA"]] as const) expect(v.vaults[name]!.expectPaused).toBe(!unpaused.includes(k));
   });
 
   test("the expected timelock delay is TIMELOCK_MIN_DELAY until the update-delay row executes, then GOVERN_NEW_DELAY (verify after govern failed on 60 vs 3600)", () => {
@@ -256,9 +234,9 @@ describe("stage 12 after govern: the unpause rows are linked to the paused reads
 describe("stage 12 on 8453: verify runs before govern and after it, and refuses while govern is part-way (issue 1667)", () => {
   const exec = { scheduled: { at: "t", tx_hash: "0x1" }, executed: { at: "t", tx_hash: "0x2" } };
   const sched = { scheduled: { at: "t", tx_hash: "0x1" } };
-  const ALL_EXEC = { "unpause-USDC": exec, "unpause-PROTO": exec, "unpause-AGENT": exec, "unpause-RWA": exec };
-  /** depositsPaused per vault: all four vaults paused (the launch state, core 1710) unless a test says otherwise. */
-  const launch = (over: Partial<Record<string, boolean>> = {}): Record<string, boolean> => ({ USDC: true, PROTO: true, AGENT: true, RWA: true, ...over } as Record<string, boolean>);
+  const ALL_EXEC = { "unpause-USDC": exec, "unpause-PROTO": exec, "unpause-RWA": exec };
+  /** depositsPaused per vault: all three vaults paused (the launch state, core 1710) unless a test says otherwise. */
+  const launch = (over: Partial<Record<string, boolean>> = {}): Record<string, boolean> => ({ USDC: true, PROTO: true, RWA: true, ...over } as Record<string, boolean>);
   async function run(govern: Record<string, unknown>, paused: Record<string, boolean>) {
     const { ctx, lines } = setup({}, { chain: 8453 });
     const mctx = { ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext;
@@ -277,11 +255,11 @@ describe("stage 12 on 8453: verify runs before govern and after it, and refuses 
     return { err, seen, manifest, calls, lines };
   }
 
-  test("pre-govern: no unpause row scheduled passes when all four vaults read paused", async () => {
+  test("pre-govern: no unpause row scheduled passes when all three vaults read paused", async () => {
     const { err, seen, manifest } = await run({}, launch());
     expect(err).toBeUndefined();
     expect((manifest as any).stages.verify.status).toBe("done");
-    for (const k of ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]) expect(seen.sheet.vaults[k].expectPaused).toBe(true);
+    for (const k of ["rmUSDC", "rmPROTO", "rmRWA"]) expect(seen.sheet.vaults[k].expectPaused).toBe(true);
   });
   test("pre-govern fails closed when the chain disagrees with the manifest: any one vault already open (rmUSDC included)", async () => {
     const live = await run({}, launch({ PROTO: false }));
@@ -298,18 +276,18 @@ describe("stage 12 on 8453: verify runs before govern and after it, and refuses 
     await expect(runVerifyStage(mctx, stageByName("verify"), { ...newManifest(mctx, "0xa"), firstBlock: 5 } as never, deps as never)).rejects.toMatchObject({ kind: "VERIFY" });
   });
 
-  test("post-govern: all four unpause rows executed passes only when all four vaults read open", async () => {
-    const ok = await run(ALL_EXEC, launch({ USDC: false, PROTO: false, AGENT: false, RWA: false }));
+  test("post-govern: all three unpause rows executed passes only when all three vaults read open", async () => {
+    const ok = await run(ALL_EXEC, launch({ USDC: false, PROTO: false, RWA: false }));
     expect(ok.err).toBeUndefined();
-    for (const k of ["rmPROTO", "rmAGENT", "rmRWA", "rmUSDC"]) expect(ok.seen.sheet.vaults[k].expectPaused).toBe(false);
-    for (const k of ["PROTO", "AGENT", "RWA", "USDC"]) {
-      const bad = await run(ALL_EXEC, launch({ USDC: false, PROTO: false, AGENT: false, RWA: false, [k]: true }));
+    for (const k of ["rmPROTO", "rmRWA", "rmUSDC"]) expect(ok.seen.sheet.vaults[k].expectPaused).toBe(false);
+    for (const k of ["PROTO", "RWA", "USDC"]) {
+      const bad = await run(ALL_EXEC, launch({ USDC: false, PROTO: false, RWA: false, [k]: true }));
       expect(bad.err).toMatchObject({ kind: "VERIFY" });
-      expect(bad.err.message).toContain(`govern post-govern: ${{ USDC: "rmUSDC", PROTO: "rmPROTO", AGENT: "rmAGENT", RWA: "rmRWA" }[k]} depositsPaused is false`);
+      expect(bad.err.message).toContain(`govern post-govern: ${{ USDC: "rmUSDC", PROTO: "rmPROTO", RWA: "rmRWA" }[k]} depositsPaused is false`);
     }
   });
   test("post-govern with a vault that pause-all paused again names the govern row that reopens it", async () => {
-    const { err, lines } = await run(ALL_EXEC, launch({ PROTO: false, AGENT: false, RWA: false, USDC: true }));
+    const { err, lines } = await run(ALL_EXEC, launch({ PROTO: false, RWA: false, USDC: true }));
     expect(err.details.failed.join()).toContain("rmUSDC depositsPaused is false");
     expect(lines.join("\n")).toContain("govern --row unpause-USDC --chain 8453");
   });
@@ -339,14 +317,14 @@ describe("stage 12 on 8453: verify runs before govern and after it, and refuses 
     // rmUSDC is one of the four rows now (core 1710): alone it is part-way, in either phase
     expect(mainnetGovernMode({ govern: { "unpause-USDC": sched } }).mode).toBe("part-way");
     expect(mainnetGovernMode({ govern: { "unpause-USDC": exec } }).mode).toBe("part-way");
-    expect(mainnetGovernMode({ govern: { "unpause-PROTO": exec, "unpause-AGENT": exec, "unpause-RWA": exec } }).mode).toBe("part-way");
+    expect(mainnetGovernMode({ govern: { "unpause-PROTO": exec, "unpause-RWA": exec } }).mode).toBe("part-way");
     // a round 2 opened for one basket after pause-all (its record is fresh, round 1 is archived) leaves the others executed: part-way until it executes
     expect(mainnetGovernMode({ govern: { ...ALL_EXEC, "unpause-PROTO": { round: 2, ...sched }, "unpause-PROTO:round-1": exec } }).mode).toBe("part-way");
     expect(mainnetGovernMode({ govern: { ...ALL_EXEC, "unpause-PROTO": { round: 2, ...exec }, "unpause-PROTO:round-1": exec } }).mode).toBe("post-govern");
   });
 });
 
-describe("the CLI on 8453: a part-way govern run pauses nothing, a failed verify still pauses all four (issue 1667)", () => {
+describe("the CLI on 8453: a part-way govern run pauses nothing, a failed verify still pauses all three (issue 1667)", () => {
   const exec = { scheduled: { at: "t", tx_hash: "0x1" }, executed: { at: "t", tx_hash: "0x2" } };
   function seed(govern: Record<string, unknown>) {
     const w = world({ chainId: 8453, writeSafeManifest: true, writeFrozen: true });

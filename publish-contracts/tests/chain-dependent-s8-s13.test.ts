@@ -77,11 +77,11 @@ describe("issue 1520: the stage 12 verifier fails when any deploy-time value dif
   const { verifyDeployment } = require("../src/verify/index.ts") as typeof import("../src/verify/index.ts");
   const cases: [string, string, (w: ReturnType<typeof buildWorld>) => void][] = [
     ["tvl cap", "vault[rmPROTO]: tvlCap equals sheet", (w) => w.chain.set(VAULTS.rmPROTO.address, "tvlCap", 1n)],
-    ["per-deposit cap", "vault[rmAGENT]: perDepositCap equals sheet", (w) => w.chain.set(VAULTS.rmAGENT.address, "perDepositCap", 1n)],
+    ["per-deposit cap", "vault[rmRWA]: perDepositCap equals sheet", (w) => w.chain.set(VAULTS.rmRWA.address, "perDepositCap", 1n)],
     ["exit fee", "vault[rmRWA]: exitFeeBps equals sheet", (w) => w.chain.set(VAULTS.rmRWA.address, "exitFeeBps", 9999n)],
     ["fee recipient", "vault[rmUSDC]: feeRecipient equals sheet", (w) => w.chain.set(VAULTS.rmUSDC.address, "feeRecipient", addr(0xbad))],
     ["router eligibility", "vault[rmPROTO]: router eligibility equals sheet", (w) => { w.sheet.vaults.rmPROTO.routerEligible = false; }],
-    ["router eligibility of a basket the sheet leaves ineligible", "vault[rmAGENT]: router eligibility equals sheet", (w) => { w.sheet.vaults.rmAGENT.routerEligible = false; }],
+    ["router eligibility of a basket the sheet leaves ineligible", "vault[rmRWA]: router eligibility equals sheet", (w) => { w.sheet.vaults.rmRWA.routerEligible = false; }],
     ["router active vector", "router: votedWeightsActive is true only after an applied receipt", (w) => w.chain.set(ROUTER, "votedWeightsActive", true)],
     ["router effective weights", "router: effective weights equal the sheet's launch vector", (w) => w.chain.set(ROUTER, "getEffectiveWeights", [[Object.values(VAULTS)[0].address], [10000n]])],
     ["router default weights", "router: default weights equal sheet", (w) => w.chain.set(ROUTER, "getDefaultWeights", [Object.values(VAULTS).map((v) => v.address), [1n, 2n, 3n, 9994n]])],

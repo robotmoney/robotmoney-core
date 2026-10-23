@@ -46,9 +46,9 @@ export const GOVERNED_PARAMETERS: readonly string[] = [
 export const UPSTREAM_DEPENDENCIES: readonly string[] = [
   "USDC: Circle's FiatTokenProxy (upgradeable and pausable by Circle, blacklist included)",
   "Aave v3 Pool and aTokens, Compound v3 Comet and Moonwell markets behind the rmUSDC strategy adapters (each upgradeable by its own governance)",
-  "basket assets and their tokens (config/protocol-assets.json, config/rwa-assets.json, config/agent-token-shortlist.json): each token keeps its issuer's admin",
-  "Uniswap V3 SwapRouter02 and pools, Uniswap V4 PoolManager and the RM/USDC pool used by the swap adapters and the price recorder",
-  "the strategy and swap adapters and UniswapV4PriceRecorder: direct deployments replaced only through the governed adapter allowlists",
+  "basket assets and their tokens (config/protocol-assets.json, config/rwa-assets.json): each token keeps its issuer's admin",
+  "Uniswap V3 SwapRouter02 and pools used by the swap adapters",
+  "the strategy and swap adapters: direct deployments replaced only through the governed adapter allowlists",
   "Safe 1.4.1: the SafeL2 singleton and the fallback handler behind the Safe that proposes on the timelock",
 ];
 

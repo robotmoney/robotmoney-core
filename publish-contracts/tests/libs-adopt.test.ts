@@ -77,7 +77,7 @@ describe("a libs stage that plans zero transactions", () => {
     expect(w.state().nonces[A]).toBe(want);
     expect(w.logs().some((l) => l.event === "run.nonce_ok" && l.nonce === want && l.summed_frozen_counts === sum - COUNTS.libs!)).toBe(true);
     const m = manifest(w);
-    expect(m.stages.recorder.startNonce).toBe(COUNTS.safe); // the next stage starts where libs started: libs contributed 0
+    expect(m.stages.vault.startNonce).toBe(COUNTS.safe); // the next stage starts where libs started: libs contributed 0
     expect(m.stages.timelock.startNonce).toBe(want - COUNTS.timelock!);
   });
 
@@ -150,9 +150,9 @@ describe("a libs stage that plans zero transactions", () => {
 
   test("only the libs stage can be adopted: another stage that plans zero transactions is still a SIMULATION failure", async () => {
     const w = adoptWorld();
-    w.cfg.zeroTx = SCRIPT.recorder;
+    w.cfg.zeroTx = SCRIPT.vault;
     w.cfg.libsAddress = undefined;
-    // libs runs normally (SIMULATION COMPLETE), then the recorder stage prints no SIMULATION COMPLETE
+    // libs runs normally (SIMULATION COMPLETE), then the vault stage prints no SIMULATION COMPLETE
     expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.SIMULATION);
   });
 
@@ -240,7 +240,7 @@ describe("nonce accounting for an adopted stage", () => {
     expect(adoptedTxs({ stages: {
       libs: { status: "done", adopted: true, adoption: { deployerTxs: 0, factory: CREATE2_FACTORY, libraries: [] }, startedAt: "x" },
       "prove-control": { status: "done", adopted: true, startedAt: "x" },
-      recorder: { status: "started", adopted: true, adoption: { deployerTxs: 0, factory: CREATE2_FACTORY, libraries: [] }, startedAt: "x" },
+      vault: { status: "started", adopted: true, adoption: { deployerTxs: 0, factory: CREATE2_FACTORY, libraries: [] }, startedAt: "x" },
     } })).toEqual({ libs: 0 });
   });
 });

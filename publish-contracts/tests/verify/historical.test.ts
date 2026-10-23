@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { verifyDeployment } from "../../src/verify/index.ts";
 import { loadManifests } from "../../src/verify/manifests.ts";
 import { requiredManifests } from "../../src/verify/constants.ts";
-import { scopeTable } from "../../src/stage-table.ts";
+import { loadStageTable, scopeTable } from "../../src/stage-table.ts";
 import { getStageTable } from "../../src/stages.ts";
 import { SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP, stageManifestFile } from "../../src/verify/constants.ts";
 import { padTopic } from "../../src/verify/logs.ts";
@@ -16,7 +16,9 @@ import { GATEWAY, OWNERS, buildWorld, failed } from "./world.ts";
 import { REPO } from "../fixtures.ts";
 
 const DEPLOY2 = join(REPO, "deployments", "8453", "deploy-2");
-const legacy = scopeTable(getStageTable(), "legacy");
+// The deployment was made with the four-vault stage table of the v0.5.0 line (rmAGENT and the recorder were stages). That table is pinned here as a fixture, because the
+// current table (ADR-0017) deploys three vaults: reading history needs the table the history was written with.
+const legacy = scopeTable(loadStageTable(join(import.meta.dir, "..", "fixtures", "historical")), "legacy");
 
 /** The deployed release (v0.5.0) wrote ic-policy.json where the target writes receipt.json (issue 1888). The committed files are never renamed: a temp copy carries the target's name. */
 function aliasedCopy(): string {

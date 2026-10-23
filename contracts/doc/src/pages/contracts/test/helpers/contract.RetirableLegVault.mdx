@@ -1,0 +1,239 @@
+---
+title: "RetirableLegVault"
+description: "TEST FIXTURE, Twin only. The fourth vault of the retire rehearsal: a router leg that takes USDC 1:1 and pays it back 1:1, and that the registry can retire. It stands in for the live v0.5.0 rmAGENT, so the real registry, the real router, the real Safe and the real timelock run the retire batch against a populated four-vault deployment. The behaviour of the real `AgentTokenVault` after a retire (deposit reverts, redeem and redeemInKind keep paying) is proved by contracts/test/RetireVaultBatch.t.sol; this contract carries only the surface the registry (`retire`, `unretire`, `asset`) and the router (`maxDeposit`, `previewDeposit`, `deposit`) call, plus `redeem`, `retired` and `registry` that the rehearsal reads."
+---
+
+# RetirableLegVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/helpers/RetirableLegVault.sol)
+
+**Inherits:** ERC20
+
+TEST FIXTURE, Twin only. The fourth vault of the retire rehearsal: a router leg that takes USDC 1:1 and pays it back 1:1, and that the registry can retire. It stands in for the live
+v0.5.0 rmAGENT, so the real registry, the real router, the real Safe and the real timelock run the retire batch against a populated four-vault deployment. The behaviour of the
+real `AgentTokenVault` after a retire (deposit reverts, redeem and redeemInKind keep paying) is proved by contracts/test/RetireVaultBatch.t.sol; this contract carries only the
+surface the registry (`retire`, `unretire`, `asset`) and the router (`maxDeposit`, `previewDeposit`, `deposit`) call, plus `redeem`, `retired` and `registry` that the rehearsal reads.
+
+## Constants
+
+### assetToken
+
+```solidity
+IERC20 public immutable assetToken;
+```
+
+### registry
+
+The registry that may retire this vault.
+
+```solidity
+address public immutable registry;
+```
+
+## State Variables
+
+### retired
+
+True once the registry retired the vault: deposits stop, withdrawals stay open (ADR-0009).
+
+```solidity
+bool public retired;
+```
+
+## Functions
+
+<a id="constructor-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address asset_, address registry_)
+        ERC20("Robot Money Agent Tokens (retire test)", "rmAGENT-RETIRETEST");
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset_ | `address` |  |
+| registry_ | `address` |  |
+
+<a id="decimals"></a>
+
+### decimals
+
+<i>
+
+Returns the number of decimals used to get its user representation.
+For example, if `decimals` equals `2`, a balance of `505` tokens should
+be displayed to a user as `5.05` (`505 / 10 ** 2`).
+
+Tokens usually opt for a value of 18, imitating the relationship between
+Ether and Wei. This is the default value returned by this function, unless
+it's overridden.
+
+NOTE: This information is only used for _display_ purposes: it in
+no way affects any of the arithmetic of the contract, including
+`IERC20` and `IERC20`.
+
+</i>
+
+```solidity
+function decimals() public pure override returns (uint8);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint8` |  |
+
+<a id="asset"></a>
+
+### asset
+
+```solidity
+function asset() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="totalassets"></a>
+
+### totalAssets
+
+```solidity
+function totalAssets() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="maxdeposit-address"></a>
+
+### maxDeposit
+
+```solidity
+function maxDeposit(address) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="previewdeposit-uint256"></a>
+
+### previewDeposit
+
+```solidity
+function previewDeposit(uint256 assets) external pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="deposit-uint256-address"></a>
+
+### deposit
+
+```solidity
+function deposit(uint256 assets, address receiver) external returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+| receiver | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="redeem-uint256-address-address"></a>
+
+### redeem
+
+Open in every state: a retired vault stays withdraw-only, never frozen.
+
+```solidity
+function redeem(uint256 shares, address receiver, address owner)
+        external
+        returns (uint256 assets);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+| receiver | `address` |  |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+
+<a id="retire"></a>
+
+### retire
+
+```solidity
+function retire() external;
+```
+
+<a id="unretire"></a>
+
+### unretire
+
+```solidity
+function unretire() external;
+```
+
+## Errors
+
+### VaultRetired
+
+A deposit while the vault is retired.
+
+```solidity
+error VaultRetired();
+```
+
+### OnlyRegistry
+
+Only the registry halts or reopens deposits.
+
+```solidity
+error OnlyRegistry();
+```
+

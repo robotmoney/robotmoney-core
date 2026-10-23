@@ -1078,3 +1078,155 @@ async fn shipped_vault_names_get_their_intended_risk_label() {
 
     stub.shutdown();
 }
+
+/// ADR-0017: rmAGENT is retired through a real `VaultStatusChanged(Retired)` event. The indexer
+/// records status 2, keeps the SPECULATIVE label, leaves the live vaults Active, and keeps the
+/// retired vault in the watched address set so its holders' exits stay indexed (withdraw-only).
+#[tokio::test]
+async fn retired_rmagent_stays_watched_and_the_live_vaults_stay_active() {
+    let fx = pg_fixture().await;
+    let registry_addr = Address::from([0xEEu8; 20]);
+    let asset_addr = Address::from([0xDDu8; 20]);
+    let agent = Address::from([0xA2u8; 20]);
+    let usdc = Address::from([0xA3u8; 20]);
+    let cfg = IndexerConfig {
+        chain_id: 8453,
+        chain_name: "base".into(),
+        rpc_label: "stub".into(),
+        gateway: Some(Address::from([0xBBu8; 20])),
+        vault: Address::from([0xCCu8; 20]),
+        registry: Some(registry_addr),
+        router_governance: None,
+        portfolio_router: None,
+        consensus_receipt: None,
+        timelock: None,
+        safe: None,
+        max_blocks_per_tick: 200,
+        start_block: None,
+        end_block: Some(65),
+        feature_flags: 4,
+    };
+    let receipt = serde_json::json!({ "status": "0x1", "from": common::STUB_TX_FROM, "to": null });
+
+    let stub1 = StubRpcServer::start().await;
+    stub1.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
+    stub1.set(
+        "eth_getLogs",
+        serde_json::Value::Array(vec![
+            encode_vault_registered_log(
+                registry_addr,
+                agent,
+                "Robot Money Agent Tokens",
+                asset_addr,
+                50,
+                [0x11u8; 32],
+                0,
+            ),
+            encode_vault_registered_log(
+                registry_addr,
+                usdc,
+                "Robot Money USDC",
+                asset_addr,
+                50,
+                [0x11u8; 32],
+                1,
+            ),
+        ]),
+    );
+    stub1.set(
+        "eth_call",
+        serde_json::Value::String(format!("0x{}", "00".repeat(32))),
+    );
+    stub1.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
+    stub1.set("eth_getTransactionReceipt", receipt.clone());
+    let o1 = run_once(&fx.db, &JsonRpc::new(&stub1.url), &cfg)
+        .await
+        .unwrap();
+    assert!(o1.error.is_none(), "registration tick: {:?}", o1.error);
+    stub1.shutdown();
+
+    let stub2 = StubRpcServer::start().await;
+    stub2.set("eth_blockNumber", serde_json::Value::String("0x5e".into()));
+    stub2.set(
+        "eth_getLogs",
+        serde_json::Value::Array(vec![encode_vault_status_changed_log(
+            registry_addr,
+            agent,
+            2u8,
+            1_748_000_200,
+            80,
+            [0x22u8; 32],
+            0,
+        )]),
+    );
+    stub2.set(
+        "eth_call",
+        serde_json::Value::String(format!("0x{}", "00".repeat(32))),
+    );
+    stub2.set("eth_getBlockByNumber", stub_block(89, 0xab, 0xaa));
+    stub2.set("eth_getTransactionReceipt", receipt);
+    let cfg2 = IndexerConfig {
+        end_block: Some(89),
+        ..cfg.clone()
+    };
+    let o2 = run_once(&fx.db, &JsonRpc::new(&stub2.url), &cfg2)
+        .await
+        .unwrap();
+    assert!(o2.error.is_none(), "retire tick: {:?}", o2.error);
+    stub2.shutdown();
+
+    let rows: Vec<(Vec<u8>, i16, String)> = sqlx::query_as(
+        "SELECT vault_address, status, risk_label FROM vaults WHERE chain_id = $1 ORDER BY vault_address",
+    )
+    .bind(8453i64)
+    .fetch_all(fx.db.pool())
+    .await
+    .unwrap();
+    let find = |a: Address| {
+        rows.iter()
+            .find(|r| r.0 == a.as_slice())
+            .expect("vault row")
+    };
+    assert_eq!(find(agent).1, 2, "rmAGENT is Retired");
+    assert_eq!(
+        find(agent).2,
+        "SPECULATIVE",
+        "the retired vault keeps its label"
+    );
+    assert_eq!(find(usdc).1, 0, "the live vault stays Active");
+
+    // Third tick: the retired vault is still in the watched address set.
+    let stub3 = StubRpcServer::start().await;
+    stub3.set("eth_blockNumber", serde_json::Value::String("0x78".into()));
+    stub3.set("eth_getLogs", serde_json::Value::Array(vec![]));
+    stub3.set(
+        "eth_call",
+        serde_json::Value::String(format!("0x{}", "00".repeat(32))),
+    );
+    stub3.set("eth_getBlockByNumber", stub_block(110, 0xab, 0xaa));
+    let cfg3 = IndexerConfig {
+        end_block: Some(110),
+        ..cfg.clone()
+    };
+    let o3 = run_once(&fx.db, &JsonRpc::new(&stub3.url), &cfg3)
+        .await
+        .unwrap();
+    assert!(o3.error.is_none(), "watch tick: {:?}", o3.error);
+    let requests = stub3.captured_requests();
+    let logs_req = requests
+        .iter()
+        .rev()
+        .find(|r| r.get("method").and_then(|m| m.as_str()) == Some("eth_getLogs"))
+        .expect("indexer must issue eth_getLogs");
+    let addrs: Vec<String> = logs_req["params"][0]["address"]
+        .as_array()
+        .expect("address filter array")
+        .iter()
+        .map(|a| a.as_str().unwrap().to_lowercase())
+        .collect();
+    assert!(
+        addrs.contains(&format!("{agent:#x}")),
+        "retired rmAGENT stays watched: {addrs:?}"
+    );
+    stub3.shutdown();
+}

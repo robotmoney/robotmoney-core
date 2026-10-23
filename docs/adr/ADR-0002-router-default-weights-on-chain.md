@@ -1,6 +1,7 @@
 # ADR-0002: Router default weights live on-chain, not derived from the front-end
 
 - **Status:** Accepted. Router default weights live on chain. The Safe multisig, through the TimelockController, is the only body that changes router weights: `WEIGHT_SETTER_ROLE` applies the Investment Committee's consensus receipt in one timelock operation (govern row `apply-receipt`, core 1696). There is no voting by anyone. See [Launch default weights and who sets active weights](#amendment--2026-10-05-launch-default-weights-and-who-sets-active-weights).
+- **Amendment 2026-10-22:** the launch vector has three legs (rmUSDC 9500, rmPROTO 500, rmRWA 0) because rmAGENT is retired (ADR-0017).
 - **Amendment 2026-10-19:** `InvestmentCommitteePolicy` is deleted and the receipt register no longer binds the gateway (owner decision 2026-10-19). The redeploy cascades below that name the IC policy are history.
 - **Amendment 2026-10-19 (rmpc scope):** The gateway deposits only into vaults and has no router path (owner decision 2026-10-19), so replacing the router no longer cascades to the gateway. The cascades below that name the gateway are history.
 - **Date:** 2026-05-27 (amended 2026-10-05)
@@ -258,3 +259,9 @@ described in the runbook.
   here.
 - Indexer / website implementation of the read path is downstream and
   not covered by this ADR.
+
+## Amendment — 2026-10-22: Three-vault launch vector (ADR-0017)
+
+rmAGENT is retired ([ADR-0017](ADR-0017-rmagent-retired-router-uses-three-vaults.md)), so the router routes across three vaults. The default vector has one entry per router-eligible vault: rmUSDC, rmPROTO and rmRWA. A new deployment launches on `ROUTER_WEIGHTS=USDC:9500,PROTO:500,RWA:0` with `ELIGIBLE_VAULTS=PROTO,RWA`. The vector length is not a constant: `PortfolioRouter._setDefaultWeights` requires it to equal `registry.routerEligibleCount()`, so no router change is needed.
+
+The live v0.5.0 deployment keeps its four-leg vector until the Safe, through the timelock, retires rmAGENT in one batch: `registry.migrateEligibility(rmAGENT, false, [rmUSDC, rmPROTO, rmRWA], [9500, 500, 0])` then `registry.retire(rmAGENT)`. `migrateEligibility` moves the eligible count and the default vector together, atomically. The rest of this ADR is unchanged: the default weights live on chain and only the Safe through the timelock writes them after the handover.

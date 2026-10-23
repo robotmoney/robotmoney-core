@@ -31,12 +31,11 @@ const CORE_ROOT = join(import.meta.dir, "../../..");
 const WORK = mkdtempSync(join(tmpdir(), "mainnet-dapp-test-"));
 afterAll(() => rmSync(WORK, { recursive: true, force: true }));
 
-// Public addresses of the rehearsal (the Safe and the four vaults) and stand-ins for the rest.
+// Public addresses of the rehearsal (the Safe and the three vaults) and stand-ins for the rest.
 const SAFE = "0x5E68a40648DD23065b21b1C414e1178ddE6482ca";
 const VAULTS = {
   rmUSDC: "0xde5CCE7CcFc4ce1997bd93eC7bBd7085ce55f574",
   rmPROTO: "0xe5b18d5F0f848802d1a5aD302284334dBdc8AE93",
-  rmAGENT: "0x323dC47ea32A3203f0418dDA0Ae6A8BACD885C7a",
   rmRWA: "0xDA0aebEf18ed702f4584e4E81bD59E29b01fd85f",
 };
 const A = (n: number) => `0x${n.toString(16).padStart(40, "0")}`;
@@ -52,7 +51,6 @@ const ROUTER_HASH = `0x${"cd".repeat(32)}`;
 const VAULT_HASHES: Record<string, string> = {
   rmUSDC: `0x${"01".repeat(32)}`,
   rmPROTO: `0x${"02".repeat(32)}`,
-  rmAGENT: `0x${"03".repeat(32)}`,
   rmRWA: `0x${"04".repeat(32)}`,
 };
 
@@ -211,7 +209,7 @@ describe("the env builder from the manifests", () => {
 describe("refusals on the manifests and the options", () => {
   test("a manifest from another chain, each one", () => {
     const names = [manifestOf("gateway"), manifestOf("registry"), manifestOf("router"), manifestOf("governance"), manifestOf("timelock"), ...Object.values(vaultManifests())];
-    expect(names.length).toBe(9);
+    expect(names.length).toBe(8);
     for (const [i, file] of names.entries()) {
       const dir = fixture(`wrong-chain-${i}`, (d) => void (d[file]!.chain_id = 918453));
       expect(refusal(() => buildMainnetDappEnv(input(dir)))).toBe("wrong-chain");
@@ -236,7 +234,7 @@ describe("refusals on the manifests and the options", () => {
   test("a vault or the router with no recorded code hash, or a handover entry for another vault", () => {
     const tl = (d: Record<string, Json>) => d[manifestOf("timelock")]!;
     const handover = (d: Record<string, Json>) => tl(d).vault_handover as Record<string, Json>;
-    for (const i of [0, 1, 2, 3]) {
+    for (const i of [0, 1, 2]) {
       expect(refusal(() => buildMainnetDappEnv(input(fixture(`vh-missing-${i}`, (d) => void delete handover(d)[`vault_${i}`]!.code_hash))))).toBe("manifest-field");
       expect(refusal(() => buildMainnetDappEnv(input(fixture(`vh-zero-${i}`, (d) => void (handover(d)[`vault_${i}`]!.code_hash = `0x${"0".repeat(64)}`)))))).toBe("manifest-field");
     }
@@ -284,10 +282,10 @@ describe("refusals on the manifests and the options", () => {
     // A basket vault deploy names its implementation `implementation` (BasketVaultDeployBase), DeployVault `vault_implementation`.
     const basket = buildMainnetDappEnv(input(fixture("impl-basket", (d) => {
       proxied(d);
-      d[vaultManifests().rmAGENT!]!.implementation = IMPL;
+      d[vaultManifests().rmRWA!]!.implementation = IMPL;
       handover(d).vault_2!.implementation_code_hash = VAULT_IMPL_HASH;
     })));
-    expect(JSON.parse(basket.VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)).toEqual({ [VAULTS.rmPROTO]: VAULT_IMPL_HASH, [VAULTS.rmAGENT]: VAULT_IMPL_HASH });
+    expect(JSON.parse(basket.VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)).toEqual({ [VAULTS.rmPROTO]: VAULT_IMPL_HASH, [VAULTS.rmRWA]: VAULT_IMPL_HASH });
   });
 
   // Issue 1796 with QA plan U5: a vault the migration overlay (current-vaults.json) moved to a later generation is pinned by
@@ -323,7 +321,7 @@ describe("refusals on the manifests and the options", () => {
         buildMainnetDappEnv(
           input(
             fixture("order", (d) => {
-              (d[manifestOf("timelock")]!.addresses as Json).vaults = [VAULTS.rmPROTO, VAULTS.rmUSDC, VAULTS.rmAGENT, VAULTS.rmRWA];
+              (d[manifestOf("timelock")]!.addresses as Json).vaults = [VAULTS.rmPROTO, VAULTS.rmUSDC, VAULTS.rmRWA];
             }),
           ),
         ),
@@ -346,7 +344,7 @@ describe("refusals on the manifests and the options", () => {
         buildMainnetDappEnv(
           input(
             fixture("three", (d) => {
-              (d[manifestOf("timelock")]!.addresses as Json).vaults = Object.values(VAULTS).slice(0, 3);
+              (d[manifestOf("timelock")]!.addresses as Json).vaults = Object.values(VAULTS).slice(0, 2);
             }),
           ),
         ),

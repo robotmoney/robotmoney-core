@@ -2,7 +2,7 @@
 // A required CI guard: a core suite must RUN tests. `bun test` exits 0 when a file has only skipped tests, and a renamed or deleted file
 // silently drops out of a long list. This runs every file of a suite on its own and fails when the file is missing, when bun exits
 // non-zero, or when fewer than --min tests passed (default 1). A skipped-only file is a zero count and fails here.
-//   bun src/ci/require-tests.ts --suite sheet|chain-id|counts|stages|safe|verify|evidence|parity|gates|systems
+//   bun src/ci/require-tests.ts --suite sheet|chain-id|counts|stages|safe|verify|evidence|parity|gates|systems|retire
 //   bun src/ci/require-tests.ts --min 3 tests/a.test.ts tests/b.test.ts
 // Run from the publish-contracts directory.
 import { existsSync } from "node:fs";
@@ -24,6 +24,8 @@ export const SUITES: Record<string, string[]> = {
   gates: ["tests/plan-gate.test.ts", "tests/release-tag.test.ts", "tests/config-check.test.ts"],
   // issue 1892: the vaults and gateway systems on their own (the gateway run and its refusals before broadcast, both verifiers, the historical combined reading, the gateway evidence)
   systems: ["tests/gateway-system-runner.test.ts", "tests/gateway-sheet.test.ts", "tests/verify/systems.test.ts", "tests/verify/historical.test.ts", "tests/evidence-gateway.test.ts"],
+  // issue 1912, ADR-0017: the retirement of one vault (the govern row, its evidence and the verifier after it) and the executed-test floor of the retire batch
+  retire: ["tests/retire-vault.test.ts", "tests/verify/retirement.test.ts", "tests/agent-pool-floor.test.ts"],
 };
 
 export interface FileResult { file: string; ok: boolean; passed: number; failed: number; skipped: number; reason?: string }

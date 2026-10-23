@@ -14,7 +14,7 @@ import {
 } from "./constants.ts";
 import { manifestBase, scopeTable } from "../stage-table.ts";
 import { verifyGatewaySystem } from "./gateway.ts";
-import { SAFE_MANIFEST, VAULT_ADAPTER_V4_FIELD, V4_ADAPTER_ARTIFACT_KEY, VENUE_V4 } from "../core-wiring.ts";
+import { SAFE_MANIFEST } from "../core-wiring.ts";
 import { isAddress, loadManifests, lc, type ManifestVault } from "./manifests.ts";
 import { padTopic, scanLogs, topicToAddress } from "./logs.ts";
 import { safeChecks } from "./safe-checks.ts";
@@ -92,14 +92,15 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   if (opts.appliedReceipt && redeploys.length) opts = { ...opts, appliedReceipt: { ...opts.appliedReceipt, vaults: opts.appliedReceipt.vaults.map((v) => redeploys.find((r) => lc(r.oldVault) === lc(v))?.newVault ?? v) } };
   const manifestSet = man.vaults.map((v) => lc(v.address));
   // Issue 1796: a vault the registry still lists after a redeploy is the retired one. The label stays the same: the manifests plus the retired vaults equal the registry.
-  const expectedSet = [...manifestSet, ...redeploys.map((r) => lc(r.oldVault))];
+  const retirements = opts.retirements ?? [];
+  const expectedSet = [...manifestSet, ...redeploys.map((r) => lc(r.oldVault)), ...retirements.map((r) => lc(r.vault))];
   await c.run("vault set: manifests equal registry.listVaults", async () => {
     if (!listOk) return { ok: false, detail: "listVaults unreadable" };
     const missingOnChain = expectedSet.filter((a) => !chainVaults.includes(a));
     const missingInManifest = chainVaults.filter((a) => !expectedSet.includes(a));
     const dupes = expectedSet.length !== new Set(expectedSet).size;
     const ok = !missingOnChain.length && !missingInManifest.length && !dupes;
-    return { ok, detail: ok ? `${manifestSet.length} vaults${redeploys.length ? ` and ${redeploys.length} retired` : ""}` : `in manifests only: [${missingOnChain}] on chain only: [${missingInManifest}]${dupes ? " duplicate manifest address" : ""}` };
+    return { ok, detail: ok ? `${manifestSet.length} vaults${redeploys.length + retirements.length ? ` and ${redeploys.length + retirements.length} retired` : ""}` : `in manifests only: [${missingOnChain}] on chain only: [${missingInManifest}]${dupes ? " duplicate manifest address" : ""}` };
   });
   await c.run("vault set: registry vaultCount equals listVaults length", async () =>
     Number(await chain.read(registry, "function vaultCount() view returns (uint256)")) === chainVaults.length);
@@ -113,12 +114,9 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   await c.run("usdc: code hash equals pinned FiatTokenProxy", async () => checkUsdcCode(await chain.getCode(USDC_ADDRESS), opts.usdcCodeHash));
 
   // ---- code present
-  // core 1676: the V4 swap adapter a vault stage deployed (the agent vault manifest names it) is checked like a core contract.
-  const v4Adapters = man.vaults.flatMap((v) => (isAddress(v.data?.[VAULT_ADAPTER_V4_FIELD]) && lc(v.data[VAULT_ADAPTER_V4_FIELD]) !== lc(ZERO) ? [{ vault: v.key, address: v.data[VAULT_ADAPTER_V4_FIELD] as Address }] : []));
   const targets: { name: string; address: Address }[] = [
     ...core.map((x) => ({ name: x.name, address: x.address })),
     ...man.vaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address })),
-    ...v4Adapters.map((a) => ({ name: `adapter[V4:${a.vault}]`, address: a.address })),
   ];
   for (const t of targets) await c.run(`${t.name}: has code`, async () => (await chain.getCode(t.address)).length > 2);
 
@@ -193,7 +191,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   await deployTimeChecks(c, chain, sheet, { router, vaults: man.vaults, receipt: byName.receipt!, applied: opts.appliedReceipt });
 
   // ---- vaults
-  for (const v of man.vaults) await vaultChecks(c, chain, v, sheet.vaults[v.key], { tl, registry, safe, sheet, recorder: byName.recorder!, artifactsDir: opts.artifactsDir, v4AdapterArtifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY], shortlistTokens: readShortlistTokens(opts.coreDir) });
+  for (const v of man.vaults) await vaultChecks(c, chain, v, sheet.vaults[v.key], { tl, registry, safe, sheet, artifactsDir: opts.artifactsDir });
 
   // ---- gateway agents, derived from logs
   const head = await chain.blockNumber().catch(() => undefined);
@@ -267,7 +265,6 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const codeTargets: { label: string; address: Address; artifact: string; dir?: string; implDir?: string; original: boolean }[] = [
     ...core.map((x) => ({ label: x.name, address: x.address, artifact: x.artifact, dir: originalDir, original: true, ...upgradedDir(x.name) })),
     ...man.vaults.map((v) => ({ label: `vault[${v.key}]`, address: v.address, artifact: sheet.vaults[v.key]?.contract ?? v.artifact, dir: redeployed.has(v.key) ? undefined : originalDir, original: !redeployed.has(v.key), ...upgradedDir(`vault[${v.key}]`) })),
-    ...v4Adapters.map((a) => ({ label: `adapter[V4:${a.vault}]`, address: a.address, artifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY]!, dir: redeployed.has(a.vault) ? undefined : originalDir, original: !redeployed.has(a.vault) })),
     ...libNames.map((n) => ({ label: `library[${n}]`, address: man.libraries[n], artifact: man.libraryArtifacts[n]!, dir: originalDir, original: true })),
   ];
   for (const t of codeTargets) {
@@ -282,6 +279,8 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const upgradeability = await upgradeabilityChecks(c, chain, table, { sheet, timelock: tl, artifactsDir: opts.artifactsDir, proxyBuildDirs: opts.proxyBuildDirs, coreDir: opts.coreDir, data: manifestDataOf(table, man.files, man.vaults), now: opts.now, ...(head !== undefined ? { scan: { fromBlock: opts.fromBlock, head, chunk, retryBaseMs } } : {}) });
 
   // ---- single-vault redeploys (issue 1796): only when the run has one, so a run without one keeps the label set of every other deployment
+  // ---- retired vaults (issue 1912): only when the run has one, so a run without one keeps the label set of every other deployment
+  for (const r of retirements) await retirementChecks(c, chain, r.vault, { registry, router: byName.router!, vaultCount: man.vaults.length });
   for (const r of redeploys) await redeployChecks(c, chain, r, { registry, router: byName.router!, tl, emergency: sheet.emergency, vaults: man.vaults, priorDir, artifactsDir: opts.artifactsDir, artifact: man.vaults.find((v) => v.key === r.vault)?.artifact });
 
   // ---- deployer nonce equals the sum of the frozen counts
@@ -421,7 +420,7 @@ export function votingSelectorsIn(code: Hex): string[] {
 
 async function vaultChecks(
   c: Collector, chain: ChainReader, v: ManifestVault, vs: VaultSheet | undefined,
-  ctx: { tl: Address; registry: Address; safe: Address; sheet: VerifyOptions["sheet"]; recorder: Address; artifactsDir: string; v4AdapterArtifact?: string; shortlistTokens?: string[] },
+  ctx: { tl: Address; registry: Address; safe: Address; sheet: VerifyOptions["sheet"]; artifactsDir: string },
 ): Promise<void> {
   const p = `vault[${v.key}]`;
   const { tl, registry, safe, sheet } = ctx;
@@ -469,18 +468,7 @@ async function vaultChecks(
     await c.run(`${p}: asset config equals sheet`, async () => assetReadBack(chain, a, vs.assets));
     await basketGuardChecks(c, chain, a, p, vs);
     await unwindGuardCheck(c, chain, a, p, vs);
-    // The sheet's expected assets come from config/agent-token-shortlist.json at the DEPLOY_SHA. This ties the asset list the chain was checked against to the shortlist read
-    // from the core checkout, whatever its symbol (RM, or BNKR the test asset while RM is parked, ADR-0016). The pins by symbol are enforced by core's config-check.
-    if (v.kind === "agent") await c.run(`${p}: lists exactly the shortlist asset of the config`, async () => {
-      const cfg = ctx.shortlistTokens;
-      if (cfg === undefined) return { ok: false, detail: "config/agent-token-shortlist.json is not readable from the core checkout, so the asset list cannot be tied to it" };
-      const want = cfg.map(lc).sort(), got = vs.assets.map((a) => lc(a.token)).sort();
-      return { ok: want.length === got.length && want.every((t, i) => t === got[i]), detail: `sheet lists [${got.join(", ")}], the config shortlist lists [${want.join(", ")}]` };
-    });
-    // core 1676: every UniswapV4 asset is wired to the permissionless price recorder, the V4 adapter and the configured PoolKey.
-    for (const asset of vs.assets.filter((x) => x.venue === VENUE_V4)) await v4AssetChecks(c, chain, v, asset, ctx);
     // core 1695, issue 1705 C4: the swap bound is read back from every basket and compared with the config (its maxSlippageBps, else the vault default).
-    // rmAGENT's config raises it to 500 because the V4 pool fee alone is 291 bps.
     await c.run(`${p}: ${SLIPPAGE_LABEL}`, async () => {
       if (vs.maxSlippageBps === undefined) return { ok: false, detail: "the sheet has no expected maxSlippageBps for this vault" };
       const got = BigInt((await chain.read(a, "function maxSlippageBps() view returns (uint256)")) as bigint);
@@ -657,119 +645,6 @@ async function vaultScanChecks(
     const gotHashes = await allowed(SIG_CODEHASH_ALLOWED, "adapterCodeHashAllowed");
     if (gotHashes.join(",") !== wantHashes.join(",")) problems.push(`allowed code hashes [${gotHashes.join(", ")}], deployed adapters [${wantHashes.join(", ")}]`);
     return { ok: problems.length === 0, detail: problems.length ? problems.join("; ") : `${want.length} adapters, caps and allowlists equal the deploy script` };
-  });
-}
-
-/** The labels v4AssetChecks pushes. A vault whose sheet lists a V4 asset must pass every one. */
-const V4_LABELS = [
-  "asset row is venue V4 with the price recorder as its pool",
-  "V4 adapter codehash is allowed",
-  "V4 adapter is bound to the recorder, the PoolManager and the pool key",
-] as const;
-/**
- * Core 1793 (QA plan D5): the live ring the recorder must hold. The USDC sell anchor reads the recorder over `BasketViews.SELL_ANCHOR_WINDOW`
- * (14,400 s). At one `record()` per 2 s block the ring keeps that window only with 14,400 / 2 + 1 = 7,201 slots
- * (`DeployUniswapV4PriceRecorder.RING_SLOTS`). A 901-slot ring (the 1800 s NAV floor, Deploy 2's recorder) lets a spammer evict the anchor's
- * history down to about 1,800 s, so the anchor gives no protection. The live `observationCardinality` is read, not `cardinalityNext`: a ring
- * grown with `grow(7201)` stays at its old size until its index wraps.
- */
-export const RECORDER_RING_SLOTS = 7_201;
-
-const RECORDER_LABELS = [
-  "recorder: PoolKey and PoolManager equal config",
-  "recorder: observation ring holds the full window floor",
-  "recorder: has no owner, role or setter",
-] as const;
-
-/** Function selectors that would make the recorder administrable. None may be in its runtime code (it has no owner, role or setter). */
-const ADMIN_SELECTORS = [
-  "owner()", "admin()", "pendingOwner()", "transferOwnership(address)", "renounceOwnership()", "acceptOwnership()", "hasRole(bytes32,address)",
-  "grantRole(bytes32,address)", "revokeRole(bytes32,address)", "renounceRole(bytes32,address)", "DEFAULT_ADMIN_ROLE()", "ADMIN_ROLE()",
-  "setPoolManager(address)", "setMaxStaleness(uint32)", "setTick(int24)", "upgradeTo(address)", "upgradeToAndCall(address,bytes)", "setImplementation(address)",
-].map((sig) => toFunctionSelector(`function ${sig}`).slice(2).toLowerCase());
-
-/**
- * Core 1676 (owner decision 2026-10-08). The rmAGENT asset is a Uniswap V4 pool. Its vault pool is the price recorder, its adapter the V4 swap
- * adapter. Read from the chain and compared with core's config (never with the chain itself): the asset row's venue and pool, the adapter's
- * codehash on the vault allowlist, the adapter's immutable binding, the recorder's PoolKey (and that the key hashes to the configured pool id),
- * the recorder's ring size, and the absence of any admin selector in the recorder's runtime code (the negative invariant).
- */
-async function v4AssetChecks(
-  c: Collector, chain: ChainReader, v: ManifestVault, asset: ExpectedAsset,
-  ctx: { recorder: Address; artifactsDir: string; v4AdapterArtifact?: string },
-): Promise<void> {
-  const p = `vault[${v.key}]`;
-  const x = asset.v4;
-  const rec = asset.pool; // the recorder the asset must be registered with
-  await c.run(`${p}: ${V4_LABELS[0]}`, async () => {
-    if (!x) return { ok: false, detail: "the expected asset has no V4 config" };
-    let row: any;
-    for (let i = 0; i < 64; i++) {
-      let r: any;
-      try { r = await chain.read(v.address, ASSET_SIG, [BigInt(i)]); } catch { break; }
-      const t = Array.isArray(r) ? r : [r.token, r.pool, r.swapFee, r.active, r.adapter, r.venue];
-      if (lc(t[0]) === lc(asset.token)) row = t;
-    }
-    if (!row) return { ok: false, detail: `no asset row for ${asset.token}` };
-    const ok = Number(row[5]) === VENUE_V4 && lc(row[1]) === lc(rec) && lc(rec) === lc(ctx.recorder) && Number(row[2]) === x.key.fee;
-    return { ok, detail: `venue ${row[5]}, pool ${row[1]}, swapFee ${row[2]}; recorder ${ctx.recorder}, fee in config ${x.key.fee}` };
-  });
-  await c.run(`${p}: ${V4_LABELS[1]}`, async () => {
-    const code = await chain.getCode(asset.adapter);
-    if (code.length <= 2) return { ok: false, detail: `no code at the adapter ${asset.adapter}` };
-    const allowed = (await chain.read(v.address, "function adapterCodeHashAllowed(bytes32) view returns (bool)", [keccak256(code)])) as boolean;
-    return { ok: allowed === true, detail: `adapterCodeHashAllowed(${keccak256(code)}) ${String(allowed)}` };
-  });
-  await c.run(`${p}: ${V4_LABELS[2]}`, async () => {
-    if (!x) return { ok: false, detail: "the expected asset has no V4 config" };
-    const a = asset.adapter;
-    const got = {
-      pm: lc((await chain.read(a, "function POOL_MANAGER() view returns (address)")) as string),
-      recorder: lc((await chain.read(a, "function RECORDER() view returns (address)")) as string),
-      id: String(await chain.read(a, "function POOL_ID() view returns (bytes32)")).toLowerCase(),
-      c0: lc((await chain.read(a, "function CURRENCY0() view returns (address)")) as string),
-      c1: lc((await chain.read(a, "function CURRENCY1() view returns (address)")) as string),
-      fee: Number(await chain.read(a, "function POOL_FEE() view returns (uint24)")),
-      spacing: Number(await chain.read(a, "function TICK_SPACING() view returns (int24)")),
-    };
-    const ok = got.pm === lc(x.poolManager) && got.recorder === lc(rec) && got.id === x.poolId.toLowerCase() && got.c0 === lc(x.key.currency0) && got.c1 === lc(x.key.currency1) && got.fee === x.key.fee && got.spacing === x.key.tickSpacing;
-    return { ok, detail: ok ? `bound to recorder ${rec}` : `adapter reads ${JSON.stringify(got)}, config says PoolManager ${x.poolManager} recorder ${rec} poolId ${x.poolId} key ${JSON.stringify(x.key)}` };
-  });
-  await c.run(RECORDER_LABELS[0], async () => {
-    if (!x) return { ok: false, detail: "the expected asset has no V4 config" };
-    const r = ctx.recorder;
-    const got = {
-      pm: lc((await chain.read(r, "function POOL_MANAGER() view returns (address)")) as string),
-      id: String(await chain.read(r, "function POOL_ID() view returns (bytes32)")).toLowerCase(),
-      c0: lc((await chain.read(r, "function token0() view returns (address)")) as string),
-      c1: lc((await chain.read(r, "function token1() view returns (address)")) as string),
-      fee: Number(await chain.read(r, "function fee() view returns (uint24)")),
-      spacing: Number(await chain.read(r, "function tickSpacing() view returns (int24)")),
-      hooks: lc((await chain.read(r, "function hooks() view returns (address)")) as string),
-    };
-    // the configured key must hash to the configured pool id (abi.encode of the five fields), and the recorder must read that very pool
-    const hash = keccak256(encodeAbiParameters(
-      [{ type: "address" }, { type: "address" }, { type: "uint24" }, { type: "int24" }, { type: "address" }],
-      [x.key.currency0, x.key.currency1, x.key.fee, x.key.tickSpacing, x.key.hooks]));
-    const ok = got.pm === lc(x.poolManager) && got.id === x.poolId.toLowerCase() && hash.toLowerCase() === x.poolId.toLowerCase() && got.c0 === lc(x.key.currency0) && got.c1 === lc(x.key.currency1)
-      && got.fee === x.key.fee && got.spacing === x.key.tickSpacing && got.hooks === lc(x.key.hooks);
-    return { ok, detail: ok ? `pool id ${x.poolId}` : `recorder reads ${JSON.stringify(got)}, hash of the config key ${hash}, config says ${JSON.stringify({ pm: x.poolManager, id: x.poolId, key: x.key })}` };
-  });
-  await c.run(RECORDER_LABELS[1], async () => {
-    const [, , , cardinality] = (await chain.read(ctx.recorder, "function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality)")) as readonly [bigint, number, number, number];
-    const ok = Number(cardinality) >= RECORDER_RING_SLOTS;
-    return {
-      ok,
-      detail: ok
-        ? `observationCardinality ${cardinality}, the 14,400 s sell anchor window needs ${RECORDER_RING_SLOTS}`
-        : `observationCardinality ${cardinality}, the 14,400 s sell anchor window needs ${RECORDER_RING_SLOTS} (core 1793): a spammer can evict the anchor's history from a smaller ring. Call grow(${RECORDER_RING_SLOTS}) and record until the index wraps, or deploy a new recorder`,
-    };
-  });
-  await c.run(RECORDER_LABELS[2], async () => {
-    const code = (await chain.getCode(ctx.recorder)).slice(2).toLowerCase();
-    if (code.length === 0) return { ok: false, detail: `no code at the recorder ${ctx.recorder}` };
-    const found = ADMIN_SELECTORS.filter((sel) => code.includes(sel));
-    return { ok: found.length === 0, detail: found.length ? `the runtime code carries admin selector(s) ${found.join(", ")}` : `none of ${ADMIN_SELECTORS.length} admin selectors in ${code.length / 2} bytes of runtime code` };
   });
 }
 
@@ -1007,6 +882,25 @@ async function roleScan(c: Collector, chain: ChainReader, deployer: Address, gov
 }
 
 /**
+ * Issue 1912, ADR-0017: one vault the Safe retired with `govern --row retire-vault`. It is withdraw-only (ADR-0009): Retired in the registry, out of the router-eligible set, its own deposits halted by the
+ * registry retire, still holding its code (its holders redeem), and absent from the router's default and effective vectors, which keep one leg per remaining vault.
+ */
+async function retirementChecks(c: Collector, chain: ChainReader, vault: Address, ctx: { registry: Address; router: Address; vaultCount: number }): Promise<void> {
+  const p = `retired[${vault}]`;
+  await c.run(`${p}: has code`, async () => (await chain.getCode(vault)).length > 2);
+  await c.runEq(`${p}: registry status is Retired`, async () => Number(((await chain.read(ctx.registry, "function getVault(address vault) view returns ((string name, address asset, uint256 registeredAt) metadata, uint8 status)", [vault])) as [unknown, number])[1]), 2);
+  await c.runEq(`${p}: not router-eligible`, () => chain.read(ctx.registry, "function isRouterEligible(address vault) view returns (bool)", [vault]), false);
+  await c.runEq(`${p}: deposits halted by the registry retire`, () => chain.read(vault, "function retired() view returns (bool)"), true);
+  await c.run(`${p}: the router's default and effective vectors hold one leg per remaining vault and not this one`, async () => {
+    const [dv, db] = (await chain.read(ctx.router, "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
+    const [ev, eb] = (await chain.read(ctx.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
+    const same = dv.length === ev.length && dv.every((a, i) => lc(a) === lc(ev[i]!) && db[i] === eb[i]);
+    const ok = same && dv.length === ctx.vaultCount && new Set(dv.map(lc)).size === dv.length && !dv.some((a) => lc(a) === lc(vault)) && db.reduce((t, x) => t + x, 0n) === 10000n;
+    return { ok, detail: `default [${dv.join(", ")}] effective [${ev.join(", ")}]` };
+  });
+}
+
+/**
  * Issue 1796: one single-vault redeploy, after its govern row executed. The vault the registry still lists is RETIRED: withdraw-only, out of the router, still holding its code (the
  * shares of its holders redeem through `redeem`, `withdraw` and `redeemInKind`). The vault that replaced it is the one the vault manifest names (every other label already checks it) and it is Active
  * in the registry. The router's effective weights hold the new vault and not the old one.
@@ -1046,27 +940,17 @@ async function redeployChecks(
   if (r.routerVaultCap !== undefined) await c.runEq(`${q}: router per-address cap equals approved old cap`, () => chain.read(ctx.router, "function vaultCap(address vault) view returns (uint256)", [r.newVault]), BigInt(r.routerVaultCap));
   await c.runEq(`${q}: replacing vault registry status is Active`, () => status(r.newVault), 0);
   await c.runEq(`${q}: no voted vector is active`, () => chain.read(ctx.router, "function votedWeightsActive() view returns (bool)"), false);
-  await c.run(`${q}: default and effective vectors are the same unique four legs`, async () => {
+  await c.run(`${q}: default and effective vectors are the same unique three legs`, async () => {
     const [dv, db] = (await chain.read(ctx.router, "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
     const [ev, eb] = (await chain.read(ctx.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
     const same = dv.length === ev.length && dv.every((a, i) => lc(a) === lc(ev[i]!) && db[i] === eb[i]);
-    const ok = same && new Set(dv.map(lc)).size === dv.length && dv.length === 4 && db.reduce((t, x) => t + x, 0n) === 10000n;
+    const ok = same && new Set(dv.map(lc)).size === dv.length && dv.length === ctx.vaults.length && db.reduce((t, x) => t + x, 0n) === 10000n;
     return { ok, detail: `default [${dv.join(", ")}] effective [${ev.join(", ")}]` };
   });
   await c.run(`${q}: router effective weights hold the replacing vault and not the retired one`, async () => {
     const [vs] = (await chain.read(ctx.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
-    const ok = vs.length === 4 && new Set(vs.map(lc)).size === 4 && vs.filter((v) => lc(v) === lc(r.newVault)).length === 1 && !vs.some((v) => lc(v) === lc(r.oldVault));
+    const ok = vs.length === ctx.vaults.length && new Set(vs.map(lc)).size === ctx.vaults.length && vs.filter((v) => lc(v) === lc(r.newVault)).length === 1 && !vs.some((v) => lc(v) === lc(r.oldVault));
     return { ok, detail: `[${vs.join(", ")}]` };
   });
 }
 
-/** The tokens of `shortlist` in config/agent-token-shortlist.json of the core checkout, or undefined when the file is absent or unreadable. */
-export function readShortlistTokens(coreDir: string | undefined): string[] | undefined {
-  if (!coreDir) return undefined;
-  try {
-    const j = JSON.parse(readFileSync(join(coreDir, "config", "agent-token-shortlist.json"), "utf8")) as { shortlist?: { token?: string }[] };
-    return (j.shortlist ?? []).map((e) => String(e.token));
-  } catch {
-    return undefined;
-  }
-}

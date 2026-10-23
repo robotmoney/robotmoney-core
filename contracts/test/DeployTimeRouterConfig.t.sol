@@ -7,7 +7,6 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
-import {DeployAgentTokenVault} from "../script/DeployAgentTokenVault.s.sol";
 import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
@@ -30,7 +29,6 @@ contract DeployTimeEligibilityTest is BasketDeployFixture {
     EligibilityHarness internal h;
     PortfolioRouter internal router;
     address internal protoVault;
-    address internal agentVault;
     address internal rwaVault;
 
     function setUp() public {
@@ -40,13 +38,6 @@ contract DeployTimeEligibilityTest is BasketDeployFixture {
         string memory empty =
             string.concat('{"swapRouter02":"', vm.toString(router02), '","assets":[]}');
         protoVault = new DeployProtocolAssetVault().runInProcess(_params(), empty).vault;
-        agentVault =
-        new DeployAgentTokenVault()
-        .runInProcess(
-            _params(),
-            string.concat('{"swapRouter02":"', vm.toString(router02), '","shortlist":[]}')
-        )
-        .vault;
         rwaVault = new DeployRwaBasketVault().runInProcess(_params(), empty).vault;
         vm.startPrank(deployer);
         registry.setRouter(address(router));
@@ -60,33 +51,33 @@ contract DeployTimeEligibilityTest is BasketDeployFixture {
         v[1] = b;
     }
 
-    function _three(uint256 a, uint256 b, uint256 c) internal pure returns (uint256[] memory v) {
-        v = new uint256[](3);
-        v[0] = a;
-        v[1] = b;
-        v[2] = c;
-    }
-
     function test_eachFlipSetsTheDefaultVectorAndAZeroWeightIsAccepted() public {
+        // ADR-0017: the stages make rmPROTO and rmRWA eligible (rmUSDC is eligible from the router stage), so the vector grows 1, 2 legs here
         uint256[] memory one = new uint256[](1);
         one[0] = 10_000;
         h.makeEligible(registry, protoVault, one);
         assertTrue(registry.isRouterEligible(protoVault));
         assertEq(router.defaultWeightsLength(), 1);
 
-        h.makeEligible(registry, agentVault, _two(9500, 500));
-        assertTrue(registry.isRouterEligible(agentVault));
-
-        h.makeEligible(registry, rwaVault, _three(9500, 500, 0));
+        h.makeEligible(registry, rwaVault, _two(9500, 500));
         assertTrue(registry.isRouterEligible(rwaVault));
-        assertEq(registry.routerEligibleCount(), 3);
+        assertEq(registry.routerEligibleCount(), 2);
         (address[] memory vaults, uint256[] memory bps) = router.getDefaultWeights();
-        assertEq(vaults.length, 3);
+        assertEq(vaults.length, 2);
         assertEq(vaults[0], protoVault);
-        assertEq(vaults[2], rwaVault);
+        assertEq(vaults[1], rwaVault);
         assertEq(bps[0], 9500);
         assertEq(bps[1], 500);
-        assertEq(bps[2], 0);
+    }
+
+    function test_theLaunchVectorWithAZeroWeightLegIsAccepted() public {
+        uint256[] memory one = new uint256[](1);
+        one[0] = 10_000;
+        h.makeEligible(registry, protoVault, one);
+        h.makeEligible(registry, rwaVault, _two(10_000, 0));
+        (, uint256[] memory bps) = router.getDefaultWeights();
+        assertEq(bps[0], 10_000);
+        assertEq(bps[1], 0, "a zero weight is accepted");
     }
 
     function test_noneLeavesTheBasketIneligible() public {

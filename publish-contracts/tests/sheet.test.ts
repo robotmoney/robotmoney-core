@@ -47,9 +47,9 @@ describe("whitelist parser", () => {
 
   test("the Twin stage sheet carries the 8453 launch router values: governance isomorphism section 1.1 lets only chain, keys, custody and delay differ (core 1708)", () => {
     const s = parseSheet(readFileSync(join(REPO, "deployments", "twin-918453", "stage-sheet.env"), "utf8"));
-    expect(s.eligibleVaults).toEqual(["PROTO", "AGENT", "RWA"]);
-    expect(s.weights).toEqual([{ key: "USDC", bps: 9500 }, { key: "PROTO", bps: 500 }, { key: "AGENT", bps: 0 }, { key: "RWA", bps: 0 }]);
-    expect(eligibilityBps(s, "AGENT")).toEqual([9500, 500, 0]);
+    expect(s.eligibleVaults).toEqual(["PROTO", "RWA"]);
+    expect(s.weights).toEqual([{ key: "USDC", bps: 9500 }, { key: "PROTO", bps: 500 }, { key: "RWA", bps: 0 }]);
+    expect(eligibilityBps(s, "RWA")).toEqual([9500, 500, 0]);
   });
 
   // Issue 1705 rule b (Q4 (a)): eligibility, the router vector and the unpause set are not among the differences governance isomorphism section 1.1
@@ -119,7 +119,7 @@ describe("whitelist parser", () => {
     }
   });
 
-  test("the four vaults have per-vault names that resolve", () => {
+  test("the three vaults have per-vault names that resolve", () => {
     const s = parseSheet(exampleText());
     for (const k of VAULT_KEYS) {
       for (const n of vaultSheetNames(k)) expect(n).toMatch(new RegExp(`^VAULT_${k}_`));
@@ -129,7 +129,7 @@ describe("whitelist parser", () => {
 
   test("issue 1666: every basket carries a nonzero NAV deviation guard of at most 2000 bps and a pool liquidity floor above zero", () => {
     const ok = parseSheet(exampleText());
-    for (const k of ["PROTO", "AGENT", "RWA"] as const) {
+    for (const k of ["PROTO", "RWA"] as const) {
       expect(ok.vaults[k].navDeviationBps!).toBeGreaterThan(0n);
       expect(ok.vaults[k].navDeviationBps!).toBeLessThanOrEqual(2000n);
       expect(ok.vaults[k].minPoolLiquidity!).toBeGreaterThan(0n);
@@ -137,8 +137,8 @@ describe("whitelist parser", () => {
     expect(ok.vaults.USDC.navDeviationBps).toBeUndefined();
     expect(ok.vaults.USDC.minPoolLiquidity).toBeUndefined();
     // missing
-    expect(refused(sheetText({ VAULT_AGENT_NAV_DEVIATION_BPS: null })).message).toContain("VAULT_AGENT_NAV_DEVIATION_BPS");
-    expect(refused(sheetText({ VAULT_AGENT_MIN_POOL_LIQUIDITY: null })).message).toContain("VAULT_AGENT_MIN_POOL_LIQUIDITY");
+    expect(refused(sheetText({ VAULT_PROTO_NAV_DEVIATION_BPS: null })).message).toContain("VAULT_PROTO_NAV_DEVIATION_BPS");
+    expect(refused(sheetText({ VAULT_PROTO_MIN_POOL_LIQUIDITY: null })).message).toContain("VAULT_PROTO_MIN_POOL_LIQUIDITY");
     // zero disables ORA-4
     expect(refused(sheetText({ VAULT_PROTO_NAV_DEVIATION_BPS: "0" })).message).toContain("VAULT_PROTO_NAV_DEVIATION_BPS must be above 0");
     // above the vault ceiling, and the edge
@@ -149,9 +149,9 @@ describe("whitelist parser", () => {
     expect(refused(sheetText({ VAULT_RWA_NAV_DEVIATION_BPS: "5%" })).message).toContain("VAULT_RWA_NAV_DEVIATION_BPS");
     expect(refused(sheetText({ VAULT_RWA_NAV_DEVIATION_BPS: "1.5" })).message).toContain("VAULT_RWA_NAV_DEVIATION_BPS");
     // floor: zero and above uint128
-    expect(refused(sheetText({ VAULT_AGENT_MIN_POOL_LIQUIDITY: "0" })).message).toContain("VAULT_AGENT_MIN_POOL_LIQUIDITY must be above 0");
-    expect(refused(sheetText({ VAULT_AGENT_MIN_POOL_LIQUIDITY: (2n ** 128n).toString() })).message).toContain("exceeds uint128");
-    expect(parseSheet(sheetText({ VAULT_AGENT_MIN_POOL_LIQUIDITY: (2n ** 128n - 1n).toString() })).vaults.AGENT.minPoolLiquidity).toBe(2n ** 128n - 1n);
+    expect(refused(sheetText({ VAULT_PROTO_MIN_POOL_LIQUIDITY: "0" })).message).toContain("VAULT_PROTO_MIN_POOL_LIQUIDITY must be above 0");
+    expect(refused(sheetText({ VAULT_PROTO_MIN_POOL_LIQUIDITY: (2n ** 128n).toString() })).message).toContain("exceeds uint128");
+    expect(parseSheet(sheetText({ VAULT_PROTO_MIN_POOL_LIQUIDITY: (2n ** 128n - 1n).toString() })).vaults.PROTO.minPoolLiquidity).toBe(2n ** 128n - 1n);
   });
 
   test("issue 1666: rmUSDC has no NAV deviation guard and no pool: the USDC names and the unprefixed names are refused", () => {
@@ -159,7 +159,7 @@ describe("whitelist parser", () => {
     expect(refused(sheetText({}, ["VAULT_USDC_MIN_POOL_LIQUIDITY=1000"])).message).toContain("VAULT_USDC_MIN_POOL_LIQUIDITY is refused");
     expect(refused(sheetText({}, ["VAULT_NAV_DEVIATION_BPS=100"])).message).toContain("refused");
     expect(REQUIRED_NAMES).not.toContain("VAULT_USDC_NAV_DEVIATION_BPS");
-    expect(REQUIRED_NAMES).toContain("VAULT_AGENT_NAV_DEVIATION_BPS");
+    expect(REQUIRED_NAMES).toContain("VAULT_PROTO_NAV_DEVIATION_BPS");
     expect(REQUIRED_NAMES).toContain("VAULT_RWA_MIN_POOL_LIQUIDITY");
   });
 
@@ -211,37 +211,37 @@ describe("govern carries the four vault unpauses only; the rest is deploy-time c
     const ok = parseSheet(sheetText({ GOVERN_UNPAUSE_VAULTS: "PROTO", GOVERN_NEW_DELAY: "3600" }));
     expect(ok.govern.unpauseVaults).toEqual(["PROTO"]);
   });
-  test("on 8453 a GOVERN_UNPAUSE_VAULTS that lacks USDC, PROTO, AGENT or RWA is refused with a named error; Twin allows it", () => {
-    const main = (list: string) => sheetText({ CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0", GOVERN_UNPAUSE_VAULTS: list });
-    for (const list of ["PROTO,AGENT,RWA", "USDC,AGENT,RWA", "USDC,PROTO,RWA", "USDC,PROTO,AGENT", "USDC", "none"]) {
+  test("on 8453 a GOVERN_UNPAUSE_VAULTS that lacks USDC, PROTO or RWA is refused with a named error; Twin allows it", () => {
+    const main = (list: string) => sheetText({ CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,RWA:0", GOVERN_UNPAUSE_VAULTS: list });
+    for (const list of ["PROTO,RWA", "USDC,RWA", "USDC,PROTO", "USDC", "none"]) {
       const e = refused(main(list));
       expect(e.message, list).toContain("no stage 13 step may be skipped");
       expect(e.message).toContain("GOVERN_UNPAUSE_VAULTS");
     }
-    expect(parseSheet(main("USDC,PROTO,AGENT,RWA")).govern.unpauseVaults).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
-    expect(parseSheet(main("RWA,AGENT,PROTO,USDC")).govern.unpauseVaults).toEqual(["RWA", "AGENT", "PROTO", "USDC"]);
+    expect(parseSheet(main("USDC,PROTO,RWA")).govern.unpauseVaults).toEqual(["USDC", "PROTO", "RWA"]);
+    expect(parseSheet(main("RWA,PROTO,USDC")).govern.unpauseVaults).toEqual(["RWA", "PROTO", "USDC"]);
     expect(parseSheet(sheetText({ GOVERN_UNPAUSE_VAULTS: "PROTO,RWA" })).govern.unpauseVaults).toEqual(["PROTO", "RWA"]);
   });
   test("on 8453 ROUTER_WEIGHTS must be the launch vector, with a named error; Twin keeps its own weights", () => {
-    const main = (w: string) => sheetText({ CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA", ROUTER_WEIGHTS: w });
-    const ok = parseSheet(main("USDC:9500,PROTO:500,AGENT:0,RWA:0"));
-    expect(ok.weights.map((x) => x.bps)).toEqual([9500, 500, 0, 0]);
-    expect(parseSheet(main("RWA:0,AGENT:0,PROTO:500,USDC:9500")).weights.length).toBe(4);
-    for (const w of ["USDC:8500,PROTO:500,AGENT:500,RWA:500", "USDC:9000,PROTO:1000,AGENT:0,RWA:0", "USDC:9500,PROTO:0,AGENT:500,RWA:0"]) {
+    const main = (w: string) => sheetText({ CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", ELIGIBLE_VAULTS: "PROTO,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,RWA", ROUTER_WEIGHTS: w });
+    const ok = parseSheet(main("USDC:9500,PROTO:500,RWA:0"));
+    expect(ok.weights.map((x) => x.bps)).toEqual([9500, 500, 0]);
+    expect(parseSheet(main("RWA:0,PROTO:500,USDC:9500")).weights.length).toBe(3);
+    for (const w of ["USDC:8500,PROTO:500,RWA:1000", "USDC:9000,PROTO:1000,RWA:0", "USDC:9500,PROTO:0,RWA:500"]) {
       const e = refused(main(w));
       expect(e.message, w).toContain("launch vector");
       expect(e.message).toContain("ROUTER_WEIGHTS");
     }
-    // a vault left out of the vector is refused too (the vector must name all four)
-    const short = refused(sheetText({ CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", ELIGIBLE_VAULTS: "PROTO", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500" }));
+    // a vault left out of the vector is refused too (the vector must name all three)
+    const short = refused(sheetText({ CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", ELIGIBLE_VAULTS: "PROTO", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500" }));
     expect(short.message).toContain("launch vector");
     expect(parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:6000,PROTO:2500,RWA:1500" })).weights.length).toBe(3);
   });
   test("the govern block holds the unpauses and the Twin-only delay and nothing else; eligibility and weights are deploy-time fields", () => {
     const s = parseSheet(exampleText());
     expect(Object.keys(s.govern).sort()).toEqual(["newDelay", "unpauseVaults"]);
-    expect(s.eligibleVaults).toEqual(["PROTO", "AGENT", "RWA"]);
-    expect(s.weights).toEqual([{ key: "USDC", bps: 9500 }, { key: "PROTO", bps: 500 }, { key: "AGENT", bps: 0 }, { key: "RWA", bps: 0 }]);
+    expect(s.eligibleVaults).toEqual(["PROTO", "RWA"]);
+    expect(s.weights).toEqual([{ key: "USDC", bps: 9500 }, { key: "PROTO", bps: 500 }, { key: "RWA", bps: 0 }]);
     expect(s.values.GOVERN_ELIGIBLE_VAULTS).toBeUndefined();
   });
   test("ELIGIBLE_VAULTS is required, lists baskets only, and has no repeat", () => {
@@ -251,24 +251,24 @@ describe("govern carries the four vault unpauses only; the rest is deploy-time c
     expect(REQUIRED_NAMES).toContain("ELIGIBLE_VAULTS");
     expect(REQUIRED_NAMES).not.toContain("GOVERN_ELIGIBLE_VAULTS");
   });
-  test("the launch weights (rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps) are a valid sheet", () => {
-    const s = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0" }));
-    expect(s.weights.map((w) => w.bps)).toEqual([9500, 500, 0, 0]);
+  test("the launch weights (rmUSDC 9500, rmPROTO 500, rmRWA 0 bps) are a valid sheet", () => {
+    const s = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,RWA:0" }));
+    expect(s.weights.map((w) => w.bps)).toEqual([9500, 500, 0]);
   });
   test("eligibilityBps: the last eligible basket leaves exactly the sheet weights, earlier flips are scaled to 10000, an ineligible basket has none", () => {
     const s = parseSheet(exampleText());
-    expect(eligibleInOrder(s)).toEqual(["PROTO", "AGENT", "RWA"]);
+    expect(eligibleInOrder(s)).toEqual(["PROTO", "RWA"]);
     expect(eligibilityBps(s, "PROTO")).toEqual([9500, 500]);
-    expect(eligibilityBps(s, "RWA")).toEqual([9500, 500, 0, 0]);
-    const noAgent = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:6000,PROTO:2500,RWA:1500" }));
-    expect(eligibilityBps(noAgent, "PROTO")).toEqual([7059, 2941]);
-    expect(eligibilityBps(noAgent, "RWA")).toEqual([6000, 2500, 1500]);
-    expect(eligibilityBps(noAgent, "AGENT")).toBeUndefined();
-    const launch = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0" }));
+    expect(eligibilityBps(s, "RWA")).toEqual([9500, 500, 0]);
+    const both = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:6000,PROTO:2500,RWA:1500" }));
+    expect(eligibilityBps(both, "PROTO")).toEqual([7059, 2941]);
+    expect(eligibilityBps(both, "RWA")).toEqual([6000, 2500, 1500]);
+    const protoOnly = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO", ROUTER_WEIGHTS: "USDC:9500,PROTO:500" }));
+    expect(eligibilityBps(protoOnly, "RWA")).toBeUndefined();
+    const launch = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,RWA:0" }));
     expect(eligibilityBps(launch, "PROTO")).toEqual([9500, 500]);
-    expect(eligibilityBps(launch, "AGENT")).toEqual([9500, 500, 0]);
-    expect(eligibilityBps(launch, "RWA")).toEqual([9500, 500, 0, 0]);
-    for (const k of ["PROTO", "AGENT", "RWA"] as const) expect(eligibilityBps(launch, k)!.reduce((a, b) => a + b, 0)).toBe(10000);
+    expect(eligibilityBps(launch, "RWA")).toEqual([9500, 500, 0]);
+    for (const k of ["PROTO", "RWA"] as const) expect(eligibilityBps(launch, k)!.reduce((a, b) => a + b, 0)).toBe(10000);
     // all-zero weights before the last flip fall back to an equal split that still sums to 10000
     const zero = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:10000,PROTO:0,RWA:0" }));
     expect(eligibilityBps(zero, "PROTO")).toEqual([10000, 0]);
@@ -305,16 +305,16 @@ describe("rule b twin sheet", () => {
     const stage13 = (table.vaults as { key: string; unpauseInStage13: boolean }[]).filter((v) => v.unpauseInStage13).map((v) => v.key);
     expect(twin.GOVERN_UNPAUSE_VAULTS!.split(",")).toEqual(stage13);
   });
-  test("the Twin sheet parses with the launch vector and the four unpauses", () => {
+  test("the Twin sheet parses with the launch vector and the three unpauses", () => {
     const s = parseSheet(readFileSync(join(REPO, "deployments/twin-918453/stage-sheet.env"), "utf8"));
-    expect(s.weights.map((w) => `${w.key}:${w.bps}`).join(",")).toBe("USDC:9500,PROTO:500,AGENT:0,RWA:0");
-    expect([...s.eligibleVaults]).toEqual(["PROTO", "AGENT", "RWA"]);
-    expect([...s.govern.unpauseVaults]).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
+    expect(s.weights.map((w) => `${w.key}:${w.bps}`).join(",")).toBe("USDC:9500,PROTO:500,RWA:0");
+    expect([...s.eligibleVaults]).toEqual(["PROTO", "RWA"]);
+    expect([...s.govern.unpauseVaults]).toEqual(["USDC", "PROTO", "RWA"]);
   });
 });
 
 // Issue 1705 C9: every vault's registry name is a script constant, so the sheet carries no VAULT_NAME.
-test("VAULT_NAME is refused with the reason: one registry-name source for all four vaults", () => {
+test("VAULT_NAME is refused with the reason: one registry-name source for all three vaults", () => {
   expect(() => parseSheet(sheetText({}, ['VAULT_NAME="Robot Money USDC"']))).toThrow(/VAULT_NAME is refused: .*one registry-name source/);
 });
 
@@ -336,7 +336,7 @@ describe("VAULT_NAME on an old sheet: follow-on verbs warn, deploy verbs refuse 
   for (const verb of [undefined, "publish", "redeploy-vault"]) {
     test(`deploy verb ${verb ?? "(none: a stage run)"}: refused with the issue 1705 reason, no warning`, () => {
       const warnings: string[] = [];
-      expect(() => parseSheet(OLD, { verb, warn: (m) => warnings.push(m) })).toThrow(/VAULT_NAME is refused: .*\(issue 1705: one registry-name source for all four vaults\)/);
+      expect(() => parseSheet(OLD, { verb, warn: (m) => warnings.push(m) })).toThrow(/VAULT_NAME is refused: .*\(issue 1705: one registry-name source for all three vaults\)/);
       expect(warnings).toEqual([]);
     });
   }

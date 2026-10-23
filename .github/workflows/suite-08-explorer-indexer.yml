@@ -332,7 +332,7 @@ jobs:
           # multi_vault 4, vault_detail 16, vault_registry 7 (QA plan v1 T5; C1 removed the governance-vote
           # cases with the voting tables; core 1891 removed the 11 committee_indexing cases and the 5
           # committee reorg cases with the committee tables, migration 0030).
-          CARGO_TEST_MIN_EXECUTED=47 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=48 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
             --test reorg_cursor_vault_status \
             --test account_history \
@@ -424,7 +424,7 @@ jobs:
         run: |
           # 58 tests: endpoints 53, router_introspection 1, cors 4 (QA plan v1 T5; C1 removed the
           # /v1/governance/proposals cases with the route).
-          CARGO_TEST_MIN_EXECUTED=58 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=59 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test endpoints \
             --test router_introspection \

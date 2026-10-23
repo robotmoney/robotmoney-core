@@ -195,7 +195,7 @@ mod tests {
         assert!(all.iter().all(|f| !f.starts_with("vault-")));
         assert!(all.contains(&"vault.json".to_string()));
         assert_eq!(t.expected_manifest_count(), all.len());
-        assert_eq!(t.vault_manifests().len(), 4);
+        assert_eq!(t.vault_manifests().len(), 3);
     }
 
     #[test]
@@ -228,12 +228,12 @@ mod tests {
     }
 
     #[test]
-    fn real_table_carries_the_four_vault_deposit_rules() {
+    fn real_table_carries_the_three_vault_deposit_rules() {
         let t = StageTable::load_default().unwrap();
         let rules = t.vault_deposit_rules();
         let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]);
-        // issue 1705 Q1 (a): all four deploy paused and stage 13 opens all four
+        assert_eq!(names, ["rmUSDC", "rmPROTO", "rmRWA"]);
+        // issue 1705 Q1 (a): all three deploy paused and stage 13 opens all three
         assert!(rules
             .iter()
             .all(|r| r.deploy_paused && r.unpause_in_stage13));

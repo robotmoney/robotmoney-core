@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
+import { getStageTable } from "../src/stages.ts";
 
 export const REPO = join(import.meta.dir, "..", ".."); // the core repo root
 export const EXAMPLE_SHEET = join(import.meta.dir, "fixtures", "frozen-sheet.env.example");
@@ -10,10 +11,10 @@ export const exampleText = (): string => readFileSync(EXAMPLE_SHEET, "utf8");
 
 /** The example sheet with some names replaced, and extra lines appended. */
 export function sheetText(over: Record<string, string | null> = {}, extra: string[] = []): string {
-  // chain 8453 refuses a sheet that skips a stage 13 unpause (issue 1520): default it to all four unless the caller says otherwise
-  if (over.CHAIN_ID === "8453" && !("GOVERN_UNPAUSE_VAULTS" in over)) over = { ...over, GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA" };
-  // and issue 1580: chain 8453 refuses any router weights but the launch vector (eligibility must then name all three baskets)
-  if (over.CHAIN_ID === "8453") over = { ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0", ...over };
+  // chain 8453 refuses a sheet that skips a stage 13 unpause (issue 1520): default it to all three unless the caller says otherwise
+  if (over.CHAIN_ID === "8453" && !("GOVERN_UNPAUSE_VAULTS" in over)) over = { ...over, GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,RWA" };
+  // and issue 1580: chain 8453 refuses any router weights but the launch vector (eligibility must then name both baskets)
+  if (over.CHAIN_ID === "8453") over = { ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,RWA:0", ...over };
   const lines = exampleText().split("\n");
   const out: string[] = [];
   const done = new Set<string>();
@@ -32,7 +33,7 @@ export const SHA = "a".repeat(40);
 export const SHA2 = "b".repeat(40);
 
 /** Frozen counts used across the tests: the vaults system's deployer stages (issue 1892: the gateway system's counts are GATEWAY_COUNTS). */
-export const COUNTS: Record<string, number> = { safe: 1, libs: 4, recorder: 6, vault: 18, registry: 2, router: 3, governance: 2, receipt: 2, proto: 6, agent: 6, rwa: 6, timelock: 25 };
+export const COUNTS: Record<string, number> = { safe: 1, libs: 4, vault: 18, registry: 2, router: 3, governance: 2, receipt: 2, proto: 6, rwa: 6, timelock: 25 };
 
 /** The gateway system's frozen counts (issue 1892): the gateway proxy stage and the four-transaction handover. A frozen file holds both systems' keys. */
 export const GATEWAY_COUNTS: Record<string, number> = { gateway: 3, "gateway-handover": 4 };
@@ -59,7 +60,9 @@ export function refFrozenPath(sha = "9a768bb9cc66d4485470a99a068ba7477604501a"):
   if (refPath) return refPath;
   const orig = JSON.parse(readFileSync(join(REPO, "deployments", "frozen-counts", `${sha}.json`), "utf8"));
   const counts: Record<string, number> = {};
-  for (const [k, v] of Object.entries(orig.counts as Record<string, number>)) counts[k === "ic-policy" ? "receipt" : k] = v;
+  // ADR-0017: the first release deployed an agent and a recorder stage. The pinned reference keeps the stages the current table still has, so a rebuilt baseline is compared with the same stage set.
+  const live = new Set(["safe", ...getStageTable().stages.map((x) => x.name)]);
+  for (const [k, v] of Object.entries(orig.counts as Record<string, number>)) { const name = k === "ic-policy" ? "receipt" : k; if (live.has(name)) counts[name] = v; }
   refPath = join(tmp("pc-ref-"), `${sha}.json`);
   writeFileSync(refPath, JSON.stringify({ ...orig, counts }, null, 2));
   return refPath;

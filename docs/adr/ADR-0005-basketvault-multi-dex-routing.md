@@ -1,6 +1,6 @@
 # ADR-0005: BasketVault multi-DEX routing — per-asset venue abstraction for Aerodrome and Uniswap V4
 
-- **Status:** Accepted (amended 2026-10-05 — see [Amendment — 2026-10-05](#amendment--2026-10-05-venue-state-at-launch-and-the-uniswap-v4-restore))
+- **Status:** Accepted (amended 2026-10-22, no vault uses the V4 venue while rmAGENT is retired, ADR-0017; amended 2026-10-05 — see [Amendment — 2026-10-05](#amendment--2026-10-05-venue-state-at-launch-and-the-uniswap-v4-restore))
 - **Date:** 2026-06-03 (amended 2026-10-05)
 - **Deciders:** Engineering lead, Product owner
 - **Related:**
@@ -369,3 +369,7 @@ multi-hop route. The USDC-only pairing rule is unchanged.
 ## Amendment — 2026-10-21 (RM parked)
 
 The owner parked RM out of rmAGENT until its market is deep enough ([ADR-0015](ADR-0015-rm-parked-from-rmagent-until-market-depth.md)). BNKR is the rmAGENT test asset on Uniswap V4 meanwhile, inside the contained test scope only ([ADR-0016](ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md)). Tokens are added and removed through the timelock. The text above is unchanged.
+
+## Amendment — 2026-10-22 (no vault uses the V4 venue, ADR-0017)
+
+This ADR stays Accepted for any future vault. No vault uses the Uniswap V4 venue while rmAGENT is retired ([ADR-0017](ADR-0017-rmagent-retired-router-uses-three-vaults.md)): rmPROTO and rmRWA trade on Uniswap V3 pools. The V4 adapter and the price recorder stay in the repository as parked code, and no stage deploys them.

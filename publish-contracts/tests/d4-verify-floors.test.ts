@@ -60,10 +60,10 @@ describe("core's config-check: plan job and before every vault stage", () => {
     expect(await w.run(["--stage", "plan"])).toBe(EXIT_CODES.VERIFY);
     expect(lastError(w)!.message).toContain("core's config-check before the plan failed");
   });
-  test("a deploy runs it before each of the four vault stages", async () => {
+  test("a deploy runs it before each of the three vault stages", async () => {
     const w = world({ startNonce: 0 });
     expect(await w.run(["--stage", "deploy"])).toBe(0);
-    expect(VAULT_STAGES.length).toBe(4);
+    expect(VAULT_STAGES.length).toBe(3);
     expect(w.coreChecks.length).toBe(VAULT_STAGES.length);
     const ran = w.logs().filter((l) => l.event === "stage.core_config_check").map((l) => l.stage);
     expect(ran).toEqual(VAULT_STAGES.map((v) => v.stage));
@@ -170,7 +170,7 @@ describe("sheet floors: fee recipient, USDC constant, caps, exit fee", () => {
     expect(sheetErr({ USDC_ADDRESS: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" })).toBe("");
   });
   test("caps: a zero TVL cap is refused for every vault, per-deposit above TVL is refused, equal passes", () => {
-    for (const k of ["USDC", "PROTO", "AGENT", "RWA"]) {
+    for (const k of ["USDC", "PROTO", "RWA"]) {
       expect(sheetErr({ [`VAULT_${k}_TVL_CAP`]: "0" })).toContain(`VAULT_${k}_TVL_CAP must be above 0`);
       expect(sheetErr({ [`VAULT_${k}_TVL_CAP`]: "5", [`VAULT_${k}_PER_DEPOSIT_CAP`]: "6" })).toContain("never above the TVL cap");
       expect(sheetErr({ [`VAULT_${k}_TVL_CAP`]: "5", [`VAULT_${k}_PER_DEPOSIT_CAP`]: "5" })).toBe("");

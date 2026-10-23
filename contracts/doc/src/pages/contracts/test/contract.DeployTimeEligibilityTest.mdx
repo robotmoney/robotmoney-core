@@ -31,12 +31,6 @@ PortfolioRouter internal router;
 address internal protoVault;
 ```
 
-### agentVault
-
-```solidity
-address internal agentVault;
-```
-
 ### rwaVault
 
 ```solidity
@@ -74,34 +68,20 @@ function _two(uint256 a, uint256 b) internal pure returns (uint256[] memory v);
 | ---- | ---- | ----------- |
 | v | `uint256[]` |  |
 
-<a id="_three-uint256-uint256-uint256"></a>
-
-### _three
-
-```solidity
-function _three(uint256 a, uint256 b, uint256 c) internal pure returns (uint256[] memory v);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| a | `uint256` |  |
-| b | `uint256` |  |
-| c | `uint256` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| v | `uint256[]` |  |
-
 <a id="test_eachflipsetsthedefaultvectorandazeroweightisaccepted"></a>
 
 ### test_eachFlipSetsTheDefaultVectorAndAZeroWeightIsAccepted
 
 ```solidity
 function test_eachFlipSetsTheDefaultVectorAndAZeroWeightIsAccepted() public;
+```
+
+<a id="test_thelaunchvectorwithazeroweightlegisaccepted"></a>
+
+### test_theLaunchVectorWithAZeroWeightLegIsAccepted
+
+```solidity
+function test_theLaunchVectorWithAZeroWeightLegIsAccepted() public;
 ```
 
 <a id="test_noneleavesthebasketineligible"></a>

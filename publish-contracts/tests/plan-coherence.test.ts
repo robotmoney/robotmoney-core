@@ -58,13 +58,13 @@ describe("the config-check runs again right before each vault stage", () => {
     expect(ran.some((s: string) => /Basket|Protocol/.test(s))).toBe(false);
     expect(w.logs().some((l) => l.event === "stage.config_check" && l.ok === false)).toBe(true);
   });
-  test("the check reads the live RPC given to the run, and rmUSDC and the empty rmAGENT are not checked", async () => {
+  test("the check reads the live RPC given to the run, and rmUSDC is not checked", async () => {
     const w = world({ startNonce: 0 });
     const seen: string[] = [];
     const code = await w.run(["--stage", "deploy"], { chainReader: (rpc) => { seen.push(rpc); return healthyPoolReader(); } });
     expect(code).toBe(0);
     expect(seen).toEqual(["http://rpc.test:8545", "http://rpc.test:8545"]); // proto and rwa
-    expect(w.logs().some((l) => l.event === "stage.config_check_skipped" && /no configured assets/.test(l.reason))).toBe(true);
+    expect(w.logs().some((l) => l.event === "stage.config_check_skipped")).toBe(false); // rmUSDC returns before the check, and both baskets list assets
   });
 });
 

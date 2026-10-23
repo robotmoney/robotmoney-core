@@ -33,7 +33,7 @@ const MODES = [
 
 /** One world: the run manifest, the fake chain (the Safe's facts, the receipt contract) and the counters. */
 function mk(over: Record<string, string> = {}, chainId = 918453) {
-  const d = setup({ ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:5000,PROTO:2500,AGENT:1000,RWA:1500", ...over }, chainId);
+  const d = setup({ ELIGIBLE_VAULTS: "PROTO,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,RWA", ROUTER_WEIGHTS: "USDC:5000,PROTO:3500,RWA:1500", ...over }, chainId);
   const ctx = { ...d.ctx, caller: { yes: chainId !== 8453, confirm: "typed" }, prompt: async () => "record-receipt", resume: true, chainId } as unknown as RunContext; // 8453 refuses YES=1: the operator and the reviewer type the name
   saveRunManifest(ctx.evidenceDir, newManifest(ctx, addr(0xa001)));
   const st = {

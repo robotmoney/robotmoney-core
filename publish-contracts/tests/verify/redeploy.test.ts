@@ -43,17 +43,17 @@ function redeployed(over: { status?: number; oldEligible?: boolean; oldRetiredFl
   w.chain.set(NEW, "registry", REGISTRY);
   w.sheet.vaults.rmPROTO!.expectPaused = false;
   writeFileSync(join(w.manifestDir, REPLACEMENT), JSON.stringify({ chain_id: 8453, vault: NEW, implementation: NEW_IMPL, upgrade_timelock: TIMELOCK, upgrade_mode: "frozen" }));
-  const listed = [VAULTS.rmUSDC.address, OLD, VAULTS.rmAGENT.address, VAULTS.rmRWA.address, NEW];
+  const listed = [VAULTS.rmUSDC.address, OLD, VAULTS.rmRWA.address, NEW];
   w.chain.set(REGISTRY, "listVaults", listed);
-  w.chain.set(REGISTRY, "vaultCount", 5n);
+  w.chain.set(REGISTRY, "vaultCount", 4n);
   w.chain.set(REGISTRY, "isRouterEligible", (a: unknown[]) => (String(a[0]).toLowerCase() === OLD.toLowerCase() ? (over.oldEligible ?? false) : true));
   w.chain.set(REGISTRY, "getVault", (a: unknown[]) => {
     const who = String(a[0]).toLowerCase();
     const status = who === OLD.toLowerCase() ? (over.status ?? 2) : who === NEW.toLowerCase() ? (over.newStatus ?? 0) : 0;
     return [{ name: "Robot Money Protocol", asset: addr(0xc0de), registeredAt: 1n }, status];
   });
-  const four = [VAULTS.rmUSDC.address, NEW, VAULTS.rmAGENT.address, VAULTS.rmRWA.address];
-  const bps = [9500n, 500n, 0n, 0n];
+  const four = [VAULTS.rmUSDC.address, NEW, VAULTS.rmRWA.address];
+  const bps = [9500n, 500n, 0n];
   w.chain.set(ROUTER, "getDefaultWeights", [four, bps]);
   w.chain.set(ROUTER, "getEffectiveWeights", over.effective ?? [four, bps]);
   w.chain.set(ROUTER, "votedWeightsActive", over.voted ?? false);
@@ -69,7 +69,7 @@ describe("the state after a redeploy, both generations", () => {
     const r = await verifyDeployment(redeployed().opts);
     expect(failed(r)).toEqual([]);
     const labels = r.checks.map((c) => c.label);
-    for (const l of ["retired[rmPROTO]: registry status is Retired", "retired[rmPROTO]: not router-eligible", "retired[rmPROTO]: runtime code serves redeemInKind", "retired[rmPROTO]: timelock holds ADMIN_ROLE", "redeploy[rmPROTO]: router per-address cap equals approved old cap", "redeploy[rmPROTO]: no voted vector is active", "redeploy[rmPROTO]: default and effective vectors are the same unique four legs", "vault set: manifests equal registry.listVaults"]) expect(labels).toContain(l);
+    for (const l of ["retired[rmPROTO]: registry status is Retired", "retired[rmPROTO]: not router-eligible", "retired[rmPROTO]: runtime code serves redeemInKind", "retired[rmPROTO]: timelock holds ADMIN_ROLE", "redeploy[rmPROTO]: router per-address cap equals approved old cap", "redeploy[rmPROTO]: no voted vector is active", "redeploy[rmPROTO]: default and effective vectors are the same unique three legs", "vault set: manifests equal registry.listVaults"]) expect(labels).toContain(l);
     expect(new Set(labels).size).toBe(labels.length);
   });
   test("the original manifests are untouched: the replacement is a separate file the overlay supplies", async () => {
@@ -88,8 +88,8 @@ describe("the state after a redeploy, both generations", () => {
     ["the new vault is not Active in the registry", { newStatus: 2 }, "redeploy[rmPROTO]: replacing vault registry status is Active"],
     ["the router cap of the new vault is not the approved old cap", { cap: 0n }, "redeploy[rmPROTO]: router per-address cap equals approved old cap"],
     ["a voted vector is active", { voted: true }, "redeploy[rmPROTO]: no voted vector is active"],
-    ["the effective vector still routes to the old vault", { effective: [[VAULTS.rmUSDC.address, OLD, VAULTS.rmAGENT.address, VAULTS.rmRWA.address], [9500n, 500n, 0n, 0n]] }, "redeploy[rmPROTO]: default and effective vectors are the same unique four legs"],
-    ["the effective vector lists the new vault twice", { effective: [[VAULTS.rmUSDC.address, NEW, NEW, VAULTS.rmRWA.address], [9500n, 500n, 0n, 0n]] }, "redeploy[rmPROTO]: default and effective vectors are the same unique four legs"],
+    ["the effective vector still routes to the old vault", { effective: [[VAULTS.rmUSDC.address, OLD, VAULTS.rmRWA.address], [9500n, 500n, 0n]] }, "redeploy[rmPROTO]: default and effective vectors are the same unique three legs"],
+    ["the effective vector lists the new vault twice", { effective: [[VAULTS.rmUSDC.address, NEW, NEW, VAULTS.rmRWA.address], [9500n, 500n, 0n]] }, "redeploy[rmPROTO]: default and effective vectors are the same unique three legs"],
   ];
   for (const [name, over, label] of cases) {
     test(`fails when ${name}`, async () => {
@@ -114,7 +114,7 @@ describe("the state after a redeploy, both generations", () => {
     a.chain.set(NEW, "registry", addr(0));
     expect(failed(await verifyDeployment(a.opts)).length).toBeGreaterThan(0);
     const b = redeployed();
-    b.chain.set(REGISTRY, "listVaults", [...[VAULTS.rmUSDC.address, OLD, VAULTS.rmAGENT.address, VAULTS.rmRWA.address, NEW], addr(0xdead)]);
+    b.chain.set(REGISTRY, "listVaults", [...[VAULTS.rmUSDC.address, OLD, VAULTS.rmRWA.address, NEW], addr(0xdead)]);
     b.chain.set(REGISTRY, "vaultCount", 6n);
     expect(failed(await verifyDeployment(b.opts))).toContain("vault set: manifests equal registry.listVaults");
   });

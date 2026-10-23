@@ -246,7 +246,7 @@ steps:
     irreversible: false
   - id: "P1.02-publish"
     standing: ["4.3"]
-    description: "Safe, libs, recorder, vault, registry, router, ic-policy, governance, proto, agent, rwa, prove-control signed by every owner, then the timelock handover; each stage matches its frozen count"
+    description: "Safe, libs, vault, registry, router, ic-policy, governance, proto, rwa, prove-control signed by every owner, then the timelock handover; each stage matches its frozen count"
     host: "control"
     phase: 1
     cmds:
@@ -273,10 +273,10 @@ steps:
     irreversible: false
     onlyFor: "twin"
 
-  # ── Phase 2, verify: the pre-govern state. All four vaults deploy paused. ──
+  # ── Phase 2, verify: the pre-govern state. All three vaults deploy paused. ──
   - id: "P2.01-verify-pre-govern"
     standing: ["4.3"]
-    description: "Stage 12 reads the chain, not the manifests: roles, Safe, timelock, per-vault rules, recorder ring, the deployer nonce. A failure pauses all four vaults and exits 13"
+    description: "Stage 12 reads the chain, not the manifests: roles, Safe, timelock, per-vault rules, the deployer nonce. A failure pauses all three vaults and exits 13"
     host: "control"
     phase: 2
     cmds:
@@ -291,7 +291,7 @@ steps:
     maxMinutes: 60
   - id: "P3.01-govern-schedule"
     standing: ["4.3"]
-    description: "Stage 13 schedules the four vault unpauses through the real Safe, one timelock operation each, in one sitting; on 8453 it exits 15 with the resume command"
+    description: "Stage 13 schedules the three vault unpauses through the real Safe, one timelock operation each, in one sitting; on 8453 it exits 15 with the resume command"
     host: "control"
     phase: 3
     cmds:
@@ -306,7 +306,7 @@ steps:
     maxMinutes: 60
   - id: "P3.02-govern-execute"
     standing: ["4.3"]
-    description: "After the timelock delay the same command executes the four unpauses and reads depositsPaused back; every printed row has a transaction hash and status 1"
+    description: "After the timelock delay the same command executes the three unpauses and reads depositsPaused back; every printed row has a transaction hash and status 1"
     host: "control"
     phase: 3
     cmds:
@@ -374,7 +374,7 @@ steps:
   # ── Phase 4, verify again: the post-govern state. ──
   - id: "P4.01-verify-post-govern"
     standing: ["4.3"]
-    description: "Stage 12 again: all four unpause rows executed, all four vaults read depositsPaused false; a manifest that disagrees with the chain fails closed"
+    description: "Stage 12 again: all three unpause rows executed, all three vaults read depositsPaused false; a manifest that disagrees with the chain fails closed"
     host: "control"
     phase: 4
     cmds:
@@ -450,28 +450,6 @@ steps:
     receipts: []
     irreversible: false
     writes: ["preview-PROTO", "shares-PROTO", "share-bound-PROTO"]
-  - id: "P6.12-deposit-rmagent"
-    standing: ["4.3", "4.4"]
-    description: "1 USDC into rmAGENT right after record() makes the price recorder fresh (else StaleRecorder); the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut"
-    host: "control"
-    phase: 6
-    cmds:
-      - ["bash", "scripts/runbook/cast-send.sh", "{m:recorder.recorder}", "record()", "{cast}"]
-      - ["bash", "-c", 'test "$(cast call "{m:recorder.recorder}" "isFresh()(bool)")" = true']
-      - ["bash", "-c", 'cast call "{m:agent-token-vault.vault}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/preview-AGENT']
-      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:agent-token-vault.vault}", "1000000", "{cast}"]
-      - ["bash", "scripts/runbook/cast-send.sh", "{m:agent-token-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
-      - ["bash", "-c", 'cast call "{m:agent-token-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-AGENT']
-      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-AGENT}", "{state:preview-AGENT}"]
-      - ["bash", "-c", 'b=$(cast call "{m:agent-token-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-AGENT']
-      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-AGENT}", "{state:preview-AGENT}", "{state:share-bound-AGENT}"]
-    env:
-      ETH_RPC_URL: "{rpcUrl}"
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    triage: true
-    writes: ["preview-AGENT", "shares-AGENT", "share-bound-AGENT"]
   - id: "P6.13-deposit-rmrwa"
     standing: ["4.3", "4.4"]
     description: "1 USDC into rmRWA; the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut"
@@ -517,19 +495,6 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
-  - id: "P6.22-redeem-in-kind-rmagent"
-    standing: ["4.4"]
-    description: "Full redeemInKind of rmAGENT, which stays open while the recorder is stale"
-    host: "control"
-    phase: 6
-    cmds:
-      - ["bash", "scripts/runbook/cast-send.sh", "{m:agent-token-vault.vault}", "redeemInKind(uint256,address,address)", "{state:shares-AGENT}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
-      - ["bash", "-c", 'test "$(cast call "{m:agent-token-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
-    env:
-      ETH_RPC_URL: "{rpcUrl}"
-    expectExit: 0
-    receipts: []
-    irreversible: false
   - id: "P6.23-redeem-rmrwa"
     standing: ["4.4"]
     description: "Full redeem of rmRWA to USDC"
@@ -543,11 +508,23 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+  - id: "P6.24-redeem-retired-vault"
+    standing: ["4.4", "4.14"]
+    description: "Every vault the run retired (evidence vault_retirements, ADR-0017) is withdraw-only: retired() is true, maxDeposit is 0, and the admin's shares in it, if any, redeem to USDC. A run that retired no vault passes with nothing to check"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'for v in $(jq -r ".vault_retirements // [] | .[].vault" "{evidenceDir}/evidence.json"); do test "$(cast call "$v" "retired()(bool)")" = true && test "$(cast call "$v" "maxDeposit(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; b=$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$b" != 0 ]; then bash scripts/runbook/cast-send.sh "$v" "redeem(uint256,address,address)" "$b" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" --gas-limit 5000000 "$@" || exit 1; test "$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; fi; done', "_", "{cast}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
 
   # ── Phase 9, failure drills: the pause path and the recovery path run on real contracts. ──
   - id: "P9.01-pause-all"
     standing: ["4.5", "4.6"]
-    description: "pause-all pauses deposits on all four vaults with the emergency key, reads each back and writes the rollout report; withdrawals stay open"
+    description: "pause-all pauses deposits on all three vaults with the emergency key, reads each back and writes the rollout report; withdrawals stay open"
     host: "control"
     phase: 9
     cmds:
@@ -562,13 +539,12 @@ steps:
     onlyFor: ["twin", "rehearsal"]
   - id: "P9.03-resume-schedule"
     standing: ["4.5"]
-    description: "Each paused vault comes back through a new numbered unpause round of the Safe; the four are scheduled together"
+    description: "Each paused vault comes back through a new numbered unpause round of the Safe; the three are scheduled together"
     host: "control"
     phase: 9
     cmds:
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-USDC", "{common}", "{owners}", "{gate}", "{wait}"]
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-PROTO", "{common}", "{owners}", "{gate}", "{wait}"]
-      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-AGENT", "{common}", "{owners}", "{gate}", "{wait}"]
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-RWA", "{common}", "{owners}", "{gate}", "{wait}"]
     env:
       PUBLISH_MANIFEST_DIR: "{manifestDir}"
@@ -579,13 +555,12 @@ steps:
     onlyFor: ["twin", "rehearsal"]
   - id: "P9.04-resume-execute"
     standing: ["4.5"]
-    description: "After the delay the same four commands execute the unpauses"
+    description: "After the delay the same three commands execute the unpauses"
     host: "control"
     phase: 9
     cmds:
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-USDC", "{common}", "{owners}", "{gate}", "{wait}"]
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-PROTO", "{common}", "{owners}", "{gate}", "{wait}"]
-      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-AGENT", "{common}", "{owners}", "{gate}", "{wait}"]
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-RWA", "{common}", "{owners}", "{gate}", "{wait}"]
     env:
       PUBLISH_MANIFEST_DIR: "{manifestDir}"
@@ -597,7 +572,7 @@ steps:
     notBefore: {"afterStep": "P9.03-resume-schedule", "hours": "timelockDelay"}
   - id: "P9.05-verify-after-resume"
     standing: ["4.5"]
-    description: "Verify passes again with all four vaults open"
+    description: "Verify passes again with all three vaults open"
     host: "control"
     phase: 9
     cmds:

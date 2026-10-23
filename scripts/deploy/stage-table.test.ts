@@ -20,7 +20,7 @@ function scriptSource(path: string): string {
   return own + extra + upgrade + read(`${base}ExpectedChainGuard.sol`);
 }
 
-const EXPECTED = ["libs", "recorder", "vault", "registry", "router", "receipt", "governance", "proto", "agent", "rwa", "timelock", "gateway", "gateway-handover"]; // issue 1892: the vaults system, then the gateway system
+const EXPECTED = ["libs", "vault", "registry", "router", "receipt", "governance", "proto", "rwa", "timelock", "gateway", "gateway-handover"]; // issue 1892: the vaults system, then the gateway system. ADR-0017: no agent and no recorder stage
 
 describe("stage-table.json", () => {
   test("version 1 with every stage, in deploy order", () => {
@@ -30,8 +30,9 @@ describe("stage-table.json", () => {
 
   test("every non-script deploy script in contracts/script has a stage", () => {
     const listed = new Set(table.stages.map((s) => s.script.split(":")[0].split("/").pop()));
-    // the single-vault redeploy (issue 1796), a verb of its own with a `redeploys` row
-    const skip = new Set(["RedeployProtocolAssetVault.s.sol"]);
+    // the single-vault redeploy (issue 1796), a verb of its own with a `redeploys` row. ADR-0017: rmAGENT is retired, so the rmAGENT vault script and the V4 price recorder script stay
+    // in the repo as parked code that no stage reads (the live v0.5.0 deployment was made with them)
+    const skip = new Set(["RedeployProtocolAssetVault.s.sol", "DeployAgentTokenVault.s.sol", "DeployUniswapV4PriceRecorder.s.sol"]);
     const missing = readdirSync(join(ROOT, "contracts/script"))
       .filter((f) => f.endsWith(".s.sol") && !skip.has(f) && !listed.has(f));
     expect(missing).toEqual([]);
@@ -81,7 +82,7 @@ describe("stage-table.json", () => {
   }
 
   test("vault rows point at a stage with the same vault key, and the vault contract exists", () => {
-    expect(table.vaults.map((v) => v.key)).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
+    expect(table.vaults.map((v) => v.key)).toEqual(["USDC", "PROTO", "RWA"]);
     for (const v of table.vaults) {
       const st = table.stages.find((s) => s.name === v.stage)!;
       expect(st.vault).toBe(v.key);
@@ -114,7 +115,6 @@ describe("stage-table.json", () => {
       receipt: ["contracts/ConsensusRecommendationReceipt.sol"],
       governance: ["contracts/RouterGovernance.sol"],
       proto: ["contracts/vaults/BasketVault.sol"],
-      agent: ["contracts/vaults/BasketVault.sol"],
       rwa: ["contracts/vaults/BasketVault.sol"],
     };
     const fileOf = (n: string) => c2.find((l) => l.name === n)!.path.split("/").pop()!;
@@ -127,7 +127,7 @@ describe("stage-table.json", () => {
     }
     // Every proxied core contract links GovernedUpgrade (issue 1808): every stage that deploys one lists it.
     expect((table.stages as any[]).filter((s) => s.create2Libraries?.includes("GovernedUpgrade")).map((s) => s.name)).toEqual([
-      "vault", "registry", "router", "receipt", "governance", "proto", "agent", "rwa", "gateway",
+      "vault", "registry", "router", "receipt", "governance", "proto", "rwa", "gateway",
     ]);
   });
 
@@ -140,15 +140,15 @@ describe("stage-table.json", () => {
     for (const [k, name] of Object.entries(table.artifacts)) {
       expect([k, new RegExp(`contract ${name}\\b`).test(src)]).toEqual([k, true]);
     }
-    expect(Object.keys(table.artifacts).sort()).toEqual(["gateway", "governance", "receipt", "recorder", "registry", "router", "timelock", "v4Adapter"]);
+    expect(Object.keys(table.artifacts).sort()).toEqual(["gateway", "governance", "receipt", "registry", "router", "timelock"]);
   });
 
-  test("stage 13 is the four vault unpauses only, with the deploy-time configuration set in stages 4 to 10 (issue 1520)", () => {
+  test("stage 13 is the three vault unpauses only, with the deploy-time configuration set in stages 4 to 10 (issue 1520)", () => {
     const g = (table as unknown as { govern: { stage: number; description: string; mainnetRows: string[]; twinOnlyRows: string[] } }).govern;
     expect(g.stage).toBe(13);
-    expect(g.mainnetRows).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA"]);
+    expect(g.mainnetRows).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA"]);
     expect(g.twinOnlyRows).toEqual(["update-delay", "batch", "cancel"]);
-    expect(g.description).toContain("only mainnet operation is the unpause of each of the four vaults");
+    expect(g.description).toContain("only mainnet operation is the unpause of each of the three vaults");
     expect(g.description).toContain("deploy-time configuration set by the deployer in stages 4 to 10");
     expect(g.description).toContain("Twin-only");
     // no 13-row list survives: none of the old matrix rows is named
@@ -158,7 +158,7 @@ describe("stage-table.json", () => {
     // issue 1698: RouterGovernance has no voting, so the governance stage reads no voter, quorum or period, and it needs the receipt register
     expect(env("governance")).toContain("CONSENSUS_RECEIPT_ADDRESS");
     for (const gone of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) expect(env("governance")).not.toContain(gone);
-    for (const n of ["proto", "agent", "rwa"]) expect(env(n)).toContain("ROUTER_DEFAULT_BPS");
+    for (const n of ["proto", "rwa"]) expect(env(n)).toContain("ROUTER_DEFAULT_BPS");
   });
 
   describe("redeploys (issue 1796)", () => {
@@ -197,8 +197,8 @@ describe("stage-table.json", () => {
   describe("vault rules", () => {
     const raw = JSON.parse(read("scripts/deploy/stage-table.json"));
     const rules = vaultRules(raw);
-    test("every rule field is present on all four vaults", () => {
-      expect(rules.map((v) => v.key)).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
+    test("every rule field is present on all three vaults", () => {
+      expect(rules.map((v) => v.key)).toEqual(["USDC", "PROTO", "RWA"]);
       for (const v of rules) for (const f of VAULT_RULE_FIELDS) expect([v.key, f, f in v]).toEqual([v.key, f, true]);
     });
     test("a field that differs between vaults names a reason and a decision link, and a uniform field has no decision", () => {
@@ -222,9 +222,9 @@ describe("stage-table.json", () => {
       const split = copy(); split.vaults[0].deployPaused = false; split.vaults[0].unpauseInStage13 = false;
       expect(() => vaultRules(split)).toThrow(/vault rule deployPaused differs between vaults/);
       const missing = copy(); delete missing.vaults[2].emergencyLevers;
-      expect(() => vaultRules(missing)).toThrow(/vault AGENT has no emergencyLevers/);
+      expect(() => vaultRules(missing)).toThrow(/vault RWA has no emergencyLevers/);
     });
-    test("all four vaults deploy paused and stage 13 unpauses all four, each by its own row (issue 1705 Q1)", () => {
+    test("all three vaults deploy paused and stage 13 unpauses all three, each by its own row (issue 1705 Q1)", () => {
       for (const v of rules) expect([v.key, v.deployPaused, v.unpauseInStage13, v.unpauseRow]).toEqual([v.key, true, true, `unpause-${v.key}`]);
       const g = (table as unknown as { govern: { mainnetRows: string[] } }).govern;
       expect(g.mainnetRows).toEqual(rules.filter((v) => v.unpauseInStage13).map((v) => v.unpauseRow));
@@ -253,12 +253,12 @@ describe("stage-table.json", () => {
         expect([v.key, [...levers].sort()]).toEqual([v.key, [...v.emergencyLevers].sort()]);
       }
     });
-    test("registry name: one source for all four vaults, each vault script's VAULT_NAME constant, and no stage reads a VAULT_NAME env (issue 1705 C9)", () => {
+    test("registry name: one source for all three vaults, each vault script's VAULT_NAME constant, and no stage reads a VAULT_NAME env (issue 1705 C9)", () => {
       expect(new Set(rules.map((v) => v.registryNameSource))).toEqual(new Set(["script-constant"]));
       // each vault script holds its name as a constant: VAULT_NAME = "<name>", or for rmUSDC VAULT_NAME = RMUSDC_VAULT_NAME, a file-level constant of the same script
       const nameOf = (src: string) => /string public constant VAULT_NAME = "([^"]+)";/.exec(src)?.[1] ?? (/string public constant VAULT_NAME = RMUSDC_VAULT_NAME;/.test(src) ? /string constant RMUSDC_VAULT_NAME = "([^"]+)";/.exec(src)?.[1] : undefined);
       const names = rules.map((v) => nameOf(read(table.stages.find((s) => s.name === v.stage)!.script.split(":")[0]!)));
-      expect(names).toEqual(["Robot Money USDC", "Robot Money Protocol", "Robot Money Agent Tokens", "Robot Money RWA"]);
+      expect(names).toEqual(["Robot Money USDC", "Robot Money Protocol", "Robot Money RWA"]);
       for (const s of table.stages) expect([s.name, s.requiredEnv.includes("VAULT_NAME")]).toEqual([s.name, false]);
       // the registry stage registers rmUSDC under DeployVault's constant, not an env read
       const reg = read("contracts/script/DeployVaultRegistry.s.sol");
@@ -276,16 +276,17 @@ describe("stage-table.json", () => {
     test("every stage that reads UPGRADE_MODE lists its proxies, and the timelock stage, deployed last, lists none", () => {
       expect(u.modeEnv).toBe("UPGRADE_MODE");
       expect(proxyStages.map((s) => s.name)).toEqual(cli.stages.filter((s) => s.requiredEnv.includes("UPGRADE_MODE")).map((s) => s.name));
-      expect(proxyStages.map((s) => s.name)).toEqual(["vault", "registry", "router", "receipt", "governance", "proto", "agent", "rwa", "gateway"]);
+      expect(proxyStages.map((s) => s.name)).toEqual(["vault", "registry", "router", "receipt", "governance", "proto", "rwa", "gateway"]);
       expect(cli.stages.filter((s) => s.system !== "gateway").at(-1)!.name).toBe(u.stage); // the upgrade authority is last of the vaults system
       expect(cli.stages.find((s) => s.name === u.stage)!.proxies).toBeUndefined();
     });
-    test("the nine proxied core contracts are exactly the contracts the storage-layout gate snapshots", () => {
+    test("the eight proxied core contracts are the contracts the storage-layout gate snapshots, besides the parked AgentTokenVault whose layout stays pinned (ADR-0017)", () => {
       const gate = read("scripts/ci/check-core-storage-layout.sh");
       const gated = [...gate.matchAll(/^\s*"(\w+):contracts\/[\w/]+\.sol"$/gm)].map((m) => m[1]!).sort();
       const listed = proxyStages.flatMap((s) => s.proxies!.map((p) => p.contract)).sort();
-      expect(listed).toEqual(gated);
-      expect(listed).toHaveLength(9);
+      // rmAGENT is retired and no stage deploys it, but the live v0.5.0 deployment runs AgentTokenVault behind a governed proxy. A governed upgrade of it must keep its layout, so the gate keeps snapshotting it.
+      expect([...listed, "AgentTokenVault"].sort()).toEqual(gated);
+      expect(listed).toHaveLength(8);
       for (const s of proxyStages) for (const p of s.proxies!) {
         expect(existsSync(join(ROOT, p.layout)), p.layout).toBe(true);
         expect(p.layout).toBe(`contracts/test/fixtures/storage-layout/${p.contract}.json`);
