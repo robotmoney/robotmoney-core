@@ -332,11 +332,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         .expect("the govern matrix must pass through the real Safe");
     assert!(!rows.is_empty(), "the govern matrix ran no rows");
     // Core 1710: stage 13 is three unpauses, rmUSDC first. Each is its own scheduled and executed line, and each vault reads open afterwards.
-    for row in [
-        "unpause-USDC",
-        "unpause-PROTO",
-        "unpause-RWA",
-    ] {
+    for row in ["unpause-USDC", "unpause-PROTO", "unpause-RWA"] {
         assert_eq!(
             rows.iter().filter(|r| r.row == row).count(),
             2,
@@ -542,14 +538,10 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     };
     assert!(!c_released(&fx), "receipt C is recorded, not released");
     let before = router_weights(&fx);
-    let want_vaults: Vec<String> = [
-        fx.vault(),
-        fx.proto_vault(),
-        fx.rwa_vault(),
-    ]
-    .iter()
-    .map(|a| format!("{a:#x}"))
-    .collect();
+    let want_vaults: Vec<String> = [fx.vault(), fx.proto_vault(), fx.rwa_vault()]
+        .iter()
+        .map(|a| format!("{a:#x}"))
+        .collect();
     assert_eq!(
         before.0, want_vaults,
         "the router lists the eligible vaults in registry order"
