@@ -13,13 +13,33 @@ Date: 2026-10-22. Decision: owner, verbatim: "I think we need a /superfield-feat
 
 ## Gaps that remain
 
-1. **The batch is not run on Base.** Scheduling it on the live deployment is an owner-gated release step (runbook 4.14). Until it runs, the live router still holds four legs.
-2. **Holder funds are not moved.** ADR-0009 forbids assisted migration. A holder exits with `redeem` or `redeemInKind`.
-3. **The recorder keeper is still needed for the retired vault.** `redeem` reads the V4 price recorder (TWAP and the 4 hour sell anchor). If holders remain, `scripts/ops/recorder-keeper.sh` must keep running, or they use `redeemInKind`. A v0.6.0 deployment has no recorder.
-4. **The `agent_tokens` bucket stays in the receipt schema.** It is the Investment Committee's cross-repository contract (`tests/fixtures/consensus-receipt.bucket-vault-map.json`, PRD section 11). It maps to no vault. `apply-receipt` accepts it at 0 bps and refuses any weight. The IC repository should stop weighting the bucket. That is a cross-repository item the owner decides.
-5. **Parked code remains.** `DeployAgentTokenVault.s.sol`, `DeployUniswapV4PriceRecorder.s.sol`, the V4 adapter and `config/agent-token-shortlist.json` are not deleted. No stage reads them. Deleting them is a later decision.
-6. **The v0.5.0 line is unchanged.** Its tooling, frozen counts and the QA release records stay at the v0.5.0 tag. `deploy-3.env` is the v0.5.0 record and still carries `VAULT_AGENT_*`.
-7. **Frozen counts for the next release.** A v0.6.0 rc loses the `agent` and `recorder` counts. They are measured and frozen at the rc, as for every release (section 3 of the release runbooks). This change freezes nothing.
+### 1. The batch is not run on Base
+
+Scheduling it on the live deployment is an owner-gated release step (runbook 4.14). Until it runs, the live router still holds four legs.
+
+### 2. Holder funds are not moved
+
+ADR-0009 forbids assisted migration. A holder exits with `redeem` or `redeemInKind`.
+
+### 3. The recorder keeper is still needed for the retired vault
+
+`redeem` reads the V4 price recorder (TWAP and the 4 hour sell anchor). If holders remain, `scripts/ops/recorder-keeper.sh` must keep running, or they use `redeemInKind`. A v0.6.0 deployment has no recorder.
+
+### 4. The `agent_tokens` bucket stays in the receipt schema
+
+It is the Investment Committee's cross-repository contract (`tests/fixtures/consensus-receipt.bucket-vault-map.json`, PRD section 11). It maps to no vault. `apply-receipt` accepts it at 0 bps and refuses any weight. The IC repository should stop weighting the bucket. That is a cross-repository item the owner decides.
+
+### 5. Parked code remains
+
+`DeployAgentTokenVault.s.sol`, `DeployUniswapV4PriceRecorder.s.sol`, the V4 adapter and `config/agent-token-shortlist.json` are not deleted. No stage reads them. Deleting them is a later decision.
+
+### 6. The v0.5.0 line is unchanged
+
+Its tooling, frozen counts and the QA release records stay at the v0.5.0 tag. `deploy-3.env` is the v0.5.0 record and still carries `VAULT_AGENT_*`.
+
+### 7. Frozen counts for the next release
+
+A v0.6.0 rc loses the `agent` and `recorder` counts. They are measured and frozen at the rc, as for every release (section 3 of the release runbooks). This change freezes nothing.
 
 ## Guards, bounds and floors
 
