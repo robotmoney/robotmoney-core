@@ -173,10 +173,11 @@ if (rehearsalMode && env("GOVERN_IN") === "true") {
   // apply row reads the weights. Digest and id come from the shared protocol functions (receipt-digest.ts), never from a plain keccak256 of the file.
   const payload = join(rh, "receipt-payload.json");
   const real = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "tests", "fixtures", "real-consensus-receipt.canonical.json"), "utf8")) as Record<string, unknown>;
-  const body = Buffer.from(JSON.stringify({
+  // The canonical form is one compact JSON object followed by exactly one newline (receipt-digest.ts).
+  const body = Buffer.from(`${JSON.stringify({
     ...real,
     weights: [{ bucket: "agent_tokens", weight_bps: 0 }, { bucket: "conservative_defi_yield", weight_bps: 9500 }, { bucket: "protocol_tokens", weight_bps: 500 }, { bucket: "real_world_assets", weight_bps: 0 }],
-  }));
+  })}\n`);
   writeFileSync(payload, body);
   const digest = receiptPayloadDigest(new Uint8Array(body));
   const receiptId = receiptIdOfBytes(new Uint8Array(body)) ?? fail("the receipt fixture has no session_id and subject_id");
