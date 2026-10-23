@@ -8,7 +8,7 @@
  *   1. Price strip — all four cells show a numeric price (not 'unavailable',
  *      not a loading ellipsis '…').
  *   2. Vault TVL — exactly one Active vault card (rmUSDC, the 1 USDC seed) shows a non-zero
- *      total_assets; the three empty basket vaults show none (core 1488: no demo seeding,
+ *      total_assets; the two empty basket vaults show none (core 1488: no demo seeding,
  *      baskets deploy empty and paused).
  *   3. Console hygiene — zero JavaScript errors recorded during the landing-page
  *      session (inherits the _consoleGuard fixture from helpers/fixtures.ts).
@@ -85,33 +85,33 @@ test.describe("demo user stories: first-visitor landing-page session", () => {
     const vaultCards = page.getByTestId("landing-vault-cards");
     await expect(vaultCards).toBeVisible({ timeout: 30_000 });
 
-    // Clean-room deploy (core 1488): all four vaults are registered Active. There is no demo
-    // seeding. Only rmUSDC holds the deployer's 1 USDC seed. The basket vaults (rmPROTO, rmAGENT,
+    // Clean-room deploy (core 1488): all three vaults are registered Active. There is no demo
+    // seeding. Only rmUSDC holds the deployer's 1 USDC seed. The basket vaults (rmPROTO,
     // rmRWA) deploy empty and paused until governance unpauses them.
     const activeCards = page.locator(
       '[data-testid="landing-vault-card"][data-vault-active="true"]',
     );
-    await expect(activeCards).toHaveCount(4, { timeout: 30_000 });
+    await expect(activeCards).toHaveCount(3, { timeout: 30_000 });
 
     const tvlCells = page.getByTestId("landing-vault-card-tvl");
     await expect(tvlCells.first()).toBeVisible({ timeout: 30_000 });
-    await expect(tvlCells).toHaveCount(4, { timeout: 30_000 });
+    await expect(tvlCells).toHaveCount(3, { timeout: 30_000 });
 
     // VaultCards re-fetches every 15 s and the indexer lags the chain, so poll until the
-    // rmUSDC seed shows: exactly one card with a non-empty TVL, the other three empty.
+    // rmUSDC seed shows: exactly one card with a non-empty TVL, the other two empty.
     const isEmpty = (t: string) => t === "" || t === "—" || Number(t.replace(/[^0-9.]/g, "")) === 0;
     await expect
       .poll(
         async () => {
           const texts: string[] = [];
-          for (let i = 0; i < 4; i++) {
+          for (let i = 0; i < 3; i++) {
             texts.push(((await tvlCells.nth(i).textContent()) ?? "").trim());
           }
           return texts.filter((t) => !isEmpty(t)).length;
         },
         {
           message:
-            "exactly one vault card (rmUSDC, the 1 USDC seed) must show a non-zero TVL; the three empty basket vaults must show none",
+            "exactly one vault card (rmUSDC, the 1 USDC seed) must show a non-zero TVL; the two empty basket vaults must show none",
           timeout: 120_000,
           intervals: [5_000],
         },

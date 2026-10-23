@@ -27,7 +27,7 @@
  *
  *   receipt-a — digest matches its payload, released, weights equal the live
  *               router vector the deployer leaves before the handover (the Twin
- *               stage sheet ROUTER_WEIGHTS: rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0;
+ *               stage sheet ROUTER_WEIGHTS: rmUSDC 9500, rmPROTO 500, rmRWA 0;
  *               the sheet lists every vault, and receipt-a asks the same)
  *                                         ⇒ Verified · Released · Applied
  *   receipt-b — deliberately wrong on-chain digest, never released, weights

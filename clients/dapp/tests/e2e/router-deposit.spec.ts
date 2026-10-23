@@ -97,7 +97,7 @@ test.describe("Router deposit — multi-vault via PortfolioRouter on smoke-test 
   test("select router path, preview renders, approve+deposit, assert share balance updated", async ({
     page,
   }) => {
-    // The router skips legs whose computed amount is 0, so a deposit over the 9500/500/0/0 launch vector (0 bps rmAGENT and rmRWA legs) succeeds.
+    // The router skips legs whose computed amount is 0, so a deposit over the 9500/500/0 launch vector (a 0 bps rmRWA leg) succeeds.
     // Admin EOA is pre-funded with USDC via DappStack::boot (issue #603).
     await openDapp(page, endpoints, { role: "admin" });
     await openTab(page, "deposit-withdraw");
