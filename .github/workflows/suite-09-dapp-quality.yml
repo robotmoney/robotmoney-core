@@ -129,6 +129,17 @@ jobs:
           echo "gateway-write-reverify: $passed passed, $skipped skipped, $failed failed"
           [ "$passed" -ge 40 ] && [ "$skipped" -eq 0 ] && [ "$failed" -eq 0 ] || { echo "the gateway-write-reverify cases did not all run" >&2; exit 1; }
 
+      # Issue 1912 (ADR-0017): a Retired rmAGENT is withdraw-only and the router shows three legs. A removed file, a skipped case or a zero count fails here.
+      - name: Retired rmAGENT cases ran (no skips, floor of 5)
+        run: |
+          set -euo pipefail
+          bunx vitest run --passWithNoTests=false --reporter=json --outputFile="$RUNNER_TEMP/retired-rmagent.json" tests/unit/retired-rmagent-withdraw-only.test.tsx tests/unit/router-deposit-tab-three-legs.test.tsx
+          passed=$(jq '.numPassedTests' "$RUNNER_TEMP/retired-rmagent.json")
+          skipped=$(jq '[.numPendingTests, .numTodoTests] | add' "$RUNNER_TEMP/retired-rmagent.json")
+          failed=$(jq '.numFailedTests' "$RUNNER_TEMP/retired-rmagent.json")
+          echo "retired-rmagent: $passed passed, $skipped skipped, $failed failed"
+          [ "$passed" -ge 5 ] && [ "$skipped" -eq 0 ] && [ "$failed" -eq 0 ] || { echo "the retired-rmagent cases did not all run" >&2; exit 1; }
+
       - name: Dependency vulnerability audit
         # Scans for high and critical severity advisories (CVSS >= 7.0) via
         # `bun audit --audit-level=high`. We use bun (not npm) because the
