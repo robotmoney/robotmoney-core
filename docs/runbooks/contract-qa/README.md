@@ -58,6 +58,7 @@ Every step names its `host`. There are two.
 | `control` | The operator machine. It holds the keys. | The runbook driver and every signing command (`publish-contracts`, `cast send`, `rmpc`). |
 | `stage` | The stage host, `rm-core-stage-1`, reached with the ssh config alias. | Every chain and service of a rehearsal: the Twin fork, the stage stack, the dapp. |
 
+- P0.12 is written with `host: "control"` but starts the fork on the stage host (`rm-core-stage-1`): run the two `twin-fork.ts` commands over ssh there. They write `{runDir}/twin/anvil.json` on the stage host. Copy `anvil.json` back to `{runDir}/twin/` on the operator machine (for example `scp rm-core-stage-1:<runDir>/twin/anvil.json {runDir}/twin/`) because the step's receipt check reads that path on the machine that holds the run directory.
 - No rehearsal chain runs on the operator machine. That covers the Twin fork, any anvil and any fork of Base. A Twin run starts its fork on the stage host (P0.12 runs there over ssh).
 - The operator machine drives the whole run over ssh. A `control` step on the Twin target reaches the stage fork through an ssh tunnel (`ssh -N -L <port>:127.0.0.1:<port> rm-core-stage-1`), and `{rpcUrl}` is the local end of that tunnel.
 - Keys, passphrase files and keyed RPC URLs never leave the operator machine. Nothing on the stage host signs (`docs/development/stage-deployment.md`).
@@ -72,6 +73,15 @@ Every step names its `host`. There are two.
 `{gateSha}` is the sha whose tag, green CI and frozen counts gate the run (P0.20, P10.01). It is `{coreSha}`, except on a rehearsal that continues at a tool-only commit (`publish-contracts/src/tooling-sha.ts`): there it is the sha the deployment started at, the `coreSha` of `{evidenceDir}/publish-run.json`, as the publish CLI's own release gate does (owner decision 2026-10-19). A production run is always gated at its own sha.
 
 `{releaseTag}` is the release candidate tag at `{gateSha}`, the squash commit on the release branch (`release/<version>-rc.N-rehearsal` on a rehearsal, `release/<version>-rc.N` on a production run): the release gate (P0.20) needs an annotated tag of the sheet's kind at that sha, nothing more. The record tag `release/<version>-rehearsal` is cut once, at the sha the deployment's run manifest names, and never moved (policy `docs/operations/contract-release-runbooks.md`, version tags).
+
+Placeholders the runner or operator supplies:
+
+- `{owners}` expands to `--owner-signer {ownerSigner}`: one owner signer spec for the Safe owner set. On the Twin target the default throwaway keystores of P0.13 apply, so give none or one per sheet owner.
+- `{emergency}` expands to `--emergency-signer {emergencySigner}`: the key that holds `EMERGENCY_ROLE`, used by `pause-all` and nothing else.
+- `{releaseTag}` is defined above: the annotated rc tag at `{gateSha}` that the release gate (P0.20) reads.
+- `{ownerSignerCount}` is the number of owner signer specs the operator passes to `{owners}`, and P0.17 hands it to `--owner-signers`. It is `0` on the Twin target (the default keystores sign) and equals the number of `SAFE_OWNERS` on a `rehearsal` or `production` run.
+- `{receiptUri}` is the URI recorded on chain with the consensus receipt (`record-receipt --payload-uri`). It points at the stored receipt payload that `{receiptFile}` holds and is not a secret. The operator or runner supplies it.
+- `{cast}` expands to `--keystore {deployerKeystore}`: the flags that `scripts/runbook/cast-send.sh` forwards to `cast send`. It is the deployer keystore only. The passphrase comes from the 0600 file of P0.13 and never appears on the command line.
 
 A whole-element list placeholder expands to several argv elements: `{common}`, `{owners}`, `{gate}`, `{wait}`, `{emergency}`, `{cast}`. The definitions are `LIST_PLACEHOLDERS` in the validator. The scalar names are `SCALARS` in the same file.
 
