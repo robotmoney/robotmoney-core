@@ -5,7 +5,7 @@
 # a template step). scripts/runbook/validate-contract-qa.ts checks it. releases/v0.4.0.yaml and v0.5.0.yaml stay as records.
 release: v0.6.0
 template: contract-qa
-templateSha: 8c7eb73321ffb3990beee1d91cc520336a704e12
+templateSha: 9a132722fdd09f90d5a35e69daba9c01a07d20ab
 productionReady: false
 notes: |
   Identity. v0.6.0 deploys three vaults. The vaults release has no recorder stage and no agent stage (ADR-0017). The router default
