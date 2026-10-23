@@ -1124,7 +1124,7 @@ async fn retired_rmagent_is_served_withdraw_only_and_out_of_tvl() {
     };
     let before = tvl(s.addr).await;
 
-    let agent = vec![0xa9u8; 20];
+    let agent = [0xa9u8; 20];
     sqlx::query(
         "INSERT INTO vaults (chain_id, vault_address, name, risk_label, deposit_cap, status, \
                               registered_at, registered_block, registered_tx) \
