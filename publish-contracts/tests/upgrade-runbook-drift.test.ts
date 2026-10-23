@@ -321,6 +321,17 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
     expect(s6).toContain("schedule it, wait the full delay, and execute it");
     expect(s6.indexOf("--row clear-voted-weights")).toBeLessThan(s6.indexOf("--row retire-vault"));
   });
+  test("section 4.15 repeats the build-pin check, compares OWNER_SIGNER with getOwners, re-reads the receipt vector before the retire and names the Twin procedure (issue 1916)", () => {
+    expect(S415).toContain("This build-pin check is repeated immediately before every later use of `--upgrade-build`");
+    expect(S415).toContain('git ls-remote origin "refs/tags/$RC_TAG^{}"');
+    expect(step(2)).toContain("Compare each `OWNER_SIGNER` address");
+    expect(step(2)).toContain("`getOwners`");
+    expect(step(7)).toContain("re-read the receipt vector");
+    expect(step(7).indexOf("re-read the receipt vector")).toBeLessThan(step(7).indexOf("Then execute the retire batch"));
+    expect(S415).toContain("**The Twin procedure.**");
+    expect(S415).toContain("`core-stages-twin-upgrade-lifecycle`");
+    expect(S415).toContain("docs/runbooks/contract-qa/releases/v0.6.0.yaml");
+  });
   test("Authority and gates states layout and Twin runs must pass before the rc tag, and does not assert they passed", () => {
     const auth = S415.slice(S415.indexOf("**Authority and gates.**"), S415.indexOf("**The delay.**"));
     expect(auth).toContain("must pass `scripts/ci/check-core-storage-layout.sh --baseline release/v0.5.0-rehearsal`");

@@ -508,6 +508,8 @@ jobs:
         run: |
           bun test scripts/runbook/validate-contract-qa.test.ts scripts/runbook/run-record.test.ts --timeout 60000
           bun scripts/runbook/validate-contract-qa.ts
+          # Issue 1916: the committed Twin stage sheet satisfies the sheet check P0.17 runs, so a sheet that drifts from the validator fails here, not in a QA run.
+          bun scripts/runbook/validate-contract-qa.ts --check-sheet deployments/twin-918453/stage-sheet.env --target twin --owner-signers 0
 
       # Core 1496, 1498: the Twin chain CI wiring. The nightly calls suites 5, 7, 8, 10, 11b and 14 with
       # ONE pin from its pin job. Each suite has a pin input, a pin job and takes the pin in every
