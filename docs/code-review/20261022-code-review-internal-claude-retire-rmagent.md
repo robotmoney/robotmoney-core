@@ -45,6 +45,10 @@ A v0.6.0 rc loses the `agent` and `recorder` counts. They are measured and froze
 
 `docs/prd.md`, `docs/architecture.md`, `docs/technical/smart-contracts.md`, `docs/technical/portfolio-router-decisions.md` (no rmAGENT text), the invariants registry (`docs/technical/smart-contract-invariants.md`), the release runbook and `docs/runbooks/contract-qa/` describe the three-vault target. The released v0.4.0 and v0.5.0 records are untouched. Older review and QA notes still name rmAGENT as history.
 
+### 8. Dapp presentation of a Retired rmAGENT
+
+Chosen presentation: withdraw-only. The vault detail page labels the vault "Retired" (`data-deposit-state="retired"`) with the line "This vault is retired and takes no deposits. Withdraw and redeem stay open." and has no deposit control. The portfolio keeps the holder's position at its `previewRedeem` value with no deposit control. `resolveDepositState` returns `retired` for registry status 2 whatever the chain or index says, so `useDepositStates` and `depositsBlocked` keep every deposit form closed even when the vault's own `depositsPaused()` reads false. `RouterDepositTab` shows the router's three legs and no rmAGENT leg. Unit tests: `clients/dapp/tests/unit/retired-rmagent-withdraw-only.test.tsx` and `clients/dapp/tests/unit/router-deposit-tab-three-legs.test.tsx`. No source gap was found, so no dapp source changed.
+
 ## Guards, bounds and floors
 
 No guard, bound or executed-test floor is lowered. `VAULT_AGENT_MIN_POOL_LIQUIDITY` stays 1e15. No test is skipped. The new tests run in CI with non-zero executed floors (`RetireVaultBatch.t.sol` forge floor, the publish-contracts `retire` suite, the Twin upgrade-lifecycle job).
