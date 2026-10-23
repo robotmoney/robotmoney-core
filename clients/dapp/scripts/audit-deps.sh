@@ -43,6 +43,11 @@ ACCEPTED_ADVISORIES=(
   # The CPU exhaustion vulnerability in merge keys affects only YAML parsing during
   # linting of developer-controlled config files; it does not affect the production runtime bundle.
   "GHSA-2883-xcg3-v3hh" # js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources. expires: 2026-12-01
+  # zod (transitive via viem > ox > abitype and wagmi > @wagmi/connectors > @base-org/account > @coinbase/cdp-sdk).
+  # The memory-exhaustion advisory needs zod to validate an attacker-supplied oversized constrained collection;
+  # the dApp never parses untrusted bulk input with these pinned wallet-SDK copies. Published after the v0.6.0 QA
+  # branch was cut (issue 1916), so it is accepted here until the wallet SDK ships zod >= 4.6.6.
+  "GHSA-mrhx-c7xc-m3w5" # zod: memory exhaustion validating oversized constrained collections. expires: 2026-12-01
 )
 
 ignore_args=()
