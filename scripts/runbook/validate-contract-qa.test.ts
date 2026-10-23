@@ -100,8 +100,6 @@ VAULT_USDC_TVL_CAP=100000000000
 VAULT_USDC_PER_DEPOSIT_CAP=10000000000
 VAULT_PROTO_TVL_CAP=100000000000
 VAULT_PROTO_PER_DEPOSIT_CAP=10000000000
-VAULT_AGENT_TVL_CAP=100000000000
-VAULT_AGENT_PER_DEPOSIT_CAP=10000000000
 VAULT_RWA_TVL_CAP=100000000000
 VAULT_RWA_PER_DEPOSIT_CAP=10000000000
 UPGRADE_MODE=upgradeable
@@ -116,10 +114,20 @@ test("a sheet for the wrong chain or a bad seed fails", () => {
   expect(badSeed.join("\n")).toContain("SEED_DEPOSIT_USDC");
 });
 
-test("a rehearsal sheet caps the rmAGENT deposit at 5 USDC (the BNKR test pool, ADR-0016) and accepts exactly 5", () => {
-  const withCap = (cap: string) => sheetProblems(parseSheetText(TWIN_SHEET.replace(/^VAULT_AGENT_PER_DEPOSIT_CAP=.*$/m, `VAULT_AGENT_PER_DEPOSIT_CAP=${cap}`)), "rehearsal");
-  expect(withCap("5000001").join("\n")).toContain("VAULT_AGENT_PER_DEPOSIT_CAP is above 5 USDC");
-  expect(withCap("5000000").join("\n")).not.toContain("VAULT_AGENT_PER_DEPOSIT_CAP is above");
+test("a three-vault sheet (USDC, PROTO, RWA, no AGENT cap) passes on the twin target (issue 1916)", () => {
+  const real = parseSheetText(readFileSync(join(ROOT, "deployments", "twin-918453", "stage-sheet.env"), "utf8"));
+  expect(sheetProblems(real, "twin", 0)).toEqual([]);
+  expect(sheetProblems(parseSheetText(TWIN_SHEET), "rehearsal", 3).filter((x) => x.includes("_CAP is missing"))).toEqual([]);
+});
+
+test("a sheet missing a USDC, PROTO or RWA cap fails, and an AGENT cap is no longer required (issue 1916)", () => {
+  for (const k of ["USDC", "PROTO", "RWA"]) {
+    for (const n of ["TVL_CAP", "PER_DEPOSIT_CAP"]) {
+      const p = sheetProblems(parseSheetText(TWIN_SHEET.replace(new RegExp(`^VAULT_${k}_${n}=.*\\n`, "m"), "")), "rehearsal", 3);
+      expect(p.join("\n")).toContain(`sheet: VAULT_${k}_${n} is missing`);
+    }
+  }
+  expect(sheetProblems(parseSheetText(TWIN_SHEET), "rehearsal", 3).join("\n")).not.toContain("AGENT_");
 });
 
 test("an 8453 sheet needs an owner signer for every sheet owner", () => {

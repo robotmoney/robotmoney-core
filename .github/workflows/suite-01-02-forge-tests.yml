@@ -251,14 +251,14 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --quiet --no-tags --depth=1 origin '+refs/tags/release/v0.5.0-rehearsal:refs/tags/release/v0.5.0-rehearsal'
-          git rev-parse --verify --quiet 'refs/tags/release/v0.5.0-rehearsal^{commit}'
+          test "$(git rev-parse --verify --quiet 'refs/tags/release/v0.5.0-rehearsal^{commit}')" = "57fbe61833e9d7f94557d69102138f7c410c1346" || { echo "::error::release/v0.5.0-rehearsal moved: it must resolve to 57fbe61833e9d7f94557d69102138f7c410c1346"; exit 1; }
           out="$RUNNER_TEMP/layout-v050.txt"
           scripts/ci/check-core-storage-layout.sh --baseline release/v0.5.0-rehearsal >"$out" 2>&1 || { cat "$out"; echo "::error::the storage layout does not extend release/v0.5.0-rehearsal"; exit 1; }
           cat "$out"
           if grep -q 'ships no GovernedUUPS proxy' "$out"; then echo "::error::the baseline compared nothing"; exit 1; fi
           n="$(grep -c 'storage layout extends the layout of release/v0.5.0-rehearsal' "$out" || true)"
           echo "storage layouts compared with release/v0.5.0-rehearsal: $n"
-          if [[ "$n" -lt 1 ]]; then echo "::error::the baseline check did not run for any contract"; exit 1; fi
+          if [[ "$n" -ne 9 ]]; then echo "::error::the baseline check compared $n contracts, exactly 9 are required (issue 1916)"; exit 1; fi
 
       # Issue 1914 Task B: the seven contracts the v0.6.0 governed upgrade does not touch (RouterGovernance, VaultRegistry, PortfolioRouter, rmUSDC, rmPROTO, rmAGENT,
       # rmRWA) changed in comments only. The script builds release/v0.5.0-rehearsal and HEAD, masks immutables, library links and the CBOR metadata trailer, and exits
@@ -267,6 +267,7 @@ jobs:
         run: |
           set -o pipefail
           git fetch --quiet --no-tags --depth=1 origin '+refs/tags/release/*:refs/tags/release/*'
+          test "$(git rev-parse --verify --quiet 'refs/tags/release/v0.5.0-rehearsal^{commit}')" = "57fbe61833e9d7f94557d69102138f7c410c1346" || { echo "::error::release/v0.5.0-rehearsal moved: it must resolve to 57fbe61833e9d7f94557d69102138f7c410c1346"; exit 1; }
           bun test publish-contracts/tests/check-comment-only-contracts.test.ts
           bun publish-contracts/src/ci/check-comment-only-contracts.ts | tee "$RUNNER_TEMP/comment-only.txt"
           grep -qx 'compared 7 contract(s), 7 identical, 0 differ' "$RUNNER_TEMP/comment-only.txt"
