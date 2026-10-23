@@ -279,6 +279,8 @@ for f in "${REVIEW_DIR}"/*.md "${REVIEW_DIR}"/*/*.md; do
     # A measurement note with no numbered findings (V4 recorder sampling, issue 1793,
     # PR 1824): its residual risks are dispositioned in the V4 adapter rows, not per heading.
     20261014-code-review-internal-claude-v4-sampling-economics.md) continue ;;
+    # An unknowns note with no numbered findings (core issue 1914): each open point names the evidence that closes it, and none is a finding to disposition.
+    20261023-code-review-internal-claude-v060-governed-upgrade-unknowns.md) continue ;;
   esac
   day="${base%%-*}"
   [[ "${day}" =~ ^[0-9]{8}$ ]] || continue

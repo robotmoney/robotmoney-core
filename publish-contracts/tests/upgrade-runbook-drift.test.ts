@@ -2,7 +2,7 @@
 // proxy table equal the stage table's `proxies`, the transactions per proxy and the CREATE2 assumption equal `upgradeAuthority`, the verifier labels and the sheet names are
 // quoted exactly, and the exit codes named are the CLI's. A change on either side without the other fails CI (publish-contracts-tests, suite 28).
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { EXIT_CODES } from "../src/errors.ts";
 import { SHEET_SPEC, UPGRADE_MODES } from "../src/sheet.ts";
@@ -193,5 +193,149 @@ describe("the deploy-implementation verb in runbook 4.12 and the Twin harness (i
     expect(fixture).toContain("LegacyConsensusRecommendationReceipt");
     expect(fixture).not.toContain("upgradeToAndCall");
     expect(fixture.match(/artifactJson\(o\.outDir, [^)]+\)/g)).toEqual(["artifactJson(o.outDir, LEGACY_RECEIPT_CONTRACT)", 'artifactJson(o.outDir, "ERC1967Proxy")']);
+  });
+});
+
+// Issue 1914 docs drift check: every command and flag of runbook 4.15 (the v0.6.0 governed upgrade of the live Deploy 3) exists. A publish-contracts command is parsed by the real
+// parseCli (a nonexistent verb, govern row or flag throws), an evidence-check flag must be one of its parseArgs options, a cast call must name a function the contracts declare,
+// and a `govern --row NAME` mention in prose must name a row the CLI knows. The checker is itself tested against planted bad steps.
+describe("runbook 4.15 names only govern rows, flags and functions that exist (issue 1914)", () => {
+  const S415 = (() => {
+    const start = RUNBOOK.indexOf("### 4.15. The v0.6.0 governed upgrade");
+    const end = RUNBOOK.indexOf("\n## 5. ", start);
+    if (start < 0 || end < 0) throw new Error("the runbook has no section 4.15 before section 5");
+    return RUNBOOK.slice(start, end);
+  })();
+  const placeholder = (name: string): string => (name === "RC_SHA" ? "a".repeat(40) : name === "BASE_RPC_URL" ? "http://127.0.0.1:8545" : name === "PWD" ? "/x" : `0x${"1".repeat(40)}`);
+  const split = (line: string): string[] => [...line.matchAll(/"([^"]*)"|(\S+)/g)].map((m) => m[1] ?? m[2]!);
+  const expand = (line: string, common: string): string[] =>
+    split(line.replace(/\$COMMON\b/g, common)).map((t) => t.replace(/\$\{?([A-Z_0-9]+)\}?/g, (_m, n: string) => placeholder(n)));
+  const commands = (text: string): string[] => {
+    const out: string[] = [];
+    for (const block of text.matchAll(/```bash\n([\s\S]*?)```/g)) out.push(...block[1]!.split("\n").map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#") && !l.startsWith("export ")));
+    return out;
+  };
+  // hasRole is inherited from OpenZeppelin AccessControl, whose submodule is not part of the scan.
+  const INHERITED = new Set(["hasRole", "PROPOSER_ROLE", "EXECUTOR_ROLE"]);
+  // getOwners and getThreshold are the Safe's own (the vendored 1.4.1 OwnerManager the Twin deploys).
+  const safeSrc = readFileSync(join(REPO, "contracts", "test", "vendor", "safe-1.4.1", "base", "OwnerManager.sol"), "utf8");
+  const optionKeys = (src: string): Set<string> => new Set([...src.slice(src.indexOf("parseArgs({ options:")).split("\n")[0]!.matchAll(/"?([\w-]+)"?: \{ type:/g)].map((m) => m[1]!));
+  const evidenceSrc = readFileSync(join(REPO, "publish-contracts", "src", "evidence-check.ts"), "utf8");
+  const contractSrc = (() => {
+    let all = "";
+    const walk = (dir: string) => { for (const e of readdirSync(dir, { withFileTypes: true })) { const p = join(dir, e.name); if (e.isDirectory()) { if (e.name !== "test") walk(p); } else if (e.name.endsWith(".sol")) all += readFileSync(p, "utf8"); } };
+    walk(join(REPO, "contracts"));
+    return all;
+  })();
+  const KNOWN_ROWS = async (): Promise<Set<string>> => {
+    const g = await import("../src/govern.ts");
+    const u = await import("../src/upgrade-rows.ts");
+    const r = await import("../src/retire-vault.ts");
+    const a = await import("../src/apply-receipt.ts");
+    const c = await import("../src/clear-voted-weights.ts");
+    const s = await import("../src/submitter-register.ts");
+    return new Set<string>([...g.GOVERN_ROWS, ...g.SELF_ADMIN_ROWS, g.RECEIPT_ROW, a.APPLY_ROW, c.CLEAR_ROW, s.REGISTER_ROW, r.RETIRE_ROW, u.UPGRADE_ROW, u.FREEZE_ROW]);
+  };
+  /** Returns the problems of one command line of the section (empty when every verb, row and flag exists). */
+  const problems = async (line: string, common: string): Promise<string[]> => {
+    if (line.startsWith("COMMON=")) return [];
+    if (line.startsWith("test ")) {
+      // step 0: `test <lhs> = "$RC_SHA"` or `test -z "$(git status --porcelain)"` over a git read of the checkout
+      const g = line.match(/\$\(git ([a-z-]+)([^)]*)\)/);
+      if (!g) return [`${line}: a test line must read the checkout with git`];
+      if (g[1] === "status") return /--porcelain\b/.test(g[2]!) && line.startsWith("test -z ") ? [] : [`${line}: git status must be --porcelain asserted empty`];
+      if (g[1] === "rev-parse") return /= "\$RC_SHA"$/.test(line) && (g[2]!.trim() === "HEAD" || /\^\{commit\}/.test(g[2]!)) ? [] : [`${line}: git rev-parse must equal $RC_SHA`];
+      return [`${line}: git ${g[1]} is not a checkout check this runbook knows`];
+    }
+    const t = expand(line, common);
+    if (t[0] === "bun" && t[1] === "publish-contracts/src/cli.ts") {
+      const { parseCli } = await import("../src/cli.ts");
+      try { parseCli(t.slice(2)); return []; } catch (e) { return [`${line}: ${(e as Error).message.split("\n")[0]}`]; }
+    }
+    if (t[0] === "bun" && t[1] === "publish-contracts/src/evidence-check.ts") {
+      const keys = optionKeys(evidenceSrc);
+      return t.filter((x) => x.startsWith("--")).filter((f) => !keys.has(f.slice(2))).map((f) => `${line}: evidence-check has no ${f}`);
+    }
+    if (t[0] === "cast" && (t[1] === "call" || t[1] === "send")) {
+      const sig = t.find((x) => /^[A-Za-z_][\w]*\(.*\)/.test(x));
+      const name = sig?.slice(0, sig.indexOf("("));
+      if (name === undefined) return [`${line}: no function signature`];
+      if (INHERITED.has(name)) return [];
+      if (new RegExp(`function ${name}\\s*\\(`).test(safeSrc)) return [];
+      return new RegExp(`function ${name}\\s*\\(|public[^;=]*\\b${name}\\b`).test(contractSrc) ? [] : [`${line}: no contract declares ${name}`];
+    }
+    if (t[0] === "cast" && (t[1] === "storage" || t[1] === "codehash")) return [];
+    if (t[0] === "bun" && t[1] === "scripts/runbook/run-record.ts") {
+      const src = readFileSync(join(REPO, "scripts", "runbook", "run-record.ts"), "utf8");
+      return t.filter((x) => x.startsWith("--")).filter((f) => !src.includes(`"${f.slice(2)}"`)).map((f) => `${line}: run-record has no ${f}`);
+    }
+    return [`${line}: not a command this check knows`];
+  };
+  const common = (() => {
+    const m = S415.match(/^COMMON="([^"]*)"$/m);
+    if (!m) throw new Error("section 4.15 does not define COMMON");
+    return m[1]!;
+  })();
+
+  test("the section defines the shared arguments and has the owner-gated numbered mainnet steps, not checkboxes", () => {
+    for (const f of ["--chain 8453", "--rpc", "--sheet", "--core-sha", "--evidence", "--signer", "--owner-signer"]) expect(common, f).toContain(f);
+    expect(S415).not.toMatch(/- \[[ x]\]/);
+    expect([...S415.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]))).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    for (const s of ["**Pause-all caveat.**", "900 s", "172800 s (48 hours)", "Never plan a production window from the 900 s figure", "`--owner-signer`, twice", "--migration receipt-submitter-roles", "govern --row retire-vault", "--governed-upgrades", "--rpc", "`gateway_implementation_runtime_hash`", "An agent never broadcasts to Base 8453"]) expect(S415, s).toContain(s);
+  });
+  test("every command in the section's code blocks parses against the real CLI, evidence-check, run-record and the contracts", async () => {
+    const lines = commands(S415);
+    expect(lines.length).toBeGreaterThanOrEqual(15);
+    const bad: string[] = [];
+    for (const l of lines) bad.push(...(await problems(l, common)));
+    expect(bad).toEqual([]);
+    expect(lines.filter((l) => l.includes("--row upgrade-proxy")).length).toBe(2);
+    expect(lines.some((l) => l.includes("--row retire-vault"))).toBe(true);
+  });
+  test("every `govern --row NAME` the prose and tables name is a row the CLI knows", async () => {
+    const known = await KNOWN_ROWS();
+    const named = [...S415.matchAll(/govern --row ([a-z][a-z-]*)/g)].map((m) => m[1]!);
+    expect(named.length).toBeGreaterThanOrEqual(4);
+    expect(named.filter((n) => !known.has(n))).toEqual([]);
+  });
+  const step = (n: number): string => S415.slice(S415.indexOf(`\n${n}. `), S415.indexOf(`\n${n + 1}. `));
+  test("step 0 checks HEAD, a clean tree and the rc tag before any --upgrade-build use, and the checker validates those lines", async () => {
+    const s0 = step(0);
+    for (const l of ['test "$(git rev-parse HEAD)" = "$RC_SHA"', 'test -z "$(git status --porcelain)"', 'test "$(git rev-parse "$RC_TAG^{commit}")" = "$RC_SHA"']) { expect(s0, l).toContain(l); expect(await problems(l, common)).toEqual([]); }
+    expect(S415.indexOf("\n0. ")).toBeLessThan(S415.indexOf("--upgrade-build"));
+    expect((await problems('test "$(git rev-parse HEAD)" = "$OTHER"', common)).length).toBe(1);
+    expect((await problems('test -z "$(git status)"', common)).length).toBe(1);
+    expect((await problems('test "$(git log HEAD)" = "$RC_SHA"', common)).length).toBe(1);
+  });
+  test("step 2 reads the Safe owners and threshold, the Safe's timelock roles and the RouterGovernance code on chain", async () => {
+    const s2 = step(2);
+    for (const l of ['cast call $SAFE "getOwners()(address[])"', 'cast call $SAFE "getThreshold()(uint256)"', 'cast call $TIMELOCK "hasRole(bytes32,address)(bool)" $PROPOSER_ROLE $SAFE', 'cast call $TIMELOCK "hasRole(bytes32,address)(bool)" $EXECUTOR_ROLE $SAFE', "cast codehash $GOVERNANCE"]) expect(s2, l).toContain(l);
+    expect(s2).toContain("must read 2");
+    expect(await problems('cast call $SAFE "getNoSuchOwners()(address[])" --rpc-url $BASE_RPC_URL', common)).toHaveLength(1);
+    expect(S415.indexOf("export GOVERNANCE=")).toBeGreaterThan(-1);
+  });
+  test("steps 4 and 5 review govern.preview before the second signature, and step 6 clears, delays and executes before retire-vault", () => {
+    expect(step(4)).toContain("`govern.preview`");
+    for (const w of ["`new_implementation`", "`new_code_hash`", "second owner signs", "delay"]) expect(step(5), w).toContain(w);
+    const s6 = step(6);
+    expect(s6).toContain("schedule it, wait the full delay, and execute it");
+    expect(s6.indexOf("--row clear-voted-weights")).toBeLessThan(s6.indexOf("--row retire-vault"));
+  });
+  test("Authority and gates states layout and Twin runs must pass before the rc tag, and does not assert they passed", () => {
+    const auth = S415.slice(S415.indexOf("**Authority and gates.**"), S415.indexOf("**The delay.**"));
+    expect(auth).toContain("must pass `scripts/ci/check-core-storage-layout.sh --baseline release/v0.5.0-rehearsal`");
+    expect(auth).toContain("before the rc tag is cut");
+    expect(auth).not.toMatch(/\bpassed\b/);
+  });
+  test("the checker fails a step that names a nonexistent govern row, a nonexistent flag or a nonexistent function", async () => {
+    const ok = `bun publish-contracts/src/cli.ts govern --row retire-vault --admin-arg vault=$RMAGENT --admin-arg weights=USDC:9500,PROTO:500,RWA:0 $COMMON`;
+    expect(await problems(ok, common)).toEqual([]);
+    expect((await problems(ok.replace("retire-vault", "retire-everything"), common)).length).toBe(1);
+    expect((await problems(ok.replace("--admin-arg weights", "--admin-weights"), common)).length).toBe(1);
+    expect((await problems(`bun publish-contracts/src/evidence-check.ts --governed-upgrades-x F --rpc U`, common)).length).toBe(1);
+    expect((await problems(`cast call $TIMELOCK "getNoSuchDelay()(uint256)" --rpc-url $BASE_RPC_URL`, common)).length).toBe(1);
+    expect(await problems(`cast call $TIMELOCK "getMinDelay()(uint256)" --rpc-url $BASE_RPC_URL`, common)).toEqual([]);
+    const named = [...`run govern --row nosuchrow now`.matchAll(/govern --row ([a-z][a-z-]*)/g)].map((m) => m[1]!);
+    expect((await KNOWN_ROWS()).has(named[0]!)).toBe(false);
   });
 });
