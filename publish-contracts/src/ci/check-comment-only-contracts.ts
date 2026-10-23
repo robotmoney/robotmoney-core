@@ -50,6 +50,12 @@ function sh(cmd: string[], cwd: string): string {
   return r.stdout.toString().trim();
 }
 
+/** A ref that starts with '-' would be read by git as an option (for example --output=FILE or --upload-pack), so it is refused before any git call. */
+export function assertSafeRef(ref: string, flag: string): string {
+  if (ref === "" || ref.startsWith("-")) throw new Error(`${flag} must be a git ref and cannot be empty or start with '-' (got ${JSON.stringify(ref)})`);
+  return ref;
+}
+
 /** Build `ref` in a detached worktree under `scratch` and return its forge out/ directory. */
 function buildRef(root: string, scratch: string, label: string, ref: string): string {
   const wt = join(scratch, label);
@@ -76,13 +82,16 @@ export function main(argv: string[]): number {
   if (contracts.length === 0) { console.error("no contracts named"); return 2; }
   let baselineOut = arg(argv, "--baseline-out");
   let candidateOut = arg(argv, "--candidate-out");
+  const baselineRef = arg(argv, "--baseline") ?? DEFAULT_BASELINE;
+  const candidateRef = arg(argv, "--candidate") ?? "HEAD";
+  try { assertSafeRef(baselineRef, "--baseline"); assertSafeRef(candidateRef, "--candidate"); } catch (e) { console.error(`error: ${(e as Error).message}`); return 2; }
   const root = resolve(import.meta.dir, "..", "..", "..");
   let scratch: string | undefined;
   try {
     if (!baselineOut || !candidateOut) {
       scratch = mkdtempSync(join(tmpdir(), "comment-only-"));
-      baselineOut = buildRef(root, scratch, "baseline", arg(argv, "--baseline") ?? DEFAULT_BASELINE);
-      candidateOut = buildRef(root, scratch, "candidate", arg(argv, "--candidate") ?? "HEAD");
+      baselineOut = buildRef(root, scratch, "baseline", baselineRef);
+      candidateOut = buildRef(root, scratch, "candidate", candidateRef);
     }
     const rows = compareBuilds(baselineOut, candidateOut, contracts);
     for (const r of rows) console.log(`${r.ok ? "PASS" : "FAIL"} ${r.contract.padEnd(20)} baseline ${r.baseline} candidate ${r.candidate} ${r.detail}`);

@@ -4,7 +4,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { COMMENT_ONLY_CONTRACTS, compareBuilds } from "../src/ci/check-comment-only-contracts.ts";
+import { assertSafeRef, COMMENT_ONLY_CONTRACTS, compareBuilds } from "../src/ci/check-comment-only-contracts.ts";
 
 const SCRIPT = join(import.meta.dir, "..", "src", "ci", "check-comment-only-contracts.ts");
 const scratch = mkdtempSync(join(tmpdir(), "comment-only-test-"));
@@ -53,5 +53,15 @@ describe("comment-only contract guard (issue 1914)", () => {
   test("an empty contract list is a tooling error, never a pass", () => {
     const a = build("a4", { Alpha: code("6001600255", "010a") });
     expect(run(a, a, ",").exitCode).toBe(2);
+  });
+  test("an option-like ref (leading '-') is refused with exit 2 before git runs", () => {
+    expect(() => assertSafeRef("--output=/x", "--baseline")).toThrow("cannot be empty or start with '-'");
+    expect(() => assertSafeRef("", "--baseline")).toThrow();
+    expect(assertSafeRef("release/v0.5.0-rehearsal", "--baseline")).toBe("release/v0.5.0-rehearsal");
+    for (const flag of ["--baseline", "--candidate"]) {
+      const r = Bun.spawnSync(["bun", SCRIPT, flag, "--upload-pack=x"], { stdout: "pipe", stderr: "pipe" });
+      expect(r.exitCode).toBe(2);
+      expect(r.stderr.toString()).toContain("start with '-'");
+    }
   });
 });

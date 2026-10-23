@@ -964,7 +964,7 @@ This section is the ordered, owner-gated procedure that moves the live Deploy 3 
 
 **Not upgraded.** `RouterGovernance`, `VaultRegistry`, `PortfolioRouter`, `RobotMoneyVault` (rmUSDC), `ProtocolAssetVault` (rmPROTO), `AgentTokenVault` (rmAGENT) and `RwaBasketVault` (rmRWA) keep their Deploy 3 implementations. Their v0.6.0 source differs from Deploy 3 in comments only. `bun publish-contracts/src/ci/check-comment-only-contracts.ts` builds `release/v0.5.0-rehearsal` and the candidate, masks the immutables, the library links and the CBOR metadata trailer with the verifier's own masking, and exits non-zero on any difference in the runtime logic of these seven. It runs in the required CI job `forge-unit-tests` on every pull request. The orphaned `InvestmentCommitteePolicy` proxy of Deploy 3 stays on chain unchanged.
 
-**Authority and gates.** The owner records an explicit go before step 1. An agent never broadcasts to Base 8453, and the 2026-10-18 go covered Deploy 3 only. The run starts from a clean checkout of the rc tag `release/v0.6.0-rc.N-rehearsal` (§4.14). The storage layout of all nine proxied contracts passed `scripts/ci/check-core-storage-layout.sh --baseline release/v0.5.0-rehearsal`. Two clean runs of `core-stages-twin-upgrade-lifecycle` on `rm-core-stage-1` passed at the QA commit (§2).
+**Authority and gates.** The owner records an explicit go before step 1. An agent never broadcasts to Base 8453, and the 2026-10-18 go covered Deploy 3 only. The run starts from a clean checkout of the rc tag `release/v0.6.0-rc.N-rehearsal` (§4.14). The storage layout of all nine proxied contracts must pass `scripts/ci/check-core-storage-layout.sh --baseline release/v0.5.0-rehearsal` (the required `forge-unit-tests` job runs it on every pull request) before the rc tag is cut. Two clean runs of `core-stages-twin-upgrade-lifecycle` on `rm-core-stage-1` must pass at the QA commit before the rc tag is cut (§2). Do not cut the rc tag, and do not start step 1, until both are recorded green.
 
 **The delay.** Deploy 3 is a rehearsal-kind deployment with a 900 s timelock. Every schedule below waits 900 s, and the Twin does not prove the 48 hour production delay or the mainnet Safe signers. A production-kind deployment waits 172800 s (48 hours) and uses the production floors of §4.10. Never plan a production window from the 900 s figure. Read the delay from the chain in step 2 and never type it from memory.
 
@@ -978,12 +978,23 @@ Set these once. `COMMON` is the argument set every `publish-contracts` command b
 export DEPLOY3_SHEET=<the Deploy 3 frozen sheet>      # sheet of the live deployment, DEPLOYMENT_KIND=rehearsal
 export EVIDENCE=<the Deploy 3 run evidence directory>  # holds publish-run.json and the stage manifests
 export RC_SHA=<the full commit of the rc tag>
+export RC_TAG=<the rc tag, release/v0.6.0-rc.N-rehearsal>
+export SAFE=<the governing Safe, from the Deploy 3 run manifest>
+export GOVERNANCE=<RouterGovernance, from the governance stage manifest of the Deploy 3 run manifest>
 COMMON="--chain 8453 --rpc $BASE_RPC_URL --sheet $DEPLOY3_SHEET --core-sha $RC_SHA --evidence $EVIDENCE --environment local --signer $DEPLOYER_SIGNER --owner-signer $OWNER_SIGNER_1 --owner-signer $OWNER_SIGNER_2"
 ```
 
 **Pause-all caveat.** Until step 7 executes, `pause-all` does not cover the live rmAGENT, because the v0.6.0 tool pauses the three vaults rmUSDC, rmPROTO and rmRWA. If an incident needs a pause before the retire executes, pause rmAGENT by hand with the `EMERGENCY_ROLE` key (`pauseDeposits()` on the rmAGENT proxy), or run steps 6 and 7 first. Withdrawals are never paused.
 
 **Mainnet steps.** Each step is owner-gated and runs in this order. Do not start a step before the previous one is recorded in the evidence.
+
+0. Check the checkout before any command uses `--upgrade-build "$PWD"`. HEAD must equal `$RC_SHA`, the work tree must be clean and the rc tag must point at `$RC_SHA`. Stop on any failure: a build from another tree would deploy code the owners never reviewed.
+
+```bash
+test "$(git rev-parse HEAD)" = "$RC_SHA"
+test -z "$(git status --porcelain)"
+test "$(git rev-parse "$RC_TAG^{commit}")" = "$RC_SHA"
+```
 
 1. Record the owner go in the run record with the rc commit and the Deploy 3 sheet. Stop if the owner has not given the go.
 
@@ -995,6 +1006,13 @@ bun scripts/runbook/run-record.ts go --kind publish --run-dir $RUN_DIR --sha $RC
 
 ```bash
 cast call $TIMELOCK "getMinDelay()(uint256)" --rpc-url $BASE_RPC_URL
+cast call $SAFE "getOwners()(address[])" --rpc-url $BASE_RPC_URL
+cast call $SAFE "getThreshold()(uint256)" --rpc-url $BASE_RPC_URL
+cast call $TIMELOCK "PROPOSER_ROLE()(bytes32)" --rpc-url $BASE_RPC_URL
+cast call $TIMELOCK "EXECUTOR_ROLE()(bytes32)" --rpc-url $BASE_RPC_URL
+cast call $TIMELOCK "hasRole(bytes32,address)(bool)" $PROPOSER_ROLE $SAFE --rpc-url $BASE_RPC_URL
+cast call $TIMELOCK "hasRole(bytes32,address)(bool)" $EXECUTOR_ROLE $SAFE --rpc-url $BASE_RPC_URL
+cast codehash $GOVERNANCE --rpc-url $BASE_RPC_URL
 cast storage $RECEIPT 0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00 --rpc-url $BASE_RPC_URL
 cast call $RECEIPT "ADMIN_ROLE()(bytes32)" --rpc-url $BASE_RPC_URL
 cast call $RECEIPT "hasRole(bytes32,address)(bool)" $ADMIN_ROLE $TIMELOCK --rpc-url $BASE_RPC_URL
@@ -1008,7 +1026,7 @@ cast call $ROUTER "getDefaultWeights()" --rpc-url $BASE_RPC_URL
 cast call $ROUTER "getEffectiveWeights()" --rpc-url $BASE_RPC_URL
 ```
 
-   The `ADMIN_ROLE()` output is the `$ADMIN_ROLE` of the two `hasRole` reads. The delay reads 900. The receipt initialized version reads 1. The timelock and RouterGovernance both hold `ADMIN_ROLE` on the receipt. Neither proxy is frozen. The router reads four eligible vaults. If the delay reads anything else, if the receipt reads version 2 (the migration already ran and the whole execute would revert with `InvalidInitialization`), or if an active receipt vector shows in the effective weights, stop and report. The row does not read these values (gap RM-1022-2 in `docs/audits.md`), so this step is the only check of them before the signers sign.
+   The `ADMIN_ROLE()` output is the `$ADMIN_ROLE` of the two receipt `hasRole` reads. The `PROPOSER_ROLE()` and `EXECUTOR_ROLE()` outputs are the `$PROPOSER_ROLE` and `$EXECUTOR_ROLE` of the two timelock `hasRole` reads. `getOwners` must return exactly the three owners of the Deploy 3 run manifest and `getThreshold` must read 2, which are the signers of `--owner-signer` (twice). The Safe must hold `PROPOSER_ROLE` and `EXECUTOR_ROLE` on `$TIMELOCK`: both reads must be true. `$GOVERNANCE` is the `governance` field of the governance stage manifest, never typed from memory, and `cast codehash` must have code (not the empty-code hash). Record the code hash: step 5 and step 9 compare against it. The delay reads 900. The receipt initialized version reads 1. The timelock and RouterGovernance both hold `ADMIN_ROLE` on the receipt. Neither proxy is frozen. The router reads four eligible vaults. If the delay reads anything else, if the receipt reads version 2 (the migration already ran and the whole execute would revert with `InvalidInitialization`), or if an active receipt vector shows in the effective weights, stop and report. The row does not read these values (gap RM-1022-2 in `docs/audits.md`), so this step is the only check of them before the signers sign.
 
 3. Deploy the gateway implementation. The deployer sends one CREATE from the rc checkout build.
 
@@ -1026,7 +1044,7 @@ bun publish-contracts/src/cli.ts govern --row upgrade-proxy --proxy gateway --im
 
    The first run prints `govern.preview` and exits `GOVERN_PENDING` (15). After 900 s the same command executes through the Safe, reads the implementation slot back and re-records the gateway manifest, `gateway_implementation_runtime_hash` and `gateway_runtime_hash` from the chain.
 
-5. Deploy the receipt implementation, then schedule the receipt upgrade with its typed migration. Compare the `migration_function` line of `govern.preview` with the RouterGovernance address read in step 2 before any owner signs. The operator never supplies calldata.
+5. Deploy the receipt implementation, then schedule the receipt upgrade with its typed migration. Before the second owner signs, review the whole `govern.preview` line: `new_implementation` must equal the `RECEIPT_IMPL` the deploy printed, `new_code_hash` must equal the code hash read back from that address, and the `migration_function` line must name the `$GOVERNANCE` address and code read in step 2. The delay is the one read in step 2 (900), and the schedule must not go ahead if it differs. Review the gateway `govern.preview` of step 4 the same way (implementation address and delay) before its second signature. The operator never supplies calldata.
 
 ```bash
 bun publish-contracts/src/cli.ts deploy-implementation --proxy receipt --upgrade-build "$PWD" $COMMON
@@ -1035,14 +1053,14 @@ bun publish-contracts/src/cli.ts govern --row upgrade-proxy --proxy receipt --im
 
    Record the printed address as `RECEIPT_IMPL`. After 900 s run the second command again to execute it. Then read back `RECEIPT_RELEASER_ROLE` (held by RouterGovernance only), `ADMIN_ROLE` (held by the timelock only) and the receipt count, and compare them with the step 2 values. A second `migrateToSubmitterRoles` must revert with `InvalidInitialization`.
 
-6. Clear any active receipt vector, then schedule the rmAGENT retire batch. The row prints its preview first (the vault, the three-leg vector that stays, both calls) and refuses an active receipt vector, a vault that is not Active and router-eligible, and a vector that is not exactly rmUSDC, rmPROTO and rmRWA summing to 10000.
+6. Clear any active receipt vector, then schedule the rmAGENT retire batch. When step 2 showed an active receipt vector, `clear-voted-weights` is its own timelock operation: schedule it, wait the full delay, and execute it (rerun the same command after the delay) before `retire-vault` is scheduled. `retire-vault` refuses an active vector, so never schedule it while the clear is only scheduled. The row prints its preview first (the vault, the three-leg vector that stays, both calls) and refuses an active receipt vector, a vault that is not Active and router-eligible, and a vector that is not exactly rmUSDC, rmPROTO and rmRWA summing to 10000.
 
 ```bash
 bun publish-contracts/src/cli.ts govern --row clear-voted-weights $COMMON
 bun publish-contracts/src/cli.ts govern --row retire-vault --admin-arg vault=$RMAGENT --admin-arg weights=USDC:9500,PROTO:500,RWA:0 $COMMON
 ```
 
-   Run the first command only when step 2 showed an active receipt vector. The batch is one timelock operation: `registry.migrateEligibility(rmAGENT, false, [rmUSDC, rmPROTO, rmRWA], [9500, 500, 0])` then `registry.retire(rmAGENT)`. If rmAGENT holds funds (step 2 `totalAssets`), keep `scripts/ops/recorder-keeper.sh` running for it, because `redeem` reads the recorder and `redeemInKind` does not.
+   Run the first command only when step 2 showed an active receipt vector, and run it twice (schedule, then execute after the delay) before the second command. The batch is one timelock operation: `registry.migrateEligibility(rmAGENT, false, [rmUSDC, rmPROTO, rmRWA], [9500, 500, 0])` then `registry.retire(rmAGENT)`. If rmAGENT holds funds (step 2 `totalAssets`), keep `scripts/ops/recorder-keeper.sh` running for it, because `redeem` reads the recorder and `redeemInKind` does not.
 
 7. Execute the retire batch after the delay with the same `retire-vault` command. It reads back registry status Retired, `routerEligibleCount()` 3, default and effective vectors equal to the three legs, `retired()` true on rmAGENT, and code at the vault.
 
