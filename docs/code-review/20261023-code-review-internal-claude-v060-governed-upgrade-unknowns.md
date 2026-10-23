@@ -1,0 +1,18 @@
+# v0.6.0 governed upgrade of the live Deploy 3: the unknowns the runbook does not decide
+
+Date: 2026-10-23. Scope: core issue 1914, Task A (runbook section 4.15) and the Task B hash script (`publish-contracts/src/ci/check-comment-only-contracts.ts`). The runbook states the target procedure only. The points below are open, are not guessed in the runbook, and each has the evidence that closes it.
+
+## What the new checks prove
+
+- Runbook 4.15 is checked by `publish-contracts/tests/upgrade-runbook-drift.test.ts`. Every `publish-contracts` command is parsed by the real `parseCli`, so a nonexistent verb, govern row or flag fails. Every `evidence-check` flag must be one of its options. Every `cast call` names a function the contracts declare (`hasRole` is the one inherited name the scan lists by hand). Every `govern --row NAME` in prose names a known row.
+- The comment-only guard builds `release/v0.5.0-rehearsal` and the candidate with forge, masks immutables, library links and the CBOR metadata trailer with `verify/codehash.ts`, and compares the keccak256 of the result for RouterGovernance, VaultRegistry, PortfolioRouter, RobotMoneyVault, ProtocolAssetVault, AgentTokenVault and RwaBasketVault. It runs in the required job `forge-unit-tests` and the step asserts the summary line `compared 7 contract(s), 7 identical, 0 differ`.
+- The digests the guard prints are the hash of the fully masked runtime code. They are not the digests of a manual metadata-only strip, so the two sets of 12 character prefixes differ while both show equality for all seven.
+
+## Open unknowns
+
+- The live rmAGENT balance. Deploy 3 built rmAGENT with RM while RM was parked (ADR-0015, ADR-0016). Deposits were capped at 5 USDC per deposit and 20 USDC TVL. The real `totalAssets()` and `totalSupply()` are read from the chain in runbook step 2. Until then the amount a holder can redeem, and whether the V4 recorder must keep running, is unknown.
+- Verify with the orphaned `InvestmentCommitteePolicy` proxy. Deploy 3 has an ic-policy proxy that the v0.6.0 source no longer builds and whose layout snapshot is deleted. The v0.6.0 stage table has no ic-policy stage. How `verify` treats that live proxy at the new sha is not shown by any run. The Twin rehearsal builds a fresh v0.6.0 deployment, so it does not exercise it. The first evidence is the post-upgrade `verify` of step 8.
+- The version number. The release file and the runbook say v0.6.0, because the gateway and receipt ABI break. The alternative is v0.5.1. A rehearsal-kind release cuts no `vA.B.C` tag, so the choice only names the line, the branch `releases-0.6.x` and the record tag. The owner confirms before the rc tag is cut.
+- Frozen counts for the rc sha. `deployments/frozen-counts/` holds the latest file for the Deploy 3 sha. The rc sha needs its own file from the adopted Twin measuring run (runbook section 3, `freeze-counts.ts --from-adopted-run`). A governed upgrade deploys two implementations from the deployer, so the count of deployer transactions the release gate expects for this run is not stated anywhere yet.
+- Which authority governs the gateway on Deploy 3. The Deploy 3 gateway was deployed in the combined shape, so its upgrade timelock is the core timelock and `govern --row upgrade-proxy --proxy gateway` schedules through the same Safe. A later release of the separate gateway system names its own `GATEWAY_UPGRADE_TIMELOCK` (`docs/architecture.md` section 10, open). The runbook covers Deploy 3 only.
+- Recorder keeper after the retire. `redeem` on a retired rmAGENT reads the V4 recorder, so `scripts/ops/recorder-keeper.sh` must keep running while the vault holds funds. Who owns that process after the retire is not assigned.

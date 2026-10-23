@@ -245,6 +245,17 @@ jobs:
           scripts/ci/check-core-storage-layout.sh --selftest
           scripts/ci/check-core-storage-layout.sh "${base[@]}" --releases
 
+      # Issue 1914 Task B: the seven contracts the v0.6.0 governed upgrade does not touch (RouterGovernance, VaultRegistry, PortfolioRouter, rmUSDC, rmPROTO, rmAGENT,
+      # rmRWA) changed in comments only. The script builds release/v0.5.0-rehearsal and HEAD, masks immutables, library links and the CBOR metadata trailer, and exits
+      # non-zero on any runtime-logic difference. The summary line is asserted so a run that compared nothing (or fewer than all seven) reads red, never green.
+      - name: Comment-only contracts are logic-identical to Deploy 3 (issue 1914)
+        run: |
+          set -o pipefail
+          git fetch --quiet --no-tags --depth=1 origin '+refs/tags/release/*:refs/tags/release/*'
+          bun test publish-contracts/tests/check-comment-only-contracts.test.ts
+          bun publish-contracts/src/ci/check-comment-only-contracts.ts | tee "$RUNNER_TEMP/comment-only.txt"
+          grep -qx 'compared 7 contract(s), 7 identical, 0 differ' "$RUNNER_TEMP/comment-only.txt"
+
       - name: Gateway agent-policy gas report (issue 1476)
         # Measurement, not a budget: prints the RobotMoneyGateway rows for
         # revealAuthorization, setPolicy and revokeAgent so a change in their
