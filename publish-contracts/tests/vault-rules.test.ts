@@ -157,7 +157,7 @@ describe("the retired rmAGENT row of a v0.5.0 table (issue 1927)", () => {
     const { assertVaultRulesMatch } = await import("../src/vault-rules.ts");
     const { loadStageTable } = await import("../src/stage-table.ts");
     const v050 = loadStageTable(join(import.meta.dir, "fixtures", "v050"));
-    expect(v050.vaults.map((v) => v.key)).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
+    expect(v050.vaults.map((v) => v.key as string)).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
     expect(() => assertVaultRulesMatch(v050, "v050", { retired: true })).not.toThrow();
     expect(() => assertVaultRulesMatch(v050, "v050")).toThrow("for vault AGENT");
     const edited = { vaults: v050.vaults.map((v) => (v.key === "PROTO" ? { ...v, seed: "SEED_DEPOSIT_USDC" } : v)) };

@@ -9,7 +9,7 @@ import { PROOF_TX_NONCES } from "../counts.ts";
 import { kindLabel, rehearsalDelayProblem } from "../chains.ts";
 import { ERC1967_PROXY_ARTIFACT, compareDeployedCode, loadArtifact, logicCode, tryLoadArtifact } from "./codehash.ts";
 import {
-  ADMIN_ROLE, AGENT_ROLE, RECEIPT_SUBMITTER_ROLE, RECEIPT_RELEASER_ROLE, KEEPER_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
+  ADMIN_ROLE, AGENT_ROLE, COMMITTEE_AGENT_ROLE, RECEIPT_SUBMITTER_ROLE, RECEIPT_RELEASER_ROLE, KEEPER_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
     SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
 import { manifestBase, scopeTable } from "../stage-table.ts";
@@ -216,7 +216,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     // Issue 1851: the deployer can only have been granted a role on a contract that exists, so the scan start must precede the creation of every governed contract.
     await roleScan(c, chain, D, governed, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
     await roleHolderEnumeration(c, chain, governed, {
-      timelock: tl, accounts: [tl, safe, byName.governance!, sheet.emergency, sheet.pauser], receipt: byName.receipt!, gateway, router,
+      timelock: tl, accounts: [tl, safe, byName.governance!, sheet.emergency, sheet.pauser], receipt: byName.receipt!, gateway, router, ...(byName.icpolicy ? { icPolicy: byName.icpolicy } : {}),
     }, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
   }
 
@@ -835,7 +835,7 @@ const ROLE_HOLDERS_LABEL = "roles: every holder of every role on every governed 
  */
 async function roleHolderEnumeration(
   c: Collector, chain: ChainReader, governed: { name: string; address: Address }[],
-  expect: { timelock: Address; accounts: Address[]; receipt: Address; gateway: Address; router: Address },
+  expect: { timelock: Address; accounts: Address[]; receipt: Address; gateway: Address; router: Address; icPolicy?: Address },
   s: { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number; created: CreationProof },
 ): Promise<void> {
   const late = await s.created(governed);
@@ -859,6 +859,9 @@ async function roleHolderEnumeration(
         if (lc(g.address) === lc(expect.gateway) && role === AGENT_ROLE) continue;
         // The consensus receipt submitter Safe holds RECEIPT_SUBMITTER_ROLE on the receipt by design (issue 1888).
         if (lc(g.address) === lc(expect.receipt) && role === RECEIPT_SUBMITTER_ROLE) continue;
+        // Issue 1927: the orphaned InvestmentCommitteePolicy of a v0.5.0 deployment keeps its v0.5.0 holders, as the v0.5.0 verifier read them: the submitter Safe's
+        // COMMITTEE_AGENT_ROLE (issue 1750) and the gateway's ADMIN_ROLE. Only a prior-line table has the contract (core-wiring.ts PRIOR_LINE_CONTRACT_REFS).
+        if (expect.icPolicy && lc(g.address) === lc(expect.icPolicy) && (role === COMMITTEE_AGENT_ROLE || (role === ADMIN_ROLE && lc(who) === lc(expect.gateway)))) continue;
         const expected = ok.has(lc(who))
           || (lc(g.address) === lc(expect.timelock) && role === EXECUTOR_ROLE && lc(who) === lc(ZERO));
         if (!expected) bad.push(`${who} holds ${role} on ${g.name}`);
