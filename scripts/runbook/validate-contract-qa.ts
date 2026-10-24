@@ -536,6 +536,21 @@ export function gatewayRunbookProblems(root: string, model: CliModel): string[] 
 
 export interface Loaded { template: { name: string; steps: RunbookStep[] }; releases: Map<string, ReleaseRunbook>; problems: string[] }
 /** Everything in docs/runbooks/contract-qa/: the template, every release file against it, and the commands against the real CLIs. */
+/**
+ * PURE. A release that deploys and unpauses basket vaults (it has the govern-schedule step) must set a non-zero emergency unwind
+ * guard on every open basket, or the post-govern verify (P4.01, unwindGuardCheck) fails. So it needs a set-unwind-guard govern
+ * round for each of PROTO and RWA. rmAGENT is retired from v0.6.0, so it is not required there.
+ */
+export function unwindGuardProblems(r: Pick<ReleaseRunbook, "release" | "steps">): string[] {
+  if (!r.steps.some((s) => s.id === "P3.01-govern-schedule")) return [];
+  const rounds = r.steps.flatMap((s) => s.cmds ?? []).filter((c) => c.includes("set-unwind-guard"));
+  const out: string[] = [];
+  for (const vault of ["PROTO", "RWA"]) {
+    if (!rounds.some((c) => c.includes(`vault=${vault}`))) out.push(`releases/${r.release}.yaml: an open basket vault (${vault}) has no set-unwind-guard step, so the post-govern verify fails its emergency unwind guard check`);
+  }
+  return out;
+}
+
 export function validateAll(root: string = ROOT, model: CliModel = loadModel(root), pinnedTemplate: (sha: string) => string | undefined = templateAtCommit): Loaded {
   const problems: string[] = [];
   const tplPath = join(root, QA_DIR, "template.yaml");
@@ -554,6 +569,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
     try {
       const r = parseRelease(text, name);
       releases.set(name, r);
+      problems.push(...unwindGuardProblems(r));
       // A release pinned to templateSha is a record: its steps are checked against the template AT that commit, never the
       // current one, and its commands were checked against the CLIs at that commit, so a later template or CLI change does
       // not reopen it. The pin is read from git, so an edited record or a made-up commit is refused. An unpinned release is
@@ -604,14 +620,13 @@ export function sheetProblems(sheet: Record<string, string>, target: string, own
   const delay = Number(need("TIMELOCK_MIN_DELAY"));
   if (sheet.TIMELOCK_MIN_DELAY !== undefined && !(delay >= t.delay.min && delay <= t.delay.max)) out.push(`sheet: TIMELOCK_MIN_DELAY ${sheet.TIMELOCK_MIN_DELAY} is outside ${t.delay.min}..${t.delay.max === Infinity ? "any" : t.delay.max} for ${target}`);
   if (need("SEED_DEPOSIT_USDC") !== undefined && sheet.SEED_DEPOSIT_USDC !== "1000000") out.push(`sheet: SEED_DEPOSIT_USDC is ${sheet.SEED_DEPOSIT_USDC}; the standing rule is 1 USDC (1000000)`);
-  for (const k of ["USDC", "PROTO", "AGENT", "RWA"]) {
+  for (const k of ["USDC", "PROTO", "RWA"]) {
     const tvl = need(`VAULT_${k}_TVL_CAP`), per = need(`VAULT_${k}_PER_DEPOSIT_CAP`);
     if (tvl === undefined || per === undefined) continue;
     if (BigInt(per) > BigInt(tvl)) out.push(`sheet: VAULT_${k}_PER_DEPOSIT_CAP is above its TVL cap`);
     if (BigInt(per) < 1000000n) out.push(`sheet: VAULT_${k}_PER_DEPOSIT_CAP ${per} is below the 1 USDC test deposit (1000000)`);
     if (target === "rehearsal" && BigInt(tvl) > 1000000000n) out.push(`sheet: VAULT_${k}_TVL_CAP ${tvl} is above 1000 USDC; a rehearsal is a contained test`);
   }
-  if (target === "rehearsal" && sheet.VAULT_AGENT_PER_DEPOSIT_CAP !== undefined && BigInt(sheet.VAULT_AGENT_PER_DEPOSIT_CAP) > 5000000n) out.push("sheet: VAULT_AGENT_PER_DEPOSIT_CAP is above 5 USDC; the BNKR test pool holds about 706 USD of virtual depth, a 10 USDC swap already loses 1.75 percent and a 100 USDC swap 11.7 percent against the 300 bps swap bound (ADR-0016)");
   const mode = need("UPGRADE_MODE");
   if (mode !== undefined && !["upgradeable", "frozen"].includes(mode)) out.push(`sheet: UPGRADE_MODE is '${mode}', not upgradeable or frozen`);
   if (target === "production" && mode === "upgradeable" && !sheet.UPGRADE_FREEZE_DEADLINE) out.push("sheet: an upgradeable production release needs UPGRADE_FREEZE_DEADLINE");

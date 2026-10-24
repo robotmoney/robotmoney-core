@@ -17,6 +17,15 @@ import { keccak256 } from "viem";
 import { loadArtifact, maskHex } from "../verify/codehash.ts";
 
 export const DEFAULT_BASELINE = "release/v0.5.0-rehearsal";
+/** The commit the Deploy 3 record tag points at (issue 1916). A tag that resolves to any other commit is refused, so the baseline cannot move silently. */
+export const BASELINE_SHA = "57fbe61833e9d7f94557d69102138f7c410c1346";
+
+/** PURE-ish: the commit `ref` resolves to in `root`, or a thrown reason. Throws unless it equals BASELINE_SHA. */
+export function assertBaselinePinned(root: string, ref: string): void {
+  let got: string;
+  try { got = sh(["git", "rev-parse", "--verify", "--quiet", `${ref}^{commit}`], root); } catch { throw new Error(`baseline ${ref} does not resolve to a commit (expected ${BASELINE_SHA})`); }
+  if (got !== BASELINE_SHA) throw new Error(`baseline ${ref} resolves to ${got}, not the pinned ${BASELINE_SHA}`);
+}
 /** The seven contracts of the v0.6.0 line whose source changed in comments only (issue 1914). */
 export const COMMENT_ONLY_CONTRACTS = ["RouterGovernance", "VaultRegistry", "PortfolioRouter", "RobotMoneyVault", "ProtocolAssetVault", "AgentTokenVault", "RwaBasketVault"];
 const SUBMODULES = ["forge-std", "openzeppelin-contracts", "openzeppelin-contracts-upgradeable"];
@@ -88,6 +97,7 @@ export function main(argv: string[]): number {
   const root = resolve(import.meta.dir, "..", "..", "..");
   let scratch: string | undefined;
   try {
+    if (!baselineOut) assertBaselinePinned(root, baselineRef);
     if (!baselineOut || !candidateOut) {
       scratch = mkdtempSync(join(tmpdir(), "comment-only-"));
       baselineOut = buildRef(root, scratch, "baseline", baselineRef);

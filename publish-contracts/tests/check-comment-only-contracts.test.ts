@@ -4,7 +4,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertSafeRef, COMMENT_ONLY_CONTRACTS, compareBuilds } from "../src/ci/check-comment-only-contracts.ts";
+import { assertSafeRef, BASELINE_SHA, COMMENT_ONLY_CONTRACTS, compareBuilds } from "../src/ci/check-comment-only-contracts.ts";
 
 const SCRIPT = join(import.meta.dir, "..", "src", "ci", "check-comment-only-contracts.ts");
 const scratch = mkdtempSync(join(tmpdir(), "comment-only-test-"));
@@ -53,6 +53,15 @@ describe("comment-only contract guard (issue 1914)", () => {
   test("an empty contract list is a tooling error, never a pass", () => {
     const a = build("a4", { Alpha: code("6001600255", "010a") });
     expect(run(a, a, ",").exitCode).toBe(2);
+  });
+  test("a baseline ref that does not resolve to the pinned commit 57fbe618 exits non-zero before any build (issue 1916)", () => {
+    expect(BASELINE_SHA.startsWith("57fbe618")).toBe(true);
+    const r = Bun.spawnSync(["bun", SCRIPT, "--baseline", "HEAD"], { stdout: "pipe", stderr: "pipe" });
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr.toString()).toContain("not the pinned 57fbe618");
+    const missing = Bun.spawnSync(["bun", SCRIPT, "--baseline", "no-such-ref-1916"], { stdout: "pipe", stderr: "pipe" });
+    expect(missing.exitCode).not.toBe(0);
+    expect(missing.stderr.toString()).toContain("does not resolve");
   });
   test("an option-like ref (leading '-') is refused with exit 2 before git runs", () => {
     expect(() => assertSafeRef("--output=/x", "--baseline")).toThrow("cannot be empty or start with '-'");
