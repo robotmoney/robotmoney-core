@@ -1,7 +1,7 @@
 # docs/runbooks/contract-qa/releases/v0.6.0.yaml: the contract QA runbook of the v0.6.0 line (issue 1912, ADR-0017). A NEW deployment
 # of three vaults (rmUSDC, rmPROTO, rmRWA). rmAGENT is retired on the live v0.5.0 line (govern --row retire-vault, policy section 4.14)
 # and is not deployed again. A full copy of template.yaml's steps at templateSha, unchanged and in order. It has no rmAGENT deposit,
-# no unwind-guard step and no redeemInKind step. It adds the check that a retired vault is withdraw-only (P6.24-redeem-retired-vault,
+# no rmAGENT unwind-guard step and no redeemInKind step. It keeps the set-unwind-guard rounds for rmPROTO and rmRWA (P3.51, P3.52, P4.50). It adds the check that a retired vault is withdraw-only (P6.24-redeem-retired-vault,
 # a template step). scripts/runbook/validate-contract-qa.ts checks it. releases/v0.4.0.yaml and v0.5.0.yaml stay as records.
 release: v0.6.0
 template: contract-qa
@@ -293,6 +293,22 @@ steps:
       - {"dir": "{evidenceDir}", "pattern": "publish-run.json", "required": true}
     irreversible: false
     maxMinutes: 60
+  - id: "P3.51-unwind-guard-schedule"
+    standing: ["4.9"]
+    description: "In the same sitting as the unpauses, one set-unwind-guard round per open basket (rmPROTO, rmRWA): the Safe sets a non-zero emergency unwind floor on every active asset, sized from the vault's holding (the Twin proves the row with 1000000 and 500)"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "set-unwind-guard", "--admin-arg", "vault=PROTO", "--admin-arg", "token=all", "--admin-arg", "min-usdc-out={unwindMinUsdcOut}", "--admin-arg", "max-loss-bps={unwindMaxLossBps}", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "set-unwind-guard", "--admin-arg", "vault=RWA", "--admin-arg", "token=all", "--admin-arg", "min-usdc-out={unwindMinUsdcOut}", "--admin-arg", "max-loss-bps={unwindMaxLossBps}", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: [0, 15]
+    receipts: []
+    irreversible: false
+    maxMinutes: 60
+    added: "v0.6.0"
   - id: "P3.02-govern-execute"
     standing: ["4.3"]
     description: "After the timelock delay the same command executes the three unpauses and reads depositsPaused back; every printed row has a transaction hash and status 1"
@@ -309,6 +325,23 @@ steps:
     irreversible: false
     notBefore: {"afterStep": "P3.01-govern-schedule", "hours": "timelockDelay"}
     maxMinutes: 60
+  - id: "P3.52-unwind-guard-execute"
+    standing: ["4.9"]
+    description: "After the delay the two guard rounds execute and the guard reads back non-zero"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "set-unwind-guard", "--admin-arg", "vault=PROTO", "--admin-arg", "token=all", "--admin-arg", "min-usdc-out={unwindMinUsdcOut}", "--admin-arg", "max-loss-bps={unwindMaxLossBps}", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "set-unwind-guard", "--admin-arg", "vault=RWA", "--admin-arg", "token=all", "--admin-arg", "min-usdc-out={unwindMinUsdcOut}", "--admin-arg", "max-loss-bps={unwindMaxLossBps}", "{common}", "{owners}", "{gate}", "{wait}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    notBefore: {"afterStep": "P3.51-unwind-guard-schedule", "hours": "timelockDelay"}
+    maxMinutes: 60
+    added: "v0.6.0"
   - id: "P3.03-submitter-safe"
     standing: ["4.10"]
     description: "The consensus receipt submitter is a second SafeL2 1.4.1 multisig, with the governing Safe's owners and a different salt, never a key"
@@ -375,6 +408,18 @@ steps:
     receipts: []
     irreversible: false
     maxMinutes: 60
+  - id: "P4.50-unwind-guard-labels"
+    standing: ["4.9"]
+    description: "The post-govern verify requires the emergency unwind guard on every active asset of every open basket"
+    host: "control"
+    phase: 4
+    cmds:
+      - ["grep", "-qxF", "vault[rmPROTO]: emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault", "{journal:P4.01-verify-post-govern}"]
+      - ["grep", "-qxF", "vault[rmRWA]: emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault", "{journal:P4.01-verify-post-govern}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    added: "v0.6.0"
   - id: "P5.01-receipt-offline"
     standing: ["4.10"]
     description: "The receipt id and the payload digest come from the one shared definition, never a plain keccak256 of the file"
@@ -608,6 +653,18 @@ steps:
     receipts:
       - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}
     irreversible: false
+  - id: "P10.53-write-three-vault-rollout-report"
+    standing: ["4.7"]
+    description: "v0.6.0 deploys three vaults (rmUSDC, rmPROTO, rmRWA; ADR-0017), so no agent-token-vault manifest exists and the template's P10.51 report lists it as unreadable. This step rewrites rollout-report.md reading only the three manifests named by --vaults: a failed step, a vault still paused and a declared vault with no manifest are still issues"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--step", "P10.53-write-three-vault-rollout-report", "--vaults", "vault,protocol-asset-vault,rwa-basket-vault"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}
+    irreversible: false
+    added: "v0.6.0"
   - id: "P10.52-record-signoff"
     standing: ["4.4"]
     description: "The sign-off is written by the run, and only when the report lists no issue and matches the publish go"

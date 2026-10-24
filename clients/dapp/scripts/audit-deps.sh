@@ -43,6 +43,17 @@ ACCEPTED_ADVISORIES=(
   # The CPU exhaustion vulnerability in merge keys affects only YAML parsing during
   # linting of developer-controlled config files; it does not affect the production runtime bundle.
   "GHSA-2883-xcg3-v3hh" # js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources. expires: 2026-12-01
+  # zod 3.x copies only. GHSA-mrhx-c7xc-m3w5 was published 2026-10-01; patched zod is 4.6.6/4.6.7 and no
+  # patched 3.x release exists. The 4.x copies (porto, abitype) are removed by the package.json overrides
+  # for porto and abitype plus a refreshed lock. The 3.x copies that remain are:
+  #   - zod 3.25.76 in @coinbase/cdp-sdk (via @base-org/account, a wagmi connector). It validates
+  #     developer-supplied policy objects (CreatePolicyBodySchema.parse in client/policies); the dApp
+  #     never calls cdp-sdk (no import in src/).
+  #   - zod 3.22.4 in @reown/appkit-wallet (via appkit). It parses postMessage frame events from the
+  #     secure.walletconnect.org iframe; W3mFrameSchema.js has no min/max/length constraint on any
+  #     collection, and the advisory needs a constrained collection.
+  # Re-evaluate when cdp-sdk or appkit moves to zod >= 4.6.6.
+  "GHSA-mrhx-c7xc-m3w5" # zod: memory exhaustion validating oversized constrained collections. expires: 2026-12-01
 )
 
 ignore_args=()

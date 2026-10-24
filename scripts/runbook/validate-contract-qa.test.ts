@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { QA_DIR, ROOT, loadModel, parseSheetText, runnableProblems, sheetProblems, validateAll } from "./validate-contract-qa.ts";
+import { QA_DIR, ROOT, loadModel, parseSheetText, runnableProblems, sheetProblems, unwindGuardProblems, validateAll } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
 const RELEASE = "releases/v0.5.0.yaml";
@@ -100,8 +100,6 @@ VAULT_USDC_TVL_CAP=100000000000
 VAULT_USDC_PER_DEPOSIT_CAP=10000000000
 VAULT_PROTO_TVL_CAP=100000000000
 VAULT_PROTO_PER_DEPOSIT_CAP=10000000000
-VAULT_AGENT_TVL_CAP=100000000000
-VAULT_AGENT_PER_DEPOSIT_CAP=10000000000
 VAULT_RWA_TVL_CAP=100000000000
 VAULT_RWA_PER_DEPOSIT_CAP=10000000000
 UPGRADE_MODE=upgradeable
@@ -116,10 +114,20 @@ test("a sheet for the wrong chain or a bad seed fails", () => {
   expect(badSeed.join("\n")).toContain("SEED_DEPOSIT_USDC");
 });
 
-test("a rehearsal sheet caps the rmAGENT deposit at 5 USDC (the BNKR test pool, ADR-0016) and accepts exactly 5", () => {
-  const withCap = (cap: string) => sheetProblems(parseSheetText(TWIN_SHEET.replace(/^VAULT_AGENT_PER_DEPOSIT_CAP=.*$/m, `VAULT_AGENT_PER_DEPOSIT_CAP=${cap}`)), "rehearsal");
-  expect(withCap("5000001").join("\n")).toContain("VAULT_AGENT_PER_DEPOSIT_CAP is above 5 USDC");
-  expect(withCap("5000000").join("\n")).not.toContain("VAULT_AGENT_PER_DEPOSIT_CAP is above");
+test("a three-vault sheet (USDC, PROTO, RWA, no AGENT cap) passes on the twin target (issue 1916)", () => {
+  const real = parseSheetText(readFileSync(join(ROOT, "deployments", "twin-918453", "stage-sheet.env"), "utf8"));
+  expect(sheetProblems(real, "twin", 0)).toEqual([]);
+  expect(sheetProblems(parseSheetText(TWIN_SHEET), "rehearsal", 3).filter((x) => x.includes("_CAP is missing"))).toEqual([]);
+});
+
+test("a sheet missing a USDC, PROTO or RWA cap fails, and an AGENT cap is no longer required (issue 1916)", () => {
+  for (const k of ["USDC", "PROTO", "RWA"]) {
+    for (const n of ["TVL_CAP", "PER_DEPOSIT_CAP"]) {
+      const p = sheetProblems(parseSheetText(TWIN_SHEET.replace(new RegExp(`^VAULT_${k}_${n}=.*\\n`, "m"), "")), "rehearsal", 3);
+      expect(p.join("\n")).toContain(`sheet: VAULT_${k}_${n} is missing`);
+    }
+  }
+  expect(sheetProblems(parseSheetText(TWIN_SHEET), "rehearsal", 3).join("\n")).not.toContain("AGENT_");
 });
 
 test("an 8453 sheet needs an owner signer for every sheet owner", () => {
@@ -158,4 +166,29 @@ test("a gateway publish with no owner decision gate, or not marked irreversible,
 
 test("a CLI flag the gateway runbook uses that the CLI does not have fails", () => {
   expect(problemsWith("gateway.yaml", (t) => t.replace('"publish", "{gcommon}", "{gate}"]', '"publish", "{gcommon}", "{gate}", "--system-two", "x"]')).join("\n")).toContain("--system-two is no publish-contracts flag");
+});
+
+const unwindRounds = (r: { steps: { cmds?: string[][] }[] }): number => r.steps.flatMap((s) => s.cmds ?? []).filter((c) => c.includes("set-unwind-guard")).length;
+
+test("the committed v0.6.0 runbook sets the unwind guard on rmPROTO and rmRWA only", () => {
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  expect(unwindRounds(r)).toBe(4);
+  expect(unwindGuardProblems(r)).toEqual([]);
+  const cmds = r.steps.flatMap((s) => s.cmds ?? []).filter((c) => c.includes("set-unwind-guard")).map((c) => c.join(" "));
+  expect(cmds.some((c) => c.includes("vault=AGENT"))).toBe(false);
+  const ids = r.steps.map((s) => s.id);
+  expect(ids.indexOf("P3.51-unwind-guard-schedule")).toBeLessThan(ids.indexOf("P3.52-unwind-guard-execute"));
+  expect(ids.indexOf("P3.52-unwind-guard-execute")).toBeLessThan(ids.indexOf("P4.01-verify-post-govern"));
+});
+
+test("a v0.6.0 yaml with an open basket vault and no set-unwind-guard step fails", () => {
+  const p = problemsWith("releases/v0.6.0.yaml", (t) => t.replace(stepBlock(t, "P3.51-unwind-guard-schedule"), "").replace(stepBlock(t, "P3.52-unwind-guard-execute"), ""));
+  const text = p.join("\n");
+  expect(text).toContain("vault (PROTO) has no set-unwind-guard step");
+  expect(text).toContain("vault (RWA) has no set-unwind-guard step");
+});
+
+test("a v0.6.0 yaml that guards only rmPROTO fails for rmRWA", () => {
+  const p = problemsWith("releases/v0.6.0.yaml", (t) => t.replace(/.*vault=RWA.*\n/g, ""));
+  expect(p.join("\n")).toContain("vault (RWA) has no set-unwind-guard step");
 });
