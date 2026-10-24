@@ -508,3 +508,54 @@ describe("issue 1712: an unfunded signer stops pause-all BEFORE the first send",
     expect(report(w).pauseAll).toMatchObject({ allPaused: true });
   });
 });
+
+// Review-security-002 (issue 1927): against the live v0.5.0 deployment (its table, the committed copy in tests/fixtures/v050, still has rmAGENT) pause-all covers rmAGENT too:
+// it pauses it like the others, and counts it covered without a send only once it reads retired() true.
+describe("pause-all with the v0.5.0 table: the retired-line rmAGENT (issue 1927)", () => {
+  async function run050(o: { agentRetired: boolean; failAgent?: boolean }) {
+    const { loadStageTable } = await import("../src/stage-table.ts");
+    const { peekStageState, restoreStageState, useStageTable } = await import("../src/stages.ts");
+    const { pauseAll } = await import("../src/pause-all.ts");
+    const { publishLogger } = await import("../src/log.ts");
+    const { tmp } = await import("./fixtures.ts");
+    const table = loadStageTable(join(import.meta.dir, "fixtures", "v050"));
+    const core = tmp("pc-pause-v050-");
+    const m = join(core, "deployments", "918453");
+    mkdirSync(m, { recursive: true });
+    table.vaults.forEach((v, i) => writeFileSync(join(m, `${manifestBase(v.manifest)}.json`), JSON.stringify({ vault: vaultAddr(i) })));
+    const agent = vaultAddr(table.vaults.findIndex((v) => (v.key as string) === "AGENT"));
+    const c = newChain();
+    if (o.failAgent) c.failSendTo = agent;
+    const inner = chainRunner(c);
+    const reads: string[] = [];
+    const run: ProcessRunner = async (tool, args, opts) => {
+      if (tool === "cast" && args[0] === "call" && args[2] === "retired()(bool)") { reads.push(args[1]!); return { code: 0, stdout: `${o.agentRetired && args[1] === agent}\n`, stderr: "" }; }
+      return inner(tool, args, opts);
+    };
+    const lines: string[] = [];
+    const ctx = { coreDir: core, chainId: 918453, rpc: "http://x", sheet, evidenceDir: join(core, "evidence"), environment: "local", coreSha: SHA, baseEnv: {}, run, signer: signerFor(DEPLOYER_SPEC), log: publishLogger((l) => lines.push(l)), dryRun: false } as never;
+    const was = peekStageState();
+    useStageTable(table);
+    try { return { report: await pauseAll(ctx, { stages: AFTER_HANDOVER } as never, { trigger: "manual", reason: "test", emergencySigner: signerFor(EMERGENCY_SPEC) }), c, agent, reads }; } finally { restoreStageState(was); }
+  }
+  test("rmAGENT not retired: it is paused with the EMERGENCY key like the three others, and all four read paused", async () => {
+    const r = await run050({ agentRetired: false });
+    expect(r.report.vaults.map((v) => v.vault)).toEqual(["rmUSDC", "rmPROTO", "rmRWA", "rmAGENT"]);
+    expect(r.c.sends.map((s) => s.to)).toContain(r.agent);
+    expect(r.c.sends.length).toBe(4);
+    expect(r.report.allPaused).toBe(true);
+  });
+  test("rmAGENT retired: nothing is sent to it and it counts as covered", async () => {
+    const r = await run050({ agentRetired: true });
+    expect(r.reads).toEqual([r.agent]);
+    expect(r.c.sends.map((s) => s.to)).not.toContain(r.agent);
+    expect(r.report.vaults.find((v) => v.vault === "rmAGENT")).toMatchObject({ retired: true });
+    expect(r.report.allPaused).toBe(true);
+  });
+  test("rmAGENT neither retired nor paused (its send fails): pause-all is NOT allPaused and names it", async () => {
+    const { pauseIncomplete } = await import("../src/pause-all.ts");
+    const r = await run050({ agentRetired: false, failAgent: true });
+    expect(r.report.allPaused).toBe(false);
+    expect(pauseIncomplete(r.report).details.unpaused).toEqual(["rmAGENT"]);
+  });
+});
