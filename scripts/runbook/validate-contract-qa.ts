@@ -53,12 +53,17 @@ export const SCALARS = new Set([
   "submitterSaltNonce", "unwindMinUsdcOut", "unwindMaxLossBps", "environmentName", "ownerSigner", "emergencySigner", "deployerKeystore",
   "chainId", "rpcUrl", "sheet", "sheetTemplate", "countsDir", "evidenceDir", "manifestDir", "signer", "yes", "usdc", "deploymentKind",
   "ownerSignerCount", "sheetOwnerCount", "castFlagsInline", "gateSha", "gatewaySheet",
+  // issue 1927: the local end of the tunnel to the second Twin fork the v0.5.0 deployment runs on (P8.02, port 8547)
+  "v050RpcUrl",
 ]);
 /** A whole-element placeholder that expands to several argv elements (empty on the Twin chain where noted). */
 export const LIST_PLACEHOLDERS: Readonly<Record<string, readonly string[]>> = {
   // issue 1892: the gateway system run (docs/runbooks/contract-qa/gateway.yaml): its own sheet, its own evidence directory, --system gateway
   gcommon: ["--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{gatewaySheet}", "--signer", "{signer}", "--environment", "{environmentName}", "--core-sha", "{coreSha}", "--counts-dir", "{countsDir}", "--evidence", "{runDir}/evidence-gateway", "--system", "gateway"],
   common: ["--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--signer", "{signer}", "--environment", "{environmentName}", "--core-sha", "{coreSha}", "--counts-dir", "{countsDir}", "--evidence", "{evidenceDir}"],
+  // issue 1927: the arguments of runbook 4.15's COMMON on the Twin, against the v0.5.0 deployment of P8.03: --core-dir and --core-sha of the v0.5.0 checkout (P8.01), the tag run's
+  // sheet, keys, counts and evidence ({runDir}/v050-run, P8.03). The tag run's SAFE_OWNER keystores sign beside its DEPLOYER keystore (the Twin default), so no {owners}.
+  v050common: ["--chain", "{chainId}", "--rpc", "{v050RpcUrl}", "--sheet", "{runDir}/v050-run/sheet.env", "--core-dir", "{runDir}/v050", "--core-sha", "57fbe61833e9d7f94557d69102138f7c410c1346", "--signer", "keystore:{runDir}/v050-run/keys/DEPLOYER:{runDir}/v050-run/passphrase", "--environment", "{environmentName}", "--counts-dir", "{runDir}/v050-run/counts", "--evidence", "{runDir}/v050-run/evidence"],
   owners: ["--owner-signer", "{ownerSigner}"],
   gate: ["--counts-require-origin-dev"],
   wait: ["--max-wait", "0"],

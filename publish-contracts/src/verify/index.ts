@@ -93,6 +93,11 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const manifestSet = man.vaults.map((v) => lc(v.address));
   // Issue 1796: a vault the registry still lists after a redeploy is the retired one. The label stays the same: the manifests plus the retired vaults equal the registry.
   const retirements = opts.retirements ?? [];
+  // Issue 1927: a v0.5.0 table's own retired vault (rmAGENT, its manifest kept) is verified only once `govern --row retire-vault` retired it: this line has no live check of it.
+  for (const v of man.retiredVaults) {
+    c.push(`vault[${v.key}]: retired by govern --row retire-vault`, retirements.some((r) => lc(r.vault) === lc(v.address)),
+      retirements.some((r) => lc(r.vault) === lc(v.address)) ? `${v.source} names ${v.address}, a vault_retirements entry of the run` : `${v.source} names ${v.address} and the run manifest records no vault_retirements entry for it: run govern --row retire-vault (runbook 4.15 step 6) before this verify`);
+  }
   const expectedSet = [...manifestSet, ...redeploys.map((r) => lc(r.oldVault)), ...retirements.map((r) => lc(r.vault))];
   await c.run("vault set: manifests equal registry.listVaults", async () => {
     if (!listOk) return { ok: false, detail: "listVaults unreadable" };
@@ -198,7 +203,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const chunk = opts.logChunk ?? 2000;
   const retryBaseMs = opts.retryBaseMs ?? 500;
   const created = creationProof(chain, opts.fromBlock, opts.deployTxs, opts.adoptedContracts, head === undefined ? undefined : { head, chunk, retryBaseMs });
-  const governed: Scanned[] = [...core, ...man.vaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address }))];
+  const governed: Scanned[] = [...core, ...man.vaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address })), ...man.retiredVaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address }))];
   if (head === undefined) {
     if (withGateway) for (const l of AGENT_LABELS) c.fail(l, "block number unreadable");
     for (const v of man.vaults) for (const l of vaultScanLabels(v)) c.fail(l, "block number unreadable");
@@ -266,6 +271,8 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     ...core.map((x) => ({ label: x.name, address: x.address, artifact: x.artifact, dir: originalDir, original: true, ...upgradedDir(x.name) })),
     ...man.vaults.map((v) => ({ label: `vault[${v.key}]`, address: v.address, artifact: sheet.vaults[v.key]?.contract ?? v.artifact, dir: redeployed.has(v.key) ? undefined : originalDir, original: !redeployed.has(v.key), ...upgradedDir(`vault[${v.key}]`) })),
     ...libNames.map((n) => ({ label: `library[${n}]`, address: man.libraries[n], artifact: man.libraryArtifacts[n]!, dir: originalDir, original: true })),
+    // Issue 1927: the retired vault of a v0.5.0 table runs the build of that deployment's checkout
+    ...man.retiredVaults.map((v) => ({ label: `vault[${v.key}]`, address: v.address, artifact: v.artifact, dir: originalDir, original: true, ...upgradedDir(`vault[${v.key}]`) })),
   ];
   for (const t of codeTargets) {
     await c.run(`${t.label}: ${CODE_LABEL}`, async () => {

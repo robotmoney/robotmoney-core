@@ -26,7 +26,8 @@ import { buildLibraryArtifacts } from "./libs-build.ts";
 import { DEPLOYER_STAGES, STAGE_NAMES, getStageTable, peekStageState, restoreStageState, useStageTable } from "./stages.ts";
 import { TABLE_REL, loadStageTable, SYSTEM_NAMES, type SystemName } from "./stage-table.ts";
 import { adoptedTxs, finalNonceCheck, loadRunManifest, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
-import { callerInputs, parseSheet, type Sheet } from "./sheet.ts";
+import { RETIRED_VAULT_VERBS, callerInputs, parseSheet, type Sheet } from "./sheet.ts";
+import { isRetiredVaultKey } from "./vault-keys.ts";
 import { assertVaultRulesMatch } from "./vault-rules.ts";
 import { makeSigner, type PublishSigner } from "./signer.ts";
 import { PROOF_STAGE } from "./control-proof.ts";
@@ -597,7 +598,13 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     // Issue 1833: the per-vault rules this CLI loaded from its own checkout must be that table's, or the CLI runs from another sha. Checked before any verb runs.
     // Issue 1851: except the emergency pause-all, which reads no per-vault rule: a mismatch there is one warning naming both tables, never a refusal.
     const stageTable = loadStageTable(coreDir);
-    try { assertVaultRulesMatch(stageTable, join(coreDir, TABLE_REL)); } catch (e) {
+    // Issue 1927: the deployment checkout (--core-dir, at its DEPLOY_SHA) supplies the stage table, the manifest set and the deployed layout snapshots. A follow-on verb of the governed
+    // upgrade may name the live v0.5.0 checkout, whose table also has the retired rmAGENT row (RETIRED_VAULT_KEYS). Every vault this CLI governs keeps the 1833 check.
+    const followOn = (RETIRED_VAULT_VERBS as readonly string[]).includes(sheetOpts.verb ?? "");
+    const tableRetired = stageTable.vaults.map((v) => v.key as string).filter(isRetiredVaultKey);
+    const sheetRetired = sheet.retiredVaults ?? [];
+    if (sheetRetired.some((k) => !tableRetired.includes(k)) || (followOn && tableRetired.some((k) => !sheetRetired.includes(k)))) throw new PublishError("INPUT_MISSING", `the sheet names the retired vault(s) [${sheetRetired.join(", ")}] and the stage table of ${coreDir} names [${tableRetired.join(", ")}]: the sheet and --core-dir must be the same deployment's (runbook 4.15)`, { sheet: sheetRetired, table: tableRetired });
+    try { assertVaultRulesMatch(stageTable, join(coreDir, TABLE_REL), { retired: followOn }); } catch (e) {
       if (a.verb !== "pause-all" || !isPublishError(e, "INPUT_MISSING")) throw e;
       log.log("warn", "vault_rules.mismatch", { ...(e.details ?? {}), message: `${e.message}. pause-all reads no per-vault rule, so it runs anyway` });
     }

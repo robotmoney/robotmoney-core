@@ -1,0 +1,627 @@
+{
+  "version": 1,
+  "stages": [
+    {
+      "name": "libs",
+      "kind": "forge",
+      "script": "contracts/script/DeployLibs.s.sol:DeployLibs",
+      "requiredEnv": [
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/libs.json",
+      "libraries": [],
+      "vault": null
+    },
+    {
+      "name": "recorder",
+      "kind": "forge",
+      "script": "contracts/script/DeployUniswapV4PriceRecorder.s.sol:DeployUniswapV4PriceRecorder",
+      "requiredEnv": [
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/recorder.json",
+      "manifestNotes": "The permissionless Uniswap V4 price recorder for the RM/USDC pool (core 1676). It runs right after libs so the 1800 s price history accumulates while the other stages run. The runner waits for a full window of history before the agent stage. No role is involved.",
+      "libraries": [],
+      "vault": null
+    },
+    {
+      "name": "vault",
+      "kind": "forge",
+      "script": "contracts/script/DeployVault.s.sol:DeployVault",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "FEE_RECIPIENT",
+        "TVL_CAP",
+        "PER_DEPOSIT_CAP",
+        "SEED_SHARE_RECEIVER",
+        "SEED_DEPOSIT_USDC",
+        "EXIT_FEE_BPS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/vault.json",
+      "manifestNotes": "Seed fields: seed_share_receiver (SEED_SHARE_RECEIVER), seed_shares (minted to the receiver) and deployer_share_balance_after (must be 0). Verify asserts the deployer holds zero shares and the receiver holds the seed shares.",
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": "USDC",
+      "create2Libraries": [
+        "GovernedUpgrade",
+        "RobotMoneyVaultOps"
+      ],
+      "proxies": [
+        {
+          "field": "vault",
+          "implementationField": "vault_implementation",
+          "contract": "RobotMoneyVault",
+          "layout": "contracts/test/fixtures/storage-layout/RobotMoneyVault.json"
+        }
+      ]
+    },
+    {
+      "name": "registry",
+      "kind": "forge",
+      "script": "contracts/script/DeployVaultRegistry.s.sol:DeployVaultRegistry",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "VAULT_ADDRESS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/registry.json",
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": null,
+      "create2Libraries": [
+        "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "registry",
+          "implementationField": "registry_implementation",
+          "contract": "VaultRegistry",
+          "layout": "contracts/test/fixtures/storage-layout/VaultRegistry.json"
+        }
+      ]
+    },
+    {
+      "name": "router",
+      "kind": "forge",
+      "script": "contracts/script/DeployPortfolioRouter.s.sol:DeployPortfolioRouter",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "REGISTRY_ADDRESS",
+        "VAULT_ADDRESS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/router.json",
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": null,
+      "create2Libraries": [
+        "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "router",
+          "implementationField": "router_implementation",
+          "contract": "PortfolioRouter",
+          "layout": "contracts/test/fixtures/storage-layout/PortfolioRouter.json"
+        }
+      ]
+    },
+    {
+      "name": "gateway",
+      "kind": "forge",
+      "script": "contracts/script/DeployGateway.s.sol:DeployGateway",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "PAUSER_ADDRESS",
+        "SHARE_RECEIVER_ADDRESS",
+        "VAULT_ADDRESS",
+        "ROUTER_ADDRESS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/gateway.json",
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": null,
+      "create2Libraries": [
+        "GovernedUpgrade",
+        "GatewayWindows"
+      ],
+      "proxies": [
+        {
+          "field": "gateway",
+          "implementationField": "gateway_implementation",
+          "contract": "RobotMoneyGateway",
+          "layout": "contracts/test/fixtures/storage-layout/RobotMoneyGateway.json"
+        }
+      ]
+    },
+    {
+      "name": "ic-policy",
+      "kind": "forge",
+      "script": "contracts/script/DeployInvestmentCommitteePolicy.s.sol:DeployInvestmentCommitteePolicy",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "GATEWAY_ADDRESS",
+        "RECEIPT_ADMIN_ADDRESS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/ic-policy.json",
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": null,
+      "create2Libraries": [
+        "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "policy",
+          "implementationField": "policy_implementation",
+          "contract": "InvestmentCommitteePolicy",
+          "layout": "contracts/test/fixtures/storage-layout/InvestmentCommitteePolicy.json"
+        },
+        {
+          "field": "consensus_receipt",
+          "implementationField": "consensus_receipt_implementation",
+          "contract": "ConsensusRecommendationReceipt",
+          "layout": "contracts/test/fixtures/storage-layout/ConsensusRecommendationReceipt.json"
+        }
+      ]
+    },
+    {
+      "name": "governance",
+      "kind": "forge",
+      "script": "contracts/script/DeployRouterGovernance.s.sol:DeployRouterGovernance",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "ROUTER_ADDRESS",
+        "CONSENSUS_RECEIPT_ADDRESS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/governance.json",
+      "manifestNotes": "RouterGovernance is the router's weight setter (issue 1698). It runs after ic-policy because its applyReceipt releases receipts on the ConsensusRecommendationReceipt register in the same call that sets the weights: the stage grants it router ADMIN_ROLE, router WEIGHT_SETTER_ROLE (the deployer's copy dropped) and the receipt register's ADMIN_ROLE. It has no voting and no constructor parameters beyond the three addresses.",
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": null,
+      "create2Libraries": [
+        "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "governance",
+          "implementationField": "governance_implementation",
+          "contract": "RouterGovernance",
+          "layout": "contracts/test/fixtures/storage-layout/RouterGovernance.json"
+        }
+      ]
+    },
+    {
+      "name": "proto",
+      "kind": "forge",
+      "script": "contracts/script/DeployProtocolAssetVault.s.sol:DeployProtocolAssetVault",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "SWAP_ROUTER",
+        "REGISTRY_ADDRESS",
+        "TVL_CAP",
+        "PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT",
+        "EXIT_FEE_BPS",
+        "NAV_DEVIATION_BPS",
+        "MIN_POOL_LIQUIDITY",
+        "ROUTER_DEFAULT_BPS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/protocol-asset-vault.json",
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": "PROTO",
+      "create2Libraries": [
+        "BasketAssetConfigGuard",
+        "TwapTickMath",
+        "BasketViews",
+        "BasketSwaps",
+        "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "vault",
+          "implementationField": "implementation",
+          "contract": "ProtocolAssetVault",
+          "layout": "contracts/test/fixtures/storage-layout/ProtocolAssetVault.json"
+        }
+      ]
+    },
+    {
+      "name": "agent",
+      "kind": "forge",
+      "script": "contracts/script/DeployAgentTokenVault.s.sol:DeployAgentTokenVault",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "SWAP_ROUTER",
+        "RECORDER_ADDRESS",
+        "REGISTRY_ADDRESS",
+        "TVL_CAP",
+        "PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT",
+        "EXIT_FEE_BPS",
+        "NAV_DEVIATION_BPS",
+        "MIN_POOL_LIQUIDITY",
+        "ROUTER_DEFAULT_BPS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/agent-token-vault.json",
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": "AGENT",
+      "create2Libraries": [
+        "BasketAssetConfigGuard",
+        "TwapTickMath",
+        "BasketViews",
+        "BasketSwaps",
+        "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "vault",
+          "implementationField": "implementation",
+          "contract": "AgentTokenVault",
+          "layout": "contracts/test/fixtures/storage-layout/AgentTokenVault.json"
+        }
+      ]
+    },
+    {
+      "name": "rwa",
+      "kind": "forge",
+      "script": "contracts/script/DeployRwaBasketVault.s.sol:DeployRwaBasketVault",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "SWAP_ROUTER",
+        "REGISTRY_ADDRESS",
+        "TVL_CAP",
+        "PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT",
+        "EXIT_FEE_BPS",
+        "NAV_DEVIATION_BPS",
+        "MIN_POOL_LIQUIDITY",
+        "ROUTER_DEFAULT_BPS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/rwa-basket-vault.json",
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": "RWA",
+      "create2Libraries": [
+        "BasketAssetConfigGuard",
+        "TwapTickMath",
+        "BasketViews",
+        "BasketSwaps",
+        "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "vault",
+          "implementationField": "implementation",
+          "contract": "RwaBasketVault",
+          "layout": "contracts/test/fixtures/storage-layout/RwaBasketVault.json"
+        }
+      ]
+    },
+    {
+      "name": "timelock",
+      "kind": "forge",
+      "script": "contracts/script/DeployTimelock.s.sol:DeployTimelock",
+      "requiredEnv": [
+        "AGENT_ADDRESSES",
+        "VAULT_ADDRESSES",
+        "GATEWAY_ADDRESS",
+        "REGISTRY_ADDRESS",
+        "ROUTER_ADDRESS",
+        "GOVERNANCE_ADDRESS",
+        "SAFE_ADDRESS",
+        "SAFE_OWNERS",
+        "SAFE_THRESHOLD",
+        "EMERGENCY_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "IC_POLICY_ADDRESS",
+        "CONSENSUS_RECEIPT_ADDRESS",
+        "RECEIPT_ADMIN_ADDRESS",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/timelock.json",
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": null
+    }
+  ],
+  "upgradeAuthority": {
+    "stage": "timelock",
+    "contract": "ProposerFloorTimelock",
+    "address": "create2",
+    "factory": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+    "salt": "robotmoney.core.timelock.v1",
+    "inputs": [
+      "SAFE_ADDRESS",
+      "TIMELOCK_MIN_DELAY"
+    ],
+    "modeEnv": "UPGRADE_MODE",
+    "modes": [
+      "upgradeable",
+      "frozen"
+    ],
+    "transactionsPerProxy": 2,
+    "layoutPins": "contracts/test/fixtures/storage-layout/pins.json",
+    "note": "Upgradeability stage 2 (issue 1809). Every stage with proxies deploys, per proxy, one implementation (its constructor disables initializers) and one ERC1967Proxy whose constructor runs initialize atomically: two deployer transactions per proxy. The release mode changes no count: it is only an initialize argument. Every proxy names the timelock as its only upgrade and freeze authority from its first block. The timelock stage runs LAST and deploys the ProposerFloorTimelock at the CREATE2 address the factory gives for the salt and the init code built from SAFE_ADDRESS and TIMELOCK_MIN_DELAY, so no interim deployer upgrade path exists. A resumed stage replays its own transactions with forge --resume at the same nonces, so its proxy and implementation addresses do not move. The publish-contracts verifier reads each proxy's ERC-1967 slots, upgradeTimelock(), upgradesFrozen() and initialized version, and records them with the layout identifier in upgradeability.json."
+  },
+  "govern": {
+    "stage": 13,
+    "description": "After the timelock handover the only mainnet operation is the unpause of each of the four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), all four deployed paused: one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait, then executed. Vault setters, router eligibility and router default weights are deploy-time configuration set by the deployer in stages 4 to 10, before the handover, and asserted by the verify stage. There is no voting by anyone. Router weights change on demand through the apply-receipt row (core 1696): the Safe schedules RouterGovernance.applyReceipt on the timelock, never in stage 13. update-delay, batch and cancel are Twin-only demonstrations of the Safe tool and are refused on 8453.",
+    "mainnetRows": [
+      "unpause-USDC",
+      "unpause-PROTO",
+      "unpause-AGENT",
+      "unpause-RWA"
+    ],
+    "twinOnlyRows": [
+      "update-delay",
+      "batch",
+      "cancel"
+    ]
+  },
+  "redeploys": [
+    {
+      "vault": "PROTO",
+      "script": "contracts/script/RedeployProtocolAssetVault.s.sol:RedeployProtocolAssetVault",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "SWAP_ROUTER",
+        "REGISTRY_ADDRESS",
+        "TIMELOCK_ADDRESS",
+        "EMERGENCY_ADDRESS",
+        "TVL_CAP",
+        "PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT",
+        "EXIT_FEE_BPS",
+        "NAV_DEVIATION_BPS",
+        "MIN_POOL_LIQUIDITY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/protocol-asset-vault.json",
+      "manifestNotes": "Single-vault redeploy into a live deployment (issue 1796), run by the redeploy-vault verb only: no frozen count, no stage. The script deploys the vault closed and unregistered, links the registry and hands ADMIN_ROLE to the timelock and EMERGENCY_ROLE to the emergency key. The Safe registers it, moves router eligibility and retires the old vault through the timelock (govern row redeploy-vault).",
+      "libraries": [
+        "tick_math"
+      ],
+      "create2Libraries": [
+        "BasketAssetConfigGuard",
+        "TwapTickMath",
+        "BasketViews",
+        "BasketSwaps",
+        "GovernedUpgrade"
+      ]
+    }
+  ],
+  "vaults": [
+    {
+      "key": "USDC",
+      "stage": "vault",
+      "artifact": "RobotMoneyVault",
+      "manifest": "deployments/<chain>/vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-USDC",
+      "unpauseInStage13": true,
+      "seed": "SEED_DEPOSIT_USDC",
+      "eligibilitySource": "router-stage",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyWithdraw",
+        "emergencyWithdrawAdapter",
+        "emergencyExcludeAdapter",
+        "forceRemoveAdapter",
+        "recoverRemovedAdapter",
+        "shutdownVault"
+      ],
+      "registryNameSource": "script-constant"
+    },
+    {
+      "key": "PROTO",
+      "stage": "proto",
+      "artifact": "ProtocolAssetVault",
+      "manifest": "deployments/<chain>/protocol-asset-vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-PROTO",
+      "unpauseInStage13": true,
+      "seed": null,
+      "eligibilitySource": "sheet:ROUTER_DEFAULT_BPS",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyUnwind",
+        "emergencyUnwindWithOverride",
+        "shutdownVault"
+      ],
+      "registryNameSource": "script-constant"
+    },
+    {
+      "key": "AGENT",
+      "stage": "agent",
+      "artifact": "AgentTokenVault",
+      "manifest": "deployments/<chain>/agent-token-vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-AGENT",
+      "unpauseInStage13": true,
+      "seed": null,
+      "eligibilitySource": "sheet:ROUTER_DEFAULT_BPS",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyUnwind",
+        "emergencyUnwindWithOverride",
+        "shutdownVault"
+      ],
+      "registryNameSource": "script-constant"
+    },
+    {
+      "key": "RWA",
+      "stage": "rwa",
+      "artifact": "RwaBasketVault",
+      "manifest": "deployments/<chain>/rwa-basket-vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-RWA",
+      "unpauseInStage13": true,
+      "seed": null,
+      "eligibilitySource": "sheet:ROUTER_DEFAULT_BPS",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyUnwind",
+        "emergencyUnwindWithOverride",
+        "shutdownVault"
+      ],
+      "registryNameSource": "script-constant"
+    }
+  ],
+  "vaultRuleDecisions": {
+    "seed": {
+      "reason": "rmUSDC is seeded with 1 USDC (SEED_DEPOSIT_USDC) to the seed share receiver (owner D3, 2026-10-01). The baskets take no seed: the 18-decimal virtual share offset protects all four vaults (issue 1705 Q6 (a)).",
+      "decision": "https://github.com/robotmoney/robotmoney-core/issues/1705"
+    },
+    "eligibilitySource": {
+      "reason": "rmUSDC is the router's base leg: the router stage makes it eligible and sets the first default vector before any basket exists. Each basket stage makes itself eligible from the sheet's ROUTER_DEFAULT_BPS in one migrateEligibility, and the last one leaves exactly the sheet's ROUTER_WEIGHTS, which names all four vaults. Issue 1705 Q4 (a) fixes the sheet format: ELIGIBLE_VAULTS=PROTO,AGENT,RWA with rmUSDC in ROUTER_WEIGHTS, the same on the Twin chain and on 8453 (docs/technical/governance-isomorphism.md 1.1).",
+      "decision": "https://github.com/robotmoney/robotmoney-core/issues/1705"
+    },
+    "emergencyLevers": {
+      "reason": "The two vault families have different emergency levers, each callable by EMERGENCY_ROLE (the emergency key) with no timelock. None freezes a withdrawal. For the mainnet test the levers stay as they are and are named here per vault (issue 1705 Q2 (a)). Only rmUSDC can take a position out of NAV: emergencyExcludeAdapter (exclude-only) and forceRemoveAdapter each open an exclusion record that snapshots the share supply, and recoverRemovedAdapter pays a force-removed adapter back into that record tranche by tranche. A recovery is credited pro rata to the holders at the snapshot (core 1820, security review 2026-10-15 SR-1015-21 and SR-1015-27), never to whoever holds shares at that moment; a holder who exits meanwhile is paid at the reduced NAV and keeps the claim. Restoring an excluded adapter stays ADMIN_ROLE, through the timelock. Narrowing the levers is decided before the final deployment.",
+      "decision": "https://github.com/robotmoney/robotmoney-core/issues/1705"
+    }
+  },
+  "libraries": [
+    {
+      "name": "tick_math",
+      "artifact": "TickMath",
+      "manifestKey": "tick_math",
+      "path": "contracts/lib/TickMath.sol"
+    }
+  ],
+  "create2Libraries": [
+    {
+      "name": "BasketAssetConfigGuard",
+      "artifact": "BasketAssetConfigGuard",
+      "path": "contracts/lib/BasketAssetConfigGuard.sol"
+    },
+    {
+      "name": "TwapTickMath",
+      "artifact": "TwapTickMath",
+      "path": "contracts/lib/TwapTickMath.sol"
+    },
+    {
+      "name": "BasketViews",
+      "artifact": "BasketViews",
+      "path": "contracts/lib/BasketViews.sol"
+    },
+    {
+      "name": "BasketSwaps",
+      "artifact": "BasketSwaps",
+      "path": "contracts/lib/BasketSwaps.sol"
+    },
+    {
+      "name": "GovernedUpgrade",
+      "artifact": "GovernedUpgrade",
+      "path": "contracts/lib/GovernedUUPS.sol"
+    },
+    {
+      "name": "RobotMoneyVaultOps",
+      "artifact": "RobotMoneyVaultOps",
+      "path": "contracts/lib/RobotMoneyVaultOps.sol"
+    },
+    {
+      "name": "GatewayWindows",
+      "artifact": "GatewayWindows",
+      "path": "contracts/lib/GatewayWindows.sol"
+    }
+  ],
+  "artifacts": {
+    "gateway": "RobotMoneyGateway",
+    "router": "PortfolioRouter",
+    "registry": "VaultRegistry",
+    "governance": "RouterGovernance",
+    "timelock": "ProposerFloorTimelock",
+    "icPolicy": "InvestmentCommitteePolicy",
+    "receipt": "ConsensusRecommendationReceipt",
+    "recorder": "UniswapV4PriceRecorder",
+    "v4Adapter": "UniswapV4SwapAdapter"
+  }
+}

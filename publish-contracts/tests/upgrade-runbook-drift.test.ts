@@ -206,7 +206,7 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
     if (start < 0 || end < 0) throw new Error("the runbook has no section 4.15 before section 5");
     return RUNBOOK.slice(start, end);
   })();
-  const placeholder = (name: string): string => (name === "RC_SHA" ? "a".repeat(40) : name === "BASE_RPC_URL" ? "http://127.0.0.1:8545" : name === "PWD" ? "/x" : `0x${"1".repeat(40)}`);
+  const placeholder = (name: string): string => (name === "RC_SHA" ? "a".repeat(40) : name === "V050_SHA" ? "57fbe61833e9d7f94557d69102138f7c410c1346" : name === "BASE_RPC_URL" ? "http://127.0.0.1:8545" : name === "PWD" || name === "V050_DIR" ? "/x" : `0x${"1".repeat(40)}`);
   const split = (line: string): string[] => [...line.matchAll(/"([^"]*)"|(\S+)/g)].map((m) => m[1] ?? m[2]!);
   const expand = (line: string, common: string): string[] =>
     split(line.replace(/\$COMMON\b/g, common)).map((t) => t.replace(/\$\{?([A-Z_0-9]+)\}?/g, (_m, n: string) => placeholder(n)));
@@ -240,12 +240,14 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
   const problems = async (line: string, common: string): Promise<string[]> => {
     if (line.startsWith("COMMON=")) return [];
     if (line.startsWith("test ")) {
-      // step 0: `test <lhs> = "$RC_SHA"` or `test -z "$(git status --porcelain)"` over a git read of the checkout
-      const g = line.match(/\$\(git ([a-z-]+)([^)]*)\)/);
+      // step 0: `test <lhs> = "$RC_SHA"` or `test -z "$(git status --porcelain)"` over a git read of the rc checkout (the working directory), and the same three reads of the v0.5.0
+      // checkout with `git -C "$V050_DIR"`, whose rev-parse must equal "$V050_SHA" (issue 1927)
+      const g = line.match(/\$\(git (-C "\$V050_DIR" )?([a-z-]+)([^)]*)\)/);
       if (!g) return [`${line}: a test line must read the checkout with git`];
-      if (g[1] === "status") return /--porcelain\b/.test(g[2]!) && line.startsWith("test -z ") ? [] : [`${line}: git status must be --porcelain asserted empty`];
-      if (g[1] === "rev-parse") return /= "\$RC_SHA"$/.test(line) && (g[2]!.trim() === "HEAD" || /\^\{commit\}/.test(g[2]!)) ? [] : [`${line}: git rev-parse must equal $RC_SHA`];
-      return [`${line}: git ${g[1]} is not a checkout check this runbook knows`];
+      const want = g[1] ? "V050_SHA" : "RC_SHA";
+      if (g[2] === "status") return /--porcelain\b/.test(g[3]!) && line.startsWith("test -z ") ? [] : [`${line}: git status must be --porcelain asserted empty`];
+      if (g[2] === "rev-parse") return new RegExp(`= "\\$${want}"$`).test(line) && (g[3]!.trim() === "HEAD" || /\^\{commit\}/.test(g[3]!)) ? [] : [`${line}: git rev-parse must equal $${want}`];
+      return [`${line}: git ${g[2]} is not a checkout check this runbook knows`];
     }
     const t = expand(line, common);
     if (t[0] === "bun" && t[1] === "publish-contracts/src/cli.ts") {
@@ -302,10 +304,48 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
   test("step 0 checks HEAD, a clean tree and the rc tag before any --upgrade-build use, and the checker validates those lines", async () => {
     const s0 = step(0);
     for (const l of ['test "$(git rev-parse HEAD)" = "$RC_SHA"', 'test -z "$(git status --porcelain)"', 'test "$(git rev-parse "$RC_TAG^{commit}")" = "$RC_SHA"']) { expect(s0, l).toContain(l); expect(await problems(l, common)).toEqual([]); }
-    expect(S415.indexOf("\n0. ")).toBeLessThan(S415.indexOf("--upgrade-build"));
+    // the first command that uses a checkout comes after step 0 (the two-checkout table above the steps only names the flags)
+    expect(S415.indexOf("\n0. ")).toBeLessThan(S415.indexOf('--upgrade-build "$PWD" $COMMON'));
     expect((await problems('test "$(git rev-parse HEAD)" = "$OTHER"', common)).length).toBe(1);
     expect((await problems('test -z "$(git status)"', common)).length).toBe(1);
     expect((await problems('test "$(git log HEAD)" = "$RC_SHA"', common)).length).toBe(1);
+  });
+  test("step 0 checks both checkouts: the rc checkout and the v0.5.0 checkout, each HEAD, clean and its tag, and both tags on the remote (issue 1927)", async () => {
+    const s0 = step(0);
+    const tests = s0.split("\n").filter((l) => l.startsWith("test "));
+    expect(tests).toEqual([
+      'test "$(git rev-parse HEAD)" = "$RC_SHA"', 'test -z "$(git status --porcelain)"', 'test "$(git rev-parse "$RC_TAG^{commit}")" = "$RC_SHA"',
+      'test "$(git -C "$V050_DIR" rev-parse HEAD)" = "$V050_SHA"', 'test -z "$(git -C "$V050_DIR" status --porcelain)"', 'test "$(git -C "$V050_DIR" rev-parse "release/v0.5.0-rehearsal^{commit}")" = "$V050_SHA"',
+    ]);
+    for (const l of tests) expect(await problems(l, common), l).toEqual([]);
+    for (const l of ['git ls-remote origin "refs/tags/$RC_TAG^{}"', 'git ls-remote origin "refs/tags/release/v0.5.0-rehearsal^{}"']) expect(s0, l).toContain(l);
+    // the checker refuses a v0.5.0 read compared with the rc sha, and an rc read compared with the v0.5.0 sha
+    expect((await problems('test "$(git -C "$V050_DIR" rev-parse HEAD)" = "$RC_SHA"', common)).length).toBe(1);
+    expect((await problems('test "$(git rev-parse HEAD)" = "$V050_SHA"', common)).length).toBe(1);
+    const { V050_SHA, V050_TAG } = await import("../src/ci/twin-upgrade-from-v050.ts");
+    expect(S415).toContain(`export V050_SHA=${V050_SHA}`);
+    expect(s0).toContain(V050_TAG);
+  });
+  test("every deploy-implementation and govern command carries --core-dir and --core-sha of the v0.5.0 checkout, and every upgrade command --upgrade-build of the rc checkout (issue 1927)", () => {
+    expect(common).toContain("--core-dir $V050_DIR --core-sha $V050_SHA");
+    expect(common).not.toContain("$RC_SHA");
+    const lines = commands(S415).filter((l) => l.startsWith("bun publish-contracts/src/cli.ts "));
+    const cli = lines.filter((l) => / (deploy-implementation|govern|verify) /.test(l));
+    expect(cli.length).toBe(7);
+    for (const l of cli) expect(l, l).toMatch(/ \$COMMON$/);
+    const upgrade = cli.filter((l) => l.includes("deploy-implementation") || l.includes("--row upgrade-proxy"));
+    expect(upgrade.length).toBe(4);
+    for (const l of upgrade) expect(l, l).toContain('--upgrade-build "$PWD"');
+    for (const l of lines.filter((x) => !upgrade.includes(x))) expect(l, l).not.toContain("--upgrade-build");
+  });
+  test("the section's publish-contracts commands are, in order, the commands the Twin driver runs (issue 1927)", async () => {
+    const { UPGRADE_FROM_V050_COMMANDS } = await import("../src/ci/twin-upgrade-from-v050.ts");
+    const lines = commands(S415).filter((l) => /^bun publish-contracts\/src\/(cli|evidence-check)\.ts /.test(l));
+    expect(lines).toEqual([...UPGRADE_FROM_V050_COMMANDS]);
+    // the driver workflow job runs that driver
+    const wf = readFileSync(join(REPO, ".github", "workflows", "suite-28-core-stages.yml"), "utf8");
+    expect(wf).toContain("name: core-stages-twin-upgrade-from-v050");
+    expect(wf).toContain("bun publish-contracts/src/ci/twin-upgrade-from-v050.ts");
   });
   test("step 2 reads the Safe owners and threshold, the Safe's timelock roles and the RouterGovernance code on chain", async () => {
     const s2 = step(2);
