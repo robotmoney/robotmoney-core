@@ -536,6 +536,21 @@ export function gatewayRunbookProblems(root: string, model: CliModel): string[] 
 
 export interface Loaded { template: { name: string; steps: RunbookStep[] }; releases: Map<string, ReleaseRunbook>; problems: string[] }
 /** Everything in docs/runbooks/contract-qa/: the template, every release file against it, and the commands against the real CLIs. */
+/**
+ * PURE. A release that deploys and unpauses basket vaults (it has the govern-schedule step) must set a non-zero emergency unwind
+ * guard on every open basket, or the post-govern verify (P4.01, unwindGuardCheck) fails. So it needs a set-unwind-guard govern
+ * round for each of PROTO and RWA. rmAGENT is retired from v0.6.0, so it is not required there.
+ */
+export function unwindGuardProblems(r: Pick<ReleaseRunbook, "release" | "steps">): string[] {
+  if (!r.steps.some((s) => s.id === "P3.01-govern-schedule")) return [];
+  const rounds = r.steps.flatMap((s) => s.cmds ?? []).filter((c) => c.includes("set-unwind-guard"));
+  const out: string[] = [];
+  for (const vault of ["PROTO", "RWA"]) {
+    if (!rounds.some((c) => c.includes(`vault=${vault}`))) out.push(`releases/${r.release}.yaml: an open basket vault (${vault}) has no set-unwind-guard step, so the post-govern verify fails its emergency unwind guard check`);
+  }
+  return out;
+}
+
 export function validateAll(root: string = ROOT, model: CliModel = loadModel(root), pinnedTemplate: (sha: string) => string | undefined = templateAtCommit): Loaded {
   const problems: string[] = [];
   const tplPath = join(root, QA_DIR, "template.yaml");
@@ -554,6 +569,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
     try {
       const r = parseRelease(text, name);
       releases.set(name, r);
+      problems.push(...unwindGuardProblems(r));
       // A release pinned to templateSha is a record: its steps are checked against the template AT that commit, never the
       // current one, and its commands were checked against the CLIs at that commit, so a later template or CLI change does
       // not reopen it. The pin is read from git, so an edited record or a made-up commit is refused. An unpinned release is
