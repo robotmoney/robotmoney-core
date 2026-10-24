@@ -309,7 +309,17 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
   });
   test("step 2 reads the Safe owners and threshold, the Safe's timelock roles and the RouterGovernance code on chain", async () => {
     const s2 = step(2);
-    for (const l of ['cast call $SAFE "getOwners()(address[])"', 'cast call $SAFE "getThreshold()(uint256)"', 'cast call $TIMELOCK "hasRole(bytes32,address)(bool)" $PROPOSER_ROLE $SAFE', 'cast call $TIMELOCK "hasRole(bytes32,address)(bool)" $EXECUTOR_ROLE $SAFE', "cast codehash $GOVERNANCE"]) expect(s2, l).toContain(l);
+    for (const l of ['cast call $SAFE "getOwners()(address[])"', 'cast call $SAFE "getThreshold()(uint256)"', 'cast call $TIMELOCK "hasRole(bytes32,address)(bool)" $PROPOSER_ROLE $SAFE', 'cast call $TIMELOCK "hasRole(bytes32,address)(bool)" $EXECUTOR_ROLE 0x0000000000000000000000000000000000000000', "cast codehash $GOVERNANCE"]) expect(s2, l).toContain(l);
+    // The executor is open (core 1521): the read is for address(0), never the Safe.
+    expect(s2).not.toContain('$EXECUTOR_ROLE $SAFE');
+    for (const l of s2.split("\n").filter((x) => x.startsWith("cast "))) expect(await problems(l, common), l).toEqual([]);
+    expect(s2).toContain("`hasRole(EXECUTOR_ROLE, address(0))` must be true");
+    expect(s2).toContain("The Safe must hold `PROPOSER_ROLE`");
+    expect(s2).toContain("never from memory");
+    // Stop rules stay for the delay and receipt version 2. An active receipt vector is recorded, not a stop (step 6 clears it).
+    expect(s2).toContain("If the delay reads anything else, or if the receipt reads version 2");
+    expect(s2).toContain("record it in the evidence and do not stop");
+    expect(s2).not.toContain("or if an active receipt vector shows in the effective weights, stop and report");
     expect(s2).toContain("must read 2");
     expect(await problems('cast call $SAFE "getNoSuchOwners()(address[])" --rpc-url $BASE_RPC_URL', common)).toHaveLength(1);
     expect(S415.indexOf("export GOVERNANCE=")).toBeGreaterThan(-1);
