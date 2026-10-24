@@ -653,6 +653,18 @@ steps:
     receipts:
       - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}
     irreversible: false
+  - id: "P10.53-write-three-vault-rollout-report"
+    standing: ["4.7"]
+    description: "v0.6.0 deploys three vaults (rmUSDC, rmPROTO, rmRWA; ADR-0017), so no agent-token-vault manifest exists and the template's P10.51 report lists it as unreadable. This step rewrites rollout-report.md reading only the three manifests named by --vaults: a failed step, a vault still paused and a declared vault with no manifest are still issues"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--step", "P10.53-write-three-vault-rollout-report", "--vaults", "vault,protocol-asset-vault,rwa-basket-vault"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}
+    irreversible: false
+    added: "v0.6.0"
   - id: "P10.52-record-signoff"
     standing: ["4.4"]
     description: "The sign-off is written by the run, and only when the report lists no issue and matches the publish go"

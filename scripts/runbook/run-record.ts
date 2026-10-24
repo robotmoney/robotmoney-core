@@ -3,10 +3,11 @@
 //   bun scripts/runbook/run-record.ts go --kind publish|freeze --run-dir D --sha S --target T --sheet F
 //       writes D/go/<kind>.json: the sha, the target and the sheet hash the run proceeds with. A freeze go is refused off the Twin chain:
 //       on 8453 the freeze is an owner decision, never a runbook default.
-//   bun scripts/runbook/run-record.ts report --run-dir D --evidence-dir E --manifest-dir M --rpc URL --sha S --target T --chain-id C --sheet F --tag TAG
+//   bun scripts/runbook/run-record.ts report --run-dir D --evidence-dir E --manifest-dir M --rpc URL --sha S --target T --chain-id C --sheet F --tag TAG [--vaults a,b,c]
 //       writes D/rollout-report.md from the run itself: the sha, the network, the sheet hash, the tag, the journal of every step and the
-//       evidence files with their sha256. A vault whose deposits are still paused at report time (read with cast from the four vault
-//       manifests in M) is an issue. A pause report (rollout-report-<chain>.json) is listed, not an issue: the pause drills write one.
+//       evidence files with their sha256. A vault whose deposits are still paused at report time (read with cast from the vault
+//       manifests in M: the four of VAULT_MANIFESTS, or only those --vaults names, a comma list) is an issue. A declared vault with no manifest is an issue.
+//       v0.6.0 is three vaults (ADR-0017) and passes --vaults vault,protocol-asset-vault,rwa-basket-vault. A pause report (rollout-report-<chain>.json) is listed, not an issue: the pause drills write one.
 //       Each step's outcome is D/journal/<id>.result: "pass", "skip <reason>" or "fail exit <n>". A failed step, or a journaled step with
 //       no result, is an issue. --step names the report's own step, which is still running and has no result yet. A skip is listed.
 //   bun scripts/runbook/run-record.ts signoff --run-dir D --sha S --target T --sheet F
@@ -18,7 +19,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from "node:path";
 
 export const VERBS = ["go", "report", "signoff"] as const;
-export const FLAGS = ["kind", "run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag", "step"] as const;
+export const FLAGS = ["kind", "run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag", "step", "vaults"] as const;
 export const VAULT_MANIFESTS = ["vault", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault"] as const;
 const TARGETS = ["twin", "rehearsal", "production"];
 
@@ -77,9 +78,19 @@ export const skipsOf = (results: Record<string, string>): string[] => Object.ent
 /** PURE. The pause reports in an evidence folder listing: listed, never an issue by themselves (the pause drills write one). */
 export const pauseReportsOf = (evidenceFiles: string[]): string[] => evidenceFiles.filter((f) => /^rollout-report-[0-9]+\.json$/.test(f));
 
-/** depositsPaused() of the four vaults the manifests name. */
-function vaultReads(manifestDir: string, rpc: string): { manifest: string; vault: string; read: string }[] {
-  return VAULT_MANIFESTS.map((m) => {
+/** PURE. The manifest names of --vaults: the default four when absent. An empty, unknown or duplicate name throws (a usage error). */
+export function vaultsOf(raw: string | undefined): readonly string[] {
+  if (raw === undefined) return VAULT_MANIFESTS;
+  const names = raw.split(",").map((n) => n.trim());
+  for (const n of names) if (n === "" || !(VAULT_MANIFESTS as readonly string[]).includes(n)) throw new Error(`--vaults names ${VAULT_MANIFESTS.join("|")}, got '${n}'`);
+  const dup = names.find((n, i) => names.indexOf(n) !== i);
+  if (dup !== undefined) throw new Error(`--vaults names '${dup}' twice`);
+  return names;
+}
+
+/** depositsPaused() of the vaults the manifests name (the default four, or the --vaults list). */
+function vaultReads(manifestDir: string, rpc: string, vaults: readonly string[]): { manifest: string; vault: string; read: string }[] {
+  return vaults.map((m) => {
     const p = join(manifestDir, `${m}.json`);
     if (!existsSync(p)) return { manifest: m, vault: "?", read: "no manifest" };
     const vault = String(JSON.parse(readFileSync(p, "utf8")).vault ?? "?");
@@ -132,10 +143,11 @@ export function main(argv: string[]): number {
         return { id: x.replace(/\.out$/, ""), lines: lines.length, last: lines.at(-1) ?? "" };
       });
       const results = Object.fromEntries(listFiles(journalDir).filter((x) => x.endsWith(".result")).map((x) => [x.replace(/\.result$/, ""), readFileSync(join(journalDir, x), "utf8").trim()]));
+      const vaults = vaultsOf(f.vaults);
       const stepIssues = stepIssuesOf(journal.map((j) => j.id), results, f.step);
       const files = listFiles(evidenceDir);
       const names = files.map((x) => x.split("/").at(-1)!);
-      const text = reportText({ ...b, chainId: need(f, "chain-id"), tag: need(f, "tag"), journal, evidence: files.map((x) => ({ file: x, sha256: sha256(join(evidenceDir, x)) })), issues: [...stepIssues, ...issuesOf(vaultReads(need(f, "manifest-dir"), need(f, "rpc")))], skips: skipsOf(results), pauseReports: pauseReportsOf(names) });
+      const text = reportText({ ...b, chainId: need(f, "chain-id"), tag: need(f, "tag"), journal, evidence: files.map((x) => ({ file: x, sha256: sha256(join(evidenceDir, x)) })), issues: [...stepIssues, ...issuesOf(vaultReads(need(f, "manifest-dir"), need(f, "rpc"), vaults))], skips: skipsOf(results), pauseReports: pauseReportsOf(names) });
       writeFileSync(join(runDir, "rollout-report.md"), text);
       return 0;
     }
