@@ -29,10 +29,18 @@ ignore = [
     # tokio-tar PAX header file-smuggling. No CVSS assigned; transitive, no
     # untrusted-archive extraction in our binaries. expires: 2026-12-01
     "RUSTSEC-2025-0111",
-    # crypto-bigint 0.5.5 constant-time timing variability, published 2026-10-23.
-    # Transitive via elliptic-curve 0.13 / ecdsa 0.16, which cannot move to the
-    # fixed >=0.7.6 until those crates release. Not used for secret-dependent
-    # operations in our binaries. expires: 2026-12-01
+    # crypto-bigint 0.5.5 timing variability in operations meant to be
+    # constant-time (patched in >= 0.7.6), published 2026-10-23. EXPOSED: the
+    # rmpc software signer (clients/rust-payment-client/src/signer/software.rs,
+    # sign_eip1559_hash -> k256::ecdsa SigningKey::sign_prehash on a secret key,
+    # also used by rmpc_keystore_import) reaches it via k256 0.13.4 -> ecdsa
+    # 0.16.9 -> elliptic-curve 0.13.8 -> crypto-bigint 0.5.5. Mitigation: that
+    # signer loads only when [signer].allow_software_fallback is true (opt-in,
+    # off otherwise). rmpc has no hardware signer yet (Hsm and Kms backends are
+    # reserved), so no rmpc signing path is outside the exposure. Cannot move
+    # until we adopt elliptic-curve 0.14 and k256 0.14, which depend on
+    # crypto-bigint 0.7 (elliptic-curve 0.14.1 requires ^0.7.5; the lockfile
+    # must resolve >= 0.7.6). expires: 2026-12-01
     "RUSTSEC-2026-0387",
 ]
 
