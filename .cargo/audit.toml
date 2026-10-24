@@ -19,7 +19,7 @@
 
 [advisories]
 # RustSec ids to ignore. Each entry MUST carry a dated justification comment.
-# The §8 gate blocks merges on HIGH/CRITICAL (CVSS >= 7.0) advisories. The two
+# The §8 gate blocks merges on HIGH/CRITICAL (CVSS >= 7.0) advisories. The
 # entries below are pre-existing transitive advisories scored BELOW high; they
 # are ignored so the gate has a green baseline. Re-evaluate at each expiry.
 ignore = [
@@ -29,6 +29,12 @@ ignore = [
     # tokio-tar PAX header file-smuggling. No CVSS assigned; transitive, no
     # untrusted-archive extraction in our binaries. expires: 2026-12-01
     "RUSTSEC-2025-0111",
+    # crypto-bigint 0.5.5 constant-time timing issues (advisory dated 2026-10-23).
+    # Transitive via k256 0.13 / elliptic-curve 0.13 (alloy-eips, rmpc and the fork
+    # e2e crate). The fix needs crypto-bigint >=0.7.6, a major jump that
+    # elliptic-curve 0.13 cannot take, so no lockfile bump clears it. No secret-key
+    # operation in our binaries runs on attacker-timed input. expires: 2026-12-01
+    "RUSTSEC-2026-0387",
 ]
 
 # Treat "unmaintained" crates as warnings rather than hard errors: an
