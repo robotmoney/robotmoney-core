@@ -196,7 +196,7 @@ test("a v0.6.0 yaml that guards only rmPROTO fails for rmRWA", () => {
 // Issue 1927: the v0.6.0 yaml rehearses runbook 4.15 on the Twin from a real v0.5.0 deployment. Its added steps run the 4.15 publish-contracts commands, in order, as the runbook
 // spells them (UPGRADE_FROM_V050_COMMANDS, which upgrade-runbook-drift.test.ts holds equal to the runbook), each with expectExit 0. The 4.15 names map to the yaml's placeholders.
 test("the committed v0.6.0 runbook runs the runbook 4.15 commands against the v0.5.0 deployment, in order, each with expectExit 0", async () => {
-  const { UPGRADE_FROM_V050_COMMANDS, V050_SHA } = await import("../../publish-contracts/src/ci/twin-upgrade-from-v050.ts");
+  const { UPGRADE_FROM_V050_COMMANDS, V050_SHA } = await import("../../publish-contracts/src/ci/upgrade-from-v050-commands.ts");
   const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
   const NAMES: Record<string, string> = {
     "$PWD": ".", "$GATEWAY_IMPL": "{state:v050-gateway-impl}", "$RECEIPT_IMPL": "{state:v050-receipt-impl}", "$RMAGENT": "{state:v050-rmagent}", "$TIMELOCK": "{state:v050-timelock}",
