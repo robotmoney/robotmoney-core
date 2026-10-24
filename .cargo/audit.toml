@@ -29,6 +29,11 @@ ignore = [
     # tokio-tar PAX header file-smuggling. No CVSS assigned; transitive, no
     # untrusted-archive extraction in our binaries. expires: 2026-12-01
     "RUSTSEC-2025-0111",
+    # crypto-bigint 0.5.5 constant-time timing variability, published 2026-10-23.
+    # Transitive via elliptic-curve 0.13 / ecdsa 0.16, which cannot move to the
+    # fixed >=0.7.6 until those crates release. Not used for secret-dependent
+    # operations in our binaries. expires: 2026-12-01
+    "RUSTSEC-2026-0387",
 ]
 
 # Treat "unmaintained" crates as warnings rather than hard errors: an
