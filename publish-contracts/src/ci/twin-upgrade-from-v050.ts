@@ -17,8 +17,8 @@ import { ERC1967_IMPLEMENTATION_SLOT } from "../verify/codehash.ts";
 import { rpcCallRevert } from "../evidence-check.ts";
 import { parseSheetText } from "../sheet.ts";
 
-export { AGENT_POOL_FLOOR, RETIRE_WEIGHTS, UPGRADE_FROM_V050_COMMANDS, V050_SHA, V050_TAG } from "./upgrade-from-v050-commands.ts";
-import { AGENT_POOL_FLOOR, UPGRADE_FROM_V050_COMMANDS, V050_SHA, V050_TAG } from "./upgrade-from-v050-commands.ts";
+export { AGENT_POOL_FLOOR, RETIRE_WEIGHTS, UPGRADE_FROM_V050_COMMANDS, UPGRADE_FROM_V050_ENV, V050_SHA, V050_TAG } from "./upgrade-from-v050-commands.ts";
+import { AGENT_POOL_FLOOR, UPGRADE_FROM_V050_COMMANDS, UPGRADE_FROM_V050_ENV, V050_SHA, V050_TAG } from "./upgrade-from-v050-commands.ts";
 
 /** The record kind the workflow asserts. */
 export const UPGRADE_FROM_V050_KIND = "twin-upgrade-from-v050";
@@ -86,11 +86,14 @@ async function main(): Promise<void> {
   const common = ["--chain", String(TWIN_CHAIN_ID), "--rpc", rpc, "--sheet", sheet, "--core-dir", v050, "--core-sha", V050_SHA, "--evidence", evidence, "--environment", "stage",
     "--signer", `keystore:${join(rh, "keys", "DEPLOYER")}:${pass}`, "--counts-dir", join(rh, "counts")];
   const vars: Record<string, string> = { PWD: qa, EVIDENCE: evidence, TIMELOCK: timelock, GOVERNANCE: governance, REGISTRY: registry, RMAGENT: rmAgent, BASE_RPC_URL: rpc };
+  // the runbook's environment (UPGRADE_FROM_V050_ENV), with the Twin's values
+  const envValues: Record<(typeof UPGRADE_FROM_V050_ENV)[number], string> = { PUBLISH_MANIFEST_DIR: manifests };
+  const runEnv: Record<string, string> = Object.fromEntries(UPGRADE_FROM_V050_ENV.map((k) => [k, envValues[k]]));
   const ran: { line: string; exit: number; out: string }[] = [];
   const runLine = (i: number, extraVars: Record<string, string> = {}): string => {
     const argv = expandCommand(UPGRADE_FROM_V050_COMMANDS[i]!, common, { ...vars, ...extraVars });
     say("command", { step: i, line: UPGRADE_FROM_V050_COMMANDS[i] });
-    const r = Bun.spawnSync([bun, ...argv.slice(1)], { cwd: qa, env: { ...process.env, PUBLISH_MANIFEST_DIR: manifests, YES: "1" }, stdout: "pipe", stderr: "inherit" });
+    const r = Bun.spawnSync([bun, ...argv.slice(1)], { cwd: qa, env: { ...process.env, ...runEnv, YES: "1" }, stdout: "pipe", stderr: "inherit" });
     const out = r.stdout.toString();
     process.stdout.write(out);
     writeFileSync(join(rh, `upgrade-from-v050-${i}.out`), out);

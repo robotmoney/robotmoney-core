@@ -16,7 +16,8 @@ notes: |
   routes into it, redeem and redeemInKind pay existing holders (ADR-0009, no assisted migration). P6.24-redeem-retired-vault checks
   every vault the run retired. A run that retired none passes with nothing to check.
 
-  Until the retire executes, pause-all does not cover the live v0.5.0 rmAGENT: pause it by hand with EMERGENCY_ROLE, or run the retire first.
+  pause-all covers the live v0.5.0 rmAGENT only with --core-dir of the v0.5.0 checkout (runbook 4.15 COMMON): it pauses it, or counts it covered once retired() reads true.
+  With this line's checkout as --core-dir it pauses the three vaults only: pause rmAGENT by hand with EMERGENCY_ROLE, or run the retire first.
 
   Open owner decisions are the decisions: list below. A production run refuses while any is open, and so does productionReady: true.
 decisions:
@@ -559,6 +560,18 @@ steps:
   # release/v0.5.0-rehearsal is published on a second Twin fork with that tag's own CLI and committed Twin sheet, then the 4.15 commands run from this checkout with
   # --core-dir and --core-sha of the v0.5.0 checkout ({v050common}) and --upgrade-build of this one (.). The fork is pinned at Base block 52881000: the RM V4 pool the v0.5.0
   # rmAGENT holds was drained at block 52881518, so its agent stage refuses the unlowered 1e15 floor at any later block. The CI twin of these steps is core-stages-twin-upgrade-from-v050. ──
+  - id: "P8.00-v050-foundry-version"
+    standing: ["4.2"]
+    description: "forge, cast and anvil are the Foundry version CI pins (v1.8.5), on the operator machine and on the stage host where P8.02 starts the fork. Foundry 1.8.1 anvil refuses an eth_call from an address with no balance, which breaks the v0.5.0 verify's Safe probes"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bash", "-c", 'for t in forge cast anvil; do "$t" --version | head -n 1 | grep -Eq "Version: 1\\.8\\.5([^0-9]|$)" || { echo "$t is not Foundry 1.8.5" >&2; exit 1; }; done']
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
+    added: "v0.6.0"
   - id: "P8.01-v050-checkout"
     standing: ["4.15"]
     description: "A clean checkout of release/v0.5.0-rehearsal outside the core checkout, HEAD 57fbe61833e9d7f94557d69102138f7c410c1346, with its own publish-contracts dependencies: the build that is live"

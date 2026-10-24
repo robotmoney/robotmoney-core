@@ -342,6 +342,13 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
     const { UPGRADE_FROM_V050_COMMANDS } = await import("../src/ci/twin-upgrade-from-v050.ts");
     const lines = commands(S415).filter((l) => /^bun publish-contracts\/src\/(cli|evidence-check)\.ts /.test(l));
     expect(lines).toEqual([...UPGRADE_FROM_V050_COMMANDS]);
+    // review-operations-001: the environment the driver gives those commands is exported in the section, and the step 8 record is read from it
+    const { UPGRADE_FROM_V050_ENV } = await import("../src/ci/upgrade-from-v050-commands.ts");
+    for (const k of UPGRADE_FROM_V050_ENV) expect(S415, k).toMatch(new RegExp(`^export ${k}=`, "m"));
+    expect(S415).toContain("writes the new `upgradeability.json` to `$PUBLISH_MANIFEST_DIR`");
+    const driver = readFileSync(join(REPO, "publish-contracts", "src", "ci", "twin-upgrade-from-v050.ts"), "utf8");
+    expect(driver).toContain("...runEnv");
+    expect(driver).not.toMatch(/PUBLISH_MANIFEST_DIR: manifests, YES/);
     // the driver workflow job runs that driver
     const wf = readFileSync(join(REPO, ".github", "workflows", "suite-28-core-stages.yml"), "utf8");
     expect(wf).toContain("name: core-stages-twin-upgrade-from-v050");

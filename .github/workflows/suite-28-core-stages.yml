@@ -302,6 +302,14 @@ jobs:
         with:
           pin-block: ${{ env.V050_PIN }}
           upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+      # The fork must serve the fixed pin. An upstream that no longer serves archive state at it would let twin-fork repin past the drain, and the v0.5.0 agent stage would then
+      # refuse its floor with a misleading cause: the job fails here instead, naming the pin.
+      - name: The fork serves the v0.5.0 pin (BASE_UPSTREAM_RPC must serve archive state at it)
+        env:
+          FORK_PIN: ${{ steps.fork.outputs.pin-block }}
+        run: |
+          set -euo pipefail
+          [ "$FORK_PIN" = "$V050_PIN" ] || { echo "::error::the Twin fork is pinned at '$FORK_PIN', not $V050_PIN: BASE_UPSTREAM_RPC must serve archive state at Base block $V050_PIN" >&2; exit 1; }
       - uses: ./.github/actions/publish-contracts-setup
       - name: Publish release/v0.5.0-rehearsal with that tag's own CLI and Twin sheet
         env:

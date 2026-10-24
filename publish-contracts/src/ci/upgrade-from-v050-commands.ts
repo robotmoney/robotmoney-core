@@ -23,3 +23,9 @@ export const UPGRADE_FROM_V050_COMMANDS: readonly string[] = [
   `bun publish-contracts/src/evidence-check.ts --governed-upgrades $EVIDENCE/publish-run.json --deployment-kind rehearsal --timelock $TIMELOCK --governance $GOVERNANCE --rpc $BASE_RPC_URL`,
   `bun publish-contracts/src/evidence-check.ts --vault-retirements $EVIDENCE/publish-run.json --deployment-kind rehearsal --registry $REGISTRY --timelock $TIMELOCK --rpc $BASE_RPC_URL`,
 ];
+
+/**
+ * Review-operations-001: the environment the 4.15 commands read besides their arguments. Runbook 4.15 exports each (upgrade-runbook-drift.test.ts), and the Twin driver sets each:
+ * the Deploy 3 stage manifests are not under the clean v0.5.0 checkout, so PUBLISH_MANIFEST_DIR names their directory.
+ */
+export const UPGRADE_FROM_V050_ENV = ["PUBLISH_MANIFEST_DIR"] as const;
