@@ -213,3 +213,47 @@ export async function assertReleaseGate(i: ReleaseGateInput): Promise<string> {
   }
   return tag;
 }
+
+/**
+ * Review-security-001 (issue 1927): the rc build a governed upgrade deploys. Runbook 4.15 names the LIVE v0.5.0 checkout as --core-dir, so the release gate above proves that sha
+ * (tagged, counted, green), and the rc checkout given as --upgrade-build needs its own proof, before any signer exists: its HEAD, a clean work tree, an annotated rc tag of the
+ * sheet's kind at HEAD (release/vA.B.C-rc.N, with -rehearsal on a rehearsal), that tag on the canonical repository with the same commit, the tagged commit on the release branch
+ * releases-A.B.x of the origin, and green CI at it. No counts: an rc build deploys implementations, not the stages. Returns the sha and the tag.
+ */
+export const RC_TAG_PATTERN = /^release\/v(\d+)\.(\d+)\.\d+-rc\.\d+(?:-rehearsal)?$/;
+export interface UpgradeBuildGateInput {
+  dir: string; kind: DeploymentKind; env: Record<string, string | undefined>; chainId: number;
+  /** The read-only git status of the work tree (isomorphism.ts dirtyTreeLines over the CLI's runner). */
+  dirty: (dir: string) => Promise<string[]>;
+  readHead: (dir: string) => string | undefined;
+  releaseTag?: ReleaseGateInput["releaseTag"]; releaseTags?: ReleaseGateInput["releaseTags"]; remoteTag?: RemoteTagCheck; checkShaGreen?: CheckShaGreen;
+  /** Test seam: the tagged commit is an ancestor of (or equal to) refs/remotes/origin/<branch>. Default: git merge-base --is-ancestor, replace refs off. */
+  onBranch?: (dir: string, sha: string, branch: string) => Promise<boolean>;
+}
+const defaultOnBranch = async (dir: string, sha: string, branch: string): Promise<boolean> => {
+  const r = spawnSync("git", ["--no-replace-objects", "-C", dir, "merge-base", "--is-ancestor", sha, `refs/remotes/origin/${branch}`], { env: gitEnv() });
+  return r.status === 0;
+};
+export async function assertUpgradeBuildGate(i: UpgradeBuildGateInput): Promise<{ sha: string; tag: string }> {
+  const refuse = (kind: "RELEASE_SHA_UNTAGGED" | "USAGE" | "CI_NOT_GREEN", why: string, d: Record<string, unknown> = {}): never => {
+    throw new PublishError(kind, `--upgrade-build ${i.dir}: ${why}. The rc build is gated like a DEPLOY_SHA (runbook 4.14, 4.15 step 0); no signer was built, nothing was sent.`, { upgrade_build: i.dir, ...d });
+  };
+  const sha = i.readHead(i.dir);
+  if (!sha || !/^[0-9a-f]{40}$/.test(sha)) return refuse("USAGE", "is not a git checkout with a readable HEAD");
+  const dirty = await i.dirty(i.dir);
+  if (dirty.length > 0) refuse("USAGE", `has uncommitted changes (${dirty.length}): ${dirty.slice(0, 5).join("; ")}`, { dirty: dirty.slice(0, 20) });
+  const found = i.releaseTags ? await i.releaseTags(i.dir, sha) : i.releaseTag ? [await i.releaseTag(i.dir, sha)].filter((t): t is string => !!t) : await releaseTagsFor(i.dir, sha);
+  const tag = found.filter((t) => RC_TAG_PATTERN.test(t) && tagKind(t) === i.kind).sort()[0];
+  if (!tag) refuse("RELEASE_SHA_UNTAGGED", `HEAD ${sha} carries no annotated rc tag of kind ${i.kind} (release/vA.B.C-rc.N${i.kind === "rehearsal" ? "-rehearsal" : ""}); tags there: ${found.join(", ") || "none"}`, { sha, tags: found });
+  await (i.remoteTag ?? ((d, t, s) => verifyCanonicalRemoteTag(d, t, undefined, s)))(i.dir, tag!, sha);
+  const m = RC_TAG_PATTERN.exec(tag!)!;
+  const branch = `releases-${m[1]}.${m[2]}.x`;
+  if (!(await (i.onBranch ?? defaultOnBranch)(i.dir, sha, branch))) refuse("USAGE", `the rc ${tag} at ${sha} is not on origin/${branch} (fetch it, or the tag is on a QA branch or on dev)`, { sha, tag, branch });
+  const token = i.env.GITHUB_TOKEN || i.env.GH_TOKEN;
+  if (!token) refuse("CI_NOT_GREEN", `cannot check that CI is green at ${sha}: GITHUB_TOKEN is not set. The check is never skipped on 8453`, { sha });
+  const env: Record<string, string> = { GITHUB_TOKEN: token! };
+  for (const k of ["PATH", "HOME"]) if (i.env[k]) env[k] = i.env[k]!;
+  const r = await (i.checkShaGreen ?? spawnCheckShaGreen)({ coreDir: i.dir, sha, repo: CORE_REPO, env });
+  if (r.code !== 0) refuse("CI_NOT_GREEN", `CI is not green at ${sha} (check-sha-green exit ${r.code}): ${r.output.split("\n").map((l) => l.trim()).filter(Boolean).slice(0, 12).join(" | ")}`, { sha, exit: r.code });
+  return { sha, tag: tag! };
+}

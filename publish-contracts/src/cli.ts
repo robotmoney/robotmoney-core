@@ -20,7 +20,7 @@ import { buildIsomorphismReport, dirtyTreeLines, readGitHead, writeReport } from
 import { scrubGitEnv } from "./git-env.ts";
 import { publishLogger, type Logger } from "./log.ts";
 import { planNonceBasis, stagePlan } from "./plan.ts";
-import { assertBaselineCommitted, assertReleaseGate, gitAnchorCommitted, gitFrozenDirCommitted, type CheckShaGreen } from "./release-gate.ts";
+import { assertBaselineCommitted, assertReleaseGate, assertUpgradeBuildGate, gitAnchorCommitted, gitFrozenDirCommitted, type CheckShaGreen } from "./release-gate.ts";
 import { codeWithRetry, verifyReconstructionOnChain } from "./counts-reconstruct.ts";
 import { buildLibraryArtifacts } from "./libs-build.ts";
 import { DEPLOYER_STAGES, STAGE_NAMES, getStageTable, peekStageState, restoreStageState, useStageTable } from "./stages.ts";
@@ -221,6 +221,8 @@ export interface CliDeps {
   releaseTags?: (coreDir: string, sha: string) => Promise<string[]>;
   checkShaGreen?: CheckShaGreen;
   remoteTag?: (coreDir: string, tag: string) => Promise<void>;
+  /** Test seam (review-security-001, issue 1927): the rc commit of --upgrade-build is on origin's releases-A.B.x. Default: git merge-base --is-ancestor. */
+  rcOnReleaseBranch?: (dir: string, sha: string, branch: string) => Promise<boolean>;
   /** Test seam (issue 1733): the plan-time re-verification of a reconstructed baseline against the build and the chain. Default: rebuild the libraries from the checkout and read their code with cast. */
   verifyReconstructed?: (file: FrozenFile) => Promise<void>;
   /** Test seam (issue 1861): the whole `deploy-implementation` verb. Default: the real one (runDeployImplementation). */
@@ -725,6 +727,14 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
         verifyReconstructed: deps.verifyReconstructed ?? realVerifyReconstructed, anchorCommitted: deps.anchorCommitted ?? realAnchorCommitted, frozenDirCommitted: deps.frozenDirCommitted ?? realFrozenDirCommitted,
         run, runEnv: scrubGitEnv(castEnv) });
       log.log("info", "plan.release_gate", { ok: true, tag, core_sha: gateSha, stage: a.stage ?? a.verb ?? "default", counts: shaRun ? "none (redeploy sha)" : "committed" });
+    }
+    // Review-security-001 (issue 1927): runbook 4.15 gates the LIVE build above (--core-sha of the v0.5.0 checkout). The rc build a governed upgrade deploys from (--upgrade-build) is a
+    // second checkout, so on 8453 it passes its own gate here, before any signer: clean HEAD, an annotated rc tag of the kind on releases-A.B.x, the canonical remote tag, green CI.
+    const upgrading = a.verb === DEPLOY_IMPL_VERB || a.row === UPGRADE_ROW;
+    if (rpcChainId === MAINNET_CHAIN_ID && upgrading && a.upgradeBuild !== undefined && resolve(a.upgradeBuild) !== coreDir) {
+      const ub = await assertUpgradeBuildGate({ dir: resolve(a.upgradeBuild), kind: sheet.kind, env, chainId: rpcChainId, dirty: (d) => dirtyTreeLines(run, d, rpcChainId, castEnv), readHead: readGitHead,
+        releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, remoteTag: deps.remoteTag, checkShaGreen: deps.checkShaGreen, onBranch: deps.rcOnReleaseBranch });
+      log.log("info", "upgrade_build.release_gate", { ok: true, upgrade_build: resolve(a.upgradeBuild), sha: ub.sha, tag: ub.tag });
     }
     // deploy-implementation (issue 1861): the release gate above ran on 8453 as for govern. No counts, no stages: one CREATE from the deployer and its implementation_deploys entry.
     if (a.verb === DEPLOY_IMPL_VERB) {
