@@ -757,8 +757,8 @@ steps:
     host: "control"
     phase: 8
     cmds:
-      - ["bun", "publish-contracts/src/evidence-check.ts", "--governed-upgrades", "{runDir}/v050-run/evidence/publish-run.json", "--timelock", "{state:v050-timelock}", "--governance", "{state:v050-governance}", "--rpc", "{v050RpcUrl}"]
-      - ["bun", "publish-contracts/src/evidence-check.ts", "--vault-retirements", "{runDir}/v050-run/evidence/publish-run.json", "--registry", "{state:v050-registry}", "--timelock", "{state:v050-timelock}", "--rpc", "{v050RpcUrl}"]
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--governed-upgrades", "{runDir}/v050-run/evidence/publish-run.json", "--deployment-kind", "rehearsal", "--timelock", "{state:v050-timelock}", "--governance", "{state:v050-governance}", "--rpc", "{v050RpcUrl}"]
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--vault-retirements", "{runDir}/v050-run/evidence/publish-run.json", "--deployment-kind", "rehearsal", "--registry", "{state:v050-registry}", "--timelock", "{state:v050-timelock}", "--rpc", "{v050RpcUrl}"]
     expectExit: 0
     receipts: []
     irreversible: false

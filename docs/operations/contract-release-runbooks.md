@@ -1088,11 +1088,11 @@ bun publish-contracts/src/cli.ts verify $COMMON
 
    Copy the new `deployments/8453/upgradeability.json` into the evidence.
 
-9. Check the evidence against the chain. Both commands must exit 0, and the receipt migration read-back must equal the typed calldata step 5 previewed.
+9. Check the evidence against the chain. Both commands must exit 0, and the receipt migration read-back must equal the typed calldata step 5 previewed. Deploy 3 is a rehearsal-kind deployment, so both name `--deployment-kind rehearsal` (the 900 s floor); without it they hold the run to the 172800 s production floor and fail.
 
 ```bash
-bun publish-contracts/src/evidence-check.ts --governed-upgrades $EVIDENCE/publish-run.json --timelock $TIMELOCK --governance $GOVERNANCE --rpc $BASE_RPC_URL
-bun publish-contracts/src/evidence-check.ts --vault-retirements $EVIDENCE/publish-run.json --registry $REGISTRY --timelock $TIMELOCK --rpc $BASE_RPC_URL
+bun publish-contracts/src/evidence-check.ts --governed-upgrades $EVIDENCE/publish-run.json --deployment-kind rehearsal --timelock $TIMELOCK --governance $GOVERNANCE --rpc $BASE_RPC_URL
+bun publish-contracts/src/evidence-check.ts --vault-retirements $EVIDENCE/publish-run.json --deployment-kind rehearsal --registry $REGISTRY --timelock $TIMELOCK --rpc $BASE_RPC_URL
 ```
 
 10. Postflight (§4.4). A deposit into rmAGENT reverts, a router deposit splits across rmUSDC, rmPROTO and rmRWA, and `redeem` and `redeemInKind` pay existing rmAGENT holders. The owner records the go or no-go.

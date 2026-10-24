@@ -37,8 +37,8 @@ export const UPGRADE_FROM_V050_COMMANDS: readonly string[] = [
   `bun publish-contracts/src/cli.ts govern --row clear-voted-weights $COMMON`,
   `bun publish-contracts/src/cli.ts govern --row retire-vault --admin-arg vault=$RMAGENT --admin-arg weights=${RETIRE_WEIGHTS} $COMMON`,
   `bun publish-contracts/src/cli.ts verify $COMMON`,
-  `bun publish-contracts/src/evidence-check.ts --governed-upgrades $EVIDENCE/publish-run.json --timelock $TIMELOCK --governance $GOVERNANCE --rpc $BASE_RPC_URL`,
-  `bun publish-contracts/src/evidence-check.ts --vault-retirements $EVIDENCE/publish-run.json --registry $REGISTRY --timelock $TIMELOCK --rpc $BASE_RPC_URL`,
+  `bun publish-contracts/src/evidence-check.ts --governed-upgrades $EVIDENCE/publish-run.json --deployment-kind rehearsal --timelock $TIMELOCK --governance $GOVERNANCE --rpc $BASE_RPC_URL`,
+  `bun publish-contracts/src/evidence-check.ts --vault-retirements $EVIDENCE/publish-run.json --deployment-kind rehearsal --registry $REGISTRY --timelock $TIMELOCK --rpc $BASE_RPC_URL`,
 ];
 
 /** The record kind the workflow asserts. */
