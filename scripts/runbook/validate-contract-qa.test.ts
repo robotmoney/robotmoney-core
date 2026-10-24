@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { QA_DIR, ROOT, loadModel, parseSheetText, runnableProblems, sheetProblems, validateAll } from "./validate-contract-qa.ts";
+import { QA_DIR, ROOT, loadModel, parseSheetText, runnableProblems, sheetProblems, unwindGuardProblems, validateAll } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
 const RELEASE = "releases/v0.5.0.yaml";
@@ -166,4 +166,29 @@ test("a gateway publish with no owner decision gate, or not marked irreversible,
 
 test("a CLI flag the gateway runbook uses that the CLI does not have fails", () => {
   expect(problemsWith("gateway.yaml", (t) => t.replace('"publish", "{gcommon}", "{gate}"]', '"publish", "{gcommon}", "{gate}", "--system-two", "x"]')).join("\n")).toContain("--system-two is no publish-contracts flag");
+});
+
+const unwindRounds = (r: { steps: { cmds?: string[][] }[] }): number => r.steps.flatMap((s) => s.cmds ?? []).filter((c) => c.includes("set-unwind-guard")).length;
+
+test("the committed v0.6.0 runbook sets the unwind guard on rmPROTO and rmRWA only", () => {
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  expect(unwindRounds(r)).toBe(4);
+  expect(unwindGuardProblems(r)).toEqual([]);
+  const cmds = r.steps.flatMap((s) => s.cmds ?? []).filter((c) => c.includes("set-unwind-guard")).map((c) => c.join(" "));
+  expect(cmds.some((c) => c.includes("vault=AGENT"))).toBe(false);
+  const ids = r.steps.map((s) => s.id);
+  expect(ids.indexOf("P3.51-unwind-guard-schedule")).toBeLessThan(ids.indexOf("P3.52-unwind-guard-execute"));
+  expect(ids.indexOf("P3.52-unwind-guard-execute")).toBeLessThan(ids.indexOf("P4.01-verify-post-govern"));
+});
+
+test("a v0.6.0 yaml with an open basket vault and no set-unwind-guard step fails", () => {
+  const p = problemsWith("releases/v0.6.0.yaml", (t) => t.replace(stepBlock(t, "P3.51-unwind-guard-schedule"), "").replace(stepBlock(t, "P3.52-unwind-guard-execute"), ""));
+  const text = p.join("\n");
+  expect(text).toContain("vault (PROTO) has no set-unwind-guard step");
+  expect(text).toContain("vault (RWA) has no set-unwind-guard step");
+});
+
+test("a v0.6.0 yaml that guards only rmPROTO fails for rmRWA", () => {
+  const p = problemsWith("releases/v0.6.0.yaml", (t) => t.replace(/.*vault=RWA.*\n/g, ""));
+  expect(p.join("\n")).toContain("vault (RWA) has no set-unwind-guard step");
 });
