@@ -15,6 +15,8 @@
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
+import { keccak256 } from "viem";
+import { artifactJson } from "./verify/codehash.ts";
 import { basename, dirname, resolve } from "node:path";
 import { anchorChainOf, fileHashOf, frozenPath, loadFrozen, type FrozenFile } from "./counts.ts";
 import { PublishError } from "./errors.ts";
@@ -212,4 +214,139 @@ export async function assertReleaseGate(i: ReleaseGateInput): Promise<string> {
     throw new PublishError("CI_NOT_GREEN", `CI is not green at ${i.sha} (check-sha-green exit ${r.code}): ${lines.slice(0, 12).join(" | ")}`, { sha: i.sha, exit: r.code });
   }
   return tag;
+}
+
+/**
+ * Review-security-001 (issue 1927): the rc checkout a governed upgrade deploys from. Runbook 4.15 names the LIVE v0.5.0 checkout as --core-dir, so the release gate above proves that
+ * sha (tagged, counted, green), and the rc checkout given as --upgrade-build needs its own proof, before any signer exists: its HEAD, a clean tracked tree, an annotated rc tag of the
+ * sheet's kind at HEAD (release/vA.B.C-rc.N, with -rehearsal on a rehearsal), that tag on the canonical repository with the same commit, the tagged commit on the release branch
+ * releases-A.B.x of the origin, and green CI at it. No counts: an rc build deploys implementations, not the stages.
+ * The build output out/ is gitignored, so the tree checks alone prove nothing about it (review-security-003). The gate therefore also proves that the build artifacts the verb
+ * deploys and compares with (`artifacts`: the proxy's implementation contract and every library it links, transitively) were compiled from this tree: every source their solc
+ * metadata names is a tracked file of the checkout (its submodules included) whose bytes hash to the keccak256 the metadata records. The tree is clean, so those bytes are HEAD's.
+ * Review-security-004: each artifact's compiler settings must also be what the tree's own foundry config yields (`forge config --json` in the checkout, every FOUNDRY_ and
+ * DAPP_ variable scrubbed): the compiler version, the optimizer, the EVM version, viaIR, the metadata bytecodeHash and the remappings. It does not prove a setting outside that
+ * list or the forge binary itself (issue 1926 pins it); the deployed code is still read back against the artifact by the verb. Returns the sha and the tag.
+ */
+export const RC_TAG_PATTERN = /^release\/v(\d+)\.(\d+)\.\d+-rc\.\d+(?:-rehearsal)?$/;
+export interface UpgradeBuildGateInput {
+  dir: string; kind: DeploymentKind; env: Record<string, string | undefined>; chainId: number;
+  /** The read-only git status of the work tree (isomorphism.ts dirtyTreeLines over the CLI's runner). */
+  dirty: (dir: string) => Promise<string[]>;
+  readHead: (dir: string) => string | undefined;
+  releaseTag?: ReleaseGateInput["releaseTag"]; releaseTags?: ReleaseGateInput["releaseTags"]; remoteTag?: RemoteTagCheck; checkShaGreen?: CheckShaGreen;
+  /** Test seam: the tagged commit is an ancestor of (or equal to) refs/remotes/origin/<branch>. Default: git merge-base --is-ancestor, replace refs off. */
+  onBranch?: (dir: string, sha: string, branch: string) => Promise<boolean>;
+  /** Review-security-003: the build artifacts (names under <dir>/out) whose sources must be this tree's. Empty or absent: none (the verb names them). */
+  artifacts?: string[];
+  /** Test seam: the paths of `paths` git tracks in the checkout, submodules included. Default: git ls-files --recurse-submodules, replace refs off. */
+  trackedFiles?: (dir: string, paths: string[]) => Promise<Set<string>>;
+  /** Test seam (review-security-004): the tree's foundry config. Default: `forge config --json` in the checkout under a scrubbed environment. */
+  forgeConfig?: (dir: string) => Promise<ForgeBuildConfig>;
+}
+/** The keys of `forge config --json` the build settings are compared with (review-security-004). */
+export interface ForgeBuildConfig { solc?: string | null; solc_version?: string | null; optimizer?: boolean; optimizer_runs?: number; evm_version?: string; via_ir?: boolean; bytecode_hash?: string; remappings?: string[] }
+export const defaultForgeConfig = async (dir: string): Promise<ForgeBuildConfig> => {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(FOUNDRY_|DAPP_)/.test(k)) env[k] = v;
+  const r = spawnSync("forge", ["config", "--json"], { cwd: dir, env, maxBuffer: 64 * 1024 * 1024 });
+  if (r.status !== 0) throw new PublishError("USAGE", `forge config --json failed in ${dir}: ${String(r.stderr ?? "").trim().split("\n").slice(-1)[0] ?? ""}`);
+  return JSON.parse(String(r.stdout)) as ForgeBuildConfig;
+};
+
+/** Review-security-004: why one artifact's solc metadata was not compiled with the tree's config. `dir` is the checkout: a remapping context under it is read relative to it. */
+export function buildSettingsProblems(name: string, meta: any, cfg: ForgeBuildConfig, dir: string): string[] {
+  const out: string[] = [];
+  const st = meta?.settings ?? {};
+  const solc = cfg.solc_version ?? cfg.solc;
+  const version = String(meta?.compiler?.version ?? "").split("+")[0];
+  if (!solc) out.push(`the tree's foundry config pins no solc version, so the ${name} compiler (${version || "unknown"}) cannot be tied to it`);
+  else if (version !== String(solc).replace(/^v/, "")) out.push(`the ${name} artifact was compiled with solc ${version || "unknown"}, the tree's config pins ${solc}`);
+  const opt = st.optimizer ?? {};
+  if ((opt.enabled === true) !== (cfg.optimizer === true) || (cfg.optimizer === true && Number(opt.runs) !== Number(cfg.optimizer_runs))) out.push(`the ${name} artifact's optimizer is ${JSON.stringify(opt)}, the tree's config is enabled ${cfg.optimizer} runs ${cfg.optimizer_runs}`);
+  if (String(st.evmVersion ?? "").toLowerCase() !== String(cfg.evm_version ?? "").toLowerCase()) out.push(`the ${name} artifact's evmVersion is ${st.evmVersion}, the tree's config is ${cfg.evm_version}`);
+  if ((st.viaIR === true) !== (cfg.via_ir === true)) out.push(`the ${name} artifact's viaIR is ${st.viaIR === true}, the tree's config is ${cfg.via_ir === true}`);
+  if (String(st.metadata?.bytecodeHash ?? "ipfs") !== String(cfg.bytecode_hash ?? "ipfs")) out.push(`the ${name} artifact's metadata bytecodeHash is ${st.metadata?.bytecodeHash}, the tree's config is ${cfg.bytecode_hash}`);
+  // solc records a remapping's context as an absolute path under the build directory, and forge also passes the relative form: both are the same remapping
+  const root = `${dir.replace(/\/+$/, "")}/`;
+  const norm = (list: unknown): string[] => [...new Set((Array.isArray(list) ? list : []).map((r) => String(r)).map((r) => (r.startsWith(root) ? r.slice(root.length) : r)))].sort();
+  const got = norm(st.remappings), want = norm(cfg.remappings);
+  if (JSON.stringify(got) !== JSON.stringify(want)) out.push(`the ${name} artifact's remappings are not the tree's config's (only in the artifact: ${got.filter((r) => !want.includes(r)).join(", ") || "none"}; only in the config: ${want.filter((r) => !got.includes(r)).join(", ") || "none"})`);
+  return out;
+}
+const defaultTrackedFiles = async (dir: string, paths: string[]): Promise<Set<string>> => {
+  const r = spawnSync("git", ["--no-replace-objects", "-C", dir, "ls-files", "--recurse-submodules", "-z", "--", ...paths], { env: gitEnv(), maxBuffer: 64 * 1024 * 1024 });
+  if (r.status !== 0) throw new PublishError("USAGE", `git ls-files failed in ${dir}: ${String(r.stderr ?? "").trim().split("\n").slice(-1)[0] ?? ""}`);
+  return new Set(String(r.stdout).split("\0").filter(Boolean));
+};
+
+/**
+ * Review-security-003: why the named artifacts of `dir`/out were not compiled from the tree of `dir`, transitively over the libraries each links. An empty list proves it: every
+ * source in each artifact's solc metadata is tracked and hashes (keccak256 of the working-tree bytes) to the metadata's value.
+ */
+export async function buildProvenanceProblems(dir: string, artifacts: readonly string[], tracked: (dir: string, paths: string[]) => Promise<Set<string>> = defaultTrackedFiles, config?: ForgeBuildConfig): Promise<string[]> {
+  const out = join(dir, "out");
+  const problems: string[] = [];
+  const seen = new Set<string>();
+  const queue = [...artifacts];
+  const sources = new Map<string, { hash: string; artifact: string }>();
+  while (queue.length) {
+    const name = queue.shift()!;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    let art: any;
+    try { art = artifactJson(out, name); } catch (e) { problems.push((e as Error).message); continue; }
+    const meta = typeof art.metadata === "object" && art.metadata ? art.metadata : typeof art.rawMetadata === "string" ? JSON.parse(art.rawMetadata) : undefined;
+    const src = meta?.sources;
+    if (!src || typeof src !== "object" || Object.keys(src).length === 0) { problems.push(`the ${name} artifact carries no solc metadata sources, so its build cannot be tied to the tree`); continue; }
+    if (config) problems.push(...buildSettingsProblems(name, meta, config, dir));
+    for (const [path, v] of Object.entries<any>(src)) {
+      if (typeof v?.keccak256 !== "string") { problems.push(`the ${name} artifact names ${path} with no keccak256`); continue; }
+      const prev = sources.get(path);
+      if (prev && prev.hash.toLowerCase() !== v.keccak256.toLowerCase()) problems.push(`${path} is ${prev.hash} in the ${prev.artifact} artifact and ${v.keccak256} in the ${name} artifact`);
+      sources.set(path, { hash: v.keccak256, artifact: name });
+    }
+    for (const file of Object.values<any>(art.deployedBytecode?.linkReferences ?? {})) for (const lib of Object.keys(file)) queue.push(lib);
+  }
+  const paths = [...sources.keys()];
+  const known = paths.length ? await tracked(dir, paths) : new Set<string>();
+  for (const [path, { hash, artifact }] of sources) {
+    if (!known.has(path)) { problems.push(`${path} (a source of the ${artifact} artifact) is not a tracked file of the checkout`); continue; }
+    let bytes: Buffer;
+    try { bytes = readFileSync(join(dir, path)); } catch { problems.push(`${path} (a source of the ${artifact} artifact) is missing from the checkout`); continue; }
+    const got = keccak256(bytes);
+    if (got.toLowerCase() !== hash.toLowerCase()) problems.push(`${path}: the ${artifact} artifact was built from bytes with keccak256 ${hash}, the checkout holds ${got}`);
+  }
+  return problems;
+}
+const defaultOnBranch = async (dir: string, sha: string, branch: string): Promise<boolean> => {
+  const r = spawnSync("git", ["--no-replace-objects", "-C", dir, "merge-base", "--is-ancestor", sha, `refs/remotes/origin/${branch}`], { env: gitEnv() });
+  return r.status === 0;
+};
+export async function assertUpgradeBuildGate(i: UpgradeBuildGateInput): Promise<{ sha: string; tag: string }> {
+  const refuse = (kind: "RELEASE_SHA_UNTAGGED" | "USAGE" | "CI_NOT_GREEN", why: string, d: Record<string, unknown> = {}): never => {
+    throw new PublishError(kind, `--upgrade-build ${i.dir}: ${why}. The rc build is gated like a DEPLOY_SHA (runbook 4.14, 4.15 step 0); no signer was built, nothing was sent.`, { upgrade_build: i.dir, ...d });
+  };
+  const sha = i.readHead(i.dir);
+  if (!sha || !/^[0-9a-f]{40}$/.test(sha)) return refuse("USAGE", "is not a git checkout with a readable HEAD");
+  const dirty = await i.dirty(i.dir);
+  if (dirty.length > 0) refuse("USAGE", `has uncommitted changes (${dirty.length}): ${dirty.slice(0, 5).join("; ")}`, { dirty: dirty.slice(0, 20) });
+  if (i.artifacts?.length) {
+    const stale = await buildProvenanceProblems(i.dir, i.artifacts, i.trackedFiles, await (i.forgeConfig ?? defaultForgeConfig)(i.dir));
+    if (stale.length) refuse("USAGE", `its out/ was not built from its tree (run forge build in it): ${stale.slice(0, 5).join("; ")}${stale.length > 5 ? ` (and ${stale.length - 5} more)` : ""}`, { stale: stale.slice(0, 20) });
+  }
+  const found = i.releaseTags ? await i.releaseTags(i.dir, sha) : i.releaseTag ? [await i.releaseTag(i.dir, sha)].filter((t): t is string => !!t) : await releaseTagsFor(i.dir, sha);
+  const tag = found.filter((t) => RC_TAG_PATTERN.test(t) && tagKind(t) === i.kind).sort()[0];
+  if (!tag) refuse("RELEASE_SHA_UNTAGGED", `HEAD ${sha} carries no annotated rc tag of kind ${i.kind} (release/vA.B.C-rc.N${i.kind === "rehearsal" ? "-rehearsal" : ""}); tags there: ${found.join(", ") || "none"}`, { sha, tags: found });
+  await (i.remoteTag ?? ((d, t, s) => verifyCanonicalRemoteTag(d, t, undefined, s)))(i.dir, tag!, sha);
+  const m = RC_TAG_PATTERN.exec(tag!)!;
+  const branch = `releases-${m[1]}.${m[2]}.x`;
+  if (!(await (i.onBranch ?? defaultOnBranch)(i.dir, sha, branch))) refuse("USAGE", `the rc ${tag} at ${sha} is not on origin/${branch} (fetch it, or the tag is on a QA branch or on dev)`, { sha, tag, branch });
+  const token = i.env.GITHUB_TOKEN || i.env.GH_TOKEN;
+  if (!token) refuse("CI_NOT_GREEN", `cannot check that CI is green at ${sha}: GITHUB_TOKEN is not set. The check is never skipped on 8453`, { sha });
+  const env: Record<string, string> = { GITHUB_TOKEN: token! };
+  for (const k of ["PATH", "HOME"]) if (i.env[k]) env[k] = i.env[k]!;
+  const r = await (i.checkShaGreen ?? spawnCheckShaGreen)({ coreDir: i.dir, sha, repo: CORE_REPO, env });
+  if (r.code !== 0) refuse("CI_NOT_GREEN", `CI is not green at ${sha} (check-sha-green exit ${r.code}): ${r.output.split("\n").map((l) => l.trim()).filter(Boolean).slice(0, 12).join(" | ")}`, { sha, exit: r.code });
+  return { sha, tag: tag! };
 }

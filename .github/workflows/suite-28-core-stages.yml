@@ -267,3 +267,101 @@ jobs:
       - name: Stop the Twin fork and save its RPC cache
         if: always()
         uses: ./.github/actions/twin-fork-save-cache
+
+  # Issue 1927: the v0.6.0 governed upgrade of the live v0.5.0 deployment (docs/operations/contract-release-runbooks.md 4.15), rehearsed from REAL v0.5.0 state. It publishes
+  # release/v0.5.0-rehearsal with that tag's own publish-contracts CLI (its twin-publish step script, rehearsal kind, upgradeable overlay) and its committed Twin sheet: four vaults,
+  # rmAGENT router-eligible, the receipt in ic-policy.json and an applied receipt vector, as on Deploy 3. Then it runs the 4.15 commands from this checkout with --core-dir and
+  # --core-sha of the v0.5.0 checkout and --upgrade-build of this one (publish-contracts/src/ci/twin-upgrade-from-v050.ts): both upgrades, the receipt migration, the clear of the
+  # applied vector, the rmAGENT retire, verify and both evidence checks, every schedule and execute through the real Safe and timelock (the warp is the only Twin step).
+  # The pin is FIXED at Base block 52881000: the live RM V4 pool the v0.5.0 rmAGENT holds was drained at block 52881518 (in-range liquidity 9.8e17 before, 6.5e13 after), so the
+  # tag's agent stage refuses its unlowered 1e15 floor at any later block. The fork is the Base state that release was built for. Nothing is lowered, seeded or skipped.
+  # It runs after core-stages-twin-upgrade-lifecycle (the same upstream, never two forks at once); the pin and draft guards are those of that job.
+  core-stages-twin-upgrade-from-v050:
+    name: core-stages-twin-upgrade-from-v050
+    needs: [pin, core-stages-twin-upgrade]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    if: ${{ !cancelled() && needs.pin.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    env:
+      CI_CLASS: system-correctness
+      V050_PIN: "52881000"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Check out release/v0.5.0-rehearsal beside this checkout
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "+refs/tags/release/v0.5.0-rehearsal:refs/tags/release/v0.5.0-rehearsal"
+          git worktree add --detach "$RUNNER_TEMP/v050" release/v0.5.0-rehearsal
+          git -C "$RUNNER_TEMP/v050" submodule update --init --recursive
+          echo "V050_DIR=$RUNNER_TEMP/v050" >> "$GITHUB_ENV"
+      - name: Start the Twin chain at the v0.5.0 pin
+        id: fork
+        uses: ./.github/actions/twin-fork
+        with:
+          pin-block: ${{ env.V050_PIN }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+      # The fork must serve the fixed pin. An upstream that no longer serves archive state at it would let twin-fork repin past the drain, and the v0.5.0 agent stage would then
+      # refuse its floor with a misleading cause: the job fails here instead, naming the pin.
+      - name: The fork serves the v0.5.0 pin (BASE_UPSTREAM_RPC must serve archive state at it)
+        env:
+          FORK_PIN: ${{ steps.fork.outputs.pin-block }}
+        run: |
+          set -euo pipefail
+          [ "$FORK_PIN" = "$V050_PIN" ] || { echo "::error::the Twin fork is pinned at '$FORK_PIN', not $V050_PIN: BASE_UPSTREAM_RPC must serve archive state at Base block $V050_PIN" >&2; exit 1; }
+      - uses: ./.github/actions/publish-contracts-setup
+      - name: Publish release/v0.5.0-rehearsal with that tag's own CLI and Twin sheet
+        env:
+          RPC_URL: ${{ steps.fork.outputs.rpc-url }}
+          VERIFY_IN: "true"
+          GOVERN_IN: "true"
+          REHEARSAL_IN: "true"
+          PREDEPLOY_LIBS_IN: "true"
+          SHEET_OVERLAY_IN: deployments/twin-918453/upgrade-rehearsal.env
+          PIN_BLOCK_IN: ${{ env.V050_PIN }}
+        run: |
+          set -euo pipefail
+          (cd "$V050_DIR/publish-contracts" && bun install --frozen-lockfile)
+          GITHUB_WORKSPACE="$V050_DIR" bun "$V050_DIR/publish-contracts/src/ci/twin-publish.ts" | tee "$RUNNER_TEMP/v050-publish.log"
+      - name: Build this checkout (the --upgrade-build)
+        run: forge build
+      - name: The runbook 4.15 commands against the v0.5.0 deployment, through the real Safe and timelock
+        env:
+          RPC_URL: ${{ steps.fork.outputs.rpc-url }}
+        run: V050_RUN_DIR="$TWIN_RUN_DIR" bun publish-contracts/src/ci/twin-upgrade-from-v050.ts
+      - name: Assert the record (a record with no executed upgrade fails)
+        run: |
+          set -euo pipefail
+          jq -e '(.kind == "twin-upgrade-from-v050") and (.v050.agent_min_pool_liquidity == "1000000000000000")
+            and ([.proxy_upgrades[] | select(.execute_tx != null)] | length == 2)
+            and ([.proxy_upgrades[] | select(.execute_tx != null) | .proxy_name] | sort == ["gateway", "receipt"])
+            and (. as $r | [.proxy_upgrades[] | (.from_implementation | ascii_downcase) == ($r.v050.upgradeability.proxies[.proxy_name].implementation | ascii_downcase)] | all)
+            and ([.proxy_upgrades[] | select(.proxy_name == "receipt") | .migration] == ["receipt-submitter-roles"])
+            and ([.vault_retirements[] | select(.execute_tx != null)] | length == 1)
+            and (.chain.router_eligible_count == 3) and (.chain.rmagent_retired == true) and (.chain.rmagent_router_eligible == false)
+            and ((.chain.receipt_releaser_role_holders | map(ascii_downcase)) == [.chain.governance | ascii_downcase])
+            and ((.chain.receipt_admin_role_holders | map(ascii_downcase)) == [.chain.timelock | ascii_downcase])
+            and (.chain.second_migration_revert_selector == .chain.invalid_initialization_selector)
+            and ([.commands[] | select(.exit != 0)] | length == 0)' "$TWIN_UPGRADE_FROM_V050" >/dev/null
+      - name: Collect the record and the run files
+        if: always()
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/upgrade-from-v050-out"
+          mkdir -p "$out"
+          [ ! -f "$RUNNER_TEMP/v050-publish.log" ] || cp "$RUNNER_TEMP/v050-publish.log" "$out/"
+          [ -z "${TWIN_RUN_DIR:-}" ] || for f in upgrade-from-v050.json sheet.env verify-labels.txt verify-labels-post-govern.txt evidence/publish-run.json; do [ ! -f "$TWIN_RUN_DIR/$f" ] || cp "$TWIN_RUN_DIR/$f" "$out/"; done
+          [ -z "${TWIN_RUN_DIR:-}" ] || for f in "$TWIN_RUN_DIR"/upgrade-from-v050-*.out; do [ ! -f "$f" ] || cp "$f" "$out/"; done
+          [ -z "${TWIN_MANIFEST_DIR:-}" ] || cp -r "$TWIN_MANIFEST_DIR" "$out/manifests"
+          ls -R "$out"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: upgrade-from-v050-${{ github.sha }}
+          path: ${{ runner.temp }}/upgrade-from-v050-out
+          if-no-files-found: error
+          retention-days: 90
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache

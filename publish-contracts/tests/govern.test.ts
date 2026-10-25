@@ -10,8 +10,8 @@ import { decodeFunctionData, encodeFunctionData, keccak256, pad, parseAbi, toByt
 import { GOVERNED_PROXY_ABI, UPGRADE_MIGRATIONS, buildMigration, decodeUpgradeCall, migrationNameProblems, pinnedMigrationData, rerecordProxyManifest, upgradeRecordKey } from "../src/upgrade-rows.ts";
 import { upgradeCalldata } from "../src/upgrade-lifecycle.ts";
 import { layoutId, proxySpecs } from "../src/verify/upgradeability.ts";
-import { getStageTable } from "../src/stages.ts";
-import { manifestBase } from "../src/stage-table.ts";
+import { getStageTable, peekStageState, restoreStageState, useStageTable } from "../src/stages.ts";
+import { loadStageTable, manifestBase } from "../src/stage-table.ts";
 import { APPLY_ROW, GOVERNANCE_APPLY_ABI, applyRecordKey } from "../src/apply-receipt.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
 import { GOVERN_ROWS, govRowRefusal, SAFE_ADMIN_ABI, SAFE_ADMIN_ROWS, SELF_ADMIN_ROWS, TIMELOCK_ADMIN_ROWS, assertNotLastProposer, buildSelfAdminCall, parseSafeAdminArgs, refuseSafeConfigChange, resumeCommand, safeAdminEffect, safeRuleProblem, selfAdminRecordKey, sheetRosterProblems, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, VAULT_ABI, roundKey, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
@@ -2274,6 +2274,47 @@ describe("issue 1842: govern --row freeze-upgrades and --row upgrade-proxy", () 
       const base = ["govern", "--chain", "8453", "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "keystore:/k"];
       expect(parseCli([...base, "--row", "upgrade-proxy", "--proxy", "receipt", "--implementation", NEW_RC, "--migration", "receipt-submitter-roles"])).toMatchObject({ row: "upgrade-proxy", proxy: "receipt", migration: "receipt-submitter-roles" });
       expect(() => parseCli([...base, "--row", "freeze-upgrades", "--migration", "receipt-submitter-roles"])).toThrow("--migration goes with --row upgrade-proxy only");
+    });
+
+    // Issue 1927: the runbook 4.15 shape. --core-dir is the live v0.5.0 checkout (its table names the receipt in ic-policy.json, its snapshot is the one Deploy 3 recorded) and
+    // --upgrade-build the rc checkout (this repo's snapshot, whose slot 0 is the reviewed rename _retiredWriterSlot, and its storage-layout-renames.json).
+    function v050ReceiptWorld(recorded?: string) {
+      const w = receiptWorld();
+      const V050 = join(import.meta.dir, "fixtures", "v050");
+      const table = loadStageTable(V050);
+      for (const f of ["scripts/deploy/stage-table.json", "contracts/test/fixtures/storage-layout/ConsensusRecommendationReceipt.json", "contracts/test/fixtures/storage-layout/RobotMoneyGateway.json", "contracts/test/fixtures/storage-layout/pins.json"]) {
+        mkdirSync(dirname(join(w.ctx.coreDir, f)), { recursive: true }); copyFileSync(join(V050, f), join(w.ctx.coreDir, f));
+      }
+      const rc = join(w.ctx.coreDir, "rc-build");
+      writeReceiptBuild(rc);
+      mkdirSync(join(rc, "scripts", "ci"), { recursive: true });
+      copyFileSync(join(REPO, "scripts", "ci", "storage-layout-renames.json"), join(rc, "scripts", "ci", "storage-layout-renames.json"));
+      // the v0.5.0 manifest set: the receipt is consensus_receipt of ic-policy.json; the v0.5.0 verify recorded the v0.5.0 snapshot's layout id
+      writeFileSync(join(w.dir, "ic-policy.json"), JSON.stringify({ consensus_receipt: A.receipt, policy: addr(0x1007) }));
+      const up = JSON.parse(readFileSync(join(w.dir, "upgradeability.json"), "utf8"));
+      const rcSpec = proxySpecs(table).find((x) => x.name === "receipt")!;
+      expect(rcSpec).toMatchObject({ stage: "ic-policy", field: "consensus_receipt" });
+      up.proxies.receipt.layout_id = recorded ?? layoutId(w.ctx.coreDir, rcSpec.layout, table.upgradeAuthority!.layoutPins);
+      writeFileSync(join(w.dir, "upgradeability.json"), JSON.stringify(up));
+      const run = async (extra: object) => { const was = peekStageState(); useStageTable(table); try { return await w.run({ upgradeBuild: rc, ...extra }); } finally { restoreStageState(was); } };
+      return { ...w, run, rc };
+    }
+    test("issue 1927: --core-dir the live v0.5.0 checkout and --upgrade-build the rc checkout: the receipt upgrade with its migration schedules upgradeToAndCall(new, migrateToSubmitterRoles(governance)) and re-records ic-policy.json", async () => {
+      const w = v050ReceiptWorld();
+      expect(w.proxies.receipt.layout_id).not.toBe(JSON.parse(readFileSync(join(w.dir, "upgradeability.json"), "utf8")).proxies.receipt.layout_id);
+      const res = await w.run({ row: "upgrade-proxy", proxy: "receipt", implementation: NEW_RC, migration: "receipt-submitter-roles" });
+      expect(res.rows).toEqual([upgradeRecordKey("receipt", NEW_RC, "receipt-submitter-roles")]);
+      expect(w.tl.s.events).toEqual(["schedule:upgrade-proxy", "execute:upgrade-proxy"]);
+      expect(w.tl.s.scheduled.get("upgrade-proxy")!.calls).toEqual([{ target: A.receipt, data: upgradeCalldata(NEW_RC, migrationData()) }]);
+      expect(w.tl.s.proxies.get(A.receipt.toLowerCase())!.impl).toBe(NEW_RC);
+      expect(JSON.parse(readFileSync(join(w.dir, "ic-policy.json"), "utf8")).consensus_receipt_implementation.toLowerCase()).toBe(NEW_RC.toLowerCase());
+      expect((w.manifest as { proxy_upgrades?: any[] }).proxy_upgrades![0]).toMatchObject({ proxy_name: "receipt", proxy: A.receipt, build: w.rc, migration: { name: "receipt-submitter-roles", releaser: A.governance } });
+    });
+    test("issue 1927: the same shape still refuses a recorded layout id that is not the deployed snapshot's (the rc snapshot's id 0x35a2...26e6), scheduling nothing", async () => {
+      const w = v050ReceiptWorld("0x35a244a88c20f3fafb46c41caa6e049660d60ec6ccbc996c8853bf2b210026e6");
+      await expect(w.run({ row: "upgrade-proxy", proxy: "receipt", implementation: NEW_RC, migration: "receipt-submitter-roles" })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("is not the one verify recorded") });
+      expect(w.tl.s.events).toEqual([]);
+      expect(w.tl.s.proxies.get(A.receipt.toLowerCase())!.impl).toBe(w.proxies.receipt.implementation);
     });
 
     test("the generic raw --call-data row stays Twin-only: refused on 8453", async () => {

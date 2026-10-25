@@ -7,6 +7,7 @@ import { PROOF_STAGE } from "./control-proof.ts";
 import { PublishError } from "./errors.ts";
 import { SAFE_MANIFEST, isVaultKey } from "./core-wiring.ts";
 import type { VaultKey } from "./sheet.ts";
+import { isRetiredVaultKey, type RetiredVaultKey } from "./vault-keys.ts";
 import { manifestFile, type StageTable, type SystemName, type TableCreate2Library, type TableLibrary } from "./stage-table.ts";
 
 export type StageKind = "safe" | "forge" | "prove" | "verify" | "govern";
@@ -72,18 +73,23 @@ export let STAGE_NAMES: string[] = [];
 export let DEPLOYER_STAGES: StageRow[] = [];
 /** The vault stages, one per vault, in table order. rmUSDC is first. */
 export let VAULT_STAGES: { key: VaultKey; stage: string }[] = [];
+/** Issue 1927: the vault stages of a prior line's table this tool never deploys (rmAGENT of the live v0.5.0 deployment, RETIRED_VAULT_KEYS). Empty for this line's table. */
+export let RETIRED_VAULT_STAGES: { key: RetiredVaultKey; stage: string; manifest: string; artifact: string }[] = [];
 
 /** The system of this run (issue 1892). `vaults` is also the system of a table from before the split (one combined run). */
 export let ACTIVE_SYSTEM: SystemName = "vaults";
 
 export function useStageTable(t: StageTable, system: SystemName = "vaults"): void {
   if (system === "gateway" && !t.systems?.gateway) throw new PublishError("INPUT_MISSING", "the core stage table declares no gateway system: use a core DEPLOY_SHA from after the system split (issue 1892)");
+  const unknown = t.vaults.find((v) => !isVaultKey(v.key) && !isRetiredVaultKey(v.key));
+  if (unknown) throw new PublishError("INPUT_MISSING", `the core stage table names vault ${unknown.key}, which is neither a vault of this line nor a retired one`);
   table = t;
   ACTIVE_SYSTEM = system;
   STAGES = buildStages(t, system);
   STAGE_NAMES = STAGES.map((s) => s.name);
   DEPLOYER_STAGES = STAGES.filter((s) => s.countKey !== null);
-  VAULT_STAGES = t.vaults.map((v) => ({ key: v.key, stage: v.stage }));
+  VAULT_STAGES = t.vaults.filter((v) => isVaultKey(v.key)).map((v) => ({ key: v.key, stage: v.stage }));
+  RETIRED_VAULT_STAGES = t.vaults.filter((v) => isRetiredVaultKey(v.key)).map((v) => ({ key: v.key as unknown as RetiredVaultKey, stage: v.stage, manifest: v.manifest, artifact: v.artifact }));
 }
 
 /** Issue 1892: the stage list and the system are process-wide. A run that switches them (the gateway system) hands back what it found. */

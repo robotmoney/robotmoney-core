@@ -167,11 +167,16 @@ export function pendingUpgrades(scheduled: readonly { id: Hex; target: Address; 
  * every member of every stored struct and every ERC-7201 namespace member of the deployed snapshot at the same position with the same type, and drop no linked library.
  * New rows and members may only follow the old ones. An empty list passes.
  */
-export function layoutExtensionProblems(deployed: any, candidate: any): string[] {
+export function layoutExtensionProblems(deployed: any, candidate: any, renames: readonly LayoutRename[] = [], contract = ""): string[] {
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const ext = (old: unknown[] = [], neu: unknown[] = []) => old.length <= neu.length && old.every((x, i) => same(x, neu[i]));
   const bad: string[] = [];
-  if (!ext(deployed?.storage, candidate?.storage)) bad.push("storage: a variable moved, was retyped or removed");
+  // Issue 1927: a reviewed label-only rename (scripts/ci/storage-layout-renames.json, slot, offset and type pinned) is applied to the deployed rows first, as the shell gate does
+  const storage = ((deployed?.storage ?? []) as any[]).map((r) => {
+    const m = renames.find((x) => x.contract === contract && x.from === r?.label && x.slot === r?.slot && x.offset === r?.offset && x.type === r?.type);
+    return m ? { ...r, label: m.to } : r;
+  });
+  if (!ext(storage, candidate?.storage)) bad.push("storage: a variable moved, was retyped or removed");
   for (const [k, v] of Object.entries<unknown[]>(deployed?.structs ?? {})) if (!ext(v, candidate?.structs?.[k])) bad.push(`struct ${k}: a member moved, was retyped or removed`);
   for (const [k, v] of Object.entries<unknown[]>(deployed?.namespaces ?? {})) if (!ext(v, candidate?.namespaces?.[k])) bad.push(`namespace ${k}: a member moved, was retyped or removed`);
   for (const l of (deployed?.libraries ?? []) as string[]) if (!((candidate?.libraries ?? []) as string[]).includes(l)) bad.push(`library ${l} is no longer linked`);
@@ -186,7 +191,24 @@ export function layoutGateProblems(spec: ProxySpec, coreDir: string, buildDir: s
   for (const [dir, f] of [[coreDir, spec.layout], [coreDir, pins], [buildDir, spec.layout]] as const) if (!existsSync(join(dir, f))) return [`${join(dir, f)} does not exist`];
   const deployedId = layoutId(coreDir, spec.layout, pins);
   if (!recordedLayoutId || lc(recordedLayoutId) !== lc(deployedId)) return [`the deployed snapshot ${spec.layout} (layout id ${deployedId}) is not the one verify recorded (${String(recordedLayoutId)}): run verify on the DEPLOY_SHA checkout first`];
-  return layoutExtensionProblems(JSON.parse(readFileSync(join(coreDir, spec.layout), "utf8")), JSON.parse(readFileSync(join(buildDir, spec.layout), "utf8")));
+  return layoutExtensionProblems(JSON.parse(readFileSync(join(coreDir, spec.layout), "utf8")), JSON.parse(readFileSync(join(buildDir, spec.layout), "utf8")), layoutRenames(buildDir), spec.contract);
+}
+
+/** Issue 1927: one reviewed label-only rename of a proxy storage row (scripts/ci/storage-layout-renames.json): the slot, offset and type are pinned, only the name changes. */
+export interface LayoutRename { contract: string; from: string; to: string; slot: string; offset: number; type: string }
+export const LAYOUT_RENAMES_REL = join("scripts", "ci", "storage-layout-renames.json");
+/**
+ * The reviewed renames the candidate build declares (its own scripts/ci/storage-layout-renames.json, the file check-core-storage-layout.sh applies). A build without the file
+ * declares none. A file that is not a list of fully pinned renames throws, so a malformed review never passes a renamed row.
+ */
+export function layoutRenames(buildDir: string): LayoutRename[] {
+  const p = join(buildDir, LAYOUT_RENAMES_REL);
+  if (!existsSync(p)) return [];
+  const list = JSON.parse(readFileSync(p, "utf8"))?.renames;
+  if (!Array.isArray(list) || !list.every((r: any) => typeof r?.contract === "string" && typeof r.from === "string" && typeof r.to === "string" && typeof r.slot === "string" && Number.isInteger(r.offset) && typeof r.type === "string")) {
+    throw new Error(`${p}: renames must be a list of {contract, from, to, slot, offset, type}`);
+  }
+  return list as LayoutRename[];
 }
 
 /**

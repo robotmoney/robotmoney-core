@@ -10,9 +10,10 @@ import { join } from "node:path";
 import { keccak256, toHex } from "viem";
 import { PublishError } from "./errors.ts";
 import { beginPauseEntry, castOut, childEnv, readManifestField, updatePauseEntry, type PauseEntry, type RunContext, type RunManifest } from "./runner.ts";
-import { VAULT_NAME, type VaultKey } from "./sheet.ts";
+import { vaultDisplayName, type VaultKey } from "./sheet.ts";
+import type { RetiredVaultKey } from "./vault-keys.ts";
 import type { PublishSigner } from "./signer.ts";
-import { VAULT_STAGES, manifestRef } from "./stages.ts";
+import { RETIRED_VAULT_STAGES, VAULT_STAGES, manifestRef } from "./stages.ts";
 import { VAULT_ADDRESS_FIELD } from "./core-wiring.ts";
 
 /** The stage that moves EMERGENCY_ROLE from the deployer to the EMERGENCY key (the stage 11 handover). */
@@ -34,8 +35,13 @@ export function pauseSignerRole(manifest: Pick<RunManifest, "stages">): PauseSig
 
 export interface PauseVaultResult {
   vault: string;
-  key: VaultKey;
+  key: VaultKey | RetiredVaultKey;
   address: string;
+  /**
+   * Review-security-002 (issue 1927): a vault of a prior line's table this line never deploys (rmAGENT of the live v0.5.0 deployment). It counts as covered when it reads retired() true
+   * (the registry retire halts its deposits for good); otherwise it is paused like the others.
+   */
+  retired?: boolean;
   signerRole: PauseSignerRole;
   signer: string;
   txHash?: string;
@@ -128,8 +134,10 @@ export async function pauseAll(ctx: RunContext, manifest: Pick<RunManifest, "sta
   if (!entry) ctx.log.log("warn", "pause_all.no_manifest_entry", { evidence_dir: ctx.evidenceDir });
   // Issue 1712: every signer that has to pay must hold ETH before the first send, so the pause cannot start and fail half way. The EMERGENCY key
   // is named in the message. In the `unsure` case the signer of each vault is read now (reads only) and only the keys that will send are checked.
+  // Review-security-002 (issue 1927): the live v0.5.0 deployment still has rmAGENT (RETIRED_VAULT_STAGES of its table). It is covered only once it reads retired() true.
+  const stages: { key: VaultKey | RetiredVaultKey; stage: string; retiredLine: boolean }[] = [...VAULT_STAGES.map((v) => ({ ...v, retiredLine: false })), ...RETIRED_VAULT_STAGES.map((v) => ({ key: v.key, stage: v.stage, retiredLine: true }))];
   const roles: (PauseSignerRole | undefined)[] = [];
-  for (const v of VAULT_STAGES) {
+  for (const v of stages) {
     if (stageRole !== "unsure") { roles.push(stageRole); continue; }
     try { roles.push((await hasEmergencyRole(ctx, readManifestField(ctx, manifestRef(v.stage, VAULT_ADDRESS_FIELD)), deployerAddr!)) ? "deployer" : "emergency"); } catch { roles.push(undefined); }
   }
@@ -138,14 +146,25 @@ export async function pauseAll(ctx: RunContext, manifest: Pick<RunManifest, "sta
   if (!blocked && roles.includes("emergency")) blocked = await unfundedSigner(ctx, emergencyAddr!, "EMERGENCY");
   if (blocked) ctx.log.log("error", "pause_all.blocked", { reason: blocked });
   const vaults: PauseVaultResult[] = [];
-  for (const [i, v] of VAULT_STAGES.entries()) {
-    const name = VAULT_NAME[v.key];
+  for (const [i, v] of stages.entries()) {
+    const name = vaultDisplayName(v.key);
     let address = "";
     let role: PauseSignerRole = stageRole === "unsure" ? "deployer" : stageRole;
     const res: PauseVaultResult = { vault: name, key: v.key, address, signerRole: role, signer: "" };
     try {
       address = readManifestField(ctx, manifestRef(v.stage, VAULT_ADDRESS_FIELD));
       res.address = address;
+      if (v.retiredLine) {
+        let out = "";
+        try { out = (await castOut(ctx, ["call", address, "retired()(bool)"])).trim(); } catch { /* unreadable: not proven retired, so it is paused below */ }
+        if (out === "true") {
+          res.retired = true;
+          ctx.log.log("info", "pause_all.vault", { vault: name, address, retired: true, note: "retired by the registry: deposits are halted for good, nothing to send" });
+          vaults.push(res);
+          if (entry) { const e = entry; record(() => updatePauseEntry(ctx.evidenceDir, { ...e, vaults: vaults.map((x) => ({ ...x })) })); }
+          continue;
+        }
+      }
       if (stageRole === "unsure") role = roles[i] ?? ((await hasEmergencyRole(ctx, address, deployerAddr!)) ? "deployer" : "emergency");
       res.signerRole = role;
       const signer = role === "deployer" ? deployer : emergency!;
@@ -174,7 +193,7 @@ export async function pauseAll(ctx: RunContext, manifest: Pick<RunManifest, "sta
     vaults.push(res);
     if (entry) { const e = entry; record(() => updatePauseEntry(ctx.evidenceDir, { ...e, vaults: vaults.map((x) => ({ ...x })) })); }
   }
-  const report: PauseAllReport = { trigger: o.trigger, reason: o.reason, at, allPaused: vaults.every((x) => x.depositsPaused === true), manifestRecorded: entry !== undefined, ...(blocked ? { blocked } : {}), vaults };
+  const report: PauseAllReport = { trigger: o.trigger, reason: o.reason, at, allPaused: vaults.every((x) => x.depositsPaused === true || x.retired === true), manifestRecorded: entry !== undefined, ...(blocked ? { blocked } : {}), vaults };
   if (entry) { const e = entry; record(() => updatePauseEntry(ctx.evidenceDir, { ...e, status: "done", allPaused: report.allPaused, vaults: vaults.map((x) => ({ ...x })) })); }
   writeRolloutReport(ctx, report);
   ctx.log.log(report.allPaused ? "info" : "error", "pause_all.done", { all_paused: report.allPaused, trigger: o.trigger, report: rolloutReportPath(ctx) });
@@ -204,7 +223,7 @@ export function pauseIncomplete(report: PauseAllReport, prefix = ""): PublishErr
   const unrecorded = report.manifestRecorded === false;
   const cancel = unrecorded ? " The pause could NOT be recorded in the run manifest either, so govern will not refuse an unpause scheduled before it. Cancel every pending unpause operation through the Safe by hand now." : "";
   const rec = unrecorded ? { manifest_recorded: false } : {};
-  if (report.blocked) return new PublishError("PAUSE", `${prefix}pause-all could not send: ${report.blocked}${cancel}`, { unpaused: report.vaults.filter((v) => v.depositsPaused !== true).map((v) => v.vault), blocked: true, ...rec });
-  const bad = report.vaults.filter((v) => v.depositsPaused !== true);
+  if (report.blocked) return new PublishError("PAUSE", `${prefix}pause-all could not send: ${report.blocked}${cancel}`, { unpaused: report.vaults.filter((v) => v.depositsPaused !== true && v.retired !== true).map((v) => v.vault), blocked: true, ...rec });
+  const bad = report.vaults.filter((v) => v.depositsPaused !== true && v.retired !== true);
   return new PublishError("PAUSE", `${prefix}pause-all left ${bad.length} of ${report.vaults.length} vaults NOT confirmed paused: ${bad.map((v) => `${v.vault}${v.error ? ` (${v.error})` : ""}`).join(", ")}. Pause them by hand now.${cancel}`, { unpaused: bad.map((v) => v.vault), ...rec });
 }

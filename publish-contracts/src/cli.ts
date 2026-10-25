@@ -20,13 +20,14 @@ import { buildIsomorphismReport, dirtyTreeLines, readGitHead, writeReport } from
 import { scrubGitEnv } from "./git-env.ts";
 import { publishLogger, type Logger } from "./log.ts";
 import { planNonceBasis, stagePlan } from "./plan.ts";
-import { assertBaselineCommitted, assertReleaseGate, gitAnchorCommitted, gitFrozenDirCommitted, type CheckShaGreen } from "./release-gate.ts";
+import { assertBaselineCommitted, assertReleaseGate, assertUpgradeBuildGate, gitAnchorCommitted, gitFrozenDirCommitted, type CheckShaGreen } from "./release-gate.ts";
 import { codeWithRetry, verifyReconstructionOnChain } from "./counts-reconstruct.ts";
 import { buildLibraryArtifacts } from "./libs-build.ts";
 import { DEPLOYER_STAGES, STAGE_NAMES, getStageTable, peekStageState, restoreStageState, useStageTable } from "./stages.ts";
 import { TABLE_REL, loadStageTable, SYSTEM_NAMES, type SystemName } from "./stage-table.ts";
 import { adoptedTxs, finalNonceCheck, loadRunManifest, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
-import { callerInputs, parseSheet, type Sheet } from "./sheet.ts";
+import { RETIRED_VAULT_VERBS, callerInputs, parseSheet, type Sheet } from "./sheet.ts";
+import { isRetiredVaultKey } from "./vault-keys.ts";
 import { assertVaultRulesMatch } from "./vault-rules.ts";
 import { makeSigner, type PublishSigner } from "./signer.ts";
 import { PROOF_STAGE } from "./control-proof.ts";
@@ -39,6 +40,7 @@ import { REDEPLOY_ROW, REDEPLOY_VERB, REDEPLOY_KEYS, isRedeployKey, redeployRefu
 import { FREEZE_ROW, UPGRADE_ROW } from "./upgrade-rows.ts";
 import { toolingShaRun } from "./tooling-sha.ts";
 import { DEPLOY_IMPL_VERB, runDeployImplementation } from "./deploy-implementation.ts";
+import { proxySpecs } from "./verify/upgradeability.ts";
 import { RECEIPT_ROW, SELF_ADMIN_ROWS, assertReceiptId, assertSelfAdminAllowed, govRowRefusal, isSelfAdminRow, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { isHardwareSpecLike, ownerHardwareSigner, parseOwnerHardwareSpec, signerFromSpec, type CastRunner, type Signer } from "./safe/index.ts";
 import { pauseAll, pauseIncomplete, pauseUnrecorded, type PauseTrigger } from "./pause-all.ts";
@@ -220,6 +222,12 @@ export interface CliDeps {
   releaseTags?: (coreDir: string, sha: string) => Promise<string[]>;
   checkShaGreen?: CheckShaGreen;
   remoteTag?: (coreDir: string, tag: string) => Promise<void>;
+  /** Test seam (review-security-001, issue 1927): the rc commit of --upgrade-build is on origin's releases-A.B.x. Default: git merge-base --is-ancestor. */
+  rcOnReleaseBranch?: (dir: string, sha: string, branch: string) => Promise<boolean>;
+  /** Test seam (review-security-003): the tracked paths of the --upgrade-build checkout. Default: git ls-files --recurse-submodules. */
+  trackedFiles?: (dir: string, paths: string[]) => Promise<Set<string>>;
+  /** Test seam (review-security-004): the --upgrade-build checkout's foundry config. Default: forge config --json there, FOUNDRY_ variables scrubbed. */
+  forgeConfig?: (dir: string) => Promise<import("./release-gate.ts").ForgeBuildConfig>;
   /** Test seam (issue 1733): the plan-time re-verification of a reconstructed baseline against the build and the chain. Default: rebuild the libraries from the checkout and read their code with cast. */
   verifyReconstructed?: (file: FrozenFile) => Promise<void>;
   /** Test seam (issue 1861): the whole `deploy-implementation` verb. Default: the real one (runDeployImplementation). */
@@ -597,7 +605,13 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     // Issue 1833: the per-vault rules this CLI loaded from its own checkout must be that table's, or the CLI runs from another sha. Checked before any verb runs.
     // Issue 1851: except the emergency pause-all, which reads no per-vault rule: a mismatch there is one warning naming both tables, never a refusal.
     const stageTable = loadStageTable(coreDir);
-    try { assertVaultRulesMatch(stageTable, join(coreDir, TABLE_REL)); } catch (e) {
+    // Issue 1927: the deployment checkout (--core-dir, at its DEPLOY_SHA) supplies the stage table, the manifest set and the deployed layout snapshots. A follow-on verb of the governed
+    // upgrade may name the live v0.5.0 checkout, whose table also has the retired rmAGENT row (RETIRED_VAULT_KEYS). Every vault this CLI governs keeps the 1833 check.
+    const followOn = (RETIRED_VAULT_VERBS as readonly string[]).includes(sheetOpts.verb ?? "");
+    const tableRetired = stageTable.vaults.map((v) => v.key as string).filter(isRetiredVaultKey);
+    const sheetRetired = sheet.retiredVaults ?? [];
+    if (sheetRetired.some((k) => !tableRetired.includes(k)) || (followOn && tableRetired.some((k) => !sheetRetired.includes(k)))) throw new PublishError("INPUT_MISSING", `the sheet names the retired vault(s) [${sheetRetired.join(", ")}] and the stage table of ${coreDir} names [${tableRetired.join(", ")}]: the sheet and --core-dir must be the same deployment's (runbook 4.15)`, { sheet: sheetRetired, table: tableRetired });
+    try { assertVaultRulesMatch(stageTable, join(coreDir, TABLE_REL), { retired: followOn }); } catch (e) {
       if (a.verb !== "pause-all" || !isPublishError(e, "INPUT_MISSING")) throw e;
       log.log("warn", "vault_rules.mismatch", { ...(e.details ?? {}), message: `${e.message}. pause-all reads no per-vault rule, so it runs anyway` });
     }
@@ -718,6 +732,16 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
         verifyReconstructed: deps.verifyReconstructed ?? realVerifyReconstructed, anchorCommitted: deps.anchorCommitted ?? realAnchorCommitted, frozenDirCommitted: deps.frozenDirCommitted ?? realFrozenDirCommitted,
         run, runEnv: scrubGitEnv(castEnv) });
       log.log("info", "plan.release_gate", { ok: true, tag, core_sha: gateSha, stage: a.stage ?? a.verb ?? "default", counts: shaRun ? "none (redeploy sha)" : "committed" });
+    }
+    // Review-security-001 (issue 1927): runbook 4.15 gates the LIVE build above (--core-sha of the v0.5.0 checkout). The rc build a governed upgrade deploys from (--upgrade-build) is a
+    // second checkout, so on 8453 it passes its own gate here, before any signer: clean HEAD, an annotated rc tag of the kind on releases-A.B.x, the canonical remote tag, green CI.
+    const upgrading = a.verb === DEPLOY_IMPL_VERB || a.row === UPGRADE_ROW;
+    if (rpcChainId === MAINNET_CHAIN_ID && upgrading && a.upgradeBuild !== undefined && resolve(a.upgradeBuild) !== coreDir) {
+      const ub = await assertUpgradeBuildGate({ dir: resolve(a.upgradeBuild), kind: sheet.kind, env, chainId: rpcChainId, dirty: (d) => dirtyTreeLines(run, d, rpcChainId, castEnv), readHead: readGitHead,
+        releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, remoteTag: deps.remoteTag, checkShaGreen: deps.checkShaGreen, onBranch: deps.rcOnReleaseBranch,
+        // review-security-003: the artifacts the verb deploys and compares with must be built from that tree. An unknown --proxy names none here; the verb refuses it with USAGE.
+        artifacts: proxySpecs(getStageTable()).filter((x) => x.name === a.proxy).map((x) => x.contract), trackedFiles: deps.trackedFiles, forgeConfig: deps.forgeConfig });
+      log.log("info", "upgrade_build.release_gate", { ok: true, upgrade_build: resolve(a.upgradeBuild), sha: ub.sha, tag: ub.tag });
     }
     // deploy-implementation (issue 1861): the release gate above ran on 8453 as for govern. No counts, no stages: one CREATE from the deployer and its implementation_deploys entry.
     if (a.verb === DEPLOY_IMPL_VERB) {

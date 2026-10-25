@@ -9,7 +9,7 @@ import { PROOF_TX_NONCES } from "../counts.ts";
 import { kindLabel, rehearsalDelayProblem } from "../chains.ts";
 import { ERC1967_PROXY_ARTIFACT, compareDeployedCode, loadArtifact, logicCode, tryLoadArtifact } from "./codehash.ts";
 import {
-  ADMIN_ROLE, AGENT_ROLE, RECEIPT_SUBMITTER_ROLE, RECEIPT_RELEASER_ROLE, KEEPER_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
+  ADMIN_ROLE, AGENT_ROLE, COMMITTEE_AGENT_ROLE, RECEIPT_SUBMITTER_ROLE, RECEIPT_RELEASER_ROLE, KEEPER_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
     SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
 import { manifestBase, scopeTable } from "../stage-table.ts";
@@ -93,6 +93,11 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const manifestSet = man.vaults.map((v) => lc(v.address));
   // Issue 1796: a vault the registry still lists after a redeploy is the retired one. The label stays the same: the manifests plus the retired vaults equal the registry.
   const retirements = opts.retirements ?? [];
+  // Issue 1927: a v0.5.0 table's own retired vault (rmAGENT, its manifest kept) is verified only once `govern --row retire-vault` retired it: this line has no live check of it.
+  for (const v of man.retiredVaults) {
+    c.push(`vault[${v.key}]: retired by govern --row retire-vault`, retirements.some((r) => lc(r.vault) === lc(v.address)),
+      retirements.some((r) => lc(r.vault) === lc(v.address)) ? `${v.source} names ${v.address}, a vault_retirements entry of the run` : `${v.source} names ${v.address} and the run manifest records no vault_retirements entry for it: run govern --row retire-vault (runbook 4.15 step 6) before this verify`);
+  }
   const expectedSet = [...manifestSet, ...redeploys.map((r) => lc(r.oldVault)), ...retirements.map((r) => lc(r.vault))];
   await c.run("vault set: manifests equal registry.listVaults", async () => {
     if (!listOk) return { ok: false, detail: "listVaults unreadable" };
@@ -198,7 +203,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const chunk = opts.logChunk ?? 2000;
   const retryBaseMs = opts.retryBaseMs ?? 500;
   const created = creationProof(chain, opts.fromBlock, opts.deployTxs, opts.adoptedContracts, head === undefined ? undefined : { head, chunk, retryBaseMs });
-  const governed: Scanned[] = [...core, ...man.vaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address }))];
+  const governed: Scanned[] = [...core, ...man.vaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address })), ...man.retiredVaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address }))];
   if (head === undefined) {
     if (withGateway) for (const l of AGENT_LABELS) c.fail(l, "block number unreadable");
     for (const v of man.vaults) for (const l of vaultScanLabels(v)) c.fail(l, "block number unreadable");
@@ -211,7 +216,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     // Issue 1851: the deployer can only have been granted a role on a contract that exists, so the scan start must precede the creation of every governed contract.
     await roleScan(c, chain, D, governed, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
     await roleHolderEnumeration(c, chain, governed, {
-      timelock: tl, accounts: [tl, safe, byName.governance!, sheet.emergency, sheet.pauser], receipt: byName.receipt!, gateway, router,
+      timelock: tl, accounts: [tl, safe, byName.governance!, sheet.emergency, sheet.pauser], receipt: byName.receipt!, gateway, router, ...(byName.icpolicy ? { icPolicy: byName.icpolicy } : {}),
     }, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
   }
 
@@ -266,6 +271,8 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     ...core.map((x) => ({ label: x.name, address: x.address, artifact: x.artifact, dir: originalDir, original: true, ...upgradedDir(x.name) })),
     ...man.vaults.map((v) => ({ label: `vault[${v.key}]`, address: v.address, artifact: sheet.vaults[v.key]?.contract ?? v.artifact, dir: redeployed.has(v.key) ? undefined : originalDir, original: !redeployed.has(v.key), ...upgradedDir(`vault[${v.key}]`) })),
     ...libNames.map((n) => ({ label: `library[${n}]`, address: man.libraries[n], artifact: man.libraryArtifacts[n]!, dir: originalDir, original: true })),
+    // Issue 1927: the retired vault of a v0.5.0 table runs the build of that deployment's checkout
+    ...man.retiredVaults.map((v) => ({ label: `vault[${v.key}]`, address: v.address, artifact: v.artifact, dir: originalDir, original: true, ...upgradedDir(`vault[${v.key}]`) })),
   ];
   for (const t of codeTargets) {
     await c.run(`${t.label}: ${CODE_LABEL}`, async () => {
@@ -828,7 +835,7 @@ const ROLE_HOLDERS_LABEL = "roles: every holder of every role on every governed 
  */
 async function roleHolderEnumeration(
   c: Collector, chain: ChainReader, governed: { name: string; address: Address }[],
-  expect: { timelock: Address; accounts: Address[]; receipt: Address; gateway: Address; router: Address },
+  expect: { timelock: Address; accounts: Address[]; receipt: Address; gateway: Address; router: Address; icPolicy?: Address },
   s: { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number; created: CreationProof },
 ): Promise<void> {
   const late = await s.created(governed);
@@ -852,6 +859,9 @@ async function roleHolderEnumeration(
         if (lc(g.address) === lc(expect.gateway) && role === AGENT_ROLE) continue;
         // The consensus receipt submitter Safe holds RECEIPT_SUBMITTER_ROLE on the receipt by design (issue 1888).
         if (lc(g.address) === lc(expect.receipt) && role === RECEIPT_SUBMITTER_ROLE) continue;
+        // Issue 1927: the orphaned InvestmentCommitteePolicy of a v0.5.0 deployment keeps its v0.5.0 holders, as the v0.5.0 verifier read them: the submitter Safe's
+        // COMMITTEE_AGENT_ROLE (issue 1750) and the gateway's ADMIN_ROLE. Only a prior-line table has the contract (core-wiring.ts PRIOR_LINE_CONTRACT_REFS).
+        if (expect.icPolicy && lc(g.address) === lc(expect.icPolicy) && (role === COMMITTEE_AGENT_ROLE || (role === ADMIN_ROLE && lc(who) === lc(expect.gateway)))) continue;
         const expected = ok.has(lc(who))
           || (lc(g.address) === lc(expect.timelock) && role === EXECUTOR_ROLE && lc(who) === lc(ZERO));
         if (!expected) bad.push(`${who} holds ${role} on ${g.name}`);

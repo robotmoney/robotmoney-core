@@ -150,3 +150,19 @@ describe("the CLI's vault rules equal the --core-dir stage table (issue 1833, 18
     });
   }
 });
+
+// Issue 1927: a follow-on verb of the governed upgrade names the live v0.5.0 checkout as --core-dir. Its table also has the retired rmAGENT row, which this CLI applies no rule of.
+describe("the retired rmAGENT row of a v0.5.0 table (issue 1927)", () => {
+  test("a follow-on verb accepts the extra row; every vault this CLI governs, and their order, must still match, and a deploy run refuses the row", async () => {
+    const { assertVaultRulesMatch } = await import("../src/vault-rules.ts");
+    const { loadStageTable } = await import("../src/stage-table.ts");
+    const v050 = loadStageTable(join(import.meta.dir, "fixtures", "v050"));
+    expect(v050.vaults.map((v) => v.key as string)).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
+    expect(() => assertVaultRulesMatch(v050, "v050", { retired: true })).not.toThrow();
+    expect(() => assertVaultRulesMatch(v050, "v050")).toThrow("for vault AGENT");
+    const edited = { vaults: v050.vaults.map((v) => (v.key === "PROTO" ? { ...v, seed: "SEED_DEPOSIT_USDC" } : v)) };
+    expect(() => assertVaultRulesMatch(edited, "v050", { retired: true })).toThrow("for vault PROTO");
+    const reordered = { vaults: [v050.vaults[1]!, v050.vaults[0]!, ...v050.vaults.slice(2)] };
+    expect(() => assertVaultRulesMatch(reordered, "v050", { retired: true })).toThrow("in vault order");
+  });
+});
