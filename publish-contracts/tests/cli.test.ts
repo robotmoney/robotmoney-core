@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { keccak256, toBytes } from "viem";
 import { DEPLOY_IMPL_VERB } from "../src/deploy-implementation.ts";
 import { EXIT_CODES } from "../src/errors.ts";
 import { SHA2 } from "./fixtures.ts";
@@ -17,8 +18,16 @@ function rcWorld() {
   const rc = join(w.dir, "rc");
   mkdirSync(join(rc, ".git"), { recursive: true });
   writeFileSync(join(rc, ".git", "HEAD"), SHA2 + "\n");
+  // the rc build: the gateway artifact, compiled from contracts/RobotMoneyGateway.sol, whose bytes its solc metadata hashes (review-security-003)
+  const SRC = "contracts/gateway/RobotMoneyGateway.sol";
+  mkdirSync(join(rc, "contracts", "gateway"), { recursive: true });
+  writeFileSync(join(rc, SRC), "// rc source\n");
+  mkdirSync(join(rc, "out", "RobotMoneyGateway.sol"), { recursive: true });
+  const writeArtifact = (hash: string) => writeFileSync(join(rc, "out", "RobotMoneyGateway.sol", "RobotMoneyGateway.json"), JSON.stringify({ metadata: { sources: { [SRC]: { keccak256: hash } } }, deployedBytecode: { object: "0x00", linkReferences: {} } }));
+  writeArtifact(keccak256(toBytes("// rc source\n")));
   const calls: string[] = [];
-  const seams = (o: { tag?: string | null; branch?: boolean; green?: boolean } = {}) => ({
+  const seams = (o: { tag?: string | null; branch?: boolean; green?: boolean; tracked?: string[] } = {}) => ({
+    trackedFiles: async (_dir: string, paths: string[]) => new Set(o.tracked ?? paths),
     releaseTag: async (dir: string) => (dir === rc ? (o.tag === undefined ? RC : o.tag) : "release/1.0.0"),
     rcOnReleaseBranch: async (dir: string, sha: string, branch: string) => { calls.push(`branch:${branch}:${sha}`); return o.branch ?? true; },
     checkShaGreen: async (i: { sha: string }) => { calls.push(`green:${i.sha}`); return o.green === false && i.sha === SHA2 ? { code: 1, output: "RED" } : { code: 0, output: "GREEN" }; },
@@ -26,7 +35,7 @@ function rcWorld() {
     govern: { api: { connectSafe: async () => { calls.push("safe"); throw new Error("the Safe was read"); } } } as never,
   });
   const failed = () => w.logs().filter((l) => l.event === "run.failed").map((l) => l.kind);
-  return { w, rc, calls, seams, failed };
+  return { w, rc, calls, seams, failed, writeArtifact, SRC };
 }
 
 describe("review-security-001: the --upgrade-build rc checkout is gated on 8453 (issue 1927)", () => {
@@ -42,6 +51,9 @@ describe("review-security-001: the --upgrade-build rc checkout is gated on 8453 
         ["dirty", (x) => { (x.w.cfg as any).gitDirtyFor = { [x.rc]: [" M contracts/RobotMoneyGateway.sol"] }; return x.seams(); }, "USAGE"],
         ["off the release branch", (x) => x.seams({ branch: false }), "USAGE"],
         ["red CI", (x) => x.seams({ green: false }), "CI_NOT_GREEN"],
+        // review-security-003: a clean, tagged checkout whose gitignored out/ is a stale build (another source) or names a source git does not track
+        ["a stale out/", (x) => { x.writeArtifact(keccak256(toBytes("// an earlier rc\n"))); return x.seams(); }, "USAGE"],
+        ["an untracked source", (x) => x.seams({ tracked: [] }), "USAGE"],
       ];
       for (const [what, arm, kind] of cases) {
         const x = rcWorld();
@@ -74,4 +86,32 @@ describe("review-security-001: the --upgrade-build rc checkout is gated on 8453 
     expect(await same.w.run(deploy(same.w.coreDir), same.seams({ tag: null }))).toBe(0);
     expect(same.calls.filter((c) => c.startsWith("branch"))).toEqual([]);
   });
+});
+
+test("review-security-003: the refusal of a stale out/ names the source and both hashes, before any tag, branch or CI read", async () => {
+  const x = rcWorld();
+  x.writeArtifact(keccak256(toBytes("// an earlier rc\n")));
+  expect(await x.w.run([DEPLOY_IMPL_VERB, "--proxy", "gateway", "--upgrade-build", x.rc], x.seams())).toBe(EXIT_CODES.USAGE);
+  const failed = x.w.logs().find((l) => l.event === "run.failed")!;
+  expect(failed.message).toContain("was not built from its tree");
+  expect(failed.message).toContain(x.SRC);
+  // the core sha's own gate ran (green at the v0.5.0 sha); nothing of the rc's tag, branch or CI was read, and nothing was deployed
+  expect(x.calls.filter((c) => c.includes(SHA2) || c === "deploy")).toEqual([]);
+});
+
+test("review-security-003: buildProvenanceProblems follows the libraries an artifact links, and passes a build of the tree", async () => {
+  const { buildProvenanceProblems } = await import("../src/release-gate.ts");
+  const { tmp } = await import("./fixtures.ts");
+  const dir = tmp("pc-prov-");
+  const put = (rel: string, text: string) => { mkdirSync(join(dir, rel, ".."), { recursive: true }); writeFileSync(join(dir, rel), text); };
+  put("contracts/A.sol", "a"); put("contracts/L.sol", "l");
+  const art = (name: string, src: string, hash: string, links: string[] = []) => put(`out/${name}.sol/${name}.json`, JSON.stringify({ metadata: { sources: { [src]: { keccak256: hash } } }, deployedBytecode: { linkReferences: links.length ? { "contracts/L.sol": Object.fromEntries(links.map((l) => [l, [{ start: 1, length: 20 }]])) } : {} } }));
+  const all = async (_d: string, p: string[]) => new Set(p);
+  art("A", "contracts/A.sol", keccak256(toBytes("a")), ["L"]);
+  art("L", "contracts/L.sol", keccak256(toBytes("l")));
+  expect(await buildProvenanceProblems(dir, ["A"], all)).toEqual([]);
+  art("L", "contracts/L.sol", keccak256(toBytes("stale")));
+  expect((await buildProvenanceProblems(dir, ["A"], all)).join()).toContain("contracts/L.sol: the L artifact was built from bytes");
+  put("out/A.sol/A.json", JSON.stringify({ deployedBytecode: {} }));
+  expect((await buildProvenanceProblems(dir, ["A"], all)).join()).toContain("carries no solc metadata sources");
 });

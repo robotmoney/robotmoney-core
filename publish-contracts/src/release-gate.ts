@@ -15,6 +15,8 @@
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
+import { keccak256 } from "viem";
+import { artifactJson } from "./verify/codehash.ts";
 import { basename, dirname, resolve } from "node:path";
 import { anchorChainOf, fileHashOf, frozenPath, loadFrozen, type FrozenFile } from "./counts.ts";
 import { PublishError } from "./errors.ts";
@@ -215,10 +217,14 @@ export async function assertReleaseGate(i: ReleaseGateInput): Promise<string> {
 }
 
 /**
- * Review-security-001 (issue 1927): the rc build a governed upgrade deploys. Runbook 4.15 names the LIVE v0.5.0 checkout as --core-dir, so the release gate above proves that sha
- * (tagged, counted, green), and the rc checkout given as --upgrade-build needs its own proof, before any signer exists: its HEAD, a clean work tree, an annotated rc tag of the
+ * Review-security-001 (issue 1927): the rc checkout a governed upgrade deploys from. Runbook 4.15 names the LIVE v0.5.0 checkout as --core-dir, so the release gate above proves that
+ * sha (tagged, counted, green), and the rc checkout given as --upgrade-build needs its own proof, before any signer exists: its HEAD, a clean tracked tree, an annotated rc tag of the
  * sheet's kind at HEAD (release/vA.B.C-rc.N, with -rehearsal on a rehearsal), that tag on the canonical repository with the same commit, the tagged commit on the release branch
- * releases-A.B.x of the origin, and green CI at it. No counts: an rc build deploys implementations, not the stages. Returns the sha and the tag.
+ * releases-A.B.x of the origin, and green CI at it. No counts: an rc build deploys implementations, not the stages.
+ * The build output out/ is gitignored, so the tree checks alone prove nothing about it (review-security-003). The gate therefore also proves that the build artifacts the verb
+ * deploys and compares with (`artifacts`: the proxy's implementation contract and every library it links, transitively) were compiled from this tree: every source their solc
+ * metadata names is a tracked file of the checkout (its submodules included) whose bytes hash to the keccak256 the metadata records. The tree is clean, so those bytes are HEAD's.
+ * It does not prove the compiler settings beyond what the metadata hash covers; the deployed code is still read back against the artifact by the verb. Returns the sha and the tag.
  */
 export const RC_TAG_PATTERN = /^release\/v(\d+)\.(\d+)\.\d+-rc\.\d+(?:-rehearsal)?$/;
 export interface UpgradeBuildGateInput {
@@ -229,6 +235,54 @@ export interface UpgradeBuildGateInput {
   releaseTag?: ReleaseGateInput["releaseTag"]; releaseTags?: ReleaseGateInput["releaseTags"]; remoteTag?: RemoteTagCheck; checkShaGreen?: CheckShaGreen;
   /** Test seam: the tagged commit is an ancestor of (or equal to) refs/remotes/origin/<branch>. Default: git merge-base --is-ancestor, replace refs off. */
   onBranch?: (dir: string, sha: string, branch: string) => Promise<boolean>;
+  /** Review-security-003: the build artifacts (names under <dir>/out) whose sources must be this tree's. Empty or absent: none (the verb names them). */
+  artifacts?: string[];
+  /** Test seam: the paths of `paths` git tracks in the checkout, submodules included. Default: git ls-files --recurse-submodules, replace refs off. */
+  trackedFiles?: (dir: string, paths: string[]) => Promise<Set<string>>;
+}
+const defaultTrackedFiles = async (dir: string, paths: string[]): Promise<Set<string>> => {
+  const r = spawnSync("git", ["--no-replace-objects", "-C", dir, "ls-files", "--recurse-submodules", "-z", "--", ...paths], { env: gitEnv(), maxBuffer: 64 * 1024 * 1024 });
+  if (r.status !== 0) throw new PublishError("USAGE", `git ls-files failed in ${dir}: ${String(r.stderr ?? "").trim().split("\n").slice(-1)[0] ?? ""}`);
+  return new Set(String(r.stdout).split("\0").filter(Boolean));
+};
+
+/**
+ * Review-security-003: why the named artifacts of `dir`/out were not compiled from the tree of `dir`, transitively over the libraries each links. An empty list proves it: every
+ * source in each artifact's solc metadata is tracked and hashes (keccak256 of the working-tree bytes) to the metadata's value.
+ */
+export async function buildProvenanceProblems(dir: string, artifacts: readonly string[], tracked: (dir: string, paths: string[]) => Promise<Set<string>> = defaultTrackedFiles): Promise<string[]> {
+  const out = join(dir, "out");
+  const problems: string[] = [];
+  const seen = new Set<string>();
+  const queue = [...artifacts];
+  const sources = new Map<string, { hash: string; artifact: string }>();
+  while (queue.length) {
+    const name = queue.shift()!;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    let art: any;
+    try { art = artifactJson(out, name); } catch (e) { problems.push((e as Error).message); continue; }
+    const meta = typeof art.metadata === "object" && art.metadata ? art.metadata : typeof art.rawMetadata === "string" ? JSON.parse(art.rawMetadata) : undefined;
+    const src = meta?.sources;
+    if (!src || typeof src !== "object" || Object.keys(src).length === 0) { problems.push(`the ${name} artifact carries no solc metadata sources, so its build cannot be tied to the tree`); continue; }
+    for (const [path, v] of Object.entries<any>(src)) {
+      if (typeof v?.keccak256 !== "string") { problems.push(`the ${name} artifact names ${path} with no keccak256`); continue; }
+      const prev = sources.get(path);
+      if (prev && prev.hash.toLowerCase() !== v.keccak256.toLowerCase()) problems.push(`${path} is ${prev.hash} in the ${prev.artifact} artifact and ${v.keccak256} in the ${name} artifact`);
+      sources.set(path, { hash: v.keccak256, artifact: name });
+    }
+    for (const file of Object.values<any>(art.deployedBytecode?.linkReferences ?? {})) for (const lib of Object.keys(file)) queue.push(lib);
+  }
+  const paths = [...sources.keys()];
+  const known = paths.length ? await tracked(dir, paths) : new Set<string>();
+  for (const [path, { hash, artifact }] of sources) {
+    if (!known.has(path)) { problems.push(`${path} (a source of the ${artifact} artifact) is not a tracked file of the checkout`); continue; }
+    let bytes: Buffer;
+    try { bytes = readFileSync(join(dir, path)); } catch { problems.push(`${path} (a source of the ${artifact} artifact) is missing from the checkout`); continue; }
+    const got = keccak256(bytes);
+    if (got.toLowerCase() !== hash.toLowerCase()) problems.push(`${path}: the ${artifact} artifact was built from bytes with keccak256 ${hash}, the checkout holds ${got}`);
+  }
+  return problems;
 }
 const defaultOnBranch = async (dir: string, sha: string, branch: string): Promise<boolean> => {
   const r = spawnSync("git", ["--no-replace-objects", "-C", dir, "merge-base", "--is-ancestor", sha, `refs/remotes/origin/${branch}`], { env: gitEnv() });
@@ -242,6 +296,10 @@ export async function assertUpgradeBuildGate(i: UpgradeBuildGateInput): Promise<
   if (!sha || !/^[0-9a-f]{40}$/.test(sha)) return refuse("USAGE", "is not a git checkout with a readable HEAD");
   const dirty = await i.dirty(i.dir);
   if (dirty.length > 0) refuse("USAGE", `has uncommitted changes (${dirty.length}): ${dirty.slice(0, 5).join("; ")}`, { dirty: dirty.slice(0, 20) });
+  if (i.artifacts?.length) {
+    const stale = await buildProvenanceProblems(i.dir, i.artifacts, i.trackedFiles);
+    if (stale.length) refuse("USAGE", `its out/ was not built from its tree (run forge build in it): ${stale.slice(0, 5).join("; ")}${stale.length > 5 ? ` (and ${stale.length - 5} more)` : ""}`, { stale: stale.slice(0, 20) });
+  }
   const found = i.releaseTags ? await i.releaseTags(i.dir, sha) : i.releaseTag ? [await i.releaseTag(i.dir, sha)].filter((t): t is string => !!t) : await releaseTagsFor(i.dir, sha);
   const tag = found.filter((t) => RC_TAG_PATTERN.test(t) && tagKind(t) === i.kind).sort()[0];
   if (!tag) refuse("RELEASE_SHA_UNTAGGED", `HEAD ${sha} carries no annotated rc tag of kind ${i.kind} (release/vA.B.C-rc.N${i.kind === "rehearsal" ? "-rehearsal" : ""}); tags there: ${found.join(", ") || "none"}`, { sha, tags: found });

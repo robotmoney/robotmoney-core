@@ -40,6 +40,7 @@ import { REDEPLOY_ROW, REDEPLOY_VERB, REDEPLOY_KEYS, isRedeployKey, redeployRefu
 import { FREEZE_ROW, UPGRADE_ROW } from "./upgrade-rows.ts";
 import { toolingShaRun } from "./tooling-sha.ts";
 import { DEPLOY_IMPL_VERB, runDeployImplementation } from "./deploy-implementation.ts";
+import { proxySpecs } from "./verify/upgradeability.ts";
 import { RECEIPT_ROW, SELF_ADMIN_ROWS, assertReceiptId, assertSelfAdminAllowed, govRowRefusal, isSelfAdminRow, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { isHardwareSpecLike, ownerHardwareSigner, parseOwnerHardwareSpec, signerFromSpec, type CastRunner, type Signer } from "./safe/index.ts";
 import { pauseAll, pauseIncomplete, pauseUnrecorded, type PauseTrigger } from "./pause-all.ts";
@@ -223,6 +224,8 @@ export interface CliDeps {
   remoteTag?: (coreDir: string, tag: string) => Promise<void>;
   /** Test seam (review-security-001, issue 1927): the rc commit of --upgrade-build is on origin's releases-A.B.x. Default: git merge-base --is-ancestor. */
   rcOnReleaseBranch?: (dir: string, sha: string, branch: string) => Promise<boolean>;
+  /** Test seam (review-security-003): the tracked paths of the --upgrade-build checkout. Default: git ls-files --recurse-submodules. */
+  trackedFiles?: (dir: string, paths: string[]) => Promise<Set<string>>;
   /** Test seam (issue 1733): the plan-time re-verification of a reconstructed baseline against the build and the chain. Default: rebuild the libraries from the checkout and read their code with cast. */
   verifyReconstructed?: (file: FrozenFile) => Promise<void>;
   /** Test seam (issue 1861): the whole `deploy-implementation` verb. Default: the real one (runDeployImplementation). */
@@ -733,7 +736,9 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     const upgrading = a.verb === DEPLOY_IMPL_VERB || a.row === UPGRADE_ROW;
     if (rpcChainId === MAINNET_CHAIN_ID && upgrading && a.upgradeBuild !== undefined && resolve(a.upgradeBuild) !== coreDir) {
       const ub = await assertUpgradeBuildGate({ dir: resolve(a.upgradeBuild), kind: sheet.kind, env, chainId: rpcChainId, dirty: (d) => dirtyTreeLines(run, d, rpcChainId, castEnv), readHead: readGitHead,
-        releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, remoteTag: deps.remoteTag, checkShaGreen: deps.checkShaGreen, onBranch: deps.rcOnReleaseBranch });
+        releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, remoteTag: deps.remoteTag, checkShaGreen: deps.checkShaGreen, onBranch: deps.rcOnReleaseBranch,
+        // review-security-003: the artifacts the verb deploys and compares with must be built from that tree. An unknown --proxy names none here; the verb refuses it with USAGE.
+        artifacts: proxySpecs(getStageTable()).filter((x) => x.name === a.proxy).map((x) => x.contract), trackedFiles: deps.trackedFiles });
       log.log("info", "upgrade_build.release_gate", { ok: true, upgrade_build: resolve(a.upgradeBuild), sha: ub.sha, tag: ub.tag });
     }
     // deploy-implementation (issue 1861): the release gate above ran on 8453 as for govern. No counts, no stages: one CREATE from the deployer and its implementation_deploys entry.
