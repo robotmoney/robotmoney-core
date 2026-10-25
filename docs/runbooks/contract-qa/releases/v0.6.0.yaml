@@ -558,7 +558,7 @@ steps:
 
   # ── Phase 8, the v0.6.0 governed upgrade of the live v0.5.0 deployment (runbook 4.15), rehearsed from REAL v0.5.0 state (issue 1927). Twin only.
   # release/v0.5.0-rehearsal is published on a second Twin fork with that tag's own CLI and committed Twin sheet, then the 4.15 commands run from this checkout with
-  # --core-dir and --core-sha of the v0.5.0 checkout ({v050common}) and --upgrade-build of this one (.). The fork is pinned at Base block 52881000: the RM V4 pool the v0.5.0
+  # --core-dir and --core-sha of the v0.5.0 checkout ({v050common}) and --upgrade-build of a separate checkout of this commit ({runDir}/v060, issue 1929: a plain forge build in the main checkout would replace the library-linked out/ that P9.05 verifies). The fork is pinned at Base block 52881000: the RM V4 pool the v0.5.0
   # rmAGENT holds was drained at block 52881518, so its agent stage refuses the unlowered 1e15 floor at any later block. The CI twin of these steps is core-stages-twin-upgrade-from-v050. ──
   - id: "P8.00-v050-foundry-version"
     standing: ["4.2"]
@@ -634,11 +634,14 @@ steps:
     added: "v0.6.0"
   - id: "P8.04-v050-addresses"
     standing: ["4.15"]
-    description: "The v0.5.0 addresses the 4.15 commands name, read from the v0.5.0 run's manifests (runbook 4.15 step 2), and this checkout built for --upgrade-build"
+    description: "The v0.5.0 addresses the 4.15 commands name, read from the v0.5.0 run's manifests (runbook 4.15 step 2), and a separate clean checkout of this commit at {runDir}/v060, built there for --upgrade-build"
     host: "control"
     phase: 8
     cmds:
-      - ["forge", "build"]
+      - ["git", "worktree", "add", "--detach", "{runDir}/v060", "{coreSha}"]
+      - ["git", "-C", "{runDir}/v060", "submodule", "update", "--init", "--recursive"]
+      - ["bash", "-c", "test \"$(git -C {runDir}/v060 rev-parse HEAD)\" = {coreSha} && test -z \"$(git -C {runDir}/v060 status --porcelain)\""]
+      - ["forge", "build", "--root", "{runDir}/v060", "--out", "{runDir}/v060/out"]
       - ["bash", "-c", "m={runDir}/v050-run/manifests && jq -r .vault $m/agent-token-vault.json > {runDir}/state/v050-rmagent && jq -r .timelock $m/timelock.json > {runDir}/state/v050-timelock && jq -r .governance $m/governance.json > {runDir}/state/v050-governance && jq -r .registry $m/registry.json > {runDir}/state/v050-registry && jq -r .router $m/router.json > {runDir}/state/v050-router"]
     expectExit: 0
     receipts: []
@@ -653,7 +656,7 @@ steps:
     host: "control"
     phase: 8
     cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--proxy", "gateway", "--upgrade-build", ".", "{v050common}", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--proxy", "gateway", "--upgrade-build", "{runDir}/v060", "{v050common}", "{gate}"]
       - ["bash", "-c", "grep '\"event\":\"deploy_implementation\"' {journal:P8.10-v050-deploy-gateway-impl} | jq -r .implementation > {runDir}/state/v050-gateway-impl"]
     env:
       PUBLISH_MANIFEST_DIR: "{runDir}/v050-run/manifests"
@@ -671,7 +674,7 @@ steps:
     host: "control"
     phase: 8
     cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "upgrade-proxy", "--proxy", "gateway", "--implementation", "{state:v050-gateway-impl}", "--upgrade-build", ".", "{v050common}", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "upgrade-proxy", "--proxy", "gateway", "--implementation", "{state:v050-gateway-impl}", "--upgrade-build", "{runDir}/v060", "{v050common}", "{gate}"]
     env:
       PUBLISH_MANIFEST_DIR: "{runDir}/v050-run/manifests"
       YES: "{yes}"
@@ -687,7 +690,7 @@ steps:
     host: "control"
     phase: 8
     cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--proxy", "receipt", "--upgrade-build", ".", "{v050common}", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--proxy", "receipt", "--upgrade-build", "{runDir}/v060", "{v050common}", "{gate}"]
       - ["bash", "-c", "grep '\"event\":\"deploy_implementation\"' {journal:P8.12-v050-deploy-receipt-impl} | jq -r .implementation > {runDir}/state/v050-receipt-impl"]
     env:
       PUBLISH_MANIFEST_DIR: "{runDir}/v050-run/manifests"
@@ -705,7 +708,7 @@ steps:
     host: "control"
     phase: 8
     cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "upgrade-proxy", "--proxy", "receipt", "--implementation", "{state:v050-receipt-impl}", "--migration", "receipt-submitter-roles", "--upgrade-build", ".", "{v050common}", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "upgrade-proxy", "--proxy", "receipt", "--implementation", "{state:v050-receipt-impl}", "--migration", "receipt-submitter-roles", "--upgrade-build", "{runDir}/v060", "{v050common}", "{gate}"]
     env:
       PUBLISH_MANIFEST_DIR: "{runDir}/v050-run/manifests"
       YES: "{yes}"
@@ -781,13 +784,13 @@ steps:
     added: "v0.6.0"
   - id: "P8.18-v050-teardown"
     standing: ["9"]
-    description: "The v0.5.0 Twin fork stops, the tag run's throwaway keystores and passphrase are destroyed, and the v0.5.0 checkout is removed"
+    description: "The v0.5.0 Twin fork stops, the tag run's throwaway keystores and passphrase are destroyed, and the v0.5.0 and v0.6.0 upgrade checkouts are removed"
     host: "control"
     phase: 8
     cmds:
       - ["bun", "scripts/devnet/twin-fork.ts", "stop", "--port", "8547", "--state-dir", "{runDir}/twin-v050"]
       - ["shred", "-u", "{runDir}/v050-run/passphrase"]
-      - ["bash", "-c", "rm -rf \"$(readlink {runDir}/v050-run)/keys\" {runDir}/v050 && git worktree prune"]
+      - ["bash", "-c", "rm -rf \"$(readlink {runDir}/v050-run)/keys\" {runDir}/v050 {runDir}/v060 && git worktree prune"]
     expectExit: 0
     receipts: []
     irreversible: false

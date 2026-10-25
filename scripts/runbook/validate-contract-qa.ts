@@ -556,6 +556,29 @@ export function unwindGuardProblems(r: Pick<ReleaseRunbook, "release" | "steps">
   return out;
 }
 
+/**
+ * PURE. Issue 1929: the library-linked publish stage leaves the main checkout's out/ equal to the chain, and every later verify reads it. A forge command after
+ * P1.02-publish that writes that out/ (build, script, clean, test) replaces it with a build whose metadata hash differs, so the next verify fails. Such a command
+ * must name both --root and --out under {runDir}, a separate checkout.
+ */
+export function mainOutProblems(r: Pick<ReleaseRunbook, "release" | "steps">): string[] {
+  const at = r.steps.findIndex((s) => s.id === "P1.02-publish");
+  if (at < 0) return [];
+  const out: string[] = [];
+  for (const s of r.steps.slice(at + 1)) {
+    for (const c of s.cmds) {
+      const forge = c[0] === "forge" ? [c] : c[0] === "bash" && c[1] === "-c" ? (c[2] ?? "").split(/&&|;|\|/).map((x) => x.trim().split(/\s+/)).filter((x) => x[0] === "forge") : [];
+      for (const f of forge) {
+        if (!["build", "script", "clean", "test"].includes(f[1] ?? "")) continue;
+        const arg = (flag: string): string | undefined => f[f.indexOf(flag) + 1];
+        const apart = (flag: string): boolean => f.includes(flag) && (arg(flag) ?? "").startsWith("{runDir}/");
+        if (!(apart("--root") && apart("--out"))) out.push(`releases/${r.release}.yaml: ${s.id}: \`${f.join(" ")}\` writes the main checkout's out/ after the library-linked P1.02-publish, so a later verify reads a rebuilt out/ and fails; build in a separate checkout with --root and --out under {runDir}`);
+      }
+    }
+  }
+  return out;
+}
+
 export function validateAll(root: string = ROOT, model: CliModel = loadModel(root), pinnedTemplate: (sha: string) => string | undefined = templateAtCommit): Loaded {
   const problems: string[] = [];
   const tplPath = join(root, QA_DIR, "template.yaml");
@@ -575,6 +598,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
       const r = parseRelease(text, name);
       releases.set(name, r);
       problems.push(...unwindGuardProblems(r));
+      problems.push(...mainOutProblems(r));
       // A release pinned to templateSha is a record: its steps are checked against the template AT that commit, never the
       // current one, and its commands were checked against the CLIs at that commit, so a later template or CLI change does
       // not reopen it. The pin is read from git, so an edited record or a made-up commit is refused. An unpinned release is
