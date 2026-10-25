@@ -43,6 +43,11 @@ const SUITES: Record<string, string> = {
   "suite-28": "suite-28-core-stages.yml",
 };
 const PIN_OUT = "${{ needs.pin.outputs.block }}";
+/**
+ * Issue 1927: the only exception to the one-pin rule. core-stages-twin-upgrade-from-v050 publishes release/v0.5.0-rehearsal, whose rmAGENT stage checks the live RM V4 pool against
+ * its unlowered 1e15 floor; that pool was drained at Base block 52881518, so the job forks at 52881000, the state that release was built for. It still needs the pin job (its guard).
+ */
+const FIXED_PIN_JOBS: Record<string, string> = { "suite-28-core-stages.yml:core-stages-twin-upgrade-from-v050": "52881000" };
 
 // 1. the nightly.
 const nightly = yaml(NIGHTLY);
@@ -77,7 +82,11 @@ for (const [job, file] of Object.entries(SUITES)) {
     for (const s of j.steps ?? []) {
       if (!String(s.uses ?? "").endsWith("/twin-fork")) continue;
       forks++;
-      if (s.with?.["pin-block"] !== PIN_OUT) bad(`${path} job ${name}: twin-fork must take pin-block: ${PIN_OUT}`);
+      const fixed = FIXED_PIN_JOBS[`${file}:${name}`];
+      if (fixed) {
+        // Issue 1927: the one job pinned at a named historical block, the Base state the release it publishes was built for. Its pin is that constant, nothing else.
+        if (s.with?.["pin-block"] !== "${{ env.V050_PIN }}" || String(j.env?.V050_PIN) !== fixed) bad(`${path} job ${name}: its twin-fork must take pin-block: \${{ env.V050_PIN }} with env V050_PIN ${fixed}`);
+      } else if (s.with?.["pin-block"] !== PIN_OUT) bad(`${path} job ${name}: twin-fork must take pin-block: ${PIN_OUT}`);
       if (![].concat(j.needs ?? []).includes("pin")) bad(`${path} job ${name} uses twin-fork but does not need the pin job`);
     }
   }
@@ -187,7 +196,8 @@ ok("the nightly uploads suite-results and twin-pin and needs no secret beyond th
       if (!isSave(last)) bad(`${path} job ${name}: the LAST step must use twin-fork-save-cache`);
       if (!/always\(\)/.test(String(last.if ?? ""))) bad(`${path} job ${name}: the twin-fork-save-cache step must have if: always()`);
       if (steps.indexOf(last) < steps.indexOf(forks[forks.length - 1])) bad(`${path} job ${name}: save-cache must come after twin-fork`);
-      for (const fk of forks) pins.add(String(fk.with?.["pin-block"] ?? ""));
+      // issue 1927: the fixed-pin job (checked above) is not a second run pin
+      if (!FIXED_PIN_JOBS[`${f}:${name}`]) for (const fk of forks) pins.add(String(fk.with?.["pin-block"] ?? ""));
     }
     if (jobsWithFork.length === 0) continue;
     // ONE pin per workflow run: every fork takes the same expression; an empty pin (auto) is only

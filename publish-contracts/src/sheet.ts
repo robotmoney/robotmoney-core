@@ -9,13 +9,19 @@ import { STAGE13_UNPAUSE_VAULTS } from "./vault-rules.ts";
 import { getAddress, isAddress } from "viem";
 import { PublishError } from "./errors.ts";
 import type { SystemName } from "./stage-table.ts";
-import { BASKET_KEYS, VAULT_KEYS, type VaultKey } from "./vault-keys.ts";
+import { BASKET_KEYS, RETIRED_VAULT_KEYS, RETIRED_VAULT_NAME, VAULT_KEYS, type RetiredVaultKey, type VaultKey } from "./vault-keys.ts";
 import { MAINNET_CHAIN_ID, DEPLOYMENT_KINDS, REHEARSAL_DELAY_FLOOR, rehearsalDelayProblem, type DeploymentKind } from "./chains.ts";
 
 export type Address = `0x${string}`;
 export { VAULT_KEYS, BASKET_KEYS, type VaultKey } from "./vault-keys.ts";
 /** Manifest and verifier name of each vault. */
 export const VAULT_NAME: Record<VaultKey, string> = { USDC: "rmUSDC", PROTO: "rmPROTO", RWA: "rmRWA" };
+/** Issue 1927: the name of a table vault key, this line's or a retired one of the prior line (rmAGENT). Any other key is refused. */
+export function vaultDisplayName(k: string): string {
+  const n = (VAULT_NAME as Record<string, string>)[k] ?? (RETIRED_VAULT_NAME as Record<string, string>)[k];
+  if (n === undefined) throw new PublishError("INPUT_MISSING", `the stage table names vault ${k}, which is neither a vault of this line nor a retired one`);
+  return n;
+}
 
 /** Per-vault sheet names. Always required, never defaulted. */
 export const vaultSheetNames = (k: VaultKey): string[] => [`VAULT_${k}_TVL_CAP`, `VAULT_${k}_PER_DEPOSIT_CAP`, `VAULT_${k}_EXIT_FEE_BPS`];
@@ -145,6 +151,8 @@ export interface Sheet {
   eligibleVaults: VaultKey[];
   /** The router default weights the deployer leaves in place: rmUSDC and each eligible basket. */
   weights: { key: VaultKey; bps: number }[];
+  /** Issue 1927: the retired vaults of a v0.5.0 sheet a follow-on verb read (rmAGENT). They are in none of the lists above. Absent: the sheet names none. */
+  retiredVaults?: RetiredVaultKey[];
   govern: {
     /** The only mainnet govern rows: one timelock unpause per vault listed here. */
     unpauseVaults: VaultKey[];
@@ -199,6 +207,48 @@ export interface ParseSheetOpts {
   warn?: (message: string, fields: Record<string, unknown>) => void;
   /** Issue 1842, test seam: the wall clock (ms since the epoch) the freeze deadline is compared with. Absent: Date.now(). */
   now?: () => number;
+}
+
+/**
+ * Issue 1927: the verbs of a governed upgrade of the live v0.5.0 deployment (runbook 4.15) read its own sheet (Deploy 3's), which still describes rmAGENT. A deploy run refuses those lines.
+ */
+export const RETIRED_VAULT_VERBS = [...LEGACY_VAULT_NAME_VERBS, "deploy-implementation"] as const;
+/** The sheet names a v0.5.0 sheet carries for a retired vault: rmAGENT was a basket (caps, exit fee, NAV deviation guard, pool liquidity floor). */
+export const retiredVaultSheetNames = (k: RetiredVaultKey): string[] => [`VAULT_${k}_TVL_CAP`, `VAULT_${k}_PER_DEPOSIT_CAP`, `VAULT_${k}_EXIT_FEE_BPS`, `VAULT_${k}_NAV_DEVIATION_BPS`, `VAULT_${k}_MIN_POOL_LIQUIDITY`];
+
+/**
+ * Issue 1927: a follow-on verb reads the retired rmAGENT lines of a v0.5.0 sheet as that vault's record. Each name must be present and well formed (the same floors as a basket), and the
+ * vault leaves the router lists: ELIGIBLE_VAULTS and GOVERN_UNPAUSE_VAULTS drop it, and ROUTER_WEIGHTS drops its leg, which must be 0 bps (the vector the retire row leaves, runbook 4.15).
+ * Every other rule of the sheet then applies to what is left. `raw` is edited in place; the caller keeps the original values. Returns the retired keys the sheet named.
+ */
+function takeRetiredVaultLines(raw: Record<string, string>, o: ParseSheetOpts): RetiredVaultKey[] {
+  if (!(RETIRED_VAULT_VERBS as readonly string[]).includes(o.verb ?? "")) return [];
+  const out: RetiredVaultKey[] = [];
+  for (const k of RETIRED_VAULT_KEYS) {
+    const names = retiredVaultSheetNames(k);
+    if (!names.some((n) => n in raw)) continue;
+    const missing = names.filter((n) => !(n in raw) || raw[n] === "");
+    if (missing.length) throw err(`the sheet names the retired ${RETIRED_VAULT_NAME[k]} but is missing ${missing.join(", ")}: a v0.5.0 sheet carries all of ${names.join(", ")}`, { missing });
+    const [t, p, f, g, l] = names.map((n) => asUint(n, raw[n]!)) as [bigint, bigint, bigint, bigint, bigint];
+    if (t === 0n || p > t || f > 10000n || g === 0n || g > MAX_NAV_DEVIATION_BPS || l === 0n || l > MAX_POOL_LIQUIDITY) throw err(`the retired ${RETIRED_VAULT_NAME[k]} lines break the basket floors (${names.join(", ")}): TVL cap above 0, per-deposit cap at most the TVL cap, exit fee at most 10000, NAV guard 1 to ${MAX_NAV_DEVIATION_BPS}, pool floor above 0 and within uint128`, { vault: k });
+    for (const n of names) delete raw[n];
+    const drop = (name: string) => {
+      if (raw[name] === undefined || raw[name] === "none") return;
+      const left = raw[name]!.split(",").map((x) => x.trim()).filter((x) => x !== k);
+      raw[name] = left.length ? left.join(",") : "none";
+    };
+    drop("ELIGIBLE_VAULTS");
+    drop("GOVERN_UNPAUSE_VAULTS");
+    if (raw.ROUTER_WEIGHTS !== undefined) {
+      const legs = raw.ROUTER_WEIGHTS.split(",").map((x) => x.trim());
+      const leg = legs.find((x) => x.startsWith(`${k}:`));
+      if (leg !== undefined && leg !== `${k}:0`) throw err(`ROUTER_WEIGHTS gives the retired ${RETIRED_VAULT_NAME[k]} ${leg.slice(k.length + 1)} bps: its default weight must be 0, so the vector without it is the one the retire row leaves`, { name: "ROUTER_WEIGHTS" });
+      raw.ROUTER_WEIGHTS = legs.filter((x) => x !== leg).join(",");
+    }
+    out.push(k);
+    o.warn?.(`the sheet's ${RETIRED_VAULT_NAME[k]} lines are read as the retired vault of the v0.5.0 deployment (${o.verb}): ${RETIRED_VAULT_NAME[k]} leaves ELIGIBLE_VAULTS, GOVERN_UNPAUSE_VAULTS and ROUTER_WEIGHTS. A deploy run refuses them`, { vault: k, verb: o.verb });
+  }
+  return out;
 }
 
 /** A follow-on verb drops VAULT_NAME with one warning naming its line. A deploy run keeps it, so checkNames refuses it with the issue 1705 reason. */
@@ -272,6 +322,8 @@ function asVaultKeys(name: string, v: string, allowNone = true): VaultKey[] {
 export function parseSheet(text: string, opts: ParseSheetOpts = {}): Sheet {
   const raw = parseSheetText(text);
   dropLegacyVaultName(text, raw, opts);
+  const written = { ...raw };
+  const retiredVaults = opts.system === "gateway" ? [] : takeRetiredVaultLines(raw, opts);
   checkNames(raw, opts.system);
   if (opts.system === "gateway") return gatewaySheet(raw);
   const v = raw;
@@ -382,13 +434,14 @@ export function parseSheet(text: string, opts: ParseSheetOpts = {}): Sheet {
     if (why) throw err(`GOVERN_NEW_DELAY ${why} (DEPLOYMENT_KIND=rehearsal)`, { name: "GOVERN_NEW_DELAY" });
   }
 
+  // values: what the sheet said, the retired vault's lines included (issue 1927)
   const values: Record<string, string> = {};
-  for (const [k, val] of Object.entries(raw)) values[k] = SHEET_SPEC[k]!.kind.startsWith("address") && val !== "@safe" && !val.includes(",") ? getAddress(val) : val;
+  for (const [k, val] of Object.entries(written)) values[k] = (SHEET_SPEC[k]?.kind ?? "uint").startsWith("address") && val !== "@safe" && !val.includes(",") ? getAddress(val) : val;
 
   return {
     values, chainId, expectedChainId, kind, admin, pauser, emergency, shareReceiver, receiptAdmin, safeOwners, safeThreshold,
     safeSalt: v.SAFE_SALT_NONCE, usdc, swapRouter, feeRecipient, seedDeposit, timelockMinDelay, upgrade, vaults,
-    eligibleVaults, weights, govern: { unpauseVaults, newDelay },
+    eligibleVaults, weights, govern: { unpauseVaults, newDelay }, ...(retiredVaults.length ? { retiredVaults } : {}),
   };
 }
 

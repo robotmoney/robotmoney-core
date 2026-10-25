@@ -220,3 +220,34 @@ describe("the row, on the live four-vault state (issue 1912)", () => {
     for (const x of c) expect(x.target).not.toBe(RETIRED_VAULT);
   });
 });
+
+// Issue 1927: runbook 4.15 runs the row with --core-dir the live v0.5.0 checkout. Its stage table (the committed copy in tests/fixtures/v050) has the agent stage and the ic-policy stage, and
+// its manifest set names rmAGENT in agent-token-vault.json and the receipt in ic-policy.json. The row reads the registry, the router, the governance and the three vaults that stay from
+// those manifests; the retired rmAGENT row of the table is not a vault the row governs (stages.ts RETIRED_VAULT_STAGES).
+describe("the row against a v0.5.0 manifest set (issue 1927)", () => {
+  test("the four-vault v0.5.0 manifests: the batch retires rmAGENT, the three legs come from the v0.5.0 manifests and the evidence entry is recorded", async () => {
+    const { loadStageTable } = await import("../src/stage-table.ts");
+    const stages = await import("../src/stages.ts");
+    const { peekStageState, restoreStageState, useStageTable } = stages;
+    const { loadGovernAddrs } = await import("../src/govern.ts");
+    const { writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const w = world();
+    const was = peekStageState();
+    useStageTable(loadStageTable(join(import.meta.dir, "fixtures", "v050")));
+    try {
+      expect(stages.VAULT_STAGES.map((v) => v.key)).toEqual(["USDC", "PROTO", "RWA"]);
+      expect(stages.RETIRED_VAULT_STAGES).toEqual([{ key: "AGENT", stage: "agent", manifest: "deployments/<chain>/agent-token-vault.json", artifact: "AgentTokenVault" }]);
+      const dir = join(w.ctx.coreDir, "deployments", "918453");
+      writeFileSync(join(dir, "agent-token-vault.json"), JSON.stringify({ vault: RETIRED_VAULT }));
+      writeFileSync(join(dir, "ic-policy.json"), JSON.stringify({ consensus_receipt: A.receipt, policy: addr(0x1007) }));
+      const a = loadGovernAddrs(w.ctx);
+      expect(a.vaults).toEqual(A.vaults);
+      await w.run({ warp: warpTo(w.tl) });
+      expect(w.tl.s.events).toEqual(["scheduleBatch:retire-vault", "executeBatch:retire-vault"]);
+      expect(w.tl.s.statuses.get(RETIRED_VAULT)).toBe(2);
+      expect(w.tl.s.weights).toEqual({ vaults: THREE, bps: [9500n, 500n, 0n] });
+      expect((w.manifest as { vault_retirements?: any[] }).vault_retirements![0]).toMatchObject({ vault: RETIRED_VAULT, vaults: THREE, bps: [9500, 500, 0], registry: A.registry });
+    } finally { restoreStageState(was); }
+  });
+});

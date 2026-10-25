@@ -192,3 +192,42 @@ test("a v0.6.0 yaml that guards only rmPROTO fails for rmRWA", () => {
   const p = problemsWith("releases/v0.6.0.yaml", (t) => t.replace(/.*vault=RWA.*\n/g, ""));
   expect(p.join("\n")).toContain("vault (RWA) has no set-unwind-guard step");
 });
+
+// Issue 1927: the v0.6.0 yaml rehearses runbook 4.15 on the Twin from a real v0.5.0 deployment. Its added steps run the 4.15 publish-contracts commands, in order, as the runbook
+// spells them (UPGRADE_FROM_V050_COMMANDS, which upgrade-runbook-drift.test.ts holds equal to the runbook), each with expectExit 0. The 4.15 names map to the yaml's placeholders.
+test("the committed v0.6.0 runbook runs the runbook 4.15 commands against the v0.5.0 deployment, in order, each with expectExit 0", async () => {
+  const { UPGRADE_FROM_V050_COMMANDS, V050_SHA } = await import("../../publish-contracts/src/ci/upgrade-from-v050-commands.ts");
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  const NAMES: Record<string, string> = {
+    "$PWD": ".", "$GATEWAY_IMPL": "{state:v050-gateway-impl}", "$RECEIPT_IMPL": "{state:v050-receipt-impl}", "$RMAGENT": "{state:v050-rmagent}", "$TIMELOCK": "{state:v050-timelock}",
+    "$GOVERNANCE": "{state:v050-governance}", "$REGISTRY": "{state:v050-registry}", "$EVIDENCE": "{runDir}/v050-run/evidence", "$BASE_RPC_URL": "{v050RpcUrl}",
+  };
+  const toYaml = (line: string): string[] => [...line.matchAll(/"([^"]*)"|(\S+)/g)].flatMap((m) => {
+    const tok = m[1] ?? m[2]!;
+    if (m[2] === "$COMMON") return ["{v050common}", "{gate}"];
+    return [tok.replace(/\$[A-Z_0-9]+/g, (n) => { if (!(n in NAMES)) throw new Error(`no yaml name for ${n}`); return NAMES[n]!; })];
+  });
+  const added = r.steps.filter((s) => s.added === "v0.6.0" && s.phase === 8);
+  expect(added.length).toBeGreaterThanOrEqual(UPGRADE_FROM_V050_COMMANDS.length);
+  let from = 0;
+  for (const line of UPGRADE_FROM_V050_COMMANDS) {
+    const want = JSON.stringify(toYaml(line));
+    const at = added.findIndex((s, i) => i >= from && s.cmds.some((c) => JSON.stringify(c) === want));
+    expect(at, line).toBeGreaterThanOrEqual(from);
+    const s = added[at]!;
+    expect(s.expectExit, `${s.id}: ${line}`).toBe(0);
+    expect(s.onlyFor, s.id).toBe("twin");
+    from = at;
+  }
+  // the v0.5.0 publish is the tag's own CLI and sheet at the fixed pin, with the unlowered rmAGENT pool floor, and {v050common} names the v0.5.0 checkout and its sha
+  const publish = added.find((s) => s.id === "P8.03-v050-publish")!;
+  expect(publish.cmds[0]).toEqual(["bun", "{runDir}/v050/publish-contracts/src/ci/twin-publish.ts"]);
+  expect(publish.env).toMatchObject({ GITHUB_WORKSPACE: "{runDir}/v050", PIN_BLOCK_IN: "52881000", REHEARSAL_IN: "true", SHEET_OVERLAY_IN: "deployments/twin-918453/upgrade-rehearsal.env" });
+  expect(publish.cmds[1]!.join(" ")).toContain("VAULT_AGENT_MIN_POOL_LIQUIDITY=1000000000000000");
+  expect(added.find((s) => s.id === "P8.02-v050-twin-fork")!.cmds[0]).toContain("52881000");
+  const { LIST_PLACEHOLDERS } = await import("./validate-contract-qa.ts");
+  const common = LIST_PLACEHOLDERS.v050common!;
+  expect(common[common.indexOf("--core-dir") + 1]).toBe("{runDir}/v050");
+  expect(common[common.indexOf("--core-sha") + 1]).toBe(V050_SHA);
+  expect(added.find((s) => s.id === "P8.01-v050-checkout")!.cmds.flat().join(" ")).toContain(V050_SHA);
+});

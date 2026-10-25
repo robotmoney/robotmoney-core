@@ -28,10 +28,12 @@ function aliasedCopy(): string {
 }
 
 describe("deployments/8453/deploy-2, the combined deployment (issue 1892)", () => {
-  test("every manifest the combined reading requires is committed there, and the vaults list names four vaults", () => {
+  test("every manifest the combined reading requires is committed there, and the vaults lists name four vaults", () => {
     const m = loadManifests(aliasedCopy(), legacy);
     expect(m.missing).toEqual([]);
-    expect(m.vaults.length).toBe(4);
+    // issue 1927: rmAGENT is a retired-line vault (RETIRED_VAULT_KEYS): its manifest is read beside the three live ones
+    expect(m.vaults.length + m.retiredVaults.length).toBe(4);
+    expect(m.retiredVaults.map((v) => v.key)).toEqual(["rmAGENT"]);
     expect(requiredManifests(legacy).sort()).toEqual(readdirSync(DEPLOY2).filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "").replace(/^ic-policy$/, "receipt")).sort());
     // the gateway handover manifest belongs to the gateway system only: the combined deployment never had one
     expect(requiredManifests(legacy)).not.toContain("gateway-handover");

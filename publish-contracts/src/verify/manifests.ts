@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { VAULT_ADDRESS_FIELD, VAULT_KIND, LIBS_STAGE, SAFE_MANIFEST } from "../core-wiring.ts";
 import { manifestBase, type StageTable } from "../stage-table.ts";
 import { VAULT_NAME } from "../sheet.ts";
+import { RETIRED_VAULT_NAME, isRetiredVaultKey } from "../vault-keys.ts";
 import { requiredManifests, stageManifestName } from "./constants.ts";
 import type { Address, Hex, VaultKind } from "./types.ts";
 
@@ -26,6 +27,8 @@ export interface Manifests {
   files: Record<string, any>;
   missing: string[];
   vaults: ManifestVault[];
+  /** Issue 1927: the vaults of a prior line's table this line never deploys (rmAGENT of the live v0.5.0 deployment), from their own manifests. Empty for this line's table. */
+  retiredVaults: { key: string; address: Address; source: string; artifact: string }[];
   /** library name -> address */
   libraries: Record<string, Address>;
   /** library name -> forge artifact name */
@@ -50,10 +53,14 @@ export function loadManifests(dir: string, table: StageTable): Manifests {
     try { files[f] = JSON.parse(readFileSync(p, "utf8")); } catch { missing.push(`${f}.json (unparseable)`); }
   }
   const vaults: ManifestVault[] = [];
+  const retiredVaults: Manifests["retiredVaults"] = [];
   for (const v of table.vaults) {
     const base = manifestBase(v.manifest);
     const addr = files[base]?.[VAULT_ADDRESS_FIELD];
-    if (isAddress(addr)) vaults.push({ key: VAULT_NAME[v.key], kind: VAULT_KIND[v.key], address: addr, source: `${base}.json`, artifact: v.artifact, data: files[base] });
+    if (!isAddress(addr)) continue;
+    // Issue 1927: the retired rmAGENT of a v0.5.0 table is not a vault this line verifies as live (verify/index.ts checks it as retired)
+    if (isRetiredVaultKey(v.key)) retiredVaults.push({ key: RETIRED_VAULT_NAME[v.key], address: addr, source: `${base}.json`, artifact: v.artifact });
+    else vaults.push({ key: VAULT_NAME[v.key], kind: VAULT_KIND[v.key], address: addr, source: `${base}.json`, artifact: v.artifact, data: files[base] });
   }
   const libs: Record<string, Address> = {};
   const libraryArtifacts: Record<string, string> = {};
@@ -63,7 +70,7 @@ export function loadManifests(dir: string, table: StageTable): Manifests {
   }
   const safeName = manifestBase(SAFE_MANIFEST);
   const safe = isAddress(files[safeName]?.safe) ? files[safeName].safe : undefined;
-  return { files, missing, vaults, libraries: libs, libraryArtifacts, safe };
+  return { files, missing, vaults, retiredVaults, libraries: libs, libraryArtifacts, safe };
 }
 
 /**

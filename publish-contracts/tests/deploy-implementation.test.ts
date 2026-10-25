@@ -1,14 +1,15 @@
 // Issue 1861: the deploy-implementation verb (src/deploy-implementation.ts) against a stub chain. The live gateway implementation links library L at address LIB; the build's
 // creation code carries L's placeholder. The real CREATE, the real libraries and the real Safe run in the suite-28 Twin upgrade lifecycle (src/ci/twin-upgrade-lifecycle.ts).
 import { describe, expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { keccak256, type Address, type Hex } from "viem";
 import { DEPLOY_IMPL_VERB, implementationDeploysOf, linkCreationCode, realDeployImplApi, runDeployImplementation, type DeployImplApi } from "../src/deploy-implementation.ts";
 import { loadRunManifest, newManifest, saveRunManifest, type RunContext } from "../src/runner.ts";
-import { getStageTable } from "../src/stages.ts";
+import { getStageTable, peekStageState, restoreStageState, useStageTable } from "../src/stages.ts";
+import { loadStageTable } from "../src/stage-table.ts";
 import { layoutId, proxySpecs } from "../src/verify/upgradeability.ts";
-import { REPO } from "./fixtures.ts";
+import { REPO, tmp } from "./fixtures.ts";
 import { A, addr, setup } from "./govern-world.ts";
 
 const SPECS = proxySpecs(getStageTable());
@@ -178,5 +179,122 @@ describe("issue 1861: the deploy-implementation CLI", () => {
     expect(rc).toBe(0);
     expect(calls).toEqual(["green", "deploy"]);
     expect(JSON.parse(out.find((l) => l.includes("deploy_implementation"))!)).toMatchObject({ event: "deploy_implementation", implementation: NEW, next: expect.stringContaining(`govern --row upgrade-proxy --proxy gateway --implementation ${NEW}`) });
+  });
+});
+
+// Issue 1927: the runbook 4.15 shape. --core-dir (ctx.coreDir) is the checkout of the build that is LIVE, release/v0.5.0-rehearsal: its stage table (the committed copy in
+// tests/fixtures/v050, where the receipt is ic-policy.json consensus_receipt), its storage layout snapshots and its build out/. --upgrade-build is the rc checkout: this repo's
+// snapshots and storage-layout-renames.json, and a build whose code differs from the live one (the rc gateway is 12923 bytes, the live one 24283).
+describe("issue 1927: deploy-implementation against the live v0.5.0 build", () => {
+  const V050 = join(import.meta.dir, "fixtures", "v050");
+  const LIVE_TAIL = "5af43d82803e", RC_TAIL = "5af43d82803f00";
+  const runtimeOf = (lib: string, tail: string) => `0x608060${"73"}${lib}${tail}`;
+  const creationOf = (lib: string, tail: string) => `0x60806040${"73"}${lib}${runtimeOf(lib, tail).slice(2)}`;
+  const RC_PROXY = addr(0x1006), LIVE_RC = addr(0x9300);
+
+  /** One build: the contract's artifact (the runtime ends in `tail`), linking every name in `libs` at the offsets the placeholder layout uses, and each library's own artifact. */
+  function writeOut(dir: string, contract: string, tail: string, libs: string[]): void {
+    const refs = (...starts: number[]) => Object.fromEntries(libs.map((l) => [`src/libs/${l}.sol`, { [l]: starts.map((start) => ({ start, length: 20 })) }]));
+    mkdirSync(join(dir, "out", `${contract}.sol`), { recursive: true });
+    writeFileSync(join(dir, "out", `${contract}.sol`, `${contract}.json`), JSON.stringify({
+      bytecode: { object: creationOf(PLACEHOLDER, tail), linkReferences: refs(5, 29) },
+      deployedBytecode: { object: runtimeOf(PLACEHOLDER, tail), linkReferences: refs(4), immutableReferences: {} },
+      abi: [],
+    }));
+    for (const l of libs) {
+      mkdirSync(join(dir, "out", `${l}.sol`), { recursive: true });
+      writeFileSync(join(dir, "out", `${l}.sol`, `${l}.json`), JSON.stringify({ bytecode: { object: LIB_CODE, linkReferences: {} }, deployedBytecode: { object: LIB_CODE, linkReferences: {}, immutableReferences: {} } }));
+    }
+  }
+
+  function world050(o: { proxy?: "gateway" | "receipt"; editRc?: (j: any) => void; renames?: boolean; recordedLayout?: (spec: any, ids: Record<string, string>) => string; rcLibs?: string[]; liveCode?: string; deployed?: (creation: Hex) => string } = {}) {
+    const proxy = o.proxy ?? "gateway";
+    const d = setup({}, 918453);
+    const saved = peekStageState();
+    const table = loadStageTable(V050);
+    useStageTable(table);
+    try {
+      const specs = proxySpecs(table);
+      const spec = specs.find((x) => x.name === proxy)!;
+      const core = tmp("pc-v050-core-"), rc = tmp("pc-v050-rc-");
+      // the v0.5.0 checkout: its table and snapshots, and its build out/ (the live code)
+      cpSync(V050, core, { recursive: true });
+      writeOut(core, spec.contract, LIVE_TAIL, ["L"]);
+      // the rc checkout: this repo's snapshots (the receipt's slot 0 renamed _retiredWriterSlot), its renames file, its build out/
+      for (const s of specs) { const f = join(REPO, s.layout); if (existsSync(f)) { mkdirSync(dirname(join(rc, s.layout)), { recursive: true }); copyFileSync(f, join(rc, s.layout)); } }
+      if (o.renames !== false) { mkdirSync(join(rc, "scripts", "ci"), { recursive: true }); copyFileSync(join(REPO, "scripts", "ci", "storage-layout-renames.json"), join(rc, "scripts", "ci", "storage-layout-renames.json")); }
+      if (o.editRc) { const p = join(rc, spec.layout); const j = JSON.parse(readFileSync(p, "utf8")); o.editRc(j); writeFileSync(p, JSON.stringify(j)); }
+      writeOut(rc, spec.contract, RC_TAIL, o.rcLibs ?? ["L"]);
+      // the deployment's manifests, named by the v0.5.0 table, and the upgradeability.json the v0.5.0 verify wrote (its layout ids are the v0.5.0 snapshots')
+      const dir = join(core, "deployments", "918453");
+      mkdirSync(dir, { recursive: true });
+      const proxyAddr = proxy === "gateway" ? A.gateway : RC_PROXY;
+      writeFileSync(join(dir, "gateway.json"), JSON.stringify({ gateway: A.gateway }));
+      writeFileSync(join(dir, "ic-policy.json"), JSON.stringify({ consensus_receipt: RC_PROXY, policy: addr(0x1007) }));
+      const pins = table.upgradeAuthority!.layoutPins;
+      const ids: Record<string, string> = Object.fromEntries(["gateway", "receipt"].map((n) => [n, layoutId(core, specs.find((x) => x.name === n)!.layout, pins)]));
+      const proxies = { gateway: { proxy: A.gateway, layout_id: o.recordedLayout?.(specs[0], ids) ?? ids.gateway }, receipt: { proxy: RC_PROXY, layout_id: o.recordedLayout?.(spec, ids) ?? ids.receipt } };
+      writeFileSync(join(dir, "upgradeability.json"), JSON.stringify({ chain_id: 918453, mode: "upgradeable", proxies }));
+      const ctx = { ...d.ctx, coreDir: core, evidenceDir: join(core, "evidence"), caller: { yes: true }, signer: { address: async () => d.sheet.admin } } as unknown as RunContext;
+      saveRunManifest(ctx.evidenceDir, newManifest(ctx, d.sheet.admin));
+      const live = proxy === "gateway" ? LIVE : LIVE_RC;
+      const s = { codes: new Map<string, string>([[live.toLowerCase(), o.liveCode ?? runtimeOf(LIB.slice(2), LIVE_TAIL)], [LIB.toLowerCase(), LIB_CODE]]), creates: [] as Hex[] };
+      const api: DeployImplApi = {
+        getCode: async (a) => (s.codes.get(a.toLowerCase()) ?? "0x") as Hex,
+        implementationOf: async (p) => { expect(p.toLowerCase()).toBe(proxyAddr.toLowerCase()); return live; },
+        upgradesFrozen: async () => false,
+        create: async (creation) => { s.creates.push(creation); s.codes.set(NEW.toLowerCase(), o.deployed ? o.deployed(creation) : `0x${creation.slice(2 + 25 * 2)}`); return { txHash: keccak256(creation), status: true, address: NEW }; },
+      };
+      const run = async () => { const was = peekStageState(); useStageTable(table); try { return await runDeployImplementation(ctx, { proxy, upgradeBuild: rc }, api); } finally { restoreStageState(was); } };
+      return { ctx, s, run, rc, core, ids, spec };
+    } finally { restoreStageState(saved); }
+  }
+  const entries = (w: { ctx: RunContext }) => implementationDeploysOf(loadRunManifest(w.ctx.evidenceDir)!);
+
+  test("the v0.5.0 table names the receipt in the ic-policy stage and the recorded layout ids are the ones Deploy 3 recorded (0xe2ca...21a0, the gateway 0x6b24...f1f4)", () => {
+    const t = loadStageTable(V050);
+    const specs = proxySpecs(t);
+    expect(specs.find((x) => x.name === "receipt")).toMatchObject({ stage: "ic-policy", field: "consensus_receipt", contract: "ConsensusRecommendationReceipt" });
+    expect(specs.find((x) => x.name === "icpolicy")).toMatchObject({ stage: "ic-policy", field: "policy" });
+    expect(specs.find((x) => x.name === "vault[rmAGENT]")).toMatchObject({ stage: "agent" });
+    const pins = t.upgradeAuthority!.layoutPins;
+    expect(layoutId(V050, specs.find((x) => x.name === "receipt")!.layout, pins)).toBe("0xe2ca7434dbf653b43914d8856a31a0c4f5523292eae0a3f514d8dee68bb221a0");
+    expect(layoutId(REPO, specs.find((x) => x.name === "receipt")!.layout, pins)).toBe("0x35a244a88c20f3fafb46c41caa6e049660d60ec6ccbc996c8853bf2b210026e6");
+    expect(layoutId(V050, specs.find((x) => x.name === "gateway")!.layout, pins)).toBe(layoutId(REPO, specs.find((x) => x.name === "gateway")!.layout, pins));
+  });
+
+  for (const proxy of ["gateway", "receipt"] as const) {
+    test(`${proxy}: the live code is the --core-dir build, its links are read there, the new implementation is the --upgrade-build artifact: one CREATE and its entry`, async () => {
+      const w = world050({ proxy });
+      const res = await w.run();
+      expect(w.s.creates.length).toBe(1);
+      expect(w.s.creates[0]!.slice(2 + 5 * 2, 2 + 25 * 2)).toBe(LIB.slice(2));
+      expect(w.s.creates[0]!).toContain(RC_TAIL);
+      expect(res.entry).toMatchObject({ proxy_name: proxy, build: w.rc, libraries: { L: LIB }, implementation: NEW });
+      expect(res.next).toContain(`--upgrade-build ${w.rc}`);
+      expect(entries(w).length).toBe(1);
+    });
+  }
+
+  test("each refusal still fires with nothing sent: live code that is not the --core-dir build, a layout id that is not the recorded one, a non-append-only snapshot, an unreviewed rename, a library the live code does not link", async () => {
+    const cases: [string, ReturnType<typeof world050>, string][] = [
+      ["live code", world050({ liveCode: runtimeOf(LIB.slice(2), RC_TAIL) }), "is not the RobotMoneyGateway of"],
+      ["layout id", world050({ proxy: "receipt", recordedLayout: () => "0x35a244a88c20f3fafb46c41caa6e049660d60ec6ccbc996c8853bf2b210026e6" }), "is not the one verify recorded"],
+      ["append-only", world050({ proxy: "receipt", editRc: (j) => { j.storage = [j.storage[1], j.storage[0], ...j.storage.slice(2)]; } }), "storage layout gate refuses"],
+      ["unreviewed rename", world050({ proxy: "receipt", renames: false }), "storage: a variable moved, was retyped or removed"],
+      ["library", world050({ rcLibs: ["L", "M"] }), "links M, which the live implementation does not link"],
+    ];
+    for (const [what, w, msg] of cases) {
+      await expect(w.run(), what).rejects.toMatchObject({ kind: "REFUSED", message: expect.stringContaining(msg) });
+      expect(w.s.creates, what).toEqual([]);
+      expect(entries(w), what).toEqual([]);
+    }
+  });
+
+  test("deployed code that is not the --upgrade-build artifact exits VERIFY and records no entry", async () => {
+    const w = world050({ deployed: (creation) => `0x${creation.slice(2 + 25 * 2).replace(RC_TAIL, LIVE_TAIL)}` });
+    await expect(w.run()).rejects.toMatchObject({ kind: "VERIFY", message: expect.stringContaining("is not the build's RobotMoneyGateway") });
+    expect(w.s.creates.length).toBe(1);
+    expect(entries(w)).toEqual([]);
   });
 });
