@@ -239,6 +239,10 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
   /** Returns the problems of one command line of the section (empty when every verb, row and flag exists). */
   const problems = async (line: string, common: string): Promise<string[]> => {
     if (line.startsWith("COMMON=")) return [];
+    if (line.startsWith("git fetch ")) {
+      // step 0 (review-operations): the rc commit is on the fetched release branch
+      return /^git fetch origin (releases-\d+\.\d+\.x) && git merge-base --is-ancestor "\$RC_SHA" origin\/\1$/.test(line) ? [] : [`${line}: the release-branch check must fetch origin releases-A.B.x and test --is-ancestor "$RC_SHA" on it`];
+    }
     if (line.startsWith("test ")) {
       // step 0: `test <lhs> = "$RC_SHA"` or `test -z "$(git status --porcelain)"` over a git read of the rc checkout (the working directory), and the same three reads of the v0.5.0
       // checkout with `git -C "$V050_DIR"`, whose rev-parse must equal "$V050_SHA" (issue 1927)
@@ -319,6 +323,12 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
     ]);
     for (const l of tests) expect(await problems(l, common), l).toEqual([]);
     for (const l of ['git ls-remote origin "refs/tags/$RC_TAG^{}"', 'git ls-remote origin "refs/tags/release/v0.5.0-rehearsal^{}"']) expect(s0, l).toContain(l);
+    // review-operations: the rc commit is on the fetched release branch, and the env block names the token the CLI's gates read
+    const branchLine = 'git fetch origin releases-0.6.x && git merge-base --is-ancestor "$RC_SHA" origin/releases-0.6.x';
+    expect(s0).toContain(branchLine);
+    expect(await problems(branchLine, common)).toEqual([]);
+    expect((await problems('git fetch origin dev && git merge-base --is-ancestor "$RC_SHA" origin/releases-0.6.x', common)).length).toBe(1);
+    expect(S415).toMatch(/^export GITHUB_TOKEN=/m);
     // the checker refuses a v0.5.0 read compared with the rc sha, and an rc read compared with the v0.5.0 sha
     expect((await problems('test "$(git -C "$V050_DIR" rev-parse HEAD)" = "$RC_SHA"', common)).length).toBe(1);
     expect((await problems('test "$(git rev-parse HEAD)" = "$V050_SHA"', common)).length).toBe(1);

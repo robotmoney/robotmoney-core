@@ -567,6 +567,7 @@ steps:
     phase: 8
     cmds:
       - ["bash", "-c", 'for t in forge cast anvil; do "$t" --version | head -n 1 | grep -Eq "Version: 1\\.8\\.5([^0-9]|$)" || { echo "$t is not Foundry 1.8.5" >&2; exit 1; }; done']
+      - ["ssh", "rm-core-stage-1", 'for t in forge cast anvil; do "$t" --version | head -n 1 | grep -Eq "Version: 1\\.8\\.5([^0-9]|$)" || { echo "$t is not Foundry 1.8.5 on the stage host" >&2; exit 1; }; done']
     expectExit: 0
     receipts: []
     irreversible: false

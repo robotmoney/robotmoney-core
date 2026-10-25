@@ -993,6 +993,7 @@ export RC_TAG=<the rc tag, release/v0.6.0-rc.N-rehearsal>
 export V050_DIR=<the clean checkout of release/v0.5.0-rehearsal, submodules included, after forge build>
 export V050_SHA=57fbe61833e9d7f94557d69102138f7c410c1346
 export PUBLISH_MANIFEST_DIR=<the Deploy 3 stage manifest directory in $EVIDENCE>
+export GITHUB_TOKEN=<a read-only GitHub token: the release gates read check-sha-green for both checkouts>
 export SAFE=<the governing Safe, from the Deploy 3 run manifest>
 export GOVERNANCE=<RouterGovernance, from the governance stage manifest of the Deploy 3 run manifest>
 COMMON="--chain 8453 --rpc $BASE_RPC_URL --sheet $DEPLOY3_SHEET --core-dir $V050_DIR --core-sha $V050_SHA --evidence $EVIDENCE --environment local --signer $DEPLOYER_SIGNER --owner-signer $OWNER_SIGNER_1 --owner-signer $OWNER_SIGNER_2"
@@ -1002,7 +1003,7 @@ COMMON="--chain 8453 --rpc $BASE_RPC_URL --sheet $DEPLOY3_SHEET --core-dir $V050
 
 **Mainnet steps.** Each step is owner-gated and runs in this order. Do not start a step before the previous one is recorded in the evidence.
 
-0. Check both checkouts before any command uses `--core-dir` or `--upgrade-build "$PWD"`. This build-pin check is repeated immediately before every later use of `--upgrade-build` (steps 3, 4 and 5): rerun the six `test` lines below, and compare `git ls-remote origin "refs/tags/$RC_TAG^{}"` with `$RC_SHA` and `git ls-remote origin "refs/tags/release/v0.5.0-rehearsal^{}"` with `$V050_SHA`, so a tag that moved after step 0 stops the run. In the rc checkout HEAD must equal `$RC_SHA`, the work tree must be clean and the rc tag must point at `$RC_SHA`. In the v0.5.0 checkout HEAD must equal `$V050_SHA`, the work tree must be clean and `release/v0.5.0-rehearsal` must point at `$V050_SHA`. Stop on any failure: a build from another tree would deploy code the owners never reviewed, or compare the live code with a build that is not live.
+0. Check both checkouts before any command uses `--core-dir` or `--upgrade-build "$PWD"`. This build-pin check is repeated immediately before every later use of `--upgrade-build` (steps 3, 4 and 5): rerun the six `test` lines below, and compare `git ls-remote origin "refs/tags/$RC_TAG^{}"` with `$RC_SHA` and `git ls-remote origin "refs/tags/release/v0.5.0-rehearsal^{}"` with `$V050_SHA`, so a tag that moved after step 0 stops the run. In the rc checkout HEAD must equal `$RC_SHA`, the work tree must be clean and the rc tag must point at `$RC_SHA`. In the v0.5.0 checkout HEAD must equal `$V050_SHA`, the work tree must be clean and `release/v0.5.0-rehearsal` must point at `$V050_SHA`. The last line fetches the release branch and checks the rc commit is on it, which the CLI's `--upgrade-build` gate also requires (it reads `origin/releases-0.6.x` as fetched, and `GITHUB_TOKEN` for green CI). Stop on any failure: a build from another tree would deploy code the owners never reviewed, or compare the live code with a build that is not live. Run `forge build` in the rc checkout after it is checked out at the tag: the CLI refuses an `out/` whose sources are not the tree's bytes.
 
 ```bash
 test "$(git rev-parse HEAD)" = "$RC_SHA"
@@ -1011,6 +1012,7 @@ test "$(git rev-parse "$RC_TAG^{commit}")" = "$RC_SHA"
 test "$(git -C "$V050_DIR" rev-parse HEAD)" = "$V050_SHA"
 test -z "$(git -C "$V050_DIR" status --porcelain)"
 test "$(git -C "$V050_DIR" rev-parse "release/v0.5.0-rehearsal^{commit}")" = "$V050_SHA"
+git fetch origin releases-0.6.x && git merge-base --is-ancestor "$RC_SHA" origin/releases-0.6.x
 ```
 
 1. Record the owner go in the run record with the rc commit and the Deploy 3 sheet. Stop if the owner has not given the go.
