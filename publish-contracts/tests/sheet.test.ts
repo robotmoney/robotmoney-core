@@ -394,3 +394,33 @@ describe("UPGRADE_MODE and UPGRADE_FREEZE_DEADLINE (issue 1809)", () => {
     expect(parseSheet(exampleText()).upgrade).toEqual({ mode: "frozen" });
   });
 });
+
+// Issue 1927: the follow-on verbs of the governed upgrade (runbook 4.15) read the live Deploy 3 sheet, which still describes the v0.5.0 rmAGENT. Its lines are the retired vault's record:
+// checked like a basket's, then out of every router list. A deploy run refuses them, and so does a sheet that gives rmAGENT a default weight.
+describe("the retired rmAGENT lines of a v0.5.0 sheet (issue 1927)", () => {
+  const AGENT = ["VAULT_AGENT_TVL_CAP=1000000000", "VAULT_AGENT_PER_DEPOSIT_CAP=100000000", "VAULT_AGENT_EXIT_FEE_BPS=0", "VAULT_AGENT_NAV_DEVIATION_BPS=400", "VAULT_AGENT_MIN_POOL_LIQUIDITY=1000000000000000"];
+  const v050 = (over: Record<string, string | null> = {}, extra = AGENT) => sheetText({ ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA", ...over }, extra);
+  test("govern, verify and deploy-implementation read them as the retired vault: rmAGENT leaves ELIGIBLE_VAULTS, GOVERN_UNPAUSE_VAULTS and its 0 bps ROUTER_WEIGHTS leg; values keep what the sheet said", () => {
+    for (const verb of ["govern", "verify", "deploy-implementation"]) {
+      const warns: string[] = [];
+      const s = parseSheet(v050(), { verb, warn: (m) => warns.push(m) });
+      expect(s.retiredVaults).toEqual(["AGENT"]);
+      expect(Object.keys(s.vaults)).toEqual([...VAULT_KEYS]);
+      expect(s.eligibleVaults).toEqual(["PROTO", "RWA"]);
+      expect(s.govern.unpauseVaults).toEqual(["USDC", "PROTO", "RWA"]);
+      expect(s.weights).toEqual([{ key: "USDC", bps: 9500 }, { key: "PROTO", bps: 500 }, { key: "RWA", bps: 0 }]);
+      expect(s.values.VAULT_AGENT_MIN_POOL_LIQUIDITY).toBe("1000000000000000");
+      expect(s.values.ROUTER_WEIGHTS).toBe("USDC:9500,PROTO:500,AGENT:0,RWA:0");
+      expect(warns.length).toBe(1);
+      expect(warns[0]).toContain("retired vault of the v0.5.0 deployment");
+    }
+  });
+  test("a deploy run refuses them; a follow-on verb refuses a missing line, a broken floor and a default weight on rmAGENT", () => {
+    expect(() => parseSheet(v050())).toThrow("VAULT_AGENT_TVL_CAP is not a sheet name");
+    expect(() => parseSheet(v050({}, AGENT.slice(0, 4)), { verb: "govern" })).toThrow("is missing VAULT_AGENT_MIN_POOL_LIQUIDITY");
+    expect(() => parseSheet(v050({}, [...AGENT.slice(0, 4), "VAULT_AGENT_MIN_POOL_LIQUIDITY=0"]), { verb: "govern" })).toThrow("break the basket floors");
+    expect(() => parseSheet(v050({ ROUTER_WEIGHTS: "USDC:9000,PROTO:500,AGENT:500,RWA:0" }), { verb: "govern" })).toThrow("gives the retired rmAGENT 500 bps");
+    // a sheet without the lines is this line's sheet, read as before
+    expect(parseSheet(sheetText(), { verb: "govern" }).retiredVaults).toBeUndefined();
+  });
+});

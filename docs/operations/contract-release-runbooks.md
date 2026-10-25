@@ -940,7 +940,7 @@ new gateway manifest after a governed upgrade (§4.12), before the version tag.
 
 **Retire rmAGENT on the live v0.5.0 line (`govern --row retire-vault`, core 1912, ADR-0017, ADR-0009).** The v0.6.0 line deploys three vaults. The live v0.5.0 rmAGENT leaves the router through one governed timelock batch. It is a configuration change, not a code change. It is owner-gated: nothing in CI schedules it on Base, and an agent never runs it.
 
-Before the retire executes, `pause-all` does not cover the live v0.5.0 rmAGENT: pause it by hand with `EMERGENCY_ROLE`, or run the retire first.
+`pause-all` covers the live v0.5.0 rmAGENT only when it runs with `--core-dir` of the v0.5.0 checkout (§4.15 `COMMON`): it then pauses rmAGENT like the other vaults, and counts it covered without a send once `retired()` reads true. Run with this line's checkout as `--core-dir`, it pauses the three vaults only: pause rmAGENT by hand with `EMERGENCY_ROLE`, or run the retire first.
 
 1. **Read the balance first.** Read `totalAssets()` and `totalSupply()` of rmAGENT, and `registry.routerEligibleCount()` and `router.getDefaultWeights()`, with `cast call`. The live balance is not in this repository. If holders exist, they keep `redeem` and `redeemInKind` after the retire (withdraw-only, no assisted migration). `redeem` reads the recorder, so keep `scripts/ops/recorder-keeper.sh` running for the retired vault while it holds funds.
 2. **Preview and schedule.** Run `bun publish-contracts/src/cli.ts govern --row retire-vault --admin-arg vault=0x<rmAGENT> --admin-arg weights=USDC:9500,PROTO:500,RWA:0` with the release's usual arguments. The row prints the preview first: the vault, the three-leg vector that stays and both calls. It refuses a vector that is not exactly rmUSDC, rmPROTO and rmRWA summing to 10000, a vault that is not Active and router-eligible, an active voted vector (run `--row clear-voted-weights` first), and a router that the registry does not link.
@@ -966,7 +966,16 @@ This section is the ordered, owner-gated procedure that moves the live Deploy 3 
 
 **Authority and gates.** The owner records an explicit go before step 1. An agent never broadcasts to Base 8453, and the 2026-10-18 go covered Deploy 3 only. The run starts from a clean checkout of the rc tag `release/v0.6.0-rc.N-rehearsal` (§4.14). The storage layout of all nine proxied contracts must pass `scripts/ci/check-core-storage-layout.sh --baseline release/v0.5.0-rehearsal` (the required `forge-unit-tests` job runs it on every pull request) before the rc tag is cut. Two clean runs of `core-stages-twin-upgrade-lifecycle` on `rm-core-stage-1` must pass at the QA commit before the rc tag is cut (§2). Do not cut the rc tag, and do not start step 1, until both are recorded green.
 
-**The Twin procedure.** The Twin procedure of this release is two things: the CI job `core-stages-twin-upgrade-lifecycle` (two clean runs on `rm-core-stage-1`) and the yaml run of `docs/runbooks/contract-qa/releases/v0.6.0.yaml` on the stage host (`docs/runbooks/contract-qa/README.md`). Both must pass at the QA commit. Neither proves the 48 hour delay or the mainnet Safe signers.
+**The Twin procedure.** The Twin procedure of this release is three things: the CI job `core-stages-twin-upgrade-lifecycle` (two clean runs on `rm-core-stage-1`), the CI job `core-stages-twin-upgrade-from-v050` and the yaml run of `docs/runbooks/contract-qa/releases/v0.6.0.yaml` on the stage host (`docs/runbooks/contract-qa/README.md`). All must pass at the QA commit. `core-stages-twin-upgrade-from-v050` publishes `release/v0.5.0-rehearsal` on a Twin fork with that tag's own publish-contracts CLI and its committed Twin sheet (`VAULT_AGENT_MIN_POOL_LIQUIDITY` 1000000000000000, never lowered), then runs the commands of steps 3 to 9 below from the QA checkout (`publish-contracts/src/ci/twin-upgrade-from-v050.ts`). The live RM pool was drained at Base block 52881518, so that job forks Base at block 52881000, the state the v0.5.0 rmAGENT stage was built for. None of them proves the 48 hour delay or the mainnet Safe signers.
+
+**The two checkouts.** Every command below runs against the build that is live. The live Deploy 3 build is `release/v0.5.0-rehearsal` (`57fbe61833e9d7f94557d69102138f7c410c1346`); the Deploy 3 checkout recorded the tool-only descendant `7bea6b9b`, which changes nothing under `contracts`. Make two clean checkouts:
+
+| Checkout | What it is | Flag |
+| --- | --- | --- |
+| `$V050_DIR` | a clean checkout of `release/v0.5.0-rehearsal` (`git submodule update --init --recursive`), after `forge build` with Foundry 1.8.5 (the version CI pins), with HEAD equal to `$V050_SHA` | `--core-dir $V050_DIR --core-sha $V050_SHA` (in `COMMON`) |
+| the working directory (`$PWD`) | a clean checkout of the rc tag (`git submodule update --init --recursive`), after `forge build` with Foundry 1.8.5 (the version CI pins), with HEAD equal to `$RC_SHA` | `--upgrade-build "$PWD"`; the CLI runs from here |
+
+The `--core-dir` checkout supplies the stage table, the manifest set (the receipt is `consensus_receipt` in `ic-policy.json`, rmAGENT is `agent-token-vault.json`), the deployed storage layout snapshots and the live link offsets, and the release gate reads its tag, its committed counts and its green CI. So `deploy-implementation` compares the live gateway code (24283 bytes) with the v0.5.0 build and reads its `GovernedUpgrade` and `GatewayWindows` links, and both layout gates read the deployed receipt snapshot of the v0.5.0 checkout, whose layout id is the one Deploy 3 recorded. The new implementation still comes from the rc build, and its code is still read back against the rc artifact. The rmAGENT lines of the Deploy 3 sheet are read as the retired vault: rmAGENT leaves `ELIGIBLE_VAULTS`, `GOVERN_UNPAUSE_VAULTS` and `ROUTER_WEIGHTS` (its 0 bps leg). No refusal of the rows is removed. On 8453 the CLI gates the `--upgrade-build` checkout itself, before any signer, whenever it is not the `--core-dir` checkout: a clean HEAD carrying an annotated rc tag of the sheet's kind, that tag on the canonical repository, the commit on `origin/releases-A.B.x`, and green CI at it (the release gate above covers the `--core-sha`). The stage manifests are the Deploy 3 ones: `PUBLISH_MANIFEST_DIR` names that directory, because `$V050_DIR/deployments/8453` holds only Deploy 2 and must stay clean.
 
 **The delay.** Deploy 3 is a rehearsal-kind deployment with a 900 s timelock. Every schedule below waits 900 s, and the Twin does not prove the 48 hour production delay or the mainnet Safe signers. A production-kind deployment waits 172800 s (48 hours) and uses the production floors of §4.10. Never plan a production window from the 900 s figure. Read the delay from the chain in step 2 and never type it from memory.
 
@@ -981,21 +990,29 @@ export DEPLOY3_SHEET=<the Deploy 3 frozen sheet>      # sheet of the live deploy
 export EVIDENCE=<the Deploy 3 run evidence directory>  # holds publish-run.json and the stage manifests
 export RC_SHA=<the full commit of the rc tag>
 export RC_TAG=<the rc tag, release/v0.6.0-rc.N-rehearsal>
+export V050_DIR=<the clean checkout of release/v0.5.0-rehearsal, submodules included, after forge build>
+export V050_SHA=57fbe61833e9d7f94557d69102138f7c410c1346
+export PUBLISH_MANIFEST_DIR=<the Deploy 3 stage manifest directory in $EVIDENCE>
+export GITHUB_TOKEN=<a read-only GitHub token: the release gates read check-sha-green for both checkouts>
 export SAFE=<the governing Safe, from the Deploy 3 run manifest>
 export GOVERNANCE=<RouterGovernance, from the governance stage manifest of the Deploy 3 run manifest>
-COMMON="--chain 8453 --rpc $BASE_RPC_URL --sheet $DEPLOY3_SHEET --core-sha $RC_SHA --evidence $EVIDENCE --environment local --signer $DEPLOYER_SIGNER --owner-signer $OWNER_SIGNER_1 --owner-signer $OWNER_SIGNER_2"
+COMMON="--chain 8453 --rpc $BASE_RPC_URL --sheet $DEPLOY3_SHEET --core-dir $V050_DIR --core-sha $V050_SHA --evidence $EVIDENCE --environment local --signer $DEPLOYER_SIGNER --owner-signer $OWNER_SIGNER_1 --owner-signer $OWNER_SIGNER_2"
 ```
 
-**Pause-all caveat.** Until step 7 executes, `pause-all` does not cover the live rmAGENT, because the v0.6.0 tool pauses the three vaults rmUSDC, rmPROTO and rmRWA. If an incident needs a pause before the retire executes, pause rmAGENT by hand with the `EMERGENCY_ROLE` key (`pauseDeposits()` on the rmAGENT proxy), or run steps 6 and 7 first. Withdrawals are never paused.
+**Pause-all caveat.** Run `pause-all` with `COMMON` (the v0.5.0 checkout as `--core-dir`, and `--emergency-signer`): it reads the v0.5.0 table, so it pauses rmAGENT with rmUSDC, rmPROTO and rmRWA, and after step 7 it counts rmAGENT covered without a send because `retired()` reads true. A run that reads `retired()` false and cannot pause rmAGENT fails and names it. Run with the rc checkout as `--core-dir`, it pauses the three vaults only: then pause rmAGENT by hand with the `EMERGENCY_ROLE` key (`pauseDeposits()` on the rmAGENT proxy). Withdrawals are never paused.
 
 **Mainnet steps.** Each step is owner-gated and runs in this order. Do not start a step before the previous one is recorded in the evidence.
 
-0. Check the checkout before any command uses `--upgrade-build "$PWD"`. This build-pin check is repeated immediately before every later use of `--upgrade-build` (steps 3, 4 and 5): rerun the three `test` lines below, and compare `git ls-remote origin "refs/tags/$RC_TAG^{}"` with `$RC_SHA`, so a tag that moved after step 0 stops the run. HEAD must equal `$RC_SHA`, the work tree must be clean and the rc tag must point at `$RC_SHA`. Stop on any failure: a build from another tree would deploy code the owners never reviewed.
+0. Check both checkouts before any command uses `--core-dir` or `--upgrade-build "$PWD"`. This build-pin check is repeated immediately before every later use of `--upgrade-build` (steps 3, 4 and 5): rerun the six `test` lines below, and compare `git ls-remote origin "refs/tags/$RC_TAG^{}"` with `$RC_SHA` and `git ls-remote origin "refs/tags/release/v0.5.0-rehearsal^{}"` with `$V050_SHA`, so a tag that moved after step 0 stops the run. In the rc checkout HEAD must equal `$RC_SHA`, the work tree must be clean and the rc tag must point at `$RC_SHA`. In the v0.5.0 checkout HEAD must equal `$V050_SHA`, the work tree must be clean and `release/v0.5.0-rehearsal` must point at `$V050_SHA`. The last line fetches the release branch and checks the rc commit is on it, which the CLI's `--upgrade-build` gate also requires (it reads `origin/releases-0.6.x` as fetched, and `GITHUB_TOKEN` for green CI). Stop on any failure: a build from another tree would deploy code the owners never reviewed, or compare the live code with a build that is not live. Run `forge build` in the rc checkout after it is checked out at the tag: the CLI refuses an `out/` whose sources are not the tree's bytes.
 
 ```bash
 test "$(git rev-parse HEAD)" = "$RC_SHA"
 test -z "$(git status --porcelain)"
 test "$(git rev-parse "$RC_TAG^{commit}")" = "$RC_SHA"
+test "$(git -C "$V050_DIR" rev-parse HEAD)" = "$V050_SHA"
+test -z "$(git -C "$V050_DIR" status --porcelain)"
+test "$(git -C "$V050_DIR" rev-parse "release/v0.5.0-rehearsal^{commit}")" = "$V050_SHA"
+git fetch origin releases-0.6.x && git merge-base --is-ancestor "$RC_SHA" origin/releases-0.6.x
 ```
 
 1. Record the owner go in the run record with the rc commit and the Deploy 3 sheet. Stop if the owner has not given the go.
@@ -1030,7 +1047,7 @@ cast call $ROUTER "getEffectiveWeights()" --rpc-url $BASE_RPC_URL
 
    The `ADMIN_ROLE()` output is the `$ADMIN_ROLE` of the two receipt `hasRole` reads. The `PROPOSER_ROLE()` and `EXECUTOR_ROLE()` outputs are the `$PROPOSER_ROLE` and `$EXECUTOR_ROLE` of the two timelock `hasRole` reads. `getOwners` must return exactly the three owners of the Deploy 3 run manifest and `getThreshold` must read 2. Compare each `OWNER_SIGNER` address (`$OWNER_SIGNER_1` and `$OWNER_SIGNER_2`) with the `getOwners` list: each must be one of the returned owners, and the two must differ. These are the signers of `--owner-signer` (twice). The Safe must hold `PROPOSER_ROLE` on `$TIMELOCK`, and the executor is open: `hasRole(EXECUTOR_ROLE, address(0))` must be true (core #1521: `DeployTimelock` grants `EXECUTOR_ROLE` to `address(0)` only). The Safe is not read for `EXECUTOR_ROLE` and does not hold it: anyone may execute a ready operation. Both reads must be true. Take `$GOVERNANCE`, `$RECEIPT` and every other proxy address from the Deploy 3 run manifest, never from memory. `$GOVERNANCE` is the `governance` field of the governance stage manifest, never typed from memory, and `cast codehash` must have code (not the empty-code hash). Record the code hash: step 5 and step 9 compare against it. The delay reads 900. The receipt initialized version reads 1. The timelock and RouterGovernance both hold `ADMIN_ROLE` on the receipt. Neither proxy is frozen. The router reads four eligible vaults. If the delay reads anything else, or if the receipt reads version 2 (the migration already ran and the whole execute would revert with `InvalidInitialization`), stop and report. If an active receipt vector shows in the effective weights, record it in the evidence and do not stop: step 6 clears it as its own timelock operation and step 7 re-reads it before the retire executes. The row does not read these values (gap RM-1022-2 in `docs/audits.md`), so this step is the only check of them before the signers sign.
 
-3. Deploy the gateway implementation. The deployer sends one CREATE from the rc checkout build.
+3. Deploy the gateway implementation. The deployer sends one CREATE from the rc checkout build, linked to the libraries the live implementation links (read at the link offsets of the `$V050_DIR` build).
 
 ```bash
 bun publish-contracts/src/cli.ts deploy-implementation --proxy gateway --upgrade-build "$PWD" $COMMON
@@ -1066,22 +1083,22 @@ bun publish-contracts/src/cli.ts govern --row retire-vault --admin-arg vault=$RM
 
 7. Before the retire executes, re-read the receipt vector (`cast call $ROUTER "getEffectiveWeights()" --rpc-url $BASE_RPC_URL`) and confirm no active receipt vector is set, including after a clear-voted-weights row. Stop if one shows. Then execute the retire batch after the delay with the same `retire-vault` command. It reads back registry status Retired, `routerEligibleCount()` 3, default and effective vectors equal to the three legs, `retired()` true on rmAGENT, and code at the vault.
 
-8. Verify. The post-upgrade verify compares the upgraded gateway and receipt against the builds of their `proxy_upgrades` entries and every other contract against the DEPLOY_SHA build, and reads rmAGENT as withdraw-only.
+8. Verify. The post-upgrade verify compares the upgraded gateway and receipt against the builds of their `proxy_upgrades` entries (the rc checkout) and every other contract against the `$V050_DIR` build, and reads rmAGENT as withdraw-only: retired by the step 6 batch, its code the v0.5.0 build.
 
 ```bash
 bun publish-contracts/src/cli.ts verify $COMMON
 ```
 
-   Copy the new `deployments/8453/upgradeability.json` into the evidence.
+   Verify writes the new `upgradeability.json` to `$PUBLISH_MANIFEST_DIR`. Copy it into the evidence.
 
-9. Check the evidence against the chain. Both commands must exit 0, and the receipt migration read-back must equal the typed calldata step 5 previewed.
+9. Check the evidence against the chain. Both commands must exit 0, and the receipt migration read-back must equal the typed calldata step 5 previewed. Deploy 3 is a rehearsal-kind deployment, so both name `--deployment-kind rehearsal` (the 900 s floor); without it they hold the run to the 172800 s production floor and fail.
 
 ```bash
-bun publish-contracts/src/evidence-check.ts --governed-upgrades $EVIDENCE/publish-run.json --timelock $TIMELOCK --governance $GOVERNANCE --rpc $BASE_RPC_URL
-bun publish-contracts/src/evidence-check.ts --vault-retirements $EVIDENCE/publish-run.json --registry $REGISTRY --timelock $TIMELOCK --rpc $BASE_RPC_URL
+bun publish-contracts/src/evidence-check.ts --governed-upgrades $EVIDENCE/publish-run.json --deployment-kind rehearsal --timelock $TIMELOCK --governance $GOVERNANCE --rpc $BASE_RPC_URL
+bun publish-contracts/src/evidence-check.ts --vault-retirements $EVIDENCE/publish-run.json --deployment-kind rehearsal --registry $REGISTRY --timelock $TIMELOCK --rpc $BASE_RPC_URL
 ```
 
-10. Postflight (§4.4). A deposit into rmAGENT reverts, a router deposit splits across rmUSDC, rmPROTO and rmRWA, and `redeem` and `redeemInKind` pay existing rmAGENT holders. The owner records the go or no-go.
+10. Postflight (§4.4). A deposit into rmAGENT reverts, a router deposit splits across rmUSDC, rmPROTO and rmRWA, and `redeemInKind` pays existing rmAGENT holders: it is the expected exit, because it reads no price. `redeem` sells RM through the drained RM V4 pool (Base block 52881518) and may revert on its slippage or freshness bound: a revert there is recorded in the evidence with its revert data, and the holder exits with `redeemInKind`. The owner records the go or no-go.
 
 11. Update every signing client pin from the new gateway manifest before any client signs: the `rmpc` TOML (`gateway_implementation` and `gateway_implementation_runtime_hash`), the dapp build env and the headless agent config. Until then the clients refuse to sign, which is the intended fail-closed behavior.
 

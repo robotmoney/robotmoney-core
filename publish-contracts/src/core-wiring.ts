@@ -94,6 +94,22 @@ export const CORE_CONTRACT_REFS: { name: string; stage: string; field: string; a
   { name: "timelock", stage: "timelock", field: "timelock", artifactKey: "timelock" },
 ];
 
+/**
+ * Issue 1927: the core contracts of the PRIOR line's stage table (the live v0.5.0 deployment, Deploy 3), read only when the --core-dir table has their stage. That table deploys the
+ * receipt in the ic-policy stage (ic-policy.json `consensus_receipt`), the orphaned InvestmentCommitteePolicy proxy beside it and the rmAGENT price recorder. This line's table has
+ * none of these stages, so none of these rows applies to it, and its own rows above stay required.
+ */
+export const PRIOR_LINE_CONTRACT_REFS: { name: string; stage: string; field: string; artifactKey: string }[] = [
+  { name: "receipt", stage: "ic-policy", field: "consensus_receipt", artifactKey: "receipt" },
+  { name: "icpolicy", stage: "ic-policy", field: "policy", artifactKey: "icPolicy" },
+  { name: "recorder", stage: "recorder", field: "recorder", artifactKey: "recorder" },
+];
+/** The verifier's core contract rows for a table: this line's rows, with the receipt row of the stage the table deploys it in, and the prior line's rows whose stage the table has. */
+export function coreContractRefs(stageNames: readonly string[]): { name: string; stage: string; field: string; artifactKey: string }[] {
+  const prior = PRIOR_LINE_CONTRACT_REFS.filter((r) => stageNames.includes(r.stage));
+  return [...CORE_CONTRACT_REFS.filter((r) => !prior.some((p) => p.name === r.name)), ...prior];
+}
+
 /** Manifest fields the tool reads, by stage. The parity test checks the scripts write them. */
 export const MANIFEST_FIELDS_READ: { stage: string; field: string }[] = [
   ...Object.values(MANIFEST_ENV).filter((x) => x.stage !== SAFE_STAGE),
