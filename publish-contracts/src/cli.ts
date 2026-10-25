@@ -226,6 +226,8 @@ export interface CliDeps {
   rcOnReleaseBranch?: (dir: string, sha: string, branch: string) => Promise<boolean>;
   /** Test seam (review-security-003): the tracked paths of the --upgrade-build checkout. Default: git ls-files --recurse-submodules. */
   trackedFiles?: (dir: string, paths: string[]) => Promise<Set<string>>;
+  /** Test seam (review-security-004): the --upgrade-build checkout's foundry config. Default: forge config --json there, FOUNDRY_ variables scrubbed. */
+  forgeConfig?: (dir: string) => Promise<import("./release-gate.ts").ForgeBuildConfig>;
   /** Test seam (issue 1733): the plan-time re-verification of a reconstructed baseline against the build and the chain. Default: rebuild the libraries from the checkout and read their code with cast. */
   verifyReconstructed?: (file: FrozenFile) => Promise<void>;
   /** Test seam (issue 1861): the whole `deploy-implementation` verb. Default: the real one (runDeployImplementation). */
@@ -738,7 +740,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       const ub = await assertUpgradeBuildGate({ dir: resolve(a.upgradeBuild), kind: sheet.kind, env, chainId: rpcChainId, dirty: (d) => dirtyTreeLines(run, d, rpcChainId, castEnv), readHead: readGitHead,
         releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, remoteTag: deps.remoteTag, checkShaGreen: deps.checkShaGreen, onBranch: deps.rcOnReleaseBranch,
         // review-security-003: the artifacts the verb deploys and compares with must be built from that tree. An unknown --proxy names none here; the verb refuses it with USAGE.
-        artifacts: proxySpecs(getStageTable()).filter((x) => x.name === a.proxy).map((x) => x.contract), trackedFiles: deps.trackedFiles });
+        artifacts: proxySpecs(getStageTable()).filter((x) => x.name === a.proxy).map((x) => x.contract), trackedFiles: deps.trackedFiles, forgeConfig: deps.forgeConfig });
       log.log("info", "upgrade_build.release_gate", { ok: true, upgrade_build: resolve(a.upgradeBuild), sha: ub.sha, tag: ub.tag });
     }
     // deploy-implementation (issue 1861): the release gate above ran on 8453 as for govern. No counts, no stages: one CREATE from the deployer and its implementation_deploys entry.

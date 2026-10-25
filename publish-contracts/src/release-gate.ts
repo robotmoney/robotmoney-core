@@ -224,7 +224,9 @@ export async function assertReleaseGate(i: ReleaseGateInput): Promise<string> {
  * The build output out/ is gitignored, so the tree checks alone prove nothing about it (review-security-003). The gate therefore also proves that the build artifacts the verb
  * deploys and compares with (`artifacts`: the proxy's implementation contract and every library it links, transitively) were compiled from this tree: every source their solc
  * metadata names is a tracked file of the checkout (its submodules included) whose bytes hash to the keccak256 the metadata records. The tree is clean, so those bytes are HEAD's.
- * It does not prove the compiler settings beyond what the metadata hash covers; the deployed code is still read back against the artifact by the verb. Returns the sha and the tag.
+ * Review-security-004: each artifact's compiler settings must also be what the tree's own foundry config yields (`forge config --json` in the checkout, every FOUNDRY_ and
+ * DAPP_ variable scrubbed): the compiler version, the optimizer, the EVM version, viaIR, the metadata bytecodeHash and the remappings. It does not prove a setting outside that
+ * list or the forge binary itself (issue 1926 pins it); the deployed code is still read back against the artifact by the verb. Returns the sha and the tag.
  */
 export const RC_TAG_PATTERN = /^release\/v(\d+)\.(\d+)\.\d+-rc\.\d+(?:-rehearsal)?$/;
 export interface UpgradeBuildGateInput {
@@ -239,6 +241,38 @@ export interface UpgradeBuildGateInput {
   artifacts?: string[];
   /** Test seam: the paths of `paths` git tracks in the checkout, submodules included. Default: git ls-files --recurse-submodules, replace refs off. */
   trackedFiles?: (dir: string, paths: string[]) => Promise<Set<string>>;
+  /** Test seam (review-security-004): the tree's foundry config. Default: `forge config --json` in the checkout under a scrubbed environment. */
+  forgeConfig?: (dir: string) => Promise<ForgeBuildConfig>;
+}
+/** The keys of `forge config --json` the build settings are compared with (review-security-004). */
+export interface ForgeBuildConfig { solc?: string | null; solc_version?: string | null; optimizer?: boolean; optimizer_runs?: number; evm_version?: string; via_ir?: boolean; bytecode_hash?: string; remappings?: string[] }
+export const defaultForgeConfig = async (dir: string): Promise<ForgeBuildConfig> => {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(FOUNDRY_|DAPP_)/.test(k)) env[k] = v;
+  const r = spawnSync("forge", ["config", "--json"], { cwd: dir, env, maxBuffer: 64 * 1024 * 1024 });
+  if (r.status !== 0) throw new PublishError("USAGE", `forge config --json failed in ${dir}: ${String(r.stderr ?? "").trim().split("\n").slice(-1)[0] ?? ""}`);
+  return JSON.parse(String(r.stdout)) as ForgeBuildConfig;
+};
+
+/** Review-security-004: why one artifact's solc metadata was not compiled with the tree's config. `dir` is the checkout: a remapping context under it is read relative to it. */
+export function buildSettingsProblems(name: string, meta: any, cfg: ForgeBuildConfig, dir: string): string[] {
+  const out: string[] = [];
+  const st = meta?.settings ?? {};
+  const solc = cfg.solc_version ?? cfg.solc;
+  const version = String(meta?.compiler?.version ?? "").split("+")[0];
+  if (!solc) out.push(`the tree's foundry config pins no solc version, so the ${name} compiler (${version || "unknown"}) cannot be tied to it`);
+  else if (version !== String(solc).replace(/^v/, "")) out.push(`the ${name} artifact was compiled with solc ${version || "unknown"}, the tree's config pins ${solc}`);
+  const opt = st.optimizer ?? {};
+  if ((opt.enabled === true) !== (cfg.optimizer === true) || (cfg.optimizer === true && Number(opt.runs) !== Number(cfg.optimizer_runs))) out.push(`the ${name} artifact's optimizer is ${JSON.stringify(opt)}, the tree's config is enabled ${cfg.optimizer} runs ${cfg.optimizer_runs}`);
+  if (String(st.evmVersion ?? "").toLowerCase() !== String(cfg.evm_version ?? "").toLowerCase()) out.push(`the ${name} artifact's evmVersion is ${st.evmVersion}, the tree's config is ${cfg.evm_version}`);
+  if ((st.viaIR === true) !== (cfg.via_ir === true)) out.push(`the ${name} artifact's viaIR is ${st.viaIR === true}, the tree's config is ${cfg.via_ir === true}`);
+  if (String(st.metadata?.bytecodeHash ?? "ipfs") !== String(cfg.bytecode_hash ?? "ipfs")) out.push(`the ${name} artifact's metadata bytecodeHash is ${st.metadata?.bytecodeHash}, the tree's config is ${cfg.bytecode_hash}`);
+  // solc records a remapping's context as an absolute path under the build directory, and forge also passes the relative form: both are the same remapping
+  const root = `${dir.replace(/\/+$/, "")}/`;
+  const norm = (list: unknown): string[] => [...new Set((Array.isArray(list) ? list : []).map((r) => String(r)).map((r) => (r.startsWith(root) ? r.slice(root.length) : r)))].sort();
+  const got = norm(st.remappings), want = norm(cfg.remappings);
+  if (JSON.stringify(got) !== JSON.stringify(want)) out.push(`the ${name} artifact's remappings are not the tree's config's (only in the artifact: ${got.filter((r) => !want.includes(r)).join(", ") || "none"}; only in the config: ${want.filter((r) => !got.includes(r)).join(", ") || "none"})`);
+  return out;
 }
 const defaultTrackedFiles = async (dir: string, paths: string[]): Promise<Set<string>> => {
   const r = spawnSync("git", ["--no-replace-objects", "-C", dir, "ls-files", "--recurse-submodules", "-z", "--", ...paths], { env: gitEnv(), maxBuffer: 64 * 1024 * 1024 });
@@ -250,7 +284,7 @@ const defaultTrackedFiles = async (dir: string, paths: string[]): Promise<Set<st
  * Review-security-003: why the named artifacts of `dir`/out were not compiled from the tree of `dir`, transitively over the libraries each links. An empty list proves it: every
  * source in each artifact's solc metadata is tracked and hashes (keccak256 of the working-tree bytes) to the metadata's value.
  */
-export async function buildProvenanceProblems(dir: string, artifacts: readonly string[], tracked: (dir: string, paths: string[]) => Promise<Set<string>> = defaultTrackedFiles): Promise<string[]> {
+export async function buildProvenanceProblems(dir: string, artifacts: readonly string[], tracked: (dir: string, paths: string[]) => Promise<Set<string>> = defaultTrackedFiles, config?: ForgeBuildConfig): Promise<string[]> {
   const out = join(dir, "out");
   const problems: string[] = [];
   const seen = new Set<string>();
@@ -265,6 +299,7 @@ export async function buildProvenanceProblems(dir: string, artifacts: readonly s
     const meta = typeof art.metadata === "object" && art.metadata ? art.metadata : typeof art.rawMetadata === "string" ? JSON.parse(art.rawMetadata) : undefined;
     const src = meta?.sources;
     if (!src || typeof src !== "object" || Object.keys(src).length === 0) { problems.push(`the ${name} artifact carries no solc metadata sources, so its build cannot be tied to the tree`); continue; }
+    if (config) problems.push(...buildSettingsProblems(name, meta, config, dir));
     for (const [path, v] of Object.entries<any>(src)) {
       if (typeof v?.keccak256 !== "string") { problems.push(`the ${name} artifact names ${path} with no keccak256`); continue; }
       const prev = sources.get(path);
@@ -297,7 +332,7 @@ export async function assertUpgradeBuildGate(i: UpgradeBuildGateInput): Promise<
   const dirty = await i.dirty(i.dir);
   if (dirty.length > 0) refuse("USAGE", `has uncommitted changes (${dirty.length}): ${dirty.slice(0, 5).join("; ")}`, { dirty: dirty.slice(0, 20) });
   if (i.artifacts?.length) {
-    const stale = await buildProvenanceProblems(i.dir, i.artifacts, i.trackedFiles);
+    const stale = await buildProvenanceProblems(i.dir, i.artifacts, i.trackedFiles, await (i.forgeConfig ?? defaultForgeConfig)(i.dir));
     if (stale.length) refuse("USAGE", `its out/ was not built from its tree (run forge build in it): ${stale.slice(0, 5).join("; ")}${stale.length > 5 ? ` (and ${stale.length - 5} more)` : ""}`, { stale: stale.slice(0, 20) });
   }
   const found = i.releaseTags ? await i.releaseTags(i.dir, sha) : i.releaseTag ? [await i.releaseTag(i.dir, sha)].filter((t): t is string => !!t) : await releaseTagsFor(i.dir, sha);
