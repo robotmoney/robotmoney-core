@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { QA_DIR, ROOT, loadModel, parseSheetText, runnableProblems, sheetProblems, unwindGuardProblems, validateAll } from "./validate-contract-qa.ts";
+import { QA_DIR, ROOT, loadModel, parseSheetText, runnableProblems, sheetProblems, mainOutProblems, unwindGuardProblems, validateAll } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
 const RELEASE = "releases/v0.5.0.yaml";
@@ -199,7 +199,7 @@ test("the committed v0.6.0 runbook runs the runbook 4.15 commands against the v0
   const { UPGRADE_FROM_V050_COMMANDS, V050_SHA } = await import("../../publish-contracts/src/ci/upgrade-from-v050-commands.ts");
   const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
   const NAMES: Record<string, string> = {
-    "$PWD": ".", "$GATEWAY_IMPL": "{state:v050-gateway-impl}", "$RECEIPT_IMPL": "{state:v050-receipt-impl}", "$RMAGENT": "{state:v050-rmagent}", "$TIMELOCK": "{state:v050-timelock}",
+    "$PWD": "{runDir}/v060", "$GATEWAY_IMPL": "{state:v050-gateway-impl}", "$RECEIPT_IMPL": "{state:v050-receipt-impl}", "$RMAGENT": "{state:v050-rmagent}", "$TIMELOCK": "{state:v050-timelock}",
     "$GOVERNANCE": "{state:v050-governance}", "$REGISTRY": "{state:v050-registry}", "$EVIDENCE": "{runDir}/v050-run/evidence", "$BASE_RPC_URL": "{v050RpcUrl}",
   };
   const toYaml = (line: string): string[] => [...line.matchAll(/"([^"]*)"|(\S+)/g)].flatMap((m) => {
@@ -230,4 +230,32 @@ test("the committed v0.6.0 runbook runs the runbook 4.15 commands against the v0
   expect(common[common.indexOf("--core-dir") + 1]).toBe("{runDir}/v050");
   expect(common[common.indexOf("--core-sha") + 1]).toBe(V050_SHA);
   expect(added.find((s) => s.id === "P8.01-v050-checkout")!.cmds.flat().join(" ")).toContain(V050_SHA);
+});
+
+// Issue 1929: a forge build of the main checkout after the library-linked publish replaces the out/ that every later verify reads.
+test("a forge build of the main checkout after P1.02-publish is rejected, naming the step", () => {
+  const steps = (cmd: string[]) => [
+    { id: "P1.02-publish", cmds: [["bun", "x"]] },
+    { id: "P8.04-rebuild", cmds: [cmd] },
+  ] as never;
+  for (const cmd of [["forge", "build"], ["bash", "-c", "cd . && forge build"], ["forge", "clean"], ["forge", "build", "--root", "{runDir}/v060"], ["forge", "script", "--out", "{runDir}/x"]]) {
+    expect(mainOutProblems({ release: "vX", steps: steps(cmd) }).join("\n"), cmd.join(" ")).toContain("P8.04-rebuild");
+  }
+  expect(mainOutProblems({ release: "vX", steps: steps(["forge", "build", "--root", "{runDir}/v060", "--out", "{runDir}/v060/out"]) })).toEqual([]);
+  expect(mainOutProblems({ release: "vX", steps: [{ id: "P0.05-build", cmds: [["forge", "build"]] }, { id: "P1.02-publish", cmds: [["bun", "x"]] }] as never })).toEqual([]);
+  const p = problemsWith("releases/v0.6.0.yaml", (t) => unpinned(t).replace('["forge", "build", "--root", "{runDir}/v060", "--out", "{runDir}/v060/out"]', '["forge", "build"]'));
+  expect(p.join("\n")).toContain("P8.04-v050-addresses");
+});
+
+test("every --upgrade-build of the committed v0.6.0 yaml names the separate checkout, never the main one", () => {
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  const uses = r.steps.flatMap((s) => s.cmds.filter((c) => c.includes("--upgrade-build")));
+  expect(uses.length).toBe(4);
+  for (const c of uses) expect(c[c.indexOf("--upgrade-build") + 1]).toBe("{runDir}/v060");
+});
+
+test("the README whole-element placeholder sentence names every key of LIST_PLACEHOLDERS", async () => {
+  const { LIST_PLACEHOLDERS } = await import("./validate-contract-qa.ts");
+  const line = readFileSync(join(ROOT, QA_DIR, "README.md"), "utf8").split("\n").find((l) => l.startsWith("A whole-element list placeholder"))!;
+  for (const k of Object.keys(LIST_PLACEHOLDERS)) expect(line, k).toContain(`{${k}}`);
 });
