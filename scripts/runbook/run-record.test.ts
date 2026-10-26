@@ -3,13 +3,13 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { VAULT_MANIFESTS, journalHashesOf, main, notRunOf, redactUrls, senderIssuesOf } from "./run-record.ts";
+import { VAULT_MANIFESTS, journalHashesOf, main, notRunOf, redactUrls, senderIssuesOf, unbackedOf } from "./run-record.ts";
 
 const SHA = "84952e18";
 /** The steps the test run's release runs on the target: the one step its journal holds, plus the report and sign-off steps the report excludes. */
 const applicable = async () => ["P0.03-tools"];
 const full = (d: { ev: string; man: string }, vaults?: string) => ["--evidence-dir", d.ev, "--manifest-dir", d.man, "--rpc", "http://127.0.0.1:8545", "--chain-id", "918453", "--tag", "release/v0.6.0-rehearsal", "--release", "vX", ...(vaults ? ["--vaults", vaults] : [])];
-type Run = { run: string; ev: string; man: string; sheet: string; setDepositsPaused: (v: string) => void };
+type Run = { run: string; ev: string; man: string; sheet: string; setDepositsPaused: (v: string) => void; setNonce: (n: number) => void };
 /** A run directory with four vault manifests and a fake `cast` on PATH that answers depositsPaused() with the value `paused` sets. */
 async function withRun(fn: (d: Run) => Promise<void> | void, manifests: readonly string[] = VAULT_MANIFESTS): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "run-record-"));
@@ -20,15 +20,17 @@ async function withRun(fn: (d: Run) => Promise<void> | void, manifests: readonly
     manifests.forEach((m, i) => writeFileSync(join(man, `${m}.json`), JSON.stringify({ vault: `0x${String(i + 1).padStart(40, "0")}` })));
     const answer = join(root, "paused");
     writeFileSync(answer, "false\n");
-    writeFileSync(join(bin, "cast"), `#!/bin/sh\ncat "${answer}"\n`); chmodSync(join(bin, "cast"), 0o755);
+    writeFileSync(join(bin, "cast"), `#!/bin/sh\ncase "$1" in nonce) cat "${join(root, "nonce")}";; tx) exit 1;; *) cat "${answer}";; esac\n`); writeFileSync(join(root, "nonce"), "0\n"); chmodSync(join(bin, "cast"), 0o755);
     process.env.PATH = `${bin}:${path}`;
     writeFileSync(sheet, "CHAIN_ID=918453\n");
     writeFileSync(join(run, "journal", "P0.03-tools.out"), "ok\n");
     writeFileSync(join(run, "journal", "P0.03-tools.result"), "pass\n");
     writeFileSync(join(ev, "evidence.json"), "{}\n");
-    await fn({ run, ev, man, sheet, setDepositsPaused: (v) => writeFileSync(answer, `${v}\n`) });
+    await fn({ run, ev, man, sheet, setDepositsPaused: (v) => writeFileSync(answer, `${v}\n`), setNonce: (n) => writeFileSync(join(root, "nonce"), `${n}\n`) });
   } finally { process.env.PATH = path; rmSync(root, { recursive: true, force: true }); }
 }
+const SENDER = "0x000000000000000000000000000000000000a001";
+const goWith = (d: Run) => main(["go", "--kind", "publish", ...base(d), "--rpc", "http://127.0.0.1:8545", "--sender", SENDER, "--evidence-dir", d.ev]);
 const THREE = ["vault", "protocol-asset-vault", "rwa-basket-vault"];
 const reportOf = (d: Run) => readFileSync(join(d.run, "rollout-report.md"), "utf8");
 const base = (d: Pick<Run, "run" | "sheet">, target = "twin") => ["--run-dir", d.run, "--sha", SHA, "--target", target, "--sheet", d.sheet];
@@ -37,8 +39,8 @@ const report = (d: Run) => main(["report", ...base(d), ...full(d)], { applicable
 const signoff = (d: Run, vaults?: string) => main(["signoff", ...base(d), ...full(d, vaults)], { applicable });
 
 test("go, report and sign-off are written by the run", () => withRun(async (d) => {
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  expect(await goWith(d)).toBe(0);
+  expect(await goWith(d)).toBe(0);
   expect(await report(d)).toBe(0);
   expect(readFileSync(join(d.run, "rollout-report.md"), "utf8")).toContain("| P0.03-tools | 1 | ok |");
   expect(await signoff(d)).toBe(0);
@@ -46,9 +48,9 @@ test("go, report and sign-off are written by the run", () => withRun(async (d) =
 }));
 
 test("a go for another sheet is refused", () => withRun(async (d) => {
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  expect(await goWith(d)).toBe(0);
   writeFileSync(d.sheet, "CHAIN_ID=1\n");
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(1);
+  expect(await goWith(d)).toBe(1);
 }));
 
 test("a freeze go is refused off the Twin chain", () => withRun(async (d) => {
@@ -58,7 +60,7 @@ test("a freeze go is refused off the Twin chain", () => withRun(async (d) => {
 }));
 
 test("a pause drill's report is listed, and the run still signs off once the vaults are open", () => withRun(async (d) => {
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  expect(await goWith(d)).toBe(0);
   writeFileSync(join(d.ev, "rollout-report-918453.json"), "{}\n");
   expect(await report(d)).toBe(0);
   expect(readFileSync(join(d.run, "rollout-report.md"), "utf8")).toContain("- rollout-report-918453.json");
@@ -66,7 +68,7 @@ test("a pause drill's report is listed, and the run still signs off once the vau
 }));
 
 test("no sign-off while a vault is still paused", () => withRun(async (d) => {
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  expect(await goWith(d)).toBe(0);
   d.setDepositsPaused("true");
   expect(await report(d)).toBe(0);
   expect(readFileSync(join(d.run, "rollout-report.md"), "utf8")).toContain("depositsPaused() is true at report time");
@@ -79,7 +81,7 @@ test("no sign-off without a publish go", () => withRun(async (d) => {
 }));
 
 test("no sign-off when a step failed, even with every vault open", () => withRun(async (d) => {
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  expect(await goWith(d)).toBe(0);
   writeFileSync(join(d.run, "journal", "P9.01-pause-all.out"), "\n");
   writeFileSync(join(d.run, "journal", "P9.01-pause-all.result"), "fail exit 25\n");
   expect(await report(d)).toBe(0);
@@ -88,7 +90,7 @@ test("no sign-off when a step failed, even with every vault open", () => withRun
 }));
 
 test("a journaled step with no result is an issue, except the report's own step", () => withRun(async (d) => {
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  expect(await goWith(d)).toBe(0);
   writeFileSync(join(d.run, "journal", "P10.51-write-rollout-report.out"), "\n");
   expect(await main(["report", ...base(d), ...full(d), "--step", "P10.51-write-rollout-report"], { applicable })).toBe(0);
   expect(await signoff(d)).toBe(1); // the sign-off computes the report again without the exemption: by then the report step has a result, and this one has not
@@ -102,7 +104,7 @@ test("a journaled step with no result is an issue, except the report's own step"
 }));
 
 test("a skipped step is listed, not an issue", () => withRun(async (d) => {
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  expect(await goWith(d)).toBe(0);
   writeFileSync(join(d.run, "journal", "P0.13-twin-keys.result"), "skip dress: real keys\n");
   expect(await report(d)).toBe(0);
   expect(readFileSync(join(d.run, "rollout-report.md"), "utf8")).toContain("## Skipped steps\n\n- P0.13-twin-keys: skip dress: real keys");
@@ -110,28 +112,28 @@ test("a skipped step is listed, not an issue", () => withRun(async (d) => {
 }));
 
 test("a three-vault run with no agent manifest has no issue and signs off", () => withRun(async (d) => {
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  expect(await goWith(d)).toBe(0);
   expect(await report3(d)).toBe(0);
   expect(reportOf(d)).toContain("## Issues\n\nNone.");
   expect(await signoff(d, THREE.join(","))).toBe(0);
 }, THREE));
 
 test("the default four-vault run missing the agent manifest lists an issue and refuses sign-off", () => withRun(async (d) => {
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  expect(await goWith(d)).toBe(0);
   expect(await report(d)).toBe(0);
   expect(reportOf(d)).toContain("agent-token-vault ?: depositsPaused() is unreadable (no manifest)");
   expect(await signoff(d)).toBe(1);
 }, THREE));
 
 test("a three-vault run missing the protocol-asset-vault manifest lists an issue and refuses sign-off", () => withRun(async (d) => {
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  expect(await goWith(d)).toBe(0);
   expect(await report3(d)).toBe(0);
   expect(reportOf(d)).toContain("protocol-asset-vault ?: depositsPaused() is unreadable (no manifest)");
   expect(await signoff(d, THREE.join(","))).toBe(1);
 }, ["vault", "rwa-basket-vault"]));
 
 test("a three-vault run still refuses sign-off while a declared vault is paused", () => withRun(async (d) => {
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  expect(await goWith(d)).toBe(0);
   d.setDepositsPaused("true");
   expect(await report3(d)).toBe(0);
   expect(reportOf(d)).toContain("true at report time");
@@ -160,7 +162,7 @@ test("a step the release runs on the target with no result is an issue; the repo
 });
 
 test("--release lists every step of the release file that runs on the target and has no result", () => withRun(async (d) => {
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  expect(await goWith(d)).toBe(0);
   expect(await main(["report", ...base(d), "--evidence-dir", d.ev, "--manifest-dir", d.man, "--rpc", "http://127.0.0.1:8545", "--chain-id", "918453", "--tag", "release/v0.6.0-rehearsal", "--vaults", THREE.join(","), "--release", "v0.6.0", "--step", "P10.53-write-three-vault-rollout-report"])).toBe(0);
   const text = reportOf(d);
   expect(text).toContain("- P1.02-publish: not run");
@@ -181,7 +183,7 @@ test("a marked sender's nonce that no journaled transaction carries is an issue"
 });
 
 test("a hand-edited report does not sign off: the sign-off computes the report again from the run", () => withRun(async (d) => {
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  expect(await goWith(d)).toBe(0);
   writeFileSync(join(d.run, "journal", "P0.05-failed.out"), "\n");
   writeFileSync(join(d.run, "journal", "P0.05-failed.result"), "fail exit 25\n");
   expect(await report(d)).toBe(0);
@@ -206,9 +208,38 @@ test("the report and sign-off steps of the committed yamls name the release, so 
 test("a URL in a journal line never reaches the published report", () => withRun(async (d) => {
   expect(redactUrls("Error: failed to connect to https://base-mainnet.example.com/v2/AbCdEfGhIjKlMnOpQrStUv012345 (503)")).toBe("Error: failed to connect to <url> (503)");
   expect(redactUrls("0x1234 status 1")).toBe("0x1234 status 1");
-  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  expect(await goWith(d)).toBe(0);
   writeFileSync(join(d.run, "journal", "P0.03-tools.out"), "connecting to https://base-mainnet.example.com/v2/SECRETKEYSECRETKEYSECRET\n");
   expect(await report(d)).toBe(0);
   expect(reportOf(d)).not.toContain("SECRETKEY");
   expect(reportOf(d)).toContain("connecting to <url>");
+}));
+
+test("no sign-off when the publish go marks no sender", () => withRun(async (d) => {
+  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  expect(await report(d)).toBe(0);
+  expect(await signoff(d)).toBe(1);
+}));
+
+test("no sign-off for another sha: the go and the sign-off name the same commit", () => withRun(async (d) => {
+  expect(await goWith(d)).toBe(0);
+  expect(await report(d)).toBe(0);
+  expect(await main(["signoff", "--run-dir", d.run, "--sha", "deadbeef", "--target", "twin", "--sheet", d.sheet, ...full(d)], { applicable })).toBe(1);
+}));
+
+test("a transaction a marked sender sent that no step journaled blocks the report's sign-off", () => withRun(async (d) => {
+  expect(await goWith(d)).toBe(0);
+  d.setNonce(2); // the sender sent two transactions after the go, and the journal names none
+  expect(await report(d)).toBe(0);
+  expect(reportOf(d)).toContain(`sender ${SENDER}: its transaction at nonce 0 is not in the run's journal`);
+  expect(await signoff(d)).toBe(1);
+}));
+
+test("a pass with no journal was written by hand", () => withRun(async (d) => {
+  expect(unbackedOf({ "P0.03-tools": "pass", "P0.04-x": "pass", "P0.05-y": "skip gate" }, ["P0.03-tools"])).toEqual(["P0.04-x: a pass with no journal"]);
+  expect(await goWith(d)).toBe(0);
+  writeFileSync(join(d.run, "journal", "P0.04-forged.result"), "pass\n");
+  expect(await report(d)).toBe(0);
+  expect(reportOf(d)).toContain("- P0.04-forged: a pass with no journal");
+  expect(await signoff(d)).toBe(1);
 }));

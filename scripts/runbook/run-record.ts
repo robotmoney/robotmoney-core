@@ -81,6 +81,9 @@ export function stepIssuesOf(journaled: string[], results: Record<string, string
   const failed = Object.entries(results).filter(([, r]) => r !== "pass" && !/^skip( |$)/.test(r)).map(([id, r]) => `${id}: ${r || "empty result"}`);
   return [...failed, ...missing].sort();
 }
+/** PURE. A result that no journal backs: every command the runner runs appends to <id>.out, so a `pass` with no journal file was written by hand. */
+export const unbackedOf = (results: Record<string, string>, journaled: string[]): string[] => Object.entries(results).filter(([id, r]) => r === "pass" && !journaled.includes(id)).map(([id]) => `${id}: a pass with no journal`).sort();
+
 /** PURE. The steps the release runs on the target that have no result at all: never run. The report's own step and the sign-off after it are still to come. */
 export function notRunOf(applicable: string[], results: Record<string, string>, self?: string): string[] {
   const at = self === undefined ? applicable.length : applicable.indexOf(self);
@@ -239,7 +242,7 @@ async function buildReport(f: Record<string, string>, b: ReturnType<typeof basis
   const texts = journalFiles.filter((x) => x.endsWith(".out") || x.endsWith(".err")).map((x) => readFileSync(join(journalDir, x), "utf8"));
   const files = listFiles(evidenceDir);
   const names = files.map((x) => x.split("/").at(-1)!);
-  const issues = [...stepIssues, ...notRun, ...issuesOf(vaultReads(need(f, "manifest-dir"), need(f, "rpc"), vaults)), ...senderIssues(runDir, texts)];
+  const issues = [...stepIssues, ...notRun, ...unbackedOf(results, journalFiles.filter((x) => x.endsWith(".out")).map((x) => x.replace(/\.out$/, ""))), ...issuesOf(vaultReads(need(f, "manifest-dir"), need(f, "rpc"), vaults)), ...senderIssues(runDir, texts)];
   const text = reportText({ ...b, chainId: need(f, "chain-id"), tag: need(f, "tag"), journal, evidence: files.map((x) => ({ file: x, sha256: sha256(join(evidenceDir, x)) })), issues, skips: skipsOf(results), pauseReports: pauseReportsOf(names) });
   return { text, issues };
 }
@@ -282,6 +285,8 @@ export async function main(argv: string[], deps: { applicable?: (release: string
     if (again.issues.length > 0) throw new Refusal(`the report computed again from the run lists ${again.issues.length} issue(s), so the report on disk is not the run's: ${again.issues.slice(0, 3).join("; ")}`);
     const goFile = join(runDir, "go", "publish.json");
     if (!existsSync(goFile) || !sameBasis(b)(JSON.parse(readFileSync(goFile, "utf8")))) throw new Refusal(`${goFile} is missing or names another sha, target or sheet`);
+    const go = JSON.parse(readFileSync(goFile, "utf8")) as { senders?: unknown[] };
+    if (!Array.isArray(go.senders) || go.senders.length === 0) throw new Refusal(`${goFile} marks no sender: the run's transactions cannot be checked, so there is no sign-off (record the go with --rpc and --sender)`);
     writeOnce(join(runDir, "go", "signoff.json"), { kind: "signoff", ...b, rolloutReportSha256: sha256(report), recordedAt: new Date().toISOString(), by: "scripts/runbook/run-record.ts" }, sameBasis(b));
     return 0;
   } catch (e) {

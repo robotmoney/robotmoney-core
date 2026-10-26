@@ -613,7 +613,7 @@ steps:
     host: "control"
     phase: 6
     cmds:
-      - ["bash", "-c", 'for v in $(jq -r ".vault_retirements // [] | .[].vault" "{evidenceDir}/evidence.json"); do test "$(cast call "$v" "retired()(bool)")" = true && test "$(cast call "$v" "maxDeposit(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; b=$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$b" != 0 ]; then bash scripts/runbook/cast-send.sh "$v" "redeem(uint256,address,address)" "$b" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" --gas-limit 5000000 "$@" || exit 1; test "$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; fi; done', "_", "{cast}"]
+      - ["bash", "-c", 'test -f "{evidenceDir}/evidence.json" && for v in $(jq -r ".vault_retirements // [] | .[].vault" "{evidenceDir}/evidence.json"); do test "$(cast call "$v" "retired()(bool)")" = true && test "$(cast call "$v" "maxDeposit(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; b=$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$b" != 0 ]; then bash scripts/runbook/cast-send.sh "$v" "redeem(uint256,address,address)" "$b" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" --gas-limit 5000000 "$@" || exit 1; test "$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; fi; done', "_", "{cast}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -791,6 +791,7 @@ steps:
       - {"dir": "{runDir}/go", "pattern": "nonce-v050-deployer.json", "required": true}
     irreversible: false
     flow: "upgrade"
+    refresh: true
     onlyFor: ["twin", "rehearsal"]
     writes: ["done-gateway-upgrade", "done-receipt-upgrade", "done-clear-voted-weights", "done-retire-vault"]
     added: "v0.6.0"

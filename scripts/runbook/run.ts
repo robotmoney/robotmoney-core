@@ -15,6 +15,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { redactUrls } from "./run-record.ts";
 import { LIST_PLACEHOLDERS, ROOT, SCALARS, TARGET_NAMES, applicableSteps, parseSheetText, runnableProblems, validateAll, type ReleaseRunbook, type RunbookStep } from "./validate-contract-qa.ts";
 
 export interface RunConfig { scalars: Record<string, string>; lists?: Record<string, string[]> }
@@ -106,10 +107,20 @@ function runCommand(argv: string[], env: Record<string, string>, out: string, er
 }
 
 /** Runs one step. Returns its result line. Throws nothing: a failure, a placeholder that does not resolve included, is a result. */
-export function runStep(step: RunbookStep, r: Resolver, opts: { runDir: string; sheetDelay: number; dryRun: boolean; log: (s: string) => void }): string {
+/** PURE. Whether a step runs again: not after a `pass`, unless it is marked `refresh` (it re-reads state, and every invocation must). */
+export const shouldRun = (prior: string | undefined, step: Pick<RunbookStep, "refresh">): boolean => prior !== "pass" || step.refresh === true;
+
+/** PURE. A publish-contracts publish that failed on an earlier invocation continues with --resume (the CLI refuses a rerun without it: NONCE, "manifest already exists"). */
+export function withResume(argv: string[], resume: boolean): string[] {
+  const cli = argv.findIndex((a) => a.endsWith("publish-contracts/src/cli.ts"));
+  if (!resume || cli < 0 || argv[cli + 1] !== "publish" || argv.includes("--resume") || argv.includes("--dry-run")) return argv;
+  return [...argv, "--resume"];
+}
+
+export function runStep(step: RunbookStep, r: Resolver, opts: { runDir: string; sheetDelay: number; dryRun: boolean; resume?: boolean; log: (s: string) => void }): string {
   try { return stepResult(step, r, opts); } catch (e) { return `fail ${(e as Error).message}`; }
 }
-function stepResult(step: RunbookStep, r: Resolver, opts: { runDir: string; sheetDelay: number; dryRun: boolean; log: (s: string) => void }): string {
+function stepResult(step: RunbookStep, r: Resolver, opts: { runDir: string; sheetDelay: number; dryRun: boolean; resume?: boolean; log: (s: string) => void }): string {
   const { runDir, log } = opts;
   const exits = Array.isArray(step.expectExit) ? step.expectExit : [step.expectExit];
   if (step.host !== "control") return `fail host ${step.host}: this runner runs control steps only`;
@@ -132,8 +143,8 @@ function stepResult(step: RunbookStep, r: Resolver, opts: { runDir: string; shee
   for (const [k, v] of Object.entries(step.env ?? {})) { const x = r.text(v); if (x !== "") env[k] = x; }
   const out = join(runDir, "journal", `${step.id}.out`), err = join(runDir, "journal", `${step.id}.err`);
   for (const cmd of step.cmds) {
-    const argv = r.argv(cmd);
-    log(`${step.id}$ ${argv.map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a)).join(" ")}`);
+    const argv = withResume(r.argv(cmd), opts.resume === true);
+    log(`${step.id}$ ${redactUrls(argv.map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a)).join(" "))}`);
     if (opts.dryRun) continue;
     mkdirSync(join(runDir, "journal"), { recursive: true });
     const code = runCommand(argv, env, out, err, step.maxMinutes);
@@ -182,9 +193,9 @@ async function main(argv: string[]): Promise<number> {
   log(`${v.release} on ${v.target}: ${steps.length} step(s) from ${steps[0]?.id} to ${steps.at(-1)?.id}${v["dry-run"] ? " (dry run)" : ""}`);
   for (const step of steps) {
     const prior = readResult(runDir, step.id);
-    if (prior === "pass") { log(`${step.id}: already passed`); continue; }
+    if (!shouldRun(prior, step)) { log(`${step.id}: already passed`); continue; }
     const sheetDelay = (() => { try { return Number(parseSheetText(readFileSync(r.scalar("sheet"), "utf8")).TIMELOCK_MIN_DELAY ?? 0); } catch { return 0; } })();
-    const result = runStep(step, r, { runDir, sheetDelay, dryRun: v["dry-run"] === true, log });
+    const result = runStep(step, r, { runDir, sheetDelay, dryRun: v["dry-run"] === true, resume: prior?.startsWith("fail") === true && step.irreversible, log });
     if (!v["dry-run"]) writeResult(runDir, step.id, result);
     log(`${step.id}: ${result}`);
     if (result.startsWith("fail")) { log(`stopped at ${step.id}. Fix the cause, then run the same command again: a passed step is not repeated.`); return 1; }

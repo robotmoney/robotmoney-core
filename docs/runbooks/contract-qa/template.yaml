@@ -36,6 +36,7 @@
 #                 {runDir}/journal/<id>.out (a runner does it, an operator pipes through tee).
 #   irreversible  true when the step cannot be undone. Every irreversible step carries notBefore, onlyFor or go.
 #   onlyFor       twin | rehearsal | production, or a list of them. Absent: every environment.
+#   refresh       true: the step reads live state and runs again on every invocation of the runner, even after a pass
 #   flow          new | upgrade, or both: the flows the step belongs to (README "Flows"). Absent: the new deployment flow.
 #                 A release says which flows each target runs (`flows:`); a step runs when its onlyFor admits the target
 #                 AND its flow is one the release runs there. Every such step must run: the report lists one that did not.
@@ -570,7 +571,7 @@ steps:
     host: "control"
     phase: 6
     cmds:
-      - ["bash", "-c", 'for v in $(jq -r ".vault_retirements // [] | .[].vault" "{evidenceDir}/evidence.json"); do test "$(cast call "$v" "retired()(bool)")" = true && test "$(cast call "$v" "maxDeposit(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; b=$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$b" != 0 ]; then bash scripts/runbook/cast-send.sh "$v" "redeem(uint256,address,address)" "$b" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" --gas-limit 5000000 "$@" || exit 1; test "$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; fi; done', "_", "{cast}"]
+      - ["bash", "-c", 'test -f "{evidenceDir}/evidence.json" && for v in $(jq -r ".vault_retirements // [] | .[].vault" "{evidenceDir}/evidence.json"); do test "$(cast call "$v" "retired()(bool)")" = true && test "$(cast call "$v" "maxDeposit(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; b=$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$b" != 0 ]; then bash scripts/runbook/cast-send.sh "$v" "redeem(uint256,address,address)" "$b" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" --gas-limit 5000000 "$@" || exit 1; test "$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; fi; done', "_", "{cast}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0

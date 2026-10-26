@@ -86,13 +86,13 @@ const PLACEHOLDER = /\{([A-Za-z][A-Za-z0-9]*)(?::([A-Za-z0-9_.\-]+))?\}/g;
 
 // ─── the step schema ────────────────────────────────────────────────────────────────────────────────────────────
 export const HOSTS = ["control", "stage"] as const;
-const STEP_KEYS = new Set(["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added"]);
+const STEP_KEYS = new Set(["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added"]);
 export const ID_PATTERN = /^P(\d{1,2})\.(\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export interface RunbookStep {
   id: string; standing: string[]; description: string; host: string; phase: number; cmds: string[][];
   env?: Record<string, string>; expectExit: number | number[]; receipts: { dir: string; pattern: string; required: boolean }[];
-  irreversible: boolean; onlyFor?: string | string[]; flow?: string | string[]; notBefore?: { afterStep: string; hours: number | "timelockDelay" };
+  irreversible: boolean; onlyFor?: string | string[]; flow?: string | string[]; refresh?: boolean; notBefore?: { afterStep: string; hours: number | "timelockDelay" };
   gateAbsent?: string; sheetIs?: Record<string, string>; go?: string; triage?: boolean; maxMinutes?: number; writes?: string[]; added?: string;
 }
 export interface ScopeEntry { pr: number; what: string; check?: string; none?: string }
@@ -142,6 +142,7 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
     const l = Array.isArray(raw.onlyFor) ? raw.onlyFor : [raw.onlyFor];
     if (l.length === 0 || !l.every((x) => (TARGET_NAMES as readonly string[]).includes(x as string))) errors.push(`${at}: onlyFor is ${TARGET_NAMES.join(" | ")}, or a list of them`);
   }
+  if (raw.refresh !== undefined && typeof raw.refresh !== "boolean") errors.push(`${at}: refresh is a boolean`);
   if (raw.flow !== undefined) {
     const l = Array.isArray(raw.flow) ? raw.flow : [raw.flow];
     if (l.length === 0 || !l.every((x) => (FLOW_NAMES as readonly string[]).includes(x as string)) || new Set(l).size !== l.length) errors.push(`${at}: flow is ${FLOW_NAMES.join(" | ")}, or a list of them`);
@@ -157,7 +158,7 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
   if (raw.added !== undefined && (typeof raw.added !== "string" || raw.added === "")) errors.push(`${at}: added is a non-empty release name`);
   if (errors.length > 0) return { errors };
   const step: Record<string, unknown> = {};
-  for (const k of ["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added"]) if (raw[k] !== undefined) step[k] = raw[k];
+  for (const k of ["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added"]) if (raw[k] !== undefined) step[k] = raw[k];
   return { step: step as unknown as RunbookStep };
 }
 

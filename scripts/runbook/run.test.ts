@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Resolver, configProblems, parseConfig, readyAt, runStep, stepsToRun } from "./run.ts";
+import { Resolver, configProblems, parseConfig, readyAt, runStep, shouldRun, stepsToRun, withResume } from "./run.ts";
 import { ROOT, loadModel, validateAll, type RunbookStep } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
@@ -81,4 +81,27 @@ test("on the rehearsal the report's directories must be the live deployment's di
   expect(configProblems({ scalars: { ...sc, v050ManifestDir: "/other" } }, "rehearsal")).toHaveLength(1);
   expect(configProblems({ scalars: { ...sc, evidenceDir: "/other", manifestDir: "/other" } }, "rehearsal")).toHaveLength(2);
   expect(configProblems({ scalars: { ...sc, v050ManifestDir: "/other" } }, "twin")).toEqual([]);
+});
+
+test("a passed step does not run again unless it refreshes; a failed or new step runs", () => {
+  expect(shouldRun("pass", {})).toBe(false);
+  expect(shouldRun("pass", { refresh: true })).toBe(true);
+  expect(shouldRun("fail exit 25", {})).toBe(true);
+  expect(shouldRun(undefined, {})).toBe(true);
+  expect(shouldRun("skip gateAbsent x", {})).toBe(true);
+});
+
+test("a publish that failed continues with --resume; nothing else gets it", () => {
+  const publish = ["bun", "publish-contracts/src/cli.ts", "publish", "--chain", "918453"];
+  expect(withResume(publish, true)).toEqual([...publish, "--resume"]);
+  expect(withResume(publish, false)).toEqual(publish);
+  expect(withResume([...publish, "--resume"], true)).toEqual([...publish, "--resume"]);
+  expect(withResume([...publish, "--dry-run"], true)).toEqual([...publish, "--dry-run"]);
+  expect(withResume(["bun", "publish-contracts/src/cli.ts", "govern", "--row", "x"], true)).toEqual(["bun", "publish-contracts/src/cli.ts", "govern", "--row", "x"]);
+  expect(withResume(["bun", "x.ts", "publish"], true)).toEqual(["bun", "x.ts", "publish"]);
+});
+
+test("only the live-state read of the upgrade flow refreshes", () => {
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  expect(r.steps.filter((s) => s.refresh).map((s) => s.id)).toEqual(["P8.06-v050-pre-state"]);
 });
