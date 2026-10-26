@@ -16,6 +16,9 @@ import { TWIN_CHAIN_ID } from "../chains.ts";
 import { ERC1967_IMPLEMENTATION_SLOT } from "../verify/codehash.ts";
 import { rpcCallRevert } from "../evidence-check.ts";
 import { parseSheetText } from "../sheet.ts";
+import { loadStageTable } from "../stage-table.ts";
+import { useStageTable } from "../stages.ts";
+import { loadReceiptAddr } from "../govern.ts";
 
 export { AGENT_POOL_FLOOR, RETIRE_WEIGHTS, UPGRADE_FROM_V050_COMMANDS, UPGRADE_FROM_V050_ENV, V050_SHA, V050_TAG } from "./upgrade-from-v050-commands.ts";
 import { AGENT_POOL_FLOOR, UPGRADE_FROM_V050_COMMANDS, UPGRADE_FROM_V050_ENV, V050_SHA, V050_TAG } from "./upgrade-from-v050-commands.ts";
@@ -123,6 +126,19 @@ async function main(): Promise<void> {
   runLine(5);
   // steps 8 and 9: verify, and both evidence checks against the chain
   runLine(6);
+  // Issue 1933: the 8453 branch of verify (verify-stage.ts) reads the receipt address through the loaded stage table and backs every receipt_applications entry of the run manifest
+  // with its timelock batch on chain. The v0.5.0 table has no receipt stage (the receipt sits in ic-policy), and the Twin chain id skips that branch, so this job runs both halves on
+  // the Twin by the same functions: loadReceiptAddr (the lookup verify calls) over the v0.5.0 table, then the checker verify calls, checkReceiptApplications and its on-chain half,
+  // through evidence-check --receipt-applications, which reads the chain over the Twin RPC. The tag's own publish applied the receipt (govern --row apply-receipt), so the entry is genuine.
+  const applied = (loadJson(join(evidence, "publish-run.json")).receipt_applications ?? []) as unknown[];
+  if (applied.length === 0) fail("the v0.5.0 run manifest holds no receipt_applications (the tag's twin-publish applies one): the verify path that broke on Deploy 3 is not exercised");
+  useStageTable(loadStageTable(v050));
+  const resolvedReceipt = loadReceiptAddr({ coreDir: v050, chainId: TWIN_CHAIN_ID, manifestOut: manifests });
+  if (!lcEq(resolvedReceipt, receipt)) fail(`the receipt the v0.5.0 table resolves (${resolvedReceipt}) is not the live receipt ${receipt}`);
+  const backing = Bun.spawnSync([bun, join(qa, "publish-contracts", "src", "evidence-check.ts"), "--receipt-applications", join(evidence, "publish-run.json"), "--deployment-kind", "rehearsal",
+    "--consensus-receipt", resolvedReceipt, "--governance", governance, "--timelock", timelock, "--rpc", rpc], { cwd: qa, stdout: "pipe", stderr: "pipe" });
+  process.stdout.write(backing.stdout.toString());
+  if (backing.exitCode !== 0) fail(`evidence-check --receipt-applications exited ${backing.exitCode}: ${backing.stderr.toString().trim()}`);
   const governed = runLine(7);
   if (!/^evidence ok \(governed upgrades: 2 upgrade\(s\), 1 with a typed migration, chain read\)$/m.test(governed)) fail(`evidence-check --governed-upgrades did not read both upgrades and the migration from the chain: ${governed}`);
   const retired = runLine(8);

@@ -754,11 +754,13 @@ steps:
     added: "v0.6.0"
   - id: "P8.16-v050-verify"
     standing: ["4.15"]
-    description: "4.15 step 8: verify compares the upgraded gateway and receipt with this build and every other contract with the v0.5.0 build, and reads rmAGENT as retired"
+    description: "4.15 step 8: verify compares the upgraded gateway and receipt with this build and every other contract with the v0.5.0 build, and reads rmAGENT as retired; the run manifest holds the applied receipt, and its timelock batch is read back from the chain (the check the 8453 verify path runs, on the v0.5.0 table, issue 1933)"
     host: "control"
     phase: 8
     cmds:
       - ["bun", "publish-contracts/src/cli.ts", "verify", "{v050common}", "{gate}"]
+      - ["jq", "-e", ".receipt_applications | length > 0", "{runDir}/v050-run/evidence/publish-run.json"]
+      - ["bash", "-c", "bun publish-contracts/src/evidence-check.ts --receipt-applications {runDir}/v050-run/evidence/publish-run.json --deployment-kind rehearsal --consensus-receipt $(jq -r .consensus_receipt {runDir}/v050-run/manifests/ic-policy.json) --governance {state:v050-governance} --timelock {state:v050-timelock} --rpc {v050RpcUrl}"]
     env:
       PUBLISH_MANIFEST_DIR: "{runDir}/v050-run/manifests"
       YES: "{yes}"
