@@ -10,8 +10,9 @@
 # gateway ADMIN_ROLE and which nonzero timelock governs the production gateway release is an OPEN decision (docs/architecture.md section 10):
 # a production run records its owner decision in {runDir}/go/gateway-governance.json before it publishes. Nothing here chooses it.
 #
-# There is no Safe, no control proof, no govern row and no agent in this runbook. The gateway verifier fails a run that authorized an agent
-# before the handover block.
+# There is no Safe, no control proof and no govern row in this runbook. The gateway verifier fails a run that authorized an agent before the
+# handover block; after it, phase 3 proves the gateway is usable: the deployer consents to itself as an agent (commit, reveal), deposits through
+# the gateway into the router, sweeps the shares and revokes itself, and the verifier passes again with the deployer holding nothing.
 template: contract-qa-gateway
 steps:
   - id: "P0.01-gateway-runbook-valid"
@@ -112,6 +113,105 @@ steps:
     expectExit: 0
     receipts:
       - {"dir": "{runDir}/evidence-gateway", "pattern": "publish-run.json", "required": true}
+    irreversible: false
+  # ── Phase 3, a real agent deposit through the gateway (runbook 4.4): the gateway is usable, not just deployed. ──
+  - id: "P3.01-agent-policy"
+    standing: ["4.4"]
+    description: "The deployer of the gateway sheet, and the commit hash, salt and the deposit policy the consent steps use (the router as the only destination); validUntil is chain time plus a day, because the Twin clock is warped"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bash", "-c", "sed -n 's/^ADMIN_ADDRESS=//p' {gatewaySheet} | tr -d ' \\\"' > {runDir}/state/gateway-admin"]
+      - ["bash", "-c", 'echo $(( $(cast block latest --field timestamp) + 86400 )) > {runDir}/state/agent-valid-until']
+      - ["bash", "-c", 'cast keccak "qa-self-$(date +%s%N)" > {runDir}/state/agent-salt-self']
+      - ["bash", "-c", 'cast keccak "$(cast abi-encode "f(address,address,bytes32)" "{state:gateway-admin}" "{state:gateway-admin}" "$(cat {runDir}/state/agent-salt-self)")" > {runDir}/state/agent-commit-self']
+      - ["bash", "-c", 'echo "(true,$(cat {runDir}/state/agent-valid-until),1000000,3000000,{state:gateway-admin},[{m:router.router}],{state:gateway-admin},0,0,[])" > {runDir}/state/agent-policy']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    writes: ["gateway-admin", "agent-valid-until", "agent-salt-self", "agent-commit-self", "agent-policy"]
+  - id: "P3.02-agent-self-commit"
+    standing: ["4.4"]
+    description: "The depositor commits its own authorization (agent and committer are the same key, so it consents by calling)"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:gateway.gateway}", "commitAuthorization(bytes32)", "{state:agent-commit-self}", "{cast}"]
+      - ["sleep", "5"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P3.03-agent-self-reveal"
+    standing: ["4.4"]
+    description: "At least a block later the reveal authorizes the agent, with the router as its only destination; the gateway records the depositor as its owner"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:gateway.gateway}", "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))", "{state:gateway-admin}", "{state:agent-salt-self}", "{state:agent-policy}", "--gas-limit", "1000000", "{cast}"]
+      - ["bash", "-c", 'test "$(cast call "{m:gateway.gateway}" "agentOwner(address)(address)" "{state:gateway-admin}" | tr A-F a-f)" = "$(echo "{state:gateway-admin}" | tr A-F a-f)"']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P3.04-gateway-deposit-router"
+    standing: ["4.4"]
+    description: "The agent approves the gateway for 1 USDC, then deposits 1 USDC through the gateway's depositTo into the router at 11,200,000 gas (the gateway floor is 400,000 plus 2,550,000 per leg): one RouterDeposit event per non-zero leg"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bash", "-c", 'cast keccak "qa-router-$(date +%s%N)" > {runDir}/state/order-router']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:gateway.gateway}", "1000000", "{cast}"]
+      - ["bash", "-c", 'cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])" | tail -n 1 | grep -oE "[0-9]+" | grep -vxc 0 > {runDir}/state/gateway-router-legs || true']
+      - ["bash", "-c", 'bash scripts/runbook/cast-send.sh "{m:gateway.gateway}" "depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])" "{state:order-router}" 1000000 "$(( $(cast block latest --field timestamp) + 300 ))" "$(cast keccak "key-{state:order-router}")" "{m:router.router}" "[]" --gas-limit 11200000 {castFlagsInline} | tee {runDir}/state/gateway-router-deposit.json; test ${PIPESTATUS[0]} = 0']
+      - ["bash", "-c", 'jq -e --arg t "$(cast sig-event "RouterDeposit(address,address,uint256,uint256,uint256)")" --argjson n "$(cat {runDir}/state/gateway-router-legs)" ''.status == "0x1" and ([.logs[] | select(.topics[0] == $t)] | length) == $n'' {runDir}/state/gateway-router-deposit.json']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    writes: ["order-router", "gateway-router-legs", "gateway-router-deposit.json"]
+  - id: "P3.05-sweep-positions"
+    standing: ["4.4"]
+    description: "The gateway deposit is redeemed in full: rmUSDC by redeem, rmPROTO by redeemInKind, rmRWA by redeem, so the deployer holds no shares anywhere"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bash", "-c", 'for pair in "{m:vault.vault}:redeem" "{m:protocol-asset-vault.vault}:redeemInKind" "{m:rwa-basket-vault.vault}:redeem"; do v=${pair%%:*}; fn=${pair##*:}; s=$(cast call "$v" "balanceOf(address)(uint256)" "{state:gateway-admin}" | cut -d" " -f1); if [ "$s" != 0 ]; then bash scripts/runbook/cast-send.sh "$v" "$fn(uint256,address,address)" "$s" "{state:gateway-admin}" "{state:gateway-admin}" --gas-limit 5000000 {castFlagsInline} || exit 1; fi; test "$(cast call "$v" "balanceOf(address)(uint256)" "{state:gateway-admin}" | cut -d" " -f1)" = 0 || exit 1; done']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P3.06-agent-revoke"
+    standing: ["4.4"]
+    description: "The deployer, the agent owner since P3.03, revokes itself as a gateway agent and AGENT_ROLE is read back gone; else the gateway verifier fails 'deployer: holds no role'"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:gateway.gateway}", "revokeAgent(address)", "{state:gateway-admin}", "{cast}"]
+      - ["bash", "-c", 'test "$(cast call "{m:gateway.gateway}" "hasRole(bytes32,address)(bool)" "$(cast keccak AGENT_ROLE)" "{state:gateway-admin}")" = false']
+      - ["bash", "-c", 'test "$(cast call "{m:gateway.gateway}" "agentOwner(address)(address)" "{state:gateway-admin}")" = 0x0000000000000000000000000000000000000000']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P3.07-gateway-verify-again"
+    standing: ["4.13"]
+    description: "The gateway verifier passes again after the agent round: the deployer holds nothing, and the vaults manifests are unchanged"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{gcommon}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+    expectExit: 0
+    receipts: []
     irreversible: false
   - id: "P10.01-gateway-evidence"
     standing: ["4.13"]

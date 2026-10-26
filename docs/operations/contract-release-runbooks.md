@@ -540,6 +540,16 @@ The postflight gate is satisfied only when every check above passes and the
 operator has signed off. Write the results into the stage rehearsal or
 production rollout report (§4.5/§4.9).
 
+**What "complete" means.** A run of a release file is complete when its
+`P10.52-record-signoff` step wrote `go/signoff.json` (`scripts/runbook/run-record.ts`).
+That record exists only when the rollout report, written by the run itself, lists
+no issue: no failed step, no step that runs on the target without a result, no vault
+still paused, and no transaction a marked sender made that no step journaled. The
+runner (`scripts/runbook/run.ts`) runs every step that runs on the target and has no
+option to skip one. Nothing an operator or an agent says about a run makes it complete,
+and no one reports as done what that record does not show. The assurances the steps
+give are listed in `docs/runbooks/contract-qa/README.md` ("Assurances").
+
 ### 4.5. Fix loop
 
 If QA, preflight, the cutover, or postflight finds any issue:
@@ -925,6 +935,16 @@ The owner writes the go for the run (§1). The runbook then runs unmodified, as
 QA ran it, with the production sheet. A mainnet broadcast without the owner's
 go is never started by an agent.
 
+**A mainnet run sends only what QA sent.** Every step of a `rehearsal` or
+`production` run is a step of the same release file that the `twin` target ran, at the
+same template, and passed. QA is the superset: it runs every mainnet step and the
+Twin-only ones (a failed verify's pause, the refusals, the dirty pre-state). A
+transaction a mainnet step would send that no Twin step sent is a step to add to the
+file first, then run on the Twin, then on 8453. Nothing is sent on 8453 outside the
+runner: the run's report reads each marked sender's nonce and fails on a transaction
+no step journaled. The two shapes below are the file's two flows (`flows:`,
+`docs/runbooks/contract-qa/README.md` "Flows").
+
 **Two shapes of a production release.**
 
 | Shape | When | Procedure |
@@ -966,7 +986,7 @@ This section is the ordered, owner-gated procedure that moves the live Deploy 3 
 
 **Authority and gates.** The owner records an explicit go before step 1. An agent never broadcasts to Base 8453, and the 2026-10-18 go covered Deploy 3 only. The run starts from a clean checkout of the rc tag `release/v0.6.0-rc.N-rehearsal` (§4.14). The storage layout of all nine proxied contracts must pass `scripts/ci/check-core-storage-layout.sh --baseline release/v0.5.0-rehearsal` (the required `forge-unit-tests` job runs it on every pull request) before the rc tag is cut. Two clean runs of `core-stages-twin-upgrade-lifecycle` on `rm-core-stage-1` must pass at the QA commit before the rc tag is cut (§2). Do not cut the rc tag, and do not start step 1, until both are recorded green.
 
-**The Twin procedure.** The Twin procedure of this release is three things: the CI job `core-stages-twin-upgrade-lifecycle` (two clean runs on `rm-core-stage-1`), the CI job `core-stages-twin-upgrade-from-v050` and the yaml run of `docs/runbooks/contract-qa/releases/v0.6.0.yaml` on the stage host (`docs/runbooks/contract-qa/README.md`). All must pass at the QA commit. `core-stages-twin-upgrade-from-v050` publishes `release/v0.5.0-rehearsal` on a Twin fork with that tag's own publish-contracts CLI and its committed Twin sheet (`VAULT_AGENT_MIN_POOL_LIQUIDITY` 1000000000000000, never lowered), then runs the commands of steps 3 to 9 below from the QA checkout (`publish-contracts/src/ci/twin-upgrade-from-v050.ts`). The live RM pool was drained at Base block 52881518, so that job forks Base at block 52881000, the state the v0.5.0 rmAGENT stage was built for. None of them proves the 48 hour delay or the mainnet Safe signers.
+**The Twin procedure.** The Twin procedure of this release is three things: the CI job `core-stages-twin-upgrade-lifecycle` (two clean runs on `rm-core-stage-1`), the CI job `core-stages-twin-upgrade-from-v050` and the yaml run of `docs/runbooks/contract-qa/releases/v0.6.0.yaml` on the stage host (`docs/runbooks/contract-qa/README.md`), whose upgrade flow is the whole of steps 2 to 10 below against a real v0.5.0 deployment, the dirty pre-state included. All must pass at the QA commit. The 8453 run is that same flow, run by the same runner, on the Deploy 3 record (§4.14: a mainnet run sends only what QA sent). `core-stages-twin-upgrade-from-v050` publishes `release/v0.5.0-rehearsal` on a Twin fork with that tag's own publish-contracts CLI and its committed Twin sheet (`VAULT_AGENT_MIN_POOL_LIQUIDITY` 1000000000000000, never lowered), then runs the commands of steps 3 to 9 below from the QA checkout (`publish-contracts/src/ci/twin-upgrade-from-v050.ts`). The live RM pool was drained at Base block 52881518, so that job forks Base at block 52881000, the state the v0.5.0 rmAGENT stage was built for. None of them proves the 48 hour delay or the mainnet Safe signers.
 
 **The two checkouts.** Every command below runs against the build that is live. The live Deploy 3 build is `release/v0.5.0-rehearsal` (`57fbe61833e9d7f94557d69102138f7c410c1346`); the Deploy 3 checkout recorded the tool-only descendant `7bea6b9b`, which changes nothing under `contracts`. Make two clean checkouts:
 
@@ -1098,11 +1118,11 @@ bun publish-contracts/src/evidence-check.ts --governed-upgrades $EVIDENCE/publis
 bun publish-contracts/src/evidence-check.ts --vault-retirements $EVIDENCE/publish-run.json --deployment-kind rehearsal --registry $REGISTRY --timelock $TIMELOCK --rpc $BASE_RPC_URL
 ```
 
-10. Postflight (§4.4). A deposit into rmAGENT reverts, a router deposit splits across rmUSDC, rmPROTO and rmRWA, and `redeemInKind` pays existing rmAGENT holders: it is the expected exit, because it reads no price. `redeem` sells RM through the drained RM V4 pool (Base block 52881518) and may revert on its slippage or freshness bound: a revert there is recorded in the evidence with its revert data, and the holder exits with `redeemInKind`. The owner records the go or no-go.
+10. Postflight (§4.4): the rest of the upgrade flow of `docs/runbooks/contract-qa/releases/v0.6.0.yaml`, steps P8.19 to P8.38, which the runner runs after step 9 in the same run as steps 3 to 9 (P8.10 to P8.17). It has no list of its own here: the file is the list, and the Twin ran it first. In order: the submitter Safe is registered again on the migrated receipt (the migration left `RECEIPT_SUBMITTER_ROLE` empty), the latest consensus receipt is recorded by it and applied by the Safe through the timelock, and the effective weights read back equal its vector (the rebalance, §4.9; a receipt that weights `agent_tokens` is refused, ADR-0017); 1 USDC is deposited into and redeemed from each of rmUSDC, rmPROTO and rmRWA; 2 USDC go through the router and split by the applied vector, never into rmAGENT; an agent is consented on the upgraded gateway, deposits 1 USDC through it into the router and is revoked; a real deposit into rmAGENT is mined reverted, and any rmAGENT shares the deployer holds leave by `redeemInKind` (the exit that reads no price; `redeem` sells RM through the drained RM V4 pool, Base block 52881518, and may revert on its slippage or freshness bound); `pause-all` pauses the three vaults with the emergency key, every position is redeemed while paused, and the three unpause rounds reopen them; `verify` and both evidence checks pass on the end state. Before step 3 the same flow's P8.06 reads the pre-state of step 2 into the journal, marks the deployer's and the emergency key's nonces, and leaves the deployer holding no shares and no agent registration (Deploy 3's postflight had left both, and every verify requires neither). The go or no-go is the run's sign-off record (§4.4), not a note.
 
-11. Update every signing client pin from the new gateway manifest before any client signs: the `rmpc` TOML (`gateway_implementation` and `gateway_implementation_runtime_hash`), the dapp build env and the headless agent config. Until then the clients refuse to sign, which is the intended fail-closed behavior.
+11. Update every signing client pin from the new gateway manifest before any client signs: the `rmpc` TOML (`gateway_implementation` and `gateway_implementation_runtime_hash`), the dapp build env and the headless agent config. Until then the clients refuse to sign, which is the intended fail-closed behavior. The clients are not contracts: their checks are their own runbooks, not this one.
 
-12. A rehearsal-kind release cuts no `vA.B.C` tag (§2). Cut `release/v0.6.0-rehearsal` as the record tag at the rc commit, and file the production report (§4.7).
+12. A rehearsal-kind release cuts no `vA.B.C` tag (§2). Cut `release/v0.6.0-rehearsal` as the record tag at the rc commit, and file the production report (§4.7) from the run's `rollout-report.md` and `go/signoff.json`. A run with no sign-off record gets no record tag.
 
 **Recovery.** A schedule that must not run is cancelled through the Safe on the timelock before it is ready (§4.5). A rollback of the gateway or the receipt is another governed upgrade with the same review (§4.12). After step 5 the previous receipt implementation cannot read the migrated roles, so never roll the receipt back without a layout and role review.
 
@@ -1120,6 +1140,11 @@ in the shape of the frontend repo's release runbooks:
   PR the release ships, tied to a check or a reason for none).
 - **The environment is chosen at run time** (`--target twin|rehearsal|production`).
   There are no per-environment files. Only the sheet and the arguments differ.
+- **A release has two flows**, a new deployment and a governed upgrade of the live
+  deployment (`flow:` on a step, `flows:` per target in the release file). Every step
+  whose target and flow match runs; the report lists one that did not.
+- **The runner runs it** (`scripts/runbook/run.ts`), and the run's own records say
+  whether it is complete (§4.4).
 - **The validator is the gate.** `bun scripts/runbook/validate-contract-qa.ts`
   refuses a release file that drops, edits or reorders a template step, a step
   that reads state no step writes, and a command the real CLIs do not accept.
