@@ -198,6 +198,9 @@ async function releaseVaults(release: string): Promise<string | undefined> {
   return v.validateAll().releases.get(release)?.vaults?.join(",");
 }
 
+/** PURE. A URL in a journal line is replaced: the report is published, and a cast error can print the keyed RPC URL a run used. */
+export const redactUrls = (line: string): string => line.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>)]+/gi, "<url>");
+
 /** PURE. The rollout report text. */
 export function reportText(r: { coreSha: string; target: string; chainId: string; sheetSha256: string; tag: string; journal: { id: string; lines: number; last: string }[]; evidence: { file: string; sha256: string }[]; issues: string[]; skips: string[]; pauseReports: string[] }): string {
   const out = [
@@ -209,7 +212,7 @@ export function reportText(r: { coreSha: string; target: string; chainId: string
     `## Skipped steps`, ``, ...(r.skips.length ? r.skips.map((s) => `- ${s}`) : ["None."]), ``,
     `## Pause reports`, ``, ...(r.pauseReports.length ? r.pauseReports.map((f) => `- ${f} (a pause drill or a failed verify; the vault reads above decide whether it is still open)`) : ["None."]), ``,
     `## Steps (journal)`, ``, `| Step | Lines | Last line |`, `| --- | --- | --- |`,
-    ...r.journal.map((j) => `| ${j.id} | ${j.lines} | ${j.last.replace(/\|/g, "\\|").slice(0, 160)} |`), ``,
+    ...r.journal.map((j) => `| ${j.id} | ${j.lines} | ${redactUrls(j.last).replace(/\|/g, "\\|").slice(0, 160)} |`), ``,
     `## Evidence`, ``, `| File | sha256 |`, `| --- | --- |`, ...r.evidence.map((e) => `| ${e.file} | ${e.sha256} |`), ``,
   ];
   return out.join("\n");

@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Resolver, parseConfig, readyAt, runStep, stepsToRun } from "./run.ts";
+import { Resolver, configProblems, parseConfig, readyAt, runStep, stepsToRun } from "./run.ts";
 import { ROOT, loadModel, validateAll, type RunbookStep } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
@@ -73,4 +73,12 @@ test("the runner has no option to skip a step", () => {
   const options = /options: \{([^\n]*)\}/.exec(src)![1]!;
   expect(options).not.toMatch(/skip|force|ignore/);
   expect(existsSync(join(ROOT, "scripts", "runbook", "run.ts"))).toBe(true);
+});
+
+test("on the rehearsal the report's directories must be the live deployment's directories", () => {
+  const sc = { manifestDir: "/m", v050ManifestDir: "/m", evidenceDir: "/e", v050EvidenceDir: "/e" };
+  expect(configProblems({ scalars: sc }, "rehearsal")).toEqual([]);
+  expect(configProblems({ scalars: { ...sc, v050ManifestDir: "/other" } }, "rehearsal")).toHaveLength(1);
+  expect(configProblems({ scalars: { ...sc, evidenceDir: "/other", manifestDir: "/other" } }, "rehearsal")).toHaveLength(2);
+  expect(configProblems({ scalars: { ...sc, v050ManifestDir: "/other" } }, "twin")).toEqual([]);
 });

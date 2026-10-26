@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { QA_DIR, ROOT, applicableSteps, loadModel, qaSupersetProblems, sends, parseSheetText, runnableProblems, sheetProblems, mainOutProblems, unwindGuardProblems, validateAll } from "./validate-contract-qa.ts";
+import { QA_DIR, ROOT, applicableSteps, loadModel, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, mainOutProblems, unwindGuardProblems, validateAll } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
 const RELEASE = "releases/v0.5.0.yaml";
@@ -323,4 +323,11 @@ test("the template applies the receipt it records and deposits through the route
   expect(t.steps.map((s) => s.id).indexOf("P6.31-sweep-positions")).toBeGreaterThan(t.steps.map((s) => s.id).indexOf("P6.30-router-deposit"));
   expect(step("P1.50-record-go").cmds[0]).toContain("--sender");
   for (const id of ["P0.01-runbook-valid", "P1.50-record-go", "P10.51-write-rollout-report", "P10.52-record-signoff"]) expect(step(id).flow, id).toEqual(["new", "upgrade"]);
+});
+
+test("a report or sign-off step that drops a flag the report needs fails; --release included", () => {
+  const p = problemsWith("releases/v0.6.0.yaml", (t) => unpinned(t).replace('"--release", "{release}", "--step", "P10.52-record-signoff"', '"--step", "P10.52-record-signoff"'));
+  expect(p.join("\n")).toContain("P10.52-record-signoff: run-record.ts signoff needs --release");
+  expect(recordStepProblems([{ id: "P10.99", cmds: [["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "d"]] }]).length).toBe(9);
+  expect(recordStepProblems([{ id: "P1.50", cmds: [["bun", "scripts/runbook/run-record.ts", "go", "--kind", "publish"]] }])).toEqual([]);
 });

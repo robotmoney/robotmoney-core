@@ -597,6 +597,19 @@ export function sends(s: Pick<RunbookStep, "cmds">): boolean {
   });
 }
 
+/** The flags run-record.ts needs to compute the report (README "Run it"): without one the step exits 2 at run time, so the validator refuses the file before a run. */
+export const RECORD_FLAGS = ["run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag", "release"] as const;
+/** PURE. Every step that runs run-record.ts report or signoff names every flag the report needs, `--release` included. */
+export function recordStepProblems(steps: Pick<RunbookStep, "id" | "cmds">[]): string[] {
+  const out: string[] = [];
+  for (const s of steps) for (const c of s.cmds) {
+    const verb = c.findIndex((a) => a === "scripts/runbook/run-record.ts" || a.endsWith("/scripts/runbook/run-record.ts"));
+    if (verb < 0 || !["report", "signoff"].includes(c[verb + 1] ?? "")) continue;
+    for (const f of RECORD_FLAGS) if (!c.includes(`--${f}`)) out.push(`${s.id}: run-record.ts ${c[verb + 1]} needs --${f}`);
+  }
+  return out;
+}
+
 /**
  * PURE. A mainnet run sends only what QA sent (policy 4.14, README "Assurances"): every step that sends on the rehearsal or production target must also run on
  * the twin target. A step that only reads (a gate, a funding check, the plan) may be mainnet-only.
@@ -639,6 +652,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
   try { template = parseTemplate(tplText); } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   problems.push(...secretProblems(tplText, "template.yaml"));
   problems.push(...commandProblems(template.steps, model, root));
+  problems.push(...recordStepProblems(template.steps));
   problems.push(...gatewayRunbookProblems(root, model));
   const releases = new Map<string, ReleaseRunbook>();
   const dir = join(root, QA_DIR, "releases");
@@ -664,6 +678,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
       }
       problems.push(...checkAddOnly(template, r));
       problems.push(...commandProblems(r.steps, model, root));
+      problems.push(...recordStepProblems(r.steps));
     } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   }
   if (releases.size === 0) problems.push(`${QA_DIR}/releases/ holds no release runbook`);

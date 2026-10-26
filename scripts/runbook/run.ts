@@ -35,6 +35,13 @@ export function parseConfig(text: string): RunConfig {
   return j;
 }
 
+/** PURE. Why a config cannot run the upgrade flow on 8453: the report reads {manifestDir} and {evidenceDir}, the flow writes {v050ManifestDir} and {v050EvidenceDir}, so on the rehearsal they must be the same directories. */
+export function configProblems(cfg: RunConfig, target: string): string[] {
+  if (target !== "rehearsal") return [];
+  const sc = cfg.scalars;
+  return [["manifestDir", "v050ManifestDir"], ["evidenceDir", "v050EvidenceDir"]].filter(([a, b]) => sc[a!] !== sc[b!]).map(([a, b]) => `on the rehearsal target {${a}} (${sc[a!] ?? "unset"}) must equal {${b}} (${sc[b!] ?? "unset"}): the report reads the first, the upgrade flow writes the second`);
+}
+
 /** The resolver of one run: every placeholder kind of README.md, read at the moment a step runs. */
 export class Resolver {
   /** dry: a manifest or state file an earlier step would write resolves to <m:...> or <state:...> instead of failing (a dry run executes nothing). */
@@ -165,6 +172,8 @@ async function main(argv: string[]): Promise<number> {
   if (notRunnable.length > 0) { for (const p of notRunnable) console.error(p); return 2; }
   let cfg: RunConfig, steps: RunbookStep[];
   try { cfg = parseConfig(readFileSync(v.config, "utf8")); steps = stepsToRun(release, v.target, v.from, v.to); } catch (e) { console.error(`run: ${(e as Error).message}`); return 2; }
+  const bad = configProblems(cfg, v.target);
+  if (bad.length > 0) { for (const p of bad) console.error(`run: ${p}`); return 2; }
   const r = new Resolver(cfg, process.env, v["dry-run"] === true);
   if (cfg.scalars.release !== undefined && cfg.scalars.release !== v.release) { console.error(`run: the config names release ${cfg.scalars.release}, the command ${v.release}`); return 2; }
   if (cfg.scalars.target !== undefined && cfg.scalars.target !== v.target) { console.error(`run: the config names target ${cfg.scalars.target}, the command ${v.target}`); return 2; }

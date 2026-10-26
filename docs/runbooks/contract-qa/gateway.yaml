@@ -167,7 +167,7 @@ steps:
       - ["bash", "-c", 'cast keccak "qa-router-$(date +%s%N)" > {runDir}/state/order-router']
       - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:gateway.gateway}", "1000000", "{cast}"]
       - ["bash", "-c", 'cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])" | tail -n 1 | grep -oE "[0-9]+" | grep -vxc 0 > {runDir}/state/gateway-router-legs || true']
-      - ["bash", "-c", 'bash scripts/runbook/cast-send.sh "{m:gateway.gateway}" "depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])" "{state:order-router}" 1000000 "$(( $(date +%s) + 300 ))" "$(cast keccak "key-{state:order-router}")" "{m:router.router}" "[]" --gas-limit 11200000 {castFlagsInline} | tee {runDir}/state/gateway-router-deposit.json; test ${PIPESTATUS[0]} = 0']
+      - ["bash", "-c", 'bash scripts/runbook/cast-send.sh "{m:gateway.gateway}" "depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])" "{state:order-router}" 1000000 "$(( $(cast block latest --field timestamp) + 300 ))" "$(cast keccak "key-{state:order-router}")" "{m:router.router}" "[]" --gas-limit 11200000 {castFlagsInline} | tee {runDir}/state/gateway-router-deposit.json; test ${PIPESTATUS[0]} = 0']
       - ["bash", "-c", 'jq -e --arg t "$(cast sig-event "RouterDeposit(address,address,uint256,uint256,uint256)")" --argjson n "$(cat {runDir}/state/gateway-router-legs)" ''.status == "0x1" and ([.logs[] | select(.topics[0] == $t)] | length) == $n'' {runDir}/state/gateway-router-deposit.json']
     env:
       ETH_RPC_URL: "{rpcUrl}"

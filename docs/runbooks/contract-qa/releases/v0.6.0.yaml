@@ -735,13 +735,13 @@ steps:
     host: "control"
     phase: 8
     cmds:
-      - ["git", "worktree", "add", "--detach", "{runDir}/v060", "{coreSha}"]
+      - ["bash", "-c", "test -d {runDir}/v060 || git worktree add --detach {runDir}/v060 {coreSha}"]
       - ["git", "-C", "{runDir}/v060", "submodule", "update", "--init", "--recursive"]
       - ["bash", "-c", "test \"$(git -C {runDir}/v060 rev-parse HEAD)\" = {coreSha} && test -z \"$(git -C {runDir}/v060 status --porcelain)\""]
       - ["forge", "build", "--root", "{runDir}/v060", "--out", "{runDir}/v060/out"]
       - ["bash", "-c", "m={v050ManifestDir} && jq -r .vault $m/agent-token-vault.json > {runDir}/state/v050-rmagent && jq -r .timelock $m/timelock.json > {runDir}/state/v050-timelock && jq -r .governance $m/governance.json > {runDir}/state/v050-governance && jq -r .registry $m/registry.json > {runDir}/state/v050-registry && jq -r .router $m/router.json > {runDir}/state/v050-router"]
       - ["bash", "-c", "m={v050ManifestDir} && jq -r .vault $m/vault.json > {runDir}/state/v050-rmusdc && jq -r .usdc $m/vault.json > {runDir}/state/v050-usdc && jq -r .vault $m/protocol-asset-vault.json > {runDir}/state/v050-rmproto && jq -r .vault $m/rwa-basket-vault.json > {runDir}/state/v050-rmrwa && jq -r .gateway $m/gateway.json > {runDir}/state/v050-gateway && jq -r .consensus_receipt $m/ic-policy.json > {runDir}/state/v050-receipt"]
-      - ["bash", "-c", "sed -n 's/^ADMIN_ADDRESS=//p' {v050Sheet} | tr -d ' \\\"' > {runDir}/state/v050-admin && sed -n 's/^EMERGENCY_ADDRESS=//p' {v050Sheet} | tr -d ' \\\"' > {runDir}/state/v050-emergency && jq -r '[.recorded_receipts[]?.submitter] | last' {v050EvidenceDir}/publish-run.json > {runDir}/state/v050-submitter && test -s {runDir}/state/v050-admin && test -s {runDir}/state/v050-submitter"]
+      - ["bash", "-c", "sed -n 's/^ADMIN_ADDRESS=//p' {v050Sheet} | tr -d ' \\\"' > {runDir}/state/v050-admin && sed -n 's/^EMERGENCY_ADDRESS=//p' {v050Sheet} | tr -d ' \\\"' > {runDir}/state/v050-emergency && jq -er '[.recorded_receipts[]?.submitter] | last' {v050EvidenceDir}/publish-run.json > {runDir}/state/v050-submitter && test -s {runDir}/state/v050-admin"]
     expectExit: 0
     receipts: []
     irreversible: false
@@ -1174,7 +1174,7 @@ steps:
     cmds:
       - ["bash", "-c", 'cast keccak "qa-router-$(date +%s%N)" > {runDir}/state/v050-order-router']
       - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-usdc}", "approve(address,uint256)", "{state:v050-gateway}", "1000000", "{v050cast}"]
-      - ["bash", "-c", 'bash scripts/runbook/cast-send.sh "{state:v050-gateway}" "depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])" "{state:v050-order-router}" 1000000 "$(( $(date +%s) + 300 ))" "$(cast keccak "key-{state:v050-order-router}")" "{state:v050-router}" "[]" --gas-limit 11200000 {v050CastFlagsInline} | tee {runDir}/state/v050-gateway-router-deposit.json; test ${PIPESTATUS[0]} = 0']
+      - ["bash", "-c", 'bash scripts/runbook/cast-send.sh "{state:v050-gateway}" "depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])" "{state:v050-order-router}" 1000000 "$(( $(cast block latest --field timestamp) + 300 ))" "$(cast keccak "key-{state:v050-order-router}")" "{state:v050-router}" "[]" --gas-limit 11200000 {v050CastFlagsInline} | tee {runDir}/state/v050-gateway-router-deposit.json; test ${PIPESTATUS[0]} = 0']
       - ["bash", "-c", 'jq -e --arg t "$(cast sig-event "RouterDeposit(address,address,uint256,uint256,uint256)")" --argjson n "$(cat {runDir}/state/v050-router-legs)" ''.status == "0x1" and ([.logs[] | select(.topics[0] == $t)] | length) == $n'' {runDir}/state/v050-gateway-router-deposit.json']
     env:
       ETH_RPC_URL: "{v050RpcUrl}"
@@ -1402,11 +1402,12 @@ steps:
     onlyFor: ["rehearsal", "production"]
   - id: "P10.02-secret-scan"
     standing: ["4.7"]
-    description: "No key, passphrase or keystore path is in the run's evidence folder"
+    description: "No key, passphrase or keystore path is in the run's evidence folder or in its journal (a cast error can print a keyed RPC URL)"
     host: "control"
     phase: 10
     cmds:
       - ["bun", "publish-contracts/src/ci/scan-rehearsal-secrets.ts", "--evidence", "{evidenceDir}"]
+      - ["bun", "publish-contracts/src/ci/scan-rehearsal-secrets.ts", "--evidence", "{runDir}/journal"]
     expectExit: 0
     receipts: []
     irreversible: false

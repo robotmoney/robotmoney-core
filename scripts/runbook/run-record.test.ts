@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { VAULT_MANIFESTS, journalHashesOf, main, notRunOf, senderIssuesOf } from "./run-record.ts";
+import { VAULT_MANIFESTS, journalHashesOf, main, notRunOf, redactUrls, senderIssuesOf } from "./run-record.ts";
 
 const SHA = "84952e18";
 /** The steps the test run's release runs on the target: the one step its journal holds, plus the report and sign-off steps the report excludes. */
@@ -202,3 +202,13 @@ test("the report and sign-off steps of the committed yamls name the release, so 
     }
   }
 });
+
+test("a URL in a journal line never reaches the published report", () => withRun(async (d) => {
+  expect(redactUrls("Error: failed to connect to https://base-mainnet.example.com/v2/AbCdEfGhIjKlMnOpQrStUv012345 (503)")).toBe("Error: failed to connect to <url> (503)");
+  expect(redactUrls("0x1234 status 1")).toBe("0x1234 status 1");
+  expect(await main(["go", "--kind", "publish", ...base(d)])).toBe(0);
+  writeFileSync(join(d.run, "journal", "P0.03-tools.out"), "connecting to https://base-mainnet.example.com/v2/SECRETKEYSECRETKEYSECRET\n");
+  expect(await report(d)).toBe(0);
+  expect(reportOf(d)).not.toContain("SECRETKEY");
+  expect(reportOf(d)).toContain("connecting to <url>");
+}));
