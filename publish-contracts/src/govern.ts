@@ -117,7 +117,7 @@ import { BASE_CHAIN_ID, httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts"
 import { manifestDir, loadRunManifest, readManifestField, reserveManifestSeq, saveRunManifest, type PauseEntry, type RunContext, type RunManifest } from "./runner.ts";
 import { BASKET_KEYS, VAULT_NAME, type Sheet, type VaultKey } from "./sheet.ts";
 import { STAGE13_UNPAUSE_ROWS, VAULT_UNPAUSE_ROWS } from "./vault-rules.ts";
-import { VAULT_STAGES, manifestRef, type StageRow } from "./stages.ts";
+import { VAULT_STAGES, manifestRef, receiptRef, type StageRow } from "./stages.ts";
 import {
   cancelOnTimelock, connectSafe, executeOnTimelock, executeTx, operationId, operationState, proposeTx, roleId, scheduleOnTimelock, signTx, timelockMinDelay,
   updateTimelockDelay, TIMELOCK_ROLES, verifyTimelockEffect, type Signer, type SafeHandle, type SafeTxBundle, type TimelockCall,
@@ -227,7 +227,7 @@ export function buildReleaseCall(receipt: Address, receiptId: Hex): LabelledCall
 }
 
 /** The deployed ConsensusRecommendationReceipt, from the receipt stage manifest (field consensus_receipt). */
-export const loadReceiptAddr = (ctx: Pick<RunContext, "coreDir" | "chainId" | "manifestOut">): Address => readManifestField(ctx, manifestRef("receipt", "consensus_receipt")) as Address;
+export const loadReceiptAddr = (ctx: Pick<RunContext, "coreDir" | "chainId" | "manifestOut">): Address => readManifestField(ctx, receiptRef()) as Address;
 
 // ---- Safe and timelock self-administration (issue 1645) --------------------------------------------------------------------
 
