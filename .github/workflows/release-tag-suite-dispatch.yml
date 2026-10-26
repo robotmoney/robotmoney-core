@@ -106,8 +106,14 @@ jobs:
           # Issue 1931: a suite the push itself already started on this commit is not dispatched again. A dispatched run on the same ref cancels a push run through the
           # suite's concurrency group (fusion-cross-repo-drift did), and check-sha-green counts the cancelled run as failing.
           SHA=$(gh api "repos/$REPO/commits/$TARGET_REF" --jq .sha)
-          sleep 30
-          PUSHED=$(gh run list -R "$REPO" --commit "$SHA" --limit 300 --json workflowName,event --jq '.[] | select(.event=="push") | .workflowName')
+          # The push runs register over a few seconds: read until two reads 10 s apart agree and are not empty (at most 60 s).
+          PUSHED=""
+          for _ in 1 2 3 4 5 6; do
+            sleep 10
+            cur=$(gh run list -R "$REPO" --commit "$SHA" --limit 300 --json workflowName,event --jq '.[] | select(.event=="push") | .workflowName' | sort)
+            if [[ -n "$cur" && "$cur" == "$PUSHED" ]]; then break; fi
+            PUSHED="$cur"
+          done
           if [[ "${#CANDIDATES[@]}" -eq 0 ]]; then
             echo "::error::the API returned zero active workflows — refusing to report a green dispatch that dispatched nothing"
             exit 1
