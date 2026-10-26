@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SHEET_SPEC, VAULT_KEYS } from "../src/sheet.ts";
-import { DEPLOYER_STAGES, STAGES, STAGE_NAMES, VAULT_STAGES, buildStages, expectedStartNonce, getStageTable, manifestRef, proofNoncesBefore } from "../src/stages.ts";
+import { DEPLOYER_STAGES, STAGES, STAGE_NAMES, VAULT_STAGES, buildStages, expectedStartNonce, getStageTable, manifestRef, proofNoncesBefore, receiptRef, useStageTable } from "../src/stages.ts";
 import { LIBS_STAGE, MANIFEST_ENV, SHEET_RENAMES, requiredSheetNames, resolveEnv } from "../src/core-wiring.ts";
 import { manifestBase, parseStageTable } from "../src/stage-table.ts";
 import { stagePlan } from "../src/plan.ts";
@@ -195,5 +195,22 @@ describe("the govern stage lists the unpause-only matrix (issue 1520)", () => {
     expect(governRowNames().length).toBe(6);
     const g = (table as unknown as { govern: { mainnetRows: string[]; twinOnlyRows: string[] } }).govern;
     expect([...g.mainnetRows, ...g.twinOnlyRows]).toEqual([...governRowNames()]);
+  });
+});
+
+describe("receiptRef follows the loaded stage table (issue 1933)", () => {
+  const raw = JSON.parse(readFileSync(join(REPO, "scripts", "deploy", "stage-table.json"), "utf8"));
+  test("this line's table: the receipt stage", () => {
+    useStageTable(parseStageTable(raw));
+    expect(receiptRef()).toBe(manifestRef("receipt", "consensus_receipt"));
+  });
+  test("the prior line's table (no receipt stage, the receipt in ic-policy): the ic-policy manifest", () => {
+    const prior = JSON.parse(JSON.stringify(raw));
+    prior.stages = prior.stages.map((s: any) => (s.name === "receipt" ? { ...s, name: "ic-policy" } : s));
+    prior.systems.vaults.stages = prior.systems.vaults.stages.map((n: string) => (n === "receipt" ? "ic-policy" : n));
+    useStageTable(parseStageTable(prior));
+    expect(STAGE_NAMES).not.toContain("receipt");
+    expect(receiptRef()).toBe(manifestRef("ic-policy", "consensus_receipt"));
+    useStageTable(parseStageTable(raw));
   });
 });

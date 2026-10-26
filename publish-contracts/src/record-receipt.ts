@@ -19,7 +19,7 @@ import { PublishError } from "./errors.ts";
 import { supportedReceiptPayload } from "./receipt-digest.ts";
 import { RECEIPT_SUBMITTER_ROLE } from "./verify/constants.ts";
 import { loadRunManifest, readManifestField, saveRunManifest, confirmStage, type RunContext } from "./runner.ts";
-import { manifestRef } from "./stages.ts";
+import { manifestRef, receiptRef } from "./stages.ts";
 import { checkSignaturesOnChain, connectSafe, executeTx, proposeTx, signTx, type Logger, type Signer } from "./safe/index.ts";
 import { assertSubmitterSafe, chainFromClient, forbiddenSubmitters, submitterSafeEvidence, type SubmitterChain, type SubmitterSafeEvidence } from "./submitter-safe.ts";
 
@@ -149,7 +149,7 @@ export function assertRecordInputs(i: { receiptId?: string; payloadDigest?: stri
 export const loadRecordAddrs = (ctx: Pick<RunContext, "coreDir" | "chainId" | "manifestOut">): { receipt: Address; safe: Address; timelock: Address } => ({
   safe: readManifestField(ctx, manifestRef("safe", "safe")) as Address,
   timelock: readManifestField(ctx, manifestRef("timelock", "timelock")) as Address,
-  receipt: readManifestField(ctx, manifestRef("receipt", "consensus_receipt")) as Address,
+  receipt: readManifestField(ctx, receiptRef()) as Address,
 });
 
 /** What the verb is asked to record. `payload` and `submitter` are mandatory: a missing one is refused before anything is read or built. */
