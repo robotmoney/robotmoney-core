@@ -97,7 +97,7 @@ export interface RunbookStep {
 }
 export interface ScopeEntry { pr: number; what: string; check?: string; none?: string }
 export interface Decision { id: string; question: string; status: "open" | "decided"; answer: string | null; decidedOn: string | null; ref: string | null }
-export interface ReleaseRunbook { release: string; template: string; templateSha?: string; productionReady: boolean; notes?: string; recovery: string; decisions: Decision[]; scope: ScopeEntry[]; flows?: Partial<Record<TargetName, FlowName[]>>; steps: RunbookStep[] }
+export interface ReleaseRunbook { release: string; template: string; templateSha?: string; productionReady: boolean; notes?: string; recovery: string; decisions: Decision[]; scope: ScopeEntry[]; flows?: Partial<Record<TargetName, FlowName[]>>; vaults?: string[]; steps: RunbookStep[] }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
@@ -401,7 +401,9 @@ export function commandProblems(steps: RunbookStep[], model: CliModel, root: str
 
 // ─── the template and the release file ──────────────────────────────────────────────────────────────────────────
 const TEMPLATE_KEYS = new Set(["template", "steps"]);
-const RELEASE_KEYS = new Set(["release", "template", "templateSha", "productionReady", "notes", "recovery", "decisions", "scope", "flows", "steps"]);
+const RELEASE_KEYS = new Set(["release", "template", "templateSha", "productionReady", "notes", "recovery", "decisions", "scope", "flows", "vaults", "steps"]);
+/** The vault manifests a release deploys (run-record.ts reads them for the report): the release's `vaults:`, else the four of v0.4.0 and v0.5.0. */
+export const RELEASE_VAULT_MANIFESTS = ["vault", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault"] as const;
 
 /** PURE. A template from its YAML text. Throws with every reason it is not one. */
 export function parseTemplate(text: string, templateName: string = TEMPLATE_NAME): { name: string; steps: RunbookStep[] } {
@@ -473,6 +475,7 @@ export function parseRelease(text: string, release: string): ReleaseRunbook {
     const ok = isObject(doc.flows) && Object.entries(doc.flows).every(([t, l]) => (TARGET_NAMES as readonly string[]).includes(t) && Array.isArray(l) && l.length > 0 && l.every((f) => (FLOW_NAMES as readonly string[]).includes(f as string)));
     if (!ok) errors.push(`${where}: flows maps a target (${TARGET_NAMES.join(", ")}) to a non-empty list of ${FLOW_NAMES.join(" | ")}`);
   }
+  if (doc.vaults !== undefined && !(Array.isArray(doc.vaults) && doc.vaults.length > 0 && new Set(doc.vaults).size === doc.vaults.length && doc.vaults.every((v) => (RELEASE_VAULT_MANIFESTS as readonly string[]).includes(v as string)))) errors.push(`${where}: vaults is a list of distinct vault manifest names (${RELEASE_VAULT_MANIFESTS.join(", ")})`);
   const steps = parseSteps(doc.steps, where, errors);
   errors.push(...scopeProblems(doc.scope, steps, where));
   errors.push(...decisionProblems(doc.decisions, where));
@@ -589,8 +592,8 @@ export function unwindGuardProblems(r: Pick<ReleaseRunbook, "release" | "steps">
 export function sends(s: Pick<RunbookStep, "cmds">): boolean {
   return s.cmds.some((c) => {
     const j = expandArgv(c).join(" ");
-    if (/publish-contracts\/src\/cli\.ts (publish|govern|deploy-implementation|record-receipt|pause-all|redeploy-vault)\b/.test(j) && !j.includes("--dry-run")) return true;
-    return /scripts\/runbook\/cast-send\.sh|\bcast send\b|publish-contracts\/src\/safe\/cli\.ts create\b/.test(j);
+    if (/publish-contracts\/src\/cli\.ts\b.*\s(publish|govern|deploy-implementation|record-receipt|pause-all|redeploy-vault)(\s|$)/.test(j) && !j.includes("--dry-run")) return true;
+    return /scripts\/runbook\/cast-send\.sh|\bcast send\b|publish-contracts\/src\/safe\/cli\.ts\b/.test(j);
   });
 }
 

@@ -8,6 +8,7 @@
 release: v0.6.0
 template: contract-qa
 productionReady: false
+vaults: ["vault", "protocol-asset-vault", "rwa-basket-vault"]
 flows:
   twin: ["new", "upgrade"]
   rehearsal: ["upgrade"]
@@ -116,6 +117,7 @@ steps:
     receipts:
       - {"dir": "{countsCheckout}/deployments/dependency-manifests/8453", "pattern": "{release}.json", "required": true}
     irreversible: false
+    flow: ["new", "upgrade"]
     onlyFor: ["rehearsal", "production"]
   - id: "P0.12-twin-fork"
     standing: ["9"]
@@ -772,7 +774,7 @@ steps:
     added: "v0.6.0"
   - id: "P8.06-v050-pre-state"
     standing: ["4.15"]
-    description: "Runbook 4.15 step 2 on the live deployment, before any send: the delay, the Safe owners and threshold, the timelock roles, the receipt version and admins, the frozen flags, rmAGENT's supply, the eligible count and both weight vectors are read from the chain into the journal; the deployer's and the emergency key's nonces are marked for the report; the deployer is left holding no vault shares (redeemed) and no agent registration (revoked), which every verify requires; and a done-* marker is written for each governed operation the chain AND the run manifest already show executed, so a rerun on an upgraded deployment skips it by its own gate"
+    description: "Runbook 4.15 step 2 on the live deployment, before any send: the delay, the Safe owners and threshold, the timelock roles, the receipt version and admins, the frozen flags, rmAGENT's supply, the eligible count and both weight vectors are read from the chain into the journal; the deployer's and the emergency key's nonces are marked for the report; the deployer is left holding no vault shares (redeemed) and no agent registration (revoked), which every verify requires; and a done-* marker is written for each governed operation the chain AND the run manifest already show executed, so a rerun on an upgraded deployment skips it by its own gate; stale markers of an earlier run are removed first"
     host: "control"
     phase: 8
     cmds:
@@ -781,7 +783,7 @@ steps:
       - ["bash", "-c", 'T={state:v050-timelock}; S=$(jq -r .safe {v050ManifestDir}/safe.json); echo "safe $S"; echo "delay $(cast call $T "getMinDelay()(uint256)")"; echo "owners $(cast call $S "getOwners()(address[])")"; echo "threshold $(cast call $S "getThreshold()(uint256)")"; P=$(cast call $T "PROPOSER_ROLE()(bytes32)"); E=$(cast call $T "EXECUTOR_ROLE()(bytes32)"); echo "safe-proposer $(cast call $T "hasRole(bytes32,address)(bool)" $P $S)"; echo "open-executor $(cast call $T "hasRole(bytes32,address)(bool)" $E 0x0000000000000000000000000000000000000000)"; echo "governance-codehash $(cast codehash {state:v050-governance})"; V=$(cast keccak "openzeppelin.storage.Initializable"); V=$(python3 -c "import sys; print(hex(int(sys.argv[1], 16) - 1))" "$V"); V=$(cast keccak "$(cast abi-encode "f(uint256)" "$V")"); V=$(python3 -c "import sys; print(hex(int(sys.argv[1], 16) & ~0xff))" "$V"); echo "receipt-version $(cast storage {state:v050-receipt} "$V")"; A=$(cast call {state:v050-receipt} "ADMIN_ROLE()(bytes32)"); echo "receipt-admin-timelock $(cast call {state:v050-receipt} "hasRole(bytes32,address)(bool)" $A $T)"; echo "receipt-admin-governance $(cast call {state:v050-receipt} "hasRole(bytes32,address)(bool)" $A {state:v050-governance})"; echo "gateway-frozen $(cast call {state:v050-gateway} "upgradesFrozen()(bool)")"; echo "receipt-frozen $(cast call {state:v050-receipt} "upgradesFrozen()(bool)")"; echo "rmagent-assets $(cast call {state:v050-rmagent} "totalAssets()(uint256)")"; echo "rmagent-supply $(cast call {state:v050-rmagent} "totalSupply()(uint256)")"; echo "eligible $(cast call {state:v050-registry} "routerEligibleCount()(uint256)")"; echo "default $(cast call {state:v050-router} "getDefaultWeights()(address[],uint256[])" | tr "\n" " ")"; echo "effective $(cast call {state:v050-router} "getEffectiveWeights()(address[],uint256[])" | tr "\n" " ")"; test "$(cast call $S "getThreshold()(uint256)")" = 2 && test "$(cast call $T "hasRole(bytes32,address)(bool)" $P $S)" = true && test "$(cast call $T "hasRole(bytes32,address)(bool)" $E 0x0000000000000000000000000000000000000000)" = true']
       - ["bash", "-c", 'for pair in "{state:v050-rmusdc}:redeem" "{state:v050-rmproto}:redeemInKind" "{state:v050-rmagent}:redeemInKind" "{state:v050-rmrwa}:redeem"; do v=${pair%%:*}; fn=${pair##*:}; b=$(cast call "$v" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1); if [ "$b" != 0 ]; then echo "deployer holds $b shares of $v: redeeming"; bash scripts/runbook/cast-send.sh "$v" "$fn(uint256,address,address)" "$b" "{state:v050-admin}" "{state:v050-admin}" --gas-limit 5000000 {v050CastFlagsInline} || exit 1; fi; test "$(cast call "$v" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1)" = 0 || exit 1; done']
       - ["bash", "-c", 'if [ "$(cast call "{state:v050-gateway}" "agentOwner(address)(address)" "{state:v050-admin}")" != 0x0000000000000000000000000000000000000000 ]; then echo "deployer is a registered gateway agent: revoking"; bash scripts/runbook/cast-send.sh "{state:v050-gateway}" "revokeAgent(address)" "{state:v050-admin}" {v050CastFlagsInline} || exit 1; fi; test "$(cast call "{state:v050-gateway}" "hasRole(bytes32,address)(bool)" "$(cast keccak AGENT_ROLE)" "{state:v050-admin}")" = false']
-      - ["bash", "-c", 'e={v050EvidenceDir}/publish-run.json; done_upgrade() { want=$(jq -r --arg p "$1" "[.proxy_upgrades[]? | select(.proxy_name == \$p and .execute_tx != null)] | last | .to_implementation // empty" "$e" | tr A-F a-f); have=$(cast implementation "$2" | tr A-F a-f); test -n "$want" && test "$have" = "$want"; }; if done_upgrade gateway {state:v050-gateway}; then echo "gateway already upgraded"; touch {runDir}/state/done-gateway-upgrade; fi; if done_upgrade receipt {state:v050-receipt}; then echo "receipt already upgraded"; touch {runDir}/state/done-receipt-upgrade; fi; if [ "$(cast call {state:v050-router} "votedWeightsActive()(bool)")" = false ]; then echo "no active receipt vector"; touch {runDir}/state/done-clear-voted-weights; fi; if [ "$(cast call {state:v050-rmagent} "retired()(bool)")" = true ] && [ "$(jq -r "[.vault_retirements[]? | select(.execute_tx != null)] | length" "$e")" != 0 ]; then echo "rmAGENT already retired"; touch {runDir}/state/done-retire-vault; fi; true']
+      - ["bash", "-c", 'e={v050EvidenceDir}/publish-run.json; rm -f {runDir}/state/done-gateway-upgrade {runDir}/state/done-receipt-upgrade {runDir}/state/done-clear-voted-weights {runDir}/state/done-retire-vault; done_upgrade() { want=$(jq -r --arg p "$1" "[.proxy_upgrades[]? | select(.proxy_name == \$p and .execute_tx != null)] | last | .to_implementation // empty" "$e" | tr A-F a-f); have=$(cast implementation "$2" | tr A-F a-f); test -n "$want" && test "$have" = "$want"; }; if done_upgrade gateway {state:v050-gateway}; then echo "gateway already upgraded"; touch {runDir}/state/done-gateway-upgrade; fi; if done_upgrade receipt {state:v050-receipt}; then echo "receipt already upgraded"; touch {runDir}/state/done-receipt-upgrade; fi; if [ "$(cast call {state:v050-router} "votedWeightsActive()(bool)")" = false ]; then echo "no active receipt vector"; touch {runDir}/state/done-clear-voted-weights; fi; if [ "$(cast call {state:v050-rmagent} "retired()(bool)")" = true ] && [ "$(jq -r "[.vault_retirements[]? | select(.execute_tx != null)] | length" "$e")" != 0 ]; then echo "rmAGENT already retired"; touch {runDir}/state/done-retire-vault; fi; true']
     env:
       ETH_RPC_URL: "{v050RpcUrl}"
     expectExit: 0
@@ -1415,7 +1417,7 @@ steps:
     host: "control"
     phase: 10
     cmds:
-      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--step", "P10.51-write-rollout-report"]
+      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--release", "{release}", "--step", "P10.51-write-rollout-report"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}
@@ -1427,7 +1429,7 @@ steps:
     host: "control"
     phase: 10
     cmds:
-      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--step", "P10.53-write-three-vault-rollout-report", "--vaults", "vault,protocol-asset-vault,rwa-basket-vault"]
+      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--release", "{release}", "--step", "P10.53-write-three-vault-rollout-report", "--vaults", "vault,protocol-asset-vault,rwa-basket-vault"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}
@@ -1440,7 +1442,7 @@ steps:
     host: "control"
     phase: 10
     cmds:
-      - ["bun", "scripts/runbook/run-record.ts", "signoff", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}"]
+      - ["bun", "scripts/runbook/run-record.ts", "signoff", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--release", "{release}", "--step", "P10.52-record-signoff"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}/go", "pattern": "signoff.json", "required": true}

@@ -7,19 +7,20 @@
 //       the run recorded (a step's journal, or the run manifest the CLI wrote there).
 //   bun scripts/runbook/run-record.ts nonce --run-dir D --mark NAME --sender A --rpc URL --evidence-dir E
 //       writes D/go/nonce-NAME.json: a later sender's nonce (the live deployment's deployer of an upgrade flow), checked by the report like the go's senders.
-//   bun scripts/runbook/run-record.ts report --run-dir D --evidence-dir E --manifest-dir M --rpc URL --sha S --target T --chain-id C --sheet F --tag TAG [--vaults a,b,c] [--release R]
+//   bun scripts/runbook/run-record.ts report --run-dir D --evidence-dir E --manifest-dir M --rpc URL --sha S --target T --chain-id C --sheet F --tag TAG --release R [--vaults a,b,c] [--step ID]
 //       writes D/rollout-report.md from the run itself: the sha, the network, the sheet hash, the tag, the journal of every step and the
 //       evidence files with their sha256. A vault whose deposits are still paused at report time (read with cast from the vault
 //       manifests in M: the four of VAULT_MANIFESTS, or only those --vaults names, a comma list) is an issue. A declared vault with no manifest is an issue.
 //       v0.6.0 is three vaults (ADR-0017) and passes --vaults vault,protocol-asset-vault,rwa-basket-vault. A pause report (rollout-report-<chain>.json) is listed, not an issue: the pause drills write one.
 //       Each step's outcome is D/journal/<id>.result: "pass", "skip <reason>" or "fail exit <n>". A failed step, or a journaled step with
 //       no result, is an issue. --step names the report's own step, which is still running and has no result yet. A skip is listed.
-//       With --release, every step of that release file that runs on the target (onlyFor and the release's flows, README "Flows") and has no result
+//       --release is required: every step of that release file that runs on the target (onlyFor and the release's flows, README "Flows") and has no result
 //       is an issue: a run cannot be complete with a step it never ran. With recorded sender nonces, every nonce a sender used since its mark must
 //       be a transaction the journal names (read back with cast tx); one the journal does not name is an issue: nothing was sent outside the runbook.
-//   bun scripts/runbook/run-record.ts signoff --run-dir D --sha S --target T --sheet F
-//       writes D/go/signoff.json when the report exists, lists no issue and matches the publish go. Exit 1 otherwise. This record, and nothing
-//       an operator or an agent says, is what "the run is complete" means.
+//   bun scripts/runbook/run-record.ts signoff --run-dir D --sha S --target T --sheet F --evidence-dir E --manifest-dir M --rpc URL --chain-id C --tag TAG --release R [--vaults a,b,c] [--step ID]
+//       writes D/go/signoff.json when the report exists and lists no issue, the report computed again from the run's journal, chain and release file lists no issue
+//       (a hand-edited report does not sign off) and the run matches the publish go. Exit 1 otherwise. This record, and nothing an operator or an agent says,
+//       is what "the run is complete" means.
 // A record that exists is kept when it matches and refused when it differs. Exit 1 is a refusal, exit 2 a usage error. No secret is read or written.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -187,10 +188,14 @@ function senderIssues(runDir: string, journalTexts: string[]): string[] {
 /** The ids of the steps a release runs on a target, in order, read with the validator (the one reader of the yaml). */
 async function applicableIds(release: string, target: string): Promise<string[]> {
   const v = await import("./validate-contract-qa.ts");
-  const all = v.validateAll();
-  const r = all.releases.get(release);
+  const r = v.validateAll().releases.get(release);
   if (!r) throw new Refusal(`no release runbook ${v.QA_DIR}/releases/${release}.yaml`);
   return v.applicableSteps(r, target).map((s) => s.id);
+}
+/** The vault manifests the release deploys: its `vaults:`, else the four of v0.4.0 and v0.5.0. */
+async function releaseVaults(release: string): Promise<string | undefined> {
+  const v = await import("./validate-contract-qa.ts");
+  return v.validateAll().releases.get(release)?.vaults?.join(",");
 }
 
 /** PURE. The rollout report text. */
@@ -215,7 +220,30 @@ function listFiles(dir: string, base = dir): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((d) => d.isDirectory() ? listFiles(join(dir, d.name), base) : [join(dir, d.name).slice(base.length + 1)]).sort();
 }
 
-export async function main(argv: string[]): Promise<number> {
+/** The report of the run as it stands: its text, and its issues. `report` writes it, and `signoff` computes it again, so a hand-edited report cannot sign off. */
+async function buildReport(f: Record<string, string>, b: ReturnType<typeof basis>, runDir: string, applicable: (release: string, target: string) => Promise<string[]>): Promise<{ text: string; issues: string[] }> {
+  const evidenceDir = need(f, "evidence-dir");
+  const journalDir = join(runDir, "journal");
+  const journalFiles = listFiles(journalDir);
+  const journal = journalFiles.filter((x) => x.endsWith(".out")).map((x) => {
+    const lines = readFileSync(join(journalDir, x), "utf8").split("\n").filter((l) => l.trim() !== "");
+    return { id: x.replace(/\.out$/, ""), lines: lines.length, last: lines.at(-1) ?? "" };
+  });
+  const results = Object.fromEntries(journalFiles.filter((x) => x.endsWith(".result")).map((x) => [x.replace(/\.result$/, ""), readFileSync(join(journalDir, x), "utf8").trim()]));
+  const vaults = vaultsOf(f.vaults ?? (applicable === applicableIds ? await releaseVaults(need(f, "release")) : undefined));
+  const stepIssues = stepIssuesOf(journal.map((j) => j.id), results, f.step);
+  const notRun = notRunOf(await applicable(need(f, "release"), b.target), results, f.step);
+  const texts = journalFiles.filter((x) => x.endsWith(".out") || x.endsWith(".err")).map((x) => readFileSync(join(journalDir, x), "utf8"));
+  const files = listFiles(evidenceDir);
+  const names = files.map((x) => x.split("/").at(-1)!);
+  const issues = [...stepIssues, ...notRun, ...issuesOf(vaultReads(need(f, "manifest-dir"), need(f, "rpc"), vaults)), ...senderIssues(runDir, texts)];
+  const text = reportText({ ...b, chainId: need(f, "chain-id"), tag: need(f, "tag"), journal, evidence: files.map((x) => ({ file: x, sha256: sha256(join(evidenceDir, x)) })), issues, skips: skipsOf(results), pauseReports: pauseReportsOf(names) });
+  return { text, issues };
+}
+
+/** `deps.applicable` is a test seam: the CLI never passes it, so a run is always checked against the committed release file. */
+export async function main(argv: string[], deps: { applicable?: (release: string, target: string) => Promise<string[]> } = {}): Promise<number> {
+  const applicable = deps.applicable ?? applicableIds;
   const [verb, ...rest] = argv;
   try {
     if (!(VERBS as readonly string[]).includes(verb ?? "")) throw new Error(`the verb is ${VERBS.join("|")}`);
@@ -239,22 +267,7 @@ export async function main(argv: string[]): Promise<number> {
       return 0;
     }
     if (verb === "report") {
-      const evidenceDir = need(f, "evidence-dir");
-      const journalDir = join(runDir, "journal");
-      const journalFiles = listFiles(journalDir);
-      const journal = journalFiles.filter((x) => x.endsWith(".out")).map((x) => {
-        const lines = readFileSync(join(journalDir, x), "utf8").split("\n").filter((l) => l.trim() !== "");
-        return { id: x.replace(/\.out$/, ""), lines: lines.length, last: lines.at(-1) ?? "" };
-      });
-      const results = Object.fromEntries(journalFiles.filter((x) => x.endsWith(".result")).map((x) => [x.replace(/\.result$/, ""), readFileSync(join(journalDir, x), "utf8").trim()]));
-      const vaults = vaultsOf(f.vaults);
-      const stepIssues = stepIssuesOf(journal.map((j) => j.id), results, f.step);
-      const notRun = f.release === undefined ? [] : notRunOf(await applicableIds(f.release, b.target), results, f.step);
-      const texts = journalFiles.filter((x) => x.endsWith(".out") || x.endsWith(".err")).map((x) => readFileSync(join(journalDir, x), "utf8"));
-      const files = listFiles(evidenceDir);
-      const names = files.map((x) => x.split("/").at(-1)!);
-      const text = reportText({ ...b, chainId: need(f, "chain-id"), tag: need(f, "tag"), journal, evidence: files.map((x) => ({ file: x, sha256: sha256(join(evidenceDir, x)) })), issues: [...stepIssues, ...notRun, ...issuesOf(vaultReads(need(f, "manifest-dir"), need(f, "rpc"), vaults)), ...senderIssues(runDir, texts)], skips: skipsOf(results), pauseReports: pauseReportsOf(names) });
-      writeFileSync(join(runDir, "rollout-report.md"), text);
+      writeFileSync(join(runDir, "rollout-report.md"), (await buildReport(f, b, runDir, applicable)).text);
       return 0;
     }
     // signoff
@@ -262,6 +275,8 @@ export async function main(argv: string[]): Promise<number> {
     if (!existsSync(report)) throw new Refusal(`${report} does not exist: run the report verb first`);
     const text = readFileSync(report, "utf8");
     if (!/## Issues\n\nNone\.\n/.test(text)) throw new Refusal(`${report} lists an issue: no sign-off on a run with an issue`);
+    const again = await buildReport(f, b, runDir, applicable);
+    if (again.issues.length > 0) throw new Refusal(`the report computed again from the run lists ${again.issues.length} issue(s), so the report on disk is not the run's: ${again.issues.slice(0, 3).join("; ")}`);
     const goFile = join(runDir, "go", "publish.json");
     if (!existsSync(goFile) || !sameBasis(b)(JSON.parse(readFileSync(goFile, "utf8")))) throw new Refusal(`${goFile} is missing or names another sha, target or sheet`);
     writeOnce(join(runDir, "go", "signoff.json"), { kind: "signoff", ...b, rolloutReportSha256: sha256(report), recordedAt: new Date().toISOString(), by: "scripts/runbook/run-record.ts" }, sameBasis(b));

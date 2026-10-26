@@ -119,6 +119,7 @@ steps:
     receipts:
       - {"dir": "{countsCheckout}/deployments/dependency-manifests/8453", "pattern": "{release}.json", "required": true}
     irreversible: false
+    flow: ["new", "upgrade"]
     onlyFor: ["rehearsal", "production"]
   - id: "P0.12-twin-fork"
     standing: ["9"]
@@ -699,7 +700,7 @@ steps:
     host: "control"
     phase: 10
     cmds:
-      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--step", "P10.51-write-rollout-report"]
+      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--release", "{release}", "--step", "P10.51-write-rollout-report"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}
@@ -711,7 +712,7 @@ steps:
     host: "control"
     phase: 10
     cmds:
-      - ["bun", "scripts/runbook/run-record.ts", "signoff", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}"]
+      - ["bun", "scripts/runbook/run-record.ts", "signoff", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--release", "{release}", "--step", "P10.52-record-signoff"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}/go", "pattern": "signoff.json", "required": true}
