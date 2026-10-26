@@ -96,10 +96,18 @@ jobs:
           EXCLUDE="release-tag-suite-dispatch.yml release-dapp.yml release-rmpc.yml release-record.yml suite-29-nightly-twin-fork.yml nightly-third-party-drift.yml"
 
           echo "target ref: $TARGET_REF"
+          declare -A NAME_OF
           mapfile -t CANDIDATES < <(
             gh api "repos/$REPO/actions/workflows" --paginate \
-              --jq '.workflows[] | select(.state=="active") | .path' | sed 's#^.github/workflows/##'
+              --jq '.workflows[] | select(.state=="active") | "\(.path)\t\(.name)"' | sed 's#^.github/workflows/##'
           )
+          for i in "${!CANDIDATES[@]}"; do NAME_OF["${CANDIDATES[$i]%%$'\t'*}"]="${CANDIDATES[$i]#*$'\t'}"; CANDIDATES[$i]="${CANDIDATES[$i]%%$'\t'*}"; done
+
+          # Issue 1931: a suite the push itself already started on this commit is not dispatched again. A dispatched run on the same ref cancels a push run through the
+          # suite's concurrency group (fusion-cross-repo-drift did), and check-sha-green counts the cancelled run as failing.
+          SHA=$(gh api "repos/$REPO/commits/$TARGET_REF" --jq .sha)
+          sleep 30
+          PUSHED=$(gh run list -R "$REPO" --commit "$SHA" --limit 300 --json workflowName,event --jq '.[] | select(.event=="push") | .workflowName')
           if [[ "${#CANDIDATES[@]}" -eq 0 ]]; then
             echo "::error::the API returned zero active workflows — refusing to report a green dispatch that dispatched nothing"
             exit 1
@@ -108,6 +116,7 @@ jobs:
           dispatched=(); skipped=()
           for wf in "${CANDIDATES[@]}"; do
             case " $EXCLUDE " in *" $wf "*) skipped+=("$wf (excluded: publisher or self)"); continue;; esac
+            if grep -qxF -- "${NAME_OF[$wf]}" <<<"$PUSHED"; then skipped+=("$wf (already started by the push on $SHA)"); continue; fi
             # A workflow with no workflow_dispatch trigger cannot be dispatched;
             # say so by name rather than swallowing it.
             # Issue 1931: read the file raw into a variable and grep that. The earlier `gh api | base64 -d | grep -q` under pipefail failed when grep -q closed the pipe
@@ -143,7 +152,6 @@ jobs:
           fi
 
           # ---- gate: wait for every run on the commit, then ask check-sha-green, the authority ----
-          SHA=$(gh api "repos/$REPO/commits/$TARGET_REF" --jq .sha)
           echo "waiting for the runs on $SHA ..."
           sleep 30
           deadline=$(( $(date +%s) + 100 * 60 ))
