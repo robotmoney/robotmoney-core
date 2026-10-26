@@ -1,0 +1,76 @@
+// Tests for scripts/runbook/run.ts: the runner runs every step that runs on the target, journals it, writes its result, and stops on a failure.
+import { expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Resolver, parseConfig, readyAt, runStep, stepsToRun } from "./run.ts";
+import { ROOT, loadModel, validateAll, type RunbookStep } from "./validate-contract-qa.ts";
+
+const model = loadModel(ROOT);
+const withRun = (fn: (runDir: string, r: Resolver) => void): void => {
+  const runDir = mkdtempSync(join(tmpdir(), "run-test-"));
+  try {
+    mkdirSync(join(runDir, "state"));
+    writeFileSync(join(runDir, "sheet.env"), "TIMELOCK_MIN_DELAY=1\nADMIN_ADDRESS=0x000000000000000000000000000000000000a001\n");
+    fn(runDir, new Resolver({ scalars: { runDir, sheet: join(runDir, "sheet.env") }, lists: { owners: [] } }));
+  } finally { rmSync(runDir, { recursive: true, force: true }); }
+};
+const step = (s: Partial<RunbookStep>): RunbookStep => ({ id: "P0.90-test", standing: ["4.1"], description: "t", host: "control", phase: 0, cmds: [["true"]], expectExit: 0, receipts: [], irreversible: false, ...s });
+const opts = (runDir: string) => ({ runDir, sheetDelay: 1, dryRun: false, log: () => {} });
+
+test("a step passes when every command exits as expected and journals its output", () => withRun((runDir, r) => {
+  expect(runStep(step({ cmds: [["bash", "-c", "echo hello {sheet:ADMIN_ADDRESS}"], ["true"]] }), r, opts(runDir))).toBe("pass");
+  expect(readFileSync(join(runDir, "journal", "P0.90-test.out"), "utf8")).toContain("hello 0x000000000000000000000000000000000000a001");
+}));
+
+test("a step fails on an exit it does not expect, on a missing receipt, and on an unresolved placeholder", () => withRun((runDir, r) => {
+  expect(runStep(step({ cmds: [["bash", "-c", "exit 3"]] }), r, opts(runDir))).toBe("fail exit 3");
+  expect(runStep(step({ cmds: [["bash", "-c", "exit 15"]], expectExit: [0, 15] }), r, opts(runDir))).toBe("pass");
+  expect(runStep(step({ receipts: [{ dir: "{runDir}", pattern: "missing.json", required: true }] }), r, opts(runDir))).toStartWith("fail receipt missing.json");
+  expect(runStep(step({ cmds: [["echo", "{state:never-written}"]] }), r, opts(runDir))).toStartWith("fail state never-written was not written");
+  expect(runStep(step({ env: { X: "{sheet:NO_SUCH_LINE}" } }), r, opts(runDir))).toBe("fail the run sheet has no NO_SUCH_LINE");
+}));
+
+test("gateAbsent and sheetIs skip by the step's own gate; a missing go and a stage-host step fail", () => withRun((runDir, r) => {
+  writeFileSync(join(runDir, "state", "done"), "");
+  expect(runStep(step({ gateAbsent: "{runDir}/state/done", cmds: [["false"]] }), r, opts(runDir))).toStartWith("skip gateAbsent");
+  expect(runStep(step({ sheetIs: { UPGRADE_MODE: "upgradeable" }, cmds: [["false"]] }), r, opts(runDir))).toStartWith("skip sheetIs UPGRADE_MODE");
+  expect(runStep(step({ go: "owner-go" }), r, opts(runDir))).toStartWith("fail go owner-go is not recorded");
+  expect(runStep(step({ host: "stage" }), r, opts(runDir))).toStartWith("fail host stage");
+}));
+
+test("notBefore waits from the earlier step's result: the delay and hours are read, not typed", () => {
+  expect(readyAt(1_000_000, "timelockDelay", 900)).toBe(1000 + 900);
+  expect(readyAt(1_000_000, 0, 900)).toBe(1000);
+  expect(readyAt(1_000_000, 2, 900)).toBe(1000 + 7200);
+  withRun((runDir, r) => {
+    expect(runStep(step({ notBefore: { afterStep: "P0.80-earlier", hours: 0 } }), r, opts(runDir))).toBe("fail notBefore P0.80-earlier has no result");
+    mkdirSync(join(runDir, "journal"), { recursive: true });
+    writeFileSync(join(runDir, "journal", "P0.80-earlier.result"), "pass\n");
+    expect(runStep(step({ notBefore: { afterStep: "P0.80-earlier", hours: 0 } }), r, opts(runDir))).toBe("pass");
+  });
+});
+
+test("a list placeholder takes the config's value for the target; a scalar outside the README is refused", () => withRun((_runDir, r) => {
+  expect(r.argv(["bun", "x", "{owners}", "{gate}"])).toEqual(["bun", "x", "--counts-require-origin-dev"]);
+  expect(() => parseConfig(JSON.stringify({ scalars: { notAPlaceholder: "x" } }))).toThrow("no placeholder");
+  expect(() => parseConfig(JSON.stringify({ scalars: {}, lists: { notAList: [] } }))).toThrow("no whole-element placeholder");
+}));
+
+test("the steps to run are every step the release runs on the target; --from and --to only bound them", () => {
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  const all = stepsToRun(r, "rehearsal");
+  expect(all[0]!.id).toBe("P0.01-runbook-valid");
+  expect(all.at(-1)!.id).toBe("P10.52-record-signoff");
+  expect(all.map((s) => s.id)).toContain("P8.23-v050-apply-receipt");
+  const part = stepsToRun(r, "rehearsal", "P8.20-v050-register-submitter", "P8.24-v050-receipt-read-back");
+  expect(part.map((s) => s.id)).toEqual(["P8.20-v050-register-submitter", "P8.21-v050-receipt-offline", "P8.22-v050-record-receipt", "P8.23-v050-apply-receipt", "P8.24-v050-receipt-read-back"]);
+  expect(() => stepsToRun(r, "rehearsal", "P1.02-publish")).toThrow("no step that runs on rehearsal");
+});
+
+test("the runner has no option to skip a step", () => {
+  const src = readFileSync(join(ROOT, "scripts", "runbook", "run.ts"), "utf8");
+  const options = /options: \{([^\n]*)\}/.exec(src)![1]!;
+  expect(options).not.toMatch(/skip|force|ignore/);
+  expect(existsSync(join(ROOT, "scripts", "runbook", "run.ts"))).toBe(true);
+});

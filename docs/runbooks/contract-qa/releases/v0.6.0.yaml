@@ -1,12 +1,17 @@
-# docs/runbooks/contract-qa/releases/v0.6.0.yaml: the contract QA runbook of the v0.6.0 line (issue 1912, ADR-0017). A NEW deployment
-# of three vaults (rmUSDC, rmPROTO, rmRWA). rmAGENT is retired on the live v0.5.0 line (govern --row retire-vault, policy section 4.14)
-# and is not deployed again. A full copy of template.yaml's steps at templateSha, unchanged and in order. It has no rmAGENT deposit,
-# no rmAGENT unwind-guard step and no redeemInKind step. It keeps the set-unwind-guard rounds for rmPROTO and rmRWA (P3.51, P3.52, P4.50). It adds the check that a retired vault is withdraw-only (P6.24-redeem-retired-vault,
-# a template step). scripts/runbook/validate-contract-qa.ts checks it. releases/v0.4.0.yaml and v0.5.0.yaml stay as records.
+# docs/runbooks/contract-qa/releases/v0.6.0.yaml: the contract QA runbook of the v0.6.0 line (issue 1912, ADR-0017). Two flows (README "Flows"):
+# the NEW deployment of three vaults (rmUSDC, rmPROTO, rmRWA; the template steps), and the governed UPGRADE of the live v0.5.0 deployment
+# (runbook 4.15; the phase 8 steps): the gateway and receipt upgrades, the rmAGENT retire, then the receipt, deposit, pause and unpause rounds
+# on the upgraded deployment. The Twin runs both flows in one run; the 8453 rehearsal runs the upgrade flow against Deploy 3; a production
+# run of this line is a new deployment. A full copy of template.yaml's steps, unchanged and in order, plus the steps this release adds. It
+# keeps the set-unwind-guard rounds for rmPROTO and rmRWA (P3.51, P3.52, P4.50). scripts/runbook/validate-contract-qa.ts checks it;
+# scripts/runbook/run.ts runs it. releases/v0.4.0.yaml and v0.5.0.yaml stay as records.
 release: v0.6.0
 template: contract-qa
-templateSha: 9a132722fdd09f90d5a35e69daba9c01a07d20ab
 productionReady: false
+flows:
+  twin: ["new", "upgrade"]
+  rehearsal: ["upgrade"]
+  production: ["new"]
 notes: |
   Identity. v0.6.0 deploys three vaults. The vaults release has no recorder stage and no agent stage (ADR-0017). The router default
   vector is rmUSDC 9500, rmPROTO 500, rmRWA 0 bps. The VAULT_AGENT_MIN_POOL_LIQUIDITY floor is not lowered.
@@ -18,6 +23,12 @@ notes: |
 
   pause-all covers the live v0.5.0 rmAGENT only with --core-dir of the v0.5.0 checkout (runbook 4.15 COMMON): it pauses it, or counts it covered once retired() reads true.
   With this line's checkout as --core-dir it pauses the three vaults only: pause rmAGENT by hand with EMERGENCY_ROLE, or run the retire first.
+
+  Upgrade flow on 8453. Every phase 8 step that is not Twin-only runs against the live Deploy 3 record ({v050common}, {v050ManifestDir},
+  {v050EvidenceDir}: the record's sheet, manifests and evidence; {v050CoreDir}: the checkout whose build is live, issue 1926). P8.06 reads the
+  live pre-state and writes a done-* marker for each governed operation the chain and the run manifest already show executed, so a rerun on a
+  deployment that is already upgraded skips those steps by their own gate (the report lists the skips) and still runs every later step. The
+  deployer is left holding no shares and no agent registration before the upgrades (P8.06 redeems and revokes), as every verify requires.
 
   Open owner decisions are the decisions: list below. A production run refuses while any is open, and so does productionReady: true.
 decisions:
@@ -45,6 +56,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P0.02-run-dirs"
     standing: ["4.3"]
     description: "The run directory layout every later receipt and state file lives in; the run directory is outside the core checkout, which must stay clean"
@@ -56,6 +68,7 @@ steps:
     receipts:
       - {"dir": "{runDir}", "pattern": "state", "required": true}
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P0.04-checkout"
     standing: ["4.1"]
     description: "The core checkout is clean and its HEAD is the DEPLOY_SHA (the CLI refuses anything else)"
@@ -66,6 +79,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P0.05-install"
     standing: ["4.1"]
     description: "publish-contracts dependencies come from the committed lockfile"
@@ -76,6 +90,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P0.06-forge-build"
     standing: ["4.1"]
     description: "forge build succeeds at the DEPLOY_SHA"
@@ -86,6 +101,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: ["new", "upgrade"]
     maxMinutes: 30
   - id: "P0.08-dependency-manifest"
     standing: ["4.2"]
@@ -153,6 +169,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P0.07-preflight-guards"
     standing: ["4.2"]
     description: "EIP-170 size gate and the zero timelock delay guard pass on the exact build artifacts"
@@ -179,19 +196,20 @@ steps:
     onlyFor: "twin"
   - id: "P0.19-funding"
     standing: ["4.2"]
-    description: "The deployer holds 0.005 ETH and 5 USDC (1 seed plus 4 test deposits). The gas the run burns is about 0.003 ETH; every send goes through cast at the network fee"
+    description: "The deployer holds 0.005 ETH and 7 USDC (1 seed, 3 vault deposits, 2 through the router, 1 spare). The gas the run burns is about 0.003 ETH; every send goes through cast at the network fee"
     host: "control"
     phase: 0
     cmds:
       - ["bash", "-c", 'cast balance "{sheet:ADMIN_ADDRESS}" > {runDir}/state/deployer-eth']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-eth}", "5000000000000000"]
       - ["bash", "-c", 'cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/deployer-usdc']
-      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-usdc}", "5000000"]
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-usdc}", "7000000"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: ["new", "upgrade"]
     onlyFor: ["rehearsal", "production"]
     writes: ["deployer-eth", "deployer-usdc"]
   - id: "P0.20-plan"
@@ -225,15 +243,16 @@ steps:
   # ── Phase 1, publish: stages 0 to 11. The first send of the run. ──
   - id: "P1.50-record-go"
     standing: ["4.3"]
-    description: "The publish go is written by the run: the sha, the environment and the hash of the merged sheet it proceeds with. Starting the run is the go"
+    description: "The publish go is written by the run: the sha, the environment and the hash of the merged sheet it proceeds with, and the nonce of the deployer and the emergency key, so the report can prove every transaction they send from here on is one a step journaled. Starting the run is the go"
     host: "control"
     phase: 1
     cmds:
-      - ["bun", "scripts/runbook/run-record.ts", "go", "--kind", "publish", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}"]
+      - ["bun", "scripts/runbook/run-record.ts", "go", "--kind", "publish", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}", "--rpc", "{rpcUrl}", "--sender", "{sheet:ADMIN_ADDRESS},{sheet:EMERGENCY_ADDRESS}", "--evidence-dir", "{evidenceDir}"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}/go", "pattern": "publish.json", "required": true}
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P1.02-publish"
     standing: ["4.3"]
     description: "Safe, libs, vault, registry, router, ic-policy, governance, proto, rwa, prove-control signed by every owner, then the timelock handover; each stage matches its frozen count"
@@ -421,6 +440,18 @@ steps:
     receipts: []
     irreversible: false
     added: "v0.6.0"
+  # ── Phase 5, the consensus receipt: recorded by the submitter Safe, then APPLIED by the governing Safe through the timelock (runbook 4.9). ──
+  - id: "P5.00-receipt-payload"
+    standing: ["4.10"]
+    description: "The Twin's receipt payload: the real production envelope with the three-vault vector (agent_tokens 0, ADR-0017), written by the run. On 8453 the operator passes the receipt the canonical route serves as {receiptFile}; a receipt that weights agent_tokens is refused by apply-receipt and the run stops"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bun", "scripts/runbook/receipt-payload.ts", "--out", "{receiptFile}", "--weights", "USDC:9500,PROTO:500,RWA:0"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
   - id: "P5.01-receipt-offline"
     standing: ["4.10"]
     description: "The receipt id and the payload digest come from the one shared definition, never a plain keccak256 of the file"
@@ -449,6 +480,37 @@ steps:
     irreversible: true
     onlyFor: ["twin", "rehearsal"]
     notBefore: {"afterStep": "P4.01-verify-post-govern", "hours": 0}
+  - id: "P5.03-apply-receipt"
+    standing: ["4.9", "4.10"]
+    description: "The governing Safe applies the recorded receipt as ONE timelock call, RouterGovernance.applyReceipt (schedule, the delay, execute, in one command); the row reads isReleased and the router weights back"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "apply-receipt", "--receipt-id", "{state:receipt-id}", "--payload", "{receiptFile}", "{common}", "{owners}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: true
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P5.02-record-receipt", "hours": 0}
+    maxMinutes: 60
+  - id: "P5.04-receipt-read-back"
+    standing: ["4.9"]
+    description: "The chain shows the applied vector: votedWeightsActive is true and the effective weights equal the payload's buckets (agent_tokens dropped, registry order), and the run manifest's receipt_applications are backed by their timelock batches on chain"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bash", "-c", 'test "$(cast call "{m:router.router}" "votedWeightsActive()(bool)")" = true']
+      - ["bash", "-c", 'want=$(jq -r "[.weights[] | select(.bucket != \"agent_tokens\") | .weight_bps] | map(tostring) | join(\",\")" {receiptFile}) && got=$(cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])" | tail -n 1 | tr -d "[] ") && test "$got" = "$want"']
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--receipt-applications", "{evidenceDir}/publish-run.json", "--deployment-kind", "{deploymentKind}", "--consensus-receipt", "{m:receipt.consensus_receipt}", "--governance", "{m:governance.governance}", "--timelock", "{m:timelock.timelock}", "--delay-floor", "{sheet:TIMELOCK_MIN_DELAY}", "--rpc", "{rpcUrl}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
   - id: "P6.10-deposit-rmusdc"
     standing: ["4.3", "4.4"]
     description: "1 USDC into rmUSDC at the 2,500,000 gas limit; the shares equal previewDeposit within 0.5 percent"
@@ -555,6 +617,35 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+  - id: "P6.30-router-deposit"
+    standing: ["4.4"]
+    description: "2 USDC straight into the router at 8,400,000 gas (the floor is 400,000 plus 2,550,000 per leg): one RouterDeposit event per leg with a non-zero effective weight and none for a zero-weight leg, and the deployer holds shares in every non-zero leg afterwards"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])" | tail -n 1 | grep -oE "[0-9]+" | grep -vxc 0 > {runDir}/state/router-legs || true']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:router.router}", "2000000", "{cast}"]
+      - ["bash", "-c", 'bash scripts/runbook/cast-send.sh "{m:router.router}" "deposit(uint256,uint256[])" 2000000 "[]" --gas-limit 8400000 {castFlagsInline} | tee {runDir}/state/router-deposit.json; test ${PIPESTATUS[0]} = 0']
+      - ["bash", "-c", 'jq -e --arg t "$(cast sig-event "RouterDeposit(address,address,uint256,uint256,uint256)")" --argjson n "$(cat {runDir}/state/router-legs)" ''.status == "0x1" and ([.logs[] | select(.topics[0] == $t)] | length) == $n'' {runDir}/state/router-deposit.json']
+      - ["bash", "-c", 'w=$(cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])"); vs=$(echo "$w" | sed -n 1p | grep -oE "0x[0-9a-fA-F]{40}"); bs=$(echo "$w" | sed -n 2p | grep -oE "[0-9]+"); i=1; for v in $vs; do b=$(echo "$bs" | sed -n "$i"p); i=$((i+1)); s=$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$b" != 0 ] && [ "$s" = 0 ]; then echo "no shares in $v (weight $b)" >&2; exit 1; fi; done']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    writes: ["router-legs", "router-deposit.json"]
+  - id: "P6.31-sweep-positions"
+    standing: ["4.4"]
+    description: "The router deposit is redeemed in full: rmUSDC by redeem, rmPROTO by redeemInKind, rmRWA by redeem, so the deployer holds no shares anywhere (every later verify requires it)"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'for pair in "{m:vault.vault}:redeem" "{m:protocol-asset-vault.vault}:redeemInKind" "{m:rwa-basket-vault.vault}:redeem"; do v=${pair%%:*}; fn=${pair##*:}; s=$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$s" != 0 ]; then bash scripts/runbook/cast-send.sh "$v" "$fn(uint256,address,address)" "$s" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" --gas-limit 5000000 {castFlagsInline} || exit 1; fi; test "$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; done']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
 
   # ── Phase 8, the v0.6.0 governed upgrade of the live v0.5.0 deployment (runbook 4.15), rehearsed from REAL v0.5.0 state (issue 1927). Twin only.
   # release/v0.5.0-rehearsal is published on a second Twin fork with that tag's own CLI and committed Twin sheet, then the 4.15 commands run from this checkout with
@@ -571,6 +662,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: "upgrade"
     onlyFor: "twin"
     added: "v0.6.0"
   - id: "P8.01-v050-checkout"
@@ -585,6 +677,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: "upgrade"
     onlyFor: "twin"
     gateAbsent: "{runDir}/v050"
     maxMinutes: 15
@@ -603,6 +696,7 @@ steps:
     receipts:
       - {"dir": "{runDir}/twin-v050", "pattern": "anvil.json", "required": true}
     irreversible: false
+    flow: "upgrade"
     onlyFor: "twin"
     maxMinutes: 15
     added: "v0.6.0"
@@ -626,15 +720,16 @@ steps:
       PIN_BLOCK_IN: "52881000"
     expectExit: 0
     receipts:
-      - {"dir": "{runDir}/v050-run/evidence", "pattern": "publish-run.json", "required": true}
+      - {"dir": "{v050EvidenceDir}", "pattern": "publish-run.json", "required": true}
     irreversible: false
+    flow: "upgrade"
     onlyFor: "twin"
     gateAbsent: "{runDir}/v050-run"
     maxMinutes: 90
     added: "v0.6.0"
   - id: "P8.04-v050-addresses"
     standing: ["4.15"]
-    description: "The v0.5.0 addresses the 4.15 commands name, read from the v0.5.0 run's manifests (runbook 4.15 step 2), and a separate clean checkout of this commit at {runDir}/v060, built there for --upgrade-build"
+    description: "The addresses of the live deployment the 4.15 commands name, read from its manifests, sheet and run manifest (runbook 4.15 step 2; on the Twin the v0.5.0 tag run of P8.03, on 8453 the Deploy 3 record), and a separate clean checkout of this commit at {runDir}/v060, built there for --upgrade-build"
     host: "control"
     phase: 8
     cmds:
@@ -642,13 +737,60 @@ steps:
       - ["git", "-C", "{runDir}/v060", "submodule", "update", "--init", "--recursive"]
       - ["bash", "-c", "test \"$(git -C {runDir}/v060 rev-parse HEAD)\" = {coreSha} && test -z \"$(git -C {runDir}/v060 status --porcelain)\""]
       - ["forge", "build", "--root", "{runDir}/v060", "--out", "{runDir}/v060/out"]
-      - ["bash", "-c", "m={runDir}/v050-run/manifests && jq -r .vault $m/agent-token-vault.json > {runDir}/state/v050-rmagent && jq -r .timelock $m/timelock.json > {runDir}/state/v050-timelock && jq -r .governance $m/governance.json > {runDir}/state/v050-governance && jq -r .registry $m/registry.json > {runDir}/state/v050-registry && jq -r .router $m/router.json > {runDir}/state/v050-router"]
+      - ["bash", "-c", "m={v050ManifestDir} && jq -r .vault $m/agent-token-vault.json > {runDir}/state/v050-rmagent && jq -r .timelock $m/timelock.json > {runDir}/state/v050-timelock && jq -r .governance $m/governance.json > {runDir}/state/v050-governance && jq -r .registry $m/registry.json > {runDir}/state/v050-registry && jq -r .router $m/router.json > {runDir}/state/v050-router"]
+      - ["bash", "-c", "m={v050ManifestDir} && jq -r .vault $m/vault.json > {runDir}/state/v050-rmusdc && jq -r .usdc $m/vault.json > {runDir}/state/v050-usdc && jq -r .vault $m/protocol-asset-vault.json > {runDir}/state/v050-rmproto && jq -r .vault $m/rwa-basket-vault.json > {runDir}/state/v050-rmrwa && jq -r .gateway $m/gateway.json > {runDir}/state/v050-gateway && jq -r .consensus_receipt $m/ic-policy.json > {runDir}/state/v050-receipt"]
+      - ["bash", "-c", "sed -n 's/^ADMIN_ADDRESS=//p' {v050Sheet} | tr -d ' \\\"' > {runDir}/state/v050-admin && sed -n 's/^EMERGENCY_ADDRESS=//p' {v050Sheet} | tr -d ' \\\"' > {runDir}/state/v050-emergency && jq -r '[.recorded_receipts[]?.submitter] | last' {v050EvidenceDir}/publish-run.json > {runDir}/state/v050-submitter && test -s {runDir}/state/v050-admin && test -s {runDir}/state/v050-submitter"]
     expectExit: 0
     receipts: []
     irreversible: false
-    onlyFor: "twin"
-    writes: ["v050-rmagent", "v050-timelock", "v050-governance", "v050-registry", "v050-router"]
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["v050-rmagent", "v050-timelock", "v050-governance", "v050-registry", "v050-router", "v050-rmusdc", "v050-usdc", "v050-rmproto", "v050-rmrwa", "v050-gateway", "v050-receipt", "v050-admin", "v050-emergency", "v050-submitter"]
     maxMinutes: 30
+    added: "v0.6.0"
+  - id: "P8.05-v050-twin-dirty-pre-state"
+    standing: ["4.15"]
+    description: "The Twin's v0.5.0 deployer is left the way Deploy 3's was before its upgrade: holding rmUSDC shares from a 1 USDC deposit and registered as a gateway agent (commit, reveal). P8.06 must find and clear both, so the cleanup it runs on 8453 is a path QA ran"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-usdc}", "approve(address,uint256)", "{state:v050-rmusdc}", "1000000", "{v050cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-rmusdc}", "deposit(uint256,address)", "1000000", "{state:v050-admin}", "--gas-limit", "2500000", "{v050cast}"]
+      - ["bash", "-c", 'echo $(( $(cast block latest --field timestamp) + 86400 )) > {runDir}/state/v050-dirty-valid-until && cast keccak "qa-dirty-$(date +%s%N)" > {runDir}/state/v050-dirty-salt && cast keccak "$(cast abi-encode "f(address,address,bytes32)" "{state:v050-admin}" "{state:v050-admin}" "$(cat {runDir}/state/v050-dirty-salt)")" > {runDir}/state/v050-dirty-commit && echo "(true,$(cat {runDir}/state/v050-dirty-valid-until),1000000,3000000,{state:v050-admin},[{state:v050-router}],{state:v050-admin},0,0,[])" > {runDir}/state/v050-dirty-policy']
+      - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-gateway}", "commitAuthorization(bytes32)", "{state:v050-dirty-commit}", "{v050cast}"]
+      - ["sleep", "5"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-gateway}", "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))", "{state:v050-admin}", "{state:v050-dirty-salt}", "{state:v050-dirty-policy}", "--gas-limit", "1000000", "{v050cast}"]
+      - ["bash", "-c", 'test "$(cast call "{state:v050-rmusdc}" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1)" != 0 && test "$(cast call "{state:v050-gateway}" "agentOwner(address)(address)" "{state:v050-admin}" | tr A-F a-f)" = "$(echo "{state:v050-admin}" | tr A-F a-f)"']
+    env:
+      ETH_RPC_URL: "{v050RpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: "twin"
+    writes: ["v050-dirty-valid-until", "v050-dirty-salt", "v050-dirty-commit", "v050-dirty-policy"]
+    added: "v0.6.0"
+  - id: "P8.06-v050-pre-state"
+    standing: ["4.15"]
+    description: "Runbook 4.15 step 2 on the live deployment, before any send: the delay, the Safe owners and threshold, the timelock roles, the receipt version and admins, the frozen flags, rmAGENT's supply, the eligible count and both weight vectors are read from the chain into the journal; the deployer's and the emergency key's nonces are marked for the report; the deployer is left holding no vault shares (redeemed) and no agent registration (revoked), which every verify requires; and a done-* marker is written for each governed operation the chain AND the run manifest already show executed, so a rerun on an upgraded deployment skips it by its own gate"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bun", "scripts/runbook/run-record.ts", "nonce", "--run-dir", "{runDir}", "--mark", "v050-deployer", "--sender", "{state:v050-admin}", "--rpc", "{v050RpcUrl}", "--evidence-dir", "{v050EvidenceDir}"]
+      - ["bun", "scripts/runbook/run-record.ts", "nonce", "--run-dir", "{runDir}", "--mark", "v050-emergency", "--sender", "{state:v050-emergency}", "--rpc", "{v050RpcUrl}", "--evidence-dir", "{v050EvidenceDir}"]
+      - ["bash", "-c", 'T={state:v050-timelock}; S=$(jq -r .safe {v050ManifestDir}/safe.json); echo "safe $S"; echo "delay $(cast call $T "getMinDelay()(uint256)")"; echo "owners $(cast call $S "getOwners()(address[])")"; echo "threshold $(cast call $S "getThreshold()(uint256)")"; P=$(cast call $T "PROPOSER_ROLE()(bytes32)"); E=$(cast call $T "EXECUTOR_ROLE()(bytes32)"); echo "safe-proposer $(cast call $T "hasRole(bytes32,address)(bool)" $P $S)"; echo "open-executor $(cast call $T "hasRole(bytes32,address)(bool)" $E 0x0000000000000000000000000000000000000000)"; echo "governance-codehash $(cast codehash {state:v050-governance})"; V=$(cast keccak "openzeppelin.storage.Initializable"); V=$(python3 -c "import sys; print(hex(int(sys.argv[1], 16) - 1))" "$V"); V=$(cast keccak "$(cast abi-encode "f(uint256)" "$V")"); V=$(python3 -c "import sys; print(hex(int(sys.argv[1], 16) & ~0xff))" "$V"); echo "receipt-version $(cast storage {state:v050-receipt} "$V")"; A=$(cast call {state:v050-receipt} "ADMIN_ROLE()(bytes32)"); echo "receipt-admin-timelock $(cast call {state:v050-receipt} "hasRole(bytes32,address)(bool)" $A $T)"; echo "receipt-admin-governance $(cast call {state:v050-receipt} "hasRole(bytes32,address)(bool)" $A {state:v050-governance})"; echo "gateway-frozen $(cast call {state:v050-gateway} "upgradesFrozen()(bool)")"; echo "receipt-frozen $(cast call {state:v050-receipt} "upgradesFrozen()(bool)")"; echo "rmagent-assets $(cast call {state:v050-rmagent} "totalAssets()(uint256)")"; echo "rmagent-supply $(cast call {state:v050-rmagent} "totalSupply()(uint256)")"; echo "eligible $(cast call {state:v050-registry} "routerEligibleCount()(uint256)")"; echo "default $(cast call {state:v050-router} "getDefaultWeights()(address[],uint256[])" | tr "\n" " ")"; echo "effective $(cast call {state:v050-router} "getEffectiveWeights()(address[],uint256[])" | tr "\n" " ")"; test "$(cast call $S "getThreshold()(uint256)")" = 2 && test "$(cast call $T "hasRole(bytes32,address)(bool)" $P $S)" = true && test "$(cast call $T "hasRole(bytes32,address)(bool)" $E 0x0000000000000000000000000000000000000000)" = true']
+      - ["bash", "-c", 'for pair in "{state:v050-rmusdc}:redeem" "{state:v050-rmproto}:redeemInKind" "{state:v050-rmagent}:redeemInKind" "{state:v050-rmrwa}:redeem"; do v=${pair%%:*}; fn=${pair##*:}; b=$(cast call "$v" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1); if [ "$b" != 0 ]; then echo "deployer holds $b shares of $v: redeeming"; bash scripts/runbook/cast-send.sh "$v" "$fn(uint256,address,address)" "$b" "{state:v050-admin}" "{state:v050-admin}" --gas-limit 5000000 {v050CastFlagsInline} || exit 1; fi; test "$(cast call "$v" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1)" = 0 || exit 1; done']
+      - ["bash", "-c", 'if [ "$(cast call "{state:v050-gateway}" "agentOwner(address)(address)" "{state:v050-admin}")" != 0x0000000000000000000000000000000000000000 ]; then echo "deployer is a registered gateway agent: revoking"; bash scripts/runbook/cast-send.sh "{state:v050-gateway}" "revokeAgent(address)" "{state:v050-admin}" {v050CastFlagsInline} || exit 1; fi; test "$(cast call "{state:v050-gateway}" "hasRole(bytes32,address)(bool)" "$(cast keccak AGENT_ROLE)" "{state:v050-admin}")" = false']
+      - ["bash", "-c", 'e={v050EvidenceDir}/publish-run.json; done_upgrade() { want=$(jq -r --arg p "$1" "[.proxy_upgrades[]? | select(.proxy_name == \$p and .execute_tx != null)] | last | .to_implementation // empty" "$e" | tr A-F a-f); have=$(cast implementation "$2" | tr A-F a-f); test -n "$want" && test "$have" = "$want"; }; if done_upgrade gateway {state:v050-gateway}; then echo "gateway already upgraded"; touch {runDir}/state/done-gateway-upgrade; fi; if done_upgrade receipt {state:v050-receipt}; then echo "receipt already upgraded"; touch {runDir}/state/done-receipt-upgrade; fi; if [ "$(cast call {state:v050-router} "votedWeightsActive()(bool)")" = false ]; then echo "no active receipt vector"; touch {runDir}/state/done-clear-voted-weights; fi; if [ "$(cast call {state:v050-rmagent} "retired()(bool)")" = true ] && [ "$(jq -r "[.vault_retirements[]? | select(.execute_tx != null)] | length" "$e")" != 0 ]; then echo "rmAGENT already retired"; touch {runDir}/state/done-retire-vault; fi; true']
+    env:
+      ETH_RPC_URL: "{v050RpcUrl}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/go", "pattern": "nonce-v050-deployer.json", "required": true}
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["done-gateway-upgrade", "done-receipt-upgrade", "done-clear-voted-weights", "done-retire-vault"]
     added: "v0.6.0"
   - id: "P8.10-v050-deploy-gateway-impl"
     standing: ["4.15"]
@@ -659,12 +801,14 @@ steps:
       - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--proxy", "gateway", "--upgrade-build", "{runDir}/v060", "{v050common}", "{gate}"]
       - ["bash", "-c", "grep '\"event\":\"deploy_implementation\"' {journal:P8.10-v050-deploy-gateway-impl} | jq -r .implementation > {runDir}/state/v050-gateway-impl"]
     env:
-      PUBLISH_MANIFEST_DIR: "{runDir}/v050-run/manifests"
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
       YES: "{yes}"
     expectExit: 0
     receipts: []
     irreversible: false
-    onlyFor: "twin"
+    flow: "upgrade"
+    gateAbsent: "{runDir}/state/done-gateway-upgrade"
+    onlyFor: ["twin", "rehearsal"]
     writes: ["v050-gateway-impl"]
     maxMinutes: 60
     added: "v0.6.0"
@@ -676,12 +820,14 @@ steps:
     cmds:
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "upgrade-proxy", "--proxy", "gateway", "--implementation", "{state:v050-gateway-impl}", "--upgrade-build", "{runDir}/v060", "{v050common}", "{gate}"]
     env:
-      PUBLISH_MANIFEST_DIR: "{runDir}/v050-run/manifests"
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
       YES: "{yes}"
     expectExit: 0
     receipts: []
     irreversible: false
-    onlyFor: "twin"
+    flow: "upgrade"
+    gateAbsent: "{runDir}/state/done-gateway-upgrade"
+    onlyFor: ["twin", "rehearsal"]
     maxMinutes: 60
     added: "v0.6.0"
   - id: "P8.12-v050-deploy-receipt-impl"
@@ -693,12 +839,14 @@ steps:
       - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--proxy", "receipt", "--upgrade-build", "{runDir}/v060", "{v050common}", "{gate}"]
       - ["bash", "-c", "grep '\"event\":\"deploy_implementation\"' {journal:P8.12-v050-deploy-receipt-impl} | jq -r .implementation > {runDir}/state/v050-receipt-impl"]
     env:
-      PUBLISH_MANIFEST_DIR: "{runDir}/v050-run/manifests"
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
       YES: "{yes}"
     expectExit: 0
     receipts: []
     irreversible: false
-    onlyFor: "twin"
+    flow: "upgrade"
+    gateAbsent: "{runDir}/state/done-receipt-upgrade"
+    onlyFor: ["twin", "rehearsal"]
     writes: ["v050-receipt-impl"]
     maxMinutes: 60
     added: "v0.6.0"
@@ -710,12 +858,14 @@ steps:
     cmds:
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "upgrade-proxy", "--proxy", "receipt", "--implementation", "{state:v050-receipt-impl}", "--migration", "receipt-submitter-roles", "--upgrade-build", "{runDir}/v060", "{v050common}", "{gate}"]
     env:
-      PUBLISH_MANIFEST_DIR: "{runDir}/v050-run/manifests"
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
       YES: "{yes}"
     expectExit: 0
     receipts: []
     irreversible: false
-    onlyFor: "twin"
+    flow: "upgrade"
+    gateAbsent: "{runDir}/state/done-receipt-upgrade"
+    onlyFor: ["twin", "rehearsal"]
     maxMinutes: 60
     added: "v0.6.0"
   - id: "P8.14-v050-clear-voted-weights"
@@ -727,12 +877,14 @@ steps:
       - ["bash", "-c", "test \"$(cast call {state:v050-router} 'votedWeightsActive()(bool)' --rpc-url {v050RpcUrl})\" = true"]
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "clear-voted-weights", "{v050common}", "{gate}"]
     env:
-      PUBLISH_MANIFEST_DIR: "{runDir}/v050-run/manifests"
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
       YES: "{yes}"
     expectExit: 0
     receipts: []
     irreversible: false
-    onlyFor: "twin"
+    flow: "upgrade"
+    gateAbsent: "{runDir}/state/done-clear-voted-weights"
+    onlyFor: ["twin", "rehearsal"]
     maxMinutes: 60
     added: "v0.6.0"
   - id: "P8.15-v050-retire-vault"
@@ -744,12 +896,14 @@ steps:
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "retire-vault", "--admin-arg", "vault={state:v050-rmagent}", "--admin-arg", "weights=USDC:9500,PROTO:500,RWA:0", "{v050common}", "{gate}"]
       - ["bash", "-c", "test \"$(cast call {state:v050-registry} 'routerEligibleCount()(uint256)' --rpc-url {v050RpcUrl})\" = 3 && test \"$(cast call {state:v050-rmagent} 'retired()(bool)' --rpc-url {v050RpcUrl})\" = true"]
     env:
-      PUBLISH_MANIFEST_DIR: "{runDir}/v050-run/manifests"
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
       YES: "{yes}"
     expectExit: 0
     receipts: []
     irreversible: false
-    onlyFor: "twin"
+    flow: "upgrade"
+    gateAbsent: "{runDir}/state/done-retire-vault"
+    onlyFor: ["twin", "rehearsal"]
     maxMinutes: 60
     added: "v0.6.0"
   - id: "P8.16-v050-verify"
@@ -760,12 +914,13 @@ steps:
     cmds:
       - ["bun", "publish-contracts/src/cli.ts", "verify", "{v050common}", "{gate}"]
     env:
-      PUBLISH_MANIFEST_DIR: "{runDir}/v050-run/manifests"
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
       YES: "{yes}"
     expectExit: 0
     receipts: []
     irreversible: false
-    onlyFor: "twin"
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
     maxMinutes: 60
     added: "v0.6.0"
   - id: "P8.17-v050-evidence"
@@ -774,15 +929,383 @@ steps:
     host: "control"
     phase: 8
     cmds:
-      - ["bun", "publish-contracts/src/evidence-check.ts", "--governed-upgrades", "{runDir}/v050-run/evidence/publish-run.json", "--deployment-kind", "rehearsal", "--timelock", "{state:v050-timelock}", "--governance", "{state:v050-governance}", "--rpc", "{v050RpcUrl}"]
-      - ["bun", "publish-contracts/src/evidence-check.ts", "--vault-retirements", "{runDir}/v050-run/evidence/publish-run.json", "--deployment-kind", "rehearsal", "--registry", "{state:v050-registry}", "--timelock", "{state:v050-timelock}", "--rpc", "{v050RpcUrl}"]
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--governed-upgrades", "{v050EvidenceDir}/publish-run.json", "--deployment-kind", "rehearsal", "--timelock", "{state:v050-timelock}", "--governance", "{state:v050-governance}", "--rpc", "{v050RpcUrl}"]
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--vault-retirements", "{v050EvidenceDir}/publish-run.json", "--deployment-kind", "rehearsal", "--registry", "{state:v050-registry}", "--timelock", "{state:v050-timelock}", "--rpc", "{v050RpcUrl}"]
     expectExit: 0
     receipts: []
     irreversible: false
-    onlyFor: "twin"
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
     maxMinutes: 60
     added: "v0.6.0"
-  - id: "P8.18-v050-teardown"
+
+  - id: "P8.19-v050-receipt-payload"
+    standing: ["4.10"]
+    description: "The Twin's receipt payload for the upgraded deployment: the real production envelope with the three-vault vector (agent_tokens 0). On 8453 the operator passes the receipt the canonical route serves as {receiptFile}; one that weights agent_tokens is refused by apply-receipt and the run stops"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bun", "scripts/runbook/receipt-payload.ts", "--out", "{receiptFile}", "--weights", "USDC:9500,PROTO:500,RWA:0"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: "twin"
+    added: "v0.6.0"
+  - id: "P8.20-v050-register-submitter"
+    standing: ["4.10", "4.15"]
+    description: "The receipt migration left RECEIPT_SUBMITTER_ROLE with no holder, so the governing Safe registers the deployment's submitter Safe again through the timelock (schedule, the delay, execute, in one command) before any receipt can be recorded"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "register-submitter", "--submitter", "{state:v050-submitter}", "{v050common}", "{v050owners}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    maxMinutes: 60
+    added: "v0.6.0"
+  - id: "P8.21-v050-receipt-offline"
+    standing: ["4.10"]
+    description: "The receipt id and the payload digest come from the one shared definition, never a plain keccak256 of the file"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bash", "-c", "bun scripts/runbook/qa-assert.ts receipt-id {receiptFile} > {runDir}/state/v050-receipt-id"]
+      - ["bash", "-c", "bun scripts/runbook/qa-assert.ts receipt-digest {receiptFile} > {runDir}/state/v050-receipt-digest"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["v050-receipt-id", "v050-receipt-digest"]
+    added: "v0.6.0"
+  - id: "P8.22-v050-record-receipt"
+    standing: ["4.10"]
+    description: "The submitter Safe records the receipt on the upgraded receipt contract: threshold owners sign, the deployer pays; the stored submitter reads back as the Safe"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "record-receipt", "{v050common}", "{v050owners}", "{gate}", "--receipt-id", "{state:v050-receipt-id}", "--payload-digest", "{state:v050-receipt-digest}", "--payload", "{receiptFile}", "--payload-uri", "{receiptUri}", "--submitter", "{state:v050-submitter}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: true
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P8.20-v050-register-submitter", "hours": 0}
+    added: "v0.6.0"
+  - id: "P8.23-v050-apply-receipt"
+    standing: ["4.9", "4.15"]
+    description: "The governing Safe applies the recorded receipt as ONE timelock call on the three-vault router (schedule, the delay, execute, in one command); the row reads isReleased and the router weights back. This is the rebalance a release ends with: the router routes by the agents' consensus, not by the launch default"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "apply-receipt", "--receipt-id", "{state:v050-receipt-id}", "--payload", "{receiptFile}", "{v050common}", "{v050owners}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: true
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P8.22-v050-record-receipt", "hours": 0}
+    maxMinutes: 60
+    added: "v0.6.0"
+  - id: "P8.24-v050-receipt-read-back"
+    standing: ["4.9"]
+    description: "The chain shows the applied vector: votedWeightsActive is true and the effective weights equal the payload's buckets (agent_tokens dropped, registry order), and the run manifest's receipt_applications are backed by their timelock batches on chain"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bash", "-c", 'test "$(cast call "{state:v050-router}" "votedWeightsActive()(bool)")" = true']
+      - ["bash", "-c", 'want=$(jq -r "[.weights[] | select(.bucket != \"agent_tokens\") | .weight_bps] | map(tostring) | join(\",\")" {receiptFile}) && got=$(cast call "{state:v050-router}" "getEffectiveWeights()(address[],uint256[])" | tail -n 1 | tr -d "[] ") && test "$got" = "$want"']
+      - ["bash", "-c", "bun publish-contracts/src/evidence-check.ts --receipt-applications {v050EvidenceDir}/publish-run.json --deployment-kind rehearsal --consensus-receipt {state:v050-receipt} --governance {state:v050-governance} --timelock {state:v050-timelock} --delay-floor \"$(sed -n 's/^TIMELOCK_MIN_DELAY=//p' {v050Sheet} | tr -d ' ')\" --rpc {v050RpcUrl}"]
+    env:
+      ETH_RPC_URL: "{v050RpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    added: "v0.6.0"
+  - id: "P8.25-v050-funding"
+    standing: ["4.2"]
+    description: "The live deployment's deployer holds 0.005 ETH and 7 USDC for the rounds below (3 vault deposits, 2 through the router, 1 through the gateway, 1 spare)"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bash", "-c", 'cast balance "{state:v050-admin}" > {runDir}/state/v050-deployer-eth']
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:v050-deployer-eth}", "5000000000000000"]
+      - ["bash", "-c", 'cast call "{state:v050-usdc}" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1 > {runDir}/state/v050-deployer-usdc']
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:v050-deployer-usdc}", "7000000"]
+    env:
+      ETH_RPC_URL: "{v050RpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["v050-deployer-eth", "v050-deployer-usdc"]
+    added: "v0.6.0"
+  - id: "P8.26-v050-deposit-rmusdc"
+    standing: ["4.4"]
+    description: "1 USDC into the live rmUSDC at the 2,500,000 gas limit; the shares equal previewDeposit within 0.5 percent"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bash", "-c", 'cast call "{state:v050-rmusdc}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/v050-preview-USDC']
+      - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-usdc}", "approve(address,uint256)", "{state:v050-rmusdc}", "1000000", "{v050cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-rmusdc}", "deposit(uint256,address)", "1000000", "{state:v050-admin}", "--gas-limit", "2500000", "{v050cast}"]
+      - ["bash", "-c", 'cast call "{state:v050-rmusdc}" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1 > {runDir}/state/v050-shares-USDC']
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:v050-shares-USDC}", "{state:v050-preview-USDC}", "50"]
+    env:
+      ETH_RPC_URL: "{v050RpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["v050-preview-USDC", "v050-shares-USDC"]
+    added: "v0.6.0"
+  - id: "P8.27-v050-deposit-rmproto"
+    standing: ["4.4"]
+    description: "1 USDC into the live rmPROTO; the shares are at least previewDeposit and above it by no more than the maxSlippageBps haircut; the vault really traded, so it holds more of its assets than before"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bash", "-c", 'cast call "{state:v050-rmproto}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/v050-preview-PROTO']
+      - ["bash", "-c", 'cast call "{state:v050-rmproto}" "totalAssets()(uint256)" | cut -d" " -f1 > {runDir}/state/v050-assets-PROTO-before']
+      - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-usdc}", "approve(address,uint256)", "{state:v050-rmproto}", "1000000", "{v050cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-rmproto}", "deposit(uint256,address)", "1000000", "{state:v050-admin}", "--gas-limit", "5000000", "{v050cast}"]
+      - ["bash", "-c", 'cast call "{state:v050-rmproto}" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1 > {runDir}/state/v050-shares-PROTO']
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:v050-shares-PROTO}", "{state:v050-preview-PROTO}"]
+      - ["bash", "-c", 'b=$(cast call "{state:v050-rmproto}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/v050-share-bound-PROTO']
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:v050-shares-PROTO}", "{state:v050-preview-PROTO}", "{state:v050-share-bound-PROTO}"]
+      - ["bash", "-c", 'a=$(cast call "{state:v050-rmproto}" "totalAssets()(uint256)" | cut -d" " -f1); test "$a" -gt "$(cat {runDir}/state/v050-assets-PROTO-before)"']
+    env:
+      ETH_RPC_URL: "{v050RpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["v050-preview-PROTO", "v050-assets-PROTO-before", "v050-shares-PROTO", "v050-share-bound-PROTO"]
+    added: "v0.6.0"
+  - id: "P8.28-v050-deposit-rmrwa"
+    standing: ["4.4"]
+    description: "1 USDC into the live rmRWA; the shares are at least previewDeposit and above it by no more than the maxSlippageBps haircut; the vault really traded, so it holds more of its assets than before"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bash", "-c", 'cast call "{state:v050-rmrwa}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/v050-preview-RWA']
+      - ["bash", "-c", 'cast call "{state:v050-rmrwa}" "totalAssets()(uint256)" | cut -d" " -f1 > {runDir}/state/v050-assets-RWA-before']
+      - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-usdc}", "approve(address,uint256)", "{state:v050-rmrwa}", "1000000", "{v050cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-rmrwa}", "deposit(uint256,address)", "1000000", "{state:v050-admin}", "--gas-limit", "5000000", "{v050cast}"]
+      - ["bash", "-c", 'cast call "{state:v050-rmrwa}" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1 > {runDir}/state/v050-shares-RWA']
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:v050-shares-RWA}", "{state:v050-preview-RWA}"]
+      - ["bash", "-c", 'b=$(cast call "{state:v050-rmrwa}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/v050-share-bound-RWA']
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:v050-shares-RWA}", "{state:v050-preview-RWA}", "{state:v050-share-bound-RWA}"]
+      - ["bash", "-c", 'a=$(cast call "{state:v050-rmrwa}" "totalAssets()(uint256)" | cut -d" " -f1); test "$a" -gt "$(cat {runDir}/state/v050-assets-RWA-before)"']
+    env:
+      ETH_RPC_URL: "{v050RpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["v050-preview-RWA", "v050-assets-RWA-before", "v050-shares-RWA", "v050-share-bound-RWA"]
+    added: "v0.6.0"
+  - id: "P8.29-v050-router-deposit"
+    standing: ["4.4", "4.15"]
+    description: "2 USDC straight into the live router at 8,400,000 gas: one RouterDeposit event per leg with a non-zero effective weight (the applied receipt's vector), none for a zero-weight leg, never one into rmAGENT, and the deployer holds shares in every non-zero leg afterwards"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bash", "-c", 'cast call "{state:v050-router}" "getEffectiveWeights()(address[],uint256[])" | tail -n 1 | grep -oE "[0-9]+" | grep -vxc 0 > {runDir}/state/v050-router-legs || true']
+      - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-usdc}", "approve(address,uint256)", "{state:v050-router}", "2000000", "{v050cast}"]
+      - ["bash", "-c", 'bash scripts/runbook/cast-send.sh "{state:v050-router}" "deposit(uint256,uint256[])" 2000000 "[]" --gas-limit 8400000 {v050CastFlagsInline} | tee {runDir}/state/v050-router-deposit.json; test ${PIPESTATUS[0]} = 0']
+      - ["bash", "-c", 'jq -e --arg t "$(cast sig-event "RouterDeposit(address,address,uint256,uint256,uint256)")" --argjson n "$(cat {runDir}/state/v050-router-legs)" ''.status == "0x1" and ([.logs[] | select(.topics[0] == $t)] | length) == $n'' {runDir}/state/v050-router-deposit.json']
+      - ["bash", "-c", 'jq -e --arg a "$(echo {state:v050-rmagent} | tr A-F a-f)" ''[.logs[] | select((.topics[2] // "") | ascii_downcase | endswith($a[2:]))] | length == 0'' {runDir}/state/v050-router-deposit.json']
+      - ["bash", "-c", 'w=$(cast call "{state:v050-router}" "getEffectiveWeights()(address[],uint256[])"); vs=$(echo "$w" | sed -n 1p | grep -oE "0x[0-9a-fA-F]{40}"); bs=$(echo "$w" | sed -n 2p | grep -oE "[0-9]+"); i=1; for v in $vs; do b=$(echo "$bs" | sed -n "$i"p); i=$((i+1)); s=$(cast call "$v" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1); if [ "$b" != 0 ] && [ "$s" = 0 ]; then echo "no shares in $v (weight $b)" >&2; exit 1; fi; done']
+    env:
+      ETH_RPC_URL: "{v050RpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["v050-router-legs", "v050-router-deposit.json"]
+    added: "v0.6.0"
+  - id: "P8.30-v050-gateway-agent"
+    standing: ["4.4", "4.15"]
+    description: "On the upgraded gateway the deployer consents to itself as an agent (commit, then the reveal at least a block later, the router as its only destination) and the gateway records it as the agent's owner"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bash", "-c", 'echo $(( $(cast block latest --field timestamp) + 86400 )) > {runDir}/state/v050-agent-valid-until && cast keccak "qa-self-$(date +%s%N)" > {runDir}/state/v050-agent-salt && cast keccak "$(cast abi-encode "f(address,address,bytes32)" "{state:v050-admin}" "{state:v050-admin}" "$(cat {runDir}/state/v050-agent-salt)")" > {runDir}/state/v050-agent-commit && echo "(true,$(cat {runDir}/state/v050-agent-valid-until),1000000,3000000,{state:v050-admin},[{state:v050-router}],{state:v050-admin},0,0,[])" > {runDir}/state/v050-agent-policy']
+      - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-gateway}", "commitAuthorization(bytes32)", "{state:v050-agent-commit}", "{v050cast}"]
+      - ["sleep", "5"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-gateway}", "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))", "{state:v050-admin}", "{state:v050-agent-salt}", "{state:v050-agent-policy}", "--gas-limit", "1000000", "{v050cast}"]
+      - ["bash", "-c", 'test "$(cast call "{state:v050-gateway}" "agentOwner(address)(address)" "{state:v050-admin}" | tr A-F a-f)" = "$(echo "{state:v050-admin}" | tr A-F a-f)"']
+    env:
+      ETH_RPC_URL: "{v050RpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["v050-agent-valid-until", "v050-agent-salt", "v050-agent-commit", "v050-agent-policy"]
+    added: "v0.6.0"
+  - id: "P8.31-v050-gateway-deposit-router"
+    standing: ["4.4", "4.15"]
+    description: "The agent approves the upgraded gateway for 1 USDC and deposits it through depositTo into the router at 11,200,000 gas: one RouterDeposit event per non-zero leg"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bash", "-c", 'cast keccak "qa-router-$(date +%s%N)" > {runDir}/state/v050-order-router']
+      - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-usdc}", "approve(address,uint256)", "{state:v050-gateway}", "1000000", "{v050cast}"]
+      - ["bash", "-c", 'bash scripts/runbook/cast-send.sh "{state:v050-gateway}" "depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])" "{state:v050-order-router}" 1000000 "$(( $(date +%s) + 300 ))" "$(cast keccak "key-{state:v050-order-router}")" "{state:v050-router}" "[]" --gas-limit 11200000 {v050CastFlagsInline} | tee {runDir}/state/v050-gateway-router-deposit.json; test ${PIPESTATUS[0]} = 0']
+      - ["bash", "-c", 'jq -e --arg t "$(cast sig-event "RouterDeposit(address,address,uint256,uint256,uint256)")" --argjson n "$(cat {runDir}/state/v050-router-legs)" ''.status == "0x1" and ([.logs[] | select(.topics[0] == $t)] | length) == $n'' {runDir}/state/v050-gateway-router-deposit.json']
+    env:
+      ETH_RPC_URL: "{v050RpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["v050-order-router", "v050-gateway-router-deposit.json"]
+    added: "v0.6.0"
+  - id: "P8.32-v050-agent-revoke"
+    standing: ["4.4"]
+    description: "The deployer revokes itself as a gateway agent and AGENT_ROLE is read back gone, so the final verify's 'deployer: holds no role' holds"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-gateway}", "revokeAgent(address)", "{state:v050-admin}", "{v050cast}"]
+      - ["bash", "-c", 'test "$(cast call "{state:v050-gateway}" "hasRole(bytes32,address)(bool)" "$(cast keccak AGENT_ROLE)" "{state:v050-admin}")" = false']
+    env:
+      ETH_RPC_URL: "{v050RpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    added: "v0.6.0"
+  - id: "P8.33-v050-retired-vault"
+    standing: ["4.4", "4.14", "4.15"]
+    description: "rmAGENT is withdraw-only (ADR-0017, ADR-0009): retired() is true, maxDeposit is 0, a REAL 1 USDC deposit send is mined with status 0 (it reverts), and any rmAGENT shares the deployer holds leave by redeemInKind, the exit that reads no price"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bash", "-c", 'test "$(cast call "{state:v050-rmagent}" "retired()(bool)")" = true && test "$(cast call "{state:v050-rmagent}" "maxDeposit(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1)" = 0']
+      - ["bash", "-c", 'out=$(cast send "{state:v050-rmagent}" "deposit(uint256,address)" 1000000 "{state:v050-admin}" --gas-limit 300000 --json {v050CastFlagsInline}) && echo "$out" && echo "$out" | jq -e ''.status == "0x0"'' > /dev/null']
+      - ["bash", "-c", 'b=$(cast call "{state:v050-rmagent}" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1); if [ "$b" != 0 ]; then bash scripts/runbook/cast-send.sh "{state:v050-rmagent}" "redeemInKind(uint256,address,address)" "$b" "{state:v050-admin}" "{state:v050-admin}" --gas-limit 5000000 {v050CastFlagsInline} || exit 1; fi; test "$(cast call "{state:v050-rmagent}" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1)" = 0']
+    env:
+      ETH_RPC_URL: "{v050RpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    added: "v0.6.0"
+  - id: "P8.34-v050-pause-all"
+    standing: ["4.5", "4.6", "4.15"]
+    description: "pause-all with the emergency key pauses deposits on the live rmUSDC, rmPROTO and rmRWA (rmAGENT counts covered once retired) and reads each back; withdrawals stay open"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "pause-all", "{v050common}", "{v050emergency}"]
+      - ["bash", "-c", 'for v in {state:v050-rmusdc} {state:v050-rmproto} {state:v050-rmrwa}; do test "$(cast call "$v" "depositsPaused()(bool)")" = true || exit 1; done']
+    env:
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
+      YES: "{yes}"
+      ETH_RPC_URL: "{v050RpcUrl}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{v050EvidenceDir}", "pattern": "rollout-report-{chainId}.json", "required": true}
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    added: "v0.6.0"
+  - id: "P8.35-v050-redeem-while-paused"
+    standing: ["4.4", "4.6"]
+    description: "With deposits paused every test position still leaves: rmUSDC by redeem, rmPROTO by redeemInKind, rmRWA by redeem, so withdrawals are proven open under a pause and the deployer holds no shares"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bash", "-c", 'for pair in "{state:v050-rmusdc}:redeem" "{state:v050-rmproto}:redeemInKind" "{state:v050-rmrwa}:redeem"; do v=${pair%%:*}; fn=${pair##*:}; s=$(cast call "$v" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1); if [ "$s" != 0 ]; then bash scripts/runbook/cast-send.sh "$v" "$fn(uint256,address,address)" "$s" "{state:v050-admin}" "{state:v050-admin}" --gas-limit 5000000 {v050CastFlagsInline} || exit 1; fi; test "$(cast call "$v" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1)" = 0 || exit 1; done']
+    env:
+      ETH_RPC_URL: "{v050RpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    added: "v0.6.0"
+  - id: "P8.36-v050-unpause"
+    standing: ["4.5"]
+    description: "Each paused vault comes back through a new numbered unpause round of the Safe (schedule, the delay, execute, in one command each) and reads depositsPaused false"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-USDC", "{v050common}", "{v050owners}", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-PROTO", "{v050common}", "{v050owners}", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-RWA", "{v050common}", "{v050owners}", "{gate}"]
+      - ["bash", "-c", 'for v in {state:v050-rmusdc} {state:v050-rmproto} {state:v050-rmrwa}; do test "$(cast call "$v" "depositsPaused()(bool)")" = false || exit 1; done']
+    env:
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
+      YES: "{yes}"
+      ETH_RPC_URL: "{v050RpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    maxMinutes: 120
+    added: "v0.6.0"
+  - id: "P8.37-v050-verify-final"
+    standing: ["4.15"]
+    description: "Verify passes on the end state: the upgraded gateway and receipt, every other contract the live build, rmAGENT retired, the applied vector, every role holder, the deployer holding nothing, all three vaults open"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{v050common}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    maxMinutes: 60
+    added: "v0.6.0"
+  - id: "P8.38-v050-evidence-final"
+    standing: ["4.15"]
+    description: "The evidence checks read the governed upgrades and the retirement back from the chain once more, after every round of this flow, and the new upgradeability record verify wrote is copied into the evidence (runbook 4.15 step 8)"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--governed-upgrades", "{v050EvidenceDir}/publish-run.json", "--deployment-kind", "rehearsal", "--timelock", "{state:v050-timelock}", "--governance", "{state:v050-governance}", "--rpc", "{v050RpcUrl}"]
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--vault-retirements", "{v050EvidenceDir}/publish-run.json", "--deployment-kind", "rehearsal", "--registry", "{state:v050-registry}", "--timelock", "{state:v050-timelock}", "--rpc", "{v050RpcUrl}"]
+      - ["cp", "{v050ManifestDir}/upgradeability.json", "{v050EvidenceDir}/upgradeability.json"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{v050EvidenceDir}", "pattern": "upgradeability.json", "required": true}
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    maxMinutes: 60
+    added: "v0.6.0"
+  - id: "P8.90-v050-teardown"
     standing: ["9"]
     description: "The v0.5.0 Twin fork stops, the tag run's throwaway keystores and passphrase are destroyed, and the v0.5.0 and v0.6.0 upgrade checkouts are removed"
     host: "control"
@@ -794,6 +1317,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: "upgrade"
     onlyFor: "twin"
     added: "v0.6.0"
 
@@ -884,6 +1408,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P10.51-write-rollout-report"
     standing: ["4.7"]
     description: "The rollout report is written from the run: sha, network, sheet hash, tag, every step's journal, every evidence file's sha256; a failed step, a journaled step with no result and a vault still paused at report time are issues, a pause report from a drill is listed only"
@@ -895,6 +1420,7 @@ steps:
     receipts:
       - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P10.53-write-three-vault-rollout-report"
     standing: ["4.7"]
     description: "v0.6.0 deploys three vaults (rmUSDC, rmPROTO, rmRWA; ADR-0017), so no agent-token-vault manifest exists and the template's P10.51 report lists it as unreadable. This step rewrites rollout-report.md reading only the three manifests named by --vaults: a failed step, a vault still paused and a declared vault with no manifest are still issues"
@@ -906,6 +1432,7 @@ steps:
     receipts:
       - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}
     irreversible: false
+    flow: ["new", "upgrade"]
     added: "v0.6.0"
   - id: "P10.52-record-signoff"
     standing: ["4.4"]
@@ -918,6 +1445,7 @@ steps:
     receipts:
       - {"dir": "{runDir}/go", "pattern": "signoff.json", "required": true}
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P10.07-twin-teardown"
     standing: ["9"]
     description: "The Twin fork stops and the throwaway keystores and the passphrase file are destroyed"
