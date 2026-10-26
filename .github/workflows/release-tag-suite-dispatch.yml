@@ -75,6 +75,9 @@ jobs:
     name: dispatch-full-suite
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    # CI taxonomy: plumbing that dispatches the suites and then asks check-sha-green, not a test (docs/CI-TAXONOMY.md, class `ignore`).
+    env:
+      CI_CLASS: ignore
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
