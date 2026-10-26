@@ -152,13 +152,23 @@ export function controlProofOf(manifest: Pick<RunManifest, "stages">): { txHash:
   return r?.status === "done" && typeof r.txHash === "string" && Number.isInteger(r.nonce) ? { txHash: r.txHash as `0x${string}`, nonce: r.nonce as number } : undefined;
 }
 
-/** The last receipt `govern --row apply-receipt` applied (issue 1696): its id and vector, from the run manifest's `receipt_applications`. */
-export function appliedReceiptOf(manifest: Pick<RunManifest, "receipt_applications">): VerifyOptions["appliedReceipt"] {
-  const last = (manifest.receipt_applications ?? []).filter((x): x is { receipt_id: `0x${string}`; vaults: `0x${string}`[]; bps: number[] } => {
+/**
+ * The last receipt `govern --row apply-receipt` applied (issue 1696): its id and vector, from the run manifest's `receipt_applications`. Undefined when none was applied, or when an
+ * executed `govern --row clear-voted-weights` round (`voted_weights_clears`, issue 1743) read the active vector cleared at a block time strictly after that application executed
+ * (issue 1927: runbook 4.15 clears the applied vector before the retire). A tie keeps the application, so the router must then still hold it.
+ */
+export function appliedReceiptOf(manifest: Pick<RunManifest, "receipt_applications"> & { voted_weights_clears?: unknown[] }): VerifyOptions["appliedReceipt"] {
+  const last = (manifest.receipt_applications ?? []).filter((x): x is { receipt_id: `0x${string}`; vaults: `0x${string}`[]; bps: number[]; execute_block_timestamp?: unknown } => {
     const e = x as { receipt_id?: unknown; vaults?: unknown; bps?: unknown } | undefined;
     return typeof e?.receipt_id === "string" && Array.isArray(e.vaults) && Array.isArray(e.bps) && e.vaults.length === e.bps.length;
   }).pop();
-  return last ? { receiptId: last.receipt_id, vaults: last.vaults, bps: last.bps } : undefined;
+  if (!last) return undefined;
+  const appliedAt = typeof last.execute_block_timestamp === "number" ? last.execute_block_timestamp : undefined;
+  const cleared = appliedAt !== undefined && (manifest.voted_weights_clears ?? []).some((x) => {
+    const c = x as { execute_status?: unknown; execute_block_timestamp?: unknown; voted_weights_active?: unknown } | undefined;
+    return c?.execute_status === 1 && c.voted_weights_active === false && typeof c.execute_block_timestamp === "number" && c.execute_block_timestamp > appliedAt;
+  });
+  return cleared ? undefined : { receiptId: last.receipt_id, vaults: last.vaults, bps: last.bps };
 }
 
 /**

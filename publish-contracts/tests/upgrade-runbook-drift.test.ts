@@ -206,7 +206,7 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
     if (start < 0 || end < 0) throw new Error("the runbook has no section 4.15 before section 5");
     return RUNBOOK.slice(start, end);
   })();
-  const placeholder = (name: string): string => (name === "RC_SHA" ? "a".repeat(40) : name === "BASE_RPC_URL" ? "http://127.0.0.1:8545" : name === "PWD" ? "/x" : `0x${"1".repeat(40)}`);
+  const placeholder = (name: string): string => (name === "RC_SHA" ? "a".repeat(40) : name === "V050_SHA" ? "57fbe61833e9d7f94557d69102138f7c410c1346" : name === "BASE_RPC_URL" ? "http://127.0.0.1:8545" : name === "PWD" || name === "V050_DIR" ? "/x" : `0x${"1".repeat(40)}`);
   const split = (line: string): string[] => [...line.matchAll(/"([^"]*)"|(\S+)/g)].map((m) => m[1] ?? m[2]!);
   const expand = (line: string, common: string): string[] =>
     split(line.replace(/\$COMMON\b/g, common)).map((t) => t.replace(/\$\{?([A-Z_0-9]+)\}?/g, (_m, n: string) => placeholder(n)));
@@ -239,13 +239,19 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
   /** Returns the problems of one command line of the section (empty when every verb, row and flag exists). */
   const problems = async (line: string, common: string): Promise<string[]> => {
     if (line.startsWith("COMMON=")) return [];
+    if (line.startsWith("git fetch ")) {
+      // step 0 (review-operations): the rc commit is on the fetched release branch
+      return /^git fetch origin (releases-\d+\.\d+\.x) && git merge-base --is-ancestor "\$RC_SHA" origin\/\1$/.test(line) ? [] : [`${line}: the release-branch check must fetch origin releases-A.B.x and test --is-ancestor "$RC_SHA" on it`];
+    }
     if (line.startsWith("test ")) {
-      // step 0: `test <lhs> = "$RC_SHA"` or `test -z "$(git status --porcelain)"` over a git read of the checkout
-      const g = line.match(/\$\(git ([a-z-]+)([^)]*)\)/);
+      // step 0: `test <lhs> = "$RC_SHA"` or `test -z "$(git status --porcelain)"` over a git read of the rc checkout (the working directory), and the same three reads of the v0.5.0
+      // checkout with `git -C "$V050_DIR"`, whose rev-parse must equal "$V050_SHA" (issue 1927)
+      const g = line.match(/\$\(git (-C "\$V050_DIR" )?([a-z-]+)([^)]*)\)/);
       if (!g) return [`${line}: a test line must read the checkout with git`];
-      if (g[1] === "status") return /--porcelain\b/.test(g[2]!) && line.startsWith("test -z ") ? [] : [`${line}: git status must be --porcelain asserted empty`];
-      if (g[1] === "rev-parse") return /= "\$RC_SHA"$/.test(line) && (g[2]!.trim() === "HEAD" || /\^\{commit\}/.test(g[2]!)) ? [] : [`${line}: git rev-parse must equal $RC_SHA`];
-      return [`${line}: git ${g[1]} is not a checkout check this runbook knows`];
+      const want = g[1] ? "V050_SHA" : "RC_SHA";
+      if (g[2] === "status") return /--porcelain\b/.test(g[3]!) && line.startsWith("test -z ") ? [] : [`${line}: git status must be --porcelain asserted empty`];
+      if (g[2] === "rev-parse") return new RegExp(`= "\\$${want}"$`).test(line) && (g[3]!.trim() === "HEAD" || /\^\{commit\}/.test(g[3]!)) ? [] : [`${line}: git rev-parse must equal $${want}`];
+      return [`${line}: git ${g[2]} is not a checkout check this runbook knows`];
     }
     const t = expand(line, common);
     if (t[0] === "bun" && t[1] === "publish-contracts/src/cli.ts") {
@@ -302,14 +308,75 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
   test("step 0 checks HEAD, a clean tree and the rc tag before any --upgrade-build use, and the checker validates those lines", async () => {
     const s0 = step(0);
     for (const l of ['test "$(git rev-parse HEAD)" = "$RC_SHA"', 'test -z "$(git status --porcelain)"', 'test "$(git rev-parse "$RC_TAG^{commit}")" = "$RC_SHA"']) { expect(s0, l).toContain(l); expect(await problems(l, common)).toEqual([]); }
-    expect(S415.indexOf("\n0. ")).toBeLessThan(S415.indexOf("--upgrade-build"));
+    // the first command that uses a checkout comes after step 0 (the two-checkout table above the steps only names the flags)
+    expect(S415.indexOf("\n0. ")).toBeLessThan(S415.indexOf('--upgrade-build "$PWD" $COMMON'));
     expect((await problems('test "$(git rev-parse HEAD)" = "$OTHER"', common)).length).toBe(1);
     expect((await problems('test -z "$(git status)"', common)).length).toBe(1);
     expect((await problems('test "$(git log HEAD)" = "$RC_SHA"', common)).length).toBe(1);
   });
+  test("step 0 checks both checkouts: the rc checkout and the v0.5.0 checkout, each HEAD, clean and its tag, and both tags on the remote (issue 1927)", async () => {
+    const s0 = step(0);
+    const tests = s0.split("\n").filter((l) => l.startsWith("test "));
+    expect(tests).toEqual([
+      'test "$(git rev-parse HEAD)" = "$RC_SHA"', 'test -z "$(git status --porcelain)"', 'test "$(git rev-parse "$RC_TAG^{commit}")" = "$RC_SHA"',
+      'test "$(git -C "$V050_DIR" rev-parse HEAD)" = "$V050_SHA"', 'test -z "$(git -C "$V050_DIR" status --porcelain)"', 'test "$(git -C "$V050_DIR" rev-parse "release/v0.5.0-rehearsal^{commit}")" = "$V050_SHA"',
+    ]);
+    for (const l of tests) expect(await problems(l, common), l).toEqual([]);
+    for (const l of ['git ls-remote origin "refs/tags/$RC_TAG^{}"', 'git ls-remote origin "refs/tags/release/v0.5.0-rehearsal^{}"']) expect(s0, l).toContain(l);
+    // review-operations: the rc commit is on the fetched release branch, and the env block names the token the CLI's gates read
+    const branchLine = 'git fetch origin releases-0.6.x && git merge-base --is-ancestor "$RC_SHA" origin/releases-0.6.x';
+    expect(s0).toContain(branchLine);
+    expect(await problems(branchLine, common)).toEqual([]);
+    expect((await problems('git fetch origin dev && git merge-base --is-ancestor "$RC_SHA" origin/releases-0.6.x', common)).length).toBe(1);
+    expect(S415).toMatch(/^export GITHUB_TOKEN=/m);
+    // the checker refuses a v0.5.0 read compared with the rc sha, and an rc read compared with the v0.5.0 sha
+    expect((await problems('test "$(git -C "$V050_DIR" rev-parse HEAD)" = "$RC_SHA"', common)).length).toBe(1);
+    expect((await problems('test "$(git rev-parse HEAD)" = "$V050_SHA"', common)).length).toBe(1);
+    const { V050_SHA, V050_TAG } = await import("../src/ci/twin-upgrade-from-v050.ts");
+    expect(S415).toContain(`export V050_SHA=${V050_SHA}`);
+    expect(s0).toContain(V050_TAG);
+  });
+  test("every deploy-implementation and govern command carries --core-dir and --core-sha of the v0.5.0 checkout, and every upgrade command --upgrade-build of the rc checkout (issue 1927)", () => {
+    expect(common).toContain("--core-dir $V050_DIR --core-sha $V050_SHA");
+    expect(common).not.toContain("$RC_SHA");
+    const lines = commands(S415).filter((l) => l.startsWith("bun publish-contracts/src/cli.ts "));
+    const cli = lines.filter((l) => / (deploy-implementation|govern|verify) /.test(l));
+    expect(cli.length).toBe(7);
+    for (const l of cli) expect(l, l).toMatch(/ \$COMMON$/);
+    const upgrade = cli.filter((l) => l.includes("deploy-implementation") || l.includes("--row upgrade-proxy"));
+    expect(upgrade.length).toBe(4);
+    for (const l of upgrade) expect(l, l).toContain('--upgrade-build "$PWD"');
+    for (const l of lines.filter((x) => !upgrade.includes(x))) expect(l, l).not.toContain("--upgrade-build");
+  });
+  test("the section's publish-contracts commands are, in order, the commands the Twin driver runs (issue 1927)", async () => {
+    const { UPGRADE_FROM_V050_COMMANDS } = await import("../src/ci/twin-upgrade-from-v050.ts");
+    const lines = commands(S415).filter((l) => /^bun publish-contracts\/src\/(cli|evidence-check)\.ts /.test(l));
+    expect(lines).toEqual([...UPGRADE_FROM_V050_COMMANDS]);
+    // review-operations-001: the environment the driver gives those commands is exported in the section, and the step 8 record is read from it
+    const { UPGRADE_FROM_V050_ENV } = await import("../src/ci/upgrade-from-v050-commands.ts");
+    for (const k of UPGRADE_FROM_V050_ENV) expect(S415, k).toMatch(new RegExp(`^export ${k}=`, "m"));
+    expect(S415).toContain("writes the new `upgradeability.json` to `$PUBLISH_MANIFEST_DIR`");
+    const driver = readFileSync(join(REPO, "publish-contracts", "src", "ci", "twin-upgrade-from-v050.ts"), "utf8");
+    expect(driver).toContain("...runEnv");
+    expect(driver).not.toMatch(/PUBLISH_MANIFEST_DIR: manifests, YES/);
+    // the driver workflow job runs that driver
+    const wf = readFileSync(join(REPO, ".github", "workflows", "suite-28-core-stages.yml"), "utf8");
+    expect(wf).toContain("name: core-stages-twin-upgrade-from-v050");
+    expect(wf).toContain("bun publish-contracts/src/ci/twin-upgrade-from-v050.ts");
+  });
   test("step 2 reads the Safe owners and threshold, the Safe's timelock roles and the RouterGovernance code on chain", async () => {
     const s2 = step(2);
-    for (const l of ['cast call $SAFE "getOwners()(address[])"', 'cast call $SAFE "getThreshold()(uint256)"', 'cast call $TIMELOCK "hasRole(bytes32,address)(bool)" $PROPOSER_ROLE $SAFE', 'cast call $TIMELOCK "hasRole(bytes32,address)(bool)" $EXECUTOR_ROLE $SAFE', "cast codehash $GOVERNANCE"]) expect(s2, l).toContain(l);
+    for (const l of ['cast call $SAFE "getOwners()(address[])"', 'cast call $SAFE "getThreshold()(uint256)"', 'cast call $TIMELOCK "hasRole(bytes32,address)(bool)" $PROPOSER_ROLE $SAFE', 'cast call $TIMELOCK "hasRole(bytes32,address)(bool)" $EXECUTOR_ROLE 0x0000000000000000000000000000000000000000', "cast codehash $GOVERNANCE"]) expect(s2, l).toContain(l);
+    // The executor is open (core 1521): the read is for address(0), never the Safe.
+    expect(s2).not.toContain('$EXECUTOR_ROLE $SAFE');
+    for (const l of s2.split("\n").filter((x) => x.startsWith("cast "))) expect(await problems(l, common), l).toEqual([]);
+    expect(s2).toContain("`hasRole(EXECUTOR_ROLE, address(0))` must be true");
+    expect(s2).toContain("The Safe must hold `PROPOSER_ROLE`");
+    expect(s2).toContain("never from memory");
+    // Stop rules stay for the delay and receipt version 2. An active receipt vector is recorded, not a stop (step 6 clears it).
+    expect(s2).toContain("If the delay reads anything else, or if the receipt reads version 2");
+    expect(s2).toContain("record it in the evidence and do not stop");
+    expect(s2).not.toContain("or if an active receipt vector shows in the effective weights, stop and report");
     expect(s2).toContain("must read 2");
     expect(await problems('cast call $SAFE "getNoSuchOwners()(address[])" --rpc-url $BASE_RPC_URL', common)).toHaveLength(1);
     expect(S415.indexOf("export GOVERNANCE=")).toBeGreaterThan(-1);

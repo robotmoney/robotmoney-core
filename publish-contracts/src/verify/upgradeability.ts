@@ -7,9 +7,9 @@ import { join } from "node:path";
 import { concatHex, decodeAbiParameters, keccak256, toFunctionSelector, toHex } from "viem";
 import type { Collector } from "./collector.ts";
 import { ERC1967_IMPLEMENTATION_SLOT, ERC1967_PROXY_ARTIFACT, compareCode, isProxyCode, linkedLibraries, loadArtifact, tryLoadArtifact } from "./codehash.ts";
-import { CORE_CONTRACT_REFS } from "../core-wiring.ts";
+import { coreContractRefs } from "../core-wiring.ts";
 import { MAINNET_CHAIN_ID } from "../chains.ts";
-import { VAULT_NAME, type UpgradeMode } from "../sheet.ts";
+import { vaultDisplayName, type UpgradeMode } from "../sheet.ts";
 import { manifestBase, type StageTable } from "../stage-table.ts";
 import { isAddress, lc, type ManifestVault } from "./manifests.ts";
 import { padTopic, scanLogs } from "./logs.ts";
@@ -63,9 +63,11 @@ export const PINNED_PROXIES: readonly string[] = ["gateway"];
 
 /** The full proxied core set from the stage table, in table order. A core name for a non-vault stage (CORE_CONTRACT_REFS), `vault[<name>]` for a vault stage. */
 export function proxySpecs(table: StageTable): ProxySpec[] {
+  // Issue 1927: a prior line's table (the live v0.5.0 deployment) names its receipt in the ic-policy stage, beside the InvestmentCommitteePolicy proxy, and the retired rmAGENT vault.
+  const refs = coreContractRefs(table.stages.map((s) => s.name));
   return table.stages.flatMap((s) => (s.proxies ?? []).map((p) => {
-    const core = CORE_CONTRACT_REFS.find((r) => r.stage === s.name && r.field === p.field);
-    const name = s.vault ? `vault[${VAULT_NAME[s.vault]}]` : core?.name;
+    const core = refs.find((r) => r.stage === s.name && r.field === p.field);
+    const name = s.vault ? `vault[${vaultDisplayName(s.vault)}]` : core?.name;
     if (!name) throw new Error(`the stage table proxy ${s.name}.${p.field} is neither a vault nor a core contract this verifier names`);
     return { name, stage: s.name, ...p };
   }));
@@ -362,7 +364,7 @@ export function finishUpgradeability(c: Collector, table: StageTable, rec: Upgra
 export function manifestDataOf(table: StageTable, files: Record<string, any>, vaults: ManifestVault[]): (s: ProxySpec) => any {
   return (s) => {
     const st = table.stages.find((x) => x.name === s.stage)!;
-    if (st.vault) return vaults.find((v) => v.key === VAULT_NAME[st.vault!])?.data ?? files[manifestBase(st.manifest)];
+    if (st.vault) return vaults.find((v) => v.key === vaultDisplayName(st.vault!))?.data ?? files[manifestBase(st.manifest)];
     return files[manifestBase(st.manifest)];
   };
 }
