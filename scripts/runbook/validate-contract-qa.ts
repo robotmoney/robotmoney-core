@@ -53,9 +53,15 @@ export const SCALARS = new Set([
   "submitterSaltNonce", "unwindMinUsdcOut", "unwindMaxLossBps", "environmentName", "ownerSigner", "emergencySigner", "deployerKeystore",
   "chainId", "rpcUrl", "sheet", "sheetTemplate", "countsDir", "evidenceDir", "manifestDir", "signer", "yes", "usdc", "deploymentKind",
   "ownerSignerCount", "sheetOwnerCount", "castFlagsInline", "gateSha", "gatewaySheet",
-  // issue 1927: the local end of the tunnel to the second Twin fork the v0.5.0 deployment runs on (P8.02, port 8547)
+  // issue 1927: the local end of the tunnel to the second Twin fork the v0.5.0 deployment runs on (P8.02, port 8547). On the rehearsal target it is the live RPC.
   "v050RpcUrl",
+  // The live deployment an upgrade flow runs against (README "Flows"): on the Twin the v0.5.0 tag run of P8.03, on 8453 the Deploy 3 record. Each is a path, a signer spec
+  // or cast flags the runner supplies; none is written down here.
+  "v050Sheet", "v050CoreDir", "v050Signer", "v050CountsDir", "v050EvidenceDir", "v050ManifestDir", "v050OwnerSigner", "v050EmergencySigner", "v050DeployerKeystore", "v050CastFlagsInline",
 ]);
+/** The flows a step belongs to (README "Flows"): a new deployment, or a governed upgrade of the live deployment. A step with no `flow` is of the new flow. */
+export const FLOW_NAMES = ["new", "upgrade"] as const;
+export type FlowName = (typeof FLOW_NAMES)[number];
 /** A whole-element placeholder that expands to several argv elements (empty on the Twin chain where noted). */
 export const LIST_PLACEHOLDERS: Readonly<Record<string, readonly string[]>> = {
   // issue 1892: the gateway system run (docs/runbooks/contract-qa/gateway.yaml): its own sheet, its own evidence directory, --system gateway
@@ -63,7 +69,12 @@ export const LIST_PLACEHOLDERS: Readonly<Record<string, readonly string[]>> = {
   common: ["--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--signer", "{signer}", "--environment", "{environmentName}", "--core-sha", "{coreSha}", "--counts-dir", "{countsDir}", "--evidence", "{evidenceDir}"],
   // issue 1927: the arguments of runbook 4.15's COMMON on the Twin, against the v0.5.0 deployment of P8.03: --core-dir and --core-sha of the v0.5.0 checkout (P8.01), the tag run's
   // sheet, keys, counts and evidence ({runDir}/v050-run, P8.03). The tag run's SAFE_OWNER keystores sign beside its DEPLOYER keystore (the Twin default), so no {owners}.
-  v050common: ["--chain", "{chainId}", "--rpc", "{v050RpcUrl}", "--sheet", "{runDir}/v050-run/sheet.env", "--core-dir", "{runDir}/v050", "--core-sha", "57fbe61833e9d7f94557d69102138f7c410c1346", "--signer", "keystore:{runDir}/v050-run/keys/DEPLOYER:{runDir}/v050-run/passphrase", "--environment", "{environmentName}", "--counts-dir", "{runDir}/v050-run/counts", "--evidence", "{runDir}/v050-run/evidence"],
+  // The same arguments on the rehearsal target name the Deploy 3 record: its sheet, the checkout its live build came from, its evidence and manifests (README "Flows").
+  v050common: ["--chain", "{chainId}", "--rpc", "{v050RpcUrl}", "--sheet", "{v050Sheet}", "--core-dir", "{v050CoreDir}", "--core-sha", "57fbe61833e9d7f94557d69102138f7c410c1346", "--signer", "{v050Signer}", "--environment", "{environmentName}", "--counts-dir", "{v050CountsDir}", "--evidence", "{v050EvidenceDir}"],
+  // The live deployment's signers and cast flags: empty on the Twin (the tag run's keystores sit beside its DEPLOYER keystore), one per owner on 8453.
+  v050owners: ["--owner-signer", "{v050OwnerSigner}"],
+  v050emergency: ["--emergency-signer", "{v050EmergencySigner}"],
+  v050cast: ["--keystore", "{v050DeployerKeystore}"],
   owners: ["--owner-signer", "{ownerSigner}"],
   gate: ["--counts-require-origin-dev"],
   wait: ["--max-wait", "0"],
@@ -75,22 +86,31 @@ const PLACEHOLDER = /\{([A-Za-z][A-Za-z0-9]*)(?::([A-Za-z0-9_.\-]+))?\}/g;
 
 // ─── the step schema ────────────────────────────────────────────────────────────────────────────────────────────
 export const HOSTS = ["control", "stage"] as const;
-const STEP_KEYS = new Set(["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added"]);
+const STEP_KEYS = new Set(["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added"]);
 export const ID_PATTERN = /^P(\d{1,2})\.(\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export interface RunbookStep {
   id: string; standing: string[]; description: string; host: string; phase: number; cmds: string[][];
   env?: Record<string, string>; expectExit: number | number[]; receipts: { dir: string; pattern: string; required: boolean }[];
-  irreversible: boolean; onlyFor?: string | string[]; notBefore?: { afterStep: string; hours: number | "timelockDelay" };
+  irreversible: boolean; onlyFor?: string | string[]; flow?: string | string[]; refresh?: boolean; notBefore?: { afterStep: string; hours: number | "timelockDelay" };
   gateAbsent?: string; sheetIs?: Record<string, string>; go?: string; triage?: boolean; maxMinutes?: number; writes?: string[]; added?: string;
 }
 export interface ScopeEntry { pr: number; what: string; check?: string; none?: string }
 export interface Decision { id: string; question: string; status: "open" | "decided"; answer: string | null; decidedOn: string | null; ref: string | null }
-export interface ReleaseRunbook { release: string; template: string; templateSha?: string; productionReady: boolean; notes?: string; recovery: string; decisions: Decision[]; scope: ScopeEntry[]; steps: RunbookStep[] }
+export interface ReleaseRunbook { release: string; template: string; templateSha?: string; productionReady: boolean; notes?: string; recovery: string; decisions: Decision[]; scope: ScopeEntry[]; flows?: Partial<Record<TargetName, FlowName[]>>; vaults?: string[]; steps: RunbookStep[] }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 const onlyForList = (s: Pick<RunbookStep, "onlyFor">): string[] => (s.onlyFor === undefined ? [] : Array.isArray(s.onlyFor) ? s.onlyFor : [s.onlyFor]);
+/** The flows a step belongs to: `flow`, or the new flow when absent. */
+export const flowsOf = (s: Pick<RunbookStep, "flow">): FlowName[] => (s.flow === undefined ? ["new"] : Array.isArray(s.flow) ? (s.flow as FlowName[]) : [s.flow as FlowName]);
+/** The flows a release runs on a target: its `flows` entry, or the new flow when the release names none. */
+export const targetFlows = (r: Pick<ReleaseRunbook, "flows">, target: string): FlowName[] => r.flows?.[target as TargetName] ?? ["new"];
+/** PURE. The steps of a release that run on a target, in order: every step whose onlyFor admits the target and whose flow the release runs there. Nothing else runs, and each of these must. */
+export function applicableSteps(r: Pick<ReleaseRunbook, "flows" | "steps">, target: string): RunbookStep[] {
+  const flows = targetFlows(r, target);
+  return r.steps.filter((s) => (onlyForList(s).length === 0 || onlyForList(s).includes(target)) && flowsOf(s).some((f) => flows.includes(f)));
+}
 
 /** Stable JSON: object keys sorted, so equality never depends on the order a file wrote them. */
 export function stable(v: unknown): string {
@@ -122,6 +142,11 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
     const l = Array.isArray(raw.onlyFor) ? raw.onlyFor : [raw.onlyFor];
     if (l.length === 0 || !l.every((x) => (TARGET_NAMES as readonly string[]).includes(x as string))) errors.push(`${at}: onlyFor is ${TARGET_NAMES.join(" | ")}, or a list of them`);
   }
+  if (raw.refresh !== undefined && typeof raw.refresh !== "boolean") errors.push(`${at}: refresh is a boolean`);
+  if (raw.flow !== undefined) {
+    const l = Array.isArray(raw.flow) ? raw.flow : [raw.flow];
+    if (l.length === 0 || !l.every((x) => (FLOW_NAMES as readonly string[]).includes(x as string)) || new Set(l).size !== l.length) errors.push(`${at}: flow is ${FLOW_NAMES.join(" | ")}, or a list of them`);
+  }
   const nb = raw.notBefore;
   if (nb !== undefined && !(isObject(nb) && typeof nb.afterStep === "string" && (nb.hours === "timelockDelay" || (typeof nb.hours === "number" && nb.hours >= 0)) && Object.keys(nb).length === 2)) errors.push(`${at}: notBefore is {afterStep, hours} with hours a number (0 or more) or "timelockDelay"`);
   if (raw.gateAbsent !== undefined && (typeof raw.gateAbsent !== "string" || raw.gateAbsent === "")) errors.push(`${at}: gateAbsent is a non-empty path`);
@@ -133,7 +158,7 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
   if (raw.added !== undefined && (typeof raw.added !== "string" || raw.added === "")) errors.push(`${at}: added is a non-empty release name`);
   if (errors.length > 0) return { errors };
   const step: Record<string, unknown> = {};
-  for (const k of ["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added"]) if (raw[k] !== undefined) step[k] = raw[k];
+  for (const k of ["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added"]) if (raw[k] !== undefined) step[k] = raw[k];
   return { step: step as unknown as RunbookStep };
 }
 
@@ -235,7 +260,8 @@ export function loadModel(root: string = ROOT): CliModel {
   tools.set("scripts/release/preflight-guards.sh", { flags: new Set(["dependency-manifest", "contract"]) });
   tools.set("scripts/runbook/validate-contract-qa.ts", { flags: new Set(["release", "target", "runnable", "check-sheet", "owner-signers", "root"]) });
   tools.set("scripts/runbook/qa-assert.ts", { verbs: new Set(["eq", "ge", "within-bps", "receipt-id", "receipt-digest"]), flags: new Set() });
-  tools.set("scripts/runbook/run-record.ts", { verbs: new Set(["go", "report", "signoff"]), flags: new Set(["kind", "run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag", "step"]) });
+  tools.set("scripts/runbook/run-record.ts", { verbs: new Set(["go", "nonce", "report", "signoff"]), flags: new Set(["kind", "run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag", "step", "vaults", "release", "sender", "mark"]) });
+  tools.set("scripts/runbook/receipt-payload.ts", { flags: new Set(["out", "weights"]) });
 
   const rs = read(root, "clients/rust-payment-client/src/cli.rs");
   const variants = (enumName: string): Set<string> => {
@@ -264,7 +290,7 @@ export function expandArgv(argv: string[]): string[] {
 /** Words of a `bash -c` string, quotes and shell punctuation removed. */
 export const wordsOf = (script: string): string[] => script.replace(/["'`]/g, " ").split(/[\s;|&()<>]+/).filter(Boolean);
 
-const KNOWN_TOOLS = ["publish-contracts/src/cli.ts", "scripts/stage/core-stack.ts", "target/debug/rmpc", "publish-contracts/src/safe/cli.ts", "publish-contracts/src/rehearsal/cli.ts", "scripts/devnet/twin-fork.ts", "publish-contracts/src/evidence-check.ts", "scripts/ci/check-sha-green.ts", "publish-contracts/src/ci/merge-sheet.ts", "publish-contracts/src/ci/scan-rehearsal-secrets.ts", "scripts/stage/dapp-served-check.ts", "scripts/release/preflight-guards.sh", "scripts/runbook/validate-contract-qa.ts", "scripts/runbook/qa-assert.ts", "scripts/runbook/run-record.ts"];
+const KNOWN_TOOLS = ["publish-contracts/src/cli.ts", "scripts/stage/core-stack.ts", "target/debug/rmpc", "publish-contracts/src/safe/cli.ts", "publish-contracts/src/rehearsal/cli.ts", "scripts/devnet/twin-fork.ts", "publish-contracts/src/evidence-check.ts", "scripts/ci/check-sha-green.ts", "publish-contracts/src/ci/merge-sheet.ts", "publish-contracts/src/ci/scan-rehearsal-secrets.ts", "scripts/stage/dapp-served-check.ts", "scripts/release/preflight-guards.sh", "scripts/runbook/validate-contract-qa.ts", "scripts/runbook/qa-assert.ts", "scripts/runbook/run-record.ts", "scripts/runbook/receipt-payload.ts"];
 
 /** The invocations of known tools in one command: the tool and the words after it. A `bash -c` script is searched word by word. */
 export function invocations(argv: string[]): { tool: string; args: string[] }[] {
@@ -376,7 +402,9 @@ export function commandProblems(steps: RunbookStep[], model: CliModel, root: str
 
 // ─── the template and the release file ──────────────────────────────────────────────────────────────────────────
 const TEMPLATE_KEYS = new Set(["template", "steps"]);
-const RELEASE_KEYS = new Set(["release", "template", "templateSha", "productionReady", "notes", "recovery", "decisions", "scope", "steps"]);
+const RELEASE_KEYS = new Set(["release", "template", "templateSha", "productionReady", "notes", "recovery", "decisions", "scope", "flows", "vaults", "steps"]);
+/** The vault manifests a release deploys (run-record.ts reads them for the report): the release's `vaults:`, else the four of v0.4.0 and v0.5.0. */
+export const RELEASE_VAULT_MANIFESTS = ["vault", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault"] as const;
 
 /** PURE. A template from its YAML text. Throws with every reason it is not one. */
 export function parseTemplate(text: string, templateName: string = TEMPLATE_NAME): { name: string; steps: RunbookStep[] } {
@@ -444,6 +472,11 @@ export function parseRelease(text: string, release: string): ReleaseRunbook {
   if (typeof doc.recovery !== "string" || doc.recovery.trim() === "") errors.push(`${where}: recovery is the release's recovery decision, as text`);
   if (doc.notes !== undefined && typeof doc.notes !== "string") errors.push(`${where}: notes is text`);
   if (typeof doc.productionReady !== "boolean") errors.push(`${where}: productionReady is a boolean`);
+  if (doc.flows !== undefined) {
+    const ok = isObject(doc.flows) && Object.entries(doc.flows).every(([t, l]) => (TARGET_NAMES as readonly string[]).includes(t) && Array.isArray(l) && l.length > 0 && l.every((f) => (FLOW_NAMES as readonly string[]).includes(f as string)));
+    if (!ok) errors.push(`${where}: flows maps a target (${TARGET_NAMES.join(", ")}) to a non-empty list of ${FLOW_NAMES.join(" | ")}`);
+  }
+  if (doc.vaults !== undefined && !(Array.isArray(doc.vaults) && doc.vaults.length > 0 && new Set(doc.vaults).size === doc.vaults.length && doc.vaults.every((v) => (RELEASE_VAULT_MANIFESTS as readonly string[]).includes(v as string)))) errors.push(`${where}: vaults is a list of distinct vault manifest names (${RELEASE_VAULT_MANIFESTS.join(", ")})`);
   const steps = parseSteps(doc.steps, where, errors);
   errors.push(...scopeProblems(doc.scope, steps, where));
   errors.push(...decisionProblems(doc.decisions, where));
@@ -556,6 +589,39 @@ export function unwindGuardProblems(r: Pick<ReleaseRunbook, "release" | "steps">
   return out;
 }
 
+/** PURE. Whether a step sends a transaction: a broadcasting publish-contracts verb, a cast send (through cast-send.sh or not) or a Safe creation. */
+export function sends(s: Pick<RunbookStep, "cmds">): boolean {
+  return s.cmds.some((c) => {
+    const j = expandArgv(c).join(" ");
+    if (/publish-contracts\/src\/cli\.ts\b.*\s(publish|govern|deploy-implementation|record-receipt|pause-all|redeploy-vault)(\s|$)/.test(j) && !j.includes("--dry-run")) return true;
+    return /scripts\/runbook\/cast-send\.sh|\bcast send\b|publish-contracts\/src\/safe\/cli\.ts\b/.test(j);
+  });
+}
+
+/** The flags run-record.ts needs to compute the report (README "Run it"): without one the step exits 2 at run time, so the validator refuses the file before a run. */
+export const RECORD_FLAGS = ["run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag", "release"] as const;
+/** PURE. Every step that runs run-record.ts report or signoff names every flag the report needs, `--release` included. */
+export function recordStepProblems(steps: Pick<RunbookStep, "id" | "cmds">[]): string[] {
+  const out: string[] = [];
+  for (const s of steps) for (const c of s.cmds) {
+    const verb = c.findIndex((a) => a === "scripts/runbook/run-record.ts" || a.endsWith("/scripts/runbook/run-record.ts"));
+    if (verb < 0 || !["report", "signoff"].includes(c[verb + 1] ?? "")) continue;
+    for (const f of RECORD_FLAGS) if (!c.includes(`--${f}`)) out.push(`${s.id}: run-record.ts ${c[verb + 1]} needs --${f}`);
+  }
+  return out;
+}
+
+/**
+ * PURE. A mainnet run sends only what QA sent (policy 4.14, README "Assurances"): every step that sends on the rehearsal or production target must also run on
+ * the twin target. A step that only reads (a gate, a funding check, the plan) may be mainnet-only.
+ */
+export function qaSupersetProblems(r: Pick<ReleaseRunbook, "release" | "flows" | "steps">): string[] {
+  const twin = new Set(applicableSteps(r, "twin").map((s) => s.id));
+  const out: string[] = [];
+  for (const t of ["rehearsal", "production"]) for (const s of applicableSteps(r, t)) if (sends(s) && !twin.has(s.id)) out.push(`releases/${r.release}.yaml: ${s.id} sends on ${t} but does not run on twin: QA runs every transaction a mainnet run sends`);
+  return out;
+}
+
 /**
  * PURE. Issue 1929: the library-linked publish stage leaves the main checkout's out/ equal to the chain, and every later verify reads it. A forge command after
  * P1.02-publish that writes that out/ (build, script, clean, test) replaces it with a build whose metadata hash differs, so the next verify fails. Such a command
@@ -587,6 +653,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
   try { template = parseTemplate(tplText); } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   problems.push(...secretProblems(tplText, "template.yaml"));
   problems.push(...commandProblems(template.steps, model, root));
+  problems.push(...recordStepProblems(template.steps));
   problems.push(...gatewayRunbookProblems(root, model));
   const releases = new Map<string, ReleaseRunbook>();
   const dir = join(root, QA_DIR, "releases");
@@ -599,6 +666,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
       releases.set(name, r);
       problems.push(...unwindGuardProblems(r));
       problems.push(...mainOutProblems(r));
+      problems.push(...qaSupersetProblems(r));
       // A release pinned to templateSha is a record: its steps are checked against the template AT that commit, never the
       // current one, and its commands were checked against the CLIs at that commit, so a later template or CLI change does
       // not reopen it. The pin is read from git, so an edited record or a made-up commit is refused. An unpinned release is
@@ -611,6 +679,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
       }
       problems.push(...checkAddOnly(template, r));
       problems.push(...commandProblems(r.steps, model, root));
+      problems.push(...recordStepProblems(r.steps));
     } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   }
   if (releases.size === 0) problems.push(`${QA_DIR}/releases/ holds no release runbook`);
@@ -620,6 +689,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
 /** PURE. Why a release is not runnable on this target: a production run refuses while an owner decision is open. */
 export function runnableProblems(r: ReleaseRunbook, target: string): string[] {
   if (!(TARGET_NAMES as readonly string[]).includes(target)) return [`--target is ${TARGET_NAMES.join(" | ")}, got '${target}'`];
+  if (applicableSteps(r, target).length === 0) return [`release ${r.release} has no step that runs on ${target}`];
   if (target !== "production") return [];
   const open = r.decisions.filter((d) => d.status === "open");
   const out = open.map((d) => `owner decision '${d.id}' is open: ${d.question}`);
