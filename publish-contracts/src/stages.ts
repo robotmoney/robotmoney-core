@@ -5,7 +5,7 @@
 import { PROOF_TX_NONCES } from "./counts.ts";
 import { PROOF_STAGE } from "./control-proof.ts";
 import { PublishError } from "./errors.ts";
-import { SAFE_MANIFEST, isVaultKey } from "./core-wiring.ts";
+import { SAFE_MANIFEST, coreContractRefs, isVaultKey } from "./core-wiring.ts";
 import type { VaultKey } from "./sheet.ts";
 import { isRetiredVaultKey, type RetiredVaultKey } from "./vault-keys.ts";
 import { manifestFile, type StageTable, type SystemName, type TableCreate2Library, type TableLibrary } from "./stage-table.ts";
@@ -112,6 +112,13 @@ export const manifestRef = (stage: string, field: string): string => {
   const m = (STAGES.find((x) => x.name === stage) ?? (table ? allForgeRows(table).find((x) => x.name === stage) : undefined) ?? stageByName(stage)).manifest;
   if (!m) throw new Error(`stage ${stage} writes no manifest`);
   return `${m.replace(/\.json$/, "")}:${field}`;
+};
+
+/** `file:field` reference of the consensus receipt's address in the loaded table: the receipt stage of this line, or the ic-policy stage of the prior line (issue 1933). */
+export const receiptRef = (): string => {
+  const r = coreContractRefs(STAGE_NAMES).find((x) => x.name === "receipt");
+  if (!r) throw new Error("the stage table names no stage that deploys the consensus receipt");
+  return manifestRef(r.stage, r.field);
 };
 
 /** The deployer transactions outside every stage count that precede a stage: the prove-control transaction, for every stage after it (core 1712). */
