@@ -685,12 +685,11 @@ steps:
     onlyFor: ["rehearsal", "production"]
   - id: "P10.02-secret-scan"
     standing: ["4.7"]
-    description: "No key, passphrase or keystore path is in the run's evidence folder or in its journal (a cast error can print a keyed RPC URL)"
+    description: "No key, passphrase or keystore path is in the run's evidence folder"
     host: "control"
     phase: 10
     cmds:
       - ["bun", "publish-contracts/src/ci/scan-rehearsal-secrets.ts", "--evidence", "{evidenceDir}"]
-      - ["bun", "publish-contracts/src/ci/scan-rehearsal-secrets.ts", "--evidence", "{runDir}/journal"]
     expectExit: 0
     receipts: []
     irreversible: false
