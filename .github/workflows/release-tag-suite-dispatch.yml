@@ -51,6 +51,9 @@ name: release-tag-suite-dispatch
 on:
   push:
     tags: ["v*.*.*"]
+    # Issue 1931: a squash on a release branch and a commit on a QA branch get the full suite too. The suites carry path filters and no `qa/**` trigger, so a plain push
+    # runs only a few of them; this dispatch runs every one against the pushed commit, and check-sha-green (the 8453 upgrade-build gate) reads their check runs on that sha.
+    branches: ["releases-*", "qa/**"]
   workflow_dispatch:
     inputs:
       ref:
@@ -61,6 +64,11 @@ on:
 permissions:
   contents: read
   actions: write
+  checks: read
+
+concurrency:
+  group: release-tag-suite-dispatch-${{ inputs.ref || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   dispatch-full-suite:
@@ -69,6 +77,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
 
       - name: Dispatch every dispatchable workflow against the tag, then gate on the results
         env:
@@ -80,7 +89,8 @@ jobs:
 
           # Self, and the release publishers that the tag push already triggers
           # directly (re-dispatching them would double-publish a release).
-          EXCLUDE="release-tag-suite-dispatch.yml release-dapp.yml release-rmpc.yml suite-29-nightly-twin-fork.yml nightly-third-party-drift.yml"
+          # release-record.yml takes required inputs (chain id, release tag) and records a deployment: it is run by an operator.
+          EXCLUDE="release-tag-suite-dispatch.yml release-dapp.yml release-rmpc.yml release-record.yml suite-29-nightly-twin-fork.yml nightly-third-party-drift.yml"
 
           echo "target ref: $TARGET_REF"
           mapfile -t CANDIDATES < <(
@@ -97,9 +107,14 @@ jobs:
             case " $EXCLUDE " in *" $wf "*) skipped+=("$wf (excluded: publisher or self)"); continue;; esac
             # A workflow with no workflow_dispatch trigger cannot be dispatched;
             # say so by name rather than swallowing it.
-            if ! gh api "repos/$REPO/contents/.github/workflows/$wf?ref=$TARGET_REF" \
-                 --jq '.content' 2>/dev/null | base64 -d | grep -q 'workflow_dispatch'; then
-              skipped+=("$wf (no workflow_dispatch trigger on $TARGET_REF, or absent from that tag)")
+            # Issue 1931: read the file raw into a variable and grep that. The earlier `gh api | base64 -d | grep -q` under pipefail failed when grep -q closed the pipe
+            # early (and on base64 input errors), which reported 46 dispatchable workflows as having no workflow_dispatch trigger.
+            if ! body=$(gh api -H "Accept: application/vnd.github.raw" "repos/$REPO/contents/.github/workflows/$wf?ref=$TARGET_REF" 2>/dev/null); then
+              skipped+=("$wf (absent from $TARGET_REF)")
+              continue
+            fi
+            if ! grep -q 'workflow_dispatch' <<<"$body"; then
+              skipped+=("$wf (no workflow_dispatch trigger on $TARGET_REF)")
               continue
             fi
             if gh workflow run "$wf" -R "$REPO" --ref "$TARGET_REF" >/dev/null 2>&1; then
@@ -124,17 +139,18 @@ jobs:
             exit 1
           fi
 
-          # ---- gate: wait for the dispatched runs and fail if any failed ----
-          echo "waiting for dispatched runs on $TARGET_REF ..."
+          # ---- gate: wait for every run on the commit, then ask check-sha-green, the authority ----
+          SHA=$(gh api "repos/$REPO/commits/$TARGET_REF" --jq .sha)
+          echo "waiting for the runs on $SHA ..."
           sleep 30
           deadline=$(( $(date +%s) + 100 * 60 ))
           while :; do
-            runs=$(gh run list -R "$REPO" -b "$TARGET_REF" -e workflow_dispatch --limit 200 \
-                     --json name,status,conclusion,databaseId)
+            runs=$(gh run list -R "$REPO" --commit "$SHA" --limit 300 --json name,status,conclusion,databaseId \
+                     | jq --argjson self "$GITHUB_RUN_ID" '[.[] | select(.databaseId != $self)]')
             pending=$(echo "$runs" | jq '[.[] | select(.status != "completed")] | length')
             [[ "$pending" -eq 0 ]] && break
             if [[ $(date +%s) -ge $deadline ]]; then
-              echo "::error::timed out with $pending dispatched run(s) still in flight on $TARGET_REF"
+              echo "::error::timed out with $pending run(s) still in flight on $SHA"
               exit 1
             fi
             echo "  $pending still running ..."
@@ -142,9 +158,5 @@ jobs:
           done
 
           echo "$runs" | jq -r '.[] | "\(.conclusion)\t\(.name)\t\(.databaseId)"' | sort | tee -a "$GITHUB_STEP_SUMMARY"
-          bad=$(echo "$runs" | jq '[.[] | select(.conclusion != "success" and .conclusion != "skipped")] | length')
-          if [[ "$bad" -gt 0 ]]; then
-            echo "::error::$bad dispatched run(s) did not succeed for $TARGET_REF"
-            exit 1
-          fi
-          echo "all ${#dispatched[@]} dispatched run(s) succeeded for $TARGET_REF"
+          # An optional suite may fail without gating (scripts/ci/required-checks.json): check-sha-green decides, not a count of failed runs.
+          bun scripts/ci/check-sha-green.ts "$SHA" --repo "$REPO" | tee -a "$GITHUB_STEP_SUMMARY"

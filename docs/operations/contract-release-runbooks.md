@@ -95,8 +95,10 @@ release branch tip and pushes it. Every patch of the session, runbook
 corrections included, merges there by PR. A pushed QA branch is never
 rewritten: no force push, reset or rebase. A new base means a new branch,
 `qa/A.B.x-<YYYY-MM-DD>-2`, and the session report names which branch each piece
-of evidence ran on. Every CI workflow runs on a push to `qa/**`, so the commit
-QA runs carries its own green CI. A QA branch is kept after its squash: the
+of evidence ran on. A push to `qa/**` or `releases-*` runs `release-tag-suite-dispatch.yml`, which
+dispatches every suite that has a `workflow_dispatch` trigger against the pushed commit
+(path filters do not apply to a dispatch), waits for them and ends with `check-sha-green`
+on that commit. The commit QA runs carries its own green CI, with no manual dispatch. A QA branch is kept after its squash: the
 session report and a release file's `templateSha` name its commits.
 
 **Where QA runs.** QA runs the release's runbook YAML on the Twin chain (918453)
@@ -180,7 +182,7 @@ contracts-freeze gate that the rc tag satisfies.
   run the final Twin rehearsal at that SHA, then commit its
   frozen per-stage transaction counts to
   `deployments/frozen-counts/<sha>.json` by §2 route (c). The rehearsal is the `core-stages-twin-chain`
-  job of suite 28 (every push to `dev`, `releases-*` and `qa/**`, and the nightly). Download the `rehearsal-counts-<sha>`
+  job of suite 28 (every push to `dev` and `releases-*`, the dispatch of `release-tag-suite-dispatch.yml` on a push to `qa/**`, and the nightly). Download the `rehearsal-counts-<sha>`
   artifact of the release SHA's run, review `counts.json`, and write its `counts` (with `deploySha` and
   the `measured` chain id and time) to that file with
   `bun publish-contracts/scripts/freeze-counts.ts --counts counts.json`. Take the artifact from the
