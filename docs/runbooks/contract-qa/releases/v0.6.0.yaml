@@ -915,8 +915,8 @@ steps:
     phase: 8
     cmds:
       - ["bun", "publish-contracts/src/cli.ts", "verify", "{v050common}", "{gate}"]
-      - ["jq", "-e", ".receipt_applications | length > 0", "{runDir}/v050-run/evidence/publish-run.json"]
-      - ["bash", "-c", "bun publish-contracts/src/evidence-check.ts --receipt-applications {runDir}/v050-run/evidence/publish-run.json --deployment-kind rehearsal --consensus-receipt $(jq -r .consensus_receipt {runDir}/v050-run/manifests/ic-policy.json) --governance {state:v050-governance} --timelock {state:v050-timelock} --rpc {v050RpcUrl}"]
+      - ["jq", "-e", ".receipt_applications | length > 0", "{v050EvidenceDir}/publish-run.json"]
+      - ["bash", "-c", "bun publish-contracts/src/evidence-check.ts --receipt-applications {v050EvidenceDir}/publish-run.json --deployment-kind rehearsal --consensus-receipt $(jq -r .consensus_receipt {v050ManifestDir}/ic-policy.json) --governance {state:v050-governance} --timelock {state:v050-timelock} --rpc {v050RpcUrl}"]
     env:
       PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
       YES: "{yes}"
