@@ -754,11 +754,12 @@ steps:
     added: "v0.6.0"
   - id: "P8.16-v050-verify"
     standing: ["4.15"]
-    description: "4.15 step 8: verify compares the upgraded gateway and receipt with this build and every other contract with the v0.5.0 build, and reads rmAGENT as retired"
+    description: "4.15 step 8: verify compares the upgraded gateway and receipt with this build and every other contract with the v0.5.0 build, and reads rmAGENT as retired; the run manifest holds the applied receipt the 8453 verify path reads through the v0.5.0 stage table (issue 1933)"
     host: "control"
     phase: 8
     cmds:
       - ["bun", "publish-contracts/src/cli.ts", "verify", "{v050common}", "{gate}"]
+      - ["jq", "-e", ".receipt_applications | length > 0", "{runDir}/v050-run/evidence/publish-run.json"]
     env:
       PUBLISH_MANIFEST_DIR: "{runDir}/v050-run/manifests"
       YES: "{yes}"

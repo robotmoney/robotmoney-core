@@ -7,7 +7,7 @@ import { TIMELOCK, WORLD_CREATE2_FACTORY, adoptTimelock, deployedWorld } from ".
 import { publishLogger } from "../src/log.ts";
 import { newManifest, type RunContext } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
-import { manifestRef, stageByName } from "../src/stages.ts";
+import { manifestRef, receiptRef, stageByName, useStageTable } from "../src/stages.ts";
 import { encodeAbiParameters, encodeEventTopics, parseAbi, parseAbiParameters } from "viem";
 import { applyCalldata } from "../src/evidence-check.ts";
 import { buildVerifySheet, handoverBlock, loadExpectedAssets, mainnetGovernMode, runVerifyStage } from "../src/verify-stage.ts";
@@ -15,7 +15,7 @@ import { ADMIN, world } from "./harness.ts";
 import { COUNTS, SHA, sheetText, tmp } from "./fixtures.ts";
 
 import { getStageTable } from "../src/stages.ts";
-import { manifestBase } from "../src/stage-table.ts";
+import { manifestBase, parseStageTable } from "../src/stage-table.ts";
 import { CONFIG_ASSET, MANIFEST_ADAPTER, writeCoreAssetConfig } from "./fixtures.ts";
 
 /** One distinct address per vault, so a test can say which vault reads paused. */
@@ -483,10 +483,22 @@ describe("issue 1701: on 8453 the applied receipt vector of the run manifest mus
     step: "apply-receipt", receipt_id: RID, target: GOV, governance: GOV, payload_digest: DIGEST, vaults: VAULTS, bps, voted_weights_active: true, effective_vaults: VAULTS, effective_bps: bps,
     operation_id: OP, schedule_tx: "0x" + "51".repeat(32), schedule_status: 1, schedule_block_timestamp: 1000, execute_tx: "0x" + "52".repeat(32), execute_status: 1, execute_block_timestamp: 1000 + 172800,
   });
-  async function run(apps: unknown[]) {
+  /** Issue 1933: the v0.5.0 stage table has no receipt stage (the receipt sits in ic-policy). The table of this line with that one stage renamed is the shape verify loads on Deploy 3. */
+  const priorLineTable = () => {
+    const t = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "scripts", "deploy", "stage-table.json"), "utf8"));
+    t.stages = t.stages.map((x: any) => (x.name === "receipt" ? { ...x, name: "ic-policy" } : x));
+    t.systems.vaults.stages = t.systems.vaults.stages.map((n: string) => (n === "receipt" ? "ic-policy" : n));
+    return parseStageTable(t);
+  };
+  async function run(apps: unknown[], prior = false) {
     const { ctx } = setup({}, { chain: 8453 });
+    const saved = getStageTable();
+    if (prior) useStageTable(priorLineTable());
+    try { return await runIn(ctx, apps); } finally { useStageTable(saved); }
+  }
+  async function runIn(ctx: RunContext, apps: unknown[]) {
     const dir = join(ctx.coreDir, "deployments", "8453");
-    for (const [ref, v] of [[manifestRef("timelock", "timelock"), TL], [manifestRef("governance", "governance"), GOV], [manifestRef("receipt", "consensus_receipt"), RCPT]] as const) {
+    for (const [ref, v] of [[manifestRef("timelock", "timelock"), TL], [manifestRef("governance", "governance"), GOV], [receiptRef(), RCPT]] as const) {
       const [file, field] = ref.split(":") as [string, string];
       writeFileSync(join(dir, `${file}.json`), JSON.stringify({ chain_id: 8453, [field]: v }));
     }
@@ -515,6 +527,12 @@ describe("issue 1701: on 8453 the applied receipt vector of the run manifest mus
     // an entry whose transactions are not on chain at all is refused too
     const unbacked = await run([{ ...entry(drifted), schedule_tx: "0x" + "99".repeat(32), execute_tx: "0x" + "98".repeat(32) }]);
     expect(unbacked.err).toMatchObject({ kind: "VERIFY" });
+  });
+
+  test("issue 1933: verify with an applied receipt reads the receipt from the ic-policy manifest when --core-dir is the v0.5.0 checkout", async () => {
+    const r = await run([entry(ONCHAIN_BPS)], true);
+    expect(r.err).toBeUndefined();
+    expect(r.seen.appliedReceipt.bps).toEqual(ONCHAIN_BPS);
   });
 });
 
@@ -561,4 +579,5 @@ describe("the applied receipt after a clear-voted-weights round (issue 1927)", (
     expect(appliedReceiptOf({ receipt_applications: [app], voted_weights_clears: [clear(1001, { execute_status: 0 })] })).toMatchObject({ receiptId: app.receipt_id });
     expect(appliedReceiptOf({ receipt_applications: [app], voted_weights_clears: [clear(1001, { voted_weights_active: true })] })).toMatchObject({ receiptId: app.receipt_id });
   });
+
 });

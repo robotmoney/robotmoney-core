@@ -16,6 +16,8 @@ import { TWIN_CHAIN_ID } from "../chains.ts";
 import { ERC1967_IMPLEMENTATION_SLOT } from "../verify/codehash.ts";
 import { rpcCallRevert } from "../evidence-check.ts";
 import { parseSheetText } from "../sheet.ts";
+import { loadStageTable } from "../stage-table.ts";
+import { receiptRef, useStageTable } from "../stages.ts";
 
 export { AGENT_POOL_FLOOR, RETIRE_WEIGHTS, UPGRADE_FROM_V050_COMMANDS, UPGRADE_FROM_V050_ENV, V050_SHA, V050_TAG } from "./upgrade-from-v050-commands.ts";
 import { AGENT_POOL_FLOOR, UPGRADE_FROM_V050_COMMANDS, UPGRADE_FROM_V050_ENV, V050_SHA, V050_TAG } from "./upgrade-from-v050-commands.ts";
@@ -123,6 +125,14 @@ async function main(): Promise<void> {
   runLine(5);
   // steps 8 and 9: verify, and both evidence checks against the chain
   runLine(6);
+  // Issue 1933: the mainnet verify reads the receipt address and every receipt_applications entry of the run manifest through the v0.5.0 stage table, which has no receipt stage
+  // (the receipt sits in ic-policy). The Twin chain skips that branch, so this job holds both halves: an applied receipt is in the run manifest, and the table resolves it to the live receipt.
+  const applied = (loadJson(join(evidence, "publish-run.json")).receipt_applications ?? []) as unknown[];
+  if (applied.length === 0) fail("the v0.5.0 run manifest holds no receipt_applications: the verify path that broke on Deploy 3 is not exercised");
+  useStageTable(loadStageTable(v050));
+  const [receiptFile, receiptField] = receiptRef().split(":") as [string, string];
+  if (receiptFile !== "ic-policy") fail(`the v0.5.0 table resolves the receipt in ${receiptFile}, not ic-policy`);
+  if (!lcEq(json(join(manifests, `${receiptFile}.json`))[receiptField], receipt)) fail(`the receipt the v0.5.0 table resolves is not the live receipt ${receipt}`);
   const governed = runLine(7);
   if (!/^evidence ok \(governed upgrades: 2 upgrade\(s\), 1 with a typed migration, chain read\)$/m.test(governed)) fail(`evidence-check --governed-upgrades did not read both upgrades and the migration from the chain: ${governed}`);
   const retired = runLine(8);
