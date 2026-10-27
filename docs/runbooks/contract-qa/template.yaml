@@ -124,19 +124,20 @@ steps:
     onlyFor: ["rehearsal", "production"]
   - id: "P0.12-twin-fork"
     standing: ["9"]
-    description: "The Twin chain (918453), a pinned lazy fork of Base, answers on the RPC the run uses"
+    description: "The Twin chain (918453), a pinned lazy fork of Base, runs on the stage host (never on this machine): the host checkout is brought to the run's sha, port 8545 is checked free, the fork starts and is ready, an ssh tunnel brings it to {tunnelPort} here (reopened on every invocation), and its anvil.json is copied back"
     host: "control"
     phase: 0
     cmds:
-      - ["bun", "scripts/devnet/twin-fork.ts", "start", "--port", "8545", "--state-dir", "{runDir}/twin"]
-      - ["bun", "scripts/devnet/twin-fork.ts", "wait-ready", "--port", "8545", "--state-dir", "{runDir}/twin"]
-    env:
-      BASE_UPSTREAM_RPC: "{env:BASE_UPSTREAM_RPC}"
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; mkdir -p {stageDir} && cd {stageCore} && git fetch -q origin && git checkout -q --detach {coreSha} && git submodule update -q --init --recursive && test -z \"$(git status --porcelain)\" && test \"$(git rev-parse HEAD)\" = {coreSha} && if test -s {stageDir}/twin/anvil.json && (echo >/dev/tcp/127.0.0.1/8545) 2>/dev/null; then echo \"the fork on 8545 already runs\"; elif (echo >/dev/tcp/127.0.0.1/8545) 2>/dev/null; then echo \"port 8545 is busy on the stage host\" >&2; exit 70; else bun scripts/devnet/twin-fork.ts start --port 8545 --state-dir {stageDir}/twin; fi"]
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; cd {stageCore} && bun scripts/devnet/twin-fork.ts wait-ready --port 8545 --state-dir {stageDir}/twin"]
+      - ["bash", "-c", "ssh -o BatchMode=yes -S {runDir}/tunnel-8545.sock -O check {stageHost} 2>/dev/null || ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -f -N -M -S {runDir}/tunnel-8545.sock -L {tunnelPort}:127.0.0.1:8545 {stageHost}"]
+      - ["bash", "-c", "mkdir -p {runDir}/twin && scp -q {stageHost}:{stageDir}/twin/anvil.json {runDir}/twin/anvil.json"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}/twin", "pattern": "anvil.json", "required": true}
     irreversible: false
     onlyFor: "twin"
+    refresh: true
     maxMinutes: 15
   - id: "P0.13-twin-keys"
     standing: ["4.3"]
@@ -721,11 +722,12 @@ steps:
     flow: ["new", "upgrade"]
   - id: "P10.07-twin-teardown"
     standing: ["9"]
-    description: "The Twin fork stops and the throwaway keystores and the passphrase file are destroyed"
+    description: "The tunnel closes, the Twin fork stops on the stage host, and the throwaway keystores and the passphrase file are destroyed"
     host: "control"
     phase: 10
     cmds:
-      - ["bun", "scripts/devnet/twin-fork.ts", "stop", "--port", "8545", "--state-dir", "{runDir}/twin"]
+      - ["bash", "-c", "ssh -o BatchMode=yes -S {runDir}/tunnel-8545.sock -O exit {stageHost} 2>/dev/null; true"]
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; cd {stageCore} && bun scripts/devnet/twin-fork.ts stop --port 8545 --state-dir {stageDir}/twin"]
       - ["shred", "-u", "{runDir}/passphrase"]
       - ["rm", "-rf", "{runDir}/keys"]
     expectExit: 0
