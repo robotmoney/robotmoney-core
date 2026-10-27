@@ -357,3 +357,15 @@ test("a tunnel step removes a stale control socket before it reopens the tunnel,
     expect(tunnel.indexOf("rm -f"), id).toBeLessThan(tunnel.indexOf("-f -N -M"));
   }
 });
+
+test("the ssh scripts of the stage-host steps name the host state dir absolutely: they cd into the checkout first, so a relative path lands inside it", () => {
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  const remote = r.steps.flatMap((s) => s.cmds.filter((c) => c[0] === "ssh" && c.some((a) => a.includes("{stageDir}"))).map((c) => ({ id: s.id, script: c.at(-1)! })));
+  expect(remote.length).toBeGreaterThanOrEqual(6);
+  for (const { id, script } of remote) {
+    expect(script.match(/\{stageDir\}/g)!.length, id).toBe(script.match(/\$HOME\/\{stageDir\}/g)!.length);
+  }
+  // the scp that copies anvil.json back names the path relative to the host's home, which scp resolves itself
+  const scp = r.steps.find((s) => s.id === "P0.12-twin-fork")!.cmds.map((c) => c.join(" ")).find((c) => c.includes("scp -q"))!;
+  expect(scp).toContain("{stageHost}:{stageDir}/twin/anvil.json");
+});
