@@ -1469,7 +1469,8 @@ async function checkApplicationsMain(values: Record<string, string | boolean | u
   if (need.length) { console.error(`evidence: --receipt-applications needs ${need.map((k) => `--${k}`).join(", ")}`); process.exit(2); }
   const m = JSON.parse(readFileSync(values["receipt-applications"] as string, "utf8"));
   const ev = { deployment_kind: kind, consensus_receipt: { address: values["consensus-receipt"] }, governance: { address: values.governance }, timelock: { address: values.timelock }, receipt_applications: m.receipt_applications, voted_weights_clears: m.voted_weights_clears,
-    committee_registrations: m.committee_registrations, submitter_registrations: m.submitter_registrations, recorded_receipts: m.recorded_receipts };
+    committee_registrations: m.committee_registrations, submitter_registrations: m.submitter_registrations, recorded_receipts: m.recorded_receipts,
+    proxy_upgrades: m.proxy_upgrades }; // the re-registration rule reads the receipt migration the manifest records
   const { createPublicClient, http } = await import("viem");
   const reader = typeof values.rpc === "string" ? createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader : undefined;
   const floor = await floorArg(values, kind, reader);
