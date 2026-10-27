@@ -121,19 +121,20 @@ steps:
     onlyFor: ["rehearsal", "production"]
   - id: "P0.12-twin-fork"
     standing: ["9"]
-    description: "The Twin chain (918453), a pinned lazy fork of Base, answers on the RPC the run uses"
+    description: "The Twin chain (918453), a pinned lazy fork of Base, runs on the stage host (never on this machine): the host checkout is brought to the run's sha, port 8545 is checked free, the fork starts and is ready, an ssh tunnel brings it to {tunnelPort} here (reopened on every invocation), and its anvil.json is copied back"
     host: "control"
     phase: 0
     cmds:
-      - ["bun", "scripts/devnet/twin-fork.ts", "start", "--port", "8545", "--state-dir", "{runDir}/twin"]
-      - ["bun", "scripts/devnet/twin-fork.ts", "wait-ready", "--port", "8545", "--state-dir", "{runDir}/twin"]
-    env:
-      BASE_UPSTREAM_RPC: "{env:BASE_UPSTREAM_RPC}"
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; mkdir -p {stageDir} && cd {stageCore} && git fetch -q origin && git checkout -q --detach {coreSha} && git submodule update -q --init --recursive && test -z \"$(git status --porcelain)\" && test \"$(git rev-parse HEAD)\" = {coreSha} && if test -s {stageDir}/twin/anvil.json && (echo >/dev/tcp/127.0.0.1/8545) 2>/dev/null; then echo \"the fork on 8545 already runs\"; elif (echo >/dev/tcp/127.0.0.1/8545) 2>/dev/null; then echo \"port 8545 is busy on the stage host\" >&2; exit 70; else bun scripts/devnet/twin-fork.ts start --port 8545 --state-dir {stageDir}/twin; fi"]
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; cd {stageCore} && bun scripts/devnet/twin-fork.ts wait-ready --port 8545 --state-dir {stageDir}/twin"]
+      - ["bash", "-c", "ssh -o BatchMode=yes -S {runDir}/tunnel-8545.sock -O check {stageHost} 2>/dev/null || ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -f -N -M -S {runDir}/tunnel-8545.sock -L {tunnelPort}:127.0.0.1:8545 {stageHost}"]
+      - ["bash", "-c", "mkdir -p {runDir}/twin && scp -q {stageHost}:{stageDir}/twin/anvil.json {runDir}/twin/anvil.json"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}/twin", "pattern": "anvil.json", "required": true}
     irreversible: false
     onlyFor: "twin"
+    refresh: true
     maxMinutes: 15
   - id: "P0.13-twin-keys"
     standing: ["4.3"]
@@ -686,20 +687,21 @@ steps:
     added: "v0.6.0"
   - id: "P8.02-v050-twin-fork"
     standing: ["9"]
-    description: "A second Twin chain (918453) for the v0.5.0 deployment, pinned at Base block 52881000, where the live RM V4 pool still holds the liquidity the v0.5.0 agent stage checks"
+    description: "A second Twin chain (918453) for the v0.5.0 deployment, on the stage host, pinned at Base block 52881000 where the live RM V4 pool still holds the liquidity the v0.5.0 agent stage checks; port 8547 is checked free, an ssh tunnel brings it to {tunnelPort2} here (reopened on every invocation), and its anvil.json is copied back"
     host: "control"
     phase: 8
     cmds:
-      - ["bun", "scripts/devnet/twin-fork.ts", "start", "--port", "8547", "--pin-block", "52881000", "--state-dir", "{runDir}/twin-v050"]
-      - ["bun", "scripts/devnet/twin-fork.ts", "wait-ready", "--port", "8547", "--state-dir", "{runDir}/twin-v050"]
-    env:
-      BASE_UPSTREAM_RPC: "{env:BASE_UPSTREAM_RPC}"
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; mkdir -p {stageDir} && cd {stageCore} && git fetch -q origin && git checkout -q --detach {coreSha} && git submodule update -q --init --recursive && test -z \"$(git status --porcelain)\" && test \"$(git rev-parse HEAD)\" = {coreSha} && if test -s {stageDir}/twin-v050/anvil.json && (echo >/dev/tcp/127.0.0.1/8547) 2>/dev/null; then echo \"the fork on 8547 already runs\"; elif (echo >/dev/tcp/127.0.0.1/8547) 2>/dev/null; then echo \"port 8547 is busy on the stage host\" >&2; exit 70; else bun scripts/devnet/twin-fork.ts start --port 8547 --pin-block 52881000 --state-dir {stageDir}/twin-v050; fi"]
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; cd {stageCore} && bun scripts/devnet/twin-fork.ts wait-ready --port 8547 --state-dir {stageDir}/twin-v050"]
+      - ["bash", "-c", "ssh -o BatchMode=yes -S {runDir}/tunnel-8547.sock -O check {stageHost} 2>/dev/null || ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -f -N -M -S {runDir}/tunnel-8547.sock -L {tunnelPort2}:127.0.0.1:8547 {stageHost}"]
+      - ["bash", "-c", "mkdir -p {runDir}/twin-v050 && scp -q {stageHost}:{stageDir}/twin-v050/anvil.json {runDir}/twin-v050/anvil.json"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}/twin-v050", "pattern": "anvil.json", "required": true}
     irreversible: false
     flow: "upgrade"
     onlyFor: "twin"
+    refresh: true
     maxMinutes: 15
     added: "v0.6.0"
   - id: "P8.03-v050-publish"
@@ -1316,7 +1318,8 @@ steps:
     host: "control"
     phase: 8
     cmds:
-      - ["bun", "scripts/devnet/twin-fork.ts", "stop", "--port", "8547", "--state-dir", "{runDir}/twin-v050"]
+      - ["bash", "-c", "ssh -o BatchMode=yes -S {runDir}/tunnel-8547.sock -O exit {stageHost} 2>/dev/null; true"]
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; cd {stageCore} && bun scripts/devnet/twin-fork.ts stop --port 8547 --state-dir {stageDir}/twin-v050"]
       - ["shred", "-u", "{runDir}/v050-run/passphrase"]
       - ["bash", "-c", "rm -rf \"$(readlink {runDir}/v050-run)/keys\" {runDir}/v050 {runDir}/v060 && git worktree prune"]
     expectExit: 0
@@ -1453,11 +1456,12 @@ steps:
     flow: ["new", "upgrade"]
   - id: "P10.07-twin-teardown"
     standing: ["9"]
-    description: "The Twin fork stops and the throwaway keystores and the passphrase file are destroyed"
+    description: "The tunnel closes, the Twin fork stops on the stage host, and the throwaway keystores and the passphrase file are destroyed"
     host: "control"
     phase: 10
     cmds:
-      - ["bun", "scripts/devnet/twin-fork.ts", "stop", "--port", "8545", "--state-dir", "{runDir}/twin"]
+      - ["bash", "-c", "ssh -o BatchMode=yes -S {runDir}/tunnel-8545.sock -O exit {stageHost} 2>/dev/null; true"]
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; cd {stageCore} && bun scripts/devnet/twin-fork.ts stop --port 8545 --state-dir {stageDir}/twin"]
       - ["shred", "-u", "{runDir}/passphrase"]
       - ["rm", "-rf", "{runDir}/keys"]
     expectExit: 0

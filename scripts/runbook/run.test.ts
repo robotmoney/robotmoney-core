@@ -101,7 +101,7 @@ test("a publish that failed continues with --resume; nothing else gets it", () =
   expect(withResume(["bun", "x.ts", "publish"], true)).toEqual(["bun", "x.ts", "publish"]);
 });
 
-test("only the live-state read of the upgrade flow refreshes", () => {
+test("only the live-state read and the two stage-host fork steps refresh", () => {
   const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
-  expect(r.steps.filter((s) => s.refresh).map((s) => s.id)).toEqual(["P8.06-v050-pre-state"]);
+  expect(r.steps.filter((s) => s.refresh).map((s) => s.id)).toEqual(["P0.12-twin-fork", "P8.02-v050-twin-fork", "P8.06-v050-pre-state"]);
 });
