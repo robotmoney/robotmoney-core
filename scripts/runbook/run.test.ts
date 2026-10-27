@@ -105,3 +105,8 @@ test("only the live-state read and the two stage-host fork steps refresh", () =>
   const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
   expect(r.steps.filter((s) => s.refresh).map((s) => s.id)).toEqual(["P0.12-twin-fork", "P8.02-v050-twin-fork", "P8.06-v050-pre-state"]);
 });
+
+test("on the twin the run directory must leave room for the tunnel control socket path", () => {
+  expect(configProblems({ scalars: { runDir: "/home/u/tmp/twin-qa-v060-9/run-1" } }, "twin")).toEqual([]);
+  expect(configProblems({ scalars: { runDir: `/home/u/${"x".repeat(80)}` } }, "twin")).toHaveLength(1);
+});
