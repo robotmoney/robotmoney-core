@@ -2,6 +2,25 @@
 
 The rehearsal deploy runbook deploys a contract release on a network, governs it and proves it works. It runs in three environments. The policy is `docs/operations/contract-release-runbooks.md` (4.4, 4.12 and 4.14). The format follows the frontend release runbooks.
 
+## Assurances
+
+A run of a release file is the proof of three things. Each step proves part of one of them, and the `standing` field names the policy section it proves.
+
+| Assurance | What the steps prove |
+| --- | --- |
+| The code on chain is the tagged build | the release gate (tag, remote, branch, green CI), every implementation's and library's code hash against the build, append-only storage layouts |
+| Only the intended parties can change anything | the Safe owners and threshold, the timelock roles and delay, every role holder of every governed contract enumerated from logs, the deployer holding no role, no shares and no agent registration |
+| Each governed operation did what the release says, and nothing else | the implementation slots, the migration run once, the roles after it, the state before the operation still readable after it, every operation scheduled, delayed and executed through the timelock (the evidence checks read this from the chain) |
+| The governance pipeline works on the new state | a submitter registered, a receipt recorded by it, the receipt applied through the Safe and the timelock, the router weights read back equal to it |
+| Users and agents can use it | a deposit and a redeem in each vault, a deposit through the router split by the effective weights, an agent consented, deposited through the gateway and revoked, a retired vault refusing a real deposit and paying its holders |
+| The safety controls work | pause-all with the emergency key, a redeem while paused, the unpause rounds through the Safe, the unwind and slippage guards set |
+| The record is complete, and nothing happened outside it | every step that runs on the target has a result, every transaction a marked sender made during the run is one a step journaled, the sign-off written from the report |
+
+Two rules follow from this:
+
+- **QA runs everything mainnet runs, and more.** A step of the `rehearsal` or `production` target is a step of the same file that the `twin` target ran at the same template. A mainnet rehearsal may send only what a passing Twin run sent (policy 4.14). The Twin adds what only a disposable chain allows (the Twin-only steps).
+- **"Complete" is a record, not a claim.** A run is complete when `P10.52-record-signoff` wrote `{runDir}/go/signoff.json`. The report it checks lists every applicable step without a result, every failed step, every vault still paused and every transaction sent outside the journal as an issue. Nothing an operator or an agent says changes that.
+
 ## Branches and tags
 
 The release line is the branch `releases-A.B.x` (for example `releases-0.5.x`). Feature PRs never target it. The policy (sections 2, 3 and 4.14) is the rule. In short:
@@ -17,10 +36,13 @@ The release line is the branch `releases-A.B.x` (for example `releases-0.5.x`). 
 | --- | --- |
 | `template.yaml` | Every step a contract release runs, in order. General: no release in it. |
 | `releases/<release>.yaml` | A full copy of the template steps, unchanged and in order. Plus only the steps that release adds, each marked `added: <release>`. |
+| `gateway.yaml` | The gateway system's own runbook (issue 1892): deploy, verify, an agent deposit through the gateway, evidence. |
+| `../../../scripts/runbook/run.ts` | The runner. It runs a release file on a target from the first step that runs there to the last, journals every command and writes every result. |
 | `../../../scripts/runbook/validate-contract-qa.ts` | The checker. Run it with no arguments for the template and every release file. |
 | `../../../scripts/runbook/qa-assert.ts` | The small assertions a step makes between two commands. |
 | `../../../scripts/runbook/cast-send.sh` | `cast send` that fails on a mined revert: cast exits 0 when a send with `--gas-limit` is mined with status 0. Every step sends through it. |
-| `../../../scripts/runbook/run-record.ts` | Writes the run's own records: the publish go, the Twin freeze go, the rollout report and the sign-off. |
+| `../../../scripts/runbook/run-record.ts` | Writes the run's own records: the publish go (with the senders' nonces), a later sender's nonce mark, the Twin freeze go, the rollout report and the sign-off. |
+| `../../../scripts/runbook/receipt-payload.ts` | The Twin's receipt payload: the real production envelope with the three-vault vector. On 8453 the operator passes the receipt the canonical route serves. |
 
 A release file also holds its `decisions:` (owner decisions, open or decided), its `recovery:` decision, its `notes:` and its `scope:` (every PR the release ships, each tied to a check or a reason for none).
 
@@ -41,6 +63,16 @@ The template itself can change. When a release is finished, its file pins `templ
 
 The environment is chosen at run time with `--target twin|rehearsal|production`. There are no per-environment files. Only parameters differ. A step that exists for one environment says so with `onlyFor`.
 
+## Flows
+
+A release has two flows. The **new** flow deploys the release at new addresses (the template steps). The **upgrade** flow upgrades the live deployment in place (a governed upgrade, policy 4.12 and 4.14: the steps the release adds for it, v0.6.0's phase 8). A step names its flows with `flow:` (absent: `new`). A release names the flows each target runs with `flows:`; absent, every target runs the new flow. A step runs on a target when its `onlyFor` admits the target and its flow is one the release runs there, and every such step must run: the report lists one that did not as an issue.
+
+v0.6.0 runs both flows on the Twin in one run, the upgrade flow on the 8453 rehearsal (the live Deploy 3 record) and the new flow in production. In the upgrade flow the `{v050...}` placeholders name the live deployment: on the Twin the v0.5.0 tag run the flow itself publishes (P8.03), on 8453 the Deploy 3 record. `{v050CoreDir}` is the checkout whose build is the live one (a rebuild elsewhere embeds another path in the metadata and fails the library hash check, issue 1926). Template steps with no `flow` belong to the new flow only: the Twin keys and fork, the sheet merge, the plan and the dry run of a new deployment, the publish and its verifies, the first govern rounds, the template's own receipt and deposit rounds and pause drills, the frozen-counts evidence check. The upgrade flow has its own steps for the same assurances against the live deployment (phase 8): P8.06 reads its pre-state, P8.20 to P8.24 govern a receipt, P8.26 to P8.33 deposit and redeem, P8.34 to P8.36 drill the pause, P8.37 and P8.38 verify and check the evidence. The steps that do belong to both are marked `flow: ["new", "upgrade"]`.
+
+**What these records cannot do.** They stop an honest run that skips, forgets or sends outside the runbook, and a hand-edited report (the sign-off computes the report again). They cannot stop someone who holds the keys and the run directory from forging a result file, a `done-*` marker or a journal line: a sign-off is evidence the run produced, not an authority. The sender nonce check covers the deployer and the emergency key, not the Safe owners' keys. The report redacts every URL in a journal line, because it is published and a cast error can print the keyed RPC URL; the journal itself stays in the run directory outside the repo.
+
+On a deployment that is already upgraded, P8.06 writes a `done-*` marker for each governed operation the chain and the run manifest show executed; the operation's steps are then skipped by their own `gateAbsent`, the report lists the skips, and every later step still runs.
+
 | Target | Chain | RPC variable | Starting sheet |
 | --- | --- | --- | --- |
 | `twin` | 918453 | `TWIN_RPC_URL` | `deployments/twin-918453/stage-sheet.env` |
@@ -60,7 +92,7 @@ Every step names its `host`. There are two.
 
 - P0.12 is written with `host: "control"` but starts the fork on the stage host (`rm-core-stage-1`): run the two `twin-fork.ts` commands over ssh there with `--state-dir <hostStateDir>/twin`, where `<hostStateDir>` is the host-side mirror of `{runDir}` on the stage host (for example `$HOME/tmp/twin-qa-v060/host-<run name>`). The exact file they write is `<hostStateDir>/twin/anvil.json` on the stage host. After `wait-ready`, copy it back to `{runDir}/twin/anvil.json` on the operator machine (`scp rm-core-stage-1:<hostStateDir>/twin/anvil.json {runDir}/twin/anvil.json`), because the step's receipt check reads `{runDir}/twin/anvil.json` on the machine that holds the run directory.
 - Port rule: P0.12 and P10.07 hard-code port `8545`. The runner must confirm before P0.12 that port 8545 is free on the stage host (for example `ss -ltn 'sport = :8545'` prints no listener), because the host can also run a foreign anvil. If it is not free, stop and free it. Do not edit the port in a committed release yaml.
-- The v0.6.0 release adds a second Twin fork for its phase 8 (issue 1927, runbook 4.15 rehearsed from a real v0.5.0 deployment): P8.00 checks that forge, cast and anvil are Foundry 1.8.5 on both hosts (on the stage host it calls `$HOME/.foundry/bin/<tool>` by path, since a non-interactive ssh shell has no Foundry on PATH: install 1.8.5 there with `foundryup -i v1.8.5` before the run). P8.02 starts the fork on the stage host over ssh like P0.12, on port 8547 with `--pin-block 52881000` and `--state-dir <hostStateDir>/twin-v050`; after `wait-ready`, copy `<hostStateDir>/twin-v050/anvil.json` back to `{runDir}/twin-v050/anvil.json` (`scp rm-core-stage-1:<hostStateDir>/twin-v050/anvil.json {runDir}/twin-v050/anvil.json`), because the step's receipt check reads it there. P8.18's `twin-fork.ts stop` also runs over ssh on the stage host, with `--state-dir <hostStateDir>/twin-v050`. The upstream `BASE_UPSTREAM_RPC` must serve archive state at Base block 52881000: a node that has pruned it cannot fork there, and a later pin fails the v0.5.0 agent stage. Confirm port 8547 is free on the stage host before P8.02, as for 8545. `{v050RpcUrl}` is the local end of a second tunnel (`ssh -N -L 8547:127.0.0.1:8547 rm-core-stage-1`). The pin is fixed because the live RM V4 pool the v0.5.0 rmAGENT holds was drained at Base block 52881518. P8.01 checks out `release/v0.5.0-rehearsal` at `{runDir}/v050` (outside the core checkout, so the core checkout stays clean), P8.03 publishes it with that tag's own `publish-contracts/src/ci/twin-publish.ts` and links its run directory to `{runDir}/v050-run`, and the 4.15 commands run with `{v050common}` (`--core-dir {runDir}/v050` and the tag's sha). P8.04 checks out the qa commit a second time at `{runDir}/v060` (with submodules) and runs `forge build --root {runDir}/v060 --out {runDir}/v060/out` there, and P8.10 to P8.13 pass `--upgrade-build {runDir}/v060`. A plain `forge build` in the main checkout would replace its library-linked `out/`, which P9.05 and every later verify read (issue 1929). The validator refuses a forge build, script, clean or test after P1.02-publish unless it names `--root` and `--out` under `{runDir}`. P8.18 removes both checkouts.
+- The v0.6.0 release adds a second Twin fork for its phase 8 (issue 1927, runbook 4.15 rehearsed from a real v0.5.0 deployment): P8.00 checks that forge, cast and anvil are Foundry 1.8.5 on both hosts (on the stage host it calls `$HOME/.foundry/bin/<tool>` by path, since a non-interactive ssh shell has no Foundry on PATH: install 1.8.5 there with `foundryup -i v1.8.5` before the run). P8.02 starts the fork on the stage host over ssh like P0.12, on port 8547 with `--pin-block 52881000` and `--state-dir <hostStateDir>/twin-v050`; after `wait-ready`, copy `<hostStateDir>/twin-v050/anvil.json` back to `{runDir}/twin-v050/anvil.json` (`scp rm-core-stage-1:<hostStateDir>/twin-v050/anvil.json {runDir}/twin-v050/anvil.json`), because the step's receipt check reads it there. P8.90's `twin-fork.ts stop` also runs over ssh on the stage host, with `--state-dir <hostStateDir>/twin-v050`. The upstream `BASE_UPSTREAM_RPC` must serve archive state at Base block 52881000: a node that has pruned it cannot fork there, and a later pin fails the v0.5.0 agent stage. Confirm port 8547 is free on the stage host before P8.02, as for 8545. `{v050RpcUrl}` is the local end of a second tunnel (`ssh -N -L 8547:127.0.0.1:8547 rm-core-stage-1`). The pin is fixed because the live RM V4 pool the v0.5.0 rmAGENT holds was drained at Base block 52881518. P8.01 checks out `release/v0.5.0-rehearsal` at `{runDir}/v050` (outside the core checkout, so the core checkout stays clean), P8.03 publishes it with that tag's own `publish-contracts/src/ci/twin-publish.ts` and links its run directory to `{runDir}/v050-run`, and the 4.15 commands run with `{v050common}` (on the Twin `--core-dir {v050CoreDir}` is `{runDir}/v050`, and the tag's sha). P8.04 checks out the qa commit a second time at `{runDir}/v060` (with submodules) and runs `forge build --root {runDir}/v060 --out {runDir}/v060/out` there, and P8.10 to P8.13 pass `--upgrade-build {runDir}/v060`. A plain `forge build` in the main checkout would replace its library-linked `out/`, which P9.05 and every later verify read (issue 1929). The validator refuses a forge build, script, clean or test after P1.02-publish unless it names `--root` and `--out` under `{runDir}`. P8.90 removes both checkouts.
 - No rehearsal chain runs on the operator machine. That covers the Twin fork, any anvil and any fork of Base. A Twin run starts its fork on the stage host (P0.12 runs there over ssh).
 - The operator machine drives the whole run over ssh. A `control` step on the Twin target reaches the stage fork through an ssh tunnel (`ssh -N -L <port>:127.0.0.1:<port> rm-core-stage-1`), and `{rpcUrl}` is the local end of that tunnel.
 - Keys, passphrase files and keyed RPC URLs never leave the operator machine. Nothing on the stage host signs (`docs/development/stage-deployment.md`).
@@ -69,6 +101,8 @@ Every step names its `host`. There are two.
 ## Placeholders
 
 `{name}` is resolved at run time from the target, the sheet or the run. `{sheet:NAME}` reads a sheet line. `{m:file.key}` reads a deployment manifest. `{state:name}` reads a file an earlier step wrote under `{runDir}/state/`. `{journal:id}` reads an earlier step's journaled output.
+
+`{v050Sheet}`, `{v050CoreDir}`, `{v050CountsDir}`, `{v050EvidenceDir}`, `{v050ManifestDir}` and `{v050RpcUrl}` name the live deployment of the upgrade flow ("Flows"). `{v050Signer}` is its deployer's signer spec, `{v050OwnerSigner}` one of its Safe owners' specs, `{v050EmergencySigner}` its emergency key's spec, `{v050DeployerKeystore}` and `{v050CastFlagsInline}` its deployer keystore for `cast send`. On the Twin they point into `{runDir}/v050-run` (the tag run of P8.03) and the signer lists are empty, because that run's keystores sign by default.
 
 `{manifestDir}` is `deployments/qa-runs/<run name>` in the core checkout. Forge may write manifests only under `./deployments` or `/tmp` (`fs_permissions` in `foundry.toml`). Git ignores `deployments/qa-runs/`, so verify (P2.01), which refuses a checkout with untracked files, still passes. Any other folder under `deployments/` fails P2.01, and a folder outside the checkout fails publish (P1.02). The dry run (P0.21) writes to `{runDir}/manifests-dry`, which P0.57 links to `{manifestDir}-dry` for the same reason.
 
@@ -82,10 +116,11 @@ Placeholders the runner or operator supplies:
 - `{emergency}` expands to `--emergency-signer {emergencySigner}`: the key that holds `EMERGENCY_ROLE`, used by `pause-all` and nothing else.
 - `{releaseTag}` is defined above: the annotated rc tag at `{gateSha}` that the release gate (P0.20) reads.
 - `{ownerSignerCount}` is the number of owner signer specs the operator passes to `{owners}`, and P0.17 hands it to `--owner-signers`. It is `0` on the Twin target (the default keystores sign) and equals the number of `SAFE_OWNERS` on a `rehearsal` or `production` run.
+- `{receiptFile}` is the consensus receipt payload the run records and applies. On the Twin, `P5.00-receipt-payload` (and `P8.19` in the upgrade flow) writes it: the real production envelope with the three-vault vector. On 8453 the operator passes the latest receipt the canonical route serves; `apply-receipt` refuses one that weights `agent_tokens` (ADR-0017) and the run stops there, so the committee issues a receipt the router can take.
 - `{receiptUri}` is the URI recorded on chain with the consensus receipt (`record-receipt --payload-uri`). It points at the stored receipt payload that `{receiptFile}` holds and is not a secret. The operator or runner supplies it.
 - `{cast}` expands to `--keystore {deployerKeystore}`: the flags that `scripts/runbook/cast-send.sh` forwards to `cast send`. It is the deployer keystore only. The passphrase comes from the 0600 file of P0.13 and never appears on the command line.
 
-A whole-element list placeholder expands to several argv elements: `{common}`, `{gcommon}`, `{v050common}`, `{owners}`, `{gate}`, `{wait}`, `{emergency}`, `{cast}`. The definitions are `LIST_PLACEHOLDERS` in the validator. The scalar names are `SCALARS` in the same file.
+A whole-element list placeholder expands to several argv elements: `{common}`, `{gcommon}`, `{v050common}`, `{owners}`, `{v050owners}`, `{gate}`, `{wait}`, `{emergency}`, `{v050emergency}`, `{cast}`, `{v050cast}`. The definitions are `LIST_PLACEHOLDERS` in the validator. The scalar names are `SCALARS` in the same file. The runner's config may give a list its value for the target (`lists`): `{owners}`, `{v050owners}`, `{emergency}` and `{v050emergency}` are empty on the Twin, and on 8453 `{v050common}` is the README definition plus one `--owner-signer` per live Safe owner, because the upgrade flow's commands take no separate owner list.
 
 ## Target
 
@@ -93,14 +128,25 @@ The target deployment has three vaults: rmUSDC, rmPROTO and rmRWA (ADR-0017). A 
 
 ## Run it
 
-Until a runner is ported, an operator or an agent follows the YAML by hand. Each step's commands run in order from the root of the core checkout at the deploy sha: the QA branch commit on the `twin` target, the rc tag's commit on `rehearsal` and `production`. Pipe every command's stdout through `tee -a {runDir}/journal/<id>.out` (the verifier labels the later steps grep). Keep stderr, the JSON logs, apart in `{runDir}/journal/<id>.err`: a log field named `label` is not a verifier label. Write receipts to the paths the step names. Record each step's outcome in `{runDir}/journal/<id>.result` as one line: `pass`, `skip <reason>` or `fail exit <n>`. A retry that passes overwrites it. The rollout report (P10.51) lists a failed step, or a journaled step with no result, as an issue, and the sign-off (P10.52) is then refused. v0.6.0 has three vaults (ADR-0017): its added step P10.53 rewrites the report with `--vaults vault,protocol-asset-vault,rwa-basket-vault`, because a template step is never edited and the default reads four manifests.
+One command runs a release on a target, from the first step that runs there to the last:
+
+```
+bun scripts/runbook/run.ts --release v0.6.0 --target twin --config ~/tmp/<run>/config.json
+```
+
+The config is a JSON file outside the repo, `{"scalars": {...}, "lists": {...}}`: every scalar placeholder above, and a list placeholder's value for the target where it differs from the definition. A keystore spec in it is a path; the passphrase is typed at the CLI's own prompt on the terminal the runner runs in (8453 refuses passphrase files), and never written anywhere. The runner refuses to start on a runbook the validator rejects, or on a target the release does not run.
+
+For every step that runs on the target the runner, in order: skips a step whose result is already `pass` unless it is marked `refresh` (so the same command continues a run after a failure; P8.06 refreshes, because it re-reads the chain); adds `--resume` to a `publish` that failed on the earlier invocation (the CLI refuses a rerun without it); writes `skip <reason>` for a step whose `gateAbsent` file exists or whose `sheetIs` line differs; refuses a `go` step whose record is missing; waits out `notBefore` itself (the earlier step's result time plus its hours, the sheet's `TIMELOCK_MIN_DELAY` for `timelockDelay`); runs each command from the checkout root with the step's env, stdin on the terminal, stdout appended to `{runDir}/journal/<id>.out` and stderr to `<id>.err` (both also shown); requires the exit code to be one of `expectExit` and every required receipt to exist; writes `pass` or `fail exit <n>` to `{runDir}/journal/<id>.result`, and stops on a failure. There is no option to skip a step. `--from` and `--to` bound a continuation only: a step without a result stays an issue in the report, so a bounded run cannot sign off. `--dry-run` prints the resolved commands and writes nothing.
+
+The record of the run is written by the run: `P1.50-record-go` records the sha, target, sheet hash and the deployer's and emergency key's nonces; `P10.51-write-rollout-report` (and v0.6.0's P10.53) writes `rollout-report.md` with every step's journal and result, every evidence file's sha256, and as issues every failed step, every applicable step with no result, every vault still paused and every transaction a marked sender made that no step journaled; `P10.52-record-signoff` writes `go/signoff.json` only when the report lists no issue and matches the go. That file is what "the run is complete" means. An operator or an agent reports the run by quoting it, and reports nothing as done that it does not show.
 
 Check before any run:
 
 ```
 bun scripts/runbook/validate-contract-qa.ts
-bun scripts/runbook/validate-contract-qa.ts --release v0.5.0 --target twin --runnable
+bun scripts/runbook/validate-contract-qa.ts --release v0.6.0 --target twin --runnable
 bun scripts/runbook/validate-contract-qa.ts --check-sheet <sheet.env> --target twin
+bun scripts/runbook/run.ts --release v0.6.0 --target twin --config <config.json> --dry-run
 ```
 
 A `production` run is refused while any owner decision is open or `productionReady` is `false`. Only the owner sets those.
@@ -114,4 +160,4 @@ A `production` run is refused while any owner decision is open or `productionRea
 - No secret and no keyed RPC URL appears in any file here.
 - Core never imports devops. A step calls the documented `publish-contracts` CLI only.
 
-The tests are `scripts/runbook/validate-contract-qa.test.ts` and `scripts/runbook/run-record.test.ts`. CI runs it in the doc checks suite.
+The tests are `scripts/runbook/validate-contract-qa.test.ts`, `scripts/runbook/run-record.test.ts` and `scripts/runbook/run.test.ts`. CI runs them in the doc checks suite.
