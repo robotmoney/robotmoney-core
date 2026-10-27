@@ -146,6 +146,21 @@ export function journalHashesOf(texts: string[]): string[] {
   }
   return [...out].sort();
 }
+/**
+ * PURE. The sender and nonce of a `cast tx --json` answer, or undefined when it is not a transaction. Foundry 1.8 wraps the transaction in an envelope
+ * ({"schema_version":1,"success":true,"data":{...}}), older casts print it bare: both shapes are read, and a failed or empty answer yields nothing.
+ */
+export function senderTxOf(json: string): { from: string; nonce: number } | undefined {
+  try {
+    const parsed = JSON.parse(json) as { success?: boolean; data?: { from?: string; nonce?: string | number } | null; from?: string; nonce?: string | number };
+    const t = parsed.data !== undefined ? parsed.data : parsed;
+    if (parsed.success === false || !t || typeof t.from !== "string" || t.nonce === undefined) return undefined;
+    const nonce = Number(t.nonce);
+    return Number.isInteger(nonce) ? { from: t.from, nonce } : undefined;
+  } catch {
+    return undefined;
+  }
+}
 /** PURE. The issues of one sender's window: every nonce from the mark to now that no journaled transaction of that sender carries. */
 export function senderIssuesOf(sender: string, from: number, now: number, journaled: { from: string; nonce: number }[]): string[] {
   const seen = new Set(journaled.filter((t) => t.from.toLowerCase() === sender.toLowerCase()).map((t) => t.nonce));
@@ -179,7 +194,8 @@ function senderIssues(runDir: string, journalTexts: string[]): string[] {
       for (const h of journalHashesOf(journalTexts)) {
         const j = cast(["tx", h, "--json", "--rpc-url", rpc]);
         if (!j) continue;
-        try { const t = JSON.parse(j) as { from?: string; nonce?: string | number }; if (t.from && t.nonce !== undefined) list.push({ from: t.from, nonce: Number(t.nonce) }); } catch { /* not a transaction of this chain */ }
+        const t = senderTxOf(j);
+        if (t) list.push(t);
       }
       byRpc.set(rpc, list);
     }
