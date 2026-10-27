@@ -38,6 +38,11 @@ export function parseConfig(text: string): RunConfig {
 
 /** PURE. Why a config cannot run the upgrade flow on 8453: the report reads {manifestDir} and {evidenceDir}, the flow writes {v050ManifestDir} and {v050EvidenceDir}, so on the rehearsal they must be the same directories. */
 export function configProblems(cfg: RunConfig, target: string): string[] {
+  if (target === "twin") {
+    // ssh adds a 17-character suffix while it creates a control socket and a unix socket path holds 107 bytes: a longer run directory makes every tunnel step fail.
+    const sock = `${cfg.scalars.runDir ?? ""}/tunnel-8545.sock`;
+    return sock.length > 90 ? [`on the twin target the tunnel control socket path (${sock.length} characters) must be 90 or fewer: use a shorter {runDir}`] : [];
+  }
   if (target !== "rehearsal") return [];
   const sc = cfg.scalars;
   return [["manifestDir", "v050ManifestDir"], ["evidenceDir", "v050EvidenceDir"]].filter(([a, b]) => sc[a!] !== sc[b!]).map(([a, b]) => `on the rehearsal target {${a}} (${sc[a!] ?? "unset"}) must equal {${b}} (${sc[b!] ?? "unset"}): the report reads the first, the upgrade flow writes the second`);
