@@ -263,7 +263,7 @@ export function loadModel(root: string = ROOT): CliModel {
   tools.set("scripts/runbook/validate-contract-qa.ts", { flags: new Set(["release", "target", "runnable", "check-sheet", "owner-signers", "root"]) });
   tools.set("scripts/runbook/qa-assert.ts", { verbs: new Set(["eq", "ge", "within-bps", "receipt-id", "receipt-digest"]), flags: new Set() });
   tools.set("scripts/runbook/run-record.ts", { verbs: new Set(["go", "nonce", "report", "signoff"]), flags: new Set(["kind", "run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag", "step", "vaults", "release", "sender", "mark"]) });
-  tools.set("scripts/runbook/receipt-payload.ts", { flags: new Set(["out", "weights"]) });
+  tools.set("scripts/runbook/receipt-payload.ts", { flags: new Set(["out", "weights", "session-id"]) });
 
   const rs = read(root, "clients/rust-payment-client/src/cli.rs");
   const variants = (enumName: string): Set<string> => {
