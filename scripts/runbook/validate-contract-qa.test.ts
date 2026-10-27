@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { QA_DIR, ROOT, applicableSteps, loadModel, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, mainOutProblems, unwindGuardProblems, validateAll } from "./validate-contract-qa.ts";
+import { QA_DIR, ROOT, applicableSteps, loadModel, localForkProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, mainOutProblems, unwindGuardProblems, validateAll } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
 const RELEASE = "releases/v0.5.0.yaml";
@@ -228,7 +228,7 @@ test("the committed v0.6.0 runbook runs the runbook 4.15 commands against the v0
   expect(publish.cmds[0]).toEqual(["bun", "{runDir}/v050/publish-contracts/src/ci/twin-publish.ts"]);
   expect(publish.env).toMatchObject({ GITHUB_WORKSPACE: "{runDir}/v050", PIN_BLOCK_IN: "52881000", REHEARSAL_IN: "true", SHEET_OVERLAY_IN: "deployments/twin-918453/upgrade-rehearsal.env" });
   expect(publish.cmds[1]!.join(" ")).toContain("VAULT_AGENT_MIN_POOL_LIQUIDITY=1000000000000000");
-  expect(added.find((s) => s.id === "P8.02-v050-twin-fork")!.cmds[0]).toContain("52881000");
+  expect(added.find((s) => s.id === "P8.02-v050-twin-fork")!.cmds[0]!.join(" ")).toContain("--pin-block 52881000");
   const { LIST_PLACEHOLDERS } = await import("./validate-contract-qa.ts");
   const common = LIST_PLACEHOLDERS.v050common!;
   expect(common[common.indexOf("--core-dir") + 1]).toBe("{v050CoreDir}");
@@ -330,4 +330,20 @@ test("a report or sign-off step that drops a flag the report needs fails; --rele
   expect(p.join("\n")).toContain("P10.52-record-signoff: run-record.ts signoff needs --release");
   expect(recordStepProblems([{ id: "P10.99", cmds: [["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "d"]] }]).length).toBe(9);
   expect(recordStepProblems([{ id: "P1.50", cmds: [["bun", "scripts/runbook/run-record.ts", "go", "--kind", "publish"]] }])).toEqual([]);
+});
+
+test("a Twin fork or anvil started as a command of this machine fails; the committed fork steps are ssh commands on the stage host", () => {
+  expect(localForkProblems([{ id: "P0.12", cmds: [["bun", "scripts/devnet/twin-fork.ts", "start", "--port", "8545"]] }]).join("\n")).toContain("twin-fork.ts start runs on this machine");
+  expect(localForkProblems([{ id: "P0.12", cmds: [["bun", "/x/scripts/devnet/twin-fork.ts", "stop"]] }])).toHaveLength(1);
+  expect(localForkProblems([{ id: "P0.12", cmds: [["anvil", "--port", "8545"]] }, { id: "P0.13", cmds: [["bash", "-c", "nohup anvil --fork-url x &"]] }])).toHaveLength(2);
+  expect(localForkProblems([{ id: "P0.12", cmds: [["ssh", "-o", "BatchMode=yes", "{stageHost}", "cd {stageCore} && bun scripts/devnet/twin-fork.ts start --port 8545"]] }])).toEqual([]);
+  const p = problemsWith("releases/v0.6.0.yaml", (t) => unpinned(t).replace(/\["ssh", "-o", "BatchMode=yes", "\{stageHost\}", "export PATH=\$HOME\/\.foundry\/bin:\$PATH; cd \{stageCore\} && bun scripts\/devnet\/twin-fork\.ts wait-ready --port 8547[^\]]*\]/, '["bun", "scripts/devnet/twin-fork.ts", "wait-ready", "--port", "8547"]'));
+  expect(p.join("\n")).toContain("P8.02-v050-twin-fork: twin-fork.ts wait-ready runs on this machine");
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  for (const id of ["P0.12-twin-fork", "P8.02-v050-twin-fork"]) {
+    const cmds = r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" "));
+    expect(cmds.filter((c) => c.startsWith("ssh ")).length, id).toBeGreaterThanOrEqual(2);
+    expect(cmds.some((c) => /-L \{tunnelPort2?\}:127\.0\.0\.1:854[57]/.test(c)), id).toBe(true);
+    expect(cmds.some((c) => c.includes("scp -q {stageHost}:")), id).toBe(true);
+  }
 });
