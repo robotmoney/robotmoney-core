@@ -347,3 +347,13 @@ test("a Twin fork or anvil started as a command of this machine fails; the commi
     expect(cmds.some((c) => c.includes("scp -q {stageHost}:")), id).toBe(true);
   }
 });
+
+test("a tunnel step removes a stale control socket before it reopens the tunnel, so the teardown's -O exit reaches the live master", () => {
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  for (const id of ["P0.12-twin-fork", "P8.02-v050-twin-fork"]) {
+    const tunnel = r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" ")).find((c) => c.includes("-O check"))!;
+    const sock = /-S (\S+\.sock) -O check/.exec(tunnel)![1]!;
+    expect(tunnel, id).toContain(`|| { rm -f ${sock}; ssh `);
+    expect(tunnel.indexOf("rm -f"), id).toBeLessThan(tunnel.indexOf("-f -N -M"));
+  }
+});
