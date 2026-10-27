@@ -459,9 +459,11 @@ export function reRegistrationProblems(hist: any[], news: any[], upgrades: any[]
   for (const r of news) {
     const before = hist.filter((h) => ADDR.test(h?.submitter ?? "") && lc(h.submitter) === lc(r?.submitter ?? ""));
     if (before.length === 0) continue;
-    const from = Math.max(...before.map((h) => Number(h?.execute_block_timestamp)));
-    const to = Number(r?.schedule_block_timestamp);
-    const migrated = upgrades.some((u) => u?.proxy_name === "receipt" && u?.migration?.name === "receipt-submitter-roles" && Number(u?.execute_block_timestamp) >= from && Number(u?.execute_block_timestamp) <= to);
+    // Timestamps are integers or the pair is refused: Number(null) and Number("") are 0 and would widen the window to everything before the new registration.
+    const stamps = before.map((h) => h?.execute_block_timestamp);
+    const from = Math.max(...stamps.map(Number)), to = Number(r?.schedule_block_timestamp);
+    const migrated = stamps.every((t) => Number.isInteger(t)) && Number.isInteger(r?.schedule_block_timestamp)
+      && upgrades.some((u) => u?.proxy_name === "receipt" && u?.migration?.name === "receipt-submitter-roles" && Number.isInteger(u?.execute_block_timestamp) && u.execute_block_timestamp >= from && u.execute_block_timestamp <= to);
     if (!migrated) out.push(`${regLabel(r)}: submitter is also a historical committee registration; a second registration is valid only after a receipt-submitter-roles migration executed between them`);
   }
   return out;

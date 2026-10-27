@@ -344,6 +344,12 @@ describe("issue 1888: submitter_registrations and Safe-recorded receipts, in eve
     expect(reRegistrationProblems([hist], [again], [migration(T0 + 5001)]).join("\n")).toContain("executed between them"); // after the new one was scheduled
     expect(reRegistrationProblems([hist], [again], [{ proxy_name: "gateway", migration: { name: "receipt-submitter-roles" }, execute_block_timestamp: T0 + 3000 }, { proxy_name: "receipt", execute_block_timestamp: T0 + 3000 }]).join("\n")).toContain("executed between them");
     expect(reRegistrationProblems([{ submitter: a(99), execute_block_timestamp: T0 }], [again], [])).toEqual([]); // another submitter: nothing to compare
+    // a null, empty or text timestamp never widens the window
+    for (const bogus of [null, "", "x", undefined]) {
+      expect(reRegistrationProblems([{ submitter: SUB, execute_block_timestamp: bogus }], [again], [migration(T0 + 3000)]).join("\n")).toContain("executed between them");
+      expect(reRegistrationProblems([hist], [{ submitter: SUB, schedule_block_timestamp: bogus }], [migration(T0 + 3000)]).join("\n")).toContain("executed between them");
+      expect(reRegistrationProblems([hist], [again], [{ ...migration(T0 + 3000), execute_block_timestamp: bogus }]).join("\n")).toContain("executed between them");
+    }
   });
   test("a historical and a new registration of the same submitter in the evidence need the migration; a duplicate inside either list is still refused", () => {
     const e = path(live(reh(), 900));
@@ -352,6 +358,24 @@ describe("issue 1888: submitter_registrations and Safe-recorded receipts, in eve
     expect(problems(dupNew, R)).toContain("submitter has more than one evidence entry");
     const dupHist = path(live(reh(), 900)); dupHist.committee_registrations.push({ ...dupHist.committee_registrations[0] });
     expect(problems(dupHist, R)).toContain("submitter has more than one evidence entry");
+  });
+  test("end to end through the checker: a historical and a live registration of one submitter pass with a receipt-submitter-roles migration between them, and fail without it or with it outside the window", () => {
+    const withMigration = (at: (hist: number, sched: number) => number | undefined) => {
+      const e = path(live(reh(), 900));
+      // the live registration comes after the historical one executed (the fixtures place both at T0)
+      e.submitter_registrations[0].schedule_block_timestamp = T0 + 6000; e.submitter_registrations[0].execute_block_timestamp = T0 + 6900;
+      const hist = Number(e.committee_registrations[0].execute_block_timestamp), sched = Number(e.submitter_registrations[0].schedule_block_timestamp);
+      const when = at(hist, sched);
+      e.proxy_upgrades = when === undefined ? [] : [{ proxy_name: "receipt", migration: { name: "receipt-submitter-roles" }, execute_block_timestamp: when }];
+      return { e, hist, sched };
+    };
+    const bad = ["more than one evidence entry", "also a historical committee registration"];
+    const inside = withMigration((h0, s0) => Math.floor((h0 + s0) / 2));
+    expect(inside.sched).toBeGreaterThan(inside.hist);
+    for (const m of bad) expect(problems(inside.e, R)).not.toContain(m);
+    expect(problems(withMigration(() => undefined).e, R)).toContain("also a historical committee registration");
+    expect(problems(withMigration((h0) => h0 - 1).e, R)).toContain("also a historical committee registration");
+    expect(problems(withMigration((_h, s0) => s0 + 1).e, R)).toContain("also a historical committee registration");
   });
   test("a receipt recorded by a submitter with no registration is refused in a rehearsal (mutation: the registered one passes)", () => {
     const e = live(reh(), 900); e.recorded_receipts[0].submitter = a(0xbad); e.recorded_receipts[0].submitter_safe.address = a(0xbad);
