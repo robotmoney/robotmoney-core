@@ -313,6 +313,23 @@ describe("evidence-check --receipt-applications: the Twin run manifest (issue 16
   });
 });
 
+describe("evidence-check --receipt-applications: a submitter registered before and after the receipt migration", () => {
+  const run = (manifest: object) => {
+    const dir = mkdtempSync(join(tmpdir(), "pc-apply-rereg-"));
+    const file = join(dir, "publish-run.json");
+    writeFileSync(file, JSON.stringify(manifest));
+    const r = Bun.spawnSync(["bun", join(import.meta.dir, "..", "src", "evidence-check.ts"), "--receipt-applications", file, "--consensus-receipt", a(30), "--governance", a(32), "--timelock", a(9)]);
+    return r.stderr.toString();
+  };
+  const hist = { submitter: a(40), execute_block_timestamp: 1000 };
+  const again = { submitter: a(40), schedule_block_timestamp: 5000 };
+  const migration = { proxy_name: "receipt", migration: { name: "receipt-submitter-roles" }, execute_block_timestamp: 3000 };
+  test("the manifest's proxy_upgrades reach the rule", () => {
+    expect(run({ committee_registrations: [hist], submitter_registrations: [again], proxy_upgrades: [migration] })).not.toContain("executed between them");
+    expect(run({ committee_registrations: [hist], submitter_registrations: [again] })).toContain("executed between them");
+  });
+});
+
 describe("owner exceptions before plan approval", () => {
   test("an empty list passes", () => expect(() => assertOwnerExceptions([], "2026-10-05T10:00:00Z")).not.toThrow());
   test("a placeholder is refused", () => expect(() => assertOwnerExceptions([{ text: "<x>", recorded_at: "2026-10-01T00:00:00Z" }], "2026-10-05T10:00:00Z")).toThrow());
