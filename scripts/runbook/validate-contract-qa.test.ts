@@ -273,7 +273,7 @@ test("the v0.6.0 release runs both flows on the Twin, the upgrade flow on the re
   expect(ids("twin")).toContain("P8.05-v050-twin-dirty-pre-state");
   expect(ids("rehearsal")).not.toContain("P1.02-publish");
   expect(ids("rehearsal")).not.toContain("P8.05-v050-twin-dirty-pre-state");
-  for (const id of ["P0.01-runbook-valid", "P1.50-record-go", "P8.06-v050-pre-state", "P8.23-v050-apply-receipt", "P8.29-v050-router-deposit", "P8.34-v050-pause-all", "P8.37-v050-verify-final", "P10.53-write-three-vault-rollout-report", "P10.52-record-signoff"]) expect(ids("rehearsal"), id).toContain(id);
+  for (const id of ["P0.01-runbook-valid", "P1.50-record-go", "P8.06-v050-pre-state", "P8.07-v050-done-markers", "P8.23-v050-apply-receipt", "P8.29-v050-router-deposit", "P8.34-v050-pause-all", "P8.37-v050-verify-final", "P10.53-write-three-vault-rollout-report", "P10.52-record-signoff"]) expect(ids("rehearsal"), id).toContain(id);
   expect(ids("production")).toContain("P1.02-publish");
   expect(ids("production")).not.toContain("P8.10-v050-deploy-gateway-impl");
   // a mainnet run sends only what QA sent: every step that sends on 8453 runs on the Twin
@@ -302,15 +302,15 @@ test("the committed v0.6.0 upgrade flow records and applies a receipt, deposits 
   expect(joined("P8.24-v050-receipt-read-back")).toContain("--receipt-applications");
   for (const id of ["P8.26-v050-deposit-rmusdc", "P8.27-v050-deposit-rmproto", "P8.28-v050-deposit-rmrwa"]) expect(joined(id)).toContain("deposit(uint256,address)");
   expect(joined("P8.29-v050-router-deposit")).toContain("deposit(uint256,uint256[])");
-  expect(joined("P8.31-v050-gateway-deposit-router")).toContain("depositTo(");
+  expect(joined("P8.31-v050-gateway-deposit-vaults")).toContain("depositTo(");
   expect(joined("P8.33-v050-retired-vault")).toContain("redeemInKind");
   expect(joined("P8.34-v050-pause-all")).toContain("pause-all");
   expect(joined("P8.36-v050-unpause")).toContain("--row unpause-RWA");
   const order = r.steps.map((s) => s.id);
-  for (const [a, b] of [["P8.15-v050-retire-vault", "P8.20-v050-register-submitter"], ["P8.22-v050-record-receipt", "P8.23-v050-apply-receipt"], ["P8.34-v050-pause-all", "P8.35-v050-redeem-while-paused"], ["P8.36-v050-unpause", "P8.37-v050-verify-final"], ["P8.38-v050-evidence-final", "P8.90-v050-teardown"]]) expect(order.indexOf(a), `${a} before ${b}`).toBeLessThan(order.indexOf(b));
+  for (const [a, b] of [["P8.15-v050-retire-vault", "P8.20-v050-register-submitter"], ["P8.22-v050-record-receipt", "P8.23-v050-apply-receipt"], ["P8.34-v050-pause-all", "P8.35-v050-redeem-while-paused"], ["P8.36-v050-unpause", "P8.37-v050-verify-final"], ["P10.52-record-signoff", "P10.06-v050-teardown"]]) expect(order.indexOf(a), `${a} before ${b}`).toBeLessThan(order.indexOf(b));
   // the governed operations are gated on the done-* markers P8.06 writes, so a rerun on an upgraded deployment skips them by their own gate
   for (const [id, marker] of [["P8.10-v050-deploy-gateway-impl", "done-gateway-upgrade"], ["P8.13-v050-upgrade-receipt", "done-receipt-upgrade"], ["P8.14-v050-clear-voted-weights", "done-clear-voted-weights"], ["P8.15-v050-retire-vault", "done-retire-vault"]]) expect(r.steps.find((s) => s.id === id)!.gateAbsent, id).toBe(`{runDir}/state/${marker}`);
-  expect(r.steps.find((s) => s.id === "P8.06-v050-pre-state")!.writes).toEqual(expect.arrayContaining(["done-gateway-upgrade", "done-receipt-upgrade", "done-clear-voted-weights", "done-retire-vault"]));
+  expect(r.steps.find((s) => s.id === "P8.07-v050-done-markers")!.writes).toEqual(expect.arrayContaining(["done-gateway-upgrade", "done-receipt-upgrade", "done-clear-voted-weights", "done-retire-vault"]));
 });
 
 test("the template applies the receipt it records and deposits through the router, and the go marks the senders", () => {
@@ -376,4 +376,32 @@ test("the retired-vault step reads the run manifest every run writes, never the 
   expect(script).toContain('test -f "{evidenceDir}/publish-run.json"');
   expect(script).toContain('"{evidenceDir}/publish-run.json")');
   expect(script).not.toContain("evidence.json");
+});
+
+test("the agent policies of the v0.6.0 gateway steps keep the retired withdraw members zero (the gateway reverts RetiredPolicyFieldNonZero otherwise)", () => {
+  const Z = "0x0000000000000000000000000000000000000000";
+  const root = join(ROOT, QA_DIR);
+  for (const [file, id, state] of [["releases/v0.6.0.yaml", "P8.30-v050-gateway-agent", "v050-agent-policy"], ["gateway.yaml", "P3.01-agent-policy", "agent-policy"]] as const) {
+    const text = readFileSync(join(root, file), "utf8");
+    const block = text.slice(text.indexOf(`id: "${id}"`));
+    const line = block.split("\n").find((l) => l.includes(`> {runDir}/state/${state}`))!;
+    // (active,validUntil,maxPerPayment,maxPerWindow,shareReceiver,[destinations],assetRecipient,maxWithdrawPerPayment,maxWithdrawPerWindow,[sourceVaults])
+    expect(line, `${file} ${id}`).toContain(`],${Z},0,0,[])`);
+  }
+});
+
+test("the agent of a v0.6.0 gateway step may deposit only into the three vaults: the router is never a destination (architecture 5.2)", () => {
+  const root = join(ROOT, QA_DIR);
+  for (const [file, policyState, depositId] of [["releases/v0.6.0.yaml", "v050-agent-policy", "P8.31-v050-gateway-deposit-vaults"], ["gateway.yaml", "agent-policy", "P3.04-gateway-deposit-vaults"]] as const) {
+    const text = readFileSync(join(root, file), "utf8");
+    const policy = text.split("\n").find((l) => l.includes(`> {runDir}/state/${policyState}`))!;
+    expect(policy, file).not.toMatch(/router/);
+    const dests = /\[([^\[\]]*)\],0x0000000000000000000000000000000000000000,0,0,\[\]/.exec(policy)![1]!.split(",");
+    expect(dests, file).toHaveLength(3);
+    const block = text.slice(text.indexOf(`id: "${depositId}"`));
+    const step = block.slice(0, block.indexOf("irreversible:"));
+    expect(step, file).toContain("depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])");
+    expect(step, file).toContain("AgentDeposit(bytes32,bytes32,address,address,uint256,uint256,uint64)");
+    expect(step, file).not.toMatch(/router/i);
+  }
 });

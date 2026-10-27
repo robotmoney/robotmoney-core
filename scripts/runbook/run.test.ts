@@ -101,9 +101,13 @@ test("a publish that failed continues with --resume; nothing else gets it", () =
   expect(withResume(["bun", "x.ts", "publish"], true)).toEqual(["bun", "x.ts", "publish"]);
 });
 
-test("only the live-state read and the two stage-host fork steps refresh", () => {
+test("only the two stage-host fork steps and the done-marker read refresh; the destructive pre-state cleanup runs once", () => {
   const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
-  expect(r.steps.filter((s) => s.refresh).map((s) => s.id)).toEqual(["P0.12-twin-fork", "P8.02-v050-twin-fork", "P8.06-v050-pre-state"]);
+  expect(r.steps.filter((s) => s.refresh).map((s) => s.id)).toEqual(["P0.12-twin-fork", "P8.02-v050-twin-fork", "P8.07-v050-done-markers"]);
+  const cleanup = r.steps.find((s) => s.id === "P8.06-v050-pre-state")!;
+  expect(cleanup.refresh).toBeUndefined();
+  expect(cleanup.cmds.flat().join(" ")).toContain("revokeAgent"); // it redeems and revokes: a rerun mid-flow would undo the later steps' state
+  expect(r.steps.find((s) => s.id === "P8.07-v050-done-markers")!.cmds.flat().join(" ")).not.toMatch(/cast-send|cast send|revokeAgent/); // it only reads
 });
 
 test("on the twin the run directory must leave room for the tunnel control socket path", () => {
