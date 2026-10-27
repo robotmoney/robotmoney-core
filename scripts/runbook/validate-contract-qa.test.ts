@@ -369,3 +369,11 @@ test("the ssh scripts of the stage-host steps name the host state dir absolutely
   const scp = r.steps.find((s) => s.id === "P0.12-twin-fork")!.cmds.map((c) => c.join(" ")).find((c) => c.includes("scp -q"))!;
   expect(scp).toContain("{stageHost}:{stageDir}/twin/anvil.json");
 });
+
+test("the retired-vault step reads the run manifest every run writes, never the operator-assembled evidence.json", () => {
+  const t = validateAll(ROOT, model).template.steps.find((s) => s.id === "P6.24-redeem-retired-vault")!;
+  const script = t.cmds.flat().join(" ");
+  expect(script).toContain('test -f "{evidenceDir}/publish-run.json"');
+  expect(script).toContain('"{evidenceDir}/publish-run.json")');
+  expect(script).not.toContain("evidence.json");
+});
