@@ -55,6 +55,8 @@ export const SCALARS = new Set([
   "ownerSignerCount", "sheetOwnerCount", "castFlagsInline", "gateSha", "gatewaySheet",
   // issue 1927: the local end of the tunnel to the second Twin fork the v0.5.0 deployment runs on (P8.02, port 8547). On the rehearsal target it is the live RPC.
   "v050RpcUrl",
+  // The stage host of a Twin run (README "Hosts"): its ssh alias, the host checkout of the core repo and the run's state dir (both relative to the host's home), and the local ports of the tunnels to the two forks.
+  "stageHost", "stageCore", "stageDir", "tunnelPort", "tunnelPort2",
   // The live deployment an upgrade flow runs against (README "Flows"): on the Twin the v0.5.0 tag run of P8.03, on 8453 the Deploy 3 record. Each is a path, a signer spec
   // or cast flags the runner supplies; none is written down here.
   "v050Sheet", "v050CoreDir", "v050Signer", "v050CountsDir", "v050EvidenceDir", "v050ManifestDir", "v050OwnerSigner", "v050EmergencySigner", "v050DeployerKeystore", "v050CastFlagsInline",
@@ -598,6 +600,17 @@ export function sends(s: Pick<RunbookStep, "cmds">): boolean {
   });
 }
 
+/** PURE. No step starts, serves, waits for or stops a Twin fork, or runs anvil, as a command of this machine: the fork lives on the stage host (README "Hosts"), so the command is an ssh command whose remote script names it. */
+export function localForkProblems(steps: Pick<RunbookStep, "id" | "cmds">[]): string[] {
+  const out: string[] = [];
+  for (const s of steps) for (const c of s.cmds) {
+    const forkVerb = c.findIndex((a) => a === "scripts/devnet/twin-fork.ts" || a.endsWith("/scripts/devnet/twin-fork.ts"));
+    const verb = forkVerb < 0 ? undefined : c[forkVerb + 1];
+    if (verb !== undefined && ["start", "serve", "wait-ready", "stop"].includes(verb)) out.push(`${s.id}: twin-fork.ts ${verb} runs on this machine; the fork lives on the stage host, so run it in an ssh command`);
+    if (c[0] === "anvil" || (c[0] === "bash" && c[1] === "-c" && /(^|[\s;&|(])anvil\s/.test(c[2] ?? ""))) out.push(`${s.id}: anvil runs on this machine; the fork lives on the stage host`);
+  }
+  return out;
+}
 /** The flags run-record.ts needs to compute the report (README "Run it"): without one the step exits 2 at run time, so the validator refuses the file before a run. */
 export const RECORD_FLAGS = ["run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag", "release"] as const;
 /** PURE. Every step that runs run-record.ts report or signoff names every flag the report needs, `--release` included. */
@@ -653,7 +666,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
   try { template = parseTemplate(tplText); } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   problems.push(...secretProblems(tplText, "template.yaml"));
   problems.push(...commandProblems(template.steps, model, root));
-  problems.push(...recordStepProblems(template.steps));
+  problems.push(...recordStepProblems(template.steps), ...localForkProblems(template.steps));
   problems.push(...gatewayRunbookProblems(root, model));
   const releases = new Map<string, ReleaseRunbook>();
   const dir = join(root, QA_DIR, "releases");
@@ -679,7 +692,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
       }
       problems.push(...checkAddOnly(template, r));
       problems.push(...commandProblems(r.steps, model, root));
-      problems.push(...recordStepProblems(r.steps));
+      problems.push(...recordStepProblems(r.steps), ...localForkProblems(r.steps));
     } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   }
   if (releases.size === 0) problems.push(`${QA_DIR}/releases/ holds no release runbook`);
