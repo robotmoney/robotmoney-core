@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { VAULT_MANIFESTS, journalHashesOf, main, notRunOf, redactUrls, senderIssuesOf, unbackedOf } from "./run-record.ts";
+import { VAULT_MANIFESTS, journalHashesOf, main, notRunOf, redactUrls, senderIssuesOf, senderTxOf, unbackedOf } from "./run-record.ts";
 
 const SHA = "84952e18";
 /** The steps the test run's release runs on the target: the one step its journal holds, plus the report and sign-off steps the report excludes. */
@@ -243,3 +243,14 @@ test("a pass with no journal was written by hand", () => withRun(async (d) => {
   expect(reportOf(d)).toContain("- P0.04-forged: a pass with no journal");
   expect(await signoff(d)).toBe(1);
 }));
+
+test("senderTxOf reads the foundry 1.8 envelope and the bare transaction, and nothing else", () => {
+  const a = "0x000000000000000000000000000000000000a001";
+  expect(senderTxOf(JSON.stringify({ schema_version: 1, success: true, data: { from: a, nonce: "0x5" }, errors: [], warnings: [] }))).toEqual({ from: a, nonce: 5 });
+  expect(senderTxOf(JSON.stringify({ schema_version: 1, success: true, data: { from: a, nonce: 7 } }))).toEqual({ from: a, nonce: 7 });
+  expect(senderTxOf(JSON.stringify({ from: a, nonce: "0x9" }))).toEqual({ from: a, nonce: 9 });
+  expect(senderTxOf(JSON.stringify({ schema_version: 1, success: false, data: null, errors: [{ message: "tx not found" }] }))).toBeUndefined();
+  expect(senderTxOf(JSON.stringify({ success: true, data: {} }))).toBeUndefined();
+  expect(senderTxOf("not json")).toBeUndefined();
+  expect(senderTxOf("")).toBeUndefined();
+});
