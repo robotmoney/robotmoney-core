@@ -117,7 +117,7 @@ steps:
   # ── Phase 3, a real agent deposit through the gateway (runbook 4.4): the gateway is usable, not just deployed. ──
   - id: "P3.01-agent-policy"
     standing: ["4.4"]
-    description: "The deployer of the gateway sheet, and the commit hash, salt and the deposit policy the consent steps use (the router as the only destination); validUntil is chain time plus a day, because the Twin clock is warped"
+    description: "The deployer of the gateway sheet, and the commit hash, salt and the deposit policy the consent steps use (the three vaults as the only destinations: the router is never a destination); validUntil is chain time plus a day, because the Twin clock is warped; assetRecipient and the other retired withdraw members are zero, or the v0.6.0 gateway reverts RetiredPolicyFieldNonZero"
     host: "control"
     phase: 3
     cmds:
@@ -125,7 +125,7 @@ steps:
       - ["bash", "-c", 'echo $(( $(cast block latest --field timestamp) + 86400 )) > {runDir}/state/agent-valid-until']
       - ["bash", "-c", 'cast keccak "qa-self-$(date +%s%N)" > {runDir}/state/agent-salt-self']
       - ["bash", "-c", 'cast keccak "$(cast abi-encode "f(address,address,bytes32)" "{state:gateway-admin}" "{state:gateway-admin}" "$(cat {runDir}/state/agent-salt-self)")" > {runDir}/state/agent-commit-self']
-      - ["bash", "-c", 'echo "(true,$(cat {runDir}/state/agent-valid-until),1000000,3000000,{state:gateway-admin},[{m:router.router}],{state:gateway-admin},0,0,[])" > {runDir}/state/agent-policy']
+      - ["bash", "-c", 'echo "(true,$(cat {runDir}/state/agent-valid-until),1000000,3000000,{state:gateway-admin},[{m:vault.vault},{m:protocol-asset-vault.vault},{m:rwa-basket-vault.vault}],0x0000000000000000000000000000000000000000,0,0,[])" > {runDir}/state/agent-policy']
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -147,7 +147,7 @@ steps:
     irreversible: false
   - id: "P3.03-agent-self-reveal"
     standing: ["4.4"]
-    description: "At least a block later the reveal authorizes the agent, with the router as its only destination; the gateway records the depositor as its owner"
+    description: "At least a block later the reveal authorizes the agent, with the three vaults as its only destinations (the router is never a destination); the gateway records the depositor as its owner"
     host: "control"
     phase: 3
     cmds:
@@ -158,23 +158,18 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
-  - id: "P3.04-gateway-deposit-router"
+  - id: "P3.04-gateway-deposit-vaults"
     standing: ["4.4"]
-    description: "The agent approves the gateway for 1 USDC, then deposits 1 USDC through the gateway's depositTo into the router at 11,200,000 gas (the gateway floor is 400,000 plus 2,550,000 per leg): one RouterDeposit event per non-zero leg"
+    description: "The agent approves the gateway for 1 USDC and deposits it with depositTo into each of rmUSDC, rmPROTO and rmRWA at 6,000,000 gas (the gateway floor is 2,000,000): each transaction is status 1 with exactly one AgentDeposit event of the gateway, and the deployer, the share receiver, holds shares in that vault afterwards"
     host: "control"
     phase: 3
     cmds:
-      - ["bash", "-c", 'cast keccak "qa-router-$(date +%s%N)" > {runDir}/state/order-router']
-      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:gateway.gateway}", "1000000", "{cast}"]
-      - ["bash", "-c", 'cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])" | tail -n 1 | grep -oE "[0-9]+" | grep -vxc 0 > {runDir}/state/gateway-router-legs || true']
-      - ["bash", "-c", 'bash scripts/runbook/cast-send.sh "{m:gateway.gateway}" "depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])" "{state:order-router}" 1000000 "$(( $(cast block latest --field timestamp) + 300 ))" "$(cast keccak "key-{state:order-router}")" "{m:router.router}" "[]" --gas-limit 11200000 {castFlagsInline} | tee {runDir}/state/gateway-router-deposit.json; test ${PIPESTATUS[0]} = 0']
-      - ["bash", "-c", 'jq -e --arg t "$(cast sig-event "RouterDeposit(address,address,uint256,uint256,uint256)")" --argjson n "$(cat {runDir}/state/gateway-router-legs)" ''.status == "0x1" and ([.logs[] | select(.topics[0] == $t)] | length) == $n'' {runDir}/state/gateway-router-deposit.json']
+      - ["bash", "-c", 'for v in {m:vault.vault} {m:protocol-asset-vault.vault} {m:rwa-basket-vault.vault}; do o=$(cast keccak "qa-vault-$v-$(date +%s%N)"); bash scripts/runbook/cast-send.sh {m:vault.usdc} "approve(address,uint256)" {m:gateway.gateway} 1000000 {castFlagsInline} > /dev/null || exit 1; out=$(bash scripts/runbook/cast-send.sh {m:gateway.gateway} "depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])" $o 1000000 "$(( $(cast block latest --field timestamp) + 300 ))" "$(cast keccak "key-$o")" $v "[]" --gas-limit 6000000 {castFlagsInline}) || exit 1; echo "$out"; echo "$out" | jq -e --arg t "$(cast sig-event "AgentDeposit(bytes32,bytes32,address,address,uint256,uint256,uint64)")" --arg g "$(echo {m:gateway.gateway} | tr A-F a-f)" ''.status == "0x1" and ([.logs[] | select((.address | ascii_downcase) == $g and .topics[0] == $t)] | length) == 1'' > /dev/null || exit 1; s=$(cast call $v "balanceOf(address)(uint256)" {state:gateway-admin} | cut -d" " -f1); test "$s" != 0 || { echo "no shares in $v" >&2; exit 1; }; done']
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
     receipts: []
     irreversible: false
-    writes: ["order-router", "gateway-router-legs", "gateway-router-deposit.json"]
   - id: "P3.05-sweep-positions"
     standing: ["4.4"]
     description: "The gateway deposit is redeemed in full: rmUSDC by redeem, rmPROTO by redeemInKind, rmRWA by redeem, so the deployer holds no shares anywhere"

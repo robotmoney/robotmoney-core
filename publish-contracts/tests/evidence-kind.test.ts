@@ -2,7 +2,7 @@
 // receipt path (registration, REAL recorded receipt, application) are accepted in a rehearsal and refused in production. Each refusal has a mutation (the fixed input passes).
 import { describe, expect, test } from "bun:test";
 import { encodeAbiParameters, encodeEventTopics, keccak256, parseAbi, toBytes, type Hex } from "viem";
-import { checkEvidence, checkEvidenceOnChain, checkReceiptPathOnChain, GOVERN_STEPS, REHEARSAL_ROWS, type ChainReader } from "../src/evidence-check.ts";
+import { checkEvidence, reRegistrationProblems, checkEvidenceOnChain, checkReceiptPathOnChain, GOVERN_STEPS, REHEARSAL_ROWS, type ChainReader } from "../src/evidence-check.ts";
 import { buildHistoricalRegisterCalls as buildRegisterCalls } from "../src/committee-register.ts";
 import { finalDeployerNonce } from "../src/counts.ts";
 import { withUpgradeability } from "./upgradeability-fixture.ts";
@@ -332,6 +332,26 @@ describe("issue 1888: submitter_registrations and Safe-recorded receipts, in eve
     expect(m((e) => { e.submitter_registrations[0].execute_block_timestamp = T0 + 899; })).toContain("gap 899 s");
     expect(m((e) => { e.submitter_registrations[0].cancelled = true; })).toContain("cancelled is not a field of an executed operation");
     expect(m((e) => { e.submitter_registrations = "x"; })).toContain("submitter_registrations is not a list");
+  });
+  test("a submitter registered by the v0.5.0 tool and again after the receipt migration passes; without the migration between them it is refused (runbook 4.15)", () => {
+    const hist = { submitter: SUB, execute_block_timestamp: T0 };
+    const again = { submitter: SUB, schedule_block_timestamp: T0 + 5000 };
+    const migration = (at: number) => ({ proxy_name: "receipt", migration: { name: "receipt-submitter-roles" }, execute_block_timestamp: at });
+    expect(reRegistrationProblems([hist], [again], [migration(T0 + 3000)])).toEqual([]);
+    expect(reRegistrationProblems([hist], [again], [migration(T0 + 5000)])).toEqual([]);
+    expect(reRegistrationProblems([hist], [again], []).join("\n")).toContain("valid only after a receipt-submitter-roles migration executed between them");
+    expect(reRegistrationProblems([hist], [again], [migration(T0 - 1)]).join("\n")).toContain("executed between them"); // before the historical registration
+    expect(reRegistrationProblems([hist], [again], [migration(T0 + 5001)]).join("\n")).toContain("executed between them"); // after the new one was scheduled
+    expect(reRegistrationProblems([hist], [again], [{ proxy_name: "gateway", migration: { name: "receipt-submitter-roles" }, execute_block_timestamp: T0 + 3000 }, { proxy_name: "receipt", execute_block_timestamp: T0 + 3000 }]).join("\n")).toContain("executed between them");
+    expect(reRegistrationProblems([{ submitter: a(99), execute_block_timestamp: T0 }], [again], [])).toEqual([]); // another submitter: nothing to compare
+  });
+  test("a historical and a new registration of the same submitter in the evidence need the migration; a duplicate inside either list is still refused", () => {
+    const e = path(live(reh(), 900));
+    expect(problems(e, R)).toContain("submitter is also a historical committee registration");
+    const dupNew = live(reh(), 900); dupNew.submitter_registrations.push({ ...dupNew.submitter_registrations[0] });
+    expect(problems(dupNew, R)).toContain("submitter has more than one evidence entry");
+    const dupHist = path(live(reh(), 900)); dupHist.committee_registrations.push({ ...dupHist.committee_registrations[0] });
+    expect(problems(dupHist, R)).toContain("submitter has more than one evidence entry");
   });
   test("a receipt recorded by a submitter with no registration is refused in a rehearsal (mutation: the registered one passes)", () => {
     const e = live(reh(), 900); e.recorded_receipts[0].submitter = a(0xbad); e.recorded_receipts[0].submitter_safe.address = a(0xbad);
