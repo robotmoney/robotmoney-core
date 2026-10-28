@@ -1,8 +1,9 @@
 # docs/runbooks/contract-qa/template.yaml: the general contract-release QA runbook.
 # Deployed release (v0.5.0) procedure on today's tooling; target changes are IC-1019 finding 13.
 #
-# Every step a contract release runs, in order: gate, publish, verify, govern, receipt, deposits, observability,
-# evidence, teardown (the Deploy 2 flow, on today's tooling). A release's own runbook is releases/<release>.yaml:
+# Every step a contract release runs, in order: gate, publish, verify, govern, receipt (recorded AND applied), deposits
+# (each vault, the router), failure drills, evidence, teardown (the Deploy 2 flow, on today's tooling). The assurances these
+# steps give, and the rule that a mainnet run sends only what a Twin run of the same steps sent, are README.md "Assurances". A release's own runbook is releases/<release>.yaml:
 # a full copy of these steps, unchanged and in order, plus the steps only that release adds (each with
 # `added: <release>`). scripts/runbook/validate-contract-qa.ts refuses a release file that drops, edits or
 # reorders a step of this file. The policy is docs/operations/contract-release-runbooks.md (4.4) and
@@ -35,6 +36,10 @@
 #                 {runDir}/journal/<id>.out (a runner does it, an operator pipes through tee).
 #   irreversible  true when the step cannot be undone. Every irreversible step carries notBefore, onlyFor or go.
 #   onlyFor       twin | rehearsal | production, or a list of them. Absent: every environment.
+#   refresh       true: the step reads live state and runs again on every invocation of the runner, even after a pass
+#   flow          new | upgrade, or both: the flows the step belongs to (README "Flows"). Absent: the new deployment flow.
+#                 A release says which flows each target runs (`flows:`); a step runs when its onlyFor admits the target
+#                 AND its flow is one the release runs there. Every such step must run: the report lists one that did not.
 #   notBefore     {afterStep, hours}: not before that step finished, and `hours` later. hours is a number
 #                 (0 means just after) or "timelockDelay" (the sheet's TIMELOCK_MIN_DELAY).
 #   gateAbsent    a one-time step: skipped when this file exists.
@@ -55,6 +60,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P0.02-run-dirs"
     standing: ["4.3"]
     description: "The run directory layout every later receipt and state file lives in; the run directory is outside the core checkout, which must stay clean"
@@ -66,6 +72,7 @@ steps:
     receipts:
       - {"dir": "{runDir}", "pattern": "state", "required": true}
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P0.04-checkout"
     standing: ["4.1"]
     description: "The core checkout is clean and its HEAD is the DEPLOY_SHA (the CLI refuses anything else)"
@@ -76,6 +83,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P0.05-install"
     standing: ["4.1"]
     description: "publish-contracts dependencies come from the committed lockfile"
@@ -86,6 +94,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P0.06-forge-build"
     standing: ["4.1"]
     description: "forge build succeeds at the DEPLOY_SHA"
@@ -96,6 +105,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: ["new", "upgrade"]
     maxMinutes: 30
   - id: "P0.08-dependency-manifest"
     standing: ["4.2"]
@@ -110,22 +120,24 @@ steps:
     receipts:
       - {"dir": "{countsCheckout}/deployments/dependency-manifests/8453", "pattern": "{release}.json", "required": true}
     irreversible: false
+    flow: ["new", "upgrade"]
     onlyFor: ["rehearsal", "production"]
   - id: "P0.12-twin-fork"
     standing: ["9"]
-    description: "The Twin chain (918453), a pinned lazy fork of Base, answers on the RPC the run uses"
+    description: "The Twin chain (918453), a pinned lazy fork of Base, runs on the stage host (never on this machine): the host checkout is brought to the run's sha, port 8545 is checked free, the fork starts and is ready, an ssh tunnel brings it to {tunnelPort} here (reopened on every invocation), and its anvil.json is copied back"
     host: "control"
     phase: 0
     cmds:
-      - ["bun", "scripts/devnet/twin-fork.ts", "start", "--port", "8545", "--state-dir", "{runDir}/twin"]
-      - ["bun", "scripts/devnet/twin-fork.ts", "wait-ready", "--port", "8545", "--state-dir", "{runDir}/twin"]
-    env:
-      BASE_UPSTREAM_RPC: "{env:BASE_UPSTREAM_RPC}"
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; mkdir -p $HOME/{stageDir} && cd {stageCore} && git fetch -q origin && git checkout -q --detach {coreSha} && git submodule update -q --init --recursive && test -z \"$(git status --porcelain)\" && test \"$(git rev-parse HEAD)\" = {coreSha} && if test -s $HOME/{stageDir}/twin/anvil.json && (echo >/dev/tcp/127.0.0.1/8545) 2>/dev/null; then echo \"the fork on 8545 already runs\"; elif (echo >/dev/tcp/127.0.0.1/8545) 2>/dev/null; then echo \"port 8545 is busy on the stage host\" >&2; exit 70; else bun scripts/devnet/twin-fork.ts start --port 8545 --state-dir $HOME/{stageDir}/twin; fi"]
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; cd {stageCore} && bun scripts/devnet/twin-fork.ts wait-ready --port 8545 --state-dir $HOME/{stageDir}/twin"]
+      - ["bash", "-c", "ssh -o BatchMode=yes -S {runDir}/tunnel-8545.sock -O check {stageHost} 2>/dev/null || { rm -f {runDir}/tunnel-8545.sock; ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -f -N -M -S {runDir}/tunnel-8545.sock -L {tunnelPort}:127.0.0.1:8545 {stageHost}; }"]
+      - ["bash", "-c", "mkdir -p {runDir}/twin && scp -q {stageHost}:{stageDir}/twin/anvil.json {runDir}/twin/anvil.json"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}/twin", "pattern": "anvil.json", "required": true}
     irreversible: false
     onlyFor: "twin"
+    refresh: true
     maxMinutes: 15
   - id: "P0.13-twin-keys"
     standing: ["4.3"]
@@ -163,6 +175,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P0.07-preflight-guards"
     standing: ["4.2"]
     description: "EIP-170 size gate and the zero timelock delay guard pass on the exact build artifacts"
@@ -189,19 +202,20 @@ steps:
     onlyFor: "twin"
   - id: "P0.19-funding"
     standing: ["4.2"]
-    description: "The deployer holds 0.005 ETH and 5 USDC (1 seed plus 4 test deposits). The gas the run burns is about 0.003 ETH; every send goes through cast at the network fee"
+    description: "The deployer holds 0.005 ETH and 7 USDC (1 seed, 3 vault deposits, 2 through the router, 1 spare). The gas the run burns is about 0.003 ETH; every send goes through cast at the network fee"
     host: "control"
     phase: 0
     cmds:
       - ["bash", "-c", 'cast balance "{sheet:ADMIN_ADDRESS}" > {runDir}/state/deployer-eth']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-eth}", "5000000000000000"]
       - ["bash", "-c", 'cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/deployer-usdc']
-      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-usdc}", "5000000"]
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-usdc}", "7000000"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: ["new", "upgrade"]
     onlyFor: ["rehearsal", "production"]
     writes: ["deployer-eth", "deployer-usdc"]
   - id: "P0.20-plan"
@@ -235,15 +249,16 @@ steps:
   # ── Phase 1, publish: stages 0 to 11. The first send of the run. ──
   - id: "P1.50-record-go"
     standing: ["4.3"]
-    description: "The publish go is written by the run: the sha, the environment and the hash of the merged sheet it proceeds with. Starting the run is the go"
+    description: "The publish go is written by the run: the sha, the environment and the hash of the merged sheet it proceeds with, and the nonce of the deployer and the emergency key, so the report can prove every transaction they send from here on is one a step journaled. Starting the run is the go"
     host: "control"
     phase: 1
     cmds:
-      - ["bun", "scripts/runbook/run-record.ts", "go", "--kind", "publish", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}"]
+      - ["bun", "scripts/runbook/run-record.ts", "go", "--kind", "publish", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}", "--rpc", "{rpcUrl}", "--sender", "{sheet:ADMIN_ADDRESS},{sheet:EMERGENCY_ADDRESS}", "--evidence-dir", "{evidenceDir}"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}/go", "pattern": "publish.json", "required": true}
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P1.02-publish"
     standing: ["4.3"]
     description: "Safe, libs, vault, registry, router, ic-policy, governance, proto, rwa, prove-control signed by every owner, then the timelock handover; each stage matches its frozen count"
@@ -386,6 +401,18 @@ steps:
     receipts: []
     irreversible: false
     maxMinutes: 60
+  # ── Phase 5, the consensus receipt: recorded by the submitter Safe, then APPLIED by the governing Safe through the timelock (runbook 4.9). ──
+  - id: "P5.00-receipt-payload"
+    standing: ["4.10"]
+    description: "The Twin's receipt payload: the real production envelope with the three-vault vector (agent_tokens 0, ADR-0017), written by the run. On 8453 the operator passes the receipt the canonical route serves as {receiptFile}; a receipt that weights agent_tokens is refused by apply-receipt and the run stops"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bun", "scripts/runbook/receipt-payload.ts", "--out", "{receiptFile}", "--weights", "USDC:9500,PROTO:500,RWA:0"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "twin"
   - id: "P5.01-receipt-offline"
     standing: ["4.10"]
     description: "The receipt id and the payload digest come from the one shared definition, never a plain keccak256 of the file"
@@ -414,6 +441,37 @@ steps:
     irreversible: true
     onlyFor: ["twin", "rehearsal"]
     notBefore: {"afterStep": "P4.01-verify-post-govern", "hours": 0}
+  - id: "P5.03-apply-receipt"
+    standing: ["4.9", "4.10"]
+    description: "The governing Safe applies the recorded receipt as ONE timelock call, RouterGovernance.applyReceipt (schedule, the delay, execute, in one command); the row reads isReleased and the router weights back"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "apply-receipt", "--receipt-id", "{state:receipt-id}", "--payload", "{receiptFile}", "{common}", "{owners}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: true
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P5.02-record-receipt", "hours": 0}
+    maxMinutes: 60
+  - id: "P5.04-receipt-read-back"
+    standing: ["4.9"]
+    description: "The chain shows the applied vector: votedWeightsActive is true and the effective weights equal the payload's buckets (agent_tokens dropped, registry order), and the run manifest's receipt_applications are backed by their timelock batches on chain"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bash", "-c", 'test "$(cast call "{m:router.router}" "votedWeightsActive()(bool)")" = true']
+      - ["bash", "-c", 'want=$(jq -r "[.weights[] | select(.bucket != \"agent_tokens\") | .weight_bps] | map(tostring) | join(\",\")" {receiptFile}) && got=$(cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])" | tail -n 1 | tr -d "[] ") && test "$got" = "$want"']
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--receipt-applications", "{evidenceDir}/publish-run.json", "--deployment-kind", "{deploymentKind}", "--consensus-receipt", "{m:receipt.consensus_receipt}", "--governance", "{m:governance.governance}", "--timelock", "{m:timelock.timelock}", "--delay-floor", "{sheet:TIMELOCK_MIN_DELAY}", "--rpc", "{rpcUrl}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
   - id: "P6.10-deposit-rmusdc"
     standing: ["4.3", "4.4"]
     description: "1 USDC into rmUSDC at the 2,500,000 gas limit; the shares equal previewDeposit within 0.5 percent"
@@ -510,11 +568,40 @@ steps:
     irreversible: false
   - id: "P6.24-redeem-retired-vault"
     standing: ["4.4", "4.14"]
-    description: "Every vault the run retired (evidence vault_retirements, ADR-0017) is withdraw-only: retired() is true, maxDeposit is 0, and the admin's shares in it, if any, redeem to USDC. A run that retired no vault passes with nothing to check"
+    description: "Every vault the run retired (the run manifest publish-run.json, vault_retirements, ADR-0017; the step fails when the manifest is missing) is withdraw-only: retired() is true, maxDeposit is 0, and the admin's shares in it, if any, redeem to USDC. A run that retired no vault passes with nothing to check"
     host: "control"
     phase: 6
     cmds:
-      - ["bash", "-c", 'for v in $(jq -r ".vault_retirements // [] | .[].vault" "{evidenceDir}/evidence.json"); do test "$(cast call "$v" "retired()(bool)")" = true && test "$(cast call "$v" "maxDeposit(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; b=$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$b" != 0 ]; then bash scripts/runbook/cast-send.sh "$v" "redeem(uint256,address,address)" "$b" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" --gas-limit 5000000 "$@" || exit 1; test "$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; fi; done', "_", "{cast}"]
+      - ["bash", "-c", 'test -f "{evidenceDir}/publish-run.json" && for v in $(jq -r ".vault_retirements // [] | .[].vault" "{evidenceDir}/publish-run.json"); do test "$(cast call "$v" "retired()(bool)")" = true && test "$(cast call "$v" "maxDeposit(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; b=$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$b" != 0 ]; then bash scripts/runbook/cast-send.sh "$v" "redeem(uint256,address,address)" "$b" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" --gas-limit 5000000 "$@" || exit 1; test "$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; fi; done', "_", "{cast}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P6.30-router-deposit"
+    standing: ["4.4"]
+    description: "2 USDC straight into the router at 8,400,000 gas (the floor is 400,000 plus 2,550,000 per leg): one RouterDeposit event per leg with a non-zero effective weight and none for a zero-weight leg, and the deployer holds shares in every non-zero leg afterwards"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])" | tail -n 1 | grep -oE "[0-9]+" | grep -vxc 0 > {runDir}/state/router-legs || true']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:router.router}", "2000000", "{cast}"]
+      - ["bash", "-c", 'bash scripts/runbook/cast-send.sh "{m:router.router}" "deposit(uint256,uint256[])" 2000000 "[]" --gas-limit 8400000 {castFlagsInline} | tee {runDir}/state/router-deposit.json; test ${PIPESTATUS[0]} = 0']
+      - ["bash", "-c", 'jq -e --arg t "$(cast sig-event "RouterDeposit(address,address,uint256,uint256,uint256)")" --argjson n "$(cat {runDir}/state/router-legs)" ''.status == "0x1" and ([.logs[] | select(.topics[0] == $t)] | length) == $n'' {runDir}/state/router-deposit.json']
+      - ["bash", "-c", 'w=$(cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])"); vs=$(echo "$w" | sed -n 1p | grep -oE "0x[0-9a-fA-F]{40}"); bs=$(echo "$w" | sed -n 2p | grep -oE "[0-9]+"); i=1; for v in $vs; do b=$(echo "$bs" | sed -n "$i"p); i=$((i+1)); s=$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$b" != 0 ] && [ "$s" = 0 ]; then echo "no shares in $v (weight $b)" >&2; exit 1; fi; done']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    writes: ["router-legs", "router-deposit.json"]
+  - id: "P6.31-sweep-positions"
+    standing: ["4.4"]
+    description: "The router deposit is redeemed in full: rmUSDC by redeem, rmPROTO by redeemInKind, rmRWA by redeem, so the deployer holds no shares anywhere (every later verify requires it)"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'for pair in "{m:vault.vault}:redeem" "{m:protocol-asset-vault.vault}:redeemInKind" "{m:rwa-basket-vault.vault}:redeem"; do v=${pair%%:*}; fn=${pair##*:}; s=$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$s" != 0 ]; then bash scripts/runbook/cast-send.sh "$v" "$fn(uint256,address,address)" "$s" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" --gas-limit 5000000 {castFlagsInline} || exit 1; fi; test "$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; done']
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -608,35 +695,39 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P10.51-write-rollout-report"
     standing: ["4.7"]
     description: "The rollout report is written from the run: sha, network, sheet hash, tag, every step's journal, every evidence file's sha256; a failed step, a journaled step with no result and a vault still paused at report time are issues, a pause report from a drill is listed only"
     host: "control"
     phase: 10
     cmds:
-      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--step", "P10.51-write-rollout-report"]
+      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--release", "{release}", "--step", "P10.51-write-rollout-report"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P10.52-record-signoff"
     standing: ["4.4"]
     description: "The sign-off is written by the run, and only when the report lists no issue and matches the publish go"
     host: "control"
     phase: 10
     cmds:
-      - ["bun", "scripts/runbook/run-record.ts", "signoff", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}"]
+      - ["bun", "scripts/runbook/run-record.ts", "signoff", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--release", "{release}", "--step", "P10.52-record-signoff"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}/go", "pattern": "signoff.json", "required": true}
     irreversible: false
+    flow: ["new", "upgrade"]
   - id: "P10.07-twin-teardown"
     standing: ["9"]
-    description: "The Twin fork stops and the throwaway keystores and the passphrase file are destroyed"
+    description: "The tunnel closes, the Twin fork stops on the stage host, and the throwaway keystores and the passphrase file are destroyed"
     host: "control"
     phase: 10
     cmds:
-      - ["bun", "scripts/devnet/twin-fork.ts", "stop", "--port", "8545", "--state-dir", "{runDir}/twin"]
+      - ["bash", "-c", "ssh -o BatchMode=yes -S {runDir}/tunnel-8545.sock -O exit {stageHost} 2>/dev/null; true"]
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; cd {stageCore} && bun scripts/devnet/twin-fork.ts stop --port 8545 --state-dir $HOME/{stageDir}/twin"]
       - ["shred", "-u", "{runDir}/passphrase"]
       - ["rm", "-rf", "{runDir}/keys"]
     expectExit: 0

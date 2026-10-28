@@ -449,6 +449,25 @@ function submitterSafeProblems(ev: any, r: any, w: string, recorded: boolean, ba
   const strangers = signers.filter((x) => !owners.some((o) => lc(o) === lc(x)));
   if (strangers.length) bad(`${w}: submitter_safe.signers ${strangers.join(", ")} are not owners of the submitter Safe`);
 }
+/**
+ * PURE. A submitter Safe is registered once, except across the receipt migration: the v0.5.0 tool registered it with the historical two-call batch (`committee_registrations`), and
+ * `migrateToSubmitterRoles` (the `receipt-submitter-roles` typed migration of runbook 4.15) leaves RECEIPT_SUBMITTER_ROLE with no holder, so the v0.6.0 `register-submitter` row grants it
+ * again (`submitter_registrations`). Such a pair is valid only when a receipt upgrade with that migration executed after the historical registration and before the new one was scheduled.
+ */
+export function reRegistrationProblems(hist: any[], news: any[], upgrades: any[]): string[] {
+  const out: string[] = [];
+  for (const r of news) {
+    const before = hist.filter((h) => ADDR.test(h?.submitter ?? "") && lc(h.submitter) === lc(r?.submitter ?? ""));
+    if (before.length === 0) continue;
+    // Timestamps are integers or the pair is refused: Number(null) and Number("") are 0 and would widen the window to everything before the new registration.
+    const stamps = before.map((h) => h?.execute_block_timestamp);
+    const from = Math.max(...stamps.map(Number)), to = Number(r?.schedule_block_timestamp);
+    const migrated = stamps.every((t) => Number.isInteger(t)) && Number.isInteger(r?.schedule_block_timestamp)
+      && upgrades.some((u) => u?.proxy_name === "receipt" && u?.migration?.name === "receipt-submitter-roles" && Number.isInteger(u?.execute_block_timestamp) && u.execute_block_timestamp >= from && u.execute_block_timestamp <= to);
+    if (!migrated) out.push(`${regLabel(r)}: submitter is also a historical committee registration; a second registration is valid only after a receipt-submitter-roles migration executed between them`);
+  }
+  return out;
+}
 const regLabel = (r: any) => `${REGISTER_ROW} ${r?.submitter}`;
 const histLabel = (r: any) => `${HISTORICAL_REGISTER_ROW} ${r?.submitter}`;
 const recLabel = (r: any) => `recorded receipt ${r?.receipt_id}`;
@@ -462,7 +481,7 @@ function receiptPathProblems(ev: any, kind: DeploymentKind, applications: any[],
   for (const r of hist) {
     const w = histLabel(r);
     if (!ADDR.test(r?.submitter ?? "")) bad(`${w}: submitter is not an address`);
-    else if (seenSub.has(lc(r.submitter))) bad(`${w}: submitter has more than one evidence entry`);
+    else if (histSub.has(lc(r.submitter))) bad(`${w}: submitter has more than one evidence entry`);
     else { seenSub.add(lc(r.submitter)); histSub.add(lc(r.submitter)); }
     if (r?.step !== undefined && r.step !== HISTORICAL_REGISTER_ROW) bad(`${w}: step '${r.step}' is not ${HISTORICAL_REGISTER_ROW}`);
     for (const k of ["gateway", "ic_policy", "timelock"]) if (!ADDR.test(r?.[k] ?? "")) bad(`${w}: ${k} is not an address`);
@@ -475,17 +494,19 @@ function receiptPathProblems(ev: any, kind: DeploymentKind, applications: any[],
     if (sa !== undefined) for (const k of ["commit_tx", "reveal_tx", "hand_over_tx"]) if (sa?.[k] !== undefined && !TX.test(String(sa[k]))) bad(`${w}: self_authorization.${k} is not a transaction hash`);
   }
   // The live registration (issue 1888): ONE receipt.grantRole(RECEIPT_SUBMITTER_ROLE, submitter), a Safe, on any chain and kind.
+  const newSub = new Set<string>();
   for (const r of news) {
     const w = regLabel(r);
     if (!ADDR.test(r?.submitter ?? "")) bad(`${w}: submitter is not an address`);
-    else if (seenSub.has(lc(r.submitter))) bad(`${w}: submitter has more than one evidence entry`);
-    else seenSub.add(lc(r.submitter));
+    else if (newSub.has(lc(r.submitter))) bad(`${w}: submitter has more than one evidence entry`);
+    else { newSub.add(lc(r.submitter)); seenSub.add(lc(r.submitter)); }
     if (r?.step !== undefined && r.step !== REGISTER_ROW) bad(`${w}: step '${r.step}' is not ${REGISTER_ROW}`);
     for (const k of ["receipt", "timelock"]) if (!ADDR.test(r?.[k] ?? "")) bad(`${w}: ${k} is not an address`);
     if (ADDR.test(r?.timelock ?? "") && lc(r.timelock) !== lc(ev?.timelock?.address ?? "")) bad(`${w}: timelock ${r.timelock} is not the run's timelock ${ev?.timelock?.address}`);
     if (ADDR.test(r?.receipt ?? "") && ADDR.test(ev?.consensus_receipt?.address ?? "") && lc(r.receipt) !== lc(ev.consensus_receipt.address)) bad(`${w}: receipt ${r.receipt} is not the run's receipt contract ${ev.consensus_receipt.address}`);
     submitterSafeProblems(ev, r, w, false, bad);
   }
+  for (const m of reRegistrationProblems(hist, news, Array.isArray(ev?.proxy_upgrades) ? ev.proxy_upgrades : [])) bad(m);
   const seenRec = new Set<string>();
   for (const r of recs) {
     const w = recLabel(r);
@@ -1448,7 +1469,8 @@ async function checkApplicationsMain(values: Record<string, string | boolean | u
   if (need.length) { console.error(`evidence: --receipt-applications needs ${need.map((k) => `--${k}`).join(", ")}`); process.exit(2); }
   const m = JSON.parse(readFileSync(values["receipt-applications"] as string, "utf8"));
   const ev = { deployment_kind: kind, consensus_receipt: { address: values["consensus-receipt"] }, governance: { address: values.governance }, timelock: { address: values.timelock }, receipt_applications: m.receipt_applications, voted_weights_clears: m.voted_weights_clears,
-    committee_registrations: m.committee_registrations, submitter_registrations: m.submitter_registrations, recorded_receipts: m.recorded_receipts };
+    committee_registrations: m.committee_registrations, submitter_registrations: m.submitter_registrations, recorded_receipts: m.recorded_receipts,
+    proxy_upgrades: m.proxy_upgrades }; // the re-registration rule reads the receipt migration the manifest records
   const { createPublicClient, http } = await import("viem");
   const reader = typeof values.rpc === "string" ? createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader : undefined;
   const floor = await floorArg(values, kind, reader);

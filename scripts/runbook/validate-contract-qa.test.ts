@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { QA_DIR, ROOT, loadModel, parseSheetText, runnableProblems, sheetProblems, mainOutProblems, unwindGuardProblems, validateAll } from "./validate-contract-qa.ts";
+import { QA_DIR, ROOT, applicableSteps, loadModel, localForkProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, mainOutProblems, unwindGuardProblems, validateAll } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
 const RELEASE = "releases/v0.5.0.yaml";
@@ -42,9 +42,12 @@ test("an unpinned release that edits a template step fails", () => {
   expect(p.join("\n")).toContain("P0.04-checkout");
 });
 
-test("the template can change while every committed release is pinned", () => {
+test("the template can change while every committed release is pinned; only the unpinned release being prepared must follow it", () => {
   const p = problemsWith("template.yaml", (t) => t.replace(stepBlock(t, "P0.04-checkout"), (b) => b.replace("The core checkout is clean", "The core checkout")));
-  expect(p).toEqual([]);
+  const pinned = [...validateAll(ROOT, model).releases.values()].filter((r) => r.templateSha !== undefined).map((r) => r.release);
+  expect(pinned.length).toBeGreaterThan(0);
+  for (const r of pinned) expect(p.filter((x) => x.includes(`runbook ${r}`) || x.includes(`releases/${r}.yaml`))).toEqual([]);
+  expect(p.every((x) => x.includes("v0.6.0"))).toBe(true);
 });
 
 test("a pinned release that edits a template step fails against the template at its pin", () => {
@@ -75,6 +78,12 @@ test("a sheet value read before the run sheet is written fails", () => {
 test("a command that names a verb no CLI has fails", () => {
   const p = problemsWith("template.yaml", (t) => t.replace(stepBlock(t, "P2.01-verify-pre-govern"), (b) => b.replace('"publish-contracts/src/cli.ts", "verify"', '"publish-contracts/src/cli.ts", "no-such-verb"')));
   expect(p.join("\n")).toContain("P2.01-verify-pre-govern");
+});
+
+test("a step that sends a cast-send.sh receipt to /dev/null fails: the sign-off would flag its transaction as sent outside the runbook", () => {
+  const p = problemsWith("releases/v0.6.0.yaml", (t) => t.replace(stepBlock(t, "P8.31-v050-gateway-deposit-vaults"), (b) => b.replace("1000000 {v050CastFlagsInline} || exit 1", "1000000 {v050CastFlagsInline} > /dev/null || exit 1")));
+  expect(p.join("\n")).toContain("P8.31-v050-gateway-deposit-vaults: a cast-send.sh receipt is sent to /dev/null");
+  expect(problemsWith("releases/v0.6.0.yaml", (t) => t.replace(stepBlock(t, "P8.31-v050-gateway-deposit-vaults"), (b) => b.replace("1000000 {v050CastFlagsInline} || exit 1", "1000000 {v050CastFlagsInline} 2> /dev/null || exit 1")))).toEqual([]);
 });
 
 test("a planted credential fails", () => {
@@ -200,7 +209,7 @@ test("the committed v0.6.0 runbook runs the runbook 4.15 commands against the v0
   const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
   const NAMES: Record<string, string> = {
     "$PWD": "{runDir}/v060", "$GATEWAY_IMPL": "{state:v050-gateway-impl}", "$RECEIPT_IMPL": "{state:v050-receipt-impl}", "$RMAGENT": "{state:v050-rmagent}", "$TIMELOCK": "{state:v050-timelock}",
-    "$GOVERNANCE": "{state:v050-governance}", "$REGISTRY": "{state:v050-registry}", "$EVIDENCE": "{runDir}/v050-run/evidence", "$BASE_RPC_URL": "{v050RpcUrl}",
+    "$GOVERNANCE": "{state:v050-governance}", "$REGISTRY": "{state:v050-registry}", "$EVIDENCE": "{v050EvidenceDir}", "$BASE_RPC_URL": "{v050RpcUrl}",
   };
   const toYaml = (line: string): string[] => [...line.matchAll(/"([^"]*)"|(\S+)/g)].flatMap((m) => {
     const tok = m[1] ?? m[2]!;
@@ -216,7 +225,8 @@ test("the committed v0.6.0 runbook runs the runbook 4.15 commands against the v0
     expect(at, line).toBeGreaterThanOrEqual(from);
     const s = added[at]!;
     expect(s.expectExit, `${s.id}: ${line}`).toBe(0);
-    expect(s.onlyFor, s.id).toBe("twin");
+    expect(s.onlyFor, s.id).toEqual(["twin", "rehearsal"]);
+    expect(s.flow, s.id).toBe("upgrade");
     from = at;
   }
   // the v0.5.0 publish is the tag's own CLI and sheet at the fixed pin, with the unlowered rmAGENT pool floor, and {v050common} names the v0.5.0 checkout and its sha
@@ -224,10 +234,10 @@ test("the committed v0.6.0 runbook runs the runbook 4.15 commands against the v0
   expect(publish.cmds[0]).toEqual(["bun", "{runDir}/v050/publish-contracts/src/ci/twin-publish.ts"]);
   expect(publish.env).toMatchObject({ GITHUB_WORKSPACE: "{runDir}/v050", PIN_BLOCK_IN: "52881000", REHEARSAL_IN: "true", SHEET_OVERLAY_IN: "deployments/twin-918453/upgrade-rehearsal.env" });
   expect(publish.cmds[1]!.join(" ")).toContain("VAULT_AGENT_MIN_POOL_LIQUIDITY=1000000000000000");
-  expect(added.find((s) => s.id === "P8.02-v050-twin-fork")!.cmds[0]).toContain("52881000");
+  expect(added.find((s) => s.id === "P8.02-v050-twin-fork")!.cmds[0]!.join(" ")).toContain("--pin-block 52881000");
   const { LIST_PLACEHOLDERS } = await import("./validate-contract-qa.ts");
   const common = LIST_PLACEHOLDERS.v050common!;
-  expect(common[common.indexOf("--core-dir") + 1]).toBe("{runDir}/v050");
+  expect(common[common.indexOf("--core-dir") + 1]).toBe("{v050CoreDir}");
   expect(common[common.indexOf("--core-sha") + 1]).toBe(V050_SHA);
   expect(added.find((s) => s.id === "P8.01-v050-checkout")!.cmds.flat().join(" ")).toContain(V050_SHA);
 });
@@ -258,4 +268,146 @@ test("the README whole-element placeholder sentence names every key of LIST_PLAC
   const { LIST_PLACEHOLDERS } = await import("./validate-contract-qa.ts");
   const line = readFileSync(join(ROOT, QA_DIR, "README.md"), "utf8").split("\n").find((l) => l.startsWith("A whole-element list placeholder"))!;
   for (const k of Object.keys(LIST_PLACEHOLDERS)) expect(line, k).toContain(`{${k}}`);
+});
+
+// Flows (README "Flows"): a step runs on a target when its onlyFor admits the target and its flow is one the release runs there.
+test("the v0.6.0 release runs both flows on the Twin, the upgrade flow on the rehearsal and the new flow in production", () => {
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  const ids = (t: string) => applicableSteps(r, t).map((s) => s.id);
+  expect(ids("twin")).toContain("P1.02-publish");
+  expect(ids("twin")).toContain("P8.10-v050-deploy-gateway-impl");
+  expect(ids("twin")).toContain("P8.05-v050-twin-dirty-pre-state");
+  expect(ids("rehearsal")).not.toContain("P1.02-publish");
+  expect(ids("rehearsal")).not.toContain("P8.05-v050-twin-dirty-pre-state");
+  for (const id of ["P0.01-runbook-valid", "P1.50-record-go", "P8.06-v050-pre-state", "P8.07-v050-done-markers", "P8.23-v050-apply-receipt", "P8.29-v050-router-deposit", "P8.34-v050-pause-all", "P8.37-v050-verify-final", "P10.53-write-three-vault-rollout-report", "P10.52-record-signoff"]) expect(ids("rehearsal"), id).toContain(id);
+  expect(ids("production")).toContain("P1.02-publish");
+  expect(ids("production")).not.toContain("P8.10-v050-deploy-gateway-impl");
+  // a mainnet run sends only what QA sent: every step that sends on 8453 runs on the Twin
+  for (const t of ["rehearsal", "production"]) for (const s of applicableSteps(r, t).filter(sends)) expect(ids("twin"), `${s.id} on ${t}`).toContain(s.id);
+  expect(qaSupersetProblems(r)).toEqual([]);
+});
+
+test("a step that sends on 8453 and does not run on the Twin fails", () => {
+  const p = problemsWith("releases/v0.6.0.yaml", (t) => t.replace(stepBlock(t, "P8.29-v050-router-deposit"), (b) => b.replace('    onlyFor: ["twin", "rehearsal"]', '    onlyFor: "rehearsal"')));
+  expect(p.join("\n")).toContain("P8.29-v050-router-deposit sends on rehearsal but does not run on twin");
+});
+
+test("a step with an unknown flow, and a release whose flows name an unknown target or flow, fail", () => {
+  expect(problemsWith("releases/v0.6.0.yaml", (t) => t.replace('    flow: "upgrade"\n', '    flow: "sideways"\n')).join("\n")).toContain("flow is new | upgrade");
+  expect(problemsWith("releases/v0.6.0.yaml", (t) => t.replace('  rehearsal: ["upgrade"]', '  staging: ["upgrade"]')).join("\n")).toContain("flows maps a target");
+  expect(problemsWith("releases/v0.6.0.yaml", (t) => t.replace('  rehearsal: ["upgrade"]', '  rehearsal: ["rollback"]')).join("\n")).toContain("flows maps a target");
+});
+
+test("the committed v0.6.0 upgrade flow records and applies a receipt, deposits through each vault, the router and the gateway, drills the pause, and verifies at the end", () => {
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  const joined = (id: string) => r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" ")).join("\n");
+  expect(joined("P8.20-v050-register-submitter")).toContain("--row register-submitter");
+  expect(joined("P8.22-v050-record-receipt")).toContain("record-receipt");
+  expect(joined("P8.23-v050-apply-receipt")).toContain("--row apply-receipt");
+  expect(r.steps.find((s) => s.id === "P8.23-v050-apply-receipt")!.irreversible).toBe(true);
+  expect(joined("P8.24-v050-receipt-read-back")).toContain("--receipt-applications");
+  for (const id of ["P8.26-v050-deposit-rmusdc", "P8.27-v050-deposit-rmproto", "P8.28-v050-deposit-rmrwa"]) expect(joined(id)).toContain("deposit(uint256,address)");
+  expect(joined("P8.29-v050-router-deposit")).toContain("deposit(uint256,uint256[])");
+  expect(joined("P8.31-v050-gateway-deposit-vaults")).toContain("depositTo(");
+  expect(joined("P8.33-v050-retired-vault")).toContain("redeemInKind");
+  expect(joined("P8.34-v050-pause-all")).toContain("pause-all");
+  expect(joined("P8.36-v050-unpause")).toContain("--row unpause-RWA");
+  const order = r.steps.map((s) => s.id);
+  for (const [a, b] of [["P8.15-v050-retire-vault", "P8.20-v050-register-submitter"], ["P8.22-v050-record-receipt", "P8.23-v050-apply-receipt"], ["P8.34-v050-pause-all", "P8.35-v050-redeem-while-paused"], ["P8.36-v050-unpause", "P8.37-v050-verify-final"], ["P10.52-record-signoff", "P10.06-v050-teardown"]]) expect(order.indexOf(a), `${a} before ${b}`).toBeLessThan(order.indexOf(b));
+  // the governed operations are gated on the done-* markers P8.06 writes, so a rerun on an upgraded deployment skips them by their own gate
+  for (const [id, marker] of [["P8.10-v050-deploy-gateway-impl", "done-gateway-upgrade"], ["P8.13-v050-upgrade-receipt", "done-receipt-upgrade"], ["P8.14-v050-clear-voted-weights", "done-clear-voted-weights"], ["P8.15-v050-retire-vault", "done-retire-vault"]]) expect(r.steps.find((s) => s.id === id)!.gateAbsent, id).toBe(`{runDir}/state/${marker}`);
+  expect(r.steps.find((s) => s.id === "P8.07-v050-done-markers")!.writes).toEqual(expect.arrayContaining(["done-gateway-upgrade", "done-receipt-upgrade", "done-clear-voted-weights", "done-retire-vault"]));
+});
+
+test("the template applies the receipt it records and deposits through the router, and the go marks the senders", () => {
+  const t = validateAll(ROOT, model).template;
+  const step = (id: string) => t.steps.find((s) => s.id === id)!;
+  expect(step("P5.03-apply-receipt").cmds[0]).toContain("apply-receipt");
+  expect(step("P5.03-apply-receipt").irreversible).toBe(true);
+  expect(step("P5.04-receipt-read-back").cmds.map((c) => c.join(" ")).join("\n")).toContain("--receipt-applications");
+  expect(step("P6.30-router-deposit").cmds.map((c) => c.join(" ")).join("\n")).toContain("deposit(uint256,uint256[])");
+  expect(t.steps.map((s) => s.id).indexOf("P6.31-sweep-positions")).toBeGreaterThan(t.steps.map((s) => s.id).indexOf("P6.30-router-deposit"));
+  expect(step("P1.50-record-go").cmds[0]).toContain("--sender");
+  for (const id of ["P0.01-runbook-valid", "P1.50-record-go", "P10.51-write-rollout-report", "P10.52-record-signoff"]) expect(step(id).flow, id).toEqual(["new", "upgrade"]);
+});
+
+test("a report or sign-off step that drops a flag the report needs fails; --release included", () => {
+  const p = problemsWith("releases/v0.6.0.yaml", (t) => unpinned(t).replace('"--release", "{release}", "--step", "P10.52-record-signoff"', '"--step", "P10.52-record-signoff"'));
+  expect(p.join("\n")).toContain("P10.52-record-signoff: run-record.ts signoff needs --release");
+  expect(recordStepProblems([{ id: "P10.99", cmds: [["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "d"]] }]).length).toBe(9);
+  expect(recordStepProblems([{ id: "P1.50", cmds: [["bun", "scripts/runbook/run-record.ts", "go", "--kind", "publish"]] }])).toEqual([]);
+});
+
+test("a Twin fork or anvil started as a command of this machine fails; the committed fork steps are ssh commands on the stage host", () => {
+  expect(localForkProblems([{ id: "P0.12", cmds: [["bun", "scripts/devnet/twin-fork.ts", "start", "--port", "8545"]] }]).join("\n")).toContain("twin-fork.ts start runs on this machine");
+  expect(localForkProblems([{ id: "P0.12", cmds: [["bun", "/x/scripts/devnet/twin-fork.ts", "stop"]] }])).toHaveLength(1);
+  expect(localForkProblems([{ id: "P0.12", cmds: [["anvil", "--port", "8545"]] }, { id: "P0.13", cmds: [["bash", "-c", "nohup anvil --fork-url x &"]] }])).toHaveLength(2);
+  expect(localForkProblems([{ id: "P0.12", cmds: [["ssh", "-o", "BatchMode=yes", "{stageHost}", "cd {stageCore} && bun scripts/devnet/twin-fork.ts start --port 8545"]] }])).toEqual([]);
+  const p = problemsWith("releases/v0.6.0.yaml", (t) => unpinned(t).replace(/\["ssh", "-o", "BatchMode=yes", "\{stageHost\}", "export PATH=\$HOME\/\.foundry\/bin:\$PATH; cd \{stageCore\} && bun scripts\/devnet\/twin-fork\.ts wait-ready --port 8547[^\]]*\]/, '["bun", "scripts/devnet/twin-fork.ts", "wait-ready", "--port", "8547"]'));
+  expect(p.join("\n")).toContain("P8.02-v050-twin-fork: twin-fork.ts wait-ready runs on this machine");
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  for (const id of ["P0.12-twin-fork", "P8.02-v050-twin-fork"]) {
+    const cmds = r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" "));
+    expect(cmds.filter((c) => c.startsWith("ssh ")).length, id).toBeGreaterThanOrEqual(2);
+    expect(cmds.some((c) => /-L \{tunnelPort2?\}:127\.0\.0\.1:854[57]/.test(c)), id).toBe(true);
+    expect(cmds.some((c) => c.includes("scp -q {stageHost}:")), id).toBe(true);
+  }
+});
+
+test("a tunnel step removes a stale control socket before it reopens the tunnel, so the teardown's -O exit reaches the live master", () => {
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  for (const id of ["P0.12-twin-fork", "P8.02-v050-twin-fork"]) {
+    const tunnel = r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" ")).find((c) => c.includes("-O check"))!;
+    const sock = /-S (\S+\.sock) -O check/.exec(tunnel)![1]!;
+    expect(tunnel, id).toContain(`|| { rm -f ${sock}; ssh `);
+    expect(tunnel.indexOf("rm -f"), id).toBeLessThan(tunnel.indexOf("-f -N -M"));
+  }
+});
+
+test("the ssh scripts of the stage-host steps name the host state dir absolutely: they cd into the checkout first, so a relative path lands inside it", () => {
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  const remote = r.steps.flatMap((s) => s.cmds.filter((c) => c[0] === "ssh" && c.some((a) => a.includes("{stageDir}"))).map((c) => ({ id: s.id, script: c.at(-1)! })));
+  expect(remote.length).toBeGreaterThanOrEqual(6);
+  for (const { id, script } of remote) {
+    expect(script.match(/\{stageDir\}/g)!.length, id).toBe(script.match(/\$HOME\/\{stageDir\}/g)!.length);
+  }
+  // the scp that copies anvil.json back names the path relative to the host's home, which scp resolves itself
+  const scp = r.steps.find((s) => s.id === "P0.12-twin-fork")!.cmds.map((c) => c.join(" ")).find((c) => c.includes("scp -q"))!;
+  expect(scp).toContain("{stageHost}:{stageDir}/twin/anvil.json");
+});
+
+test("the retired-vault step reads the run manifest every run writes, never the operator-assembled evidence.json", () => {
+  const t = validateAll(ROOT, model).template.steps.find((s) => s.id === "P6.24-redeem-retired-vault")!;
+  const script = t.cmds.flat().join(" ");
+  expect(script).toContain('test -f "{evidenceDir}/publish-run.json"');
+  expect(script).toContain('"{evidenceDir}/publish-run.json")');
+  expect(script).not.toContain("evidence.json");
+});
+
+test("the agent policies of the v0.6.0 gateway steps keep the retired withdraw members zero (the gateway reverts RetiredPolicyFieldNonZero otherwise)", () => {
+  const Z = "0x0000000000000000000000000000000000000000";
+  const root = join(ROOT, QA_DIR);
+  for (const [file, id, state] of [["releases/v0.6.0.yaml", "P8.30-v050-gateway-agent", "v050-agent-policy"], ["gateway.yaml", "P3.01-agent-policy", "agent-policy"]] as const) {
+    const text = readFileSync(join(root, file), "utf8");
+    const block = text.slice(text.indexOf(`id: "${id}"`));
+    const line = block.split("\n").find((l) => l.includes(`> {runDir}/state/${state}`))!;
+    // (active,validUntil,maxPerPayment,maxPerWindow,shareReceiver,[destinations],assetRecipient,maxWithdrawPerPayment,maxWithdrawPerWindow,[sourceVaults])
+    expect(line, `${file} ${id}`).toContain(`],${Z},0,0,[])`);
+  }
+});
+
+test("the agent of a v0.6.0 gateway step may deposit only into the three vaults: the router is never a destination (architecture 5.2)", () => {
+  const root = join(ROOT, QA_DIR);
+  for (const [file, policyState, depositId] of [["releases/v0.6.0.yaml", "v050-agent-policy", "P8.31-v050-gateway-deposit-vaults"], ["gateway.yaml", "agent-policy", "P3.04-gateway-deposit-vaults"]] as const) {
+    const text = readFileSync(join(root, file), "utf8");
+    const policy = text.split("\n").find((l) => l.includes(`> {runDir}/state/${policyState}`))!;
+    expect(policy, file).not.toMatch(/router/);
+    const dests = /\[([^\[\]]*)\],0x0000000000000000000000000000000000000000,0,0,\[\]/.exec(policy)![1]!.split(",");
+    expect(dests, file).toHaveLength(3);
+    const block = text.slice(text.indexOf(`id: "${depositId}"`));
+    const step = block.slice(0, block.indexOf("irreversible:"));
+    expect(step, file).toContain("depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])");
+    expect(step, file).toContain("AgentDeposit(bytes32,bytes32,address,address,uint256,uint256,uint64)");
+    expect(step, file).not.toMatch(/router/i);
+  }
 });

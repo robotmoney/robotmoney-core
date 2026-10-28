@@ -95,6 +95,7 @@
   ],
   "exempt": [
     { "name": "twin-pin", "reason": "It chooses the Twin chain pin block for its workflow and tests nothing. Every Twin chain job needs it, so a failed pin skips them, and a skipped required job fails the gate." },
-    { "name": "smoke-test-changes", "source": "suite-14-smoke-test.yml", "reason": "It computes the suite 14 deploy-path flag and tests nothing. On a push it always sets deploy=true, so both required-on-deploy-paths jobs run." }
+    { "name": "smoke-test-changes", "source": "suite-14-smoke-test.yml", "reason": "It computes the suite 14 deploy-path flag and tests nothing. On a push it always sets deploy=true, so both required-on-deploy-paths jobs run." },
+    { "name": "dispatch-full-suite", "source": "release-tag-suite-dispatch.yml", "reason": "It dispatches the workflow_dispatch suites against a release or qa commit and then runs check-sha-green as the authority. It tests nothing itself, and it cannot gate the sha it is still working on." }
   ]
 }
