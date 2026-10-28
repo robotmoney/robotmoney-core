@@ -980,11 +980,11 @@ steps:
     added: "v0.6.0"
   - id: "P8.07-v050-done-markers"
     standing: ["4.15"]
-    description: "A done-* marker for each governed operation the chain AND the run manifest already show executed (the gateway upgrade, the receipt upgrade, no active receipt vector, rmAGENT retired), so a rerun on an upgraded deployment skips that operation by its own gate and still runs every later step; the markers of an earlier invocation are removed first, and the step runs on every invocation (it only reads, so a rerun mid-flow is safe)"
+    description: "A done-* marker for each governed operation the chain AND the run manifest already show executed (the gateway upgrade, the receipt upgrade, rmAGENT retired), so a rerun on an upgraded deployment skips that operation by its own gate and still runs every later step; the markers of an earlier invocation are removed first, and the step runs on every invocation (it only reads, so a rerun mid-flow is safe)"
     host: "control"
     phase: 8
     cmds:
-      - ["bash", "-c", 'e={v050EvidenceDir}/publish-run.json; rm -f {runDir}/state/done-gateway-upgrade {runDir}/state/done-receipt-upgrade {runDir}/state/done-clear-voted-weights {runDir}/state/done-retire-vault; done_upgrade() { want=$(jq -r --arg p "$1" "[.proxy_upgrades[]? | select(.proxy_name == \$p and .execute_tx != null)] | last | .to_implementation // empty" "$e" | tr A-F a-f); have=$(cast implementation "$2" | tr A-F a-f); test -n "$want" && test "$have" = "$want"; }; if done_upgrade gateway {state:v050-gateway}; then echo "gateway already upgraded"; touch {runDir}/state/done-gateway-upgrade; fi; if done_upgrade receipt {state:v050-receipt}; then echo "receipt already upgraded"; touch {runDir}/state/done-receipt-upgrade; fi; if [ "$(cast call {state:v050-router} "votedWeightsActive()(bool)")" = false ]; then echo "no active receipt vector"; touch {runDir}/state/done-clear-voted-weights; fi; if [ "$(cast call {state:v050-rmagent} "retired()(bool)")" = true ] && [ "$(jq -r "[.vault_retirements[]? | select(.execute_tx != null)] | length" "$e")" != 0 ]; then echo "rmAGENT already retired"; touch {runDir}/state/done-retire-vault; fi; true']
+      - ["bash", "-c", 'e={v050EvidenceDir}/publish-run.json; rm -f {runDir}/state/done-gateway-upgrade {runDir}/state/done-receipt-upgrade {runDir}/state/done-retire-vault; done_upgrade() { want=$(jq -r --arg p "$1" "[.proxy_upgrades[]? | select(.proxy_name == \$p and .execute_tx != null)] | last | .to_implementation // empty" "$e" | tr A-F a-f); have=$(cast implementation "$2" | tr A-F a-f); test -n "$want" && test "$have" = "$want"; }; if done_upgrade gateway {state:v050-gateway}; then echo "gateway already upgraded"; touch {runDir}/state/done-gateway-upgrade; fi; if done_upgrade receipt {state:v050-receipt}; then echo "receipt already upgraded"; touch {runDir}/state/done-receipt-upgrade; fi; if [ "$(cast call {state:v050-rmagent} "retired()(bool)")" = true ] && [ "$(jq -r "[.vault_retirements[]? | select(.execute_tx != null)] | length" "$e")" != 0 ]; then echo "rmAGENT already retired"; touch {runDir}/state/done-retire-vault; fi; true']
     env:
       ETH_RPC_URL: "{v050RpcUrl}"
     expectExit: 0
@@ -993,7 +993,7 @@ steps:
     flow: "upgrade"
     refresh: true
     onlyFor: ["twin", "rehearsal"]
-    writes: ["done-gateway-upgrade", "done-receipt-upgrade", "done-clear-voted-weights", "done-retire-vault"]
+    writes: ["done-gateway-upgrade", "done-receipt-upgrade", "done-retire-vault"]
     added: "v0.6.0"
   - id: "P8.10-v050-deploy-gateway-impl"
     standing: ["4.15"]
@@ -1068,25 +1068,6 @@ steps:
     irreversible: false
     flow: "upgrade"
     gateAbsent: "{runDir}/state/done-receipt-upgrade"
-    onlyFor: ["twin", "rehearsal"]
-    maxMinutes: 60
-    added: "v0.6.0"
-  - id: "P8.14-v050-clear-voted-weights"
-    standing: ["4.15"]
-    description: "4.15 step 6: the v0.5.0 rehearsal applied a receipt, so the pre-state shows an active vector; the Safe clears it as its own timelock operation before the retire"
-    host: "control"
-    phase: 8
-    cmds:
-      - ["bash", "-c", "test \"$(cast call {state:v050-router} 'votedWeightsActive()(bool)' --rpc-url {v050RpcUrl})\" = true"]
-      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "clear-voted-weights", "{v050common}", "{gate}"]
-    env:
-      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
-      YES: "{yes}"
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    flow: "upgrade"
-    gateAbsent: "{runDir}/state/done-clear-voted-weights"
     onlyFor: ["twin", "rehearsal"]
     maxMinutes: 60
     added: "v0.6.0"
@@ -1515,10 +1496,12 @@ steps:
     added: "v0.6.0"
   - id: "P8.29-v050-router-deposit"
     standing: ["4.4", "4.15"]
-    description: "2 USDC straight into the live router at 8,400,000 gas: one RouterDeposit event per leg with a non-zero effective weight (the applied receipt's vector), none for a zero-weight leg, never one into rmAGENT, and the deployer holds shares in every non-zero leg afterwards"
+    description: "2 USDC straight into the live router at 8,400,000 gas: right before it the router still routes by the applied receipt (votedWeightsActive is true and the effective weights equal the payload's buckets, as P8.24 read them; a lost vector fails here instead of routing on the default, issue 1980); one RouterDeposit event per leg with a non-zero effective weight (the applied receipt's vector), none for a zero-weight leg, never one into rmAGENT, and the deployer holds shares in every non-zero leg afterwards"
     host: "control"
     phase: 8
     cmds:
+      - ["bash", "-c", 'test "$(cast call "{state:v050-router}" "votedWeightsActive()(bool)")" = true']
+      - ["bash", "-c", 'want=$(jq -r "[.weights[] | select(.bucket != \"agent_tokens\") | .weight_bps] | map(tostring) | join(\",\")" {receiptFile}) && got=$(cast call "{state:v050-router}" "getEffectiveWeights()(address[],uint256[])" | tail -n 1 | tr -d "[] ") && test "$got" = "$want"']
       - ["bash", "-c", 'cast call "{state:v050-router}" "getEffectiveWeights()(address[],uint256[])" | tail -n 1 | grep -oE "[0-9]+" | grep -vxc 0 > {runDir}/state/v050-router-legs || true']
       - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-usdc}", "approve(address,uint256)", "{state:v050-router}", "2000000", "{v050cast}"]
       - ["bash", "-c", 'bash scripts/runbook/cast-send.sh "{state:v050-router}" "deposit(uint256,uint256[])" 2000000 "[]" --gas-limit 8400000 {v050CastFlagsInline} | tee {runDir}/state/v050-router-deposit.json; test ${PIPESTATUS[0]} = 0']
