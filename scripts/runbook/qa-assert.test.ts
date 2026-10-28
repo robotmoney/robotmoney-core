@@ -72,6 +72,8 @@ test("the CLI: router-legs, legs-differ and receipt-changes-split pass and fail 
   const unchanged = cli((d) => ["receipt-changes-split", join(d, "same.json"), join(d, "default")], files);
   expect(unchanged.code).toBe(1);
   expect(unchanged.out).toContain("cannot show the split change");
+  // a router vector of another length than the receipt's (a live vector that still names a retired vault) is another split
+  expect(cli((d) => ["receipt-changes-split", join(d, "same.json"), join(d, "four")], { ...files, four: `[${USDC_VAULT}, ${PROTO_VAULT}, ${RWA_VAULT}, 0x4444444444444444444444444444444444444444]\n[9500, 500, 0, 0]\n` }).code).toBe(0);
 });
 
 test("the CLI: sub prints the share delta and refuses a balance that fell", () => {

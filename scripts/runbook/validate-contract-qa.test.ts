@@ -479,9 +479,16 @@ test("the rounds before the rebalance run before the receipt is recorded, check 
   ]) {
     before(first!, guard!); before(guard!, router!); before(router!, record!); before(record!, apply!); before(apply!, post!); before(post!, changed!);
     const text = (id: string) => r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" ")).join("\n");
-    expect(text(guard!)).toContain("votedWeightsActive()(bool)\")\" = false");
-    expect(text(guard!)).toContain("getDefaultWeights()");
+    // the pre-rebalance vector is the effective vector, whatever votedWeightsActive reads: the runbook never clears a vector to reach the default (issue 1980)
+    expect(text(guard!)).toContain("getEffectiveWeights()");
+    expect(text(guard!)).not.toContain("votedWeightsActive");
+    expect(text(guard!)).not.toContain("getDefaultWeights");
     expect(text(guard!)).toContain("receipt-changes-split");
+    expect(r.steps.find((s) => s.id === guard)!.description).not.toContain("P8.14");
+    // the pre-rebalance router deposit checks its legs against that same saved vector
+    const saved = guard!.startsWith("P8") ? "v050-pre-router-weights" : "pre-router-weights";
+    expect(text(guard!)).toContain(`> {runDir}/state/${saved}`);
+    expect(text(router!)).toContain(`router-legs {runDir}/state/${saved.replace("weights", "deposit.json")} {runDir}/state/${saved}`);
     expect(text(router!)).toContain("router-legs");
     expect(text(changed!)).toContain("legs-differ");
   }

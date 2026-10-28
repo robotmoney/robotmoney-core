@@ -14,7 +14,7 @@
 //                                                           exit 0 when the legs (vault and weightBps) of two router deposit receipts differ: the split changed
 //   bun scripts/runbook/qa-assert.ts receipt-changes-split RECEIPT WEIGHTS
 //                                                           exit 0 when the receipt file's vault vector (agent_tokens dropped, bucket order) differs from the bps of
-//                                                           WEIGHTS, so applying it changes the router split (issue 1984)
+//                                                           WEIGHTS (the effective vector before the rebalance; another length differs), so applying it changes the router split (issue 1984)
 // A value read from `cast call` looks like "1000000 [1e6]": the first whitespace-separated token is the value. Exit 1 is a failed
 // assertion, exit 2 a usage error. No secret is read or written.
 import { readFileSync } from "node:fs";
@@ -141,7 +141,8 @@ async function main(argv: string[]): Promise<number> {
       const want = receiptVector(readFileSync(args[0]!, "utf8"));
       const have = parseWeights(readFileSync(args[1]!, "utf8")).bps;
       console.log(`receipt ${want.join(",")} router ${have.join(",")}`);
-      if (want.length !== have.length) { console.error(`qa-assert receipt-changes-split: the receipt weights ${want.length} vault buckets, the router ${have.length} legs`); return 1; }
+      // A vector of another length is another split: the receipt's legs cannot be the router's (P5.04 and P8.24 then read the applied vector back).
+      if (want.length !== have.length) { console.log(`the receipt weights ${want.length} vault buckets, the router's vector has ${have.length} legs: the split changes`); return 0; }
       if (want.join(",") === have.join(",")) { console.error(`qa-assert receipt-changes-split: the receipt's vector ${want.join(",")} is the router's effective vector before the rebalance, so applying it cannot show the split change; get a receipt with another vector before it is recorded`); return 1; }
       return 0;
     }

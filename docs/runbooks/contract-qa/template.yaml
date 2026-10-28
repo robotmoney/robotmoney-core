@@ -2,7 +2,7 @@
 # Deployed release (v0.5.0) procedure on today's tooling; target changes are IC-1019 finding 13.
 #
 # Every step a contract release runs, in order: gate, publish, verify, govern, receipt (recorded, a deposit and redeem round on the
-# default vector, then applied: the rebalance), deposits
+# vector in effect, then applied: the rebalance), deposits
 # (each vault, the router), failure drills, evidence, teardown (the Deploy 2 flow, on today's tooling). The assurances these
 # steps give, and the rule that a mainnet run sends only what a Twin run of the same steps sent, are README.md "Assurances". A release's own runbook is releases/<release>.yaml:
 # a full copy of these steps, unchanged and in order, plus the steps only that release adds (each with
@@ -205,7 +205,7 @@ steps:
     onlyFor: "twin"
   - id: "P0.19-funding"
     standing: ["4.2"]
-    description: "The deployer holds 7 USDC. The most a run needs at once is 5.32 (the contract ceilings: rmRWA maxSlippageBps at most 500 on the buy and on the sale, its exit fee at most 100 bps, so a round trip through rmRWA loses at most 11 percent; rmUSDC and rmRWA redeem to USDC, rmPROTO redeemInKind pays in tokens). It is the 1 USDC seed, plus what the round before the rebalance does not return as USDC (1.1 in rmPROTO tokens: 1 redeemed in kind, and the router's rmPROTO leg of 2 USDC at the default 500 bps; at most 0.11 lost on the 1 USDC rmRWA round trip; the default sends nothing to rmRWA), plus either the 3 vault deposits held at once after it (5.21) or, once they are redeemed (another 1 in rmPROTO tokens, at most 0.11 on rmRWA), the 2 USDC router deposit (5.32). The receipt's vector only splits that last router deposit, so it does not move the floor. The 1.68 spare is margin. A run without the pre-rebalance round (production) needs 4.11. The ETH balance is advisory: below 0.005 ETH the step prints a warning and the run goes on (the gas the run burns is about 0.003 ETH; every send goes through cast at the network fee). The upgrade flow checks its own funding at P8.25"
+    description: "The deployer holds 7 USDC. The most a run needs at once is 5.32 (the contract ceilings: rmRWA maxSlippageBps at most 500 on the buy and on the sale, its exit fee at most 100 bps, so a round trip through rmRWA loses at most 11 percent; rmUSDC and rmRWA redeem to USDC, rmPROTO redeemInKind pays in tokens). It is the 1 USDC seed, plus what the round before the rebalance does not return as USDC (1.1 in rmPROTO tokens: 1 redeemed in kind, and the router's rmPROTO leg of 2 USDC at the 500 bps of the vector in effect, on a new deployment the sheet's default; at most 0.11 lost on the 1 USDC rmRWA round trip; that vector sends nothing to rmRWA), plus either the 3 vault deposits held at once after it (5.21) or, once they are redeemed (another 1 in rmPROTO tokens, at most 0.11 on rmRWA), the 2 USDC router deposit (5.32). The receipt's vector only splits that last router deposit, so it does not move the floor. The 1.68 spare is margin. A run without the pre-rebalance round (production) needs 4.11. The ETH balance is advisory: below 0.005 ETH the step prints a warning and the run goes on (the gas the run burns is about 0.003 ETH; every send goes through cast at the network fee). The upgrade flow checks its own funding at P8.25"
     host: "control"
     phase: 0
     cmds:
@@ -430,16 +430,15 @@ steps:
     onlyFor: ["twin", "rehearsal"]
     writes: ["receipt-id", "receipt-digest"]
   # ── Issue 1984: the round BEFORE the router rebalance. P5.03 applies the receipt, which is the rebalance (publish-contracts/src/govern.ts); ADR-0003 routes only NEW
-  # deposits by the new vector, so a run deposits, routes and redeems on the default vector first, then again on the receipt's vector in phase 6. These steps run where
+  # deposits by the new vector, so a run deposits, routes and redeems on the vector in effect first, then again on the receipt's vector in phase 6. These steps run where
   # P5.03 runs, and before the receipt is recorded, so a receipt that would not change the split stops the run before anything irreversible. They write pre-* state only. ──
   - id: "P5.05-receipt-changes-split"
     standing: ["4.4", "4.9"]
-    description: "Before the rebalance the router routes by its default vector: votedWeightsActive is false and the effective weights equal the default weights, saved as the pre-rebalance vector; the receipt about to be recorded weights the vaults differently, so applying it changes the split the router deposits follow"
+    description: "Before the rebalance the router's effective weights, whatever votedWeightsActive reads (on a new deployment the sheet's default vector; the runbook never clears a vector, issue 1980), are saved as the pre-rebalance vector; the receipt about to be recorded weights the vaults differently from that vector, so applying it changes the split the router deposits follow"
     host: "control"
     phase: 5
     cmds:
-      - ["bash", "-c", 'test "$(cast call "{m:router.router}" "votedWeightsActive()(bool)")" = false']
-      - ["bash", "-c", 'cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])" > {runDir}/state/pre-router-weights && test "$(cat {runDir}/state/pre-router-weights)" = "$(cast call "{m:router.router}" "getDefaultWeights()(address[],uint256[])")"']
+      - ["bash", "-c", 'cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])" > {runDir}/state/pre-router-weights && cat {runDir}/state/pre-router-weights']
       - ["bun", "scripts/runbook/qa-assert.ts", "receipt-changes-split", "{receiptFile}", "{runDir}/state/pre-router-weights"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -559,7 +558,7 @@ steps:
     exercises: "redeem"
   - id: "P5.30-pre-router-deposit"
     standing: ["4.4"]
-    description: "Before the rebalance, 2 USDC straight into the router at 8,400,000 gas: the effective weights still equal the pre-rebalance vector of P5.05 (the default), and the RouterDeposit legs are exactly that vector's non-zero weights, each leg naming its vault and weight and minting shares; the deployer holds shares in every non-zero leg afterwards"
+    description: "Before the rebalance, 2 USDC straight into the router at 8,400,000 gas: the effective weights still equal the pre-rebalance vector P5.05 saved, and the RouterDeposit legs are exactly that vector's non-zero weights, each leg naming its vault and weight and minting shares; the deployer holds shares in every non-zero leg afterwards"
     host: "control"
     phase: 5
     cmds:
@@ -768,7 +767,7 @@ steps:
     exercises: "router-deposit"
   - id: "P6.32-router-split-changed"
     standing: ["4.4", "4.9"]
-    description: "The rebalance changed the router split: the post-rebalance router deposit's RouterDeposit legs are exactly the non-zero effective weights now (the applied receipt's vector, P5.04), each minting shares, and they differ in vault or weight from the legs of the pre-rebalance router deposit (P5.30, the default vector)"
+    description: "The rebalance changed the router split: the post-rebalance router deposit's RouterDeposit legs are exactly the non-zero effective weights now (the applied receipt's vector, P5.04), each minting shares, and they differ in vault or weight from the legs of the pre-rebalance router deposit (P5.30, the vector in effect before it)"
     host: "control"
     phase: 6
     cmds:
