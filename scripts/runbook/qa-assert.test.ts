@@ -15,9 +15,10 @@ const log = (vault: string, amount: bigint, shares: bigint, bps: bigint, topic =
 const receipt = (logs: unknown[], status = "0x1"): string => JSON.stringify({ status, transactionHash: `0x${"cd".repeat(32)}`, logs });
 // `cast call ... "getEffectiveWeights()(address[],uint256[])"`: the address list, then the bps list; cast annotates a value of 10000 or more
 const WEIGHTS_DEFAULT = `[${USDC_VAULT}, ${PROTO_VAULT}, ${RWA_VAULT}]\n[9500, 500, 0]\n`;
-const WEIGHTS_RECEIPT = `[${USDC_VAULT}, ${PROTO_VAULT}, ${RWA_VAULT}]\n[9000, 1000, 0]\n`;
+const WEIGHTS_RECEIPT = `[${USDC_VAULT}, ${PROTO_VAULT}, ${RWA_VAULT}]\n[8000, 1000, 1000]\n`;
 const PRE = receipt([log(USDC_VAULT, 1_900_000n, 1_899_000n, 9500n), log(PROTO_VAULT, 100_000n, 99_000n, 500n), { address: "0xusdc", topics: [`0x${"ee".repeat(32)}`], data: "0x" }]);
-const POST = receipt([log(USDC_VAULT, 1_800_000n, 1_799_000n, 9000n), log(PROTO_VAULT, 200_000n, 198_000n, 1000n)]);
+// the Twin receipt (USDC 8000, PROTO 1000, RWA 1000) weights every vault: the post-rebalance router deposit has three legs
+const POST = receipt([log(USDC_VAULT, 1_600_000n, 1_599_000n, 8000n), log(PROTO_VAULT, 200_000n, 198_000n, 1000n), log(RWA_VAULT, 200_000n, 197_000n, 1000n)]);
 
 test("a weights answer parses into its vaults and bps, cast's exponent annotation dropped", () => {
   expect(parseWeights(WEIGHTS_DEFAULT)).toEqual({ vaults: [USDC_VAULT, PROTO_VAULT, RWA_VAULT], bps: [9500n, 500n, 0n] });
@@ -41,8 +42,8 @@ test("the router deposit legs follow the effective weights: one leg per non-zero
 });
 
 test("a receipt's vault vector drops agent_tokens and keeps the bucket order P5.04 compares", () => {
-  const r = JSON.stringify({ weights: [{ bucket: "agent_tokens", weight_bps: 0 }, { bucket: "conservative_defi_yield", weight_bps: 9000 }, { bucket: "protocol_tokens", weight_bps: 1000 }, { bucket: "real_world_assets", weight_bps: 0 }] });
-  expect(receiptVector(r)).toEqual([9000n, 1000n, 0n]);
+  const r = JSON.stringify({ weights: [{ bucket: "agent_tokens", weight_bps: 0 }, { bucket: "conservative_defi_yield", weight_bps: 8000 }, { bucket: "protocol_tokens", weight_bps: 1000 }, { bucket: "real_world_assets", weight_bps: 1000 }] });
+  expect(receiptVector(r)).toEqual([8000n, 1000n, 1000n]);
   expect(() => receiptVector("{}")).toThrow("no weights");
 });
 
@@ -58,7 +59,7 @@ function cli(args: (dir: string) => string[], files: Record<string, string>): { 
 
 test("the CLI: router-legs, legs-differ and receipt-changes-split pass and fail on the files a run writes", () => {
   const files = { "pre.json": PRE, "post.json": POST, "default": WEIGHTS_DEFAULT, "receipt-w": WEIGHTS_RECEIPT,
-    "receipt.json": JSON.stringify({ weights: [{ bucket: "agent_tokens", weight_bps: 0 }, { bucket: "conservative_defi_yield", weight_bps: 9000 }, { bucket: "protocol_tokens", weight_bps: 1000 }, { bucket: "real_world_assets", weight_bps: 0 }] }),
+    "receipt.json": JSON.stringify({ weights: [{ bucket: "agent_tokens", weight_bps: 0 }, { bucket: "conservative_defi_yield", weight_bps: 8000 }, { bucket: "protocol_tokens", weight_bps: 1000 }, { bucket: "real_world_assets", weight_bps: 1000 }] }),
     "same.json": JSON.stringify({ weights: [{ bucket: "agent_tokens", weight_bps: 0 }, { bucket: "conservative_defi_yield", weight_bps: 9500 }, { bucket: "protocol_tokens", weight_bps: 500 }, { bucket: "real_world_assets", weight_bps: 0 }] }) };
   expect(cli((d) => ["router-legs", join(d, "pre.json"), join(d, "default"), TOPIC], files).code).toBe(0);
   expect(cli((d) => ["router-legs", join(d, "post.json"), join(d, "receipt-w"), TOPIC], files).code).toBe(0);

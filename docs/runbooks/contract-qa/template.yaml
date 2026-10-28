@@ -205,7 +205,7 @@ steps:
     onlyFor: "twin"
   - id: "P0.19-funding"
     standing: ["4.2"]
-    description: "The deployer holds 7 USDC. The most a run needs at once is 5.1: the 1 USDC seed, the 1.1 the round before the rebalance pays back in rmPROTO tokens, not USDC (1 redeemed in kind, and the router's rmPROTO leg of 2 USDC at the default 500 bps), and the 3 vault deposits held at once after it (rmUSDC and rmRWA redeem to USDC, so the router's 2 USDC come from them); the 1.9 spare covers rmRWA slippage. A run without the pre-rebalance round (production) needs 4. The ETH balance is advisory: below 0.005 ETH the step prints a warning and the run goes on (the gas the run burns is about 0.003 ETH; every send goes through cast at the network fee). The upgrade flow checks its own funding at P8.25"
+    description: "The deployer holds 7 USDC. The most a run needs at once is 5.32 (the contract ceilings: rmRWA maxSlippageBps at most 500 on the buy and on the sale, its exit fee at most 100 bps, so a round trip through rmRWA loses at most 11 percent; rmUSDC and rmRWA redeem to USDC, rmPROTO redeemInKind pays in tokens). It is the 1 USDC seed, plus what the round before the rebalance does not return as USDC (1.1 in rmPROTO tokens: 1 redeemed in kind, and the router's rmPROTO leg of 2 USDC at the default 500 bps; at most 0.11 lost on the 1 USDC rmRWA round trip; the default sends nothing to rmRWA), plus either the 3 vault deposits held at once after it (5.21) or, once they are redeemed (another 1 in rmPROTO tokens, at most 0.11 on rmRWA), the 2 USDC router deposit (5.32). The receipt's vector only splits that last router deposit, so it does not move the floor. The 1.68 spare is margin. A run without the pre-rebalance round (production) needs 4.11. The ETH balance is advisory: below 0.005 ETH the step prints a warning and the run goes on (the gas the run burns is about 0.003 ETH; every send goes through cast at the network fee). The upgrade flow checks its own funding at P8.25"
     host: "control"
     phase: 0
     cmds:
@@ -407,11 +407,11 @@ steps:
   # ── Phase 5, the consensus receipt: recorded by the submitter Safe, then APPLIED by the governing Safe through the timelock (runbook 4.9). ──
   - id: "P5.00-receipt-payload"
     standing: ["4.10"]
-    description: "The Twin's receipt payload: the real production envelope with the three-vault vector USDC 9000, PROTO 1000, RWA 0 (agent_tokens 0, ADR-0017), written by the run. It differs from the sheet's default vector (9500, 500, 0), so applying it changes the router split the run checks (P5.05, P6.32). On 8453 the operator passes the receipt the canonical route serves as {receiptFile}; a receipt that weights agent_tokens is refused by apply-receipt and the run stops"
+    description: "The Twin's receipt payload: the real production envelope with the three-vault vector USDC 8000, PROTO 1000, RWA 1000 (agent_tokens 0, ADR-0017), written by the run. It weights every vault, so the post-rebalance router deposit routes into all three (three legs, within its 8,400,000 gas: 400,000 plus 2,550,000 per leg), and it differs from the sheet's default vector (9500, 500, 0), so applying it changes the router split the run checks (P5.05, P6.32). On 8453 the operator passes the receipt the canonical route serves as {receiptFile}; a receipt that weights agent_tokens is refused by apply-receipt and the run stops"
     host: "control"
     phase: 5
     cmds:
-      - ["bun", "scripts/runbook/receipt-payload.ts", "--out", "{receiptFile}", "--weights", "USDC:9000,PROTO:1000,RWA:0"]
+      - ["bun", "scripts/runbook/receipt-payload.ts", "--out", "{receiptFile}", "--weights", "USDC:8000,PROTO:1000,RWA:1000"]
     expectExit: 0
     receipts: []
     irreversible: false

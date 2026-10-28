@@ -492,6 +492,6 @@ test("the rounds before the rebalance run before the receipt is recorded, check 
   const pre = writes((id) => /^P5\.(05|[123]\d)-|^P8\.4[0-8]-/.test(id));
   const post = writes((id) => /^P6\.|^P8\.(2[6-9]|49|50)-/.test(id));
   expect([...pre].filter((w) => post.has(w))).toEqual([]);
-  // the Twin's receipt vectors differ from the default vector the sheet and the retire set, so the Twin run proves the split changed
-  for (const id of ["P5.00-receipt-payload", "P8.19-v050-receipt-payload"]) expect(r.steps.find((s) => s.id === id)!.cmds[0]).toContain("USDC:9000,PROTO:1000,RWA:0");
+  // the Twin's receipt vectors weight every vault and differ from the default vector the sheet and the retire set, so the Twin run proves the split changed with three legs
+  for (const id of ["P5.00-receipt-payload", "P8.19-v050-receipt-payload"]) expect(r.steps.find((s) => s.id === id)!.cmds[0]).toContain("USDC:8000,PROTO:1000,RWA:1000");
 });
