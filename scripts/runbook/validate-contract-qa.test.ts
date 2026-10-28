@@ -81,9 +81,9 @@ test("a command that names a verb no CLI has fails", () => {
 });
 
 test("a step that sends a cast-send.sh receipt to /dev/null fails: the sign-off would flag its transaction as sent outside the runbook", () => {
-  const p = problemsWith("releases/v0.6.0.yaml", (t) => t.replace(stepBlock(t, "P8.31-v050-gateway-deposit-vaults"), (b) => b.replace("1000000 {v050CastFlagsInline} || exit 1", "1000000 {v050CastFlagsInline} > /dev/null || exit 1")));
+  const p = problemsWith("releases/v0.6.0.yaml", (t) => t.replace(stepBlock(t, "P8.31-v050-gateway-deposit-vaults"), (b) => b.replace("500000 {v050CastFlagsInline} || exit 1", "500000 {v050CastFlagsInline} > /dev/null || exit 1")));
   expect(p.join("\n")).toContain("P8.31-v050-gateway-deposit-vaults: a cast-send.sh receipt is sent to /dev/null");
-  expect(problemsWith("releases/v0.6.0.yaml", (t) => t.replace(stepBlock(t, "P8.31-v050-gateway-deposit-vaults"), (b) => b.replace("1000000 {v050CastFlagsInline} || exit 1", "1000000 {v050CastFlagsInline} 2> /dev/null || exit 1")))).toEqual([]);
+  expect(problemsWith("releases/v0.6.0.yaml", (t) => t.replace(stepBlock(t, "P8.31-v050-gateway-deposit-vaults"), (b) => b.replace("500000 {v050CastFlagsInline} || exit 1", "500000 {v050CastFlagsInline} 2> /dev/null || exit 1")))).toEqual([]);
 });
 
 test("a planted credential fails", () => {
