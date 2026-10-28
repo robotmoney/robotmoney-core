@@ -623,6 +623,19 @@ export function localForkProblems(steps: Pick<RunbookStep, "id" | "cmds">[]): st
   }
   return out;
 }
+/**
+ * PURE (issue 1980). No step clears the router's voted vector: neither the `govern --row clear-voted-weights` round nor a direct clearVotedWeights() call. The owner
+ * decided the runbook never clears a vector (a rerun or a resume of the v0.6.0 upgrade flow cleared the vector it had applied itself, and later deposits routed on the
+ * default). Checked on the template and the release being prepared; a pinned release is a record and is not reopened.
+ */
+export function clearVectorProblems(steps: Pick<RunbookStep, "id" | "cmds">[], where: string): string[] {
+  const out: string[] = [];
+  for (const s of steps) for (const c of s.cmds) {
+    const joined = expandArgv(c).join(" ");
+    if (/--row[\s=]+clear-voted-weights\b|\bclearVotedWeights\(/.test(joined)) out.push(`${where} ${s.id}: the runbook never clears the router's voted vector (govern --row clear-voted-weights, owner decision, issue 1980)`);
+  }
+  return out;
+}
 /** The flags run-record.ts needs to compute the report (README "Run it"): without one the step exits 2 at run time, so the validator refuses the file before a run. */
 export const RECORD_FLAGS = ["run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag", "release"] as const;
 /** PURE. Every step that runs run-record.ts report or signoff names every flag the report needs, `--release` included. */
@@ -713,6 +726,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
   try { template = parseTemplate(tplText); } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   problems.push(...secretProblems(tplText, "template.yaml"));
   problems.push(...commandProblems(template.steps, model, root));
+  problems.push(...clearVectorProblems(template.steps, "template.yaml"));
   problems.push(...recordStepProblems(template.steps), ...localForkProblems(template.steps));
   problems.push(...rebalanceRoundProblems(template.steps, "template.yaml"));
   problems.push(...gatewayRunbookProblems(root, model));
@@ -740,6 +754,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
       }
       problems.push(...checkAddOnly(template, r));
       problems.push(...commandProblems(r.steps, model, root));
+      problems.push(...clearVectorProblems(r.steps, `releases/${f}`));
       problems.push(...recordStepProblems(r.steps), ...localForkProblems(r.steps));
       problems.push(...rebalanceRoundProblems(r.steps, `releases/${f}`));
     } catch (e) { problems.push(...(e as Error).message.split("\n")); }
