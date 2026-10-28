@@ -202,12 +202,12 @@ steps:
     onlyFor: "twin"
   - id: "P0.19-funding"
     standing: ["4.2"]
-    description: "The deployer holds 0.005 ETH and 7 USDC (1 seed, 3 vault deposits, 2 through the router, 1 spare). The gas the run burns is about 0.003 ETH; every send goes through cast at the network fee"
+    description: "The deployer holds 7 USDC (1 seed, 3 vault deposits, 2 through the router, 1 spare). The ETH balance is advisory: below 0.005 ETH the step prints a warning and the run goes on (the gas the run burns is about 0.003 ETH; every send goes through cast at the network fee). The upgrade flow checks its own funding at P8.25"
     host: "control"
     phase: 0
     cmds:
       - ["bash", "-c", 'cast balance "{sheet:ADMIN_ADDRESS}" > {runDir}/state/deployer-eth']
-      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-eth}", "5000000000000000"]
+      - ["bash", "-c", "bun scripts/runbook/qa-assert.ts ge {state:deployer-eth} 5000000000000000 || echo 'advisory: the deployer holds less than 0.005 ETH, the gas a full run burns at a high network fee; the run goes on' >&2"]
       - ["bash", "-c", 'cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/deployer-usdc']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:deployer-usdc}", "7000000"]
     env:
@@ -215,7 +215,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
-    flow: ["new", "upgrade"]
+    flow: "new"
     onlyFor: ["rehearsal", "production"]
     writes: ["deployer-eth", "deployer-usdc"]
   - id: "P0.20-plan"

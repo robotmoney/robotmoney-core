@@ -121,6 +121,9 @@ export function stable(v: unknown): string {
   return JSON.stringify(v);
 }
 
+/** A cast-send.sh call whose stdout (the receipt the sender check reads its hash from) is redirected to /dev/null before the command ends. */
+const DISCARDED_SEND = /cast-send\.sh[^;|&]*?(?:&|(?<!2))>\s*\/dev\/null/;
+
 /** PURE. One step from its parsed YAML, or the reasons it is not one. */
 export function parseStep(raw: unknown, where: string): { step: RunbookStep } | { errors: string[] } {
   if (!isObject(raw)) return { errors: [`${where}: a step is a mapping`] };
@@ -135,6 +138,7 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
   if (!Number.isInteger(raw.phase) || (raw.phase as number) < 0 || (raw.phase as number) > 10) errors.push(`${at}: phase is an integer 0 to 10`);
   else if (m && Number(m[1]) !== raw.phase) errors.push(`${at}: the id names phase ${m[1]} but phase is ${String(raw.phase)}`);
   if (!Array.isArray(raw.cmds) || raw.cmds.length === 0 || !raw.cmds.every((c) => isStringArray(c) && c.length > 0)) errors.push(`${at}: cmds is a non-empty list of argv lists`);
+  if (Array.isArray(raw.cmds) && raw.cmds.some((c) => isStringArray(c) && c.some((a) => DISCARDED_SEND.test(a)))) errors.push(`${at}: a cast-send.sh receipt is sent to /dev/null, so its transaction hash never reaches the journal and the sign-off flags it as sent outside the runbook`);
   if (raw.env !== undefined && !(isObject(raw.env) && Object.values(raw.env).every((v) => typeof v === "string"))) errors.push(`${at}: env maps names to strings`);
   const ee = raw.expectExit;
   if (!(Number.isInteger(ee) || (Array.isArray(ee) && ee.length > 0 && ee.every((x) => Number.isInteger(x))))) errors.push(`${at}: expectExit is an integer or a list of integers`);
