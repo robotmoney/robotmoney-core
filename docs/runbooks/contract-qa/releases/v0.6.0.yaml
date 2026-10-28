@@ -743,7 +743,7 @@ steps:
       - ["forge", "build", "--root", "{runDir}/v060", "--out", "{runDir}/v060/out"]
       - ["bash", "-c", "m={v050ManifestDir} && jq -r .vault $m/agent-token-vault.json > {runDir}/state/v050-rmagent && jq -r .timelock $m/timelock.json > {runDir}/state/v050-timelock && jq -r .governance $m/governance.json > {runDir}/state/v050-governance && jq -r .registry $m/registry.json > {runDir}/state/v050-registry && jq -r .router $m/router.json > {runDir}/state/v050-router"]
       - ["bash", "-c", "m={v050ManifestDir} && jq -r .vault $m/vault.json > {runDir}/state/v050-rmusdc && jq -r .usdc $m/vault.json > {runDir}/state/v050-usdc && jq -r .vault $m/protocol-asset-vault.json > {runDir}/state/v050-rmproto && jq -r .vault $m/rwa-basket-vault.json > {runDir}/state/v050-rmrwa && jq -r .gateway $m/gateway.json > {runDir}/state/v050-gateway && jq -r .consensus_receipt $m/ic-policy.json > {runDir}/state/v050-receipt"]
-      - ["bash", "-c", "sed -n 's/^ADMIN_ADDRESS=//p' {v050Sheet} | tr -d ' \\\"' > {runDir}/state/v050-admin && sed -n 's/^EMERGENCY_ADDRESS=//p' {v050Sheet} | tr -d ' \\\"' > {runDir}/state/v050-emergency && jq -er '[.recorded_receipts[]?.submitter] | last' {v050EvidenceDir}/publish-run.json > {runDir}/state/v050-submitter && test -s {runDir}/state/v050-admin"]
+      - ["bash", "-c", "sed -n 's/^ADMIN_ADDRESS=//p' {v050Sheet} | sed 's/#.*//' | tr -d ' \\\"' > {runDir}/state/v050-admin && sed -n 's/^EMERGENCY_ADDRESS=//p' {v050Sheet} | sed 's/#.*//' | tr -d ' \\\"' > {runDir}/state/v050-emergency && jq -er '[.recorded_receipts[]?.submitter] | last' {v050EvidenceDir}/publish-run.json > {runDir}/state/v050-submitter && test -s {runDir}/state/v050-admin"]
     expectExit: 0
     receipts: []
     irreversible: false
@@ -1048,7 +1048,7 @@ steps:
     cmds:
       - ["bash", "-c", 'test "$(cast call "{state:v050-router}" "votedWeightsActive()(bool)")" = true']
       - ["bash", "-c", 'want=$(jq -r "[.weights[] | select(.bucket != \"agent_tokens\") | .weight_bps] | map(tostring) | join(\",\")" {receiptFile}) && got=$(cast call "{state:v050-router}" "getEffectiveWeights()(address[],uint256[])" | tail -n 1 | tr -d "[] ") && test "$got" = "$want"']
-      - ["bash", "-c", "bun publish-contracts/src/evidence-check.ts --receipt-applications {v050EvidenceDir}/publish-run.json --deployment-kind rehearsal --consensus-receipt {state:v050-receipt} --governance {state:v050-governance} --timelock {state:v050-timelock} --delay-floor \"$(sed -n 's/^TIMELOCK_MIN_DELAY=//p' {v050Sheet} | tr -d ' ')\" --rpc {v050RpcUrl}"]
+      - ["bash", "-c", "bun publish-contracts/src/evidence-check.ts --receipt-applications {v050EvidenceDir}/publish-run.json --deployment-kind rehearsal --consensus-receipt {state:v050-receipt} --governance {state:v050-governance} --timelock {state:v050-timelock} --delay-floor \"$(sed -n 's/^TIMELOCK_MIN_DELAY=//p' {v050Sheet} | sed 's/#.*//' | tr -d ' ')\" --rpc {v050RpcUrl}"]
     env:
       ETH_RPC_URL: "{v050RpcUrl}"
     expectExit: 0
