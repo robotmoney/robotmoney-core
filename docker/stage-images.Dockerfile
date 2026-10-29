@@ -22,7 +22,7 @@
 # Build context is the repo root. This file has its own ignore list (stage-images.Dockerfile.dockerignore).
 
 FROM oven/bun:1.3.14-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f939ae4dfc9db6f AS bun
-FROM ghcr.io/foundry-rs/foundry:v1.8.3@sha256:2e4287278639262de76db72477301d5d3212fa1b1cce710d7d148750a46ce9e7 AS foundry
+FROM ghcr.io/foundry-rs/foundry:v1.8.5@sha256:32c8ea9ef052a440cb1620175987a3f49eff8b068a0c6a3d09ebf7f5f9a0e043 AS foundry
 
 # --- twin-chain ----------------------------------------------------------------------------------------------
 FROM foundry AS twin-chain

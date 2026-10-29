@@ -150,6 +150,13 @@ describe("issue 1926: every Foundry install in CI names the pinned version", () 
     expect(found.some((x) => x.file === join(".github", "actions", "twin-fork", "action.yml"))).toBe(true);
   });
 
+  test("the stage images (stage-core-stack-containers runs the publish runner inside them) take forge from the pinned foundry image", () => {
+    const df = readFileSync(join(REPO, "docker", "stage-images.Dockerfile"), "utf8");
+    const froms = [...df.matchAll(/^FROM\s+ghcr\.io\/foundry-rs\/foundry:(\S+?)@sha256:[0-9a-f]{64}\b/gm)].map((m) => m[1]);
+    expect(froms.length).toBeGreaterThan(0);
+    expect(froms.every((t) => t === PINNED_FORGE_TAG)).toBe(true);
+  });
+
   test("the scan catches a step that names another version or none", () => {
     const d = join(scratch, "wf");
     mkdirSync(d, { recursive: true });
