@@ -505,6 +505,64 @@ export const rpcHostOf = (url: string): string => { try { return rpcHost(url); }
 /** The bound of the reads right after a broadcast (QA plan v1 E6, issue 1723): the run's `readRetry` (a test passes a sleep that does not wait), else the default bound. */
 export const readRetryOf = (ctx: RunContext): StaleReadRetry => ctx.readRetry ?? {};
 
+/** Issue 1981: how many reads in a row must show the receipt block, and how many reads the wait may take (one per `delayMs`, 1 s by default). Same rule as scripts/runbook/cast-send.sh. */
+export const RECEIPT_BLOCK_READS = 3;
+export const RECEIPT_BLOCK_TRIES = 60;
+
+/** A receipt's blockNumber (hex string, decimal string or number) as a number, or undefined when the receipt has none. */
+export function receiptBlock(receipt: Record<string, unknown>): number | undefined {
+  const b = receipt.blockNumber;
+  if (typeof b === "number" && Number.isSafeInteger(b)) return b;
+  if (typeof b === "string" && /^(0x[0-9a-f]+|[0-9]+)$/i.test(b.trim())) return Number(b.trim());
+  return undefined;
+}
+
+/**
+ * Issue 1981: a load-balanced RPC (mainnet.base.org) can answer the read after a mined send from a node that has not seen the receipt's block yet: pause-all read
+ * depositsPaused false right after its pause was mined, and the next send from the same key took a stale nonce and failed. This waits until `cast block-number`
+ * reads at or past `block` on RECEIPT_BLOCK_READS reads in a row. It fails with a TOOL error naming the block after RECEIPT_BLOCK_TRIES reads. The run's `readRetry`
+ * gives the sleep and delay (a test passes a sleep that does not wait). A read that errors counts as behind.
+ */
+export async function waitForReceiptBlock(ctx: RunContext, block: number, what: string): Promise<void> {
+  const retry = readRetryOf(ctx);
+  const delay = retry.delayMs ?? 1000;
+  const sleep = retry.sleep ?? ((ms: number) => new Promise<void>((res) => setTimeout(res, ms)));
+  let seen = 0;
+  let last = "nothing";
+  for (let i = 1; i <= RECEIPT_BLOCK_TRIES; i++) {
+    let head: number | undefined;
+    try {
+      const out = await castOut(ctx, ["block-number"]);
+      if (/^[0-9]+$/.test(out)) head = Number(out);
+      last = out;
+    } catch (e) { last = `an error (${(e as Error).message})`; }
+    if (head !== undefined && head >= block) {
+      if (++seen >= RECEIPT_BLOCK_READS) return;
+    } else {
+      seen = 0;
+      ctx.log.log("warn", "rpc.behind_receipt", { what, receipt_block: block, last, try: i, tries: RECEIPT_BLOCK_TRIES, rpc_host: rpcHostOf(ctx.rpc) });
+    }
+    if (i < RECEIPT_BLOCK_TRIES) await sleep(delay);
+  }
+  throw new PublishError("TOOL", `${what} was mined in block ${block}, but RPC ${rpcHostOf(ctx.rpc)} did not read block ${block} on ${RECEIPT_BLOCK_READS} reads in a row within ${RECEIPT_BLOCK_TRIES} reads ${delay} ms apart (last read ${last}). A read now could be stale: read the chain before any retry.`, { receipt_block: block, last, rpc_host: rpcHostOf(ctx.rpc) });
+}
+
+/**
+ * Issue 1981: the nonce for the next send from `who`, read fresh from the pending block, never below one past the last nonce this run sent from it (`sent`). A
+ * lagging node answers the old nonce, the send then fails with an empty error. A read that fails falls back to `sent + 1`, or undefined (cast picks) when nothing was sent.
+ */
+export async function nextNonce(ctx: RunContext, who: string, sent: number | undefined): Promise<number | undefined> {
+  const floor = sent === undefined ? undefined : sent + 1;
+  let read: number | undefined;
+  try {
+    const out = await castOut(ctx, ["nonce", "--block", "pending", who]);
+    if (/^[0-9]+$/.test(out)) read = Number(out);
+  } catch (e) { ctx.log.log("warn", "rpc.nonce_unread", { who, message: (e as Error).message }); }
+  if (read !== undefined && floor !== undefined && read < floor) ctx.log.log("warn", "rpc.stale_nonce", { who, read, used: floor, note: "the RPC answered a nonce below one past the last send from this key: using the higher one" });
+  if (read === undefined) return floor;
+  return floor === undefined ? read : Math.max(read, floor);
+}
+
 export async function deployerNonce(ctx: RunContext, who: string): Promise<number> {
   const out = await castOut(ctx, ["nonce", who]);
   if (!/^[0-9]+$/.test(out)) throw new PublishError("TOOL", `cast nonce returned '${out}'`);

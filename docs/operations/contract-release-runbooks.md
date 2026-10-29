@@ -643,7 +643,11 @@ itself when stage 12 (verify) or the postflight fails, and the run still exits
 with the verify failure's code (13). It picks the signer by stage (deployer
 before the handover, EMERGENCY key after), reads `depositsPaused` back on
 every vault and records each vault's paused state in
-`rollout-report-<chain>.json` under the run's evidence directory. Withdrawals
+`rollout-report-<chain>.json` under the run's evidence directory. Each send
+takes a fresh pending nonce (never below one past the key's last send in the
+run), and each read-back waits until the RPC reads the receipt block three
+times in a row, 60 reads at most, the same rule as `scripts/runbook/cast-send.sh`
+(issue 1981: a lagging Base RPC node read `false` after a mined pause). Withdrawals
 stay open. Exit 25 means a vault is not confirmed paused. Run the CLI from a
 checkout of `DEPLOY_SHA`. A CLI from another sha still pauses, with one
 `vault_rules.mismatch` warning naming both stage tables (`pause-all` reads no

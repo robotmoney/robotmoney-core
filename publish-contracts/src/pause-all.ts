@@ -3,13 +3,14 @@
 // `depositsPaused` only. No contract change: every vault already has pauseDeposits(), gated by EMERGENCY_ROLE.
 // Signer by stage: the DEPLOYER before the stage 11 handover (it holds EMERGENCY_ROLE on every vault until the timelock stage moves the role),
 // the EMERGENCY key after it. Every vault is read back (`depositsPaused`) and the result goes into the rollout report file.
+// Issue 1981: each send takes a fresh (pending) nonce, and the read-back waits until the RPC serves the receipt block, so a lagging load-balanced node cannot fail it.
 // Issue 1686: the run manifest gets a `pauses` entry BEFORE the first send (see runner.ts PauseEntry); govern's execute phase refuses an unpause scheduled before it.
 // Docs: docs/operations/contract-release-runbooks.md sections 4.5 and 4.6, docs/operations/manual-admin-actions.md, docs/prd.md.
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { keccak256, toHex } from "viem";
 import { PublishError } from "./errors.ts";
-import { beginPauseEntry, castOut, childEnv, readManifestField, updatePauseEntry, type PauseEntry, type RunContext, type RunManifest } from "./runner.ts";
+import { beginPauseEntry, castOut, childEnv, nextNonce, readManifestField, receiptBlock, updatePauseEntry, waitForReceiptBlock, type PauseEntry, type RunContext, type RunManifest } from "./runner.ts";
 import { vaultDisplayName, type VaultKey } from "./sheet.ts";
 import type { RetiredVaultKey } from "./vault-keys.ts";
 import type { PublishSigner } from "./signer.ts";
@@ -146,6 +147,8 @@ export async function pauseAll(ctx: RunContext, manifest: Pick<RunManifest, "sta
   if (!blocked && roles.includes("emergency")) blocked = await unfundedSigner(ctx, emergencyAddr!, "EMERGENCY");
   if (blocked) ctx.log.log("error", "pause_all.blocked", { reason: blocked });
   const vaults: PauseVaultResult[] = [];
+  // Issue 1981: the last nonce this run sent from each key (lower-case address). The next send from that key never takes a nonce below it + 1.
+  const sentNonce = new Map<string, number>();
   for (const [i, v] of stages.entries()) {
     const name = vaultDisplayName(v.key);
     let address = "";
@@ -170,11 +173,18 @@ export async function pauseAll(ctx: RunContext, manifest: Pick<RunManifest, "sta
       const signer = role === "deployer" ? deployer : emergency!;
       res.signer = role === "deployer" ? deployerAddr! : emergencyAddr!;
       if (blocked) throw new PublishError("PAUSE", blocked);
-      const r = await ctx.run("cast", ["send", address, "pauseDeposits()", "--json", ...(await castSignerArgs(signer))], { env: childEnv(ctx), interactive: true });
-      if (r.code !== 0) throw new PublishError("TOOL", `cast send pauseDeposits() on ${name} failed: ${r.stderr.trim().split("\n").slice(-2).join(" ")}`);
+      // Issue 1981: the nonce is read fresh (pending) for every send, never below one past this key's last send in this run: a lagging node answered a stale nonce on 8453.
+      const nonce = await nextNonce(ctx, res.signer, sentNonce.get(lc(res.signer)));
+      const r = await ctx.run("cast", ["send", address, "pauseDeposits()", "--json", ...(nonce === undefined ? [] : ["--nonce", String(nonce)]), ...(await castSignerArgs(signer))], { env: childEnv(ctx), interactive: true });
+      if (r.code !== 0) throw new PublishError("TOOL", `cast send pauseDeposits() on ${name} failed: ${r.stderr.trim().split("\n").slice(-2).join(" ") || `exit ${r.code} with no error text${nonce === undefined ? "" : ` (nonce ${nonce})`}`}`);
       let receipt: Record<string, unknown> = {};
       try { receipt = JSON.parse(r.stdout.trim().split("\n").filter((l) => l.startsWith("{")).pop() ?? "{}"); } catch { /* read-back below is the proof */ }
+      if (nonce !== undefined) sentNonce.set(lc(res.signer), nonce);
       if (typeof receipt.transactionHash === "string") res.txHash = receipt.transactionHash;
+      // Issue 1981: the read-back below and the next send wait until the RPC serves the receipt's block (three reads in a row, as scripts/runbook/cast-send.sh).
+      const block = receiptBlock(receipt);
+      if (block === undefined) ctx.log.log("warn", "pause_all.no_receipt_block", { vault: name, tx_hash: res.txHash, note: "the receipt names no block: the read-back cannot wait for it" });
+      else await waitForReceiptBlock(ctx, block, `pauseDeposits() on ${name}`);
       if (receipt.status !== undefined && !sentOk(receipt)) throw new PublishError("BROADCAST", `pauseDeposits() on ${name} was mined and reverted (${String(receipt.transactionHash)})`);
     } catch (e) {
       res.error = (e as Error).message;

@@ -19,7 +19,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAddress, keccak256, type Address, type Hex } from "viem";
 import { PublishError } from "./errors.ts";
-import { childEnv, confirmStage, loadRunManifest, manifestDir, saveRunManifest, type RunContext, type RunManifest } from "./runner.ts";
+import { childEnv, confirmStage, loadRunManifest, manifestDir, receiptBlock, saveRunManifest, waitForReceiptBlock, type RunContext, type RunManifest } from "./runner.ts";
 import { getStageTable } from "./stages.ts";
 import { manifestBase } from "./stage-table.ts";
 import { UPGRADE_ROW, layoutGateProblems, runtimeCodeProblems } from "./upgrade-rows.ts";
@@ -102,6 +102,9 @@ export function realDeployImplApi(ctx: RunContext): DeployImplApi {
       const r = await ctx.run("cast", ["send", "--json", ...signerArgs, "--create", creationCode], { env: childEnv(ctx), interactive: true });
       if (r.code !== 0) throw new PublishError("BROADCAST", `cast send --create failed: ${r.stderr.trim().split("\n").filter((l) => l.trim() !== "").slice(-3).join(" ")}`);
       const rc = JSON.parse(r.stdout.trim().split("\n").filter((l) => l.startsWith("{")).pop() ?? "{}");
+      // Issue 1981: the code read-back runs only once the RPC serves the receipt's block (a lagging node answers no code for a contract that is there).
+      const block = receiptBlock(rc);
+      if (block !== undefined) await waitForReceiptBlock(ctx, block, `the CREATE ${String(rc.transactionHash)}`);
       return { txHash: rc.transactionHash as Hex, status: ["0x1", "1", "success"].includes(lc(rc.status)) || rc.status === 1, address: (rc.contractAddress ?? null) as Address | null };
     },
   };
