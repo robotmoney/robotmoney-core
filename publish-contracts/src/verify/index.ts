@@ -893,7 +893,8 @@ async function roleScan(c: Collector, chain: ChainReader, deployer: Address, gov
 
 /**
  * Issue 1912, ADR-0017: one vault the Safe retired with `govern --row retire-vault`. It is withdraw-only (ADR-0009): Retired in the registry, out of the router-eligible set, its own deposits halted by the
- * registry retire, still holding its code (its holders redeem), and absent from the router's default and effective vectors, which keep one leg per remaining vault.
+ * registry retire, still holding its code (its holders redeem), and absent from the router's default and effective vectors, which keep one leg per remaining vault. The two vectors
+ * have the same bps unless an applied receipt's vector is active (issue 1992).
  */
 async function retirementChecks(c: Collector, chain: ChainReader, vault: Address, ctx: { registry: Address; router: Address; vaultCount: number }): Promise<void> {
   const p = `retired[${vault}]`;
@@ -904,9 +905,14 @@ async function retirementChecks(c: Collector, chain: ChainReader, vault: Address
   await c.run(`${p}: the router's default and effective vectors hold one leg per remaining vault and not this one`, async () => {
     const [dv, db] = (await chain.read(ctx.router, "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
     const [ev, eb] = (await chain.read(ctx.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
-    const same = dv.length === ev.length && dv.every((a, i) => lc(a) === lc(ev[i]!) && db[i] === eb[i]);
-    const ok = same && dv.length === ctx.vaultCount && new Set(dv.map(lc)).size === dv.length && !dv.some((a) => lc(a) === lc(vault)) && db.reduce((t, x) => t + x, 0n) === 10000n;
-    return { ok, detail: `default [${dv.join(", ")}] effective [${ev.join(", ")}]` };
+    // Issue 1992: an applied receipt sets an active vector whose bps differ from the default; no step clears it (issue 1980), so the bps must match only while none is active.
+    const voted = (await chain.read(ctx.router, "function votedWeightsActive() view returns (bool)")) as boolean;
+    const sameVaults = dv.length === ev.length && dv.every((a, i) => lc(a) === lc(ev[i]!));
+    const sameBps = db.length === eb.length && db.every((x, i) => x === eb[i]);
+    const sum = (b: bigint[]) => b.reduce((t, x) => t + x, 0n);
+    const ok = sameVaults && (voted || sameBps) && dv.length === ctx.vaultCount && new Set(dv.map(lc)).size === dv.length && !dv.some((a) => lc(a) === lc(vault))
+      && sum(db) === 10000n && sum(eb) === 10000n;
+    return { ok, detail: `default [${dv.join(", ")}] [${db.join(", ")}] effective [${ev.join(", ")}] [${eb.join(", ")}] votedWeightsActive ${voted}` };
   });
 }
 
