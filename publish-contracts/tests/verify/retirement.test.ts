@@ -9,7 +9,7 @@ import { REGISTRY, ROUTER, VAULTS, addr, buildWorld, failed, type World } from "
 const RETIRED = addr(0xb0099);
 
 /** The healthy three-vault world, plus a fourth vault the Safe retired: listed, Retired, not eligible, retired() true, with code. */
-function retired(over: { status?: number; eligible?: boolean; flag?: boolean; code?: boolean; inVector?: boolean; listed?: boolean } = {}): World {
+function retired(over: { status?: number; eligible?: boolean; flag?: boolean; code?: boolean; inVector?: boolean; listed?: boolean; effective?: bigint[]; voted?: boolean } = {}): World {
   const w = buildWorld();
   const three = Object.values(VAULTS).map((v) => v.address);
   if (over.code !== false) w.chain.codes.set(RETIRED.toLowerCase(), "0x6001");
@@ -23,6 +23,8 @@ function retired(over: { status?: number; eligible?: boolean; flag?: boolean; co
     w.chain.set(ROUTER, "getDefaultWeights", [vs, [9500n, 500n, 0n]]);
     w.chain.set(ROUTER, "getEffectiveWeights", [vs, [9500n, 500n, 0n]]);
   }
+  if (over.effective) w.chain.set(ROUTER, "getEffectiveWeights", [three, over.effective]);
+  if (over.voted !== undefined) w.chain.set(ROUTER, "votedWeightsActive", over.voted);
   w.opts.retirements = [{ vault: RETIRED }];
   return w;
 }
@@ -47,6 +49,11 @@ describe("a retired vault (issue 1912, ADR-0017)", () => {
     expect(failed(await verifyDeployment(retired({ flag: false }).opts))).toEqual([label("deposits halted by the registry retire")]);
     expect(failed(await verifyDeployment(retired({ code: false }).opts))).toContain(label("has code"));
     expect(failed(await verifyDeployment(retired({ inVector: true }).opts))).toContain(label(VECTOR));
+  });
+  test("issue 1992: an applied receipt's active vector over the remaining vaults passes; differing bps with no active vector, or a vector off 10000, fail", async () => {
+    expect(failed(await verifyDeployment(retired({ effective: [8000n, 1000n, 1000n], voted: true }).opts))).not.toContain(label(VECTOR));
+    expect(failed(await verifyDeployment(retired({ effective: [8000n, 1000n, 1000n], voted: false }).opts))).toContain(label(VECTOR));
+    expect(failed(await verifyDeployment(retired({ effective: [8000n, 1000n, 900n], voted: true }).opts))).toContain(label(VECTOR));
   });
   test("a retired vault the registry does not list fails the vault set label", async () => {
     expect(failed(await verifyDeployment(retired({ listed: false }).opts))).toContain("vault set: manifests equal registry.listVaults");
