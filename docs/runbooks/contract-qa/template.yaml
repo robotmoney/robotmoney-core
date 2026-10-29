@@ -470,7 +470,7 @@ steps:
     exercises: "vault-deposit"
   - id: "P5.11-pre-deposit-rmproto"
     standing: ["4.3", "4.4"]
-    description: "Before the rebalance, 1 USDC into rmPROTO; the shares it minted are at least previewDeposit and above it by no more than the maxSlippageBps haircut"
+    description: "Before the rebalance, 1 USDC into rmPROTO; the shares it minted are at least previewDeposit and above it by no more than the maxSlippageBps haircut plus the same slippage in the depositor's favour, because a swap can beat the oracle price (issue 1990)"
     host: "control"
     phase: 5
     cmds:
@@ -481,7 +481,7 @@ steps:
       - ["bash", "-c", 'cast call "{m:protocol-asset-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/pre-balance1-PROTO']
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts sub {state:pre-balance1-PROTO} {state:pre-balance0-PROTO} > {runDir}/state/pre-shares-PROTO"]
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:pre-shares-PROTO}", "{state:pre-preview-PROTO}"]
-      - ["bash", "-c", 'b=$(cast call "{m:protocol-asset-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/pre-share-bound-PROTO']
+      - ["bash", "-c", 'b=$(cast call "{m:protocol-asset-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( 100000000 * 10000 / ((10000 - b) * (10000 - b)) - 10000 + 1 )) > {runDir}/state/pre-share-bound-PROTO']
       - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:pre-shares-PROTO}", "{state:pre-preview-PROTO}", "{state:pre-share-bound-PROTO}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -493,7 +493,7 @@ steps:
     exercises: "vault-deposit"
   - id: "P5.13-pre-deposit-rmrwa"
     standing: ["4.3", "4.4"]
-    description: "Before the rebalance, 1 USDC into rmRWA; the shares it minted are at least previewDeposit and above it by no more than the maxSlippageBps haircut"
+    description: "Before the rebalance, 1 USDC into rmRWA; the shares it minted are at least previewDeposit and above it by no more than the maxSlippageBps haircut plus the same slippage in the depositor's favour, because a swap can beat the oracle price (issue 1990)"
     host: "control"
     phase: 5
     cmds:
@@ -504,7 +504,7 @@ steps:
       - ["bash", "-c", 'cast call "{m:rwa-basket-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/pre-balance1-RWA']
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts sub {state:pre-balance1-RWA} {state:pre-balance0-RWA} > {runDir}/state/pre-shares-RWA"]
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:pre-shares-RWA}", "{state:pre-preview-RWA}"]
-      - ["bash", "-c", 'b=$(cast call "{m:rwa-basket-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/pre-share-bound-RWA']
+      - ["bash", "-c", 'b=$(cast call "{m:rwa-basket-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( 100000000 * 10000 / ((10000 - b) * (10000 - b)) - 10000 + 1 )) > {runDir}/state/pre-share-bound-RWA']
       - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:pre-shares-RWA}", "{state:pre-preview-RWA}", "{state:pre-share-bound-RWA}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -655,7 +655,7 @@ steps:
     exercises: "vault-deposit"
   - id: "P6.11-deposit-rmproto"
     standing: ["4.3", "4.4"]
-    description: "1 USDC into rmPROTO; the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut"
+    description: "1 USDC into rmPROTO; the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut plus the same slippage in the depositor's favour, because a swap can beat the oracle price (issue 1990)"
     host: "control"
     phase: 6
     cmds:
@@ -664,7 +664,7 @@ steps:
       - ["bash", "scripts/runbook/cast-send.sh", "{m:protocol-asset-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
       - ["bash", "-c", 'cast call "{m:protocol-asset-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-PROTO']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-PROTO}", "{state:preview-PROTO}"]
-      - ["bash", "-c", 'b=$(cast call "{m:protocol-asset-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-PROTO']
+      - ["bash", "-c", 'b=$(cast call "{m:protocol-asset-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( 100000000 * 10000 / ((10000 - b) * (10000 - b)) - 10000 + 1 )) > {runDir}/state/share-bound-PROTO']
       - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-PROTO}", "{state:preview-PROTO}", "{state:share-bound-PROTO}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -675,7 +675,7 @@ steps:
     exercises: "vault-deposit"
   - id: "P6.13-deposit-rmrwa"
     standing: ["4.3", "4.4"]
-    description: "1 USDC into rmRWA; the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut"
+    description: "1 USDC into rmRWA; the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut plus the same slippage in the depositor's favour, because a swap can beat the oracle price (issue 1990)"
     host: "control"
     phase: 6
     cmds:
@@ -684,7 +684,7 @@ steps:
       - ["bash", "scripts/runbook/cast-send.sh", "{m:rwa-basket-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
       - ["bash", "-c", 'cast call "{m:rwa-basket-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-RWA']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-RWA}", "{state:preview-RWA}"]
-      - ["bash", "-c", 'b=$(cast call "{m:rwa-basket-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-RWA']
+      - ["bash", "-c", 'b=$(cast call "{m:rwa-basket-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( 100000000 * 10000 / ((10000 - b) * (10000 - b)) - 10000 + 1 )) > {runDir}/state/share-bound-RWA']
       - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-RWA}", "{state:preview-RWA}", "{state:share-bound-RWA}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
