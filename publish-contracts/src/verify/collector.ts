@@ -1,4 +1,11 @@
+import { RPC_REFUSED_DETAIL } from "./logs.ts";
 import type { Check, VerifyReport } from "./types.ts";
+
+/** A thrown error's detail. An RPC refusal keeps its RPC_REFUSED prefix, so verify-stage.ts reads it as a read the RPC refused, not a finding (issue 1977). */
+const errorDetail = (e: any): string => {
+  const m = String(e?.shortMessage ?? e?.message ?? e);
+  return m.startsWith(RPC_REFUSED_DETAIL) ? m.slice(0, 300) : `error: ${m.slice(0, 300)}`;
+};
 
 /** Accumulates checks. A thrown error inside a check becomes a failed check with the same stable label. */
 export class Collector {
@@ -25,14 +32,14 @@ export class Collector {
       if (typeof r === "boolean") this.push(label, r, r ? "ok" : "condition false");
       else this.push(label, r.ok, r.detail);
     } catch (e: any) {
-      this.push(label, false, `error: ${String(e?.shortMessage ?? e?.message ?? e).slice(0, 300)}`);
+      this.push(label, false, errorDetail(e));
     }
   }
 
   /** Read a value then compare it with eq semantics. */
   async runEq(label: string, get: () => Promise<unknown>, want: unknown): Promise<void> {
     try { this.eq(label, await get(), want); }
-    catch (e: any) { this.push(label, false, `error: ${String(e?.shortMessage ?? e?.message ?? e).slice(0, 300)}`); }
+    catch (e: any) { this.push(label, false, errorDetail(e)); }
   }
 
   report(): VerifyReport {

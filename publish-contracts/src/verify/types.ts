@@ -142,8 +142,10 @@ export interface VerifyOptions {
   adoptedContracts?: Address[];
   /** The block of the timelock handover. The agent checks stop here, because depositors authorize their own agents after it. Unset: the chain head. */
   handoverBlock?: bigint;
-  /** Blocks per eth_getLogs call. The public Base RPC caps at 2000. */
+  /** Blocks per eth_getLogs call. The public Base RPC caps at 2000. A range-limit answer shrinks it to the limit the RPC names (issue 1977). */
   logChunk?: number;
+  /** Issue 1977: false scans each check's logs on its own instead of from the one shared pass. A test seam: the shared and per-check reads must give the same report. */
+  sharedLogScan?: boolean;
   /** Frozen per-stage transaction counts for this DEPLOY_SHA. The deployer nonce must equal their sum. */
   frozenCounts: Record<string, number>;
   /** Directory with forge `out/` artifacts for the code-hash comparison. */
@@ -257,5 +259,6 @@ export interface ChainReader {
   deployReceipt(hash: Hex): Promise<DeployReceipt | null>;
   /** Raw eth_call that never throws on revert. */
   callRaw(to: Address, data: Hex, from?: Address): Promise<RawCallResult>;
-  getLogs(params: { address?: Address; topics: (Hex | Hex[] | null)[]; fromBlock: bigint; toBlock: bigint }): Promise<LogEntry[]>;
+  /** `address` may be a list (eth_getLogs matches any of them): the shared verify scan reads every scanned contract in one pass (issue 1977). */
+  getLogs(params: { address?: Address | Address[]; topics: (Hex | Hex[] | null)[]; fromBlock: bigint; toBlock: bigint }): Promise<LogEntry[]>;
 }

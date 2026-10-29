@@ -173,7 +173,8 @@ export const USAGE = `publish contracts
   --measure          rehearsal only: measure per-stage counts and write the frozen file for this SHA
   --logs-rpc URL     prove-control --resume and the verify stage: a separate RPC for eth_getLogs (the scan for a landed proof, the verifier's role and
                      creation scans). Every other read stays on --rpc.
-  --logs-window N    prove-control --resume and the verify stage: blocks per eth_getLogs call (default 2000); prove-control halves it on a range-limit error
+  --logs-window N    prove-control --resume and the verify stage: blocks per eth_getLogs call (default 2000); prove-control halves it on a range-limit error,
+                     verify shrinks it to the limit the RPC names. Verify reads each block range once for all its log checks (issue 1977).
   --check-sources    verify: also check explorer source verification (Blockscout, Sourcify); publishing, not a gate, so off by default
   --logs-tries N     prove-control --resume: tries of one throttled eth_getLogs call (HTTP 429), with exponential backoff (default 6)
   --owner-signer S   prove-control and govern: a Safe owner signer spec (repeat for each owner: prove-control needs EVERY owner, govern the threshold). On chain 918453 with none given: the SAFE_OWNER_A/B/C keystores

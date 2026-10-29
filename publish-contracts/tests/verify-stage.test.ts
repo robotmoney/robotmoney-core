@@ -441,6 +441,17 @@ describe("the CLI on 8453: a part-way govern run pauses nothing, a failed verify
     expect(calls).toEqual([]);
     expect(w.logs().filter((l) => l.event === "run.failed").pop().message).toContain("No vault was paused");
   });
+  // Issue 1977: a log scan the RPC keeps refusing (every eth_getLogs throttled past the retry budget) is one scan error, not a finding: the real verifier fails every scan
+  // label with the RPC_REFUSED detail, verify exits RPC_REFUSED and pauses nothing.
+  test("every eth_getLogs fails past its retries: exit 30 (RPC_REFUSED), every failed label is RPC_REFUSED, pauseAll is never called", async () => {
+    const { code, calls, w, world } = await nullReceiptRun((world) => { world.chain.rateLimits = 1_000_000; });
+    expect(code).toBe(EXIT_CODES.RPC_REFUSED);
+    expect(calls).toEqual([]);
+    const details = w.logs().filter((l) => l.event === "verify.check" && l.ok === false).map((l) => String(l.detail));
+    expect(details.length).toBeGreaterThan(0);
+    for (const d of details) expect(d.startsWith(RPC_REFUSED_DETAIL)).toBe(true);
+    expect(world.chain.logFilters.filter((f) => Array.isArray(f.address))).toHaveLength(7); // the shared pass is tried once (1 + 6 retries), not once per check
+  });
   test("an RPC_REFUSED failure beside a real failure is a real verify failure: pauseAll is called once", async () => {
     const w = seed({});
     const p = spy();

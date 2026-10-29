@@ -134,6 +134,8 @@ export interface ScanWindow { fromBlock: bigint; head: bigint; chunk: number; re
 const UPGRADES_FROZEN_TOPIC = keccak256(toHex("UpgradesFrozen(address,address,bytes32)"));
 const CALL_EXECUTED_TOPIC = keccak256(toHex("CallExecuted(bytes32,uint256,address,uint256,bytes)"));
 const CALL_SCHEDULED_TOPIC = keccak256(toHex("CallScheduled(bytes32,uint256,address,uint256,bytes,bytes32,uint256)"));
+/** Issue 1977: topic 0 of every event this file scans, so the verify's shared log pass reads them. */
+export const SCANNED_TOPIC0S: Hex[] = [UPGRADES_FROZEN_TOPIC, CALL_EXECUTED_TOPIC, CALL_SCHEDULED_TOPIC];
 export const FREEZE_UPGRADES_SELECTOR: Hex = toFunctionSelector("freezeUpgrades(address,bytes32)");
 const DAY = 86_400n;
 
