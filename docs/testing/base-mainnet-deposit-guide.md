@@ -15,7 +15,7 @@ Never test with a deployment key. That means no deployer, Safe owner, pauser or 
 
 ## The contracts
 
-Deploy 3 was upgraded to v0.6.0 on 2026-10-25. The addresses did not change.
+Deploy 3 was upgraded to v0.6.0 on 2026-10-29. The addresses did not change.
 
 | Name | Address | Notes |
 |---|---|---|
@@ -28,6 +28,7 @@ Deploy 3 was upgraded to v0.6.0 on 2026-10-25. The addresses did not change.
 
 Other addresses you may see:
 - **Old addresses.** The addresses in `deployments/8453/deploy-2/` belong to Deploy 2, an older and separate deployment. Do not test with them.
+- **Consensus receipt.** `0x0fa82D61266FFe25F04272C1Cdf1939a56E4ac95` records the committee vote that set the split.
 - **Contract records.** The full Deploy 3 records are the run manifests.
 
 ## Limits
@@ -65,7 +66,7 @@ for v in $(cast call $ROUTER 'getEffectiveWeights()(address[],uint256[])' | head
 done
 ```
 
-Today the split is 9500, 500, 0. That means 95% goes to rmUSDC, 5% to rmPROTO and nothing to rmRWA. The split can change when the investment committee's choice is applied, so always read it.
+Today the split is 7000, 1500, 1500. That means 70% goes to rmUSDC, 15% to rmPROTO and 15% to rmRWA. The split can change when the investment committee's choice is applied, so always read it.
 
 If any vault prints `true`, deposits are paused for a test. Wait and try later. Withdrawals still work.
 
