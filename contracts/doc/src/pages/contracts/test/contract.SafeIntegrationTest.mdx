@@ -5,7 +5,7 @@ description: "Fork-based integration tests proving that a 2-of-3 Safe proxy depl
 
 # SafeIntegrationTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/SafeIntegration.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a15767d7de43d0b6794a99ef433de7c2b7daec83/contracts/test/SafeIntegration.t.sol)
 
 **Inherits:** Test
 
@@ -676,14 +676,15 @@ AC1b: Full Safe+timelock path on PortfolioRouter (setRouterCap).
 function test_happyPath_portfolioRouter_setRouterCap() public withSnap;
 ```
 
-<a id="test_happypath_routergovernance_clearvotedweights"></a>
+<a id="test_happypath_routergovernance_adminrolegrant"></a>
 
-### test_happyPath_routerGovernance_clearVotedWeights
+### test_happyPath_routerGovernance_adminRoleGrant
 
-AC1c: Full Safe+timelock path on RouterGovernance (clearVotedWeights).
+AC1c: Full Safe+timelock path on RouterGovernance (ADMIN_ROLE grant). RouterGovernance has
+no clear of the router's applied vector (issue 1988), so the governed call here is a role grant.
 
 ```solidity
-function test_happyPath_routerGovernance_clearVotedWeights() public withSnap;
+function test_happyPath_routerGovernance_adminRoleGrant() public withSnap;
 ```
 
 <a id="test_happypath_vault_setexitfeebps"></a>

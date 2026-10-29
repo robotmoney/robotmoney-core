@@ -2025,29 +2025,33 @@ contract PortfolioRouterTest is SafeGovernance {
         assertEq(shares[1], 400e6);
     }
 
-    /// @notice After the applied vector is cleared (`clearVotedWeights`, the
-    ///         timelock's fall-back to the default vector), the router previews
-    ///         by the default vector again. ADR-0002.
-    function test_previewDeposit_uses_defaultWeights_after_applied_weights_cleared() public {
+    /// @notice Issue 1988: nothing clears or resets the applied vector. The router has no
+    ///         `clearVotedWeights()` (the selector reverts for every caller, the admin included),
+    ///         so once a receipt is applied the router keeps routing by it. ADR-0002.
+    function test_noFunctionClearsTheAppliedVector() public {
         _setDefaultWeights();
-
-        // A receipt was applied earlier and set a 50/50 vector...
         _setEqualWeights();
         assertTrue(router.votedWeightsActive());
 
-        // ...then the timelock clears it and the router falls back to the default.
+        bytes memory clearCall = abi.encodeWithSignature("clearVotedWeights()");
         vm.prank(admin);
-        router.clearVotedWeights();
-        assertFalse(router.votedWeightsActive());
+        (bool ok,) = address(router).call(clearCall);
+        assertFalse(ok, "the router has no clearVotedWeights selector");
+        vm.prank(admin);
+        (ok,) = address(router).call(abi.encodeWithSignature("resetVotedWeights()"));
+        assertFalse(ok, "the router has no reset selector either");
 
+        assertTrue(router.votedWeightsActive(), "the applied vector stays active");
         PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(1_000e6);
-        assertEq(legs[0].weightBps, 6_000);
-        assertEq(legs[1].weightBps, 4_000);
+        assertEq(legs[0].weightBps, 5_000);
+        assertEq(legs[1].weightBps, 5_000);
     }
 
     /// @notice An applied vector overrides the default; defaultWeights storage is
-    ///         unchanged; clearing the applied vector reverts to default. ADR-0002.
-    function test_applied_weights_override_defaults_then_revert_to_defaults() public {
+    ///         unchanged; the only way to change the applied vector is a newer
+    ///         applied vector (issue 1988: a bad vector is replaced, never cleared).
+    ///         ADR-0002.
+    function test_applied_weights_override_defaults_then_a_newer_vector_replaces_them() public {
         _setDefaultWeights();
 
         // A receipt is applied -> its 50/50 vector overrides the default.
@@ -2062,11 +2066,18 @@ contract PortfolioRouterTest is SafeGovernance {
         assertEq(defBps[0], 6_000);
         assertEq(defBps[1], 4_000);
 
-        // Revert to default.
+        // A newer receipt replaces it; the router never falls back to the default.
+        address[] memory vaults = new address[](2);
+        uint256[] memory bps = new uint256[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        bps[0] = 7_000;
+        bps[1] = 3_000;
         vm.prank(admin);
-        router.clearVotedWeights();
-        (, uint256[] memory backBps) = router.getEffectiveWeights();
-        assertEq(backBps[0], 6_000);
-        assertEq(backBps[1], 4_000);
+        router.setWeights(vaults, bps);
+        assertTrue(router.votedWeightsActive());
+        (, uint256[] memory nextBps) = router.getEffectiveWeights();
+        assertEq(nextBps[0], 7_000);
+        assertEq(nextBps[1], 3_000);
     }
 }

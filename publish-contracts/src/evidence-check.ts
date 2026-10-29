@@ -26,8 +26,7 @@ import { MAINNET_CHAIN_ID, MAINNET_DELAY_FLOOR, delayFloor, rehearsalDelayProble
 import { DEPLOYMENT_KINDS, kindLabel, type DeploymentKind } from "./chains.ts";
 import { HISTORICAL_REGISTER_ROW, buildHistoricalRegisterCalls } from "./committee-register.ts";
 import { REGISTER_ROW, buildRegisterCall } from "./submitter-register.ts";
-import { CLEAR_ROW, clearCalldata } from "./clear-voted-weights.ts";
-import { RETIRE_ROW, STAYING_KEYS, buildRetireCalls } from "./retire-vault.ts";
+import { RETIRE_ROW, STAYING_KEYS, buildRetireCalls, retiredVectorProblems } from "./retire-vault.ts";
 import { REDEPLOY_ROW, buildRedeployCalls, createdVaultProblems, vectorsFromFinal, type DeployReceipt } from "./redeploy-vault.ts";
 import { assertOwnerExceptions } from "./plan.ts";
 import { GATEWAY_EVIDENCE_STAGES, checkGatewayEvidence } from "./evidence-gateway.ts";
@@ -143,8 +142,9 @@ function applicationShapeProblems(ev: any, bad: (m: string) => void): any[] {
 
 /**
  * Issue 1743: the router's EFFECTIVE weights are what deposits route by, and the entry records what the read-back saw (`voted_weights_active`, `effective_vaults`, `effective_bps`).
- * `active` is the flag the round must leave: true after an application (applyReceipt sets the router's active vector, issue 1698), false after a clear or a redeploy (routing on
- * the default vector). `vaults` / `bps` are the vector the entry claims the router routes by; undefined for a clear entry, which only needs a well formed vector.
+ * `active` is the flag the round must leave: true after an application (applyReceipt sets the router's active vector, issue 1698), false after a redeploy or a retire with no applied
+ * vector (routing on the default vector), and false in a HISTORICAL clear entry. `vaults` / `bps` are the vector the entry claims the router routes by; undefined for a historical
+ * clear entry, which only needs a well formed vector.
  */
 function effectiveReadBackProblems(w: string, r: any, vaults: unknown[] | undefined, bps: unknown[] | undefined, active: boolean, bad: (m: string) => void): void {
   if (r?.voted_weights_active !== active) bad(`${w}: voted_weights_active is ${String(r?.voted_weights_active)}, want ${active}: ${active ? "the applied vector must be the router's active vector" : "the read-back must show no active vector overriding the default"} (issue 1743)`);
@@ -161,10 +161,13 @@ function effectiveReadBackProblems(w: string, r: any, vaults: unknown[] | undefi
 }
 
 /**
- * A router voted-vector clear (issue 1743, `govern --row clear-voted-weights`), recorded under `voted_weights_clears` (never in `govern`, so stage 13 stays the three unpauses).
+ * HISTORICAL (issue 1743, removed by issue 1988): a router voted-vector clear, recorded under `voted_weights_clears` by the removed `govern --row clear-voted-weights`. No tool writes
+ * it any more and the contracts of this line have no clear (issue 1988): it is still decoded so a run manifest that holds one (the Deploy 3 run of 2026-10-28) validates.
  * One entry per round: ONE timelock call, clearVotedWeights() on the governance contract (`governance.address`), one schedule and one execute at least the floor apart, and the
  * read-back: votedWeightsActive false and the effective weights recorded.
  */
+const CLEAR_ROW = "clear-voted-weights";
+const clearCalldata = (): Hex => encodeFunctionData({ abi: parseAbi(["function clearVotedWeights()"]), functionName: "clearVotedWeights" });
 const clearLabel = (r: any) => `${CLEAR_ROW} round ${r?.round ?? 1}`;
 function clearShapeProblems(ev: any, bad: (m: string) => void): any[] {
   const clears: any[] = ev?.voted_weights_clears === undefined ? [] : Array.isArray(ev.voted_weights_clears) ? ev.voted_weights_clears : (bad("voted_weights_clears is not a list"), []);
@@ -182,7 +185,7 @@ function clearShapeProblems(ev: any, bad: (m: string) => void): any[] {
   }
   return clears;
 }
-/** Offline check of `voted_weights_clears` alone (shape, both transactions, statuses and the delay floor). An empty list is a pass. */
+/** Offline check of the HISTORICAL `voted_weights_clears` alone (shape, both transactions, statuses and the delay floor). An empty list is a pass. */
 export function checkVotedWeightsClears(ev: any, floor: number = MAINNET_DELAY_FLOOR): string[] {
   const p: string[] = [];
   const clears = clearShapeProblems(ev, (m) => p.push(m));
@@ -194,8 +197,9 @@ export function checkVotedWeightsClears(ev: any, floor: number = MAINNET_DELAY_F
 /**
  * A vault retirement (issue 1912, ADR-0017, `govern --row retire-vault`), recorded under `vault_retirements` (never in `govern`, so stage 13 stays the three unpauses). One entry per round:
  * ONE timelock batch of two calls, registry.migrateEligibility(vault, false, three legs) then registry.retire(vault), one schedule and one execute at least the floor apart, and the read-back:
- * the three-leg default vector (`vaults`, `bps`, 10000 bps, the retired vault out), voted_weights_active false and the router's effective weights equal to it. Allowed in every kind: the row
- * is the governed path on the live production deployment.
+ * the three-leg default vector (`vaults`, `bps`, 10000 bps, the retired vault out). With voted_weights_active false the router's effective weights equal it. With an applied vector
+ * active (issue 1988: nothing clears it) the effective weights pass retiredVectorProblems (retire-vault.ts), and when they still name the retired vault, `retired_leg_skipped` is true:
+ * the read-back saw router.previewDeposit skip that leg. Allowed in every kind: the row is the governed path on the live production deployment.
  */
 const retireLabel = (r: any) => `${RETIRE_ROW} ${r?.vault ?? "?"} round ${r?.round ?? 1}`;
 function retireShapeProblems(ev: any, bad: (m: string) => void): any[] {
@@ -215,9 +219,22 @@ function retireShapeProblems(ev: any, bad: (m: string) => void): any[] {
     if (vaults.length !== STAYING_KEYS.length || vaults.length !== bps.length || !vaults.every((v) => typeof v === "string" && ADDR.test(v)) || new Set(vaults.map((v) => lc(String(v)))).size !== vaults.length) bad(`${w}: vaults and bps are not ${STAYING_KEYS.length} distinct addresses with one weight each`);
     else if (!bps.every((x) => Number.isInteger(x) && (x as number) >= 0) || (bps as number[]).reduce((t, x) => t + x, 0) !== 10000) bad(`${w}: bps do not sum to 10000`);
     else if (ADDR.test(r?.vault ?? "") && vaults.some((v) => lc(String(v)) === lc(r.vault))) bad(`${w}: the retired vault ${r.vault} is still in the default vector`);
-    effectiveReadBackProblems(w, r, vaults, bps, false, bad);
+    if (r?.voted_weights_active === true) activeRetireReadBackProblems(w, r, vaults, bps, bad);
+    else effectiveReadBackProblems(w, r, vaults, bps, false, bad);
   }
   return rs;
+}
+/** Issue 1988: the read-back of a retire that ran under an active applied vector. The vector stays; the router skips a leg it still holds for the retired vault. */
+function activeRetireReadBackProblems(w: string, r: any, vaults: unknown[], bps: unknown[], bad: (m: string) => void): void {
+  const ev: unknown[] = Array.isArray(r?.effective_vaults) ? r.effective_vaults : [];
+  const eb: unknown[] = Array.isArray(r?.effective_bps) ? r.effective_bps : [];
+  if (ev.length === 0 || ev.length !== eb.length || !ev.every((v) => typeof v === "string" && ADDR.test(v)) || !eb.every((x) => Number.isInteger(x) && (x as number) >= 0)) {
+    bad(`${w}: effective_vaults and effective_bps (the router's getEffectiveWeights after the round) are missing or not a vector`);
+    return;
+  }
+  if (!ADDR.test(r?.vault ?? "") || vaults.length !== bps.length || !vaults.every((v) => typeof v === "string") || !bps.every((x) => Number.isInteger(x))) return; // the shape check already named it
+  for (const m of retiredVectorProblems(r.vault, { vaultCount: STAYING_KEYS.length, votedWeightsActive: true, defaultVaults: vaults as string[], defaultBps: bps as number[], effectiveVaults: ev as string[], effectiveBps: eb as number[] })) bad(`${w}: the active applied vector: ${m}`);
+  if ((ev as string[]).some((v) => lc(v) === lc(r.vault)) && r?.retired_leg_skipped !== true) bad(`${w}: the active applied vector still names the retired vault and retired_leg_skipped is ${String(r?.retired_leg_skipped)}, want true (the router skips that leg)`);
 }
 /** Offline check of `vault_retirements` alone (shape, both transactions, statuses and the delay floor). An empty list is a pass. */
 export function checkVaultRetirements(ev: any, floor: number = MAINNET_DELAY_FLOOR): string[] {
@@ -995,7 +1012,7 @@ export async function checkGovernedUpgradesOnChain(ev: any, chain: ChainReader):
 }
 
 /**
- * Chain check of `voted_weights_clears` (issue 1743). Each entry is ONE timelock call: the schedule tx has exactly one CallScheduled event (the recorded operation_id), target the
+ * Chain check of the HISTORICAL `voted_weights_clears` (issue 1743, removed by issue 1988). Each entry is ONE timelock call: the schedule tx has exactly one CallScheduled event (the recorded operation_id), target the
  * governance contract, calldata clearVotedWeights(), a delay of at least the floor. The execute tx has the matching CallExecuted event. The block gap is at least the floor.
  */
 export async function checkVotedWeightsClearsOnChain(ev: any, chain: ChainReader, floor: number = MAINNET_DELAY_FLOOR): Promise<string[]> {

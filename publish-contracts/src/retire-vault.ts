@@ -7,8 +7,12 @@
 // A timelock batch is atomic, so no observer, deposit or redeem ever sees a router that weights a retired vault. After the batch the vault is withdraw-only (ADR-0009):
 // `redeem` and `redeemInKind` stay open, `deposit` reverts, the router never routes into it, and there is no assisted migration. Nothing moves a holder's funds.
 // The builders reuse the registry ABI and the vector rules of redeploy-vault.ts (core 1796). The row needs no deployed contract and no new Solidity: it is a configuration change.
+// An applied receipt's vector may be active (issue 1988): nothing clears it, and neither call of the batch touches it. A vector applied over the four eligible vaults still names the
+// retired vault after the batch: the router skips that leg (registry status Retired, PortfolioRouter._isDepositable) and spreads its share over the other legs by their bps, until the
+// next `govern --row apply-receipt` replaces the vector with one over the three vaults that stay. retiredVectorProblems is the one rule for that state: the row's pre-check and read-back,
+// the evidence check and verify all apply it.
 // This module is pure: it reads no chain and sends nothing. govern.ts reads the chain, schedules, executes and reads the result back.
-import { encodeFunctionData, getAddress, type Address, type Hex } from "viem";
+import { encodeFunctionData, getAddress, parseAbi, type Address, type Hex } from "viem";
 import { PublishError } from "./errors.ts";
 import { BPS_TOTAL, REGISTRY_REDEPLOY_ABI, STATUS_ACTIVE, STATUS_NAME, STATUS_RETIRED } from "./redeploy-vault.ts";
 
@@ -65,6 +69,42 @@ export function buildRetireCalls(i: { registry: Address; vault: Address; finalVa
   ];
 }
 
+/** The router's preview, read to see the router skip a retired leg of an active applied vector (PortfolioRouter.LegPreview). */
+export const ROUTER_PREVIEW_DEPOSIT = "function previewDeposit(uint256 amount) view returns ((address vault, uint256 weightBps, uint256 legAmount, uint256 estShares, bool unavailable)[] legs)";
+export const ROUTER_PREVIEW_ABI = parseAbi([ROUTER_PREVIEW_DEPOSIT, "function getWeights() view returns (address[] vaults, uint256[] bps)"]);
+/** 1 USDC: the amount the skip is previewed at. Any positive amount shows it: an unavailable leg gets 0 whatever the amount. */
+export const PREVIEW_AMOUNT = 1_000_000n;
+
+const sumOf = (b: readonly (bigint | number)[]): bigint => b.reduce<bigint>((t, x) => t + BigInt(x), 0n);
+const sameList = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((x, i) => lc(x) === lc(b[i]!));
+
+/**
+ * The router's vectors after `vault` was retired. An empty list is a pass. The default holds one leg per remaining vault (`vaultCount` of them, distinct, 10000 bps) and not `vault`.
+ * With no applied vector active the effective vector IS the default. With one active (issue 1992; nothing clears it, issue 1988) the effective vector sums to 10000, its vaults
+ * without `vault` are the default's vaults in the same order, and those legs carry weight. It may still name `vault` (a vector applied before the retire): the caller then checks
+ * that the router skips that leg.
+ */
+export function retiredVectorProblems(vault: string, r: {
+  vaultCount: number; votedWeightsActive: boolean;
+  defaultVaults: readonly string[]; defaultBps: readonly (bigint | number)[]; effectiveVaults: readonly string[]; effectiveBps: readonly (bigint | number)[];
+}): string[] {
+  const bad: string[] = [];
+  const dv = r.defaultVaults, ev = r.effectiveVaults;
+  if (dv.length !== r.vaultCount || dv.length !== r.defaultBps.length || new Set(dv.map(lc)).size !== dv.length) bad.push(`the default vector [${dv.join(", ")}] is not ${r.vaultCount} distinct legs with one weight each`);
+  if (sumOf(r.defaultBps) !== BigInt(BPS_TOTAL)) bad.push(`the default vector sums to ${sumOf(r.defaultBps)} bps, want ${BPS_TOTAL}`);
+  if (dv.some((v) => lc(v) === lc(vault))) bad.push(`the default vector still holds the retired vault ${vault}`);
+  if (ev.length !== r.effectiveBps.length || ev.length === 0 || new Set(ev.map(lc)).size !== ev.length) bad.push(`the effective vector [${ev.join(", ")}] is not a list of distinct legs with one weight each`);
+  else if (!r.votedWeightsActive) {
+    if (vkey(ev, r.effectiveBps) !== vkey(dv, r.defaultBps)) bad.push(`no applied vector is active, so the effective vector [${vkey(ev, r.effectiveBps)}] must be the default [${vkey(dv, r.defaultBps)}]`);
+  } else {
+    if (sumOf(r.effectiveBps) !== BigInt(BPS_TOTAL)) bad.push(`the applied vector sums to ${sumOf(r.effectiveBps)} bps, want ${BPS_TOTAL}`);
+    const keep = ev.map((v, i) => ({ v, b: r.effectiveBps[i]! })).filter((x) => lc(x.v) !== lc(vault));
+    if (!sameList(keep.map((x) => x.v), dv)) bad.push(`the applied vector's vaults without the retired one [${keep.map((x) => x.v).join(", ")}] are not the default's vaults [${dv.join(", ")}]`);
+    else if (sumOf(keep.map((x) => x.b)) === 0n) bad.push("the applied vector puts no weight on the vaults that stay: every router deposit would route nothing");
+  }
+  return bad;
+}
+
 /** What the chain says before the batch is scheduled. */
 export interface RetireBefore {
   listed: readonly string[];
@@ -74,6 +114,9 @@ export interface RetireBefore {
   router: string;
   timelockIsRegistryAdmin: boolean;
   votedWeightsActive: boolean;
+  /** The router's applied vector (getWeights), read when votedWeightsActive is true. */
+  appliedVaults?: readonly string[];
+  appliedBps?: readonly (bigint | number)[];
   defaultVaults: readonly string[];
   hasCode: boolean;
 }
@@ -87,7 +130,14 @@ export function retireBeforeProblems(want: RetireWant, finalVaults: readonly str
   if (!b.eligible) bad.push("the vault is not router-eligible: there is no eligibility to move, and the retire row only runs on an eligible vault");
   if (lc(b.registryRouter) !== lc(b.router)) bad.push(`registry.router() is ${b.registryRouter}, not the deployment's router ${b.router}: migrateEligibility would revert RouterNotLinked`);
   if (!b.timelockIsRegistryAdmin) bad.push("the timelock does not hold ADMIN_ROLE on the registry: the batch would revert");
-  if (b.votedWeightsActive) bad.push("router.votedWeightsActive() is true: an applied receipt vector (which still names the vault) overrides the default. Run --row clear-voted-weights first, then apply a receipt over the three-vault set afterwards");
+  // Issue 1988: an active applied vector is allowed and stays as it is (nothing clears it). Predict the state after the batch: the vector that stays is the default, the applied vector
+  // is unchanged. It must pass the read-back's rule, or the batch would execute into a state the read-back refuses.
+  if (b.votedWeightsActive) {
+    if (b.appliedVaults === undefined || b.appliedBps === undefined) bad.push("router.votedWeightsActive() is true and the applied vector (getWeights) was not read");
+    else for (const m of retiredVectorProblems(want.vault, { vaultCount: finalVaults.length, votedWeightsActive: true, defaultVaults: finalVaults, defaultBps: want.weights.map((w) => w.bps), effectiveVaults: b.appliedVaults, effectiveBps: b.appliedBps })) {
+      bad.push(`the active applied vector does not fit the vector that stays: ${m}`);
+    }
+  }
   // the vector must be the router's current default vector without the vault: the same three vaults, so the registry's length check passes
   const stays = b.defaultVaults.filter((v) => lc(v) !== lc(want.vault));
   if (!b.defaultVaults.some((v) => lc(v) === lc(want.vault))) bad.push(`the router's default vector does not hold the vault: [${b.defaultVaults.join(", ")}]`);
@@ -109,20 +159,29 @@ export interface RetireAfter {
   effectiveBps: readonly (bigint | number)[];
   retiredFlag: boolean;
   hasCode: boolean;
+  /** The retired vault's leg in router.previewDeposit: unavailable with amount 0. Read only when an active applied vector still names the vault. */
+  retiredLegSkipped?: boolean;
 }
 
 const vkey = (v: readonly string[], b: readonly (bigint | number)[]): string => v.map((a, k) => `${lc(a)}:${b[k]}`).join(",");
 
-/** What must hold after the batch. An empty list is a pass. The effective vector is what deposits route by: it must be the three-leg vector with no applied receipt over it. */
-export function retireReadBackProblems(finalVaults: readonly string[], finalBps: readonly (bigint | number)[], a: RetireAfter): string[] {
+/**
+ * What must hold after the batch. An empty list is a pass. The default vector is the three-leg vector that stays. The effective vector is what deposits route by: the default when
+ * no applied vector is active, else the applied vector, which retiredVectorProblems checks and whose retired leg, if it still names one, the router must skip (issue 1988).
+ */
+export function retireReadBackProblems(vault: string, finalVaults: readonly string[], finalBps: readonly (bigint | number)[], a: RetireAfter): string[] {
   const bad: string[] = [];
   if (a.status !== STATUS_RETIRED) bad.push(`the vault's registry status is ${STATUS_NAME[a.status] ?? a.status}, want Retired`);
   if (a.eligible) bad.push("the vault is still router-eligible");
   if (a.eligibleCount !== finalVaults.length) bad.push(`registry.routerEligibleCount() is ${a.eligibleCount}, want ${finalVaults.length}`);
-  if (a.votedWeightsActive) bad.push("router.votedWeightsActive() is true: an applied receipt vector overrides the default the batch left");
   const want = vkey(finalVaults, finalBps);
   if (vkey(a.defaultVaults, a.defaultBps) !== want) bad.push(`router.getDefaultWeights() is [${vkey(a.defaultVaults, a.defaultBps)}], want [${want}]`);
-  if (vkey(a.effectiveVaults, a.effectiveBps) !== want) bad.push(`router.getEffectiveWeights() is [${vkey(a.effectiveVaults, a.effectiveBps)}], want [${want}]`);
+  if (!a.votedWeightsActive) {
+    if (vkey(a.effectiveVaults, a.effectiveBps) !== want) bad.push(`router.getEffectiveWeights() is [${vkey(a.effectiveVaults, a.effectiveBps)}], want [${want}]`);
+  } else {
+    bad.push(...retiredVectorProblems(vault, { vaultCount: finalVaults.length, votedWeightsActive: true, defaultVaults: a.defaultVaults, defaultBps: a.defaultBps, effectiveVaults: a.effectiveVaults, effectiveBps: a.effectiveBps }).map((m) => `the active applied vector: ${m}`));
+    if (a.effectiveVaults.some((v) => lc(v) === lc(vault)) && a.retiredLegSkipped !== true) bad.push("the active applied vector still names the retired vault and router.previewDeposit does not show that leg skipped (unavailable, amount 0)");
+  }
   if (!a.retiredFlag) bad.push("the vault's retired() flag is false: its deposit halt did not run");
   if (!a.hasCode) bad.push("the vault has no code: it must keep serving redeem and redeemInKind");
   return bad;

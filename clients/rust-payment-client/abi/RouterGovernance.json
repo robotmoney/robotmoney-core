@@ -68,13 +68,6 @@
   },
   {
     "type": "function",
-    "name": "clearVotedWeights",
-    "inputs": [],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
     "name": "currentWeights",
     "inputs": [],
     "outputs": [

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/adr/ADR-0017-rmagent-retired-router-uses-three-vaults.md; docs/adr/ADR-0009-vault-retirement-no-assisted-migration.md
 //            docs/operations/contract-release-runbooks.md section 4.14 (the governed retire batch)
-// Implements: issue 1912 (retire rmAGENT so the router uses three vaults)
+// Implements: issue 1912 (retire rmAGENT so the router uses three vaults); issue 1988 (the retire with an active applied vector, no clear)
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -294,6 +294,84 @@ contract RetireVaultBatchTest is Test {
         assertEq(rmProto.balanceOf(depositor), 50 * ONE, "rmPROTO 5 percent");
         assertEq(rmRwa.balanceOf(depositor), 0, "rmRWA carries weight 0");
         assertEq(rmAgent.totalSupply(), 0, "rmAGENT is out of the split");
+    }
+
+    // ─── the retire while an applied (voted) vector is active: no clear (issue 1988) ─────────
+
+    /// @dev An applied receipt over the four eligible vaults, as on the live deployment: the weight setter writes it.
+    function _applyFourLegVector() internal returns (address[] memory v, uint256[] memory b) {
+        v = _four();
+        b = _fourBps(8000, 1000, 500, 500);
+        vm.prank(admin);
+        router.setWeights(v, b);
+        assertTrue(router.votedWeightsActive(), "the applied vector is active");
+    }
+
+    /// @notice The batch runs while an applied vector names rmAGENT. Neither call touches the applied vector: it stays active and unchanged.
+    function test_theBatchRunsWithAnActiveAppliedVectorAndLeavesItUnchanged() public {
+        (address[] memory v, uint256[] memory b) = _applyFourLegVector();
+
+        _retire(_threeBps(9500, 500, 0));
+
+        (, VaultRegistry.VaultStatus status) = registry.getVault(address(rmAgent));
+        assertEq(uint256(status), uint256(VaultRegistry.VaultStatus.Retired), "registry Retired");
+        assertEq(registry.routerEligibleCount(), 3, "eligible count 4 to 3");
+        assertEq(router.defaultWeightsLength(), 3, "the default vector has three legs");
+        assertTrue(router.votedWeightsActive(), "nothing cleared the applied vector");
+        (address[] memory ev, uint256[] memory eb) = router.getEffectiveWeights();
+        assertEq(ev, v, "the effective vaults are the applied vector");
+        assertEq(eb, b, "the effective bps are the applied vector");
+    }
+
+    /// @notice With the applied vector still naming the retired vault, the router skips that leg: the preview marks it unavailable with
+    ///         amount 0, and a deposit spreads its share over the other legs by their bps. No USDC reaches rmAGENT.
+    function test_theRouterSkipsTheRetiredLegOfAnActiveAppliedVector() public {
+        _applyFourLegVector();
+        _retire(_threeBps(9500, 500, 0));
+
+        uint256 amount = 950 * ONE;
+        PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(amount);
+        assertEq(legs.length, 4, "the preview has the applied vector's four legs");
+        assertEq(legs[2].vault, address(rmAgent));
+        assertTrue(legs[2].unavailable, "the retired leg is unavailable");
+        assertEq(legs[2].legAmount, 0, "the retired leg gets nothing");
+        assertFalse(
+            legs[0].unavailable || legs[1].unavailable || legs[3].unavailable,
+            "the other legs stay available"
+        );
+
+        _routerDeposit(amount);
+        // the 9500 bps of the available legs share the whole amount: 8000, 1000 and 500 of 9500
+        assertEq(rmUsdc.balanceOf(depositor), 800 * ONE, "rmUSDC 8000 of 9500");
+        assertEq(rmProto.balanceOf(depositor), 100 * ONE, "rmPROTO 1000 of 9500");
+        assertEq(rmRwa.balanceOf(depositor), 50 * ONE, "rmRWA 500 of 9500");
+        assertEq(rmAgent.totalSupply(), 0, "no rmAGENT share is minted");
+        assertEq(usdc.balanceOf(address(rmAgent)), 0, "no USDC reaches rmAGENT");
+        assertEq(usdc.balanceOf(address(router)), 0, "the router holds no USDC");
+    }
+
+    /// @notice The next receipt sets the three-vault vector. A vector that still names the retired vault is refused, so the applied
+    ///         vector can only move to the three vaults that stay.
+    function test_theNextReceiptReplacesTheAppliedVectorWithTheThreeVaults() public {
+        _applyFourLegVector();
+        _retire(_threeBps(9500, 500, 0));
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PortfolioRouter.VaultNotActive.selector,
+                address(rmAgent),
+                VaultRegistry.VaultStatus.Retired
+            )
+        );
+        router.setWeights(_four(), _fourBps(8000, 1000, 500, 500));
+
+        vm.prank(admin);
+        router.setWeights(_three(), _threeBps(8000, 1000, 1000));
+        assertTrue(router.votedWeightsActive());
+        (address[] memory ev, uint256[] memory eb) = router.getEffectiveWeights();
+        assertEq(ev, _three(), "the effective vector is the three vaults that stay");
+        assertEq(eb, _threeBps(8000, 1000, 1000));
     }
 
     // ─── nothing moves a holder's funds ─────────────────────────────────────────────

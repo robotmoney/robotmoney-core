@@ -571,8 +571,8 @@ contract DeployTimelock is UpgradeAuthority {
             "R7: deployer EOA can still call router.setWeights directly"
         );
         // `setWeights` is gated by WEIGHT_SETTER_ROLE, held only by
-        // RouterGovernance. The timelock gets ADMIN_ROLE (setDefaultWeights,
-        // clearVotedWeights) and must not hold the active weight setter.
+        // RouterGovernance. The timelock gets ADMIN_ROLE (setDefaultWeights)
+        // and must not hold the active weight setter.
         require(
             !IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROLE, address(timelock)),
             "R7: timelock holds router WEIGHT_SETTER_ROLE - it could bypass RouterGovernance"

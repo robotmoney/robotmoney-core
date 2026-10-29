@@ -44,7 +44,7 @@ export interface WeightSetterHolder {
   address: Address;
   /**
    * The holder's logic code (the implementation behind its ERC-1967 proxy, issue 1808) equals the RouterGovernance build (masked): its weight writes are
-   * `applyReceipt` (`onlyRole(WEIGHT_SETTER_ROLE)`, issue 1698), `setDefaultWeights` and `clearVotedWeights` (`onlyRole(ADMIN_ROLE)`).
+   * `applyReceipt` (`onlyRole(WEIGHT_SETTER_ROLE)`, issue 1698) and `setDefaultWeights` (`onlyRole(ADMIN_ROLE)`).
    */
   routerGovernanceCode: boolean;
   /** The holder's `ADMIN_ROLE` members. Null when the holder does not answer `getRoleMemberCount`/`getRoleMember` (it is no AccessControlEnumerable contract). */

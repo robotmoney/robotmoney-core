@@ -46,9 +46,6 @@
 // Its run-manifest key and salt are `apply-receipt-<receiptId>`. A Twin run proves the row executes on the real contracts, not that mainnet governance works.
 // apply-receipt sets the router's ACTIVE vector (setWeights through the weight setter), so its read-back checks getWeights and the EFFECTIVE weights (what deposits route
 // by, issue 1743) equal the receipt's vector, with votedWeightsActive true. The default vector is untouched and stays the fallback.
-//   clear-voted-weights          on demand (issue 1743), no arguments: ONE timelock call, RouterGovernance.clearVotedWeights() (ADMIN_ROLE, the timelock), which clears the router's active vector
-// so routing falls back to the default. It reads votedWeightsActive false and effective == default back. Refused (GOVERN, nothing scheduled) when no active vector is in effect. Runs on 8453 in
-// production and in a rehearsal, never in stage 13, with its own delay. A later applied receipt that sets an active vector again opens round 2 with the same explicit `--row`.
 //   set-unwind-guard             on demand (QA plan v1 D7, review E5, issue 1705 Q2), `--admin-arg vault=PROTO|RWA token=0x..|all min-usdc-out=N max-loss-bps=N [override-allowed=true|false]`:
 // ONE timelock operation on one basket vault, BasketVault.setEmergencyUnwindGuard(token, minUsdcOut, overrideAllowed, maxLossBps) per token (ADMIN_ROLE, the timelock). Before it no stage
 // and no row set the guard, so the oracle-free unwind and emergencyUnwindWithOverride could not run. overrideAllowed defaults to true, set by the Safe only (QA plan v1 Decisions D3).
@@ -87,7 +84,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { decodeFunctionData, encodeFunctionData, getAddress, keccak256, parseAbi, parseAbiItem, toBytes, toHex, type Address, type Hex } from "viem";
 import { receiptPayloadDigest } from "./receipt-digest.ts";
 import { APPLY_ROW, GOVERNANCE_LAST_APPLIED_ABI, REGISTRY_ELIGIBLE_ABI, RECEIPT_RECORD_ABI, ROUTER_WEIGHTS_ABI, applyReadBackProblems, applyRecordKey, buildApplyCall, notNewerMessage, planApply } from "./apply-receipt.ts";
-import { CLEAR_ROW, buildClearCall, clearReadBackProblems } from "./clear-voted-weights.ts";
 import {
   REDEPLOY_ROW, REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI, VAULT_REDEPLOY_ABI, STATUS_NAME, buildRedeployCalls, createdVaultProblems, planRedeployVectors, redeployBeforeProblems,
   redeployReadBackProblems, redeployRecordKey, redeployRefusal, redeploysOf, vectorsFromFinal, type DeployReceipt, type RedeployRecord, type RedeployVectors,
@@ -97,7 +93,7 @@ import {
   type GuardRead, type UnwindGuardArgs, type UnwindGuardWant,
 } from "./unwind-guard.ts";
 import {
-  RETIRE_ROW, buildRetireCalls, parseRetireArgs, retireBeforeProblems, retireReadBackProblems, retireRecordKey, retirePreviewLines, type RetireArgs, type RetireWant,
+  PREVIEW_AMOUNT, RETIRE_ROW, ROUTER_PREVIEW_ABI, buildRetireCalls, parseRetireArgs, retireBeforeProblems, retireReadBackProblems, retireRecordKey, retirePreviewLines, type RetireArgs, type RetireWant,
 } from "./retire-vault.ts";
 import { PublishError } from "./errors.ts";
 import {
@@ -189,11 +185,11 @@ export const twinOnlyRefused = (row: string, chainId: number, kind: DeploymentKi
  */
 export function govRowRefusal(row: string | undefined, chainId: number, kind: DeploymentKind): string | undefined {
   if (row === REDEPLOY_ROW) return redeployRefusal(chainId, kind);
-  if (row === undefined || row === RECEIPT_ROW || row === REGISTER_ROW || row === APPLY_ROW || row === CLEAR_ROW || row === RETIRE_ROW || row === UNWIND_GUARD_ROW || row === FREEZE_ROW || row === UPGRADE_ROW) return undefined;
+  if (row === undefined || row === RECEIPT_ROW || row === REGISTER_ROW || row === APPLY_ROW || row === RETIRE_ROW || row === UNWIND_GUARD_ROW || row === FREEZE_ROW || row === UPGRADE_ROW) return undefined;
   let name: string;
   try { name = resolveGovernRow(row); } catch { return undefined; } // an unknown row is a usage error raised where it always was
   return twinOnlyRefused(name, chainId, kind)
-    ? `--row ${name} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet govern stage operation is the vault unpause; the other mainnet actions are --row ${RECEIPT_ROW}, --row ${APPLY_ROW}, --row ${CLEAR_ROW} and --row ${UNWIND_GUARD_ROW}). A Base mainnet REHEARSAL (DEPLOYMENT_KIND=rehearsal in the sheet) may run it.`
+    ? `--row ${name} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet govern stage operation is the vault unpause; the other mainnet actions are --row ${RECEIPT_ROW}, --row ${APPLY_ROW} and --row ${UNWIND_GUARD_ROW}). A Base mainnet REHEARSAL (DEPLOYMENT_KIND=rehearsal in the sheet) may run it.`
     : undefined;
 }
 
@@ -466,7 +462,6 @@ export function resolveGovernRow(row: string): PlannedRow {
   if (row === RECEIPT_ROW) throw new PublishError("USAGE", `--row ${RECEIPT_ROW} is the on-demand receipt release: it needs --receipt-id 0x<bytes32>`);
   if (row === REGISTER_ROW) throw new PublishError("USAGE", `--row ${REGISTER_ROW} is the on-demand receipt submitter registration (one delayed receipt.grantRole): it needs --submitter 0x<the submitter Safe>`);
   if (row === APPLY_ROW) throw new PublishError("USAGE", `--row ${APPLY_ROW} is the on-demand receipt application: it needs --receipt-id 0x<bytes32> and --payload FILE`);
-  if (row === CLEAR_ROW) throw new PublishError("USAGE", `--row ${CLEAR_ROW} is the on-demand clear of the router's voted weight vector: it is run by name only (runGovern)`);
   if (row === REDEPLOY_ROW) throw new PublishError("USAGE", `--row ${REDEPLOY_ROW} is the on-demand replacement of one redeployed vault: it is run by name only (runGovern)`);
   if (row === RETIRE_ROW) throw new PublishError("USAGE", `--row ${RETIRE_ROW} is the on-demand retirement of one vault (ADR-0017): it needs --admin-arg vault=0x<address> and --admin-arg weights=USDC:9500,PROTO:500,RWA:0`);
   if (row === UNWIND_GUARD_ROW) throw new PublishError("USAGE", `--row ${UNWIND_GUARD_ROW} is the on-demand emergency unwind guard of one basket vault: it needs --admin-arg vault=PROTO|RWA token=0x..|all min-usdc-out=N max-loss-bps=N`);
@@ -479,7 +474,7 @@ export function resolveGovernRow(row: string): PlannedRow {
     return name;
   }
   if ((GOVERN_ROWS as readonly string[]).includes(row)) return row as GovernRowName;
-  throw new PublishError("USAGE", `unknown govern row '${row}' (${GOVERN_ROWS.join(", ")}, or 1 to ${GOVERN_ROWS.length}; on demand: ${RECEIPT_ROW} --receipt-id 0x<bytes32>, ${APPLY_ROW} --receipt-id 0x<bytes32> --payload FILE, ${CLEAR_ROW}, ${UNWIND_GUARD_ROW} --admin-arg K=V)`);
+  throw new PublishError("USAGE", `unknown govern row '${row}' (${GOVERN_ROWS.join(", ")}, or 1 to ${GOVERN_ROWS.length}; on demand: ${RECEIPT_ROW} --receipt-id 0x<bytes32>, ${APPLY_ROW} --receipt-id 0x<bytes32> --payload FILE, ${UNWIND_GUARD_ROW} --admin-arg K=V)`);
 }
 
 /** The calls of one unpause row. Empty means the sheet does not ask for it (the vault stays paused): the row is skipped. */
@@ -619,7 +614,7 @@ export interface SelfAdminRecord { data?: Hex; nonce: number; want: string }
 /** `guard` (QA plan v1 D7): what a set-unwind-guard round sets, written before its schedule so a resume and the evidence entry name the same values. */
 export interface GuardRecord { vault: string; vault_address: string; tokens: string[]; min_usdc_out: string; override_allowed: boolean; max_loss_bps: number }
 /** What the run manifest keeps per row. A row is complete when it is skipped, executed or (for cancel) cancelled. */
-export interface RowRecord { round?: number; admin?: SelfAdminRecord; guard?: GuardRecord; apply?: { vaults: string[]; bps: number[]; payload_digest: string }; observed?: { voted_weights_active: boolean; effective_vaults: string[]; effective_bps: number[] }; skipped?: { at: string; reason: string }; scheduled?: PhaseRecord; executed?: PhaseRecord; cancelled?: PhaseRecord }
+export interface RowRecord { round?: number; admin?: SelfAdminRecord; guard?: GuardRecord; apply?: { vaults: string[]; bps: number[]; payload_digest: string }; observed?: { voted_weights_active: boolean; effective_vaults: string[]; effective_bps: number[]; retired_leg_skipped?: boolean }; skipped?: { at: string; reason: string }; scheduled?: PhaseRecord; executed?: PhaseRecord; cancelled?: PhaseRecord }
 type GovernState = Record<string, RowRecord>;
 /** The `register` part of a register-submitter record: what the grant was built from, and the submitter Safe's facts. */
 interface RegisterState { submitter: string; receipt: string; submitter_safe: SubmitterSafeEvidence }
@@ -771,7 +766,6 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   const releasing = o.row === RECEIPT_ROW;
   const applying = o.row === APPLY_ROW;
   const registering = o.row === REGISTER_ROW;
-  const clearing = o.row === CLEAR_ROW;
   const redeploying = o.row === REDEPLOY_ROW;
   const guarding = o.row === UNWIND_GUARD_ROW;
   const retiring = o.row === RETIRE_ROW;
@@ -787,7 +781,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   const guardWant = guarding ? parseUnwindGuardArgs(o.unwindGuard) : undefined;
   const early = govRowRefusal(o.row, ctx.chainId, ctx.sheet.kind);
   if (early !== undefined) throw new PublishError("USAGE", early);
-  const selected: PlannedRow | undefined = o.row === undefined || releasing || applying || registering || clearing || redeploying || retiring || guarding || freezing || upgrading || selfAdminRow !== undefined ? undefined : resolveGovernRow(o.row);
+  const selected: PlannedRow | undefined = o.row === undefined || releasing || applying || registering || redeploying || retiring || guarding || freezing || upgrading || selfAdminRow !== undefined ? undefined : resolveGovernRow(o.row);
   // Issue 1842: the upgrade row's arguments are checked before the Safe is read.
   const upgradeSpec = upgrading ? proxySpecs(getStageTable()).find((x) => x.name === o.proxy) : undefined;
   if (upgrading) {
@@ -1124,84 +1118,6 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     return { rows: [name], skipped: [], opIds };
   }
 
-  /** The evidence entry of an executed clear round (`voted_weights_clears` of the run manifest, checked by evidence-check). */
-  async function recordClear(name: string, governance: Address): Promise<void> {
-    const r = state[name];
-    if (!r?.executed?.tx_hash || !r.scheduled?.tx_hash) return;
-    const at = async (hash: string): Promise<number> => {
-      const rc = await handle.client.getTransactionReceipt({ hash: hash as Hex });
-      return Number((await handle.client.getBlock({ blockNumber: rc.blockNumber })).timestamp);
-    };
-    const entry = {
-      step: CLEAR_ROW, round: r.round ?? 1, governance, router: a.router,
-      voted_weights_active: r.observed?.voted_weights_active, effective_vaults: r.observed?.effective_vaults, effective_bps: r.observed?.effective_bps,
-      operation_id: r.scheduled.operation_id, schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await at(r.scheduled.tx_hash),
-      execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await at(r.executed.tx_hash),
-    };
-    const list = ((manifest as { voted_weights_clears?: { operation_id?: string }[] }).voted_weights_clears ??= []);
-    const i = list.findIndex((x) => x.operation_id?.toLowerCase() === String(entry.operation_id).toLowerCase());
-    if (i >= 0) list[i] = entry; else list.push(entry);
-    save();
-  }
-
-  if (clearing) {
-    // Issue 1743: ONE timelock call, RouterGovernance.clearVotedWeights(). Never part of the matrix. On 8453 in production and in a rehearsal, and on the Twin chain.
-    const name = CLEAR_ROW;
-    const governance = a.governance;
-    const rd = reader(handle);
-    const votedNow = () => rd<boolean>(a.router, ROUTER_WEIGHTS_ABI, "votedWeightsActive");
-    const prev = state[name];
-    if (prev?.scheduled?.operation_id && !rowComplete(prev)) {
-      // The operator cancelled this round's operation through the Safe and named the row again: the same round is scheduled again (a cancelled id is free).
-      const st = await api.operationState(handle, a.timelock, prev.scheduled.operation_id as Hex);
-      if (!st.exists && !st.done) {
-        const n = prev.round ?? 1;
-        let k = 1;
-        while (state[`${roundKey(name, n)}:cancelled-${k}`]) k++;
-        state[`${roundKey(name, n)}:cancelled-${k}`] = prev;
-        state[name] = { round: n };
-        save();
-        ctx.log.log("info", "govern.round_rescheduled", { row: CLEAR_ROW, round: n, cancelled_operation: prev.scheduled.operation_id });
-      }
-    } else if (rowComplete(prev)) {
-      // An executed round, and the router reads an active vector again (a receipt was applied since): a NEW round, a new operation.
-      if (!(await votedNow())) throw new PublishError("GOVERN", `govern row ${CLEAR_ROW} executed in round ${prev!.round ?? 1} and router.votedWeightsActive() reads false: there is nothing to clear`, { row: CLEAR_ROW, round: prev!.round ?? 1 });
-      const done = prev!.round ?? 1;
-      state[roundKey(name, done)] = prev!;
-      state[name] = { round: done + 1 };
-      save();
-      ctx.log.log("info", "govern.round_opened", { row: CLEAR_ROW, round: done + 1 });
-    }
-    if (!rowComplete(state[name])) {
-      const c = buildClearCall(governance);
-      const p = { timelock: a.timelock, calls: [{ target: c.target, data: c.data }], salt: salt(labelOf(name)), form: "single" as const };
-      const id = await api.operationId(handle, p);
-      if (state[name]?.scheduled === undefined && !(await api.operationState(handle, a.timelock, id)).exists && !(await votedNow())) {
-        throw new PublishError("GOVERN", `govern row ${CLEAR_ROW}: router.votedWeightsActive() already reads false: there is no voted vector to clear, so no round is scheduled`, { row: CLEAR_ROW });
-      }
-      const readBack = async () => {
-        const [defaultVaults, defaultBps] = await rd<[Address[], bigint[]]>(a.router, ROUTER_WEIGHTS_ABI, "getDefaultWeights");
-        const [effectiveVaults, effectiveBps] = await rd<[Address[], bigint[]]>(a.router, ROUTER_WEIGHTS_ABI, "getEffectiveWeights");
-        const votedWeightsActive = await votedNow();
-        const bad = clearReadBackProblems({ votedWeightsActive, defaultVaults, defaultBps, effectiveVaults, effectiveBps });
-        if (bad.length === 0) state[name]!.observed = { voted_weights_active: votedWeightsActive, effective_vaults: [...effectiveVaults], effective_bps: effectiveBps.map(Number) };
-        return bad;
-      };
-      state[name] = { ...(state[name] ?? { round: 1 }) };
-      await round(name, {
-        id, description: "clear the router's voted weight vector", readBack,
-        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${CLEAR_ROW}: ${c.label}` }),
-        execute: () => api.executeOnTimelock(handle, { ...p, description: `${CLEAR_ROW} execute` }),
-      }, CLEAR_ROW);
-    } else {
-      reprint(name);
-    }
-    await recordClear(name, governance);
-    save();
-    ctx.log.log("info", "govern.row_run_done", { stage: row.name, row: CLEAR_ROW });
-    return { rows: [name], skipped: [], opIds };
-  }
-
   /** The evidence entry of an executed retire round (`vault_retirements` of the run manifest, checked by evidence-check). */
   async function recordRetire(name: string, want: RetireWant, vaults: readonly Address[], bps: readonly number[]): Promise<void> {
     const r = state[name]!;
@@ -1213,6 +1129,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     const entry = {
       step: RETIRE_ROW, round: r.round ?? 1, vault: want.vault, registry: a.registry, router: a.router, timelock: a.timelock, vaults: [...vaults], bps: [...bps],
       voted_weights_active: r.observed?.voted_weights_active, effective_vaults: r.observed?.effective_vaults, effective_bps: r.observed?.effective_bps,
+      ...(r.observed?.retired_leg_skipped !== undefined ? { retired_leg_skipped: r.observed.retired_leg_skipped } : {}),
       operation_id: r.scheduled.operation_id, schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await at(r.scheduled.tx_hash),
       execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await at(r.executed.tx_hash),
     };
@@ -1242,8 +1159,11 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
         rd<[Address[], bigint[]]>(a.router, ROUTER_REDEPLOY_ABI, "getDefaultWeights"),
       ]);
       const code = await handle.client.getCode({ address: want.vault });
+      // Issue 1988: an active applied vector stays (nothing clears it). Read it so the pre-check can predict the state after the batch.
+      const applied = voted ? await rd<[Address[], bigint[]]>(a.router, ROUTER_PREVIEW_ABI, "getWeights") : undefined;
       return retireBeforeProblems(want, finalVaults, {
         listed, status: Number(status), eligible, registryRouter, router: a.router, timelockIsRegistryAdmin: tlAdmin, votedWeightsActive: voted, defaultVaults, hasCode: !!code && code !== "0x",
+        ...(applied ? { appliedVaults: applied[0], appliedBps: applied[1] } : {}),
       });
     };
     const prev = state[name];
@@ -1276,12 +1196,18 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
         const [effectiveVaults, effectiveBps] = await rd<[Address[], bigint[]]>(a.router, ROUTER_REDEPLOY_ABI, "getEffectiveWeights");
         const votedWeightsActive = await rd<boolean>(a.router, ROUTER_REDEPLOY_ABI, "votedWeightsActive");
         const code = await handle.client.getCode({ address: want.vault });
-        const bad = retireReadBackProblems(finalVaults, finalBps, {
+        // Issue 1988: an active applied vector that still names the retired vault: the router must skip that leg.
+        const namesVault = votedWeightsActive && effectiveVaults.some((v) => v.toLowerCase() === want.vault.toLowerCase());
+        const legs = namesVault ? await rd<readonly { vault: Address; legAmount: bigint; unavailable: boolean }[]>(a.router, ROUTER_PREVIEW_ABI, "previewDeposit", [PREVIEW_AMOUNT]) : undefined;
+        const leg = legs?.find((l) => l.vault.toLowerCase() === want.vault.toLowerCase());
+        const retiredLegSkipped = namesVault ? leg !== undefined && leg.unavailable && leg.legAmount === 0n : undefined;
+        const bad = retireReadBackProblems(want.vault, finalVaults, finalBps, {
           status: Number(status), eligible: await rd<boolean>(a.registry, REGISTRY_REDEPLOY_ABI, "isRouterEligible", [want.vault]),
           eligibleCount: Number(await rd<bigint>(a.registry, REGISTRY_REDEPLOY_ABI, "routerEligibleCount")), votedWeightsActive,
           defaultVaults, defaultBps, effectiveVaults, effectiveBps, retiredFlag: await rd<boolean>(want.vault, VAULT_REDEPLOY_ABI, "retired"), hasCode: !!code && code !== "0x",
+          ...(retiredLegSkipped !== undefined ? { retiredLegSkipped } : {}),
         });
-        if (bad.length === 0) state[name]!.observed = { voted_weights_active: votedWeightsActive, effective_vaults: [...effectiveVaults], effective_bps: effectiveBps.map(Number) };
+        if (bad.length === 0) state[name]!.observed = { voted_weights_active: votedWeightsActive, effective_vaults: [...effectiveVaults], effective_bps: effectiveBps.map(Number), ...(retiredLegSkipped !== undefined ? { retired_leg_skipped: retiredLegSkipped } : {}) };
         return bad;
       };
       state[name] = { ...(state[name] ?? { round: 1 }) };
@@ -1909,7 +1835,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
 
   if (o.call) {
     const { label, target, data } = o.call;
-    if (!/^[A-Za-z0-9._-]+$/.test(label) || (GOVERN_ROWS as readonly string[]).includes(label) || label === RECEIPT_ROW || label === APPLY_ROW || label === REGISTER_ROW || label === CLEAR_ROW || label === REDEPLOY_ROW || label === RETIRE_ROW || label === UNWIND_GUARD_ROW) throw new PublishError("USAGE", `call label '${label}': letters, digits, . _ - only, and not a govern row name`);
+    if (!/^[A-Za-z0-9._-]+$/.test(label) || (GOVERN_ROWS as readonly string[]).includes(label) || label === RECEIPT_ROW || label === APPLY_ROW || label === REGISTER_ROW || label === REDEPLOY_ROW || label === RETIRE_ROW || label === UNWIND_GUARD_ROW) throw new PublishError("USAGE", `call label '${label}': letters, digits, . _ - only, and not a govern row name`);
     const name = `call-${label}`;
     const p = { timelock: a.timelock, calls: [{ target, data }], salt: salt(name), form: "single" as const };
     const id = await api.operationId(handle, p);

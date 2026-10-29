@@ -232,9 +232,8 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
     const u = await import("../src/upgrade-rows.ts");
     const r = await import("../src/retire-vault.ts");
     const a = await import("../src/apply-receipt.ts");
-    const c = await import("../src/clear-voted-weights.ts");
     const s = await import("../src/submitter-register.ts");
-    return new Set<string>([...g.GOVERN_ROWS, ...g.SELF_ADMIN_ROWS, g.RECEIPT_ROW, a.APPLY_ROW, c.CLEAR_ROW, s.REGISTER_ROW, r.RETIRE_ROW, u.UPGRADE_ROW, u.FREEZE_ROW]);
+    return new Set<string>([...g.GOVERN_ROWS, ...g.SELF_ADMIN_ROWS, g.RECEIPT_ROW, a.APPLY_ROW, s.REGISTER_ROW, r.RETIRE_ROW, u.UPGRADE_ROW, u.FREEZE_ROW]);
   };
   /** Returns the problems of one command line of the section (empty when every verb, row and flag exists). */
   const problems = async (line: string, common: string): Promise<string[]> => {
@@ -341,7 +340,7 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
     expect(common).not.toContain("$RC_SHA");
     const lines = commands(S415).filter((l) => l.startsWith("bun publish-contracts/src/cli.ts "));
     const cli = lines.filter((l) => / (deploy-implementation|govern|verify) /.test(l));
-    expect(cli.length).toBe(7);
+    expect(cli.length).toBe(6); // issue 1988: no clear row before the retire
     for (const l of cli) expect(l, l).toMatch(/ \$COMMON$/);
     const upgrade = cli.filter((l) => l.includes("deploy-implementation") || l.includes("--row upgrade-proxy"));
     expect(upgrade.length).toBe(4);
@@ -373,7 +372,7 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
     expect(s2).toContain("`hasRole(EXECUTOR_ROLE, address(0))` must be true");
     expect(s2).toContain("The Safe must hold `PROPOSER_ROLE`");
     expect(s2).toContain("never from memory");
-    // Stop rules stay for the delay and receipt version 2. An active receipt vector is recorded, not a stop (step 6 clears it).
+    // Stop rules stay for the delay and receipt version 2. An active receipt vector is recorded, not a stop: nothing clears it (issue 1988), the retire leaves it and the step 10 receipt replaces it.
     expect(s2).toContain("If the delay reads anything else, or if the receipt reads version 2");
     expect(s2).toContain("record it in the evidence and do not stop");
     expect(s2).not.toContain("or if an active receipt vector shows in the effective weights, stop and report");
@@ -381,20 +380,22 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
     expect(await problems('cast call $SAFE "getNoSuchOwners()(address[])" --rpc-url $BASE_RPC_URL', common)).toHaveLength(1);
     expect(S415.indexOf("export GOVERNANCE=")).toBeGreaterThan(-1);
   });
-  test("steps 4 and 5 review govern.preview before the second signature, and step 6 clears, delays and executes before retire-vault", () => {
+  test("steps 4 and 5 review govern.preview before the second signature, and step 6 retires with no clear of the receipt vector (issue 1988)", () => {
     expect(step(4)).toContain("`govern.preview`");
     for (const w of ["`new_implementation`", "`new_code_hash`", "second owner signs", "delay"]) expect(step(5), w).toContain(w);
     const s6 = step(6);
-    expect(s6).toContain("schedule it, wait the full delay, and execute it");
-    expect(s6.indexOf("--row clear-voted-weights")).toBeLessThan(s6.indexOf("--row retire-vault"));
+    expect(s6).toContain("--row retire-vault");
+    expect(s6).toContain("nothing clears or resets the router's vector (issue 1988)");
+    expect(s6).not.toMatch(/clear-voted-weights|clearVotedWeights/);
+    expect(step(2)).not.toMatch(/clear-voted-weights|clearVotedWeights/);
   });
-  test("section 4.15 repeats the build-pin check, compares OWNER_SIGNER with getOwners, re-reads the receipt vector before the retire and names the Twin procedure (issue 1916)", () => {
+  test("section 4.15 repeats the build-pin check, compares OWNER_SIGNER with getOwners, re-reads the state before the retire executes and names the Twin procedure (issue 1916)", () => {
     expect(S415).toContain("This build-pin check is repeated immediately before every later use of `--upgrade-build`");
     expect(S415).toContain('git ls-remote origin "refs/tags/$RC_TAG^{}"');
     expect(step(2)).toContain("Compare each `OWNER_SIGNER` address");
     expect(step(2)).toContain("`getOwners`");
-    expect(step(7)).toContain("re-read the receipt vector");
-    expect(step(7).indexOf("re-read the receipt vector")).toBeLessThan(step(7).indexOf("Then execute the retire batch"));
+    expect(step(7)).toContain("re-reads the state it checked in step 6");
+    expect(step(7)).toContain("requires the rmAGENT leg unavailable with amount 0");
     expect(S415).toContain("**The Twin procedure.**");
     expect(S415).toContain("`core-stages-twin-upgrade-lifecycle`");
     expect(S415).toContain("docs/runbooks/contract-qa/releases/v0.6.0.yaml");

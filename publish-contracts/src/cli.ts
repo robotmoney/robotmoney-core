@@ -33,7 +33,6 @@ import { makeSigner, type PublishSigner } from "./signer.ts";
 import { PROOF_STAGE } from "./control-proof.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
 import { APPLY_ROW } from "./apply-receipt.ts";
-import { CLEAR_ROW } from "./clear-voted-weights.ts";
 import { RETIRE_KEYS, RETIRE_ROW, parseRetireArgs } from "./retire-vault.ts";
 import { UNWIND_GUARD_KEYS, UNWIND_GUARD_ROW, parseUnwindGuardArgs } from "./unwind-guard.ts";
 import { REDEPLOY_ROW, REDEPLOY_VERB, REDEPLOY_KEYS, isRedeployKey, redeployRefusal, redeployShaPath, redeployShaRun, runRedeployVault } from "./redeploy-vault.ts";
@@ -109,12 +108,12 @@ export const USAGE = `publish contracts
                      registry order. Not part of stage 13. After the delay the same command executes it and reads isReleased and the router weights back.
                      --row release-receipt --receipt-id 0x<bytes32> is refused with USAGE once RouterGovernance holds the receipt's RECEIPT_RELEASER_ROLE (the narrow release role, issue 1888;
                      before it, ADMIN_ROLE since issue 1698): the timelock cannot release directly and a release alone would burn the receipt, so use --row apply-receipt (issue 1831).
-                     --row clear-voted-weights (no other argument) clears the router's ACTIVE (applied receipt) weight vector (issue 1743): ONE timelock call, RouterGovernance.clearVotedWeights(),
-                     so routing falls back to the default vector: the emergency lever. Refused (nothing scheduled) when no active vector is in effect. Production and rehearsal, never part of stage 13.
                      --row retire-vault --admin-arg vault=0x<address> --admin-arg weights=USDC:9500,PROTO:500,RWA:0 (issue 1912, ADR-0017) retires one vault of the live deployment, rmAGENT on
                      v0.5.0: ONE timelock batch, registry.migrateEligibility(vault, false, three legs) then registry.retire(vault). The vector must name USDC, PROTO and RWA once each and sum to
                      10000, and it must be the router's current default vector without the vault, or nothing is scheduled. The preview (the vault, the vector, each call's target and data) is logged
                      before the schedule. The vault becomes withdraw-only (ADR-0009): redeem and redeemInKind stay open, deposit reverts. Production and rehearsal, never part of stage 13.
+                     An active applied receipt vector stays as it is (nothing clears it, issue 1988): its vaults without the retired one must be the vector that stays, in order. While it
+                     still names the retired vault the router skips that leg (read back from previewDeposit), and the next --row apply-receipt sets the three-vault vector.
                      --row set-unwind-guard --admin-arg vault=PROTO|RWA --admin-arg token=0x<address>|all --admin-arg min-usdc-out=N --admin-arg max-loss-bps=N
                      [--admin-arg override-allowed=true|false] (QA plan v1 D7) sets a basket vault's emergency unwind guard: ONE timelock operation, BasketVault.setEmergencyUnwindGuard(token,
                      minUsdcOut, overrideAllowed, maxLossBps) for the one token or for every active asset (all). min-usdc-out is USDC (6 decimals) for the vault's whole balance of the token,
@@ -315,7 +314,7 @@ export function parseCli(argv: string[]): Parsed {
     if (!(verb === "govern" || stageNames === "govern")) throw new PublishError("USAGE", `--row applies to the govern verb (or --stage govern) only\n${USAGE}`);
     // An unknown row fails here, before any work. Whether update-delay, batch and cancel may run on 8453 depends on the sheet's DEPLOYMENT_KIND, so runGovern decides that.
     if (isSelfAdminRow(row)) assertSelfAdminAllowed(Number(chainRaw), row);
-    else if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW && row !== RETIRE_ROW && row !== REDEPLOY_ROW && row !== UNWIND_GUARD_ROW && row !== FREEZE_ROW && row !== UPGRADE_ROW) resolveGovernRow(row);
+    else if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== RETIRE_ROW && row !== REDEPLOY_ROW && row !== UNWIND_GUARD_ROW && row !== FREEZE_ROW && row !== UPGRADE_ROW) resolveGovernRow(row);
   }
   const vaultArg = v.vault as string | undefined;
   if (verb === REDEPLOY_VERB) {

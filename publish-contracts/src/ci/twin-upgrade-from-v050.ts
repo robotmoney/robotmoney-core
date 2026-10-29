@@ -118,14 +118,20 @@ async function main(): Promise<void> {
   runLine(3, { RECEIPT_IMPL: receiptImpl });
   if (!lcEq(await implOf(receipt), receiptImpl)) fail(`after its upgrade the receipt runs ${await implOf(receipt)}, not ${receiptImpl}`);
 
-  // step 6: clear the active receipt vector when the pre-state shows one (the tag's rehearsal applied a receipt), then the retire batch
-  const ROUTER_ABI = parseAbi(["function votedWeightsActive() view returns (bool)", "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)", "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)"]);
-  const votedBefore = (await client.readContract({ address: router, abi: ROUTER_ABI, functionName: "votedWeightsActive" })) as boolean;
-  if (votedBefore) runLine(4);
-  if ((await client.readContract({ address: router, abi: ROUTER_ABI, functionName: "votedWeightsActive" })) as boolean) fail("an active receipt vector is still set before the retire (runbook 4.15 step 7)");
-  runLine(5);
+  // step 6: the retire batch under the applied receipt vector the tag's rehearsal left, as on Deploy 3. Nothing clears it (issue 1988): the retire leaves it active and unchanged,
+  // and the router skips its rmAGENT leg (the row reads that back from previewDeposit). The next receipt sets the three-vault vector.
+  const ROUTER_ABI = parseAbi(["function votedWeightsActive() view returns (bool)", "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)", "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)", "function getWeights() view returns (address[] vaults, uint256[] bps)"]);
+  const voted = async (): Promise<boolean> => (await client.readContract({ address: router, abi: ROUTER_ABI, functionName: "votedWeightsActive" })) as boolean;
+  const appliedKey = async (): Promise<string> => { const [v, b] = (await client.readContract({ address: router, abi: ROUTER_ABI, functionName: "getWeights" })) as [Address[], bigint[]]; return v.map((x, i) => `${x.toLowerCase()}:${b[i]}`).join(","); };
+  const votedBefore = await voted();
+  if (!votedBefore) fail("no applied receipt vector is active before the retire (the tag's twin-publish applies one): the retire under an active vector (issue 1988) is not exercised");
+  const appliedBefore = await appliedKey();
+  runLine(4);
+  const votedAfter = await voted();
+  const appliedAfter = await appliedKey();
+  if (!votedAfter || appliedAfter !== appliedBefore) fail(`the retire changed the applied receipt vector: active ${votedAfter}, before [${appliedBefore}], after [${appliedAfter}]`);
   // steps 8 and 9: verify, and both evidence checks against the chain
-  runLine(6);
+  runLine(5);
   // Issue 1933: the 8453 branch of verify (verify-stage.ts) reads the receipt address through the loaded stage table and backs every receipt_applications entry of the run manifest
   // with its timelock batch on chain. The v0.5.0 table has no receipt stage (the receipt sits in ic-policy), and the Twin chain id skips that branch, so this job runs both halves on
   // the Twin by the same functions: loadReceiptAddr (the lookup verify calls) over the v0.5.0 table, then the checker verify calls, checkReceiptApplications and its on-chain half,
@@ -139,9 +145,9 @@ async function main(): Promise<void> {
     "--consensus-receipt", resolvedReceipt, "--governance", governance, "--timelock", timelock, "--rpc", rpc], { cwd: qa, stdout: "pipe", stderr: "pipe" });
   process.stdout.write(backing.stdout.toString());
   if (backing.exitCode !== 0) fail(`evidence-check --receipt-applications exited ${backing.exitCode}: ${backing.stderr.toString().trim()}`);
-  const governed = runLine(7);
+  const governed = runLine(6);
   if (!/^evidence ok \(governed upgrades: 2 upgrade\(s\), 1 with a typed migration, chain read\)$/m.test(governed)) fail(`evidence-check --governed-upgrades did not read both upgrades and the migration from the chain: ${governed}`);
-  const retired = runLine(8);
+  const retired = runLine(7);
   if (!/^evidence ok \(vault retirements: 1 retirement\(s\), chain read\)$/m.test(retired)) fail(`evidence-check --vault-retirements did not read the retirement from the chain: ${retired}`);
 
   // ---- the end state, read from the chain ----
@@ -160,7 +166,7 @@ async function main(): Promise<void> {
   const retirements = ((run.vault_retirements ?? []) as any[]).filter((e) => lcEq(e?.vault, rmAgent));
   const record = {
     kind: UPGRADE_FROM_V050_KIND, chain_id: TWIN_CHAIN_ID, v050: { tag: V050_TAG, sha: V050_SHA, upgradeability: deployed, agent_min_pool_liquidity: AGENT_POOL_FLOOR }, qa_sha: qaSha,
-    commands: ran, voted_weights_active_before: votedBefore,
+    commands: ran, voted_weights_active_before: votedBefore, voted_weights_active_after: votedAfter, applied_vector_unchanged: appliedAfter === appliedBefore,
     proxy_upgrades: upgrades.map((e) => ({ proxy_name: e.proxy_name, proxy: e.proxy, from_implementation: e.from_implementation, to_implementation: e.to_implementation, build: e.build, migration: e.migration?.name ?? null, operation_id: e.operation_id, schedule_tx: e.schedule_tx, execute_tx: e.execute_tx ?? null })),
     vault_retirements: retirements.map((e) => ({ vault: e.vault, operation_id: e.operation_id, schedule_tx: e.schedule_tx, execute_tx: e.execute_tx ?? null })),
     chain: {

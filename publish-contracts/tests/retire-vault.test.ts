@@ -111,22 +111,81 @@ describe("the batch (issue 1912)", () => {
     expect(p({ eligible: false })).toContain("not router-eligible");
     expect(p({ registryRouter: addr(1) })).toContain("RouterNotLinked");
     expect(p({ timelockIsRegistryAdmin: false })).toContain("ADMIN_ROLE on the registry");
-    expect(p({ votedWeightsActive: true })).toContain("clear-voted-weights");
     expect(p({ defaultVaults: THREE })).toContain("does not hold the vault");
     expect(p({ defaultVaults: [A.vaults.USDC, A.vaults.PROTO, RETIRED_VAULT, addr(0x7777)] })).toContain("LengthMismatch");
   });
   test("the read-back passes on the three-leg end state and names each difference", () => {
     const after = { status: 2, eligible: false, eligibleCount: 3, votedWeightsActive: false, defaultVaults: THREE, defaultBps: [9500, 500, 0], effectiveVaults: THREE, effectiveBps: [9500, 500, 0], retiredFlag: true, hasCode: true };
-    expect(retireReadBackProblems(THREE, [9500, 500, 0], after)).toEqual([]);
-    const p = (o: object) => retireReadBackProblems(THREE, [9500, 500, 0], { ...after, ...o }).join("; ");
+    expect(retireReadBackProblems(RETIRED_VAULT, THREE, [9500, 500, 0], after)).toEqual([]);
+    const p = (o: object) => retireReadBackProblems(RETIRED_VAULT, THREE, [9500, 500, 0], { ...after, ...o }).join("; ");
     expect(p({ status: 0 })).toContain("want Retired");
     expect(p({ eligible: true })).toContain("still router-eligible");
     expect(p({ eligibleCount: 4 })).toContain("routerEligibleCount() is 4, want 3");
-    expect(p({ votedWeightsActive: true })).toContain("votedWeightsActive");
     expect(p({ defaultBps: [9000, 1000, 0] })).toContain("getDefaultWeights");
     expect(p({ effectiveVaults: FOUR, effectiveBps: [9500, 500, 0, 0] })).toContain("getEffectiveWeights");
     expect(p({ retiredFlag: false })).toContain("retired() flag");
     expect(p({ hasCode: false })).toContain("no code");
+  });
+});
+
+// Issue 1988: nothing clears the router's applied vector. The row runs under an active one, leaves it unchanged, and the router skips a leg it still holds for the retired vault.
+describe("the retire under an active applied vector, with no clear (issue 1988)", () => {
+  const want = parseRetireArgs(ARGS);
+  const before = { listed: FOUR, status: 0, eligible: true, registryRouter: A.router, router: A.router, timelockIsRegistryAdmin: true, votedWeightsActive: true, defaultVaults: FOUR, hasCode: true, appliedVaults: FOUR, appliedBps: [8000, 1000, 500, 500] };
+  const pb = (o: object) => retireBeforeProblems(want, THREE, { ...before, ...o }).join("; ");
+  test("the before check accepts an applied vector over the four eligible vaults and refuses one the read-back would refuse", () => {
+    expect(retireBeforeProblems(want, THREE, before)).toEqual([]);
+    expect(pb({ appliedVaults: THREE, appliedBps: [8000, 1000, 1000] })).toBe("");
+    expect(pb({ appliedVaults: undefined, appliedBps: undefined })).toContain("was not read");
+    expect(pb({ appliedBps: [0, 0, 10000, 0] })).toContain("no weight on the vaults that stay");
+    expect(pb({ appliedVaults: [A.vaults.USDC, A.vaults.RWA, RETIRED_VAULT, A.vaults.PROTO] })).toContain("are not the default's vaults");
+    expect(pb({ appliedVaults: [A.vaults.USDC, RETIRED_VAULT, A.vaults.RWA], appliedBps: [8000, 1000, 1000] })).toContain("are not the default's vaults");
+    expect(pb({ appliedBps: [8000, 1000, 500, 400] })).toContain("sums to 9900");
+  });
+  const after = { status: 2, eligible: false, eligibleCount: 3, votedWeightsActive: true, defaultVaults: THREE, defaultBps: [9500, 500, 0], effectiveVaults: FOUR, effectiveBps: [8000, 1000, 500, 500], retiredFlag: true, hasCode: true, retiredLegSkipped: true };
+  const pa = (o: object) => retireReadBackProblems(RETIRED_VAULT, THREE, [9500, 500, 0], { ...after, ...o }).join("; ");
+  test("the read-back accepts the unchanged applied vector when the router skips the retired leg, and an applied vector over the three vaults that stay", () => {
+    expect(pa({})).toBe("");
+    expect(pa({ effectiveVaults: THREE, effectiveBps: [8000, 1000, 1000], retiredLegSkipped: undefined })).toBe("");
+  });
+  test("the read-back refuses a retired leg the router does not skip, a vector off 10000, a missing vault and a default that still holds the vault", () => {
+    expect(pa({ retiredLegSkipped: false })).toContain("previewDeposit does not show that leg skipped");
+    expect(pa({ retiredLegSkipped: undefined })).toContain("previewDeposit does not show that leg skipped");
+    expect(pa({ effectiveBps: [8000, 1000, 500, 400] })).toContain("sums to 9900");
+    expect(pa({ effectiveVaults: [A.vaults.USDC, RETIRED_VAULT, A.vaults.RWA], effectiveBps: [8000, 1000, 1000] })).toContain("are not the default's vaults");
+    expect(pa({ effectiveVaults: THREE, effectiveBps: [0, 0, 0] })).toContain("sums to 0");
+    expect(pa({ defaultVaults: FOUR, defaultBps: [9500, 500, 0, 0] })).toContain("getDefaultWeights");
+  });
+  test("end to end: the batch runs under the applied vector, leaves it active and unchanged, and the entry records the skipped leg and passes the evidence check", async () => {
+    const w = world();
+    w.tl.s.voted = { vaults: [...FOUR], bps: [8000n, 1000n, 500n, 500n] };
+    await w.run({ warp: warpTo(w.tl) });
+    expect(w.tl.s.events).toEqual(["scheduleBatch:retire-vault", "executeBatch:retire-vault"]);
+    expect(w.tl.s.statuses.get(RETIRED_VAULT)).toBe(2);
+    expect(w.tl.s.weights).toEqual({ vaults: THREE, bps: [9500n, 500n, 0n] });
+    expect(w.tl.s.voted).toEqual({ vaults: FOUR, bps: [8000n, 1000n, 500n, 500n] });
+    const entry = (w.manifest as { vault_retirements?: any[] }).vault_retirements![0];
+    expect(entry).toMatchObject({ vaults: THREE, bps: [9500, 500, 0], voted_weights_active: true, effective_vaults: FOUR, effective_bps: [8000, 1000, 500, 500], retired_leg_skipped: true });
+    const ev = (e: any) => ({ registry: { address: A.registry }, timelock: { address: A.timelock }, vault_retirements: [e] });
+    expect(checkVaultRetirements(ev(entry), 172800)).toEqual([]);
+    const bad = (edit: (e: any) => void) => { const e = JSON.parse(JSON.stringify(entry)); edit(e); return checkVaultRetirements(ev(e), 172800).join("\n"); };
+    expect(bad((e) => { delete e.retired_leg_skipped; })).toContain("retired_leg_skipped is undefined, want true");
+    expect(bad((e) => { e.retired_leg_skipped = false; })).toContain("retired_leg_skipped is false, want true");
+    expect(bad((e) => { e.effective_bps = [8000, 1000, 500, 400]; })).toContain("sums to 9900");
+    expect(bad((e) => { e.effective_vaults = [A.vaults.USDC, RETIRED_VAULT, A.vaults.RWA]; e.effective_bps = [8000, 1000, 1000]; })).toContain("are not the default's vaults");
+  });
+  test("end to end: an applied vector the router could not route by after the retire is refused before anything is scheduled", async () => {
+    const w = world();
+    w.tl.s.voted = { vaults: [...FOUR], bps: [0n, 0n, 10000n, 0n] };
+    await expect(w.run({ warp: warpTo(w.tl) })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("no weight on the vaults that stay") });
+    expect(w.tl.s.events).toEqual([]);
+  });
+  test("end to end: a router that does not skip the retired leg fails the read-back and records nothing as governed", async () => {
+    const w = world();
+    w.tl.s.voted = { vaults: [...FOUR], bps: [8000n, 1000n, 500n, 500n] };
+    w.tl.s.reads.previewDeposit = FOUR.map((v, i) => ({ vault: v, weightBps: [8000n, 1000n, 500n, 500n][i]!, legAmount: 1n, estShares: 0n, unavailable: false }));
+    await expect(w.run({ warp: warpTo(w.tl) })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("previewDeposit does not show that leg skipped") });
+    expect((w.manifest as { vault_retirements?: unknown[] }).vault_retirements).toBeUndefined();
   });
 });
 
@@ -162,7 +221,7 @@ describe("the row, on the live four-vault state (issue 1912)", () => {
     expect(bad((e) => { e.vaults[2] = e.vault; })).toContain("is still in the default vector");
     expect(bad((e) => { e.registry = addr(0x1); })).toContain("is not the run's registry");
     expect(bad((e) => { e.execute_block_timestamp = e.schedule_block_timestamp + 172799; })).toContain("gap");
-    expect(bad((e) => { e.voted_weights_active = true; })).toContain("voted_weights_active is true");
+    expect(bad((e) => { e.voted_weights_active = "yes"; })).toContain("voted_weights_active is yes");
     expect(bad((e) => { e.step = "unpause-USDC"; })).toContain("is not retire-vault");
     // a chain read back: the stub serves the two CallScheduled events and the two CallExecuted events of the batch
     expect(typeof checkVaultRetirementsOnChain).toBe("function");
@@ -192,7 +251,7 @@ describe("the row, on the live four-vault state (issue 1912)", () => {
       ["a vault the registry does not list", (w) => { w.tl.s.listed = [...THREE]; }, "does not list the vault"],
       ["a vault that is not router-eligible", (w) => { w.tl.s.ineligible.add(RETIRED_VAULT); w.tl.s.weights = { vaults: THREE, bps: [9500n, 500n, 0n] }; }, "not router-eligible"],
       ["a vault already Retired", (w) => { w.tl.s.statuses.set(RETIRED_VAULT, 2); }, "want Active"],
-      ["an active (voted) vector that still names the vault", (w) => { w.tl.s.voted = { vaults: FOUR, bps: [9000n, 500n, 250n, 250n] }; }, "clear-voted-weights"],
+      ["an active (voted) vector whose vaults without the retired one are not the three that stay", (w) => { w.tl.s.voted = { vaults: [A.vaults.USDC, RETIRED_VAULT, A.vaults.RWA], bps: [9000n, 500n, 500n] }; }, "are not the default's vaults"],
       ["a router vector that is not the three that stay", (w) => { w.tl.s.weights = { vaults: [A.vaults.USDC, RETIRED_VAULT, addr(0x7777), A.vaults.RWA], bps: [9500n, 500n, 0n, 0n] }; }, "LengthMismatch or VaultNotActive"],
     ];
     for (const [what, arm, message] of cases) {

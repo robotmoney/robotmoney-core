@@ -1087,7 +1087,7 @@ steps:
     added: "v0.6.0"
   - id: "P8.15-v050-retire-vault"
     standing: ["4.15"]
-    description: "4.15 steps 6 and 7: the Safe retires rmAGENT in one batch of two calls; the row reads back Retired, routerEligibleCount() 3 and the three-leg vectors"
+    description: "4.15 steps 6 and 7: the Safe retires rmAGENT in one batch of two calls under the applied receipt vector, which nothing clears (issue 1988); the row reads back Retired, routerEligibleCount() 3, the three-leg default vector, and the applied vector unchanged with its rmAGENT leg skipped by previewDeposit"
     host: "control"
     phase: 8
     cmds:

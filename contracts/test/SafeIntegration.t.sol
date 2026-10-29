@@ -288,7 +288,7 @@ contract SafeIntegrationTest is Test {
 
         // RouterGovernance must hold the router's ADMIN_ROLE and WEIGHT_SETTER_ROLE
         // before the handover: WEIGHT_SETTER_ROLE gates setWeights (applyReceipt)
-        // and ADMIN_ROLE gates the two fallbacks. DeployRouterGovernance performs
+        // and ADMIN_ROLE gates the default-vector fallback. DeployRouterGovernance performs
         // this grant for a real deployment; this fixture constructs RouterGovernance
         // directly, so it must do the same. DeployTimelock's R7 precondition asserts
         // it below.
@@ -636,22 +636,17 @@ contract SafeIntegrationTest is Test {
         assertEq(router.routerCap(), 1_000_000e6, "router cap should be updated");
     }
 
-    /// @notice AC1c: Full Safe+timelock path on RouterGovernance (clearVotedWeights).
-    function test_happyPath_routerGovernance_clearVotedWeights() public withSnap {
-        bytes memory callData = abi.encodeCall(RouterGovernance.clearVotedWeights, ());
-        vm.recordLogs();
+    /// @notice AC1c: Full Safe+timelock path on RouterGovernance (ADMIN_ROLE grant). RouterGovernance has
+    ///         no clear of the router's applied vector (issue 1988), so the governed call here is a role grant.
+    function test_happyPath_routerGovernance_adminRoleGrant() public withSnap {
+        address newAdmin = makeAddr("newGovernanceAdmin");
+        bytes memory callData = abi.encodeCall(IAccessControl.grantRole, (ADMIN_ROLE, newAdmin));
         _scheduleAndExecute(address(governance), callData);
-        Vm.Log[] memory logs = vm.getRecordedLogs();
-        uint256 cleared;
-        for (uint256 i = 0; i < logs.length; i++) {
-            if (
-                logs[i].emitter == address(router)
-                    && logs[i].topics[0] == PortfolioRouter.VotedWeightsCleared.selector
-            ) cleared++;
-        }
-        assertEq(cleared, 1, "the timelock cleared the active vector once");
 
-        assertFalse(router.votedWeightsActive(), "active vector should be cleared");
+        assertTrue(
+            IAccessControl(address(governance)).hasRole(ADMIN_ROLE, newAdmin),
+            "newAdmin should hold ADMIN_ROLE on RouterGovernance"
+        );
     }
 
     /// @notice AC1d: Full Safe+timelock path on RobotMoneyVault (setExitFeeBps).
@@ -1036,7 +1031,7 @@ contract SafeIntegrationTest is Test {
             )
         );
         vm.prank(address(safe));
-        governance.clearVotedWeights();
+        governance.setDefaultWeights(new address[](0), new uint256[](0));
     }
 
     /// @notice AC6d: Direct ADMIN_ROLE call on RobotMoneyVault reverts.

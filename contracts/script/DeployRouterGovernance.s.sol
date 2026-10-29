@@ -17,10 +17,9 @@ import {UpgradeAuthority} from "./UpgradeAuthority.sol";
 /// @notice Foundry deploy script for RouterGovernance, the router's weight setter.
 ///         Deploys it with the deployer as `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE`
 ///         holder (the timelock stage hands both to the TimelockController) and
-///         wires the three grants `applyReceipt` and the fallbacks need:
+///         wires the three grants `applyReceipt` and the fallback need:
 ///
-///         - router `ADMIN_ROLE`, so `setDefaultWeights` and `clearVotedWeights`
-///           forward;
+///         - router `ADMIN_ROLE`, so `setDefaultWeights` forwards;
 ///         - router `WEIGHT_SETTER_ROLE`, the only gate on `setWeights`, after
 ///           which the deployer's own copy is dropped;
 ///         - `RECEIPT_RELEASER_ROLE` on the ConsensusRecommendationReceipt, so
@@ -131,8 +130,7 @@ contract DeployRouterGovernance is UpgradeAuthority {
         _grantReceiptRelease(d);
     }
 
-    /// @dev Router `ADMIN_ROLE`, so `setDefaultWeights` and `clearVotedWeights`
-    ///      forward. Read back.
+    /// @dev Router `ADMIN_ROLE`, so `setDefaultWeights` forwards. Read back.
     function _grantRouterAdmin(Deployed memory d, address granter_) internal {
         bytes32 routerAdminRole = d.router.ADMIN_ROLE();
         address governance = address(d.governance);

@@ -1,11 +1,11 @@
 ---
 title: "GovernedSurfacesSafeTimelockTest"
-description: "One real Safe -> Timelock test for each governed surface that had none: the receipt submitter role, adapter admin, role revoke, `setDefaultWeights` after the handover, `RouterGovernance.clearVotedWeights` after the handover, and the AgentTokenVault non-asset setters. Two owners sign, the real SafeL2 proxy runs `execTransaction`, the timelock waits, the timelock calls the contract. Nothing pranks the Safe."
+description: "One real Safe -> Timelock test for each governed surface that had none: the receipt submitter role, adapter admin, role revoke, `setDefaultWeights` after the handover, and the AgentTokenVault non-asset setters. Two owners sign, the real SafeL2 proxy runs `execTransaction`, the timelock waits, the timelock calls the contract. Nothing pranks the Safe."
 ---
 
 # GovernedSurfacesSafeTimelockTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/GovernedSurfacesSafeTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a15767d7de43d0b6794a99ef433de7c2b7daec83/contracts/test/GovernedSurfacesSafeTimelock.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -13,8 +13,7 @@ description: "One real Safe -> Timelock test for each governed surface that had 
 
 One real Safe -> Timelock test for each governed surface that had none: the
 receipt submitter role, adapter admin, role revoke, `setDefaultWeights` after the
-handover, `RouterGovernance.clearVotedWeights` after the handover, and the AgentTokenVault
-non-asset setters. Two owners sign, the real SafeL2 proxy runs `execTransaction`,
+handover, and the AgentTokenVault non-asset setters. Two owners sign, the real SafeL2 proxy runs `execTransaction`,
 the timelock waits, the timelock calls the contract. Nothing pranks the Safe.
 
 ## Constants
@@ -208,14 +207,6 @@ function test_agentRole_notManageableByTheTimelock() public;
 
 ```solidity
 function test_routerGovernance_setDefaultWeights_afterHandover_viaSafeThenTimelock() public;
-```
-
-<a id="test_routergovernance_clearvotedweights_afterhandover_viasafethentimelock"></a>
-
-### test_routerGovernance_clearVotedWeights_afterHandover_viaSafeThenTimelock
-
-```solidity
-function test_routerGovernance_clearVotedWeights_afterHandover_viaSafeThenTimelock() public;
 ```
 
 <a id="test_routergovernance_directsafecall_isrefused_exactreason"></a>

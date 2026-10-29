@@ -1,11 +1,11 @@
 ---
 title: "DeployRouterGovernance"
-description: "Foundry deploy script for RouterGovernance, the router's weight setter. Deploys it with the deployer as `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE` holder (the timelock stage hands both to the TimelockController) and wires the three grants `applyReceipt` and the fallbacks need:"
+description: "Foundry deploy script for RouterGovernance, the router's weight setter. Deploys it with the deployer as `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE` holder (the timelock stage hands both to the TimelockController) and wires the three grants `applyReceipt` and the fallback need:"
 ---
 
 # DeployRouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/script/DeployRouterGovernance.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a15767d7de43d0b6794a99ef433de7c2b7daec83/contracts/script/DeployRouterGovernance.s.sol)
 
 **Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
@@ -14,10 +14,9 @@ description: "Foundry deploy script for RouterGovernance, the router's weight se
 Foundry deploy script for RouterGovernance, the router's weight setter.
 Deploys it with the deployer as `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE`
 holder (the timelock stage hands both to the TimelockController) and
-wires the three grants `applyReceipt` and the fallbacks need:
+wires the three grants `applyReceipt` and the fallback need:
 
-- router `ADMIN_ROLE`, so `setDefaultWeights` and `clearVotedWeights`
-forward;
+- router `ADMIN_ROLE`, so `setDefaultWeights` forwards;
 - router `WEIGHT_SETTER_ROLE`, the only gate on `setWeights`, after
 which the deployer's own copy is dropped;
 - `RECEIPT_RELEASER_ROLE` on the ConsensusRecommendationReceipt, so
@@ -144,8 +143,7 @@ function _deploy(
 
 <i>
 
-Router `ADMIN_ROLE`, so `setDefaultWeights` and `clearVotedWeights`
-forward. Read back.
+Router `ADMIN_ROLE`, so `setDefaultWeights` forwards. Read back.
 
 </i>
 

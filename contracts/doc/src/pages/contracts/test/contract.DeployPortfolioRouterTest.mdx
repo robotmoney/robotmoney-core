@@ -4,7 +4,7 @@ title: "DeployPortfolioRouterTest"
 
 # DeployPortfolioRouterTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/DeployPortfolioRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a15767d7de43d0b6794a99ef433de7c2b7daec83/contracts/test/DeployPortfolioRouter.t.sol)
 
 **Inherits:** Test
 
@@ -104,16 +104,16 @@ setDefaultWeights emits DefaultWeightsSet, and no WeightsSet fires (no voted vec
 function test_deploy_emitsDefaultWeightsSetAndNoWeightsSet() public;
 ```
 
-<a id="test_clearvotedweights_isadminonlyandrestoresthedefault"></a>
+<a id="test_norolecanclearthevotedvector"></a>
 
-### test_clearVotedWeights_isAdminOnlyAndRestoresTheDefault
+### test_noRoleCanClearTheVotedVector
 
-Who may clear a voted vector (issue 1743): `clearVotedWeights` is ADMIN_ROLE only. A WEIGHT_SETTER_ROLE holder
-that lacks ADMIN_ROLE cannot clear, so on the first 8453 deployment (voted vector set by the router stage) the way back to
-the default is an ADMIN_ROLE call: the timelock (router ADMIN_ROLE) directly, or through RouterGovernance.clearVotedWeights.
+Issue 1988: no role can clear a voted vector. The deployed router has no `clearVotedWeights()`, so a call
+from ADMIN_ROLE (the timelock), from a WEIGHT_SETTER_ROLE holder or from a stranger reverts, and the vector stays
+active until a newer one replaces it.
 
 ```solidity
-function test_clearVotedWeights_isAdminOnlyAndRestoresTheDefault() public;
+function test_noRoleCanClearTheVotedVector() public;
 ```
 
 <a id="test_ceremony_basketflipafterrouterstageleaveseffectiveequaltothelaunchvector"></a>

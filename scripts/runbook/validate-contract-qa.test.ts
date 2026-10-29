@@ -220,11 +220,11 @@ test("the committed v0.6.0 runbook runs the runbook 4.15 commands against the v0
   const added = r.steps.filter((s) => s.added === "v0.6.0" && s.phase === 8);
   expect(added.length).toBeGreaterThanOrEqual(UPGRADE_FROM_V050_COMMANDS.length);
   let from = 0;
-  // issue 1980 (owner decision): the runbook never clears the router's voted vector, so the yaml runs every 4.15 command but the clear, and never the clear
+  // issue 1980 (owner decision): the runbook never clears the router's voted vector; issue 1988 removed the clear from the 4.15 commands, so the yaml runs every one of them
   const CLEAR = "govern --row clear-voted-weights";
-  expect(UPGRADE_FROM_V050_COMMANDS.filter((l) => l.includes(CLEAR))).toHaveLength(1);
+  expect(UPGRADE_FROM_V050_COMMANDS.filter((l) => l.includes(CLEAR))).toHaveLength(0);
   expect(added.some((s) => s.cmds.some((c) => c.join(" ").includes(CLEAR)))).toBe(false);
-  for (const line of UPGRADE_FROM_V050_COMMANDS.filter((l) => !l.includes(CLEAR))) {
+  for (const line of UPGRADE_FROM_V050_COMMANDS) {
     const want = JSON.stringify(toYaml(line));
     const at = added.findIndex((s, i) => i >= from && s.cmds.some((c) => JSON.stringify(c) === want));
     expect(at, line).toBeGreaterThanOrEqual(from);

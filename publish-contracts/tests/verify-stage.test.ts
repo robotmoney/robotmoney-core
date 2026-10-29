@@ -566,18 +566,16 @@ describe("stage 12 records the upgradeability of the deployment (issue 1809)", (
   });
 });
 
-// Issue 1927: runbook 4.15 clears the applied receipt vector (govern --row clear-voted-weights) before the retire, so verify must not expect it on the router any more.
-describe("the applied receipt after a clear-voted-weights round (issue 1927)", () => {
-  test("an executed clear after the last application leaves no applied receipt; a clear before it, a tie, or an unexecuted clear keeps it", async () => {
+// Issue 1988: nothing clears an applied vector, so verify expects the last application on the router. A HISTORICAL clear entry in an older manifest changes nothing.
+describe("the applied receipt is the last application (issue 1988)", () => {
+  test("the last well formed application is expected on the router, with or without a historical clear entry", async () => {
     const { appliedReceiptOf } = await import("../src/verify-stage.ts");
     const app = { receipt_id: `0x${"11".repeat(32)}`, vaults: [`0x${"22".repeat(20)}`], bps: [10000], execute_block_timestamp: 1000 };
-    const clear = (at: number, o: object = {}) => ({ execute_status: 1, voted_weights_active: false, execute_block_timestamp: at, ...o });
+    const later = { ...app, receipt_id: `0x${"33".repeat(32)}`, execute_block_timestamp: 2000 };
+    expect(appliedReceiptOf({})).toBeUndefined();
     expect(appliedReceiptOf({ receipt_applications: [app] })).toMatchObject({ receiptId: app.receipt_id });
-    expect(appliedReceiptOf({ receipt_applications: [app], voted_weights_clears: [clear(1001)] })).toBeUndefined();
-    expect(appliedReceiptOf({ receipt_applications: [app], voted_weights_clears: [clear(999)] })).toMatchObject({ receiptId: app.receipt_id });
-    expect(appliedReceiptOf({ receipt_applications: [app], voted_weights_clears: [clear(1000)] })).toMatchObject({ receiptId: app.receipt_id });
-    expect(appliedReceiptOf({ receipt_applications: [app], voted_weights_clears: [clear(1001, { execute_status: 0 })] })).toMatchObject({ receiptId: app.receipt_id });
-    expect(appliedReceiptOf({ receipt_applications: [app], voted_weights_clears: [clear(1001, { voted_weights_active: true })] })).toMatchObject({ receiptId: app.receipt_id });
+    expect(appliedReceiptOf({ receipt_applications: [app, later] })).toMatchObject({ receiptId: later.receipt_id });
+    expect(appliedReceiptOf({ receipt_applications: [app], voted_weights_clears: [{ execute_status: 1, voted_weights_active: false, execute_block_timestamp: 1001 }] } as never)).toMatchObject({ receiptId: app.receipt_id });
   });
 
 });

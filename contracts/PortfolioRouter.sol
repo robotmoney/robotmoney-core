@@ -64,7 +64,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     ///         active weights move only when the Safe, through the timelock,
     ///         applies a recorded consensus receipt with
     ///         `RouterGovernance.applyReceipt`. The timelock keeps `ADMIN_ROLE` and reaches
-    ///         `setDefaultWeights` and `clearVotedWeights` only. The initializer
+    ///         `setDefaultWeights` only. The initializer
     ///         seeds the role to `_admin` so the router deploy stage can write
     ///         the initial weights. The governance deploy stage revokes it. The role is its
     ///         own role admin, so no `ADMIN_ROLE` holder can grant it.
@@ -134,15 +134,17 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
 
     /// @notice True when the voted weight vector is in effect. False means the
     ///         router falls back to `defaultWeights` (the on-chain
-    ///         fallback). Set true by `setWeights`, set false by
-    ///         `clearVotedWeights`. See ADR-0002.
+    ///         fallback): no receipt has been applied yet. Set true by
+    ///         `setWeights`. Nothing sets it false again: no function clears or
+    ///         resets the applied vector, and a bad vector is replaced by a newer
+    ///         receipt (issue 1988). See ADR-0002.
     bool public votedWeightsActive;
 
     /// @notice Ordered list of vaults included in the default (fallback) weight
     ///         vector. Used by `previewDeposit`/`deposit` whenever the voted
-    ///         vector is not active: no receipt has been applied yet, or the
-    ///         timelock cleared the active vector. Admin-settable; survives a
-    ///         receipt application unchanged. ADR-0002.
+    ///         vector is not active, which means no receipt has been applied
+    ///         yet. Admin-settable; survives a receipt application unchanged.
+    ///         ADR-0002.
     address[] private _defaultWeightVaultList;
 
     /// @notice Weight in basis points for each vault in `_defaultWeightVaultList`.
@@ -185,10 +187,6 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     /// @param vaults  New ordered list of vault addresses.
     /// @param bps     Parallel weight array (must sum to BPS_DENOMINATOR).
     event DefaultWeightsSet(address[] vaults, uint256[] bps);
-
-    /// @notice Emitted when the applied weight vector is cleared and the router
-    ///         reverts to the default weight vector.
-    event VotedWeightsCleared();
 
     /// @notice Emitted when the global router cap is updated.
     /// @param oldCap Previous value (0 = uncapped).
@@ -531,9 +529,8 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
 
     /// @notice Set the default (fallback) weight vector. Used by
     ///         `previewDeposit`/`deposit` whenever the active vector is not
-    ///         in effect: no receipt has been applied yet, or the timelock
-    ///         cleared the active vector. This vector survives a receipt
-    ///         application unchanged. ADR-0002.
+    ///         in effect, which means no receipt has been applied yet. This
+    ///         vector survives a receipt application unchanged. ADR-0002.
     ///
     ///         All vaults must be registered AND router-eligible, the bps must
     ///         sum to BPS_DENOMINATOR, and the length must equal the registry's
@@ -608,17 +605,6 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
         }
 
         emit DefaultWeightsSet(vaults, bps);
-    }
-
-    /// @notice Clear the active weight vector and revert routing to
-    ///         `defaultWeights`. The emergency lever: the Safe, through the
-    ///         timelock, falls back to the default vector. Restricted to
-    ///         `ADMIN_ROLE`. ADR-0002.
-    function clearVotedWeights() external onlyRole(ADMIN_ROLE) {
-        delete _weightVaultList;
-        delete _weightBps;
-        votedWeightsActive = false;
-        emit VotedWeightsCleared();
     }
 
     /// @notice Update the global router cap. 0 means uncapped.

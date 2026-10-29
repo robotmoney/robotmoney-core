@@ -20,6 +20,7 @@ import { padTopic, scanLogs, topicToAddress } from "./logs.ts";
 import { safeChecks } from "./safe-checks.ts";
 import { CODE_LABEL, finishUpgradeability, manifestDataOf, upgradeabilityChecks } from "./upgradeability.ts";
 import { USDC_ADDRESS, checkUsdcCode } from "../usdc.ts";
+import { PREVIEW_AMOUNT, ROUTER_PREVIEW_DEPOSIT, retiredVectorProblems } from "../retire-vault.ts";
 import type { Address, ChainReader, DeployReceipt, ExpectedAsset, Hex, VaultSheet, VerifyOptions, VerifyReport, WeightSetterGating, WeightSetterHolder } from "./types.ts";
 
 export type { VerifyOptions, VerifyReport, Check, VerifySheet, VaultSheet, ChainReader, WeightSetterGating, WeightSetterHolder } from "./types.ts";
@@ -329,7 +330,7 @@ const roleMembers = async (ch: ChainReader, at: Address, r: Hex): Promise<Addres
 /**
  * QA plan v1 C3 (CS-6, ADR-0002 "Why the 1522 bypass stays closed"). Reads every router `WEIGHT_SETTER_ROLE` holder and what gates its weight writes. A holder is
  * timelock-gated when its logic code (the implementation behind its ERC-1967 proxy, issue 1808) is the RouterGovernance build, and the timelock is its only
- * `ADMIN_ROLE` member (setDefaultWeights, clearVotedWeights) and its only `WEIGHT_SETTER_ROLE` member (applyReceipt, issue 1698). Any other contract is not: its
+ * `ADMIN_ROLE` member (setDefaultWeights) and its only `WEIGHT_SETTER_ROLE` member (applyReceipt, issue 1698). Any other contract is not: its
  * code is not the reviewed build, so nothing says the timelock stands in front of it. A failed router or code read is "unreadable", never "timelock". The delay is
  * recorded only: the timelock labels own its floor.
  */
@@ -893,8 +894,10 @@ async function roleScan(c: Collector, chain: ChainReader, deployer: Address, gov
 
 /**
  * Issue 1912, ADR-0017: one vault the Safe retired with `govern --row retire-vault`. It is withdraw-only (ADR-0009): Retired in the registry, out of the router-eligible set, its own deposits halted by the
- * registry retire, still holding its code (its holders redeem), and absent from the router's default and effective vectors, which keep one leg per remaining vault. The two vectors
- * have the same bps unless an applied receipt's vector is active (issue 1992).
+ * registry retire, still holding its code (its holders redeem), and absent from the router's default vector, which keeps one leg per remaining vault. With no applied vector active the effective
+ * vector is the default. An applied receipt's vector may be active (issue 1992), and nothing clears it (issue 1988): it is the default's vaults in the same order, with its own bps. A vector
+ * applied before the retire still names the retired vault until the next receipt replaces it; then the router must skip that leg (`previewDeposit` reads it unavailable with amount 0) and the
+ * remaining legs must carry weight. The same rule as `retireReadBackProblems` (retire-vault.ts).
  */
 async function retirementChecks(c: Collector, chain: ChainReader, vault: Address, ctx: { registry: Address; router: Address; vaultCount: number }): Promise<void> {
   const p = `retired[${vault}]`;
@@ -905,14 +908,16 @@ async function retirementChecks(c: Collector, chain: ChainReader, vault: Address
   await c.run(`${p}: the router's default and effective vectors hold one leg per remaining vault and not this one`, async () => {
     const [dv, db] = (await chain.read(ctx.router, "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
     const [ev, eb] = (await chain.read(ctx.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
-    // Issue 1992: an applied receipt sets an active vector whose bps differ from the default; no step clears it (issue 1980), so the bps must match only while none is active.
     const voted = (await chain.read(ctx.router, "function votedWeightsActive() view returns (bool)")) as boolean;
-    const sameVaults = dv.length === ev.length && dv.every((a, i) => lc(a) === lc(ev[i]!));
-    const sameBps = db.length === eb.length && db.every((x, i) => x === eb[i]);
-    const sum = (b: bigint[]) => b.reduce((t, x) => t + x, 0n);
-    const ok = sameVaults && (voted || sameBps) && dv.length === ctx.vaultCount && new Set(dv.map(lc)).size === dv.length && !dv.some((a) => lc(a) === lc(vault))
-      && sum(db) === 10000n && sum(eb) === 10000n;
-    return { ok, detail: `default [${dv.join(", ")}] [${db.join(", ")}] effective [${ev.join(", ")}] [${eb.join(", ")}] votedWeightsActive ${voted}` };
+    const problems = retiredVectorProblems(vault, { vaultCount: ctx.vaultCount, votedWeightsActive: voted, defaultVaults: dv, defaultBps: db, effectiveVaults: ev, effectiveBps: eb });
+    let skip = "";
+    if (problems.length === 0 && ev.some((a) => lc(a) === lc(vault))) {
+      const legs = (await chain.read(ctx.router, ROUTER_PREVIEW_DEPOSIT, [PREVIEW_AMOUNT])) as { vault: string; legAmount: bigint; unavailable: boolean }[];
+      const leg = legs.find((l) => lc(l.vault) === lc(vault));
+      if (!leg || !leg.unavailable || leg.legAmount !== 0n) problems.push(`the router does not skip the retired leg: previewDeposit(${PREVIEW_AMOUNT}) reads ${leg ? `unavailable ${leg.unavailable}, legAmount ${leg.legAmount}` : "no leg for it"}`);
+      else skip = "; the applied vector still names it and the router skips that leg";
+    }
+    return { ok: problems.length === 0, detail: `default [${dv.join(", ")}] [${db.join(", ")}] effective [${ev.join(", ")}] [${eb.join(", ")}] votedWeightsActive ${voted}${skip}${problems.length ? `: ${problems.join("; ")}` : ""}` };
   });
 }
 

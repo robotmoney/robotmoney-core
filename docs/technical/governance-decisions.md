@@ -184,7 +184,7 @@ so the timelock cannot grant itself the role through a scheduled operation.
   `WEIGHT_SETTER_ROLE`, which is its own role admin. The timelock stage
   (`DeployTimelock.s.sol`) hands it to the `TimelockController` and drops the
   deployer's copy, and grants the timelock `ADMIN_ROLE` on `RouterGovernance`,
-  which reaches `setDefaultWeights` and `clearVotedWeights`. Each grant is read
+  which reaches `setDefaultWeights`. Each grant is read
   back by the script and asserted again by the verifier.
 - Rotation (core 1616): `RouterGovernance` is replaced without a router
   redeploy through a bounded rotation, not through a role grant. The Safe holds
@@ -200,9 +200,10 @@ so the timelock cannot grant itself the role through a scheduled operation.
 No off-chain relay, multisig signer alone, keeper or agent is in the
 weight-update path.
 
-**Emergency path.** `RouterGovernance` has no pause or guardian role. The
-emergency lever is `clearVotedWeights` (`ADMIN_ROLE`, through the timelock),
-which returns routing to the default vector. A scheduled `apply-receipt` call
+**Emergency path.** `RouterGovernance` has no pause or guardian role, and no
+function clears the router's applied vector or resets it to the default
+(issue 1988, ADR-0002 amendment 2026-10-29). A bad applied vector is replaced
+by a newer receipt through `apply-receipt`. A scheduled `apply-receipt` call
 that should not run is cancelled on the timelock by the Safe before its delay
 passes.
 

@@ -50,8 +50,10 @@ import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommenda
 ///           agent permissions, or protocol admin operations.
 ///         - No token, no minting, no wrapping (§6.6 of the decision record).
 ///
-///         `ADMIN_ROLE` (the timelock) keeps the two router fallbacks:
-///         `setDefaultWeights` and the emergency `clearVotedWeights`.
+///         `ADMIN_ROLE` (the timelock) keeps one router fallback:
+///         `setDefaultWeights`. Nothing here clears or resets the router's
+///         applied vector: a bad vector is replaced by a newer receipt through
+///         `applyReceipt` (issue 1988, ADR-0002).
 ///
 /// Emits: `ReceiptApplied`.
 ///
@@ -200,11 +202,11 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuardUpgradeable
 
     // slither-disable-end reentrancy-events
 
-    // ─── Admin: router fallbacks ─────────────────────────────────────────────
+    // ─── Admin: router fallback ──────────────────────────────────────────────
 
     /// @notice Set the router's default (fallback) weight vector, forwarding to
     ///         `PortfolioRouter.setDefaultWeights`. The router routes by it
-    ///         until a receipt is applied, and again after `clearVotedWeights`.
+    ///         until the first receipt is applied.
     ///         `ADMIN_ROLE` only (Safe -> Timelock -> ADMIN_ROLE). ADR-0002.
     /// @param vaults Ordered vault address list.
     /// @param bps    Parallel weight array (must sum to 10 000).
@@ -213,12 +215,6 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuardUpgradeable
         onlyRole(ADMIN_ROLE)
     {
         router.setDefaultWeights(vaults, bps);
-    }
-
-    /// @notice Clear the router's active weight vector so routing falls back to
-    ///         the default vector. The emergency lever. `ADMIN_ROLE` only. ADR-0002.
-    function clearVotedWeights() external onlyRole(ADMIN_ROLE) {
-        router.clearVotedWeights();
     }
 
     // ─── Read surface ────────────────────────────────────────────────────────

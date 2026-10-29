@@ -260,9 +260,10 @@ jobs:
           echo "storage layouts compared with release/v0.5.0-rehearsal: $n"
           if [[ "$n" -ne 9 ]]; then echo "::error::the baseline check compared $n contracts, exactly 9 are required (issue 1916)"; exit 1; fi
 
-      # Issue 1914 Task B: the seven contracts the v0.6.0 governed upgrade does not touch (RouterGovernance, VaultRegistry, PortfolioRouter, rmUSDC, rmPROTO, rmAGENT,
-      # rmRWA) changed in comments only. The script builds release/v0.5.0-rehearsal and HEAD, masks immutables, library links and the CBOR metadata trailer, and exits
-      # non-zero on any runtime-logic difference. The summary line is asserted so a run that compared nothing (or fewer than all seven) reads red, never green.
+      # Issue 1914 Task B: the contracts the governed upgrade does not touch changed in comments only. The v0.6.0 line checks seven. On dev, issue 1988 removed the clear
+      # of the router's applied vector from RouterGovernance and PortfolioRouter (they ship on the next line as governed upgrades), so five remain: VaultRegistry, rmUSDC,
+      # rmPROTO, rmAGENT, rmRWA. The script builds release/v0.5.0-rehearsal and HEAD, masks immutables, library links and the CBOR metadata trailer, and exits non-zero on
+      # any runtime-logic difference. The summary line is asserted so a run that compared nothing (or fewer than all five) reads red, never green.
       - name: Comment-only contracts are logic-identical to Deploy 3 (issue 1914)
         run: |
           set -o pipefail
@@ -270,7 +271,7 @@ jobs:
           test "$(git rev-parse --verify --quiet 'refs/tags/release/v0.5.0-rehearsal^{commit}')" = "57fbe61833e9d7f94557d69102138f7c410c1346" || { echo "::error::release/v0.5.0-rehearsal moved: it must resolve to 57fbe61833e9d7f94557d69102138f7c410c1346"; exit 1; }
           bun test publish-contracts/tests/check-comment-only-contracts.test.ts
           bun publish-contracts/src/ci/check-comment-only-contracts.ts | tee "$RUNNER_TEMP/comment-only.txt"
-          grep -qx 'compared 7 contract(s), 7 identical, 0 differ' "$RUNNER_TEMP/comment-only.txt"
+          grep -qx 'compared 5 contract(s), 5 identical, 0 differ' "$RUNNER_TEMP/comment-only.txt"
 
       - name: Gateway agent-policy gas report (issue 1476)
         # Measurement, not a budget: prints the RobotMoneyGateway rows for

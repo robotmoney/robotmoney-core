@@ -374,7 +374,7 @@ export function redeployBeforeProblems(oldVault: string, newVault: string | unde
   if (lc(b.registryRouter) !== lc(b.router)) bad.push(`registry.router() is ${b.registryRouter}, not the deployment's router ${b.router}: migrateEligibility would revert RouterNotLinked`);
   if (!b.timelockIsRegistryAdmin) bad.push("the timelock does not hold ADMIN_ROLE on the registry: the batch would revert");
   if (b.timelockIsRouterAdmin === false) bad.push("the timelock does not hold ADMIN_ROLE on the router: the batch's router.setVaultCap(new, approved old cap) would revert");
-  if (b.votedWeightsActive) bad.push("router.votedWeightsActive() is true: an applied receipt vector (which still names the old vault) overrides the default, so the split the batch keeps is not the split deposits use. Run --row clear-voted-weights first, then apply a receipt over the new vault set afterwards");
+  if (b.votedWeightsActive) bad.push("router.votedWeightsActive() is true: an applied receipt vector (which still names the old vault) overrides the default, so the split the batch keeps is not the split deposits use. The redeploy row runs only on a deployment with no applied vector: nothing clears one (issue 1988)");
   if (!b.defaultVaults.some((v) => lc(v) === lc(oldVault))) bad.push(`the router's default vector does not hold the old vault: [${b.defaultVaults.join(", ")}]`);
   return bad;
 }

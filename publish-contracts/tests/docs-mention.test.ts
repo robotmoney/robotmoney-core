@@ -48,20 +48,23 @@ describe("docs mention the apply-receipt row (issue 1696, issue 1698)", () => {
   }
 });
 
-// Issue 1743: the clear row is documented in both docs, and that an active vector does not block apply-receipt (issue 1698).
-describe("docs mention the clear-voted-weights row and that applyReceipt overwrites an active vector (issue 1743, issue 1698)", () => {
+// Issue 1988: both docs state that nothing clears the active vector and that a newer receipt replaces it; neither documents a clear row (issue 1743 removed).
+describe("docs state that the active vector is never cleared and a newer receipt replaces it (issue 1988, issue 1698)", () => {
   const P: [string, RegExp][] = [
-    ["the row", /--row clear-voted-weights/],
-    ["the single call", /RouterGovernance\.clearVotedWeights\(\)/],
-    ["the role", /ADMIN_ROLE/],
-    ["an active vector does not block the row", /An active vector already in effect does not block the row: `applyReceipt` overwrites it\./],
+    ["the rule", /The active vector is never cleared \(issue 1988/],
+    ["the recovery path", /replaced by a newer receipt/],
+    ["an active vector does not block apply-receipt", /An active vector already in effect does not block the row: `applyReceipt` overwrites it\./],
     ["the effective weights read-back", /getEffectiveWeights\(\)/],
-    ["the evidence list", /voted_weights_clears/],
+    ["the historical evidence list", /voted_weights_clears/],
     ["the verifier labels", /router: votedWeightsActive is false after deploy/],
-    ["no contract change", /No contract change/i],
-    ["the live-router 0 bps leg warning (issue 1746)", /NEVER run clear-voted-weights on the LIVE 8453 router/],
   ];
-  for (const [file, text] of Object.entries(DOCS)) for (const [what, re] of P) test(`${file} documents ${what}`, () => expect(text).toMatch(re));
+  for (const [file, text] of Object.entries(DOCS)) {
+    for (const [what, re] of P) test(`${file} documents ${what}`, () => expect(text).toMatch(re));
+    test(`${file} documents no clear row`, () => {
+      expect(text).not.toMatch(/govern --row clear-voted-weights/);
+      expect(text).not.toMatch(/RouterGovernance\.clearVotedWeights\(\)/);
+    });
+  }
 });
 
 // Issue 1701: the two causes of exit 25 and the apply-receipt versus pause-all ordering gap are documented in both docs.
@@ -126,7 +129,7 @@ describe("the CLI help and architecture 4.9 describe the one-call apply and both
     const { USAGE } = await import("../src/cli.ts");
     const start = USAGE.indexOf("--row apply-receipt --receipt-id");
     expect(start).toBeGreaterThan(0);
-    const paragraph = USAGE.slice(start, USAGE.indexOf("--row clear-voted-weights", start));
+    const paragraph = USAGE.slice(start, USAGE.indexOf("--row retire-vault", start));
     expect(paragraph).toContain("RouterGovernance.applyReceipt");
     expect(paragraph).not.toContain("ONE timelock batch");
     expect(paragraph).toContain("lastAppliedRecordedAt");

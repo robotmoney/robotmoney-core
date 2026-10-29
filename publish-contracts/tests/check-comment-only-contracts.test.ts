@@ -4,7 +4,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertSafeRef, BASELINE_SHA, COMMENT_ONLY_CONTRACTS, compareBuilds } from "../src/ci/check-comment-only-contracts.ts";
+import { assertSafeRef, BASELINE_SHA, CHANGED_SINCE_DEPLOY3, COMMENT_ONLY_CONTRACTS, compareBuilds } from "../src/ci/check-comment-only-contracts.ts";
 
 const SCRIPT = join(import.meta.dir, "..", "src", "ci", "check-comment-only-contracts.ts");
 const scratch = mkdtempSync(join(tmpdir(), "comment-only-test-"));
@@ -23,8 +23,10 @@ function build(dir: string, files: Record<string, string>): string {
 const run = (a: string, b: string, contracts?: string) => Bun.spawnSync(["bun", SCRIPT, "--baseline-out", a, "--candidate-out", b, ...(contracts ? ["--contracts", contracts] : [])], { stdout: "pipe", stderr: "pipe" });
 
 describe("comment-only contract guard (issue 1914)", () => {
-  test("the default list is the seven contracts v0.6.0 does not upgrade", () => {
-    expect(COMMENT_ONLY_CONTRACTS).toEqual(["RouterGovernance", "VaultRegistry", "PortfolioRouter", "RobotMoneyVault", "ProtocolAssetVault", "AgentTokenVault", "RwaBasketVault"]);
+  test("the default list is the five contracts still comment-only since Deploy 3: issue 1988 changed PortfolioRouter and RouterGovernance on purpose", () => {
+    expect(COMMENT_ONLY_CONTRACTS).toEqual(["VaultRegistry", "RobotMoneyVault", "ProtocolAssetVault", "AgentTokenVault", "RwaBasketVault"]);
+    expect(CHANGED_SINCE_DEPLOY3).toEqual(["RouterGovernance", "PortfolioRouter"]);
+    for (const c of CHANGED_SINCE_DEPLOY3) expect(COMMENT_ONLY_CONTRACTS).not.toContain(c);
   });
   test("a metadata-only difference passes and the CLI exits 0 reporting a non-zero count", () => {
     const a = build("a1", { Alpha: code("6001600255", "010a"), Beta: code("600360045500", "0b0c") });
