@@ -6277,13 +6277,6 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
-    name: "clearVotedWeights",
-    inputs: [],
-    outputs: [],
-    stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
     name: "defaultWeightsLength",
     inputs: [],
     outputs: [
@@ -7286,12 +7279,6 @@ export const routerAbiGenerated = [
         internalType: "uint256",
       },
     ],
-    anonymous: false,
-  },
-  {
-    type: "event",
-    name: "VotedWeightsCleared",
-    inputs: [],
     anonymous: false,
   },
   {

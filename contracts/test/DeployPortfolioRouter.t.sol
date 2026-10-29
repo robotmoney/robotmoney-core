@@ -112,17 +112,16 @@ contract DeployPortfolioRouterTest is Test {
         assertEq(defaults, 1, "DefaultWeightsSet must fire exactly once");
     }
 
-    /// @notice Who may clear a voted vector (issue 1743): `clearVotedWeights` is ADMIN_ROLE only. A WEIGHT_SETTER_ROLE holder
-    ///         that lacks ADMIN_ROLE cannot clear, so on the first 8453 deployment (voted vector set by the router stage) the way back to
-    ///         the default is an ADMIN_ROLE call: the timelock (router ADMIN_ROLE) directly, or through RouterGovernance.clearVotedWeights.
-    function test_clearVotedWeights_isAdminOnlyAndRestoresTheDefault() public {
+    /// @notice Issue 1988: no role can clear a voted vector. The deployed router has no `clearVotedWeights()`, so a call
+    ///         from ADMIN_ROLE (the timelock), from a WEIGHT_SETTER_ROLE holder or from a stranger reverts, and the vector stays
+    ///         active until a newer one replaces it.
+    function test_noRoleCanClearTheVotedVector() public {
         DeployPortfolioRouter.Deployed memory d =
             script.runInProcessWith(admin, address(registry), vault, address(usdc));
         address[] memory vs = new address[](1);
         vs[0] = vault;
         uint256[] memory bps = new uint256[](1);
         bps[0] = 10_000;
-        // what the OLD router stage did: a voted vector on top of the default
         vm.prank(admin);
         d.router.setWeights(vs, bps);
         assertTrue(d.router.votedWeightsActive(), "setWeights activates the voted vector");
@@ -131,22 +130,16 @@ contract DeployPortfolioRouterTest is Test {
         bytes32 setterRole = d.router.WEIGHT_SETTER_ROLE();
         vm.prank(admin);
         d.router.grantRole(setterRole, setterOnly);
-        vm.startPrank(setterOnly);
-        vm.expectRevert();
-        d.router.clearVotedWeights();
-        vm.stopPrank();
-        vm.prank(makeAddr("stranger"));
-        vm.expectRevert();
-        d.router.clearVotedWeights();
-        assertTrue(d.router.votedWeightsActive(), "a non-admin cannot clear");
-
-        vm.prank(admin);
-        d.router.clearVotedWeights();
-        assertFalse(d.router.votedWeightsActive(), "ADMIN_ROLE clears the voted vector");
+        address[3] memory callers = [admin, setterOnly, makeAddr("stranger")];
+        for (uint256 i = 0; i < callers.length; i++) {
+            vm.prank(callers[i]);
+            (bool ok,) = address(d.router).call(abi.encodeWithSignature("clearVotedWeights()"));
+            assertFalse(ok, "no clearVotedWeights selector");
+        }
+        assertTrue(d.router.votedWeightsActive(), "nothing cleared the voted vector");
         (address[] memory effV, uint256[] memory effB) = d.router.getEffectiveWeights();
-        (address[] memory defV, uint256[] memory defB) = d.router.getDefaultWeights();
-        assertEq(effV, defV, "effective vaults equal the default after the clear");
-        assertEq(effB, defB, "effective bps equal the default after the clear");
+        assertEq(effV, vs, "effective vaults are still the applied vector");
+        assertEq(effB, bps, "effective bps are still the applied vector");
     }
 
     /// @notice The ceremony order (issue 1743): the router stage writes the DEFAULT [rmUSDC]/[10000], then a basket stage flips a basket eligible with

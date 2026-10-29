@@ -13,9 +13,10 @@ import { releaseCalldata, checkVaultRedeploys, checkVaultRedeploysOnChain, check
 import { buildRedeployCalls } from "../src/redeploy-vault.ts";
 import { pinnedMigrationData } from "../src/upgrade-rows.ts";
 import { upgradeCalldata } from "../src/upgrade-lifecycle.ts";
-import { clearCalldata } from "../src/clear-voted-weights.ts";
 import { VAULT_RULES } from "../src/vault-rules.ts";
 import { keccak256 } from "viem";
+// HISTORICAL (issue 1743, removed by issue 1988): the calldata of the removed clear row, which pinned run manifests still record.
+const clearCalldata = () => encodeFunctionData({ abi: parseAbi(["function clearVotedWeights()"]), functionName: "clearVotedWeights" });
 import { withUpgradeability, withUpgradeabilityReads } from "./upgradeability-fixture.ts";
 
 const h = (n: number) => "0x" + n.toString(16).padStart(64, "0");
@@ -612,7 +613,7 @@ describe("evidence check: an adopted libs stage (issue 1721)", () => {
   });
 });
 
-describe("effective weights and voted_weights_clears in the evidence (issue 1743)", () => {
+describe("effective weights, and the HISTORICAL voted_weights_clears, in the evidence (issue 1743, issue 1988)", () => {
   const VAULTS = [a(5), a(6), a(8)];
   const BPS = [5000, 3000, 2000];
   const withApply = (e: any) => {
@@ -656,9 +657,9 @@ describe("effective weights and voted_weights_clears in the evidence (issue 1743
     expect(await clearChain({ clearDelay: 60n })).toContain("delay");
     expect(await clearChain({ clearGap: 172799 })).toContain("on-chain schedule-to-execute gap");
   });
-  test("the template lists the clear block and an empty list passes", () => {
+  test("the template no longer lists the clear block (issue 1988: no tool writes one) and an empty list still passes", () => {
     const tpl = JSON.parse(readFileSync(join(import.meta.dir, "..", "evidence.example.json"), "utf8"));
-    expect(tpl.voted_weights_clears).toEqual([]);
+    expect(tpl.voted_weights_clears).toBeUndefined();
     expect(checkEvidence({ ...good(), voted_weights_clears: [] })).toEqual([]);
   });
 });
@@ -683,11 +684,22 @@ describe("vault_retirements in the evidence (issue 1912, ADR-0017)", () => {
     expect(offline((e) => { e.vault_retirements[0].vaults[2] = a(60); })).toContain("is still in the default vector");
     expect(offline((e) => { e.vault_retirements[0].bps = [9500, 500, 1]; })).toContain("sum to 10000");
     expect(offline((e) => { delete e.vault_retirements[0].effective_bps; })).toContain("effective_vaults and effective_bps");
-    expect(offline((e) => { e.vault_retirements[0].voted_weights_active = true; })).toContain("voted_weights_active is true");
+    expect(offline((e) => { e.vault_retirements[0].voted_weights_active = "yes"; })).toContain("voted_weights_active is yes");
     expect(offline((e) => { e.vault_retirements[0].step = "unpause-USDC"; })).toContain("is not retire-vault");
     expect(offline((e) => { e.vault_retirements[0].execute_block_timestamp = T0 + 35 + 172799; })).toContain("gap");
     expect(offline((e) => { e.vault_retirements.push({ ...e.vault_retirements[0] }); })).toContain("more than one evidence entry");
     expect(offline((e) => { e.vault_retirements[0].cancelled = true; })).toContain("cancelled is not a field");
+  });
+  test("issue 1988: an entry with an active applied vector passes when the vector fits the three that stay and the retired leg was seen skipped", () => {
+    const four = [a(5), a(6), a(60), a(8)];
+    const active = (f: (r: any) => void = () => {}) => offline((e) => { Object.assign(e.vault_retirements[0], { voted_weights_active: true, effective_vaults: [...four], effective_bps: [8000, 1000, 500, 500], retired_leg_skipped: true }); f(e.vault_retirements[0]); });
+    expect(active()).toBe("");
+    expect(active((r) => { r.effective_vaults = [...VAULTS3]; r.effective_bps = [8000, 1000, 1000]; delete r.retired_leg_skipped; })).toBe("");
+    expect(active((r) => { delete r.retired_leg_skipped; })).toContain("retired_leg_skipped is undefined, want true");
+    expect(active((r) => { r.effective_bps = [8000, 1000, 500, 400]; })).toContain("sums to 9900");
+    expect(active((r) => { r.effective_vaults = [a(5), a(8), a(60), a(6)]; })).toContain("are not the default's vaults");
+    expect(active((r) => { r.effective_bps = [0, 0, 10000, 0]; })).toContain("no weight on the vaults that stay");
+    expect(active((r) => { delete r.effective_vaults; })).toContain("effective_vaults and effective_bps");
   });
   test("the chain read refuses a batch whose calls, number of calls or delay differ from the recorded retirement", async () => {
     const wrong = buildRetireCalls({ registry: a(21) as `0x${string}`, vault: a(60) as `0x${string}`, finalVaults: VAULTS3, finalBps: [9000, 1000, 0] });

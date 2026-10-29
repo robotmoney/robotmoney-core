@@ -133,7 +133,7 @@ export interface RunManifest {
   govern?: Record<string, unknown>;
   /** One entry per executed `govern --row apply-receipt` round (issue 1696): the evidence-check `receipt_applications` shape. */
   receipt_applications?: unknown[];
-  /** One entry per executed `govern --row clear-voted-weights` round (issue 1743). */
+  /** HISTORICAL (issue 1743): the entries of a removed router-vector clear row. No tool writes them since issue 1988; a manifest that holds them keeps them. */
   voted_weights_clears?: unknown[];
   /** One entry per executed `govern --row retire-vault` round (issue 1912). */
   vault_retirements?: unknown[];

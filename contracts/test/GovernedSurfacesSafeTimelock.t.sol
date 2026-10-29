@@ -27,8 +27,7 @@ import {CoreProxies} from "./helpers/CoreProxies.sol";
 /// @title GovernedSurfacesSafeTimelockTest
 /// @notice One real Safe -> Timelock test for each governed surface that had none: the
 ///         receipt submitter role, adapter admin, role revoke, `setDefaultWeights` after the
-///         handover, `RouterGovernance.clearVotedWeights` after the handover, and the AgentTokenVault
-///         non-asset setters. Two owners sign, the real SafeL2 proxy runs `execTransaction`,
+///         handover, and the AgentTokenVault non-asset setters. Two owners sign, the real SafeL2 proxy runs `execTransaction`,
 ///         the timelock waits, the timelock calls the contract. Nothing pranks the Safe.
 contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -192,23 +191,6 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
         (address[] memory got, uint256[] memory gotBps) = router.getDefaultWeights();
         assertEq(got, vaults, "default vaults set by the timelock");
         assertEq(gotBps, bps, "default bps set by the timelock");
-    }
-
-    function test_routerGovernance_clearVotedWeights_afterHandover_viaSafeThenTimelock() public {
-        vm.recordLogs();
-        _runChecked(
-            address(gov), abi.encodeCall(RouterGovernance.clearVotedWeights, ()), keccak256("clear")
-        );
-        Vm.Log[] memory logs = vm.getRecordedLogs();
-        uint256 cleared;
-        for (uint256 i = 0; i < logs.length; i++) {
-            if (
-                logs[i].emitter == address(router)
-                    && logs[i].topics[0] == PortfolioRouter.VotedWeightsCleared.selector
-            ) cleared++;
-        }
-        assertEq(cleared, 1, "the timelock cleared the active vector once");
-        assertFalse(router.votedWeightsActive(), "routing on the default vector");
     }
 
     function test_routerGovernance_directSafeCall_isRefused_exactReason() public {

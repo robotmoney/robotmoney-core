@@ -25,8 +25,9 @@
 //!    configured `TimelockController`. Any other holder can apply a recorded
 //!    receipt without waiting the timelock delay.
 //! 3. The weight setter's `ADMIN_ROLE` is held by exactly one account, the
-//!    timelock. Any other holder can call `setDefaultWeights` or
-//!    `clearVotedWeights` without waiting the timelock delay.
+//!    timelock. Any other holder can call `setDefaultWeights` (and, on a
+//!    router from before issue 1988, its clear of the applied vector) without
+//!    waiting the timelock delay.
 //!
 //! The stage 12 verifier checks these once, at deploy. A grant executed after
 //! that undoes the evidence, and only a standing check notices it. A deliberate

@@ -214,7 +214,10 @@ contract RouterGovernanceTest is Test {
         gov.setDefaultWeights(one, bps);
     }
 
-    function test_clearVotedWeights_adminOnlyAndRevertsToDefault() public {
+    /// @notice Issue 1988: RouterGovernance has no function that clears or resets the router's
+    ///         applied vector. A `clearVotedWeights()` call reverts for the admin and a stranger,
+    ///         and the router keeps routing by the applied vector.
+    function test_noClearVotedWeights_theAppliedVectorStays() public {
         (address[] memory dv, uint256[] memory db) =
             _vector(address(vaultA), address(vaultB), 7_000, 3_000);
         vm.prank(govAdmin);
@@ -224,18 +227,16 @@ contract RouterGovernanceTest is Test {
         vm.prank(address(gov));
         router.setWeights(vaults, bps);
         assertTrue(router.votedWeightsActive());
-        (address[] memory cur,) = gov.currentWeights();
-        assertEq(cur.length, 2);
 
-        vm.prank(stranger);
-        vm.expectRevert();
-        gov.clearVotedWeights();
-
-        vm.prank(govAdmin);
-        gov.clearVotedWeights();
-        assertFalse(router.votedWeightsActive());
+        address[2] memory callers = [govAdmin, stranger];
+        for (uint256 i = 0; i < callers.length; i++) {
+            vm.prank(callers[i]);
+            (bool ok,) = address(gov).call(abi.encodeWithSignature("clearVotedWeights()"));
+            assertFalse(ok, "RouterGovernance has no clearVotedWeights selector");
+        }
+        assertTrue(router.votedWeightsActive(), "the applied vector stays active");
         (, uint256[] memory eb) = router.getEffectiveWeights();
-        assertEq(eb, db);
+        assertEq(eb, bps);
     }
 
     // ─── Duplicate vault on the router setters (HR-L-9) ───────────────────────

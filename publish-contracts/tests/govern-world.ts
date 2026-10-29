@@ -15,7 +15,6 @@ import { AGENT_ROLE, stageManifestName } from "../src/verify/constants.ts";
 import { SAFE_141, type Signer } from "../src/safe/index.ts";
 import { RECEIPT_ABI, SAFE_ADMIN_ABI, SAFE_SENTINEL_OWNER, VAULT_ABI, type GovernApi } from "../src/govern.ts";
 import { GOVERNANCE_APPLY_ABI } from "../src/apply-receipt.ts";
-import { GOVERNANCE_CLEAR_ABI } from "../src/clear-voted-weights.ts";
 import { REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI } from "../src/redeploy-vault.ts";
 import { VAULT_UNWIND_GUARD_ABI } from "../src/unwind-guard.ts";
 import { GOVERNED_PROXY_ABI } from "../src/upgrade-rows.ts";
@@ -76,7 +75,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     vaultCaps: new Map<string, bigint>(),
     weights: { vaults: [] as Address[], bps: [] as bigint[] },
     /** Issue 1743: the ACTIVE ("voted") vector on the router. An executed applyReceipt sets it (issue 1698). While set, votedWeightsActive reads true and getEffectiveWeights reads it
-     *  instead of the default; an executed clearVotedWeights removes it. */
+     *  instead of the default. Nothing removes it (issue 1988): only a newer applyReceipt replaces it. */
     voted: undefined as { vaults: Address[]; bps: bigint[] } | undefined,
     /** The chain clock at each Safe transaction hash: getTransactionReceipt answers with it as the block number, getBlock({blockNumber}) as the timestamp. */
     txClock: new Map<string, bigint>(),
@@ -158,6 +157,14 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "getWeights": return s.voted ? [s.voted.vaults, s.voted.bps] : [[], []];
           case "getEffectiveWeights": return s.voted ? [s.voted.vaults, s.voted.bps] : [s.weights.vaults, s.weights.bps];
           case "votedWeightsActive": return s.voted !== undefined;
+          // PortfolioRouter.previewDeposit: one leg per effective leg; a leg whose vault is not registry-Active, not eligible or retired is unavailable with amount 0 (issue 1988)
+          case "previewDeposit": {
+            const [vs, bps] = s.voted ? [s.voted.vaults, s.voted.bps] : [s.weights.vaults, s.weights.bps];
+            const ok = vs.map((v) => (s.statuses.get(v) ?? 0) === 0 && !s.ineligible.has(v) && !s.retiredFlag.has(v));
+            const live = bps.reduce((t, b, i) => (ok[i] ? t + b : t), 0n);
+            const amount = BigInt(args?.[0] as bigint);
+            return vs.map((v, i) => ({ vault: v, weightBps: bps[i]!, legAmount: ok[i] && live > 0n ? (amount * bps[i]!) / live : 0n, estShares: 0n, unavailable: !ok[i] }));
+          }
           case "depositsPaused": return s.paused.has(address);
           case "feeRecipient": return sheet.feeRecipient === "@safe" ? A.safe : sheet.feeRecipient;
           // RobotMoneyGateway.agents(agent): the public getter's eight non-array fields (QA plan v1 B6 reads the policy shape)
@@ -275,7 +282,6 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
             continue;
           }
           if (c.target === A.governance) {
-            if (c.data === encodeFunctionData({ abi: GOVERNANCE_CLEAR_ABI, functionName: "clearVotedWeights" })) { s.voted = undefined; continue; }
             // RouterGovernance.applyReceipt (issue 1698): the contract's own checks, then release and the active vector in one call
             const w = decodeFunctionData({ abi: GOVERNANCE_APPLY_ABI, data: c.data });
             const [rid, digest, vs, bps] = w.args as [Hex, Hex, Address[], bigint[]];

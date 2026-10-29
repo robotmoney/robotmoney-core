@@ -5,7 +5,7 @@ description: "Outer allocation contract that accepts USDC and splits deposits ac
 
 # PortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a15767d7de43d0b6794a99ef433de7c2b7daec83/contracts/PortfolioRouter.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
@@ -54,7 +54,7 @@ deploy ceremony only the RouterGovernance contract holds it, so
 active weights move only when the Safe, through the timelock,
 applies a recorded consensus receipt with
 `RouterGovernance.applyReceipt`. The timelock keeps `ADMIN_ROLE` and reaches
-`setDefaultWeights` and `clearVotedWeights` only. The initializer
+`setDefaultWeights` only. The initializer
 seeds the role to `_admin` so the router deploy stage can write
 the initial weights. The governance deploy stage revokes it. The role is its
 own role admin, so no `ADMIN_ROLE` holder can grant it.
@@ -228,8 +228,10 @@ uint256[] private _weightBps;
 
 True when the voted weight vector is in effect. False means the
 router falls back to `defaultWeights` (the on-chain
-fallback). Set true by `setWeights`, set false by
-`clearVotedWeights`. See ADR-0002.
+fallback): no receipt has been applied yet. Set true by
+`setWeights`. Nothing sets it false again: no function clears or
+resets the applied vector, and a bad vector is replaced by a newer
+receipt (issue 1988). See ADR-0002.
 
 ```solidity
 bool public votedWeightsActive;
@@ -239,9 +241,9 @@ bool public votedWeightsActive;
 
 Ordered list of vaults included in the default (fallback) weight
 vector. Used by `previewDeposit`/`deposit` whenever the voted
-vector is not active: no receipt has been applied yet, or the
-timelock cleared the active vector. Admin-settable; survives a
-receipt application unchanged. ADR-0002.
+vector is not active, which means no receipt has been applied
+yet. Admin-settable; survives a receipt application unchanged.
+ADR-0002.
 
 ```solidity
 address[] private _defaultWeightVaultList;
@@ -391,9 +393,8 @@ function setWeights(address[] calldata vaults, uint256[] calldata bps)
 
 Set the default (fallback) weight vector. Used by
 `previewDeposit`/`deposit` whenever the active vector is not
-in effect: no receipt has been applied yet, or the timelock
-cleared the active vector. This vector survives a receipt
-application unchanged. ADR-0002.
+in effect, which means no receipt has been applied yet. This
+vector survives a receipt application unchanged. ADR-0002.
 
 All vaults must be registered AND router-eligible, the bps must
 sum to BPS_DENOMINATOR, and the length must equal the registry's
@@ -472,19 +473,6 @@ function _setDefaultWeights(address[] calldata vaults, uint256[] calldata bps) i
 | ---- | ---- | ----------- |
 | vaults | `address[]` |  |
 | bps | `uint256[]` |  |
-
-<a id="clearvotedweights"></a>
-
-### clearVotedWeights
-
-Clear the active weight vector and revert routing to
-`defaultWeights`. The emergency lever: the Safe, through the
-timelock, falls back to the default vector. Restricted to
-`ADMIN_ROLE`. ADR-0002.
-
-```solidity
-function clearVotedWeights() external onlyRole(ADMIN_ROLE);
-```
 
 <a id="setroutercap-uint256"></a>
 
@@ -1396,15 +1384,6 @@ event DefaultWeightsSet(address[] vaults, uint256[] bps);
 | ---- | ---- | ----------- |
 | vaults | `address[]` | New ordered list of vault addresses. |
 | bps | `uint256[]` | Parallel weight array (must sum to BPS_DENOMINATOR). |
-
-### VotedWeightsCleared
-
-Emitted when the applied weight vector is cleared and the router
-reverts to the default weight vector.
-
-```solidity
-event VotedWeightsCleared();
-```
 
 ### RouterCapSet
 

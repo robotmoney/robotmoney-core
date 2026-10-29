@@ -89,7 +89,7 @@ v0.6.0 runs both flows on the Twin in one run, the upgrade flow on the 8453 rehe
 
 On a deployment that is already upgraded, P8.07 (which runs on every invocation and only reads) writes a `done-*` marker for each governed operation the chain and the run manifest show executed; the operation's steps are then skipped by their own `gateAbsent`, the report lists the skips, and every later step still runs.
 
-No step clears the router's voted vector (`govern --row clear-voted-weights`, or a direct `clearVotedWeights()` call): the owner decided the runbook never does (issue 1980), because a rerun or a resume cleared the vector the flow had applied itself. The validator refuses such a step in the template and in the release being prepared. The router deposit after the rebalance (P8.29) first reads `votedWeightsActive` true and the effective weights equal to the receipt's, so a lost vector fails the run instead of routing on the default.
+No step clears the router's voted vector (the removed `govern --row clear-voted-weights`, or a direct `clearVotedWeights()` call on a pre-1988 router): the owner decided the runbook never does (issue 1980), because a rerun or a resume cleared the vector the flow had applied itself, and the contracts of the next line have no clear at all (issue 1988). The validator refuses such a step in the template and in the release being prepared. The router deposit after the rebalance (P8.29) first reads `votedWeightsActive` true and the effective weights equal to the receipt's, so a lost vector fails the run instead of routing on the default.
 
 | Target | Chain | RPC variable | Starting sheet |
 | --- | --- | --- | --- |

@@ -4,7 +4,7 @@ title: "PortfolioRouterTest"
 
 # PortfolioRouterTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a15767d7de43d0b6794a99ef433de7c2b7daec83/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -1178,26 +1178,28 @@ router previews and routes by the default weight vector. ADR-0002.
 function test_previewDeposit_uses_defaultWeights_when_no_receipt_applied() public;
 ```
 
-<a id="test_previewdeposit_uses_defaultweights_after_applied_weights_cleared"></a>
+<a id="test_nofunctionclearstheappliedvector"></a>
 
-### test_previewDeposit_uses_defaultWeights_after_applied_weights_cleared
+### test_noFunctionClearsTheAppliedVector
 
-After the applied vector is cleared (`clearVotedWeights`, the
-timelock's fall-back to the default vector), the router previews
-by the default vector again. ADR-0002.
+Issue 1988: nothing clears or resets the applied vector. The router has no
+`clearVotedWeights()` (the selector reverts for every caller, the admin included),
+so once a receipt is applied the router keeps routing by it. ADR-0002.
 
 ```solidity
-function test_previewDeposit_uses_defaultWeights_after_applied_weights_cleared() public;
+function test_noFunctionClearsTheAppliedVector() public;
 ```
 
-<a id="test_applied_weights_override_defaults_then_revert_to_defaults"></a>
+<a id="test_applied_weights_override_defaults_then_a_newer_vector_replaces_them"></a>
 
-### test_applied_weights_override_defaults_then_revert_to_defaults
+### test_applied_weights_override_defaults_then_a_newer_vector_replaces_them
 
 An applied vector overrides the default; defaultWeights storage is
-unchanged; clearing the applied vector reverts to default. ADR-0002.
+unchanged; the only way to change the applied vector is a newer
+applied vector (issue 1988: a bad vector is replaced, never cleared).
+ADR-0002.
 
 ```solidity
-function test_applied_weights_override_defaults_then_revert_to_defaults() public;
+function test_applied_weights_override_defaults_then_a_newer_vector_replaces_them() public;
 ```
 

@@ -271,8 +271,9 @@ jobs:
   # Issue 1927: the v0.6.0 governed upgrade of the live v0.5.0 deployment (docs/operations/contract-release-runbooks.md 4.15), rehearsed from REAL v0.5.0 state. It publishes
   # release/v0.5.0-rehearsal with that tag's own publish-contracts CLI (its twin-publish step script, rehearsal kind, upgradeable overlay) and its committed Twin sheet: four vaults,
   # rmAGENT router-eligible, the receipt in ic-policy.json and an applied receipt vector, as on Deploy 3. Then it runs the 4.15 commands from this checkout with --core-dir and
-  # --core-sha of the v0.5.0 checkout and --upgrade-build of this one (publish-contracts/src/ci/twin-upgrade-from-v050.ts): both upgrades, the receipt migration, the clear of the
-  # applied vector, the rmAGENT retire, verify and both evidence checks, every schedule and execute through the real Safe and timelock (the warp is the only Twin step).
+  # --core-sha of the v0.5.0 checkout and --upgrade-build of this one (publish-contracts/src/ci/twin-upgrade-from-v050.ts): both upgrades, the receipt migration, the rmAGENT retire
+  # under the applied vector (nothing clears it, issue 1988: the vector stays and the router skips the retired leg), verify and both evidence checks, every schedule and execute
+  # through the real Safe and timelock (the warp is the only Twin step).
   # The pin is FIXED at Base block 52881000: the live RM V4 pool the v0.5.0 rmAGENT holds was drained at block 52881518 (in-range liquidity 9.8e17 before, 6.5e13 after), so the
   # tag's agent stage refuses its unlowered 1e15 floor at any later block. The fork is the Base state that release was built for. Nothing is lowered, seeded or skipped.
   # It runs after core-stages-twin-upgrade-lifecycle (the same upstream, never two forks at once); the pin and draft guards are those of that job.
@@ -339,6 +340,7 @@ jobs:
             and (. as $r | [.proxy_upgrades[] | (.from_implementation | ascii_downcase) == ($r.v050.upgradeability.proxies[.proxy_name].implementation | ascii_downcase)] | all)
             and ([.proxy_upgrades[] | select(.proxy_name == "receipt") | .migration] == ["receipt-submitter-roles"])
             and ([.vault_retirements[] | select(.execute_tx != null)] | length == 1)
+            and (.voted_weights_active_before == true) and (.voted_weights_active_after == true) and (.applied_vector_unchanged == true)
             and (.chain.router_eligible_count == 3) and (.chain.rmagent_retired == true) and (.chain.rmagent_router_eligible == false)
             and ((.chain.receipt_releaser_role_holders | map(ascii_downcase)) == [.chain.governance | ascii_downcase])
             and ((.chain.receipt_admin_role_holders | map(ascii_downcase)) == [.chain.timelock | ascii_downcase])

@@ -109,7 +109,7 @@ describe("the state before and after", () => {
     // QA plan v1 E3: the batch's setVaultCap runs as the timelock on the router; a caller that did not read the role (undefined) is not refused for it
     expect(p({ timelockIsRouterAdmin: false })).toContain("ADMIN_ROLE on the router");
     expect(redeployBeforeProblems(OLD, NEW, before({ timelockIsRouterAdmin: true }))).toEqual([]);
-    expect(p({ votedWeightsActive: true })).toContain("clear-voted-weights");
+    expect(p({ votedWeightsActive: true })).toContain("nothing clears one (issue 1988)");
     expect(p({ defaultVaults: [USDC, AGENT, RWA], defaultBps: [9000, 600, 400] })).toContain("does not hold the old vault");
   });
   const v = vectorsFromFinal({ finalVaults: [USDC, NEW, AGENT, RWA], finalBps: DEF_BPS, oldVault: OLD, newVault: NEW });
@@ -575,7 +575,7 @@ describe("the govern row", () => {
   };
   test("refused before anything is scheduled: the old vault is not eligible", () => refuses((w) => w.tl.s.ineligible.add(OLD), "not router-eligible"));
   test("refused before anything is scheduled: the old vault is already retired", () => refuses((w) => w.tl.s.statuses.set(OLD, 2), "want Active"));
-  test("refused before anything is scheduled: a voted vector is active", () => refuses((w) => { w.tl.s.voted = { vaults: [USDC], bps: [10000n] }; }, "clear-voted-weights"));
+  test("refused before anything is scheduled: a voted vector is active", () => refuses((w) => { w.tl.s.voted = { vaults: [USDC], bps: [10000n] }; }, "nothing clears one (issue 1988)"));
   test("refused before anything is scheduled: the registry already lists the new vault", () => refuses((w) => w.tl.s.listed.push(NEW), "already lists the new vault"));
   test("refused before anything is scheduled: the registry is linked to another router", () => refuses((w) => { w.tl.s.registryRouter = addr(0x77); }, "RouterNotLinked"));
   test("refused before anything is scheduled: the timelock is not the registry admin", () => refuses((w) => { w.tl.s.timelockIsRegistryAdmin = false; }, "ADMIN_ROLE on the registry"));

@@ -66,6 +66,25 @@ describe("a retired vault (issue 1912, ADR-0017)", () => {
     expect(vec(await verifyDeployment(retired({ voted: true, effectiveW: [[a!, c!, b!], [8000n, 1000n, 1000n]] }).opts))).toBe(false);
     expect(vec(await verifyDeployment(retired({ voted: true, effectiveW: [[a!, b!, RETIRED], [8000n, 1000n, 1000n]] }).opts))).toBe(false);
   });
+  test("issue 1988: an applied vector from before the retire still names the vault; it passes when the router skips that leg, and fails when it does not", async () => {
+    const [a, b, c] = Object.values(VAULTS).map((v) => v.address);
+    const four = [a!, b!, RETIRED, c!];
+    const vec = (r: Awaited<ReturnType<typeof verifyDeployment>>) => r.checks.find((x) => x.label === label(VECTOR));
+    const legs = (skip: boolean) => four.map((v) => ({ vault: v, weightBps: 2500n, legAmount: v === RETIRED && skip ? 0n : 1n, estShares: 0n, unavailable: v === RETIRED && skip }));
+    const w = (skip: boolean | undefined) => { const x = retired({ voted: true, effectiveW: [four, [8000n, 1000n, 500n, 500n]] }); if (skip !== undefined) x.chain.set(ROUTER, "previewDeposit", legs(skip)); return x; };
+    const ok = await verifyDeployment(w(true).opts);
+    expect(vec(ok)?.ok).toBe(true);
+    expect(vec(ok)?.detail).toContain("the router skips that leg");
+    expect(vec(await verifyDeployment(w(false).opts))?.ok).toBe(false);
+    expect(vec(await verifyDeployment(w(false).opts))?.detail).toContain("does not skip the retired leg");
+    expect(vec(await verifyDeployment(w(undefined).opts))?.ok).toBe(false);
+    // with no applied vector active the effective vector must be the default: a four-leg effective vector fails
+    expect(vec(await verifyDeployment(retired({ voted: false, effectiveW: [four, [8000n, 1000n, 500n, 500n]] }).opts))?.ok).toBe(false);
+    // an applied vector that puts no weight on the vaults that stay fails
+    const dead = retired({ voted: true, effectiveW: [four, [0n, 0n, 10000n, 0n]] });
+    dead.chain.set(ROUTER, "previewDeposit", legs(true));
+    expect(vec(await verifyDeployment(dead.opts))?.ok).toBe(false);
+  });
   test("a retired vault the registry does not list fails the vault set label", async () => {
     expect(failed(await verifyDeployment(retired({ listed: false }).opts))).toContain("vault set: manifests equal registry.listVaults");
   });

@@ -5,7 +5,7 @@ description: "The governed retire batch of rmAGENT (ADR-0017, ADR-0009), replaye
 
 # RetireVaultBatchTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/RetireVaultBatch.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a15767d7de43d0b6794a99ef433de7c2b7daec83/contracts/test/RetireVaultBatch.t.sol)
 
 **Inherits:** Test
 
@@ -334,6 +334,59 @@ function test_routerDepositsSplitOverRmUsdcRmProtoAndRmRwaAndNeverTouchRmAgent()
 
 ```solidity
 function test_theLaunchVectorSendsEverythingToRmUsdcAndRmProto() public;
+```
+
+<a id="_applyfourlegvector"></a>
+
+### _applyFourLegVector
+
+<i>
+
+An applied receipt over the four eligible vaults, as on the live deployment: the weight setter writes it.
+
+</i>
+
+```solidity
+function _applyFourLegVector() internal returns (address[] memory v, uint256[] memory b);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `address[]` |  |
+| b | `uint256[]` |  |
+
+<a id="test_thebatchrunswithanactiveappliedvectorandleavesitunchanged"></a>
+
+### test_theBatchRunsWithAnActiveAppliedVectorAndLeavesItUnchanged
+
+The batch runs while an applied vector names rmAGENT. Neither call touches the applied vector: it stays active and unchanged.
+
+```solidity
+function test_theBatchRunsWithAnActiveAppliedVectorAndLeavesItUnchanged() public;
+```
+
+<a id="test_therouterskipstheretiredlegofanactiveappliedvector"></a>
+
+### test_theRouterSkipsTheRetiredLegOfAnActiveAppliedVector
+
+With the applied vector still naming the retired vault, the router skips that leg: the preview marks it unavailable with
+amount 0, and a deposit spreads its share over the other legs by their bps. No USDC reaches rmAGENT.
+
+```solidity
+function test_theRouterSkipsTheRetiredLegOfAnActiveAppliedVector() public;
+```
+
+<a id="test_thenextreceiptreplacestheappliedvectorwiththethreevaults"></a>
+
+### test_theNextReceiptReplacesTheAppliedVectorWithTheThreeVaults
+
+The next receipt sets the three-vault vector. A vector that still names the retired vault is refused, so the applied
+vector can only move to the three vaults that stay.
+
+```solidity
+function test_theNextReceiptReplacesTheAppliedVectorWithTheThreeVaults() public;
 ```
 
 <a id="test_thebatchmovesnoholderfunds"></a>

@@ -153,22 +153,15 @@ export function controlProofOf(manifest: Pick<RunManifest, "stages">): { txHash:
 }
 
 /**
- * The last receipt `govern --row apply-receipt` applied (issue 1696): its id and vector, from the run manifest's `receipt_applications`. Undefined when none was applied, or when an
- * executed `govern --row clear-voted-weights` round (`voted_weights_clears`, issue 1743) read the active vector cleared at a block time strictly after that application executed
- * (issue 1927: runbook 4.15 clears the applied vector before the retire). A tie keeps the application, so the router must then still hold it.
+ * The last receipt `govern --row apply-receipt` applied (issue 1696): its id and vector, from the run manifest's `receipt_applications`. Undefined when none was applied. Nothing clears
+ * an applied vector (issue 1988), so the router must still hold the last one. A HISTORICAL clear (issue 1743) in an older manifest preceded a later application there.
  */
-export function appliedReceiptOf(manifest: Pick<RunManifest, "receipt_applications"> & { voted_weights_clears?: unknown[] }): VerifyOptions["appliedReceipt"] {
-  const last = (manifest.receipt_applications ?? []).filter((x): x is { receipt_id: `0x${string}`; vaults: `0x${string}`[]; bps: number[]; execute_block_timestamp?: unknown } => {
+export function appliedReceiptOf(manifest: Pick<RunManifest, "receipt_applications">): VerifyOptions["appliedReceipt"] {
+  const last = (manifest.receipt_applications ?? []).filter((x): x is { receipt_id: `0x${string}`; vaults: `0x${string}`[]; bps: number[] } => {
     const e = x as { receipt_id?: unknown; vaults?: unknown; bps?: unknown } | undefined;
     return typeof e?.receipt_id === "string" && Array.isArray(e.vaults) && Array.isArray(e.bps) && e.vaults.length === e.bps.length;
   }).pop();
-  if (!last) return undefined;
-  const appliedAt = typeof last.execute_block_timestamp === "number" ? last.execute_block_timestamp : undefined;
-  const cleared = appliedAt !== undefined && (manifest.voted_weights_clears ?? []).some((x) => {
-    const c = x as { execute_status?: unknown; execute_block_timestamp?: unknown; voted_weights_active?: unknown } | undefined;
-    return c?.execute_status === 1 && c.voted_weights_active === false && typeof c.execute_block_timestamp === "number" && c.execute_block_timestamp > appliedAt;
-  });
-  return cleared ? undefined : { receiptId: last.receipt_id, vaults: last.vaults, bps: last.bps };
+  return last ? { receiptId: last.receipt_id, vaults: last.vaults, bps: last.bps } : undefined;
 }
 
 /**

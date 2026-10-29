@@ -8,7 +8,7 @@
 //
 // Usage: bun publish-contracts/src/ci/check-comment-only-contracts.ts [--baseline REF] [--candidate REF] [--contracts A,B,...]
 //        bun publish-contracts/src/ci/check-comment-only-contracts.ts --baseline-out DIR --candidate-out DIR [--contracts A,B,...]   (forge out/ directories already built)
-// Defaults: baseline release/v0.5.0-rehearsal, candidate HEAD, the seven contracts v0.6.0 does not upgrade.
+// Defaults: baseline release/v0.5.0-rehearsal, candidate HEAD, the contracts of COMMENT_ONLY_CONTRACTS (five on dev since issue 1988; the v0.6.0 line checks seven).
 // Exit 0: every contract matches and at least one was compared. Exit 1: a masked hash differs, or an artifact is missing. Exit 2: tooling or input error.
 import { existsSync, mkdtempSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,8 +26,14 @@ export function assertBaselinePinned(root: string, ref: string): void {
   try { got = sh(["git", "rev-parse", "--verify", "--quiet", `${ref}^{commit}`], root); } catch { throw new Error(`baseline ${ref} does not resolve to a commit (expected ${BASELINE_SHA})`); }
   if (got !== BASELINE_SHA) throw new Error(`baseline ${ref} resolves to ${got}, not the pinned ${BASELINE_SHA}`);
 }
-/** The seven contracts of the v0.6.0 line whose source changed in comments only (issue 1914). */
-export const COMMENT_ONLY_CONTRACTS = ["RouterGovernance", "VaultRegistry", "PortfolioRouter", "RobotMoneyVault", "ProtocolAssetVault", "AgentTokenVault", "RwaBasketVault"];
+/**
+ * The contracts whose source changed in comments only since Deploy 3. The v0.6.0 line (releases-0.6.x) holds seven (issue 1914). On dev, issue 1988 removed the clear of the
+ * router's applied vector from PortfolioRouter and RouterGovernance, a real logic change: those two ship on the next line as governed upgrades, so they are no longer
+ * comment-only here. The five below still are.
+ */
+export const COMMENT_ONLY_CONTRACTS = ["VaultRegistry", "RobotMoneyVault", "ProtocolAssetVault", "AgentTokenVault", "RwaBasketVault"];
+/** Issue 1988: changed on purpose since Deploy 3 (the clear of the applied vector is gone), so they are not in COMMENT_ONLY_CONTRACTS on dev. */
+export const CHANGED_SINCE_DEPLOY3 = ["RouterGovernance", "PortfolioRouter"];
 const SUBMODULES = ["forge-std", "openzeppelin-contracts", "openzeppelin-contracts-upgradeable"];
 
 export interface Row { contract: string; baseline: string; candidate: string; ok: boolean; detail: string }

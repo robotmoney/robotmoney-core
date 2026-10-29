@@ -397,7 +397,9 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
             (
                 address(gov),
                 0,
-                abi.encodeCall(RouterGovernance.clearVotedWeights, ()),
+                abi.encodeCall(
+                    RouterGovernance.setDefaultWeights, (new address[](0), new uint256[](0))
+                ),
                 bytes32(0),
                 keccak256("one-owner"),
                 MIN_DELAY

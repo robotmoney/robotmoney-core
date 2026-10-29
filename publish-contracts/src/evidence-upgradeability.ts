@@ -4,7 +4,7 @@
 // Canonical: docs/technical/contract-upgradeability-plan.md (Release modes and proof), docs/operations/contract-release-runbooks.md 4.12.
 import { keccak256, parseAbi, type Hex } from "viem";
 import { ERC1967_IMPLEMENTATION_SLOT } from "./verify/codehash.ts";
-import { GOVERNED_PARAMETERS, UPSTREAM_DEPENDENCIES } from "./verify/upgradeability.ts";
+import { GOVERNED_PARAMETERS, GOVERNED_PARAMETER_HISTORY, UPSTREAM_DEPENDENCIES } from "./verify/upgradeability.ts";
 import { UPGRADE_MODES } from "./sheet.ts";
 import type { DeploymentKind } from "./chains.ts";
 
@@ -43,7 +43,8 @@ export function upgradeabilityEvidenceProblems(ev: any, proxies: readonly string
   for (const k of Object.keys(vaults)) { const r = u.proxies?.[`vault[${k}]`]; if (r && ADDR.test(vaults[k]?.address ?? "") && lc(r.proxy ?? "") !== lc(vaults[k].address)) bad(`vault[${k}]: proxy ${r.proxy} is not the evidence vault ${vaults[k].address}`); }
   for (const [list, want] of [["remaining_governed_parameters", GOVERNED_PARAMETERS], ["upstream_dependencies", UPSTREAM_DEPENDENCIES]] as const) {
     const l: unknown[] = Array.isArray(u[list]) ? u[list] : [];
-    const dropped = want.filter((x) => !l.includes(x));
+    // a record written before an entry was reworded lists the entry's HISTORICAL wording instead (issue 1988)
+    const dropped = want.filter((x) => !l.includes(x) && !(GOVERNED_PARAMETER_HISTORY[x] ?? []).some((h) => l.includes(h)));
     if (dropped.length) bad(`${list} drops ${dropped.length} of the entries the verifier lists: a freeze never makes them immutable`);
   }
   // The claim. core_immutable true needs every proxy of the full set frozen (in the frozen mode, or an upgradeable release frozen by governance), nothing refused, and a

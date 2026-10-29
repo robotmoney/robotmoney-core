@@ -30,7 +30,7 @@ export const GOVERNED_PARAMETERS: readonly string[] = [
   "vault caps (tvlCap, perDepositCap), exitFeeBps and feeRecipient on every vault: ADMIN_ROLE, the Safe through the timelock",
   "rmUSDC strategy adapters, their caps and the adapter and code-hash allowlists: ADMIN_ROLE, the Safe through the timelock",
   "basket asset config, swap adapters, maxSlippageBps and navDeviationGuardBps: ADMIN_ROLE, the Safe through the timelock",
-  "router weights: RouterGovernance.applyReceipt (a consensus receipt the Safe applies through the timelock) and clearVotedWeights",
+  "router weights: RouterGovernance.applyReceipt (a consensus receipt the Safe applies through the timelock)",
   "router eligibility, vault registration and retirement on the VaultRegistry: ADMIN_ROLE, the Safe through the timelock",
   "the router weight setter (WEIGHT_SETTER_ROLE): rotated by the Safe and executed by the timelock",
   "deposit pauses: the pauser key (gateway DEPOSIT_PAUSER_ROLE) and the emergency key (vault EMERGENCY_ROLE levers) with no timelock, unpauses through the timelock",
@@ -38,6 +38,16 @@ export const GOVERNED_PARAMETERS: readonly string[] = [
   "the timelock delay and its proposers: TimelockController self-administration by the Safe (updateDelay, grantRole)",
   "depositor agent authorizations on the gateway: each depositor's own commitAuthorization and revealAuthorization",
 ];
+
+/**
+ * HISTORICAL entries of GOVERNED_PARAMETERS, keyed by the entry that replaced them. A record written before the replacement carries the old wording, which names a larger lever set,
+ * so it still lists the lever. Issue 1988 removed the router's clear of its applied vector: records of a deployment with that function (Deploy 3) name it.
+ */
+export const GOVERNED_PARAMETER_HISTORY: Readonly<Record<string, readonly string[]>> = {
+  "router weights: RouterGovernance.applyReceipt (a consensus receipt the Safe applies through the timelock)": [
+    "router weights: RouterGovernance.applyReceipt (a consensus receipt the Safe applies through the timelock) and clearVotedWeights",
+  ],
+};
 
 /**
  * Upstream code the core depends on and does not control: each keeps its own upgrade or admin authority after a freeze. The release dependency manifest
