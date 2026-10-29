@@ -1,9 +1,9 @@
 // Tests of scripts/runbook/qa-assert.ts: the router-leg, split-change and share-delta assertions the rounds before and after the router rebalance make (issue 1984).
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseWeights, receiptVector, routerLegProblems, routerLegsOf } from "./qa-assert.ts";
+import { assertion, parseWeights, receiptVector, routerLegProblems, routerLegsOf } from "./qa-assert.ts";
 
 const TOPIC = `0x${"ab".repeat(32)}`;
 const USDC_VAULT = "0x1111111111111111111111111111111111111111";
@@ -81,4 +81,17 @@ test("the CLI: sub prints the share delta and refuses a balance that fell", () =
   expect(ok.code).toBe(0);
   expect(ok.out.trim()).toBe("1000000000000000000");
   expect(cli(() => ["sub", "1", "2"], {}).code).toBe(1);
+});
+
+// Issue 1990: the basket deposit share bound. A swap can beat the oracle, so the bound over previewDeposit is the maxSlippageBps haircut plus the
+// same slippage in the depositor's favour. The bash expression is read from the runbook itself, so the test checks what a run computes.
+test("the basket share bound passes a deposit that beats the oracle (Base, rc5e P8.27) and refuses one far above par", () => {
+  const yaml = readFileSync(join(import.meta.dir, "../../docs/runbooks/contract-qa/releases/v0.6.0.yaml"), "utf8");
+  const expr = yaml.match(/echo (\$\(\( 100000000 \* 10000 \/ \(\(10000 - b\) \* \(10000 - b\)\) - 10000 \+ 1 \)\))/)?.[1];
+  expect(expr).toBeDefined();
+  const bound = Bun.spawnSync(["bash", "-c", `b=100; echo ${expr}`]).stdout.toString().trim();
+  expect(bound).toBe("204");
+  expect(assertion("within-bps", ["500455000000000000000000", "495000000000000000000000", bound])).toBeUndefined();
+  expect(assertion("within-bps", ["501525160227906335372446", "495074193464579990047583", bound])).toBeUndefined();
+  expect(assertion("within-bps", ["520000000000000000000000", "495000000000000000000000", bound])).toBeDefined();
 });
