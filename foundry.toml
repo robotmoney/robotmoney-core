@@ -7,11 +7,19 @@ solc_version = "0.8.24"
 optimizer = true
 optimizer_runs = 100
 evm_version = "cancun"
+# Issue 1926: no auto-detected remappings. Forge auto-detects the nested submodules' remappings and records their context as an ABSOLUTE path in
+# the solc metadata, so the metadata hash in every contract's bytecode (and every CREATE2 library address) depended on where the repo was checked
+# out. Every remapping the build needs is listed here as a relative path instead, so two checkouts of one commit build byte-identical code
+# (publish-contracts/src/ci/check-build-reproducible.ts, job contract-build-reproducibility).
+auto_detect_remappings = false
 remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
     "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/",
     "forge-std/=lib/forge-std/src/",
     "erc4626-tests/=lib/openzeppelin-contracts/lib/erc4626-tests/",
+    "ds-test/=lib/openzeppelin-contracts/lib/forge-std/lib/ds-test/src/",
+    "openzeppelin-contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/",
+    "openzeppelin-contracts/=lib/openzeppelin-contracts/",
 ]
 
 # Allow the core stage scripts to write the deployment JSON. Scoped read-write so
