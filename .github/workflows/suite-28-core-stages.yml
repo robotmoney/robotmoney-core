@@ -55,7 +55,8 @@ jobs:
           set -euo pipefail
           # scripts/ci/check-timelock-prediction-parity.test.ts imports publish-contracts' timelock prediction, which needs its viem (issue 1853)
           (cd publish-contracts && bun install --frozen-lockfile)
-          bun test scripts/deploy scripts/ci 2>&1 | tee core-stages.log
+          # scripts/release/preflight-guards.test.ts: CEREMONY_CONTRACTS covers every vault contract the stage table deploys (issue 1926)
+          bun test scripts/deploy scripts/ci scripts/release/preflight-guards.test.ts 2>&1 | tee core-stages.log
           grep -Eq '^ *[1-9][0-9]* pass' core-stages.log || { echo "zero tests passed" >&2; exit 1; }
 
   publish-contracts-tests:

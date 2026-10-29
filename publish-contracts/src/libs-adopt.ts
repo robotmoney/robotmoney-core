@@ -18,6 +18,15 @@ export interface AdoptedLibrary { name: string; artifact: string; address: Addre
 /** What the run manifest keeps for an adopted stage (StageRecord.adopted). */
 export interface AdoptionRecord { libraries: AdoptedLibrary[]; factory: Address; deployerTxs: number }
 
+/**
+ * Issue 1926: the likely cause of a library address that is not the build's. The address is CREATE2 of the creation code, and the creation code ends in the
+ * solc metadata hash, so it moves with the checkout path (builds before issue 1926 recorded the auto-detected submodule remappings with an absolute path)
+ * and with the forge version (pinned in forge-version.ts). Since issue 1926 the build is path-independent, so the library addresses moved ONCE: the live
+ * libraries at the old addresses (Deploy 3 TickMath 0xeed214865b76872182E8B0532aE901dae14D30d0 and the CREATE2 libraries of its stages) are no longer
+ * adopted, and a fresh stage run creates the libraries again at the new addresses.
+ */
+export const LIBRARY_ADDRESS_CAUSE = "Likely cause: the expected address came from a build at another checkout path or with another forge version (the creation code ends in the solc metadata hash, which moves with both; release builds use the pinned forge, publish-contracts/src/forge-version.ts). Builds before issue 1926 embedded the checkout path, so library addresses moved once: live libraries at the old addresses are not adopted, and a fresh stage run creates them again at the new address.";
+
 const fail = (msg: string, details: Record<string, unknown> = {}): never => { throw new PublishError("LIBS_ADOPTION", `${msg} Nothing was sent.`, details); };
 
 interface LibArtifact { creation: Hex; deployed: string }
