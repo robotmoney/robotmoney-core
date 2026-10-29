@@ -271,6 +271,8 @@ jobs:
           bun test publish-contracts/tests/check-comment-only-contracts.test.ts
           bun publish-contracts/src/ci/check-comment-only-contracts.ts | tee "$RUNNER_TEMP/comment-only.txt"
           grep -qx 'compared 7 contract(s), 7 identical, 0 differ' "$RUNNER_TEMP/comment-only.txt"
+          # Issue 1926: the relative-remapping foundry.toml moves only the CBOR metadata tail, and the verifier's code hash masks exactly that tail.
+          bun test publish-contracts/tests/verify/units.test.ts -t "issue 1926"
 
       - name: Gateway agent-policy gas report (issue 1476)
         # Measurement, not a budget: prints the RobotMoneyGateway rows for
@@ -402,6 +404,46 @@ jobs:
         run: |
           python3 .github/scripts/check_test_tmp_paths.py
           bash .github/scripts/tests/test_check_test_tmp_paths.sh
+
+  # Issue 1926: the contract build must not depend on the checkout path. Two checkouts of this commit at different absolute paths are
+  # built with the pinned forge the way the deploy stages compile (TickMath alone, then every source linked to it), and every CREATE2
+  # library and every upgradeable implementation of the stage table must have byte-identical creation and runtime code, with no
+  # absolute path in any artifact's solc metadata. Before issue 1926 forge recorded the auto-detected submodule remappings with an
+  # absolute path, so every library address moved with the checkout.
+  contract-build-reproducibility:
+    name: contract-build-reproducibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: oven-sh/setup-bun@v2
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.5
+      - name: Self-test of the check
+        run: |
+          set -euo pipefail
+          (cd publish-contracts && bun install --frozen-lockfile)
+          (cd publish-contracts && bun test --timeout 60000 tests/check-build-reproducible.test.ts tests/forge-version.test.ts)
+      - name: Build two checkouts at different absolute paths and compare
+        run: |
+          set -euo pipefail
+          A="$RUNNER_TEMP/a"
+          B="$RUNNER_TEMP/deeper/checkout/path/b"
+          mkdir -p "$(dirname "$B")"
+          for wt in "$A" "$B"; do
+            git worktree add --detach "$wt" HEAD
+            # The submodules are the ones this checkout pinned (checked out recursively above); copy them in.
+            cp -a lib/. "$wt/lib/"
+          done
+          bun publish-contracts/src/ci/check-build-reproducible.ts --core-a "$A" --core-b "$B" 2>&1 | tee build-reproducible.log
+          grep -Eq '^compared [1-9][0-9]* artifact\(s\), [1-9][0-9]* identical, 0 differ, 0 absolute path\(s\) in metadata$' build-reproducible.log \
+            || { echo "::error::the summary line does not show a non-zero compared count, 0 differ and 0 absolute paths"; exit 1; }
 
   # ONE pin per workflow run (core 1498, 1496): the upstream head at the start of the run minus 2.
   # The fork tests run on the Twin chain, a pinned lazy anvil fork of real Base state. There is no

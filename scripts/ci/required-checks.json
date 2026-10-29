@@ -11,6 +11,7 @@
     { "name": "forge-unit-tests", "source": "suite-01-02-forge-tests.yml" },
     { "name": "forge-invariant-fuzz-tests", "source": "suite-01-02-forge-tests.yml" },
     { "name": "forge-coverage-gate", "source": "suite-01-02-forge-tests.yml" },
+    { "name": "contract-build-reproducibility", "source": "suite-01-02-forge-tests.yml" },
     { "name": "solidity-lint", "source": "suite-03-solidity-quality.yml" },
     { "name": "rust-lint", "source": "suite-04-rust-quality.yml" },
     { "name": "rust-audit", "source": "suite-04-rust-quality.yml" },

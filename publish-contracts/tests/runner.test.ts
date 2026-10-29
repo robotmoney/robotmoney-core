@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { encodeErrorResult, encodeFunctionData, parseAbi } from "viem";
 import { basename, join } from "node:path";
 import { PROOF_TX_NONCES } from "../src/counts.ts";
@@ -9,6 +9,7 @@ import { predictCoreTimelock } from "../src/timelock-pin.ts";
 import { COUNTS, SHA, exampleText, tmp } from "./fixtures.ts";
 import { ADMIN, LOCAL_RPC, SCRIPT, world } from "./harness.ts";
 import { realGovernApi, resumeCommand } from "../src/govern.ts";
+import { buildCreate2Libraries } from "../src/libs-adopt.ts";
 
 const sheetValue = (name: string): string => new RegExp(`^${name}=(\\S+)`, "m").exec(exampleText())![1]!;
 const DEPLOY = STAGE_NAMES.slice(0, STAGE_NAMES.indexOf("timelock") + 1);
@@ -753,5 +754,81 @@ describe("the core timelock: pinned at the first proxy stage, adopted when someo
     expect(lastError(w).message).toContain(`the core timelock this run pinned from the build is ${TL.address}`);
     expect(manifest(w).stages.vault.status).toBe("started");
     expect(broadcasts(w)).not.toContain(SCRIPT.registry);
+  });
+});
+
+// Issue 1926: library addresses moved once (the build no longer embeds the checkout path), so a fresh run on 8453 finds NO code at the derived library addresses.
+// On 8453 every library a stage links must hold code, have been created earlier in the run, or be created by the stage itself through the CREATE2 factory AHEAD of
+// every other transaction; otherwise the run refuses before anything is sent. Exercised with an 8453 dry run (stub forge and cast; nothing reaches any chain).
+describe("issue 1926: on 8453 no stage links a library address without code", () => {
+  const OUT = join(import.meta.dir, "fixtures", "build-out");
+  const BUILT = buildCreate2Libraries(getStageTable().create2Libraries!, OUT);
+  const VAULT_LIBS = getStageTable().stages.find((s) => s.name === "vault")!.create2Libraries!.map((n) => BUILT.get(getStageTable().create2Libraries!.find((l) => l.name === n)!.artifact)!.address.toLowerCase());
+  const TICK = "0x0000000000000000000000000000000000001009"; // the stub libs manifest's tick_math
+  const OWNERS = ["A", "B", "C"].flatMap((o) => ["--owner-signer", `keystore:/k/OWNER_${o}`]);
+  /** An 8453 world whose chain holds no code at tick_math or the vault stage's derived CREATE2 libraries. `vaultPlan`: the CREATE2 addresses the vault simulation plans, by transaction index. */
+  const freshWorld = (vaultPlan: string[]) => {
+    const w = world({ chainId: 8453, startNonce: 0 });
+    cpSync(OUT, join(w.coreDir, "out"), { recursive: true });
+    Object.assign(w.cfg, { emptyCode: ["0x00000000000000000000000000000000000050fe", TICK, ...VAULT_LIBS], creates: { [SCRIPT.libs]: [TICK], [SCRIPT.vault]: vaultPlan } });
+    return w;
+  };
+  const gateLog = (w: ReturnType<typeof world>, stage: string) => w.logs().find((l) => l.event === "stage.linked_libraries_have_code" && l.stage === stage);
+  const vaultBroadcasts = (w: ReturnType<typeof world>) => forgeScripts(w).filter((c: any) => c.args.includes("--broadcast") && String(c.args[1]).includes(SCRIPT.vault));
+
+  test("the libs stage and the vault stage create their libraries through the factory before any transaction that links them; later stages link what this run created", async () => {
+    const w = freshWorld(VAULT_LIBS);
+    expect(await w.run(["--stage", "deploy", "--dry-run", ...OWNERS])).toBe(0);
+    expect(lastError(w)).toBeUndefined();
+    expect(gateLog(w, "libs").libraries).toEqual([{ name: "tick_math", address: TICK, how: "created by this stage" }]);
+    expect(gateLog(w, "vault").libraries).toEqual([
+      { name: "tick_math", address: TICK, how: "created earlier in this run" },
+      ...VAULT_LIBS.map((a, i) => ({ name: getStageTable().stages.find((s) => s.name === "vault")!.create2Libraries![i], address: a, how: "created by this stage before its first linking transaction" })),
+    ]);
+    // the registry links GovernedUpgrade, which the vault stage created in this run
+    expect(gateLog(w, "registry").libraries).toContainEqual({ name: "GovernedUpgrade", address: VAULT_LIBS[0], how: "created earlier in this run" });
+  });
+
+  test("a stage that would link a derived library address with NO code, and plans no CREATE2 of it, is refused (LIBS_ADOPTION) before anything is sent", async () => {
+    const w = freshWorld([]);
+    expect(await w.run(["--stage", "deploy", "--dry-run", ...OWNERS])).toBe(EXIT_CODES.LIBS_ADOPTION);
+    expect(lastError(w).message).toContain(`at its derived address ${VAULT_LIBS[0]} has NO code`);
+    expect(lastError(w).message).toContain("Nothing was sent");
+    expect(vaultBroadcasts(w)).toEqual([]); // not even applied to the local simulation chain
+    expect(targetBroadcasts(w)).toEqual([]);
+    expect(simulations(w).some((c: any) => String(c.args[1]).includes(SCRIPT.registry))).toBe(false);
+  });
+
+  test("a library CREATE2 planned AFTER a transaction that may link it is refused before anything is sent", async () => {
+    const w = freshWorld(["", ...VAULT_LIBS]); // transaction 0 is the stage's own, the libraries come after it
+    expect(await w.run(["--stage", "deploy", "--dry-run", ...OWNERS])).toBe(EXIT_CODES.LIBS_ADOPTION);
+    expect(lastError(w).message).toContain("as transaction 1, after transaction 0");
+    expect(vaultBroadcasts(w)).toEqual([]);
+  });
+
+  test("the gate is 8453 only: the same chain state on the Twin chain runs as before", async () => {
+    const w = world({ startNonce: 0 });
+    cpSync(OUT, join(w.coreDir, "out"), { recursive: true });
+    Object.assign(w.cfg, { emptyCode: [TICK, ...VAULT_LIBS], creates: { [SCRIPT.vault]: [] } });
+    expect(await w.run(["--stage", "deploy"])).toBe(0);
+    expect(w.logs().some((l) => l.event === "stage.linked_libraries_have_code")).toBe(false);
+  });
+});
+
+describe("issue 1926: the stage runner reads forge --version first and refuses any forge but the pinned 1.8.5", () => {
+  for (const v of ["1.7.1", "1.8.3"]) {
+    test(`forge ${v} is refused (TOOL) with both versions named, before the signer or any forge script`, async () => {
+      const w = world({ startNonce: 0 });
+      (w.cfg as any).forgeVersion = `forge Version: ${v}-v${v}\nCommit SHA: stub`;
+      expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.TOOL);
+      expect(lastError(w).message).toContain(`is forge ${v}, but release builds use exactly forge 1.8.5`);
+      expect(forgeScripts(w)).toEqual([]);
+    });
+  }
+  test("the pinned forge 1.8.5 is accepted", async () => {
+    const w = world({ startNonce: 1, writeSafeManifest: true });
+    (w.cfg as any).forgeVersion = "forge Version: 1.8.5-v1.8.5\nCommit SHA: stub";
+    expect(await w.run(["--stage", "libs"])).toBe(0);
+    expect(w.state().calls.find((c: any) => c.tool === "forge").args).toEqual(["--version"]);
   });
 });

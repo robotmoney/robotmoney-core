@@ -30,6 +30,7 @@ import type { RedeployRecord } from "./redeploy-vault.ts";
 import type { ImplementationDeploy } from "./deploy-implementation.ts";
 import type { CallerInputs } from "./sheet.ts";
 import { isReadOnlyGitAncestry, isReadOnlyGitInputsDiff } from "./tooling-sha.ts";
+import { assertPinnedForgeWith } from "./forge-version.ts";
 import { SafeToolError, createSafe, impersonatedSender, connectSafe, readAfterWrite, rpcHost, verifyCreatedSafe, type CreateSafePlan, type SafeManifest, type StaleReadRetry } from "./safe/index.ts";
 
 // ---- spawning: forge, cast and read-only git reads only -----------------------------------------------------------------------------------------
@@ -661,15 +662,18 @@ export function libraryArgs(ctx: ManifestCtx, row: StageRow): string[] {
 
 const scriptFile = (script: string): string => basename(script.split(":")[0]!);
 
-export function readTxCount(path: string): { count: number; hashes: string[]; creates: string[]; firstBlock?: number; lastBlock?: number } | undefined {
+export function readTxCount(path: string): { count: number; hashes: string[]; creates: string[]; createIndex: number[]; firstBlock?: number; lastBlock?: number } | undefined {
   if (!existsSync(path)) return undefined;
   const j = JSON.parse(readFileSync(path, "utf8"));
   const txs: unknown[] = Array.isArray(j.transactions) ? j.transactions : [];
   const hashes = txs.map((t) => (t as { hash?: string }).hash).filter((h): h is string => typeof h === "string");
   const rc = Array.isArray(j.receipts) ? j.receipts : [];
   const blocks = rc.map((r: { blockNumber?: string }) => (r.blockNumber ? Number(BigInt(r.blockNumber)) : NaN)).filter((n: number) => Number.isFinite(n));
-  const creates = txs.filter((t) => (t as { transactionType?: string }).transactionType === "CREATE2").map((t) => String((t as { contractAddress?: string }).contractAddress ?? "").toLowerCase()).filter(Boolean);
-  return { count: txs.length, hashes, creates, firstBlock: blocks.length ? Math.min(...blocks) : undefined, lastBlock: blocks.length ? Math.max(...blocks) : undefined };
+  const create2 = txs.map((t, i) => ({ i, t: t as { transactionType?: string; contractAddress?: string } })).filter(({ t }) => t.transactionType === "CREATE2" && String(t.contractAddress ?? "") !== "");
+  const creates = create2.map(({ t }) => String(t.contractAddress).toLowerCase());
+  // issue 1926: the position of each CREATE2 in the planned transactions, so a library create can be proven to come before the transactions that link it
+  const createIndex = create2.map(({ i }) => i);
+  return { count: txs.length, hashes, creates, createIndex, firstBlock: blocks.length ? Math.min(...blocks) : undefined, lastBlock: blocks.length ? Math.max(...blocks) : undefined };
 }
 
 /** forge writes broadcast/<ScriptFile>/<chainId>/(dry-run/)run-latest.json. */
@@ -797,6 +801,64 @@ async function adoptCreate2Libraries(ctx: RunContext, row: StageRow, manifest: R
   const libs = await verifyAdoptedCreate2({ adopted: absent, getCode: async (a) => castOut(ctx, ["code", a]) });
   if (expectedCount !== undefined && dry.count !== expectedCount - libs.length) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: the dry-run sends ${dry.count} transactions, the frozen count is ${expectedCount} and ${libs.length} adopted librar${libs.length === 1 ? "y" : "ies"} (${libs.map((l) => l.name).join(", ")}) explain only ${libs.length} of the ${expectedCount - dry.count} missing. Nothing was sent.`, { stage: row.name, dry: dry.count, frozen: expectedCount, adopted: libs.length });
   return libs;
+}
+
+/**
+ * Issue 1926: on chain 8453 nothing ever links an address without code. Evaluated after the simulation and before anything is sent (a refusal is LIBS_ADOPTION,
+ * nothing sent). Library addresses moved once with issue 1926 (the build no longer embeds the checkout path), so a fresh run on 8453 finds no code at the new
+ * addresses and must create every library itself, through the CREATE2 factory, before the first transaction that links it:
+ *  - the libs stage: each table library at the address the simulation wrote holds code already, or the stage plans its CREATE2;
+ *  - every later stage: each `--libraries` address (read from the libs manifest) holds code or was created earlier in this run;
+ *  - every create2 library of the stage, at the address derived from the build (CREATE2 factory, salt 0, resolved creation code), holds code, was created or
+ *    adopted earlier in this run, or is planned by this stage as a CREATE2 AHEAD of every other planned transaction (forge deploys libraries first).
+ * Returns the checked libraries. Other chains (the Twin, anvil) are not gated here: the stage runs there exactly as before.
+ */
+export async function linkedLibraryCodeGate(ctx: RunContext, row: StageRow, manifest: RunManifest, dry: { creates: string[]; createIndex: number[]; count: number }, outPath: string): Promise<{ name: string; address: string; how: string }[]> {
+  if (!isMainnet(ctx.chainId)) return [];
+  const earlier = createdEarlier(manifest);
+  const planned = new Map(dry.creates.map((a, k) => [a.toLowerCase(), dry.createIndex[k] ?? -1]));
+  const hasCode = async (a: string): Promise<boolean> => { const c = (await castOut(ctx, ["code", a])).toLowerCase(); return c !== "" && c !== "0x"; };
+  const refuse = (msg: string, details: Record<string, unknown>): never => { throw new PublishError("LIBS_ADOPTION", `stage ${row.name} on chain ${ctx.chainId}: ${msg} Nothing was sent.`, { stage: row.name, ...details }); };
+  const checked: { name: string; address: string; how: string }[] = [];
+  const t = getStageTable();
+  if (row.name === LIBS_STAGE) {
+    let m: Record<string, unknown> = {};
+    try { m = JSON.parse(readFileSync(outPath, "utf8")); } catch { refuse(`the simulation wrote no readable libs manifest ${outPath}, so the library addresses it creates are unknown.`, {}); }
+    for (const lib of t.libraries) {
+      const at = String(m[lib.manifestKey] ?? "").toLowerCase();
+      if (!/^0x[0-9a-f]{40}$/.test(at)) refuse(`the libs manifest names no address for ${lib.name} (${lib.manifestKey}).`, { library: lib.name });
+      if (planned.has(at)) { checked.push({ name: lib.name, address: at, how: "created by this stage" }); continue; }
+      if (await hasCode(at)) { checked.push({ name: lib.name, address: at, how: "has code" }); continue; }
+      refuse(`${lib.name} at ${at} has NO code and the stage plans no CREATE2 of it through the factory ${CREATE2_FACTORY}.`, { library: lib.name, address: at });
+    }
+    return checked;
+  }
+  for (const lib of row.libraries) {
+    const at = readManifestField(ctx, `${stageManifestBase(LIBS_STAGE)}:${lib.manifestKey}`).toLowerCase();
+    if (earlier.has(at)) { checked.push({ name: lib.name, address: at, how: "created earlier in this run" }); continue; }
+    if (await hasCode(at)) { checked.push({ name: lib.name, address: at, how: "has code" }); continue; }
+    refuse(`the stage links ${lib.name} at ${at} (the libs manifest), which has NO code and was not created earlier in this run: the stage would link an empty address. Run the libs stage first.`, { library: lib.name, address: at });
+  }
+  if (row.create2Libraries.length === 0) return checked;
+  const outDir = join(ctx.coreDir, "out");
+  const all = t.create2Libraries ?? [];
+  if (!create2ArtifactsPresent(all, outDir)) refuse(`no build artifacts of the CREATE2 libraries under ${outDir}, so their addresses cannot be derived and proven to hold code before the stage links them.`, { out: outDir });
+  const built = buildCreate2Libraries(all, outDir);
+  const ownCreates = new Set(row.create2Libraries.map((l) => built.get(l.artifact)!.address.toLowerCase()));
+  // the first planned transaction that is not a CREATE2 of one of this stage's libraries: every library this stage creates must come before it
+  const firstOther = (() => { for (let i = 0; i < dry.count; i++) { const k = dry.createIndex.indexOf(i); if (k < 0 || !ownCreates.has(dry.creates[k]!.toLowerCase())) return i; } return dry.count; })();
+  for (const l of row.create2Libraries) {
+    const at = built.get(l.artifact)!.address.toLowerCase();
+    const idx = planned.get(at);
+    if (idx !== undefined) {
+      if (idx < firstOther) { checked.push({ name: l.name, address: at, how: "created by this stage before its first linking transaction" }); continue; }
+      refuse(`the stage plans the CREATE2 of ${l.name} (${at}) as transaction ${idx}, after transaction ${firstOther}, which may link it.`, { library: l.name, address: at, index: idx, firstOther });
+    }
+    if (earlier.has(at)) { checked.push({ name: l.name, address: at, how: "created earlier in this run" }); continue; }
+    if (await hasCode(at)) { checked.push({ name: l.name, address: at, how: "has code" }); continue; }
+    refuse(`${l.name} at its derived address ${at} has NO code, was not created earlier in this run and the stage plans no CREATE2 of it through the factory ${CREATE2_FACTORY}: the stage would link an empty address.`, { library: l.name, address: at, derived: at });
+  }
+  return checked;
 }
 
 /** The first stage of the table that deploys proxies: it pins the core timelock prediction (issue 1835). */
@@ -954,6 +1016,8 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
     const wantCount = expectedCount === undefined ? undefined : expectedCount - adoptedLibs.length; // the transactions this stage sends: the frozen count less the adopted creations
     ctx.log.log("info", "stage.simulated", { stage: row.name, dry_run_count: dry.count, expected_count: expectedCount ?? null, ...(adoptedLibs.length ? { adopted_create2: adoptedLibs.map((l) => ({ name: l.name, address: l.address, code_hash: l.codeHash })) } : {}) });
     if (wantCount !== undefined && dry.count !== wantCount) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: the dry-run sends ${dry.count} transactions, the frozen count is ${expectedCount}. Nothing was sent.`, { stage: row.name, dry: dry.count, frozen: expectedCount });
+    const libsChecked = await linkedLibraryCodeGate(ctx, row, manifest, dry, outPath);
+    if (libsChecked.length) ctx.log.log("info", "stage.linked_libraries_have_code", { stage: row.name, libraries: libsChecked });
     if (ctx.dryRun) {
       // The simulation wrote the manifest. It stays for the later stages of this dry run (their inputs); runStages restores the checkout at the end.
       // On the local chain the stage is then APPLIED to it, so the later stages find the contracts this one deployed (a registry stage
@@ -1264,6 +1328,9 @@ async function simulationChain(ctx: RunContext, deployer: string): Promise<{ sim
 /** Runs the named stages in table order. Stops at the first failure (the error is rethrown with its own exit code). */
 export async function runStages(ctx: RunContext, names: string[], handlers: Handlers): Promise<RunResult> {
   for (const n of names) stageByName(n); // unknown names fail before any work
+  // Issue 1926: a run with a forge stage compiles the release's contracts, and another forge version compiles other bytes (other CREATE2 library addresses, other
+  // linked implementations, other counts). The pinned version is read first, before the signer is asked for anything and before anything is simulated or sent.
+  if (names.some((n) => stageByName(n).kind === "forge")) await assertPinnedForgeWith((args) => ctx.run("forge", args, { env: childEnv(ctx), cwd: ctx.coreDir }));
   const deployer = await ctx.signer.address();
   let manifest = loadRunManifest(ctx.evidenceDir);
   if (manifest) {

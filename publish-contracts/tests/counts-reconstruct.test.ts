@@ -8,7 +8,7 @@ import { keccak256, type Address, type Hex } from "viem";
 import { MAX_ANCHOR_DEPTH, anchorChainOf, fileHashOf, loadFrozen, loadFrozenFile, resolveCounts, frozenPath, sumCounts } from "../src/counts.ts";
 import { codeWithRetry, adoptableOf, crossCheckDiff, reconstructBaseline, verifyReconstruction, verifyReconstructionOnChain, type CountsJsonLike, type Reconstruction } from "../src/counts-reconstruct.ts";
 import { PublishError } from "../src/errors.ts";
-import { buildCreate2Libraries, predictedLibraryAddress, expectedLibraryRuntime } from "../src/libs-adopt.ts";
+import { LIBRARY_ADDRESS_CAUSE, buildCreate2Libraries, predictedLibraryAddress, expectedLibraryRuntime } from "../src/libs-adopt.ts";
 import { assertBaselineCommitted, assertReleaseGate, gitAnchorCommitted, gitFrozenDirCommitted } from "../src/release-gate.ts";
 import { adoptedFromRunManifest, buildCountsJson, checkCountsJson } from "../src/ci/rehearsal-counts.ts";
 import { freezeFromAdoptedRun } from "../scripts/freeze-counts.ts";
@@ -64,7 +64,7 @@ const rebuild = (j: CountsJsonLike, o: { cross?: { sha: string; counts: Record<s
   reconstructBaseline({ j, sha: o.sha ?? SHA, table, at: "2026-10-10T00:00:00Z", verify: (r) => verifyReconstructionOnChain(r, { table, out: OUTS, getCode: o.getCode ?? chain() }), cross: o.cross && { fileHash: "ab".repeat(32), ...o.cross }, acceptDiff: o.acceptDiff });
 
 describe("the fixtures are the real thing", () => {
-  test("the build's libraries sit at the Base mainnet addresses and the table lets libs adopt tick_math and proto the three create2 libraries", () => {
+  test("the fixture build (tests/fixtures/build-out, built before issue 1926 at the Deploy 2 addresses) derives its libraries' addresses, and the table lets libs adopt tick_math and each stage its first create2 libraries", () => {
     expect(TICK).toBe("0x3353854084194AE5Cc1697a9E4337806ECcdD9F6");
     expect(BASKET.slice(0, 3).map((b) => b.address.toLowerCase())).toEqual(["0xb026a232f54d381a47a9e2640d04084830f0ae58", "0x7fdc1e387486c81f97a2379ce897b202d4e815e2", "0xe0a16a5b9a4edd2e0723b74f593c1053f8cbe6ba"]);
     expect(adoptableOf(table, "libs").map((l) => l.library)).toEqual(["tick_math"]);
@@ -693,5 +693,83 @@ describe("the counts dir of a reconstructed baseline is the committed one (final
     writeFileSync(join(dir, "x.json"), "{}");
     expect(await msg(() => gitAnchorCommitted(join(dir, "x.json"), "00", "/nonexistent/git"))).toContain("git could not run");
     expect(await msg(() => gitFrozenDirCommitted(r, dir, "/nonexistent/git"))).toContain("git could not run");
+  });
+});
+
+describe("issue 1926: an address refusal names the derived and the expected address and the likely cause", () => {
+  test("libs (tick_math) and a create2 library: the message carries the derived (build) address, the expected (recorded) address and the checkout path / forge version cause", async () => {
+    const fake = "0x00000000000000000000000000000000000000f1";
+    const run = adoptedRun();
+    (run.adopted!.libs!.libraries![0] as { address: string }).address = fake;
+    const m1 = await msg(() => rebuild(run, { getCode: chain({ [fake]: TICK_RUNTIME }) }));
+    expect(await kind(() => rebuild(run, { getCode: chain({ [fake]: TICK_RUNTIME }) }))).toBe("LIBS_ADOPTION");
+    expect(m1.toLowerCase()).toContain(fake);
+    expect(m1.toLowerCase()).toContain(TICK.toLowerCase());
+    expect(m1).toContain(LIBRARY_ADDRESS_CAUSE);
+    const run2 = adoptedRun();
+    (run2.adopted!.proto!.libraries![0] as { address: string }).address = fake;
+    const m2 = await msg(() => rebuild(run2, { getCode: chain({ [fake]: BASKET[0]!.runtime }) }));
+    expect(m2).toContain(`Derived address (CREATE2 of this build): ${BASKET[0]!.address}`);
+    expect(m2).toContain(`Expected address (the adoption record): ${fake}`);
+    expect(m2).toContain(LIBRARY_ADDRESS_CAUSE);
+    expect(LIBRARY_ADDRESS_CAUSE).toMatch(/checkout path/);
+    expect(LIBRARY_ADDRESS_CAUSE).toMatch(/forge version/);
+  });
+});
+
+describe("issue 1926: the cross-check across a stage-table change (a removed stage, an added stage, a stage unknown to both)", () => {
+  const PREV = "9a768bb9cc66d4485470a99a068ba7477604501a";
+  function setup(counts: Record<string, number>) {
+    const dir = tmp("pc-1926-");
+    const frozen = join(dir, "frozen");
+    mkdirSync(frozen);
+    const anchor = join(frozen, `${PREV}.json`);
+    writeFileSync(anchor, JSON.stringify({ deploySha: PREV, measured: { chainId: 918453, at: "2026-10-09T19:46:52.795Z" }, counts }, null, 2));
+    const cj = join(dir, "counts.json");
+    writeFileSync(cj, JSON.stringify(adoptedRun()));
+    return { frozen, anchor, cj };
+  }
+  const go = (t: ReturnType<typeof setup>, acceptDiff?: string[]) =>
+    freezeFromAdoptedRun({ countsJsonPath: t.cj, sha: SHA, countsDir: t.frozen, table, getCode: chain(), build: () => ({ ...OUTS, linked: [], create2: [] }), crossCheckPath: t.anchor, acceptDiff });
+  test("REMOVED stage: the anchor has `agent`, the table does not; --accept-diff agent writes accepted { agent, old N, new null } and loadFrozen loads it", async () => {
+    expect(table.stages.some((s) => s.name === "agent")).toBe(false);
+    const t = setup({ ...REF, agent: 11 });
+    expect(await kind(() => go(t))).toBe("COUNT_MISMATCH");
+    expect(await msg(() => go(t))).toContain("agent (old 11, new none)");
+    const p = await go(t, ["agent"]);
+    expect(JSON.parse(readFileSync(p, "utf8")).measured.reconstructed.crossCheck.accepted).toEqual([{ stage: "agent", old: 11, new: null }]);
+    const f = loadFrozen(t.frozen, SHA);
+    expect(f.counts).toEqual(REF);
+    expect(f.measured.reconstructed!.crossCheck!.accepted).toEqual([{ stage: "agent", old: 11, new: null }]);
+  });
+  test("ADDED stage: the table has `receipt`, the anchor does not; --accept-diff receipt writes accepted { receipt, old null, new N } and loadFrozen loads it", async () => {
+    const { receipt, ...withoutReceipt } = REF;
+    const t = setup(withoutReceipt);
+    expect(await kind(() => go(t))).toBe("COUNT_MISMATCH");
+    await go(t, ["receipt"]);
+    expect(loadFrozen(t.frozen, SHA).measured.reconstructed!.crossCheck!.accepted).toEqual([{ stage: "receipt", old: null, new: receipt! }]);
+  });
+  test("a stage UNKNOWN to both: --accept-diff nosuch is USAGE; a hand-edited accepted entry for nosuch is COUNTS_MISSING on load, in the removed shape and in any other", async () => {
+    const t = setup({ ...REF, agent: 11 });
+    expect(await kind(() => go(t, ["agent", "nosuch"]))).toBe("USAGE");
+    const p = await go(t, ["agent"]);
+    const good = readFileSync(p, "utf8");
+    for (const extra of [{ stage: "nosuch", old: 3, new: null }, { stage: "nosuch", old: 3, new: 4 }, { stage: "nosuch", old: null, new: 4 }]) {
+      const j = JSON.parse(good);
+      j.measured.reconstructed.crossCheck.accepted.push(extra);
+      writeFileSync(p, JSON.stringify(j, null, 2));
+      expect(await kind(() => loadFrozen(t.frozen, SHA)), JSON.stringify(extra)).toBe("COUNTS_MISSING");
+    }
+    writeFileSync(p, good);
+    expect(loadFrozen(t.frozen, SHA).counts).toEqual(REF);
+  });
+  test("verifyReconstruction: a removed-shape entry is accepted only for a stage outside the table, never for the gateway system's stage, and a malformed entry is refused", async () => {
+    const t = setup({ ...REF, agent: 11 });
+    const f = JSON.parse(readFileSync(await go(t, ["agent"]), "utf8"));
+    const withAccepted = (accepted: unknown[]) => ({ ...f, measured: { ...f.measured, reconstructed: { ...f.measured.reconstructed, crossCheck: { ...f.measured.reconstructed.crossCheck, accepted } } } });
+    expect(() => verifyReconstruction(withAccepted([{ stage: "agent", old: 11, new: null }]), table)).not.toThrow();
+    expect(() => verifyReconstruction(withAccepted([{ stage: "registry", old: 3, new: 2 }]), table)).not.toThrow(); // a stage of the table, as before
+    for (const bad of [{ stage: "agent", old: null, new: 4 }, { stage: "agent", old: 11, new: 3 }, { stage: "gateway", old: 3, new: null }, { stage: "agent", old: null, new: null }, { stage: "agent", old: -1, new: null }, { stage: 7, old: 1, new: null }])
+      expect(await kind(() => verifyReconstruction(withAccepted([bad]), table)), JSON.stringify(bad)).toBe("COUNTS_MISSING");
   });
 });

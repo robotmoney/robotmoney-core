@@ -8,20 +8,25 @@ and tears down the Docker Compose stack whenever it needs a clean slate.
 
 ## Foundry version
 
-Two places pin one exact Foundry release, **`v1.8.5`**:
+Every `foundry-rs/foundry-toolchain@v1` step in `.github/workflows/` and
+`.github/actions/` installs one exact Foundry release, **`v1.8.5`** (issue
+1926). The version is `PINNED_FORGE_VERSION` in
+`publish-contracts/src/forge-version.ts`, and
+`publish-contracts/tests/forge-version.test.ts` fails when any install names
+another version. Every release-build entry point (libs-build, predeploy-libs,
+deploy-implementation, freeze-counts and the stage runner) reads
+`forge --version` first and refuses any other version, because another forge
+compiles other bytes: other CREATE2 library addresses, other linked
+implementations and other frozen counts. `contracts/doc/` is generated with
+the same version (suite 13 `generated-docs-freshness`). Bump the module, the
+installs and `contracts/doc/` together.
 
-- every "Install Foundry" step of suite 11b
-  (`suite-11b-opencode-headless.yml`: the `refusal`, `deposit` and `read` jobs);
-- `.github/actions/twin-fork/action.yml`, the action that starts the Twin
-  chain. Its install runs after any earlier one in the job and wins on `PATH`,
-  so every `anvil`, `cast` and `forge` call after the fork starts, in every
-  Twin chain job of every suite, is `v1.8.5`.
-
-Every other `foundry-rs/foundry-toolchain@v1` step in `.github/workflows/`
-installs the floating `stable` release. For `generated-docs-freshness` (suite
-13) that is deliberate: its expected value is what the current `forge doc`
-emits, and its step comment says not to re-pin without regenerating
-`contracts/doc/`.
+The contract build is also independent of the checkout path (issue 1926):
+`foundry.toml` sets `auto_detect_remappings = false` and lists only
+context-free relative remappings, because forge records a context remapping
+with an absolute path in the solc metadata, which moved the metadata hash, and
+so every library address, with the checkout. The
+`contract-build-reproducibility` job (suite 1–2) guards it.
 
 Why suite 11b pins: a floating `stable` moved its `cast` from 1.7.1 to 1.8.1
 on 2026-09-05. cast 1.8 changed `cast wallet new --json` from a bare array to
@@ -70,6 +75,7 @@ stale docs). For Twin chain work, match CI with `foundryup --install v1.8.5`.
 - `unit` — forge unit tests; runs immediately on trigger
 - `invariant` — forge fuzz/invariant tests; runs in parallel with `unit`
 - `coverage` — coverage gate check; **needs `unit` and `invariant`** (only worth running if tests pass)
+- `contract-build-reproducibility` — issue 1926: builds two `git worktree` checkouts of the commit at different absolute paths under `$RUNNER_TEMP` with the pinned forge, the way the deploy stages compile, and runs `publish-contracts/src/ci/check-build-reproducible.ts`. Every library, CREATE2 library and proxy implementation of the stage table must have byte-identical creation and runtime code, and no artifact's metadata may hold an absolute path. The step greps the summary line for a non-zero compared count, 0 differ and 0 absolute paths. Required (`scripts/ci/required-checks.json`).
 
 **Steps — `unit` job:**
 1. Checkout repository

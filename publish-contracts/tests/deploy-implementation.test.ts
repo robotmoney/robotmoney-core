@@ -10,6 +10,10 @@ import { getStageTable, peekStageState, restoreStageState, useStageTable } from 
 import { loadStageTable } from "../src/stage-table.ts";
 import { layoutId, proxySpecs } from "../src/verify/upgradeability.ts";
 import { REPO, tmp } from "./fixtures.ts";
+import { LIBRARY_ADDRESS_CAUSE } from "../src/libs-adopt.ts";
+
+/** What `forge --version` prints for the pinned release-build forge (issue 1926). */
+const PINNED_FORGE = async () => ({ code: 0, stdout: "forge Version: 1.8.5-v1.8.5\nCommit SHA: stub", stderr: "" });
 import { A, addr, setup } from "./govern-world.ts";
 
 const SPECS = proxySpecs(getStageTable());
@@ -44,7 +48,7 @@ function writeBuild(dir: string, o: { editLayout?: (j: any) => void; libs?: stri
 }
 
 /** The stub chain: the gateway proxy runs LIVE (linked to L at LIB), L's code at LIB. A CREATE puts `deployed(creation)` at NEW. */
-function world(o: { deployed?: (creation: Hex) => string } = {}) {
+function world(o: { deployed?: (creation: Hex) => string; forgeVersion?: string } = {}) {
   const d = setup({}, 918453);
   writeBuild(d.ctx.coreDir);
   const ctx = { ...d.ctx, caller: { yes: true }, signer: { address: async () => d.sheet.admin } } as unknown as RunContext;
@@ -58,6 +62,7 @@ function world(o: { deployed?: (creation: Hex) => string } = {}) {
     getCode: async (a) => (s.codes.get(a.toLowerCase()) ?? "0x") as Hex,
     implementationOf: async () => LIVE,
     upgradesFrozen: async () => s.frozen,
+    forgeVersion: o.forgeVersion === undefined ? PINNED_FORGE : async () => ({ code: 0, stdout: o.forgeVersion!, stderr: "" }),
     create: async (creation) => {
       s.creates.push(creation);
       // the runtime the creation code returns: the tail after the constructor prefix, with its links as filled in
@@ -127,9 +132,41 @@ describe("issue 1861: deploy-implementation links to the live libraries, deploys
 
   test("the live implementation linking a library the build does not name is refused (linkCreationCode)", () => {
     const art = { bytecode: { object: CREATION_ART, linkReferences: linkRefs(5, 29) } };
-    expect(linkCreationCode(art, { L: LIB, N: addr(0x7002) }, GW.contract).problems).toEqual([`the live implementation links N, which the build's ${GW.contract} does not name`]);
+    expect(linkCreationCode(art, { L: LIB, N: addr(0x7002) }, GW.contract).problems).toEqual([`the live implementation links N, which the build's ${GW.contract} does not name (expected: ${addr(0x7002)}, the address the live implementation links; derived: no link site in the build). ${LIBRARY_ADDRESS_CAUSE}`]);
     expect(linkCreationCode(art, { L: LIB }, GW.contract).problems).toEqual([]);
     expect(linkCreationCode({ bytecode: { object: `${CREATION_ART}${PLACEHOLDER}`, linkReferences: linkRefs(5, 29) } }, { L: LIB }, GW.contract).problems[0]).toContain("unlinked library placeholder");
+  });
+
+  test("issue 1926: a library address read from the live implementation with NO code is refused before the CREATE, nothing sent; with code it proceeds to exactly one CREATE", async () => {
+    const empty = world();
+    empty.s.codes.delete(LIB.toLowerCase()); // the live implementation links L at LIB, and LIB holds no code on this chain
+    await expect(empty.run()).rejects.toMatchObject({ kind: "REFUSED", message: expect.stringContaining(`links L at ${LIB}, which has NO code on chain 918453`), details: { library: "L", address: LIB } });
+    expect(empty.s.creates).toEqual([]);
+    expect(implementationDeploysOf(loadRunManifest(empty.ctx.evidenceDir)!)).toEqual([]);
+    const full = world();
+    await full.run();
+    expect(full.s.creates.length).toBe(1);
+  });
+
+  test("issue 1926: a library-link refusal prints the expected (live) address, the derived one and the likely cause (checkout path or forge version, the one-time address move)", () => {
+    const art = { bytecode: { object: CREATION_ART, linkReferences: linkRefs(5, 29) } };
+    const p = linkCreationCode(art, {}, GW.contract).problems[0]!;
+    expect(p).toContain("links L, which the live implementation does not link");
+    expect(p).toContain("expected: an address the live implementation links; derived: none");
+    expect(p).toContain("another checkout path or with another forge version");
+    expect(p).toContain("library addresses moved once");
+  });
+
+  test("issue 1926: deploy-implementation reads forge --version first and refuses any forge but the pinned 1.8.5 (TOOL), naming both versions, with nothing read or sent", async () => {
+    for (const v of ["forge Version: 1.7.1-v1.7.1", "forge Version: 1.8.3-v1.8.3"]) {
+      const w = world({ forgeVersion: v });
+      const got = v.split(" ")[2]!.split("-")[0]!;
+      await expect(w.run()).rejects.toMatchObject({ kind: "TOOL", message: expect.stringContaining(`is forge ${got}, but release builds use exactly forge 1.8.5`), details: { found: got, pinned: "1.8.5" } });
+      expect(w.s.creates).toEqual([]);
+    }
+    const ok = world({ forgeVersion: "forge Version: 1.8.5-v1.8.5" });
+    await ok.run();
+    expect(ok.s.creates.length).toBe(1);
   });
 
   test("a deployed runtime code that differs from the build (masked) exits non-zero and records no entry", async () => {
@@ -243,6 +280,7 @@ describe("issue 1927: deploy-implementation against the live v0.5.0 build", () =
         getCode: async (a) => (s.codes.get(a.toLowerCase()) ?? "0x") as Hex,
         implementationOf: async (p) => { expect(p.toLowerCase()).toBe(proxyAddr.toLowerCase()); return live; },
         upgradesFrozen: async () => false,
+        forgeVersion: PINNED_FORGE,
         create: async (creation) => { s.creates.push(creation); s.codes.set(NEW.toLowerCase(), o.deployed ? o.deployed(creation) : `0x${creation.slice(2 + 25 * 2)}`); return { txHash: keccak256(creation), status: true, address: NEW }; },
       };
       const run = async () => { const was = peekStageState(); useStageTable(table); try { return await runDeployImplementation(ctx, { proxy, upgradeBuild: rc }, api); } finally { restoreStageState(was); } };

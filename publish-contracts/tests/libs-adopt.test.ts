@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { keccak256, type Address, type Hex } from "viem";
 import { PROOF_TX_NONCES, checkNonce, effectiveCounts, finalDeployerNonce } from "../src/counts.ts";
 import { EXIT_CODES } from "../src/errors.ts";
-import { CREATE2_FACTORY, expectedLibraryRuntime, predictedLibraryAddress } from "../src/libs-adopt.ts";
+import { CREATE2_FACTORY, LIBRARY_ADDRESS_CAUSE, expectedLibraryRuntime, predictedLibraryAddress, verifyAdoptedLibraries } from "../src/libs-adopt.ts";
+import { getStageTable } from "../src/stages.ts";
 import { adoptedTxs } from "../src/runner.ts";
 import { driftErrors } from "../src/counts-drift.ts";
 import { adoptedFromRunManifest, buildCountsJson, checkCountsJson } from "../src/ci/rehearsal-counts.ts";
@@ -18,7 +19,8 @@ import { LOCAL_RPC, SCRIPT, world, type World } from "./harness.ts";
 
 const OUT_FIXTURE = join(import.meta.dir, "fixtures", "build-out");
 const ART = JSON.parse(readFileSync(join(OUT_FIXTURE, "TickMath.sol", "TickMath.json"), "utf8")) as { bytecode: { object: Hex }; deployedBytecode: { object: string } };
-/** The library address on Base mainnet (block 52401633): the CREATE2 address of the build below. */
+/** The CREATE2 address of the committed fixture build below: the Deploy 2 TickMath on Base (block 52401633). The live Deploy 3 TickMath is another address
+ *  (0xeed214865b76872182E8B0532aE901dae14D30d0), built at another checkout path: issue 1926. */
 const MAINNET_TICKMATH: Address = "0x3353854084194AE5Cc1697a9E4337806ECcdD9F6";
 const ADDR = predictedLibraryAddress(ART.bytecode.object);
 // built here by hand, not with the function under test: the library's runtime code is its artifact with PUSH20 <its own address> at bytes 1 to 20
@@ -41,7 +43,7 @@ function adoptWorld(o: { code?: string; address?: string; bumps?: number; startN
 }
 
 describe("the CREATE2 library address and runtime code", () => {
-  test("the build's address through the Arachnid factory is the Base mainnet TickMath", () => {
+  test("the fixture build's address through the Arachnid factory is the Deploy 2 TickMath", () => {
     expect(CREATE2_FACTORY).toBe("0x4e59b44847b379578588920cA78FbF26c0B4956C");
     expect(ADDR).toBe(MAINNET_TICKMATH);
   });
@@ -134,6 +136,21 @@ describe("a libs stage that plans zero transactions", () => {
     const w = adoptWorld({ address: "0x000000000000000000000000000000000000dead", code: RUNTIME });
     expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.LIBS_ADOPTION);
     expect(lastError(w)?.message).toContain("does not commit to this build");
+  });
+
+  test("issue 1926: an address mismatch prints the derived address, the expected address and the likely cause (checkout path or forge version, the one-time move)", async () => {
+    const expected = "0x000000000000000000000000000000000000dead";
+    const w = adoptWorld({ address: expected, code: RUNTIME });
+    expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.LIBS_ADOPTION);
+    const msg = String(lastError(w)?.message);
+    expect(msg).toContain(`is at ${expected} in the manifest (expected address)`);
+    expect(msg).toContain(`build deploys it to ${ADDR} (derived address`);
+    expect(msg).toContain(LIBRARY_ADDRESS_CAUSE);
+    expect(msg).toContain("another checkout path or with another forge version");
+    expect(msg).toContain("library addresses moved once");
+    const outDir = join(w.coreDir, "out");
+    const err = await verifyAdoptedLibraries({ libraries: getStageTable().libraries, manifest: { tick_math: expected }, outDir, getCode: async () => RUNTIME }).catch((e) => e);
+    expect(err).toMatchObject({ kind: "LIBS_ADOPTION", details: { library: "tick_math", expected, derived: ADDR } });
   });
 
   test("a missing build artifact is refused with LIBS_ADOPTION", async () => {

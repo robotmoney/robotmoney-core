@@ -66,12 +66,12 @@ export async function verifyAdoptedLibraries(o: { libraries: TableLibrary[]; man
     const address = raw as Address;
     const art = loadLibArtifact(o.outDir, lib.artifact);
     const predicted = predictedLibraryAddress(art.creation);
-    if (predicted.toLowerCase() !== address.toLowerCase()) return fail(`libs adoption: ${lib.name} is at ${address} in the manifest, but the build deploys it to ${predicted} (CREATE2 factory ${CREATE2_FACTORY}, salt 0, creation code of the build). The address does not commit to this build.`, { library: lib.name, address, predicted });
+    if (predicted.toLowerCase() !== address.toLowerCase()) return fail(`libs adoption: ${lib.name} is at ${address} in the manifest (expected address), but the build deploys it to ${predicted} (derived address: CREATE2 factory ${CREATE2_FACTORY}, salt 0, creation code of the build). The address does not commit to this build. ${LIBRARY_ADDRESS_CAUSE}`, { library: lib.name, address, predicted, expected: address, derived: predicted });
     const code = (await o.getCode(address)).toLowerCase();
     if (code === "0x" || code === "") return fail(`libs adoption: the libs simulation planned zero transactions but ${lib.name} has NO code at ${address}. Something other than a deployed library made forge plan nothing.`, { library: lib.name, address });
     const want = keccak256(expectedLibraryRuntime(art.deployed, address));
     const got = keccak256(code as Hex);
-    if (got !== want) return fail(`libs adoption: the runtime code at ${address} (hash ${got}) is not the build's ${lib.name} (expected hash ${want}).`, { library: lib.name, address, got, want });
+    if (got !== want) return fail(`libs adoption: the runtime code at ${address} (hash ${got}) is not the build's ${lib.name} (expected hash ${want}; derived address ${predicted}, expected address ${address}). ${LIBRARY_ADDRESS_CAUSE}`, { library: lib.name, address, got, want, expected: address, derived: predicted });
     out.push({ name: lib.name, artifact: lib.artifact, address, codeHash: got });
   }
   return out;
@@ -142,9 +142,9 @@ export async function verifyAdoptedCreate2(o: { adopted: Create2Built[]; getCode
   const out: AdoptedLibrary[] = [];
   for (const b of o.adopted) {
     const code = (await o.getCode(b.address)).toLowerCase();
-    if (code === "0x" || code === "") return fail(`libs adoption: the stage planned no creation of ${b.name} but there is NO code at ${b.address}.`, { library: b.name, address: b.address });
+    if (code === "0x" || code === "") return fail(`libs adoption: the stage planned no creation of ${b.name} but there is NO code at ${b.address} (derived address of the build; no library is expected anywhere else). ${LIBRARY_ADDRESS_CAUSE}`, { library: b.name, address: b.address, derived: b.address });
     const got = keccak256(code as Hex);
-    if (got !== b.runtimeHash) return fail(`libs adoption: the runtime code at ${b.address} (hash ${got}) is not the build's ${b.name} (expected hash ${b.runtimeHash}).`, { library: b.name, address: b.address, got, want: b.runtimeHash });
+    if (got !== b.runtimeHash) return fail(`libs adoption: the runtime code at ${b.address} (hash ${got}) is not the build's ${b.name} (expected hash ${b.runtimeHash}; derived address ${b.address}). ${LIBRARY_ADDRESS_CAUSE}`, { library: b.name, address: b.address, got, want: b.runtimeHash, derived: b.address });
     out.push({ name: b.name, artifact: b.artifact, address: b.address, codeHash: got });
   }
   return out;

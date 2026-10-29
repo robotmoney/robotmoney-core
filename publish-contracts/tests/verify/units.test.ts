@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ERC1967_IMPLEMENTATION_SLOT, compareCode, compareDeployedCode, implicitRefs, logicCode, maskHex } from "../../src/verify/codehash.ts";
+import { ERC1967_IMPLEMENTATION_SLOT, compareCode, compareDeployedCode, implicitRefs, loadArtifact, logicCode, maskHex } from "../../src/verify/codehash.ts";
 import { loadFrozenCounts, sumFrozenCounts } from "../../src/verify/frozen.ts";
 import { minDelayFloor } from "../../src/verify/constants.ts";
 import { scanLogs } from "../../src/verify/logs.ts";
@@ -45,6 +45,22 @@ describe("implicit masks (found in the first Twin rehearsal)", () => {
     expect(len).toBeGreaterThan(0);
     expect(hex.slice((total - 2 - len) * 2, (total - 2 - len) * 2 + 2)).toBe("a2"); // solc's map of two entries (ipfs, solc)
     expect(implicitRefs(hex, true)).toEqual([{ start: total - 2 - len, length: len }]);
+  });
+  test("issue 1926: a build whose metadata differs (another checkout path, the relative-remapping foundry.toml) differs only in the CBOR tail and passes compareCode", () => {
+    const j = JSON.parse(readFileSync(join(import.meta.dir, "..", "fixtures", "build-out", "ProposerFloorTimelock.sol", "ProposerFloorTimelock.json"), "utf8"));
+    const art = loadArtifact(join(import.meta.dir, "..", "fixtures", "build-out"), "ProposerFloorTimelock");
+    const hex = String(j.deployedBytecode.object).replace(/^0x/, "");
+    const total = hex.length / 2, len = parseInt(hex.slice(-4), 16), start = total - 2 - len;
+    // The ipfs multihash sits inside the trailer (a2 64 'ipfs' 58 22 <34 bytes> ...): flip every byte of it, as a path-dependent metadata hash would.
+    const ipfsAt = hex.indexOf("64697066735822", start * 2) / 2 + 7;
+    expect(ipfsAt).toBeGreaterThan(start);
+    const otherTail = hex.slice(0, ipfsAt * 2) + hex.slice(ipfsAt * 2, (ipfsAt + 34) * 2).replace(/../g, (b) => (0xff ^ parseInt(b, 16)).toString(16).padStart(2, "0")) + hex.slice((ipfsAt + 34) * 2);
+    expect(otherTail).not.toBe(hex);
+    expect(compareCode(`0x${otherTail}`, art).ok).toBe(true);
+    // One executable byte outside every masked range changed is still a mismatch.
+    const at = [...Array(start).keys()].find((i) => i > 0 && !art.refs.some((r) => i >= r.start && i < r.start + r.length))!;
+    const exec = hex.slice(0, at * 2) + (0xff ^ parseInt(hex.slice(at * 2, at * 2 + 2), 16)).toString(16).padStart(2, "0") + hex.slice(at * 2 + 2);
+    expect(compareCode(`0x${exec}`, art).ok).toBe(false);
   });
 });
 

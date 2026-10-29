@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { PublishError } from "../src/errors.ts";
-import { PROOF_TX_NONCES, assertSha, checkNonce, countFor, frozenPath, loadFrozen, resolveCounts, sumCounts, writeFrozen } from "../src/counts.ts";
+import { PROOF_TX_NONCES, assertSha, checkNonce, countFor, effectiveCounts, finalDeployerNonce, frozenPath, loadFrozen, loadFrozenFile, resolveCounts, sumCounts, writeFrozen } from "../src/counts.ts";
+import { LIBRARY_MOVE_STAGES, crossCheckDiff, libraryMoveCounts } from "../src/counts-reconstruct.ts";
+import { getStageTable } from "../src/stages.ts";
 import { freezeCounts } from "../scripts/freeze-counts.ts";
-import { COUNTS, SHA, SHA2, tmp, writeCounts } from "./fixtures.ts";
+import { COUNTS, REPO, SHA, SHA2, tmp, writeCounts } from "./fixtures.ts";
 
 const kind = (f: () => unknown): string | undefined => { try { f(); } catch (e) { return (e as PublishError).kind; } return undefined; };
 
@@ -119,5 +122,64 @@ describe("freeze-counts (core 1524)", () => {
     expect(kind(() => freezeCounts(counts({ deployerNonce: 1 }), dir))).toBe("USAGE");
     expect(kind(() => freezeCounts(counts({ chainId: 8453 }), dir))).toBe("USAGE");
     expect(kind(() => freezeCounts(counts({ deploySha: "../x" }), dir))).toBe("USAGE");
+  });
+});
+
+describe("the one-time library address move: baseline and 8453 effective counts with no adoption (issue 1926)", () => {
+  // The source the runbook copies (upgrade-runbook-drift.test.ts asserts the runbook text equals these numbers).
+  const DEPLOY3 = "57fbe61833e9d7f94557d69102138f7c410c1346";
+  const anchor = loadFrozenFile(join(REPO, "deployments", "frozen-counts", `${DEPLOY3}.json`), DEPLOY3);
+  const m = libraryMoveCounts(getStageTable(), { sha: DEPLOY3, counts: anchor.counts });
+  test("libs, vault, proto and rwa: the baseline is the Deploy 3 frozen count, the Twin run adopts each stage's first creations, 8453 adopts nothing", () => {
+    expect(m.stages).toEqual({
+      libs: { baseline: 1, creations: 1, twinMeasured: 0, mainnet: 1 }, // TickMath
+      vault: { baseline: 19, creations: 2, twinMeasured: 17, mainnet: 19 }, // GovernedUpgrade, RobotMoneyVaultOps
+      proto: { baseline: 12, creations: 4, twinMeasured: 8, mainnet: 12 }, // BasketAssetConfigGuard, TwapTickMath, BasketViews, BasketSwaps
+      rwa: { baseline: 9, creations: 0, twinMeasured: 9, mainnet: 9 }, // every library it links was created by an earlier stage
+    });
+  });
+  test("with nothing adopted effectiveCounts is the baseline and the expected nonce is start + sum(baseline) + 1 proof", () => {
+    const baseline = Object.fromEntries(LIBRARY_MOVE_STAGES.map((s) => [s, m.stages[s].baseline]));
+    expect(effectiveCounts(baseline, {})).toEqual(baseline);
+    expect(finalDeployerNonce(baseline, 7)).toBe(7 + 1 + 19 + 12 + 9 + PROOF_TX_NONCES);
+    // the Twin run, which adopted, sent exactly the creations fewer
+    const adopted = Object.fromEntries(LIBRARY_MOVE_STAGES.filter((s) => m.stages[s].creations > 0).map((s) => [s, m.stages[s].twinMeasured]));
+    expect(effectiveCounts(baseline, adopted)).toEqual(Object.fromEntries(LIBRARY_MOVE_STAGES.map((s) => [s, m.stages[s].twinMeasured])));
+  });
+  test("a cross-check against the Deploy 3 file needs --accept-diff for the stages the table retired (agent, ic-policy, recorder) and the one it added (receipt); the gateway system's key is not compared", () => {
+    expect(m.acceptDiff).toEqual(["agent", "ic-policy", "receipt", "recorder"]);
+    // a new baseline equal to Deploy 3 at every stage the table still has differs from it at exactly those stages
+    const keys = ["safe", ...getStageTable().stages.filter((s) => s.system !== "gateway").map((s) => s.name)];
+    const same = Object.fromEntries(keys.map((k) => [k, anchor.counts[k] ?? 2]));
+    expect(crossCheckDiff(same, anchor.counts).map((d) => d.stage)).toEqual(m.acceptDiff);
+  });
+});
+
+describe("loadFrozen of a reconstructed baseline across a stage-table change (issue 1926)", () => {
+  // A hand-made reconstruction (offline: loadFrozen re-verifies the block against the table, never the chain) anchored on a plain file that still has a retired stage.
+  const ANCHOR = "d".repeat(40);
+  function write(anchorCounts: Record<string, number>, accepted: unknown[]): string {
+    const dir = tmp("pc-1926-load-");
+    const anchorBytes = JSON.stringify({ deploySha: ANCHOR, measured: { chainId: 918453, at: "2026-10-01T00:00:00Z" }, counts: anchorCounts }, null, 2);
+    writeFileSync(join(dir, `${ANCHOR}.json`), anchorBytes);
+    const reconstructed = {
+      fromRun: { sha: SHA, chainId: 918453 }, measuredCounts: { ...COUNTS, libs: COUNTS.libs! - 1 },
+      adopted: [{ stage: "libs", library: "tick_math", artifact: "TickMath", address: `0x${"11".repeat(20)}`, codeHash: `0x${"22".repeat(32)}` }],
+      crossCheck: { against: ANCHOR, accepted },
+    };
+    writeFileSync(join(dir, `${SHA}.json`), JSON.stringify({ deploySha: SHA, measured: { chainId: 918453, at: "2026-10-02T00:00:00Z", reconstructed, crossChecked: { sha: ANCHOR, fileHash: createHash("sha256").update(anchorBytes).digest("hex") } }, counts: COUNTS }, null, 2));
+    return dir;
+  }
+  test("removed stage: the anchor has `agent`, the file accepts { agent, old 11, new null }: it loads", () => {
+    expect(loadFrozen(write({ ...COUNTS, agent: 11 }, [{ stage: "agent", old: 11, new: null }]), SHA).counts).toEqual(COUNTS);
+  });
+  test("added stage: the anchor lacks `receipt`, the file accepts { receipt, old null, new N }: it loads", () => {
+    const { receipt, ...rest } = COUNTS;
+    expect(loadFrozen(write(rest, [{ stage: "receipt", old: null, new: receipt! }]), SHA).counts).toEqual(COUNTS);
+  });
+  test("a stage unknown to both the table and the anchor is COUNTS_MISSING, removed-shaped or not; a removed stage missing from the accepted list is too", () => {
+    expect(kind(() => loadFrozen(write({ ...COUNTS, agent: 11 }, [{ stage: "agent", old: 11, new: null }, { stage: "nosuch", old: 3, new: null }]), SHA))).toBe("COUNTS_MISSING");
+    expect(kind(() => loadFrozen(write({ ...COUNTS, agent: 11 }, [{ stage: "agent", old: 11, new: null }, { stage: "nosuch", old: 3, new: 4 }]), SHA))).toBe("COUNTS_MISSING");
+    expect(kind(() => loadFrozen(write({ ...COUNTS, agent: 11 }, []), SHA))).toBe("COUNTS_MISSING");
   });
 });

@@ -5,6 +5,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { EXIT_CODES } from "../src/errors.ts";
+import { loadFrozenFile } from "../src/counts.ts";
+import { LIBRARY_MOVE_STAGES, libraryMoveCounts } from "../src/counts-reconstruct.ts";
 import { SHEET_SPEC, UPGRADE_MODES } from "../src/sheet.ts";
 import { getStageTable } from "../src/stages.ts";
 import { CLAIM_LABEL, CODE_LABEL, DEADLINE_LABEL, MODE_LABEL, PROXY_LABELS } from "../src/verify/upgradeability.ts";
@@ -415,5 +417,43 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
     expect(await problems(`cast call $TIMELOCK "getMinDelay()(uint256)" --rpc-url $BASE_RPC_URL`, common)).toEqual([]);
     const named = [...`run govern --row nosuchrow now`.matchAll(/govern --row ([a-z][a-z-]*)/g)].map((m) => m[1]!);
     expect((await KNOWN_ROWS()).has(named[0]!)).toBe(false);
+  });
+});
+
+describe("the one-time library address move in the runbook and the README (issue 1926)", () => {
+  // The numbers come from libraryMoveCounts over the Deploy 3 frozen file (the release on Base); tests/counts.test.ts pins them. The runbook copies them.
+  const DEPLOY3 = "57fbe61833e9d7f94557d69102138f7c410c1346";
+  const m = libraryMoveCounts(table, { sha: DEPLOY3, counts: loadFrozenFile(join(REPO, "deployments", "frozen-counts", `${DEPLOY3}.json`), DEPLOY3).counts });
+  const nums = (k: "baseline" | "twinMeasured") => LIBRARY_MOVE_STAGES.map((s) => `${s} ${m.stages[s][k]}`).join(", ");
+  const BASELINE = `baseline and 8453 effective counts: ${nums("baseline")}`;
+  const TWIN = `the Twin measuring run records ${nums("twinMeasured")}`;
+  const ACCEPT = `\`--accept-diff ${m.acceptDiff.join(",")}\``;
+  const README = readFileSync(join(REPO, "publish-contracts", "README.md"), "utf8");
+  const libsRow = RUNBOOK.split("\n").find((l) => l.startsWith("| 1 `libs` |")) ?? "";
+  const freeze = (() => { const a = RUNBOOK.indexOf("- **The normal case: the run adopted the CREATE2 libraries (issue 1733).**"); return a < 0 ? "" : RUNBOOK.slice(a, RUNBOOK.indexOf("CI never commits it.", a)); })();
+  const releaseItem = RUNBOOK.split("\n").find((l) => l.startsWith("1. Tag X, the squash commit")) ?? "";
+  test("the 8453 effective counts equal the baseline (no stage adopts after the move) and the numbers are the ones the counts unit test pins", () => {
+    for (const s of LIBRARY_MOVE_STAGES) expect(m.stages[s].mainnet).toBe(m.stages[s].baseline);
+    expect(BASELINE).toBe("baseline and 8453 effective counts: libs 1, vault 19, proto 12, rwa 9");
+    expect(ACCEPT).toBe("`--accept-diff agent,ic-policy,receipt,recorder`");
+  });
+  test("the libs row (4.3), the freeze-counts text (3) and the release-branch freeze list state the counts, the --accept-diff value and that the addresses moved once", () => {
+    for (const [name, text] of [["libs row", libsRow], ["freeze-counts text", freeze], ["release freeze list", releaseItem]] as const) {
+      expect(text, name).not.toBe("");
+      expect(text, name).toContain(BASELINE);
+      expect(text, name).toContain(TWIN);
+      expect(text, name).toContain(ACCEPT);
+      expect(text, name).toMatch(/moved once/);
+    }
+    for (const text of [libsRow, freeze]) {
+      expect(text).toContain("are no longer adopted");
+      expect(text).toContain("the next deployment creates them again");
+    }
+  });
+  test("no fixed Deploy 2 library address and no 'freeze in the Twin's checkout path' wording remains in the runbook or the README", () => {
+    for (const [name, text] of [["runbook", RUNBOOK], ["README", README]] as const) {
+      for (const a of ["0x3353854084194AE5Cc1697a9E4337806ECcdD9F6", "0xB026a232f54d381A47a9E2640d04084830F0Ae58", "0x7fDc1E387486C81F97A2379CE897b202d4E815E2", "0xE0a16a5B9a4EDd2E0723B74F593C1053F8cBe6BA"]) expect(text.toLowerCase().includes(a.toLowerCase()), `${name} quotes ${a}`).toBe(false);
+      expect(text, name).not.toMatch(/(same|Twin(?: run)?'s) checkout path|checkout path (?:as|of) the Twin|must run in the (?:same )?checkout (?:path )?(?:of|as) the Twin/i);
+    }
   });
 });
