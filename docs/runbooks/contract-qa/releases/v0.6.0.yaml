@@ -917,14 +917,10 @@ steps:
     added: "v0.6.0"
   - id: "P8.04-v050-addresses"
     standing: ["4.15"]
-    description: "The addresses of the live deployment the 4.15 commands name, read from its manifests, sheet and run manifest (runbook 4.15 step 2; on the Twin the v0.5.0 tag run of P8.03, on 8453 the Deploy 3 record), and a separate clean checkout of this commit at {runDir}/v060, built there for --upgrade-build"
+    description: "The addresses of the live deployment the 4.15 commands name, read from its manifests, sheet and run manifest (runbook 4.15 step 2; on the Twin the v0.5.0 tag run of P8.03, on 8453 the Deploy 3 record); P8.08 makes the separate checkout of this commit that --upgrade-build reads"
     host: "control"
     phase: 8
     cmds:
-      - ["bash", "-c", "test -d {runDir}/v060 || git worktree add --detach {runDir}/v060 {coreSha}"]
-      - ["git", "-C", "{runDir}/v060", "submodule", "update", "--init", "--recursive"]
-      - ["bash", "-c", "test \"$(git -C {runDir}/v060 rev-parse HEAD)\" = {coreSha} && test -z \"$(git -C {runDir}/v060 status --porcelain)\""]
-      - ["forge", "build", "--root", "{runDir}/v060", "--out", "{runDir}/v060/out"]
       - ["bash", "-c", "m={v050ManifestDir} && jq -r .vault $m/agent-token-vault.json > {runDir}/state/v050-rmagent && jq -r .timelock $m/timelock.json > {runDir}/state/v050-timelock && jq -r .governance $m/governance.json > {runDir}/state/v050-governance && jq -r .registry $m/registry.json > {runDir}/state/v050-registry && jq -r .router $m/router.json > {runDir}/state/v050-router"]
       - ["bash", "-c", "m={v050ManifestDir} && jq -r .vault $m/vault.json > {runDir}/state/v050-rmusdc && jq -r .usdc $m/vault.json > {runDir}/state/v050-usdc && jq -r .vault $m/protocol-asset-vault.json > {runDir}/state/v050-rmproto && jq -r .vault $m/rwa-basket-vault.json > {runDir}/state/v050-rmrwa && jq -r .gateway $m/gateway.json > {runDir}/state/v050-gateway && jq -r .consensus_receipt $m/ic-policy.json > {runDir}/state/v050-receipt"]
       - ["bash", "-c", "sed -n 's/^ADMIN_ADDRESS=//p' {v050Sheet} | sed 's/#.*//' | tr -d ' \\\"' > {runDir}/state/v050-admin && sed -n 's/^EMERGENCY_ADDRESS=//p' {v050Sheet} | sed 's/#.*//' | tr -d ' \\\"' > {runDir}/state/v050-emergency && jq -er '[.recorded_receipts[]?.submitter] | last' {v050EvidenceDir}/publish-run.json > {runDir}/state/v050-submitter && test -s {runDir}/state/v050-admin"]
@@ -994,6 +990,24 @@ steps:
     refresh: true
     onlyFor: ["twin", "rehearsal"]
     writes: ["done-gateway-upgrade", "done-receipt-upgrade", "done-retire-vault"]
+    added: "v0.6.0"
+  - id: "P8.08-v060-upgrade-build"
+    standing: ["4.15"]
+    description: "A separate clean checkout of this commit at {runDir}/v060, built there for --upgrade-build (issue 1929: a plain forge build in the main checkout would replace the library-linked out/ that P9.05 verifies). Its submodules are cloned from the main checkout's own submodule repositories, so no library already present is fetched from the network. It is skipped when the done-* markers of every step that reads {runDir}/v060 exist (P8.10 to P8.13, issue 1996): on an upgraded deployment nothing reads the build"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bash", "-c", "test -d {runDir}/v060 || git worktree add --detach {runDir}/v060 {coreSha}"]
+      - ["bash", "scripts/runbook/upgrade-submodules.sh", "{runDir}/v060"]
+      - ["bash", "-c", "test \"$(git -C {runDir}/v060 rev-parse HEAD)\" = {coreSha} && test -z \"$(git -C {runDir}/v060 status --porcelain)\""]
+      - ["forge", "build", "--root", "{runDir}/v060", "--out", "{runDir}/v060/out"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    gateAbsent: ["{runDir}/state/done-gateway-upgrade", "{runDir}/state/done-receipt-upgrade"]
+    maxMinutes: 30
     added: "v0.6.0"
   - id: "P8.10-v050-deploy-gateway-impl"
     standing: ["4.15"]

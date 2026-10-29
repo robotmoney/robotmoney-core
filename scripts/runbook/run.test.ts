@@ -34,6 +34,10 @@ test("a step fails on an exit it does not expect, on a missing receipt, and on a
 test("gateAbsent and sheetIs skip by the step's own gate; a missing go and a stage-host step fail", () => withRun((runDir, r) => {
   writeFileSync(join(runDir, "state", "done"), "");
   expect(runStep(step({ gateAbsent: "{runDir}/state/done", cmds: [["false"]] }), r, opts(runDir))).toStartWith("skip gateAbsent");
+  // a list of paths skips only when every one exists (issue 1996: the upgrade build runs while any reader of it still runs)
+  expect(runStep(step({ gateAbsent: ["{runDir}/state/done", "{runDir}/state/other"] }), r, opts(runDir))).toBe("pass");
+  writeFileSync(join(runDir, "state", "other"), "");
+  expect(runStep(step({ gateAbsent: ["{runDir}/state/done", "{runDir}/state/other"], cmds: [["false"]] }), r, opts(runDir))).toStartWith("skip gateAbsent");
   expect(runStep(step({ sheetIs: { UPGRADE_MODE: "upgradeable" }, cmds: [["false"]] }), r, opts(runDir))).toStartWith("skip sheetIs UPGRADE_MODE");
   expect(runStep(step({ go: "owner-go" }), r, opts(runDir))).toStartWith("fail go owner-go is not recorded");
   expect(runStep(step({ host: "stage" }), r, opts(runDir))).toStartWith("fail host stage");
