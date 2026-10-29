@@ -19,6 +19,7 @@ interface Cfg {
   creates?: Record<string, string[]>;     // script file -> the CREATE2 library addresses its first transactions create (issue 1721); the file marks them transactionType CREATE2
   libsAddress?: string;                    // the tick_math address the stub manifest holds (default 0x1009)
   chainId: number;
+  forgeVersion?: string;                   // what `forge --version` prints (issue 1926: the runner refuses any forge but the pinned one). Default: the pinned 1.8.5
   vaultOut?: Record<string, string>;       // script file -> the vault address the stub manifest holds (default 0x1001): a redeploy writes a NEW vault (issue 1796)
                                            // and its FIRST broadcast transaction is the deployer's CREATE of it (QA plan v1 C2: the receipt's contractAddress)
   createdOut?: Record<string, string>;     // script file -> the address that CREATE receipt names instead (a manifest that is not the created contract)
@@ -74,7 +75,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
     out(`stub cast: unsupported ${cmd}`, 1);
   }
 
-  if (args[0] === "--version") out("forge 1.0.0-stub");
+  if (args[0] === "--version") out(cfg.forgeVersion ?? "forge Version: 1.8.5-v1.8.5\nCommit SHA: stub");
   if (args[0] !== "script") out(`stub forge: unsupported ${args[0]}`, 1);
   const script = args[1]!;
   const file = basename(script.split(":")[0]!);

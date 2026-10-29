@@ -70,7 +70,7 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          version: v1.8.5
       - name: forge test ERC-4626 preconditions (exitFeeBps=${{ matrix.exit_fee_bps }})
         env:
           EXIT_FEE_BPS: ${{ matrix.exit_fee_bps }}

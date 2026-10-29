@@ -9,6 +9,8 @@
 //   bun publish-contracts/scripts/freeze-counts.ts --from-adopted-run counts.json --sha <sha> --rpc <url> [--core-dir DIR] [--counts-dir DIR]
 //        [--cross-check <earlier frozen file> [--accept-diff stage,stage]]
 // --core-dir (default: this checkout) must be a checkout AT <sha> with forge: the libraries are rebuilt from it. --rpc is the Twin or Base RPC that holds them.
+// Issue 1926: the build is path-independent, so --core-dir may be ANY checkout at <sha> (not the Twin run's own checkout path). The forge on PATH (or FORGE) must be the
+// pinned release version (src/forge-version.ts): it is checked first, before the checkout, the counts dir, the build or the RPC are touched (TOOL, exit 18).
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -16,6 +18,7 @@ import { TWIN_CHAIN_ID } from "../src/chains.ts";
 import { FROZEN_DIR, PROOF_TX_NONCES, assertSha, fileHashOf, latestOtherFrozen, loadFrozenFile, validateCounts, writeFrozen } from "../src/counts.ts";
 import { reconstructBaseline, verifyReconstructionOnChain, type CountsJsonLike } from "../src/counts-reconstruct.ts";
 import { PublishError, exitCodeOf } from "../src/errors.ts";
+import { assertPinnedForge } from "../src/forge-version.ts";
 import { buildLibraryArtifacts } from "../src/libs-build.ts";
 import { loadStageTable, type StageTable } from "../src/stage-table.ts";
 import { useStageTable } from "../src/stages.ts";
@@ -52,7 +55,7 @@ export async function freezeFromAdoptedRun(o: {
     if (dirname(resolve(o.crossCheckPath)) !== resolve(o.countsDir)) throw new PublishError("USAGE", `--cross-check ${o.crossCheckPath} is not in the counts dir ${o.countsDir}: the anchor of a baseline is a frozen file of that dir (commit it there first)`);
     const bytes = readFileSync(o.crossCheckPath);
     const old = JSON.parse(bytes.toString("utf8"));
-    const f = loadFrozenFile(o.crossCheckPath, assertSha(String(old.deploySha))); // an adopted-marked or unverifiable earlier file is no reference
+    const f = loadFrozenFile(o.crossCheckPath, assertSha(String(old.deploySha)), { historical: true }); // an adopted-marked or unverifiable earlier file is no reference (verified against its own sha's stage table, issue 1926)
     if (f.deploySha === sha) throw new PublishError("USAGE", "--cross-check names the file being written");
     cross = { sha: f.deploySha, counts: f.counts, fileHash: fileHashOf(bytes) };
   } else {
@@ -71,6 +74,7 @@ if (import.meta.main) {
   try {
     if (v["from-adopted-run"]) {
       if (v.counts || !v.sha || !v.rpc) throw new PublishError("USAGE", "usage: freeze-counts.ts --from-adopted-run counts.json --sha <sha> --rpc <url> [--core-dir DIR] [--counts-dir DIR] [--cross-check FILE [--accept-diff stage,stage]]");
+      assertPinnedForge(process.env.FORGE ?? "forge"); // issue 1926: the libraries are rebuilt with the pinned forge only, checked before anything else
       const core = resolve(v["core-dir"] ?? resolve(import.meta.dir, "..", ".."));
       // the libraries are rebuilt from the checkout, so it must BE the sha the file is for
       const head = Bun.spawnSync(["git", "-C", core, "rev-parse", "HEAD"]).stdout.toString().trim();

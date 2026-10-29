@@ -4,14 +4,19 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { assertPinnedForge } from "./forge-version.ts";
 import { buildCreate2Libraries } from "./libs-adopt.ts";
 import type { BuildOut } from "./counts-reconstruct.ts";
 import type { StageTable, TableCreate2Library } from "./stage-table.ts";
 
 export interface LibraryBuild extends BuildOut { linked: TableCreate2Library[]; create2: TableCreate2Library[] }
 
-/** Runs `forge build` for the library sources in `core` and returns the two output directories. Throws on a failing build. */
+/**
+ * Runs `forge build` for the library sources in `core` and returns the two output directories. Throws on a failing build. Issue 1926: reads `forge --version`
+ * first and refuses (TOOL, nothing built) any forge but the pinned release-build version, because another version derives other library addresses.
+ */
 export function buildLibraryArtifacts(core: string, t: StageTable, forge = process.env.FORGE ?? "forge"): LibraryBuild {
+  assertPinnedForge(forge);
   const scratch = mkdtempSync(join(tmpdir(), "predeploy-libs."));
   const build = (paths: string[], out: string, extra: string[] = []): void => {
     const r = Bun.spawnSync([forge, "build", ...paths, ...extra, "--out", join(scratch, out), "--cache-path", join(scratch, `${out}-cache`)], { cwd: core, stdout: "inherit", stderr: "inherit" });

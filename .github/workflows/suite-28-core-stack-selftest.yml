@@ -202,7 +202,7 @@ jobs:
       # stack need nothing but docker.
       - uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          version: v1.8.5
       # The out dir stays outside the checkout: the publish run refuses a checkout with untracked files.
       - name: Choose the out dir
         run: echo "STAGE_OUT=$RUNNER_TEMP/stage-out" >> "$GITHUB_ENV"

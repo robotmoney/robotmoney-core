@@ -57,6 +57,9 @@ CEREMONY_CONTRACTS=(
   # deploy them itself.
   "RwaBasketVault"
   "AgentTokenVault"
+  # rmPROTO: every vault contract the stage table deploys is in this list
+  # (issue 1926, asserted by scripts/release/preflight-guards.test.ts).
+  "ProtocolAssetVault"
 )
 
 fail() {

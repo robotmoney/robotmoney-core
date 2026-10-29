@@ -2,11 +2,13 @@
 // data file: deployments/frozen-counts/<sha>.json. There are no hand-typed literals. Plan principle 17.
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PublishError } from "./errors.ts";
 import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./chains.ts";
 import { crossCheckDiff, verifyReconstruction, type Reconstruction } from "./counts-reconstruct.ts";
 import { DEPLOYER_STAGES, getStageTable, proofTxNonces } from "./stages.ts";
+import { TABLE_REL, parseStageTable, type StageTable } from "./stage-table.ts";
+import { gitEnv } from "./git-env.ts";
 
 export type FrozenCounts = Record<string, number>;
 export interface FrozenFile { deploySha: string; measured: { chainId: number; at: string; forge?: string; /** Stages the measuring run ADOPTED (issue 1721): their counts are not measurements. */ adopted?: string[];
@@ -30,17 +32,36 @@ export function validateCounts(counts: unknown): FrozenCounts {
 }
 
 /**
+ * Issue 1926: the stage table a HISTORICAL frozen file was written for, read from git at the file's own DEPLOY_SHA (`git show <sha>:scripts/deploy/stage-table.json`
+ * in the repository that holds the file). Undefined when that repository or commit is not available (a scratch copy of the directory, a shallow clone): the caller
+ * then checks against the loaded table, as before.
+ */
+export function stageTableAtSha(fileDir: string, sha: string): StageTable | undefined {
+  let r: ReturnType<typeof Bun.spawnSync>;
+  try { r = Bun.spawnSync(["git", "--no-replace-objects", "-C", fileDir, "show", `${assertSha(sha)}:${TABLE_REL}`], { stdout: "pipe", stderr: "pipe", env: gitEnv() }); } catch { return undefined; }
+  if (r.exitCode !== 0) return undefined;
+  let json: unknown;
+  try { json = JSON.parse(r.stdout!.toString()); } catch { return undefined; }
+  return parseStageTable(json, `${sha}:${TABLE_REL}`); // a table that does not parse is an error, never skipped
+}
+
+/**
  * Reads and checks one frozen file (any path). The file must carry `sha`, must not be marked adopted, and a reconstructed baseline (issue 1733) must pass
  * verifyReconstruction against the loaded stage table. A reconstruction that cannot be checked (no stage table loaded) is refused: nothing is assumed.
+ * `historical` (issue 1926): the file is an EARLIER release's (another file of the directory, an anchor, a --cross-check reference), not the DEPLOY_SHA being
+ * loaded. It is verified against the stage table of its own DEPLOY_SHA when git can read it: a stage the table later removed (the retired `agent`, `ic-policy`,
+ * `recorder`) is not an error in a file written before the removal. Without git history it is verified against the loaded table, as before (fails closed).
  */
-export function loadFrozenFile(p: string, sha: string, o: { allowAdopted?: boolean } = {}): FrozenFile {
+export function loadFrozenFile(p: string, sha: string, o: { allowAdopted?: boolean; historical?: boolean } = {}): FrozenFile {
   const j = JSON.parse(readFileSync(p, "utf8"));
   if (j.deploySha !== sha) throw new PublishError("COUNTS_MISSING", `${p} is for DEPLOY_SHA ${j.deploySha}, not ${sha}`, { sha });
   if (!o.allowAdopted && Array.isArray(j.measured?.adopted) && j.measured.adopted.length > 0) throw new PublishError("COUNTS_MISSING", `${p} was written by a run that ADOPTED stage(s) ${j.measured.adopted.join(", ")} (already on chain, not run): their counts were never measured, so it is not a frozen file. Rebuild the baseline from the counts.json of that run: bun publish-contracts/scripts/freeze-counts.ts --from-adopted-run counts.json --sha ${sha} --rpc <url> (issue 1733). Delete this file before rerunning.`, { sha, adopted: j.measured.adopted });
   const file: FrozenFile = { deploySha: sha, measured: j.measured, counts: validateCounts(j.counts) };
   if (j.measured?.reconstructed !== undefined) {
+    const own = o.historical ? stageTableAtSha(dirname(p), sha) : undefined;
     let table;
-    try { table = getStageTable(); } catch { throw new PublishError("COUNTS_MISSING", `${p} is a reconstructed baseline but no stage table is loaded, so it cannot be verified: it is refused`, { sha }); }
+    if (own) table = own;
+    else try { table = getStageTable(); } catch { throw new PublishError("COUNTS_MISSING", `${p} is a reconstructed baseline but no stage table is loaded, so it cannot be verified: it is refused`, { sha }); }
     verifyReconstruction(file, table);
   }
   return file;
@@ -53,7 +74,7 @@ export function otherFrozenFiles(dir: string, sha: string): { sha: string; file:
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter((n) => /^[0-9a-f]{40}\.json$/.test(n) && n !== `${sha}.json`).sort().map((n) => {
     const path = join(dir, n), s = n.slice(0, 40);
-    return { sha: s, file: loadFrozenFile(path, s), path };
+    return { sha: s, file: loadFrozenFile(path, s, { historical: true }), path };
   });
 }
 
@@ -67,7 +88,7 @@ export function anchorChainOf(dir: string, sha: string): { sha: string; fileHash
   const out: { sha: string; fileHash: string }[] = [];
   let cur = sha;
   for (let i = 0; i <= MAX_ANCHOR_DEPTH; i++) {
-    const cc = loadFrozenFile(frozenPath(dir, cur), cur).measured.crossChecked;
+    const cc = loadFrozenFile(frozenPath(dir, cur), cur, { historical: cur !== sha }).measured.crossChecked;
     if (!cc) return out;
     out.push({ sha: cc.sha, fileHash: cc.fileHash });
     cur = cc.sha;
@@ -90,7 +111,7 @@ function loadFrozenChain(dir: string, sha: string, o: { allowAdopted?: boolean }
   if (seen.length >= MAX_ANCHOR_DEPTH) throw new PublishError("COUNTS_MISSING", `the anchor chain of ${seen[0]} is deeper than ${MAX_ANCHOR_DEPTH}: refused`, { sha });
   const p = frozenPath(dir, sha);
   if (!existsSync(p)) throw new PublishError("COUNTS_MISSING", `FROZEN_COUNTS_MISSING: no frozen counts for DEPLOY_SHA ${sha}: ${p} does not exist. No counts file is committed for a SHA until its first Twin chain rehearsal has measured it. Run publish contracts --measure on the Twin chain (918453) at this SHA (refused on 8453), then commit ${FROZEN_DIR}/${sha}.json: review a measurement that ran every stage, or, when the run ADOPTED the CREATE2 libraries (every Twin fork since Base block 52401633), rebuild the baseline with freeze-counts --from-adopted-run (issue 1733). Nothing here guesses a count.`, { sha });
-  const f = loadFrozenFile(p, sha, o);
+  const f = loadFrozenFile(p, sha, { ...o, historical: seen.length > 0 }); // an anchor is an earlier release's file (issue 1926)
   if (f.measured.reconstructed) {
     // Issue 1733: the counts of the stages that adopted nothing come from a Twin counts.json nobody can prove untampered offline. The earlier release is the independent anchor.
     // The rule does NOT trust `measured.at` (it can be backdated): a reconstructed file must carry crossChecked whenever ANY other frozen file exists in the dir, and the

@@ -55,7 +55,8 @@ jobs:
           set -euo pipefail
           # scripts/ci/check-timelock-prediction-parity.test.ts imports publish-contracts' timelock prediction, which needs its viem (issue 1853)
           (cd publish-contracts && bun install --frozen-lockfile)
-          bun test scripts/deploy scripts/ci 2>&1 | tee core-stages.log
+          # scripts/release/preflight-guards.test.ts: CEREMONY_CONTRACTS covers every vault contract the stage table deploys (issue 1926)
+          bun test scripts/deploy scripts/ci scripts/release/preflight-guards.test.ts 2>&1 | tee core-stages.log
           grep -Eq '^ *[1-9][0-9]* pass' core-stages.log || { echo "zero tests passed" >&2; exit 1; }
 
   publish-contracts-tests:
@@ -68,6 +69,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          # Issue 1926: counts.test.ts loads a baseline next to the committed frozen files, each verified against the stage table of its own DEPLOY_SHA (git show).
+          fetch-depth: 0
       - uses: ./.github/actions/publish-contracts-setup
       - name: Typecheck
         working-directory: publish-contracts
@@ -158,15 +161,25 @@ jobs:
         run: bun publish-contracts/src/ci/rehearsal-counts.ts check --file "$TWIN_COUNTS_JSON"
       # Issue 1733: this run ADOPTED the CREATE2 libraries, so its counts.json is not a frozen file. The reconstruct verb rebuilds the BASELINE from the adoption records,
       # re-derives every adopted library from the build, reads its code hash from the Twin fork, and the strict loader (the 8453 rules) must accept the result.
-      - name: Rebuild the baseline frozen counts from the adopted measuring counts.json and load it strictly
+      # Issue 1926: the libraries are rebuilt from a SECOND checkout of this sha at another absolute path and depth (--core-dir), not the checkout the Twin run built
+      # in. The build is path-independent (foundry.toml: no auto-detected remappings) and uses the pinned forge the twin-fork action installed, so the addresses the
+      # Twin run adopted must re-derive there. A path-dependent build fails this step with LIBS_ADOPTION.
+      - name: Rebuild the baseline frozen counts from the adopted measuring counts.json in a second checkout path and load it strictly
         env:
           TWIN_RPC: ${{ steps.fork.outputs.rpc-url }}
         run: |
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
           base="$RUNNER_TEMP/baseline-frozen"
+          second="$RUNNER_TEMP/freeze-path/a/b/c/core"
+          mkdir -p "$(dirname "$second")"
+          git worktree add --detach "$second" "$sha"
+          # the submodule sources, copied (not symlinked: a symlink target outside the checkout would change the source paths forge records)
+          rm -rf "$second/lib" && cp -a lib "$second/lib"
+          test "$(git -C "$second" rev-parse HEAD)" = "$sha"
+          test "$(cd "$second" && pwd -P)" != "$(pwd -P)"
           jq '. + {rehearsal: {conclusion: "success"}}' "$TWIN_COUNTS_JSON" > "$RUNNER_TEMP/counts-green.json"
-          bun publish-contracts/scripts/freeze-counts.ts --from-adopted-run "$RUNNER_TEMP/counts-green.json" --sha "$sha" --rpc "$TWIN_RPC" --counts-dir "$base"
+          bun publish-contracts/scripts/freeze-counts.ts --from-adopted-run "$RUNNER_TEMP/counts-green.json" --sha "$sha" --rpc "$TWIN_RPC" --counts-dir "$base" --core-dir "$second"
           bun publish-contracts/src/ci/rehearsal-counts.ts check-baseline --counts-dir "$base" --sha "$sha"
           jq -e '(.measured.reconstructed.adopted | length > 0) and (.measured.adopted == null)' "$base/$sha.json" >/dev/null
           cp "$base/$sha.json" "$RUNNER_TEMP/baseline-$sha.json"

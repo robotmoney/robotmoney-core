@@ -86,7 +86,7 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          version: v1.8.5
 
       - name: Recorder keeper self-test
         run: bash scripts/ops/test-recorder-keeper.sh

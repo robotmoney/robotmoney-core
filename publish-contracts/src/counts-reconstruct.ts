@@ -20,7 +20,7 @@ import { isAddress, type Address } from "viem";
 import { TWIN_CHAIN_ID } from "./chains.ts";
 import { LIBS_STAGE } from "./core-wiring.ts";
 import { PublishError } from "./errors.ts";
-import { buildCreate2Libraries, verifyAdoptedCreate2, verifyAdoptedLibraries } from "./libs-adopt.ts";
+import { LIBRARY_ADDRESS_CAUSE, buildCreate2Libraries, verifyAdoptedCreate2, verifyAdoptedLibraries } from "./libs-adopt.ts";
 import { scopeTable, type StageTable } from "./stage-table.ts";
 import { ACTIVE_SYSTEM, getStageTable } from "./stages.ts";
 import type { FrozenCounts, FrozenFile } from "./counts.ts";
@@ -104,7 +104,17 @@ export function verifyReconstruction(file: Pick<FrozenFile, "deploySha" | "measu
   if (r.crossCheck !== undefined) {
     const c = r.crossCheck;
     if (!/^[0-9a-f]{40}$/.test(String(c?.against)) || !Array.isArray(c.accepted)) refuse("crossCheck is malformed");
-    for (const d of c.accepted) if (typeof d?.stage !== "string" || !keys.includes(d.stage)) refuse("crossCheck names an unknown stage");
+    // Issue 1926: an accepted difference names a stage of the current table (changed, or added: old null), or a REMOVED stage, one the anchor has and the table no
+    // longer has (old an integer, new null: the retired `agent` stage of every committed frozen file, ADR-0017). Any other shape is a stage unknown to the table; a
+    // removed-shape entry for a stage the anchor does not have either is refused by loadFrozen, which requires `accepted` to equal crossCheckDiff against the anchor.
+    for (const d of c.accepted) {
+      if (typeof d?.stage !== "string") refuse("crossCheck names an unknown stage");
+      const intOrNull = (x: unknown): boolean => x === null || (Number.isInteger(x) && (x as number) >= 0);
+      if (!intOrNull(d.old) || !intOrNull(d.new) || (d.old === null && d.new === null)) refuse(`crossCheck entry for stage '${d.stage}' is malformed (old ${JSON.stringify(d.old)}, new ${JSON.stringify(d.new)})`);
+      if (keys.includes(d.stage)) continue;
+      const removed = Number.isInteger(d.old) && d.new === null && !other.has(d.stage);
+      if (!removed) refuse(`crossCheck names an unknown stage '${d.stage}': an accepted difference names a stage of the stage table, or a stage the table no longer has (old count, new null)`, { stage: d.stage });
+    }
   }
   return r;
 }
@@ -112,6 +122,9 @@ export function verifyReconstruction(file: Pick<FrozenFile, "deploySha" | "measu
 /** Where the verifier finds build artifacts: the libs stage artifacts (nothing linked) and the create2 library artifacts (built with TickMath linked). */
 export interface BuildOut { linkOut: string; c2Out: string }
 const libsFail = (msg: string, details: Record<string, unknown> = {}): never => { throw new PublishError("LIBS_ADOPTION", `reconstructed baseline: ${msg}`, details); };
+/** Issue 1926: an address refusal names the address the build derives, the address that was expected (the record) and the likely cause. */
+const addressFail = (library: string, expected: string, derived: string, what: string): never =>
+  libsFail(`${library}: ${what}. Derived address (CREATE2 of this build): ${derived}. Expected address (the adoption record): ${expected}. ${LIBRARY_ADDRESS_CAUSE}`, { library, expected, derived, recorded: expected, build: derived });
 
 /**
  * Proves every adopted record against the BUILD and the CHAIN. The address must be the CREATE2 address the build predicts, the chain must hold code there, and keccak256
@@ -122,10 +135,17 @@ export async function verifyReconstructionOnChain(r: Reconstruction, o: { table:
   if (libsEntries.length > 0) {
     const libs = o.table.libraries.filter((l) => libsEntries.some((a) => a.library === l.name));
     const manifest = Object.fromEntries(libsEntries.map((a) => [o.table.libraries.find((l) => l.name === a.library)?.manifestKey ?? a.library, a.address]));
-    const got = await verifyAdoptedLibraries({ libraries: libs, manifest, outDir: o.out.linkOut, getCode: o.getCode });
+    let got: Awaited<ReturnType<typeof verifyAdoptedLibraries>>;
+    try { got = await verifyAdoptedLibraries({ libraries: libs, manifest, outDir: o.out.linkOut, getCode: o.getCode }); } catch (e) {
+      // issue 1926: an address mismatch names the derived and the expected address and the likely cause, whatever the shared check's wording
+      const d = (e as PublishError).details ?? {};
+      if (e instanceof PublishError && e.kind === "LIBS_ADOPTION" && typeof d.predicted === "string" && typeof d.address === "string" && !e.message.includes(LIBRARY_ADDRESS_CAUSE)) addressFail(String(d.library), d.address, d.predicted, "the recorded address is not the address this build deploys the library to");
+      throw e;
+    }
     for (const g of got) {
       const rec = libsEntries.find((a) => a.library === g.name)!;
-      if (lc(g.address) !== lc(rec.address) || lc(g.codeHash) !== lc(rec.codeHash)) libsFail(`${g.name} record (${rec.address}, ${rec.codeHash}) differs from the build and chain (${g.address}, ${g.codeHash})`, { library: g.name });
+      if (lc(g.address) !== lc(rec.address)) addressFail(g.name, rec.address, g.address, "the record and the build disagree on the address");
+      if (lc(g.codeHash) !== lc(rec.codeHash)) libsFail(`${g.name} record (${rec.address}, ${rec.codeHash}) differs from the build and chain (${g.address}, ${g.codeHash})`, { library: g.name });
     }
   }
   const c2Entries = r.adopted.filter((a) => a.stage !== LIBS_STAGE);
@@ -134,7 +154,7 @@ export async function verifyReconstructionOnChain(r: Reconstruction, o: { table:
     const wanted = [...new Map(c2Entries.map((a) => {
       const b = built.get(a.artifact);
       if (!b) return libsFail(`${a.library} (${a.artifact}) is not a create2 library of the stage table`, { library: a.library });
-      if (lc(b.address) !== lc(a.address)) return libsFail(`${a.library} is recorded at ${a.address}, the build deploys it to ${b.address}`, { library: a.library, recorded: a.address, build: b.address });
+      if (lc(b.address) !== lc(a.address)) return addressFail(a.library, a.address, b.address, `recorded at ${a.address}, the build deploys it to ${b.address}`);
       if (lc(b.runtimeHash) !== lc(a.codeHash)) return libsFail(`${a.library} records code hash ${a.codeHash}, the build's runtime hash is ${b.runtimeHash}`, { library: a.library });
       return [lc(b.address), b] as const;
     })).values()];
@@ -202,6 +222,37 @@ export async function reconstructBaseline(o: {
   } else if ((o.acceptDiff ?? []).length > 0) usage("--accept-diff needs --cross-check");
   verifyReconstruction(file, table);
   return file;
+}
+
+/** The stages whose counts the one-time library address move changes (issue 1926): the libs stage and the first stage that creates each CREATE2 library, and rwa (none). */
+export const LIBRARY_MOVE_STAGES = ["libs", "vault", "proto", "rwa"] as const;
+export interface LibraryMoveCounts {
+  /** The frozen file the numbers are read from (the release on Base). */
+  anchor: string;
+  /** Per stage: the frozen baseline (a fresh chain), the libraries the stage creates on a fresh chain (adoptableOf), what a Twin measuring run records when every library
+   * was predeployed (baseline less those creations, adopted), and the 8453 effective count when no library is adopted (equal to the baseline). */
+  stages: Record<(typeof LIBRARY_MOVE_STAGES)[number], { baseline: number; creations: number; twinMeasured: number; mainnet: number }>;
+  /** The `--accept-diff` value a cross-check against `anchor` needs at minimum: the stages the anchor has and the table no longer has, and the stages the table added. */
+  acceptDiff: string[];
+}
+
+/**
+ * Issue 1926. Builds before issue 1926 embedded the checkout path in the metadata hash, so the CREATE2 library addresses moved ONCE: the libraries live on 8453 sit at the old
+ * addresses and are no longer adopted. A frozen baseline already counts every stage as on a fresh chain, so it does not change; on 8453 no stage adopts, so the effective
+ * counts equal the baseline and the expected deployer nonce is start + sum(baseline) + 1 proof. The Twin measuring run still adopts every library (predeploy-libs puts them at
+ * the new addresses first) and records the baseline less the creations. Pure: the runbook copies these numbers (upgrade-runbook-drift.test.ts asserts it).
+ */
+export function libraryMoveCounts(table: StageTable, anchor: { sha: string; counts: FrozenCounts }): LibraryMoveCounts {
+  const keys = stageKeys(table), other = otherSystemKeys(table);
+  const stages = Object.fromEntries(LIBRARY_MOVE_STAGES.map((s) => {
+    const baseline = anchor.counts[s];
+    if (!Number.isInteger(baseline)) throw new PublishError("COUNTS_MISSING", `the frozen file ${anchor.sha} has no count for stage ${s}`, { stage: s });
+    const creations = adoptableOf(table, s).length;
+    return [s, { baseline: baseline!, creations, twinMeasured: baseline! - creations, mainnet: baseline! }];
+  })) as LibraryMoveCounts["stages"];
+  const removed = Object.keys(anchor.counts).filter((k) => !keys.includes(k) && !other.has(k));
+  const added = keys.filter((k) => !(k in anchor.counts));
+  return { anchor: anchor.sha, stages, acceptDiff: [...removed, ...added].sort() };
 }
 
 /** `cast code` with a bounded retry (3 tries, doubling backoff). A failure after the last try is CHAIN naming the RPC origin and method, never "no code". Fails closed. */

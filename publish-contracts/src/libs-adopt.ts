@@ -18,6 +18,15 @@ export interface AdoptedLibrary { name: string; artifact: string; address: Addre
 /** What the run manifest keeps for an adopted stage (StageRecord.adopted). */
 export interface AdoptionRecord { libraries: AdoptedLibrary[]; factory: Address; deployerTxs: number }
 
+/**
+ * Issue 1926: the likely cause of a library address that is not the build's. The address is CREATE2 of the creation code, and the creation code ends in the
+ * solc metadata hash, so it moves with the checkout path (builds before issue 1926 recorded the auto-detected submodule remappings with an absolute path)
+ * and with the forge version (pinned in forge-version.ts). Since issue 1926 the build is path-independent, so the library addresses moved ONCE: the live
+ * libraries at the old addresses (Deploy 3 TickMath 0xeed214865b76872182E8B0532aE901dae14D30d0 and the CREATE2 libraries of its stages) are no longer
+ * adopted, and a fresh stage run creates the libraries again at the new addresses.
+ */
+export const LIBRARY_ADDRESS_CAUSE = "Likely cause: the expected address came from a build at another checkout path or with another forge version (the creation code ends in the solc metadata hash, which moves with both; release builds use the pinned forge, publish-contracts/src/forge-version.ts). Builds before issue 1926 embedded the checkout path, so library addresses moved once: live libraries at the old addresses are not adopted, and a fresh stage run creates them again at the new address.";
+
 const fail = (msg: string, details: Record<string, unknown> = {}): never => { throw new PublishError("LIBS_ADOPTION", `${msg} Nothing was sent.`, details); };
 
 interface LibArtifact { creation: Hex; deployed: string }
@@ -57,12 +66,12 @@ export async function verifyAdoptedLibraries(o: { libraries: TableLibrary[]; man
     const address = raw as Address;
     const art = loadLibArtifact(o.outDir, lib.artifact);
     const predicted = predictedLibraryAddress(art.creation);
-    if (predicted.toLowerCase() !== address.toLowerCase()) return fail(`libs adoption: ${lib.name} is at ${address} in the manifest, but the build deploys it to ${predicted} (CREATE2 factory ${CREATE2_FACTORY}, salt 0, creation code of the build). The address does not commit to this build.`, { library: lib.name, address, predicted });
+    if (predicted.toLowerCase() !== address.toLowerCase()) return fail(`libs adoption: ${lib.name} is at ${address} in the manifest (expected address), but the build deploys it to ${predicted} (derived address: CREATE2 factory ${CREATE2_FACTORY}, salt 0, creation code of the build). The address does not commit to this build. ${LIBRARY_ADDRESS_CAUSE}`, { library: lib.name, address, predicted, expected: address, derived: predicted });
     const code = (await o.getCode(address)).toLowerCase();
     if (code === "0x" || code === "") return fail(`libs adoption: the libs simulation planned zero transactions but ${lib.name} has NO code at ${address}. Something other than a deployed library made forge plan nothing.`, { library: lib.name, address });
     const want = keccak256(expectedLibraryRuntime(art.deployed, address));
     const got = keccak256(code as Hex);
-    if (got !== want) return fail(`libs adoption: the runtime code at ${address} (hash ${got}) is not the build's ${lib.name} (expected hash ${want}).`, { library: lib.name, address, got, want });
+    if (got !== want) return fail(`libs adoption: the runtime code at ${address} (hash ${got}) is not the build's ${lib.name} (expected hash ${want}; derived address ${predicted}, expected address ${address}). ${LIBRARY_ADDRESS_CAUSE}`, { library: lib.name, address, got, want, expected: address, derived: predicted });
     out.push({ name: lib.name, artifact: lib.artifact, address, codeHash: got });
   }
   return out;
@@ -133,9 +142,9 @@ export async function verifyAdoptedCreate2(o: { adopted: Create2Built[]; getCode
   const out: AdoptedLibrary[] = [];
   for (const b of o.adopted) {
     const code = (await o.getCode(b.address)).toLowerCase();
-    if (code === "0x" || code === "") return fail(`libs adoption: the stage planned no creation of ${b.name} but there is NO code at ${b.address}.`, { library: b.name, address: b.address });
+    if (code === "0x" || code === "") return fail(`libs adoption: the stage planned no creation of ${b.name} but there is NO code at ${b.address} (derived address of the build; no library is expected anywhere else). ${LIBRARY_ADDRESS_CAUSE}`, { library: b.name, address: b.address, derived: b.address });
     const got = keccak256(code as Hex);
-    if (got !== b.runtimeHash) return fail(`libs adoption: the runtime code at ${b.address} (hash ${got}) is not the build's ${b.name} (expected hash ${b.runtimeHash}).`, { library: b.name, address: b.address, got, want: b.runtimeHash });
+    if (got !== b.runtimeHash) return fail(`libs adoption: the runtime code at ${b.address} (hash ${got}) is not the build's ${b.name} (expected hash ${b.runtimeHash}; derived address ${b.address}). ${LIBRARY_ADDRESS_CAUSE}`, { library: b.name, address: b.address, got, want: b.runtimeHash, derived: b.address });
     out.push({ name: b.name, artifact: b.artifact, address: b.address, codeHash: got });
   }
   return out;
