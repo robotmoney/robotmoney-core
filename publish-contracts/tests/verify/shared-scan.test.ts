@@ -8,8 +8,8 @@ import { encodeAbiParameters, encodeFunctionData, keccak256, pad, parseAbi, toHe
 import { verifyDeployment } from "../../src/verify/index.ts";
 import { hashConsumedManifests } from "../../src/verify/gateway.ts";
 import { ADMIN_ROLE, AGENT_ROLE, EMERGENCY_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, stageManifestFile } from "../../src/verify/constants.ts";
-import { RPC_REFUSED_DETAIL, logMatches, padTopic, rangeLimit, scanLogs, withSharedLogScan } from "../../src/verify/logs.ts";
-import type { LogEntry, VerifyOptions } from "../../src/verify/types.ts";
+import { MAX_LOG_ADDRESSES, RPC_REFUSED_DETAIL, addressLimit, logMatches, padTopic, rangeLimit, scanLogs, withSharedLogScan } from "../../src/verify/logs.ts";
+import type { ChainReader, LogEntry, VerifyOptions } from "../../src/verify/types.ts";
 import { adoptTimelock, addr, buildWorld, deployedWorld, DEPLOYER, FakeChain, GATEWAY, OWNERS, REGISTRY, ROUTER, TIMELOCK, VAULTS, WORLD_CREATE2_FACTORY, type World } from "./world.ts";
 
 const OTHER = addr(0x0bad);
@@ -116,19 +116,23 @@ describe("one shared log pass serves every address-scoped check (issue 1977)", (
       if (/^(healthy|the gateway system$|a creation proof|an adopted timelock \(|a proxy frozen by the timelock|a revoked grant|agent logs only after|a scheduled freeze)/.test(name)) expect(now.checks.filter((x) => !x.ok)).toEqual([]);
       else expect(now.ok).toBe(false);
 
-      // the calls of the shared way: one walk of [fromBlock, head] with the address list, plus (vaults and legacy only) the deployer's address-less discovery scan
+      // the call-count bound (issue 1977 AC): per block range, one call per group of at most MAX_LOG_ADDRESSES addresses, plus (vaults and legacy only) the deployer's
+      // address-less role scan, which covers contracts no manifest names
       const n = ranges(after.opts.fromBlock, after.w.chain.head, after.opts.logChunk ?? 2000);
       const f = after.w.chain.logFilters;
       const shared = f.filter((x) => Array.isArray(x.address)), unscoped = f.filter((x) => x.address === undefined), single = f.filter((x) => typeof x.address === "string");
       expect(single).toEqual([]); // no check scanned its own address: the shared pass covered them all
+      for (const x of shared) expect((x.address as string[]).length).toBeLessThanOrEqual(MAX_LOG_ADDRESSES);
+      const groups = Math.ceil(new Set(shared.flatMap((x) => x.address as string[])).size / MAX_LOG_ADDRESSES);
       // a case whose creation proof fails scans nothing: its scan labels fail before any read
-      expect([0, n]).toContain(shared.length);
+      expect([0, n * groups]).toContain(shared.length);
       expect([0, after.opts.system === "gateway" ? 0 : n]).toContain(unscoped.length);
-      expect(f.length).toBeLessThanOrEqual((after.opts.system === "gateway" ? 1 : 2) * n);
-      // the shared walk covers the range once, in order, with no gap and no overlap
+      expect(f.length).toBeLessThanOrEqual(n * groups + (after.opts.system === "gateway" ? 0 : n));
+      // each group's walk covers the range once, in order, with no gap and no overlap
+      const firstGroup = shared.filter((x) => shared.length && (x.address as string[])[0] === (shared[0]!.address as string[])[0]);
       let next = after.opts.fromBlock;
-      for (const x of shared) { expect(x.fromBlock).toBe(next); next = x.toBlock + 1n; }
-      expect(next).toBe(after.w.chain.head + 1n);
+      for (const x of firstGroup) { expect(x.fromBlock).toBe(next); next = x.toBlock + 1n; }
+      if (shared.length) expect(next).toBe(after.w.chain.head + 1n);
       // and the per-check way made more calls than the shared one, unless neither scanned
       if (shared.length) expect(before.w.chain.logFilters.length).toBeGreaterThan(f.length);
     });
@@ -227,5 +231,52 @@ describe("a failed chunk is one scan error, never 'no logs' (issue 1977)", () =>
     // 7 tries (the first and 6 retries) of the shared pass's first chunk, and 7 of the deployer scan's
     expect(w.chain.logFilters.filter((x) => Array.isArray(x.address))).toHaveLength(7);
     expect(w.chain.logFilters).toHaveLength(14);
+  });
+});
+
+/** 23 contracts with RoleGranted logs spread over [0, 4999], and a chain that refuses more than `maxAddresses` addresses or `maxRange` blocks per call. */
+function manyContracts(maxAddresses = Infinity, maxRange = 1n << 60n): { c: FakeChain; addrs: `0x${string}`[] } {
+  const c = new FakeChain();
+  c.maxLogSpan = 1n << 60n;
+  const addrs = Array.from({ length: 23 }, (_, i) => addr(0x1000 + i));
+  for (let b = 0n; b < 5_000n; b += 13n) c.logs.push({ address: addrs[Number(b % 23n)]!, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), KEEPER_ROLE, padTopic(OTHER)], data: "0x", blockNumber: b });
+  const inner = c.getLogs.bind(c);
+  c.getLogs = async (p) => {
+    const n = Array.isArray(p.address) ? p.address.length : 1;
+    if (n > maxAddresses) { c.logFilters.push(p); throw new Error(`A maximum of ${maxAddresses} addresses is allowed. No limit on a dedicated node`); }
+    if (p.toBlock - p.fromBlock + 1n > maxRange) { c.logFilters.push(p); throw new Error(`exceed maximum block range: ${maxRange}`); }
+    return inner(p);
+  };
+  return { c, addrs };
+}
+const perAddress = async (c: FakeChain, s: ChainReader, addrs: `0x${string}`[]) => {
+  for (const a of addrs) {
+    const p = { address: a, topics: [keccak256(toHex(SIG_ROLE_GRANTED))], fromBlock: 0n, toBlock: 4_999n, chunk: 2_000, retryBaseMs: 0 };
+    expect(await scanLogs(s, p)).toEqual(await scanLogs(c, p));
+  }
+};
+
+describe("an address list longer than the RPC allows is read in groups (issue 1977)", () => {
+  test(`at most ${MAX_LOG_ADDRESSES} addresses per call: 23 contracts are 3 calls per range, and every contract reads the same logs`, async () => {
+    const { c, addrs } = manyContracts(MAX_LOG_ADDRESSES);
+    const s = withSharedLogScan(c, { addresses: addrs, topic0s: [keccak256(toHex(SIG_ROLE_GRANTED))], fromBlock: 0n, toBlock: 4_999n, chunk: 2_000, retryBaseMs: 0 });
+    await perAddress(c, s, addrs);
+    const shared = c.logFilters.filter((x) => Array.isArray(x.address));
+    expect(shared.map((x) => (x.address as string[]).length)).toEqual([10, 10, 3, 10, 10, 3, 10, 10, 3]);
+  });
+  test("\"A maximum of 4 addresses is allowed\" shrinks the group and the scan completes with the same logs", async () => {
+    expect(addressLimit(new Error("A maximum of 10 addresses is allowed. No limit on a dedicated node"))).toBe(10);
+    const { c, addrs } = manyContracts(4, 1_500n);
+    const s = withSharedLogScan(c, { addresses: addrs, topic0s: [keccak256(toHex(SIG_ROLE_GRANTED))], fromBlock: 0n, toBlock: 4_999n, chunk: 2_000, retryBaseMs: 0 });
+    await perAddress(c, s, addrs);
+    const served = c.logCalls.length - c.logFilters.filter((x) => Array.isArray(x.address) && ((x.address as string[]).length > 4 || x.toBlock - x.fromBlock + 1n > 1_500n)).length;
+    expect(served).toBeGreaterThan(0);
+  });
+  test("an error whose request body holds \"429\" by chance is not a rate limit: one call, then RPC_REFUSED", async () => {
+    const c = new FakeChain();
+    c.getLogs = async (p) => { c.logFilters.push(p); throw new Error('The request took too long to respond.\n\nURL: http://127.0.0.1:18997/\nRequest body: {"address":["0x5841723442960000000000000000000000000000"]}'); };
+    const s = withSharedLogScan(c, { addresses: [addr(0xa)], topic0s: [txOf(1)], fromBlock: 0n, toBlock: 10n, chunk: 100, retryBaseMs: 0 });
+    await expect(scanLogs(s, { address: addr(0xa), topics: [txOf(1)], fromBlock: 0n, toBlock: 10n, chunk: 100, retryBaseMs: 0 })).rejects.toThrow(/^RPC_REFUSED: getLogs 0-10 failed: The request took too long to respond\.$/);
+    expect(c.logFilters).toHaveLength(1);
   });
 });

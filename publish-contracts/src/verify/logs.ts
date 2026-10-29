@@ -8,8 +8,22 @@ import type { Address, ChainReader, Hex, LogEntry } from "./types.ts";
 export const RPC_REFUSED_DETAIL = "RPC_REFUSED";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const errText = (e: any) => String(e?.message ?? e) + String(e?.cause?.message ?? "") + String(e?.details ?? "");
-const isRateLimit = (e: any) => /429|rate.?limit|too many requests/i.test(errText(e));
+/** The error's own text, without the request body and URL viem appends (a body of addresses and topics can hold "429" by chance). */
+const own = (m: unknown) => String(m ?? "").split(/\n\s*(?:URL|Request body|Raw Call Arguments):/)[0]!;
+const errText = (e: any) => own(e?.message ?? e) + " " + own(e?.cause?.message) + " " + String(e?.details ?? "");
+const statusOf = (e: any): number | undefined => { for (let x = e, i = 0; x && i < 6; x = x.cause, i++) if (typeof x.status === "number") return x.status; return undefined; };
+const isRateLimit = (e: any) => statusOf(e) === 429 || /\b429\b|rate.?limit|too many requests/i.test(errText(e));
+
+/**
+ * Issue 1977: the most addresses one shared eth_getLogs call asks for. publicnode (the Base RPC that serves 50,000-block ranges) answers "A maximum of 10 addresses
+ * is allowed" above it. A longer address list is read in groups of this size, each over the same window, and an RPC that names a smaller limit shrinks the group.
+ */
+export const MAX_LOG_ADDRESSES = 10;
+/** The address-count limit an RPC names ("A maximum of N addresses is allowed"), or undefined. */
+export function addressLimit(e: unknown): number | undefined {
+  const n = /maximum of (\d+) addresses/i.exec(errText(e));
+  return n ? Number(n[1]) : undefined;
+}
 
 /**
  * Issue 1977: the range-limit answers of the Base RPCs. The block count the RPC names, 0n when it names none, undefined when the error is not a range limit.
@@ -35,35 +49,51 @@ export interface ScanParams {
 
 type Filter = { address?: Address | Address[]; topics: (Hex | Hex[] | null)[] };
 
-/** One chunked walk of [from, to]: 429 retries with backoff, a range limit shrinks the window, any other failure throws RPC_REFUSED naming the chunk. */
+/**
+ * One chunked walk of [from, to]: 429 retries with backoff, a range limit shrinks the window, any other failure throws RPC_REFUSED naming the chunk.
+ * An address list is asked in groups of at most MAX_LOG_ADDRESSES (fewer when the RPC names a smaller limit). Each address sits in one group, so its logs keep their order.
+ */
 async function walk(chain: ChainReader, f: Filter, from: bigint, to: bigint, chunk: number, retryBaseMs: number, maxRetries: number): Promise<LogEntry[]> {
   if (chunk < 1) throw new Error("logChunk must be at least 1");
   const out: LogEntry[] = [];
+  const list = Array.isArray(f.address) ? f.address : undefined;
+  let group = Math.min(list?.length ?? 1, MAX_LOG_ADDRESSES);
   let step = BigInt(chunk);
   for (let lo = from; lo <= to;) {
     let hi = lo + step - 1n;
     if (hi > to) hi = to;
-    for (let attempt = 0; ;) {
-      try {
-        out.push(...(await chain.getLogs({ address: f.address, topics: f.topics, fromBlock: lo, toBlock: hi })));
-        break;
-      } catch (e: any) {
-        const lim = rangeLimit(e), size = hi - lo + 1n;
-        if (lim !== undefined && size > 1n) {
-          step = lim > 0n && lim < size ? lim : size / 2n;
-          hi = lo + step - 1n;
-          if (hi > to) hi = to;
-          continue;
+    for (let g = 0; g < (list?.length ?? 1);) {
+      const address = list ? list.slice(g, g + group) : f.address;
+      let shrunk = false;
+      for (let attempt = 0; ;) {
+        try {
+          out.push(...(await chain.getLogs({ address, topics: f.topics, fromBlock: lo, toBlock: hi })));
+          break;
+        } catch (e: any) {
+          const lim = rangeLimit(e), size = hi - lo + 1n, alim = addressLimit(e);
+          if (list && alim !== undefined && alim >= 1 && alim < group) { group = alim; shrunk = true; break; }
+          if (lim !== undefined && size > 1n) {
+            step = lim > 0n && lim < size ? lim : size / 2n;
+            hi = lo + step - 1n;
+            if (hi > to) hi = to;
+            if (g > 0) { shrunk = true; break; } // the groups already read covered the wider window: read this chunk again from the first group
+            continue;
+          }
+          if (!isRateLimit(e) || attempt >= maxRetries) throw new Error(`${RPC_REFUSED_DETAIL}: getLogs ${lo}-${hi} failed: ${String(own(e?.message ?? e)).slice(0, 200)}`);
+          await sleep(retryBaseMs * 2 ** attempt);
+          attempt++;
         }
-        if (!isRateLimit(e) || attempt >= maxRetries) throw new Error(`${RPC_REFUSED_DETAIL}: getLogs ${lo}-${hi} failed: ${String(e?.message ?? e).slice(0, 200)}`);
-        await sleep(retryBaseMs * 2 ** attempt);
-        attempt++;
       }
+      if (shrunk) { out.splice(chunkStart(out, lo)); g = 0; continue; }
+      g += group;
     }
     lo = hi + 1n;
   }
   return out;
 }
+
+/** The index of the first log at or after block `lo` (the logs read so far for the chunk being read again). */
+const chunkStart = (out: LogEntry[], lo: bigint): number => { let i = out.length; while (i > 0 && out[i - 1]!.blockNumber >= lo) i--; return i; };
 
 export async function scanLogs(chain: ChainReader, p: ScanParams): Promise<LogEntry[]> {
   if (p.chunk < 1) throw new Error("logChunk must be at least 1");
