@@ -10,7 +10,7 @@ import { keccak256, toHex } from "viem";
 import { Collector } from "./collector.ts";
 import { ERC1967_PROXY_ARTIFACT, compareDeployedCode, loadArtifact, tryLoadArtifact } from "./codehash.ts";
 import { AGENT_ROLE, DEPOSIT_PAUSER_ROLE, ADMIN_ROLE, SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED, Z32, ZERO } from "./constants.ts";
-import { scanLogs, topicToAddress } from "./logs.ts";
+import { scanLogs, topicToAddress, withSharedLogScan } from "./logs.ts";
 import { isAddress, lc } from "./manifests.ts";
 import { manifestBase, scopeTable } from "../stage-table.ts";
 import { USDC_ADDRESS, checkUsdcCode } from "../usdc.ts";
@@ -114,17 +114,21 @@ export async function verifyGatewaySystem(opts: VerifyOptions): Promise<VerifyRe
     c.fail("deployer: holds no role on the gateway (log scan)", "block number unreadable");
   } else {
     const to = opts.handoverBlock !== undefined && opts.handoverBlock < head ? opts.handoverBlock : head;
+    // Issue 1977: the three gateway scans read one shared pass over [fromBlock, head] and filter it in memory.
+    const lchain = opts.sharedLogScan === false ? chain : withSharedLogScan(chain, {
+      addresses: [gateway], topic0s: [SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED].map((s) => keccak256(toHex(s))), fromBlock: opts.fromBlock, toBlock: head, chunk, retryBaseMs,
+    });
     const scan = { address: gateway, fromBlock: opts.fromBlock, toBlock: to, chunk, retryBaseMs };
     await c.run(GATEWAY_AGENT_LABELS[0], async () => {
-      const logs = await scanLogs(chain, { ...scan, topics: [keccak256(toHex(SIG_AGENT_AUTHORIZED))] });
+      const logs = await scanLogs(lchain, { ...scan, topics: [keccak256(toHex(SIG_AGENT_AUTHORIZED))] });
       return { ok: logs.length === 0, detail: logs.length ? `${logs.length} AgentAuthorized logs from block ${opts.fromBlock}` : `no AgentAuthorized log from block ${opts.fromBlock} to ${to}` };
     });
     await c.run(GATEWAY_AGENT_LABELS[1], async () => {
-      const logs = await scanLogs(chain, { ...scan, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), AGENT_ROLE] });
+      const logs = await scanLogs(lchain, { ...scan, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), AGENT_ROLE] });
       return { ok: logs.length === 0, detail: logs.length ? `${logs.length} AGENT_ROLE grants, to ${[...new Set(logs.map((l) => topicToAddress(l.topics[2]!)))].join(", ")}` : `no AGENT_ROLE grant from block ${opts.fromBlock} to ${to}` };
     });
     await c.run("deployer: holds no role on the gateway (log scan)", async () => {
-      const logs = await scanLogs(chain, { address: gateway, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), null, padAddr(D)], fromBlock: opts.fromBlock, toBlock: head, chunk, retryBaseMs });
+      const logs = await scanLogs(lchain, { address: gateway, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), null, padAddr(D)], fromBlock: opts.fromBlock, toBlock: head, chunk, retryBaseMs });
       const roles = [...new Set(logs.map((l) => l.topics[1]!))];
       const held: string[] = [];
       for (const r of roles) if (await hasRole(chain, gateway, r as Hex, D)) held.push(r);

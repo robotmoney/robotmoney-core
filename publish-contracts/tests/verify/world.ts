@@ -172,13 +172,16 @@ export class FakeChain implements ChainReader {
     return { ok: true, data: "0x" };
   }
 
-  async getLogs(p: { address?: Address; topics: (Hex | Hex[] | null)[]; fromBlock: bigint; toBlock: bigint }): Promise<LogEntry[]> {
+  /** Every eth_getLogs filter asked, in order (issue 1977: the shared scan asks an address list). */
+  logFilters: { address?: Address | Address[]; topics: (Hex | Hex[] | null)[]; fromBlock: bigint; toBlock: bigint }[] = [];
+  async getLogs(p: { address?: Address | Address[]; topics: (Hex | Hex[] | null)[]; fromBlock: bigint; toBlock: bigint }): Promise<LogEntry[]> {
     if (p.toBlock - p.fromBlock + 1n > this.maxLogSpan) throw new Error("query exceeds max block range 2000");
     this.logCalls.push({ from: p.fromBlock, to: p.toBlock });
+    this.logFilters.push(p);
     if (this.rateLimits > 0) { this.rateLimits--; throw new Error("HTTP request failed. Status: 429 Too Many Requests"); }
     return this.logs.filter((l) =>
       l.blockNumber >= p.fromBlock && l.blockNumber <= p.toBlock &&
-      (!p.address || l.address.toLowerCase() === p.address.toLowerCase()) &&
+      (!p.address || (Array.isArray(p.address) ? p.address : [p.address]).some((x) => x.toLowerCase() === l.address.toLowerCase())) &&
       p.topics.every((t, i) => t === null || (Array.isArray(t) ? t.includes(l.topics[i]) : (l.topics[i] ?? "").toLowerCase() === t.toLowerCase())));
   }
 

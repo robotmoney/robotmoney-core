@@ -16,9 +16,9 @@ import { manifestBase, scopeTable } from "../stage-table.ts";
 import { verifyGatewaySystem } from "./gateway.ts";
 import { SAFE_MANIFEST } from "../core-wiring.ts";
 import { isAddress, loadManifests, lc, type ManifestVault } from "./manifests.ts";
-import { padTopic, scanLogs, topicToAddress } from "./logs.ts";
+import { RPC_REFUSED_DETAIL, padTopic, scanFailedDetail, scanLogs, topicToAddress, withSharedLogScan } from "./logs.ts";
 import { safeChecks } from "./safe-checks.ts";
-import { CODE_LABEL, finishUpgradeability, manifestDataOf, upgradeabilityChecks } from "./upgradeability.ts";
+import { CODE_LABEL, SCANNED_TOPIC0S as UPGRADE_TOPIC0S, finishUpgradeability, manifestDataOf, upgradeabilityChecks } from "./upgradeability.ts";
 import { USDC_ADDRESS, checkUsdcCode } from "../usdc.ts";
 import type { Address, ChainReader, DeployReceipt, ExpectedAsset, Hex, VaultSheet, VerifyOptions, VerifyReport, WeightSetterGating, WeightSetterHolder } from "./types.ts";
 
@@ -202,8 +202,14 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const head = await chain.blockNumber().catch(() => undefined);
   const chunk = opts.logChunk ?? 2000;
   const retryBaseMs = opts.retryBaseMs ?? 500;
-  const created = creationProof(chain, opts.fromBlock, opts.deployTxs, opts.adoptedContracts, head === undefined ? undefined : { head, chunk, retryBaseMs });
   const governed: Scanned[] = [...core, ...man.vaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address })), ...man.retiredVaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address }))];
+  // Issue 1977: every address-scoped log scan below reads one shared pass over [fromBlock, head] (the governed contracts, the gateway, the timelock and the adopted
+  // contracts, every event the scans name) and filters it in memory. The deployer's role scan has no address (it covers contracts no manifest names), so it scans on its own.
+  const lchain = head === undefined || opts.sharedLogScan === false ? chain : withSharedLogScan(chain, {
+    addresses: [...governed.map((g) => g.address), gateway, tl, ...(opts.adoptedContracts ?? [])].filter((a) => isAddress(a) && lc(a) !== lc(ZERO)),
+    topic0s: [...SCANNED_TOPIC0S, ...UPGRADE_TOPIC0S], fromBlock: opts.fromBlock, toBlock: head, chunk, retryBaseMs,
+  });
+  const created = creationProof(lchain, opts.fromBlock, opts.deployTxs, opts.adoptedContracts, head === undefined ? undefined : { head, chunk, retryBaseMs });
   if (head === undefined) {
     if (withGateway) for (const l of AGENT_LABELS) c.fail(l, "block number unreadable");
     for (const v of man.vaults) for (const l of vaultScanLabels(v)) c.fail(l, "block number unreadable");
@@ -211,11 +217,11 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     c.fail(ROLE_HOLDERS_LABEL, "block number unreadable");
   } else {
     // each label is a c.run, so a failed log scan fails that label with the error and never skips it
-    for (const v of man.vaults) await vaultScanChecks(c, chain, v, sheet.vaults[v.key], sheet.emergency, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
-    if (withGateway) await agentChecks(c, chain, gateway, tlManifest, { fromBlock: opts.fromBlock, head: opts.handoverBlock !== undefined && opts.handoverBlock < head ? opts.handoverBlock : head, chunk, retryBaseMs, created });
+    for (const v of man.vaults) await vaultScanChecks(c, lchain, v, sheet.vaults[v.key], sheet.emergency, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
+    if (withGateway) await agentChecks(c, lchain, gateway, tlManifest, { fromBlock: opts.fromBlock, head: opts.handoverBlock !== undefined && opts.handoverBlock < head ? opts.handoverBlock : head, chunk, retryBaseMs, created });
     // Issue 1851: the deployer can only have been granted a role on a contract that exists, so the scan start must precede the creation of every governed contract.
-    await roleScan(c, chain, D, governed, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
-    await roleHolderEnumeration(c, chain, governed, {
+    await roleScan(c, lchain, D, governed, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
+    await roleHolderEnumeration(c, lchain, governed, {
       timelock: tl, accounts: [tl, safe, byName.governance!, sheet.emergency, sheet.pauser], receipt: byName.receipt!, gateway, router, ...(byName.icpolicy ? { icPolicy: byName.icpolicy } : {}),
     }, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
   }
@@ -247,7 +253,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   }
   await c.runEq("timelock: EXECUTOR_ROLE open to address zero", () => hasRole(chain, tl, EXECUTOR_ROLE, ZERO), true);
   await c.runEq("timelock: EXECUTOR_ROLE not held by deployer", () => hasRole(chain, tl, EXECUTOR_ROLE, D), false);
-  await timelockHolderScan(c, chain, tl, safe, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
+  await timelockHolderScan(c, lchain, tl, safe, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs, created });
   await c.runEq("timelock: admin role held by timelock itself", () => hasRole(chain, tl, Z32, tl), true);
   await c.runEq("timelock: admin role not held by deployer", () => hasRole(chain, tl, Z32, D), false);
   await c.runEq("timelock: admin role not held by safe", () => hasRole(chain, tl, Z32, safe), false);
@@ -283,7 +289,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   }
 
   // ---- upgradeability (issue 1809): every proxied core contract is the build's ERC-1967 proxy in the sheet's release mode, governed by the timelock alone
-  const upgradeability = await upgradeabilityChecks(c, chain, table, { sheet, timelock: tl, artifactsDir: opts.artifactsDir, proxyBuildDirs: opts.proxyBuildDirs, coreDir: opts.coreDir, data: manifestDataOf(table, man.files, man.vaults), now: opts.now, ...(head !== undefined ? { scan: { fromBlock: opts.fromBlock, head, chunk, retryBaseMs } } : {}) });
+  const upgradeability = await upgradeabilityChecks(c, lchain, table, { sheet, timelock: tl, artifactsDir: opts.artifactsDir, proxyBuildDirs: opts.proxyBuildDirs, coreDir: opts.coreDir, data: manifestDataOf(table, man.files, man.vaults), now: opts.now, ...(head !== undefined ? { scan: { fromBlock: opts.fromBlock, head, chunk, retryBaseMs } } : {}) });
 
   // ---- single-vault redeploys (issue 1796): only when the run has one, so a run without one keeps the label set of every other deployment
   // ---- retired vaults (issue 1912): only when the run has one, so a run without one keeps the label set of every other deployment
@@ -505,7 +511,7 @@ async function currentHolders(chain: ChainReader, at: Address, role: Hex, s: { f
 }
 
 /** Issue 1851: the detail prefix of a scan label that failed because the RPC refused a read, not because the chain is wrong. verify-stage.ts does not pause the vaults for those alone. */
-export const RPC_REFUSED_DETAIL = "RPC_REFUSED";
+export { RPC_REFUSED_DETAIL };
 /** The canonical CREATE2 factory (libs-adopt.ts CREATE2_FACTORY): the timelock stage creates the timelock through it, so that receipt names no contractAddress. */
 const CREATE2_FACTORY = "0x4e59b44847b379578588920ca78fbf26c0b4956c";
 
@@ -787,14 +793,14 @@ async function agentChecks(
     const logs = [...(await scanLogs(chain, { ...base, topics: [t1] })), ...(await scanLogs(chain, { ...base, topics: [t2] }))];
     const agents = [...new Set(logs.map((l) => lc(topicToAddress(l.topics[1]))))];
     c.push(AGENT_LABELS[0]!, logs.length === 0, logs.length ? `${logs.length} agent logs from block ${s.fromBlock}, agents ${agents.join(", ")}` : `no AgentAuthorized or AgentOwnershipTransferred log from block ${s.fromBlock}`);
-  } catch (e: any) { c.fail(AGENT_LABELS[0]!, `scan failed: ${String(e?.message ?? e).slice(0, 300)}`); }
+  } catch (e: any) { c.fail(AGENT_LABELS[0]!, scanFailedDetail(e)); }
   if (late !== undefined) c.fail(AGENT_LABELS[1]!, late);
   else try {
     const logs = await scanLogs(chain, { ...base, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), AGENT_ROLE] });
     const holders: string[] = [];
     for (const who of new Set(logs.map((l) => topicToAddress(l.topics[2])))) if (await hasRole(chain, gateway, AGENT_ROLE, who)) holders.push(who);
     c.push(AGENT_LABELS[1]!, holders.length === 0, holders.length ? `holders ${holders.join(", ")}` : `${logs.length} AGENT_ROLE grants scanned, none held`);
-  } catch (e: any) { c.fail(AGENT_LABELS[1]!, `scan failed: ${String(e?.message ?? e).slice(0, 300)}`); }
+  } catch (e: any) { c.fail(AGENT_LABELS[1]!, scanFailedDetail(e)); }
 }
 
 /** Log-enumerated scan of the timelock's PROPOSER, CANCELLER and EXECUTOR holders: only the Safe, plus address(0) as the open executor. An EOA holder is named. */
@@ -820,9 +826,12 @@ async function timelockHolderScan(c: Collector, chain: ChainReader, tl: Address,
     }
     c.push(label, bad.length === 0, bad.length ? bad.join(", ") : `${pairs.size} grants scanned, holders are the safe and the open executor`);
   } catch (e: any) {
-    c.fail(label, `scan failed: ${String(e?.message ?? e).slice(0, 300)}`);
+    c.fail(label, scanFailedDetail(e));
   }
 }
+
+/** Issue 1977: topic 0 of every event the address-scoped scans of this file read, so the shared pass reads them all. */
+const SCANNED_TOPIC0S: Hex[] = [SIG_ROLE_GRANTED, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP, SIG_ADAPTER_ALLOWED, SIG_CODEHASH_ALLOWED].map((s) => keccak256(toHex(s)));
 
 const ROLE_HOLDERS_LABEL = "roles: every holder of every role on every governed contract is an expected account (log scan)";
 
@@ -869,7 +878,7 @@ async function roleHolderEnumeration(
     }
     c.push(ROLE_HOLDERS_LABEL, bad.length === 0, bad.length ? `unexpected holders: ${bad.join(", ")}` : `${grants} grants scanned on ${governed.length} contracts, every holder is expected`);
   } catch (e: any) {
-    c.fail(ROLE_HOLDERS_LABEL, `scan failed: ${String(e?.message ?? e).slice(0, 300)}`);
+    c.fail(ROLE_HOLDERS_LABEL, scanFailedDetail(e));
   }
 }
 
@@ -887,7 +896,7 @@ async function roleScan(c: Collector, chain: ChainReader, deployer: Address, gov
     for (const { at, role } of pairs.values()) if (await hasRole(chain, at, role, deployer)) held.push(`${at}:${role}`);
     c.push(label, held.length === 0, held.length ? `deployer still holds ${held.join(", ")}` : `${pairs.size} grants scanned, none held`);
   } catch (e: any) {
-    c.fail(label, `scan failed: ${String(e?.message ?? e).slice(0, 300)}`);
+    c.fail(label, scanFailedDetail(e));
   }
 }
 
