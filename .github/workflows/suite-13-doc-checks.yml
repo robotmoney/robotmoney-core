@@ -506,7 +506,7 @@ jobs:
       # have. The unit test plants each drift first. Runs on every PR, so a CLI change cannot strand the runbook.
       - name: Contract QA runbook is valid (self-test, then the check)
         run: |
-          bun test scripts/runbook/validate-contract-qa.test.ts scripts/runbook/run-record.test.ts scripts/runbook/run.test.ts scripts/runbook/receipt-payload.test.ts --timeout 60000
+          bun test scripts/runbook/validate-contract-qa.test.ts scripts/runbook/run-record.test.ts scripts/runbook/run.test.ts scripts/runbook/receipt-payload.test.ts scripts/runbook/qa-assert.test.ts --timeout 60000
           bun scripts/runbook/validate-contract-qa.ts
           # Issue 1916: the committed Twin stage sheet satisfies the sheet check P0.17 runs, so a sheet that drifts from the validator fails here, not in a QA run.
           bun scripts/runbook/validate-contract-qa.ts --check-sheet deployments/twin-918453/stage-sheet.env --target twin --owner-signers 0

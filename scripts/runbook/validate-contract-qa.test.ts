@@ -1,9 +1,10 @@
 // Drift test for scripts/runbook/validate-contract-qa.ts: the committed contract QA runbook is clean, and each planted drift fails.
 import { expect, test } from "bun:test";
+import { clearVectorProblems } from "./validate-contract-qa.ts";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { QA_DIR, ROOT, applicableSteps, loadModel, localForkProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, mainOutProblems, unwindGuardProblems, validateAll } from "./validate-contract-qa.ts";
+import { QA_DIR, ROOT, applicableSteps, loadModel, localForkProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, mainOutProblems, rebalanceRoundProblems, unwindGuardProblems, validateAll } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
 const RELEASE = "releases/v0.5.0.yaml";
@@ -219,7 +220,11 @@ test("the committed v0.6.0 runbook runs the runbook 4.15 commands against the v0
   const added = r.steps.filter((s) => s.added === "v0.6.0" && s.phase === 8);
   expect(added.length).toBeGreaterThanOrEqual(UPGRADE_FROM_V050_COMMANDS.length);
   let from = 0;
-  for (const line of UPGRADE_FROM_V050_COMMANDS) {
+  // issue 1980 (owner decision): the runbook never clears the router's voted vector, so the yaml runs every 4.15 command but the clear, and never the clear
+  const CLEAR = "govern --row clear-voted-weights";
+  expect(UPGRADE_FROM_V050_COMMANDS.filter((l) => l.includes(CLEAR))).toHaveLength(1);
+  expect(added.some((s) => s.cmds.some((c) => c.join(" ").includes(CLEAR)))).toBe(false);
+  for (const line of UPGRADE_FROM_V050_COMMANDS.filter((l) => !l.includes(CLEAR))) {
     const want = JSON.stringify(toYaml(line));
     const at = added.findIndex((s, i) => i >= from && s.cmds.some((c) => JSON.stringify(c) === want));
     expect(at, line).toBeGreaterThanOrEqual(from);
@@ -240,6 +245,41 @@ test("the committed v0.6.0 runbook runs the runbook 4.15 commands against the v0
   expect(common[common.indexOf("--core-dir") + 1]).toBe("{v050CoreDir}");
   expect(common[common.indexOf("--core-sha") + 1]).toBe(V050_SHA);
   expect(added.find((s) => s.id === "P8.01-v050-checkout")!.cmds.flat().join(" ")).toContain(V050_SHA);
+});
+
+// Issue 1980 (owner decision): the runbook never clears the router's voted vector. The rule covers the template and the release being prepared; a pinned record is not reopened.
+test("a step that clears the router's voted vector fails, by govern row or by a direct call", () => {
+  const step = (id: string, cmd: string[]) => ({ id, cmds: [cmd] });
+  expect(clearVectorProblems([step("P8.14-x", ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "clear-voted-weights", "{v050common}"])], "releases/v0.6.0.yaml")).toHaveLength(1);
+  expect(clearVectorProblems([step("P8.14-x", ["bash", "-c", "bun publish-contracts/src/cli.ts govern --row=clear-voted-weights"])], "template.yaml")).toHaveLength(1);
+  expect(clearVectorProblems([step("P5.90-x", ["bash", "scripts/runbook/cast-send.sh", "{m:governance.governance}", "clearVotedWeights()"])], "template.yaml")).toHaveLength(1);
+  expect(clearVectorProblems([step("P5.03-apply-receipt", ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "apply-receipt"]), step("P8.24-x", ["bash", "-c", 'test "$(cast call r "votedWeightsActive()(bool)")" = true'])], "template.yaml")).toEqual([]);
+  const clear = `  - id: "P8.14-v050-clear-voted-weights"
+    standing: ["4.15"]
+    description: "the Safe clears the active vector before the retire"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "clear-voted-weights", "{v050common}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    maxMinutes: 60
+    added: "v0.6.0"
+`;
+  const p = problemsWith("releases/v0.6.0.yaml", (t) => t.replace('  - id: "P8.15-v050-retire-vault"', `${clear}  - id: "P8.15-v050-retire-vault"`));
+  expect(p.filter((x) => x.includes("never clears the router's voted vector"))).toEqual(["releases/v0.6.0.yaml P8.14-v050-clear-voted-weights: the runbook never clears the router's voted vector (govern --row clear-voted-weights, owner decision, issue 1980)"]);
+  // the pinned records keep their history: v0.4.0 and v0.5.0 still validate, and the rule is not run on them
+  expect(validateAll(ROOT, model).problems).toEqual([]);
+  const plant = (t: string): string => t.replace(/(\n  - id: "P5\.54-apply-receipt-execute"[\s\S]*?cmds:\n)/, `$1      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "clear-voted-weights", "{common}", "{gate}"]\n`);
+  expect(plant(readFileSync(join(ROOT, QA_DIR, RELEASE), "utf8"))).toContain("clear-voted-weights\", \"{common}");
+  const pinned = problemsWith(RELEASE, plant);
+  expect(pinned.filter((x) => x.includes("never clears the router's voted vector"))).toEqual([]);
 });
 
 // Issue 1929: a forge build of the main checkout after the library-linked publish replaces the out/ that every later verify reads.
@@ -315,8 +355,19 @@ test("the committed v0.6.0 upgrade flow records and applies a receipt, deposits 
   const order = r.steps.map((s) => s.id);
   for (const [a, b] of [["P8.15-v050-retire-vault", "P8.20-v050-register-submitter"], ["P8.22-v050-record-receipt", "P8.23-v050-apply-receipt"], ["P8.34-v050-pause-all", "P8.35-v050-redeem-while-paused"], ["P8.36-v050-unpause", "P8.37-v050-verify-final"], ["P10.52-record-signoff", "P10.06-v050-teardown"]]) expect(order.indexOf(a), `${a} before ${b}`).toBeLessThan(order.indexOf(b));
   // the governed operations are gated on the done-* markers P8.06 writes, so a rerun on an upgraded deployment skips them by their own gate
-  for (const [id, marker] of [["P8.10-v050-deploy-gateway-impl", "done-gateway-upgrade"], ["P8.13-v050-upgrade-receipt", "done-receipt-upgrade"], ["P8.14-v050-clear-voted-weights", "done-clear-voted-weights"], ["P8.15-v050-retire-vault", "done-retire-vault"]]) expect(r.steps.find((s) => s.id === id)!.gateAbsent, id).toBe(`{runDir}/state/${marker}`);
-  expect(r.steps.find((s) => s.id === "P8.07-v050-done-markers")!.writes).toEqual(expect.arrayContaining(["done-gateway-upgrade", "done-receipt-upgrade", "done-clear-voted-weights", "done-retire-vault"]));
+  for (const [id, marker] of [["P8.10-v050-deploy-gateway-impl", "done-gateway-upgrade"], ["P8.13-v050-upgrade-receipt", "done-receipt-upgrade"], ["P8.15-v050-retire-vault", "done-retire-vault"]]) expect(r.steps.find((s) => s.id === id)!.gateAbsent, id).toBe(`{runDir}/state/${marker}`);
+  expect(r.steps.find((s) => s.id === "P8.07-v050-done-markers")!.writes).toEqual(["done-gateway-upgrade", "done-receipt-upgrade", "done-retire-vault"]);
+  // issue 1980 (owner decision): the flow never clears the router's voted vector, so a rerun or a resume cannot drop the vector it applied
+  expect(order.some((id) => id.startsWith("P8.14"))).toBe(false);
+  expect(r.steps.flatMap((s) => s.cmds.map((c) => c.join(" "))).join("\n")).not.toMatch(/clear-voted-weights|clearVotedWeights/);
+  // right before the post-rebalance router deposit the router still routes by the applied receipt: active, and the effective weights equal the payload's
+  const deposit = r.steps.find((s) => s.id === "P8.29-v050-router-deposit")!.cmds.map((c) => c.join(" "));
+  const send = deposit.findIndex((c) => c.includes("deposit(uint256,uint256[])"));
+  const active = deposit.findIndex((c) => /votedWeightsActive\(\)\(bool\)"\)" = true/.test(c));
+  const vector = deposit.findIndex((c) => c.includes("{receiptFile}") && c.includes("getEffectiveWeights()") && c.includes('test "$got" = "$want"'));
+  expect(active).toBeGreaterThanOrEqual(0);
+  expect(vector).toBeGreaterThanOrEqual(0);
+  expect(Math.max(active, vector)).toBeLessThan(send);
 });
 
 test("the template applies the receipt it records and deposits through the router, and the go marks the senders", () => {
@@ -410,4 +461,95 @@ test("the agent of a v0.6.0 gateway step may deposit only into the three vaults:
     expect(step, file).toContain("AgentDeposit(bytes32,bytes32,address,address,uint256,uint256,uint64)");
     expect(step, file).not.toMatch(/router/i);
   }
+});
+
+// Issue 1984: the router rebalance is the apply-receipt step. Each flow that runs one deposits into a vault, deposits through the router and redeems before AND after it.
+const send = (call: string): string[] => ["bash", "scripts/runbook/cast-send.sh", "0xV", call, "1", "{cast}"];
+const roundStep = (id: string, extra: Record<string, unknown> = {}) => ({ id, standing: ["4.4"], description: "d", host: "control", phase: 5, cmds: [["true"]], expectExit: 0, receipts: [], irreversible: false, ...extra });
+const ROUND = (tag: string) => [
+  roundStep(`P5.1${tag}-deposit`, { cmds: [send("deposit(uint256,address)")], exercises: "vault-deposit" }),
+  roundStep(`P5.2${tag}-router`, { cmds: [send("deposit(uint256,uint256[])")], exercises: "router-deposit" }),
+  roundStep(`P5.3${tag}-redeem`, { cmds: [["bash", "-c", 'bash scripts/runbook/cast-send.sh "$v" "$fn(uint256,address,address)" "$s" {castFlagsInline}']], exercises: "redeem" }),
+];
+const APPLY = roundStep("P5.03-apply-receipt", { cmds: [["bun", "publish-contracts/src/cli.ts", "govern", "--row", "apply-receipt", "{common}"]], irreversible: true, onlyFor: ["twin", "rehearsal"] });
+
+test("a flow that deposits, routes and redeems before and after its apply-receipt step passes the rebalance rule (issue 1984)", () => {
+  expect(rebalanceRoundProblems([...ROUND("a"), APPLY, ...ROUND("b")] as never, "t")).toEqual([]);
+  // a flow with no apply-receipt step has no rebalance to bracket
+  expect(rebalanceRoundProblems(ROUND("a") as never, "t")).toEqual([]);
+  // the committed template and the unpinned v0.6.0 pass in both flows; the pinned v0.4.0 and v0.5.0 records are not reopened
+  const all = validateAll(ROOT, model);
+  expect(rebalanceRoundProblems(all.template.steps, "template.yaml")).toEqual([]);
+  expect(rebalanceRoundProblems(all.releases.get("v0.6.0")!.steps, "v0.6.0")).toEqual([]);
+  expect(all.problems).toEqual([]);
+});
+
+test("a flow with no deposit, router deposit or redeem before the apply-receipt step is refused (issue 1984)", () => {
+  const p = rebalanceRoundProblems([APPLY, ...ROUND("b")] as never, "t").join("\n");
+  for (const k of ["vault-deposit", "router-deposit", "redeem"]) expect(p).toContain(`the new flow on twin has no ${k} step before P5.03-apply-receipt`);
+  expect(p).toContain("the new flow on rehearsal has no redeem step before");
+  // on production the apply step does not run, so nothing is required there
+  expect(p).not.toContain("on production");
+  // the committed v0.6.0 without its upgrade-flow round before P8.23 is refused
+  const v = problemsWith("releases/v0.6.0.yaml", (t) => ["P8.41-v050-pre-deposit-rmusdc", "P8.42-v050-pre-deposit-rmproto", "P8.43-v050-pre-deposit-rmrwa"].reduce((x, id) => x.replace(stepBlock(x, id), ""), t)).join("\n");
+  expect(v).toContain("the upgrade flow on rehearsal has no vault-deposit step before P8.23-v050-apply-receipt");
+  // and the template without its round before P5.03 is refused
+  const tpl = problemsWith("template.yaml", (t) => t.replace(stepBlock(t, "P5.30-pre-router-deposit"), "")).join("\n");
+  expect(tpl).toContain("template.yaml: the new flow on twin has no router-deposit step before P5.03-apply-receipt");
+});
+
+test("a flow with no deposit, router deposit or redeem after the apply-receipt step is refused (issue 1984)", () => {
+  const p = rebalanceRoundProblems([...ROUND("a"), APPLY] as never, "t").join("\n");
+  for (const k of ["vault-deposit", "router-deposit", "redeem"]) expect(p).toContain(`the new flow on twin has no ${k} step after P5.03-apply-receipt`);
+  // the committed v0.6.0 with no redeem after P8.23 (the sweep and the paused redeem dropped) is refused
+  const v = problemsWith("releases/v0.6.0.yaml", (t) => t.replace(stepBlock(t, "P8.50-v050-sweep-positions"), "").replace(stepBlock(t, "P8.35-v050-redeem-while-paused"), "")).join("\n");
+  expect(v).toContain("the upgrade flow on twin has no redeem step after P8.23-v050-apply-receipt");
+  // a step of the other flow, or one that does not run on that target, does not count
+  const other = rebalanceRoundProblems([...ROUND("a").map((s) => ({ ...s, flow: "upgrade" })), APPLY, ...ROUND("b")] as never, "t").join("\n");
+  expect(other).toContain("the new flow on twin has no vault-deposit step before");
+  const prodOnly = rebalanceRoundProblems([...ROUND("a").map((s) => ({ ...s, onlyFor: "production" })), APPLY, ...ROUND("b")] as never, "t").join("\n");
+  expect(prodOnly).toContain("the new flow on rehearsal has no router-deposit step before");
+});
+
+test("an exercises label with no matching journaled send, or an unknown label, is refused: a label never stands in for the send (issue 1984)", () => {
+  const p = rebalanceRoundProblems([roundStep("P5.10-fake", { cmds: [["bash", "-c", "cast call 0xV 'deposit(uint256,address)'"]], exercises: "vault-deposit" }), roundStep("P5.11-wrong", { cmds: [send("deposit(uint256,address)")], exercises: "router-deposit" })] as never, "t");
+  expect(p).toEqual(["t P5.10-fake: exercises vault-deposit, but no command sends that call through scripts/runbook/cast-send.sh", "t P5.11-wrong: exercises router-deposit, but no command sends that call through scripts/runbook/cast-send.sh"]);
+  expect(problemsWith("template.yaml", (t) => t.replace('    exercises: "redeem"\n', '    exercises: "withdraw"\n')).join("\n")).toContain("exercises is vault-deposit | router-deposit | redeem");
+  // the setup deposit of the Twin's dirty pre-state and the cleanup redeem of the live pre-state carry no label: they prove no round
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  for (const id of ["P8.05-v050-twin-dirty-pre-state", "P8.06-v050-pre-state", "P8.33-v050-retired-vault", "P6.24-redeem-retired-vault"]) expect(r.steps.find((s) => s.id === id)!.exercises, id).toBeUndefined();
+});
+
+test("the rounds before the rebalance run before the receipt is recorded, check the router against the pre-rebalance vector and write their own state; the round after proves the split changed (issue 1984)", () => {
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  const ids = r.steps.map((s) => s.id);
+  const before = (a: string, b: string) => expect(ids.indexOf(a), `${a} before ${b}`).toBeLessThan(ids.indexOf(b));
+  for (const [first, guard, router, record, apply, post, changed] of [
+    ["P4.01-verify-post-govern", "P5.05-receipt-changes-split", "P5.30-pre-router-deposit", "P5.02-record-receipt", "P5.03-apply-receipt", "P6.30-router-deposit", "P6.32-router-split-changed"],
+    ["P8.17-v050-evidence", "P8.40-v050-receipt-changes-split", "P8.47-v050-pre-router-deposit", "P8.22-v050-record-receipt", "P8.23-v050-apply-receipt", "P8.29-v050-router-deposit", "P8.49-v050-router-split-changed"],
+  ]) {
+    before(first!, guard!); before(guard!, router!); before(router!, record!); before(record!, apply!); before(apply!, post!); before(post!, changed!);
+    const text = (id: string) => r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" ")).join("\n");
+    // the pre-rebalance vector is the effective vector, whatever votedWeightsActive reads: the runbook never clears a vector to reach the default (issue 1980)
+    expect(text(guard!)).toContain("getEffectiveWeights()");
+    expect(text(guard!)).not.toContain("votedWeightsActive");
+    expect(text(guard!)).not.toContain("getDefaultWeights");
+    expect(text(guard!)).toContain("receipt-changes-split");
+    expect(r.steps.find((s) => s.id === guard)!.description).not.toContain("P8.14");
+    // the pre-rebalance router deposit checks its legs against that same saved vector
+    const saved = guard!.startsWith("P8") ? "v050-pre-router-weights" : "pre-router-weights";
+    expect(text(guard!)).toContain(`> {runDir}/state/${saved}`);
+    expect(text(router!)).toContain(`router-legs {runDir}/state/${saved.replace("weights", "deposit.json")} {runDir}/state/${saved}`);
+    expect(text(router!)).toContain("router-legs");
+    expect(text(changed!)).toContain("legs-differ");
+  }
+  // the funding check runs before the first send of the upgrade flow's rounds
+  before("P8.25-v050-funding", "P8.41-v050-pre-deposit-rmusdc");
+  // the pre-rebalance round never writes the state the round after it writes
+  const writes = (pred: (id: string) => boolean) => new Set(r.steps.filter((s) => pred(s.id)).flatMap((s) => s.writes ?? []));
+  const pre = writes((id) => /^P5\.(05|[123]\d)-|^P8\.4[0-8]-/.test(id));
+  const post = writes((id) => /^P6\.|^P8\.(2[6-9]|49|50)-/.test(id));
+  expect([...pre].filter((w) => post.has(w))).toEqual([]);
+  // the Twin's receipt vectors weight every vault and differ from the default vector the sheet and the retire set, so the Twin run proves the split changed with three legs
+  for (const id of ["P5.00-receipt-payload", "P8.19-v050-receipt-payload"]) expect(r.steps.find((s) => s.id === id)!.cmds[0]).toContain("USDC:8000,PROTO:1000,RWA:1000");
 });

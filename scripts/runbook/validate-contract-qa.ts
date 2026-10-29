@@ -88,7 +88,7 @@ const PLACEHOLDER = /\{([A-Za-z][A-Za-z0-9]*)(?::([A-Za-z0-9_.\-]+))?\}/g;
 
 // ─── the step schema ────────────────────────────────────────────────────────────────────────────────────────────
 export const HOSTS = ["control", "stage"] as const;
-const STEP_KEYS = new Set(["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added"]);
+const STEP_KEYS = new Set(["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added", "exercises"]);
 export const ID_PATTERN = /^P(\d{1,2})\.(\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export interface RunbookStep {
@@ -96,7 +96,14 @@ export interface RunbookStep {
   env?: Record<string, string>; expectExit: number | number[]; receipts: { dir: string; pattern: string; required: boolean }[];
   irreversible: boolean; onlyFor?: string | string[]; flow?: string | string[]; refresh?: boolean; notBefore?: { afterStep: string; hours: number | "timelockDelay" };
   gateAbsent?: string; sheetIs?: Record<string, string>; go?: string; triage?: boolean; maxMinutes?: number; writes?: string[]; added?: string;
+  exercises?: Exercise;
 }
+/**
+ * Issue 1984: what a user-facing round step proves on the vaults, named on the step (`exercises:`): a direct vault deposit, a deposit through the router, or a redeem.
+ * The rebalance rule (rebalanceRoundProblems) counts these steps before and after the apply-receipt step of each flow.
+ */
+export const EXERCISES = ["vault-deposit", "router-deposit", "redeem"] as const;
+export type Exercise = (typeof EXERCISES)[number];
 export interface ScopeEntry { pr: number; what: string; check?: string; none?: string }
 export interface Decision { id: string; question: string; status: "open" | "decided"; answer: string | null; decidedOn: string | null; ref: string | null }
 export interface ReleaseRunbook { release: string; template: string; templateSha?: string; productionReady: boolean; notes?: string; recovery: string; decisions: Decision[]; scope: ScopeEntry[]; flows?: Partial<Record<TargetName, FlowName[]>>; vaults?: string[]; steps: RunbookStep[] }
@@ -162,9 +169,10 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
   if (raw.maxMinutes !== undefined && !(Number.isInteger(raw.maxMinutes) && (raw.maxMinutes as number) > 0)) errors.push(`${at}: maxMinutes is a positive integer`);
   if (raw.writes !== undefined && !(isStringArray(raw.writes) && raw.writes.length > 0 && raw.writes.every((w) => /^[A-Za-z0-9][A-Za-z0-9.\-]*$/.test(w)))) errors.push(`${at}: writes is a list of state names`);
   if (raw.added !== undefined && (typeof raw.added !== "string" || raw.added === "")) errors.push(`${at}: added is a non-empty release name`);
+  if (raw.exercises !== undefined && !(EXERCISES as readonly string[]).includes(raw.exercises as string)) errors.push(`${at}: exercises is ${EXERCISES.join(" | ")}`);
   if (errors.length > 0) return { errors };
   const step: Record<string, unknown> = {};
-  for (const k of ["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added"]) if (raw[k] !== undefined) step[k] = raw[k];
+  for (const k of ["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added", "exercises"]) if (raw[k] !== undefined) step[k] = raw[k];
   return { step: step as unknown as RunbookStep };
 }
 
@@ -265,7 +273,7 @@ export function loadModel(root: string = ROOT): CliModel {
   tools.set("scripts/stage/dapp-served-check.ts", { flags: new Set() });
   tools.set("scripts/release/preflight-guards.sh", { flags: new Set(["dependency-manifest", "contract"]) });
   tools.set("scripts/runbook/validate-contract-qa.ts", { flags: new Set(["release", "target", "runnable", "check-sheet", "owner-signers", "root"]) });
-  tools.set("scripts/runbook/qa-assert.ts", { verbs: new Set(["eq", "ge", "within-bps", "receipt-id", "receipt-digest"]), flags: new Set() });
+  tools.set("scripts/runbook/qa-assert.ts", { verbs: new Set(["eq", "ge", "within-bps", "receipt-id", "receipt-digest", "sub", "router-legs", "legs-differ", "receipt-changes-split"]), flags: new Set() });
   tools.set("scripts/runbook/run-record.ts", { verbs: new Set(["go", "nonce", "report", "signoff"]), flags: new Set(["kind", "run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag", "step", "vaults", "release", "sender", "mark"]) });
   tools.set("scripts/runbook/receipt-payload.ts", { flags: new Set(["out", "weights", "session-id"]) });
 
@@ -615,6 +623,19 @@ export function localForkProblems(steps: Pick<RunbookStep, "id" | "cmds">[]): st
   }
   return out;
 }
+/**
+ * PURE (issue 1980). No step clears the router's voted vector: neither the `govern --row clear-voted-weights` round nor a direct clearVotedWeights() call. The owner
+ * decided the runbook never clears a vector (a rerun or a resume of the v0.6.0 upgrade flow cleared the vector it had applied itself, and later deposits routed on the
+ * default). Checked on the template and the release being prepared; a pinned release is a record and is not reopened.
+ */
+export function clearVectorProblems(steps: Pick<RunbookStep, "id" | "cmds">[], where: string): string[] {
+  const out: string[] = [];
+  for (const s of steps) for (const c of s.cmds) {
+    const joined = expandArgv(c).join(" ");
+    if (/--row[\s=]+clear-voted-weights\b|\bclearVotedWeights\(/.test(joined)) out.push(`${where} ${s.id}: the runbook never clears the router's voted vector (govern --row clear-voted-weights, owner decision, issue 1980)`);
+  }
+  return out;
+}
 /** The flags run-record.ts needs to compute the report (README "Run it"): without one the step exits 2 at run time, so the validator refuses the file before a run. */
 export const RECORD_FLAGS = ["run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag", "release"] as const;
 /** PURE. Every step that runs run-record.ts report or signoff names every flag the report needs, `--release` included. */
@@ -662,6 +683,41 @@ export function mainOutProblems(r: Pick<ReleaseRunbook, "release" | "steps">): s
   return out;
 }
 
+/** The command shape each `exercises` value must have: a journaled send (cast-send.sh) of the vault or router call it names. */
+const EXERCISE_SHAPE: Readonly<Record<Exercise, RegExp>> = {
+  "vault-deposit": /deposit\(uint256,address\)/,
+  "router-deposit": /deposit\(uint256,uint256\[\]\)/,
+  redeem: /(?:redeem|redeemInKind|\$fn)\(uint256,address,address\)/,
+};
+/** A step runs the apply-receipt govern row: the rebalance (publish-contracts/src/govern.ts, "that submission is the rebalance"). */
+const appliesReceipt = (s: Pick<RunbookStep, "cmds">): boolean => s.cmds.some((c) => expandArgv(c).join(" ").includes("--row apply-receipt"));
+
+/**
+ * PURE (issue 1984). The router rebalance is the apply-receipt step. ADR-0003 routes only new deposits by the new vector, so a run proves the vaults and the router on
+ * BOTH sides of it: for every flow and target where an apply-receipt step runs, a direct vault deposit, a router deposit and a redeem run before the first such step, and
+ * again after the last one. A step counts by its explicit `exercises:` field, never by its command alone: a setup deposit (the Twin's dirty pre-state), a cleanup redeem
+ * (the live pre-state), a conditional retired-vault redeem or a refused deposit probe has the same `cast send` shape and proves no round. A step that carries the field must
+ * also have that shape (a journaled cast-send.sh of the call), so the label cannot stand in for the send.
+ */
+export function rebalanceRoundProblems(steps: RunbookStep[], where: string): string[] {
+  const out: string[] = [];
+  for (const s of steps) {
+    if (s.exercises === undefined) continue;
+    const joined = s.cmds.map((c) => expandArgv(c).join(" ")).filter((j) => j.includes("scripts/runbook/cast-send.sh"));
+    if (!joined.some((j) => EXERCISE_SHAPE[s.exercises!].test(j))) out.push(`${where} ${s.id}: exercises ${s.exercises}, but no command sends that call through scripts/runbook/cast-send.sh`);
+  }
+  for (const flow of FLOW_NAMES) for (const target of TARGET_NAMES) {
+    const run = steps.filter((s) => flowsOf(s).includes(flow) && (onlyForList(s).length === 0 || onlyForList(s).includes(target)));
+    const applies = run.map((s, i) => (appliesReceipt(s) ? i : -1)).filter((i) => i >= 0);
+    if (applies.length === 0) continue;
+    const apply = run[applies[0]!]!.id;
+    for (const [side, part] of [["before", run.slice(0, applies[0]!)], ["after", run.slice(applies.at(-1)! + 1)]] as const) {
+      for (const kind of EXERCISES) if (!part.some((s) => s.exercises === kind)) out.push(`${where}: the ${flow} flow on ${target} has no ${kind} step ${side} ${apply} (the router rebalance): deposit, router deposit and redeem run on both sides of it (issue 1984)`);
+    }
+  }
+  return out;
+}
+
 export function validateAll(root: string = ROOT, model: CliModel = loadModel(root), pinnedTemplate: (sha: string) => string | undefined = templateAtCommit): Loaded {
   const problems: string[] = [];
   const tplPath = join(root, QA_DIR, "template.yaml");
@@ -670,7 +726,9 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
   try { template = parseTemplate(tplText); } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   problems.push(...secretProblems(tplText, "template.yaml"));
   problems.push(...commandProblems(template.steps, model, root));
+  problems.push(...clearVectorProblems(template.steps, "template.yaml"));
   problems.push(...recordStepProblems(template.steps), ...localForkProblems(template.steps));
+  problems.push(...rebalanceRoundProblems(template.steps, "template.yaml"));
   problems.push(...gatewayRunbookProblems(root, model));
   const releases = new Map<string, ReleaseRunbook>();
   const dir = join(root, QA_DIR, "releases");
@@ -696,7 +754,9 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
       }
       problems.push(...checkAddOnly(template, r));
       problems.push(...commandProblems(r.steps, model, root));
+      problems.push(...clearVectorProblems(r.steps, `releases/${f}`));
       problems.push(...recordStepProblems(r.steps), ...localForkProblems(r.steps));
+      problems.push(...rebalanceRoundProblems(r.steps, `releases/${f}`));
     } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   }
   if (releases.size === 0) problems.push(`${QA_DIR}/releases/ holds no release runbook`);

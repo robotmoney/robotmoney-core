@@ -1,7 +1,8 @@
 # docs/runbooks/contract-qa/template.yaml: the general contract-release QA runbook.
 # Deployed release (v0.5.0) procedure on today's tooling; target changes are IC-1019 finding 13.
 #
-# Every step a contract release runs, in order: gate, publish, verify, govern, receipt (recorded AND applied), deposits
+# Every step a contract release runs, in order: gate, publish, verify, govern, receipt (recorded, a deposit and redeem round on the
+# vector in effect, then applied: the rebalance), deposits
 # (each vault, the router), failure drills, evidence, teardown (the Deploy 2 flow, on today's tooling). The assurances these
 # steps give, and the rule that a mainnet run sends only what a Twin run of the same steps sent, are README.md "Assurances". A release's own runbook is releases/<release>.yaml:
 # a full copy of these steps, unchanged and in order, plus the steps only that release adds (each with
@@ -48,6 +49,8 @@
 #   triage        true: a non-zero exit passes only when {runDir}/triage.json lists this step id with a reason.
 #   maxMinutes    longest the step may take.
 #   writes        state names {runDir}/state/<name> the step writes, read later as {state:<name>}.
+#   exercises     vault-deposit | router-deposit | redeem: the user round the step proves (issue 1984). Every flow that applies a receipt
+#                 (the router rebalance) runs each of the three before AND after it; the validator refuses one that does not.
 template: contract-qa
 steps:
   - id: "P0.01-runbook-valid"
@@ -202,7 +205,7 @@ steps:
     onlyFor: "twin"
   - id: "P0.19-funding"
     standing: ["4.2"]
-    description: "The deployer holds 7 USDC (1 seed, 3 vault deposits, 2 through the router, 1 spare). The ETH balance is advisory: below 0.005 ETH the step prints a warning and the run goes on (the gas the run burns is about 0.003 ETH; every send goes through cast at the network fee). The upgrade flow checks its own funding at P8.25"
+    description: "The deployer holds 7 USDC. The most a run needs at once is 5.32 (the contract ceilings: rmRWA maxSlippageBps at most 500 on the buy and on the sale, its exit fee at most 100 bps, so a round trip through rmRWA loses at most 11 percent; rmUSDC and rmRWA redeem to USDC, rmPROTO redeemInKind pays in tokens). It is the 1 USDC seed, plus what the round before the rebalance does not return as USDC (1.1 in rmPROTO tokens: 1 redeemed in kind, and the router's rmPROTO leg of 2 USDC at the 500 bps of the vector in effect, on a new deployment the sheet's default; at most 0.11 lost on the 1 USDC rmRWA round trip; that vector sends nothing to rmRWA), plus either the 3 vault deposits held at once after it (5.21) or, once they are redeemed (another 1 in rmPROTO tokens, at most 0.11 on rmRWA), the 2 USDC router deposit (5.32). The receipt's vector only splits that last router deposit, so it does not move the floor. The 1.68 spare is margin. A run without the pre-rebalance round (production) needs 4.11. The ETH balance is advisory: below 0.005 ETH the step prints a warning and the run goes on (the gas the run burns is about 0.003 ETH; every send goes through cast at the network fee). The upgrade flow checks its own funding at P8.25"
     host: "control"
     phase: 0
     cmds:
@@ -404,11 +407,11 @@ steps:
   # ── Phase 5, the consensus receipt: recorded by the submitter Safe, then APPLIED by the governing Safe through the timelock (runbook 4.9). ──
   - id: "P5.00-receipt-payload"
     standing: ["4.10"]
-    description: "The Twin's receipt payload: the real production envelope with the three-vault vector (agent_tokens 0, ADR-0017), written by the run. On 8453 the operator passes the receipt the canonical route serves as {receiptFile}; a receipt that weights agent_tokens is refused by apply-receipt and the run stops"
+    description: "The Twin's receipt payload: the real production envelope with the three-vault vector USDC 8000, PROTO 1000, RWA 1000 (agent_tokens 0, ADR-0017), written by the run. It weights every vault, so the post-rebalance router deposit routes into all three (three legs, within its 8,400,000 gas: 400,000 plus 2,550,000 per leg), and it differs from the sheet's default vector (9500, 500, 0), so applying it changes the router split the run checks (P5.05, P6.32). On 8453 the operator passes the receipt the canonical route serves as {receiptFile}; a receipt that weights agent_tokens is refused by apply-receipt and the run stops"
     host: "control"
     phase: 5
     cmds:
-      - ["bun", "scripts/runbook/receipt-payload.ts", "--out", "{receiptFile}", "--weights", "USDC:9500,PROTO:500,RWA:0"]
+      - ["bun", "scripts/runbook/receipt-payload.ts", "--out", "{receiptFile}", "--weights", "USDC:8000,PROTO:1000,RWA:1000"]
     expectExit: 0
     receipts: []
     irreversible: false
@@ -426,6 +429,166 @@ steps:
     irreversible: false
     onlyFor: ["twin", "rehearsal"]
     writes: ["receipt-id", "receipt-digest"]
+  # ── Issue 1984: the round BEFORE the router rebalance. P5.03 applies the receipt, which is the rebalance (publish-contracts/src/govern.ts); ADR-0003 routes only NEW
+  # deposits by the new vector, so a run deposits, routes and redeems on the vector in effect first, then again on the receipt's vector in phase 6. These steps run where
+  # P5.03 runs, and before the receipt is recorded, so a receipt that would not change the split stops the run before anything irreversible. They write pre-* state only. ──
+  - id: "P5.05-receipt-changes-split"
+    standing: ["4.4", "4.9"]
+    description: "Before the rebalance the router's effective weights, whatever votedWeightsActive reads (on a new deployment the sheet's default vector; the runbook never clears a vector, issue 1980), are saved as the pre-rebalance vector; the receipt about to be recorded weights the vaults differently from that vector, so applying it changes the split the router deposits follow"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bash", "-c", 'cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])" > {runDir}/state/pre-router-weights && cat {runDir}/state/pre-router-weights']
+      - ["bun", "scripts/runbook/qa-assert.ts", "receipt-changes-split", "{receiptFile}", "{runDir}/state/pre-router-weights"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["pre-router-weights"]
+  - id: "P5.10-pre-deposit-rmusdc"
+    standing: ["4.3", "4.4"]
+    description: "Before the rebalance, 1 USDC into rmUSDC at the 2,500,000 gas limit; the shares it minted (the balance after less the balance before) equal previewDeposit within 0.5 percent"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bash", "-c", 'cast call "{m:vault.vault}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/pre-preview-USDC']
+      - ["bash", "-c", 'cast call "{m:vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/pre-balance0-USDC']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "2500000", "{cast}"]
+      - ["bash", "-c", 'cast call "{m:vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/pre-balance1-USDC']
+      - ["bash", "-c", "bun scripts/runbook/qa-assert.ts sub {state:pre-balance1-USDC} {state:pre-balance0-USDC} > {runDir}/state/pre-shares-USDC"]
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:pre-shares-USDC}", "{state:pre-preview-USDC}", "50"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["pre-preview-USDC", "pre-balance0-USDC", "pre-balance1-USDC", "pre-shares-USDC"]
+    exercises: "vault-deposit"
+  - id: "P5.11-pre-deposit-rmproto"
+    standing: ["4.3", "4.4"]
+    description: "Before the rebalance, 1 USDC into rmPROTO; the shares it minted are at least previewDeposit and above it by no more than the maxSlippageBps haircut plus the same slippage in the depositor's favour, because a swap can beat the oracle price (issue 1990)"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bash", "-c", 'cast call "{m:protocol-asset-vault.vault}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/pre-preview-PROTO']
+      - ["bash", "-c", 'cast call "{m:protocol-asset-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/pre-balance0-PROTO']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:protocol-asset-vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:protocol-asset-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "-c", 'cast call "{m:protocol-asset-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/pre-balance1-PROTO']
+      - ["bash", "-c", "bun scripts/runbook/qa-assert.ts sub {state:pre-balance1-PROTO} {state:pre-balance0-PROTO} > {runDir}/state/pre-shares-PROTO"]
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:pre-shares-PROTO}", "{state:pre-preview-PROTO}"]
+      - ["bash", "-c", 'b=$(cast call "{m:protocol-asset-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( 100000000 * 10000 / ((10000 - b) * (10000 - b)) - 10000 + 1 )) > {runDir}/state/pre-share-bound-PROTO']
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:pre-shares-PROTO}", "{state:pre-preview-PROTO}", "{state:pre-share-bound-PROTO}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["pre-preview-PROTO", "pre-balance0-PROTO", "pre-balance1-PROTO", "pre-shares-PROTO", "pre-share-bound-PROTO"]
+    exercises: "vault-deposit"
+  - id: "P5.13-pre-deposit-rmrwa"
+    standing: ["4.3", "4.4"]
+    description: "Before the rebalance, 1 USDC into rmRWA; the shares it minted are at least previewDeposit and above it by no more than the maxSlippageBps haircut plus the same slippage in the depositor's favour, because a swap can beat the oracle price (issue 1990)"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bash", "-c", 'cast call "{m:rwa-basket-vault.vault}" "previewDeposit(uint256)(uint256)" 1000000 | cut -d" " -f1 > {runDir}/state/pre-preview-RWA']
+      - ["bash", "-c", 'cast call "{m:rwa-basket-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/pre-balance0-RWA']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:rwa-basket-vault.vault}", "1000000", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:rwa-basket-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
+      - ["bash", "-c", 'cast call "{m:rwa-basket-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/pre-balance1-RWA']
+      - ["bash", "-c", "bun scripts/runbook/qa-assert.ts sub {state:pre-balance1-RWA} {state:pre-balance0-RWA} > {runDir}/state/pre-shares-RWA"]
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:pre-shares-RWA}", "{state:pre-preview-RWA}"]
+      - ["bash", "-c", 'b=$(cast call "{m:rwa-basket-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( 100000000 * 10000 / ((10000 - b) * (10000 - b)) - 10000 + 1 )) > {runDir}/state/pre-share-bound-RWA']
+      - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:pre-shares-RWA}", "{state:pre-preview-RWA}", "{state:pre-share-bound-RWA}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["pre-preview-RWA", "pre-balance0-RWA", "pre-balance1-RWA", "pre-shares-RWA", "pre-share-bound-RWA"]
+    exercises: "vault-deposit"
+  - id: "P5.20-pre-redeem-rmusdc"
+    standing: ["4.4"]
+    description: "Before the rebalance, the deployer's whole rmUSDC balance redeems to USDC; its share balance is zero afterwards"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bash", "-c", 's=$(cast call "{m:vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$s" != 0 ]; then bash scripts/runbook/cast-send.sh "{m:vault.vault}" "redeem(uint256,address,address)" "$s" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" --gas-limit 3000000 {castFlagsInline} || exit 1; fi; test "$(cast call "{m:vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    exercises: "redeem"
+  - id: "P5.21-pre-redeem-in-kind-rmproto"
+    standing: ["4.4"]
+    description: "Before the rebalance, the deployer's whole rmPROTO balance leaves by redeemInKind (no oracle, paid in the underlying assets); its share balance is zero afterwards"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bash", "-c", 's=$(cast call "{m:protocol-asset-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$s" != 0 ]; then bash scripts/runbook/cast-send.sh "{m:protocol-asset-vault.vault}" "redeemInKind(uint256,address,address)" "$s" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" --gas-limit 5000000 {castFlagsInline} || exit 1; fi; test "$(cast call "{m:protocol-asset-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    exercises: "redeem"
+  - id: "P5.23-pre-redeem-rmrwa"
+    standing: ["4.4"]
+    description: "Before the rebalance, the deployer's whole rmRWA balance redeems to USDC; its share balance is zero afterwards"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bash", "-c", 's=$(cast call "{m:rwa-basket-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$s" != 0 ]; then bash scripts/runbook/cast-send.sh "{m:rwa-basket-vault.vault}" "redeem(uint256,address,address)" "$s" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" --gas-limit 5000000 {castFlagsInline} || exit 1; fi; test "$(cast call "{m:rwa-basket-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    exercises: "redeem"
+  - id: "P5.30-pre-router-deposit"
+    standing: ["4.4"]
+    description: "Before the rebalance, 2 USDC straight into the router at 8,400,000 gas: the effective weights still equal the pre-rebalance vector P5.05 saved, and the RouterDeposit legs are exactly that vector's non-zero weights, each leg naming its vault and weight and minting shares; the deployer holds shares in every non-zero leg afterwards"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bash", "-c", 'test "$(cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])")" = "$(cat {runDir}/state/pre-router-weights)"']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:vault.usdc}", "approve(address,uint256)", "{m:router.router}", "2000000", "{cast}"]
+      - ["bash", "-c", 'bash scripts/runbook/cast-send.sh "{m:router.router}" "deposit(uint256,uint256[])" 2000000 "[]" --gas-limit 8400000 {castFlagsInline} | tee {runDir}/state/pre-router-deposit.json; test ${PIPESTATUS[0]} = 0']
+      - ["bash", "-c", 'bun scripts/runbook/qa-assert.ts router-legs {runDir}/state/pre-router-deposit.json {runDir}/state/pre-router-weights "$(cast sig-event "RouterDeposit(address,address,uint256,uint256,uint256)")"']
+      - ["bash", "-c", 'w=$(cat {runDir}/state/pre-router-weights); vs=$(echo "$w" | sed -n 1p | grep -oE "0x[0-9a-fA-F]{40}"); bs=$(echo "$w" | sed -n 2p | grep -oE "[0-9]+"); i=1; for v in $vs; do b=$(echo "$bs" | sed -n "$i"p); i=$((i+1)); s=$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$b" != 0 ] && [ "$s" = 0 ]; then echo "no shares in $v (weight $b)" >&2; exit 1; fi; done']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["pre-router-deposit.json"]
+    exercises: "router-deposit"
+  - id: "P5.31-pre-sweep-positions"
+    standing: ["4.4"]
+    description: "Before the rebalance, the router deposit is redeemed in full: rmUSDC by redeem, rmPROTO by redeemInKind, rmRWA by redeem, so the deployer holds no shares anywhere when the receipt is recorded and applied"
+    host: "control"
+    phase: 5
+    cmds:
+      - ["bash", "-c", 'for pair in "{m:vault.vault}:redeem" "{m:protocol-asset-vault.vault}:redeemInKind" "{m:rwa-basket-vault.vault}:redeem"; do v=${pair%%:*}; fn=${pair##*:}; s=$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1); if [ "$s" != 0 ]; then bash scripts/runbook/cast-send.sh "$v" "$fn(uint256,address,address)" "$s" "{sheet:ADMIN_ADDRESS}" "{sheet:ADMIN_ADDRESS}" --gas-limit 5000000 {castFlagsInline} || exit 1; fi; test "$(cast call "$v" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0 || exit 1; done']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    exercises: "redeem"
   - id: "P5.02-record-receipt"
     standing: ["4.10"]
     description: "The submitter Safe records the receipt directly on the receipt contract: threshold owners sign, the deployer pays; the digest and id are recomputed from the served bytes before any signer exists; the stored submitter reads back as the Safe. A receipt id is unique, so a wrong digest cannot be corrected"
@@ -489,9 +652,10 @@ steps:
     receipts: []
     irreversible: false
     writes: ["preview-USDC", "shares-USDC"]
+    exercises: "vault-deposit"
   - id: "P6.11-deposit-rmproto"
     standing: ["4.3", "4.4"]
-    description: "1 USDC into rmPROTO; the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut"
+    description: "1 USDC into rmPROTO; the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut plus the same slippage in the depositor's favour, because a swap can beat the oracle price (issue 1990)"
     host: "control"
     phase: 6
     cmds:
@@ -500,7 +664,7 @@ steps:
       - ["bash", "scripts/runbook/cast-send.sh", "{m:protocol-asset-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
       - ["bash", "-c", 'cast call "{m:protocol-asset-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-PROTO']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-PROTO}", "{state:preview-PROTO}"]
-      - ["bash", "-c", 'b=$(cast call "{m:protocol-asset-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-PROTO']
+      - ["bash", "-c", 'b=$(cast call "{m:protocol-asset-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( 100000000 * 10000 / ((10000 - b) * (10000 - b)) - 10000 + 1 )) > {runDir}/state/share-bound-PROTO']
       - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-PROTO}", "{state:preview-PROTO}", "{state:share-bound-PROTO}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -508,9 +672,10 @@ steps:
     receipts: []
     irreversible: false
     writes: ["preview-PROTO", "shares-PROTO", "share-bound-PROTO"]
+    exercises: "vault-deposit"
   - id: "P6.13-deposit-rmrwa"
     standing: ["4.3", "4.4"]
-    description: "1 USDC into rmRWA; the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut"
+    description: "1 USDC into rmRWA; the shares are at least previewDeposit (a basket's preview is the floor after maxSlippageBps) and above it by no more than that haircut plus the same slippage in the depositor's favour, because a swap can beat the oracle price (issue 1990)"
     host: "control"
     phase: 6
     cmds:
@@ -519,7 +684,7 @@ steps:
       - ["bash", "scripts/runbook/cast-send.sh", "{m:rwa-basket-vault.vault}", "deposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "--gas-limit", "5000000", "{cast}"]
       - ["bash", "-c", 'cast call "{m:rwa-basket-vault.vault}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/shares-RWA']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:shares-RWA}", "{state:preview-RWA}"]
-      - ["bash", "-c", 'b=$(cast call "{m:rwa-basket-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( b * 10000 / (10000 - b) + 1 )) > {runDir}/state/share-bound-RWA']
+      - ["bash", "-c", 'b=$(cast call "{m:rwa-basket-vault.vault}" "maxSlippageBps()(uint256)" | cut -d" " -f1) && echo $(( 100000000 * 10000 / ((10000 - b) * (10000 - b)) - 10000 + 1 )) > {runDir}/state/share-bound-RWA']
       - ["bun", "scripts/runbook/qa-assert.ts", "within-bps", "{state:shares-RWA}", "{state:preview-RWA}", "{state:share-bound-RWA}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -527,6 +692,7 @@ steps:
     receipts: []
     irreversible: false
     writes: ["preview-RWA", "shares-RWA", "share-bound-RWA"]
+    exercises: "vault-deposit"
   - id: "P6.20-redeem-rmusdc"
     standing: ["4.4"]
     description: "Full redeem of rmUSDC to USDC; the deployer's share balance is zero afterwards"
@@ -540,6 +706,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    exercises: "redeem"
   - id: "P6.21-redeem-in-kind-rmproto"
     standing: ["4.4"]
     description: "Full redeemInKind of rmPROTO, which reads no oracle and always pays in the underlying assets"
@@ -553,6 +720,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    exercises: "redeem"
   - id: "P6.23-redeem-rmrwa"
     standing: ["4.4"]
     description: "Full redeem of rmRWA to USDC"
@@ -566,6 +734,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    exercises: "redeem"
   - id: "P6.24-redeem-retired-vault"
     standing: ["4.4", "4.14"]
     description: "Every vault the run retired (the run manifest publish-run.json, vault_retirements, ADR-0017; the step fails when the manifest is missing) is withdraw-only: retired() is true, maxDeposit is 0, and the admin's shares in it, if any, redeem to USDC. A run that retired no vault passes with nothing to check"
@@ -595,6 +764,23 @@ steps:
     receipts: []
     irreversible: false
     writes: ["router-legs", "router-deposit.json"]
+    exercises: "router-deposit"
+  - id: "P6.32-router-split-changed"
+    standing: ["4.4", "4.9"]
+    description: "The rebalance changed the router split: the post-rebalance router deposit's RouterDeposit legs are exactly the non-zero effective weights now (the applied receipt's vector, P5.04), each minting shares, and they differ in vault or weight from the legs of the pre-rebalance router deposit (P5.30, the vector in effect before it)"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'cast call "{m:router.router}" "getEffectiveWeights()(address[],uint256[])" > {runDir}/state/post-router-weights']
+      - ["bash", "-c", 'bun scripts/runbook/qa-assert.ts router-legs {runDir}/state/router-deposit.json {runDir}/state/post-router-weights "$(cast sig-event "RouterDeposit(address,address,uint256,uint256,uint256)")"']
+      - ["bash", "-c", 'bun scripts/runbook/qa-assert.ts legs-differ {runDir}/state/pre-router-deposit.json {runDir}/state/router-deposit.json "$(cast sig-event "RouterDeposit(address,address,uint256,uint256,uint256)")"']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["post-router-weights"]
   - id: "P6.31-sweep-positions"
     standing: ["4.4"]
     description: "The router deposit is redeemed in full: rmUSDC by redeem, rmPROTO by redeemInKind, rmRWA by redeem, so the deployer holds no shares anywhere (every later verify requires it)"
@@ -607,6 +793,7 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
+    exercises: "redeem"
 
   # ── Phase 9, failure drills: the pause path and the recovery path run on real contracts. ──
   - id: "P9.01-pause-all"
