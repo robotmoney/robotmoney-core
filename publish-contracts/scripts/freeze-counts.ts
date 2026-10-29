@@ -55,7 +55,7 @@ export async function freezeFromAdoptedRun(o: {
     if (dirname(resolve(o.crossCheckPath)) !== resolve(o.countsDir)) throw new PublishError("USAGE", `--cross-check ${o.crossCheckPath} is not in the counts dir ${o.countsDir}: the anchor of a baseline is a frozen file of that dir (commit it there first)`);
     const bytes = readFileSync(o.crossCheckPath);
     const old = JSON.parse(bytes.toString("utf8"));
-    const f = loadFrozenFile(o.crossCheckPath, assertSha(String(old.deploySha))); // an adopted-marked or unverifiable earlier file is no reference
+    const f = loadFrozenFile(o.crossCheckPath, assertSha(String(old.deploySha)), { historical: true }); // an adopted-marked or unverifiable earlier file is no reference (verified against its own sha's stage table, issue 1926)
     if (f.deploySha === sha) throw new PublishError("USAGE", "--cross-check names the file being written");
     cross = { sha: f.deploySha, counts: f.counts, fileHash: fileHashOf(bytes) };
   } else {

@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { PublishError } from "../src/errors.ts";
-import { PROOF_TX_NONCES, assertSha, checkNonce, countFor, effectiveCounts, finalDeployerNonce, frozenPath, loadFrozen, loadFrozenFile, resolveCounts, sumCounts, writeFrozen } from "../src/counts.ts";
+import { PROOF_TX_NONCES, assertSha, checkNonce, countFor, effectiveCounts, finalDeployerNonce, frozenPath, loadFrozen, loadFrozenFile, resolveCounts, stageTableAtSha, sumCounts, writeFrozen } from "../src/counts.ts";
 import { LIBRARY_MOVE_STAGES, crossCheckDiff, libraryMoveCounts } from "../src/counts-reconstruct.ts";
 import { getStageTable } from "../src/stages.ts";
 import { freezeCounts } from "../scripts/freeze-counts.ts";
@@ -181,5 +181,48 @@ describe("loadFrozen of a reconstructed baseline across a stage-table change (is
     expect(kind(() => loadFrozen(write({ ...COUNTS, agent: 11 }, [{ stage: "agent", old: 11, new: null }, { stage: "nosuch", old: 3, new: null }]), SHA))).toBe("COUNTS_MISSING");
     expect(kind(() => loadFrozen(write({ ...COUNTS, agent: 11 }, [{ stage: "agent", old: 11, new: null }, { stage: "nosuch", old: 3, new: 4 }]), SHA))).toBe("COUNTS_MISSING");
     expect(kind(() => loadFrozen(write({ ...COUNTS, agent: 11 }, []), SHA))).toBe("COUNTS_MISSING");
+  });
+});
+
+describe("a new baseline loads in the committed frozen-counts directory, whose older files name stages the table retired (issue 1926)", () => {
+  // loadFrozen checks every OTHER file of the directory and the anchor chain. Those are earlier releases' files: each is verified against the stage table of
+  // its own DEPLOY_SHA (git show <sha>:scripts/deploy/stage-table.json), so the reconstructed 72a87d90, 78c50cbd and f8c869e2 (agent, ic-policy, recorder) load.
+  const DEPLOY3 = "57fbe61833e9d7f94557d69102138f7c410c1346";
+  const real = join(REPO, "deployments", "frozen-counts");
+  const files = readdirSync(real).filter((n) => /^[0-9a-f]{40}\.json$/.test(n));
+  const reconstructed = files.filter((n) => JSON.parse(readFileSync(join(real, n), "utf8")).measured?.reconstructed !== undefined).map((n) => n.slice(0, 40));
+  function plant(dir: string): void {
+    for (const n of files) copyFileSync(join(real, n), join(dir, n));
+    const anchorBytes = readFileSync(join(dir, `${DEPLOY3}.json`));
+    const anchor = JSON.parse(anchorBytes.toString()).counts;
+    const counts = baselineLike(anchor);
+    const rec = {
+      fromRun: { sha: SHA, chainId: 918453 }, measuredCounts: { ...counts, libs: counts.libs! - 1 },
+      adopted: [{ stage: "libs", library: "tick_math", artifact: "TickMath", address: `0x${"11".repeat(20)}`, codeHash: `0x${"22".repeat(32)}` }],
+      crossCheck: { against: DEPLOY3, accepted: crossCheckDiff(counts, anchor) },
+    };
+    writeFileSync(join(dir, `${SHA}.json`), JSON.stringify({ deploySha: SHA, measured: { chainId: 918453, at: "2026-10-29T00:00:00Z", reconstructed: rec, crossChecked: { sha: DEPLOY3, fileHash: createHash("sha256").update(anchorBytes).digest("hex") } }, counts }, null, 2));
+  }
+  /** Deploy 3's count at every stage the table still has (the fixture count for the added receipt stage). */
+  const baselineLike = (anchor: Record<string, number>): Record<string, number> => Object.fromEntries(Object.keys(COUNTS).map((k) => [k, anchor[k] ?? COUNTS[k]!]));
+  test("the committed directory holds reconstructed files whose own stage tables are in this repository's history", () => {
+    expect(reconstructed.length).toBeGreaterThan(0);
+    for (const s of reconstructed) expect(stageTableAtSha(real, s)).toBeDefined(); // fails (never skips) on a checkout without history: publish-contracts-tests fetches it
+  });
+  test("a baseline anchored on Deploy 3, accepting agent, ic-policy, receipt and recorder, loads next to every committed file", () => {
+    // a directory inside the repository, so git resolves each file's own sha; node_modules is ignored by git
+    const dir = mkdtempSync(join(import.meta.dir, "..", "node_modules", ".frozen-1926-"));
+    try {
+      plant(dir);
+      const f = loadFrozen(dir, SHA);
+      expect(f.counts).toEqual(baselineLike(JSON.parse(readFileSync(join(real, `${DEPLOY3}.json`), "utf8")).counts));
+      expect(f.measured.reconstructed!.crossCheck!.accepted.map((d) => d.stage)).toEqual(["agent", "ic-policy", "receipt", "recorder"]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  test("without git history (a copy outside the repository) the older files are verified against today's table, as before: COUNTS_MISSING", () => {
+    const dir = tmp("pc-1926-nohistory-");
+    plant(dir);
+    for (const s of reconstructed) expect(stageTableAtSha(dir, s)).toBeUndefined();
+    expect(kind(() => loadFrozen(dir, SHA))).toBe("COUNTS_MISSING");
   });
 });
