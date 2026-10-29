@@ -4,7 +4,7 @@ import { clearVectorProblems } from "./validate-contract-qa.ts";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { QA_DIR, ROOT, applicableSteps, loadModel, localForkProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, mainOutProblems, rebalanceRoundProblems, unwindGuardProblems, validateAll } from "./validate-contract-qa.ts";
+import { QA_DIR, ROOT, applicableSteps, loadModel, localForkProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, gateAbsentPaths, mainOutProblems, rebalanceRoundProblems, unwindGuardProblems, upgradeBuildGateProblems, validateAll } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
 const RELEASE = "releases/v0.5.0.yaml";
@@ -294,7 +294,38 @@ test("a forge build of the main checkout after P1.02-publish is rejected, naming
   expect(mainOutProblems({ release: "vX", steps: steps(["forge", "build", "--root", "{runDir}/v060", "--out", "{runDir}/v060/out"]) })).toEqual([]);
   expect(mainOutProblems({ release: "vX", steps: [{ id: "P0.05-build", cmds: [["forge", "build"]] }, { id: "P1.02-publish", cmds: [["bun", "x"]] }] as never })).toEqual([]);
   const p = problemsWith("releases/v0.6.0.yaml", (t) => unpinned(t).replace('["forge", "build", "--root", "{runDir}/v060", "--out", "{runDir}/v060/out"]', '["forge", "build"]'));
-  expect(p.join("\n")).toContain("P8.04-v050-addresses");
+  expect(p.join("\n")).toContain("P8.08-v060-upgrade-build");
+});
+
+// Issue 1996: the {runDir}/v060 build step is skipped exactly when every step that reads the build is skipped by its own gate.
+test("the v0.6.0 upgrade build step's gate names the gate of every step that reads {runDir}/v060", () => {
+  const r = validateAll(ROOT, model).releases.get("v0.6.0")!;
+  expect(upgradeBuildGateProblems(r.steps, "v0.6.0")).toEqual([]);
+  const readers = r.steps.filter((s) => s.cmds.some((c) => c.join(" ").includes("--upgrade-build {runDir}/v060")));
+  expect(readers.map((s) => s.id)).toEqual(["P8.10-v050-deploy-gateway-impl", "P8.11-v050-upgrade-gateway", "P8.12-v050-deploy-receipt-impl", "P8.13-v050-upgrade-receipt"]);
+  const build = r.steps.find((s) => s.id === "P8.08-v060-upgrade-build")!;
+  expect([...gateAbsentPaths(build)].sort()).toEqual([...new Set(readers.flatMap(gateAbsentPaths))].sort());
+  // the build reuses the main checkout's submodule objects, and no other step makes the checkout
+  expect(build.cmds.map((c) => c.join(" "))).toContain("bash scripts/runbook/upgrade-submodules.sh {runDir}/v060");
+  expect(r.steps.filter((s) => s.cmds.some((c) => c.join(" ").includes("worktree add --detach {runDir}/v060"))).map((s) => s.id)).toEqual([build.id]);
+  // the template has no upgrade build, so the rule holds there trivially
+  expect(upgradeBuildGateProblems(validateAll(ROOT, model).template.steps, "template.yaml")).toEqual([]);
+});
+
+test("an upgrade build gate that misses a reader, lists a stray path, or a reader with no gate is refused", () => {
+  const v = "releases/v0.6.0.yaml";
+  const gate = 'gateAbsent: ["{runDir}/state/done-gateway-upgrade", "{runDir}/state/done-receipt-upgrade"]';
+  const missing = problemsWith(v, (t) => t.replace(gate, 'gateAbsent: ["{runDir}/state/done-gateway-upgrade"]')).join("\n");
+  expect(missing).toContain("P8.08-v060-upgrade-build: its gateAbsent does not list {runDir}/state/done-receipt-upgrade, the gate of P8.12-v050-deploy-receipt-impl");
+  expect(missing).toContain("the gate of P8.13-v050-upgrade-receipt");
+  const stray = problemsWith(v, (t) => t.replace(gate, 'gateAbsent: ["{runDir}/state/done-gateway-upgrade", "{runDir}/state/done-receipt-upgrade", "{runDir}/state/done-retire-vault"]')).join("\n");
+  expect(stray).toContain("lists {runDir}/state/done-retire-vault, which gates no step that reads {runDir}/v060");
+  const ungated = problemsWith(v, (t) => t.replace(stepBlock(t, "P8.11-v050-upgrade-gateway"), stepBlock(t, "P8.11-v050-upgrade-gateway").replace('    gateAbsent: "{runDir}/state/done-gateway-upgrade"\n', ""))).join("\n");
+  expect(ungated).toContain("P8.11-v050-upgrade-gateway: it reads {runDir}/v060 but has no gateAbsent");
+  const unbuilt = problemsWith(v, (t) => t.replace(stepBlock(t, "P8.08-v060-upgrade-build"), "")).join("\n");
+  expect(unbuilt).toContain("no step makes the --upgrade-build checkout {runDir}/v060");
+  const late = upgradeBuildGateProblems([{ id: "P8.10-read", cmds: [["bun", "x", "--upgrade-build", "{runDir}/b"]], gateAbsent: "g" }, { id: "P8.20-make", cmds: [["git", "worktree", "add", "{runDir}/b"]], gateAbsent: "g" }] as never, "t");
+  expect(late).toEqual(["t P8.10-read: it reads {runDir}/b before P8.20-make makes it"]);
 });
 
 test("every --upgrade-build of the committed v0.6.0 yaml names the separate checkout, never the main one", () => {

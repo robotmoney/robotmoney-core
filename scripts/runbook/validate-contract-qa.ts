@@ -95,7 +95,7 @@ export interface RunbookStep {
   id: string; standing: string[]; description: string; host: string; phase: number; cmds: string[][];
   env?: Record<string, string>; expectExit: number | number[]; receipts: { dir: string; pattern: string; required: boolean }[];
   irreversible: boolean; onlyFor?: string | string[]; flow?: string | string[]; refresh?: boolean; notBefore?: { afterStep: string; hours: number | "timelockDelay" };
-  gateAbsent?: string; sheetIs?: Record<string, string>; go?: string; triage?: boolean; maxMinutes?: number; writes?: string[]; added?: string;
+  gateAbsent?: string | string[]; sheetIs?: Record<string, string>; go?: string; triage?: boolean; maxMinutes?: number; writes?: string[]; added?: string;
   exercises?: Exercise;
 }
 /**
@@ -162,7 +162,8 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
   }
   const nb = raw.notBefore;
   if (nb !== undefined && !(isObject(nb) && typeof nb.afterStep === "string" && (nb.hours === "timelockDelay" || (typeof nb.hours === "number" && nb.hours >= 0)) && Object.keys(nb).length === 2)) errors.push(`${at}: notBefore is {afterStep, hours} with hours a number (0 or more) or "timelockDelay"`);
-  if (raw.gateAbsent !== undefined && (typeof raw.gateAbsent !== "string" || raw.gateAbsent === "")) errors.push(`${at}: gateAbsent is a non-empty path`);
+  const ga = raw.gateAbsent;
+  if (ga !== undefined && !((typeof ga === "string" && ga !== "") || (isStringArray(ga) && ga.length > 0 && ga.every((x) => x !== "") && new Set(ga).size === ga.length))) errors.push(`${at}: gateAbsent is a non-empty path, or a list of distinct paths (the step is skipped when every one exists)`);
   if (raw.sheetIs !== undefined && !(isObject(raw.sheetIs) && Object.keys(raw.sheetIs).length > 0 && Object.entries(raw.sheetIs).every(([k, v]) => /^[A-Z][A-Z0-9_]*$/.test(k) && typeof v === "string"))) errors.push(`${at}: sheetIs maps sheet names to values`);
   if (raw.go !== undefined && !(typeof raw.go === "string" && /^[a-z][a-z0-9-]*$/.test(raw.go))) errors.push(`${at}: go is a lower-case name`);
   if (raw.triage !== undefined && typeof raw.triage !== "boolean") errors.push(`${at}: triage is a boolean`);
@@ -212,9 +213,11 @@ export function parseSteps(raw: unknown, where: string, errors: string[]): Runbo
 // ─── placeholders ───────────────────────────────────────────────────────────────────────────────────────────────
 export interface PlaceholderRef { raw: string; kind: string; arg?: string }
 export const placeholdersIn = (s: string): PlaceholderRef[] => [...s.matchAll(PLACEHOLDER)].map((m) => ({ raw: m[0], kind: m[1]!, arg: m[2] }));
+/** PURE. The paths of a step's gateAbsent: none, one, or a list (the step is skipped when every one exists). */
+export const gateAbsentPaths = (s: Pick<RunbookStep, "gateAbsent">): string[] => (s.gateAbsent === undefined ? [] : Array.isArray(s.gateAbsent) ? s.gateAbsent : [s.gateAbsent]);
 /** Every placeholder the step reads: commands, env values, receipts, gateAbsent. */
 export function placeholdersOf(s: RunbookStep): PlaceholderRef[] {
-  const texts = [...s.cmds.flat(), ...Object.values(s.env ?? {}), ...s.receipts.flatMap((r) => [r.dir, r.pattern]), ...(s.gateAbsent ? [s.gateAbsent] : [])];
+  const texts = [...s.cmds.flat(), ...Object.values(s.env ?? {}), ...s.receipts.flatMap((r) => [r.dir, r.pattern]), ...gateAbsentPaths(s)];
   return texts.flatMap(placeholdersIn);
 }
 const reads = (s: RunbookStep) => s.cmds.flat().concat(Object.values(s.env ?? {}));
@@ -683,6 +686,38 @@ export function mainOutProblems(r: Pick<ReleaseRunbook, "release" | "steps">): s
   return out;
 }
 
+/** The --upgrade-build checkout a step reads, if any (the argument after --upgrade-build). */
+const upgradeBuildsOf = (s: Pick<RunbookStep, "cmds">): string[] => s.cmds.map(expandArgv).flatMap((c) => c.flatMap((a, i) => (a === "--upgrade-build" && c[i + 1] !== undefined ? [c[i + 1]!] : [])));
+/** A step makes this checkout: a `git worktree add` of it. */
+const makesCheckout = (s: Pick<RunbookStep, "cmds">, dir: string): boolean => s.cmds.some((c) => { const j = expandArgv(c).join(" "); return /\bgit\b.*\bworktree add\b/.test(j) && j.split(/\s+/).includes(dir); });
+
+/**
+ * PURE (issue 1996). The step that makes and builds a --upgrade-build checkout (a worktree, every submodule, forge build) is skipped once nothing reads the build:
+ * its gateAbsent lists the gateAbsent of every step that reads the checkout, no more and no less, so it is skipped exactly when every reader is. Each reader must
+ * have a gateAbsent (else the build can never be skipped by it), the build step comes before every reader and runs on every flow and target a reader runs on.
+ */
+export function upgradeBuildGateProblems(steps: RunbookStep[], where: string): string[] {
+  const out: string[] = [];
+  for (const dir of [...new Set(steps.flatMap(upgradeBuildsOf))]) {
+    const readers = steps.filter((s) => upgradeBuildsOf(s).includes(dir));
+    const builders = steps.filter((s) => makesCheckout(s, dir));
+    if (builders.length !== 1) { out.push(`${where}: ${builders.length === 0 ? "no step makes" : `${builders.map((b) => b.id).join(", ")} each make`} the --upgrade-build checkout ${dir}; exactly one step makes and builds it`); continue; }
+    const b = builders[0]!;
+    const gate = new Set(gateAbsentPaths(b));
+    const wanted = new Set<string>();
+    for (const r of readers) {
+      if (steps.indexOf(r) < steps.indexOf(b)) out.push(`${where} ${r.id}: it reads ${dir} before ${b.id} makes it`);
+      const rf = flowsOf(r), bf = flowsOf(b), ro = onlyForList(r), bo = onlyForList(b);
+      if (!rf.every((f) => bf.includes(f)) || (bo.length > 0 && (ro.length === 0 || !ro.every((t) => bo.includes(t))))) out.push(`${where} ${r.id}: it reads ${dir} on a flow or target where ${b.id} does not make it`);
+      const paths = gateAbsentPaths(r);
+      if (paths.length === 0) out.push(`${where} ${r.id}: it reads ${dir} but has no gateAbsent, so ${b.id} cannot tell when it no longer needs the build (issue 1996)`);
+      for (const p of paths) { wanted.add(p); if (!gate.has(p)) out.push(`${where} ${b.id}: its gateAbsent does not list ${p}, the gate of ${r.id}, which reads ${dir}: list the gate of every step that reads it (issue 1996)`); }
+    }
+    for (const p of gate) if (!wanted.has(p)) out.push(`${where} ${b.id}: its gateAbsent lists ${p}, which gates no step that reads ${dir}`);
+  }
+  return out;
+}
+
 /** The command shape each `exercises` value must have: a journaled send (cast-send.sh) of the vault or router call it names. */
 const EXERCISE_SHAPE: Readonly<Record<Exercise, RegExp>> = {
   "vault-deposit": /deposit\(uint256,address\)/,
@@ -727,6 +762,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
   problems.push(...secretProblems(tplText, "template.yaml"));
   problems.push(...commandProblems(template.steps, model, root));
   problems.push(...clearVectorProblems(template.steps, "template.yaml"));
+  problems.push(...upgradeBuildGateProblems(template.steps, "template.yaml"));
   problems.push(...recordStepProblems(template.steps), ...localForkProblems(template.steps));
   problems.push(...rebalanceRoundProblems(template.steps, "template.yaml"));
   problems.push(...gatewayRunbookProblems(root, model));
@@ -755,6 +791,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
       problems.push(...checkAddOnly(template, r));
       problems.push(...commandProblems(r.steps, model, root));
       problems.push(...clearVectorProblems(r.steps, `releases/${f}`));
+      problems.push(...upgradeBuildGateProblems(r.steps, `releases/${f}`));
       problems.push(...recordStepProblems(r.steps), ...localForkProblems(r.steps));
       problems.push(...rebalanceRoundProblems(r.steps, `releases/${f}`));
     } catch (e) { problems.push(...(e as Error).message.split("\n")); }

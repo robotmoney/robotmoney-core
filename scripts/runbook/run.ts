@@ -6,7 +6,7 @@
 // {rpcUrl}, {sheet}, ...). Lists override a whole-element placeholder for the target ({owners}, {v050owners}, {cast}: empty on the Twin where the
 // default keystores sign). A keystore spec is a path; the passphrase is typed at the CLI's own prompt on this terminal, never written in the config.
 // For every step that runs on the target (onlyFor, and the release's flows for the target): a step whose result is already `pass` is not run again
-// (a rerun after a failure continues); `gateAbsent` and `sheetIs` write a `skip` result; `go` must exist; `notBefore` is waited out here, from the
+// (a rerun after a failure continues); `gateAbsent` (a path, or a list of paths that must all exist) and `sheetIs` write a `skip` result; `go` must exist; `notBefore` is waited out here, from the
 // earlier step's result time plus its hours (the sheet's TIMELOCK_MIN_DELAY for "timelockDelay"). Each command runs from the checkout root with the
 // step's env, stdin on this terminal, stdout appended to {runDir}/journal/<id>.out and stderr to <id>.err (both also shown). The exit code must be
 // one of expectExit, every required receipt must exist, else the step's result is `fail exit <n>` and the run stops with exit 1. Nothing is skipped
@@ -16,7 +16,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { redactUrls } from "./run-record.ts";
-import { LIST_PLACEHOLDERS, ROOT, SCALARS, TARGET_NAMES, applicableSteps, parseSheetText, runnableProblems, validateAll, type ReleaseRunbook, type RunbookStep } from "./validate-contract-qa.ts";
+import { LIST_PLACEHOLDERS, ROOT, SCALARS, TARGET_NAMES, applicableSteps, gateAbsentPaths, parseSheetText, runnableProblems, validateAll, type ReleaseRunbook, type RunbookStep } from "./validate-contract-qa.ts";
 
 export interface RunConfig { scalars: Record<string, string>; lists?: Record<string, string[]> }
 const PLACEHOLDER = /\{([A-Za-z][A-Za-z0-9]*)(?::([A-Za-z0-9_.\-]+))?\}/g;
@@ -129,7 +129,10 @@ function stepResult(step: RunbookStep, r: Resolver, opts: { runDir: string; shee
   const { runDir, log } = opts;
   const exits = Array.isArray(step.expectExit) ? step.expectExit : [step.expectExit];
   if (step.host !== "control") return `fail host ${step.host}: this runner runs control steps only`;
-  if (step.gateAbsent !== undefined && existsSync(r.text(step.gateAbsent))) return `skip gateAbsent ${r.text(step.gateAbsent)} exists`;
+  if (step.gateAbsent !== undefined) {
+    const paths = gateAbsentPaths(step).map((p) => r.text(p));
+    if (paths.every((p) => existsSync(p))) return `skip gateAbsent ${paths.join(" ")} ${paths.length === 1 ? "exists" : "all exist"}`;
+  }
   if (step.sheetIs !== undefined) {
     const sheet = parseSheetText(readFileSync(r.scalar("sheet"), "utf8"));
     const miss = Object.entries(step.sheetIs).find(([k, v]) => sheet[k] !== v);
