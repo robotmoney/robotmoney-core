@@ -33,9 +33,19 @@ function signerFor(spec: string): PublishSigner {
   return { spec, kind: "keystore", cleanup() {}, async address() { return address as `0x${string}`; }, async forgeArgs() { return ["--keystore", path, "--sender", address]; }, async safeSigner() { return { kind: "keystore", modes: ["raw"], address: async () => address } as never; } };
 }
 
-interface Send { to: string; keystore?: string; from?: string }
-interface Chain { paused: Record<string, boolean>; sends: Send[]; failSendTo?: string; emergencyHolds: Set<string>; balances: Record<string, string>; balanceReads: string[] }
-const newChain = (): Chain => ({ paused: {}, sends: [], emergencyHolds: new Set(), balances: {}, balanceReads: [] });
+interface Send { to: string; keystore?: string; from?: string; nonce?: number }
+/**
+ * Issue 1981: the chain mines one block per send. `lagReads` block-number reads after each send answer the block before it, and a depositsPaused read answers the
+ * state at the block the RPC serves, as a load-balanced node behind the send does. `staleNonce`: a pending-nonce read answers the nonce from before the key's last send (a node that has not seen it). A send
+ * whose --nonce is not the real nonce fails with an empty error, as the rmPROTO send did on 8453.
+ */
+interface Chain {
+  paused: Record<string, boolean>; sends: Send[]; failSendTo?: string; emergencyHolds: Set<string>; balances: Record<string, string>; balanceReads: string[];
+  head: number; pausedAt: Record<string, number>; lagReads: number; lagLeft: number; staleNonce: boolean; nonces: Record<string, number>; prevNonces: Record<string, number>; blockReads: number;
+}
+const newChain = (): Chain => ({ paused: {}, sends: [], emergencyHolds: new Set(), balances: {}, balanceReads: [], head: 100, pausedAt: {}, lagReads: 0, lagLeft: 0, staleNonce: false, nonces: {}, prevNonces: {}, blockReads: 0 });
+/** The block the RPC serves now: one behind the head while the lag lasts. */
+const served = (c: Chain): number => (c.lagLeft > 0 ? c.head - 1 : c.head);
 
 /** `cast send pauseDeposits()` flips the flag and records its signer flags, `cast call` reads it. Every other tool call goes to the stubs on PATH. */
 function chainRunner(c: Chain): ProcessRunner {
@@ -43,16 +53,36 @@ function chainRunner(c: Chain): ProcessRunner {
     if (tool === "cast" && args[0] === "send") {
       const to = args[1]!;
       expect(args[2]).toBe("pauseDeposits()");
-      c.sends.push({ to, keystore: args[args.indexOf("--keystore") + 1], from: args[args.indexOf("--from") + 1] });
+      const from = args[args.indexOf("--from") + 1]!.toLowerCase();
+      const nonce = args.includes("--nonce") ? Number(args[args.indexOf("--nonce") + 1]) : undefined;
+      c.sends.push({ to, keystore: args[args.indexOf("--keystore") + 1], from: args[args.indexOf("--from") + 1], nonce });
       if (c.failSendTo === to) return { code: 1, stdout: "", stderr: "Error: execution reverted: AccessControl" };
+      if (nonce !== (c.nonces[from] ?? 0)) return { code: 1, stdout: "", stderr: "" }; // a stale nonce: the node refuses with no text
+      c.prevNonces[from] = nonce!;
+      c.nonces[from] = nonce! + 1;
+      c.head += 1;
+      c.lagLeft = c.lagReads;
       c.paused[to] = true;
-      return { code: 0, stdout: JSON.stringify({ status: "0x1", transactionHash: `0x${"ab".repeat(32)}` }) + "\n", stderr: "" };
+      c.pausedAt[to] = c.head;
+      return { code: 0, stdout: JSON.stringify({ status: "0x1", transactionHash: `0x${"ab".repeat(32)}`, blockNumber: `0x${c.head.toString(16)}` }) + "\n", stderr: "" };
+    }
+    if (tool === "cast" && args[0] === "block-number") {
+      c.blockReads++;
+      const b = served(c);
+      if (c.lagLeft > 0) c.lagLeft--;
+      return { code: 0, stdout: `${b}\n`, stderr: "" };
+    }
+    if (tool === "cast" && args[0] === "nonce" && args[1] === "--block") { // pause-all's pending read (the deploy's own nonce checks go to the stub)
+      expect(args[2]).toBe("pending");
+      const who = args[3]!.toLowerCase();
+      const n = c.nonces[who] ?? 0;
+      return { code: 0, stdout: `${c.staleNonce ? (c.prevNonces[who] ?? n) : n}\n`, stderr: "" };
     }
     if (tool === "cast" && args[0] === "balance") {
       c.balanceReads.push(args[1]!.toLowerCase());
       return { code: 0, stdout: `${c.balances[args[1]!.toLowerCase()] ?? "10000000000000000000"}\n`, stderr: "" };
     }
-    if (tool === "cast" && args[0] === "call" && args[2] === "depositsPaused()(bool)") return { code: 0, stdout: `${c.paused[args[1]!] === true}\n`, stderr: "" };
+    if (tool === "cast" && args[0] === "call" && args[2] === "depositsPaused()(bool)") return { code: 0, stdout: `${c.paused[args[1]!] === true && (c.pausedAt[args[1]!] ?? 0) <= served(c)}\n`, stderr: "" };
     if (tool === "cast" && args[0] === "call" && args[2] === "hasRole(bytes32,address)(bool)") {
       expect(args[3]).toBe(EMERGENCY_ROLE);
       return { code: 0, stdout: `${args[4]!.toLowerCase() === ADMIN ? !c.emergencyHolds.has(args[1]!) : c.emergencyHolds.has(args[1]!)}\n`, stderr: "" };
@@ -557,5 +587,68 @@ describe("pause-all with the v0.5.0 table: the retired-line rmAGENT (issue 1927)
     const r = await run050({ agentRetired: false, failAgent: true });
     expect(r.report.allPaused).toBe(false);
     expect(pauseIncomplete(r.report).details.unpaused).toEqual(["rmAGENT"]);
+  });
+});
+
+describe("issue 1981: a load-balanced RPC behind the send", () => {
+  test("the RPC lags one block after each send: the read-back waits for the receipt block and reads every vault paused", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    c.lagReads = 1; // the first block-number read after each send answers the block before the receipt
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
+    expect(report(w).pauseAll).toMatchObject({ allPaused: true });
+    for (const v of report(w).pauseAll.vaults) expect(v.depositsPaused).toBe(true);
+    // one stale read and three reads in a row at the receipt block, per send
+    expect(c.blockReads).toBe(3 * 4);
+    expect(w.logs().filter((l) => l.event === "rpc.behind_receipt")).toHaveLength(3);
+  });
+
+  test("the same lag without the wait reads false: the fake is a real lag, not a pass-through", async () => {
+    const c = newChain();
+    c.lagReads = 1;
+    const run = chainRunner(c);
+    const ADDR = vaultAddr(0);
+    await run("cast", ["send", ADDR, "pauseDeposits()", "--json", "--nonce", "0", "--keystore", "/k/EMERGENCY", "--from", EMERGENCY], {} as never);
+    expect((await run("cast", ["call", ADDR, "depositsPaused()(bool)"], {} as never)).stdout.trim()).toBe("false");
+    await run("cast", ["block-number"], {} as never);
+    expect((await run("cast", ["call", ADDR, "depositsPaused()(bool)"], {} as never)).stdout.trim()).toBe("true");
+  });
+
+  test("the RPC never serves the receipt block: a bounded wait, a clear error, and the false read-back still fails the pause", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    c.lagReads = 1_000_000;
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(EXIT_CODES.PAUSE);
+    const r = report(w).pauseAll;
+    expect(r.allPaused).toBe(false);
+    expect(r.vaults[0].depositsPaused).toBe(false);
+    expect(r.vaults[0].error).toContain("did not read block 101 on 3 reads in a row within 60 reads");
+    expect(lastError(w).message).toContain("NOT confirmed paused");
+  });
+
+  test("a pending-nonce read that answers a stale nonce: each send from the same key still takes the next nonce", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    c.staleNonce = true;
+    c.nonces[EMERGENCY.toLowerCase()] = 7;
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
+    expect(c.sends.map((s) => s.nonce)).toEqual([7, 8, 9]);
+    expect(w.logs().filter((l) => l.event === "rpc.stale_nonce")).toHaveLength(2);
+    expect(report(w).pauseAll).toMatchObject({ allPaused: true });
+  });
+
+  test("the fake refuses a stale nonce with an empty error, and pause-all names the exit and the nonce in place of the empty text", async () => {
+    const c = newChain();
+    c.nonces[EMERGENCY.toLowerCase()] = 3;
+    const r = await chainRunner(c)("cast", ["send", vaultAddr(0), "pauseDeposits()", "--json", "--nonce", "2", "--keystore", "/k/EMERGENCY", "--from", EMERGENCY], {} as never);
+    expect(r).toMatchObject({ code: 1, stderr: "" });
+    const w = world({ writeSafeManifest: true }), c2 = newChain();
+    seed(w, AFTER_HANDOVER);
+    // a pending read that lags a send made before this run: the first send has no floor from this run, so it fails, with a message that is not empty
+    c2.nonces[EMERGENCY.toLowerCase()] = 5;
+    c2.prevNonces[EMERGENCY.toLowerCase()] = 4;
+    c2.staleNonce = true;
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c2))).toBe(EXIT_CODES.PAUSE);
+    expect(report(w).pauseAll.vaults[0].error).toContain("exit 1 with no error text (nonce 4)");
   });
 });
