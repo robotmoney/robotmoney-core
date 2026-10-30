@@ -526,7 +526,7 @@ test("the rounds before the rebalance run before the receipt is recorded, check 
   const before = (a: string, b: string) => expect(ids.indexOf(a), `${a} before ${b}`).toBeLessThan(ids.indexOf(b));
   for (const [first, guard, router, record, apply, post, changed] of [
     ["P4.01-verify-post-govern", "P5.05-receipt-changes-split", "P5.30-pre-router-deposit", "P5.02-record-receipt", "P5.03-apply-receipt", "P6.30-router-deposit", "P6.32-router-split-changed"],
-    ["P8.17-v050-evidence", "P8.40-v050-receipt-changes-split", "P8.47-v050-pre-router-deposit", "P8.22-v050-record-receipt", "P8.23-v050-apply-receipt", "P8.29-v050-router-deposit", "P8.49-v050-router-split-changed"],
+    ["P8.13-v050-upgrade-receipt", "P8.40-v050-receipt-changes-split", "P8.47-v050-pre-router-deposit", "P8.22-v050-record-receipt", "P8.23-v050-apply-receipt", "P8.29-v050-router-deposit", "P8.49-v050-router-split-changed"],
   ]) {
     before(first!, guard!); before(guard!, router!); before(router!, record!); before(record!, apply!); before(apply!, post!); before(post!, changed!);
     const text = (id: string) => r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" ")).join("\n");
