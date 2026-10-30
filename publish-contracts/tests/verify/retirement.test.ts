@@ -65,6 +65,9 @@ describe("a retired vault (issue 1912, ADR-0017)", () => {
     expect(vec(await verifyDeployment(retired({ voted: true, defaultW: [[a!, b!, c!], [9500n, 500n, 100n]], effectiveW: [[a!, b!, c!], [8000n, 1000n, 1000n]] }).opts))).toBe(false);
     expect(vec(await verifyDeployment(retired({ voted: true, effectiveW: [[a!, c!, b!], [8000n, 1000n, 1000n]] }).opts))).toBe(false);
     expect(vec(await verifyDeployment(retired({ voted: true, effectiveW: [[a!, b!, RETIRED], [8000n, 1000n, 1000n]] }).opts))).toBe(false);
+    // vector=applied: the active vector keeps the retired vault as an extra leg, the other legs match the default.
+    expect(vec(await verifyDeployment(retired({ voted: true, effectiveW: [[a!, b!, c!, RETIRED], [7000n, 1000n, 1000n, 1000n]] }).opts))).toBe(true);
+    expect(vec(await verifyDeployment(retired({ voted: false, effectiveW: [[a!, b!, c!, RETIRED], [7000n, 1000n, 1000n, 1000n]] }).opts))).toBe(false);
   });
   test("a retired vault the registry does not list fails the vault set label", async () => {
     expect(failed(await verifyDeployment(retired({ listed: false }).opts))).toContain("vault set: manifests equal registry.listVaults");
