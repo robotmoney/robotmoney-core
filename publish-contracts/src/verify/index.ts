@@ -894,7 +894,7 @@ async function roleScan(c: Collector, chain: ChainReader, deployer: Address, gov
 /**
  * Issue 1912, ADR-0017: one vault the Safe retired with `govern --row retire-vault`. It is withdraw-only (ADR-0009): Retired in the registry, out of the router-eligible set, its own deposits halted by the
  * registry retire, still holding its code (its holders redeem), and absent from the router's default and effective vectors, which keep one leg per remaining vault. The two vectors
- * have the same bps unless an applied receipt's vector is active (issue 1992).
+ * have the same bps unless an applied receipt's vector is active (issue 1992). That vector may still carry the retired vault as an extra leg (retire with vector=applied).
  */
 async function retirementChecks(c: Collector, chain: ChainReader, vault: Address, ctx: { registry: Address; router: Address; vaultCount: number }): Promise<void> {
   const p = `retired[${vault}]`;
@@ -907,7 +907,9 @@ async function retirementChecks(c: Collector, chain: ChainReader, vault: Address
     const [ev, eb] = (await chain.read(ctx.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
     // Issue 1992: an applied receipt sets an active vector whose bps differ from the default; no step clears it (issue 1980), so the bps must match only while none is active.
     const voted = (await chain.read(ctx.router, "function votedWeightsActive() view returns (bool)")) as boolean;
-    const sameVaults = dv.length === ev.length && dv.every((a, i) => lc(a) === lc(ev[i]!));
+    // Retire with vector=applied (owner decision 1980): the active applied vector still names the retired vault until the next receipt is applied. Its other legs must match the default's, in order.
+    const evKept = voted ? ev.filter((a) => lc(a) !== lc(vault)) : ev;
+    const sameVaults = dv.length === evKept.length && dv.every((a, i) => lc(a) === lc(evKept[i]!));
     const sameBps = db.length === eb.length && db.every((x, i) => x === eb[i]);
     const sum = (b: bigint[]) => b.reduce((t, x) => t + x, 0n);
     const ok = sameVaults && (voted || sameBps) && dv.length === ctx.vaultCount && new Set(dv.map(lc)).size === dv.length && !dv.some((a) => lc(a) === lc(vault))
