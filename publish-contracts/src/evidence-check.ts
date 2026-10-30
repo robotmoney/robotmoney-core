@@ -194,7 +194,7 @@ export function checkVotedWeightsClears(ev: any, floor: number = MAINNET_DELAY_F
 /**
  * A vault retirement (issue 1912, ADR-0017, `govern --row retire-vault`), recorded under `vault_retirements` (never in `govern`, so stage 13 stays the three unpauses). One entry per round:
  * ONE timelock batch of two calls, registry.migrateEligibility(vault, false, three legs) then registry.retire(vault), one schedule and one execute at least the floor apart, and the read-back:
- * the three-leg default vector (`vaults`, `bps`, 10000 bps, the retired vault out), voted_weights_active false and the router's effective weights equal to it. Allowed in every kind: the row
+ * the three-leg default vector (`vaults`, `bps`, 10000 bps, the retired vault out), voted_weights_active false and the router's effective weights equal to it. An entry with `applied_vector: true` (the row ran with `vector=applied`, issue 1980) instead records voted_weights_active true and the effective weights of the applied vector. Allowed in every kind: the row
  * is the governed path on the live production deployment.
  */
 const retireLabel = (r: any) => `${RETIRE_ROW} ${r?.vault ?? "?"} round ${r?.round ?? 1}`;
@@ -215,7 +215,9 @@ function retireShapeProblems(ev: any, bad: (m: string) => void): any[] {
     if (vaults.length !== STAYING_KEYS.length || vaults.length !== bps.length || !vaults.every((v) => typeof v === "string" && ADDR.test(v)) || new Set(vaults.map((v) => lc(String(v)))).size !== vaults.length) bad(`${w}: vaults and bps are not ${STAYING_KEYS.length} distinct addresses with one weight each`);
     else if (!bps.every((x) => Number.isInteger(x) && (x as number) >= 0) || (bps as number[]).reduce((t, x) => t + x, 0) !== 10000) bad(`${w}: bps do not sum to 10000`);
     else if (ADDR.test(r?.vault ?? "") && vaults.some((v) => lc(String(v)) === lc(r.vault))) bad(`${w}: the retired vault ${r.vault} is still in the default vector`);
-    effectiveReadBackProblems(w, r, vaults, bps, false, bad);
+    // applied_vector: the round accepted an active applied receipt vector (issue 1980). The router then routes by that vector, so the effective weights are not the default vector.
+    const applied = r?.applied_vector === true;
+    effectiveReadBackProblems(w, r, applied ? undefined : vaults, applied ? undefined : bps, applied, bad);
   }
   return rs;
 }

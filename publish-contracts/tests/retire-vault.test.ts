@@ -44,6 +44,14 @@ describe("the retire-vault arguments (issue 1912)", () => {
     expect(STAYING_KEYS).toEqual(["USDC", "PROTO", "RWA"]);
     expect(retireArgsText(w)).toContain("--admin-arg weights=USDC:9500,PROTO:500,RWA:0");
   });
+  test("vector=applied is the only opt-in to an active applied receipt vector (issue 1980)", () => {
+    const w = parseRetireArgs({ ...ARGS, vector: "applied" });
+    expect(w.appliedVector).toBe(true);
+    expect(retireArgsText(w)).toContain("--admin-arg vector=applied");
+    expect(parseRetireArgs(ARGS).appliedVector).toBeUndefined();
+    expect(retireArgsText(parseRetireArgs(ARGS))).not.toContain("vector=");
+    expect(() => parseRetireArgs({ ...ARGS, vector: "cleared" })).toThrow(/vector must be 'applied'/);
+  });
   test("a vector that is not three legs summing to 10000 is refused with USAGE", () => {
     const refuse = (a: Record<string, string>, why: string) => expect(() => parseRetireArgs(a), why).toThrow(/retire-vault/);
     refuse({ weights: WEIGHTS }, "no vault");
@@ -111,9 +119,26 @@ describe("the batch (issue 1912)", () => {
     expect(p({ eligible: false })).toContain("not router-eligible");
     expect(p({ registryRouter: addr(1) })).toContain("RouterNotLinked");
     expect(p({ timelockIsRegistryAdmin: false })).toContain("ADMIN_ROLE on the registry");
-    expect(p({ votedWeightsActive: true })).toContain("clear-voted-weights");
+    expect(p({ votedWeightsActive: true })).toContain("vector=applied");
     expect(p({ defaultVaults: THREE })).toContain("does not hold the vault");
     expect(p({ defaultVaults: [A.vaults.USDC, A.vaults.PROTO, RETIRED_VAULT, addr(0x7777)] })).toContain("LengthMismatch");
+  });
+  test("with vector=applied the before check accepts an active vector and every other refusal stays (issue 1980)", () => {
+    const want = parseRetireArgs({ ...ARGS, vector: "applied" });
+    const good = { listed: FOUR, status: 0, eligible: true, registryRouter: A.router, router: A.router, timelockIsRegistryAdmin: true, votedWeightsActive: true, defaultVaults: FOUR, hasCode: true };
+    expect(retireBeforeProblems(want, THREE, good)).toEqual([]);
+    expect(retireBeforeProblems(want, THREE, { ...good, hasCode: false }).join("; ")).toContain("has no code");
+    expect(retireBeforeProblems(want, THREE, { ...good, defaultVaults: THREE }).join("; ")).toContain("does not hold the vault");
+  });
+  test("with vector=applied the read-back accepts the active vector and still checks the default vector, the status and the flag (issue 1980)", () => {
+    const active = { status: 2, eligible: false, eligibleCount: 3, votedWeightsActive: true, defaultVaults: THREE, defaultBps: [9500, 500, 0], effectiveVaults: FOUR, effectiveBps: [7000, 1500, 0, 1500], retiredFlag: true, hasCode: true };
+    expect(retireReadBackProblems(THREE, [9500, 500, 0], active, true)).toEqual([]);
+    expect(retireReadBackProblems(THREE, [9500, 500, 0], active)).not.toEqual([]);
+    const p = (o: object) => retireReadBackProblems(THREE, [9500, 500, 0], { ...active, ...o }, true).join("; ");
+    expect(p({ defaultBps: [9000, 1000, 0] })).toContain("getDefaultWeights");
+    expect(p({ status: 0 })).toContain("want Retired");
+    expect(p({ retiredFlag: false })).toContain("retired() flag");
+    expect(p({ votedWeightsActive: false })).toContain("getEffectiveWeights");
   });
   test("the read-back passes on the three-leg end state and names each difference", () => {
     const after = { status: 2, eligible: false, eligibleCount: 3, votedWeightsActive: false, defaultVaults: THREE, defaultBps: [9500, 500, 0], effectiveVaults: THREE, effectiveBps: [9500, 500, 0], retiredFlag: true, hasCode: true };
@@ -150,6 +175,22 @@ describe("the row, on the live four-vault state (issue 1912)", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ step: RETIRE_ROW, round: 1, vault: RETIRED_VAULT, registry: A.registry, router: A.router, timelock: A.timelock, vaults: THREE, bps: [9500, 500, 0], voted_weights_active: false, effective_vaults: THREE, effective_bps: [9500, 500, 0], schedule_status: 1, execute_status: 1 });
     expect(entries[0].execute_block_timestamp - entries[0].schedule_block_timestamp).toBeGreaterThanOrEqual(Number(DELAY));
+  });
+  test("with vector=applied the row retires over an active applied vector, leaves it in place and records an applied_vector entry the offline check accepts (issue 1980)", async () => {
+    const w = world(918453, { ...ARGS, vector: "applied" });
+    w.tl.s.voted = { vaults: FOUR, bps: [7000n, 1500n, 0n, 1500n] };
+    await w.run({ warp: warpTo(w.tl) });
+    expect(w.tl.s.events).toEqual(["scheduleBatch:retire-vault", "executeBatch:retire-vault"]);
+    expect(w.tl.s.statuses.get(RETIRED_VAULT)).toBe(2);
+    expect(w.tl.s.voted).toEqual({ vaults: FOUR, bps: [7000n, 1500n, 0n, 1500n] });
+    const entry = (w.manifest as { vault_retirements?: any[] }).vault_retirements![0];
+    expect(entry).toMatchObject({ applied_vector: true, voted_weights_active: true, vaults: THREE, bps: [9500, 500, 0] });
+    const ev = (e: any) => ({ registry: { address: A.registry }, timelock: { address: A.timelock }, vault_retirements: [e] });
+    expect(checkVaultRetirements(ev(entry), 172800)).toEqual([]);
+    const noFlag = JSON.parse(JSON.stringify(entry)); delete noFlag.applied_vector;
+    expect(checkVaultRetirements(ev(noFlag), 172800).join("\n")).toContain("voted_weights_active is true, want false");
+    const lie = JSON.parse(JSON.stringify(entry)); lie.voted_weights_active = false;
+    expect(checkVaultRetirements(ev(lie), 172800).join("\n")).toContain("voted_weights_active is false, want true");
   });
   test("the evidence entry passes the offline retirement check and a tampered one does not", async () => {
     const w = await (async () => { const x = world(); await x.run({ warp: warpTo(x.tl) }); return x; })();
@@ -192,7 +233,7 @@ describe("the row, on the live four-vault state (issue 1912)", () => {
       ["a vault the registry does not list", (w) => { w.tl.s.listed = [...THREE]; }, "does not list the vault"],
       ["a vault that is not router-eligible", (w) => { w.tl.s.ineligible.add(RETIRED_VAULT); w.tl.s.weights = { vaults: THREE, bps: [9500n, 500n, 0n] }; }, "not router-eligible"],
       ["a vault already Retired", (w) => { w.tl.s.statuses.set(RETIRED_VAULT, 2); }, "want Active"],
-      ["an active (voted) vector that still names the vault", (w) => { w.tl.s.voted = { vaults: FOUR, bps: [9000n, 500n, 250n, 250n] }; }, "clear-voted-weights"],
+      ["an active (voted) vector that still names the vault", (w) => { w.tl.s.voted = { vaults: FOUR, bps: [9000n, 500n, 250n, 250n] }; }, "vector=applied"],
       ["a router vector that is not the three that stay", (w) => { w.tl.s.weights = { vaults: [A.vaults.USDC, RETIRED_VAULT, addr(0x7777), A.vaults.RWA], bps: [9500n, 500n, 0n, 0n] }; }, "LengthMismatch or VaultNotActive"],
     ];
     for (const [what, arm, message] of cases) {
