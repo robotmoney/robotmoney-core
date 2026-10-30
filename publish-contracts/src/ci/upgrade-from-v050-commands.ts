@@ -18,7 +18,7 @@ export const UPGRADE_FROM_V050_COMMANDS: readonly string[] = [
   `bun publish-contracts/src/cli.ts deploy-implementation --proxy receipt --upgrade-build "$PWD" $COMMON`,
   `bun publish-contracts/src/cli.ts govern --row upgrade-proxy --proxy receipt --implementation $RECEIPT_IMPL --migration receipt-submitter-roles --upgrade-build "$PWD" $COMMON`,
   `bun publish-contracts/src/cli.ts govern --row clear-voted-weights $COMMON`,
-  `bun publish-contracts/src/cli.ts govern --row retire-vault --admin-arg vault=$RMAGENT --admin-arg weights=${RETIRE_WEIGHTS} $COMMON`,
+  `bun publish-contracts/src/cli.ts govern --row retire-vault --admin-arg vault=$RMAGENT --admin-arg weights=${RETIRE_WEIGHTS} --admin-arg vector=applied $COMMON`,
   `bun publish-contracts/src/cli.ts verify $COMMON`,
   `bun publish-contracts/src/evidence-check.ts --governed-upgrades $EVIDENCE/publish-run.json --deployment-kind rehearsal --timelock $TIMELOCK --governance $GOVERNANCE --rpc $BASE_RPC_URL`,
   `bun publish-contracts/src/evidence-check.ts --vault-retirements $EVIDENCE/publish-run.json --deployment-kind rehearsal --registry $REGISTRY --timelock $TIMELOCK --rpc $BASE_RPC_URL`,
