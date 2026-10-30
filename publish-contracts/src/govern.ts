@@ -1213,6 +1213,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     const entry = {
       step: RETIRE_ROW, round: r.round ?? 1, vault: want.vault, registry: a.registry, router: a.router, timelock: a.timelock, vaults: [...vaults], bps: [...bps],
       voted_weights_active: r.observed?.voted_weights_active, effective_vaults: r.observed?.effective_vaults, effective_bps: r.observed?.effective_bps,
+      ...(want.appliedVector && r.observed?.voted_weights_active === true ? { applied_vector: true } : {}),
       operation_id: r.scheduled.operation_id, schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await at(r.scheduled.tx_hash),
       execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await at(r.executed.tx_hash),
     };
@@ -1280,7 +1281,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
           status: Number(status), eligible: await rd<boolean>(a.registry, REGISTRY_REDEPLOY_ABI, "isRouterEligible", [want.vault]),
           eligibleCount: Number(await rd<bigint>(a.registry, REGISTRY_REDEPLOY_ABI, "routerEligibleCount")), votedWeightsActive,
           defaultVaults, defaultBps, effectiveVaults, effectiveBps, retiredFlag: await rd<boolean>(want.vault, VAULT_REDEPLOY_ABI, "retired"), hasCode: !!code && code !== "0x",
-        });
+        }, want.appliedVector === true);
         if (bad.length === 0) state[name]!.observed = { voted_weights_active: votedWeightsActive, effective_vaults: [...effectiveVaults], effective_bps: effectiveBps.map(Number) };
         return bad;
       };

@@ -1073,11 +1073,11 @@ steps:
     added: "v0.6.0"
   - id: "P8.15-v050-retire-vault"
     standing: ["4.15"]
-    description: "4.15 steps 6 and 7: the Safe retires rmAGENT in one batch of two calls; the row reads back Retired, routerEligibleCount() 3 and the three-leg vectors"
+    description: "4.15 steps 6 and 7: the Safe retires rmAGENT in one batch of two calls; the row reads back Retired, routerEligibleCount() 3 and the three-leg default vector; vector=applied accepts the applied receipt vector that stays active (the flow never clears it, 1980) until P8.23 applies the three-vault receipt"
     host: "control"
     phase: 8
     cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "retire-vault", "--admin-arg", "vault={state:v050-rmagent}", "--admin-arg", "weights=USDC:9500,PROTO:500,RWA:0", "{v050common}", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "retire-vault", "--admin-arg", "vault={state:v050-rmagent}", "--admin-arg", "weights=USDC:9500,PROTO:500,RWA:0", "--admin-arg", "vector=applied", "{v050common}", "{gate}"]
       - ["bash", "-c", "test \"$(cast call {state:v050-registry} 'routerEligibleCount()(uint256)' --rpc-url {v050RpcUrl})\" = 3 && test \"$(cast call {state:v050-rmagent} 'retired()(bool)' --rpc-url {v050RpcUrl})\" = true"]
     env:
       PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"

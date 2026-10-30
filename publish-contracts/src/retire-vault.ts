@@ -13,15 +13,16 @@ import { PublishError } from "./errors.ts";
 import { BPS_TOTAL, REGISTRY_REDEPLOY_ABI, STATUS_ACTIVE, STATUS_NAME, STATUS_RETIRED } from "./redeploy-vault.ts";
 
 export const RETIRE_ROW = "retire-vault";
-/** The `--admin-arg` keys of the row: the vault to retire and the default vector that stays, `USDC:9500,PROTO:500,RWA:0`. */
-export const RETIRE_KEYS = ["vault", "weights"] as const;
+/** The `--admin-arg` keys of the row: the vault to retire, the default vector that stays, `USDC:9500,PROTO:500,RWA:0`, and the optional `vector=applied`: an applied receipt vector may be active, because the caller applies a receipt over the three-vault set next (the upgrade flow never clears the vector, issue 1980). */
+export const RETIRE_KEYS = ["vault", "weights", "vector"] as const;
 export type RetireKey = (typeof RETIRE_KEYS)[number];
 export type RetireArgs = Partial<Record<RetireKey, string>>;
 /** The vaults that stay router-eligible after the retire, in vector order. The router vector has exactly one leg per eligible vault (ADR-0017). */
 export const STAYING_KEYS = ["USDC", "PROTO", "RWA"] as const;
 export type StayingKey = (typeof STAYING_KEYS)[number];
 
-export interface RetireWant { vault: Address; weights: { key: StayingKey; bps: number }[] }
+/** appliedVector: the caller accepts an active applied receipt vector before and after the batch and applies a receipt over the three-vault set next; deposits through the router revert until then. */
+export interface RetireWant { vault: Address; weights: { key: StayingKey; bps: number }[]; appliedVector?: boolean }
 
 const usage = (m: string): never => { throw new PublishError("USAGE", `--row ${RETIRE_ROW}: ${m}`, { row: RETIRE_ROW }); };
 const lc = (x: string): string => x.toLowerCase();
@@ -39,12 +40,13 @@ export function parseRetireArgs(args: RetireArgs | undefined): RetireWant {
   if (keys !== [...STAYING_KEYS].sort().join(",")) return usage(`--admin-arg weights must name exactly ${STAYING_KEYS.join(", ")} once each (three legs), got ${keys || "none"}`);
   const total = weights.reduce((t, w) => t + w.bps, 0);
   if (total !== BPS_TOTAL) return usage(`--admin-arg weights sums to ${total} bps, want ${BPS_TOTAL}`);
-  return { vault: getAddress(a.vault), weights: STAYING_KEYS.map((k) => weights.find((w) => w.key === k)! ) as RetireWant["weights"] };
+  if (a.vector !== undefined && a.vector !== "applied") return usage(`--admin-arg vector must be 'applied' or absent, got '${a.vector}'`);
+  return { vault: getAddress(a.vault), weights: STAYING_KEYS.map((k) => weights.find((w) => w.key === k)! ) as RetireWant["weights"], ...(a.vector === "applied" ? { appliedVector: true } : {}) };
 }
 
 /** The `--admin-arg` flags that name this exact run (the resume command spells them out: they carry no secret). */
 export const retireArgsText = (w: RetireWant): string =>
-  [`vault=${w.vault}`, `weights=${w.weights.map((x) => `${x.key}:${x.bps}`).join(",")}`].map((kv) => `--admin-arg ${kv}`).join(" ");
+  [`vault=${w.vault}`, `weights=${w.weights.map((x) => `${x.key}:${x.bps}`).join(",")}`, ...(w.appliedVector ? ["vector=applied"] : [])].map((kv) => `--admin-arg ${kv}`).join(" ");
 
 /** The run-manifest key and salt input of a retire of one vault. */
 export const retireRecordKey = (vault: string): string => `${RETIRE_ROW}-${lc(vault).slice(2)}`;
@@ -87,7 +89,7 @@ export function retireBeforeProblems(want: RetireWant, finalVaults: readonly str
   if (!b.eligible) bad.push("the vault is not router-eligible: there is no eligibility to move, and the retire row only runs on an eligible vault");
   if (lc(b.registryRouter) !== lc(b.router)) bad.push(`registry.router() is ${b.registryRouter}, not the deployment's router ${b.router}: migrateEligibility would revert RouterNotLinked`);
   if (!b.timelockIsRegistryAdmin) bad.push("the timelock does not hold ADMIN_ROLE on the registry: the batch would revert");
-  if (b.votedWeightsActive) bad.push("router.votedWeightsActive() is true: an applied receipt vector (which still names the vault) overrides the default. Run --row clear-voted-weights first, then apply a receipt over the three-vault set afterwards");
+  if (b.votedWeightsActive && !want.appliedVector) bad.push("router.votedWeightsActive() is true: an applied receipt vector (which still names the vault) overrides the default. Pass --admin-arg vector=applied when a receipt over the three-vault set is applied next");
   // the vector must be the router's current default vector without the vault: the same three vaults, so the registry's length check passes
   const stays = b.defaultVaults.filter((v) => lc(v) !== lc(want.vault));
   if (!b.defaultVaults.some((v) => lc(v) === lc(want.vault))) bad.push(`the router's default vector does not hold the vault: [${b.defaultVaults.join(", ")}]`);
@@ -114,15 +116,16 @@ export interface RetireAfter {
 const vkey = (v: readonly string[], b: readonly (bigint | number)[]): string => v.map((a, k) => `${lc(a)}:${b[k]}`).join(",");
 
 /** What must hold after the batch. An empty list is a pass. The effective vector is what deposits route by: it must be the three-leg vector with no applied receipt over it. */
-export function retireReadBackProblems(finalVaults: readonly string[], finalBps: readonly (bigint | number)[], a: RetireAfter): string[] {
+export function retireReadBackProblems(finalVaults: readonly string[], finalBps: readonly (bigint | number)[], a: RetireAfter, appliedVector = false): string[] {
   const bad: string[] = [];
   if (a.status !== STATUS_RETIRED) bad.push(`the vault's registry status is ${STATUS_NAME[a.status] ?? a.status}, want Retired`);
   if (a.eligible) bad.push("the vault is still router-eligible");
   if (a.eligibleCount !== finalVaults.length) bad.push(`registry.routerEligibleCount() is ${a.eligibleCount}, want ${finalVaults.length}`);
-  if (a.votedWeightsActive) bad.push("router.votedWeightsActive() is true: an applied receipt vector overrides the default the batch left");
+  if (a.votedWeightsActive && !appliedVector) bad.push("router.votedWeightsActive() is true: an applied receipt vector overrides the default the batch left");
   const want = vkey(finalVaults, finalBps);
   if (vkey(a.defaultVaults, a.defaultBps) !== want) bad.push(`router.getDefaultWeights() is [${vkey(a.defaultVaults, a.defaultBps)}], want [${want}]`);
-  if (vkey(a.effectiveVaults, a.effectiveBps) !== want) bad.push(`router.getEffectiveWeights() is [${vkey(a.effectiveVaults, a.effectiveBps)}], want [${want}]`);
+  // an accepted applied vector is what deposits route by until the next receipt: only the default vector is checked then
+  if (!(a.votedWeightsActive && appliedVector) && vkey(a.effectiveVaults, a.effectiveBps) !== want) bad.push(`router.getEffectiveWeights() is [${vkey(a.effectiveVaults, a.effectiveBps)}], want [${want}]`);
   if (!a.retiredFlag) bad.push("the vault's retired() flag is false: its deposit halt did not run");
   if (!a.hasCode) bad.push("the vault has no code: it must keep serving redeem and redeemInKind");
   return bad;
