@@ -239,11 +239,14 @@ jobs:
       # watchdog's first run are recorded as seen, not paged, and a new
       # upgrade after it pages; an upgrade an older watchdog failed to
       # deliver still pages, and an unreadable baseline pages everything.
-      # Postgres testcontainer plus a mock webhook. Floor = the nine tests
+      # Issue 1868: only the startup call may take the cursor baseline, and a
+      # startup with nothing indexed stores -1, so an upgrade an indexer run
+      # covers after that startup still pages, even across a restart.
+      # Postgres testcontainer plus a mock webhook. Floor = the twelve tests
       # the target holds.
-      - name: Proxy upgrade and freeze alert integration test (issues 1810, 1840, 1856)
+      - name: Proxy upgrade and freeze alert integration test (issues 1810, 1840, 1856, 1868)
         env:
-          CARGO_TEST_MIN_EXECUTED: 9
+          CARGO_TEST_MIN_EXECUTED: 12
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             -p watchdog \

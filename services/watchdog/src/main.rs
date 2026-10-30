@@ -225,8 +225,9 @@ async fn main() {
         error!("pager state table unavailable, pager state will not survive a restart: {e}");
     }
     // Issue 1856: take the proxy-change baseline before the first cycle writes
-    // the watchdog cursor, so a first-ever start is told from a restart.
-    if let Err(e) = proxy_change_baseline(&pool, chain_id).await {
+    // the watchdog cursor, so a first-ever start is told from a restart. Only
+    // this startup call may take the indexer cursor (issue 1868).
+    if let Err(e) = proxy_change_baseline(&pool, chain_id, true).await {
         error!("proxy change baseline unavailable, every unpaged proxy change will page: {e}");
     }
     let cadence = config.consensus_receipts.expected_cadence_secs;
