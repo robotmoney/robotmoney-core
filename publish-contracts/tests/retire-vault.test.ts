@@ -192,6 +192,14 @@ describe("the row, on the live four-vault state (issue 1912)", () => {
     const lie = JSON.parse(JSON.stringify(entry)); lie.voted_weights_active = false;
     expect(checkVaultRetirements(ev(lie), 172800).join("\n")).toContain("voted_weights_active is false, want true");
   });
+  test("with vector=applied and no active vector the entry carries no applied_vector flag and the offline check still expects the default vector (issue 1980)", async () => {
+    const w = world(918453, { ...ARGS, vector: "applied" });
+    await w.run({ warp: warpTo(w.tl) });
+    const entry = (w.manifest as { vault_retirements?: any[] }).vault_retirements![0];
+    expect(entry.applied_vector).toBeUndefined();
+    expect(entry).toMatchObject({ voted_weights_active: false, effective_vaults: THREE, effective_bps: [9500, 500, 0] });
+    expect(checkVaultRetirements({ registry: { address: A.registry }, timelock: { address: A.timelock }, vault_retirements: [entry] }, 172800)).toEqual([]);
+  });
   test("the evidence entry passes the offline retirement check and a tampered one does not", async () => {
     const w = await (async () => { const x = world(); await x.run({ warp: warpTo(x.tl) }); return x; })();
     const entry = (w.manifest as { vault_retirements?: any[] }).vault_retirements![0];
