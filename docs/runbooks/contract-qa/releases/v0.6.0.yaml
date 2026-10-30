@@ -1071,59 +1071,6 @@ steps:
     onlyFor: ["twin", "rehearsal"]
     maxMinutes: 60
     added: "v0.6.0"
-  - id: "P8.15-v050-retire-vault"
-    standing: ["4.15"]
-    description: "4.15 steps 6 and 7: the Safe retires rmAGENT in one batch of two calls; the row reads back Retired, routerEligibleCount() 3 and the three-leg default vector; vector=applied accepts the applied receipt vector that stays active (the flow never clears it, 1980) until P8.23 applies the three-vault receipt"
-    host: "control"
-    phase: 8
-    cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "retire-vault", "--admin-arg", "vault={state:v050-rmagent}", "--admin-arg", "weights=USDC:9500,PROTO:500,RWA:0", "--admin-arg", "vector=applied", "{v050common}", "{gate}"]
-      - ["bash", "-c", "test \"$(cast call {state:v050-registry} 'routerEligibleCount()(uint256)' --rpc-url {v050RpcUrl})\" = 3 && test \"$(cast call {state:v050-rmagent} 'retired()(bool)' --rpc-url {v050RpcUrl})\" = true"]
-    env:
-      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
-      YES: "{yes}"
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    flow: "upgrade"
-    gateAbsent: "{runDir}/state/done-retire-vault"
-    onlyFor: ["twin", "rehearsal"]
-    maxMinutes: 60
-    added: "v0.6.0"
-  - id: "P8.16-v050-verify"
-    standing: ["4.15"]
-    description: "4.15 step 8: verify compares the upgraded gateway and receipt with this build and every other contract with the v0.5.0 build, and reads rmAGENT as retired; the run manifest holds the applied receipt, and its timelock batch is read back from the chain (the check the 8453 verify path runs, on the v0.5.0 table, issue 1933)"
-    host: "control"
-    phase: 8
-    cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "verify", "{v050common}", "{gate}"]
-      - ["jq", "-e", ".receipt_applications | length > 0", "{v050EvidenceDir}/publish-run.json"]
-      - ["bash", "-c", "bun publish-contracts/src/evidence-check.ts --receipt-applications {v050EvidenceDir}/publish-run.json --deployment-kind rehearsal --consensus-receipt $(jq -r .consensus_receipt {v050ManifestDir}/ic-policy.json) --governance {state:v050-governance} --timelock {state:v050-timelock} --rpc {v050RpcUrl}"]
-    env:
-      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
-      YES: "{yes}"
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    flow: "upgrade"
-    onlyFor: ["twin", "rehearsal"]
-    maxMinutes: 60
-    added: "v0.6.0"
-  - id: "P8.17-v050-evidence"
-    standing: ["4.15"]
-    description: "4.15 step 9: both evidence checks read the governed upgrades and the retirement back from the chain"
-    host: "control"
-    phase: 8
-    cmds:
-      - ["bun", "publish-contracts/src/evidence-check.ts", "--governed-upgrades", "{v050EvidenceDir}/publish-run.json", "--deployment-kind", "rehearsal", "--timelock", "{state:v050-timelock}", "--governance", "{state:v050-governance}", "--rpc", "{v050RpcUrl}"]
-      - ["bun", "publish-contracts/src/evidence-check.ts", "--vault-retirements", "{v050EvidenceDir}/publish-run.json", "--deployment-kind", "rehearsal", "--registry", "{state:v050-registry}", "--timelock", "{state:v050-timelock}", "--rpc", "{v050RpcUrl}"]
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    flow: "upgrade"
-    onlyFor: ["twin", "rehearsal"]
-    maxMinutes: 60
-    added: "v0.6.0"
 
   - id: "P8.19-v050-receipt-payload"
     standing: ["4.10"]
@@ -1137,23 +1084,6 @@ steps:
     irreversible: false
     flow: "upgrade"
     onlyFor: "twin"
-    added: "v0.6.0"
-  - id: "P8.20-v050-register-submitter"
-    standing: ["4.10", "4.15"]
-    description: "The receipt migration left RECEIPT_SUBMITTER_ROLE with no holder, so the governing Safe registers the deployment's submitter Safe again through the timelock (schedule, the delay, execute, in one command) before any receipt can be recorded"
-    host: "control"
-    phase: 8
-    cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "register-submitter", "--submitter", "{state:v050-submitter}", "{v050common}", "{v050owners}", "{gate}"]
-    env:
-      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
-      YES: "{yes}"
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    flow: "upgrade"
-    onlyFor: ["twin", "rehearsal"]
-    maxMinutes: 60
     added: "v0.6.0"
   - id: "P8.21-v050-receipt-offline"
     standing: ["4.10"]
@@ -1190,7 +1120,7 @@ steps:
     writes: ["v050-deployer-eth", "v050-deployer-usdc"]
     added: "v0.6.0"
   # ── Issue 1984: the round BEFORE the router rebalance (P8.23 applies the receipt, which is the rebalance; ADR-0003 routes only NEW deposits by the new vector). After the
-  # upgrades, the retire and their verify (P8.16, P8.17), and before the receipt is recorded, so a receipt that would not change the split stops the run before anything
+  # upgrades, and before the retire (P8.15), its verify (P8.16, P8.17) and the receipt (P8.22), so a receipt that would not change the split stops the run before anything
   # irreversible. Deposits are measured as balance deltas and redeems take the whole balance, so a step rerun after a failure mid-step still checks what it sent. ──
   - id: "P8.40-v050-receipt-changes-split"
     standing: ["4.4", "4.9"]
@@ -1370,6 +1300,77 @@ steps:
     flow: "upgrade"
     onlyFor: ["twin", "rehearsal"]
     exercises: "redeem"
+    added: "v0.6.0"
+  # Issue 2005: the retire and its verify run after the pre-rebalance round. A router deposit follows the effective vector, which still names rmAGENT with a non-zero leg until P8.23, and a retired vault takes no deposit.
+  - id: "P8.15-v050-retire-vault"
+    standing: ["4.15"]
+    description: "4.15 steps 6 and 7: the Safe retires rmAGENT in one batch of two calls; the row reads back Retired, routerEligibleCount() 3 and the three-leg default vector; vector=applied accepts the applied receipt vector that stays active (the flow never clears it, 1980) until P8.23 applies the three-vault receipt"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "retire-vault", "--admin-arg", "vault={state:v050-rmagent}", "--admin-arg", "weights=USDC:9500,PROTO:500,RWA:0", "--admin-arg", "vector=applied", "{v050common}", "{gate}"]
+      - ["bash", "-c", "test \"$(cast call {state:v050-registry} 'routerEligibleCount()(uint256)' --rpc-url {v050RpcUrl})\" = 3 && test \"$(cast call {state:v050-rmagent} 'retired()(bool)' --rpc-url {v050RpcUrl})\" = true"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    gateAbsent: "{runDir}/state/done-retire-vault"
+    onlyFor: ["twin", "rehearsal"]
+    maxMinutes: 60
+    added: "v0.6.0"
+  - id: "P8.16-v050-verify"
+    standing: ["4.15"]
+    description: "4.15 step 8: verify compares the upgraded gateway and receipt with this build and every other contract with the v0.5.0 build, and reads rmAGENT as retired; the run manifest holds the applied receipt, and its timelock batch is read back from the chain (the check the 8453 verify path runs, on the v0.5.0 table, issue 1933)"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{v050common}", "{gate}"]
+      - ["jq", "-e", ".receipt_applications | length > 0", "{v050EvidenceDir}/publish-run.json"]
+      - ["bash", "-c", "bun publish-contracts/src/evidence-check.ts --receipt-applications {v050EvidenceDir}/publish-run.json --deployment-kind rehearsal --consensus-receipt $(jq -r .consensus_receipt {v050ManifestDir}/ic-policy.json) --governance {state:v050-governance} --timelock {state:v050-timelock} --rpc {v050RpcUrl}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    maxMinutes: 60
+    added: "v0.6.0"
+  - id: "P8.17-v050-evidence"
+    standing: ["4.15"]
+    description: "4.15 step 9: both evidence checks read the governed upgrades and the retirement back from the chain"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--governed-upgrades", "{v050EvidenceDir}/publish-run.json", "--deployment-kind", "rehearsal", "--timelock", "{state:v050-timelock}", "--governance", "{state:v050-governance}", "--rpc", "{v050RpcUrl}"]
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--vault-retirements", "{v050EvidenceDir}/publish-run.json", "--deployment-kind", "rehearsal", "--registry", "{state:v050-registry}", "--timelock", "{state:v050-timelock}", "--rpc", "{v050RpcUrl}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    maxMinutes: 60
+    added: "v0.6.0"
+  - id: "P8.20-v050-register-submitter"
+    standing: ["4.10", "4.15"]
+    description: "The receipt migration left RECEIPT_SUBMITTER_ROLE with no holder, so the governing Safe registers the deployment's submitter Safe again through the timelock (schedule, the delay, execute, in one command) before any receipt can be recorded"
+    host: "control"
+    phase: 8
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "register-submitter", "--submitter", "{state:v050-submitter}", "{v050common}", "{v050owners}", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{v050ManifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    maxMinutes: 60
     added: "v0.6.0"
   - id: "P8.22-v050-record-receipt"
     standing: ["4.10"]

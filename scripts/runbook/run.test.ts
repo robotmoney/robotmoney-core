@@ -64,7 +64,7 @@ test("the steps to run are every step the release runs on the target; --from and
   expect(all.at(-1)!.id).toBe("P10.52-record-signoff");
   expect(all.map((s) => s.id)).toContain("P8.23-v050-apply-receipt");
   const part = stepsToRun(r, "rehearsal", "P8.20-v050-register-submitter", "P8.24-v050-receipt-read-back");
-  expect(part.map((s) => s.id)).toEqual(["P8.20-v050-register-submitter", "P8.21-v050-receipt-offline", "P8.25-v050-funding", "P8.40-v050-receipt-changes-split", "P8.41-v050-pre-deposit-rmusdc", "P8.42-v050-pre-deposit-rmproto", "P8.43-v050-pre-deposit-rmrwa", "P8.44-v050-pre-redeem-rmusdc", "P8.45-v050-pre-redeem-in-kind-rmproto", "P8.46-v050-pre-redeem-rmrwa", "P8.47-v050-pre-router-deposit", "P8.48-v050-pre-sweep-positions", "P8.22-v050-record-receipt", "P8.23-v050-apply-receipt", "P8.24-v050-receipt-read-back"]);
+  expect(part.map((s) => s.id)).toEqual(["P8.20-v050-register-submitter", "P8.22-v050-record-receipt", "P8.23-v050-apply-receipt", "P8.24-v050-receipt-read-back"]);
   expect(() => stepsToRun(r, "rehearsal", "P1.02-publish")).toThrow("no step that runs on rehearsal");
 });
 
