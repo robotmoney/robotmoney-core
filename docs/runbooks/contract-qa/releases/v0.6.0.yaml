@@ -1266,15 +1266,15 @@ steps:
     added: "v0.6.0"
   - id: "P8.47-v050-pre-router-deposit"
     standing: ["4.4"]
-    description: "Before the rebalance, 2 USDC straight into the live router at 10,600,000 gas (the live router still has four non-zero legs here, and the floor is 400,000 plus 2,550,000 per leg): the effective weights still equal the pre-rebalance vector P8.40 saved, and the RouterDeposit legs are exactly that vector's non-zero weights, each leg naming its vault and weight and minting shares; the deployer holds shares in every non-zero leg afterwards"
+    description: "Before the rebalance, 2 USDC straight into the live router at 10,600,000 gas (the live router still has four non-zero legs here, and the floor is 400,000 plus 2,550,000 per leg): the effective weights still equal the pre-rebalance vector P8.40 saved, and the RouterDeposit legs are exactly that vector's non-zero weights, each leg naming its vault and weight and minting shares, except a vault whose previewDeposit reverts (rmAGENT on a stale price recorder), which the router skips and renormalises past; the deployer holds shares in every other non-zero leg afterwards"
     host: "control"
     phase: 8
     cmds:
       - ["bash", "-c", 'test "$(cast call "{state:v050-router}" "getEffectiveWeights()(address[],uint256[])")" = "$(cat {runDir}/state/v050-pre-router-weights)"']
       - ["bash", "scripts/runbook/cast-send.sh", "{state:v050-usdc}", "approve(address,uint256)", "{state:v050-router}", "2000000", "{v050cast}"]
       - ["bash", "-c", 'bash scripts/runbook/cast-send.sh "{state:v050-router}" "deposit(uint256,uint256[])" 2000000 "[]" --gas-limit 10600000 {v050CastFlagsInline} | tee {runDir}/state/v050-pre-router-deposit.json; test ${PIPESTATUS[0]} = 0']
-      - ["bash", "-c", 'bun scripts/runbook/qa-assert.ts router-legs {runDir}/state/v050-pre-router-deposit.json {runDir}/state/v050-pre-router-weights "$(cast sig-event "RouterDeposit(address,address,uint256,uint256,uint256)")"']
-      - ["bash", "-c", 'w=$(cat {runDir}/state/v050-pre-router-weights); vs=$(echo "$w" | sed -n 1p | grep -oE "0x[0-9a-fA-F]{40}"); bs=$(echo "$w" | sed -n 2p | grep -oE "[0-9]+"); i=1; for v in $vs; do b=$(echo "$bs" | sed -n "$i"p); i=$((i+1)); s=$(cast call "$v" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1); if [ "$b" != 0 ] && [ "$s" = 0 ]; then echo "no shares in $v (weight $b)" >&2; exit 1; fi; done']
+      - ["bash", "-c", 'u=""; cast call "{state:v050-rmagent}" "previewDeposit(uint256)(uint256)" 1000000 > /dev/null 2>&1 || u="{state:v050-rmagent}"; echo "unavailable (previewDeposit reverts): [$u]"; bun scripts/runbook/qa-assert.ts router-legs {runDir}/state/v050-pre-router-deposit.json {runDir}/state/v050-pre-router-weights "$(cast sig-event "RouterDeposit(address,address,uint256,uint256,uint256)")" "$u"']
+      - ["bash", "-c", 'w=$(cat {runDir}/state/v050-pre-router-weights); vs=$(echo "$w" | sed -n 1p | grep -oE "0x[0-9a-fA-F]{40}"); bs=$(echo "$w" | sed -n 2p | grep -oE "[0-9]+"); i=1; for v in $vs; do b=$(echo "$bs" | sed -n "$i"p); i=$((i+1)); cast call "$v" "previewDeposit(uint256)(uint256)" 1000000 > /dev/null 2>&1 || continue; s=$(cast call "$v" "balanceOf(address)(uint256)" "{state:v050-admin}" | cut -d" " -f1); if [ "$b" != 0 ] && [ "$s" = 0 ]; then echo "no shares in $v (weight $b)" >&2; exit 1; fi; done']
     env:
       ETH_RPC_URL: "{v050RpcUrl}"
     expectExit: 0
