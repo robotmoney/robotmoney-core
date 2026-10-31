@@ -37,6 +37,10 @@ test("the router deposit legs follow the effective weights: one leg per non-zero
   expect(routerLegProblems(routerLegsOf(receipt([log(USDC_VAULT, 1n, 1n, 9500n)]), TOPIC), parseWeights(WEIGHTS_DEFAULT))).toHaveLength(1);
   expect(routerLegProblems(routerLegsOf(receipt([...JSON.parse(PRE).logs, log(RWA_VAULT, 1n, 1n, 0n)]), TOPIC), parseWeights(WEIGHTS_DEFAULT))).toHaveLength(1);
   expect(routerLegProblems(routerLegsOf(receipt([log(USDC_VAULT, 1_900_000n, 0n, 9500n), log(PROTO_VAULT, 100_000n, 99_000n, 500n)]), TOPIC), parseWeights(WEIGHTS_DEFAULT)).join("\n")).toContain("for 0 shares");
+  // a vault whose previewDeposit reverts is skipped by the router: its missing leg is wanted only when it is named unavailable
+  expect(routerLegProblems(legs, parseWeights(WEIGHTS_DEFAULT), [RWA_VAULT])).toEqual([]);
+  expect(routerLegProblems(routerLegsOf(receipt([log(USDC_VAULT, 1_900_000n, 1n, 9500n)]), TOPIC), parseWeights(WEIGHTS_DEFAULT), [PROTO_VAULT.toUpperCase().replace("0X", "0x")])).toEqual([]);
+  expect(routerLegProblems(routerLegsOf(receipt([log(USDC_VAULT, 1_900_000n, 1n, 9500n)]), TOPIC), parseWeights(WEIGHTS_DEFAULT), [])).toHaveLength(1);
   expect(() => routerLegsOf(receipt([], "0x0"), TOPIC)).toThrow("status 0x0");
   expect(() => routerLegsOf(PRE, "RouterDeposit")).toThrow("not a 32-byte hash");
 });

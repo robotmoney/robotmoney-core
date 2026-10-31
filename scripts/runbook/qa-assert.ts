@@ -6,10 +6,11 @@
 //   bun scripts/runbook/qa-assert.ts receipt-id FILE        prints the receipt id of a consensus receipt file (publish-contracts/src/receipt-digest.ts)
 //   bun scripts/runbook/qa-assert.ts receipt-digest FILE    prints its payload digest (domain line plus bytes, never a plain keccak256)
 //   bun scripts/runbook/qa-assert.ts sub A B                prints A - B (integers); exit 1 when A < B (a share balance that fell)
-//   bun scripts/runbook/qa-assert.ts router-legs DEPOSIT WEIGHTS TOPIC
+//   bun scripts/runbook/qa-assert.ts router-legs DEPOSIT WEIGHTS TOPIC [UNAVAILABLE]
 //                                                           exit 0 when the router deposit receipt DEPOSIT (cast send --json) is status 0x1 and its RouterDeposit
 //                                                           logs (topic0 TOPIC) are exactly one per non-zero weight of WEIGHTS (cast call getEffectiveWeights()), each
-//                                                           naming that vault with that weightBps and minting shares; prints the legs
+//                                                           naming that vault with that weightBps and minting shares; prints the legs. UNAVAILABLE, a comma list of vaults (may be
+//                                                           empty), names vaults whose previewDeposit reverts: the router skips such a leg, so it is not wanted (a stale price recorder)
 //   bun scripts/runbook/qa-assert.ts legs-differ PRE POST TOPIC
 //                                                           exit 0 when the legs (vault and weightBps) of two router deposit receipts differ: the split changed
 //   bun scripts/runbook/qa-assert.ts receipt-changes-split RECEIPT WEIGHTS
@@ -84,9 +85,10 @@ export function routerLegsOf(receiptJson: string, topic: string): RouterLeg[] {
 const legKey = (vault: string, bps: bigint): string => `${vault.toLowerCase()}:${bps}`;
 
 /** PURE. Why the legs of a router deposit do not follow the weights: one leg per non-zero weight, that vault at that weight, none for a zero weight, shares minted. */
-export function routerLegProblems(legs: RouterLeg[], w: { vaults: string[]; bps: bigint[] }): string[] {
+export function routerLegProblems(legs: RouterLeg[], w: { vaults: string[]; bps: bigint[] }, unavailable: string[] = []): string[] {
   const out: string[] = [];
-  const want = w.vaults.map((v, i) => legKey(v, w.bps[i]!)).filter((_, i) => w.bps[i]! !== 0n).sort();
+  const skip = new Set(unavailable.map((v) => v.toLowerCase()));
+  const want = w.vaults.map((v, i) => legKey(v, w.bps[i]!)).filter((_, i) => w.bps[i]! !== 0n && !skip.has(w.vaults[i]!.toLowerCase())).sort();
   const got = legs.map((l) => legKey(l.vault, l.weightBps)).sort();
   if (want.join(",") !== got.join(",")) out.push(`the router deposit legs [${got.join(", ")}] are not the non-zero effective weights [${want.join(", ")}]`);
   for (const l of legs) if (l.amount === 0n || l.shares === 0n) out.push(`the leg into ${l.vault} moved ${l.amount} USDC for ${l.shares} shares`);
@@ -120,9 +122,11 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     if (verb === "router-legs") {
-      if (args.length !== 3) throw new Error("router-legs needs DEPOSIT WEIGHTS TOPIC");
+      if (args.length !== 3 && args.length !== 4) throw new Error("router-legs needs DEPOSIT WEIGHTS TOPIC [UNAVAILABLE]");
       const legs = routerLegsOf(readFileSync(args[0]!, "utf8"), args[2]!);
-      const why = routerLegProblems(legs, parseWeights(readFileSync(args[1]!, "utf8")));
+      const skipped = (args[3] ?? "").split(",").map((x) => x.trim()).filter((x) => x !== "");
+      for (const v of skipped) if (!/^0x[0-9a-fA-F]{40}$/.test(v)) throw new Error(`UNAVAILABLE names '${v}', which is not an address`);
+      const why = routerLegProblems(legs, parseWeights(readFileSync(args[1]!, "utf8")), skipped);
       for (const l of legs) console.log(`leg ${l.vault} weightBps ${l.weightBps} amount ${l.amount} shares ${l.shares}`);
       if (why.length > 0) { for (const w of why) console.error(`qa-assert router-legs: ${w}`); return 1; }
       return 0;
