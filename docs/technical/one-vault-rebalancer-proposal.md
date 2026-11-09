@@ -570,9 +570,9 @@ fixture pin it rests on.
 
 | Gate | Result | Evidence | Date |
 | --- | --- | --- | --- |
-| G1 | Not run | | |
+| G1 | Pass | `SizeGate.t.sol`. Fund implementation is 22,775 bytes, 777 under the 23,552 limit. Rebalancer is 17,893 bytes. The fund fits only with three linked libraries: `FundFlowsLib` (19,555), `FundAdminLib` (12,072) and `FundValuationLib` (8,134). These hold code, not custody or accounting state. The fund also uses the counter admin floor, not the enumerable one. Fixture pin 55371881. | 2026-11-09 |
 | G2 | Dropped | | |
-| G3 | Not run | | |
+| G3 | Pass, with listed prototype gaps | 29 fixture tests pass offline at pin 55371881 (563 accounts, 2,346 slots, no RPC). `Invariants.t.sol` (16 runs of 32 calls, fixed seed, fail on revert) checks RB-1 to RB-8 and INV-1. `EndToEnd.t.sol` runs deposit, receipt, timelock apply, steps to convergence, redeem and `redeemInKind`. `Adversarial.t.sol` has a passing test for all 8 rows of §5.8. `Custody.t.sol` covers INV-2 (donation accrual, first-depositor inflation) and INV-3 (fee and quarantine control only through the timelock). Review found 19 issues. 18 were fixed, among them a frozen venue that blocked `redeemInKind`, an admin able to grant the rebalancer role, and a gas-starvation lever on `step()`. Open gaps: a plan opened at zero NAV has a zero cost budget and halts until the admin extends it; dust on a removed basket asset is not re-absorbed (INV-2 port from `BasketVault` not done); a frozen lending venue still blocks the USDC `redeem` path, as it does today. | 2026-11-09 |
 | G4 | Not run | | |
 | G5 | Not run | | |
 | G6 | Not run | | |

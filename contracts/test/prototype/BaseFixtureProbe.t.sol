@@ -119,7 +119,8 @@ contract BaseFixtureProbeTest is BaseFixture {
         IERC20(USDC).approve(AAVE_POOL, 10_000e6);
         IAavePool(AAVE_POOL).supply(USDC, 10_000e6, address(this), 0);
         uint256 out = IAavePool(AAVE_POOL).withdraw(USDC, type(uint256).max, address(this));
-        assertGe(out, 10_000e6 - 1, "aave returns principal");
+        // Aave rounds the scaled balance on supply (rayDiv) and on read (rayMul): a few wei either way.
+        assertGe(out, 10_000e6 - 2, "aave returns principal");
     }
 
     function test_comet_supplyWithdraw() public fixtureCovered {
