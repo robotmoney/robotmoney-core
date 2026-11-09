@@ -428,7 +428,8 @@ These are the invariants the experiment must prove (gate G3). They join §8 of t
 
 ## 9. Migration
 
-ADR-0009 holds: there is no on-chain migration of holder funds.
+Out of the experiment's scope (owner, 2026-11-09). This section records the
+production path only. ADR-0009 holds: there is no on-chain migration of holder funds.
 
 1. Deploy the fund, the rebalancer and `RebalanceGovernance` as a fresh set of
    proxies (ADR-0014). Grant roles. Hand `ADMIN_ROLE` to the timelock.
@@ -475,23 +476,22 @@ by the test. A miss fails `FixtureSlotMiss(account, slot)` or
 `FixtureAccountMiss(account)`, and the fix is to re-record. Recording is the
 only step that touches the network.
 
-0. **Size spike.** Build the fund skeleton with the rebalancer split out.
-   Prove it fits EIP-170. Measure deposit, redeem and step gas on the replay
-   fixture.
-   This answers gate G1 and G2 first, because they are the cheapest way to
-   invalidate the design.
-1. **Contracts.** Fund, rebalancer, governance. Unit, invariant and fork tests,
-   including an adversarial test for every row of §5.8. This answers G3.
-2. **Rebalance simulation.** On the replay fixture, apply a set of receipt
-   vectors (the anchored historical receipts plus a few extreme moves) and run
-   each plan to the end with a simulated keeper. Between steps, move pool
-   prices with arbitrage-sized swaps so steps meet a moving market. Measure
-   realized cost, time to converge, and steps skipped. This answers G4 and G5.
-3. **Client cost.** Count the contracts, deploy stages, govern rows and
-   `ADMIN_ROLE` holders the one-vault design needs against today's, from the
-   prototype and §6 and §8. No client is built in the experiment. This answers
-   G6.
-4. **Conclusion.** Score every gate in §13. Write the result ADR (§3).
+Scope (owner, 2026-11-09): no migration, no gas measurement, and the
+smallest test set that still scores the gates. The full contracts come first.
+
+1. **Full prototype contracts.** Fund, rebalancer and governance, complete
+   against §4, §5 and §6 in one pass.
+2. **Fixture tests.** Re-record the fixture, then a minimal set: the size
+   check (G1), one end-to-end receipt-to-converged test, one test per row of
+   §5.8, and one invariant run over §7 (G3).
+3. **Rebalance simulation.** On the replay fixture, apply a small set of
+   receipt vectors (the anchored historical receipts plus a few extreme
+   moves) and run each plan to the end with a simulated keeper. Between
+   steps, move pool prices with arbitrage-sized swaps. Measure realized cost,
+   time to converge, and steps skipped. This answers G4 and G5.
+4. **System size count.** Count the contracts, deploy stages, govern rows and
+   `ADMIN_ROLE` holders against today's. No client is built. This answers G6.
+5. **Conclusion.** Score every gate in §13. Write the result ADR (§3).
 
 If the experiment invalidates the rejection, the production path that
 follows is: ADR, canonical doc rewrite, external audit, 8453 rehearsal,
@@ -550,15 +550,15 @@ result cannot move them.
 | Gate | Question | Pass | Fail | Tests the rejection reason |
 | --- | --- | --- | --- | --- |
 | G1 | Does the fund fit EIP-170 with today's optimizer settings and the rebalancer split out? | Fund and rebalancer each deploy under 24,576 bytes with at least 1 KB headroom. | Either needs a further contract split that moves custody or accounting out of the fund. | ADR-0010 M-A2 (size pressure moves, it does not disappear) |
-| G2 | Is redeem gas acceptable with every position in one vault? | A full redeem across all positions costs no more than the sum of today's three vault redeems through the router. | It costs more than that sum. | ADR-0010 M-A3 (gas) |
+| G2 | Dropped (owner, 2026-11-09): gas is not a gate. | | | |
 | G3 | Do the invariants hold under adversarial tests? | Every RB invariant (§7) and every existing custody invariant has a passing invariant or fork test, and every §5.8 threat has a test that shows the defence works. | Any invariant cannot be made to hold without a design change to custody or share accounting. | Audited-design safety, the core of the rejection |
 | G4 | Is the shared rebalance cost acceptable? | Across the replayed receipts, median realized cost is at most 15 bps of turnover and no plan exceeds 30 bps. | Median above 15 bps, or any plan above 30 bps with default parameters. | New risk (D1). The reason ADR-0003 refused socialized cost |
 | G5 | Does a plan actually converge? | Every replayed plan converges within `duration + maxOverrun`, and fewer than 10% of step attempts are skipped. | Any plan expires unconverged on a liquid asset (wETH, cbBTC), or skips exceed 10%. | New risk: the glide path is only useful if it finishes |
 | G6 | Is the system smaller to build and operate? | Net contracts, deploy stages, govern rows and `ADMIN_ROLE` holders all go down, and every client change in §8 maps onto an existing surface. | Any of those counts goes up, or a client change in §8 needs a new kind of surface. | "Migration cost is not worth it" |
-| G7 | Is the migration cost bounded? | The migration in §9 runs end to end in a forge test on the replay fixture: today's three vaults and router deployed from this repo with holders, then each governed step of §9 as a timelock call. | It needs a step outside ADR-0009 (assisted migration) or an ungoverned action. | Reversibility cost of migrating mainnet |
+| G7 | Dropped (owner, 2026-11-09): migration is out of scope. | | | |
 
-**Scoring.** All gates pass: the rejection is invalidated. G1, G3 or G7 fails:
-the rejection is validated, because those are the reasons it was made. Any
+**Scoring.** All live gates pass: the rejection is invalidated. G1 or G3
+fails: the rejection is validated, because those are the reasons it was made. Any
 other failure: the conclusion records it, then decides whether a stated
 fallback (for example D2's separate stable vault, or an auction executor for
 G4) would turn it into a pass, and tests that fallback before concluding.
@@ -571,9 +571,9 @@ fixture pin it rests on.
 | Gate | Result | Evidence | Date |
 | --- | --- | --- | --- |
 | G1 | Not run | | |
-| G2 | Not run | | |
+| G2 | Dropped | | |
 | G3 | Not run | | |
 | G4 | Not run | | |
 | G5 | Not run | | |
 | G6 | Not run | | |
-| G7 | Not run | | |
+| G7 | Dropped | | |
