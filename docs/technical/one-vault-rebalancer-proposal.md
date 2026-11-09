@@ -70,7 +70,7 @@ hypothesis with a measurable gate in §13.
 | --- | --- |
 | The deployed families are audited, and migrating them is not worth the reversibility cost. | **Partly.** This proposal also needs a new audit and a fresh deployment. What is new is the benefit: ADR-0010 kept the router and had no way to move existing capital, so it bought little product change for its cost. This proposal removes the router and makes receipts move money, which is a product change the current design cannot deliver. |
 | A fifth contract kind breaks the one-deployment-scheme rule. | **No.** ADR-0010 added a fifth kind next to the four existing ones. This proposal **replaces** them. A new deployment has one vault kind, not five. |
-| `forceRebalance`-only, caller-funded rebalancing. No keeper, no socialized cost. | **Deliberately reversed.** ADR-0010 and ADR-0003 both refused socialized rebalance cost. A receipt-driven rebalance has a real cost that all holders share. This proposal bounds that cost and discloses it (§5.7). The owner must accept that cost explicitly (§11, decision D1). |
+| `forceRebalance`-only, caller-funded rebalancing. No keeper, no socialized cost. | **Deliberately reversed.** ADR-0010 and ADR-0003 both refused socialized rebalance cost. A receipt-driven rebalance has a real cost that all holders share. This design bounds that cost and discloses it (§5.7). The experiment assumes it (§11, D1) and measures whether it is acceptable (§13, G4). |
 
 This document is the experiment's design, not an ADR. When the experiment
 concludes, the result is recorded as a new ADR either way:
