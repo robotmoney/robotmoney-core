@@ -33,7 +33,9 @@ abstract contract BaseFixture is Test {
     mapping(address => bool) private _fxAccount;
     mapping(address => mapping(bytes32 => bool)) private _fxSlot;
     mapping(address => mapping(bytes32 => bool)) private _seen;
-    mapping(address => bool) private _created;
+    /// @dev Contracts the test created. Internal so a test that consumes part of the recording itself
+    ///      (Invariants) can report its creations here too.
+    mapping(address => bool) internal _created;
 
     function setUp() public virtual {
         string memory rpc = vm.envOr("PROTO_RECORD_RPC", string(""));
@@ -49,7 +51,22 @@ abstract contract BaseFixture is Test {
     /// @dev Put on every prototype test. Runs the coverage check after the test body in replay.
     modifier fixtureCovered() {
         _;
-        if (!recording) _assertFixtureCovered();
+        if (!recording) this.checkFixtureCoverageNow();
+    }
+
+    /// @dev Replay only: check everything recorded so far and restart the recording. A long test calls it
+    ///      between phases. The check runs in an external self-call, so the decoded state diff lives in that
+    ///      call's own memory and is freed on return: forge's EVM memory limit then bounds one phase, not the
+    ///      whole test.
+    function _fixtureCheckpoint() internal {
+        if (!recording) this.checkFixtureCoverageNow();
+    }
+
+    /// @dev Self-call target of `fixtureCovered` and `_fixtureCheckpoint`. Not a test.
+    function checkFixtureCoverageNow() external {
+        require(msg.sender == address(this), "self only");
+        _assertFixtureCovered();
+        vm.startStateDiffRecording();
     }
 
     function _loadFixture() private {
@@ -74,9 +91,15 @@ abstract contract BaseFixture is Test {
 
     function _assertFixtureCovered() private {
         VmSafe.AccountAccess[] memory acc = vm.stopAndReturnStateDiff();
+        // Mark every contract the test created first: forge lists a constructor's nested calls (a proxy's
+        // initializer delegatecall) before the Create entry itself. The record run also fetches each
+        // address the test deploys to, so the fixture lists them as (empty) accounts. Their storage is
+        // the test's own, never Base state, so it needs no fixture slot.
+        for (uint256 i = 0; i < acc.length; i++) {
+            if (acc[i].kind == VmSafe.AccountAccessKind.Create) _created[acc[i].account] = true;
+        }
         for (uint256 i = 0; i < acc.length; i++) {
             VmSafe.AccountAccess memory x = acc[i];
-            if (x.kind == VmSafe.AccountAccessKind.Create) _created[x.account] = true;
             bool isCall = x.kind == VmSafe.AccountAccessKind.Call
                 || x.kind == VmSafe.AccountAccessKind.StaticCall
                 || x.kind == VmSafe.AccountAccessKind.DelegateCall;
@@ -87,7 +110,7 @@ abstract contract BaseFixture is Test {
 
             for (uint256 j = 0; j < x.storageAccesses.length; j++) {
                 VmSafe.StorageAccess memory s = x.storageAccesses[j];
-                if (!_fxAccount[s.account] || _seen[s.account][s.slot]) continue;
+                if (!_fxAccount[s.account] || _created[s.account] || _seen[s.account][s.slot]) continue;
                 _seen[s.account][s.slot] = true;
                 if (!s.isWrite && !_fxSlot[s.account][s.slot]) {
                     revert FixtureSlotMiss(s.account, s.slot);
