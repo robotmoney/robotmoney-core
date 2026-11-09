@@ -451,22 +451,46 @@ router that no longer matters.
 
 ## 10. Experiment phases
 
-The experiment runs on its own branch and on the Twin devnet only. Nothing
-deploys to 8453. Each phase ends with evidence written into §14.
+The experiment runs on its own branch as quick forge unit tests only. There
+is no Twin, no anvil process, no deploy and no RPC in a test run. Each phase
+ends with evidence written into §14.
+
+**How tests get real Base state.** Every prototype test extends
+`contracts/test/prototype/BaseFixture.sol`. In the default replay mode it loads
+`contracts/test/prototype/fixtures/base-state.alloc.json` with `vm.loadAllocs`
+and sets block, timestamp, base fee and chain id from `base-state.meta.json`.
+That is real Base (8453) state at one pinned block: the real USDC, the real
+Uniswap V3 pools for wETH, cbBTC and deSPXA, SwapRouter02, Aave V3, Compound V3
+and Moonwell. The tests run in forge's in-process EVM (the same revm anvil
+uses) in milliseconds.
+
+The fixture is lazy: it holds only the accounts and slots a recording run read.
+`scripts/prototype/record-base-fixture.ts` records it. It runs the same tests
+forked from Base at a pin, converts forge's fork cache (the original value of
+every account and slot fetched) into the fixture, then replays with no RPC to
+prove coverage. A slot the fixture lacks would read as zero, a silent wrong
+answer. So each test checks after its body that every slot it read first is in
+the fixture, and that every contract it called is in the fixture or was created
+by the test. A miss fails `FixtureSlotMiss(account, slot)` or
+`FixtureAccountMiss(account)`, and the fix is to re-record. Recording is the
+only step that touches the network.
 
 0. **Size spike.** Build the fund skeleton with the rebalancer split out.
-   Prove it fits EIP-170. Measure deposit, redeem and step gas on the Twin.
+   Prove it fits EIP-170. Measure deposit, redeem and step gas on the replay
+   fixture.
    This answers gate G1 and G2 first, because they are the cheapest way to
    invalidate the design.
 1. **Contracts.** Fund, rebalancer, governance. Unit, invariant and fork tests,
    including an adversarial test for every row of §5.8. This answers G3.
-2. **Rebalance simulation.** Replay a set of historical receipts against
-   forked Base state at the receipt dates. Measure realized cost, time to
-   converge, and steps skipped. This answers G4 and G5.
-3. **Client cost.** Build the minimum client path end to end on the Twin:
-   publish-contracts stages and the `apply-receipt` row, a keeper, the
-   indexer tables, and the dapp deposit and plan views. Count what was
-   deleted and what was added. This answers G6.
+2. **Rebalance simulation.** On the replay fixture, apply a set of receipt
+   vectors (the anchored historical receipts plus a few extreme moves) and run
+   each plan to the end with a simulated keeper. Between steps, move pool
+   prices with arbitrage-sized swaps so steps meet a moving market. Measure
+   realized cost, time to converge, and steps skipped. This answers G4 and G5.
+3. **Client cost.** Count the contracts, deploy stages, govern rows and
+   `ADMIN_ROLE` holders the one-vault design needs against today's, from the
+   prototype and §6 and §8. No client is built in the experiment. This answers
+   G6.
 4. **Conclusion.** Score every gate in §13. Write the result ADR (§3).
 
 If the experiment invalidates the rejection, the production path that
@@ -530,8 +554,8 @@ result cannot move them.
 | G3 | Do the invariants hold under adversarial tests? | Every RB invariant (§7) and every existing custody invariant has a passing invariant or fork test, and every §5.8 threat has a test that shows the defence works. | Any invariant cannot be made to hold without a design change to custody or share accounting. | Audited-design safety, the core of the rejection |
 | G4 | Is the shared rebalance cost acceptable? | Across the replayed receipts, median realized cost is at most 15 bps of turnover and no plan exceeds 30 bps. | Median above 15 bps, or any plan above 30 bps with default parameters. | New risk (D1). The reason ADR-0003 refused socialized cost |
 | G5 | Does a plan actually converge? | Every replayed plan converges within `duration + maxOverrun`, and fewer than 10% of step attempts are skipped. | Any plan expires unconverged on a liquid asset (wETH, cbBTC), or skips exceed 10%. | New risk: the glide path is only useful if it finishes |
-| G6 | Is the system smaller to build and operate? | Net contracts, deploy stages, govern rows and `ADMIN_ROLE` holders all go down, and the client path works end to end on the Twin. | Any of those counts goes up, or a client surface cannot be made to work. | "Migration cost is not worth it" |
-| G7 | Is the migration cost bounded? | The migration in §9 runs end to end on the Twin from a three-vault deployment with holders, using only governed rows. | It needs a step outside ADR-0009 (assisted migration) or an ungoverned action. | Reversibility cost of migrating mainnet |
+| G6 | Is the system smaller to build and operate? | Net contracts, deploy stages, govern rows and `ADMIN_ROLE` holders all go down, and every client change in §8 maps onto an existing surface. | Any of those counts goes up, or a client change in §8 needs a new kind of surface. | "Migration cost is not worth it" |
+| G7 | Is the migration cost bounded? | The migration in §9 runs end to end in a forge test on the replay fixture: today's three vaults and router deployed from this repo with holders, then each governed step of §9 as a timelock call. | It needs a step outside ADR-0009 (assisted migration) or an ungoverned action. | Reversibility cost of migrating mainnet |
 
 **Scoring.** All gates pass: the rejection is invalidated. G1, G3 or G7 fails:
 the rejection is validated, because those are the reasons it was made. Any
@@ -542,7 +566,7 @@ G4) would turn it into a pass, and tests that fallback before concluding.
 ## 14. Evidence log
 
 Filled in as each phase finishes. Every row links to the commit, test run or
-Twin evidence it rests on.
+fixture pin it rests on.
 
 | Gate | Result | Evidence | Date |
 | --- | --- | --- | --- |
