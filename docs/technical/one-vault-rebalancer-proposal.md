@@ -1,11 +1,16 @@
-# Proposal: one vault and a receipt-driven rebalancer
+# Experiment: one vault and a receipt-driven rebalancer
 
-- **Status:** Proposed. Not accepted. Nothing here changes code or the
-  canonical docs until the product owner accepts it.
-- **Date:** 2026-11-07
+- **Status:** Experiment in progress. The purpose is to validate or
+  invalidate the rejection of
+  [ADR-0010](../adr/ADR-0010-unified-vault-architecture.md) with measured
+  evidence. The design is developed to its conclusion first. The decision
+  comes after, from the gates in §13. Production stays on the three-vault
+  design until then. The canonical docs are not rewritten during the
+  experiment.
+- **Date:** 2026-11-07 (reframed as an experiment 2026-11-09)
 - **Author:** lucky-tensor (drafted with Claude)
 - **Decider:** Product owner
-- **Would supersede, if accepted:** the Portfolio Router (`docs/architecture.md`
+- **Would supersede, if the experiment invalidates the rejection:** the Portfolio Router (`docs/architecture.md`
   §4.2), router-weight governance (§2.3), and the rejection in
   [ADR-0010](../adr/ADR-0010-unified-vault-architecture.md). It would amend
   [ADR-0003 (rebalancing)](../adr/ADR-0003-basketvault-rebalancing-model.md)
@@ -58,17 +63,22 @@ opens a rebalance plan.
 ## 3. Relationship to the rejected unified vault (ADR-0010)
 
 ADR-0010 also proposed one vault class. The owner rejected it on 2026-09-18.
-This proposal must be judged against the reasons for that rejection.
+This experiment exists to test that rejection. Each rejection reason becomes a
+hypothesis with a measurable gate in §13.
 
-| ADR-0010 rejection reason | Does it still hold here? |
+| ADR-0010 rejection reason | Expectation going in (to be tested) |
 | --- | --- |
 | The deployed families are audited, and migrating them is not worth the reversibility cost. | **Partly.** This proposal also needs a new audit and a fresh deployment. What is new is the benefit: ADR-0010 kept the router and had no way to move existing capital, so it bought little product change for its cost. This proposal removes the router and makes receipts move money, which is a product change the current design cannot deliver. |
 | A fifth contract kind breaks the one-deployment-scheme rule. | **No.** ADR-0010 added a fifth kind next to the four existing ones. This proposal **replaces** them. A new deployment has one vault kind, not five. |
 | `forceRebalance`-only, caller-funded rebalancing. No keeper, no socialized cost. | **Deliberately reversed.** ADR-0010 and ADR-0003 both refused socialized rebalance cost. A receipt-driven rebalance has a real cost that all holders share. This proposal bounds that cost and discloses it (§5.7). The owner must accept that cost explicitly (§11, decision D1). |
 
-Because of the standing rejection, this document is a proposal, not an ADR.
-If accepted, it becomes a new ADR that supersedes ADR-0010's rejection, and
-the canonical docs are rewritten in the same change.
+This document is the experiment's design, not an ADR. When the experiment
+concludes, the result is recorded as a new ADR either way:
+
+- **Validated** (the rejection holds): the new ADR records the evidence and
+  ADR-0010 stays Rejected with a stronger reason.
+- **Invalidated** (the rejection does not hold): the new ADR supersedes the
+  rejection, and the canonical docs are rewritten in the same change.
 
 ## 4. Target architecture
 
@@ -371,7 +381,7 @@ today. Gas must be measured in the spike against the redeem gas budget
 
 ## 7. New invariants
 
-These join §8 of the architecture if the proposal is accepted.
+These are the invariants the experiment must prove (gate G3). They join §8 of the architecture only if the rejection is invalidated.
 
 - **RB-1.** Only a timelock-executed `RebalanceGovernance` call can set a
   target or open a plan.
@@ -439,33 +449,45 @@ evidence, like today's releases. The order matters: the release role must
 move before the old governance contract could apply another receipt to a
 router that no longer matters.
 
-## 10. Phases
+## 10. Experiment phases
 
-0. **Spike.** Prove the fund fits EIP-170 with the rebalancer split out. Measure
-   deposit, redeem and step gas on the Twin. Stop here if it does not fit.
-1. **ADR.** Owner accepts a new ADR that supersedes ADR-0010's rejection and
-   amends ADR-0003 and ADR-0017. Rewrite the architecture §4 and the PRD
-   vault catalog in the same change.
-2. **Contracts.** Fund, rebalancer, governance. Unit, invariant and fork tests,
-   including adversarial tests for every row of §5.8.
-3. **Clients.** publish-contracts stages and rows, dapp, rmpc, indexer,
-   watchdog, keeper.
-4. **Audit.** External audit of the fund, the rebalancer and governance.
-5. **Rehearsal.** Full deploy and one full receipt-to-converged plan on the
-   Twin, then on the 8453 rehearsal deployment.
-6. **Mainnet.** Deploy, then retire the old set (§9).
+The experiment runs on its own branch and on the Twin devnet only. Nothing
+deploys to 8453. Each phase ends with evidence written into §14.
 
-## 11. Decisions for the owner
+0. **Size spike.** Build the fund skeleton with the rebalancer split out.
+   Prove it fits EIP-170. Measure deposit, redeem and step gas on the Twin.
+   This answers gate G1 and G2 first, because they are the cheapest way to
+   invalidate the design.
+1. **Contracts.** Fund, rebalancer, governance. Unit, invariant and fork tests,
+   including an adversarial test for every row of §5.8. This answers G3.
+2. **Rebalance simulation.** Replay a set of historical receipts against
+   forked Base state at the receipt dates. Measure realized cost, time to
+   converge, and steps skipped. This answers G4 and G5.
+3. **Client cost.** Build the minimum client path end to end on the Twin:
+   publish-contracts stages and the `apply-receipt` row, a keeper, the
+   indexer tables, and the dapp deposit and plan views. Count what was
+   deleted and what was added. This answers G6.
+4. **Conclusion.** Score every gate in §13. Write the result ADR (§3).
 
-| ID | Decision | Recommendation |
-| --- | --- | --- |
-| D1 | Accept that rebalance cost is shared by all holders, within caps. | Accept. Without it a receipt cannot move existing money, which is the point of the change. |
-| D2 | Users lose the choice of a single exposure (for example rmUSDC only). The PRD user story "choose a vault or the Portfolio Router" goes away. | Accept, if the product is "follow the committee". Otherwise keep rmUSDC as a separate stable-only vault next to the fund. |
-| D3 | Who triggers steps: keeper only, keeper then anyone, or anyone. | Keeper first, anyone after `keeperGrace`. |
-| D4 | Keep `VaultRegistry` for new deployments. | Drop it for the fund. Keep the live one for v1 retirement. |
-| D5 | Should the rebalancer also correct market drift between receipts? | No. Only an applied receipt or a Safe `setTarget` opens a plan. Drift between receipts is the committee's call. |
-| D6 | Name of the vault and share. | `RobotMoneyFund` / `rmFUND` as a working name. |
-| D7 | Deposit routing: deficit-first or target-weight split. | Deficit-first. It lowers rebalance cost. |
+If the experiment invalidates the rejection, the production path that
+follows is: ADR, canonical doc rewrite, external audit, 8453 rehearsal,
+mainnet deploy, then retiring the old set (§9). That path is not part of
+the experiment.
+
+## 11. Working defaults for the experiment
+
+These are decided for the experiment so the work is not blocked. Each one is
+recorded so the conclusion can revisit it.
+
+| ID | Question | Working default | Why |
+| --- | --- | --- | --- |
+| D1 | Is rebalance cost shared by all holders, within caps? | Yes. | Without it a receipt cannot move existing money. G4 measures whether the cost is acceptable. |
+| D2 | Do users lose the choice of a single exposure (for example rmUSDC only)? | Yes, in the experiment. | It tests the cleanest form. Keeping a separate stable-only vault next to the fund is a fallback the conclusion can choose. |
+| D3 | Who triggers steps? | Keeper first, anyone after `keeperGrace`. | Liveness without trusting Robot Money to stay online. |
+| D4 | Keep `VaultRegistry` for the fund? | No. | One vault has nothing to register. G6 counts the saving. |
+| D5 | Does the rebalancer correct market drift between receipts? | No. Only an applied receipt or a Safe `setTarget` opens a plan. | Drift between receipts is the committee's call. |
+| D6 | Name of the vault and share? | `RobotMoneyFund` / `rmFUND`. | Working name only. |
+| D7 | Deposit routing? | Deficit-first. | It lowers rebalance cost. G4 measures by how much. |
 
 ## 12. Alternatives considered
 
@@ -493,3 +515,41 @@ router that no longer matters.
 - **`forceRebalance` only (ADR-0010's model).** No shared cost, but nobody is
   obliged to pay for rebalancing, so in practice a receipt still moves
   nothing. Rejected for the same reason as the status quo.
+
+## 13. Gates: what validates or invalidates the rejection
+
+Each gate maps to a reason ADR-0010 was rejected, or to a new risk this design
+adds. A gate is scored **pass** (supports the one-vault design) or **fail**
+(supports the rejection). Thresholds are set now, before any results, so the
+result cannot move them.
+
+| Gate | Question | Pass | Fail | Tests the rejection reason |
+| --- | --- | --- | --- | --- |
+| G1 | Does the fund fit EIP-170 with today's optimizer settings and the rebalancer split out? | Fund and rebalancer each deploy under 24,576 bytes with at least 1 KB headroom. | Either needs a further contract split that moves custody or accounting out of the fund. | ADR-0010 M-A2 (size pressure moves, it does not disappear) |
+| G2 | Is redeem gas acceptable with every position in one vault? | A full redeem across all positions costs no more than the sum of today's three vault redeems through the router. | It costs more than that sum. | ADR-0010 M-A3 (gas) |
+| G3 | Do the invariants hold under adversarial tests? | Every RB invariant (§7) and every existing custody invariant has a passing invariant or fork test, and every §5.8 threat has a test that shows the defence works. | Any invariant cannot be made to hold without a design change to custody or share accounting. | Audited-design safety, the core of the rejection |
+| G4 | Is the shared rebalance cost acceptable? | Across the replayed receipts, median realized cost is at most 15 bps of turnover and no plan exceeds 30 bps. | Median above 15 bps, or any plan above 30 bps with default parameters. | New risk (D1). The reason ADR-0003 refused socialized cost |
+| G5 | Does a plan actually converge? | Every replayed plan converges within `duration + maxOverrun`, and fewer than 10% of step attempts are skipped. | Any plan expires unconverged on a liquid asset (wETH, cbBTC), or skips exceed 10%. | New risk: the glide path is only useful if it finishes |
+| G6 | Is the system smaller to build and operate? | Net contracts, deploy stages, govern rows and `ADMIN_ROLE` holders all go down, and the client path works end to end on the Twin. | Any of those counts goes up, or a client surface cannot be made to work. | "Migration cost is not worth it" |
+| G7 | Is the migration cost bounded? | The migration in §9 runs end to end on the Twin from a three-vault deployment with holders, using only governed rows. | It needs a step outside ADR-0009 (assisted migration) or an ungoverned action. | Reversibility cost of migrating mainnet |
+
+**Scoring.** All gates pass: the rejection is invalidated. G1, G3 or G7 fails:
+the rejection is validated, because those are the reasons it was made. Any
+other failure: the conclusion records it, then decides whether a stated
+fallback (for example D2's separate stable vault, or an auction executor for
+G4) would turn it into a pass, and tests that fallback before concluding.
+
+## 14. Evidence log
+
+Filled in as each phase finishes. Every row links to the commit, test run or
+Twin evidence it rests on.
+
+| Gate | Result | Evidence | Date |
+| --- | --- | --- | --- |
+| G1 | Not run | | |
+| G2 | Not run | | |
+| G3 | Not run | | |
+| G4 | Not run | | |
+| G5 | Not run | | |
+| G6 | Not run | | |
+| G7 | Not run | | |
