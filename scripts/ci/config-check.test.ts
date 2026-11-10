@@ -273,7 +273,7 @@ describe("live rules against a fake RPC", () => {
   const FACTORY = cfg.rwa.uniswapV3Factory.toLowerCase();
 
   /** Per-pool live facts. Defaults match the committed config, so a test overrides one thing. */
-  interface Live { fee?: number; cardinality?: number; liquidity?: bigint; factoryPool?: string; sqrtPrice?: bigint }
+  interface Live { fee?: number; cardinality?: number; liquidity?: bigint; factoryPool?: string; sqrtPrice?: bigint; observeReverts?: boolean }
   function rpcFor(over: Record<string, Live> = {}, noCode: string[] = []): Rpc {
     const feeOf = (pool: string) => Number(all.find((x) => x.pool?.toLowerCase() === pool)!.poolFee);
     return async (method, params) => {
@@ -299,6 +299,7 @@ describe("live rules against a fake RPC", () => {
       // Word 3 is the 6-field Slipstream cardinality (Aero pools); word 4 is what the V3 reader takes.
       if (sel === "0x3850c7bd") return "0x" + w(1n << 96n) + w(0) + w(0) + w(AERO_POOLS.has(t) ? (o.cardinality ?? 1000) : 0) + w(o.cardinality ?? 1000) + w(0) + w(1);
       if (sel === "0x1a686502") return "0x" + w(o.liquidity ?? 10n ** 18n);
+      if (sel === "0x883bdbfd" && o.observeReverts) throw new Error("execution reverted: OLD");
       if (sel === "0x70a08231") return "0x" + w(2_000_000n * 10n ** 6n);
       if (sel === "0x1698ee82" && t === FACTORY) {
         // getPool(token, usdc, fee): the first argument is the asset token.
@@ -327,8 +328,12 @@ describe("live rules against a fake RPC", () => {
     expect(r.findings.filter((f) => !f.ok)).toEqual([]);
     expect(r.findings.some((f) => f.scope === "hard-assets.json:PAXG" && f.rule === "factory-getPool-equals-config" && f.ok)).toBe(true);
   });
-  test("core 2008: the PAXG Aero pool fails below 901 observation slots, on a wrong tick spacing and when it is not the factory's pool", async () => {
-    expect(await bad({ PAXG: { cardinality: 900 } }, "observation-cardinality>=901", "PAXG")).toBe(true);
+  test("core 2008: the PAXG Aero pool fails below its 1798 s window floor (900 slots), on a short history, a wrong tick spacing and when it is not the factory's pool", async () => {
+    // ADR-0018: the floor is twapWindow / 2 s + 1 = 900, the pool's real ring. 900 passes as it is, 899 fails. No state change is expected of the pool.
+    expect(await bad({ PAXG: { cardinality: 900 } }, "observation-cardinality>=900", "PAXG")).toBe(false);
+    expect(await bad({ PAXG: { cardinality: 899 } }, "observation-cardinality>=900", "PAXG")).toBe(true);
+    expect(await bad({ PAXG: { observeReverts: true } }, "observe-1798s-history", "PAXG")).toBe(true);
+    expect(await bad({}, "observe-1798s-history", "PAXG")).toBe(false);
     expect(await bad({ PAXG: { fee: 50 } }, "pool-tick-spacing-equals-config", "PAXG")).toBe(true);
     expect(await bad({ PAXG: { factoryPool: "0x" + "22".repeat(20) } }, "factory-getPool-equals-config", "PAXG")).toBe(true);
     expect(await bad({ PAXG: { liquidity: 0n } }, "liquidity>0", "PAXG")).toBe(true);

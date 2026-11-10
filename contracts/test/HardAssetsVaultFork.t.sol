@@ -13,22 +13,18 @@ import {BasketVaultDeployBase} from "../script/BasketVaultDeployBase.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {HardAssetsVault} from "../vaults/HardAssetsVault.sol";
 import {AerodromeSwapAdapter} from "../adapters/AerodromeSwapAdapter.sol";
-import {IAerodromeSlipstreamRouter} from "../interfaces/IAerodromeSlipstreamRouter.sol";
 import {IAerodromePool} from "../interfaces/IAerodromePool.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
 
-interface IAeroCardinality {
-    function increaseObservationCardinalityNext(uint16 observationCardinalityNext) external;
-}
-
 /// @notice Fork regression for rmHARD (core 2008). The real `DeployHardAssetsVault` script runs against the real PAXG token, its
-///         real Aero (Aerodrome Slipstream) CL USDC pool, the real Aero factory and router, and real USDC on the Twin chain pin. This
-///         proves the existing `AerodromeSwapAdapter` against PAXG's pool factory: the deploy's canonical-pool check, the TWAP price
-///         and both swap directions. A deposit buys real PAXG. A redeem sells it in one transaction within the vault slippage cap.
+///         real Aero (Aerodrome Slipstream) CL USDC pool, the real Aero factory and router, and real USDC on the fork pin. This
+///         proves the existing `AerodromeSwapAdapter` against PAXG's pool factory: the deploy's canonical-pool check, `addAsset`,
+///         the TWAP price and both swap directions. A deposit buys real PAXG. A redeem sells it in one transaction within the vault
+///         slippage cap.
 ///
-///         The pool's observation ring holds 900 slots and `addAsset` needs 901 for the 1800 s window. As in production
-///         (docs/operations/contract-release-runbooks.md), `_prepareCardinality` raises `observationCardinalityNext` and drives
-///         small two-way swaps, one block apart, until the ring grows.
+///         The pool is used exactly as it is: nothing in this test changes its state before the deploy (owner correction
+///         2026-11-10). Its observation ring has 900 slots, so the vault reads PAXG over the 1798 s window that ring serves
+///         (config `twapWindow`, ADR-0018), and `addAsset` vets the pool for that window.
 ///
 ///         Runs on the Twin chain (a pinned lazy anvil fork of real Base state): CI runs it in forge-fork-vault-regressions through
 ///         scripts/devnet/forge-fork-tests.ts, which fails a run in which nothing executed. With FORK_RPC_URL unset it skips with a
@@ -38,23 +34,18 @@ contract HardAssetsVaultForkTest is Test {
 
     address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
     uint256 internal constant DEPOSIT = 1_000 * 1e6;
-    uint16 internal constant REQUIRED_CARDINALITY = 901;
-    /// @dev Upper bound on prep swaps: one full ring plus slack.
-    uint256 internal constant MAX_PREP_SWAPS = 1_000;
-    /// @dev An Aero CL pool writes an observation only when a swap moves the tick (CLPool.swap). 5,000 USDC moves the PAXG pool
-    ///      a few ticks; 1 USDC does not move it at all.
-    uint256 internal constant PREP_SWAP_USDC = 5_000 * 1e6;
+    /// @dev The PAXG window: what a 900-slot ring covers at 2 s blocks (1798 / 2 + 1 = 900).
+    uint32 internal constant PAXG_TWAP_WINDOW = 1_798;
 
     address internal admin = makeAddr("admin");
     address internal alice = makeAddr("alice");
-    address internal prepper = makeAddr("prepper");
 
     HardAssetsVault internal vault;
     AerodromeSwapAdapter internal adapter;
     string internal cfg;
     address internal paxg;
     address internal pool;
-    address internal router;
+    uint16 internal ringBefore;
 
     function setUp() public {
         string memory rpc = vm.envOr("FORK_RPC_URL", string(""));
@@ -63,8 +54,7 @@ contract HardAssetsVaultForkTest is Test {
         cfg = vm.readFile("config/hard-assets.json");
         paxg = cfg.readAddress(".assets[0].token");
         pool = cfg.readAddress(".assets[0].pool");
-        router = cfg.readAddress(".aerodromeSlipstreamRouter");
-        _prepareCardinality();
+        (,,, ringBefore,,) = IAerodromePool(pool).slot0();
 
         VaultRegistry registry = CoreProxies.vaultRegistry(admin);
         BasketVaultDeployBase.Params memory p = BasketVaultDeployBase.Params({
@@ -86,41 +76,22 @@ contract HardAssetsVaultForkTest is Test {
         deal(BASE_USDC, alice, DEPOSIT);
     }
 
-    /// @dev Raise the ring to 901 the production way: `increaseObservationCardinalityNext`, then swaps in later blocks until the
-    ///      write index wraps and the cardinality takes the new size. Each round buys PAXG with 5,000 USDC and sells it back, so the
-    ///      price returns near where it started.
-    function _prepareCardinality() internal {
-        (,,, uint16 cardinality,,) = IAerodromePool(pool).slot0();
-        if (cardinality >= REQUIRED_CARDINALITY) return;
-        IAeroCardinality(pool).increaseObservationCardinalityNext(REQUIRED_CARDINALITY);
-        deal(BASE_USDC, prepper, PREP_SWAP_USDC * 2);
-        vm.startPrank(prepper);
-        IERC20(BASE_USDC).approve(router, type(uint256).max);
-        IERC20(paxg).approve(router, type(uint256).max);
-        for (uint256 i = 0; i < MAX_PREP_SWAPS && cardinality < REQUIRED_CARDINALITY; i++) {
-            vm.roll(block.number + 1);
-            vm.warp(block.timestamp + 2);
-            bool buy = i % 2 == 0;
-            address tokenIn = buy ? BASE_USDC : paxg;
-            uint256 amountIn = IERC20(tokenIn).balanceOf(prepper);
-            if (buy && amountIn > PREP_SWAP_USDC) amountIn = PREP_SWAP_USDC;
-            IAerodromeSlipstreamRouter(router)
-                .exactInputSingle(
-                    IAerodromeSlipstreamRouter.ExactInputSingleParams({
-                        tokenIn: tokenIn,
-                        tokenOut: buy ? paxg : BASE_USDC,
-                        tickSpacing: 10,
-                        recipient: prepper,
-                        deadline: block.timestamp,
-                        amountIn: amountIn,
-                        amountOutMinimum: 0,
-                        sqrtPriceLimitX96: 0
-                    })
-                );
-            (,,, cardinality,,) = IAerodromePool(pool).slot0();
-        }
-        vm.stopPrank();
-        assertGe(cardinality, REQUIRED_CARDINALITY, "prep raised the PAXG pool ring to 901");
+    function test_fork_rmhard_addAssetOnTheUnmodifiedPoolWithThePaxgWindow() public view {
+        (,,, uint16 ring,,) = IAerodromePool(pool).slot0();
+        assertEq(ring, ringBefore, "the deploy changed nothing in the pool's ring");
+        assertGe(
+            uint256(ring), uint256(PAXG_TWAP_WINDOW) / 2 + 1, "the real ring serves the PAXG window"
+        );
+        assertEq(uint256(cfg.readUint(".assets[0].twapWindow")), PAXG_TWAP_WINDOW, "config window");
+        assertEq(
+            vault.effectiveTwapWindow(paxg),
+            PAXG_TWAP_WINDOW,
+            "the vault reads PAXG over its window"
+        );
+        assertEq(vault.assetCount(), 1, "addAsset registered PAXG");
+        (address token, address p,,,,) = vault.assets(0);
+        assertEq(token, paxg);
+        assertEq(p, pool);
     }
 
     function test_fork_rmhard_adapterResolvesPaxgPoolThroughTheAeroFactory() public view {
@@ -129,9 +100,11 @@ contract HardAssetsVaultForkTest is Test {
             cfg.readAddress(".aerodromeSlipstreamFactory"),
             "Aero factory"
         );
-        assertEq(address(adapter.ROUTER()), router, "Aero router");
-        // The adapter's own canonical-pool check (PoolFactoryMismatch) passes, and 1 PAXG prices in a sane USDC band.
-        uint256 oneOz = adapter.twapPrice(pool, paxg, BASE_USDC, 1e18, vault.DEFAULT_TWAP_WINDOW());
+        assertEq(
+            address(adapter.ROUTER()), cfg.readAddress(".aerodromeSlipstreamRouter"), "Aero router"
+        );
+        // The adapter's own canonical-pool check (PoolFactoryMismatch) passes, and 1 PAXG over the PAXG window prices in a sane band.
+        uint256 oneOz = adapter.twapPrice(pool, paxg, BASE_USDC, 1e18, PAXG_TWAP_WINDOW);
         assertGt(oneOz, 1_000 * 1e6, "1 PAXG is above 1,000 USDC");
         assertLt(oneOz, 20_000 * 1e6, "1 PAXG is below 20,000 USDC");
     }
@@ -148,12 +121,11 @@ contract HardAssetsVaultForkTest is Test {
 
         uint256 held = IERC20(paxg).balanceOf(address(vault));
         assertGt(held, 0, "deposit bought PAXG");
-        uint256 twapValue =
-            adapter.twapPrice(pool, paxg, BASE_USDC, held, vault.effectiveTwapWindow(paxg));
+        uint256 twapValue = adapter.twapPrice(pool, paxg, BASE_USDC, held, PAXG_TWAP_WINDOW);
         assertEq(
             vault.totalAssets(),
             IERC20(BASE_USDC).balanceOf(address(vault)) + twapValue,
-            "NAV equals idle USDC plus the Aero pool TWAP value of the PAXG held"
+            "NAV equals idle USDC plus the Aero pool TWAP value of the PAXG held, over the PAXG window"
         );
 
         uint256 preview = vault.previewRedeem(shares);

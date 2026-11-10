@@ -12,6 +12,8 @@ import {HardAssetsVault} from "../vaults/HardAssetsVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {AerodromeSwapAdapter} from "../adapters/AerodromeSwapAdapter.sol";
 import {BasketDeployFixture, ConstPool} from "./helpers/BasketDeployFixture.sol";
+import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
+import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
 
 /// @dev Aero (Aerodrome Slipstream) CL pool double: the `ConstPool` TWAP and liquidity surface, the pool's live fee in pips,
 ///      plus `tickSpacing()` and `factory()`. Every field is an immutable, so the code can be etched at the real pool address.
@@ -28,6 +30,38 @@ contract ConstAeroPool is ConstPool {
 
     function tickSpacing() external view returns (int24) {
         return _tickSpacing;
+    }
+}
+
+/// @dev The real PAXG Aero pool's ring: 900 observation slots (ADR-0018).
+contract ConstAeroPool900 is ConstAeroPool {
+    constructor(address a, address b, uint24 livePips, int24 ts, address f)
+        ConstAeroPool(a, b, livePips, ts, f)
+    {}
+
+    function slot0()
+        external
+        pure
+        override
+        returns (uint160, int24, uint16, uint16, uint16, uint8, bool)
+    {
+        return (uint160(1 << 96), 0, 0, 900, 900, 0, true);
+    }
+}
+
+/// @dev One slot short of the 1798 s PAXG window's floor (1798 / 2 + 1 = 900).
+contract ConstAeroPool899 is ConstAeroPool {
+    constructor(address a, address b, uint24 livePips, int24 ts, address f)
+        ConstAeroPool(a, b, livePips, ts, f)
+    {}
+
+    function slot0()
+        external
+        pure
+        override
+        returns (uint160, int24, uint16, uint16, uint16, uint8, bool)
+    {
+        return (uint160(1 << 96), 0, 0, 899, 899, 0, true);
     }
 }
 
@@ -68,6 +102,21 @@ contract DeployBasketVaultHardAssetsTest is BasketDeployFixture {
     uint24 internal constant LIVE_FEE_PIPS = 500;
 
     DeployHardAssetsVault internal script;
+    address internal _etchedFactory;
+    address internal _etchedToken;
+    address internal _etchedPool;
+
+    /// @dev Replace the etched Aero pool with a double holding `ring` observation slots (900: the real pool; 899: one short).
+    function _etchRing(uint16 ring) internal {
+        address code = ring == 900
+            ? address(
+                new ConstAeroPool900(_etchedToken, address(usdc), LIVE_FEE_PIPS, 10, _etchedFactory)
+            )
+            : address(
+                new ConstAeroPool899(_etchedToken, address(usdc), LIVE_FEE_PIPS, 10, _etchedFactory)
+            );
+        vm.etch(_etchedPool, code.code);
+    }
 
     function setUp() public {
         _fixtureSetUp();
@@ -89,6 +138,9 @@ contract DeployBasketVaultHardAssetsTest is BasketDeployFixture {
             address(new ConstAeroPool(token, address(usdc), livePips, poolTickSpacing, factory))
             .code
         );
+        _etchedFactory = factory;
+        _etchedToken = token;
+        _etchedPool = pool;
         vm.etch(factory, address(new ConstAeroFactory(pool, token, address(usdc), ts)).code);
         if (token.code.length == 0) vm.etch(token, address(usdc).code);
     }
@@ -156,6 +208,92 @@ contract DeployBasketVaultHardAssetsTest is BasketDeployFixture {
             .twapPrice(pools[0], tokens[0], address(usdc), 1e18, v.DEFAULT_TWAP_WINDOW());
         assertGt(quote, 0, "TWAP quote succeeds");
         assertEq(v.totalAssets(), 0, "empty vault NAV");
+    }
+
+    // ─── ADR-0018: the vault fits the pool's real 900-slot ring through PAXG's 1798 s window ─────────
+
+    function test_window_paxgIsAddedOnTheReal900SlotRingWithIts1798sWindow() public {
+        string memory json = _etchAero(LIVE_FEE_PIPS, 10);
+        _etchRing(900);
+        assertEq(json.readUint(".assets[0].twapWindow"), 1798, "config window");
+        BasketVaultDeployBase.Deployed memory d = _deploy(_sheet(), json);
+        HardAssetsVault v = HardAssetsVault(d.vault);
+        assertEq(v.assetCount(), 1, "addAsset passed on 900 slots");
+        assertEq(v.effectiveTwapWindow(_etchedToken), 1798, "NAV reads PAXG over 1798 s");
+        assertEq(v.DEFAULT_TWAP_WINDOW(), 1800, "the default is unchanged");
+        assertEq(v.MIN_TWAP_WINDOW(), 600, "the minimum is unchanged");
+    }
+
+    function test_window_899SlotsAreRefusedForThe1798sWindow() public {
+        string memory json = _etchAero(LIVE_FEE_PIPS, 10);
+        _etchRing(899);
+        BasketVaultDeployBase.Params memory p = _sheet();
+        p.swapRouter = _configRouter(json);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketAssetConfigGuard.InsufficientPoolCardinality.selector,
+                _etchedPool,
+                uint16(900),
+                uint16(899)
+            )
+        );
+        script.runInProcess(p, json);
+    }
+
+    function test_window_withoutThePresetThe900SlotPoolIsRefusedAt901() public {
+        string memory json = _etchAero(LIVE_FEE_PIPS, 10);
+        _etchRing(900);
+        json = vm.replace(json, '"twapWindow": 1798', '"twapWindowRemoved": 1798');
+        BasketVaultDeployBase.Params memory p = _sheet();
+        p.swapRouter = _configRouter(json);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketAssetConfigGuard.InsufficientPoolCardinality.selector,
+                _etchedPool,
+                uint16(901),
+                uint16(900)
+            )
+        );
+        script.runInProcess(p, json);
+    }
+
+    function test_window_presetIsRefusedOnAnActiveAssetAndOutOfBounds() public {
+        string memory json = _etchAero(LIVE_FEE_PIPS, 10);
+        _etchRing(900);
+        HardAssetsVault v = HardAssetsVault(_deploy(_sheet(), json).vault);
+        vm.prank(deployer);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                HardAssetsVault.TwapWindowPresetOnActiveAsset.selector, _etchedToken
+            )
+        );
+        v.presetTwapWindow(_etchedToken, 1700);
+        vm.prank(deployer);
+        vm.expectRevert(abi.encodeWithSelector(BasketVault.InvalidTwapWindow.selector, uint32(599)));
+        v.presetTwapWindow(makeAddr("next"), 599);
+        vm.prank(makeAddr("stranger"));
+        vm.expectRevert();
+        v.presetTwapWindow(makeAddr("next"), 1798);
+    }
+
+    /// @notice The shared BasketVault keeps the 1800 s floor: rmRWA on a 900-slot pool is refused at 901, as before.
+    function test_window_otherBasketsKeepThe901SlotFloor() public {
+        string memory json = _etchConfigPools("config/rwa-assets.json", "assets");
+        address rwaPool = json.readAddress(".assets[0].pool");
+        address rwaToken = json.readAddress(".assets[0].token");
+        vm.etch(rwaPool, address(new ConstPool900Fee500(rwaToken, address(usdc))).code);
+        BasketVaultDeployBase.Params memory p = _params();
+        p.swapRouter = _configRouter(json);
+        DeployRwaBasketVault rwa = new DeployRwaBasketVault();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketAssetConfigGuard.InsufficientPoolCardinality.selector,
+                rwaPool,
+                uint16(901),
+                uint16(900)
+            )
+        );
+        rwa.runInProcess(p, json);
     }
 
     function test_reverts_whenPoolTickSpacingDiffersFromConfig() public {
@@ -226,5 +364,19 @@ contract DeployBasketVaultHardAssetsTest is BasketDeployFixture {
         _setSheetEnv(prefix, "NAV_DEVIATION_BPS");
         vm.expectRevert(bytes(string.concat(prefix, "NAV_DEVIATION_BPS must be set")));
         h.readPrefixed(prefix);
+    }
+}
+
+/// @dev A Uniswap V3 pool double (fee 500) with a 900-slot ring, for the rmRWA floor check.
+contract ConstPool900Fee500 is ConstPool {
+    constructor(address a, address b) ConstPool(a, b, 500) {}
+
+    function slot0()
+        external
+        pure
+        override
+        returns (uint160, int24, uint16, uint16, uint16, uint8, bool)
+    {
+        return (uint160(1 << 96), 0, 0, 900, 900, 0, true);
     }
 }

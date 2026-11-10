@@ -321,10 +321,11 @@ Slipstream) CL USDC pool and traded through the existing
   spacing as `poolFee`, plus the Aero CL factory and router. The basket
   deploy base deploys one `AerodromeSwapAdapter` for it and checks the pool
   against the factory before `addAsset` (ADR-0005 venue abstraction).
-- **Cardinality prerequisite.** `addAsset` needs 901 observation slots. The
-  operator raises the PAXG pool's ring before the stage (contract release
-  runbook). An Aero CL pool writes an observation only when a swap moves the
-  tick, so the ring grows only with trading.
+- **Per-asset TWAP window.** PAXG is read over 1798 s, the longest window the
+  pool's real 900-slot observation ring covers at 2 s blocks. The deploy presets
+  it (`HardAssetsVault.presetTwapWindow`) and `addAsset` vets the pool for it
+  (`BasketVault._addAssetTwapWindow`); every other basket keeps the 1800 s
+  window and its 901-slot floor. Nothing changes the pool's state (ADR-0018).
 - **Issuer freeze-control risk.** Paxos may freeze, wipe or pause PAXG.
   A freeze of the vault blocks swaps and therefore deposits and withdrawals,
   as for deSPXA above. The dapp shows a Paxos disclosure on the vault page.

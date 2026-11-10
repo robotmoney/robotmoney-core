@@ -2,8 +2,9 @@
 // live chain. It runs in the plan job before any approval and again right before each vault stage (runner.ts). It sends nothing (the
 // ChainReader surface is read-only). For every configured asset:
 //   token code present, pool code present, pool fee() equals the configured poolFee (an Aerodrome CL pool: tickSpacing() equals it, core 2008),
-//   observation cardinality at least 901, liquidity above 0,
-//   and the oracle (the pool TWAP that prices the basket vault): observe() covers the TWAP window, the last observation is fresh, and the
+//   observation cardinality at least the asset's window floor (window / 2 s + 1: 901 for the 1800 s default, 900 for PAXG's 1798 s,
+//   ADR-0018), liquidity above 0,
+//   and the oracle (the pool TWAP that prices the basket vault): observe() covers the asset's TWAP window, the last observation is fresh, and the
 //   TWAP is within ORACLE_MAX_DEVIATION_PERCENT of the V3 slot0 spot.
 // Missing config is a failure, never a skip.
 import { decodeFunctionResult, encodeFunctionData, parseAbi } from "viem";
@@ -29,7 +30,7 @@ export const maxDeviationTicks = (percent: number): number => Math.floor(Math.lo
 
 const POOL_ABI = parseAbi(["function observe(uint32[] secondsAgos) view returns (int56[] tickCumulatives, uint160[] secondsPerLiquidityCumulativeX128s)"]);
 
-export interface ConfiguredAsset extends Omit<ExpectedAsset, "adapter"> { vault: string; symbol?: string }
+export interface ConfiguredAsset extends Omit<ExpectedAsset, "adapter"> { vault: string; symbol?: string; twapWindow?: number }
 
 /** Every configured asset of the basket vaults, from core's config files. */
 export function loadConfiguredAssets(coreDir: string): ConfiguredAsset[] {
@@ -87,13 +88,16 @@ export async function configCheck(chain: ChainReader, assets: ConfiguredAsset[])
     }
     let spotTick: bigint | undefined;
     let obsIndex: bigint | undefined;
-    await c.run(`${p}: observation cardinality at least 901`, async () => {
+    // The window the vault reads this asset over, and the floor BasketVault.addAsset applies for it (BasketAssetConfigGuard: window / 2 s + 1).
+    const window = a.twapWindow ?? ORACLE_TWAP_WINDOW_SECONDS;
+    const floor = BigInt(Math.floor(window / 2) + 1);
+    await c.run(`${p}: observation cardinality at least ${floor}`, async () => {
       const r = await chain.callRaw(a.pool, POOL_SELECTORS.slot0 as Hex);
       if (!r.ok) return { ok: false, detail: `slot0() reverted: ${r.reason ?? ""}` };
       spotTick = signed(word(r.data, 1));
       obsIndex = word(r.data, 2);
       const card = word(r.data, 3);
-      return { ok: card >= 901n, detail: `cardinality ${card}` };
+      return { ok: card >= floor, detail: `cardinality ${card}, twap window ${window} s` };
     });
     await c.run(`${p}: liquidity above 0`, async () => {
       const r = await chain.callRaw(a.pool, POOL_SELECTORS.liquidity as Hex);
@@ -104,12 +108,12 @@ export async function configCheck(chain: ChainReader, assets: ConfiguredAsset[])
     // oracle: the pool TWAP is what the basket vault prices NAV and swap minimums from
     let twapTick: bigint | undefined;
     await c.run(`${p}: oracle observation history covers the TWAP window`, async () => {
-      const data = encodeFunctionData({ abi: POOL_ABI, functionName: "observe", args: [[ORACLE_TWAP_WINDOW_SECONDS, 0]] });
+      const data = encodeFunctionData({ abi: POOL_ABI, functionName: "observe", args: [[window, 0]] });
       const r = await chain.callRaw(a.pool, data);
-      if (!r.ok) return { ok: false, detail: `observe() reverted over ${ORACLE_TWAP_WINDOW_SECONDS} s: ${r.reason ?? ""}` };
+      if (!r.ok) return { ok: false, detail: `observe() reverted over ${window} s: ${r.reason ?? ""}` };
       const [cum] = decodeFunctionResult({ abi: POOL_ABI, functionName: "observe", data: r.data }) as [readonly bigint[], readonly bigint[]];
-      twapTick = (cum[1]! - cum[0]!) / BigInt(ORACLE_TWAP_WINDOW_SECONDS);
-      return { ok: true, detail: `mean tick ${twapTick} over ${ORACLE_TWAP_WINDOW_SECONDS} s` };
+      twapTick = (cum[1]! - cum[0]!) / BigInt(window);
+      return { ok: true, detail: `mean tick ${twapTick} over ${window} s` };
     });
     await c.run(`${p}: oracle last observation is fresh`, async () => {
       if (obsIndex === undefined) return { ok: false, detail: "slot0 was not readable" };

@@ -675,7 +675,7 @@ exited within its stated limits.
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | VOLATILE |
 | Underlying asset | PAXG (Paxos Gold, 18 decimals): each token is one fine troy ounce of London Good Delivery gold held by Paxos. Base address `0xe904AEA5E1b110c9174728fA2efFc8aeD19E98Ef` (docs.paxos.com) |
-| Oracle | None: a plain basket row priced from the TWAP of PAXG's Aero (Aerodrome Slipstream) CL USDC pool (tick spacing 10) |
+| Oracle | None: a plain basket row priced from the 1798-second TWAP of PAXG's Aero (Aerodrome Slipstream) CL USDC pool (tick spacing 10) |
 | Entry / exit | Swaps in PAXG's Aero CL USDC pool only, through the `AerodromeSwapAdapter`; Paxos primary redemption is never used by this vault |
 | Default router weight | 0 bps at launch |
 | Status | Router-eligible after readiness review (see below) |
@@ -688,9 +688,12 @@ timelock, as for the other baskets. The owner chose gold on 2026-11-07 and
 PAXG on 2026-11-10, because XAUT (Tether Gold) is not deployed on Base
 (ADR-0018).
 
-The vault has no oracle. PAXG is a plain basket row priced from the
-1800-second TWAP of its Aero CL USDC pool, the same way rmPROTO and rmRWA
-price their assets. PAXG has no Uniswap USDC pool with depth on Base, so
+The vault has no oracle. PAXG is a plain basket row priced from the TWAP
+of its Aero CL USDC pool, the same way rmPROTO and rmRWA price their
+assets. Its window is 1798 seconds rather than the default 1800: that is
+the longest window the pool's existing observation history (900 slots)
+covers, so the vault works with the pool exactly as it is and never
+changes the pool's state (ADR-0018). PAXG has no Uniswap USDC pool with depth on Base, so
 this vault trades on Aero. It follows the same rules as the other vaults:
 deployed paused, unpaused in stage 13 through the Safe and the timelock,
 the same caps, slippage bound, NAV deviation guard, pool liquidity floor

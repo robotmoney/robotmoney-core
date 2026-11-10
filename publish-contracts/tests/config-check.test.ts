@@ -102,27 +102,37 @@ describe("config-check", () => {
 });
 
 // Core 2008, ADR-0018: rmHARD's PAXG row is an Aero (Aerodrome Slipstream) CL pool, venue 2. Its swap fee is the tick spacing, so the check reads tickSpacing() instead
-// of fee(); every other check (cardinality 901, liquidity, the TWAP oracle) runs as for a V3 pool, because the CL pool has the same slot0, observe and observations surface.
+// of fee(). Its per-asset TWAP window is 1798 s, so the cardinality floor is 1798 / 2 + 1 = 900 (the pool's real ring) and the oracle reads 1798 s. Liquidity and the
+// oracle checks run as for a V3 pool, because the CL pool has the same slot0, observe and observations surface.
 describe("config-check of an Aerodrome CL row (core 2008)", () => {
-  const aero = (n: number) => asset(n, { vault: "rmHARD", swapFee: 10, venue: 2 });
+  const aero = (n: number) => ({ ...asset(n, { vault: "rmHARD", swapFee: 10, venue: 2 }), twapWindow: 1798 });
   test("a healthy Aero pool passes every check, with the tick spacing in place of the fee", async () => {
     const a = aero(3);
     const r = await configCheck(chain({ [key(a)]: {} }), [a]);
     expect(r.ok).toBe(true);
     expect(r.checks.map((c) => c.label.replace(/^\S+ \S+: /, ""))).toEqual([
-      "token code present", "pool code present", "pool tick spacing equals config", "observation cardinality at least 901", "liquidity above 0",
+      "token code present", "pool code present", "pool tick spacing equals config", "observation cardinality at least 900", "liquidity above 0",
       "oracle observation history covers the TWAP window", "oracle last observation is fresh", "oracle TWAP is within 5 percent of V3 spot",
     ]);
   });
   test.each([
     ["a tick spacing that differs from config", { tickSpacing: 50n }, "pool tick spacing equals config"],
-    ["cardinality 900, one below the 1800 s window floor (the PAXG pool at the evidence block)", { card: 900n }, "observation cardinality"],
+    ["cardinality 899, one below the 1798 s window floor", { card: 899n }, "observation cardinality at least 900"],
+    ["a history that does not reach the 1798 s window", { observeReverts: true }, "observation history covers the TWAP window"],
     ["zero liquidity", { liq: 0n }, "liquidity above 0"],
   ] as [string, Pool, string][])("fails on %s", async (_n, pool, label) => {
     const a = aero(4);
     const r = await configCheck(chain({ [key(a)]: pool }), [a]);
     expect(r.ok).toBe(false);
     expect(r.checks.filter((c) => !c.ok).map((c) => c.label).join("|")).toContain(label);
+  });
+  test("the PAXG pool's real 900-slot ring passes as it is; without its window the same pool is refused at 901", async () => {
+    const a = aero(5);
+    const ok = await configCheck(chain({ [key(a)]: { card: 900n } }), [a]);
+    expect(ok.ok).toBe(true);
+    const { twapWindow: _w, ...noWindow } = a;
+    const r = await configCheck(chain({ [key(a)]: { card: 900n } }), [noWindow]);
+    expect(r.checks.find((c) => c.label.endsWith("observation cardinality at least 901"))!.ok).toBe(false);
   });
 });
 

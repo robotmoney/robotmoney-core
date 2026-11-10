@@ -1,22 +1,23 @@
 ---
 title: "HardAssetsVaultForkTest"
-description: "Fork regression for rmHARD (core 2008). The real `DeployHardAssetsVault` script runs against the real PAXG token, its real Aero (Aerodrome Slipstream) CL USDC pool, the real Aero factory and router, and real USDC on the Twin chain pin. This proves the existing `AerodromeSwapAdapter` against PAXG's pool factory: the deploy's canonical-pool check, the TWAP price and both swap directions. A deposit buys real PAXG. A redeem sells it in one transaction within the vault slippage cap."
+description: "Fork regression for rmHARD (core 2008). The real `DeployHardAssetsVault` script runs against the real PAXG token, its real Aero (Aerodrome Slipstream) CL USDC pool, the real Aero factory and router, and real USDC on the fork pin. This proves the existing `AerodromeSwapAdapter` against PAXG's pool factory: the deploy's canonical-pool check, `addAsset`, the TWAP price and both swap directions. A deposit buys real PAXG. A redeem sells it in one transaction within the vault slippage cap."
 ---
 
 # HardAssetsVaultForkTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9a5abb78f17cecf801493322557775e4886f59cc/contracts/test/HardAssetsVaultFork.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/418570cf18d1a61c8b8bc2dbcdc90d0c3ef7c094/contracts/test/HardAssetsVaultFork.t.sol)
 
 **Inherits:** Test
 
 Fork regression for rmHARD (core 2008). The real `DeployHardAssetsVault` script runs against the real PAXG token, its
-real Aero (Aerodrome Slipstream) CL USDC pool, the real Aero factory and router, and real USDC on the Twin chain pin. This
-proves the existing `AerodromeSwapAdapter` against PAXG's pool factory: the deploy's canonical-pool check, the TWAP price
-and both swap directions. A deposit buys real PAXG. A redeem sells it in one transaction within the vault slippage cap.
+real Aero (Aerodrome Slipstream) CL USDC pool, the real Aero factory and router, and real USDC on the fork pin. This
+proves the existing `AerodromeSwapAdapter` against PAXG's pool factory: the deploy's canonical-pool check, `addAsset`,
+the TWAP price and both swap directions. A deposit buys real PAXG. A redeem sells it in one transaction within the vault
+slippage cap.
 
-The pool's observation ring holds 900 slots and `addAsset` needs 901 for the 1800 s window. As in production
-(docs/operations/contract-release-runbooks.md), `_prepareCardinality` raises `observationCardinalityNext` and drives
-small two-way swaps, one block apart, until the ring grows.
+The pool is used exactly as it is: nothing in this test changes its state before the deploy (owner correction
+2026-11-10). Its observation ring has 900 slots, so the vault reads PAXG over the 1798 s window that ring serves
+(config `twapWindow`, ADR-0018), and `addAsset` vets the pool for that window.
 
 Runs on the Twin chain (a pinned lazy anvil fork of real Base state): CI runs it in forge-fork-vault-regressions through
 scripts/devnet/forge-fork-tests.ts, which fails a run in which nothing executed. With FORK_RPC_URL unset it skips with a
@@ -36,35 +37,16 @@ address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
 uint256 internal constant DEPOSIT = 1_000 * 1e6;
 ```
 
-### REQUIRED_CARDINALITY
-
-```solidity
-uint16 internal constant REQUIRED_CARDINALITY = 901;
-```
-
-### MAX_PREP_SWAPS
+### PAXG_TWAP_WINDOW
 
 <i>
 
-Upper bound on prep swaps: one full ring plus slack.
+The PAXG window: what a 900-slot ring covers at 2 s blocks (1798 / 2 + 1 = 900).
 
 </i>
 
 ```solidity
-uint256 internal constant MAX_PREP_SWAPS = 1_000;
-```
-
-### PREP_SWAP_USDC
-
-<i>
-
-An Aero CL pool writes an observation only when a swap moves the tick (CLPool.swap). 5,000 USDC moves the PAXG pool
-a few ticks; 1 USDC does not move it at all.
-
-</i>
-
-```solidity
-uint256 internal constant PREP_SWAP_USDC = 5_000 * 1e6;
+uint32 internal constant PAXG_TWAP_WINDOW = 1_798;
 ```
 
 ## State Variables
@@ -79,12 +61,6 @@ address internal admin = makeAddr("admin");
 
 ```solidity
 address internal alice = makeAddr("alice");
-```
-
-### prepper
-
-```solidity
-address internal prepper = makeAddr("prepper");
 ```
 
 ### vault
@@ -117,10 +93,10 @@ address internal paxg;
 address internal pool;
 ```
 
-### router
+### ringBefore
 
 ```solidity
-address internal router;
+uint16 internal ringBefore;
 ```
 
 ## Functions
@@ -133,20 +109,12 @@ address internal router;
 function setUp() public;
 ```
 
-<a id="_preparecardinality"></a>
+<a id="test_fork_rmhard_addassetontheunmodifiedpoolwiththepaxgwindow"></a>
 
-### _prepareCardinality
-
-<i>
-
-Raise the ring to 901 the production way: `increaseObservationCardinalityNext`, then swaps in later blocks until the
-write index wraps and the cardinality takes the new size. Each round buys PAXG with 5,000 USDC and sells it back, so the
-price returns near where it started.
-
-</i>
+### test_fork_rmhard_addAssetOnTheUnmodifiedPoolWithThePaxgWindow
 
 ```solidity
-function _prepareCardinality() internal;
+function test_fork_rmhard_addAssetOnTheUnmodifiedPoolWithThePaxgWindow() public view;
 ```
 
 <a id="test_fork_rmhard_adapterresolvespaxgpoolthroughtheaerofactory"></a>

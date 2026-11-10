@@ -5,7 +5,7 @@ description: "Issue 1705, ADR-0018: the four production vault deploy scripts run
 
 # FourVaultInitialStateForkTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9a5abb78f17cecf801493322557775e4886f59cc/contracts/test/FourVaultInitialState.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/418570cf18d1a61c8b8bc2dbcdc90d0c3ef7c094/contracts/test/FourVaultInitialState.t.sol)
 
 **Inherits:** Test
 
@@ -79,28 +79,6 @@ function _basketParams(VaultRegistry registry)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `BasketVaultDeployBase.Params` |  |
-
-<a id="_raiseaerocardinality-string"></a>
-
-### _raiseAeroCardinality
-
-<i>
-
-The PAXG Aero pool ring holds 900 slots and `addAsset` needs 901 (core 2008): raise `observationCardinalityNext` and swap
-two ways, one block apart, until the ring grows. An Aero CL pool writes an observation only when a swap moves the tick, so
-each leg is 5,000 USDC. HardAssetsVaultFork.t.sol does the same; the production step is in the contract release runbook.
-
-</i>
-
-```solidity
-function _raiseAeroCardinality(string memory cfg) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| cfg | `string` |  |
 
 <a id="_deploy-string-vaultregistry"></a>
 

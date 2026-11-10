@@ -9,7 +9,11 @@ import { VAULT_NAME, type VaultKey } from "./sheet.ts";
 import type { Address } from "./verify/types.ts";
 
 /** One configured asset: a UniswapV3 or Aerodrome asset with its pool. A UniswapV4 asset is refused (no stage deploys a V4 venue, ADR-0017). */
-export interface ConfigAsset { symbol?: string; token: Address; pool: Address; swapFee: number; venue: number }
+export interface ConfigAsset {
+  symbol?: string; token: Address; pool: Address; swapFee: number; venue: number;
+  /** The row's per-asset TWAP window in seconds (hard-assets.json PAXG 1798, ADR-0018). Absent: the vault default (1800). */
+  twapWindow?: number;
+}
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 
@@ -31,7 +35,10 @@ export function loadConfigAssets(coreDir: string, key: VaultKey): ConfigAsset[] 
     if (venue === undefined) throw new PublishError("INPUT_MISSING", `${at}: venue '${String(a.venue)}' is not one of ${Object.keys(VENUE_INDEX).join(", ")}`, { key });
     const symbol = typeof a.symbol === "string" ? a.symbol : undefined;
     if (typeof a.pool !== "string" || !ADDR.test(a.pool)) throw new PublishError("INPUT_MISSING", `${at}: pool is not an address`, { key });
-    return { symbol, token: a.token as Address, pool: a.pool as Address, swapFee: a.poolFee, venue };
+    if (a.twapWindow !== undefined && (typeof a.twapWindow !== "number" || !Number.isInteger(a.twapWindow) || a.twapWindow <= 0)) {
+      throw new PublishError("INPUT_MISSING", `${at}: twapWindow is not a positive integer`, { key });
+    }
+    return { symbol, token: a.token as Address, pool: a.pool as Address, swapFee: a.poolFee, venue, ...(a.twapWindow !== undefined ? { twapWindow: a.twapWindow as number } : {}) };
   });
 }
 

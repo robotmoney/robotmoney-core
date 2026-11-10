@@ -9,7 +9,7 @@
 //   - wSOL and JUNO are absent; RM and BNKR appear only in agent-token-shortlist.json
 //   - no Chronicle, Aerodrome, mainnet or devnet key anywhere in config/, except Aerodrome in hard-assets.json
 //   - hard-assets.json (rmHARD, core 2008, ADR-0018) lists PAXG only, pinned to its Aero (Aerodrome Slipstream) CL USDC pool, tick
-//     spacing 10, with the Aero CL factory and swap router recorded
+//     spacing 10, with the Aero CL factory and swap router recorded and its per-asset TWAP window 1798 s
 //   - agent-token-shortlist.json launch list is BNKR alone as the rmAGENT TEST asset with RM parked under `parked.entries` (owner decisions 2026-10-21 and 2026-10-22,
 //     ADR-0015 and ADR-0016), or exactly RM once reactivated, never both. Each entry is code-hash pinned and pinned to its hookless Uniswap V4 USDC pool by PoolKey and pool id
 //     (RM: fee 29100, tickSpacing 582, pool id 0xf2e7b957...; BNKR: fee 3000, tickSpacing 60, pool id 0x87a44b2f...). The file records swapRouter02 (the script parser needs it).
@@ -19,8 +19,9 @@
 //   minTvlUsd floor.
 // Live rules (the Aerodrome asset, hard-assets.json): the token, pool, Aero factory and Aero router have code, the pool's tickSpacing()
 //   equals config, factory.getPool(token, USDC, tickSpacing) equals config, the pool pairs the token with USDC, observationCardinality
-//   (slot0 word 3 of the 6-field Slipstream slot0) >= 901, liquidity() > 0 and USD TVL >= minTvlUsd. The cardinality rule fails until
-//   the operator raises the pool's ring (docs/operations/contract-release-runbooks.md, "rmHARD pool cardinality"): never bypassed.
+//   (slot0 word 3 of the 6-field Slipstream slot0) >= the asset's window floor (twapWindow / 2 s + 1: 900 for PAXG's 1798 s, the
+//   floor BasketVault.addAsset applies through HardAssetsVault), observe([twapWindow, 0]) succeeds, liquidity() > 0 and USD TVL >=
+//   minTvlUsd. The pool is checked as it is: nothing here or in the deploy changes its state (ADR-0018).
 // Live rules (the V4 asset): the PoolManager and StateView have code; the PoolKey from config resolves, through StateView.getSlot0 on
 //   the derived pool id, to an initialized pool whose lpFee equals the config fee (V4 stores no PoolKey, only its hash, so a key whose
 //   hash resolves to a live pool is the key); StateView.getLiquidity(poolId) >= 1000000. The unit is the pool's in-range liquidity L
@@ -63,6 +64,8 @@ export const PAXG = {
   pool: "0x108c5c97155D35847c61683F1a254D9c0470A591",
   /** The pool's tick spacing: the vault's swapFee for an Aerodrome row. */
   poolFee: 10,
+  /** The per-asset TWAP window: what the pool's real 900-slot ring serves at 2 s blocks (1798 / 2 + 1 = 900, ADR-0018). */
+  twapWindow: 1798,
   aerodromeSlipstreamFactory: "0x9CB220581b91b0C83223012FE69688b92aD07a76",
   aerodromeSlipstreamRouter: "0x9Ee35Bf1bd69a03c6F0393582030fCe8Bb93D418",
 };
@@ -112,6 +115,8 @@ export interface Asset {
   venue: string;
   pool: string;
   poolFee: number;
+  /** Optional per-asset TWAP window in seconds (hard-assets.json, ADR-0018). Absent: the vault default, 1800 s. */
+  twapWindow?: number;
 }
 export interface PoolKey {
   currency0: string;
@@ -257,6 +262,7 @@ export function staticFindings(c: Configs): Finding[] {
   add(HARD_FILE, "paxg-aero-pool-pinned",
     !!g && same(g.token, PAXG.token) && g.tokenDecimals === PAXG.tokenDecimals && g.venue === PAXG.venue && same(g.pool, PAXG.pool) && g.poolFee === PAXG.poolFee,
     `token=${g?.token} decimals=${g?.tokenDecimals} venue=${g?.venue} pool=${g?.pool} poolFee=${g?.poolFee}`);
+  add(HARD_FILE, "paxg-twap-window-1798", g?.twapWindow === PAXG.twapWindow, `twapWindow=${g?.twapWindow}`);
   add(HARD_FILE, "aero-venues-recorded",
     same(c.hard.aerodromeSlipstreamFactory, PAXG.aerodromeSlipstreamFactory) && same(c.hard.aerodromeSlipstreamRouter, PAXG.aerodromeSlipstreamRouter),
     `factory=${c.hard.aerodromeSlipstreamFactory} router=${c.hard.aerodromeSlipstreamRouter}`);
@@ -505,6 +511,11 @@ async function v4Findings(
 /** CLFactory.getPool(address,address,int24), CLPool.tickSpacing(), the ERC-20 balanceOf and the pool reads shared with V3. */
 const AERO_GET_POOL = "0x28af8d0b";
 const AERO_TICK_SPACING = "0xd0c93a7c";
+/** observe(uint32[]), the Uniswap V3 / Slipstream TWAP read. */
+const OBSERVE = "0x883bdbfd";
+/** BasketVault.DEFAULT_TWAP_WINDOW and BasketAssetConfigGuard.BASE_BLOCK_SECONDS: floor = window / 2 s + 1. */
+const DEFAULT_TWAP_WINDOW = 1800;
+const BASE_BLOCK_SECONDS = 2;
 
 /**
  * The Aerodrome (Aero Slipstream CL) asset against live chain state (core 2008, ADR-0018). The pool's slot0 has 6 fields (no feeProtocol),
@@ -545,13 +556,17 @@ async function aeroFindings(
   add("pool-tick-spacing-equals-config", tickSpacing === a.poolFee, `live=${tickSpacing} config=${a.poolFee}`);
   add("pool-is-token-usdc", [token0, token1].sort().join() === [a.token.toLowerCase(), usdc].sort().join(), `${token0},${token1}`);
   add("factory-getPool-equals-config", factoryPool.toLowerCase() === a.pool.toLowerCase(), `factory=${factoryPool} config=${a.pool}`);
-  const prep = " (BasketVault.addAsset needs 901: raise it with increaseObservationCardinalityNext(901) and let swaps wrap the ring before the hard stage, runbook \"rmHARD pool cardinality\")";
-  add("observation-cardinality>=901", cardinality >= 901, `cardinality=${cardinality}${cardinality >= 901 ? "" : prep}`);
+  // The floor BasketVault.addAsset applies for this asset's window (HardAssetsVault vets the pool for the preset window).
+  const window = a.twapWindow ?? DEFAULT_TWAP_WINDOW;
+  const floor = Math.floor(window / BASE_BLOCK_SECONDS) + 1;
+  add(`observation-cardinality>=${floor}`, cardinality >= floor, `cardinality=${cardinality} twapWindow=${window}`);
+  const observe = await call(a.pool, OBSERVE + pad("0x20") + pad("0x2") + pad("0x" + window.toString(16)) + pad("0x0")).then(() => true, () => false);
+  add(`observe-${window}s-history`, observe, `observe([${window}, 0]) ${observe ? "succeeds" : "reverts: the pool's history does not reach the window"}`);
   add("liquidity>0", liquidity > 0n, `liquidity=${liquidity}`);
   add(`tvl-usd>=${f.minTvlUsd}`, tvlUsd >= f.minTvlUsd, `tvlUsd=${tvlUsd.toFixed(0)}`);
   return {
     findings: out,
-    facts: { pool: a.pool, tickSpacing, token0, token1, observationCardinality: cardinality, liquidity: liquidity.toString(), usdcReserve: usdcReserve.toString(), otherReserve: otherReserve.toString(), tvlUsd },
+    facts: { pool: a.pool, tickSpacing, token0, token1, observationCardinality: cardinality, twapWindow: window, liquidity: liquidity.toString(), usdcReserve: usdcReserve.toString(), otherReserve: otherReserve.toString(), tvlUsd },
   };
 }
 

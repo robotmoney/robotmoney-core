@@ -34,7 +34,7 @@ const FACTORY = base.rwa.uniswapV3Factory.toLowerCase();
 let liveFeeOverride: Record<string, number> = {};
 /** The live in-range liquidity L the fake StateView reports for the RM V4 pool (default: funded). */
 let rmLiquidity = 10n ** 18n;
-/** The observation cardinality the fake Aero PAXG pool reports (default: the 901 floor is met). */
+/** The observation cardinality the fake Aero PAXG pool reports (default 1000; the PAXG floor is 900 for its 1798 s window). */
 let aeroCardinality = 1000;
 
 function handle(method: string, params: any[]): string {
@@ -204,13 +204,16 @@ describe("config-check CLI against a fake live chain", () => {
     expect(r.out).toMatch(/FAIL[^\n]*PAXG/);
   });
 
-  test("core 2008: exits non-zero while the PAXG Aero pool ring is below 901, naming the runbook step", async () => {
+  test("core 2008: the PAXG Aero pool passes on its real 900-slot ring and exits non-zero one slot below its 1798 s window floor", async () => {
     liveFeeOverride = {};
     aeroCardinality = 900;
+    const ok = await run(configDir());
+    aeroCardinality = 899;
     const r = await run(configDir());
     aeroCardinality = 1000;
+    expect(ok.out).toMatch(/PASS[^\n]*PAXG[^\n]*observation-cardinality>=900[^\n]*cardinality=900 twapWindow=1798/);
     expect(r.code).not.toBe(0);
-    expect(r.out).toMatch(/FAIL[^\n]*PAXG[^\n]*observation-cardinality>=901[^\n]*rmHARD pool cardinality/);
+    expect(r.out).toMatch(/FAIL[^\n]*PAXG[^\n]*observation-cardinality>=900[^\n]*cardinality=899/);
   });
 
   test("exits non-zero when the chain id is not Base", async () => {

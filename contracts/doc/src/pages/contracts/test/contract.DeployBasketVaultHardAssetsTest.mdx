@@ -5,7 +5,7 @@ description: "rmHARD script (core 2008, ADR-0018): a plain BasketVault row for P
 
 # DeployBasketVaultHardAssetsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/fd752974f7648ba7e1588ccff599816ae456b379/contracts/test/DeployBasketVaultHardAssets.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/418570cf18d1a61c8b8bc2dbcdc90d0c3ef7c094/contracts/test/DeployBasketVaultHardAssets.t.sol)
 
 **Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
 
@@ -47,7 +47,45 @@ uint24 internal constant LIVE_FEE_PIPS = 500;
 DeployHardAssetsVault internal script;
 ```
 
+### _etchedFactory
+
+```solidity
+address internal _etchedFactory;
+```
+
+### _etchedToken
+
+```solidity
+address internal _etchedToken;
+```
+
+### _etchedPool
+
+```solidity
+address internal _etchedPool;
+```
+
 ## Functions
+
+<a id="_etchring-uint16"></a>
+
+### _etchRing
+
+<i>
+
+Replace the etched Aero pool with a double holding `ring` observation slots (900: the real pool; 899: one short).
+
+</i>
+
+```solidity
+function _etchRing(uint16 ring) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ring | `uint16` |  |
 
 <a id="setup"></a>
 
@@ -129,6 +167,48 @@ function _sheet() internal view returns (BasketVaultDeployBase.Params memory p);
 
 ```solidity
 function test_deploy_pausedActiveNamedAndOnePaxgRowThroughAerodrome() public;
+```
+
+<a id="test_window_paxgisaddedonthereal900slotringwithits1798swindow"></a>
+
+### test_window_paxgIsAddedOnTheReal900SlotRingWithIts1798sWindow
+
+```solidity
+function test_window_paxgIsAddedOnTheReal900SlotRingWithIts1798sWindow() public;
+```
+
+<a id="test_window_899slotsarerefusedforthe1798swindow"></a>
+
+### test_window_899SlotsAreRefusedForThe1798sWindow
+
+```solidity
+function test_window_899SlotsAreRefusedForThe1798sWindow() public;
+```
+
+<a id="test_window_withoutthepresetthe900slotpoolisrefusedat901"></a>
+
+### test_window_withoutThePresetThe900SlotPoolIsRefusedAt901
+
+```solidity
+function test_window_withoutThePresetThe900SlotPoolIsRefusedAt901() public;
+```
+
+<a id="test_window_presetisrefusedonanactiveassetandoutofbounds"></a>
+
+### test_window_presetIsRefusedOnAnActiveAssetAndOutOfBounds
+
+```solidity
+function test_window_presetIsRefusedOnAnActiveAssetAndOutOfBounds() public;
+```
+
+<a id="test_window_otherbasketskeepthe901slotfloor"></a>
+
+### test_window_otherBasketsKeepThe901SlotFloor
+
+The shared BasketVault keeps the 1800 s floor: rmRWA on a 900-slot pool is refused at 901, as before.
+
+```solidity
+function test_window_otherBasketsKeepThe901SlotFloor() public;
 ```
 
 <a id="test_reverts_whenpooltickspacingdiffersfromconfig"></a>

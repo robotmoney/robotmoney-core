@@ -81,6 +81,7 @@ contracts/script/contract.RedeployProtocolAssetVault.mdx
 contracts/script/interface.IAerodromeCLPoolFactoryRef.mdx
 contracts/script/interface.IRetirableVaultLink.mdx
 contracts/script/interface.ISafeFull.mdx
+contracts/script/interface.ITwapWindowPreset.mdx
 contracts/script/interface.IVaultRegistryLink.mdx
 contracts/script/library.AdapterBytecodeGuard.mdx
 contracts/test/abstract.DeployTimelockKindBase.mdx
@@ -127,6 +128,9 @@ contracts/test/contract.ConsensusReceiptSafeSubmitterTest.mdx
 contracts/test/contract.ConsensusRecommendationReceiptTest.mdx
 contracts/test/contract.ConstAeroFactory.mdx
 contracts/test/contract.ConstAeroPool.mdx
+contracts/test/contract.ConstAeroPool899.mdx
+contracts/test/contract.ConstAeroPool900.mdx
+contracts/test/contract.ConstPool900Fee500.mdx
 contracts/test/contract.ConstPoolFee100.mdx
 contracts/test/contract.CoreStagesFork.mdx
 contracts/test/contract.CustodyHandler.mdx
@@ -404,8 +408,6 @@ contracts/test/helpers/library.VaultTestParams.mdx
 contracts/test/helpers/library.VenueEtcher.mdx
 contracts/test/interface.IAaveAddressesProvider.mdx
 contracts/test/interface.IAavePoolConfigurable.mdx
-contracts/test/interface.IAeroCardinality.mdx
-contracts/test/interface.IAeroCardinalityNext.mdx
 contracts/test/interface.IDepositsPaused.mdx
 contracts/test/interface.ILendingMinOutSurface.mdx
 contracts/test/interface.IMarker.mdx

@@ -157,9 +157,9 @@ contract VaultCodeSizeGuard is Test {
             950
         );
         assertGe(EIP170_LIMIT - vm.getDeployedCode("RwaBasketVault.sol:RwaBasketVault").length, 950);
-        // HardAssetsVault (core 2008) is the same thin subclass as RwaBasketVault, so it keeps the same floor.
+        // HardAssetsVault (core 2008) is RwaBasketVault plus `presetTwapWindow` (ADR-0018): 552 bytes measured, rounded down.
         assertGe(
-            EIP170_LIMIT - vm.getDeployedCode("HardAssetsVault.sol:HardAssetsVault").length, 950
+            EIP170_LIMIT - vm.getDeployedCode("HardAssetsVault.sol:HardAssetsVault").length, 550
         );
         assertGe(
             EIP170_LIMIT - vm.getDeployedCode("RobotMoneyVault.sol:RobotMoneyVault").length, 3_500

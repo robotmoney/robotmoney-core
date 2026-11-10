@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "rmHARD (HardAssetsVault) launch assets: PAXG (Paxos Gold) only, a plain basket row with no oracle, on its Aero (Aerodrome Slipstream) CL USDC pool, tick spacing 10, priced from the pool TWAP through the existing AerodromeSwapAdapter (ADR-0018, owner decision 2026-11-10). PAXG token from docs.paxos.com (Base Mainnet). Factory and router from dromos-labs/metadex-slipstream-public deployment-addresses/cl-base.json. Read from Base mainnet at block 55670968: the pool holds about 386k USDC and 127 PAXG, factory.getPool(USDC, PAXG, 10) returns the pool, observationCardinality is 900 (the vault needs 901, so increaseObservationCardinalityNext(901) must land before the deploy, docs/operations/contract-release-runbooks.md). No Uniswap V3 or V4 PAXG/USDC pool has depth.",
+  "description": "rmHARD (HardAssetsVault) launch assets: PAXG (Paxos Gold) only, a plain basket row with no oracle, on its Aero (Aerodrome Slipstream) CL USDC pool, tick spacing 10, priced from the pool TWAP through the existing AerodromeSwapAdapter (ADR-0018, owner decision 2026-11-10). PAXG token from docs.paxos.com (Base Mainnet). Factory and router from dromos-labs/metadex-slipstream-public deployment-addresses/cl-base.json. Read from Base mainnet at block 55670968: the pool holds about 386k USDC and 127 PAXG, factory.getPool(USDC, PAXG, 10) returns the pool, and its observation ring has 900 slots. twapWindow 1798 s is the window a 900-slot ring covers at 2 s blocks (1798 / 2 + 1 = 900): the vault fits the pool as it is and never changes its state (owner correction 2026-11-10). No Uniswap V3 or V4 PAXG/USDC pool has depth.",
   "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   "uniswapV3Factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
   "swapRouter02": "0x2626664c2603336E57B271c5C0b26F421741e481",
@@ -14,7 +14,8 @@
       "tokenDecimals": 18,
       "venue": "Aerodrome",
       "pool": "0x108c5c97155D35847c61683F1a254D9c0470A591",
-      "poolFee": 10
+      "poolFee": 10,
+      "twapWindow": 1798
     }
   ]
 }

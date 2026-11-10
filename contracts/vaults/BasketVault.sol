@@ -1149,9 +1149,16 @@ abstract contract BasketVault is
             }),
             adapterCodeHashAllowed[adapter_.codehash],
             address(_USDC),
-            DEFAULT_TWAP_WINDOW,
+            _addAssetTwapWindow(token_),
             MIN_POOL_LIQUIDITY
         );
+    }
+
+    /// @dev The TWAP window `addAsset` vets the pool for (cardinality floor `window / 2 s + 1` and `observe([window, 0])`).
+    ///      `DEFAULT_TWAP_WINDOW` here, so every basket vault keeps the 901-slot floor. `HardAssetsVault` returns the asset's
+    ///      preset window (ADR-0018: PAXG's real 900-slot Aero ring serves 1798 s).
+    function _addAssetTwapWindow(address) internal view virtual returns (uint32) {
+        return DEFAULT_TWAP_WINDOW;
     }
 
     /// @notice Deactivate a basket asset. Restricted to ADMIN_ROLE. The vault must hold none of the token, or only dust:
