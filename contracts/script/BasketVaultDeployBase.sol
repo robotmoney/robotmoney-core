@@ -74,8 +74,8 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
         bool isV4;
         /// @dev Aerodrome (Aero Slipstream) CL asset (ADR-0018): swapped and priced through an `AerodromeSwapAdapter`.
         bool isAerodrome;
-        /// @dev Optional per-asset TWAP window (config `twapWindow`), zero for the vault default. Preset on the vault
-        ///      (`HardAssetsVault.presetTwapWindow`) before `addAsset`, which then vets the pool for it (ADR-0018).
+        /// @dev Optional per-asset TWAP window (config `twapWindow`), zero for the vault default. Registered
+        ///      through `HardAssetsVault.addAssetWithTwapWindow`, which vets the pool for it (ADR-0018).
         uint32 twapWindow;
         /// @dev V4 only: the PoolManager, the pool id and the full PoolKey from the config. `key` hashes to `poolId` (checked at parse).
         address poolManager;
@@ -485,7 +485,6 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
         _requireOneAdapterVenue(cfg);
         for (uint256 i = 0; i < cfg.assets.length; i++) {
             AssetCfg memory a = cfg.assets[i];
-            _presetTwapWindow(vault, a);
             if (a.isV4) {
                 _addV4Asset(vault, p, a, d);
             } else if (a.isAerodrome) {
@@ -498,7 +497,7 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
                     d.adapter = adapter;
                 }
                 _checkPool(a, p.minPoolLiquidity);
-                vault.addAsset(a.token, a.pool, a.poolFee, adapter, BasketVault.Venue.V3);
+                _register(vault, a, a.pool, adapter, BasketVault.Venue.V3);
             }
             d.tokens[i] = a.token;
         }
@@ -524,7 +523,7 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
         address adapterV4 =
             address(new UniswapV4SwapAdapter(a.poolManager, a.key, p.recorder, p.usdc));
         vault.setAdapterCodeHashAllowed(adapterV4.codehash, true);
-        vault.addAsset(a.token, p.recorder, a.poolFee, adapterV4, BasketVault.Venue.V4);
+        _register(vault, a, p.recorder, adapterV4, BasketVault.Venue.V4);
         d.adapterV4 = adapterV4;
         d.recorder = p.recorder;
     }
@@ -534,7 +533,7 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
     ///      in order, before any state change: the pool has code, reports the config tick spacing, is the factory's canonical pool for
     ///      the token/USDC pair at that spacing and names that factory, holds at least the sheet liquidity floor, and charges a live fee
     ///      below the ORA-4 guard (QA plan D4). `addAsset` itself enforces the token/USDC pair, the cardinality floor and the
-    ///      observation history of the asset's TWAP window (the preset `twapWindow`, else 1800 s).
+    ///      observation history of the asset's TWAP window (the row's `twapWindow` through `addAssetWithTwapWindow`, else 1800 s).
     function _addAerodromeAsset(
         BasketVault vault,
         Params memory p,
@@ -549,15 +548,25 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
             vault.setAdapterCodeHashAllowed(adapter.codehash, true);
             d.adapter = adapter;
         }
-        vault.addAsset(a.token, a.pool, a.poolFee, d.adapter, BasketVault.Venue.Aerodrome);
+        _register(vault, a, a.pool, d.adapter, BasketVault.Venue.Aerodrome);
     }
 
-    /// @dev ADR-0018: a config row with a `twapWindow` presets it on the vault before `addAsset`, which then vets the pool for that
-    ///      window (`BasketVault._addAssetTwapWindow`). Only a vault with `presetTwapWindow` (HardAssetsVault) takes one; another
-    ///      vault reverts here, before any asset is added. Read back so a no-op fails the deploy.
-    function _presetTwapWindow(BasketVault vault, AssetCfg memory a) internal {
-        if (a.twapWindow == 0) return;
-        ITwapWindowPreset(address(vault)).presetTwapWindow(a.token, a.twapWindow);
+    /// @dev Register one asset. A row with no `twapWindow` uses `BasketVault.addAsset` (the 1800 s default). ADR-0018: a row with
+    ///      one uses `HardAssetsVault.addAssetWithTwapWindow`, which sets the window and vets the pool for it in one call. Only
+    ///      HardAssetsVault has that entry point; another vault reverts here. Read back so a no-op fails the deploy.
+    function _register(
+        BasketVault vault,
+        AssetCfg memory a,
+        address pool,
+        address adapter,
+        BasketVault.Venue venue
+    ) internal {
+        if (a.twapWindow == 0) {
+            vault.addAsset(a.token, pool, a.poolFee, adapter, venue);
+            return;
+        }
+        IAddAssetWithTwapWindow(address(vault))
+            .addAssetWithTwapWindow(a.token, pool, a.poolFee, adapter, venue, a.twapWindow);
         require(
             vault.effectiveTwapWindow(a.token) == a.twapWindow,
             string.concat(a.symbol, ": twapWindow readback differs from config")
@@ -746,7 +755,14 @@ interface IAerodromeCLPoolFactoryRef {
     function factory() external view returns (address);
 }
 
-/// @dev The per-asset TWAP window preset of `HardAssetsVault` (ADR-0018).
-interface ITwapWindowPreset {
-    function presetTwapWindow(address token, uint32 window) external;
+/// @dev `HardAssetsVault.addAssetWithTwapWindow` (ADR-0018).
+interface IAddAssetWithTwapWindow {
+    function addAssetWithTwapWindow(
+        address token,
+        address pool,
+        uint24 swapFee,
+        address adapter,
+        BasketVault.Venue venue,
+        uint32 window
+    ) external;
 }

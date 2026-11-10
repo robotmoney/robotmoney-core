@@ -8,6 +8,7 @@ pragma solidity ^0.8.24;
 
 import {BasketVault} from "./BasketVault.sol";
 import {BasketViews, IBasketVaultViews} from "../lib/BasketViews.sol";
+import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
 
 /// @title HardAssetsVault
 /// @notice The rmHARD vault. A plain `BasketVault` row set: no oracle, no staleness halt, no
@@ -24,22 +25,20 @@ import {BasketViews, IBasketVaultViews} from "../lib/BasketViews.sol";
 ///
 ///         The vault inherits every control of `BasketVault`: caps, slippage floors, TWAP
 ///         cardinality and liquidity checks on `addAsset`, the adapter code-hash allowlist,
-///         pause and emergency unwind. It adds a name, a symbol, an asset cap and one more thing:
+///         pause and emergency unwind. It adds a name, a symbol, an asset cap and one entry point:
 ///
-///         PER-ASSET TWAP WINDOW BEFORE `addAsset` (ADR-0018). `BasketVault.addAsset` vets a pool for
+///         `addAssetWithTwapWindow` (ADR-0018). `BasketVault.addAsset` vets a pool for
 ///         `DEFAULT_TWAP_WINDOW` (1800 s), which needs a 901-slot observation ring (`window / 2 s + 1`).
 ///         PAXG's Aero pool has a 900-slot ring, and the vault fits the pool as it is: it never changes
-///         third-party pool state. ADMIN_ROLE presets the asset's window (`presetTwapWindow`, PAXG 1798 s,
-///         which a 900-slot ring covers at 2 s blocks) before `addAsset`, and `addAsset` then vets the pool
-///         for that window with the unchanged guard (`requireObservationHistory`: the window-derived floor
-///         and `observe([window, 0])`). NAV, slippage floors and the dust check read the same window
-///         (`effectiveTwapWindow`). `MIN_TWAP_WINDOW` and the guard are unchanged.
+///         third-party pool state. This entry point sets the asset's TWAP window first (bounded like
+///         `setTwapWindow`) and then runs the same `BasketAssetConfigGuard.addAsset` for that window: the
+///         window-derived cardinality floor and `observe([window, 0])`, unchanged. PAXG uses 1798 s, which
+///         a 900-slot ring covers at 2 s blocks. NAV, slippage floors and the dust check read the same
+///         window (`effectiveTwapWindow`). `BasketVault` itself is unchanged, so rmPROTO and rmRWA keep
+///         their bytecode and the 901-slot floor.
 contract HardAssetsVault is BasketVault {
     uint256 private constant _MAX_ASSETS = 10;
     uint256 private constant _DEFAULT_SLIPPAGE_BPS = 100; // 1%
-
-    /// @dev `presetTwapWindow` on a token that is already an active asset: use `setTwapWindow`, which vets the live pool.
-    error TwapWindowPresetOnActiveAsset(address token);
 
     /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it).
     /// @param p The per-instance basket arguments.
@@ -57,26 +56,47 @@ contract HardAssetsVault is BasketVault {
         return _MAX_ASSETS;
     }
 
-    /// @notice Preset the TWAP window of `token` before `addAsset`, so `addAsset` vets its pool for this window and NAV
-    ///         reads it from the start. ADMIN_ROLE only. Bounded like `setTwapWindow` (`[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`).
-    ///         Refused for an active asset: `setTwapWindow` changes that one, against the live pool's history.
-    /// @param token  A token that is not an active basket asset.
-    /// @param window TWAP window in seconds.
-    function presetTwapWindow(address token, uint32 window) external onlyRole(ADMIN_ROLE) {
-        if (window < MIN_TWAP_WINDOW || window > MAX_TWAP_WINDOW) revert InvalidTwapWindow(window);
-        for (uint256 i = 0; i < assets.length; i++) {
-            if (assets[i].token == token && assets[i].active) {
-                revert TwapWindowPresetOnActiveAsset(token);
-            }
+    /// @notice `addAsset` with the asset's own TWAP window: sets `twapWindow[token_] = window_` (bounded by
+    ///         `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`, as `setTwapWindow`), then registers the asset through the same
+    ///         guard as `BasketVault.addAsset`, which vets the pool for `window_`. ADMIN_ROLE only. Atomic: a pool that
+    ///         does not serve the window reverts the whole call, and the window is not left behind.
+    /// @param token_   ERC-20 token address.
+    /// @param pool_    DEX pool pairing `token_` with USDC.
+    /// @param swapFee_ Venue parameter (fee tier, or tick spacing for Aerodrome).
+    /// @param adapter_ Swap and TWAP adapter (code hash allowlisted), or zero for the built-in V3 path.
+    /// @param venue_   DEX venue selector.
+    /// @param window_  The asset's TWAP window in seconds.
+    function addAssetWithTwapWindow(
+        address token_,
+        address pool_,
+        uint24 swapFee_,
+        address adapter_,
+        Venue venue_,
+        uint32 window_
+    ) external onlyRole(ADMIN_ROLE) {
+        if (token_ == address(0) || pool_ == address(0)) revert ZeroAddress();
+        if (assets.length >= maxAssets()) revert MaxAssetsReached();
+        if (window_ < MIN_TWAP_WINDOW || window_ > MAX_TWAP_WINDOW) {
+            revert InvalidTwapWindow(window_);
         }
-        uint32 old = twapWindow[token];
-        twapWindow[token] = window;
-        emit TwapWindowUpdated(token, old, window);
-    }
-
-    /// @dev `addAsset` vets the pool for the asset's own window: the preset one, else `DEFAULT_TWAP_WINDOW`.
-    function _addAssetTwapWindow(address token) internal view override returns (uint32) {
-        return effectiveTwapWindow(token);
+        uint32 old = twapWindow[token_];
+        twapWindow[token_] = window_;
+        emit TwapWindowUpdated(token_, old, window_);
+        BasketAssetConfigGuard.addAsset(
+            _guardAssets(),
+            BasketAssetConfigGuard.AssetInfo({
+                token: token_,
+                pool: pool_,
+                swapFee: swapFee_,
+                active: true,
+                adapter: adapter_,
+                venue: BasketAssetConfigGuard.Venue(uint8(venue_))
+            }),
+            adapterCodeHashAllowed[adapter_.codehash],
+            address(_USDC),
+            window_,
+            MIN_POOL_LIQUIDITY
+        );
     }
 
     /// @notice Token, pool, fee tier, active flag and held balance for every basket row.

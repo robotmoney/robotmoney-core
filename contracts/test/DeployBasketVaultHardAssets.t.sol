@@ -257,23 +257,35 @@ contract DeployBasketVaultHardAssetsTest is BasketDeployFixture {
         script.runInProcess(p, json);
     }
 
-    function test_window_presetIsRefusedOnAnActiveAssetAndOutOfBounds() public {
+    function test_window_addAssetWithTwapWindowIsBoundedAdminOnlyAndKeepsTheDuplicateGuard()
+        public
+    {
         string memory json = _etchAero(LIVE_FEE_PIPS, 10);
         _etchRing(900);
         HardAssetsVault v = HardAssetsVault(_deploy(_sheet(), json).vault);
+        (,,,, address adapter,) = v.assets(0);
+        // An active asset cannot be added twice (NC-8), with or without a window.
         vm.prank(deployer);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                HardAssetsVault.TwapWindowPresetOnActiveAsset.selector, _etchedToken
-            )
+        vm.expectRevert(BasketAssetConfigGuard.AssetAlreadyActive.selector);
+        v.addAssetWithTwapWindow(
+            _etchedToken, _etchedPool, 10, adapter, BasketVault.Venue.Aerodrome, 1798
         );
-        v.presetTwapWindow(_etchedToken, 1700);
+        // The window is bounded like setTwapWindow: MIN_TWAP_WINDOW is not lowered.
         vm.prank(deployer);
         vm.expectRevert(abi.encodeWithSelector(BasketVault.InvalidTwapWindow.selector, uint32(599)));
-        v.presetTwapWindow(makeAddr("next"), 599);
+        v.addAssetWithTwapWindow(
+            makeAddr("next"), _etchedPool, 10, adapter, BasketVault.Venue.Aerodrome, 599
+        );
+        // ADMIN_ROLE only.
         vm.prank(makeAddr("stranger"));
         vm.expectRevert();
-        v.presetTwapWindow(makeAddr("next"), 1798);
+        v.addAssetWithTwapWindow(
+            makeAddr("next"), _etchedPool, 10, adapter, BasketVault.Venue.Aerodrome, 1798
+        );
+        // The inherited addAsset keeps the 1800 s floor on this vault too: PAXG's pool is refused there at 901.
+        assertEq(
+            v.effectiveTwapWindow(makeAddr("next")), 1800, "a refused call leaves no window behind"
+        );
     }
 
     /// @notice The shared BasketVault keeps the 1800 s floor: rmRWA on a 900-slot pool is refused at 901, as before.
