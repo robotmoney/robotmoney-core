@@ -3,21 +3,29 @@
 //
 // Records the Base state the prototype tests read, so they replay offline in plain `forge test`.
 //
-//   bun scripts/prototype/record-base-fixture.ts [--pin N] [--rpc URL] [--match-path GLOB]
+//   bun scripts/prototype/record-base-fixture.ts [--pin N] [--rpc URL] [--match-path GLOB] [--sim]
+//                                                [--no-anvil]
 //
 // 1. Picks a pin (upstream head minus 2 unless --pin is given). The public node is not an archive
 //    node, so record soon after picking a pin.
-// 2. Runs the prototype tests in record mode (PROTO_RECORD_RPC, PROTO_PIN). Forge forks Base at the
-//    pin and, when it exits, writes the original value of every account and slot it fetched to
-//    ~/.foundry/cache/rpc/base/<pin>/storage-*.json. The RPC must be a remote URL: forge does not
-//    cache localhost forks.
-// 3. Converts that cache into contracts/test/prototype/fixtures/base-state.alloc.json (genesis
-//    alloc for vm.loadAllocs) and base-state.meta.json (block env, account list, slot index).
-// 4. Runs the tests again in replay mode with no RPC, to prove the fixture covers them.
+// 2. Starts its own anvil, forked from the upstream RPC at the pin, on a free port of 127.0.0.2.
+//    Every record pass reads through it, so each account and slot crosses the network once. The
+//    address is 127.0.0.2, not localhost or 127.0.0.1, because forge does not cache forks of those.
+//    The script owns this process: it stops it when recording ends, on any error, and on SIGINT or
+//    SIGTERM. --no-anvil records straight from the upstream RPC instead.
+// 3. Runs the prototype tests in record mode (PROTO_RECORD_RPC, PROTO_PIN). Forge forks at the pin
+//    and, when it exits, writes the original value of every account and slot it fetched to
+//    ~/.foundry/cache/rpc/base/<pin>. Passes add to the same cache. --sim adds the rebalance sim
+//    (PROTO_SIM=1): one pass with PROTO_SIM_RUN=tuned over the sim tests, then the default pass.
+// 4. Stops anvil. Converts the cache into contracts/test/prototype/fixtures/base-state.alloc.json
+//    (genesis alloc for vm.loadAllocs) and base-state.meta.json (block env, account list, slot
+//    index).
+// 5. Runs the same passes again in replay mode with no RPC and no anvil, to prove the fixture
+//    covers them.
 //
-// The RPC URL is never written to the fixture or printed. Only the host is recorded.
+// The RPC URL is never written to the fixture or printed. Only the upstream host is recorded.
 
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -28,7 +36,10 @@ function arg(name: string): string | undefined {
 }
 
 const rpc = arg("rpc") ?? process.env.BASE_UPSTREAM_RPC ?? "https://mainnet.base.org";
-const matchPath = arg("match-path") ?? "contracts/test/prototype/*";
+const matchPath = arg("match-path") ?? "contracts/test/prototype/**";
+const simPath = "contracts/test/prototype/sim/*";
+const withSim = args.includes("--sim");
+const useAnvil = !args.includes("--no-anvil");
 const outDir = "contracts/test/prototype/fixtures";
 const host = new URL(rpc).host;
 
@@ -42,14 +53,79 @@ function run(cmd: string[], env: Record<string, string> = {}): string {
   return out;
 }
 
-async function headBlock(): Promise<number> {
-  const r = await fetch(rpc, {
+async function blockNumber(url: string): Promise<number> {
+  const r = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] }),
   });
   const j = (await r.json()) as { result: string };
   return Number(BigInt(j.result));
+}
+
+async function headBlock(): Promise<number> {
+  return blockNumber(rpc);
+}
+
+// ─── anvil, owned by this script ────────────────────────────────────────────────────────────────
+
+let anvil: ReturnType<typeof Bun.spawn> | undefined;
+
+function stopAnvil(): void {
+  if (!anvil) return;
+  anvil.kill("SIGTERM");
+  anvil = undefined;
+  console.log("anvil: stopped");
+}
+
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, () => {
+    stopAnvil();
+    process.exit(130);
+  });
+}
+process.on("exit", stopAnvil);
+
+function freePort(): number {
+  const s = Bun.listen({ hostname: "127.0.0.2", port: 0, socket: { data() {} } });
+  const port = s.port;
+  s.stop(true);
+  return port;
+}
+
+async function startAnvil(pin: number): Promise<string> {
+  const port = freePort();
+  const url = `http://127.0.0.2:${port}`;
+  anvil = Bun.spawn(
+    [
+      "anvil", "--host", "127.0.0.2", "--port", String(port),
+      "--fork-url", rpc, "--fork-block-number", String(pin), "--chain-id", "8453",
+      "--silent", "--retries", "10", "--fork-retry-backoff", "500",
+      "--compute-units-per-second", "10000", "--timeout", "60000",
+    ],
+    { stdout: "ignore", stderr: "pipe" },
+  );
+  for (let i = 0; i < 120; i++) {
+    if (anvil.exitCode !== null) throw new Error(`anvil exited early (code ${anvil.exitCode})`);
+    try {
+      if ((await blockNumber(url)) === pin) {
+        console.log(`anvil: forked ${host} at ${pin} on 127.0.0.2:${port}`);
+        return url;
+      }
+    } catch {}
+    await Bun.sleep(500);
+  }
+  throw new Error("anvil did not answer within 60 s");
+}
+
+type Pass = { label: string; path: string; env: Record<string, string> };
+
+function passes(): Pass[] {
+  if (!withSim) return [{ label: "prototype", path: matchPath, env: {} }];
+  return [
+    { label: "sim tuned", path: simPath, env: { PROTO_SIM: "1", PROTO_SIM_RUN: "tuned" } },
+    { label: "prototype + sim default", path: matchPath, env: { PROTO_SIM: "1", PROTO_SIM_RUN: "default" } },
+  ];
 }
 
 function pad32(hex: string): string {
@@ -92,10 +168,20 @@ function codeOf(code: any): string {
 
 const pin = arg("pin") ? Number(arg("pin")) : (await headBlock()) - 2;
 console.log(`record: pin ${pin} from ${host}`);
-run(["forge", "test", "--match-path", matchPath], {
-  PROTO_RECORD_RPC: rpc,
-  PROTO_PIN: String(pin),
-});
+
+// A zero-byte cache file (left by a killed run) would make forge fail to load the cache.
+const cachePath = join(homedir(), ".foundry", "cache", "rpc", "base", String(pin));
+if (existsSync(cachePath) && statSync(cachePath).isFile() && statSync(cachePath).size === 0) rmSync(cachePath);
+
+try {
+  const recordRpc = useAnvil ? await startAnvil(pin) : rpc;
+  for (const p of passes()) {
+    console.log(`record: ${p.label}`);
+    run(["forge", "test", "--match-path", p.path], { ...p.env, PROTO_RECORD_RPC: recordRpc, PROTO_PIN: String(pin) });
+  }
+} finally {
+  stopAnvil();
+}
 
 const cache = readCache(pin);
 const env = cache.meta.block_env;
@@ -146,9 +232,8 @@ console.log(
   `fixture: ${accounts.length} accounts, ${slots.reduce((n, s) => n + s.length, 0)} slots at block ${meta.block}`,
 );
 
-console.log("replay: running the same tests with no RPC");
-const replay = run(["forge", "test", "--match-path", matchPath], {
-  PROTO_RECORD_RPC: "",
-  PROTO_PIN: "",
-});
-console.log(replay.split("\n").filter((l) => /Suite result|passed|failed/.test(l)).join("\n"));
+for (const p of passes()) {
+  console.log(`replay: ${p.label}, no RPC and no anvil`);
+  const replay = run(["forge", "test", "--match-path", p.path], { ...p.env, PROTO_RECORD_RPC: "", PROTO_PIN: "" });
+  console.log(replay.split("\n").filter((l) => /Suite result|passed|failed/.test(l)).join("\n"));
+}
