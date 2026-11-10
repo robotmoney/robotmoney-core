@@ -522,8 +522,9 @@ router that no longer matters.
 ## 10. Experiment phases
 
 The experiment runs on its own branch as quick forge unit tests only. There
-is no Twin, no anvil process, no deploy and no RPC in a test run. Each phase
-ends with evidence written into §14.
+is no Twin, no deploy, no anvil and no RPC in a test run. Only recording a
+fixture uses the network, through an anvil the recorder starts and stops
+itself. Each phase ends with evidence written into §14.
 
 **How tests get real Base state.** Every prototype test extends
 `contracts/test/prototype/BaseFixture.sol`. In the default replay mode it loads
@@ -535,10 +536,13 @@ and Moonwell. The tests run in forge's in-process EVM (the same revm anvil
 uses) in milliseconds.
 
 The fixture is lazy: it holds only the accounts and slots a recording run read.
-`scripts/prototype/record-base-fixture.ts` records it. It runs the same tests
-forked from Base at a pin, converts forge's fork cache (the original value of
-every account and slot fetched) into the fixture, then replays with no RPC to
-prove coverage. A slot the fixture lacks would read as zero, a silent wrong
+`scripts/prototype/record-base-fixture.ts` records it. It starts its own
+anvil forked from Base at a pin, so each account and slot crosses the network
+once. It runs the same tests through that anvil, then stops it. That happens
+on success, on error and on Ctrl-C, so no anvil outlives a recording. It
+converts forge's fork cache (the original value of every account and slot
+fetched) into the fixture, then replays with no RPC and no anvil to prove
+coverage. `--sim` records the default and tuned simulation runs too. A slot the fixture lacks would read as zero, a silent wrong
 answer. So each test checks after its body that every slot it read first is in
 the fixture, and that every contract it called is in the fixture or was created
 by the test. A miss fails `FixtureSlotMiss(account, slot)` or
@@ -548,17 +552,17 @@ only step that touches the network.
 Scope (owner, 2026-11-09): no migration, no gas measurement, and the
 smallest test set that still scores the gates. The full contracts come first.
 
-1. **Full prototype contracts.** Fund, rebalancer and governance, complete
+1. **Full prototype contracts.** *Done 2026-11-09.* Fund, rebalancer and governance, complete
    against §4, §5 and §6 in one pass.
-2. **Fixture tests.** Re-record the fixture, then a minimal set: the size
+2. **Fixture tests.** *Done 2026-11-09: G1 pass, G3 pass with listed gaps.* Re-record the fixture, then a minimal set: the size
    check (G1), one end-to-end receipt-to-converged test, one test per row of
    §5.8, and one invariant run over §7 (G3).
-3. **Rebalance simulation.** On the replay fixture, apply a small set of
+3. **Rebalance simulation.** *Done 2026-11-10: G4 fail, G5 not pass.* On the replay fixture, apply a small set of
    receipt vectors (the anchored historical receipts plus a few extreme
    moves) and run each plan to the end with a simulated keeper. Between
    steps, move pool prices with arbitrage-sized swaps. Measure realized cost,
    time to converge, and steps skipped. This answers G4 and G5.
-3b. **Per-asset targets (owner, 2026-11-10).** Remove sleeves from the
+3b. **Per-asset targets (owner, 2026-11-10).** *Next.* Remove sleeves from the
    contracts, as §4.1 now describes. The rebalancer already works per asset,
    so step selection, path math and cost accounting do not change. The
    refactor must show that by test:
@@ -574,6 +578,15 @@ smallest test set that still scores the gates. The full contracts come first.
      sleeve design produced. G4 and G5 must then reproduce the §14 numbers
      exactly. Any difference is a bug in the refactor, not a new result.
    - Re-measure G1 sizes. Re-record the fixture only if a test reports a miss.
+3c. **Fallbacks for G4 and G5.** §13 scoring requires testing a stated
+   fallback before a non-G1, non-G3 failure counts. This runs on the 3b
+   contracts. The §13 thresholds and the scorer's cost definition stay fixed.
+   - G4: an auction executor (§12) behind the existing `executeStep`
+     interface, scored on the same scenarios, seeds and pin.
+   - G5: every failing plan pushed a basket pool out of its recorded LP
+     range, where the sim holds liquidity fixed. Either model LP response
+     outside the range, or record the gap as a stated limit of the result.
+     The conclusion names which.
 4. **System size count.** Count the contracts, deploy stages, govern rows and
    `ADMIN_ROLE` holders against today's. No client is built. This answers G6.
 5. **Conclusion.** Score every gate in §13. Write the result ADR (§3).
