@@ -65,6 +65,21 @@ async function prepPools(url: string) {
   log(`prep-pools: ${pools.length} Aerodrome pool(s) checked, ${raised.length} raised (Twin-only stand-in for the rmHARD operator prerequisite)`);
 }
 
+/**
+ * `prep-pools` inside `start`: its own retries, and never a reason to stop a ready fork. A failure leaves the pool at its real
+ * cardinality, so the rmHARD stage still refuses it loudly (InsufficientPoolCardinality), the same outcome as on Base before the
+ * operator raises it. Killing anvil here would only turn a rate-limited upstream read into a dead chain (stage-chain-container).
+ */
+async function prepPoolsOrWarn(url: string) {
+  for (let a = 1; a <= 3; a++) {
+    try { await prepPools(url); return; } catch (e: any) {
+      log(`WARN: prep-pools attempt ${a}/3 failed: ${String(e?.message ?? e)}`);
+      if (a < 3) await sleep(3000 * a);
+    }
+  }
+  log("WARN: prep-pools did not raise the Aerodrome pool ring: the rmHARD stage will refuse the pool (InsufficientPoolCardinality) until it is raised. The fork keeps serving.");
+}
+
 async function start() {
   const upstream = resolveUpstream(v.upstream);
   const prev = readState();
@@ -100,7 +115,7 @@ async function start() {
     writeFileSync(pidFile, JSON.stringify({ pid, pin, port }), { mode: 0o600 });
     try {
       await waitReady(localUrl, pin.block, Number(v["ready-timeout"]), Number(v["chain-id"]), Boolean(v["block-time"]));
-      await prepPools(localUrl);
+      await prepPoolsOrWarn(localUrl);
       if (v["pin-file"]) {
         mkdirSync(dirname(resolve(v["pin-file"])), { recursive: true });
         writeFileSync(v["pin-file"], JSON.stringify(pin, null, 2) + "\n");
