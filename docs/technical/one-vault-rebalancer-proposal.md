@@ -7,7 +7,8 @@
   comes after, from the gates in §13. Production stays on the three-vault
   design until then. The canonical docs are not rewritten during the
   experiment.
-- **Date:** 2026-11-07 (reframed as an experiment 2026-11-09)
+- **Date:** 2026-11-07 (reframed as an experiment 2026-11-09; per-asset
+  targets replace on-chain sleeves 2026-11-10)
 - **Author:** lucky-tensor (drafted with Claude)
 - **Decider:** Product owner
 - **Would supersede, if the experiment invalidates the rejection:** the Portfolio Router (`docs/architecture.md`
@@ -15,11 +16,12 @@
   [ADR-0010](../adr/ADR-0010-unified-vault-architecture.md). It would amend
   [ADR-0003 (rebalancing)](../adr/ADR-0003-basketvault-rebalancing-model.md)
   and [ADR-0017](../adr/ADR-0017-rmagent-retired-router-uses-three-vaults.md).
-- **Keeps unchanged:** the consensus receipt contract (§4.9), the receipt
-  payload schema, the Safe and timelock as the only governance body, the
-  lending adapters, the swap adapters, ADR-0009 retirement (no assisted
-  migration), ADR-0014 governed UUPS proxies, and the custody invariants
-  INV-1 to INV-4.
+- **Keeps unchanged:** the consensus receipt contract (§4.9), the Safe and
+  timelock as the only governance body, the lending adapters, the swap
+  adapters, ADR-0009 retirement (no assisted migration), ADR-0014 governed
+  UUPS proxies, and the custody invariants INV-1 to INV-4.
+- **Changes off-chain:** the receipt payload gains an optional per-asset
+  target list (schema 1.1, a minor bump, §4.1).
 
 ## 1. Summary
 
@@ -30,11 +32,12 @@ where **new** deposits go. Money already in a vault never moves.
 
 This proposal replaces that with:
 
-1. **One vault.** A single ERC-4626 USDC vault with one share token. Inside
-   it, holdings are grouped into **sleeves**. One sleeve per receipt bucket:
-   stable yield (lending adapters), protocol tokens (wETH, cbBTC) and real
-   world assets (deSPXA). The agent-token sleeve stays empty, as ADR-0017
-   already requires.
+1. **One vault.** A single ERC-4626 USDC vault with one share token. It
+   keeps a flat list of assets and one target weight per asset: three
+   lending positions (Morpho, Aave, Compound), wETH, cbBTC and deSPXA. The
+   receipt sets every asset's target directly. Categories such as "stable
+   yield" or "protocol tokens" are labels in the receipt and in off-chain
+   tools. The contracts do not know them (§4.1).
 2. **No router.** The vault itself holds the target weights. A deposit into
    the vault is already a portfolio deposit.
 3. **A rebalancer.** When the Safe applies a consensus receipt, the vault
@@ -89,9 +92,9 @@ Submitter (RECEIPT_SUBMITTER_ROLE)
    -> ConsensusRecommendationReceipt.recordReceipt        (unchanged)
 
 Safe -> TimelockController
-   -> RebalanceGovernance.applyReceipt(receiptId, digest, sleeves, bps)
+   -> RebalanceGovernance.applyReceipt(receiptId, digest, assets, bps)
         -> receipt.releaseReceipt(receiptId)                (unchanged role)
-        -> vault.setTargetAndOpenPlan(bps, planParams)
+        -> vault.setTargetAndOpenPlan(assets, bps, planParams)
 
 Keeper (KEEPER_ROLE, or anyone after the grace period)
    -> Rebalancer.step()
@@ -100,33 +103,90 @@ Keeper (KEEPER_ROLE, or anyone after the grace period)
 Human wallet / rmpc gateway
    -> vault.deposit / vault.redeem / vault.redeemInKind
 
-RobotMoneyFund vault (one ERC-4626, one share token)
-   |-- stable sleeve      -> MorphoAdapter, AaveV3Adapter, CompoundV3Adapter
-   |-- protocol sleeve    -> wETH, cbBTC via UniswapV3SwapAdapter / AerodromeSwapAdapter
-   |-- rwa sleeve         -> deSPXA via UniswapV3SwapAdapter
-   |-- agent sleeve       -> empty, weight pinned to 0 (ADR-0017)
+RobotMoneyFund vault (one ERC-4626, one share token, a flat asset list)
+   |-- MorphoAdapter, AaveV3Adapter, CompoundV3Adapter   (lending assets)
+   |-- wETH, cbBTC   via UniswapV3SwapAdapter / AerodromeSwapAdapter
+   |-- deSPXA        via UniswapV3SwapAdapter
    `-- idle USDC
 ```
+
+Each asset has one target weight. The receipt's category labels
+(`stable yield`, `protocol tokens`, `real world assets`, `agent tokens`) are
+not on chain.
 
 The working name for the vault is `RobotMoneyFund` and its share `rmFUND`.
 The name is open (§11, D6).
 
-### 4.1 Sleeves
+### 4.1 Asset targets, and sleeves as labels
 
-A sleeve is a named group of positions inside the one vault. It is
-configuration, not a contract.
+**On chain there are only assets.** The fund keeps a flat list of assets.
+Each asset has one target weight in bps of NAV. The receipt sets those
+weights directly. There is no sleeve id, no sleeve weight and no
+intra-sleeve weight in any contract.
 
-- Each sleeve maps to exactly one receipt bucket.
-  `tests/fixtures/consensus-receipt.bucket-vault-map.json` becomes a
-  bucket-to-sleeve map. The receipt schema does not change.
-- A sleeve has a **target weight** in bps of vault NAV. The four weights sum
-  to 10,000.
-- Inside a sleeve, positions split by a governed **intra-sleeve weight**.
-  The default is the current behaviour: equal weight across active basket
-  assets (ADR-0003), and the existing per-adapter `capBps` allocator across
-  lending adapters.
-- The asset-level target is `sleeveBps × intraBps / 10,000`. The rebalancer
-  works at asset level. The receipt and the dapp work at sleeve level.
+**Why.** An earlier version of this design put sleeves on chain. A receipt
+set four sleeve weights. A separate governed intra-sleeve weight split each
+sleeve across its assets. The asset target was the product of the two. That
+needed two layers of allocation governance: the balance between sleeves,
+and the balance inside each sleeve. It bought no on-chain safety.
+`applyReceipt` never checked the sleeve vector against the payload. It only
+checked that the named digest equals the recorded digest. Matching the
+vector to the payload was already an off-chain re-derivation. With
+per-asset targets in the receipt, the committee's decision is the whole
+allocation. Nothing else governs it.
+
+**The receipt (schema 1.1).** A minor bump appends one optional field,
+`assets`, after `weights`:
+
+```json
+"assets": [
+  {"asset": "morpho-usdc",      "sleeve": "conservative_defi_yield", "weight_bps": 2500},
+  {"asset": "aave-v3-usdc",     "sleeve": "conservative_defi_yield", "weight_bps": 2000},
+  {"asset": "compound-v3-usdc", "sleeve": "conservative_defi_yield", "weight_bps": 1500},
+  {"asset": "weth",             "sleeve": "protocol_tokens",         "weight_bps": 1200},
+  {"asset": "cbbtc",            "sleeve": "protocol_tokens",         "weight_bps": 1300},
+  {"asset": "despxa",           "sleeve": "real_world_assets",       "weight_bps": 1500}
+]
+```
+
+- `asset` is a stable key. A fixture,
+  `tests/fixtures/consensus-receipt.asset-map.json`, maps each key to the
+  fund's on-chain asset id per chain. It replaces the bucket-to-vault map.
+- `weight_bps` is the asset's target share of NAV. The list sums to 10,000.
+  It is a weight, not an amount, because NAV moves between the receipt and
+  each step.
+- `sleeve` is a **label**. It names the receipt bucket the asset is reported
+  under. It is informational, not imperative. It does not reach the chain.
+- Sleeves are not separable. There is no per-sleeve share, NAV, deposit,
+  redemption or plan. A holder always owns a pro-rata slice of every asset.
+  "Sleeve" only names a way to slice the fund for reading.
+
+**The audit check.** The receipt keeps its four bucket `weights`. They are
+now an audit field. For each bucket, the sum of `weight_bps` over the assets
+labelled with it must equal that bucket's `weight_bps`. The assembler
+refuses to build a receipt that fails this. `rmpc receipt verify` and the
+`apply-receipt` govern row refuse it too. The contracts never see it.
+
+**What the contracts check.** `applyReceipt(receiptId, digest, assets, bps)`
+and `setTarget(assets, bps, params)` check only the vector itself:
+
+- every listed asset is an active fund asset;
+- every active asset is listed exactly once, so a receipt can never sell an
+  asset by forgetting it (an explicit 0 sells it);
+- the weights sum to 10,000;
+- a lending asset's target is at or below its `capBps`. That cap is a risk
+  ceiling on one venue, not an allocation choice.
+
+Idle USDC carries no target. It absorbs rounding, as before.
+
+**Off-chain tools own the semantic layer.** The dapp, rmpc, explorer and
+reports group assets by the receipt's labels. They can slice the same assets
+another way later without a contract change.
+
+**What is still governed by the Safe.** Which assets are tradable at all:
+adding or retiring an asset, its adapter or pool, its TWAP window, and its
+`capBps`. Those choices define what a receipt may name. They do not set any
+balance.
 
 ### 4.2 NAV
 
@@ -147,10 +207,10 @@ A deposit mints on the **realized NAV delta**, the basket model (AZ-BSK-1/-3).
 For an all-lending deposit the realized delta equals the deposit, so nothing
 changes for that case.
 
-**Where the deposit goes: deficit-first.** The deposit fills the sleeves that
+**Where the deposit goes: deficit-first.** The deposit fills the assets that
 are furthest below the *current plan target* first, then splits the rest by
 target weight. This is free rebalancing: every dollar that arrives in an
-underweight sleeve is a dollar the rebalancer does not have to trade. ADR-0003
+underweight asset is a dollar the rebalancer does not have to trade. ADR-0003
 chose deposit-driven correction for exactly this reason. Here it is a cost
 saver, not the only mechanism.
 
@@ -186,10 +246,12 @@ This is the core of the proposal.
 
 1. The submitter records the receipt (unchanged, §4.9 of the architecture).
 2. The Safe schedules `RebalanceGovernance.applyReceipt(receiptId, digest,
-   sleeves, bps)` on the timelock. This is today's `RouterGovernance.applyReceipt`
+   assets, bps)` on the timelock. This is today's `RouterGovernance.applyReceipt`
    with the router call swapped for a vault call. Its checks stay: the receipt
    must be recorded, not released, match the digest, and be newer than the
-   last applied receipt (`lastAppliedRecordedAt`). The agent bucket must be 0.
+   last applied receipt (`lastAppliedRecordedAt`). The vector checks are the
+   ones in §4.1. The govern row derives `assets` and `bps` from the payload's
+   `assets` field and runs the bucket audit check before it schedules.
 3. On execution it releases the receipt and calls
    `vault.setTargetAndOpenPlan`. That call:
    - snapshots the vault's **current** asset weights as the plan's start point;
@@ -237,7 +299,7 @@ inputs come from chain state. The caller chooses nothing except **when**.
 3. **Pick legs.** Value every asset at TWAP. Compute each asset's deviation
    from `pathTarget(now)`. The sell leg is the most overweight asset. The buy
    leg is the most underweight asset. USDC is the hub for every pair: the
-   lending sleeve and idle USDC are "USDC", and every basket pool is a USDC
+   lending assets and idle USDC are "USDC", and every basket pool is a USDC
    pool today.
 4. **Size.** `notional = min(overweight, underweight, maxStepUsdc[asset])`.
    `maxStepUsdc` is a governed per-asset cap set from pool depth. wETH and
@@ -284,7 +346,7 @@ Open ──(path end reached and every asset within toleranceBps)──> Converg
   └──(endTime + maxOverrun passed)──────> Expired
 ```
 
-- `toleranceBps` (for example 50 bps per sleeve) stops the plan chasing
+- `toleranceBps` (for example 50 bps per asset) stops the plan chasing
   exact weights through endless small trades.
 - After `endTime` the path target equals the end weights. Steps continue
   until converged or `maxOverrun` (for example 7 more days) passes.
@@ -307,7 +369,7 @@ decided.
 | `maxStepSlippageBps` | per asset | above the pool fee, at or below `maxSlippageBps` | Swap floor against TWAP |
 | `maxStepCostBps` | global | 50 bps of notional | Per-step NAV-loss cap |
 | `costBudgetBps` | per plan | 30 bps of plan turnover | Total cost a plan may spend |
-| `toleranceBps` | global | 50 bps per sleeve | When a plan counts as converged |
+| `toleranceBps` | global | 50 bps per asset | When a plan counts as converged |
 | `keeperGrace` | global | 6 hours | When `step()` opens to anyone |
 | `maxOverrun` | global | 7 days | When an unconverged plan expires |
 
@@ -323,7 +385,7 @@ ADR-0010 (§3). It is bounded and visible:
 
 - **Bounded** per step (`maxStepCostBps`) and per plan (`costBudgetBps`).
   A halted plan needs a fresh Safe decision to spend more.
-- **Previewed** before the Safe applies: `previewPlan(bps)` returns the
+- **Previewed** before the Safe applies: `previewPlan(assets, bps)` returns the
   turnover per asset and the estimated cost at current TWAP. The govern row
   shows it before scheduling, and the dapp shows it next to the receipt.
 - **Recorded** per step in events. The indexer sums realized cost per plan.
@@ -348,14 +410,14 @@ ADR-0010 (§3). It is bounded and visible:
 
 | Contract | Today | Proposed |
 | --- | --- | --- |
-| `RobotMoneyVault` (rmUSDC) | Lending vault | Retired (withdraw-only, ADR-0009). Its allocator, ADP-2 exclusion and `ExclusionLedger` move into the fund's stable sleeve. |
-| `BasketVault`, `ProtocolAssetVault`, `RwaBasketVault` | Basket vaults | Retired (withdraw-only). TWAP valuation, ORA-4, slippage floors, `redeemInKind`, and emergency unwind move into the fund's basket sleeves. |
-| `AgentTokenVault` | Parked | Stays parked. The agent sleeve is empty. |
+| `RobotMoneyVault` (rmUSDC) | Lending vault | Retired (withdraw-only, ADR-0009). Its ADP-2 exclusion and `ExclusionLedger` move into the fund. Each lending adapter becomes one fund asset with its own target and `capBps`. |
+| `BasketVault`, `ProtocolAssetVault`, `RwaBasketVault` | Basket vaults | Retired (withdraw-only). TWAP valuation, ORA-4, slippage floors, `redeemInKind`, and emergency unwind move into the fund. Each basket token becomes one fund asset. |
+| `AgentTokenVault` | Parked | Stays parked. The fund lists no agent-token asset, so the receipt's agent bucket must be 0. |
 | `PortfolioRouter` | Splits deposits | **Deleted** for new deployments. The live router is retired: default weights cleared and deposits stopped. |
-| `RouterGovernance` | `applyReceipt` sets router weights | Renamed `RebalanceGovernance`. `applyReceipt` sets the vault target and opens a plan. `setDefaultWeights` becomes `setTarget` (a plan with no receipt, for bootstrap and drift correction). |
+| `RouterGovernance` | `applyReceipt` sets router weights | Renamed `RebalanceGovernance`. `applyReceipt` sets the vault target and opens a plan. `setDefaultWeights` becomes `setTarget(assets, bps, params)` (a plan with no receipt, for bootstrap and drift correction). Both take a per-asset vector. |
 | `VaultRegistry` | Status and router eligibility | Not needed by a one-vault deployment. The fund holds its own lifecycle status. The live registry stays to run v1 retirement. Open (§11, D4). |
-| `ConsensusRecommendationReceipt` | Signalling register | **Unchanged.** The release role moves from `RouterGovernance` to `RebalanceGovernance`. |
-| `RobotMoneyFund` | — | **New.** One ERC-4626 vault with sleeves, target weights, plan state, and `executeStep` callable only by the `Rebalancer`. |
+| `ConsensusRecommendationReceipt` | Signalling register | **Unchanged.** The release role moves from `RouterGovernance` to `RebalanceGovernance`. The payload it anchors gains the optional `assets` field (schema 1.1), which the contract never reads. |
+| `RobotMoneyFund` | — | **New.** One ERC-4626 vault with a flat asset list, one target weight per asset, plan state, and `executeStep` callable only by the `Rebalancer`. No sleeve state. |
 | `Rebalancer` | — | **New.** Holds no funds. Computes and validates steps, then calls the fund. Separate contract to keep the fund under EIP-170. |
 | Lending and swap adapters | Used by their vaults | **Unchanged.** Their owning vault becomes the fund. |
 | `RobotMoneyGateway` (separate system) | Allows deposits into three vaults | Its allowed-destination list becomes the fund. Done in the gateway's own release. The fund does not name the gateway (§1 dependency rule holds). |
@@ -399,6 +461,8 @@ These are the invariants the experiment must prove (gate G3). They join §8 of t
 - **RB-7.** The rebalancer never moves the vault past `pathTarget(now)`.
 - **RB-8.** The receipt contract stays signalling-only (INV-4). It never calls
   the fund, the rebalancer, or governance.
+- **RB-9.** A target vector names every active asset exactly once and sums
+  to 10,000. No contract stores or reads a sleeve or category.
 
 ## 8. Off-chain changes
 
@@ -406,14 +470,19 @@ These are the invariants the experiment must prove (gate G3). They join §8 of t
   the fund's target instead of the router vector. A new third state,
   **converged**, comes from the plan status. The dapp shows recorded → applied
   → converging (with progress) → converged.
-- **Bucket map fixture** maps buckets to sleeves. The cross-repo receipt
-  schema is unchanged, so `robotmoney-frontend` needs no schema change. Its
-  display of "which vault" changes to "which sleeve".
+- **Receipt schema 1.1.** `consensus-receipt.schema.json` gains the optional
+  `assets` field (§4.1) as a minor bump. The shared fixtures stay
+  byte-identical with `robotmoney-frontend`, so the frontend repo takes the
+  same schema change. Its assembler builds `assets` and refuses a receipt
+  that fails the bucket audit check. Who chooses the per-asset weights is
+  open (§11, D8).
+- **Asset map fixture.** `consensus-receipt.asset-map.json` maps each asset
+  key to the fund's asset id per chain. It replaces the bucket-to-vault map.
 - **Dapp.** One deposit flow, one position, one NAV. The portfolio composite
-  view (§2.2) becomes the fund's sleeve breakdown. A plan panel shows target,
-  current, path, steps, and cost.
+  view (§2.2) becomes a per-asset breakdown, grouped by the receipt's sleeve
+  labels. A plan panel shows target, current, path, steps, and cost.
 - **rmpc.** Deposit preview and preflight point at one vault. Read commands
-  gain `plan` and `sleeves`.
+  gain `plan` and `assets`. `receipt verify` runs the bucket audit check.
 - **Explorer and indexer.** New tables for plans and steps. Router tables go
   read-only for history.
 - **Watchdog.** Watches step cost against caps, plan halts, and keeper
@@ -489,6 +558,22 @@ smallest test set that still scores the gates. The full contracts come first.
    moves) and run each plan to the end with a simulated keeper. Between
    steps, move pool prices with arbitrage-sized swaps. Measure realized cost,
    time to converge, and steps skipped. This answers G4 and G5.
+3b. **Per-asset targets (owner, 2026-11-10).** Remove sleeves from the
+   contracts, as §4.1 now describes. The rebalancer already works per asset,
+   so step selection, path math and cost accounting do not change. The
+   refactor must show that by test:
+   - The fund drops `sleeve`, `intraBps`, `setIntraBps`, `targetSleeveBps` and
+     the sleeve constants. `setTargetAndOpenPlan`, `applyReceipt`, `setTarget`
+     and `previewPlan` take `(assets, bps)` and enforce the §4.1 checks.
+   - A schema 1.1 receipt fixture with `assets`, an asset map fixture, and a
+     small checker for the bucket audit rule, with pass and refuse cases.
+   - The tests, the invariant run and the §5.8 tests move to per-asset
+     vectors. New tests cover RB-9: an unlisted active asset, a duplicate, an
+     inactive asset and a bad sum all revert and release nothing.
+   - The sim turns each scenario receipt into the same per-asset targets the
+     sleeve design produced. G4 and G5 must then reproduce the §14 numbers
+     exactly. Any difference is a bug in the refactor, not a new result.
+   - Re-measure G1 sizes. Re-record the fixture only if a test reports a miss.
 4. **System size count.** Count the contracts, deploy stages, govern rows and
    `ADMIN_ROLE` holders against today's. No client is built. This answers G6.
 5. **Conclusion.** Score every gate in §13. Write the result ADR (§3).
@@ -512,6 +597,8 @@ recorded so the conclusion can revisit it.
 | D5 | Does the rebalancer correct market drift between receipts? | No. Only an applied receipt or a Safe `setTarget` opens a plan. | Drift between receipts is the committee's call. |
 | D6 | Name of the vault and share? | `RobotMoneyFund` / `rmFUND`. | Working name only. |
 | D7 | Deposit routing? | Deficit-first. | It lowers rebalance cost. G4 measures by how much. |
+| D8 | Who chooses per-asset weights? | For the experiment, receipt fixtures carry hand-written asset weights. | The analysts sign bucket weights today. Production needs either per-asset analyst weights or a published, deterministic split rule in the assembler. That choice lives in `robotmoney-frontend` and is out of the experiment's scope. |
+| D9 | Are sleeves on chain? | No. The receipt labels each asset with a sleeve. The contracts keep only assets and targets. | One layer of allocation governance instead of two. Owner, 2026-11-10. |
 
 ## 12. Alternatives considered
 
@@ -573,7 +660,37 @@ fixture pin it rests on.
 | G1 | Pass | `SizeGate.t.sol`. Fund implementation is 22,775 bytes, 777 under the 23,552 limit. Rebalancer is 17,893 bytes. The fund fits only with three linked libraries: `FundFlowsLib` (19,555), `FundAdminLib` (12,072) and `FundValuationLib` (8,134). These hold code, not custody or accounting state. The fund also uses the counter admin floor, not the enumerable one. Fixture pin 55371881. | 2026-11-09 |
 | G2 | Dropped | | |
 | G3 | Pass, with listed prototype gaps | 29 fixture tests pass offline at pin 55371881 (563 accounts, 2,346 slots, no RPC). `Invariants.t.sol` (16 runs of 32 calls, fixed seed, fail on revert) checks RB-1 to RB-8 and INV-1. `EndToEnd.t.sol` runs deposit, receipt, timelock apply, steps to convergence, redeem and `redeemInKind`. `Adversarial.t.sol` has a passing test for all 8 rows of §5.8. `Custody.t.sol` covers INV-2 (donation accrual, first-depositor inflation) and INV-3 (fee and quarantine control only through the timelock). Review found 19 issues. 18 were fixed, among them a frozen venue that blocked `redeemInKind`, an admin able to grant the rebalancer role, and a gas-starvation lever on `step()`. Open gaps: a plan opened at zero NAV has a zero cost budget and halts until the admin extends it; dust on a removed basket asset is not re-absorbed (INV-2 port from `BasketVault` not done); a frozen lending venue still blocks the USDC `redeem` path, as it does today. | 2026-11-09 |
-| G4 | Not run | | |
-| G5 | Not run | | |
+| G4 | Fail | `sim/RebalanceSim.t.sol` scored by `sim/score-sim.ts`, default parameters, 36 scored plans. Median realized cost is 17.02 bps of turnover. The worst plan costs 82.63 bps (JUMP-DOWN-1M-s2, receipt d07). Both exceed the 15 and 30 bps limits. Cost is measured against the reference price. Measured against the arrival price, the median is 5.48 bps and the worst is 9.13 bps. The tuned set also fails: median 17.76 bps, worst 83.40 bps. Fixture pin 55462550 (2,193 accounts, 17,310 slots), recorded through anvil forking Base. All 16 sim tests pass offline for each parameter set. | 2026-11-10 |
+| G5 | Not pass (no fail clause fired) | Same runs. No liquid-asset plan expired. Blocked skips are 4.99% of step attempts overall. One plan expired unconverged on deSPXA and the three lending assets: JUMP-DOWN-1M-s1, receipt d07. Its pool left the recorded LP range. Three JUMP-DOWN plans each skip more than 10% of their steps (27.0%, 61.3% and 13.5%). Without the five plans whose pool left its LP range, G5 passes: every plan converges and skips are 0.13%. The tuned set is worse: skips are 7.35%, and eight plans exceed 10%. | 2026-11-10 |
 | G6 | Not run | | |
 | G7 | Dropped | | |
+
+**Step 3 simulation (2026-11-10).** The sim replays real Base state at pin
+55462550 with no RPC. It runs five scenarios. SEQ applies the anchored
+historical receipts in order. EXT moves from all stable to all basket and
+back. JUMP-DOWN and JUMP-UP move the deSPXA price sharply in the middle of a
+plan. EXT-PROBE runs EXT at 5M USDC as a capacity probe. The probe is
+reported but not scored. SEQ runs at 1M and 5M USDC. The others run at 1M
+USDC. Each scored scenario runs three seeds. A simulated keeper steps every
+30 minutes. Arbitrage swaps, noise swaps and user flows move pools between
+steps.
+
+| Scenario | Median cost (bps) | Worst cost (bps) | Blocked skips | Unconverged |
+| --- | --- | --- | --- | --- |
+| SEQ-1M | 12.54 | 26.50 | 0.19% | 0 of 12 |
+| SEQ-5M | 21.52 | 59.19 | 0.37% | 0 of 12 |
+| EXT-1M | 22.93 | 44.20 | 0.15% | 0 of 6 |
+| JUMP-UP-1M | 19.62 | 21.76 | 2.99% | 0 of 3 |
+| JUMP-DOWN-1M | 64.62 | 82.63 | 40.35% | 1 of 3 |
+| EXT-PROBE-5M (not scored) | 51.02 | 92.31 | 0.00% | 2 of 2 |
+
+These are default parameters. The tuned set changes two values. Plan
+duration goes from 7 to 21 days. `minStepUsdc` goes from 100 to 33 USDC.
+Tuning lowers EXT cost to a 14.02 bps median. It does not lower the overall
+median. It raises skips. The sim treats pool liquidity as fixed at the pin.
+Five scored plans saw a pool leave its recorded LP range, so their cost may
+be overstated. Those five plans include every JUMP-DOWN plan.
+
+The §13 fallback to test next for G4 is an auction executor (§12). The
+result also depends on the cost measure. The reference-price reading fails.
+The arrival-price reading passes.
