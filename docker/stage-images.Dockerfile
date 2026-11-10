@@ -29,6 +29,8 @@ FROM foundry AS twin-chain
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /opt/twin
 COPY scripts/devnet/twin-fork.ts scripts/devnet/twin-fork-lib.ts ./scripts/devnet/
+# `serve` runs prep-pools on start (core 2008): it reads the Aerodrome pools rmHARD lists, Twin-only.
+COPY config/hard-assets.json ./config/
 # /state holds the tool's pid file, anvil's log and the pin file. /cache is HOME for anvil (its RPC cache).
 # Both are owned by the unprivileged user so a fresh named volume mounted on them is writable.
 USER root
