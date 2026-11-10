@@ -54,6 +54,14 @@ ACCEPTED_ADVISORIES=(
   #     collection, and the advisory needs a constrained collection.
   # Re-evaluate when cdp-sdk or appkit moves to zod >= 4.6.6.
   "GHSA-mrhx-c7xc-m3w5" # zod: memory exhaustion validating oversized constrained collections. expires: 2026-12-01
+  # decode-uri-component 0.2.2 (transitive via @walletconnect/utils 2.21.x > query-string 7.1.3, pinned exactly).
+  # GHSA-qr28-fpjm-wq7f was published 2026-10-29; the only patched release, 0.5.1, is ESM-only, and query-string 7
+  # loads it with require(): forcing 0.5.1 makes every query-string parse throw "decodeComponent is not a function"
+  # (verified 2026-11-10), which would break WalletConnect URI parsing. No CommonJS-compatible fix exists. The DoS is a
+  # quadratic decode of a crafted percent-encoded string: in the dApp it only decodes WalletConnect pairing URIs and
+  # query strings in the user's own tab, so the worst case is that tab stalling. Re-evaluate when @walletconnect/utils
+  # (through wagmi or appkit) moves off query-string 7.
+  "GHSA-qr28-fpjm-wq7f" # decode-uri-component: DoS via quadratic replacement of percent-encoded runs. expires: 2026-12-15
 )
 
 ignore_args=()
