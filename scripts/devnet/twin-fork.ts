@@ -115,11 +115,12 @@ async function start() {
     writeFileSync(pidFile, JSON.stringify({ pid, pin, port }), { mode: 0o600 });
     try {
       await waitReady(localUrl, pin.block, Number(v["ready-timeout"]), Number(v["chain-id"]), Boolean(v["block-time"]));
-      await prepPoolsOrWarn(localUrl);
       if (v["pin-file"]) {
         mkdirSync(dirname(resolve(v["pin-file"])), { recursive: true });
         writeFileSync(v["pin-file"], JSON.stringify(pin, null, 2) + "\n");
       }
+      // After the pin file: a container healthcheck passes as soon as anvil answers, and readers expect the pin file then.
+      await prepPoolsOrWarn(localUrl);
       log(`ready at ${localUrl} (pid ${pid})`);
       return;
     } catch (e: any) {
