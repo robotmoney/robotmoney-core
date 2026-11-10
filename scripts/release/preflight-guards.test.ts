@@ -28,8 +28,8 @@ describe("issue 1926: CEREMONY_CONTRACTS covers every vault contract the stage t
   const table = JSON.parse(readFileSync(TABLE, "utf8"));
   const script = readFileSync(SCRIPT, "utf8");
 
-  test("the table's vault contracts are the three live vaults", () => {
-    expect(tableVaultContracts(table)).toEqual(["ProtocolAssetVault", "RobotMoneyVault", "RwaBasketVault"]);
+  test("the table's vault contracts are the four live vaults (ADR-0018 adds rmHARD)", () => {
+    expect(tableVaultContracts(table)).toEqual(["HardAssetsVault", "ProtocolAssetVault", "RobotMoneyVault", "RwaBasketVault"]);
   });
 
   test("preflight-guards.sh lists each of them, ProtocolAssetVault (rmPROTO) included", () => {

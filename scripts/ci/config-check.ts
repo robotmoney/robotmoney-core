@@ -7,7 +7,9 @@
 //   - every 0x string in config/ is exactly 40 hex digits (catches the 39-digit addresses)
 //   - deSPXA is listed with Uniswap V3 fee 500 and nothing else in rwa-assets.json
 //   - wSOL and JUNO are absent; RM and BNKR appear only in agent-token-shortlist.json
-//   - no Chronicle, Aerodrome, mainnet or devnet key anywhere in config/
+//   - no Chronicle, Aerodrome, mainnet or devnet key anywhere in config/, except Aerodrome in hard-assets.json
+//   - hard-assets.json (rmHARD, core 2008, ADR-0018) lists PAXG only, pinned to its Aero (Aerodrome Slipstream) CL USDC pool, tick
+//     spacing 10, with the Aero CL factory and swap router recorded
 //   - agent-token-shortlist.json launch list is BNKR alone as the rmAGENT TEST asset with RM parked under `parked.entries` (owner decisions 2026-10-21 and 2026-10-22,
 //     ADR-0015 and ADR-0016), or exactly RM once reactivated, never both. Each entry is code-hash pinned and pinned to its hookless Uniswap V4 USDC pool by PoolKey and pool id
 //     (RM: fee 29100, tickSpacing 582, pool id 0xf2e7b957...; BNKR: fee 3000, tickSpacing 60, pool id 0x87a44b2f...). The file records swapRouter02 (the script parser needs it).
@@ -15,6 +17,10 @@
 //   pool fee() equals config, factory.getPool equals config, observationCardinality >= 901 (1800 s default TWAP window / 2 s Base blocks + 1, core 1665),
 //   liquidity() > 0, USD TVL (USDC reserve plus other side at slot0 price) >= the file's
 //   minTvlUsd floor.
+// Live rules (the Aerodrome asset, hard-assets.json): the token, pool, Aero factory and Aero router have code, the pool's tickSpacing()
+//   equals config, factory.getPool(token, USDC, tickSpacing) equals config, the pool pairs the token with USDC, observationCardinality
+//   (slot0 word 3 of the 6-field Slipstream slot0) >= 901, liquidity() > 0 and USD TVL >= minTvlUsd. The cardinality rule fails until
+//   the operator raises the pool's ring (docs/operations/contract-release-runbooks.md, "rmHARD pool cardinality"): never bypassed.
 // Live rules (the V4 asset): the PoolManager and StateView have code; the PoolKey from config resolves, through StateView.getSlot0 on
 //   the derived pool id, to an initialized pool whose lpFee equals the config fee (V4 stores no PoolKey, only its hash, so a key whose
 //   hash resolves to a live pool is the key); StateView.getLiquidity(poolId) >= 1000000. The unit is the pool's in-range liquidity L
@@ -47,6 +53,19 @@ export const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 export const USDC_IMPL_SLOT = "0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3";
 export const FORBIDDEN_SYMBOLS = ["wsol", "juno"]; // rm and bnkr are forbidden outside the agent file by the rule below (BNKR is the rmAGENT test asset, ADR-0016)
 const AGENT_FILE = "agent-token-shortlist.json";
+/** rmHARD's config (core 2008, ADR-0018): the one file where an Aerodrome key and venue are allowed. */
+const HARD_FILE = "hard-assets.json";
+/** PAXG on its Aero CL USDC pool (docs.paxos.com; dromos-labs metadex-slipstream-public deployment-addresses/cl-base.json). */
+export const PAXG = {
+  token: "0xe904AEA5E1b110c9174728fA2efFc8aeD19E98Ef",
+  tokenDecimals: 18,
+  venue: "Aerodrome",
+  pool: "0x108c5c97155D35847c61683F1a254D9c0470A591",
+  /** The pool's tick spacing: the vault's swapFee for an Aerodrome row. */
+  poolFee: 10,
+  aerodromeSlipstreamFactory: "0x9CB220581b91b0C83223012FE69688b92aD07a76",
+  aerodromeSlipstreamRouter: "0x9Ee35Bf1bd69a03c6F0393582030fCe8Bb93D418",
+};
 export const RM = {
   token: "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3",
   venue: "UniswapV4",
@@ -138,9 +157,15 @@ export interface AssetFile {
   minTvlUsd: number;
   assets: Asset[];
 }
+/** config/hard-assets.json: an AssetFile plus the Aero CL factory and router its Aerodrome rows trade through. */
+export interface HardAssetFile extends AssetFile {
+  aerodromeSlipstreamFactory: string;
+  aerodromeSlipstreamRouter: string;
+}
 export interface Configs {
   protocol: AssetFile;
   rwa: AssetFile;
+  hard: HardAssetFile;
   agent: AgentFile;
   dexPools: Record<string, unknown>;
   /** Pinned USDC code hashes (config/usdc-hashes.json). null means not pinned yet: refused. */
@@ -171,6 +196,7 @@ export function loadConfigs(dir: string): Configs {
   return {
     protocol: need("protocol-assets.json") as AssetFile,
     rwa: need("rwa-assets.json") as AssetFile,
+    hard: need(HARD_FILE) as HardAssetFile,
     agent: need(AGENT_FILE) as Configs["agent"],
     dexPools: need("dex-pools.json") as Record<string, unknown>,
     usdcHashes: need("usdc-hashes.json") as UsdcHashes,
@@ -195,14 +221,17 @@ export function staticFindings(c: Configs): Finding[] {
     const badAddr: string[] = [];
     const badKey: string[] = [];
     const badSym: string[] = [];
+    // ADR-0018: hard-assets.json is the one file whose rows trade on Aerodrome, so only there may a key or value name it. Chronicle stays forbidden everywhere.
+    const aeroOk = file === HARD_FILE;
+    const keyForbidden = (k: string) => FORBIDDEN_KEY.test(aeroOk ? k.replace(/aerodrome|slipstream/gi, "") : k);
     walk(json, file, (path, key, val) => {
-      if (key && !META_KEYS.has(key) && !key.startsWith("$") && FORBIDDEN_KEY.test(key)) badKey.push(path);
+      if (key && !META_KEYS.has(key) && !key.startsWith("$") && keyForbidden(key)) badKey.push(path);
       const underMeta = path.split(".").some((p) => META_KEYS.has(p) || p.startsWith("$"));
       if (typeof val === "string" && !underMeta) {
         const isHashKey = key !== null && /CodeHash$|^poolId$/.test(key);
         if (!isHashKey && /^0x[0-9a-fA-F]*$/.test(val) && val.length > 2 && val.length !== 42) badAddr.push(`${path}=${val} (${val.length - 2} digits)`);
         const lower = val.toLowerCase();
-        if (FORBIDDEN_SYMBOLS.includes(lower) || ((lower === "rm" || lower === "bnkr") && file !== AGENT_FILE) || /wsol/.test(lower) || /chronicle|aerodrome|slipstream/.test(lower)) badSym.push(`${path}=${val}`);
+        if (FORBIDDEN_SYMBOLS.includes(lower) || ((lower === "rm" || lower === "bnkr") && file !== AGENT_FILE) || /wsol/.test(lower) || /chronicle/.test(lower) || (!aeroOk && /aerodrome|slipstream/.test(lower))) badSym.push(`${path}=${val}`);
       }
     });
     add(file, "address-format", badAddr.length === 0, badAddr.join("; ") || "all 0x values are 40 hex digits");
@@ -220,6 +249,17 @@ export function staticFindings(c: Configs): Finding[] {
   const d = (c.rwa.assets ?? []).find((a) => a.symbol === "deSPXA");
   add("rwa-assets.json", "despxa-fee-500", d?.poolFee === 500, `poolFee=${d?.poolFee}`);
   add("rwa-assets.json", "despxa-venue", d?.venue === "UniswapV3", `venue=${d?.venue}`);
+  // Core 2008, ADR-0018: rmHARD is PAXG alone on its Aero CL USDC pool.
+  const hardSyms = (c.hard.assets ?? []).map((a) => a.symbol);
+  add(HARD_FILE, "paxg-only", hardSyms.length === 1 && hardSyms[0] === "PAXG", `symbols=${hardSyms.join(",")}`);
+  const g = (c.hard.assets ?? []).find((a) => a.symbol === "PAXG");
+  const same = (x: string | undefined, y: string) => x?.toLowerCase() === y.toLowerCase();
+  add(HARD_FILE, "paxg-aero-pool-pinned",
+    !!g && same(g.token, PAXG.token) && g.tokenDecimals === PAXG.tokenDecimals && g.venue === PAXG.venue && same(g.pool, PAXG.pool) && g.poolFee === PAXG.poolFee,
+    `token=${g?.token} decimals=${g?.tokenDecimals} venue=${g?.venue} pool=${g?.pool} poolFee=${g?.poolFee}`);
+  add(HARD_FILE, "aero-venues-recorded",
+    same(c.hard.aerodromeSlipstreamFactory, PAXG.aerodromeSlipstreamFactory) && same(c.hard.aerodromeSlipstreamRouter, PAXG.aerodromeSlipstreamRouter),
+    `factory=${c.hard.aerodromeSlipstreamFactory} router=${c.hard.aerodromeSlipstreamRouter}`);
   const protoSyms = (c.protocol.assets ?? []).map((a) => a.symbol).sort();
   add("protocol-assets.json", "weth-cbbtc-only", JSON.stringify(protoSyms) === JSON.stringify(["cbBTC", "wETH"]), `symbols=${protoSyms.join(",")}`);
   // Core issue 1903, ADR-0015 and ADR-0016. The launch list is BNKR alone as the test asset with RM parked (owner decisions 2026-10-21 and 2026-10-22), or RM alone once
@@ -259,7 +299,7 @@ export function staticFindings(c: Configs): Finding[] {
   if (isParked) v4Rules(parkedEntries[0], c.agent.parked?.maxSlippageBps, "parked");
   add("agent-token-shortlist.json", "swap-router-recorded",
     c.agent.swapRouter02?.toLowerCase() === "0x2626664c2603336e57b271c5c0b26f421741e481", `router=${c.agent.swapRouter02}`);
-  for (const [name, f] of [["protocol-assets.json", c.protocol], ["rwa-assets.json", c.rwa]] as const) {
+  for (const [name, f] of [["protocol-assets.json", c.protocol], ["rwa-assets.json", c.rwa], [HARD_FILE, c.hard]] as const) {
     add(name, "venues-recorded",
       f.swapRouter02?.toLowerCase() === "0x2626664c2603336e57b271c5c0b26f421741e481" &&
         f.uniswapV3Factory?.toLowerCase() === "0x33128a8fc17869897dce68ed026d694621f6fdfd",
@@ -462,6 +502,59 @@ async function v4Findings(
   };
 }
 
+/** CLFactory.getPool(address,address,int24), CLPool.tickSpacing(), the ERC-20 balanceOf and the pool reads shared with V3. */
+const AERO_GET_POOL = "0x28af8d0b";
+const AERO_TICK_SPACING = "0xd0c93a7c";
+
+/**
+ * The Aerodrome (Aero Slipstream CL) asset against live chain state (core 2008, ADR-0018). The pool's slot0 has 6 fields (no feeProtocol),
+ * so the cardinality is word 3. The TVL is the USDC reserve plus the other side at the slot0 price, as for a V3 pool.
+ */
+async function aeroFindings(
+  rpc: Rpc, tag: string, s: string, a: Asset, f: HardAssetFile, hasCode: (addr: string) => Promise<boolean>,
+): Promise<{ findings: Finding[]; facts: Record<string, unknown> }> {
+  const out: Finding[] = [];
+  const add = (rule: string, ok: boolean, detail: string) => out.push({ scope: s, rule, ok, detail });
+  const poolCode = await hasCode(a.pool);
+  add("code:pool", poolCode, a.pool);
+  if (!poolCode) return { findings: out, facts: {} };
+  const call = (to: string, data: string) => rpc("eth_call", [{ to, data }, tag]);
+  const [tsW, t0, t1, slot0, liqW] = await Promise.all([
+    call(a.pool, AERO_TICK_SPACING), call(a.pool, "0x0dfe1681"), call(a.pool, "0xd21220a7"), call(a.pool, "0x3850c7bd"), call(a.pool, "0x1a686502"),
+  ]);
+  const tickSpacing = Number(BigInt.asIntN(24, BigInt("0x" + word(tsW, 0))));
+  const token0 = addrOf(word(t0, 0));
+  const token1 = addrOf(word(t1, 0));
+  const usdc = f.usdc.toLowerCase();
+  const usdcIs0 = token0 === usdc;
+  const otherToken = usdcIs0 ? token1 : token0;
+  const [balU, balO, gp] = await Promise.all([
+    call(f.usdc, "0x70a08231" + pad(a.pool)),
+    call(otherToken, "0x70a08231" + pad(a.pool)),
+    call(f.aerodromeSlipstreamFactory, AERO_GET_POOL + pad(a.token) + pad(f.usdc) + pad("0x" + BigInt(a.poolFee).toString(16))),
+  ]);
+  const sqrtP = BigInt("0x" + word(slot0, 0));
+  const cardinality = Number(BigInt("0x" + word(slot0, 3)));
+  const liquidity = BigInt("0x" + word(liqW, 0));
+  const usdcReserve = BigInt("0x" + word(balU, 0));
+  const otherReserve = BigInt("0x" + word(balO, 0));
+  const Q192 = 1n << 192n;
+  const otherInUsdc = usdcIs0 ? (otherReserve * Q192) / (sqrtP * sqrtP || 1n) : (otherReserve * sqrtP * sqrtP) / Q192;
+  const tvlUsd = Number(usdcReserve + otherInUsdc) / 1e6;
+  const factoryPool = addrOf(word(gp, 0));
+  add("pool-tick-spacing-equals-config", tickSpacing === a.poolFee, `live=${tickSpacing} config=${a.poolFee}`);
+  add("pool-is-token-usdc", [token0, token1].sort().join() === [a.token.toLowerCase(), usdc].sort().join(), `${token0},${token1}`);
+  add("factory-getPool-equals-config", factoryPool.toLowerCase() === a.pool.toLowerCase(), `factory=${factoryPool} config=${a.pool}`);
+  const prep = " (BasketVault.addAsset needs 901: raise it with increaseObservationCardinalityNext(901) and let swaps wrap the ring before the hard stage, runbook \"rmHARD pool cardinality\")";
+  add("observation-cardinality>=901", cardinality >= 901, `cardinality=${cardinality}${cardinality >= 901 ? "" : prep}`);
+  add("liquidity>0", liquidity > 0n, `liquidity=${liquidity}`);
+  add(`tvl-usd>=${f.minTvlUsd}`, tvlUsd >= f.minTvlUsd, `tvlUsd=${tvlUsd.toFixed(0)}`);
+  return {
+    findings: out,
+    facts: { pool: a.pool, tickSpacing, token0, token1, observationCardinality: cardinality, liquidity: liquidity.toString(), usdcReserve: usdcReserve.toString(), otherReserve: otherReserve.toString(), tvlUsd },
+  };
+}
+
 export async function liveFindings(rpc: Rpc, tag: string, c: Configs): Promise<{ findings: Finding[]; facts: Record<string, unknown> }> {
   const findings: Finding[] = [];
   const facts: Record<string, unknown> = {};
@@ -527,6 +620,23 @@ export async function liveFindings(rpc: Rpc, tag: string, c: Configs): Promise<{
       } catch (e) {
         add(s, "pool-read", false, String(e));
       }
+    }
+  }
+  // Core 2008, ADR-0018: rmHARD's Aerodrome rows.
+  const h = c.hard;
+  add(HARD_FILE, "code:usdc", await hasCode(h.usdc), h.usdc);
+  add(HARD_FILE, "code:swapRouter02", await hasCode(h.swapRouter02), h.swapRouter02);
+  add(HARD_FILE, "code:aerodromeSlipstreamFactory", await hasCode(h.aerodromeSlipstreamFactory), h.aerodromeSlipstreamFactory);
+  add(HARD_FILE, "code:aerodromeSlipstreamRouter", await hasCode(h.aerodromeSlipstreamRouter), h.aerodromeSlipstreamRouter);
+  for (const a of h.assets ?? []) {
+    const s = `${HARD_FILE}:${a.symbol}`;
+    add(s, "code:token", await hasCode(a.token), a.token);
+    try {
+      const r = await aeroFindings(rpc, tag, s, a, h, hasCode);
+      findings.push(...r.findings);
+      facts[s] = r.facts;
+    } catch (e) {
+      add(s, "pool-read", false, String(e));
     }
   }
   return { findings, facts };

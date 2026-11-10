@@ -11,14 +11,22 @@ import {DeployVault} from "../script/DeployVault.s.sol";
 import {BasketVaultDeployBase} from "../script/BasketVaultDeployBase.sol";
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
 import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
+import {DeployHardAssetsVault} from "../script/DeployHardAssetsVault.s.sol";
+import {IAerodromePool} from "../interfaces/IAerodromePool.sol";
+import {IAerodromeSlipstreamRouter} from "../interfaces/IAerodromeSlipstreamRouter.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
+
+interface IAeroCardinalityNext {
+    function increaseObservationCardinalityNext(uint16 observationCardinalityNext) external;
+}
 
 interface IDepositsPaused {
     function depositsPaused() external view returns (bool);
 }
 
-/// @notice Issue 1705, ADR-0017: the three production vault deploy scripts run in process, and each vault's
+/// @notice Issue 1705, ADR-0018: the four production vault deploy scripts run in process, and each vault's
 ///         `depositsPaused()` right after its stage equals the stage table's `deployPaused` for that
 ///         vault (scripts/deploy/stage-table.json, the one rule table). rmUSDC runs the seeded path
 ///         the broadcast run takes (the pause follows the seed), the baskets run their in-process
@@ -28,7 +36,7 @@ interface IDepositsPaused {
 ///         need the real USDC, lending venues and pools. CI runs it in forge-fork-vault-regressions
 ///         through scripts/devnet/forge-fork-tests.ts, which fails a run in which nothing executed.
 ///         With FORK_RPC_URL unset the test skips with a named reason.
-contract ThreeVaultInitialStateForkTest is Test {
+contract FourVaultInitialStateForkTest is Test {
     using stdJson for string;
 
     address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
@@ -60,6 +68,45 @@ contract ThreeVaultInitialStateForkTest is Test {
         });
     }
 
+    /// @dev The PAXG Aero pool ring holds 900 slots and `addAsset` needs 901 (core 2008): raise `observationCardinalityNext` and swap
+    ///      two ways, one block apart, until the ring grows. An Aero CL pool writes an observation only when a swap moves the tick, so
+    ///      each leg is 5,000 USDC. HardAssetsVaultFork.t.sol does the same; the production step is in the contract release runbook.
+    function _raiseAeroCardinality(string memory cfg) internal {
+        address pool = cfg.readAddress(".assets[0].pool");
+        address paxg = cfg.readAddress(".assets[0].token");
+        address router = cfg.readAddress(".aerodromeSlipstreamRouter");
+        (,,, uint16 card,,) = IAerodromePool(pool).slot0();
+        if (card >= 901) return;
+        IAeroCardinalityNext(pool).increaseObservationCardinalityNext(901);
+        address prepper = makeAddr("cardinalityPrepper");
+        deal(USDC, prepper, 10_000 * 1e6);
+        vm.startPrank(prepper);
+        IERC20(USDC).approve(router, type(uint256).max);
+        IERC20(paxg).approve(router, type(uint256).max);
+        for (uint256 i = 0; i < 1_000 && card < 901; i++) {
+            vm.roll(block.number + 1);
+            vm.warp(block.timestamp + 2);
+            bool buy = i % 2 == 0;
+            address tokenIn = buy ? USDC : paxg;
+            uint256 amountIn = IERC20(tokenIn).balanceOf(prepper);
+            if (buy && amountIn > 5_000 * 1e6) amountIn = 5_000 * 1e6;
+            IAerodromeSlipstreamRouter(router).exactInputSingle(
+                IAerodromeSlipstreamRouter.ExactInputSingleParams({
+                    tokenIn: tokenIn,
+                    tokenOut: buy ? paxg : USDC,
+                    tickSpacing: 10,
+                    recipient: prepper,
+                    deadline: block.timestamp,
+                    amountIn: amountIn,
+                    amountOutMinimum: 0,
+                    sqrtPriceLimitX96: 0
+                })
+            );
+            (,,, card,,) = IAerodromePool(pool).slot0();
+        }
+        vm.stopPrank();
+    }
+
     /// @dev Runs the vault stage named `stage` in process and returns the vault it deployed.
     function _deploy(string memory stage, VaultRegistry registry) internal returns (address) {
         bytes32 s = keccak256(bytes(stage));
@@ -85,6 +132,11 @@ contract ThreeVaultInitialStateForkTest is Test {
             .runInProcess(_basketParams(registry), vm.readFile("config/rwa-assets.json"))
             .vault;
         }
+        if (s == keccak256("hard")) {
+            string memory cfg = vm.readFile("config/hard-assets.json");
+            _raiseAeroCardinality(cfg);
+            return new DeployHardAssetsVault().runInProcess(_basketParams(registry), cfg).vault;
+        }
         revert(string.concat("no in-process deploy for vault stage ", stage));
     }
 
@@ -94,7 +146,7 @@ contract ThreeVaultInitialStateForkTest is Test {
         VaultRegistry registry = CoreProxies.vaultRegistry(admin);
         uint256 n;
         while (vm.keyExistsJson(table, string.concat(".vaults[", vm.toString(n), "]"))) n++;
-        assertEq(n, 3, "the table lists the three vaults");
+        assertEq(n, 4, "the table lists the four vaults");
         for (uint256 i = 0; i < n; i++) {
             string memory row = string.concat(".vaults[", vm.toString(i), "]");
             string memory key = table.readString(string.concat(row, ".key"));

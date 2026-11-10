@@ -264,7 +264,7 @@ steps:
     flow: ["new", "upgrade"]
   - id: "P1.02-publish"
     standing: ["4.3"]
-    description: "Safe, libs, vault, registry, router, ic-policy, governance, proto, rwa, prove-control signed by every owner, then the timelock handover; each stage matches its frozen count"
+    description: "Safe, libs, vault, registry, router, ic-policy, governance, proto, rwa, hard, prove-control signed by every owner, then the timelock handover; each stage matches its frozen count"
     host: "control"
     phase: 1
     cmds:
@@ -309,7 +309,7 @@ steps:
     maxMinutes: 60
   - id: "P3.01-govern-schedule"
     standing: ["4.3"]
-    description: "Stage 13 schedules the three vault unpauses through the real Safe, one timelock operation each, in one sitting; on 8453 it exits 15 with the resume command"
+    description: "Stage 13 schedules the four vault unpauses through the real Safe, one timelock operation each, in one sitting; on 8453 it exits 15 with the resume command"
     host: "control"
     phase: 3
     cmds:
@@ -324,7 +324,7 @@ steps:
     maxMinutes: 60
   - id: "P3.02-govern-execute"
     standing: ["4.3"]
-    description: "After the timelock delay the same command executes the three unpauses and reads depositsPaused back; every printed row has a transaction hash and status 1"
+    description: "After the timelock delay the same command executes the four unpauses and reads depositsPaused back; every printed row has a transaction hash and status 1"
     host: "control"
     phase: 3
     cmds:
@@ -392,7 +392,7 @@ steps:
   # ── Phase 4, verify again: the post-govern state. ──
   - id: "P4.01-verify-post-govern"
     standing: ["4.3"]
-    description: "Stage 12 again: all three unpause rows executed, all three vaults read depositsPaused false; a manifest that disagrees with the chain fails closed"
+    description: "Stage 12 again: all four unpause rows executed, all four vaults read depositsPaused false; a manifest that disagrees with the chain fails closed"
     host: "control"
     phase: 4
     cmds:
@@ -813,13 +813,14 @@ steps:
     onlyFor: ["twin", "rehearsal"]
   - id: "P9.03-resume-schedule"
     standing: ["4.5"]
-    description: "Each paused vault comes back through a new numbered unpause round of the Safe; the three are scheduled together"
+    description: "Each paused vault comes back through a new numbered unpause round of the Safe; the four are scheduled together"
     host: "control"
     phase: 9
     cmds:
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-USDC", "{common}", "{owners}", "{gate}", "{wait}"]
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-PROTO", "{common}", "{owners}", "{gate}", "{wait}"]
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-RWA", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-HARD", "{common}", "{owners}", "{gate}", "{wait}"]
     env:
       PUBLISH_MANIFEST_DIR: "{manifestDir}"
       YES: "{yes}"
@@ -829,13 +830,14 @@ steps:
     onlyFor: ["twin", "rehearsal"]
   - id: "P9.04-resume-execute"
     standing: ["4.5"]
-    description: "After the delay the same three commands execute the unpauses"
+    description: "After the delay the same four commands execute the unpauses"
     host: "control"
     phase: 9
     cmds:
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-USDC", "{common}", "{owners}", "{gate}", "{wait}"]
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-PROTO", "{common}", "{owners}", "{gate}", "{wait}"]
       - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-RWA", "{common}", "{owners}", "{gate}", "{wait}"]
+      - ["bun", "publish-contracts/src/cli.ts", "govern", "--row", "unpause-HARD", "{common}", "{owners}", "{gate}", "{wait}"]
     env:
       PUBLISH_MANIFEST_DIR: "{manifestDir}"
       YES: "{yes}"

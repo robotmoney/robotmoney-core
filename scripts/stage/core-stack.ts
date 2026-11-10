@@ -109,7 +109,7 @@ export const RECORD_REQUIRED_FIELDS = [
   ".addresses.gateway", ".addresses.vault", ".addresses.registry", ".addresses.router", ".addresses.governance",
   ".addresses.consensus_receipt", ".addresses.timelock", ".addresses.safe", ".addresses.emergency",
   ".code_hashes.gateway",
-  ".vault_addresses.rmUSDC", ".vault_addresses.rmPROTO", ".vault_addresses.rmRWA",
+  ".vault_addresses.rmUSDC", ".vault_addresses.rmPROTO", ".vault_addresses.rmRWA", ".vault_addresses.rmHARD",
   ".ephemeral.approver", ".ephemeral.emergency",
   ".ephemeral.keystore_dir", ".ephemeral.safe_signers",
 ];
@@ -1098,7 +1098,7 @@ async function recordWrite(s: Stack): Promise<void> {
       emergency,
     },
     code_hashes: { gateway: hash },
-    vault_addresses: { rmUSDC: vaults.rmUSDC!.vault, rmPROTO: vaults.rmPROTO!.vault, rmRWA: vaults.rmRWA!.vault },
+    vault_addresses: { rmUSDC: vaults.rmUSDC!.vault, rmPROTO: vaults.rmPROTO!.vault, rmRWA: vaults.rmRWA!.vault, rmHARD: vaults.rmHARD!.vault },
     ephemeral: {
       approver: owners[0],
       emergency,
@@ -1135,7 +1135,7 @@ export function validateRecord(rec: Json, recordPath: string): void {
   for (const f of [
     ".deployer", ".addresses.gateway", ".addresses.vault", ".addresses.registry", ".addresses.router", ".addresses.governance",
     ".addresses.consensus_receipt", ".addresses.timelock", ".addresses.safe", ".addresses.emergency",
-    ".vault_addresses.rmUSDC", ".vault_addresses.rmPROTO", ".vault_addresses.rmRWA",
+    ".vault_addresses.rmUSDC", ".vault_addresses.rmPROTO", ".vault_addresses.rmRWA", ".vault_addresses.rmHARD",
     ".ephemeral.approver", ".ephemeral.emergency",
   ]) addr(f);
   const hash = get(".code_hashes.gateway");

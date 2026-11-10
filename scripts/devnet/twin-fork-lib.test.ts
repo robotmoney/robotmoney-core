@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import {
   buildAnvilArgv, ethToWei, keccak256, redact, redactArgv, rpc, selectPin, urlHost,
   usdcBalanceSlot, usdcBalanceWord, resolveUpstream, DEFAULT_UPSTREAM, warp, hexToBytes, isStalePinText, pinStateServed, repinIfStale, superviseUntil,
+  aeroCardinalityOf, aeroSlot0WithCardinality, aerodromePools, prepareAeroCardinality, AERO_REQUIRED_CARDINALITY,
 } from "./twin-fork-lib.ts";
 
 /** Stub JSON-RPC fetcher. */
@@ -155,6 +156,90 @@ describe("warp", () => {
   });
   test("rejects non-positive seconds", async () => {
     await expect(warp("http://x", 0)).rejects.toThrow();
+  });
+});
+
+describe("Aero pool cardinality, Twin-only (core 2008, ADR-0018)", () => {
+  // Slot 6 of the PAXG Aero pool 0x108c5c97155D35847c61683F1a254D9c0470A591 at Base block ~55.68M: sqrtPriceX96, tick 193306,
+  // observationIndex 391, observationCardinality 900, observationCardinalityNext 900, unlocked 1.
+  const LIVE = 0x00000103840384018702f31a0000000000003d8991123197fcb21323ab2d4048n;
+  const POOL = "0x108c5c97155D35847c61683F1a254D9c0470A591";
+  test("the packed fields decode as slot0() reads them", () => {
+    expect(aeroCardinalityOf(LIVE)).toEqual({ index: 391, cardinality: 900, cardinalityNext: 900 });
+  });
+  test("raising to 901 changes only the two cardinality fields", () => {
+    const up = aeroSlot0WithCardinality(LIVE, AERO_REQUIRED_CARDINALITY);
+    expect(aeroCardinalityOf(up)).toEqual({ index: 391, cardinality: 901, cardinalityNext: 901 });
+    const fields = (1n << 232n) - (1n << 200n); // bits 200-231
+    expect(up & ~fields).toBe(LIVE & ~fields);
+    expect(up >> 232n).toBe(LIVE >> 232n); // unlocked and above untouched
+  });
+  test("never lowers a field already above the requirement", () => {
+    const big = aeroSlot0WithCardinality(LIVE, 1200);
+    expect(aeroCardinalityOf(aeroSlot0WithCardinality(big, 901))).toEqual({ index: 391, cardinality: 1200, cardinalityNext: 1200 });
+    expect(() => aeroSlot0WithCardinality(LIVE, 0)).toThrow();
+    expect(() => aeroSlot0WithCardinality(LIVE, 70000)).toThrow();
+  });
+  test("aerodromePools reads the Aerodrome rows of the committed config/hard-assets.json", async () => {
+    const text = await Bun.file(import.meta.dir + "/../../config/hard-assets.json").text();
+    expect(aerodromePools(text)).toEqual([POOL]);
+    expect(aerodromePools(JSON.stringify({ assets: [{ venue: "UniswapV3", pool: "0x" + "11".repeat(20) }] }))).toEqual([]);
+  });
+  const slot0Of = (w: bigint) => {
+    const f = aeroCardinalityOf(w);
+    const p = (n: bigint | number) => BigInt(n).toString(16).padStart(64, "0");
+    return "0x" + p(w & ((1n << 160n) - 1n)) + p(0) + p(f.index) + p(f.cardinality) + p(f.cardinalityNext) + p(1);
+  };
+  function chain(chainId: string, start: bigint, writes: string[][], calls: string[]) {
+    let word = start;
+    return stub({
+      eth_chainId: () => chainId,
+      eth_getStorageAt: () => "0x" + word.toString(16).padStart(64, "0"),
+      anvil_setStorageAt: (p) => { writes.push(p); word = BigInt(p[2]); return true; },
+      eth_call: (p) => (p[0].data === "0x3850c7bd" ? slot0Of(word) : "0x"),
+    }, calls);
+  }
+  test("refuses Base mainnet and writes nothing", async () => {
+    const writes: string[][] = [];
+    await expect(prepareAeroCardinality("http://127.0.0.1:8545", [POOL], 901, { fetcher: chain("0x2105", LIVE, writes, []) })).rejects.toThrow(/8453/);
+    expect(writes).toEqual([]);
+  });
+  test("on the Twin raises the ring to 901 in slot 6, reads slot0 and observe back, and logs a Twin-only line", async () => {
+    const writes: string[][] = [];
+    const calls: string[] = [];
+    const lines: string[] = [];
+    const raised = await prepareAeroCardinality("http://127.0.0.1:8545", [POOL], 901, { fetcher: chain("0xe0e35", LIVE, writes, calls) }, (m) => lines.push(m));
+    expect(raised).toEqual([POOL]);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]![1]).toBe("0x" + "6".padStart(64, "0"));
+    expect(aeroCardinalityOf(BigInt(writes[0]![2]!))).toEqual({ index: 391, cardinality: 901, cardinalityNext: 901 });
+    expect(calls.filter((c) => c === "eth_call")).toHaveLength(2); // slot0() and observe([1800, 0])
+    expect(lines.join("\n")).toMatch(/twin-only.*900 -> 901/);
+  });
+  test("a pool already at 901 is read back and left alone", async () => {
+    const writes: string[][] = [];
+    const raised = await prepareAeroCardinality("http://x", [POOL], 901, { fetcher: chain("0xe0e35", aeroSlot0WithCardinality(LIVE, 901), writes, []) });
+    expect(raised).toEqual([]);
+    expect(writes).toEqual([]);
+  });
+  test("fails loudly when slot0() does not read the raised ring back", async () => {
+    const f = stub({
+      eth_chainId: () => "0xe0e35",
+      eth_getStorageAt: () => "0x" + LIVE.toString(16).padStart(64, "0"),
+      anvil_setStorageAt: () => true,
+      eth_call: () => slot0Of(LIVE),
+    });
+    await expect(prepareAeroCardinality("http://x", [POOL], 901, { fetcher: f })).rejects.toThrow(/reads 900 after the prep, need 901/);
+  });
+  test("fails loudly when observe([1800, 0]) reverts", async () => {
+    let word = LIVE;
+    const f = stub({
+      eth_chainId: () => "0xe0e35",
+      eth_getStorageAt: () => "0x" + word.toString(16).padStart(64, "0"),
+      anvil_setStorageAt: (p) => { word = BigInt(p[2]); return true; },
+      eth_call: (p) => (p[0].data === "0x3850c7bd" ? slot0Of(word) : new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { message: "execution reverted: OLD" } }))),
+    });
+    await expect(prepareAeroCardinality("http://x", [POOL], 901, { fetcher: f })).rejects.toThrow(/OLD/);
   });
 });
 

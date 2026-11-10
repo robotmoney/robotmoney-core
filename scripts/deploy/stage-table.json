@@ -12,6 +12,7 @@
         "governance",
         "proto",
         "rwa",
+        "hard",
         "timelock"
       ],
       "requires": []
@@ -308,6 +309,51 @@
       ]
     },
     {
+      "name": "hard",
+      "system": "vaults",
+      "kind": "forge",
+      "script": "contracts/script/DeployHardAssetsVault.s.sol:DeployHardAssetsVault",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "SWAP_ROUTER",
+        "REGISTRY_ADDRESS",
+        "TVL_CAP",
+        "PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT",
+        "EXIT_FEE_BPS",
+        "NAV_DEVIATION_BPS",
+        "MIN_POOL_LIQUIDITY",
+        "ROUTER_DEFAULT_BPS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/hard-assets-vault.json",
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": "HARD",
+      "create2Libraries": [
+        "BasketAssetConfigGuard",
+        "TwapTickMath",
+        "BasketViews",
+        "BasketSwaps",
+        "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "vault",
+          "implementationField": "implementation",
+          "contract": "HardAssetsVault",
+          "layout": "contracts/test/fixtures/storage-layout/HardAssetsVault.json"
+        }
+      ]
+    },
+    {
       "name": "timelock",
       "system": "vaults",
       "kind": "forge",
@@ -414,11 +460,12 @@
   },
   "govern": {
     "stage": 13,
-    "description": "After the timelock handover the only mainnet operation is the unpause of each of the three vaults (rmUSDC, rmPROTO, rmRWA), all three deployed paused (rmAGENT is retired under ADR-0009 and ADR-0017: no stage deploys it): one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait, then executed. Vault setters, router eligibility and router default weights are deploy-time configuration set by the deployer in stages 4 to 10, before the handover, and asserted by the verify stage. There is no voting by anyone. Router weights change on demand through the apply-receipt row (core 1696): the Safe schedules RouterGovernance.applyReceipt on the timelock, never in stage 13. update-delay, batch and cancel are Twin-only demonstrations of the Safe tool and are refused on 8453.",
+    "description": "After the timelock handover the only mainnet operation is the unpause of each of the four vaults (rmUSDC, rmPROTO, rmRWA, rmHARD), all four deployed paused (rmAGENT is retired under ADR-0009 and ADR-0017: no stage deploys it; rmHARD fills its router slot under ADR-0018): one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait, then executed. Vault setters, router eligibility and router default weights are deploy-time configuration set by the deployer in stages 4 to 10, before the handover, and asserted by the verify stage. There is no voting by anyone. Router weights change on demand through the apply-receipt row (core 1696): the Safe schedules RouterGovernance.applyReceipt on the timelock, never in stage 13. update-delay, batch and cancel are Twin-only demonstrations of the Safe tool and are refused on 8453.",
     "mainnetRows": [
       "unpause-USDC",
       "unpause-PROTO",
-      "unpause-RWA"
+      "unpause-RWA",
+      "unpause-HARD"
     ],
     "twinOnlyRows": [
       "update-delay",
@@ -519,15 +566,33 @@
         "shutdownVault"
       ],
       "registryNameSource": "script-constant"
+    },
+    {
+      "key": "HARD",
+      "stage": "hard",
+      "artifact": "HardAssetsVault",
+      "manifest": "deployments/<chain>/hard-assets-vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-HARD",
+      "unpauseInStage13": true,
+      "seed": null,
+      "eligibilitySource": "sheet:ROUTER_DEFAULT_BPS",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyUnwind",
+        "emergencyUnwindWithOverride",
+        "shutdownVault"
+      ],
+      "registryNameSource": "script-constant"
     }
   ],
   "vaultRuleDecisions": {
     "seed": {
-      "reason": "rmUSDC is seeded with 1 USDC (SEED_DEPOSIT_USDC) to the seed share receiver (owner D3, 2026-10-01). The baskets take no seed: the 18-decimal virtual share offset protects all three vaults (issue 1705 Q6 (a)).",
+      "reason": "rmUSDC is seeded with 1 USDC (SEED_DEPOSIT_USDC) to the seed share receiver (owner D3, 2026-10-01). The baskets take no seed: the 18-decimal virtual share offset protects every basket (issue 1705 Q6 (a)).",
       "decision": "https://github.com/robotmoney/robotmoney-core/issues/1705"
     },
     "eligibilitySource": {
-      "reason": "rmUSDC is the router's base leg: the router stage makes it eligible and sets the first default vector before any basket exists. Each basket stage makes itself eligible from the sheet's ROUTER_DEFAULT_BPS in one migrateEligibility, and the last one leaves exactly the sheet's ROUTER_WEIGHTS, which names all three vaults. Issue 1705 Q4 (a) fixes the sheet format: ELIGIBLE_VAULTS=PROTO,RWA with rmUSDC in ROUTER_WEIGHTS, the same on the Twin chain and on 8453 (docs/technical/governance-isomorphism.md 1.1).",
+      "reason": "rmUSDC is the router's base leg: the router stage makes it eligible and sets the first default vector before any basket exists. Each basket stage makes itself eligible from the sheet's ROUTER_DEFAULT_BPS in one migrateEligibility, and the last one leaves exactly the sheet's ROUTER_WEIGHTS, which names all four vaults (ADR-0018). Issue 1705 Q4 (a) fixes the sheet format: ELIGIBLE_VAULTS=PROTO,RWA,HARD with rmUSDC in ROUTER_WEIGHTS, the same on the Twin chain and on 8453 (docs/technical/governance-isomorphism.md 1.1).",
       "decision": "https://github.com/robotmoney/robotmoney-core/issues/1705"
     },
     "emergencyLevers": {

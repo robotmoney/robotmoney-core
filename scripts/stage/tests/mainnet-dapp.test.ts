@@ -24,6 +24,7 @@ import {
   mainnetComposeTexts,
   readMainnetManifests,
   redactRpc,
+  VAULT_KEYS,
 } from "../mainnet-dapp.ts";
 import { manifestOf, vaultManifests } from "../stage-manifests.ts";
 
@@ -208,7 +209,8 @@ describe("the env builder from the manifests", () => {
 
 describe("refusals on the manifests and the options", () => {
   test("a manifest from another chain, each one", () => {
-    const names = [manifestOf("gateway"), manifestOf("registry"), manifestOf("router"), manifestOf("governance"), manifestOf("timelock"), ...Object.values(vaultManifests())];
+    // The vault manifests of the live 8453 deployment this tool reads (rmHARD, ADR-0018, is not on it until its registration batch runs).
+    const names = [manifestOf("gateway"), manifestOf("registry"), manifestOf("router"), manifestOf("governance"), manifestOf("timelock"), ...VAULT_KEYS.map((k) => vaultManifests()[k]!)];
     expect(names.length).toBe(8);
     for (const [i, file] of names.entries()) {
       const dir = fixture(`wrong-chain-${i}`, (d) => void (d[file]!.chain_id = 918453));

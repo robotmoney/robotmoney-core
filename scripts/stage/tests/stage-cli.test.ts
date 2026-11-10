@@ -104,7 +104,7 @@ describe("govern-rows CLI reads the govern run stdout", () => {
   });
 });
 
-describe("twin-run-report CLI: a manifest for each of the three vaults", () => {
+describe("twin-run-report CLI: a manifest for each of the four vaults", () => {
   const table = loadStageTable();
   const A = (n: number) => "0x" + n.toString(16).padStart(40, "0");
   /** Writes one manifest per table stage (a vault stage holds its vault address). */
@@ -121,8 +121,8 @@ describe("twin-run-report CLI: a manifest for each of the three vaults", () => {
     return d;
   }
 
-  test("the table lists exactly three vaults", () => {
-    expect(table.vaults.length).toBe(3);
+  test("the table lists exactly four vaults (ADR-0018 adds rmHARD)", () => {
+    expect(table.vaults.length).toBe(4);
   });
   test("a complete run exits 0 and lists every vault address", () => {
     const out = join(tmp(), "report.json");
@@ -131,7 +131,7 @@ describe("twin-run-report CLI: a manifest for each of the three vaults", () => {
     for (const v of table.vaults) expect(r.out).toContain(v.key);
     expect(r.out).not.toContain("MISSING");
     const j = JSON.parse(require("node:fs").readFileSync(out, "utf8"));
-    expect(j.vaults.length).toBe(3);
+    expect(j.vaults.length).toBe(4);
     expect(j.vaults.every((v: { address: string | null }) => v.address)).toBe(true);
   });
   test("a missing stage manifest exits non-zero and says MISSING", () => {

@@ -48,6 +48,24 @@ describe("static rules", () => {
       expect(failures(c).length).toBeGreaterThan(0);
     });
   }
+  test("core 2008: an Aerodrome key or venue outside hard-assets.json fails, Chronicle fails even inside it", () => {
+    const c = fixture((f) => { f["rwa-assets.json"].assets[0].venue = "Aerodrome"; });
+    expect(failures(c).some((x) => x.scope === "rwa-assets.json" && x.rule === "forbidden-symbol")).toBe(true);
+    const d = fixture((f) => { f["protocol-assets.json"].aerodromeSlipstreamRouter = f["hard-assets.json"].aerodromeSlipstreamRouter; });
+    expect(failures(d).some((x) => x.scope === "protocol-assets.json" && x.rule === "forbidden-key")).toBe(true);
+    const e = fixture((f) => { f["hard-assets.json"].chronicleFeed = "0x" + "11".repeat(20); });
+    expect(failures(e).some((x) => x.scope === "hard-assets.json" && x.rule === "forbidden-key")).toBe(true);
+  });
+  test("core 2008: a PAXG row off its pinned Aero pool, or a second hard asset, fails", () => {
+    const c = fixture((f) => { f["hard-assets.json"].assets[0].poolFee = 100; });
+    expect(failures(c).some((x) => x.rule === "paxg-aero-pool-pinned")).toBe(true);
+    const d = fixture((f) => { f["hard-assets.json"].assets[0].venue = "UniswapV3"; });
+    expect(failures(d).some((x) => x.rule === "paxg-aero-pool-pinned")).toBe(true);
+    const e = fixture((f) => { f["hard-assets.json"].assets.push({ ...f["hard-assets.json"].assets[0], symbol: "DGLD" }); });
+    expect(failures(e).some((x) => x.rule === "paxg-only")).toBe(true);
+    const g = fixture((f) => { f["hard-assets.json"].aerodromeSlipstreamFactory = "0x" + "33".repeat(20); });
+    expect(failures(g).some((x) => x.rule === "aero-venues-recorded")).toBe(true);
+  });
   test("RM outside the agent shortlist fails the forbidden-symbol rule", () => {
     const c = fixture((f) => { f["rwa-assets.json"].assets.push({ ...f["rwa-assets.json"].assets[0], symbol: "RM" }); });
     expect(failures(c).some((x) => x.rule === "forbidden-symbol")).toBe(true);
@@ -189,7 +207,10 @@ describe("config/ grep test", () => {
     readdirSync(dir).map((n) => readFileSync(join(dir, n), "utf8")).join("\n");
   const all = text(realDir);
   test("no Chronicle or Aerodrome, and V4 only as the RM venue", () => {
-    expect(all).not.toMatch(/chronicle|aerodrome/i);
+    // Core 2008, ADR-0018: rmHARD's hard-assets.json is the one file whose rows trade on Aerodrome. Chronicle is nowhere.
+    expect(all).not.toMatch(/chronicle/i);
+    const notHard = readdirSync(realDir).filter((n) => n !== "hard-assets.json").map((n) => readFileSync(join(realDir, n), "utf8")).join("\n");
+    expect(notHard).not.toMatch(/aerodrome|slipstream/i);
     // prose in "description" may name V4; keys and values may name it only as the venue UniswapV4
     const noProse = readdirSync(realDir).map((n) => JSON.stringify(JSON.parse(readFileSync(join(realDir, n), "utf8")), (k, v) => (k === "description" ? undefined : v))).join("\n");
     const v4 = noProse.match(/[A-Za-z]*v4[A-Za-z]*/gi) ?? [];
@@ -197,6 +218,13 @@ describe("config/ grep test", () => {
   });
   test("no mainnet or devnet branch key", () => {
     expect(all).not.toMatch(/"(mainnet|devnet)"\s*:/);
+  });
+  test("hard-assets.json lists PAXG only, Aerodrome, tick spacing 10 (core 2008, ADR-0018)", () => {
+    const j = JSON.parse(readFileSync(join(realDir, "hard-assets.json"), "utf8"));
+    expect(j.assets.map((a: any) => [a.symbol, a.venue, a.poolFee, a.tokenDecimals])).toEqual([["PAXG", "Aerodrome", 10, 18]]);
+    expect(j.assets[0].pool).toBe("0x108c5c97155D35847c61683F1a254D9c0470A591");
+    expect(j.aerodromeSlipstreamFactory).toBe("0x9CB220581b91b0C83223012FE69688b92aD07a76");
+    expect(j.aerodromeSlipstreamRouter).toBe("0x9Ee35Bf1bd69a03c6F0393582030fCe8Bb93D418");
   });
   test("rwa-assets.json lists deSPXA only, UniswapV3, fee 500", () => {
     const j = JSON.parse(readFileSync(join(realDir, "rwa-assets.json"), "utf8"));
@@ -237,8 +265,10 @@ describe("live rules against a fake RPC", () => {
   const cfg = pin(loadConfigs(activatedConfigDir(realDir)));
   const w = (n: bigint | number) => BigInt(n).toString(16).padStart(64, "0");
   const a = (x: string) => x.replace(/^0x/, "").toLowerCase().padStart(64, "0");
-  const all = [...cfg.protocol.assets, ...cfg.rwa.assets, ...cfg.agent.shortlist] as { symbol: string; token: string; pool?: string; poolFee: number }[];
+  const all = [...cfg.protocol.assets, ...cfg.rwa.assets, ...cfg.hard.assets, ...cfg.agent.shortlist] as { symbol: string; token: string; pool?: string; poolFee: number }[];
   const rmEntry = cfg.agent.shortlist[0];
+  const AERO_FACTORY = cfg.hard.aerodromeSlipstreamFactory.toLowerCase();
+  const AERO_POOLS = new Set(cfg.hard.assets.map((x) => x.pool.toLowerCase()));
   const STATE_VIEW = rmEntry.stateView!.toLowerCase();
   const FACTORY = cfg.rwa.uniswapV3Factory.toLowerCase();
 
@@ -261,10 +291,13 @@ describe("live rules against a fake RPC", () => {
       }
       const asset = all.find((x) => x.pool?.toLowerCase() === t);
       const o = (asset && over[asset.symbol]) || {};
+      // An Aero CL pool answers tickSpacing() with its config tick spacing (its poolFee); `fee` overrides it here.
+      if (sel === "0xd0c93a7c" && AERO_POOLS.has(t)) return "0x" + w(o.fee ?? feeOf(t));
       if (sel === "0xddca3f43") return "0x" + w(o.fee ?? feeOf(t));
       if (sel === "0x0dfe1681") return "0x" + a(cfg.rwa.usdc);
       if (sel === "0xd21220a7") return "0x" + a(asset!.token);
-      if (sel === "0x3850c7bd") return "0x" + w(1n << 96n) + w(0) + w(0) + w(0) + w(o.cardinality ?? 1000) + w(0) + w(1);
+      // Word 3 is the 6-field Slipstream cardinality (Aero pools); word 4 is what the V3 reader takes.
+      if (sel === "0x3850c7bd") return "0x" + w(1n << 96n) + w(0) + w(0) + w(AERO_POOLS.has(t) ? (o.cardinality ?? 1000) : 0) + w(o.cardinality ?? 1000) + w(0) + w(1);
       if (sel === "0x1a686502") return "0x" + w(o.liquidity ?? 10n ** 18n);
       if (sel === "0x70a08231") return "0x" + w(2_000_000n * 10n ** 6n);
       if (sel === "0x1698ee82" && t === FACTORY) {
@@ -273,6 +306,13 @@ describe("live rules against a fake RPC", () => {
         const x = all.find((y) => y.token.toLowerCase() === tok.toLowerCase());
         const o2 = (x && over[x.symbol]) || {};
         return "0x" + a(o2.factoryPool ?? x!.pool);
+      }
+      if (sel === "0x28af8d0b" && t === AERO_FACTORY) {
+        // Aero CLFactory.getPool(token, usdc, tickSpacing).
+        const tok = "0x" + data.slice(10, 74).slice(24);
+        const x = all.find((y) => y.token.toLowerCase() === tok.toLowerCase());
+        const o2 = (x && over[x.symbol]) || {};
+        return "0x" + a(o2.factoryPool ?? x?.pool ?? "0x0");
       }
       return "0x" + w(0);
     };
@@ -285,6 +325,13 @@ describe("live rules against a fake RPC", () => {
   test("passes when live facts match, for every asset", async () => {
     const r = await liveFindings(rpcFor(), "latest", cfg);
     expect(r.findings.filter((f) => !f.ok)).toEqual([]);
+    expect(r.findings.some((f) => f.scope === "hard-assets.json:PAXG" && f.rule === "factory-getPool-equals-config" && f.ok)).toBe(true);
+  });
+  test("core 2008: the PAXG Aero pool fails below 901 observation slots, on a wrong tick spacing and when it is not the factory's pool", async () => {
+    expect(await bad({ PAXG: { cardinality: 900 } }, "observation-cardinality>=901", "PAXG")).toBe(true);
+    expect(await bad({ PAXG: { fee: 50 } }, "pool-tick-spacing-equals-config", "PAXG")).toBe(true);
+    expect(await bad({ PAXG: { factoryPool: "0x" + "22".repeat(20) } }, "factory-getPool-equals-config", "PAXG")).toBe(true);
+    expect(await bad({ PAXG: { liquidity: 0n } }, "liquidity>0", "PAXG")).toBe(true);
   });
   test("fails when the live pool fee differs", async () => {
     expect(await bad({ deSPXA: { fee: 100 } }, "pool-fee-equals-config", "deSPXA")).toBe(true);

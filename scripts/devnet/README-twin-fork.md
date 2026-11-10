@@ -22,6 +22,8 @@ bun scripts/devnet/twin-fork.ts stop
 
 `fund-usdc` writes the real FiatToken `balanceAndBlacklistStates[holder]` slot (mapping at storage slot 9, key `keccak256(pad32(holder) ++ pad32(9))`, balance in the low 255 bits) with `anvil_setStorageAt`, then checks `balanceOf`. Total supply is not changed. `warp` uses `evm_increaseTime` then `evm_mine`. This is how the 48h governance waits run.
 
+`prep-pools` (also run by `start` once the fork is ready) is a Twin-only stand-in for the operator prerequisite of the rmHARD stage (core 2008, ADR-0018): `BasketVault.addAsset` needs 901 observation slots and the PAXG Aero pool holds 900 on Base. For every venue `Aerodrome` pool in `config/hard-assets.json` (or `--hard-assets-config`) it raises `observationCardinality` and `observationCardinalityNext` to 901 in the pool's packed slot0 (storage slot 6, bits 200-215 and 216-231) with `anvil_setStorageAt`, then reads `slot0()` and `observe([1800, 0])` back and fails if either misses. It refuses chain id 8453. On Base the operator raises the ring for real (runbook "rmHARD pool cardinality").
+
 ## Pinning
 
 `--pin-block auto` reads the upstream head with `eth_blockNumber` (with retry) and pins head minus 2 (reorg safety). `--pin-file` receives `{block, hash, timestamp, upstreamHost}`. The host is written, never the URL. Every job of one CI run must use the same pin.
