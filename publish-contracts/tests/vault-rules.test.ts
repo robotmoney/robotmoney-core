@@ -77,6 +77,12 @@ describe("the tools read the vault rules from the stage table (issue 1705)", () 
       // the default vector starts with the router-stage vaults
       expect(v.defaultWeights.slice(0, ROWS.filter((r) => r.eligibilitySource === "router-stage").length).map((w) => w.vault)).toEqual(ROWS.filter((r) => r.eligibilitySource === "router-stage").map((r) => VAULT_NAME[r.key]));
     });
+    test("core 2008: a vault the sheet marks absent (a prior line without rmHARD) is not verified", () => {
+      const v = buildVerifySheet({ ...c, sheet: { ...c.sheet, absentVaults: ["HARD"] } } as never, "0x00000000000000000000000000000000000050fe");
+      expect(v.vaults[VAULT_NAME.HARD]).toBeUndefined();
+      expect(Object.keys(v.vaults).sort()).toEqual(["rmPROTO", "rmRWA", "rmUSDC"]);
+      expect(buildVerifySheet(c, "0x00000000000000000000000000000000000050fe").vaults[VAULT_NAME.HARD]).toBeDefined();
+    });
     test("the seed is expected exactly on the vaults the table seeds", () => {
       const v = buildVerifySheet(c, "0x00000000000000000000000000000000000050fe");
       for (const r of ROWS) expect([r.key, v.vaults[VAULT_NAME[r.key]]!.seed !== undefined]).toEqual([r.key, r.seed !== null]);

@@ -120,6 +120,9 @@ export function buildVerifySheet(ctx: Pick<RunContext, "sheet" | "coreDir" | "ch
   const s = ctx.sheet;
   const vaults: Record<string, VaultSheet> = {};
   for (const k of VAULT_KEYS) {
+    // Core 2008: a follow-on verb on a prior line (v0.5.0, v0.6.0) verifies a deployment without rmHARD. Its sheet has no rmHARD lines (sheet.absentVaults) and its
+    // stage table no HARD row, so there is nothing of that vault to verify.
+    if (s.absentVaults?.includes(k)) continue;
     const v = s.vaults[k];
     const adapters = loadExpectedStrategyAdapters(ctx, k);
     vaults[VAULT_NAME[k]] = {
