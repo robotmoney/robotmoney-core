@@ -424,7 +424,7 @@ jobs:
         run: |
           # 58 tests: endpoints 53, router_introspection 1, cors 4 (QA plan v1 T5; C1 removed the
           # /v1/governance/proposals cases with the route).
-          CARGO_TEST_MIN_EXECUTED=59 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=60 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test endpoints \
             --test router_introspection \

@@ -1,15 +1,15 @@
 ---
-title: "ThreeVaultInitialStateForkTest"
-description: "Issue 1705, ADR-0017: the three production vault deploy scripts run in process, and each vault's `depositsPaused()` right after its stage equals the stage table's `deployPaused` for that vault (scripts/deploy/stage-table.json, the one rule table). rmUSDC runs the seeded path the broadcast run takes (the pause follows the seed), the baskets run their in-process entry point. The table row is matched to the script by its `stage` name."
+title: "FourVaultInitialStateForkTest"
+description: "Issue 1705, ADR-0018: the four production vault deploy scripts run in process, and each vault's `depositsPaused()` right after its stage equals the stage table's `deployPaused` for that vault (scripts/deploy/stage-table.json, the one rule table). rmUSDC runs the seeded path the broadcast run takes (the pause follows the seed), the baskets run their in-process entry point. The table row is matched to the script by its `stage` name."
 ---
 
-# ThreeVaultInitialStateForkTest
+# FourVaultInitialStateForkTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/ThreeVaultInitialState.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/418570cf18d1a61c8b8bc2dbcdc90d0c3ef7c094/contracts/test/FourVaultInitialState.t.sol)
 
 **Inherits:** Test
 
-Issue 1705, ADR-0017: the three production vault deploy scripts run in process, and each vault's
+Issue 1705, ADR-0018: the four production vault deploy scripts run in process, and each vault's
 `depositsPaused()` right after its stage equals the stage table's `deployPaused` for that
 vault (scripts/deploy/stage-table.json, the one rule table). rmUSDC runs the seeded path
 the broadcast run takes (the pause follows the seed), the baskets run their in-process

@@ -1,0 +1,135 @@
+---
+title: "HardAssetsVaultForkTest"
+description: "Fork regression for rmHARD (core 2008). The real `DeployHardAssetsVault` script runs against the real PAXG token, its real Aero (Aerodrome Slipstream) CL USDC pool, the real Aero factory and router, and real USDC on the fork pin. This proves the existing `AerodromeSwapAdapter` against PAXG's pool factory: the deploy's canonical-pool check, `addAsset`, the TWAP price and both swap directions. A deposit buys real PAXG. A redeem sells it in one transaction within the vault slippage cap."
+---
+
+# HardAssetsVaultForkTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/418570cf18d1a61c8b8bc2dbcdc90d0c3ef7c094/contracts/test/HardAssetsVaultFork.t.sol)
+
+**Inherits:** Test
+
+Fork regression for rmHARD (core 2008). The real `DeployHardAssetsVault` script runs against the real PAXG token, its
+real Aero (Aerodrome Slipstream) CL USDC pool, the real Aero factory and router, and real USDC on the fork pin. This
+proves the existing `AerodromeSwapAdapter` against PAXG's pool factory: the deploy's canonical-pool check, `addAsset`,
+the TWAP price and both swap directions. A deposit buys real PAXG. A redeem sells it in one transaction within the vault
+slippage cap.
+
+The pool is used exactly as it is: nothing in this test changes its state before the deploy (owner correction
+2026-11-10). Its observation ring has 900 slots, so the vault reads PAXG over the 1798 s window that ring serves
+(config `twapWindow`, ADR-0018), and `addAsset` vets the pool for that window.
+
+Runs on the Twin chain (a pinned lazy anvil fork of real Base state): CI runs it in forge-fork-vault-regressions through
+scripts/devnet/forge-fork-tests.ts, which fails a run in which nothing executed. With FORK_RPC_URL unset it skips with a
+named reason.
+
+## Constants
+
+### BASE_USDC
+
+```solidity
+address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### DEPOSIT
+
+```solidity
+uint256 internal constant DEPOSIT = 1_000 * 1e6;
+```
+
+### PAXG_TWAP_WINDOW
+
+<i>
+
+The PAXG window: what a 900-slot ring covers at 2 s blocks (1798 / 2 + 1 = 900).
+
+</i>
+
+```solidity
+uint32 internal constant PAXG_TWAP_WINDOW = 1_798;
+```
+
+## State Variables
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### vault
+
+```solidity
+HardAssetsVault internal vault;
+```
+
+### adapter
+
+```solidity
+AerodromeSwapAdapter internal adapter;
+```
+
+### cfg
+
+```solidity
+string internal cfg;
+```
+
+### paxg
+
+```solidity
+address internal paxg;
+```
+
+### pool
+
+```solidity
+address internal pool;
+```
+
+### ringBefore
+
+```solidity
+uint16 internal ringBefore;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_fork_rmhard_addassetontheunmodifiedpoolwiththepaxgwindow"></a>
+
+### test_fork_rmhard_addAssetOnTheUnmodifiedPoolWithThePaxgWindow
+
+```solidity
+function test_fork_rmhard_addAssetOnTheUnmodifiedPoolWithThePaxgWindow() public view;
+```
+
+<a id="test_fork_rmhard_adapterresolvespaxgpoolthroughtheaerofactory"></a>
+
+### test_fork_rmhard_adapterResolvesPaxgPoolThroughTheAeroFactory
+
+```solidity
+function test_fork_rmhard_adapterResolvesPaxgPoolThroughTheAeroFactory() public view;
+```
+
+<a id="test_fork_rmhard_depositholdspaxgandredeemsinonetxwithinslippagecap"></a>
+
+### test_fork_rmhard_depositHoldsPaxgAndRedeemsInOneTxWithinSlippageCap
+
+```solidity
+function test_fork_rmhard_depositHoldsPaxgAndRedeemsInOneTxWithinSlippageCap() public;
+```
+

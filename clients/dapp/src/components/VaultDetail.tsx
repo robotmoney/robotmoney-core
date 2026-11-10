@@ -64,6 +64,15 @@ function holdsDeSPXA(vaultName: string): boolean {
   return /\brwa\b/i.test(vaultName);
 }
 
+/**
+ * True for the vault that holds PAXG (rmHARD, "Robot Money Hard Assets", PRD §11.5, ADR-0018), keyed
+ * on the vault identity and never on the risk label (rmPROTO is VOLATILE too and holds no
+ * issuer-controlled token). Paxos can freeze, wipe or pause PAXG at any address.
+ */
+function holdsPAXG(vaultName: string): boolean {
+  return /\bhard\s+assets?\b/i.test(vaultName);
+}
+
 interface AssetRowProps {
   token: string;
   active?: boolean | null;
@@ -411,6 +420,25 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
             and exit independently of Aerodrome liquidity. This is a known, accepted risk for this
             SPECULATIVE-category vault. Depositors should understand that a freeze event could
             prevent withdrawals until the issuer lifts the restriction.
+          </p>
+        </div>
+      )}
+
+      {holdsPAXG(vault.name) && (
+        <div
+          data-testid="vault-detail-issuer-freeze-disclosure"
+          className="risk-disclosure"
+          role="alert"
+          aria-label="Issuer freeze-control risk disclosure"
+        >
+          <strong>Issuer Freeze-Control Risk Disclosure</strong>
+          <p>
+            This vault holds PAXG (Paxos Gold), which is subject to issuer controls by{" "}
+            <strong>Paxos</strong>. Paxos may freeze or wipe the PAXG held at any address, or pause
+            all PAXG transfers, at any time. A freeze of this vault would block vault entry and exit
+            independently of Aerodrome liquidity, until Paxos lifts it. This is a known, accepted
+            risk for this VOLATILE-category vault. Depositors should understand that a freeze event
+            could prevent withdrawals until the issuer lifts the restriction.
           </p>
         </div>
       )}

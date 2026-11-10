@@ -33,7 +33,7 @@ a transparent, multi-party, reproducible allocation rationale.
 Robot Money is two separate systems (owner decision, 2026-10-19).
 
 - **Vaults system.** The treasury product. It holds the Robot Money
-  vaults (rmUSDC, rmPROTO, rmRWA), the vault registry, the
+  vaults (rmUSDC, rmPROTO, rmRWA, rmHARD), the vault registry, the
   Portfolio Router and router-weight governance. Its only rebalancing
   signal is the consensus recommendation receipt, recorded on the consensus
   receipt contract. The vector the Safe schedules through `applyReceipt`
@@ -509,20 +509,20 @@ risk label, fee structure, accepted asset, withdrawal model, and status.
 | Per-deposit cap | Configurable |
 | Status | Deployed on Base mainnet |
 
-**Initial deposit state, one rule for all three vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all three vaults deploy paused, and stage 13 unpauses all three through the Safe and the timelock.
-All three vaults (rmUSDC, rmPROTO, rmRWA) open deposits on day 2
-of the mainnet launch. All three vaults are deployed paused (rmUSDC pauses
+**Initial deposit state, one rule for all four vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all four vaults deploy paused, and stage 13 unpauses all four through the Safe and the timelock.
+All four vaults (rmUSDC, rmPROTO, rmRWA, rmHARD) open deposits on day 2
+of the mainnet launch. All four vaults are deployed paused (rmUSDC pauses
 right after its seed deposit) and are unpaused only by Safe → Timelock
 governance, one timelock operation per vault, executed after the timelock
-delay (stage 13: three unpause rows, core #1710).
+delay (stage 13: four unpause rows, core #1710, core 2008).
 The timelock's proposer and canceller is the Safe (2-of-3), any address may
 execute a ready operation after the delay, and the delay floor on Base is
 48 hours (core #1521: `DeployTimelock` opens `EXECUTOR_ROLE` to
 `address(0)` and the stage 12 verifier checks it). All products are
-eligible for Portfolio Router allocation — three initially (rmAGENT is retired, ADR-0017), extensible to
+eligible for Portfolio Router allocation — four initially (rmAGENT is retired, ADR-0017; rmHARD fills its slot, ADR-0018), extensible to
 more — weighted by recommendation, once each passes its readiness review.
 The router default weights at
-launch are rmUSDC 9500, rmPROTO 500, rmRWA 0 bps; later changes
+launch are rmUSDC 9500, rmPROTO 500, rmRWA 0, rmHARD 0 bps; later changes
 come only from the Safe applying an Investment Committee consensus receipt
 through the weight setter (`RouterGovernance.applyReceipt`, through the
 timelock, core #1698). There is no voting. The
@@ -582,7 +582,7 @@ Router allocation.
 
 ### 11.3 Agent Token Vault (retired)
 
-**Retired (ADR-0017, core 1912).** rmAGENT is retired and the Portfolio Router routes across three vaults: rmUSDC, rmPROTO and rmRWA. A new deployment has no rmAGENT. The live v0.5.0 rmAGENT is retired through the Safe and the timelock and is withdraw-only (ADR-0009): deposits are closed, `redeem` and `redeemInKind` stay open, and nothing migrates holder funds. The table below describes the vault as it was specified. The consensus receipt keeps its `agent_tokens` bucket, which now maps to no vault and carries 0 bps.
+**Retired (ADR-0017, core 1912).** rmAGENT is retired. A new deployment has no rmAGENT. Its router slot is filled by the Hard Assets vault (§11.5, ADR-0018), so the Portfolio Router routes across four vaults: rmUSDC, rmPROTO, rmRWA and rmHARD. The live v0.5.0 rmAGENT is retired through the Safe and the timelock and is withdraw-only (ADR-0009): deposits are closed, `redeem` and `redeemInKind` stay open, and nothing migrates holder funds. The table below describes the vault as it was specified. The consensus receipt keeps its `agent_tokens` bucket, which now maps to rmHARD (ADR-0018).
 
 | Property | Value |
 | --- | --- |
@@ -665,6 +665,54 @@ limit, and a redemption that cannot clear within that limit does not
 proceed. The Portfolio Router may allocate to this product once it passes
 the standard readiness review — its holdings can be priced and it can be
 exited within its stated limits.
+
+### 11.5 Hard Assets Vault
+
+| Property | Value |
+| --- | --- |
+| Name | Robot Money Hard Assets |
+| Receipt token | rmHARD |
+| Accepted asset | USDC (Base, 6 decimals) |
+| Risk label | VOLATILE |
+| Underlying asset | PAXG (Paxos Gold, 18 decimals): each token is one fine troy ounce of London Good Delivery gold held by Paxos. Base address `0xe904AEA5E1b110c9174728fA2efFc8aeD19E98Ef` (docs.paxos.com) |
+| Oracle | None: a plain basket row priced from the 1798-second TWAP of PAXG's Aero (Aerodrome Slipstream) CL USDC pool (tick spacing 10) |
+| Entry / exit | Swaps in PAXG's Aero CL USDC pool only, through the `AerodromeSwapAdapter`; Paxos primary redemption is never used by this vault |
+| Default router weight | 0 bps at launch |
+| Status | Router-eligible after readiness review (see below) |
+
+The Hard Assets vault is the fourth router vault. It fills the router slot
+of the retired Agent Token vault (§11.3, ADR-0017); it is a new vault, and
+the retired rmAGENT stays withdraw-only. At launch it holds one asset,
+PAXG. More hard assets may be added later through the Safe and the
+timelock, as for the other baskets. The owner chose gold on 2026-11-07 and
+PAXG on 2026-11-10, because XAUT (Tether Gold) is not deployed on Base
+(ADR-0018).
+
+The vault has no oracle. PAXG is a plain basket row priced from the TWAP
+of its Aero CL USDC pool, the same way rmPROTO and rmRWA price their
+assets. Its window is 1798 seconds rather than the default 1800: that is
+the longest window the pool's existing observation history (900 slots)
+covers, so the vault works with the pool exactly as it is and never
+changes the pool's state (ADR-0018). PAXG has no Uniswap USDC pool with depth on Base, so
+this vault trades on Aero. It follows the same rules as the other vaults:
+deployed paused, unpaused in stage 13 through the Safe and the timelock,
+the same caps, slippage bound, NAV deviation guard, pool liquidity floor
+and emergency levers.
+
+**Issuer freeze-control risk disclosure:** PAXG is subject to Paxos
+issuer controls. Paxos may freeze or wipe the PAXG held at any address,
+or pause all PAXG transfers, at any time, which would block vault entry
+and exit independently of pool liquidity. This risk is disclosed to
+depositors in the dapp vault detail page and is a known, accepted product
+risk for this vault category.
+
+Holders redeem their shares for current value in a single transaction;
+proceeds reflect the realized value at redemption, bounded by a slippage
+limit, and a redemption that cannot clear within that limit does not
+proceed. The Investment Committee receipt's `agent_tokens` bucket (a
+legacy name, schema 1.0) maps to this vault, so `RouterGovernance.applyReceipt`
+can give it weight. The Portfolio Router may allocate to this product once
+it passes the standard readiness review.
 
 ## 12. Security invariants
 

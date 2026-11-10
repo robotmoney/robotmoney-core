@@ -12,6 +12,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 
 import { ConsensusReceiptPanel } from "../../src/components/ConsensusReceiptPanel";
 import {
+  BUCKET_VAULT_SYMBOL,
   computeAppliedState,
   ConsensusReceiptApiClient,
   parseVaultAddressMap,
@@ -417,6 +418,39 @@ describe("ConsensusReceiptPanel", () => {
       "could not be fetched",
     );
     expect(screen.getByTestId(`applied-${RECEIPT_B}`).textContent).toContain("Cannot determine");
+  });
+});
+
+describe("computeAppliedState on a four-vault deployment (ADR-0018): agent_tokens is rmHARD", () => {
+  const RM_HARD = "0x5555555555555555555555555555555555555555";
+  const FOUR = {
+    rmUSDC: VAULTS.rmUSDC,
+    rmPROTO: VAULTS.rmPROTO,
+    rmRWA: VAULTS.rmRWA,
+    rmHARD: RM_HARD,
+  };
+  const ROUTER = [
+    { vault: FOUR.rmUSDC, bps: 6000 },
+    { vault: FOUR.rmPROTO, bps: 1750 },
+    { vault: FOUR.rmRWA, bps: 1000 },
+    { vault: FOUR.rmHARD, bps: 1250 },
+  ];
+
+  it("maps the agent_tokens bucket to rmHARD", () => {
+    expect(BUCKET_VAULT_SYMBOL.agent_tokens).toBe("rmHARD");
+  });
+
+  it("is applied when the rmHARD leg carries the agent_tokens weight", () => {
+    expect(computeAppliedState(PAYLOAD, ROUTER, FOUR)).toBe("applied");
+  });
+
+  it("is not applied when the rmHARD leg differs from the agent_tokens weight", () => {
+    const drifted = ROUTER.map((w) => (w.vault === RM_HARD ? { ...w, bps: 0 } : w));
+    expect(computeAppliedState(PAYLOAD, drifted, FOUR)).toBe("not_applied");
+  });
+
+  it("parses rmHARD from the deployment map and keeps it", () => {
+    expect(parseVaultAddressMap(JSON.stringify(FOUR))).toEqual(FOUR);
   });
 });
 

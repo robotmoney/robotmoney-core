@@ -1,6 +1,6 @@
 # ADR-0017: rmAGENT is retired and the router routes across three vaults (rmUSDC, rmPROTO, rmRWA)
 
-- **Status:** Accepted
+- **Status:** Accepted, superseded in part by [ADR-0018](ADR-0018-hard-assets-vault-fourth-router-vault.md) (2026-11-10): decision 1 (exactly three vaults) and the Receipts section (`agent_tokens` maps to no vault). rmHARD is the fourth router vault and `agent_tokens` maps to it. Decisions 2 to 8 and the retired-vault note stand: rmAGENT stays withdraw-only.
 - **Date:** 2026-10-22
 - **Deciders:** Product owner
 - **Supersedes in part:** [ADR-0001](ADR-0001-mvp-agent-token-shortlist.md) (the four-vault launch scope), [ADR-0015](ADR-0015-rm-parked-from-rmagent-until-market-depth.md) (decisions 2 to 4) and [ADR-0016](ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md) (in full)

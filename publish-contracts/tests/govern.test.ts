@@ -23,20 +23,20 @@ import { A, CANCELLER_ROLE_ID, PROPOSER_ROLE_ID, addr, fakeTimelock, sender, set
 import { UNWIND_GUARD_ROW, VAULT_UNWIND_GUARD_ABI, buildUnwindGuardCalls, parseUnwindGuardArgs, unwindGuardRecordKey, type UnwindGuardArgs } from "../src/unwind-guard.ts";
 
 const ALL = {
-  ELIGIBLE_VAULTS: "PROTO,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,RWA",
-  ROUTER_WEIGHTS: "USDC:5000,PROTO:3500,RWA:1500",
+  ELIGIBLE_VAULTS: "PROTO,RWA,HARD", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,RWA,HARD",
+  ROUTER_WEIGHTS: "USDC:5000,PROTO:3500,RWA:1500,HARD:0",
 };
 const DELAY = 172800n;
 const authorizeAgentSelector = toFunctionSelector("authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))");
 /** The rmUSDC unpause row (the stage table names it, issue 1705). */
 const UNPAUSE_USDC_ROW = "unpause-USDC" as const;
-const BASKETS = ["PROTO", "RWA"] as const;
+const BASKETS = ["PROTO", "RWA", "HARD"] as const;
 const VAULTS = ["USDC", ...BASKETS] as const;
 
-describe("the govern rows: the three vault unpauses plus the Twin-only demonstrations", () => {
-  test("governRowNames() is exactly the three unpauses (rmUSDC first) then update-delay, batch, cancel", () => {
-    expect([...governRowNames()]).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA", "update-delay", "batch", "cancel"]);
-    expect([...UNPAUSE_ROWS]).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA"]);
+describe("the govern rows: the four vault unpauses plus the Twin-only demonstrations", () => {
+  test("governRowNames() is exactly the four unpauses (rmUSDC first) then update-delay, batch, cancel", () => {
+    expect([...governRowNames()]).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA", "unpause-HARD", "update-delay", "batch", "cancel"]);
+    expect([...UNPAUSE_ROWS]).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA", "unpause-HARD"]);
     expect([...TWIN_ONLY_ROWS]).toEqual(["update-delay", "batch", "cancel"]);
   });
   test("there is no agents row and the planner never encodes authorizeAgent (core 1527)", () => {
@@ -50,25 +50,26 @@ describe("the govern rows: the three vault unpauses plus the Twin-only demonstra
     expect([...stageRows(8453)]).toEqual([...UNPAUSE_ROWS]);
     expect([...stageRows(918453)]).toEqual([...GOVERN_ROWS]);
   });
-  test("an unknown or out-of-range row is a usage error, and the numbers are the six rows", () => {
-    for (const bad of ["0", "7", "13", "nope", "-1", "voting-power-quorum", "agents", "other-setters", "router-weights", "migrate-eligibility-PROTO"]) expect(() => resolveGovernRow(bad)).toThrow(PublishError);
+  test("an unknown or out-of-range row is a usage error, and the numbers are the seven rows", () => {
+    for (const bad of ["0", "8", "13", "nope", "-1", "voting-power-quorum", "agents", "other-setters", "router-weights", "migrate-eligibility-PROTO"]) expect(() => resolveGovernRow(bad)).toThrow(PublishError);
     expect(resolveGovernRow("1")).toBe("unpause-USDC");
     expect(resolveGovernRow("2")).toBe("unpause-PROTO");
-    expect(resolveGovernRow("6")).toBe("cancel");
+    expect(resolveGovernRow("4")).toBe("unpause-HARD");
+    expect(resolveGovernRow("7")).toBe("cancel");
     expect(resolveGovernRow("update-delay")).toBe("update-delay");
   });
 });
 
-describe("the committed Twin stage sheet plans the three vault unpauses (core 1710)", () => {
+describe("the committed Twin stage sheet plans the four vault unpauses (core 1710)", () => {
   const twinSheet = parseSheet(readFileSync(join(REPO, "deployments", "twin-918453", "stage-sheet.env"), "utf8"));
-  test("GOVERN_UNPAUSE_VAULTS is USDC,PROTO,RWA: a rehearsal differs from production only in arguments", () => {
-    expect(twinSheet.govern.unpauseVaults).toEqual(["USDC", "PROTO", "RWA"]);
+  test("GOVERN_UNPAUSE_VAULTS is USDC,PROTO,RWA,HARD: a rehearsal differs from production only in arguments", () => {
+    expect(twinSheet.govern.unpauseVaults).toEqual(["USDC", "PROTO", "RWA", "HARD"]);
   });
   test("each unpause row builds exactly one unpauseDeposits call from that sheet", () => {
     const { ctx } = setup();
     const a = loadGovernAddrs(ctx);
     const calls = UNPAUSE_ROWS.map((r) => buildStepCalls(twinSheet, a, r).length);
-    expect(calls).toEqual([1, 1, 1]);
+    expect(calls).toEqual([1, 1, 1, 1]);
   });
 });
 
@@ -118,15 +119,15 @@ describe("8453: every unpause is scheduled in one sitting, one GOVERN_PENDING, o
     expect(e.kind).toBe("GOVERN_PENDING");
     expect(e.exitCode).toBe(15);
     expect(warps).toBe(0);
-    // all three scheduled in this one run, in order, none executed
-    expect(tl.s.events).toEqual(["schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-RWA"]);
+    // all four scheduled in this one run, in order, none executed
+    expect(tl.s.events).toEqual(["schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-RWA", "schedule:unpause-HARD"]);
     // distinct timelock operation ids
     const ids = UNPAUSE_ROWS.map((r) => tl.s.ids.get(r)!);
-    expect(new Set(ids).size).toBe(3);
+    expect(new Set(ids).size).toBe(4);
     // no Safe transaction is shared by two operations: one transaction per operation, all hashes different
     const hashes = ids.flatMap((id) => tl.s.safeTxs.get(id)!);
-    expect(hashes.length).toBe(3);
-    expect(new Set(hashes).size).toBe(3);
+    expect(hashes.length).toBe(4);
+    expect(new Set(hashes).size).toBe(4);
     // each is a single-call unpause of its own vault
     for (const k of VAULTS) {
       const sc = tl.s.scheduled.get(`unpause-${k}`)!;
@@ -158,8 +159,8 @@ describe("8453: every unpause is scheduled in one sitting, one GOVERN_PENDING, o
     const res = await run(ctx, manifest, sheet, tl, { warp: noWarp, emit: (l: string) => out.push(l) });
     expect(res.rows).toEqual([...UNPAUSE_ROWS]);
     expect(tl.s.events).toEqual([
-      "schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-RWA",
-      "execute:unpause-USDC", "execute:unpause-PROTO", "execute:unpause-RWA",
+      "schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-RWA", "schedule:unpause-HARD",
+      "execute:unpause-USDC", "execute:unpause-PROTO", "execute:unpause-RWA", "execute:unpause-HARD",
     ]);
     expect([...new Set(paused)].sort()).toEqual(VAULTS.map((k) => A.vaults[k]).sort());
     for (const k of VAULTS) expect((manifest.govern as any)[`unpause-${k}`].executed.tx_hash).toBeDefined();
@@ -179,7 +180,7 @@ describe("8453: every unpause is scheduled in one sitting, one GOVERN_PENDING, o
     await expect(run(ctx, manifest, sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
     tl.s.clock += DELAY - 7200n;
     await expect(run(ctx, manifest, sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING", details: { remaining: 7200 } });
-    expect(tl.s.events.length).toBe(3);
+    expect(tl.s.events.length).toBe(4);
   });
 
   test("a huge --max-wait still does not block for the delay on 8453", async () => {
@@ -205,7 +206,7 @@ describe("8453: every unpause is scheduled in one sitting, one GOVERN_PENDING, o
   });
 
   test("the Twin-only rows are refused with USAGE on 8453, by name and by number, and nothing is sent", async () => {
-    for (const row of [...TWIN_ONLY_ROWS, "4", "5", "6"]) {
+    for (const row of [...TWIN_ONLY_ROWS, "5", "6", "7"]) {
       const { ctx, sheet } = setup(ALL, 8453);
       const tl = fakeTimelock(sheet, DELAY);
       const err = await run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row }).then(() => { throw new Error("expected a rejection"); }, (e) => e as PublishError);
@@ -243,7 +244,7 @@ describe("a dependent operation carries its predecessor and runs in the same res
     expect(tl.s.ids.get("unpause-RWA")).not.toBe(tl.s.ids.get("unpause-USDC"));
     tl.s.clock += DELAY;
     await run(ctx, manifest, sheet, tl, { dependsOn });
-    expect(tl.s.events.slice(3)).toEqual(["execute:unpause-USDC", "execute:unpause-PROTO", "execute:unpause-RWA"]);
+    expect(tl.s.events.slice(4)).toEqual(["execute:unpause-USDC", "execute:unpause-PROTO", "execute:unpause-RWA", "execute:unpause-HARD"]);
     expect(manifest.stages.govern!.status).toBe("done");
   });
 
@@ -257,7 +258,7 @@ describe("a dependent operation carries its predecessor and runs in the same res
     const m = newManifest(ctx, addr(0xa001));
     await run(ctx, m, sheet, tl, { dependsOn, warp: async (s: bigint) => { warped.push(s); tl.s.clock += s; } });
     expect(warped[0]).toBe(DELAY + 1n);
-    expect(tl.s.events.slice(0, 7)).toEqual(["schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-RWA", "execute:unpause-USDC", "execute:unpause-PROTO", "execute:unpause-RWA", "updateDelay.schedule:update-delay"]);
+    expect(tl.s.events.slice(0, 9)).toEqual(["schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-RWA", "schedule:unpause-HARD", "execute:unpause-USDC", "execute:unpause-PROTO", "execute:unpause-RWA", "execute:unpause-HARD", "updateDelay.schedule:update-delay"]);
   });
 
   test("a predecessor that does not come first is a usage error", async () => {
@@ -293,8 +294,8 @@ describe("a Twin fork: one sitting, ONE warp, then the Twin-only rows one round 
     const res = await run(ctx, manifest, sheet, tl, { warp: async (s: bigint) => { warped.push(s); tl.s.events.push("warp"); tl.s.clock += s; }, emit: (l: string) => out.push(l) });
     expect(res.rows as string[]).toEqual([...GOVERN_ROWS]);
     expect(tl.s.events).toEqual([
-      "schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-RWA", "warp",
-      "execute:unpause-USDC", "execute:unpause-PROTO", "execute:unpause-RWA",
+      "schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-RWA", "schedule:unpause-HARD", "warp",
+      "execute:unpause-USDC", "execute:unpause-PROTO", "execute:unpause-RWA", "execute:unpause-HARD",
       "updateDelay.schedule:update-delay", "warp", "updateDelay.execute:update-delay",
       "scheduleBatch:batch", "warp", "executeBatch:batch",
       "schedule:cancel", "cancel:cancel",
@@ -321,7 +322,7 @@ describe("a Twin fork: one sitting, ONE warp, then the Twin-only rows one round 
     const tl = fakeTimelock(sheet, DELAY);
     const manifest = newManifest(ctx, addr(0xa001));
     const res = await run(ctx, manifest, sheet, tl, { warp: warpTo(tl) });
-    expect(res.skipped).toEqual(["unpause-RWA"]);
+    expect(res.skipped).toEqual(["unpause-RWA", "unpause-HARD"]);
     expect((manifest.govern as any)["unpause-RWA"].skipped.reason).toContain("stays paused");
     expect(tl.s.events.some((e) => e.endsWith(":unpause-RWA"))).toBe(false);
     expect(manifest.stages.govern!.status).toBe("done");
@@ -710,7 +711,7 @@ describe("issue 1667: the on-demand unpause-USDC row and round-numbered salts", 
     expect(tl.s.paused.has(A.vaults.USDC)).toBe(true);
     const manifest = newManifest(ctx, addr(0xa001));
     await expect(R(ctx, manifest, sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    expect(tl.s.events).toEqual(["schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-RWA"]);
+    expect(tl.s.events).toEqual(["schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-RWA", "schedule:unpause-HARD"]);
     expect(Object.keys(manifest.govern!)).toContain(UNPAUSE_USDC_ROW);
   });
   test("--row unpause-USDC on 8453 after pause-all: schedules, exits GOVERN_PENDING, the resume executes and rmUSDC reads open", async () => {
@@ -749,7 +750,7 @@ describe("issue 1667: the on-demand unpause-USDC row and round-numbered salts", 
 
   test("salts are round numbered: every round of every unpause row is its own salt", () => {
     const labels = [...UNPAUSE_ROWS].flatMap((r) => [1, 2, 3].map((n) => governSalt(SHA, 8453, roundKey(r, n))));
-    expect(new Set(labels).size).toBe(9);
+    expect(new Set(labels).size).toBe(12);
   });
   test("after an executed unpause, a re-pause and a second govern of the same row yields a different operation id and executes", async () => {
     const { ctx, sheet, tl, manifest } = await launched();
@@ -868,7 +869,7 @@ describe("issue 1686: govern refuses to execute an unpause scheduled before a pa
     tl.s.clock += DELAY;
     const res = await R(ctx, manifest, sheet, tl);
     expect(res.rows).toEqual([...UNPAUSE_ROWS]);
-    expect(executes(tl)).toHaveLength(3);
+    expect(executes(tl)).toHaveLength(4);
   });
 
   test("a pause-all OLDER than the schedule does not block: the round scheduled after it executes", async () => {
@@ -1075,8 +1076,8 @@ describe("issue 1688: the unpause ordering cannot be bypassed by a legacy record
     const seenAtSend: (number | undefined)[] = [];
     (tl.api as any).scheduleOnTimelock = async (...a: any[]) => { seenAtSend.push(loadRunManifest(d.ctx.evidenceDir)?.seqHigh); return (orig as any)(...a); };
     await expect(R(d.ctx, manifest, d.sheet, tl)).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    expect(seenAtSend).toEqual([1, 2, 3]);
-    expect(Object.values(manifest.govern as Record<string, any>).map((r) => r.scheduled.seq)).toEqual([1, 2, 3]);
+    expect(seenAtSend).toEqual([1, 2, 3, 4]);
+    expect(Object.values(manifest.govern as Record<string, any>).map((r) => r.scheduled.seq)).toEqual([1, 2, 3, 4]);
   });
 
   test("a pause-all that lands between the schedule send and the first save orders AFTER the schedule, so the unpause is refused", async () => {
@@ -1125,13 +1126,13 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
   const RID = `0x${"ab".repeat(32)}` as `0x${string}`;
   const noWarp = async () => { throw new Error("no anvil_ or evm_ method on 8453"); };
   const payloadDoc = (weights: { bucket: string; weight_bps: number }[]) => JSON.stringify({ schema_version: "1.0", weights });
-  /** Registry order USDC, PROTO, RWA: the eligible set is all three (the Twin shape). The agent_tokens bucket stays in the receipt schema at 0 bps (ADR-0017). */
+  /** Registry order USDC, PROTO, RWA, HARD: the eligible set is all four (the Twin shape). The agent_tokens bucket maps to rmHARD (ADR-0018). */
   const GOOD = [
     { bucket: "agent_tokens", weight_bps: 0 }, { bucket: "conservative_defi_yield", weight_bps: 5000 },
     { bucket: "protocol_tokens", weight_bps: 3000 }, { bucket: "real_world_assets", weight_bps: 2000 },
   ];
-  const WANT_VAULTS = [A.vaults.USDC, A.vaults.PROTO, A.vaults.RWA];
-  const WANT_BPS = [5000n, 3000n, 2000n];
+  const WANT_VAULTS = [A.vaults.USDC, A.vaults.PROTO, A.vaults.RWA, A.vaults.HARD];
+  const WANT_BPS = [5000n, 3000n, 2000n, 0n];
   function world(chainId = 918453, docWeights = GOOD) {
     const d = setup(ALL, chainId);
     const tl = fakeTimelock(d.sheet, DELAY);
@@ -1140,7 +1141,7 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     const text = payloadDoc(docWeights);
     writeFileSync(file, text);
     tl.s.digests.set(RID, receiptPayloadDigest(toBytes(text)));
-    tl.s.weights = { vaults: [A.vaults.USDC, A.vaults.PROTO, A.vaults.RWA], bps: [6000n, 2500n, 1500n] };
+    tl.s.weights = { vaults: [A.vaults.USDC, A.vaults.PROTO, A.vaults.RWA, A.vaults.HARD], bps: [6000n, 2500n, 1500n, 0n] };
     const manifest = newManifest(d.ctx, addr(0xa001));
     const apply = (extra: object = {}) => runGovern(d.ctx, stageByName("govern"), manifest, opts(d.sheet, tl, { row: APPLY_ROW, receiptId: RID, payload: file, ...extra }));
     return { ...d, tl, file, manifest, apply };
@@ -1169,7 +1170,7 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     // the one call released the receipt and set the router's active vector; the default vector is untouched
     expect(w.tl.s.released.has(RID)).toBe(true);
     expect(w.tl.s.voted).toEqual({ vaults: WANT_VAULTS, bps: WANT_BPS });
-    expect(w.tl.s.weights).toEqual({ vaults: WANT_VAULTS, bps: [6000n, 2500n, 1500n] });
+    expect(w.tl.s.weights).toEqual({ vaults: WANT_VAULTS, bps: [6000n, 2500n, 1500n, 0n] });
     // the schedule is signed by owners and sent as ONE Safe transaction, and the lines carry the row
     expect(w.tl.s.safeTxs.get(w.tl.s.ids.get("apply-receipt")!)!.length).toBe(2);
     const lines = out.map((l) => JSON.parse(l));
@@ -1178,7 +1179,7 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     // the evidence entry (receipt_applications) carries both Safe transactions, the vector and block times one delay apart
     const entries = (w.manifest as { receipt_applications?: any[] }).receipt_applications!;
     expect(entries.length).toBe(1);
-    expect(entries[0]).toMatchObject({ step: "apply-receipt", receipt_id: RID, target: A.governance, governance: A.governance, vaults: WANT_VAULTS, bps: [5000, 3000, 2000], voted_weights_active: true, effective_vaults: WANT_VAULTS, effective_bps: [5000, 3000, 2000], schedule_status: 1, execute_status: 1 });
+    expect(entries[0]).toMatchObject({ step: "apply-receipt", receipt_id: RID, target: A.governance, governance: A.governance, vaults: WANT_VAULTS, bps: [5000, 3000, 2000, 0], voted_weights_active: true, effective_vaults: WANT_VAULTS, effective_bps: [5000, 3000, 2000, 0], schedule_status: 1, execute_status: 1 });
     expect(entries[0].execute_block_timestamp - entries[0].schedule_block_timestamp).toBeGreaterThanOrEqual(Number(DELAY));
     expect(entries[0].schedule_tx).not.toBe(entries[0].execute_tx);
     // never in the matrix
@@ -1193,11 +1194,11 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     expect(ok.tl.s.voted).toEqual({ vaults: WANT_VAULTS, bps: WANT_BPS });
     // the router reads another active vector after the call executed
     const wrongWeights = world();
-    wrongWeights.tl.s.reads.getWeights = [WANT_VAULTS, [6000n, 2500n, 1500n]];
+    wrongWeights.tl.s.reads.getWeights = [WANT_VAULTS, [6000n, 2500n, 1500n, 0n]];
     await expect(wrongWeights.apply({ warp: warpTo(wrongWeights.tl) })).rejects.toMatchObject({ kind: "GOVERN", exitCode: EXIT_CODES.GOVERN });
     // the router reads the vault list in another order
     const wrongOrder = world();
-    wrongOrder.tl.s.reads.getWeights = [[A.vaults.PROTO, A.vaults.USDC, A.vaults.RWA], WANT_BPS];
+    wrongOrder.tl.s.reads.getWeights = [[A.vaults.PROTO, A.vaults.USDC, A.vaults.RWA, A.vaults.HARD], WANT_BPS];
     await expect(wrongOrder.apply({ warp: warpTo(wrongOrder.tl) })).rejects.toMatchObject({ kind: "GOVERN" });
     // the receipt reads not released after the batch executed
     const notReleased = world();
@@ -1233,8 +1234,6 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
   test("apply-receipt refuses a sum other than 10000, a wrong vault set and a wrong order with USAGE and sends nothing", async () => {
     // sums to 10001 and to 9999
     for (const delta of [1, -1]) await refused(world(918453, GOOD.map((g) => (g.bucket === "protocol_tokens" ? { ...g, weight_bps: g.weight_bps + delta } : g))), "sum to");
-    // the retired agent_tokens bucket carries weight: its vault (rmAGENT) is retired and the router never routes into it
-    await refused(world(918453, [{ bucket: "agent_tokens", weight_bps: 500 }, { bucket: "conservative_defi_yield", weight_bps: 4500 }, { bucket: "protocol_tokens", weight_bps: 3000 }, { bucket: "real_world_assets", weight_bps: 2000 }]), "is retired");
     // an eligible vault (rmRWA) missing from the payload
     await refused(world(918453, [{ bucket: "conservative_defi_yield", weight_bps: 5000 }, { bucket: "protocol_tokens", weight_bps: 5000 }]), "vault set");
     // an unknown bucket, a bucket twice
@@ -1253,23 +1252,26 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
   });
 
   test("issue 1754: the payload lists the buckets in the receipt's canonical order, the applied vector is in registry order (the order of the signed payload is irrelevant)", async () => {
-    // registry order USDC, PROTO, RWA; the payload lists agent (retired, 0 bps), conservative, protocol, rwa (the real receipt's order)
-    const w = world(918453, [{ bucket: "agent_tokens", weight_bps: 0 }, { bucket: "conservative_defi_yield", weight_bps: 8550 }, { bucket: "protocol_tokens", weight_bps: 1100 }, { bucket: "real_world_assets", weight_bps: 350 }]);
-    w.tl.s.weights = { vaults: [A.vaults.USDC, A.vaults.PROTO, A.vaults.RWA], bps: [6000n, 2500n, 1500n] };
+    // registry order USDC, PROTO, RWA, HARD; the payload lists agent (rmHARD), conservative, protocol, rwa (the real receipt's order)
+    const w = world(918453, [{ bucket: "agent_tokens", weight_bps: 200 }, { bucket: "conservative_defi_yield", weight_bps: 8350 }, { bucket: "protocol_tokens", weight_bps: 1100 }, { bucket: "real_world_assets", weight_bps: 350 }]);
+    w.tl.s.weights = { vaults: [A.vaults.USDC, A.vaults.PROTO, A.vaults.RWA, A.vaults.HARD], bps: [6000n, 2500n, 1500n, 0n] };
     await w.apply({ warp: warpTo(w.tl) });
     const sc = w.tl.s.scheduled.get("apply-receipt")!;
     const d = decodeFunctionData({ abi: GOVERNANCE_APPLY_ABI, data: sc.calls[0]!.data as `0x${string}` });
-    expect([d.args[2], d.args[3]]).toEqual([[A.vaults.USDC, A.vaults.PROTO, A.vaults.RWA], [8550n, 1100n, 350n]]);
+    expect([d.args[2], d.args[3]]).toEqual([[A.vaults.USDC, A.vaults.PROTO, A.vaults.RWA, A.vaults.HARD], [8350n, 1100n, 350n, 200n]]);
   });
 
-  test("ADR-0017: a payload that gives the retired agent_tokens bucket weight is refused before anything is scheduled", async () => {
+  test("ADR-0018: the agent_tokens bucket maps to rmHARD, so a payload that gives it weight is applied with that weight on the rmHARD leg", async () => {
     const w = world(918453, [{ bucket: "agent_tokens", weight_bps: 575 }, { bucket: "conservative_defi_yield", weight_bps: 8550 }, { bucket: "protocol_tokens", weight_bps: 525 }, { bucket: "real_world_assets", weight_bps: 350 }]);
-    await expect(w.apply({ warp: warpTo(w.tl) })).rejects.toMatchObject({ kind: "USAGE" });
-    expect(w.tl.s.scheduled.has("apply-receipt")).toBe(false);
+    await w.apply({ warp: warpTo(w.tl) });
+    const sc = w.tl.s.scheduled.get("apply-receipt")!;
+    const d = decodeFunctionData({ abi: GOVERNANCE_APPLY_ABI, data: sc.calls[0]!.data as `0x${string}` });
+    expect([d.args[2], d.args[3]]).toEqual([[A.vaults.USDC, A.vaults.PROTO, A.vaults.RWA, A.vaults.HARD], [8550n, 525n, 350n, 575n]]);
+    expect(w.tl.s.voted).toEqual({ vaults: [A.vaults.USDC, A.vaults.PROTO, A.vaults.RWA, A.vaults.HARD], bps: [8550n, 525n, 350n, 575n] });
   });
 
-  test("apply-receipt is not in stage 13: stageRows(8453) is the three unpauses and GOVERN_ROWS has no apply-receipt", () => {
-    expect([...stageRows(8453)]).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA"]);
+  test("apply-receipt is not in stage 13: stageRows(8453) is the four unpauses and GOVERN_ROWS has no apply-receipt", () => {
+    expect([...stageRows(8453)]).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA", "unpause-HARD"]);
     expect([...stageRows(8453)]).toEqual([...UNPAUSE_ROWS]);
     expect(GOVERN_ROWS as readonly string[]).not.toContain(APPLY_ROW);
     expect([...stageRows(918453)]).not.toContain(APPLY_ROW as never);
@@ -1277,10 +1279,10 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
   });
 
   test("apply-receipt on 8453 only when named: no default run, stage run or numbered --row reaches it", async () => {
-    // a default run on 8453 schedules the three unpauses and nothing else
+    // a default run on 8453 schedules the four unpauses and nothing else
     const w = world(8453);
     await expect(runGovern(w.ctx, stageByName("govern"), w.manifest, opts(w.sheet, w.tl, { warp: noWarp }))).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    expect(w.tl.s.events).toEqual(["schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-RWA"]);
+    expect(w.tl.s.events).toEqual(["schedule:unpause-USDC", "schedule:unpause-PROTO", "schedule:unpause-RWA", "schedule:unpause-HARD"]);
     expect(w.tl.s.released.has(RID)).toBe(false);
     expect(Object.keys(w.manifest.govern!)).not.toContain(applyRecordKey(RID));
     // no numbered row is the apply row, and the bare name needs its receipt id and payload

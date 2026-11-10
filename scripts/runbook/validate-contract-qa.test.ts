@@ -272,7 +272,7 @@ test("a step that clears the router's voted vector fails, by govern row or by a 
     maxMinutes: 60
     added: "v0.6.0"
 `;
-  const p = problemsWith("releases/v0.6.0.yaml", (t) => t.replace('  - id: "P8.15-v050-retire-vault"', `${clear}  - id: "P8.15-v050-retire-vault"`));
+  const p = problemsWith("releases/v0.6.0.yaml", (t) => unpinned(t).replace('  - id: "P8.15-v050-retire-vault"', `${clear}  - id: "P8.15-v050-retire-vault"`));
   expect(p.filter((x) => x.includes("never clears the router's voted vector"))).toEqual(["releases/v0.6.0.yaml P8.14-v050-clear-voted-weights: the runbook never clears the router's voted vector (govern --row clear-voted-weights, owner decision, issue 1980)"]);
   // the pinned records keep their history: v0.4.0 and v0.5.0 still validate, and the rule is not run on them
   expect(validateAll(ROOT, model).problems).toEqual([]);
@@ -315,14 +315,14 @@ test("the v0.6.0 upgrade build step's gate names the gate of every step that rea
 test("an upgrade build gate that misses a reader, lists a stray path, or a reader with no gate is refused", () => {
   const v = "releases/v0.6.0.yaml";
   const gate = 'gateAbsent: ["{runDir}/state/done-gateway-upgrade", "{runDir}/state/done-receipt-upgrade"]';
-  const missing = problemsWith(v, (t) => t.replace(gate, 'gateAbsent: ["{runDir}/state/done-gateway-upgrade"]')).join("\n");
+  const missing = problemsWith(v, (t) => unpinned(t).replace(gate, 'gateAbsent: ["{runDir}/state/done-gateway-upgrade"]')).join("\n");
   expect(missing).toContain("P8.08-v060-upgrade-build: its gateAbsent does not list {runDir}/state/done-receipt-upgrade, the gate of P8.12-v050-deploy-receipt-impl");
   expect(missing).toContain("the gate of P8.13-v050-upgrade-receipt");
-  const stray = problemsWith(v, (t) => t.replace(gate, 'gateAbsent: ["{runDir}/state/done-gateway-upgrade", "{runDir}/state/done-receipt-upgrade", "{runDir}/state/done-retire-vault"]')).join("\n");
+  const stray = problemsWith(v, (t) => unpinned(t).replace(gate, 'gateAbsent: ["{runDir}/state/done-gateway-upgrade", "{runDir}/state/done-receipt-upgrade", "{runDir}/state/done-retire-vault"]')).join("\n");
   expect(stray).toContain("lists {runDir}/state/done-retire-vault, which gates no step that reads {runDir}/v060");
-  const ungated = problemsWith(v, (t) => t.replace(stepBlock(t, "P8.11-v050-upgrade-gateway"), stepBlock(t, "P8.11-v050-upgrade-gateway").replace('    gateAbsent: "{runDir}/state/done-gateway-upgrade"\n', ""))).join("\n");
+  const ungated = problemsWith(v, (t) => unpinned(t).replace(stepBlock(t, "P8.11-v050-upgrade-gateway"), stepBlock(t, "P8.11-v050-upgrade-gateway").replace('    gateAbsent: "{runDir}/state/done-gateway-upgrade"\n', ""))).join("\n");
   expect(ungated).toContain("P8.11-v050-upgrade-gateway: it reads {runDir}/v060 but has no gateAbsent");
-  const unbuilt = problemsWith(v, (t) => t.replace(stepBlock(t, "P8.08-v060-upgrade-build"), "")).join("\n");
+  const unbuilt = problemsWith(v, (t) => unpinned(t).replace(stepBlock(t, "P8.08-v060-upgrade-build"), "")).join("\n");
   expect(unbuilt).toContain("no step makes the --upgrade-build checkout {runDir}/v060");
   const late = upgradeBuildGateProblems([{ id: "P8.10-read", cmds: [["bun", "x", "--upgrade-build", "{runDir}/b"]], gateAbsent: "g" }, { id: "P8.20-make", cmds: [["git", "worktree", "add", "{runDir}/b"]], gateAbsent: "g" }] as never, "t");
   expect(late).toEqual(["t P8.10-read: it reads {runDir}/b before P8.20-make makes it"]);
@@ -522,7 +522,7 @@ test("a flow with no deposit, router deposit or redeem before the apply-receipt 
   // on production the apply step does not run, so nothing is required there
   expect(p).not.toContain("on production");
   // the committed v0.6.0 without its upgrade-flow round before P8.23 is refused
-  const v = problemsWith("releases/v0.6.0.yaml", (t) => ["P8.41-v050-pre-deposit-rmusdc", "P8.42-v050-pre-deposit-rmproto", "P8.43-v050-pre-deposit-rmrwa"].reduce((x, id) => x.replace(stepBlock(x, id), ""), t)).join("\n");
+  const v = problemsWith("releases/v0.6.0.yaml", (t) => ["P8.41-v050-pre-deposit-rmusdc", "P8.42-v050-pre-deposit-rmproto", "P8.43-v050-pre-deposit-rmrwa"].reduce((x, id) => x.replace(stepBlock(x, id), ""), unpinned(t))).join("\n");
   expect(v).toContain("the upgrade flow on rehearsal has no vault-deposit step before P8.23-v050-apply-receipt");
   // and the template without its round before P5.03 is refused
   const tpl = problemsWith("template.yaml", (t) => t.replace(stepBlock(t, "P5.30-pre-router-deposit"), "")).join("\n");
@@ -533,7 +533,7 @@ test("a flow with no deposit, router deposit or redeem after the apply-receipt s
   const p = rebalanceRoundProblems([...ROUND("a"), APPLY] as never, "t").join("\n");
   for (const k of ["vault-deposit", "router-deposit", "redeem"]) expect(p).toContain(`the new flow on twin has no ${k} step after P5.03-apply-receipt`);
   // the committed v0.6.0 with no redeem after P8.23 (the sweep and the paused redeem dropped) is refused
-  const v = problemsWith("releases/v0.6.0.yaml", (t) => t.replace(stepBlock(t, "P8.50-v050-sweep-positions"), "").replace(stepBlock(t, "P8.35-v050-redeem-while-paused"), "")).join("\n");
+  const v = problemsWith("releases/v0.6.0.yaml", (t) => unpinned(t).replace(stepBlock(t, "P8.50-v050-sweep-positions"), "").replace(stepBlock(t, "P8.35-v050-redeem-while-paused"), "")).join("\n");
   expect(v).toContain("the upgrade flow on twin has no redeem step after P8.23-v050-apply-receipt");
   // a step of the other flow, or one that does not run on that target, does not count
   const other = rebalanceRoundProblems([...ROUND("a").map((s) => ({ ...s, flow: "upgrade" })), APPLY, ...ROUND("b")] as never, "t").join("\n");

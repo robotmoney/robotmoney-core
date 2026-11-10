@@ -18,6 +18,7 @@ import {
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
 import {DeployAgentTokenVault} from "../script/DeployAgentTokenVault.s.sol";
 import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
+import {DeployHardAssetsVault} from "../script/DeployHardAssetsVault.s.sol";
 
 /// @notice On chain id 8453, every script's `run()` refuses to start when EXPECTED_CHAIN_ID is
 ///         unset. Nothing else is set: the guard is the first statement of each `run()`, so a
@@ -99,6 +100,12 @@ contract DeployScriptChainGuardsTest is Test {
 
     function test_rwaBasketVault_run_requiresExpectedChainOnBase() public {
         DeployRwaBasketVault s = new DeployRwaBasketVault();
+        vm.expectRevert(bytes(MSG));
+        s.run();
+    }
+
+    function test_hardAssetsVault_run_requiresExpectedChainOnBase() public {
+        DeployHardAssetsVault s = new DeployHardAssetsVault();
         vm.expectRevert(bytes(MSG));
         s.run();
     }

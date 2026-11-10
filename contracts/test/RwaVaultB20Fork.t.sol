@@ -42,7 +42,12 @@ contract RwaVaultB20ForkTest is Test {
     address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
     /// @dev Base mainnet timelock delay (security-model.md §4).
     uint256 internal constant MIN_DELAY = 172_800;
-    uint256 internal constant DEPOSIT = 1_000 * 1e6;
+    /// @dev Sized to the live pools, not to the fixture block. The four B20 Slipstream pools lost most of their in-range
+    ///      liquidity since the fixture block 52284978 (L, fixture -> Base block 55747546: METAc 2.2e14 -> 2.7e11, NVDAc
+    ///      1.7e14 -> 9.7e9, GOOGLc 1.5e14 -> 8.3e10, TSLAc 4.7e13 -> 4.3e10), so a 1,000 USDC deposit (200 USDC per leg)
+    ///      now moves NVDAc past the 1 percent swap floor ("Too little received"). 20 USDC (4 USDC per leg) passes with 5x
+    ///      headroom at that block (100 USDC passes too). Every assertion and bound below is unchanged (core 2008 CI fix).
+    uint256 internal constant DEPOSIT = 20 * 1e6;
     /// @dev Vault slippage bound (100 bps) plus pool fee between spot execution and the TWAP.
     uint256 internal constant TOLERANCE_BPS = 150;
     uint256 internal constant POOL_B20_FUNDING = 1e13;

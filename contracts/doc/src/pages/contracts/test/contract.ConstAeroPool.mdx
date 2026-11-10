@@ -1,0 +1,66 @@
+---
+title: "ConstAeroPool"
+---
+
+# ConstAeroPool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9a5abb78f17cecf801493322557775e4886f59cc/contracts/test/DeployBasketVaultHardAssets.t.sol)
+
+**Inherits:** [ConstPool](/contracts/test/helpers/contract.ConstPool)
+
+<i>
+
+Aero (Aerodrome Slipstream) CL pool double: the `ConstPool` TWAP and liquidity surface, the pool's live fee in pips,
+plus `tickSpacing()` and `factory()`. Every field is an immutable, so the code can be etched at the real pool address.
+
+</i>
+
+## Constants
+
+### _tickSpacing
+
+```solidity
+int24 private immutable _tickSpacing;
+```
+
+### factory
+
+```solidity
+address public immutable factory;
+```
+
+## Functions
+
+<a id="constructor-address-address-uint24-int24-address"></a>
+
+### constructor
+
+```solidity
+constructor(address a, address b, uint24 livePips, int24 tickSpacing_, address factory_)
+        ConstPool(a, b, livePips);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address` |  |
+| b | `address` |  |
+| livePips | `uint24` |  |
+| tickSpacing_ | `int24` |  |
+| factory_ | `address` |  |
+
+<a id="tickspacing"></a>
+
+### tickSpacing
+
+```solidity
+function tickSpacing() external view returns (int24);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int24` |  |
+

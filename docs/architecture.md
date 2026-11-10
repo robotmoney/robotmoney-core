@@ -16,7 +16,7 @@ agents. It is built as **two separate systems** (owner decision,
 2026-10-19):
 
 - **The vaults system** is the treasury product. It holds the Robot Money
-  vaults (rmUSDC, rmPROTO, rmRWA), their adapters and libraries
+  vaults (rmUSDC, rmPROTO, rmRWA, rmHARD), their adapters and libraries
   (every library in `contracts/lib/` except `GatewayWindows`, which is the
   gateway's rolling-window library),
   `VaultRegistry`, `PortfolioRouter`,
@@ -286,7 +286,7 @@ same contracts ship into test, demo, and mainnet — only the registry
 flag's value differs across environments. See
 `docs/development/single-production-codebase.md` for the principle.
 
-rmAGENT is retired and the router routes across three vaults: rmUSDC, rmPROTO and rmRWA ([ADR-0017](adr/ADR-0017-rmagent-retired-router-uses-three-vaults.md), core 1912). A new deployment has no `agent` stage and no `recorder` stage. The live v0.5.0 rmAGENT (`AgentTokenVault`) is retired through the Safe and the timelock by one batch, `registry.migrateEligibility(rmAGENT, false, three legs)` then `registry.retire(rmAGENT)` (`govern --row retire-vault`, runbook 4.14). After it the vault is withdraw-only (ADR-0009): deposits revert, `redeem` and `redeemInKind` stay open, and nothing migrates holder funds. `redeem` reads the V4 price recorder, so a retired vault with holders needs a recorded price, and `redeemInKind` needs no oracle. `AgentTokenVault`, `UniswapV4SwapAdapter`, `UniswapV4PriceRecorder` and `config/agent-token-shortlist.json` stay in the repository as parked code that no stage reads. RM and BNKR are not listed anywhere (ADR-0015 and ADR-0016 are superseded by ADR-0017). `VAULT_AGENT_MIN_POOL_LIQUIDITY` stays 1e15 for any future agent-token vault.
+rmAGENT is retired ([ADR-0017](adr/ADR-0017-rmagent-retired-router-uses-three-vaults.md), core 1912). A new deployment has no `agent` stage and no `recorder` stage. Its router slot is filled by rmHARD (`HardAssetsVault`, PAXG, [ADR-0018](adr/ADR-0018-hard-assets-vault-fourth-router-vault.md), core 2008), so the router routes across four vaults: rmUSDC, rmPROTO, rmRWA and rmHARD. The live v0.5.0 rmAGENT (`AgentTokenVault`) is retired through the Safe and the timelock by one batch, `registry.migrateEligibility(rmAGENT, false, three legs)` then `registry.retire(rmAGENT)` (`govern --row retire-vault`, runbook 4.14). After it the vault is withdraw-only (ADR-0009): deposits revert, `redeem` and `redeemInKind` stay open, and nothing migrates holder funds. `redeem` reads the V4 price recorder, so a retired vault with holders needs a recorded price, and `redeemInKind` needs no oracle. `AgentTokenVault`, `UniswapV4SwapAdapter`, `UniswapV4PriceRecorder` and `config/agent-token-shortlist.json` stay in the repository as parked code that no stage reads. RM and BNKR are not listed anywhere (ADR-0015 and ADR-0016 are superseded by ADR-0017). `VAULT_AGENT_MIN_POOL_LIQUIDITY` stays 1e15 for any future agent-token vault.
 
 The source tree also contains `RwaBasketVault`, the rmRWA vault. rmRWA is
 a plain basket row: it holds deSPXA (Centrifuge / Janus Henderson / Anemoy
@@ -308,15 +308,40 @@ Characteristics:
   `VaultRegistry.isRouterEligible` flag as other basket vaults, flipped by
   ADMIN_ROLE once pool cardinality and the rebalancing model are certified.
 
+The source tree also contains `HardAssetsVault`, the rmHARD vault ("Robot
+Money Hard Assets", PRD §11.5, [ADR-0018](adr/ADR-0018-hard-assets-vault-fourth-router-vault.md),
+core 2008). It is the fourth router vault, in the slot of the retired
+rmAGENT. rmHARD is a plain basket row like rmRWA: it holds PAXG (Paxos Gold,
+18 decimals) priced from the 1800 s TWAP of PAXG's Aero (Aerodrome
+Slipstream) CL USDC pool and traded through the existing
+`AerodromeSwapAdapter`. It has no oracle. Characteristics:
+
+- **Aerodrome venue.** PAXG has no Uniswap USDC pool with depth on Base,
+  so `config/hard-assets.json` lists venue `Aerodrome` with the pool's tick
+  spacing as `poolFee`, plus the Aero CL factory and router. The basket
+  deploy base deploys one `AerodromeSwapAdapter` for it and checks the pool
+  against the factory before `addAsset` (ADR-0005 venue abstraction).
+- **Per-asset TWAP window.** PAXG is read over 1798 s, the longest window the
+  pool's real 900-slot observation ring covers at 2 s blocks. The deploy
+  registers PAXG with `HardAssetsVault.addAssetWithTwapWindow`, which sets the
+  window and vets the pool for it with the unchanged guard. `BasketVault` is
+  unchanged, so every other basket keeps the 1800 s window and its 901-slot
+  floor. Nothing changes the pool's state (ADR-0018).
+- **Issuer freeze-control risk.** Paxos may freeze, wipe or pause PAXG.
+  A freeze of the vault blocks swaps and therefore deposits and withdrawals,
+  as for deSPXA above. The dapp shows a Paxos disclosure on the vault page.
+- **Receipts.** The consensus receipt's `agent_tokens` bucket (a legacy
+  name) maps to rmHARD.
+
 #### ADR-0010 is Rejected
 
 [ADR-0010](adr/ADR-0010-unified-vault-architecture.md) proposed one unified
 `Vault` contract composed with a position-adapter interface. It is
 Rejected. A fifth contract kind breaks the one-deployment-scheme rule, so
 that contract, its interface, its asset adapters and its theme deploy script
-are deleted. Three vaults deploy (ADR-0017); four vault kinds exist in code: `RobotMoneyVault`
+are deleted. Four vaults deploy (ADR-0018); five vault kinds exist in code: `RobotMoneyVault`
 (rmUSDC, lending adapters) and the `BasketVault` family (`ProtocolAssetVault`,
-`AgentTokenVault`, `RwaBasketVault`) that swap through `IBasketSwapAdapter`.
+`AgentTokenVault` (retired, ADR-0017), `RwaBasketVault`, `HardAssetsVault`) that swap through `IBasketSwapAdapter`.
 The registry-eligibility model (`isRouterEligible`), the lifecycle in §4.7
 and the single-production-codebase principle are unchanged.
 
@@ -495,9 +520,9 @@ background implementation details.
 ### 4.5 Protocol Admin Authority
 
 Every protocol contract uses OpenZeppelin `AccessControl` with an
-`ADMIN_ROLE`. A vaults-system deployment has seven of them: the three vaults
+`ADMIN_ROLE`. A vaults-system deployment has eight of them: the four vaults
 (`RobotMoneyVault` for rmUSDC, and the `BasketVault` kinds
-`ProtocolAssetVault` and `RwaBasketVault`) and four
+`ProtocolAssetVault`, `RwaBasketVault` and `HardAssetsVault`, ADR-0018) and four
 singletons, `VaultRegistry`, `PortfolioRouter`, `RouterGovernance` and
 `ConsensusRecommendationReceipt` (§4.8, §4.9). `RobotMoneyGateway` also has an `ADMIN_ROLE`, but it belongs to
 the gateway system. Who governs it is an open question for the gateway's

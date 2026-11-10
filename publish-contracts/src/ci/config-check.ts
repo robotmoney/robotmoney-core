@@ -1,8 +1,10 @@
-// Read-only config-check of core's asset config (config/protocol-assets.json, rwa-assets.json) against the
+// Read-only config-check of core's asset config (config/protocol-assets.json, rwa-assets.json, hard-assets.json) against the
 // live chain. It runs in the plan job before any approval and again right before each vault stage (runner.ts). It sends nothing (the
 // ChainReader surface is read-only). For every configured asset:
-//   token code present, pool code present, pool fee() equals the configured poolFee, observation cardinality at least 901, liquidity above 0,
-//   and the oracle (the pool TWAP that prices the basket vault): observe() covers the TWAP window, the last observation is fresh, and the
+//   token code present, pool code present, pool fee() equals the configured poolFee (an Aerodrome CL pool: tickSpacing() equals it, core 2008),
+//   observation cardinality at least the asset's window floor (window / 2 s + 1: 901 for the 1800 s default, 900 for PAXG's 1798 s,
+//   ADR-0018), liquidity above 0,
+//   and the oracle (the pool TWAP that prices the basket vault): observe() covers the asset's TWAP window, the last observation is fresh, and the
 //   TWAP is within ORACLE_MAX_DEVIATION_PERCENT of the V3 slot0 spot.
 // Missing config is a failure, never a skip.
 import { decodeFunctionResult, encodeFunctionData, parseAbi } from "viem";
@@ -11,11 +13,11 @@ import type { Address, ChainReader, ExpectedAsset, Hex, VerifyReport } from "../
 import { loadConfigAssets } from "../asset-config.ts";
 import { VAULT_KEYS, VAULT_NAME, type VaultKey } from "../sheet.ts";
 
-export const POOL_SELECTORS = { fee: "0xddca3f43", slot0: "0x3850c7bd", liquidity: "0x1a686502", observations: "0x252c09d7" } as const;
+export const POOL_SELECTORS = { fee: "0xddca3f43", slot0: "0x3850c7bd", liquidity: "0x1a686502", observations: "0x252c09d7", tickSpacing: "0xd0c93a7c" } as const;
 /** The addAsset in-range liquidity floor (BasketVault.MIN_POOL_LIQUIDITY). For a V4 pool the unit is the pool's liquidity L, not USDC. */
 export const MIN_POOL_LIQUIDITY = 1_000_000n;
 /** The vault names whose assets the config-check reads. rmUSDC holds no basket assets. */
-export const CONFIG_VAULTS = ["rmPROTO", "rmRWA"] as const;
+export const CONFIG_VAULTS = ["rmPROTO", "rmRWA", "rmHARD"] as const;
 
 /** BasketVault.DEFAULT_TWAP_WINDOW (core contracts/vaults/BasketVault.sol): the window a freshly added asset is priced over. */
 export const ORACLE_TWAP_WINDOW_SECONDS = 1800;
@@ -28,9 +30,9 @@ export const maxDeviationTicks = (percent: number): number => Math.floor(Math.lo
 
 const POOL_ABI = parseAbi(["function observe(uint32[] secondsAgos) view returns (int56[] tickCumulatives, uint160[] secondsPerLiquidityCumulativeX128s)"]);
 
-export interface ConfiguredAsset extends Omit<ExpectedAsset, "adapter"> { vault: string; symbol?: string }
+export interface ConfiguredAsset extends Omit<ExpectedAsset, "adapter"> { vault: string; symbol?: string; twapWindow?: number }
 
-/** Every configured asset of the two basket vaults, from core's config files. */
+/** Every configured asset of the basket vaults, from core's config files. */
 export function loadConfiguredAssets(coreDir: string): ConfiguredAsset[] {
   const out: ConfiguredAsset[] = [];
   for (const k of VAULT_KEYS) {
@@ -66,22 +68,36 @@ export async function configCheck(chain: ChainReader, assets: ConfiguredAsset[])
     const hasCode = await (async () => { try { return (await chain.getCode(a.pool)) !== "0x"; } catch { return false; } })();
     c.push(`${p}: pool code present`, hasCode, hasCode ? `${a.pool}` : `no code at pool ${a.pool}`);
     if (!hasCode) continue;
-    if (a.venue !== undefined && a.venue !== 0) { c.pass(`${p}: venue ${a.venue} is not a V3 pool, code presence only`); continue; }
-    await c.run(`${p}: pool fee equals config`, async () => {
-      const r = await chain.callRaw(a.pool, POOL_SELECTORS.fee as Hex);
-      if (!r.ok) return { ok: false, detail: `fee() reverted: ${r.reason ?? ""}` };
-      const got = word(r.data, 0);
-      return { ok: got === BigInt(a.swapFee), detail: `got ${got}, want ${a.swapFee}` };
-    });
+    // An Aerodrome CL pool (venue 2, rmHARD, ADR-0018) has the Uniswap V3 slot0, observe, observations and liquidity surface: its swap fee is the tick spacing.
+    const aerodrome = a.venue === 2;
+    if (a.venue !== undefined && a.venue !== 0 && !aerodrome) { c.pass(`${p}: venue ${a.venue} is not a V3 pool, code presence only`); continue; }
+    if (aerodrome) {
+      await c.run(`${p}: pool tick spacing equals config`, async () => {
+        const r = await chain.callRaw(a.pool, POOL_SELECTORS.tickSpacing as Hex);
+        if (!r.ok) return { ok: false, detail: `tickSpacing() reverted: ${r.reason ?? ""}` };
+        const got = signed(word(r.data, 0));
+        return { ok: got === BigInt(a.swapFee), detail: `got ${got}, want ${a.swapFee}` };
+      });
+    } else {
+      await c.run(`${p}: pool fee equals config`, async () => {
+        const r = await chain.callRaw(a.pool, POOL_SELECTORS.fee as Hex);
+        if (!r.ok) return { ok: false, detail: `fee() reverted: ${r.reason ?? ""}` };
+        const got = word(r.data, 0);
+        return { ok: got === BigInt(a.swapFee), detail: `got ${got}, want ${a.swapFee}` };
+      });
+    }
     let spotTick: bigint | undefined;
     let obsIndex: bigint | undefined;
-    await c.run(`${p}: observation cardinality at least 901`, async () => {
+    // The window the vault reads this asset over, and the floor BasketVault.addAsset applies for it (BasketAssetConfigGuard: window / 2 s + 1).
+    const window = a.twapWindow ?? ORACLE_TWAP_WINDOW_SECONDS;
+    const floor = BigInt(Math.floor(window / 2) + 1);
+    await c.run(`${p}: observation cardinality at least ${floor}`, async () => {
       const r = await chain.callRaw(a.pool, POOL_SELECTORS.slot0 as Hex);
       if (!r.ok) return { ok: false, detail: `slot0() reverted: ${r.reason ?? ""}` };
       spotTick = signed(word(r.data, 1));
       obsIndex = word(r.data, 2);
       const card = word(r.data, 3);
-      return { ok: card >= 901n, detail: `cardinality ${card}` };
+      return { ok: card >= floor, detail: `cardinality ${card}, twap window ${window} s` };
     });
     await c.run(`${p}: liquidity above 0`, async () => {
       const r = await chain.callRaw(a.pool, POOL_SELECTORS.liquidity as Hex);
@@ -92,12 +108,12 @@ export async function configCheck(chain: ChainReader, assets: ConfiguredAsset[])
     // oracle: the pool TWAP is what the basket vault prices NAV and swap minimums from
     let twapTick: bigint | undefined;
     await c.run(`${p}: oracle observation history covers the TWAP window`, async () => {
-      const data = encodeFunctionData({ abi: POOL_ABI, functionName: "observe", args: [[ORACLE_TWAP_WINDOW_SECONDS, 0]] });
+      const data = encodeFunctionData({ abi: POOL_ABI, functionName: "observe", args: [[window, 0]] });
       const r = await chain.callRaw(a.pool, data);
-      if (!r.ok) return { ok: false, detail: `observe() reverted over ${ORACLE_TWAP_WINDOW_SECONDS} s: ${r.reason ?? ""}` };
+      if (!r.ok) return { ok: false, detail: `observe() reverted over ${window} s: ${r.reason ?? ""}` };
       const [cum] = decodeFunctionResult({ abi: POOL_ABI, functionName: "observe", data: r.data }) as [readonly bigint[], readonly bigint[]];
-      twapTick = (cum[1]! - cum[0]!) / BigInt(ORACLE_TWAP_WINDOW_SECONDS);
-      return { ok: true, detail: `mean tick ${twapTick} over ${ORACLE_TWAP_WINDOW_SECONDS} s` };
+      twapTick = (cum[1]! - cum[0]!) / BigInt(window);
+      return { ok: true, detail: `mean tick ${twapTick} over ${window} s` };
     });
     await c.run(`${p}: oracle last observation is fresh`, async () => {
       if (obsIndex === undefined) return { ok: false, detail: "slot0 was not readable" };

@@ -25,6 +25,7 @@
     ".vault_addresses.rmUSDC",
     ".vault_addresses.rmPROTO",
     ".vault_addresses.rmRWA",
+    ".vault_addresses.rmHARD",
     ".ephemeral.approver",
     ".ephemeral.emergency",
     ".ephemeral.keystore_dir",
@@ -93,12 +94,13 @@
     },
     "vault_addresses": {
       "type": "object",
-      "required": ["rmUSDC", "rmPROTO", "rmRWA"],
+      "required": ["rmUSDC", "rmPROTO", "rmRWA", "rmHARD"],
       "properties": {
         "rmUSDC": { "$ref": "#/$defs/address" },
         "rmPROTO": { "$ref": "#/$defs/address" },
-        "rmAGENT": { "$ref": "#/$defs/address", "description": "Optional. Only a deployment of the v0.5.0 line has an rmAGENT, and it is retired (ADR-0017): withdraw-only. A three-vault deployment omits it." },
-        "rmRWA": { "$ref": "#/$defs/address" }
+        "rmAGENT": { "$ref": "#/$defs/address", "description": "Optional. Only a deployment of the v0.5.0 line has an rmAGENT, and it is retired (ADR-0017): withdraw-only. A deployment of a later line omits it." },
+        "rmRWA": { "$ref": "#/$defs/address" },
+        "rmHARD": { "$ref": "#/$defs/address", "description": "The Hard Assets vault (HardAssetsVault, PAXG), the fourth router vault in the retired rmAGENT slot (ADR-0018, core 2008)." }
       }
     },
     "ephemeral": {

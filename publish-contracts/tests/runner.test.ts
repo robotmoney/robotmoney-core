@@ -32,7 +32,7 @@ describe("the stage runner on stub forge and cast", () => {
     expect(lastError(w)).toBeUndefined();
     expect(code).toBe(0);
     expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.vault, SCRIPT.registry, SCRIPT.router,
-      SCRIPT.receipt, SCRIPT.governance, SCRIPT.proto, SCRIPT.rwa, SCRIPT.timelock]);
+      SCRIPT.receipt, SCRIPT.governance, SCRIPT.proto, SCRIPT.rwa, SCRIPT.hard, SCRIPT.timelock]);
     expect(w.safeCalls[0]).toBe("createSafe");
     const m = manifest(w);
     expect(Object.keys(m.stages)).toEqual(DEPLOY);
@@ -302,7 +302,7 @@ describe("the stage runner on stub forge and cast", () => {
     expect(r.forge.version).toContain("forge");
     expect(r.forge.optimizerRuns).toBe(100);
     expect(r.forge.evmVersion).toBe("cancun");
-    expect(Object.keys(r.configHashes).sort()).toEqual(["config/agent-token-shortlist.json", "config/dex-pools.json", "config/protocol-assets.json", "config/rwa-assets.json"]);
+    expect(Object.keys(r.configHashes).sort()).toEqual(["config/agent-token-shortlist.json", "config/dex-pools.json", "config/hard-assets.json", "config/protocol-assets.json", "config/rwa-assets.json"]);
     for (const v of Object.values(r.configHashes)) expect(v).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(Object.keys(r.codehashes).length).toBeGreaterThan(5);
     expect(r.notes.join(" ")).toContain("does not prove the real delay");
@@ -443,7 +443,7 @@ describe("the core timelock: pinned at the first proxy stage, adopted when someo
     expect(m.stages.timelock.adopted).toBeUndefined();
     // issue 1853: every proxy stage after the first and the timelock stage recompute the pin before they broadcast
     const ok = w.logs().filter((l) => l.event === "stage.timelock_pin_ok");
-    expect(ok.map((l) => l.stage)).toEqual(["registry", "router", "receipt", "governance", "proto", "rwa", "timelock"]);
+    expect(ok.map((l) => l.stage)).toEqual(["registry", "router", "receipt", "governance", "proto", "rwa", "hard", "timelock"]);
     for (const l of ok) expect(l).toMatchObject({ timelock: TL.address, init_code_hash: TL.initCodeHash });
   });
 

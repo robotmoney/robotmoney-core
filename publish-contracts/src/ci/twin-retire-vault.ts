@@ -40,14 +40,15 @@ export function deployRetirableLeg(o: { send: CastSend; outDir: string; usdc: Ad
 }
 
 /**
- * The one timelock batch that makes the fourth vault part of the deployment, built by the Safe: registerVault(vault), then migrateEligibility(vault, true, four legs). The default vector
- * takes the vault in the third slot with 0 bps, exactly the live v0.5.0 shape (rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0).
+ * The one timelock batch that makes the extra vault part of the deployment, built by the Safe: registerVault(vault), then migrateEligibility(vault, true, legs plus the vault). The
+ * default vector takes the vault in the third slot with 0 bps, the live v0.5.0 shape (rmUSDC 9500, rmPROTO 500, rmAGENT 0, then the rest at 0). `legs` is the deployment's own vaults
+ * in registry order (four since ADR-0018), the first two at 9500 and 500 bps.
  */
-export function fourthVaultBatch(o: { registry: Address; vault: Address; usdc: Address; legs: readonly [Address, Address, Address] }): { target: Address; data: Hex }[] {
-  const [usdcVault, proto, rwa] = o.legs;
-  const vaults = [usdcVault, proto, o.vault, rwa];
+export function fourthVaultBatch(o: { registry: Address; vault: Address; usdc: Address; legs: readonly Address[] }): { target: Address; data: Hex }[] {
+  const vaults = [...o.legs.slice(0, 2), o.vault, ...o.legs.slice(2)];
+  const bps = vaults.map((_, i) => (i === 0 ? 9500n : i === 1 ? 500n : 0n));
   return [
     { target: o.registry, data: encodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, functionName: "registerVault", args: [o.vault, { name: FOURTH_VAULT_NAME, asset: o.usdc, registeredAt: 0n }] }) },
-    { target: o.registry, data: encodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, functionName: "migrateEligibility", args: [o.vault, true, vaults, [9500n, 500n, 0n, 0n]] }) },
+    { target: o.registry, data: encodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, functionName: "migrateEligibility", args: [o.vault, true, vaults, bps] }) },
   ];
 }

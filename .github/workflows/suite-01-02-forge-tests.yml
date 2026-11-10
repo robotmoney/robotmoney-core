@@ -155,7 +155,7 @@ jobs:
         run: >-
           forge test -vvv
           --no-match-test "^testFail_"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,RecorderManipulationFork,FourVaultInitialState,UpgradeLifecycleFork}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,HardAssetsVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,RecorderManipulationFork,FourVaultInitialState,UpgradeLifecycleFork}.t.sol"
 
       # Issue 1808: governed UUPS upgrades and the one-way freeze of the ten proxied core contracts
       # (implementation lock, initializer replay, release mode, timelock-only authority, freeze at
@@ -293,17 +293,20 @@ jobs:
         run: bash .github/scripts/forge_test_require_executed.sh --match-path "contracts/test/GatewayAgentPolicyAuthorization.t.sol"
 
       - name: forge test (basket vault production scripts and eligibility — core 1486)
-        # Explicit, named guard for the three basket vault scripts (one deployment scheme):
+        # Explicit, named guard for the basket vault scripts (one deployment scheme):
         #   - DeployProtocolAssetVault.t.sol: rmPROTO paused with exactly wETH and cbBTC,
         #     asset config read back equals config/protocol-assets.json.
         #   - DeployAgentTokenVault.t.sol: rmAGENT holds RM (added through the V3 pool floors), paused, registered.
         #   - DeployBasketVaultRwa.t.sol: rmRWA is a plain BasketVault row for deSPXA through
         #     the UniswapV3SwapAdapter on the fee 500 pool.
+        #   - DeployBasketVaultHardAssets.t.sol: rmHARD (core 2008, ADR-0018) is paused, Active in the
+        #     registry, named per PRD 11.5, one PAXG row through the AerodromeSwapAdapter, sheet exit fee.
         #   - BasketVault / AgentTokenVault / ProtocolAssetVault: per-vault composition.
         run: |
           bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployProtocolAssetVault.t.sol"
           bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployAgentTokenVault.t.sol"
           bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployBasketVaultRwa.t.sol"
+          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployBasketVaultHardAssets.t.sol"
           bash .github/scripts/forge_test_require_executed.sh -vvv --match-contract 'BasketVault|AgentTokenVault|ProtocolAssetVault'
           bash scripts/ci/check-no-devnet-config.sh
           bun scripts/ci/check-set-registry-owner.ts
@@ -532,6 +535,8 @@ jobs:
 
       - name: forge test (rmRWA fork regression — core 1492)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/RwaBasketVaultFork.t.sol"
+      - name: forge test (rmHARD holds PAXG through the AerodromeSwapAdapter on the live Aero pool, redeems in one transaction — core 2008)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/HardAssetsVaultFork.t.sol"
       - name: forge test (V4 swap adapter and price recorder against the real Base PoolManager and the live RM pool — core 1676)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/UniswapV4SwapAdapterFork.t.sol"
       - name: forge test (a held RM price drags the recorder sell floor; the USDC sell anchor bounds it, live RM pool — core 1793)
@@ -558,7 +563,10 @@ jobs:
           echo "::endgroup::"
 
       - name: forge test (each vault deploys with the stage table's deposit state — issue 1705)
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/ThreeVaultInitialState.t.sol"
+        # Runs even when an earlier live-pool step of this job failed (core 2008): its own result is still recorded, and the job
+        # stays red for the earlier failure.
+        if: ${{ !cancelled() }}
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/FourVaultInitialState.t.sol"
 
       - name: forge test (split-stage vault deposit through the gateway on the fork — core 1485)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/CoreStagesFork.t.sol"
@@ -680,7 +688,7 @@ jobs:
           forge coverage --report lcov
           --no-match-test "^testFail_"
           --no-match-contract "VaultCodeSizeGuard|GatewayAgentPolicyCodeSizeGuard"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,RecorderManipulationFork,UpgradeLifecycleFork}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,HardAssetsVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,RecorderManipulationFork,UpgradeLifecycleFork}.t.sol"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info

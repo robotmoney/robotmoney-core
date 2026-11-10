@@ -417,6 +417,115 @@ async fn get_vaults_reports_retired_rmagent_as_withdraw_only() {
     assert_eq!(status_of("Robot Money USDC"), "active");
 }
 
+/// Core 2008, ADR-0018: the four live vaults (rmUSDC, rmPROTO, rmRWA and rmHARD, "Robot Money Hard Assets") are listed
+/// `active`, and the retired rmAGENT beside them stays `retired`. rmHARD is a new vault, not the retired one.
+#[tokio::test]
+async fn get_vaults_lists_the_four_live_vaults_with_rmhard_beside_the_retired_rmagent() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    let proto = address!("00000000000000000000000000000000000000b1");
+    let rwa = address!("00000000000000000000000000000000000000b2");
+    let hard = address!("00000000000000000000000000000000000000b3");
+    let agent = address!("00000000000000000000000000000000000000a9");
+    for (method, body) in [
+        ("eth_chainId", format!("0x{chain_id:x}")),
+        ("eth_blockNumber", "0x30".to_string()),
+    ] {
+        server
+            .mock("POST", "/")
+            .match_body(Matcher::PartialJson(json!({ "method": method })))
+            .with_status(200)
+            .with_body(jrpc_result(&body))
+            .expect_at_least(0)
+            .create_async()
+            .await;
+    }
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            VaultRegistry::listVaultsCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_address_array(&[
+            VAULT, proto, agent, rwa, hard,
+        ])))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    for (addr, name, status) in [
+        (VAULT, "Robot Money USDC", 0u8),
+        (proto, "Robot Money Protocol", 0u8),
+        (agent, "Robot Money Agent Tokens", 2u8),
+        (rwa, "Robot Money RWA", 0u8),
+        (hard, "Robot Money Hard Assets", 0u8),
+    ] {
+        let arg = format!("{:0>64}", ahex::encode(addr.as_slice()));
+        server
+            .mock("POST", "/")
+            .match_body(Matcher::Regex(format!(
+                "{}{}",
+                selector_hex_of::<VaultRegistry::getVaultCall>().trim_start_matches("0x"),
+                arg
+            )))
+            .with_status(200)
+            .with_body(jrpc_result(&enc_vault_record(
+                name,
+                USDC,
+                1_700_000_000,
+                status,
+            )))
+            .expect_at_least(0)
+            .create_async()
+            .await;
+    }
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            IVault::totalAssetsCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_u256(U256::ZERO)))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+
+    let fix = RegistryFixture::build(&server.url(), chain_id);
+    let out = rmpc()
+        .args(["get-vaults", "--config", fix.config_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let vaults = v["data"]["vaults"].as_array().unwrap();
+    assert_eq!(vaults.len(), 5, "four live vaults and the retired rmAGENT");
+    let status_of = |name: &str| {
+        vaults
+            .iter()
+            .find(|x| x["name"] == name)
+            .unwrap_or_else(|| panic!("{name} listed"))["status"]
+            .clone()
+    };
+    for live in [
+        "Robot Money USDC",
+        "Robot Money Protocol",
+        "Robot Money RWA",
+        "Robot Money Hard Assets",
+    ] {
+        assert_eq!(status_of(live), "active", "{live}");
+    }
+    assert_eq!(status_of("Robot Money Agent Tokens"), "retired");
+    let hard_row = vaults
+        .iter()
+        .find(|x| x["name"] == "Robot Money Hard Assets")
+        .unwrap();
+    assert_eq!(
+        hard_row["address"].as_str().map(str::to_lowercase),
+        Some(format!("{hard:#x}")),
+        "rmHARD is listed at its own address"
+    );
+}
+
 /// ADR-0017: the shipped example config names no rmAGENT destination.
 #[test]
 fn example_config_names_no_rmagent_destination() {

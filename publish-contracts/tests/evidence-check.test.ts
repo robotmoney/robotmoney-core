@@ -27,7 +27,7 @@ const good = () => withUpgradeability({
   owner_exceptions: [{ text: "signer C is a Ledger on a shared laptop", recorded_at: "2026-10-04T10:00:00Z" }],
   stages: [{ stage: "safe", frozen_count: 2, receipt_count: 2, tx_hashes: [h(1), h(2)], receipts_status: [1, 1] }],
   safe: { address: a(1), owners: [a(2), a(3), a(4)], threshold: 2, creation_tx: h(3) },
-  vaults: { rmUSDC: { address: a(5) }, rmPROTO: { address: a(6) }, rmRWA: { address: a(8) } },
+  vaults: { rmUSDC: { address: a(5) }, rmPROTO: { address: a(6) }, rmRWA: { address: a(8) }, rmHARD: { address: a(15) } },
   timelock: { address: a(9), min_delay: 172800 },
   verifier: { exit_code: 0, registry_list_vaults_equals_manifests: true },
   deployer: a(20), deployer_nonce_final: 3, registry: { address: a(21) },
@@ -54,7 +54,7 @@ describe("evidence check, more negatives", () => {
   test("a missing unpause is rejected", () => expect(mut((e) => { e.govern = e.govern.filter((g: any) => g.step !== "unpause-RWA"); })).toContain("'unpause-RWA'"));
   test("every unpause is required", () => { for (const step of GOVERN_STEPS) expect(mut((e) => { e.govern = e.govern.filter((g: any) => g.step !== step); })).toContain(`'${step}'`); });
   test("Stage 13 on 8453 is the three vault unpauses (rmUSDC first), and the unpause rows of the govern CLI are the same list", () => {
-    expect(GOVERN_STEPS).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA"]);
+    expect(GOVERN_STEPS).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA", "unpause-HARD"]);
     expect([...GOVERN_STEPS]).toEqual([...UNPAUSE_ROWS]);
   });
   test("a non-unpause operation scheduled on 8453 is rejected: update-delay, batch, cancel and anything else", () => {
@@ -64,8 +64,8 @@ describe("evidence check, more negatives", () => {
   });
   test("a complete record with one schedule and one execute per unpause, at least 172800 s apart and with distinct operation ids, passes", () => {
     const e = good();
-    expect(e.govern.length).toBe(3);
-    expect(new Set(e.govern.map((g: any) => g.operation_id)).size).toBe(3);
+    expect(e.govern.length).toBe(4);
+    expect(new Set(e.govern.map((g: any) => g.operation_id)).size).toBe(4);
     for (const g of e.govern) expect(g.execute_block_timestamp - g.schedule_block_timestamp).toBeGreaterThanOrEqual(172800);
     expect(checkEvidence(e)).toEqual([]);
   });
@@ -145,7 +145,7 @@ function stub(ev: any, o: Opts = {}): ChainReader {
     readContract: async ({ address, functionName }) => (functionName === "depositsPaused" ? (o.pausedBy?.[address] ?? o.paused ?? false) : (o.listed ?? Object.values(ev.vaults).map((v: any) => v.address))),
   });
 }
-const VAULT: Record<string, string> = { "unpause-USDC": "rmUSDC", "unpause-PROTO": "rmPROTO", "unpause-RWA": "rmRWA" };
+const VAULT: Record<string, string> = { "unpause-USDC": "rmUSDC", "unpause-PROTO": "rmPROTO", "unpause-RWA": "rmRWA", "unpause-HARD": "rmHARD" };
 const RCPT = a(30);
 const GOV = a(32);
 const RID = h(0xabc);
@@ -341,7 +341,7 @@ describe("unpause govern rows and paused=false reads tell one story", () => {
   test("an unpause row that executed while the vault still reads paused=true is rejected, naming the row", async () => {
     const p = await online({ paused: true });
     expect(p.join("\n")).toContain("govern unpause-PROTO executed with receipt status 1, but rmPROTO.depositsPaused() reads true");
-    expect(p.filter((m) => m.includes("depositsPaused()")).length).toBe(3); // rmUSDC and the two baskets, all tied to their unpause row
+    expect(p.filter((m) => m.includes("depositsPaused()")).length).toBe(4); // rmUSDC and the three baskets, all tied to their unpause row
     expect(p.join("\n")).toContain("govern unpause-USDC executed with receipt status 1, but rmUSDC.depositsPaused() reads true");
   });
   test("a vault that reads paused=false with no executed unpause row is rejected", async () => {
@@ -454,7 +454,7 @@ describe("issue 1667: rmUSDC and re-paused vaults come back through numbered Saf
     expect(offline(withUsdc)).toBe("");
     expect(await chain({}, withUsdc)).toBe("");
   });
-  test("the template step list has all three vault steps: rmUSDC is required", () => expect(GOVERN_STEPS).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA"]));
+  test("the template step list has all four vault steps: rmUSDC is required", () => expect(GOVERN_STEPS).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA", "unpause-HARD"]));
   test("any other call on rmUSDC is rejected: another function (setPerDepositCap), garbage calldata, another target", async () => {
     const calls = ["0x12345678", encodeFunctionDataSetCap()];
     for (const data of calls) expect(await chain({ stepData: { "unpause-USDC": data } }, withUsdc)).toContain("unpauseDeposits(): the only call");
@@ -664,24 +664,26 @@ describe("effective weights and voted_weights_clears in the evidence (issue 1743
 });
 
 describe("vault_retirements in the evidence (issue 1912, ADR-0017)", () => {
-  const VAULTS3 = [a(5), a(6), a(8)];
-  const BPS3 = [9500, 500, 0];
+  const VAULTS3 = [a(5), a(6), a(8), a(15)];
+  const BPS3 = [9500, 500, 0, 0];
   const withRetire = (e: any) => {
     e.vault_retirements = [{ step: "retire-vault", round: 1, vault: a(60), registry: a(21), router: a(40), timelock: a(9), vaults: [...VAULTS3], bps: [...BPS3], voted_weights_active: false, effective_vaults: [...VAULTS3], effective_bps: [...BPS3], operation_id: h(95), schedule_tx: h(680), schedule_status: 1, schedule_block_timestamp: T0 + 35, execute_tx: h(681), execute_status: 1, execute_block_timestamp: T0 + 35 + 172800 }];
   };
   const mk = (f: (e: any) => void = () => {}) => { const e = good(); withRetire(e); f(e); return e; };
   const offline = (f: (e: any) => void = () => {}) => checkEvidence(mk(f)).join("\n");
   const chain = (o: Opts = {}, f: (e: any) => void = () => {}) => { const e = mk(); const c = stub(e, o); f(e); return checkEvidenceOnChain(e, c, { safe: 2 }).then((p) => p.join("\n")); };
-  test("an entry passes offline and on chain: one batch of two calls, migrateEligibility(vault, false, three legs) then retire(vault), one delay apart", async () => {
+  test("an entry passes offline and on chain: one batch of two calls, migrateEligibility(vault, false, the legs that stay) then retire(vault), one delay apart", async () => {
     expect(offline()).toBe("");
     expect(await chain()).toBe("");
     expect(checkVaultRetirements(mk())).toEqual([]);
     expect(await checkVaultRetirementsOnChain(mk(), stub(mk()))).toEqual([]);
   });
-  test("an entry is refused for a four-leg vector, a vector still naming the vault, a missing read-back, a wrong step and a short gap", async () => {
-    expect(offline((e) => { e.vault_retirements[0].vaults = [...VAULTS3, a(60)]; e.vault_retirements[0].bps = [9500, 500, 0, 0]; })).toContain("3 distinct addresses");
+  test("an entry is refused for a five-leg vector, a vector still naming the vault, a missing read-back, a wrong step and a short gap", async () => {
+    expect(offline((e) => { e.vault_retirements[0].vaults = [...VAULTS3, a(60)]; e.vault_retirements[0].bps = [9500, 500, 0, 0, 0]; })).toContain("1 to 4 distinct addresses");
+    // a historical v0.5.0 entry, three legs, still passes
+    expect(offline((e) => { e.vault_retirements[0].vaults = e.vault_retirements[0].vaults.slice(0, 3); e.vault_retirements[0].bps = [9500, 500, 0]; e.vault_retirements[0].effective_vaults = e.vault_retirements[0].vaults; e.vault_retirements[0].effective_bps = [9500, 500, 0]; })).toBe("");
     expect(offline((e) => { e.vault_retirements[0].vaults[2] = a(60); })).toContain("is still in the default vector");
-    expect(offline((e) => { e.vault_retirements[0].bps = [9500, 500, 1]; })).toContain("sum to 10000");
+    expect(offline((e) => { e.vault_retirements[0].bps = [9500, 500, 1, 0]; })).toContain("sum to 10000");
     expect(offline((e) => { delete e.vault_retirements[0].effective_bps; })).toContain("effective_vaults and effective_bps");
     expect(offline((e) => { e.vault_retirements[0].voted_weights_active = true; })).toContain("voted_weights_active is true");
     expect(offline((e) => { e.vault_retirements[0].step = "unpause-USDC"; })).toContain("is not retire-vault");
@@ -690,8 +692,8 @@ describe("vault_retirements in the evidence (issue 1912, ADR-0017)", () => {
     expect(offline((e) => { e.vault_retirements[0].cancelled = true; })).toContain("cancelled is not a field");
   });
   test("the chain read refuses a batch whose calls, number of calls or delay differ from the recorded retirement", async () => {
-    const wrong = buildRetireCalls({ registry: a(21) as `0x${string}`, vault: a(60) as `0x${string}`, finalVaults: VAULTS3, finalBps: [9000, 1000, 0] });
-    expect(await chain({ retireCalls: wrong })).toContain("calldata is not registry.migrateEligibility(vault, false, three legs)");
+    const wrong = buildRetireCalls({ registry: a(21) as `0x${string}`, vault: a(60) as `0x${string}`, finalVaults: VAULTS3, finalBps: [9000, 1000, 0, 0] });
+    expect(await chain({ retireCalls: wrong })).toContain("calldata is not registry.migrateEligibility(vault, false, the legs that stay)");
     const only = buildRetireCalls({ registry: a(21) as `0x${string}`, vault: a(60) as `0x${string}`, finalVaults: VAULTS3, finalBps: BPS3 }).slice(1);
     expect(await chain({ retireCalls: only })).toContain("a retire round is exactly 2 calls in one batch");
     expect(await chain({ retireDelay: 60n })).toContain("delay");

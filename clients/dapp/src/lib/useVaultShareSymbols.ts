@@ -4,7 +4,7 @@
  * Each vault's own share symbol (issue 1767).
  *
  * A vault is its own ERC-4626 share token, so `symbol()` on the vault address is the authority (rmUSDC,
- * rmPROTO, rmAGENT, rmRWA). The explorer sends only `name` and `risk_label`, and a name match is a guess, so
+ * rmPROTO, rmRWA, rmHARD, rmAGENT). The explorer sends only `name` and `risk_label`, and a name match is a guess, so
  * this reads the chain. Reads follow the same chain guard as `useVaultsDepositsPaused`: on `mainnet` a wallet
  * on another chain would answer for the same address with the OTHER chain's data, so no read is made. An
  * unreadable vault has no entry, and callers print the neutral "shares" through `shareSymbolOrNeutral`.

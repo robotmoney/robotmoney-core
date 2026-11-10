@@ -43,6 +43,15 @@ ignore = [
     # crypto-bigint 0.7 (elliptic-curve 0.14.1 requires ^0.7.5; the lockfile
     # must resolve >= 0.7.6). expires: 2026-12-01
     "RUSTSEC-2026-0387",
+    # libsqlite3-sys 0.30.1 bundles a C SQLite with CVE-2026-119375 (patched in
+    # >= 0.39.0). NOT COMPILED: it is in Cargo.lock only because sqlx 0.8's
+    # weak `sqlx-sqlite?/...` features pull sqlx-sqlite into every lockfile;
+    # every crate enables sqlx with `postgres` and default-features = false, and
+    # `cargo tree -i libsqlite3-sys --target all` prints nothing (2026-11-10).
+    # No fixed version is reachable: sqlx-sqlite 0.8.6 requires ^0.30.1 and
+    # 0.9.0 requires >=0.30.1, <0.38.0. Re-evaluate when sqlx allows >= 0.39.
+    # expires: 2026-12-15
+    "RUSTSEC-2026-0459",
 ]
 
 # Treat "unmaintained" crates as warnings rather than hard errors: an

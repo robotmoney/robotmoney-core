@@ -5,7 +5,7 @@ description: "Roles. The broadcaster is `admin` and also holds EMERGENCY_ROLE on
 
 # BasketVaultDeployBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/script/BasketVaultDeployBase.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a3ffad04253f19e13d572f1bce73173e3a0632c3/contracts/script/BasketVaultDeployBase.sol)
 
 **Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
@@ -566,6 +566,119 @@ function _addV4Asset(BasketVault vault, Params memory p, AssetCfg memory a, Depl
 | a | `AssetCfg` |  |
 | d | `Deployed` |  |
 
+<a id="_addaerodromeasset-basketvault-params-cfg-assetcfg-deployed"></a>
+
+### _addAerodromeAsset
+
+<i>
+
+Aerodrome (Aero Slipstream) CL asset (ADR-0018, owner decision 2026-11-10). One `AerodromeSwapAdapter` per run, bound to the
+config factory and router, its codehash allowed, then `addAsset` with venue Aerodrome and swap fee = the tick spacing. Checks,
+in order, before any state change: the pool has code, reports the config tick spacing, is the factory's canonical pool for
+the token/USDC pair at that spacing and names that factory, holds at least the sheet liquidity floor, and charges a live fee
+below the ORA-4 guard (QA plan D4). `addAsset` itself enforces the token/USDC pair, the cardinality floor and the
+observation history of the asset's TWAP window (the row's `twapWindow` through `addAssetWithTwapWindow`, else 1800 s).
+
+</i>
+
+```solidity
+function _addAerodromeAsset(
+        BasketVault vault,
+        Params memory p,
+        Cfg memory cfg,
+        AssetCfg memory a,
+        Deployed memory d
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `BasketVault` |  |
+| p | `Params` |  |
+| cfg | `Cfg` |  |
+| a | `AssetCfg` |  |
+| d | `Deployed` |  |
+
+<a id="_register-basketvault-assetcfg-address-address-basketvault-venue"></a>
+
+### _register
+
+<i>
+
+Register one asset. A row with no `twapWindow` uses `BasketVault.addAsset` (the 1800 s default). ADR-0018: a row with
+one uses `HardAssetsVault.addAssetWithTwapWindow`, which sets the window and vets the pool for it in one call. Only
+HardAssetsVault has that entry point; another vault reverts here. Read back so a no-op fails the deploy.
+
+</i>
+
+```solidity
+function _register(
+        BasketVault vault,
+        AssetCfg memory a,
+        address pool,
+        address adapter,
+        BasketVault.Venue venue
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `BasketVault` |  |
+| a | `AssetCfg` |  |
+| pool | `address` |  |
+| adapter | `address` |  |
+| venue | `BasketVault.Venue` |  |
+
+<a id="_requireoneadaptervenue-cfg"></a>
+
+### _requireOneAdapterVenue
+
+<i>
+
+`Deployed.adapter` names one external adapter, so a config lists Aerodrome rows or Uniswap V3 rows, never both. V4 rows
+carry their own adapter (`adapterV4`) and mix with either.
+
+</i>
+
+```solidity
+function _requireOneAdapterVenue(Cfg memory cfg) internal pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cfg | `Cfg` |  |
+
+<a id="_checkaerodromepool-assetcfg-address-params"></a>
+
+### _checkAerodromePool
+
+<i>
+
+Config check on chain for an Aerodrome CL pool (see `_addAerodromeAsset`). `fee()` and `liquidity()` share the Uniswap V3
+ABI. The fee is in pips (hundredths of a bip), so the guard check is `NAV_DEVIATION_BPS * 100 > fee`, as for V3.
+
+</i>
+
+```solidity
+function _checkAerodromePool(AssetCfg memory a, address factory, Params memory p)
+        internal
+        view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `AssetCfg` |  |
+| factory | `address` |  |
+| p | `Params` |  |
+
 <a id="_checkrecorder-assetcfg-iuniswapv4pricerecorder"></a>
 
 ### _checkRecorder
@@ -690,6 +803,32 @@ function _manifestPath() internal view returns (string memory);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `string` |  |
 
+<a id="_venuename-assetcfg"></a>
+
+### _venueName
+
+<i>
+
+The manifest `venue` name of one asset.
+
+</i>
+
+```solidity
+function _venueName(AssetCfg memory a) private pure returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `AssetCfg` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
 <a id="_writemanifestto-string-deployed-cfg"></a>
 
 ### _writeManifestTo
@@ -759,10 +898,16 @@ One configured basket row, read from a config file.
 struct AssetCfg {
         string symbol;
         address token;
-        /// @dev The V3 pool address. Zero for a V4 asset: the vault registers the price recorder as the pool.
+        /// @dev The V3 or Aerodrome CL pool address. Zero for a V4 asset: the vault registers the price recorder as the pool.
         address pool;
+        /// @dev The Uniswap fee tier (V3, V4), or the CL pool tick spacing for an Aerodrome asset (the vault's `swapFee`).
         uint24 poolFee;
         bool isV4;
+        /// @dev Aerodrome (Aero Slipstream) CL asset (ADR-0018): swapped and priced through an `AerodromeSwapAdapter`.
+        bool isAerodrome;
+        /// @dev Optional per-asset TWAP window (config `twapWindow`), zero for the vault default. Registered
+        ///      through `HardAssetsVault.addAssetWithTwapWindow`, which vets the pool for it (ADR-0018).
+        uint32 twapWindow;
         /// @dev V4 only: the PoolManager, the pool id and the full PoolKey from the config. `key` hashes to `poolId` (checked at parse).
         address poolManager;
         bytes32 poolId;
@@ -779,6 +924,8 @@ struct AssetCfg {
 | pool | `address` |  |
 | poolFee | `uint24` |  |
 | isV4 | `bool` |  |
+| isAerodrome | `bool` |  |
+| twapWindow | `uint32` |  |
 | poolManager | `address` |  |
 | poolId | `bytes32` |  |
 | key | `IPoolManagerV4.PoolKey` |  |
@@ -793,6 +940,10 @@ struct Cfg {
         AssetCfg[] assets;
         /// @dev Optional root `maxSlippageBps`. Zero keeps the vault default. Applied through the vault setter before the handover.
         uint256 maxSlippageBps;
+        /// @dev Root `aerodromeSlipstreamFactory` and `aerodromeSlipstreamRouter`. Required when the config lists an Aerodrome
+        ///      asset, otherwise zero (ADR-0018). The adapter resolves and checks every pool against this factory.
+        address aerodromeFactory;
+        address aerodromeRouter;
     }
 ```
 
@@ -803,6 +954,8 @@ struct Cfg {
 | swapRouter02 | `address` |  |
 | assets | `AssetCfg[]` |  |
 | maxSlippageBps | `uint256` |  |
+| aerodromeFactory | `address` |  |
+| aerodromeRouter | `address` |  |
 
 ### Deployed
 
@@ -812,6 +965,8 @@ Result returned to in-process callers (forge tests, stage driver).
 struct Deployed {
         address vault;
         address registry;
+        /// @dev The external swap adapter for the non-V4 rows: the `UniswapV3SwapAdapter`, or the `AerodromeSwapAdapter` for a config
+        ///      whose rows are Aerodrome (ADR-0018). A config never mixes the two (`_addAssets`). Zero on the built-in router path.
         address adapter;
         /// @dev The V4 swap adapter, zero when the config lists no V4 asset (issue 1676).
         address adapterV4;

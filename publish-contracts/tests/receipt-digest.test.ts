@@ -82,22 +82,18 @@ describe("issue 1754: record-receipt checks the digest and the id against the pa
 });
 
 describe("issue 1754: apply-receipt accepts the real receipt only under the protocol digest", () => {
-  const V = { USDC: "0x00000000000000000000000000000000000000a1", PROTO: "0x00000000000000000000000000000000000000a2", RWA: "0x00000000000000000000000000000000000000a4" } as Record<"USDC" | "PROTO" | "RWA", Address>;
-  const base = { receiptId: RID as Hex, payload: bytes, recorded: true, released: false, eligible: [V.USDC, V.PROTO, V.RWA], vaultOf: V };
-  // ADR-0017: rmAGENT is retired. The real receipt weights the agent_tokens bucket 575 bps, which no vault can take, so it is refused. The same envelope with the bucket at 0 is applied.
-  const threeVault = new TextEncoder().encode(JSON.stringify({
-    ...JSON.parse(readFileSync(FIXTURE, "utf8")),
-    weights: [{ bucket: "agent_tokens", weight_bps: 0 }, { bucket: "conservative_defi_yield", weight_bps: 8550 }, { bucket: "protocol_tokens", weight_bps: 900 }, { bucket: "real_world_assets", weight_bps: 550 }],
-  }));
-  test("the real receipt gives the retired agent_tokens bucket weight: it is refused, naming the bucket and ADR-0017", () => {
-    expect(() => planApply({ ...base, storedDigest: DIGEST as Hex })).toThrow(/agent_tokens.*retired/);
-  });
-  test("stored protocol digest: the vector is the three-vault weights in registry order, the retired bucket dropped", () => {
-    const v = planApply({ ...base, payload: threeVault, storedDigest: receiptPayloadDigest(threeVault) as Hex });
-    expect(v.vaults).toEqual([V.USDC, V.PROTO, V.RWA]);
-    expect(v.bps).toEqual([8550, 900, 550]);
+  const V = { USDC: "0x00000000000000000000000000000000000000a1", PROTO: "0x00000000000000000000000000000000000000a2", RWA: "0x00000000000000000000000000000000000000a4", HARD: "0x00000000000000000000000000000000000000a5" } as Record<"USDC" | "PROTO" | "RWA" | "HARD", Address>;
+  const base = { receiptId: RID as Hex, payload: bytes, recorded: true, released: false, eligible: [V.USDC, V.PROTO, V.RWA, V.HARD], vaultOf: V };
+  // ADR-0018: the agent_tokens bucket maps to rmHARD, the fourth router vault. The real receipt weights it 575 bps and is applied as signed.
+  test("stored protocol digest: the real receipt is the four-vault vector in registry order, agent_tokens on rmHARD with its 575 bps", () => {
+    const v = planApply({ ...base, storedDigest: DIGEST as Hex });
+    expect(v.vaults).toEqual([V.USDC, V.PROTO, V.RWA, V.HARD]);
+    expect(v.bps).toEqual([8550, 525, 350, 575]);
   });
   test("mutation: a stored plain keccak256 is refused", () => {
-    expect(() => planApply({ ...base, payload: threeVault, storedDigest: keccak256(threeVault) as Hex })).toThrow(/differs from the digest stored/);
+    expect(() => planApply({ ...base, storedDigest: keccak256(bytes) as Hex })).toThrow(/differs from the digest stored/);
+  });
+  test("a deployment without rmHARD router-eligible refuses the real receipt: its agent_tokens weight has no eligible vault", () => {
+    expect(() => planApply({ ...base, eligible: [V.USDC, V.PROTO, V.RWA], storedDigest: DIGEST as Hex })).toThrow();
   });
 });

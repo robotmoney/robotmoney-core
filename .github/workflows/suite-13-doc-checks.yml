@@ -191,8 +191,8 @@ jobs:
       - name: environments.md script-paths and env-var coverage
         run: python3 .github/scripts/check_environments_doc.py
 
-      - name: Four-vault reference invariant (issue #479)
-        run: python3 .github/scripts/check_three_vault_references.py
+      - name: Four-vault reference invariant (issue #479, core 2008, ADR-0018)
+        run: python3 .github/scripts/check_four_vault_references.py
 
       - name: Self-test passthrough guard bare-substring rule (issue #921)
         # Confirms the bare-`Passthrough` rule fires (and is correctly

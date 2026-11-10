@@ -5,7 +5,7 @@ description: "Reads the launch config files and pins the facts S2 fixed. Offline
 
 # ConfigFilesTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/ConfigFiles.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9a5abb78f17cecf801493322557775e4886f59cc/contracts/test/ConfigFiles.t.sol)
 
 **Inherits:** Test
 
@@ -39,6 +39,20 @@ address internal constant V3_FACTORY = 0x33128a8fC17869897dcE68Ed026d694621f6FDf
 
 ```solidity
 function test_Config_rwaAssetsIsDespxaOnlyOnFee500() public view;
+```
+
+<a id="test_config_hardassetsispaxgonlyontheaeropool"></a>
+
+### test_Config_hardAssetsIsPaxgOnlyOnTheAeroPool
+
+<i>
+
+Core 2008, ADR-0018: rmHARD holds PAXG only, on its Aero (Aerodrome Slipstream) CL USDC pool, tick spacing 10.
+
+</i>
+
+```solidity
+function test_Config_hardAssetsIsPaxgOnlyOnTheAeroPool() public view;
 ```
 
 <a id="test_config_protocolassetsiswethandcbbtc"></a>

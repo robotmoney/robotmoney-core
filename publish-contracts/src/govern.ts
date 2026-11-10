@@ -1,6 +1,6 @@
 // Stage 13 govern: the post-handover operations through the REAL Safe and the REAL timelock, with the Safe tool (src/safe).
 // After the timelock stage the deployer holds no role. Everything here is a Safe transaction that schedules, executes or cancels a timelock operation.
-// STAGE 13 IS THE UNPAUSE OF EACH OF THE THREE VAULTS (issue 1520, issue 1710: all three deploy paused). The rows come from the stage table's vault rules
+// STAGE 13 IS THE UNPAUSE OF EACH OF THE FOUR VAULTS (issue 1520, issue 1710: all four deploy paused; rmHARD since ADR-0018). The rows come from the stage table's vault rules
 // (scripts/deploy/stage-table.json vaults[], `unpauseRow` and `unpauseInStage13`, issue 1705), never from a vault key typed here. An unpause
 // needs ADMIN_ROLE through the timelock (docs/technical/security-model.md, the pause-key abuse and pause-trigger rows). The vault
 // setters, router eligibility and the router default weights are DEPLOY-TIME configuration the deployer sets before the handover (the basket vault
@@ -10,11 +10,11 @@
 // Committee's consensus receipt; that submission is the rebalance: ONE timelock call, RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps),
 // which releases the receipt and sets the router's active vector together, read back as isReleased and the router weights. Never part of stage 13.
 // The rows (GOVERN_ROWS):
-//   unpause-USDC, unpause-PROTO, unpause-RWA   one timelock operation per unpause (never a shared operation), all scheduled in ONE sitting.
-//                                               All three vaults deploy paused (issue 1710), so stage 13 opens all three. After a pause-all the same rows reopen a vault
+//   unpause-USDC, unpause-PROTO, unpause-RWA, unpause-HARD   one timelock operation per unpause (never a shared operation), all scheduled in ONE sitting.
+//                                               All four vaults deploy paused (issue 1710), so stage 13 opens all four. After a pause-all the same rows reopen a vault
 //                                               on demand (`--row unpause-X`, a new numbered round, issue 1667).
 //   update-delay, batch, cancel                 Demonstrations of the Safe tool. Refused with USAGE on 8453, except in a REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal, issue 1727):
-//                                               there they run on 8453 as explicit `--row` runs, in order after the three unpauses, never as part of stage 13.
+//                                               there they run on 8453 as explicit `--row` runs, in order after the four unpauses, never as part of stage 13.
 // A run schedules every unpause the sheet asks for (GOVERN_UNPAUSE_VAULTS), waits ONE timelock delay, then executes each and reads depositsPaused() back.
 // An operation declared dependent on another carries that operation's id as the timelock predecessor and runs in the same resume (no second wait).
 // On demand, outside the matrix (it never blocks or completes the govern stage):
@@ -34,7 +34,7 @@
 //   release-receipt              ConsensusRecommendationReceipt.releaseReceipt(receiptId), one round per receipt id (--receipt-id)
 // The receipt contract's ADMIN_ROLE is held by the TimelockController after the timelock stage (INV-3), so the release is the same Safe ->
 // Timelock round as every other row. It runs on the Twin chain AND on 8453 (issue 1611): on 8453 it is a standalone post-launch action, its own
-// timelock operation with its own 48-hour delay, never part of stage 13 (stageRows stays the three unpauses). The first run schedules and exits
+// timelock operation with its own 48-hour delay, never part of stage 13 (stageRows stays the four unpauses). The first run schedules and exits
 // GOVERN_PENDING with the resume command, the resume after the delay executes and reads isReleased back. Its run-manifest key and salt are `release-receipt-<receiptId>`.
 // Issue 1831: REFUSED with USAGE (nothing read past the role, nothing sent) once RouterGovernance holds the receipt contract's ADMIN_ROLE, which every deploy since issue 1698
 // grants. A release alone would burn the receipt (applyReceipt then reverts ReceiptAlreadyReleased), so the message points at apply-receipt.
@@ -49,14 +49,14 @@
 //   clear-voted-weights          on demand (issue 1743), no arguments: ONE timelock call, RouterGovernance.clearVotedWeights() (ADMIN_ROLE, the timelock), which clears the router's active vector
 // so routing falls back to the default. It reads votedWeightsActive false and effective == default back. Refused (GOVERN, nothing scheduled) when no active vector is in effect. Runs on 8453 in
 // production and in a rehearsal, never in stage 13, with its own delay. A later applied receipt that sets an active vector again opens round 2 with the same explicit `--row`.
-//   set-unwind-guard             on demand (QA plan v1 D7, review E5, issue 1705 Q2), `--admin-arg vault=PROTO|RWA token=0x..|all min-usdc-out=N max-loss-bps=N [override-allowed=true|false]`:
+//   set-unwind-guard             on demand (QA plan v1 D7, review E5, issue 1705 Q2), `--admin-arg vault=PROTO|RWA|HARD token=0x..|all min-usdc-out=N max-loss-bps=N [override-allowed=true|false]`:
 // ONE timelock operation on one basket vault, BasketVault.setEmergencyUnwindGuard(token, minUsdcOut, overrideAllowed, maxLossBps) per token (ADMIN_ROLE, the timelock). Before it no stage
 // and no row set the guard, so the oracle-free unwind and emergencyUnwindWithOverride could not run. overrideAllowed defaults to true, set by the Safe only (QA plan v1 Decisions D3).
 // Refused (GOVERN, nothing scheduled) for a token that is not an active asset or a vault whose ADMIN_ROLE the timelock does not hold; a guard already in effect is recorded as
 // skipped. It reads each guard back. Runs on 8453 in production and in a rehearsal, and on the Twin chain, never in stage 13. unwind-guard.ts has the why.
 // Evidence: the run manifest's `unwind_guards` (a record).
 //   retire-vault                on demand (issue 1912, ADR-0017, ADR-0009), `--admin-arg vault=0x.. weights=USDC:9500,PROTO:500,RWA:0`: the Safe, through the timelock, retires ONE vault of the live
-// deployment (rmAGENT on v0.5.0) in ONE batch of two calls, registry.migrateEligibility(vault, false, three legs) then registry.retire(vault). The order is forced by the contracts (retire reverts
+// deployment (rmAGENT on v0.5.0) in ONE batch of two calls, registry.migrateEligibility(vault, false, the legs that stay) then registry.retire(vault). The order is forced by the contracts (retire reverts
 // RetireWhileRouterEligible, and the router's default vector must span the eligible set), see retire-vault.ts. The preview is logged before the schedule, the vector is refused unless it is the router's
 // current default vector without the vault, and the read-back checks the registry status, the eligible count, the router's DEFAULT and EFFECTIVE vectors and the vault's retired() flag. Production,
 // rehearsal and the Twin chain. Never part of stage 13. Its run-manifest key and salt are `retire-vault-<the vault address, 40 lower-case hex digits>`; the evidence entry is `vault_retirements`.
@@ -163,7 +163,7 @@ export interface LabelledCall extends TimelockCall { label: string }
 
 /**
  * The mainnet rows: one unpause per vault, each its own timelock operation, all scheduled in one sitting. Derived from the stage table's vault rules
- * (issue 1705, `unpauseRow` where `unpauseInStage13`): all three vaults deploy paused (issue 1710), so stage 13 is the three unpauses.
+ * (issue 1705, `unpauseRow` where `unpauseInStage13`): all four vaults deploy paused (issue 1710), so stage 13 is the four unpauses.
  */
 export { BASKET_KEYS };
 export const UNPAUSE_ROWS: readonly UnpauseRow[] = STAGE13_UNPAUSE_ROWS;
@@ -180,7 +180,7 @@ export const isTwinOnlyRow = (row: string): boolean => (TWIN_ONLY_ROWS as readon
 /**
  * Issue 1727: update-delay, batch and cancel are refused on 8453 UNLESS the sheet is a rehearsal (DEPLOYMENT_KIND=rehearsal). Each is a no-op or a bounded delay
  * change through the real Safe and the real timelock, so a rehearsal exercises the Safe tool on real contracts. Production keeps them refused. On a rehearsal they
- * are explicit `--row` runs: stage 13 on 8453 stays the three unpauses, and the later rows keep their order (update-delay, batch, cancel) after the unpauses.
+ * are explicit `--row` runs: stage 13 on 8453 stays the four unpauses, and the later rows keep their order (update-delay, batch, cancel) after the unpauses.
  */
 export const twinOnlyRefused = (row: string, chainId: number, kind: DeploymentKind): boolean => isTwinOnlyRow(row) && chainId === BASE_CHAIN_ID && kind !== "rehearsal";
 /**
@@ -469,7 +469,7 @@ export function resolveGovernRow(row: string): PlannedRow {
   if (row === CLEAR_ROW) throw new PublishError("USAGE", `--row ${CLEAR_ROW} is the on-demand clear of the router's voted weight vector: it is run by name only (runGovern)`);
   if (row === REDEPLOY_ROW) throw new PublishError("USAGE", `--row ${REDEPLOY_ROW} is the on-demand replacement of one redeployed vault: it is run by name only (runGovern)`);
   if (row === RETIRE_ROW) throw new PublishError("USAGE", `--row ${RETIRE_ROW} is the on-demand retirement of one vault (ADR-0017): it needs --admin-arg vault=0x<address> and --admin-arg weights=USDC:9500,PROTO:500,RWA:0`);
-  if (row === UNWIND_GUARD_ROW) throw new PublishError("USAGE", `--row ${UNWIND_GUARD_ROW} is the on-demand emergency unwind guard of one basket vault: it needs --admin-arg vault=PROTO|RWA token=0x..|all min-usdc-out=N max-loss-bps=N`);
+  if (row === UNWIND_GUARD_ROW) throw new PublishError("USAGE", `--row ${UNWIND_GUARD_ROW} is the on-demand emergency unwind guard of one basket vault: it needs --admin-arg vault=PROTO|RWA|HARD token=0x..|all min-usdc-out=N max-loss-bps=N`);
   if (row === FREEZE_ROW) throw new PublishError("USAGE", `--row ${FREEZE_ROW} is the on-demand freeze of every core proxy (issue 1842): it is run by name only (runGovern)`);
   if (row === UPGRADE_ROW) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} is the on-demand governed upgrade of one core proxy (issue 1842): it needs --proxy NAME --implementation 0x<address>`);
   if (/^[0-9]+$/.test(row)) {
@@ -593,7 +593,7 @@ export interface GovernOpts {
   selfAdmin?: SelfAdminArgs;
   /** With `--row set-unwind-guard` only (QA plan v1 D7): the vault, the token (or `all`) and the guard values, as `--admin-arg` gave them. */
   unwindGuard?: UnwindGuardArgs;
-  /** With `--row retire-vault` only (issue 1912): the vault to retire and the three-leg default vector that stays, as `--admin-arg` gave them. */
+  /** With `--row retire-vault` only (issue 1912): the vault to retire and the default vector that stays that stays, as `--admin-arg` gave them. */
   retire?: RetireArgs;
   /** With `--row upgrade-proxy` only (issue 1842): the verifier name of the proxy (gateway, registry, vault[rmUSDC], ...) and the new implementation's address. */
   proxy?: string;
@@ -781,7 +781,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   if (o.submitter !== undefined && !registering) throw new PublishError("USAGE", `--submitter goes with --row ${REGISTER_ROW} only`);
   if (o.unwindGuard !== undefined && !guarding) throw new PublishError("USAGE", `--admin-arg vault, token, min-usdc-out, max-loss-bps and override-allowed go with --row ${UNWIND_GUARD_ROW} only`);
   if (o.retire !== undefined && !retiring) throw new PublishError("USAGE", `--admin-arg vault and weights go with --row ${RETIRE_ROW} only`);
-  // issue 1912: the retire row's arguments (an address and exactly three legs summing to 10000) are checked before the Safe is read or anything is sent
+  // issue 1912: the retire row's arguments (an address and distinct legs of this CLI's vault keys, summing to 10000) are checked before the Safe is read or anything is sent
   const retireWant = retiring ? parseRetireArgs(o.retire) : undefined;
   // QA plan v1 D7: the row's arguments are checked before the Safe is read or anything is sent
   const guardWant = guarding ? parseUnwindGuardArgs(o.unwindGuard) : undefined;
@@ -1223,11 +1223,13 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   }
 
   if (retiring) {
-    // Issue 1912 (ADR-0017, ADR-0009): ONE timelock batch, registry.migrateEligibility(vault, false, three legs) then registry.retire(vault). Never part of the matrix. On 8453 in production
+    // Issue 1912 (ADR-0017, ADR-0009): ONE timelock batch, registry.migrateEligibility(vault, false, the legs that stay) then registry.retire(vault). Never part of the matrix. On 8453 in production
     // and in a rehearsal, and on the Twin chain. retire-vault.ts has the why. Every pre-check runs BEFORE the round is scheduled, so a refused vector spends no delay.
     const want = retireWant!;
     const name = retireRecordKey(want.vault);
     const rd = reader(handle);
+    const missingLeg = want.weights.filter((w) => !a.vaults[w.key]).map((w) => w.key);
+    if (missingLeg.length > 0) throw new PublishError("USAGE", `--row ${RETIRE_ROW}: --admin-arg weights names ${missingLeg.join(", ")}, which this deployment's manifests do not name: the vector is the vaults that stay on this deployment`, { row: RETIRE_ROW, missing: missingLeg });
     const finalVaults = want.weights.map((w) => a.vaults[w.key]);
     const finalBps = want.weights.map((w) => w.bps);
     const calls = buildRetireCalls({ registry: a.registry, vault: want.vault, finalVaults, finalBps });

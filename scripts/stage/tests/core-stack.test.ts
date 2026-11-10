@@ -464,7 +464,7 @@ describe("record", () => {
     chain_id: 918453, run_id: "r1", core_tag: "t", core_sha: SHA, generated_at: "2026-10-02T00:00:00Z", min_delay: 60, deployer: a(1),
     addresses: { gateway: a(2), vault: a(3), registry: a(4), router: a(5), governance: a(6), consensus_receipt: a(7), timelock: a(9), safe: a(10), emergency: a(11) },
     code_hashes: { gateway: h(12) },
-    vault_addresses: { rmUSDC: a(3), rmPROTO: a(13), rmRWA: a(14) },
+    vault_addresses: { rmUSDC: a(3), rmPROTO: a(13), rmRWA: a(14), rmHARD: a(15) },
     ephemeral: {
       approver: a(17), emergency: a(11), keystore_dir: join(OUT, "keys"),
       safe_signers: [{ role: "approver", address: a(17) }, { role: "approver-b", address: a(20) }, { role: "approver-c", address: a(21) }],

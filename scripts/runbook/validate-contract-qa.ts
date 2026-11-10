@@ -83,7 +83,7 @@ export const LIST_PLACEHOLDERS: Readonly<Record<string, readonly string[]>> = {
   emergency: ["--emergency-signer", "{emergencySigner}"],
   cast: ["--keystore", "{deployerKeystore}"],
 };
-export const MANIFEST_FILES = ["libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "receipt", "governance", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault", "gateway-handover", "timelock", "safe"];
+export const MANIFEST_FILES = ["libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "receipt", "governance", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault", "hard-assets-vault", "gateway-handover", "timelock", "safe"];
 const PLACEHOLDER = /\{([A-Za-z][A-Za-z0-9]*)(?::([A-Za-z0-9_.\-]+))?\}/g;
 
 // ─── the step schema ────────────────────────────────────────────────────────────────────────────────────────────
@@ -833,7 +833,9 @@ export function sheetProblems(sheet: Record<string, string>, target: string, own
   const delay = Number(need("TIMELOCK_MIN_DELAY"));
   if (sheet.TIMELOCK_MIN_DELAY !== undefined && !(delay >= t.delay.min && delay <= t.delay.max)) out.push(`sheet: TIMELOCK_MIN_DELAY ${sheet.TIMELOCK_MIN_DELAY} is outside ${t.delay.min}..${t.delay.max === Infinity ? "any" : t.delay.max} for ${target}`);
   if (need("SEED_DEPOSIT_USDC") !== undefined && sheet.SEED_DEPOSIT_USDC !== "1000000") out.push(`sheet: SEED_DEPOSIT_USDC is ${sheet.SEED_DEPOSIT_USDC}; the standing rule is 1 USDC (1000000)`);
-  for (const k of ["USDC", "PROTO", "RWA"]) {
+  // rmHARD (core 2008, ADR-0018) is checked when the sheet carries it: a sheet of the v0.6.0 line has no VAULT_HARD_* lines.
+  const capKeys = ["USDC", "PROTO", "RWA", ...(sheet.VAULT_HARD_TVL_CAP !== undefined ? ["HARD"] : [])];
+  for (const k of capKeys) {
     const tvl = need(`VAULT_${k}_TVL_CAP`), per = need(`VAULT_${k}_PER_DEPOSIT_CAP`);
     if (tvl === undefined || per === undefined) continue;
     if (BigInt(per) > BigInt(tvl)) out.push(`sheet: VAULT_${k}_PER_DEPOSIT_CAP is above its TVL cap`);

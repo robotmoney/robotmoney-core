@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { PublishError } from "./errors.ts";
 import { VAULT_RULE_FIELDS, vaultRules, type StageTable, type TableVault, type TableVaultKey, type VaultRules } from "./stage-table.ts";
-import { isRetiredVaultKey } from "./vault-keys.ts";
+import { isAddedVaultKey, isRetiredVaultKey } from "./vault-keys.ts";
 
 const TABLE_URL = new URL("../../scripts/deploy/stage-table.json", import.meta.url);
 
@@ -28,7 +28,11 @@ export function assertVaultRulesMatch(core: Pick<StageTable, "vaults">, corePath
   const rows = (vs: readonly Partial<TableVault>[]) => vs.map((v) => JSON.stringify([v.key, ...VAULT_RULE_FIELDS.map((f) => v[f] ?? null)]));
   // Issue 1927: a follow-on verb of the governed upgrade reads the live v0.5.0 deployment, whose table also names the retired rmAGENT (RETIRED_VAULT_KEYS). That row is the
   // deployment's own and this CLI applies no rule of it. Every other row, and their order, must still equal this CLI's. A deploy run passes no `retired`, so it refuses that row.
-  const mine = rows(VAULT_RULES), theirs = rows(o.retired ? core.vaults.filter((v) => !isRetiredVaultKey(v.key)) : core.vaults);
+  // Core 2008 (ADR-0018): the same follow-on verbs also read a prior line that predates a vault this CLI added (ADDED_VAULT_KEYS, rmHARD): that vault is not required there. Every
+  // vault the line does name must still match, in order.
+  const named = new Set(core.vaults.map((v) => v.key as string));
+  const mine = rows(o.retired ? VAULT_RULES.filter((v) => !(isAddedVaultKey(v.key) && !named.has(v.key))) : VAULT_RULES);
+  const theirs = rows(o.retired ? core.vaults.filter((v) => !isRetiredVaultKey(v.key)) : core.vaults);
   if (mine.join("\n") === theirs.join("\n")) return;
   const diff = [...new Set([...mine.filter((r) => !theirs.includes(r)), ...theirs.filter((r) => !mine.includes(r))].map((r) => JSON.parse(r)[0] as string))];
   throw new PublishError("INPUT_MISSING", `the per-vault rules differ between ${VAULT_RULES_PATH} (this CLI's checkout) and ${corePath} (--core-dir at the DEPLOY_SHA)${diff.length ? ` for vault ${diff.join(", ")}` : " in vault order"}: run the CLI from the same core sha as DEPLOY_SHA`, { cli: VAULT_RULES_PATH, core: corePath, vaults: diff });

@@ -12,7 +12,7 @@ import { CLAIM_LABEL } from "../../src/verify/upgradeability.ts";
 import { buildWorld, failed, IMPLS } from "./world.ts";
 
 const table = scopeTable(getStageTable(), "legacy"); // issue 1892: these tests read the combined deployment
-const art = (key: "USDC" | "PROTO" | "RWA") => table.vaults.find((v) => v.key === key)!.artifact;
+const art = (key: "USDC" | "PROTO" | "RWA" | "HARD") => table.vaults.find((v) => v.key === key)!.artifact;
 const codeLabel = (l: string) => `${l}: runtime code equals build artifact (masked)`;
 
 describe("verify artifacts come from the core table", () => {
@@ -25,6 +25,9 @@ describe("verify artifacts come from the core table", () => {
     expect(r.checks.find((c) => c.label === codeLabel("vault[rmRWA]"))!.detail).toContain("RwaBasketVault");
     expect(r.checks.find((c) => c.label === codeLabel("vault[rmPROTO]"))!.detail).toContain("ProtocolAssetVault");
     expect(r.checks.find((c) => c.label === codeLabel("vault[rmUSDC]"))!.detail).toContain("RobotMoneyVault");
+    // core 2008, ADR-0018: rmHARD is checked against HardAssetsVault
+    expect(art("HARD")).toBe("HardAssetsVault");
+    expect(r.checks.find((c) => c.label === codeLabel("vault[rmHARD]"))!.detail).toContain("HardAssetsVault");
   });
 
   test("rmRWA running ProtocolAssetVault code fails (it must be RwaBasketVault)", async () => {
@@ -60,7 +63,7 @@ describe("verify artifacts come from the core table", () => {
     const w = buildWorld();
     const m = loadManifests(w.manifestDir, table);
     expect(m.missing).toEqual([]);
-    expect(m.vaults.map((v) => [v.key, v.artifact])).toEqual([["rmUSDC", art("USDC")], ["rmPROTO", art("PROTO")], ["rmRWA", art("RWA")]]);
+    expect(m.vaults.map((v) => [v.key, v.artifact])).toEqual([["rmUSDC", art("USDC")], ["rmPROTO", art("PROTO")], ["rmRWA", art("RWA")], ["rmHARD", art("HARD")]]);
     expect(Object.keys(m.libraries)).toEqual(table.libraries.map((l) => l.name));
     expect(m.libraryArtifacts[table.libraries[0]!.name]).toBe(table.libraries[0]!.artifact);
   });

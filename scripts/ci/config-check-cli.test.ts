@@ -23,7 +23,10 @@ const a = (x: string) => x.replace(/^0x/, "").toLowerCase().padStart(64, "0");
 const FAKE_HASH = keccakHex("0x6001");
 // Core issue 1903: the committed config parks RM. The CLI RM-pool rules run on the reactivated config (rm-parked-testlib.ts).
 const base = loadConfigs(activatedConfigDir(realDir));
-const all = [...base.protocol.assets, ...base.rwa.assets, ...base.agent.shortlist] as { symbol: string; token: string; pool?: string; poolFee: number }[];
+const all = [...base.protocol.assets, ...base.rwa.assets, ...base.hard.assets, ...base.agent.shortlist] as { symbol: string; token: string; pool?: string; poolFee: number }[];
+// Core 2008: rmHARD's Aero CL factory, and its pools (tickSpacing() answers the config tick spacing).
+const AERO_FACTORY = base.hard.aerodromeSlipstreamFactory.toLowerCase();
+const AERO_POOLS = new Set(base.hard.assets.map((x) => x.pool.toLowerCase()));
 const RM_ENTRY = base.agent.shortlist[0];
 const FACTORY = base.rwa.uniswapV3Factory.toLowerCase();
 
@@ -31,6 +34,8 @@ const FACTORY = base.rwa.uniswapV3Factory.toLowerCase();
 let liveFeeOverride: Record<string, number> = {};
 /** The live in-range liquidity L the fake StateView reports for the RM V4 pool (default: funded). */
 let rmLiquidity = 10n ** 18n;
+/** The observation cardinality the fake Aero PAXG pool reports (default 1000; the PAXG floor is 900 for its 1798 s window). */
+let aeroCardinality = 1000;
 
 function handle(method: string, params: any[]): string {
   if (method === "eth_chainId") return "0x2105";
@@ -47,16 +52,23 @@ function handle(method: string, params: any[]): string {
     if (sel === "0xfa6793d5") return "0x" + w(rmLiquidity);
   }
   const asset = all.find((x) => x.pool?.toLowerCase() === t);
+  if (sel === "0xd0c93a7c" && AERO_POOLS.has(t)) return "0x" + w(liveFeeOverride[asset!.symbol] ?? Number(asset!.poolFee));
   if (sel === "0xddca3f43") return "0x" + w(asset ? (liveFeeOverride[asset.symbol] ?? Number(asset.poolFee)) : 0);
   if (sel === "0x0dfe1681") return "0x" + a(base.rwa.usdc);
   if (sel === "0xd21220a7") return "0x" + a(asset!.token);
-  if (sel === "0x3850c7bd") return "0x" + w(1n << 96n) + w(0) + w(0) + w(0) + w(1000) + w(0) + w(1);
+  // Word 3 is the 6-field Slipstream cardinality; word 4 is what the V3 reader takes.
+  if (sel === "0x3850c7bd") return "0x" + w(1n << 96n) + w(0) + w(0) + w(AERO_POOLS.has(t) ? aeroCardinality : 1000) + w(1000) + w(0) + w(1);
   if (sel === "0x1a686502") return "0x" + w(10n ** 18n);
   if (sel === "0x70a08231") return "0x" + w(2_000_000n * 10n ** 6n);
   if (sel === "0x1698ee82" && t === FACTORY) {
     const tok = "0x" + data.slice(10, 74).slice(24);
     const x = all.find((y) => y.token.toLowerCase() === tok.toLowerCase());
     return "0x" + a(x!.pool!);
+  }
+  if (sel === "0x28af8d0b" && t === AERO_FACTORY) {
+    const tok = "0x" + data.slice(10, 74).slice(24);
+    const x = all.find((y) => y.token.toLowerCase() === tok.toLowerCase());
+    return "0x" + a(x?.pool ?? "0x0");
   }
   return "0x" + w(0);
 }
@@ -116,7 +128,7 @@ describe("config-check CLI against a fake live chain", () => {
     const report = JSON.parse(readFileSync(file, "utf8"));
     expect(report.blockNumber).toBe(BLOCK);
     expect(report.ok).toBe(true);
-    for (const sym of ["wETH", "cbBTC", "deSPXA", "RM"]) {
+    for (const sym of ["wETH", "cbBTC", "deSPXA", "PAXG", "RM"]) {
       expect(report.findings.some((f: any) => f.scope.endsWith(`:${sym}`) && f.ok)).toBe(true);
     }
   });
@@ -175,6 +187,33 @@ describe("config-check CLI against a fake live chain", () => {
     const r = await run(configDir((f) => { f["agent-token-shortlist.json"].shortlist[0].poolKey.tickSpacing = 200; }));
     expect(r.code).not.toBe(0);
     expect(r.out).toMatch(/FAIL[^\n]*rm-v4-pool-id|FAIL[^\n]*poolkey-hashes-to-pool-id/);
+  });
+
+  test("core 2008: exits non-zero when the live PAXG Aero pool's tick spacing differs from config", async () => {
+    liveFeeOverride = { PAXG: 50 };
+    const r = await run(configDir());
+    liveFeeOverride = {};
+    expect(r.code).not.toBe(0);
+    expect(r.out).toMatch(/FAIL[^\n]*PAXG[^\n]*pool-tick-spacing-equals-config/);
+  });
+
+  test("core 2008: exits non-zero when the PAXG pool in config is not the Aero factory's pool", async () => {
+    liveFeeOverride = {};
+    const r = await run(configDir((f) => { f["hard-assets.json"].assets[0].pool = "0x2222222222222222222222222222222222222222"; }));
+    expect(r.code).not.toBe(0);
+    expect(r.out).toMatch(/FAIL[^\n]*PAXG/);
+  });
+
+  test("core 2008: the PAXG Aero pool passes on its real 900-slot ring and exits non-zero one slot below its 1798 s window floor", async () => {
+    liveFeeOverride = {};
+    aeroCardinality = 900;
+    const ok = await run(configDir());
+    aeroCardinality = 899;
+    const r = await run(configDir());
+    aeroCardinality = 1000;
+    expect(ok.out).toMatch(/PASS[^\n]*PAXG[^\n]*observation-cardinality>=900[^\n]*cardinality=900 twapWindow=1798/);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toMatch(/FAIL[^\n]*PAXG[^\n]*observation-cardinality>=900[^\n]*cardinality=899/);
   });
 
   test("exits non-zero when the chain id is not Base", async () => {

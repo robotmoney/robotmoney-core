@@ -234,9 +234,9 @@ describe("mutations fail with the expected label", () => {
     expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmRWA]: asset config equals sheet"]);
   });
 
-  test("every basket's maxSlippageBps is read back on chain and equals the config: rmPROTO and rmRWA 100, any other value fails (core 1695, issue 1705 C4)", async () => {
+  test("every basket's maxSlippageBps is read back on chain and equals the config: rmPROTO, rmRWA and rmHARD 100, any other value fails (core 1695, issue 1705 C4)", async () => {
     const ok = await verifyDeployment(buildWorld().opts);
-    const labels = ["rmPROTO", "rmRWA"].map((k) => `vault[${k}]: maxSlippageBps equals config`);
+    const labels = ["rmPROTO", "rmRWA", "rmHARD"].map((k) => `vault[${k}]: maxSlippageBps equals config`);
     for (const L of labels) expect(ok.checks.find((c) => c.label === L)).toMatchObject({ ok: true });
     // rmUSDC holds no basket and is not asked for it
     expect(ok.checks.filter((c) => c.label.endsWith("maxSlippageBps equals config")).map((c) => c.label)).toEqual(labels);
@@ -316,6 +316,7 @@ describe("mutations fail with the expected label", () => {
       rmUSDC: [...common, ...usdc],
       rmPROTO: [...common, ...basket, "maxSlippageBps equals config"],
       rmRWA: [...common, ...basket, "maxSlippageBps equals config"],
+      rmHARD: [...common, ...basket, "maxSlippageBps equals config"],
     };
     for (const key of Object.keys(want)) {
       const w = buildWorld();
@@ -615,7 +616,7 @@ describe("rotation of the weight setter (core 1616, ADR-0002)", () => {
 // QA plan v1 D7 (review E5, issue 1705 Q2): before govern --row set-unwind-guard nothing set a basket's emergency unwind guard, so the oracle-free unwind and the override path
 // could not run. The stage 12 label requires a non-zero minUsdcOut on every active asset of a basket the sheet expects OPEN; a paused basket (pre-govern) passes and records the values.
 describe("the emergency unwind guard label (QA plan v1 D7)", () => {
-  const BASKETS = ["rmPROTO", "rmRWA"] as const;
+  const BASKETS = ["rmPROTO", "rmRWA", "rmHARD"] as const;
   const labelOf = (k: string) => `vault[${k}]: ${UNWIND_GUARD_LABEL}`;
   const check = (r: Awaited<ReturnType<typeof verifyDeployment>>, k: string) => r.checks.find((c) => c.label === labelOf(k))!;
   /** The post-govern state of one basket: the sheet expects it open and the chain reads it open. */
@@ -702,7 +703,7 @@ describe("from-block against the deploy receipts (issue 1833, 1851)", () => {
   const DEPLOYER_SCAN = "deployer: holds no role on any contract (log scan)";
   const HOLDERS_SCAN = "roles: every holder of every role on every governed contract is an expected account (log scan)";
   const TIMELOCK_SCAN = "timelock: only the safe holds PROPOSER, CANCELLER or EXECUTOR role (log scan)";
-  const ALL_SCANS = [...["rmUSDC", "rmPROTO", "rmRWA"].flatMap(scanLabels), ...AGENT_SCANS, DEPLOYER_SCAN, HOLDERS_SCAN, TIMELOCK_SCAN];
+  const ALL_SCANS = [...["rmUSDC", "rmPROTO", "rmRWA", "rmHARD"].flatMap(scanLabels), ...AGENT_SCANS, DEPLOYER_SCAN, HOLDERS_SCAN, TIMELOCK_SCAN];
   const deployed = deployedWorld;
   const okOf = (r: Awaited<ReturnType<typeof verifyDeployment>>, l: string) => [l, r.checks.find((c) => c.label === l)?.ok];
   const detailOf = (r: Awaited<ReturnType<typeof verifyDeployment>>, l: string) => r.checks.find((c) => c.label === l)?.detail ?? "";
@@ -723,7 +724,7 @@ describe("from-block against the deploy receipts (issue 1833, 1851)", () => {
       expect(detailOf(r, l)).toContain("from-block 100 is after the vault's creation");
       expect(detailOf(r, l)).toContain("created in block 99");
     }
-    for (const k of ["rmPROTO", "rmRWA"]) for (const l of scanLabels(k)) expect(okOf(r, l)).toEqual([l, true]);
+    for (const k of ["rmPROTO", "rmRWA", "rmHARD"]) for (const l of scanLabels(k)) expect(okOf(r, l)).toEqual([l, true]);
   });
   test("historical state reads throw 'missing trie node' and the receipts read fine: every scan passes", async () => {
     const w = deployed();

@@ -982,13 +982,17 @@ async fn shipped_vault_names_get_their_intended_risk_label() {
 
     // (vault address byte, registration name as spelled by contracts/script,
     //  expected risk_label)
-    let cases: [(u8, &str, &str); 3] = [
+    let cases: [(u8, &str, &str); 5] = [
         // DeployProtocolAssetVault.s.sol VAULT_NAME
         (0xA1, "Robot Money Protocol", "VOLATILE"),
         // DeployAgentTokenVault.s.sol VAULT_NAME
         (0xA2, "Robot Money Agent Tokens", "SPECULATIVE"),
         // DeployVault.s.sol VAULT_NAME
         (0xA3, "Robot Money USDC", "STABLE_YIELD"),
+        // DeployRwaBasketVault.s.sol VAULT_NAME
+        (0xA4, "Robot Money RWA", "SPECULATIVE"),
+        // DeployHardAssetsVault.s.sol VAULT_NAME (core 2008, ADR-0018: PAXG, VOLATILE like rmPROTO)
+        (0xA5, "Robot Money Hard Assets", "VOLATILE"),
     ];
 
     let logs: Vec<serde_json::Value> = cases

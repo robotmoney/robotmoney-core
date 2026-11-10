@@ -1,0 +1,81 @@
+---
+title: "ConstAeroFactory"
+---
+
+# ConstAeroFactory
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9a5abb78f17cecf801493322557775e4886f59cc/contracts/test/DeployBasketVaultHardAssets.t.sol)
+
+<i>
+
+Aero CL factory double: `getPool` returns the one configured pool for the configured pair and spacing, else zero.
+
+</i>
+
+## Constants
+
+### _pool
+
+```solidity
+address internal immutable _pool;
+```
+
+### _a
+
+```solidity
+address internal immutable _a;
+```
+
+### _b
+
+```solidity
+address internal immutable _b;
+```
+
+### _tickSpacing
+
+```solidity
+int24 internal immutable _tickSpacing;
+```
+
+## Functions
+
+<a id="constructor-address-address-address-int24"></a>
+
+### constructor
+
+```solidity
+constructor(address pool_, address a, address b, int24 tickSpacing_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool_ | `address` |  |
+| a | `address` |  |
+| b | `address` |  |
+| tickSpacing_ | `int24` |  |
+
+<a id="getpool-address-address-int24"></a>
+
+### getPool
+
+```solidity
+function getPool(address x, address y, int24 ts) external view returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| x | `address` |  |
+| y | `address` |  |
+| ts | `int24` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+

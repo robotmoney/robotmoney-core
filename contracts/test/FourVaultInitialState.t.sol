@@ -11,6 +11,7 @@ import {DeployVault} from "../script/DeployVault.s.sol";
 import {BasketVaultDeployBase} from "../script/BasketVaultDeployBase.sol";
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
 import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
+import {DeployHardAssetsVault} from "../script/DeployHardAssetsVault.s.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
 
@@ -18,7 +19,7 @@ interface IDepositsPaused {
     function depositsPaused() external view returns (bool);
 }
 
-/// @notice Issue 1705, ADR-0017: the three production vault deploy scripts run in process, and each vault's
+/// @notice Issue 1705, ADR-0018: the four production vault deploy scripts run in process, and each vault's
 ///         `depositsPaused()` right after its stage equals the stage table's `deployPaused` for that
 ///         vault (scripts/deploy/stage-table.json, the one rule table). rmUSDC runs the seeded path
 ///         the broadcast run takes (the pause follows the seed), the baskets run their in-process
@@ -28,7 +29,7 @@ interface IDepositsPaused {
 ///         need the real USDC, lending venues and pools. CI runs it in forge-fork-vault-regressions
 ///         through scripts/devnet/forge-fork-tests.ts, which fails a run in which nothing executed.
 ///         With FORK_RPC_URL unset the test skips with a named reason.
-contract ThreeVaultInitialStateForkTest is Test {
+contract FourVaultInitialStateForkTest is Test {
     using stdJson for string;
 
     address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
@@ -85,6 +86,11 @@ contract ThreeVaultInitialStateForkTest is Test {
             .runInProcess(_basketParams(registry), vm.readFile("config/rwa-assets.json"))
             .vault;
         }
+        if (s == keccak256("hard")) {
+            return new DeployHardAssetsVault()
+            .runInProcess(_basketParams(registry), vm.readFile("config/hard-assets.json"))
+            .vault;
+        }
         revert(string.concat("no in-process deploy for vault stage ", stage));
     }
 
@@ -94,7 +100,7 @@ contract ThreeVaultInitialStateForkTest is Test {
         VaultRegistry registry = CoreProxies.vaultRegistry(admin);
         uint256 n;
         while (vm.keyExistsJson(table, string.concat(".vaults[", vm.toString(n), "]"))) n++;
-        assertEq(n, 3, "the table lists the three vaults");
+        assertEq(n, 4, "the table lists the four vaults");
         for (uint256 i = 0; i < n; i++) {
             string memory row = string.concat(".vaults[", vm.toString(i), "]");
             string memory key = table.readString(string.concat(row, ".key"));

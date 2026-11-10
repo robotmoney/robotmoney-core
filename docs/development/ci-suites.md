@@ -513,7 +513,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 1. Checkout repository
 2. Install Rust + Foundry (pinned `v1.8.5`, the same release as `.github/actions/twin-fork`)
 3. Generate fresh agent EOA with `cast wallet new --json`, read through `.github/scripts/parse_cast_wallet_new.py` (any known cast output shape; refuses a missing or malformed field, issue #1682); write keystore via `rmpc-keystore-import` and require its address to equal cast's
-4. Deploy the real Aave V3 / Compound V3 / Morpho adapter stack with `.github/actions/twin-publish` and `govern: "true"`: stage 13 unpauses all three vaults through the real Safe and timelock (one Twin time warp). Every vault deploys paused, so without govern the replay's `self-check` and `deposit` refuse with `ErrDepositsPaused` (QA plan v1 U2). Then the depositor authorizes the generated agent on-chain (commit, reveal) and the step asserts `agentOwner` and `AGENT_ROLE`
+4. Deploy the real Aave V3 / Compound V3 / Morpho adapter stack with `.github/actions/twin-publish` and `govern: "true"`: stage 13 unpauses all four vaults through the real Safe and timelock (one Twin time warp). Every vault deploys paused, so without govern the replay's `self-check` and `deposit` refuse with `ErrDepositsPaused` (QA plan v1 U2). Then the depositor authorizes the generated agent on-chain (commit, reveal) and the step asserts `agentOwner` and `AGENT_ROLE`
 5. Fund agent ETH balance via `anvil_setBalance`; set USDC approval signed by the generated agent key
 6. `replay_headless_transcript.py` executes get-vault → get-agent → get-balance → get-allowance → self-check → deposit in that fixed order against the live devnet, then `assert_headless_live_transcript.py` — loud-fail guard that reds this step on an empty / zero-rmpc transcript
 7. `assert_headless_deposit_transcript.py` — asserts tool-call order, deposit exit 0, tx_hash present; `assert_headless_deposit_delta.py` / `assert_headless_deposit_sender.py` — asserts the on-chain vault delta and tx sender
@@ -575,7 +575,7 @@ isolation, independent of any client (rmpc, dapp, explorer).
 6. `cargo build -p smoke-test` — includes the `smoke-test` CLI binary
 7. `cargo clippy -p smoke-test --all-targets -- -D warnings` — type-checks the crate's `tests/` integration binaries in the hermetic `smoke-test-guards` job (issue #1295); `cargo build` alone never compiles them. The same job also runs `bash .github/scripts/tests/test_cargo_test_require_executed.sh`, the self-test proving the executed-test guard's `REQUIRE_EXECUTED_MARKERS` gate goes red on a skipped or truncated devnet test (issue #1371), and `cargo_test_require_executed.sh -p smoke-test --test govern_output_parse` with a floor of 5: the hermetic govern stdout contract, which no step ran before QA plan T2
 8. `cargo test -p smoke-test --release --test cli_meta -- --nocapture` — boots `smoke-test --full-stack`, checks the structured endpoint summary, verifies `--dapp-port` / Ctrl-C teardown, and writes `smoke-test-cli_meta.log`
-9. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — deploys contracts, asserts a healthy RPC on a real Base head, the three-vault manifests and the handover
+9. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — deploys contracts, asserts a healthy RPC on a real Base head, the four-vault manifests and the handover
 10. `cargo test -p smoke-test --release --test fund_usdc -- --test-threads=1 --nocapture` — the Twin environment steps: fund USDC (a grant of the exact amount on the real FiatToken slot, spendable through the real token's `transfer`), fund gas (exact balance), the chain is the anvil Twin fork (id 918453), and warp moves block time 48h without real waiting.
 11. `cargo test -p smoke-test --release --test twin_fork_env -- --test-threads=1 --nocapture` — the same three environment steps straight through `TwinFork` on the real Base USDC, with no publish run: fund USDC sets the real balance slot, fund gas, warp, and the fork is the anvil Twin fork on a real Base head.
 12. `cargo test -p smoke-test --release --test governance -- --test-threads=1 --nocapture` — after the publish-contracts run, the deployer holds neither `ADMIN_ROLE` nor `WEIGHT_SETTER_ROLE` on `RouterGovernance`, and the timelock holds both (core 1488, issue 1698). `WEIGHT_SETTER_ROLE` gates `applyReceipt`. There is no voting by anyone: `RouterGovernance` has no voting function (issue 1698).
@@ -1098,9 +1098,9 @@ actual cost and resolved all five:
 #1311's scope, in addition to the `rmpc-fork-e2e::vault_deposit_redeem_smoke`
 and `rmpc-fork-e2e::governance` analyses above): `demo_seeding`'s assertions
 (`testing/smoke-test/tests/demo_seeding.rs`) are limited to
-`VaultRegistry.listVaults()` returning three Active vaults,
-`PortfolioRouter.getWeights()` matching the 8500/500/500/500 split, and all
-three vaults reporting non-zero `totalAssets` after `seed_demo_depositors`. It
+`VaultRegistry.listVaults()` returning four Active vaults (historical, pre-ADR-0017 shape),
+`PortfolioRouter.getWeights()` matching the 8500/500/500/500 split, and every
+vault reporting non-zero `totalAssets` after `seed_demo_depositors`. It
 calls none of `fund_eth_from_harness` or `fund_rm_token`,
 and reads no `exitFeeBps` / `activeAdapterCount`. It does call
 `self.fund_usdc(...)` indirectly, via `seed_demo_depositors` funding each

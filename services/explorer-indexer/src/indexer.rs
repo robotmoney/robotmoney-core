@@ -4175,11 +4175,12 @@ const DEFAULT_RISK_LABEL: &str = "STABLE_YIELD";
 /// when no discriminator matches.
 ///
 /// The deploy scripts register `Robot Money ...` names (`Robot Money USDC`,
-/// `Robot Money Protocol`, `Robot Money Agent Tokens`, `Robot Money RWA`); the
-/// legacy `RM ...` names also classify. The name is lower-cased and
-/// whitespace-collapsed first, because the rmUSDC name is a deploy-time env
-/// input. Basket discriminators (agent, rwa, protocol) are tested before
-/// `usdc` so a basket vault denominated in USDC classifies on what it holds.
+/// `Robot Money Protocol`, `Robot Money Agent Tokens`, `Robot Money RWA`,
+/// `Robot Money Hard Assets`); the legacy `RM ...` names also classify. The name
+/// is lower-cased and whitespace-collapsed first, because the rmUSDC name is a
+/// deploy-time env input. Basket discriminators (agent, rwa, protocol, hard asset)
+/// are tested before `usdc` so a basket vault denominated in USDC classifies on
+/// what it holds. rmHARD (PAXG, PRD §11.5, ADR-0018) is VOLATILE like rmPROTO.
 fn classify_vault_risk_label(name: &str) -> Option<&'static str> {
     let n = name
         .split_whitespace()
@@ -4188,7 +4189,7 @@ fn classify_vault_risk_label(name: &str) -> Option<&'static str> {
         .to_ascii_lowercase();
     if n.contains("agent") || n.contains("rwa") {
         Some("SPECULATIVE")
-    } else if n.contains("protocol") {
+    } else if n.contains("protocol") || n.contains("hard asset") {
         Some("VOLATILE")
     } else if n.contains("usdc") {
         Some("STABLE_YIELD")
@@ -4235,6 +4236,7 @@ mod tests {
             ("Robot Money Agent Tokens", "SPECULATIVE"),
             ("Robot Money RWA", "SPECULATIVE"),
             ("Robot Money RWA / Thematic", "SPECULATIVE"),
+            ("Robot Money Hard Assets", "VOLATILE"),
         ] {
             assert_eq!(classify_vault_risk_label(name), Some(want), "{name}");
         }
@@ -4303,6 +4305,10 @@ mod tests {
         assert!(
             found.len() >= 3,
             "scraped only {found:?}; scrape went blind"
+        );
+        assert!(
+            found.iter().any(|n| n == "Robot Money Hard Assets"),
+            "scraped {found:?}; the rmHARD script name is missing"
         );
         for name in &found {
             let label = classify_vault_risk_label(name);

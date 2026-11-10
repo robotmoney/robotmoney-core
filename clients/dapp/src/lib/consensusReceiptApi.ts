@@ -204,24 +204,35 @@ export function unwrapReceiptPayload(body: unknown): ReceiptPayload | null {
 // ─── Applied vs not-applied (issue #1247 task 4.14) ─────────────────────────
 
 /**
- * Bucket → vault symbol, pinned by
- * `tests/fixtures/consensus-receipt.bucket-vault-map.json`. Kept here as a
- * literal because the dapp cannot read repo fixtures at runtime; the mapping is
- * schema 1.0 and changes only with a `schema_version` bump.
+ * Bucket → vault symbol. Kept here as a literal because the dapp cannot read repo fixtures at
+ * runtime. The receipt schema stays 1.0. `agent_tokens` is a legacy bucket name: it maps to
+ * rmHARD (Robot Money Hard Assets, PAXG), the fourth router vault in the slot of the retired
+ * rmAGENT (ADR-0018, core 2008). The shared fixture
+ * `tests/fixtures/consensus-receipt.bucket-vault-map.json` is vendored from robotmoney-frontend
+ * and still labels the bucket rmAGENT until the frontend regenerates it.
  */
 export const BUCKET_VAULT_SYMBOL: Readonly<Record<string, string>> = {
-  agent_tokens: "rmAGENT",
+  agent_tokens: "rmHARD",
   conservative_defi_yield: "rmUSDC",
   protocol_tokens: "rmPROTO",
   real_world_assets: "rmRWA",
 };
 
 /**
- * Buckets whose vault is retired (ADR-0017). The schema keeps the bucket, a deployment of
- * the v0.6.0 line has no vault for it, and the router routes it nothing. A receipt that
- * recommends 0 bps for it is applied. A non-zero recommendation is not applied.
+ * The bucket's vault on an older deployment line, used when the deployment map has no address
+ * for the `BUCKET_VAULT_SYMBOL` vault: the live v0.5.0 line still has rmAGENT (withdraw-only,
+ * ADR-0009) for `agent_tokens`.
  */
-export const RETIRED_BUCKETS: ReadonlySet<string> = new Set(["agent_tokens"]);
+export const LEGACY_BUCKET_VAULT_SYMBOL: Readonly<Record<string, string>> = {
+  agent_tokens: "rmAGENT",
+};
+
+/**
+ * Buckets whose vault a deployment may lack. A three-vault deployment of the v0.6.0 line has no
+ * rmHARD (and no rmAGENT), so the router routes `agent_tokens` nothing there: a receipt that
+ * recommends 0 bps for it is applied, a non-zero recommendation is not applied.
+ */
+export const OPTIONAL_VAULT_BUCKETS: ReadonlySet<string> = new Set(["agent_tokens"]);
 
 /**
  * Whether a receipt's recommendation is reflected in the live router weights.
@@ -267,10 +278,12 @@ export function computeAppliedState(
   for (const w of payload.weights) {
     const symbol = BUCKET_VAULT_SYMBOL[w.bucket];
     if (!symbol) return "unknown";
-    const address = vaultAddressBySymbol[symbol];
+    const legacy = LEGACY_BUCKET_VAULT_SYMBOL[w.bucket];
+    const address =
+      vaultAddressBySymbol[symbol] ?? (legacy ? vaultAddressBySymbol[legacy] : undefined);
     if (!address) {
-      // A retired bucket has no vault in a three-vault deployment: the router routes it 0 bps.
-      if (RETIRED_BUCKETS.has(w.bucket)) {
+      // An optional bucket has no vault in a three-vault deployment: the router routes it 0 bps.
+      if (OPTIONAL_VAULT_BUCKETS.has(w.bucket)) {
         if (w.weight_bps !== 0) return "not_applied";
         continue;
       }
@@ -294,8 +307,10 @@ export function payloadSignatureCount(payload: ReceiptPayload | null): number | 
  *
  * The shape follows `deployment_address_contract` in
  * `tests/fixtures/consensus-receipt.bucket-vault-map.json`: the three symbols
- * `rmUSDC`, `rmPROTO`, `rmRWA` and a `^0x[0-9a-fA-F]{40}$` address each. `rmAGENT` is
- * retired (ADR-0017): it is accepted when present (the live v0.5.0 line) and not required. That fixture's `missing_address_policy` is explicit — *"the deployment
+ * `rmUSDC`, `rmPROTO`, `rmRWA` and a `^0x[0-9a-fA-F]{40}$` address each. `rmHARD` (ADR-0018) is
+ * accepted when present (a four-vault deployment) and not required, so a three-vault deployment
+ * stays receipt-capable. `rmAGENT` is retired (ADR-0017): it is accepted when present (the live
+ * v0.5.0 line) and not required. That fixture's `missing_address_policy` is explicit — *"the deployment
  * is not receipt-capable; never substitute a global or zero address"* — so an
  * absent, malformed, or incomplete map returns `undefined` and the surface
  * degrades to "cannot determine" rather than guessing.
@@ -320,7 +335,9 @@ export function parseVaultAddressMap(
     if (typeof value !== "string" || !addressPattern.test(value)) return undefined;
     out[symbol] = value;
   }
-  const retired = (parsed as Record<string, unknown>)["rmAGENT"];
-  if (typeof retired === "string" && addressPattern.test(retired)) out["rmAGENT"] = retired;
+  for (const optional of ["rmHARD", "rmAGENT"]) {
+    const value = (parsed as Record<string, unknown>)[optional];
+    if (typeof value === "string" && addressPattern.test(value)) out[optional] = value;
+  }
   return out;
 }
