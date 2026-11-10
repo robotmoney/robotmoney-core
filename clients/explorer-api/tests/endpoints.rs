@@ -723,6 +723,53 @@ async fn list_vaults_returns_all_registered_vaults() {
     assert!(body["indexed_at"].is_string(), "indexed_at must be present");
 }
 
+/// Core 2008, ADR-0018: a four-vault deployment lists the Hard Assets vault (rmHARD, PAXG) beside the others, with the VOLATILE
+/// risk label the indexer stores for "Robot Money Hard Assets". Two more vaults are added to the two seeded ones.
+#[tokio::test]
+async fn list_vaults_lists_the_hard_assets_vault_as_volatile() {
+    let s = start_with_seed().await;
+    let rwa = [0xb2u8; 20];
+    let hard = [0xb3u8; 20];
+    for (addr, name, label) in [
+        (&rwa, "Robot Money RWA", "SPECULATIVE"),
+        (&hard, "Robot Money Hard Assets", "VOLATILE"),
+    ] {
+        sqlx::query(
+            "INSERT INTO vaults (chain_id, vault_address, name, risk_label, deposit_cap, status, \
+                                  registered_at, registered_block, registered_tx) \
+             VALUES ($1, $2, $3, $4, 0, 0, 1748000000, 900, $5)",
+        )
+        .bind(8453_i64)
+        .bind(&addr[..])
+        .bind(name)
+        .bind(label)
+        .bind(&[0x12u8; 32][..])
+        .execute(&s._pool)
+        .await
+        .unwrap();
+    }
+    let body: serde_json::Value = http()
+        .get(format!("http://{}/v1/vaults", s.addr))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let vaults = body["vaults"].as_array().expect("vaults must be an array");
+    assert_eq!(vaults.len(), 4, "two seeded vaults plus rmRWA and rmHARD: {vaults:?}");
+    let hard_row = vaults
+        .iter()
+        .find(|v| v["name"] == "Robot Money Hard Assets")
+        .unwrap_or_else(|| panic!("rmHARD must be listed: {vaults:?}"));
+    assert_eq!(hard_row["risk_label"], "VOLATILE");
+    assert_eq!(hard_row["status"], 0);
+    assert_eq!(
+        hard_row["address"].as_str().map(str::to_lowercase),
+        Some(format!("0x{}", "b3".repeat(20)))
+    );
+}
+
 /// Suite-08 AC: GET /v1/vaults includes vaults with status != Active.
 /// Beta Vault is seeded as Paused (status=1).
 #[tokio::test]

@@ -1,7 +1,7 @@
 //! The Twin chain run of publish contracts, end to end (core 1488).
 //!
 //! One test boots the Twin chain (918453) through the harness. The harness has already called
-//! `publish` (deploy all three vaults, real Safe handover). This test then asserts the three
+//! `publish` (deploy all four vaults, real Safe handover). This test then asserts the four
 //! manifests, runs the one verifier (which holds the router, basket and timelock role proofs), runs the stage 13 govern matrix through the real Safe,
 //! runs the verifier again (the order is publish, verify, govern, verify: issue 1667), then one Safe self-administration row on the real SafeL2
 //! (`govern --row safe-change-threshold` raised to the owner count and restored to the sheet's value: QA plan v1 B5, finding T5).
@@ -139,7 +139,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
             std::fs::write(p, format!("{marker}\n")).expect("write the scenario marker");
         }
     }
-    // Core 1710, issue 1705: each vault's deposit state before govern is the stage table's deployPaused (all three deploy paused, rmUSDC included),
+    // Core 1710, issue 1705: each vault's deposit state before govern is the stage table's deployPaused (all four deploy paused, rmUSDC included),
     // and after govern it is open where the table makes the unpause a stage 13 row. The verifier below expects exactly that.
     let rules = table.vault_deposit_rules();
     let deposits_paused = |vault: alloy_primitives::Address| -> bool {
@@ -147,17 +147,18 @@ fn twin_chain_publish_verify_and_govern_matrix() {
             .expect("read depositsPaused")
             .ends_with('1')
     };
-    let three_vaults = [
+    let four_vaults = [
         ("rmUSDC", fx.vault()),
         ("rmPROTO", fx.proto_vault()),
         ("rmRWA", fx.rwa_vault()),
+        ("rmHARD", fx.hard_vault()),
     ];
     assert_eq!(
         rules.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
-        three_vaults.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
-        "the stage table's vault rows and the harness vaults must be the same three, in order"
+        four_vaults.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+        "the stage table's vault rows and the harness vaults must be the same four, in order"
     );
-    for (rule, (name, vault)) in rules.iter().zip(three_vaults) {
+    for (rule, (name, vault)) in rules.iter().zip(four_vaults) {
         assert_eq!(
             deposits_paused(vault),
             rule.deploy_paused,
@@ -184,7 +185,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     }
     // Issue 1666: every basket ships with a nonzero NAV deviation guard from the sheet and sits on pools at or above the sheet liquidity
     // floor. The verifier read both back from the chain; `verify()` above would have failed on any of these labels failing.
-    for vault in ["rmPROTO", "rmRWA"] {
+    for vault in ["rmPROTO", "rmRWA", "rmHARD"] {
         for what in [
             "navDeviationGuardBps equals sheet",
             "navDeviationGuardBps above zero",
@@ -331,15 +332,15 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         .govern_matrix()
         .expect("the govern matrix must pass through the real Safe");
     assert!(!rows.is_empty(), "the govern matrix ran no rows");
-    // Core 1710: stage 13 is three unpauses, rmUSDC first. Each is its own scheduled and executed line, and each vault reads open afterwards.
-    for row in ["unpause-USDC", "unpause-PROTO", "unpause-RWA"] {
+    // Core 1710: stage 13 is four unpauses, rmUSDC first. Each is its own scheduled and executed line, and each vault reads open afterwards.
+    for row in ["unpause-USDC", "unpause-PROTO", "unpause-RWA", "unpause-HARD"] {
         assert_eq!(
             rows.iter().filter(|r| r.row == row).count(),
             2,
             "the govern matrix must print one scheduled and one executed line for {row}"
         );
     }
-    for (rule, (name, vault)) in rules.iter().zip(three_vaults) {
+    for (rule, (name, vault)) in rules.iter().zip(four_vaults) {
         assert_eq!(
             deposits_paused(vault),
             rule.paused_after_stage13(),
@@ -350,7 +351,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     // QA plan v1 D7: the verifier requires a non-zero emergency unwind guard on every active asset of an OPEN basket. The Safe sets it through the real timelock,
     // one `govern --row set-unwind-guard` round per basket (token=all), as the twin-publish step does, before the post-govern verify. The baskets hold nothing yet:
     // these values prove the row and the label on the real contracts, not a sizing (on 8453 the operator sizes min-usdc-out from each vault's holding).
-    for basket in ["PROTO", "RWA"] {
+    for basket in ["PROTO", "RWA", "HARD"] {
         let vault_arg = format!("vault={basket}");
         let guarded = fx
             .published()
@@ -375,7 +376,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         );
     }
 
-    // Issue 1667: the order is publish, verify, govern, verify. The first verify above passed before govern (all three vaults paused). This second verify reads the
+    // Issue 1667: the order is publish, verify, govern, verify. The first verify above passed before govern (all four vaults paused). This second verify reads the
     // post-govern state: the unpause rows are executed, so the verifier expects those vaults open. The Twin run only checks that the scripts execute in this
     // order. The 48 hour delay and the Safe signers are proven on chain 8453 through the real Safe.
     let verified_after = fx
@@ -538,7 +539,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     };
     assert!(!c_released(&fx), "receipt C is recorded, not released");
     let before = router_weights(&fx);
-    let want_vaults: Vec<String> = [fx.vault(), fx.proto_vault(), fx.rwa_vault()]
+    let want_vaults: Vec<String> = [fx.vault(), fx.proto_vault(), fx.rwa_vault(), fx.hard_vault()]
         .iter()
         .map(|a| format!("{a:#x}"))
         .collect();
@@ -548,12 +549,12 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     );
     assert_eq!(
         before.1,
-        vec![9500, 500, 0],
-        "the deployer left the 8453 launch vector on the router (rmUSDC 9500, rmPROTO 500, rmRWA 0)"
+        vec![9500, 500, 0, 0],
+        "the deployer left the 8453 launch vector on the router (rmUSDC 9500, rmPROTO 500, rmRWA 0, rmHARD 0)"
     );
     assert_ne!(
         before.1,
-        vec![5000, 3000, 2000],
+        vec![5000, 3000, 2000, 0],
         "the router must not already hold receipt C's vector"
     );
     // Issue 1743 (the real 8453 deploy failure): the router stage must not leave a voted vector. Effective routing after the deploy IS the sheet's launch
@@ -597,8 +598,8 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     assert_eq!(after.0, want_vaults, "the vault list is unchanged");
     assert_eq!(
         after.1,
-        vec![5000, 3000, 2000],
-        "the router's active vector is receipt C's vector after the call"
+        vec![5000, 3000, 2000, 0],
+        "the router's active vector is receipt C's vector after the call (agent_tokens 0 bps is the eligible rmHARD leg, ADR-0018)"
     );
     // Issue 1743: a receipt-driven rebalance must change the EFFECTIVE routing.
     assert!(
@@ -682,7 +683,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     // `cast_send` fails on a reverted receipt.
     //
     // Issue 1746: the router skips every leg whose computed amount is 0 (no vault call). At this point of the run the EFFECTIVE vector is the default launch vector
-    // again (9500/500/0 after the clear above: rmRWA is 0 bps). Before the fix a 0 bps leg reverted the whole router deposit (`deposit(0)` reverts).
+    // again (9500/500/0/0 after the clear above: rmRWA and rmHARD are 0 bps). Before the fix a 0 bps leg reverted the whole router deposit (`deposit(0)` reverts).
     let user = fx.agent();
     let pk = format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY));
     let amount: u128 = 100_000_000; // 100 USDC
@@ -706,6 +707,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         ("rmUSDC", fx.vault()),
         ("rmPROTO", fx.proto_vault()),
         ("rmRWA", fx.rwa_vault()),
+        ("rmHARD", fx.hard_vault()),
     ];
     let (leg_vaults, leg_bps) = effective_weights(&fx);
     assert_eq!(
@@ -713,7 +715,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         legs.iter()
             .map(|(_, a)| format!("{a:#x}"))
             .collect::<Vec<_>>(),
-        "the effective vector lists the three vaults in registry order"
+        "the effective vector lists the four vaults in registry order"
     );
     assert!(
         leg_bps.contains(&0) && leg_bps.iter().any(|b| *b > 0),
