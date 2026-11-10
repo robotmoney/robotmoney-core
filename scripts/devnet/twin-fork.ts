@@ -1,9 +1,6 @@
 #!/usr/bin/env bun
 // Canonical: core issues 1498, 1496. Twin chain (id 918453) = pinned lazy fork of real Base state.
-// Usage: bun scripts/devnet/twin-fork.ts <start|serve|wait-ready|stop|status|fund-gas|fund-usdc|warp|prep-pools> [...]
-// `start` (and `serve`) run `prep-pools` once the fork is ready: a Twin-only stand-in for the operator prerequisite of the rmHARD
-// stage, the 901-slot observation ring of every Aerodrome pool in config/hard-assets.json (core 2008, ADR-0018). `prep-pools` runs
-// it alone against a fork this tool did not start (--rpc-url or TWIN_RPC_URL).
+// Usage: bun scripts/devnet/twin-fork.ts <start|serve|wait-ready|stop|status|fund-gas|fund-usdc|warp> [...]
 // `serve` is `start` for a container: it stays in the foreground, stops anvil on SIGTERM or SIGINT (so anvil saves its RPC
 // cache) and exits non-zero if anvil dies. Core issue 1549 (the stage chain runs in a container).
 // See scripts/devnet/README-twin-fork.md. Logs show the upstream host only, never a URL.
@@ -14,7 +11,6 @@ import { parseArgs } from "node:util";
 import {
   DEFAULT_UPSTREAM, resolveUpstream, TWIN_CHAIN_ID, buildAnvilArgv, fundGas, fundUsdc, redact, redactArgv, rpc,
   isStalePinText, repinIfStale, selectPin, spawnAnvilDetached, superviseUntil, urlHost, usdcBalanceOf, waitReady, warp,
-  aerodromePools, prepareAeroCardinality,
 } from "./twin-fork-lib.ts";
 
 const opts = {
@@ -39,8 +35,6 @@ const opts = {
   "repin-on-stale": { type: "boolean" },
   "no-repin-on-stale": { type: "boolean" },
   "stop-timeout": { type: "string", default: "90000" },
-  /** The basket config whose Aerodrome pools prep-pools raises (default: the repo's config/hard-assets.json). */
-  "hard-assets-config": { type: "string" },
 } as const;
 
 const { values: v, positionals } = parseArgs({ args: Bun.argv.slice(2), options: opts, allowPositionals: true });
@@ -56,29 +50,6 @@ const secrets = (process.env.BASE_UPSTREAM_RPC ?? "").trim() ? [process.env.BASE
 const log = (m: string) => console.log(redact(m, secrets));
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const readState = (): { pid: number; pin: any } | null => (existsSync(pidFile) ? JSON.parse(readFileSync(pidFile, "utf8")) : null);
-const hardAssetsConfig = resolve(v["hard-assets-config"] ?? join(import.meta.dir, "..", "..", "config", "hard-assets.json"));
-
-/** Twin-only: raise the observation ring of every Aerodrome pool rmHARD lists to the 901 BasketVault.addAsset needs. */
-async function prepPools(url: string) {
-  const pools = aerodromePools(readFileSync(hardAssetsConfig, "utf8"));
-  const raised = await prepareAeroCardinality(url, pools, undefined, { secrets }, log);
-  log(`prep-pools: ${pools.length} Aerodrome pool(s) checked, ${raised.length} raised (Twin-only stand-in for the rmHARD operator prerequisite)`);
-}
-
-/**
- * `prep-pools` inside `start`: its own retries, and never a reason to stop a ready fork. A failure leaves the pool at its real
- * cardinality, so the rmHARD stage still refuses it loudly (InsufficientPoolCardinality), the same outcome as on Base before the
- * operator raises it. Killing anvil here would only turn a rate-limited upstream read into a dead chain (stage-chain-container).
- */
-async function prepPoolsOrWarn(url: string) {
-  for (let a = 1; a <= 3; a++) {
-    try { await prepPools(url); return; } catch (e: any) {
-      log(`WARN: prep-pools attempt ${a}/3 failed: ${String(e?.message ?? e)}`);
-      if (a < 3) await sleep(3000 * a);
-    }
-  }
-  log("WARN: prep-pools did not raise the Aerodrome pool ring: the rmHARD stage will refuse the pool (InsufficientPoolCardinality) until it is raised. The fork keeps serving.");
-}
 
 async function start() {
   const upstream = resolveUpstream(v.upstream);
@@ -119,8 +90,6 @@ async function start() {
         mkdirSync(dirname(resolve(v["pin-file"])), { recursive: true });
         writeFileSync(v["pin-file"], JSON.stringify(pin, null, 2) + "\n");
       }
-      // After the pin file: a container healthcheck passes as soon as anvil answers, and readers expect the pin file then.
-      await prepPoolsOrWarn(localUrl);
       log(`ready at ${localUrl} (pid ${pid})`);
       return;
     } catch (e: any) {
@@ -208,9 +177,8 @@ async function main() {
       return log(`head timestamp now ${(await warp(rpcUrl, Number(secs))).timestamp}`);
     }
     case "balance-usdc": return log(String(await usdcBalanceOf(rpcUrl, rest[0])));
-    case "prep-pools": return prepPools(rpcUrl);
     default:
-      throw new Error("usage: twin-fork.ts <start|serve|wait-ready|stop|status|fund-gas|fund-usdc|warp|prep-pools> [flags]");
+      throw new Error("usage: twin-fork.ts <start|serve|wait-ready|stop|status|fund-gas|fund-usdc|warp> [flags]");
   }
 }
 main().catch((e) => { console.error(redact(String(e?.message ?? e), secrets)); process.exit(1); });
