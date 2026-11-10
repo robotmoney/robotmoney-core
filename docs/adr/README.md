@@ -15,7 +15,7 @@ ADR takes the next number after the highest one in the table.
 | # | Title | Status |
 | --- | --- | --- |
 | 0001 | [MVP agent-token shortlist is hand-picked, not quant-filtered](ADR-0001-mvp-agent-token-shortlist.md) | Accepted (amended 2026-10-05), four-vault launch scope superseded in part (ADR-0017) |
-| 0002 | [Router default weights live on-chain, not derived from the front-end](ADR-0002-router-default-weights-on-chain.md) | Accepted (amended 2026-10-05) |
+| 0002 | [Router default weights live on-chain, not derived from the front-end](ADR-0002-router-default-weights-on-chain.md) | Accepted (amended 2026-10-05, 2026-10-22, 2026-11-10) |
 | 0003 (preview) | [Slippage-adjusted basket-vault previewRedeem/previewDeposit (worst-case floor)](ADR-0003-slippage-adjusted-basket-vault-preview.md) | Accepted |
 | 0003 (rebalancing) | [BasketVault rebalancing model — trigger, target weights, cost disclosure](ADR-0003-basketvault-rebalancing-model.md) | Accepted |
 | 0004 | [Agent-token shortlist governance mechanism enabling rmAGENT router-eligibility](ADR-0004-agent-token-shortlist-governance.md) | Accepted (amended 2026-10-05) |
@@ -31,4 +31,5 @@ ADR takes the next number after the highest one in the table.
 | 0014 | [Governed per-instance UUPS proxies with a one-way, target-bound freeze for the core contracts](ADR-0014-governed-uups-upgrades-and-freeze.md) | Accepted |
 | 0015 | [Robotmoney (RM) is parked out of rmAGENT until its market is deep enough](ADR-0015-rm-parked-from-rmagent-until-market-depth.md) | Superseded in part (ADR-0017) |
 | 0016 | [BNKR is the rmAGENT test asset on Uniswap V4 while RM is parked](ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md) | Superseded (ADR-0017) |
-| 0017 | [rmAGENT is retired and the router routes across three vaults (rmUSDC, rmPROTO, rmRWA)](ADR-0017-rmagent-retired-router-uses-three-vaults.md) | Accepted |
+| 0017 | [rmAGENT is retired and the router routes across three vaults (rmUSDC, rmPROTO, rmRWA)](ADR-0017-rmagent-retired-router-uses-three-vaults.md) | Accepted, decision 1 and the receipt mapping superseded in part (ADR-0018) |
+| 0018 | [rmHARD, a Hard Assets basket holding PAXG on its Aero pool, is the fourth router vault in the retired rmAGENT slot](ADR-0018-hard-assets-vault-fourth-router-vault.md) | Accepted |

@@ -1,0 +1,167 @@
+---
+title: "HardAssetsVaultForkTest"
+description: "Fork regression for rmHARD (core 2008). The real `DeployHardAssetsVault` script runs against the real PAXG token, its real Aero (Aerodrome Slipstream) CL USDC pool, the real Aero factory and router, and real USDC on the Twin chain pin. This proves the existing `AerodromeSwapAdapter` against PAXG's pool factory: the deploy's canonical-pool check, the TWAP price and both swap directions. A deposit buys real PAXG. A redeem sells it in one transaction within the vault slippage cap."
+---
+
+# HardAssetsVaultForkTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9a5abb78f17cecf801493322557775e4886f59cc/contracts/test/HardAssetsVaultFork.t.sol)
+
+**Inherits:** Test
+
+Fork regression for rmHARD (core 2008). The real `DeployHardAssetsVault` script runs against the real PAXG token, its
+real Aero (Aerodrome Slipstream) CL USDC pool, the real Aero factory and router, and real USDC on the Twin chain pin. This
+proves the existing `AerodromeSwapAdapter` against PAXG's pool factory: the deploy's canonical-pool check, the TWAP price
+and both swap directions. A deposit buys real PAXG. A redeem sells it in one transaction within the vault slippage cap.
+
+The pool's observation ring holds 900 slots and `addAsset` needs 901 for the 1800 s window. As in production
+(docs/operations/contract-release-runbooks.md), `_prepareCardinality` raises `observationCardinalityNext` and drives
+small two-way swaps, one block apart, until the ring grows.
+
+Runs on the Twin chain (a pinned lazy anvil fork of real Base state): CI runs it in forge-fork-vault-regressions through
+scripts/devnet/forge-fork-tests.ts, which fails a run in which nothing executed. With FORK_RPC_URL unset it skips with a
+named reason.
+
+## Constants
+
+### BASE_USDC
+
+```solidity
+address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### DEPOSIT
+
+```solidity
+uint256 internal constant DEPOSIT = 1_000 * 1e6;
+```
+
+### REQUIRED_CARDINALITY
+
+```solidity
+uint16 internal constant REQUIRED_CARDINALITY = 901;
+```
+
+### MAX_PREP_SWAPS
+
+<i>
+
+Upper bound on prep swaps: one full ring plus slack.
+
+</i>
+
+```solidity
+uint256 internal constant MAX_PREP_SWAPS = 1_000;
+```
+
+### PREP_SWAP_USDC
+
+<i>
+
+An Aero CL pool writes an observation only when a swap moves the tick (CLPool.swap). 5,000 USDC moves the PAXG pool
+a few ticks; 1 USDC does not move it at all.
+
+</i>
+
+```solidity
+uint256 internal constant PREP_SWAP_USDC = 5_000 * 1e6;
+```
+
+## State Variables
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### prepper
+
+```solidity
+address internal prepper = makeAddr("prepper");
+```
+
+### vault
+
+```solidity
+HardAssetsVault internal vault;
+```
+
+### adapter
+
+```solidity
+AerodromeSwapAdapter internal adapter;
+```
+
+### cfg
+
+```solidity
+string internal cfg;
+```
+
+### paxg
+
+```solidity
+address internal paxg;
+```
+
+### pool
+
+```solidity
+address internal pool;
+```
+
+### router
+
+```solidity
+address internal router;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_preparecardinality"></a>
+
+### _prepareCardinality
+
+<i>
+
+Raise the ring to 901 the production way: `increaseObservationCardinalityNext`, then swaps in later blocks until the
+write index wraps and the cardinality takes the new size. Each round buys PAXG with 5,000 USDC and sells it back, so the
+price returns near where it started.
+
+</i>
+
+```solidity
+function _prepareCardinality() internal;
+```
+
+<a id="test_fork_rmhard_adapterresolvespaxgpoolthroughtheaerofactory"></a>
+
+### test_fork_rmhard_adapterResolvesPaxgPoolThroughTheAeroFactory
+
+```solidity
+function test_fork_rmhard_adapterResolvesPaxgPoolThroughTheAeroFactory() public view;
+```
+
+<a id="test_fork_rmhard_depositholdspaxgandredeemsinonetxwithinslippagecap"></a>
+
+### test_fork_rmhard_depositHoldsPaxgAndRedeemsInOneTxWithinSlippageCap
+
+```solidity
+function test_fork_rmhard_depositHoldsPaxgAndRedeemsInOneTxWithinSlippageCap() public;
+```
+

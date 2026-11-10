@@ -1,0 +1,179 @@
+---
+title: "DeployBasketVaultHardAssetsTest"
+description: "rmHARD script (core 2008, ADR-0018): a plain BasketVault row for PAXG through the existing `AerodromeSwapAdapter` on its Aero CL USDC pool, priced from the pool TWAP. No oracle. The script reads the real `config/hard-assets.json`; the pool and factory doubles are etched at the configured addresses."
+---
+
+# DeployBasketVaultHardAssetsTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9a5abb78f17cecf801493322557775e4886f59cc/contracts/test/DeployBasketVaultHardAssets.t.sol)
+
+**Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
+
+rmHARD script (core 2008, ADR-0018): a plain BasketVault row for PAXG through the existing `AerodromeSwapAdapter` on its
+Aero CL USDC pool, priced from the pool TWAP. No oracle. The script reads the real `config/hard-assets.json`; the pool and
+factory doubles are etched at the configured addresses.
+
+## Constants
+
+### CONFIG
+
+```solidity
+string internal constant CONFIG = "config/hard-assets.json";
+```
+
+### SHEET_EXIT_FEE_BPS
+
+```solidity
+uint256 internal constant SHEET_EXIT_FEE_BPS = 50;
+```
+
+### LIVE_FEE_PIPS
+
+<i>
+
+The live Aero pool fee in pips at the config block (5 bps).
+
+</i>
+
+```solidity
+uint24 internal constant LIVE_FEE_PIPS = 500;
+```
+
+## State Variables
+
+### script
+
+```solidity
+DeployHardAssetsVault internal script;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_etchaero-uint24-int24"></a>
+
+### _etchAero
+
+<i>
+
+Etch the Aero pool, factory and (if absent) token doubles at the config addresses, paired with this test's USDC.
+
+</i>
+
+```solidity
+function _etchAero(uint24 livePips, int24 poolTickSpacing) internal returns (string memory json);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| livePips | `uint24` |  |
+| poolTickSpacing | `int24` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| json | `string` |  |
+
+<a id="_deploy-basketvaultdeploybase-params-string"></a>
+
+### _deploy
+
+```solidity
+function _deploy(BasketVaultDeployBase.Params memory p, string memory json)
+        internal
+        returns (BasketVaultDeployBase.Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `BasketVaultDeployBase.Params` |  |
+| json | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `BasketVaultDeployBase.Deployed` |  |
+
+<a id="_sheet"></a>
+
+### _sheet
+
+```solidity
+function _sheet() internal view returns (BasketVaultDeployBase.Params memory p);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `BasketVaultDeployBase.Params` |  |
+
+<a id="test_deploy_pausedactivenamedandonepaxgrowthroughaerodrome"></a>
+
+### test_deploy_pausedActiveNamedAndOnePaxgRowThroughAerodrome
+
+```solidity
+function test_deploy_pausedActiveNamedAndOnePaxgRowThroughAerodrome() public;
+```
+
+<a id="test_reverts_whenpooltickspacingdiffersfromconfig"></a>
+
+### test_reverts_whenPoolTickSpacingDiffersFromConfig
+
+```solidity
+function test_reverts_whenPoolTickSpacingDiffersFromConfig() public;
+```
+
+<a id="test_reverts_whenpoolisnotthefactorypool"></a>
+
+### test_reverts_whenPoolIsNotTheFactoryPool
+
+```solidity
+function test_reverts_whenPoolIsNotTheFactoryPool() public;
+```
+
+<a id="test_reverts_whenguardisnotabovethelivepoolfee"></a>
+
+### test_reverts_whenGuardIsNotAboveTheLivePoolFee
+
+```solidity
+function test_reverts_whenGuardIsNotAboveTheLivePoolFee() public;
+```
+
+<a id="test_reverts_whenaerodromerouterunset"></a>
+
+### test_reverts_whenAerodromeRouterUnset
+
+```solidity
+function test_reverts_whenAerodromeRouterUnset() public;
+```
+
+<a id="test_reverts_whenconfigmixesaerodromeandv3rows"></a>
+
+### test_reverts_whenConfigMixesAerodromeAndV3Rows
+
+```solidity
+function test_reverts_whenConfigMixesAerodromeAndV3Rows() public;
+```
+
+<a id="test_reverts_whennavdeviationbpsunset"></a>
+
+### test_reverts_whenNavDeviationBpsUnset
+
+```solidity
+function test_reverts_whenNavDeviationBpsUnset() public;
+```
+

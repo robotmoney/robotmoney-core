@@ -1,0 +1,111 @@
+---
+title: "HardAssetsVault"
+description: "The rmHARD vault. A plain `BasketVault` row set: no oracle, no staleness halt, no custom adapter. Each asset is priced from its own pool TWAP through an existing swap adapter, exactly as the other basket vaults price theirs. The launch row is PAXG (Paxos Gold, 18 decimals) on its Aero (Aerodrome Slipstream) CL USDC pool, traded and priced through the existing `AerodromeSwapAdapter` (config/hard-assets.json)."
+---
+
+# HardAssetsVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9a5abb78f17cecf801493322557775e4886f59cc/contracts/vaults/HardAssetsVault.sol)
+
+**Inherits:** [BasketVault](/contracts/vaults/abstract.BasketVault)
+
+**Title:** HardAssetsVault
+
+The rmHARD vault. A plain `BasketVault` row set: no oracle, no staleness halt, no
+custom adapter. Each asset is priced from its own pool TWAP through an existing swap
+adapter, exactly as the other basket vaults price theirs. The launch row is PAXG
+(Paxos Gold, 18 decimals) on its Aero (Aerodrome Slipstream) CL USDC pool, traded and
+priced through the existing `AerodromeSwapAdapter` (config/hard-assets.json).
+
+ISSUER FREEZE RISK. Paxos can freeze, wipe or pause PAXG at any address at any time.
+A freeze of the vault makes swaps revert, which blocks deposits and withdrawals until
+Paxos lifts it. Holders keep their shares. `pauseDeposits()` surfaces the state to new
+depositors. It never blocks a redeem. This vault never calls an issuer
+primary-redemption path. Entry and exit are secondary-market swaps only.
+
+The vault inherits every control of `BasketVault`: caps, slippage floors, TWAP
+cardinality and liquidity checks on `addAsset`, the adapter code-hash allowlist,
+pause and emergency unwind. It adds only a name, a symbol and an asset cap.
+
+## Constants
+
+### _MAX_ASSETS
+
+```solidity
+uint256 private constant _MAX_ASSETS = 10;
+```
+
+### _DEFAULT_SLIPPAGE_BPS
+
+```solidity
+uint256 private constant _DEFAULT_SLIPPAGE_BPS = 100;
+```
+
+## Functions
+
+<a id="initialize-initparams-address-upgrademode"></a>
+
+### initialize
+
+Atomic proxy initialization (the ERC1967Proxy constructor calls it).
+
+```solidity
+function initialize(InitParams calldata p, address upgradeTimelock_, UpgradeMode upgradeMode_)
+        external
+        initializer;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `InitParams` | The per-instance basket arguments. |
+| upgradeTimelock_ | `address` | The Safe-controlled timelock: the only upgrade and freeze authority. |
+| upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
+
+<a id="maxassets"></a>
+
+### maxAssets
+
+Subclasses declare the maximum number of assets in the basket.
+
+```solidity
+function maxAssets() public pure override returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="shortlist"></a>
+
+### shortlist
+
+Token, pool, fee tier, active flag and held balance for every basket row.
+Same shape as `RwaBasketVault.shortlist()` and `ProtocolAssetVault.shortlist()`.
+
+```solidity
+function shortlist()
+        external
+        view
+        returns (
+            address[] memory tokens,
+            address[] memory pools,
+            uint24[] memory fees,
+            bool[] memory active,
+            uint256[] memory balances
+        );
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokens | `address[]` |  |
+| pools | `address[]` |  |
+| fees | `uint24[]` |  |
+| active | `bool[]` |  |
+| balances | `uint256[]` |  |
+

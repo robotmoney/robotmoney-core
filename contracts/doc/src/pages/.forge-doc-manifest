@@ -66,6 +66,7 @@ contracts/script/constants.DeployVault.s.mdx
 contracts/script/contract.DeployAgentTokenVault.mdx
 contracts/script/contract.DeployConsensusRecommendationReceipt.mdx
 contracts/script/contract.DeployGateway.mdx
+contracts/script/contract.DeployHardAssetsVault.mdx
 contracts/script/contract.DeployLibs.mdx
 contracts/script/contract.DeployPortfolioRouter.mdx
 contracts/script/contract.DeployProtocolAssetVault.mdx
@@ -77,6 +78,7 @@ contracts/script/contract.DeployVault.mdx
 contracts/script/contract.DeployVaultRegistry.mdx
 contracts/script/contract.HandoverGateway.mdx
 contracts/script/contract.RedeployProtocolAssetVault.mdx
+contracts/script/interface.IAerodromeCLPoolFactoryRef.mdx
 contracts/script/interface.IRetirableVaultLink.mdx
 contracts/script/interface.ISafeFull.mdx
 contracts/script/interface.IVaultRegistryLink.mdx
@@ -123,6 +125,8 @@ contracts/test/contract.ConfusedDeputyGuardsTest.mdx
 contracts/test/contract.ConsensusReceiptMigrationTest.mdx
 contracts/test/contract.ConsensusReceiptSafeSubmitterTest.mdx
 contracts/test/contract.ConsensusRecommendationReceiptTest.mdx
+contracts/test/contract.ConstAeroFactory.mdx
+contracts/test/contract.ConstAeroPool.mdx
 contracts/test/contract.ConstPoolFee100.mdx
 contracts/test/contract.CoreStagesFork.mdx
 contracts/test/contract.CustodyHandler.mdx
@@ -130,6 +134,7 @@ contracts/test/contract.CustodyInvariantGuardTest.mdx
 contracts/test/contract.CustodyInvariantTest.mdx
 contracts/test/contract.DelegatecallProxyAdapter.mdx
 contracts/test/contract.DeployAgentTokenVaultTest.mdx
+contracts/test/contract.DeployBasketVaultHardAssetsTest.mdx
 contracts/test/contract.DeployBasketVaultPoolGuardsTest.mdx
 contracts/test/contract.DeployBasketVaultRwaTest.mdx
 contracts/test/contract.DeployConsensusRecommendationReceiptTest.mdx
@@ -171,6 +176,7 @@ contracts/test/contract.EligibilityWeightsInterlockTest.mdx
 contracts/test/contract.FeatureFlagsTest.mdx
 contracts/test/contract.FeeOnTransferUSDC.mdx
 contracts/test/contract.FixedLiquidityPool.mdx
+contracts/test/contract.FourVaultInitialStateForkTest.mdx
 contracts/test/contract.GasBurningAdapter.mdx
 contracts/test/contract.GasMeteredStubVault.mdx
 contracts/test/contract.GasUSDC.mdx
@@ -195,6 +201,8 @@ contracts/test/contract.GovernedSurfacesSafeTimelockTest.mdx
 contracts/test/contract.GovernedUpgradeTest.mdx
 contracts/test/contract.GovernedVaultSafeTimelockTest.mdx
 contracts/test/contract.GuardHarness.mdx
+contracts/test/contract.HardAssetsDeployHarness.mdx
+contracts/test/contract.HardAssetsVaultForkTest.mdx
 contracts/test/contract.IlliquidMockAdapter.mdx
 contracts/test/contract.InterlockMockVault.mdx
 contracts/test/contract.InterruptedRedeploy.mdx
@@ -302,7 +310,6 @@ contracts/test/contract.ShortlistStubSwapRouter.mdx
 contracts/test/contract.StrictZeroRevertVault.mdx
 contracts/test/contract.StubSwapRouter.mdx
 contracts/test/contract.TestUSDC.mdx
-contracts/test/contract.ThreeVaultInitialStateForkTest.mdx
 contracts/test/contract.TwapTickMathHarness.mdx
 contracts/test/contract.TwapTickMathTest.mdx
 contracts/test/contract.UnderPullVault.mdx
@@ -397,6 +404,8 @@ contracts/test/helpers/library.VaultTestParams.mdx
 contracts/test/helpers/library.VenueEtcher.mdx
 contracts/test/interface.IAaveAddressesProvider.mdx
 contracts/test/interface.IAavePoolConfigurable.mdx
+contracts/test/interface.IAeroCardinality.mdx
+contracts/test/interface.IAeroCardinalityNext.mdx
 contracts/test/interface.IDepositsPaused.mdx
 contracts/test/interface.ILendingMinOutSurface.mdx
 contracts/test/interface.IMarker.mdx
@@ -454,5 +463,6 @@ contracts/test/vendor/safe-1.4.1/proxies/interface.IProxy.mdx
 contracts/test/vendor/safe-1.4.1/proxies/interface.IProxyCreationCallback.mdx
 contracts/vaults/abstract.BasketVault.mdx
 contracts/vaults/contract.AgentTokenVault.mdx
+contracts/vaults/contract.HardAssetsVault.mdx
 contracts/vaults/contract.ProtocolAssetVault.mdx
 contracts/vaults/contract.RwaBasketVault.mdx
