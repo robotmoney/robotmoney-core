@@ -50,12 +50,13 @@ FORGE="${FORGE:-forge}"
 PINS="$SNAPSHOT_DIR/pins.json"
 RENAMES="${RENAMES:-$REPO_ROOT/scripts/ci/storage-layout-renames.json}"
 
-# contract:source — the nine proxied core contracts (docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md).
+# contract:source — the ten proxied core contracts (docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md; HardAssetsVault, ADR-0018).
 CONTRACTS=(
   "RobotMoneyVault:contracts/RobotMoneyVault.sol"
   "ProtocolAssetVault:contracts/vaults/ProtocolAssetVault.sol"
   "AgentTokenVault:contracts/vaults/AgentTokenVault.sol"
   "RwaBasketVault:contracts/vaults/RwaBasketVault.sol"
+  "HardAssetsVault:contracts/vaults/HardAssetsVault.sol"
   "VaultRegistry:contracts/VaultRegistry.sol"
   "PortfolioRouter:contracts/PortfolioRouter.sol"
   "RobotMoneyGateway:contracts/gateway/RobotMoneyGateway.sol"

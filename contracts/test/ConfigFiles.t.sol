@@ -24,6 +24,21 @@ contract ConfigFilesTest is Test {
         assertEq(j.readAddress(".uniswapV3Factory"), V3_FACTORY);
     }
 
+    /// @dev Core 2008, ADR-0018: rmHARD holds PAXG only, on its Aero (Aerodrome Slipstream) CL USDC pool, tick spacing 10.
+    function test_Config_hardAssetsIsPaxgOnlyOnTheAeroPool() public view {
+        string memory j = vm.readFile("config/hard-assets.json");
+        assertEq(j.readString(".assets[0].symbol"), "PAXG");
+        assertFalse(vm.keyExistsJson(j, ".assets[1]"), "PAXG only");
+        assertEq(j.readAddress(".assets[0].token"), 0xe904AEA5E1b110c9174728fA2efFc8aeD19E98Ef);
+        assertEq(j.readUint(".assets[0].tokenDecimals"), 18);
+        assertEq(j.readString(".assets[0].venue"), "Aerodrome");
+        assertEq(j.readUint(".assets[0].poolFee"), 10, "the pool's tick spacing");
+        assertEq(j.readAddress(".assets[0].pool"), 0x108c5c97155D35847c61683F1a254D9c0470A591);
+        assertEq(j.readAddress(".aerodromeSlipstreamFactory"), 0x9CB220581b91b0C83223012FE69688b92aD07a76);
+        assertEq(j.readAddress(".aerodromeSlipstreamRouter"), 0x9Ee35Bf1bd69a03c6F0393582030fCe8Bb93D418);
+        assertEq(j.readAddress(".swapRouter02"), SWAP_ROUTER02);
+    }
+
     function test_Config_protocolAssetsIsWethAndCbbtc() public view {
         string memory j = vm.readFile("config/protocol-assets.json");
         assertEq(j.readString(".assets[0].symbol"), "wETH");

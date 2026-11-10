@@ -2,9 +2,10 @@
 // Canonical: robotmoney/devops issue 53 / core issue 1499, core S4 (issue 1486)
 //            docs/architecture.md §4.1 — Vault Family (basket vaults)
 //
-// One production path for the three basket vaults (rmPROTO, rmAGENT, rmRWA). The scripts differ
-// only in the vault class, the config file and whether assets route through the
-// `UniswapV3SwapAdapter`. There is no chain-id branch and no devnet-only input.
+// One production path for the basket vaults (rmPROTO, rmRWA, rmHARD; rmAGENT is retired, ADR-0017). The scripts
+// differ only in the vault class, the config file and whether assets route through a swap adapter
+// (`UniswapV3SwapAdapter`, `UniswapV4SwapAdapter` or, for rmHARD, `AerodromeSwapAdapter`, ADR-0018).
+// There is no chain-id branch and no devnet-only input.
 pragma solidity ^0.8.24;
 
 import {UpgradeAuthority} from "./UpgradeAuthority.sol";
@@ -17,6 +18,9 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {UniswapV3SwapAdapter} from "../adapters/UniswapV3SwapAdapter.sol";
 import {UniswapV4SwapAdapter} from "../adapters/UniswapV4SwapAdapter.sol";
+import {AerodromeSwapAdapter} from "../adapters/AerodromeSwapAdapter.sol";
+import {IAerodromePool} from "../interfaces/IAerodromePool.sol";
+import {IAerodromeCLFactory} from "../interfaces/IAerodromeCLFactory.sol";
 import {TickMath} from "../lib/TickMath.sol";
 import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
 import {IPoolManagerV4} from "../interfaces/IPoolManagerV4.sol";
@@ -63,10 +67,13 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
     struct AssetCfg {
         string symbol;
         address token;
-        /// @dev The V3 pool address. Zero for a V4 asset: the vault registers the price recorder as the pool.
+        /// @dev The V3 or Aerodrome CL pool address. Zero for a V4 asset: the vault registers the price recorder as the pool.
         address pool;
+        /// @dev The Uniswap fee tier (V3, V4), or the CL pool tick spacing for an Aerodrome asset (the vault's `swapFee`).
         uint24 poolFee;
         bool isV4;
+        /// @dev Aerodrome (Aero Slipstream) CL asset (ADR-0018): swapped and priced through an `AerodromeSwapAdapter`.
+        bool isAerodrome;
         /// @dev V4 only: the PoolManager, the pool id and the full PoolKey from the config. `key` hashes to `poolId` (checked at parse).
         address poolManager;
         bytes32 poolId;
@@ -79,12 +86,18 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
         AssetCfg[] assets;
         /// @dev Optional root `maxSlippageBps`. Zero keeps the vault default. Applied through the vault setter before the handover.
         uint256 maxSlippageBps;
+        /// @dev Root `aerodromeSlipstreamFactory` and `aerodromeSlipstreamRouter`. Required when the config lists an Aerodrome
+        ///      asset, otherwise zero (ADR-0018). The adapter resolves and checks every pool against this factory.
+        address aerodromeFactory;
+        address aerodromeRouter;
     }
 
     /// @notice Result returned to in-process callers (forge tests, stage driver).
     struct Deployed {
         address vault;
         address registry;
+        /// @dev The external swap adapter for the non-V4 rows: the `UniswapV3SwapAdapter`, or the `AerodromeSwapAdapter` for a config
+        ///      whose rows are Aerodrome (ADR-0018). A config never mixes the two (`_addAssets`). Zero on the built-in router path.
         address adapter;
         /// @dev The V4 swap adapter, zero when the config lists no V4 asset (issue 1676).
         address adapterV4;
@@ -234,6 +247,12 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
         if (vm.keyExistsJson(json, ".maxSlippageBps")) {
             cfg.maxSlippageBps = json.readUint(".maxSlippageBps");
         }
+        if (vm.keyExistsJson(json, ".aerodromeSlipstreamFactory")) {
+            cfg.aerodromeFactory = json.readAddress(".aerodromeSlipstreamFactory");
+        }
+        if (vm.keyExistsJson(json, ".aerodromeSlipstreamRouter")) {
+            cfg.aerodromeRouter = json.readAddress(".aerodromeSlipstreamRouter");
+        }
         string memory root = string.concat(".", arrayKey);
         uint256 n;
         while (vm.keyExistsJson(json, string.concat(root, "[", vm.toString(n), "]"))) n++;
@@ -245,6 +264,10 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
         for (uint256 i = 0; i < symbols.length; i++) {
             cfg.assets[i] =
                 _parseAsset(json, string.concat(root, "[", vm.toString(i), "]"), symbols[i]);
+            if (cfg.assets[i].isAerodrome) {
+                require(cfg.aerodromeFactory != address(0), "config aerodromeSlipstreamFactory unset");
+                require(cfg.aerodromeRouter != address(0), "config aerodromeSlipstreamRouter unset");
+            }
         }
     }
 
@@ -271,8 +294,15 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
             require(a.pool != address(0), "config pool unset");
         } else if (venue == keccak256("UniswapV4")) {
             _parseV4(json, base, a);
+        } else if (venue == keccak256("Aerodrome")) {
+            // ADR-0018: an Aero (Aerodrome Slipstream) CL pool. `poolFee` is the pool's tick spacing, the value the vault
+            // forwards to the adapter and checks against the pool (ORA-3). Read and range-checked as a positive int24.
+            a.isAerodrome = true;
+            a.pool = json.readAddress(string.concat(base, ".pool"));
+            require(a.pool != address(0), "config pool unset");
+            require(a.poolFee <= uint24(type(int24).max), "config Aerodrome poolFee is not a tick spacing");
         } else {
-            revert("unsupported venue: only UniswapV3 and UniswapV4");
+            revert("unsupported venue: only UniswapV3, UniswapV4 and Aerodrome");
         }
     }
 
@@ -388,6 +418,8 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
         pure
     {
         for (uint256 i = 0; i < cfg.assets.length; i++) {
+            // An Aerodrome `poolFee` is a tick spacing, not a fee: `_checkAerodromePool` checks the live pool fee instead.
+            if (cfg.assets[i].isAerodrome) continue;
             require(
                 navDeviationGuardBps * 100 > cfg.assets[i].poolFee,
                 string.concat(
@@ -437,10 +469,13 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
         internal
     {
         address adapter = address(0);
+        _requireOneAdapterVenue(cfg);
         for (uint256 i = 0; i < cfg.assets.length; i++) {
             AssetCfg memory a = cfg.assets[i];
             if (a.isV4) {
                 _addV4Asset(vault, p, a, d);
+            } else if (a.isAerodrome) {
+                _addAerodromeAsset(vault, p, cfg, a, d);
             } else {
                 // The V3 adapter is deployed with the first V3 asset (a vault whose assets are all V4 deploys none).
                 if (_usesAdapter() && adapter == address(0)) {
@@ -478,6 +513,66 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
         vault.addAsset(a.token, p.recorder, a.poolFee, adapterV4, BasketVault.Venue.V4);
         d.adapterV4 = adapterV4;
         d.recorder = p.recorder;
+    }
+
+    /// @dev Aerodrome (Aero Slipstream) CL asset (ADR-0018, owner decision 2026-11-10). One `AerodromeSwapAdapter` per run, bound to the
+    ///      config factory and router, its codehash allowed, then `addAsset` with venue Aerodrome and swap fee = the tick spacing. Checks,
+    ///      in order, before any state change: the pool has code, reports the config tick spacing, is the factory's canonical pool for
+    ///      the token/USDC pair at that spacing and names that factory, holds at least the sheet liquidity floor, and charges a live fee
+    ///      below the ORA-4 guard (QA plan D4). `addAsset` itself enforces the token/USDC pair, the 901-slot cardinality floor and
+    ///      1800 s of observation history.
+    function _addAerodromeAsset(
+        BasketVault vault,
+        Params memory p,
+        Cfg memory cfg,
+        AssetCfg memory a,
+        Deployed memory d
+    ) internal {
+        _checkAerodromePool(a, cfg.aerodromeFactory, p);
+        if (d.adapter == address(0)) {
+            address adapter = address(new AerodromeSwapAdapter(cfg.aerodromeRouter, cfg.aerodromeFactory));
+            vault.setAdapterCodeHashAllowed(adapter.codehash, true);
+            d.adapter = adapter;
+        }
+        vault.addAsset(a.token, a.pool, a.poolFee, d.adapter, BasketVault.Venue.Aerodrome);
+    }
+
+    /// @dev `Deployed.adapter` names one external adapter, so a config lists Aerodrome rows or Uniswap V3 rows, never both. V4 rows
+    ///      carry their own adapter (`adapterV4`) and mix with either.
+    function _requireOneAdapterVenue(Cfg memory cfg) internal pure {
+        bool aero;
+        bool v3;
+        for (uint256 i = 0; i < cfg.assets.length; i++) {
+            if (cfg.assets[i].isAerodrome) aero = true;
+            else if (!cfg.assets[i].isV4) v3 = true;
+        }
+        require(!(aero && v3), "config mixes Aerodrome and UniswapV3 rows");
+    }
+
+    /// @dev Config check on chain for an Aerodrome CL pool (see `_addAerodromeAsset`). `fee()` and `liquidity()` share the Uniswap V3
+    ///      ABI. The fee is in pips (hundredths of a bip), so the guard check is `NAV_DEVIATION_BPS * 100 > fee`, as for V3.
+    function _checkAerodromePool(AssetCfg memory a, address factory, Params memory p) internal view {
+        require(a.pool.code.length != 0, string.concat(a.symbol, ": pool has no code"));
+        require(
+            uint256(int256(IAerodromePool(a.pool).tickSpacing())) == uint256(a.poolFee),
+            string.concat(a.symbol, ": pool tick spacing does not equal config")
+        );
+        require(
+            IAerodromeCLFactory(factory).getPool(a.token, p.usdc, int24(a.poolFee)) == a.pool,
+            string.concat(a.symbol, ": pool is not the factory's canonical pool")
+        );
+        require(
+            IAerodromeCLPoolFactoryRef(a.pool).factory() == factory,
+            string.concat(a.symbol, ": pool factory differs from config")
+        );
+        require(
+            IUniswapV3Pool(a.pool).liquidity() >= p.minPoolLiquidity,
+            string.concat(a.symbol, ": pool liquidity is below MIN_POOL_LIQUIDITY")
+        );
+        require(
+            p.navDeviationGuardBps * 100 > IUniswapV3Pool(a.pool).fee(),
+            string.concat(a.symbol, ": NAV_DEVIATION_BPS must be above the pool fee in bps")
+        );
     }
 
     /// @dev The recorder is bound to the config PoolKey: PoolManager, pool id (the hash of the key) and every key field.
@@ -556,6 +651,12 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
         return _envStringRequired("DEPLOYMENT_OUT");
     }
 
+    /// @dev The manifest `venue` name of one asset.
+    function _venueName(AssetCfg memory a) private pure returns (string memory) {
+        if (a.isV4) return "UniswapV4";
+        return a.isAerodrome ? "Aerodrome" : "UniswapV3";
+    }
+
     function _writeManifestTo(string memory outPath, Deployed memory d, Cfg memory cfg) internal {
         string memory assetsJson = "[";
         for (uint256 i = 0; i < cfg.assets.length; i++) {
@@ -570,7 +671,7 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
                 '","pool_fee":',
                 vm.toString(uint256(a.poolFee)),
                 ',"venue":"',
-                a.isV4 ? "UniswapV4" : "UniswapV3",
+                _venueName(a),
                 '","pool_id":"',
                 vm.toString(a.poolId),
                 '"}'
@@ -608,4 +709,9 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
         vm.writeFile(outPath, json);
         console2.log(string.concat("Wrote ", _label(), " manifest to"), outPath);
     }
+}
+
+/// @dev The one Aerodrome CL pool getter the deploy check needs beyond `IAerodromePool`: the factory that created the pool.
+interface IAerodromeCLPoolFactoryRef {
+    function factory() external view returns (address);
 }

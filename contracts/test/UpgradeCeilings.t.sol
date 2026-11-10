@@ -13,6 +13,7 @@ import {BasketVault} from "../vaults/BasketVault.sol";
 import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
 import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
+import {HardAssetsVault} from "../vaults/HardAssetsVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
@@ -102,6 +103,7 @@ contract UpgradeCeilingsTest is Test {
         assertLe(new ProtocolAssetVault().maxAssets(), 10, "rmPROTO _MAX_ASSETS loosened");
         assertLe(new AgentTokenVault().maxAssets(), 15, "rmAGENT _MAX_ASSETS loosened");
         assertLe(new RwaBasketVault().maxAssets(), 10, "rmRWA _MAX_ASSETS loosened");
+        assertLe(new HardAssetsVault().maxAssets(), 10, "rmHARD _MAX_ASSETS loosened");
 
         // RobotMoneyGateway.
         RobotMoneyGatewayCeilingProbe g = new RobotMoneyGatewayCeilingProbe();
