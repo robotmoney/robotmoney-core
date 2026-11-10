@@ -85,7 +85,14 @@ contract RecorderManipulationForkTest is Test {
         string memory recorderCfg = vm.keyExistsJson(cfg, ".parked.entries[0]")
             ? vm.readFile("contracts/test/fixtures/agent-token-shortlist.rm-listed.json")
             : cfg;
+        // Base lowered its block gas limit from 400M to 40M (block 52M: 400M; block 54M on: 40M), and a fork test runs each
+        // call under the fork block's limit. The recorder stage grows its 7_201-slot ring in steps of about 5.5M gas each; a
+        // broadcast sends each step as its own transaction, but in process they all land in this one setUp call (about 45M).
+        // Gas metering is paused for the stage build only: it changes no recorder code, state or assertion, and every test
+        // body runs metered under the real 40M limit.
+        vm.pauseGasMetering();
         rec = UniswapV4PriceRecorder(stage.runInProcess(recorderCfg).recorder);
+        vm.resumeGasMetering();
         adapter = new UniswapV4SwapAdapter(poolManager, key, address(rec), USDC);
 
         deal(USDC, attacker, 10_000e6);
