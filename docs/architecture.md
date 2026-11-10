@@ -322,10 +322,11 @@ Slipstream) CL USDC pool and traded through the existing
   deploy base deploys one `AerodromeSwapAdapter` for it and checks the pool
   against the factory before `addAsset` (ADR-0005 venue abstraction).
 - **Per-asset TWAP window.** PAXG is read over 1798 s, the longest window the
-  pool's real 900-slot observation ring covers at 2 s blocks. The deploy presets
-  it (`HardAssetsVault.presetTwapWindow`) and `addAsset` vets the pool for it
-  (`BasketVault._addAssetTwapWindow`); every other basket keeps the 1800 s
-  window and its 901-slot floor. Nothing changes the pool's state (ADR-0018).
+  pool's real 900-slot observation ring covers at 2 s blocks. The deploy
+  registers PAXG with `HardAssetsVault.addAssetWithTwapWindow`, which sets the
+  window and vets the pool for it with the unchanged guard. `BasketVault` is
+  unchanged, so every other basket keeps the 1800 s window and its 901-slot
+  floor. Nothing changes the pool's state (ADR-0018).
 - **Issuer freeze-control risk.** Paxos may freeze, wipe or pause PAXG.
   A freeze of the vault blocks swaps and therefore deposits and withdrawals,
   as for deSPXA above. The dapp shows a Paxos disclosure on the vault page.

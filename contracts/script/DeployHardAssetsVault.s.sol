@@ -34,7 +34,7 @@ import {HardAssetsVault} from "../vaults/HardAssetsVault.sol";
 ///           ROUTER_DEFAULT_BPS  `none`, or the router default weight vector (bps, comma list) after this vault flips eligible
 ///
 ///         Assets come from `hard-assets.json` (PAXG only at launch). The vault is deployed paused.
-///         PAXG's row carries `twapWindow` 1798: the script presets it before `addAsset`, so the pool is vetted for the window its
+///         PAXG's row carries `twapWindow` 1798: the script registers it with `addAssetWithTwapWindow`, so the pool is vetted for the window its
 ///         real 900-slot observation ring serves (ADR-0018). Nothing changes the pool's state.
 contract DeployHardAssetsVault is BasketVaultDeployBase {
     string public constant VAULT_NAME = "Robot Money Hard Assets";

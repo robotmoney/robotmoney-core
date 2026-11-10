@@ -5,7 +5,7 @@ description: "Production deploy script for `HardAssetsVault` (rmHARD). One path 
 
 # DeployHardAssetsVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/418570cf18d1a61c8b8bc2dbcdc90d0c3ef7c094/contracts/script/DeployHardAssetsVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a3ffad04253f19e13d572f1bce73173e3a0632c3/contracts/script/DeployHardAssetsVault.s.sol)
 
 **Inherits:** [BasketVaultDeployBase](/contracts/script/abstract.BasketVaultDeployBase)
 
@@ -27,7 +27,7 @@ EXIT_FEE_BPS      exit fee in basis points, from the frozen sheet (0 is a valid 
 ROUTER_DEFAULT_BPS  `none`, or the router default weight vector (bps, comma list) after this vault flips eligible
 
 Assets come from `hard-assets.json` (PAXG only at launch). The vault is deployed paused.
-PAXG's row carries `twapWindow` 1798: the script presets it before `addAsset`, so the pool is vetted for the window its
+PAXG's row carries `twapWindow` 1798: the script registers it with `addAssetWithTwapWindow`, so the pool is vetted for the window its
 real 900-slot observation ring serves (ADR-0018). Nothing changes the pool's state.
 
 ## Constants

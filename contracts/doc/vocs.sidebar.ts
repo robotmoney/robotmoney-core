@@ -178,10 +178,10 @@ export const sidebar = [
           text: "Interfaces",
           collapsed: true,
           items: [
+            { text: "IAddAssetWithTwapWindow", link: "/contracts/script/interface.IAddAssetWithTwapWindow" },
             { text: "IAerodromeCLPoolFactoryRef", link: "/contracts/script/interface.IAerodromeCLPoolFactoryRef" },
             { text: "IRetirableVaultLink", link: "/contracts/script/interface.IRetirableVaultLink" },
             { text: "ISafeFull", link: "/contracts/script/interface.ISafeFull" },
-            { text: "ITwapWindowPreset", link: "/contracts/script/interface.ITwapWindowPreset" },
             { text: "IVaultRegistryLink", link: "/contracts/script/interface.IVaultRegistryLink" },
           ],
         },

@@ -78,10 +78,10 @@ contracts/script/contract.DeployVault.mdx
 contracts/script/contract.DeployVaultRegistry.mdx
 contracts/script/contract.HandoverGateway.mdx
 contracts/script/contract.RedeployProtocolAssetVault.mdx
+contracts/script/interface.IAddAssetWithTwapWindow.mdx
 contracts/script/interface.IAerodromeCLPoolFactoryRef.mdx
 contracts/script/interface.IRetirableVaultLink.mdx
 contracts/script/interface.ISafeFull.mdx
-contracts/script/interface.ITwapWindowPreset.mdx
 contracts/script/interface.IVaultRegistryLink.mdx
 contracts/script/library.AdapterBytecodeGuard.mdx
 contracts/test/abstract.DeployTimelockKindBase.mdx

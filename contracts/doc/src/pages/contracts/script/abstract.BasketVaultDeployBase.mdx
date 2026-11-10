@@ -5,7 +5,7 @@ description: "Roles. The broadcaster is `admin` and also holds EMERGENCY_ROLE on
 
 # BasketVaultDeployBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/418570cf18d1a61c8b8bc2dbcdc90d0c3ef7c094/contracts/script/BasketVaultDeployBase.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a3ffad04253f19e13d572f1bce73173e3a0632c3/contracts/script/BasketVaultDeployBase.sol)
 
 **Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
@@ -577,7 +577,7 @@ config factory and router, its codehash allowed, then `addAsset` with venue Aero
 in order, before any state change: the pool has code, reports the config tick spacing, is the factory's canonical pool for
 the token/USDC pair at that spacing and names that factory, holds at least the sheet liquidity floor, and charges a live fee
 below the ORA-4 guard (QA plan D4). `addAsset` itself enforces the token/USDC pair, the cardinality floor and the
-observation history of the asset's TWAP window (the preset `twapWindow`, else 1800 s).
+observation history of the asset's TWAP window (the row's `twapWindow` through `addAssetWithTwapWindow`, else 1800 s).
 
 </i>
 
@@ -601,20 +601,26 @@ function _addAerodromeAsset(
 | a | `AssetCfg` |  |
 | d | `Deployed` |  |
 
-<a id="_presettwapwindow-basketvault-assetcfg"></a>
+<a id="_register-basketvault-assetcfg-address-address-basketvault-venue"></a>
 
-### _presetTwapWindow
+### _register
 
 <i>
 
-ADR-0018: a config row with a `twapWindow` presets it on the vault before `addAsset`, which then vets the pool for that
-window (`BasketVault._addAssetTwapWindow`). Only a vault with `presetTwapWindow` (HardAssetsVault) takes one; another
-vault reverts here, before any asset is added. Read back so a no-op fails the deploy.
+Register one asset. A row with no `twapWindow` uses `BasketVault.addAsset` (the 1800 s default). ADR-0018: a row with
+one uses `HardAssetsVault.addAssetWithTwapWindow`, which sets the window and vets the pool for it in one call. Only
+HardAssetsVault has that entry point; another vault reverts here. Read back so a no-op fails the deploy.
 
 </i>
 
 ```solidity
-function _presetTwapWindow(BasketVault vault, AssetCfg memory a) internal;
+function _register(
+        BasketVault vault,
+        AssetCfg memory a,
+        address pool,
+        address adapter,
+        BasketVault.Venue venue
+    ) internal;
 ```
 
 **Parameters**
@@ -623,6 +629,9 @@ function _presetTwapWindow(BasketVault vault, AssetCfg memory a) internal;
 | ---- | ---- | ----------- |
 | vault | `BasketVault` |  |
 | a | `AssetCfg` |  |
+| pool | `address` |  |
+| adapter | `address` |  |
+| venue | `BasketVault.Venue` |  |
 
 <a id="_requireoneadaptervenue-cfg"></a>
 
@@ -896,8 +905,8 @@ struct AssetCfg {
         bool isV4;
         /// @dev Aerodrome (Aero Slipstream) CL asset (ADR-0018): swapped and priced through an `AerodromeSwapAdapter`.
         bool isAerodrome;
-        /// @dev Optional per-asset TWAP window (config `twapWindow`), zero for the vault default. Preset on the vault
-        ///      (`HardAssetsVault.presetTwapWindow`) before `addAsset`, which then vets the pool for it (ADR-0018).
+        /// @dev Optional per-asset TWAP window (config `twapWindow`), zero for the vault default. Registered
+        ///      through `HardAssetsVault.addAssetWithTwapWindow`, which vets the pool for it (ADR-0018).
         uint32 twapWindow;
         /// @dev V4 only: the PoolManager, the pool id and the full PoolKey from the config. `key` hashes to `poolId` (checked at parse).
         address poolManager;

@@ -5,7 +5,7 @@ description: "The rmHARD vault. A plain `BasketVault` row set: no oracle, no sta
 
 # HardAssetsVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/418570cf18d1a61c8b8bc2dbcdc90d0c3ef7c094/contracts/vaults/HardAssetsVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a3ffad04253f19e13d572f1bce73173e3a0632c3/contracts/vaults/HardAssetsVault.sol)
 
 **Inherits:** [BasketVault](/contracts/vaults/abstract.BasketVault)
 
@@ -25,16 +25,17 @@ primary-redemption path. Entry and exit are secondary-market swaps only.
 
 The vault inherits every control of `BasketVault`: caps, slippage floors, TWAP
 cardinality and liquidity checks on `addAsset`, the adapter code-hash allowlist,
-pause and emergency unwind. It adds a name, a symbol, an asset cap and one more thing:
+pause and emergency unwind. It adds a name, a symbol, an asset cap and one entry point:
 
-PER-ASSET TWAP WINDOW BEFORE `addAsset` (ADR-0018). `BasketVault.addAsset` vets a pool for
+`addAssetWithTwapWindow` (ADR-0018). `BasketVault.addAsset` vets a pool for
 `DEFAULT_TWAP_WINDOW` (1800 s), which needs a 901-slot observation ring (`window / 2 s + 1`).
 PAXG's Aero pool has a 900-slot ring, and the vault fits the pool as it is: it never changes
-third-party pool state. ADMIN_ROLE presets the asset's window (`presetTwapWindow`, PAXG 1798 s,
-which a 900-slot ring covers at 2 s blocks) before `addAsset`, and `addAsset` then vets the pool
-for that window with the unchanged guard (`requireObservationHistory`: the window-derived floor
-and `observe([window, 0])`). NAV, slippage floors and the dust check read the same window
-(`effectiveTwapWindow`). `MIN_TWAP_WINDOW` and the guard are unchanged.
+third-party pool state. This entry point sets the asset's TWAP window first (bounded like
+`setTwapWindow`) and then runs the same `BasketAssetConfigGuard.addAsset` for that window: the
+window-derived cardinality floor and `observe([window, 0])`, unchanged. PAXG uses 1798 s, which
+a 900-slot ring covers at 2 s blocks. NAV, slippage floors and the dust check read the same
+window (`effectiveTwapWindow`). `BasketVault` itself is unchanged, so rmPROTO and rmRWA keep
+their bytecode and the 901-slot floor.
 
 ## Constants
 
@@ -88,50 +89,36 @@ function maxAssets() public pure override returns (uint256);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
 
-<a id="presettwapwindow-address-uint32"></a>
+<a id="addassetwithtwapwindow-address-address-uint24-address-venue-uint32"></a>
 
-### presetTwapWindow
+### addAssetWithTwapWindow
 
-Preset the TWAP window of `token` before `addAsset`, so `addAsset` vets its pool for this window and NAV
-reads it from the start. ADMIN_ROLE only. Bounded like `setTwapWindow` (`[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`).
-Refused for an active asset: `setTwapWindow` changes that one, against the live pool's history.
+`addAsset` with the asset's own TWAP window: sets `twapWindow[token_] = window_` (bounded by
+`[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`, as `setTwapWindow`), then registers the asset through the same
+guard as `BasketVault.addAsset`, which vets the pool for `window_`. ADMIN_ROLE only. Atomic: a pool that
+does not serve the window reverts the whole call, and the window is not left behind.
 
 ```solidity
-function presetTwapWindow(address token, uint32 window) external onlyRole(ADMIN_ROLE);
+function addAssetWithTwapWindow(
+        address token_,
+        address pool_,
+        uint24 swapFee_,
+        address adapter_,
+        Venue venue_,
+        uint32 window_
+    ) external onlyRole(ADMIN_ROLE);
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| token | `address` | A token that is not an active basket asset. |
-| window | `uint32` | TWAP window in seconds. |
-
-<a id="_addassettwapwindow-address"></a>
-
-### _addAssetTwapWindow
-
-<i>
-
-`addAsset` vets the pool for the asset's own window: the preset one, else `DEFAULT_TWAP_WINDOW`.
-
-</i>
-
-```solidity
-function _addAssetTwapWindow(address token) internal view override returns (uint32);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| token | `address` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint32` |  |
+| token_ | `address` | ERC-20 token address. |
+| pool_ | `address` | DEX pool pairing `token_` with USDC. |
+| swapFee_ | `uint24` | Venue parameter (fee tier, or tick spacing for Aerodrome). |
+| adapter_ | `address` | Swap and TWAP adapter (code hash allowlisted), or zero for the built-in V3 path. |
+| venue_ | `Venue` | DEX venue selector. |
+| window_ | `uint32` | The asset's TWAP window in seconds. |
 
 <a id="shortlist"></a>
 
@@ -162,24 +149,4 @@ function shortlist()
 | fees | `uint24[]` |  |
 | active | `bool[]` |  |
 | balances | `uint256[]` |  |
-
-## Errors
-
-### TwapWindowPresetOnActiveAsset
-
-<i>
-
-`presetTwapWindow` on a token that is already an active asset: use `setTwapWindow`, which vets the live pool.
-
-</i>
-
-```solidity
-error TwapWindowPresetOnActiveAsset(address token);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| token | `address` |  |
 

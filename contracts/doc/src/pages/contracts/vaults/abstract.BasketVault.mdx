@@ -5,7 +5,7 @@ description: "Abstract ERC-4626 USDC vault that holds a basket of ERC-20 assets.
 
 # BasketVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/418570cf18d1a61c8b8bc2dbcdc90d0c3ef7c094/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/vaults/BasketVault.sol)
 
 **Inherits:** ERC4626Upgradeable, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
@@ -1219,34 +1219,6 @@ function addAsset(
 | swapFee_ | `uint24` | Venue parameter forwarded to execution: Uniswap fee tier<br/>for V3/V4, or signed tick spacing for Aerodrome Slipstream. |
 | adapter_ | `address` | Swap+TWAP adapter address implementing `IBasketSwapAdapter`.<br/>Pass `address(0)` to use the built-in Uniswap V3 default path<br/>(venue = V3). For V4 or Aerodrome, pass the deployed adapter<br/>address and the corresponding `venue_`. |
 | venue_ | `Venue` | DEX venue selector. Must match the adapter type:<br/>`Venue.V3` with `adapter_=address(0)`,<br/>`Venue.V4` with a `UniswapV4SwapAdapter` and `pool_` = its `UniswapV4PriceRecorder`,<br/>`Venue.Aerodrome` with an `AerodromeSwapAdapter`.<br/>Stored on `AssetInfo` so governance tooling can inspect<br/>the venue without decoding the adapter address. |
-
-<a id="_addassettwapwindow-address"></a>
-
-### _addAssetTwapWindow
-
-<i>
-
-The TWAP window `addAsset` vets the pool for (cardinality floor `window / 2 s + 1` and `observe([window, 0])`).
-`DEFAULT_TWAP_WINDOW` here, so every basket vault keeps the 901-slot floor. `HardAssetsVault` returns the asset's
-preset window (ADR-0018: PAXG's real 900-slot Aero ring serves 1798 s).
-
-</i>
-
-```solidity
-function _addAssetTwapWindow(address) internal view virtual returns (uint32);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| _ | `address` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint32` |  |
 
 <a id="removeasset-uint256"></a>
 

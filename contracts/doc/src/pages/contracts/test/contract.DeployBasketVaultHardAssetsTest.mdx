@@ -5,7 +5,7 @@ description: "rmHARD script (core 2008, ADR-0018): a plain BasketVault row for P
 
 # DeployBasketVaultHardAssetsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/418570cf18d1a61c8b8bc2dbcdc90d0c3ef7c094/contracts/test/DeployBasketVaultHardAssets.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a3ffad04253f19e13d572f1bce73173e3a0632c3/contracts/test/DeployBasketVaultHardAssets.t.sol)
 
 **Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
 
@@ -193,12 +193,13 @@ function test_window_899SlotsAreRefusedForThe1798sWindow() public;
 function test_window_withoutThePresetThe900SlotPoolIsRefusedAt901() public;
 ```
 
-<a id="test_window_presetisrefusedonanactiveassetandoutofbounds"></a>
+<a id="test_window_addassetwithtwapwindowisboundedadminonlyandkeepstheduplicateguard"></a>
 
-### test_window_presetIsRefusedOnAnActiveAssetAndOutOfBounds
+### test_window_addAssetWithTwapWindowIsBoundedAdminOnlyAndKeepsTheDuplicateGuard
 
 ```solidity
-function test_window_presetIsRefusedOnAnActiveAssetAndOutOfBounds() public;
+function test_window_addAssetWithTwapWindowIsBoundedAdminOnlyAndKeepsTheDuplicateGuard()
+        public;
 ```
 
 <a id="test_window_otherbasketskeepthe901slotfloor"></a>
