@@ -663,12 +663,24 @@ def semantic_errors(receipt: dict[str, Any], spec: dict[str, Any], denominator: 
     return errors
 
 
+# A PRD §11 vault that took over a bucket from a predecessor the vendored bucket map still names (core 2008, ADR-0018:
+# rmHARD fills the retired rmAGENT's router slot, so the `agent_tokens` bucket maps to rmHARD in publish-contracts and the
+# dapp). The bucket map is vendored from robotmoney-frontend and is never hand-edited here, so until the frontend
+# regenerates it with the successor's label, the successor counts as covered by its predecessor's row. Once the map
+# names the successor, this bridge no longer applies and the plain catalog equality below holds.
+BUCKET_SUCCESSORS = {"rmHARD": "rmAGENT"}
+
+
 def mapping_errors(mapping: dict[str, Any], spec: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    prd_vaults = prd_vault_symbols()
     rows = mapping.get("buckets", [])
     buckets = [row.get("bucket") for row in rows]
     vaults = [row.get("vault_symbol") for row in rows]
+    prd_vaults = [
+        symbol
+        for symbol in prd_vault_symbols()
+        if not (symbol in BUCKET_SUCCESSORS and symbol not in vaults and BUCKET_SUCCESSORS[symbol] in vaults)
+    ]
     if buckets != EXPECTED_BUCKETS or mapping.get("canonical_bucket_order") != EXPECTED_BUCKETS:
         errors.append("bucket map must cover the four PRD §11 buckets in canonical order")
     if spec.get("canonical_bucket_order") != EXPECTED_BUCKETS:
