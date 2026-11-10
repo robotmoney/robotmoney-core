@@ -85,17 +85,17 @@ test.describe("demo user stories: first-visitor landing-page session", () => {
     const vaultCards = page.getByTestId("landing-vault-cards");
     await expect(vaultCards).toBeVisible({ timeout: 30_000 });
 
-    // Clean-room deploy (core 1488): all three vaults are registered Active. There is no demo
-    // seeding. Only rmUSDC holds the deployer's 1 USDC seed. The basket vaults (rmPROTO,
-    // rmRWA) deploy empty and paused until governance unpauses them.
+    // Clean-room deploy (core 1488): all four vaults are registered Active (ADR-0018). There is no
+    // demo seeding. Only rmUSDC holds the deployer's 1 USDC seed. The basket vaults (rmPROTO,
+    // rmRWA, rmHARD) deploy empty and paused until governance unpauses them.
     const activeCards = page.locator(
       '[data-testid="landing-vault-card"][data-vault-active="true"]',
     );
-    await expect(activeCards).toHaveCount(3, { timeout: 30_000 });
+    await expect(activeCards).toHaveCount(4, { timeout: 30_000 });
 
     const tvlCells = page.getByTestId("landing-vault-card-tvl");
     await expect(tvlCells.first()).toBeVisible({ timeout: 30_000 });
-    await expect(tvlCells).toHaveCount(3, { timeout: 30_000 });
+    await expect(tvlCells).toHaveCount(4, { timeout: 30_000 });
 
     // VaultCards re-fetches every 15 s and the indexer lags the chain, so poll until the
     // rmUSDC seed shows: exactly one card with a non-empty TVL, the other two empty.

@@ -169,6 +169,9 @@ describe("VaultDetail issuer freeze-control disclosure (issue 1765)", () => {
     ["Robot Money RWA / Thematic", "SPECULATIVE", 0, true],
     ["Forward Fund", "SPECULATIVE", 0, false],
     ["Reward Basket", "SPECULATIVE", 0, false],
+    ["Robot Money Hard Assets", "VOLATILE", 0, true],
+    ["Robot Money Hard Assets", "VOLATILE", 1, true],
+    ["Hardware Fund", "VOLATILE", 0, false],
   ];
   it.each(cases)("%s (%s, status %i) disclosure present: %s", async (name, risk, status, shown) => {
     const { getByTestId, queryByTestId } = render(
@@ -181,6 +184,32 @@ describe("VaultDetail issuer freeze-control disclosure (issue 1765)", () => {
     await waitFor(() => expect(getByTestId("vault-detail-composition")).toBeTruthy());
     const el = queryByTestId("vault-detail-issuer-freeze-disclosure");
     expect(el !== null).toBe(shown);
+  });
+});
+
+describe("VaultDetail Paxos freeze-control disclosure for rmHARD (core 2008, ADR-0018)", () => {
+  async function disclosureFor(name: string, risk: string): Promise<HTMLElement | null> {
+    const { getByTestId, queryByTestId } = render(
+      <VaultDetail
+        apiUrl="http://api"
+        address={VAULT_ADDR}
+        fetchImpl={makeFetch(makeVaultDetailFixture({ risk_label: risk, name }))}
+      />,
+    );
+    await waitFor(() => expect(getByTestId("vault-detail-composition")).toBeTruthy());
+    return queryByTestId("vault-detail-issuer-freeze-disclosure");
+  }
+
+  it("names Paxos and PAXG on the Hard Assets vault", async () => {
+    const el = await disclosureFor("Robot Money Hard Assets", "VOLATILE");
+    expect(el).not.toBeNull();
+    expect(el!.textContent).toContain("PAXG");
+    expect(el!.textContent).toContain("Paxos");
+    expect(el!.textContent).not.toContain("deSPXA");
+  });
+
+  it("is absent on rmPROTO, the other VOLATILE vault", async () => {
+    expect(await disclosureFor("Robot Money Protocol", "VOLATILE")).toBeNull();
   });
 });
 
