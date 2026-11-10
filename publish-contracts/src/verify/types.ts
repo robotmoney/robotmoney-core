@@ -111,7 +111,7 @@ export interface VerifySheet {
   upgradeMode?: "upgradeable" | "frozen";
   /** Issue 1809: the sheet's UPGRADE_FREEZE_DEADLINE (ISO 8601 UTC), the proving-period deadline of an upgradeable release. */
   freezeDeadline?: string;
-  /** Keyed by vault key (rmUSDC, rmPROTO, rmRWA). */
+  /** Keyed by vault key (rmUSDC, rmPROTO, rmRWA, rmHARD). */
   vaults: Record<string, VaultSheet>;
   /** The router default weights the deployer left in place, in router order (rmUSDC, then the eligible baskets): vault key and bps. */
   defaultWeights: { vault: string; bps: number }[];

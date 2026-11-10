@@ -85,7 +85,7 @@ describe("a rehearsal with a non-zero start and adopted stages", () => {
   test("mutation: with no stray transaction the same resumes succeed and the run completes at the composed nonce", async () => {
     const w = adoptedWorld();
     expect(await w.run(["--stage", PRE_PROTO.join(",")])).toBe(0);
-    expect(await w.run(["--stage", "proto,rwa,prove-control,timelock", "--resume"])).toBe(0);
+    expect(await w.run(["--stage", "proto,rwa,hard,prove-control,timelock", "--resume"])).toBe(0);
     expect(w.state().nonces[A]).toBe(START + (sum - COUNTS.libs! - N) + PROOF_TX_NONCES);
   });
   test("the end-of-deploy check: start + sum(effective) + proof passes, one stray transaction after the last stage, a missing start and the production reading fail", async () => {

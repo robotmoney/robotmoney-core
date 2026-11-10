@@ -9,13 +9,13 @@ import { STAGE13_UNPAUSE_VAULTS } from "./vault-rules.ts";
 import { getAddress, isAddress } from "viem";
 import { PublishError } from "./errors.ts";
 import type { SystemName } from "./stage-table.ts";
-import { BASKET_KEYS, RETIRED_VAULT_KEYS, RETIRED_VAULT_NAME, VAULT_KEYS, type RetiredVaultKey, type VaultKey } from "./vault-keys.ts";
+import { ADDED_VAULT_KEYS, BASKET_KEYS, RETIRED_VAULT_KEYS, RETIRED_VAULT_NAME, VAULT_KEYS, type RetiredVaultKey, type VaultKey } from "./vault-keys.ts";
 import { MAINNET_CHAIN_ID, DEPLOYMENT_KINDS, REHEARSAL_DELAY_FLOOR, rehearsalDelayProblem, type DeploymentKind } from "./chains.ts";
 
 export type Address = `0x${string}`;
 export { VAULT_KEYS, BASKET_KEYS, type VaultKey } from "./vault-keys.ts";
 /** Manifest and verifier name of each vault. */
-export const VAULT_NAME: Record<VaultKey, string> = { USDC: "rmUSDC", PROTO: "rmPROTO", RWA: "rmRWA" };
+export const VAULT_NAME: Record<VaultKey, string> = { USDC: "rmUSDC", PROTO: "rmPROTO", RWA: "rmRWA", HARD: "rmHARD" };
 /** Issue 1927: the name of a table vault key, this line's or a retired one of the prior line (rmAGENT). Any other key is refused. */
 export function vaultDisplayName(k: string): string {
   const n = (VAULT_NAME as Record<string, string>)[k] ?? (RETIRED_VAULT_NAME as Record<string, string>)[k];
@@ -75,7 +75,7 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   // deploy-time router configuration, set by the deployer in the basket vault stages (before the timelock handover). Lists of vault keys, or the word none.
   ELIGIBLE_VAULTS: { kind: "string" },
   ROUTER_WEIGHTS: { kind: "string" },
-  // govern stage (stage 13): the unpauses of the three vaults are the only mainnet operation after the handover. GOVERN_NEW_DELAY feeds the Twin-only update-delay demonstration.
+  // govern stage (stage 13): the unpauses of the four vaults are the only mainnet operation after the handover. GOVERN_NEW_DELAY feeds the Twin-only update-delay demonstration.
   GOVERN_UNPAUSE_VAULTS: { kind: "string" },
   GOVERN_NEW_DELAY: { kind: "uint" },
 };
@@ -107,9 +107,9 @@ const REFUSED: [RegExp, string][] = [
   [/^(AGENT_ADDRESS|AGENT_VALID_UNTIL|AGENT_MAX_PER_PAYMENT|AGENT_MAX_PER_WINDOW|AGENT_MAX_WITHDRAW_PER_PAYMENT|AGENT_MAX_WITHDRAW_PER_WINDOW)$/, "the deploy authorizes no agent: an agent belongs to a depositor, who authorizes it through commitAuthorization and revealAuthorization (architecture 5.2 and 6.3)"],
   [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the four vault unpauses only. Vault setters, eligibility and router default weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VAULT_<KEY>_*). Router weights change on demand through the apply-receipt row (--row apply-receipt), never through a GOVERN_ sheet name"],
   [/^(VOTER_ADDRESSES|VOTER_POWER|QUORUM_THRESHOLD|VOTING_PERIOD|EXECUTION_DELAY)$/, "there is no voting by anyone: RouterGovernance has no voter, voting power, quorum, voting period or execution delay (issue 1698). Router weights change only when the Safe applies a consensus receipt through the timelock (govern row apply-receipt). Delete the line"],
-  [/^VAULT_NAME$/, "the registry name of every vault is a constant of its own vault stage script (rmUSDC included), never a sheet value (issue 1705: one registry-name source for all three vaults). Delete the line"],
-  [/^(VAULT_TVL_CAP|VAULT_PER_DEPOSIT_CAP|VAULT_EXIT_FEE_BPS)$/, "there is no unprefixed vault cap name: each vault has its own, and the name carries the vault key (USDC, PROTO or RWA), for example VAULT_PROTO_TVL_CAP"],
-  [/^VAULT_(?:USDC_)?(?:NAV_DEVIATION_BPS|MIN_POOL_LIQUIDITY)$/, "the NAV deviation guard and the pool liquidity floor belong to the baskets only: name the basket (PROTO or RWA), for example VAULT_PROTO_NAV_DEVIATION_BPS. rmUSDC has no navDeviationGuardBps and no pool"],
+  [/^VAULT_NAME$/, "the registry name of every vault is a constant of its own vault stage script (rmUSDC included), never a sheet value (issue 1705: one registry-name source for every vault). Delete the line"],
+  [/^(VAULT_TVL_CAP|VAULT_PER_DEPOSIT_CAP|VAULT_EXIT_FEE_BPS)$/, "there is no unprefixed vault cap name: each vault has its own, and the name carries the vault key (USDC, PROTO, RWA or HARD), for example VAULT_PROTO_TVL_CAP"],
+  [/^VAULT_(?:USDC_)?(?:NAV_DEVIATION_BPS|MIN_POOL_LIQUIDITY)$/, "the NAV deviation guard and the pool liquidity floor belong to the baskets only: name the basket (PROTO, RWA or HARD), for example VAULT_PROTO_NAV_DEVIATION_BPS. rmUSDC has no navDeviationGuardBps and no pool"],
 ];
 
 export interface SheetVault {
@@ -153,6 +153,11 @@ export interface Sheet {
   weights: { key: VaultKey; bps: number }[];
   /** Issue 1927: the retired vaults of a v0.5.0 sheet a follow-on verb read (rmAGENT). They are in none of the lists above. Absent: the sheet names none. */
   retiredVaults?: RetiredVaultKey[];
+  /**
+   * Core 2008 (ADR-0018): the vaults this CLI added (ADDED_VAULT_KEYS, rmHARD) that a prior line's sheet (v0.5.0, v0.6.0) does not carry, read by a follow-on verb. `vaults` has no
+   * entry for them and no list names them. Absent: the sheet carries every vault (a deploy run always does).
+   */
+  absentVaults?: VaultKey[];
   govern: {
     /** The only mainnet govern rows: one timelock unpause per vault listed here. */
     unpauseVaults: VaultKey[];
@@ -259,7 +264,7 @@ function dropLegacyVaultName(text: string, raw: Record<string, string>, o: Parse
   o.warn?.(`sheet line ${line}: VAULT_NAME is ignored by ${o.verb}. Every registry name is a vault stage script constant (issue 1705): delete the line before the next deploy run, which refuses it`, { name: LEGACY_VAULT_NAME, line, verb: o.verb });
 }
 
-function checkNames(raw: Record<string, string>, system: SystemName = "vaults"): void {
+function checkNames(raw: Record<string, string>, system: SystemName = "vaults", absent: readonly VaultKey[] = []): void {
   for (const name of Object.keys(raw)) {
     for (const [re, why] of REFUSED) if (re.test(name)) throw err(`${name} is refused: ${why}`, { name });
     if (!(name in SHEET_SPEC)) throw err(`${name} is not a sheet name (the sheet is a whitelist)`, { name });
@@ -271,7 +276,8 @@ function checkNames(raw: Record<string, string>, system: SystemName = "vaults"):
     if (missing.length) throw err(`the gateway sheet is missing required names: ${missing.join(", ")}. Nothing has a default; the gateway admin and the gateway upgrade timelock are explicit`, { missing });
     return;
   }
-  const missing = REQUIRED_NAMES.filter((n) => !(n in raw) || raw[n] === "");
+  const absentNames = new Set(absent.flatMap((k) => [...vaultSheetNames(k), ...(k === "USDC" ? [] : basketSheetNames(k))]));
+  const missing = REQUIRED_NAMES.filter((n) => !absentNames.has(n) && (!(n in raw) || raw[n] === ""));
   if (missing.length) throw err(`the sheet is missing required names: ${missing.join(", ")}. Nothing has a default.`, { missing });
 }
 
@@ -324,7 +330,12 @@ export function parseSheet(text: string, opts: ParseSheetOpts = {}): Sheet {
   dropLegacyVaultName(text, raw, opts);
   const written = { ...raw };
   const retiredVaults = opts.system === "gateway" ? [] : takeRetiredVaultLines(raw, opts);
-  checkNames(raw, opts.system);
+  // Core 2008 (ADR-0018): a follow-on verb on a prior line reads a sheet that predates rmHARD. A vault of ADDED_VAULT_KEYS is absent when the sheet carries none of its lines; a deploy
+  // run never treats it as absent (its required names are then missing), and a sheet that carries some of its lines must carry all of them.
+  const followOn = (RETIRED_VAULT_VERBS as readonly string[]).includes(opts.verb ?? "");
+  const allNames = (k: VaultKey): string[] => [...vaultSheetNames(k), ...(k === "USDC" ? [] : basketSheetNames(k))];
+  const absentVaults: VaultKey[] = opts.system === "gateway" || !followOn ? [] : ADDED_VAULT_KEYS.filter((k) => allNames(k).every((n) => !(n in raw)));
+  checkNames(raw, opts.system, absentVaults);
   if (opts.system === "gateway") return gatewaySheet(raw);
   const v = raw;
 
@@ -386,6 +397,7 @@ export function parseSheet(text: string, opts: ParseSheetOpts = {}): Sheet {
 
   const vaults = {} as Record<VaultKey, SheetVault>;
   for (const k of VAULT_KEYS) {
+    if (absentVaults.includes(k)) continue;
     const [t, p, f] = vaultSheetNames(k) as [string, string, string];
     const tvlCap = asUint(t, v[t]!), perDepositCap = asUint(p, v[p]!), exitFeeBps = asUint(f, v[f]!);
     // caps floor, every chain: 0 is not "no cap" here, the first period runs on low explicit caps
@@ -414,17 +426,21 @@ export function parseSheet(text: string, opts: ParseSheetOpts = {}): Sheet {
   // issue 1520 (amended 2026-10-06, rmUSDC added 2026-10-09 by issue 1710): no stage 13 step may be skipped on a mainnet deploy. A vault left out would stay paused.
   if (chainId === MAINNET_CHAIN_ID) {
     // The stage 13 vaults are the stage table's vault rules (unpauseInStage13, issue 1705).
-    const missing = STAGE13_UNPAUSE_VAULTS.filter((k) => !unpauseVaults.includes(k));
+    const missing = STAGE13_UNPAUSE_VAULTS.filter((k) => !unpauseVaults.includes(k) && !absentVaults.includes(k));
     if (missing.length > 0) throw err(`GOVERN_UNPAUSE_VAULTS must list ${STAGE13_UNPAUSE_VAULTS.join(", ")} on chain 8453: no stage 13 step may be skipped (missing ${missing.join(", ")})`, { name: "GOVERN_UNPAUSE_VAULTS" });
   }
   const weights = parseWeights(v.ROUTER_WEIGHTS!);
+  for (const k of absentVaults) {
+    if (eligibleVaults.includes(k) || unpauseVaults.includes(k) || weights.some((w) => w.key === k)) throw err(`the sheet carries no ${VAULT_NAME[k]} lines (a prior line's sheet), so ELIGIBLE_VAULTS, GOVERN_UNPAUSE_VAULTS and ROUTER_WEIGHTS must not name ${k}`, { vault: k });
+  }
   const weightKeys = weights.map((w) => w.key).sort().join(",");
   const wantKeys = ["USDC", ...eligibleVaults].sort().join(",");
   if (weightKeys !== wantKeys) throw err(`ROUTER_WEIGHTS must name exactly rmUSDC and the eligible baskets (${wantKeys}), got ${weightKeys}`);
   // issue 1580 (owner amendment 2026-10-06 on the stage 13 issue): mainnet launches on exactly this vector. Twin sheets keep their own weights.
   if (chainId === MAINNET_CHAIN_ID) {
     const got = weights.map((w) => `${w.key}:${w.bps}`).sort().join(",");
-    if (got !== LAUNCH_ROUTER_WEIGHTS_8453) throw err(`ROUTER_WEIGHTS must be the launch vector on chain 8453 (USDC:9500,PROTO:500,RWA:0, every vault named), got ${v.ROUTER_WEIGHTS}`, { name: "ROUTER_WEIGHTS" });
+    const launch = LAUNCH_ROUTER_WEIGHTS_8453.split(",").filter((x) => !absentVaults.includes(x.split(":")[0] as VaultKey)).join(",");
+    if (got !== launch) throw err(`ROUTER_WEIGHTS must be the launch vector on chain 8453 (USDC:9500,PROTO:500,RWA:0,HARD:0, every vault named), got ${v.ROUTER_WEIGHTS}`, { name: "ROUTER_WEIGHTS" });
   }
   const newDelay = asUint("GOVERN_NEW_DELAY", v.GOVERN_NEW_DELAY!);
   const newDelayMin = kind === "rehearsal" ? BigInt(REHEARSAL_DELAY_FLOOR) : 3600n;
@@ -441,7 +457,7 @@ export function parseSheet(text: string, opts: ParseSheetOpts = {}): Sheet {
   return {
     values, chainId, expectedChainId, kind, admin, pauser, emergency, shareReceiver, receiptAdmin, safeOwners, safeThreshold,
     safeSalt: v.SAFE_SALT_NONCE, usdc, swapRouter, feeRecipient, seedDeposit, timelockMinDelay, upgrade, vaults,
-    eligibleVaults, weights, govern: { unpauseVaults, newDelay }, ...(retiredVaults.length ? { retiredVaults } : {}),
+    eligibleVaults, weights, govern: { unpauseVaults, newDelay }, ...(retiredVaults.length ? { retiredVaults } : {}), ...(absentVaults.length ? { absentVaults } : {}),
   };
 }
 
@@ -508,7 +524,7 @@ export function parseUpgrade(v: Record<string, string | undefined>, chainId: num
   return { mode: mode as UpgradeMode, freezeDeadline: raw };
 }
 
-const LAUNCH_ROUTER_WEIGHTS_8453 = ["USDC:9500", "PROTO:500", "RWA:0"].sort().join(",");
+const LAUNCH_ROUTER_WEIGHTS_8453 = ["USDC:9500", "PROTO:500", "RWA:0", "HARD:0"].sort().join(",");
 
 /** "USDC:6000,PROTO:3000,RWA:1000": every key once, bps sum 10000. */
 export function parseWeights(text: string): { key: VaultKey; bps: number }[] {

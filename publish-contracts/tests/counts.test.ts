@@ -14,7 +14,7 @@ const kind = (f: () => unknown): string | undefined => { try { f(); } catch (e) 
 describe("frozen counts keyed by DEPLOY_SHA", () => {
   test("the nonce check passes when it equals the summed frozen counts", () => {
     const sum = sumCounts(COUNTS);
-    expect(sum).toBe(1 + 4 + 18 + 2 + 3 + 2 + 2 + 6 + 6 + 25);
+    expect(sum).toBe(1 + 4 + 18 + 2 + 3 + 2 + 2 + 6 + 6 + 6 + 25);
     expect(kind(() => checkNonce(sum + PROOF_TX_NONCES, COUNTS))).toBeUndefined();
     expect(kind(() => checkNonce(sum, COUNTS))).toBe("NONCE"); // the deployer also sent the prove-control transaction (core 1712)
     expect(kind(() => checkNonce(sum, COUNTS, Object.keys(COUNTS)))).toBeUndefined(); // a named subset of stages is just their sum
@@ -146,8 +146,8 @@ describe("the one-time library address move: baseline and 8453 effective counts 
     const adopted = Object.fromEntries(LIBRARY_MOVE_STAGES.filter((s) => m.stages[s].creations > 0).map((s) => [s, m.stages[s].twinMeasured]));
     expect(effectiveCounts(baseline, adopted)).toEqual(Object.fromEntries(LIBRARY_MOVE_STAGES.map((s) => [s, m.stages[s].twinMeasured])));
   });
-  test("a cross-check against the Deploy 3 file needs --accept-diff for the stages the table retired (agent, ic-policy, recorder) and the one it added (receipt); the gateway system's key is not compared", () => {
-    expect(m.acceptDiff).toEqual(["agent", "ic-policy", "receipt", "recorder"]);
+  test("a cross-check against the Deploy 3 file needs --accept-diff for the stages the table retired (agent, ic-policy, recorder) and the ones it added (receipt, hard: core 2008); the gateway system's key is not compared", () => {
+    expect(m.acceptDiff).toEqual(["agent", "hard", "ic-policy", "receipt", "recorder"]);
     // a new baseline equal to Deploy 3 at every stage the table still has differs from it at exactly those stages
     const keys = ["safe", ...getStageTable().stages.filter((s) => s.system !== "gateway").map((s) => s.name)];
     const same = Object.fromEntries(keys.map((k) => [k, anchor.counts[k] ?? 2]));
@@ -216,7 +216,7 @@ describe("a new baseline loads in the committed frozen-counts directory, whose o
       plant(dir);
       const f = loadFrozen(dir, SHA);
       expect(f.counts).toEqual(baselineLike(JSON.parse(readFileSync(join(real, `${DEPLOY3}.json`), "utf8")).counts));
-      expect(f.measured.reconstructed!.crossCheck!.accepted.map((d) => d.stage)).toEqual(["agent", "ic-policy", "receipt", "recorder"]);
+      expect(f.measured.reconstructed!.crossCheck!.accepted.map((d) => d.stage)).toEqual(["agent", "hard", "ic-policy", "receipt", "recorder"]);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
   test("without git history (a copy outside the repository) the older files are verified against today's table, as before: COUNTS_MISSING", () => {

@@ -209,7 +209,7 @@ function chainOf(o: { listed?: readonly Address[]; oldStatus?: number; oldEligib
 
 function verbWorld(o: { chainId?: number; sheet?: Record<string, string | null>; manifest?: Partial<RunManifest> | null } = {}) {
   const chainId = o.chainId ?? 918453;
-  const w = world({ chainId, sheet: { ...ALL, ...(chainId === 8453 ? { ROUTER_WEIGHTS: "USDC:9500,PROTO:500,RWA:0" } : {}), ...(o.sheet ?? {}) } });
+  const w = world({ chainId, sheet: { ...ALL, ...(chainId === 8453 ? { ELIGIBLE_VAULTS: "PROTO,RWA,HARD", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,RWA,HARD", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,RWA:0,HARD:0" } : {}), ...(o.sheet ?? {}) } });
   const dir = join(w.coreDir, "deployments", String(chainId));
   writeGovernManifests(dir);
   writeFileSync(join(dir, "libs.json"), JSON.stringify({ tick_math: addr(0x7001) }));
@@ -562,7 +562,7 @@ describe("the govern row", () => {
     expect(w.tl.s.events).toEqual(["scheduleBatch:redeploy-vault", "scheduleBatch:redeploy-vault"]);
   });
   test("refused on 8453 in production, with nothing scheduled", async () => {
-    const w = rowWorld(8453, { DEPLOYMENT_KIND: null, TIMELOCK_MIN_DELAY: "172800", GOVERN_NEW_DELAY: "172800", SAFE_SALT_NONCE: null, ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,RWA:0" });
+    const w = rowWorld(8453, { DEPLOYMENT_KIND: null, TIMELOCK_MIN_DELAY: "172800", GOVERN_NEW_DELAY: "172800", SAFE_SALT_NONCE: null, ELIGIBLE_VAULTS: "PROTO,RWA,HARD", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,RWA,HARD", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,RWA:0,HARD:0" });
     await expect(w.go()).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("refused on chain 8453 in production") });
     expect(w.tl.s.events).toEqual([]);
   });

@@ -56,8 +56,8 @@ function scheduleLog(w: World, target: `0x${string}`, id: Hex, pending = true, d
 const ALL_ADDRS = () => [...Object.values(ADDR), addr(0x4ec)];
 
 describe("the full proxied core set (issue 1809)", () => {
-  test("the stage table names the eight proxied core contracts, and a healthy frozen deployment passes every label and claims core immutability", async () => {
-    expect(ALL).toEqual(["vault[rmUSDC]", "registry", "router", "gateway", "receipt", "governance", "vault[rmPROTO]", "vault[rmRWA]"]);
+  test("the stage table names the nine proxied core contracts, and a healthy frozen deployment passes every label and claims core immutability", async () => {
+    expect(ALL).toEqual(["vault[rmUSDC]", "registry", "router", "gateway", "receipt", "governance", "vault[rmPROTO]", "vault[rmRWA]", "vault[rmHARD]"]);
     const w = buildWorld();
     const r = await verifyDeployment(w.opts);
     expect(failed(r)).toEqual([]);
@@ -227,7 +227,7 @@ describe("the freeze deadline alerts before the deadline (issue 1842)", () => {
   test("before deadline - (delay + 7 days) the label passes quietly", async () => {
     const d = await detail(world(at - DELAY - 7n * DAY - 1n));
     expect(d.failed).toEqual([]);
-    expect(d.detail).toMatch(/^deadline 2027-01-31T00:00:00Z, 8 of 8 proxies still upgradeable$/);
+    expect(d.detail).toMatch(/^deadline 2027-01-31T00:00:00Z, 9 of 9 proxies still upgradeable$/);
   });
   test("WARN at deadline - (delay + 7 days): passes, names every unfrozen proxy and the govern row", async () => {
     const w = world(at - DELAY - 7n * DAY);

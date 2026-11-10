@@ -50,7 +50,7 @@ export const VAULT_ADDRESS_FIELD = "vault";
 /** Env names core uses for the per-vault caps -> the suffix of the sheet name VAULT_<KEY>_<suffix>. */
 export const VAULT_CAP_ENV: Record<string, string> = {
   TVL_CAP: "TVL_CAP", PER_DEPOSIT_CAP: "PER_DEPOSIT_CAP", EXIT_FEE_BPS: "EXIT_FEE_BPS",
-  // basket stages only (issue 1666): the table lists them for proto and rwa, never for vault (rmUSDC)
+  // basket stages only (issue 1666): the table lists them for proto, rwa and hard, never for vault (rmUSDC)
   NAV_DEVIATION_BPS: "NAV_DEVIATION_BPS", MIN_POOL_LIQUIDITY: "MIN_POOL_LIQUIDITY",
 };
 /** Env names core reads that carry a different name in the sheet. */
@@ -127,11 +127,17 @@ export const MANIFEST_FIELDS_READ: { stage: string; field: string }[] = [
 export const ASSET_CONFIG_FILES: Partial<Record<VaultKey, { file: string; list: string }>> = {
   PROTO: { file: "config/protocol-assets.json", list: "assets" },
   RWA: { file: "config/rwa-assets.json", list: "assets" },
+  // core 2008, ADR-0018: rmHARD holds PAXG on its Aero (Aerodrome Slipstream) CL USDC pool, poolFee is the pool's tick spacing
+  HARD: { file: "config/hard-assets.json", list: "assets" },
 };
-/** The manifest field of a basket or agent vault that holds its Uniswap V3 swap adapter. */
+/** The manifest field of a basket vault that holds its external swap adapter: the Uniswap V3 adapter, or the Aerodrome adapter of rmHARD (ADR-0018). */
 export const VAULT_ADAPTER_FIELD = "adapter";
-/** Core's `venue` names to the on-chain Venue enum index (`BasketVault.Venue`: V3 = 0). The V4 venue is not deployed by any stage (ADR-0017). */
-export const VENUE_INDEX: Record<string, number> = { UniswapV3: 0 };
+/**
+ * Core's `venue` names to the on-chain Venue enum index (`BasketVault.Venue`: V3 = 0, V4 = 1, Aerodrome = 2). The V4 venue is not deployed by any stage (ADR-0017).
+ * Aerodrome is rmHARD's PAXG row (core 2008, ADR-0018): the swap fee is the CL pool's tick spacing.
+ */
+export const VENUE_INDEX: Record<string, number> = { UniswapV3: 0, Aerodrome: 2 };
+export const VENUE_AERODROME = 2;
 export const VENUE_V3 = 0;
 /**
  * The strategy adapters a RobotMoneyVault stage registers (DeployVault.s.sol, issue 1705 C4): in registration order, the manifest field of each adapter and the
@@ -147,5 +153,5 @@ export const STRATEGY_ADAPTER_VAULT_ARTIFACT = "RobotMoneyVault";
 
 
 /** The verifier's vault kind per table vault key. */
-export const VAULT_KIND: Record<VaultKey, "usdc" | "basket"> = { USDC: "usdc", PROTO: "basket", RWA: "basket" };
+export const VAULT_KIND: Record<VaultKey, "usdc" | "basket"> = { USDC: "usdc", PROTO: "basket", RWA: "basket", HARD: "basket" };
 export const isVaultKey = (k: string): k is VaultKey => (VAULT_KEYS as readonly string[]).includes(k);

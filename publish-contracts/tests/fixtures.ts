@@ -11,10 +11,10 @@ export const exampleText = (): string => readFileSync(EXAMPLE_SHEET, "utf8");
 
 /** The example sheet with some names replaced, and extra lines appended. */
 export function sheetText(over: Record<string, string | null> = {}, extra: string[] = []): string {
-  // chain 8453 refuses a sheet that skips a stage 13 unpause (issue 1520): default it to all three unless the caller says otherwise
-  if (over.CHAIN_ID === "8453" && !("GOVERN_UNPAUSE_VAULTS" in over)) over = { ...over, GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,RWA" };
-  // and issue 1580: chain 8453 refuses any router weights but the launch vector (eligibility must then name both baskets)
-  if (over.CHAIN_ID === "8453") over = { ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,RWA:0", ...over };
+  // chain 8453 refuses a sheet that skips a stage 13 unpause (issue 1520): default it to all four unless the caller says otherwise
+  if (over.CHAIN_ID === "8453" && !("GOVERN_UNPAUSE_VAULTS" in over)) over = { ...over, GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,RWA,HARD" };
+  // and issue 1580: chain 8453 refuses any router weights but the launch vector (eligibility must then name every basket)
+  if (over.CHAIN_ID === "8453") over = { ELIGIBLE_VAULTS: "PROTO,RWA,HARD", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,RWA:0,HARD:0", ...over };
   const lines = exampleText().split("\n");
   const out: string[] = [];
   const done = new Set<string>();
@@ -33,7 +33,7 @@ export const SHA = "a".repeat(40);
 export const SHA2 = "b".repeat(40);
 
 /** Frozen counts used across the tests: the vaults system's deployer stages (issue 1892: the gateway system's counts are GATEWAY_COUNTS). */
-export const COUNTS: Record<string, number> = { safe: 1, libs: 4, vault: 18, registry: 2, router: 3, governance: 2, receipt: 2, proto: 6, rwa: 6, timelock: 25 };
+export const COUNTS: Record<string, number> = { safe: 1, libs: 4, vault: 18, registry: 2, router: 3, governance: 2, receipt: 2, proto: 6, rwa: 6, hard: 6, timelock: 25 };
 
 /** The gateway system's frozen counts (issue 1892): the gateway proxy stage and the four-transaction handover. A frozen file holds both systems' keys. */
 export const GATEWAY_COUNTS: Record<string, number> = { gateway: 3, "gateway-handover": 4 };
@@ -63,6 +63,9 @@ export function refFrozenPath(sha = "9a768bb9cc66d4485470a99a068ba7477604501a"):
   // ADR-0017: the first release deployed an agent and a recorder stage. The pinned reference keeps the stages the current table still has, so a rebuilt baseline is compared with the same stage set.
   const live = new Set(["safe", ...getStageTable().stages.map((x) => x.name)]);
   for (const [k, v] of Object.entries(orig.counts as Record<string, number>)) { const name = k === "ic-policy" ? "receipt" : k; if (live.has(name)) counts[name] = v; }
+  // Core 2008 (ADR-0018): the first release had no `hard` stage. DeployHardAssetsVault runs the same basket script shape as DeployRwaBasketVault (one swap adapter, the
+  // implementation and its proxy, the same setters), so the reference models the rmHARD stage with the rmRWA count. A real release freezes its own measured count.
+  if (live.has("hard") && counts.hard === undefined && counts.rwa !== undefined) counts.hard = counts.rwa;
   refPath = join(tmp("pc-ref-"), `${sha}.json`);
   writeFileSync(refPath, JSON.stringify({ ...orig, counts }, null, 2));
   return refPath;
@@ -87,15 +90,17 @@ export const CONFIG_ASSET = { symbol: "wETH", token: "0x420000000000000000000000
 /** The adapter a vault manifest names (deployed per run, not in static config). */
 export const MANIFEST_ADAPTER = "0x00000000000000000000000000000000000000a2" as const;
 
-/** Writes core's three asset config files in their real shape: protocol-assets.json, rwa-assets.json, agent-token-shortlist.json. */
-export function writeCoreAssetConfig(coreDir: string, o: { proto?: object[]; rwa?: object[]; shortlist?: object[] } = {}): void {
+/** Writes core's asset config files in their real shape: protocol-assets.json, rwa-assets.json, hard-assets.json, agent-token-shortlist.json. */
+export function writeCoreAssetConfig(coreDir: string, o: { proto?: object[]; rwa?: object[]; hard?: object[]; shortlist?: object[] } = {}): void {
   mkdirSync2(join2(coreDir, "config"), { recursive: true });
   const head = { usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", uniswapV3Factory: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD", swapRouter02: "0x2626664c2603336E57B271c5C0b26F421741e481" };
   writeFileSync2(join2(coreDir, "config", "protocol-assets.json"), JSON.stringify({ ...head, assets: o.proto ?? [CONFIG_ASSET] }));
   writeFileSync2(join2(coreDir, "config", "rwa-assets.json"), JSON.stringify({ ...head, assets: o.rwa ?? [{ ...CONFIG_ASSET, symbol: "deSPXA", token: "0x9c5C365e764829876243d0b289733B9D2b729685", pool: "0x00000000000000000000000000000000000000a3" }] }));
+  // core 2008: rmHARD's PAXG row. A V3-shaped row by default, so the healthy pool chain answers its fee; the real file is an Aerodrome row (tests that need it pass `hard`).
+  writeFileSync2(join2(coreDir, "config", "hard-assets.json"), JSON.stringify({ ...head, assets: o.hard ?? [{ ...CONFIG_ASSET, symbol: "PAXG", token: "0xe904AEA5E1b110c9174728fA2efFc8aeD19E98Ef", pool: "0x00000000000000000000000000000000000000a4" }] }));
   writeFileSync2(join2(coreDir, "config", "agent-token-shortlist.json"), JSON.stringify({ ...head, shortlist: o.shortlist ?? [] }));
   // issue 1705 C4: the verifier reads rmUSDC's adapter caps from the vault stage script and a basket's default maxSlippageBps from its contract, at the DEPLOY_SHA
-  for (const f of ["contracts/script/DeployVault.s.sol", "contracts/vaults/ProtocolAssetVault.sol", "contracts/vaults/AgentTokenVault.sol", "contracts/vaults/RwaBasketVault.sol"]) {
+  for (const f of ["contracts/script/DeployVault.s.sol", "contracts/vaults/ProtocolAssetVault.sol", "contracts/vaults/AgentTokenVault.sol", "contracts/vaults/RwaBasketVault.sol", "contracts/vaults/HardAssetsVault.sol"]) {
     mkdirSync2(join2(coreDir, f, ".."), { recursive: true });
     writeFileSync2(join2(coreDir, f), readFileSync(join2(REPO, f), "utf8"));
   }
@@ -114,6 +119,7 @@ export function healthyPoolReader(): ChainReader {
       if (data === "0xddca3f43") return { ok: true, data: `0x${w32(500n)}` as Hex2 };
       if (data === "0x3850c7bd") return { ok: true, data: `0x${[1n, 100n, 7n, 1000n, 1000n, 0n, 1n].map(w32).join("")}` as Hex2 };
       if (data === "0x1a686502") return { ok: true, data: `0x${w32(10n)}` as Hex2 };
+      if (data === "0xd0c93a7c") return { ok: true, data: `0x${w32(10n)}` as Hex2 }; // tickSpacing(): an Aero CL pool (rmHARD, core 2008)
       if (data.startsWith("0x252c09d7")) return { ok: true, data: `0x${[NOW_TS - 60n, 0n, 0n, 1n].map(w32).join("")}` as Hex2 };
       if (data === encodeFn({ abi: OBSERVE_ABI, functionName: "observe", args: [[1800, 0]] })) {
         return { ok: true, data: encodeParams([{ type: "int56[]" }, { type: "uint160[]" }], [[0n, 180_000n], [0n, 0n]]) };

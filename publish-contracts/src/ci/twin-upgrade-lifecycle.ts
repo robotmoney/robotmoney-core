@@ -252,14 +252,16 @@ run(evidenceArgs(hiddenFile), { cwd: pc, stdoutTo: join(rh, "governed-upgrades-e
 say("receipt_migrated", { legacy_proxy: legacyProxy, legacy_implementation: legacyImpl, implementation: rcNewImpl, operation_id: rcEntry.operation_id, schedule_tx: rcEntry.schedule_tx, execute_tx: rcEntry.execute_tx, releaser: governanceAddr, data_hash: keccak256(rcMigrationData) });
 
 // ---- 2c. the retirement of a populated fourth vault (issue 1912, ADR-0017, ADR-0009) ----
-// The Twin deploys the three-vault target. The retire row acts on the live four-vault v0.5.0 deployment, so the step builds that state through governance first: the deployer deploys a
-// fourth router leg (contracts/test/helpers/RetirableLegVault.sol, a stand-in for rmAGENT), the SAFE registers it and makes it router-eligible with the default vector grown to four legs
+// The Twin deploys this line's vaults (four since ADR-0018). The retire row retires a vault outside the table (rmAGENT on the live v0.5.0 deployment), so the step builds that state through
+// governance first: the deployer deploys an extra router leg (contracts/test/helpers/RetirableLegVault.sol, a stand-in for rmAGENT), the SAFE registers it and makes it router-eligible with the default vector grown to four legs
 // in ONE timelock batch, and a holder deposits into it. Then `govern --row retire-vault` (the product row) retires it through the real Safe and timelock, and the end state is read back from
 // the chain: eligible count 4 to 3, a three-entry default vector, a deposit into it reverting, redeem still paying the holder, and the router quote never naming it.
 {
   const registryAddr = getAddress(json(join(manifests, `${manifestBase(table.stages.find((x) => x.name === "registry")!.manifest)}.json`)).registry as string) as Address;
   const routerAddr = getAddress(json(join(manifests, `${manifestBase(table.stages.find((x) => x.name === "router")!.manifest)}.json`)).router as string) as Address;
-  const legs = (["USDC", "PROTO", "RWA"] as const).map((k) => getAddress(json(join(manifests, `${manifestBase(table.vaults.find((v) => v.key === k)!.manifest)}.json`)).vault as string) as Address) as [Address, Address, Address];
+  // every vault of this line's table stays (four since ADR-0018); the extra vault is the one the row retires
+  const legs = table.vaults.map((v) => getAddress(json(join(manifests, `${manifestBase(v.manifest)}.json`)).vault as string) as Address);
+  const N = legs.length;
   const send = castSender({ rpc, keystore: key("DEPLOYER"), passFile: pass, from: deployerAddr, scratchDir: rh });
   const readReg = <T>(functionName: string, args: unknown[] = []): Promise<T> => client.readContract({ address: registryAddr, abi: REGISTRY_READ_ABI, functionName, args } as any) as Promise<T>;
   const readRouter = <T>(functionName: string, args: unknown[] = []): Promise<T> => client.readContract({ address: routerAddr, abi: ROUTER_READ_ABI, functionName, args } as any) as Promise<T>;
@@ -281,13 +283,14 @@ say("receipt_migrated", { legacy_proxy: legacyProxy, legacy_implementation: lega
   const sharesBefore = await readLeg<bigint>("balanceOf", [deployerAddr]);
   if (sharesBefore !== HOLD) fail(`the holder has ${sharesBefore} shares of the fourth vault, want ${HOLD}`);
   // the four-vault state the row starts from
-  if ((await readReg<bigint>("routerEligibleCount")) !== 4n || !(await readReg<boolean>("isRouterEligible", [fourth]))) fail("the fourth vault is not router-eligible before the retire row");
+  if ((await readReg<bigint>("routerEligibleCount")) !== BigInt(N + 1) || !(await readReg<boolean>("isRouterEligible", [fourth]))) fail("the fourth vault is not router-eligible before the retire row");
   const [dvBefore, dbBefore] = await readRouter<readonly [readonly Address[], readonly bigint[]]>("getDefaultWeights");
-  if (dvBefore.length !== 4 || !dvBefore.some((v) => lcEq(v, fourth)) || dbBefore.reduce((t, x) => t + x, 0n) !== 10000n) fail(`the default vector before the retire row is not four legs naming the fourth vault: [${dvBefore.join(", ")}]`);
-  say("fourth_vault_registered", { vault: fourth, eligible_count: 4, default_legs: dvBefore.length, holder_shares: String(sharesBefore) });
+  if (dvBefore.length !== N + 1 || !dvBefore.some((v) => lcEq(v, fourth)) || dbBefore.reduce((t, x) => t + x, 0n) !== 10000n) fail(`the default vector before the retire row is not ${N + 1} legs naming the extra vault: [${dvBefore.join(", ")}]`);
+  say("fourth_vault_registered", { vault: fourth, eligible_count: N + 1, default_legs: dvBefore.length, holder_shares: String(sharesBefore) });
 
   // the product row: the Safe retires the vault through the timelock (the Twin warps the real delay), then reads the end state back and records vault_retirements
-  const weights = "USDC:9500,PROTO:500,RWA:0";
+  const legBps = legs.map((_, i) => (i === 0 ? 9500 : i === 1 ? 500 : 0));
+  const weights = table.vaults.map((v, i) => `${v.key}:${legBps[i]}`).join(",");
   stage("govern", join(rh, "govern-retire-vault.txt"), ["--row", RETIRE_ROW, "--admin-arg", `vault=${fourth}`, "--admin-arg", `weights=${weights}`]);
   const retirement = (runManifest().vault_retirements ?? []).find((e: any) => lcEq(e?.vault, fourth)) ?? fail(`govern --row ${RETIRE_ROW} wrote no vault_retirements entry for ${fourth}`);
   if (!isTx(retirement.schedule_tx) || !isTx(retirement.execute_tx)) fail(`the vault_retirements entry has no schedule or execute transaction: ${JSON.stringify(retirement)}`);
@@ -296,19 +299,19 @@ say("receipt_migrated", { legacy_proxy: legacyProxy, legacy_implementation: lega
   const status = ((await readReg<readonly [unknown, number]>("getVault", [fourth]))[1]) as number;
   if (Number(status) !== 2) fail(`the fourth vault's registry status is ${status}, want 2 (Retired)`);
   if (await readReg<boolean>("isRouterEligible", [fourth])) fail("the fourth vault is still router-eligible after the retire row");
-  if ((await readReg<bigint>("routerEligibleCount")) !== 3n) fail(`registry.routerEligibleCount() is ${await readReg<bigint>("routerEligibleCount")}, want 3`);
+  if ((await readReg<bigint>("routerEligibleCount")) !== BigInt(N)) fail(`registry.routerEligibleCount() is ${await readReg<bigint>("routerEligibleCount")}, want ${N}`);
   const [dv, db] = await readRouter<readonly [readonly Address[], readonly bigint[]]>("getDefaultWeights");
   const [ev, eb] = await readRouter<readonly [readonly Address[], readonly bigint[]]>("getEffectiveWeights");
-  const want = legs.map((v, i) => `${v.toLowerCase()}:${[9500, 500, 0][i]}`).join(",");
+  const want = legs.map((v, i) => `${v.toLowerCase()}:${legBps[i]}`).join(",");
   const key3 = (v: readonly Address[], b: readonly bigint[]) => v.map((a, i) => `${a.toLowerCase()}:${b[i]}`).join(",");
   if (key3(dv, db) !== want || key3(ev, eb) !== want) fail(`the router vectors after the retire row are default [${key3(dv, db)}] effective [${key3(ev, eb)}], want [${want}]`);
   if (await readRouter<boolean>("votedWeightsActive")) fail("an active (voted) vector is in effect after the retire row");
   if ((await readLeg<boolean>("retired")) !== true || (await readLeg<bigint>("maxDeposit", [deployerAddr])) !== 0n) fail("the fourth vault still takes deposits after the retire row");
-  // a deposit into it reverts (the vault is withdraw-only); a quote of a router deposit lists the three remaining legs and never the fourth
+  // a deposit into it reverts (the vault is withdraw-only); a quote of a router deposit lists the remaining legs and never the retired one
   const depositRevert = await rpcCallRevert(rpc)({ from: deployerAddr, to: fourth, data: encodeFunctionData({ abi: LEG_ABI, functionName: "deposit", args: [1_000_000n, deployerAddr] }) });
   if (depositRevert === undefined) fail("a deposit into the retired vault SUCCEEDS in a simulation");
   const quote = await readRouter<readonly { vault: Address; weightBps: bigint; legAmount: bigint; estShares: bigint; unavailable: boolean }[]>("previewDeposit", [1_000_000_000n]);
-  if (quote.length !== 3 || quote.some((l) => lcEq(l.vault, fourth)) || quote.reduce((t, l) => t + l.legAmount, 0n) !== 1_000_000_000n) fail(`the router quote after the retire row is not the three remaining legs: ${JSON.stringify(quote.map((l) => [l.vault, String(l.legAmount)]))}`);
+  if (quote.length !== N || quote.some((l) => lcEq(l.vault, fourth)) || quote.reduce((t, l) => t + l.legAmount, 0n) !== 1_000_000_000n) fail(`the router quote after the retire row is not the ${N} remaining legs: ${JSON.stringify(quote.map((l) => [l.vault, String(l.legAmount)]))}`);
   // redeem still pays the existing holder
   const usdcOf = (): Promise<bigint> => client.readContract({ address: USDC_ADDRESS, abi: ERC20_ABI, functionName: "balanceOf", args: [deployerAddr] }) as Promise<bigint>;
   const usdcBefore = await usdcOf();
@@ -318,9 +321,9 @@ say("receipt_migrated", { legacy_proxy: legacyProxy, legacy_implementation: lega
   const retireEvidence = join(rh, "vault-retirements-evidence.txt");
   run([bun, env("TWIN_EVIDENCE_CHECK", "src/evidence-check.ts"), "--vault-retirements", join(evidenceDir, "publish-run.json"), "--registry", registryAddr, "--timelock", timelock, "--delay-floor", String(await timelockMinDelay(handle, timelock)), "--rpc", rpc], { cwd: pc, stdoutTo: retireEvidence });
   if (!/^evidence ok \(vault retirements: 1 retirement\(s\), chain read\)$/m.test(readFileSync(retireEvidence, "utf8"))) fail(`evidence-check --vault-retirements did not read the retirement from the chain: ${readFileSync(retireEvidence, "utf8")}`);
-  // verify reads the four-vault registry as the three manifests plus the retired vault (the run manifest names it)
+  // verify reads the registry as the manifests plus the retired vault (the run manifest names it)
   stage("verify", join(rh, "verify-labels-post-retire.txt"));
-  say("vault_retired", { vault: fourth, operation_id: retirement.operation_id, schedule_tx: retirement.schedule_tx, execute_tx: retirement.execute_tx, eligible_count: 3, default_legs: dv.length, holder_redeemed: String(OUT) });
+  say("vault_retired", { vault: fourth, operation_id: retirement.operation_id, schedule_tx: retirement.schedule_tx, execute_tx: retirement.execute_tx, eligible_count: N, default_legs: dv.length, holder_redeemed: String(OUT) });
 }
 
 // ---- 3. the freeze schedule: the row binds the batch to the record verify wrote after the upgrade, schedules it and stops (no warp: exit 15, GOVERN_PENDING) ----

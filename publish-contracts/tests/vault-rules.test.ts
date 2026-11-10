@@ -158,11 +158,30 @@ describe("the retired rmAGENT row of a v0.5.0 table (issue 1927)", () => {
     const { loadStageTable } = await import("../src/stage-table.ts");
     const v050 = loadStageTable(join(import.meta.dir, "fixtures", "v050"));
     expect(v050.vaults.map((v) => v.key as string)).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
+    // core 2008 (ADR-0018): the v0.5.0 line has no rmHARD; a follow-on verb accepts that (ADDED_VAULT_KEYS), a deploy run does not
     expect(() => assertVaultRulesMatch(v050, "v050", { retired: true })).not.toThrow();
-    expect(() => assertVaultRulesMatch(v050, "v050")).toThrow("for vault AGENT");
+    expect(() => assertVaultRulesMatch(v050, "v050")).toThrow("for vault HARD, AGENT");
     const edited = { vaults: v050.vaults.map((v) => (v.key === "PROTO" ? { ...v, seed: "SEED_DEPOSIT_USDC" } : v)) };
     expect(() => assertVaultRulesMatch(edited, "v050", { retired: true })).toThrow("for vault PROTO");
     const reordered = { vaults: [v050.vaults[1]!, v050.vaults[0]!, ...v050.vaults.slice(2)] };
     expect(() => assertVaultRulesMatch(reordered, "v050", { retired: true })).toThrow("in vault order");
+  });
+});
+
+// Core 2008 (ADR-0018): rmHARD is a vault this CLI added. A prior line's table (v0.5.0, v0.6.0) does not name it.
+describe("a prior line without rmHARD (ADDED_VAULT_KEYS, core 2008)", () => {
+  test("a follow-on verb accepts a three-vault table; a deploy run refuses it naming HARD; a table that names HARD must match it; a key outside ADDED_VAULT_KEYS is never dropped", async () => {
+    const { assertVaultRulesMatch, VAULT_RULES } = await import("../src/vault-rules.ts");
+    const { ADDED_VAULT_KEYS } = await import("../src/vault-keys.ts");
+    expect([...ADDED_VAULT_KEYS]).toEqual(["HARD"]);
+    const three = { vaults: VAULT_RULES.filter((v) => v.key !== "HARD") };
+    expect(() => assertVaultRulesMatch(three, "v060", { retired: true })).not.toThrow();
+    expect(() => assertVaultRulesMatch(three, "v060")).toThrow("for vault HARD");
+    // a line that does name rmHARD must carry this CLI's rule for it
+    const edited = { vaults: VAULT_RULES.map((v) => (v.key === "HARD" ? { ...v, deployPaused: false } : v)) };
+    expect(() => assertVaultRulesMatch(edited, "core", { retired: true })).toThrow("for vault HARD");
+    // rmRWA is not an added key: a table without it is refused even in follow-on mode
+    const noRwa = { vaults: VAULT_RULES.filter((v) => v.key !== "RWA") };
+    expect(() => assertVaultRulesMatch(noRwa, "core", { retired: true })).toThrow("for vault RWA");
   });
 });

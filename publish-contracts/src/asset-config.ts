@@ -8,12 +8,12 @@ import { PublishError } from "./errors.ts";
 import { VAULT_NAME, type VaultKey } from "./sheet.ts";
 import type { Address } from "./verify/types.ts";
 
-/** One configured asset: a UniswapV3 asset with its pool. A UniswapV4 asset is refused (the three-vault deployment has no V4 venue, ADR-0017). */
+/** One configured asset: a UniswapV3 or Aerodrome asset with its pool. A UniswapV4 asset is refused (no stage deploys a V4 venue, ADR-0017). */
 export interface ConfigAsset { symbol?: string; token: Address; pool: Address; swapFee: number; venue: number }
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 
-/** The configured assets of one vault. USDC holds none. PROTO and RWA may not be empty. */
+/** The configured assets of one vault. USDC holds none. PROTO, RWA and HARD may not be empty. */
 export function loadConfigAssets(coreDir: string, key: VaultKey): ConfigAsset[] {
   const spec = ASSET_CONFIG_FILES[key];
   if (!spec) return [];

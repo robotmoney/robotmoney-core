@@ -27,7 +27,7 @@ describe("runbook 4.12 and the stage table agree (issue 1809)", () => {
   test("the proxy table lists the stage table's proxies, in stage order, with the same fields and contracts", () => {
     const rows = [...SECTION.matchAll(/^\| `([\w-]+)` \| `(\w+)` \| `(\w+)` \| `(\w+)` \|$/gm)].map((m) => [m[1], m[2], m[3], m[4]]);
     const want = table.stages.flatMap((s) => (s.proxies ?? []).map((p) => [s.name, p.field, p.implementationField, p.contract]));
-    expect(want.length).toBe(8);
+    expect(want.length).toBe(9); // core 2008: rmHARD (HardAssetsVault) is the ninth proxy
     expect(rows).toEqual(want);
   });
   test("the upgrade authority is deployed last, at the stated CREATE2 address, and each proxy is the stated number of transactions", () => {
@@ -435,7 +435,7 @@ describe("the one-time library address move in the runbook and the README (issue
   test("the 8453 effective counts equal the baseline (no stage adopts after the move) and the numbers are the ones the counts unit test pins", () => {
     for (const s of LIBRARY_MOVE_STAGES) expect(m.stages[s].mainnet).toBe(m.stages[s].baseline);
     expect(BASELINE).toBe("baseline and 8453 effective counts: libs 1, vault 19, proto 12, rwa 9");
-    expect(ACCEPT).toBe("`--accept-diff agent,ic-policy,receipt,recorder`");
+    expect(ACCEPT).toBe("`--accept-diff agent,hard,ic-policy,receipt,recorder`"); // core 2008: the hard stage is new since Deploy 3
   });
   test("the libs row (4.3), the freeze-counts text (3) and the release-branch freeze list state the counts, the --accept-diff value and that the addresses moved once", () => {
     for (const [name, text] of [["libs row", libsRow], ["freeze-counts text", freeze], ["release freeze list", releaseItem]] as const) {

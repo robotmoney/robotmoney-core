@@ -965,7 +965,7 @@ async function redeployChecks(
   if (r.routerVaultCap !== undefined) await c.runEq(`${q}: router per-address cap equals approved old cap`, () => chain.read(ctx.router, "function vaultCap(address vault) view returns (uint256)", [r.newVault]), BigInt(r.routerVaultCap));
   await c.runEq(`${q}: replacing vault registry status is Active`, () => status(r.newVault), 0);
   await c.runEq(`${q}: no voted vector is active`, () => chain.read(ctx.router, "function votedWeightsActive() view returns (bool)"), false);
-  await c.run(`${q}: default and effective vectors are the same unique three legs`, async () => {
+  await c.run(`${q}: default and effective vectors are the same unique legs, one per vault`, async () => {
     const [dv, db] = (await chain.read(ctx.router, "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
     const [ev, eb] = (await chain.read(ctx.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
     const same = dv.length === ev.length && dv.every((a, i) => lc(a) === lc(ev[i]!) && db[i] === eb[i]);

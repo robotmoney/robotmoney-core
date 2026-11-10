@@ -85,7 +85,7 @@ export const USAGE = `publish contracts
                                  reads upgradesFrozen() true, when DIR's layout snapshot does not extend the deployed one append-only, or when the build and the live implementation do not link
                                  the same libraries. It reads the runtime code back against the build (immutables and links masked), records implementation_deploys in the run manifest and
                                  prints the govern --row upgrade-proxy --implementation command to run next. A rerun with the same arguments reprints the recorded entry and sends nothing.
-                       pause-all = pause deposits on ALL THREE vaults (rmUSDC, rmPROTO, rmRWA), read depositsPaused back on each, write evidence/rollout-report-<chain>.json.
+                       pause-all = pause deposits on ALL FOUR vaults (rmUSDC, rmPROTO, rmRWA, rmHARD), read depositsPaused back on each, write evidence/rollout-report-<chain>.json.
                                  Withdrawals stay open. The signer is the deployer before the stage 11 handover and the EMERGENCY key after it (--emergency-signer).
                                  It also runs by itself when stage 12 (verify) or the postflight fails (the run then still exits with the verify failure's code, 13).
   --chain N          target chain id (8453 or 918453). Must equal 'cast chain-id' of the RPC.
@@ -96,7 +96,7 @@ export const USAGE = `publish contracts
   --environment NAME the GitHub Environment (or 'local' on a rehearsal)
   --core-sha SHA     the core DEPLOY_SHA (40 hex). The core checkout HEAD must equal it.
   --row R            govern only: run one govern row, by 1-based number or by name.
-                     Rows: unpause-USDC, unpause-PROTO, unpause-RWA (all three vaults deploy paused; the only mainnet operation after the handover), then the Twin-only
+                     Rows: unpause-USDC, unpause-PROTO, unpause-RWA, unpause-HARD (all four vaults deploy paused; the only mainnet operation after the handover), then the Twin-only
                      demonstrations update-delay, batch, cancel (refused with USAGE on 8453). Without --row, every unpause the sheet asks for is
                      scheduled in one sitting, then one wait, then executed (on 8453 only the unpauses run).
                      Naming an unpause row whose
@@ -112,10 +112,10 @@ export const USAGE = `publish contracts
                      --row clear-voted-weights (no other argument) clears the router's ACTIVE (applied receipt) weight vector (issue 1743): ONE timelock call, RouterGovernance.clearVotedWeights(),
                      so routing falls back to the default vector: the emergency lever. Refused (nothing scheduled) when no active vector is in effect. Production and rehearsal, never part of stage 13.
                      --row retire-vault --admin-arg vault=0x<address> --admin-arg weights=USDC:9500,PROTO:500,RWA:0 (issue 1912, ADR-0017) retires one vault of the live deployment, rmAGENT on
-                     v0.5.0: ONE timelock batch, registry.migrateEligibility(vault, false, three legs) then registry.retire(vault). The vector must name USDC, PROTO and RWA once each and sum to
+                     v0.5.0: ONE timelock batch, registry.migrateEligibility(vault, false, the legs that stay) then registry.retire(vault). The vector names each vault that stays once (USDC, PROTO and RWA on v0.5.0, plus HARD on a four-vault deployment) and sum to
                      10000, and it must be the router's current default vector without the vault, or nothing is scheduled. The preview (the vault, the vector, each call's target and data) is logged
                      before the schedule. The vault becomes withdraw-only (ADR-0009): redeem and redeemInKind stay open, deposit reverts. Production and rehearsal, never part of stage 13.
-                     --row set-unwind-guard --admin-arg vault=PROTO|RWA --admin-arg token=0x<address>|all --admin-arg min-usdc-out=N --admin-arg max-loss-bps=N
+                     --row set-unwind-guard --admin-arg vault=PROTO|RWA|HARD --admin-arg token=0x<address>|all --admin-arg min-usdc-out=N --admin-arg max-loss-bps=N
                      [--admin-arg override-allowed=true|false] (QA plan v1 D7) sets a basket vault's emergency unwind guard: ONE timelock operation, BasketVault.setEmergencyUnwindGuard(token,
                      minUsdcOut, overrideAllowed, maxLossBps) for the one token or for every active asset (all). min-usdc-out is USDC (6 decimals) for the vault's whole balance of the token,
                      above zero; override-allowed defaults to true (Safe-only, issue 1705 Q2). Refused (nothing scheduled) for a token that is not an active asset; a guard already in effect is
@@ -148,7 +148,7 @@ export const USAGE = `publish contracts
   --prior-out DIR    verify, after a redeploy: the forge out/ directory of a git checkout built at the ORIGINAL deployment sha (its HEAD must be that sha). Every contract the redeploy did not replace
                      (core, libraries, adapters, the other vaults, the retired one) runs the code of that build, so its code hash is compared with it; the replacing vault is compared with the
                      build of the --core-sha checkout. After a round deployed at another sha (QA plan v1 E1) the verify runs ALONE at --core-sha <the round's core_sha> WITH --prior-out: at the
-                     original sha, or without --prior-out, it is refused (USAGE) before any signer, so it never fails and pauses the three vaults. The counts are the original sha's (its frozen
+                     original sha, or without --prior-out, it is refused (USAGE) before any signer, so it never fails and pauses the vaults. The counts are the original sha's (its frozen
                      file in the counts dir, else the run manifest's per-stage counts): no frozen file for the redeploy sha.
   --receipt-id ID    govern with --row release-receipt or --row apply-receipt, and the record-receipt verb: the bytes32 receipt id.
   --payload-digest D record-receipt only: the bytes32 payload_digest of 'rmpc receipt verify' = keccak256("robotmoney:consensus-receipt:v1\n" + the canonical receipt bytes). A plain keccak256 of the served canonical file is WRONG.
@@ -372,7 +372,7 @@ export function parseCli(argv: string[]): Parsed {
     }
     parseUnwindGuardArgs(adminArgs);
   } else if (adminRaw !== undefined && row === RETIRE_ROW) {
-    // Issue 1912: the retire row's own keys, checked here before any signer or passphrase prompt. The vector must be exactly three legs summing to 10000.
+    // Issue 1912: the retire row's own keys, checked here before any signer or passphrase prompt. The vector is distinct vault keys, summing to 10000; the chain check decides which set.
     adminArgs = {};
     for (const kv of adminRaw) {
       const m = /^([a-z-]+)=(.+)$/.exec(kv);
@@ -528,7 +528,7 @@ export function defaultCountsDir(cwd: string): string {
 }
 
 /**
- * Core 1619: stage 12 (verify) or the postflight failed. Pause deposits on all three vaults, then hand back the error the run fails with:
+ * Core 1619: stage 12 (verify) or the postflight failed. Pause deposits on every vault, then hand back the error the run fails with:
  * the original failure when every vault reads paused, else a PAUSE error that names the vaults still open.
  */
 async function pauseOnFailure(ctx: RunContext, trigger: PauseTrigger, cause: unknown, emergency: () => PublishSigner | undefined, pause: typeof pauseAll = pauseAll): Promise<unknown> {
@@ -709,7 +709,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     // QA plan v1 E1 (review DT-2, QD-6, issue 1796): the single-vault redeploy's sha model. `govern --row redeploy-vault` and `verify --prior-out` may name the sha the
     // redeploy-vault verb ran at although the run manifest names the original deployment sha (redeploy-vault.ts redeployShaRun). A verify the model cannot check
     // (the original sha after a round at another sha, the redeploy sha without --prior-out, a --prior-out that is not a checkout of the original sha) is refused HERE,
-    // before any signer, frozen counts or forge: a failed verify would pause all three vaults. A stage set that reaches verify never names the redeploy sha.
+    // before any signer, frozen counts or forge: a failed verify would pause every vault. A stage set that reaches verify never names the redeploy sha.
     // Every run that reaches the verify stage is covered, not only the verify verb: the default stage set, --stage all and a list naming verify ("stage-set").
     const shaPath = a.stage === "plan" ? undefined : redeployShaPath({ verb: a.verb, stage: a.stage, row: a.row, dryRun: a.dryRun });
     const priorRun = shaPath ? loadRunManifest(evidenceDir) : undefined;
@@ -787,7 +787,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     }
     // QA plan v1 E1: a run at a redeploy round's sha continues the run manifest of the original sha; the verify records the sha of the --prior-out checkout.
     const ctx: RunContext = { ...buildCtx(frozen, counts.measure), ...(shaRun ? { originalSha: shaRun.originalSha } : toolRun ? { originalSha: toolRun.originalSha } : {}), ...(priorOutSha ? { priorArtifactsSha: priorOutSha } : {}) };
-    // A failed verify (stage 12) or postflight pauses deposits on all three vaults (core 1619) and then fails the run as before.
+    // A failed verify (stage 12) or postflight pauses deposits on every vault (core 1619) and then fails the run as before.
     let postflight: PauseTrigger | undefined;
     let result: Awaited<ReturnType<typeof runStages>>;
     try {

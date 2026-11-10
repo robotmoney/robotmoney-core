@@ -63,7 +63,7 @@ describe("the config-check runs again right before each vault stage", () => {
     const seen: string[] = [];
     const code = await w.run(["--stage", "deploy"], { chainReader: (rpc) => { seen.push(rpc); return healthyPoolReader(); } });
     expect(code).toBe(0);
-    expect(seen).toEqual(["http://rpc.test:8545", "http://rpc.test:8545"]); // proto and rwa
+    expect(seen).toEqual(["http://rpc.test:8545", "http://rpc.test:8545", "http://rpc.test:8545"]); // proto, rwa and hard
     expect(w.logs().some((l) => l.event === "stage.config_check_skipped")).toBe(false); // rmUSDC returns before the check, and both baskets list assets
   });
 });

@@ -134,7 +134,7 @@ if (env("GOVERN_IN") === "true") {
   const guardRows = guarded.map((k) => stage("govern", join(rh, `unwind-guard-${k}.txt`), twinUnwindGuardArgs(k)));
   writeFileSync(join(rh, "unwind-guard-rows.txt"), guardRows.join(""));
   exportVar("TWIN_UNWIND_GUARD_ROWS", join(rh, "unwind-guard-rows.txt"));
-  // Issue 1667: verify, govern, verify. The second verify reads the post-govern state (all three vaults unpaused). The Twin run only proves the scripts execute in this
+  // Issue 1667: verify, govern, verify. The second verify reads the post-govern state (all four vaults unpaused). The Twin run only proves the scripts execute in this
   // order: the 48 hour delay and the Safe signers are proven on 8453 through the real Safe.
   if (env("VERIFY_IN") === "true") {
     stage("verify", join(rh, "verify-labels-post-govern.txt"));
@@ -168,8 +168,8 @@ if (rehearsalMode && env("GOVERN_IN") === "true") {
     "--salt-nonce", String(safeSalt + 1), "--yes", "--out", submitterSafeJson], { cwd: pc, stdoutTo: join(rh, "submitter-safe-create.txt"), childEnv: { ADMIN_ADDRESS: admin } });
   const submitter = (JSON.parse(readFileSync(submitterSafeJson, "utf8")) as { safe?: string }).safe ?? fail("the submitter Safe manifest has no safe address");
   // A REAL receipt envelope (issue 1754): the production swarm receipt of session 5015526d-27f6-478a-86e9-ac768e310af1, as the canonical route serves it (session, subject, stances, judge and
-  // analyst signatures). Its signed weights give the agent_tokens bucket 575 bps. rmAGENT is retired (ADR-0017), so the Safe cannot apply a vector that weights it: the Twin applies the same
-  // envelope with the three-vault launch weights (agent 0, conservative 9500, protocol 500, rwa 0). The Twin never verifies the analyst signatures; the receipt contract stores the digest and the
+  // analyst signatures). Its signed weights give the agent_tokens bucket 575 bps. The bucket maps to rmHARD (ADR-0018). The Twin applies the same envelope with the four-vault launch
+  // weights (agent_tokens = rmHARD 0, conservative 9500, protocol 500, rwa 0), so the applied vector equals the sheet's default vector. The Twin never verifies the analyst signatures; the receipt contract stores the digest and the
   // apply row reads the weights. Digest and id come from the shared protocol functions (receipt-digest.ts), never from a plain keccak256 of the file.
   const payload = join(rh, "receipt-payload.json");
   const real = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "tests", "fixtures", "real-consensus-receipt.canonical.json"), "utf8")) as Record<string, unknown>;

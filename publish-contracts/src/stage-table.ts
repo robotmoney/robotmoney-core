@@ -7,7 +7,7 @@ import { PublishError } from "./errors.ts";
 
 export const TABLE_REL = join("scripts", "deploy", "stage-table.json");
 
-export type TableVaultKey = "USDC" | "PROTO" | "RWA";
+export type TableVaultKey = "USDC" | "PROTO" | "RWA" | "HARD";
 
 export interface TableStage {
   name: string;

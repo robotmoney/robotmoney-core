@@ -273,8 +273,8 @@ describe("govern warp guards", () => {
     const twin = spy(tl, { chainId: 918453 });
     (ctx as { rpc: string }).rpc = twin.url;
     const manifest = newManifest(ctx, addr(0xa001));
-    for (const row of ["unpause-USDC", "unpause-PROTO", "unpause-RWA", "update-delay", "batch", "cancel"]) await runGovern(ctx, stageByName("govern"), manifest, { ...base(sheet, tl), row } as never);
-    expect(Object.keys(manifest.govern!)).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA", "update-delay", "batch", "cancel"]);
+    for (const row of ["unpause-USDC", "unpause-PROTO", "unpause-RWA", "unpause-HARD", "update-delay", "batch", "cancel"]) await runGovern(ctx, stageByName("govern"), manifest, { ...base(sheet, tl), row } as never);
+    expect(Object.keys(manifest.govern!)).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA", "unpause-HARD", "update-delay", "batch", "cancel"]);
     expect(twin.calls).toContain("evm_increaseTime");
   });
 

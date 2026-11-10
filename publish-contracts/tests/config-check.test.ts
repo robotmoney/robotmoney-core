@@ -16,7 +16,7 @@ const addr = (n: number): Address => `0x${n.toString(16).padStart(40, "0")}` as 
 const w = (n: bigint): string => BigInt.asUintN(256, n).toString(16).padStart(64, "0");
 const asset = (n: number, o: Partial<ConfiguredAsset> = {}): ConfiguredAsset => ({ vault: "rmPROTO", token: addr(n), pool: addr(n + 0x100), swapFee: 500, venue: 0, ...o });
 
-interface Pool { fee?: bigint; card?: bigint; liq?: bigint; noCode?: boolean; reverts?: boolean; spot?: bigint; twapTick?: bigint; lastObsAge?: bigint; observeReverts?: boolean }
+interface Pool { fee?: bigint; tickSpacing?: bigint; card?: bigint; liq?: bigint; noCode?: boolean; reverts?: boolean; spot?: bigint; twapTick?: bigint; lastObsAge?: bigint; observeReverts?: boolean }
 
 function chain(pools: Record<string, Pool>, o: { noTokenCode?: Address[]; noTimestamp?: boolean } = {}): ChainReader {
   const c = {
@@ -28,6 +28,7 @@ function chain(pools: Record<string, Pool>, o: { noTokenCode?: Address[]; noTime
       const p = pools[to.toLowerCase()]!;
       if (p.reverts) return { ok: false, data: "0x" as Hex, reason: "revert" };
       if (data === POOL_SELECTORS.fee) return { ok: true, data: `0x${w(p.fee ?? 500n)}` as Hex };
+      if (data === POOL_SELECTORS.tickSpacing) return { ok: true, data: `0x${w(p.tickSpacing ?? 10n)}` as Hex };
       if (data === POOL_SELECTORS.slot0) return { ok: true, data: `0x${[1n, p.spot ?? 100n, 7n, p.card ?? 1000n, 5n, 0n, 1n].map(w).join("")}` as Hex };
       if (data === POOL_SELECTORS.liquidity) return { ok: true, data: `0x${w(p.liq ?? 10n)}` as Hex };
       if (data.startsWith(POOL_SELECTORS.observations)) return { ok: true, data: `0x${[NOW_TS - (p.lastObsAge ?? 60n), 0n, 0n, 1n].map(w).join("")}` as Hex };
@@ -100,17 +101,42 @@ describe("config-check", () => {
   });
 });
 
+// Core 2008, ADR-0018: rmHARD's PAXG row is an Aero (Aerodrome Slipstream) CL pool, venue 2. Its swap fee is the tick spacing, so the check reads tickSpacing() instead
+// of fee(); every other check (cardinality 901, liquidity, the TWAP oracle) runs as for a V3 pool, because the CL pool has the same slot0, observe and observations surface.
+describe("config-check of an Aerodrome CL row (core 2008)", () => {
+  const aero = (n: number) => asset(n, { vault: "rmHARD", swapFee: 10, venue: 2 });
+  test("a healthy Aero pool passes every check, with the tick spacing in place of the fee", async () => {
+    const a = aero(3);
+    const r = await configCheck(chain({ [key(a)]: {} }), [a]);
+    expect(r.ok).toBe(true);
+    expect(r.checks.map((c) => c.label.replace(/^\S+ \S+: /, ""))).toEqual([
+      "token code present", "pool code present", "pool tick spacing equals config", "observation cardinality at least 901", "liquidity above 0",
+      "oracle observation history covers the TWAP window", "oracle last observation is fresh", "oracle TWAP is within 5 percent of V3 spot",
+    ]);
+  });
+  test.each([
+    ["a tick spacing that differs from config", { tickSpacing: 50n }, "pool tick spacing equals config"],
+    ["cardinality 900, one below the 1800 s window floor (the PAXG pool at the evidence block)", { card: 900n }, "observation cardinality"],
+    ["zero liquidity", { liq: 0n }, "liquidity above 0"],
+  ] as [string, Pool, string][])("fails on %s", async (_n, pool, label) => {
+    const a = aero(4);
+    const r = await configCheck(chain({ [key(a)]: pool }), [a]);
+    expect(r.ok).toBe(false);
+    expect(r.checks.filter((c) => !c.ok).map((c) => c.label).join("|")).toContain(label);
+  });
+});
+
 describe("core's asset config files", () => {
   test("a UniswapV4 entry is refused by name: the three-vault deployment has no V4 venue (ADR-0017)", () => {
     const dir = tmp("cc-");
     writeCoreAssetConfig(dir, { proto: [{ ...CONFIG_ASSET, venue: "UniswapV4" }] });
     expect(() => loadConfiguredAssets(dir)).toThrow(/venue 'UniswapV4' is not one of/);
   });
-  test("loadConfiguredAssets reads protocol-assets.json and rwa-assets.json and maps poolFee to swapFee", () => {
+  test("loadConfiguredAssets reads protocol-assets.json, rwa-assets.json and hard-assets.json and maps poolFee to swapFee", () => {
     const dir = tmp("cc-");
     writeCoreAssetConfig(dir);
     const got = loadConfiguredAssets(dir);
-    expect(got.map((x) => x.vault)).toEqual(["rmPROTO", "rmRWA"]);
+    expect(got.map((x) => x.vault)).toEqual(["rmPROTO", "rmRWA", "rmHARD"]);
     expect(got[0]).toEqual({ symbol: "wETH", token: CONFIG_ASSET.token, pool: CONFIG_ASSET.pool, swapFee: 500, venue: 0, vault: "rmPROTO" });
   });
   test("a missing file fails, an empty rmPROTO or rmRWA list fails", () => {
@@ -133,19 +159,20 @@ describe("core's asset config files", () => {
 
 // Core parity (devops 64, issue 4): the real config files in REPO_ROOT load, with the shape the verifier and the config-check read.
 describe.skipIf(!coreAvailable())(`core parity: the real core config files in ${REPO_ROOT}`, () => {
-  test("every configured asset loads with a token, a pool, a positive swapFee and the V3 venue", () => {
+  test("every configured asset loads with a token, a pool, a positive swapFee and the V3 venue, except rmHARD's Aerodrome row (venue 2, ADR-0018)", () => {
     const all = loadConfiguredAssets(REPO_ROOT);
     expect(all.length).toBeGreaterThan(0);
     for (const a of all) {
       expect(a.token).toMatch(/^0x[0-9a-fA-F]{40}$/);
       expect(a.pool).toMatch(/^0x[0-9a-fA-F]{40}$/);
       expect(a.swapFee).toBeGreaterThan(0);
-      expect(a.venue).toBe(0);
+      expect(a.venue).toBe(a.vault === "rmHARD" ? 2 : 0);
     }
   });
-  test("rmPROTO lists wETH and cbBTC, rmRWA lists deSPXA only", () => {
+  test("rmPROTO lists wETH and cbBTC, rmRWA lists deSPXA only, rmHARD lists PAXG only on its Aero pool (tick spacing 10)", () => {
     expect(loadVaultConfiguredAssets(REPO_ROOT, "PROTO").map((a) => a.symbol)).toEqual(["wETH", "cbBTC"]);
     expect(loadVaultConfiguredAssets(REPO_ROOT, "RWA").map((a) => a.symbol)).toEqual(["deSPXA"]);
+    expect(loadVaultConfiguredAssets(REPO_ROOT, "HARD").map((a) => [a.symbol, a.swapFee, a.venue])).toEqual([["PAXG", 10, 2]]);
   });
   test("every basket of the stage table has a config file mapping", () => {
     const table = loadStageTable(REPO_ROOT);

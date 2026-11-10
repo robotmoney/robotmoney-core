@@ -49,8 +49,8 @@ describe("stage list built from core's stage table", () => {
     }
     expect(readers).toEqual([]);
   });
-  test("the table has a row for each of the three vaults, each pointing at a forge stage with that vault key", () => {
-    expect(VAULT_STAGES.map((v) => v.key)).toEqual(["USDC", "PROTO", "RWA"]);
+  test("the table has a row for each of the four vaults, each pointing at a forge stage with that vault key", () => {
+    expect(VAULT_STAGES.map((v) => v.key)).toEqual(["USDC", "PROTO", "RWA", "HARD"]);
     for (const v of VAULT_STAGES) {
       const row = STAGES.find((s) => s.name === v.stage)!;
       expect(row.vault).toBe(v.key);
@@ -103,7 +103,7 @@ describe("stage list built from core's stage table", () => {
     // Issue 1808: every stage that deploys a proxied core contract compiles with --libraries tick_math (one setting, one CREATE2 address per library);
     // so does the timelock stage, whose TimelockController init code (metadata included) every proxy's CREATE2 prediction hashes.
     // The libs stage deploys no proxy and links nothing.
-    expect(forge.filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "receipt", "governance", "proto", "rwa", "timelock"]);
+    expect(forge.filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "receipt", "governance", "proto", "rwa", "hard", "timelock"]);
     // the gateway handover links nothing but compiles with the same --libraries: the last compile of a run leaves out/ in that state, which the vaults verifier reads (issue 1892)
     expect(buildStages(table, "gateway").filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["gateway", "gateway-handover"]);
     for (const s of forge) for (const l of s.libraries) expect(l.manifestKey).toBeTruthy();
@@ -190,9 +190,9 @@ describe("deploy-time configuration is consumed by the deployer stages 4 to 10, 
 });
 
 describe("the govern stage lists the unpause-only matrix (issue 1520)", () => {
-  test("governRowNames() is the three vault unpauses then the Twin-only demonstrations, and no 13-row list survives", () => {
-    expect([...governRowNames()]).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA", "update-delay", "batch", "cancel"]);
-    expect(governRowNames().length).toBe(6);
+  test("governRowNames() is the four vault unpauses then the Twin-only demonstrations, and no 13-row list survives", () => {
+    expect([...governRowNames()]).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-RWA", "unpause-HARD", "update-delay", "batch", "cancel"]);
+    expect(governRowNames().length).toBe(7);
     const g = (table as unknown as { govern: { mainnetRows: string[]; twinOnlyRows: string[] } }).govern;
     expect([...g.mainnetRows, ...g.twinOnlyRows]).toEqual([...governRowNames()]);
   });

@@ -12,11 +12,12 @@ import type { VaultKey } from "./sheet.ts";
 export const APPLY_ROW = "apply-receipt";
 
 /**
- * Receipt payload bucket to vault. `agent_tokens` stays a payload bucket (the receipt schema is unchanged) and maps to no vault: rmAGENT is retired (ADR-0017), so the router never
- * routes into it. A payload may carry the bucket at 0 bps, which is dropped from the vector. A payload that gives it weight is refused.
+ * Receipt payload bucket to vault. The receipt schema is unchanged. `agent_tokens` is a legacy bucket name: it maps to rmHARD (HardAssetsVault, PAXG), the fourth router vault
+ * that fills the slot of the retired rmAGENT (ADR-0018 supersedes ADR-0017 decision 1). A bucket whose value is null maps to no vault (none today): a payload may carry it at 0 bps,
+ * which is dropped from the vector, and a payload that gives it weight is refused.
  */
 export const BUCKET_VAULT: Readonly<Record<string, VaultKey | null>> = {
-  conservative_defi_yield: "USDC", protocol_tokens: "PROTO", agent_tokens: null, real_world_assets: "RWA",
+  conservative_defi_yield: "USDC", protocol_tokens: "PROTO", agent_tokens: "HARD", real_world_assets: "RWA",
 };
 
 export const GOVERNANCE_APPLY_ABI = parseAbi(["function applyReceipt(bytes32 receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps)"]);
@@ -87,7 +88,7 @@ export function payloadVector(payload: Uint8Array, vaultOf: Readonly<Record<Vaul
     if (!Number.isInteger(bps) || bps < 0 || bps > BPS_TOTAL) return usage(`--payload weights: ${bucket} weight_bps ${String(bps)} is not an integer from 0 to ${BPS_TOTAL}`);
     const key = BUCKET_VAULT[bucket]!;
     if (key === null) {
-      if (bps > 0) return usage(`--payload weights: bucket '${bucket}' has ${bps} bps, but its vault (rmAGENT) is retired and the router routes across rmUSDC, rmPROTO and rmRWA only (ADR-0017): the weight must be 0`, { bucket, bps });
+      if (bps > 0) return usage(`--payload weights: bucket '${bucket}' has ${bps} bps, but it maps to no vault: the weight must be 0`, { bucket, bps });
       continue;
     }
     entries.push({ vault: vaultOf[key], bps, bucket });

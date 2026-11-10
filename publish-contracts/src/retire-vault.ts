@@ -1,8 +1,9 @@
 // The govern row `retire-vault` (issue 1912, ADR-0017, ADR-0009): the Safe, through the timelock, retires ONE vault of the live deployment. Today that vault is rmAGENT.
 // ONE timelock batch of two calls, in the one order the contracts allow:
-//   1. registry.migrateEligibility(vault, false, <three-leg vector>, <three weights>)   the vault leaves the router-eligible set and the default vector shrinks to the
-//      three vaults that stay (rmUSDC, rmPROTO, rmRWA) in the same call, because PortfolioRouter._setDefaultWeights reverts LengthMismatch unless the vector length equals
-//      registry.routerEligibleCount().
+//   1. registry.migrateEligibility(vault, false, <one leg per vault that stays>, <weights>)   the vault leaves the router-eligible set and the default vector shrinks to the
+//      vaults that stay in the same call, because PortfolioRouter._setDefaultWeights reverts LengthMismatch unless the vector length equals registry.routerEligibleCount().
+//      The vaults that stay are whatever the deployment has: rmUSDC, rmPROTO and rmRWA on the live v0.5.0 line (the rmAGENT retire), and rmHARD too on a four-vault
+//      deployment (ADR-0018). The row takes any distinct VAULT_KEYS set; the chain decides which is right (retireBeforeProblems: the router's default vector minus the vault).
 //   2. registry.retire(vault)                                                          VaultRegistry.retire reverts RetireWhileRouterEligible while the vault is eligible.
 // A timelock batch is atomic, so no observer, deposit or redeem ever sees a router that weights a retired vault. After the batch the vault is withdraw-only (ADR-0009):
 // `redeem` and `redeemInKind` stay open, `deposit` reverts, the router never routes into it, and there is no assisted migration. Nothing moves a holder's funds.
@@ -11,35 +12,41 @@
 import { encodeFunctionData, getAddress, type Address, type Hex } from "viem";
 import { PublishError } from "./errors.ts";
 import { BPS_TOTAL, REGISTRY_REDEPLOY_ABI, STATUS_ACTIVE, STATUS_NAME, STATUS_RETIRED } from "./redeploy-vault.ts";
+import { VAULT_KEYS, type VaultKey } from "./vault-keys.ts";
 
 export const RETIRE_ROW = "retire-vault";
-/** The `--admin-arg` keys of the row: the vault to retire and the default vector that stays, `USDC:9500,PROTO:500,RWA:0`. */
+/** The `--admin-arg` keys of the row: the vault to retire and the default vector that stays, e.g. `USDC:9500,PROTO:500,RWA:0` (v0.5.0) or `USDC:9500,PROTO:500,RWA:0,HARD:0`. */
 export const RETIRE_KEYS = ["vault", "weights"] as const;
 export type RetireKey = (typeof RETIRE_KEYS)[number];
 export type RetireArgs = Partial<Record<RetireKey, string>>;
-/** The vaults that stay router-eligible after the retire, in vector order. The router vector has exactly one leg per eligible vault (ADR-0017). */
-export const STAYING_KEYS = ["USDC", "PROTO", "RWA"] as const;
-export type StayingKey = (typeof STAYING_KEYS)[number];
+/**
+ * The keys a vault that stays may have, in vector order (VAULT_KEYS). The vector names a non-empty set of DISTINCT keys from it, one leg per vault that stays. Which set is right
+ * is the deployment's: retireBeforeProblems requires it to be the router's current default vector without the retired vault (three legs on v0.5.0, four since ADR-0018).
+ */
+export const STAYING_KEYS: readonly VaultKey[] = VAULT_KEYS;
+export type StayingKey = VaultKey;
 
 export interface RetireWant { vault: Address; weights: { key: StayingKey; bps: number }[] }
 
 const usage = (m: string): never => { throw new PublishError("USAGE", `--row ${RETIRE_ROW}: ${m}`, { row: RETIRE_ROW }); };
 const lc = (x: string): string => x.toLowerCase();
 
-/** The row's arguments, checked. Every problem is USAGE and nothing is read or sent. The vector is exactly three legs (USDC, PROTO, RWA) summing to 10000. */
+/** The row's arguments, checked. Every problem is USAGE and nothing is read or sent. The vector is distinct STAYING_KEYS legs (at least one), summing to 10000, in VAULT_KEYS order. */
 export function parseRetireArgs(args: RetireArgs | undefined): RetireWant {
   const a = args ?? {};
   if (a.vault === undefined) return usage("needs --admin-arg vault=0x<the vault to retire, rmAGENT on the live v0.5.0 deployment>");
   if (!/^0x[0-9a-fA-F]{40}$/.test(a.vault)) return usage(`--admin-arg vault must be an address, got '${a.vault}'`);
-  if (a.weights === undefined) return usage("needs --admin-arg weights=USDC:9500,PROTO:500,RWA:0 (the three-leg default vector that stays, every vault named)");
+  if (a.weights === undefined) return usage("needs --admin-arg weights=KEY:bps,... (the router's default vector without the retired vault, every vault that stays named once: USDC:9500,PROTO:500,RWA:0 on v0.5.0, USDC:9500,PROTO:500,RWA:0,HARD:0 on a four-vault deployment)");
   const parts = a.weights.split(",").map((p) => /^\s*([A-Z]+):([0-9]+)\s*$/.exec(p));
   if (parts.some((m) => m === null)) return usage(`--admin-arg weights must be KEY:bps pairs, got '${a.weights}'`);
   const weights = parts.map((m) => ({ key: m![1] as string, bps: Number(m![2]) }));
-  const keys = weights.map((w) => w.key).sort().join(",");
-  if (keys !== [...STAYING_KEYS].sort().join(",")) return usage(`--admin-arg weights must name exactly ${STAYING_KEYS.join(", ")} once each (three legs), got ${keys || "none"}`);
+  const unknown = weights.filter((w) => !(STAYING_KEYS as readonly string[]).includes(w.key)).map((w) => w.key);
+  if (unknown.length > 0) return usage(`--admin-arg weights names ${unknown.join(", ")}, which is not one of ${STAYING_KEYS.join(", ")} (the retired vault has no leg)`);
+  if (new Set(weights.map((w) => w.key)).size !== weights.length) return usage(`--admin-arg weights names a vault twice: '${a.weights}'`);
+  if (weights.length === 0) return usage("--admin-arg weights names no vault");
   const total = weights.reduce((t, w) => t + w.bps, 0);
   if (total !== BPS_TOTAL) return usage(`--admin-arg weights sums to ${total} bps, want ${BPS_TOTAL}`);
-  return { vault: getAddress(a.vault), weights: STAYING_KEYS.map((k) => weights.find((w) => w.key === k)! ) as RetireWant["weights"] };
+  return { vault: getAddress(a.vault), weights: STAYING_KEYS.filter((k) => weights.some((w) => w.key === k)).map((k) => weights.find((w) => w.key === k)!) as RetireWant["weights"] };
 }
 
 /** The `--admin-arg` flags that name this exact run (the resume command spells them out: they carry no secret). */
@@ -53,14 +60,14 @@ export interface RetireCall { label: string; target: Address; data: Hex }
 
 /** The two calls of the batch, in the one order the contracts allow. The same builder serves govern, the preview and the evidence chain check. */
 export function buildRetireCalls(i: { registry: Address; vault: Address; finalVaults: readonly string[]; finalBps: readonly (bigint | number)[] }): RetireCall[] {
-  if (i.finalVaults.length !== STAYING_KEYS.length || i.finalVaults.length !== i.finalBps.length) throw new PublishError("GOVERN", `the retire vector needs exactly ${STAYING_KEYS.length} legs and one weight per leg`);
+  if (i.finalVaults.length < 1 || i.finalVaults.length !== i.finalBps.length) throw new PublishError("GOVERN", "the retire vector needs at least one leg and one weight per leg");
   if (new Set(i.finalVaults.map(lc)).size !== i.finalVaults.length) throw new PublishError("GOVERN", "the retire vector lists a vault twice");
   if (i.finalVaults.some((v) => lc(v) === lc(i.vault))) throw new PublishError("GOVERN", `the retire vector must not hold the vault being retired ${i.vault}`);
   const total = i.finalBps.reduce<number>((t, x) => t + Number(x), 0);
   if (total !== BPS_TOTAL) throw new PublishError("GOVERN", `the retire vector sums to ${total} bps, want ${BPS_TOTAL}`);
   const reg = (functionName: "migrateEligibility" | "retire", args: unknown[]): Hex => encodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, functionName, args } as never);
   return [
-    { label: "registry.migrateEligibility(vault, false, three legs)", target: i.registry, data: reg("migrateEligibility", [i.vault, false, i.finalVaults, i.finalBps.map(BigInt)]) },
+    { label: "registry.migrateEligibility(vault, false, the legs that stay)", target: i.registry, data: reg("migrateEligibility", [i.vault, false, i.finalVaults, i.finalBps.map(BigInt)]) },
     { label: "registry.retire(vault)", target: i.registry, data: reg("retire", [i.vault]) },
   ];
 }
@@ -87,8 +94,8 @@ export function retireBeforeProblems(want: RetireWant, finalVaults: readonly str
   if (!b.eligible) bad.push("the vault is not router-eligible: there is no eligibility to move, and the retire row only runs on an eligible vault");
   if (lc(b.registryRouter) !== lc(b.router)) bad.push(`registry.router() is ${b.registryRouter}, not the deployment's router ${b.router}: migrateEligibility would revert RouterNotLinked`);
   if (!b.timelockIsRegistryAdmin) bad.push("the timelock does not hold ADMIN_ROLE on the registry: the batch would revert");
-  if (b.votedWeightsActive) bad.push("router.votedWeightsActive() is true: an applied receipt vector (which still names the vault) overrides the default. Run --row clear-voted-weights first, then apply a receipt over the three-vault set afterwards");
-  // the vector must be the router's current default vector without the vault: the same three vaults, so the registry's length check passes
+  if (b.votedWeightsActive) bad.push("router.votedWeightsActive() is true: an applied receipt vector (which still names the vault) overrides the default. Run --row clear-voted-weights first, then apply a receipt over the remaining vaults afterwards");
+  // the vector must be the router's current default vector without the vault: the same remaining vaults, so the registry's length check passes
   const stays = b.defaultVaults.filter((v) => lc(v) !== lc(want.vault));
   if (!b.defaultVaults.some((v) => lc(v) === lc(want.vault))) bad.push(`the router's default vector does not hold the vault: [${b.defaultVaults.join(", ")}]`);
   else if (stays.length !== finalVaults.length || !finalVaults.every((v) => stays.some((s) => lc(s) === lc(v)))) {
@@ -113,7 +120,7 @@ export interface RetireAfter {
 
 const vkey = (v: readonly string[], b: readonly (bigint | number)[]): string => v.map((a, k) => `${lc(a)}:${b[k]}`).join(",");
 
-/** What must hold after the batch. An empty list is a pass. The effective vector is what deposits route by: it must be the three-leg vector with no applied receipt over it. */
+/** What must hold after the batch. An empty list is a pass. The effective vector is what deposits route by: it must be the remaining vector with no applied receipt over it. */
 export function retireReadBackProblems(finalVaults: readonly string[], finalBps: readonly (bigint | number)[], a: RetireAfter): string[] {
   const bad: string[] = [];
   if (a.status !== STATUS_RETIRED) bad.push(`the vault's registry status is ${STATUS_NAME[a.status] ?? a.status}, want Retired`);

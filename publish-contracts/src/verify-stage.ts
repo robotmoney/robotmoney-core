@@ -73,22 +73,30 @@ export function unpausedByGovern(manifest: Pick<RunManifest, "govern">, sheet: R
 
 /** The vaults whose unpause rows are stage 13 on 8453 (the sheet parser requires all of them listed, issue 1710): the stage table's vault rules (issue 1705). */
 export const MAINNET_UNPAUSE_VAULTS: readonly VaultKey[] = STAGE13_UNPAUSE_VAULTS;
+/**
+ * Core 2008 (ADR-0018): the stage 13 vaults of the deployment being verified: MAINNET_UNPAUSE_VAULTS that the stage table in use (--core-dir at the DEPLOY_SHA) names. A follow-on verb on a
+ * prior line (v0.5.0, v0.6.0) reads a table without rmHARD, so its unpause row is not expected there. On this line's table the two lists are equal.
+ */
+export const deploymentUnpauseVaults = (): VaultKey[] => {
+  const named = new Set(getStageTable().vaults.map((v) => v.key as string));
+  return MAINNET_UNPAUSE_VAULTS.filter((k) => named.has(k));
+};
 
 type RowPhase = "none" | "scheduled" | "executed";
 const phaseOf = (g: Record<string, { scheduled?: unknown; executed?: unknown } | undefined> | undefined, row: string): RowPhase =>
   g?.[row]?.executed ? "executed" : g?.[row]?.scheduled ? "scheduled" : "none";
 
 /**
- * The govern state stage 12 verifies on 8453 (issue 1667, three vaults since ADR-0017), read from the run manifest's CURRENT round of each unpause row.
- *   pre-govern   no unpause row is scheduled: all three vaults (rmUSDC, rmPROTO, rmRWA) must read paused.
- *   post-govern  all three unpause rows are executed: all three vaults must read unpaused.
+ * The govern state stage 12 verifies on 8453 (issue 1667, four vaults since ADR-0018), read from the run manifest's CURRENT round of each unpause row.
+ *   pre-govern   no unpause row is scheduled: all four vaults (rmUSDC, rmPROTO, rmRWA, rmHARD) must read paused.
+ *   post-govern  all four unpause rows are executed: all four vaults must read unpaused.
  *   part-way     anything else (some but not all rows scheduled or executed): verify refuses.
  * The manifest picks the mode only. runVerifyStage then confirms it against the chain and fails closed when they disagree.
  */
 export type MainnetGovernMode = { mode: "pre-govern" | "post-govern" } | { mode: "part-way"; detail: string };
 export function mainnetGovernMode(manifest: Pick<RunManifest, "govern">): MainnetGovernMode {
   const g = manifest.govern as Record<string, { scheduled?: unknown; executed?: unknown } | undefined> | undefined;
-  const rows = MAINNET_UNPAUSE_VAULTS.map((k) => vaultRule(k).unpauseRow).map((r) => [r, phaseOf(g, r)] as const);
+  const rows = deploymentUnpauseVaults().map((k) => vaultRule(k).unpauseRow).map((r) => [r, phaseOf(g, r)] as const);
   if (!(rows.every(([, p]) => p === "none") || rows.every(([, p]) => p === "executed"))) {
     return { mode: "part-way", detail: rows.map(([r, p]) => `${r} ${p === "none" ? "not scheduled" : p}`).join(", ") };
   }
@@ -219,7 +227,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   const safe = readManifestField(ctx, manifestRef("safe", "safe"));
   const startedAt = Date.now();
   const mainnet = ctx.chainId === MAINNET_CHAIN_ID;
-  // 8453 (issue 1667): verify runs before govern (all three paused) and after it (all three open). The manifest names the mode, the chain is read
+  // 8453 (issue 1667): verify runs before govern (all four paused) and after it (all four open). The manifest names the mode, the chain is read
   // below to confirm it. A part-way govern run is neither: verify refuses, names the govern command and pauses nothing (GOVERN_PENDING is not a VERIFY failure).
   let mode: "pre-govern" | "post-govern" | undefined;
   if (mainnet) {
@@ -240,10 +248,10 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   }
   const governedRedeploys = redeployRecs.filter((r) => r.status === "governed" && r.new_vault);
   // QA plan v1 E1 (DT-2): after a round at another sha this verify must run at that sha with --prior-out of the original build. cli.ts refuses every other run
-  // before any signer (redeployShaRun); this is the stage's own check, so no caller can compare the replacing vault with the wrong build and pause all three vaults.
+  // before any signer (redeployShaRun); this is the stage's own check, so no caller can compare the replacing vault with the wrong build and pause all four vaults.
   const buildRefusal = verifyBuildRefusal(manifest, ctx);
   if (buildRefusal) throw buildRefusal;
-  const unpaused = mode ? (mode === "post-govern" ? [...MAINNET_UNPAUSE_VAULTS] : []) : unpausedByGovern(manifest, ctx.sheet);
+  const unpaused = mode ? (mode === "post-govern" ? deploymentUnpauseVaults() : []) : unpausedByGovern(manifest, ctx.sheet);
   ctx.log.log("info", "stage.start", { stage: row.name });
   const report = await deps.verifyDeployment({
     chain: verifyReader(ctx), manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildVerifySheet(ctx, safe, unpaused, expectedTimelockDelay(manifest, ctx.sheet)), fromBlock: BigInt(manifest.firstBlock),
@@ -265,11 +273,11 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     } : {}),
   });
   if (mainnet) {
-    // The mode came from the manifest, which an operator can edit or lose: read depositsPaused of all three vaults and fail on any disagreement with it.
+    // The mode came from the manifest, which an operator can edit or lose: read depositsPaused of every vault and fail on any disagreement with it.
     const read = deps.depositsPaused ?? readDepositsPaused;
     for (const v of VAULT_STAGES) {
       // pre-govern: the table's deployPaused. post-govern: open when the vault's unpause row is a stage 13 row, else still its deploy state.
-      const want = expectPaused(v.key, mode === "post-govern" ? MAINNET_UNPAUSE_VAULTS : []);
+      const want = expectPaused(v.key, mode === "post-govern" ? deploymentUnpauseVaults() : []);
       const vault = governedRedeploys.find((r) => r.key === v.key)?.new_vault ?? readManifestField(ctx, manifestRef(v.stage, "vault")) as `0x${string}`;
       let got: boolean | string;
       try { got = await read(ctx.rpc, vault); } catch (e) { got = (e as Error).message; }

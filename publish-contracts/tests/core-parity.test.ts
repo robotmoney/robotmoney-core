@@ -29,17 +29,18 @@ describe(`core parity against ${REPO_ROOT}`, () => {
     expect(tableProblems(table, REPO_ROOT)).toEqual([]);
   });
 
-  test("the table has the three vaults, rmRWA as RwaBasketVault, and no rmAGENT (retired, ADR-0017)", () => {
-    expect(table.vaults.map((v) => v.key)).toEqual(["USDC", "PROTO", "RWA"]);
+  test("the table has the four vaults, rmRWA as RwaBasketVault, rmHARD as HardAssetsVault (ADR-0018), and no rmAGENT (retired, ADR-0017)", () => {
+    expect(table.vaults.map((v) => v.key)).toEqual(["USDC", "PROTO", "RWA", "HARD"]);
     expect(table.vaults.find((v) => v.key === "RWA")!.artifact).toBe("RwaBasketVault");
+    expect(table.vaults.find((v) => v.key === "HARD")!.artifact).toBe("HardAssetsVault");
     expect(table.vaults.some((v) => (v.key as string) === "AGENT")).toBe(false);
     expect(table.stages.some((s) => s.name === "agent" || s.name === "recorder")).toBe(false);
   });
 });
 
 describe("issue 1666: the basket stages read the NAV deviation guard and the pool liquidity floor", () => {
-  test("proto and rwa require NAV_DEVIATION_BPS and MIN_POOL_LIQUIDITY, fed by their own VAULT_<KEY> sheet names", () => {
-    for (const key of ["PROTO", "RWA"] as const) {
+  test("proto, rwa and hard require NAV_DEVIATION_BPS and MIN_POOL_LIQUIDITY, fed by their own VAULT_<KEY> sheet names", () => {
+    for (const key of ["PROTO", "RWA", "HARD"] as const) {
       const row = STAGES.find((s) => s.vault === key)!;
       expect(row.requiredEnv, row.name).toContain("NAV_DEVIATION_BPS");
       expect(row.requiredEnv, row.name).toContain("MIN_POOL_LIQUIDITY");
@@ -59,7 +60,9 @@ describe("ADR-0017: the three-vault table carries no V4 venue wiring", () => {
     const src = readFileSync(join(REPO_ROOT, "contracts", "vaults", "BasketVault.sol"), "utf8");
     const body = /enum Venue \{([^}]*)\}/.exec(src)![1]!.split(",").map((x) => x.trim()).filter(Boolean);
     expect(body.slice(0, 2)).toEqual(["V3", "V4"]);
-    expect(VENUE_INDEX).toEqual({ UniswapV3: body.indexOf("V3") });
+    // core 2008 (ADR-0018): rmHARD's PAXG row is an Aerodrome CL row at the enum's Aerodrome index
+    expect(VENUE_INDEX).toEqual({ UniswapV3: body.indexOf("V3"), Aerodrome: body.indexOf("Aerodrome") });
+    expect(body.indexOf("Aerodrome")).toBe(2);
   });
   test("no stage reads RECORDER_ADDRESS and the table has no recorder or V4 adapter artifact", () => {
     expect(MANIFEST_ENV.RECORDER_ADDRESS).toBeUndefined();
