@@ -590,15 +590,19 @@ contract Invariants is PrototypeHarness {
     }
 
     function _loadCoverageIndex() private {
+        // Parsed once, unmetered: a parse per account copies the whole meta file per account (BaseFixture).
+        vm.pauseGasMetering();
         string memory meta = vm.readFile(META_PATH);
         address[] memory accounts = vm.parseJsonAddressArray(meta, ".accounts");
+        bytes32[][] memory slots = abi.decode(vm.parseJson(meta, ".slots"), (bytes32[][]));
+        require(slots.length == accounts.length, "fixture meta: one slot list per account");
         for (uint256 i; i < accounts.length; ++i) {
             _cvAccount[accounts[i]] = true;
-            bytes32[] memory slots = vm.parseJsonBytes32Array(meta, string.concat(".slots[", vm.toString(i), "]"));
-            for (uint256 j; j < slots.length; ++j) {
-                _cvSlot[accounts[i]][slots[j]] = true;
+            for (uint256 j; j < slots[i].length; ++j) {
+                _cvSlot[accounts[i]][slots[i][j]] = true;
             }
         }
+        vm.resumeGasMetering();
     }
 
     /// @dev Same rule as `BaseFixture._assertFixtureCovered`, but records the first miss for the invariant to
