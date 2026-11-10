@@ -563,6 +563,9 @@ jobs:
           echo "::endgroup::"
 
       - name: forge test (each vault deploys with the stage table's deposit state — issue 1705)
+        # Runs even when an earlier live-pool step of this job failed (core 2008): its own result is still recorded, and the job
+        # stays red for the earlier failure.
+        if: ${{ !cancelled() }}
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/FourVaultInitialState.t.sol"
 
       - name: forge test (split-stage vault deposit through the gateway on the fork — core 1485)
