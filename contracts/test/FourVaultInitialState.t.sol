@@ -90,18 +90,19 @@ contract FourVaultInitialStateForkTest is Test {
             address tokenIn = buy ? USDC : paxg;
             uint256 amountIn = IERC20(tokenIn).balanceOf(prepper);
             if (buy && amountIn > 5_000 * 1e6) amountIn = 5_000 * 1e6;
-            IAerodromeSlipstreamRouter(router).exactInputSingle(
-                IAerodromeSlipstreamRouter.ExactInputSingleParams({
-                    tokenIn: tokenIn,
-                    tokenOut: buy ? paxg : USDC,
-                    tickSpacing: 10,
-                    recipient: prepper,
-                    deadline: block.timestamp,
-                    amountIn: amountIn,
-                    amountOutMinimum: 0,
-                    sqrtPriceLimitX96: 0
-                })
-            );
+            IAerodromeSlipstreamRouter(router)
+                .exactInputSingle(
+                    IAerodromeSlipstreamRouter.ExactInputSingleParams({
+                        tokenIn: tokenIn,
+                        tokenOut: buy ? paxg : USDC,
+                        tickSpacing: 10,
+                        recipient: prepper,
+                        deadline: block.timestamp,
+                        amountIn: amountIn,
+                        amountOutMinimum: 0,
+                        sqrtPriceLimitX96: 0
+                    })
+                );
             (,,, card,,) = IAerodromePool(pool).slot0();
         }
         vm.stopPrank();

@@ -446,7 +446,9 @@ async fn get_vaults_lists_the_four_live_vaults_with_rmhard_beside_the_retired_rm
             VaultRegistry::listVaultsCall,
         >()))
         .with_status(200)
-        .with_body(jrpc_result(&enc_address_array(&[VAULT, proto, agent, rwa, hard])))
+        .with_body(jrpc_result(&enc_address_array(&[
+            VAULT, proto, agent, rwa, hard,
+        ])))
         .expect_at_least(0)
         .create_async()
         .await;

@@ -5,7 +5,7 @@ description: "Roles. The broadcaster is `admin` and also holds EMERGENCY_ROLE on
 
 # BasketVaultDeployBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9a5abb78f17cecf801493322557775e4886f59cc/contracts/script/BasketVaultDeployBase.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/fd752974f7648ba7e1588ccff599816ae456b379/contracts/script/BasketVaultDeployBase.sol)
 
 **Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
@@ -634,7 +634,9 @@ ABI. The fee is in pips (hundredths of a bip), so the guard check is `NAV_DEVIAT
 </i>
 
 ```solidity
-function _checkAerodromePool(AssetCfg memory a, address factory, Params memory p) internal view;
+function _checkAerodromePool(AssetCfg memory a, address factory, Params memory p)
+        internal
+        view;
 ```
 
 **Parameters**

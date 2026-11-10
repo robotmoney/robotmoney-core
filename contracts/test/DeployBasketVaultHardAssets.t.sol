@@ -75,7 +75,10 @@ contract DeployBasketVaultHardAssetsTest is BasketDeployFixture {
     }
 
     /// @dev Etch the Aero pool, factory and (if absent) token doubles at the config addresses, paired with this test's USDC.
-    function _etchAero(uint24 livePips, int24 poolTickSpacing) internal returns (string memory json) {
+    function _etchAero(uint24 livePips, int24 poolTickSpacing)
+        internal
+        returns (string memory json)
+    {
         json = vm.readFile(CONFIG);
         address token = json.readAddress(".assets[0].token");
         address pool = json.readAddress(".assets[0].pool");
@@ -83,7 +86,8 @@ contract DeployBasketVaultHardAssetsTest is BasketDeployFixture {
         int24 ts = int24(int256(json.readUint(".assets[0].poolFee")));
         vm.etch(
             pool,
-            address(new ConstAeroPool(token, address(usdc), livePips, poolTickSpacing, factory)).code
+            address(new ConstAeroPool(token, address(usdc), livePips, poolTickSpacing, factory))
+            .code
         );
         vm.etch(factory, address(new ConstAeroFactory(pool, token, address(usdc), ts)).code);
         if (token.code.length == 0) vm.etch(token, address(usdc).code);
@@ -110,7 +114,9 @@ contract DeployBasketVaultHardAssetsTest is BasketDeployFixture {
         assertTrue(v.depositsPaused(), "deploys paused");
         (VaultRegistry.VaultMetadata memory meta, VaultRegistry.VaultStatus status) =
             registry.getVault(d.vault);
-        assertEq(uint256(status), uint256(VaultRegistry.VaultStatus.Active), "registry lists it Active");
+        assertEq(
+            uint256(status), uint256(VaultRegistry.VaultStatus.Active), "registry lists it Active"
+        );
         assertEq(meta.name, "Robot Money Hard Assets", "registry name");
         assertEq(v.name(), "Robot Money Hard Assets", "PRD 11.5 name");
         assertEq(v.symbol(), "rmHARD", "PRD 11.5 symbol");
@@ -146,9 +152,8 @@ contract DeployBasketVaultHardAssetsTest is BasketDeployFixture {
         assertTrue(v.adapterCodeHashAllowed(adapter.codehash), "code hash allowed");
 
         // A TWAP quote through the adapter: 1 PAXG (18 decimals) at tick 0 is a non-zero USDC amount, and NAV reads.
-        uint256 quote = AerodromeSwapAdapter(adapter).twapPrice(
-            pools[0], tokens[0], address(usdc), 1e18, v.DEFAULT_TWAP_WINDOW()
-        );
+        uint256 quote = AerodromeSwapAdapter(adapter)
+            .twapPrice(pools[0], tokens[0], address(usdc), 1e18, v.DEFAULT_TWAP_WINDOW());
         assertGt(quote, 0, "TWAP quote succeeds");
         assertEq(v.totalAssets(), 0, "empty vault NAV");
     }
@@ -171,7 +176,8 @@ contract DeployBasketVaultHardAssetsTest is BasketDeployFixture {
                 new ConstAeroFactory(
                     makeAddr("otherPool"), json.readAddress(".assets[0].token"), address(usdc), 10
                 )
-            ).code
+            )
+            .code
         );
         BasketVaultDeployBase.Params memory p = _sheet();
         p.swapRouter = _configRouter(json);

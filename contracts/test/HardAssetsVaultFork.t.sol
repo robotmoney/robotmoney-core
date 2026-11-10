@@ -104,18 +104,19 @@ contract HardAssetsVaultForkTest is Test {
             address tokenIn = buy ? BASE_USDC : paxg;
             uint256 amountIn = IERC20(tokenIn).balanceOf(prepper);
             if (buy && amountIn > PREP_SWAP_USDC) amountIn = PREP_SWAP_USDC;
-            IAerodromeSlipstreamRouter(router).exactInputSingle(
-                IAerodromeSlipstreamRouter.ExactInputSingleParams({
-                    tokenIn: tokenIn,
-                    tokenOut: buy ? paxg : BASE_USDC,
-                    tickSpacing: 10,
-                    recipient: prepper,
-                    deadline: block.timestamp,
-                    amountIn: amountIn,
-                    amountOutMinimum: 0,
-                    sqrtPriceLimitX96: 0
-                })
-            );
+            IAerodromeSlipstreamRouter(router)
+                .exactInputSingle(
+                    IAerodromeSlipstreamRouter.ExactInputSingleParams({
+                        tokenIn: tokenIn,
+                        tokenOut: buy ? paxg : BASE_USDC,
+                        tickSpacing: 10,
+                        recipient: prepper,
+                        deadline: block.timestamp,
+                        amountIn: amountIn,
+                        amountOutMinimum: 0,
+                        sqrtPriceLimitX96: 0
+                    })
+                );
             (,,, cardinality,,) = IAerodromePool(pool).slot0();
         }
         vm.stopPrank();
@@ -124,7 +125,9 @@ contract HardAssetsVaultForkTest is Test {
 
     function test_fork_rmhard_adapterResolvesPaxgPoolThroughTheAeroFactory() public view {
         assertEq(
-            address(adapter.FACTORY()), cfg.readAddress(".aerodromeSlipstreamFactory"), "Aero factory"
+            address(adapter.FACTORY()),
+            cfg.readAddress(".aerodromeSlipstreamFactory"),
+            "Aero factory"
         );
         assertEq(address(adapter.ROUTER()), router, "Aero router");
         // The adapter's own canonical-pool check (PoolFactoryMismatch) passes, and 1 PAXG prices in a sane USDC band.
@@ -145,7 +148,8 @@ contract HardAssetsVaultForkTest is Test {
 
         uint256 held = IERC20(paxg).balanceOf(address(vault));
         assertGt(held, 0, "deposit bought PAXG");
-        uint256 twapValue = adapter.twapPrice(pool, paxg, BASE_USDC, held, vault.effectiveTwapWindow(paxg));
+        uint256 twapValue =
+            adapter.twapPrice(pool, paxg, BASE_USDC, held, vault.effectiveTwapWindow(paxg));
         assertEq(
             vault.totalAssets(),
             IERC20(BASE_USDC).balanceOf(address(vault)) + twapValue,

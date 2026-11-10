@@ -757,7 +757,11 @@ async fn list_vaults_lists_the_hard_assets_vault_as_volatile() {
         .await
         .unwrap();
     let vaults = body["vaults"].as_array().expect("vaults must be an array");
-    assert_eq!(vaults.len(), 4, "two seeded vaults plus rmRWA and rmHARD: {vaults:?}");
+    assert_eq!(
+        vaults.len(),
+        4,
+        "two seeded vaults plus rmRWA and rmHARD: {vaults:?}"
+    );
     let hard_row = vaults
         .iter()
         .find(|v| v["name"] == "Robot Money Hard Assets")

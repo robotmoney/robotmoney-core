@@ -5,7 +5,7 @@ description: "rmHARD script (core 2008, ADR-0018): a plain BasketVault row for P
 
 # DeployBasketVaultHardAssetsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9a5abb78f17cecf801493322557775e4886f59cc/contracts/test/DeployBasketVaultHardAssets.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/fd752974f7648ba7e1588ccff599816ae456b379/contracts/test/DeployBasketVaultHardAssets.t.sol)
 
 **Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
 
@@ -68,7 +68,9 @@ Etch the Aero pool, factory and (if absent) token doubles at the config addresse
 </i>
 
 ```solidity
-function _etchAero(uint24 livePips, int24 poolTickSpacing) internal returns (string memory json);
+function _etchAero(uint24 livePips, int24 poolTickSpacing)
+        internal
+        returns (string memory json);
 ```
 
 **Parameters**

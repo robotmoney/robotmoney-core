@@ -265,7 +265,9 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
             cfg.assets[i] =
                 _parseAsset(json, string.concat(root, "[", vm.toString(i), "]"), symbols[i]);
             if (cfg.assets[i].isAerodrome) {
-                require(cfg.aerodromeFactory != address(0), "config aerodromeSlipstreamFactory unset");
+                require(
+                    cfg.aerodromeFactory != address(0), "config aerodromeSlipstreamFactory unset"
+                );
                 require(cfg.aerodromeRouter != address(0), "config aerodromeSlipstreamRouter unset");
             }
         }
@@ -300,7 +302,10 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
             a.isAerodrome = true;
             a.pool = json.readAddress(string.concat(base, ".pool"));
             require(a.pool != address(0), "config pool unset");
-            require(a.poolFee <= uint24(type(int24).max), "config Aerodrome poolFee is not a tick spacing");
+            require(
+                a.poolFee <= uint24(type(int24).max),
+                "config Aerodrome poolFee is not a tick spacing"
+            );
         } else {
             revert("unsupported venue: only UniswapV3, UniswapV4 and Aerodrome");
         }
@@ -530,7 +535,8 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
     ) internal {
         _checkAerodromePool(a, cfg.aerodromeFactory, p);
         if (d.adapter == address(0)) {
-            address adapter = address(new AerodromeSwapAdapter(cfg.aerodromeRouter, cfg.aerodromeFactory));
+            address adapter =
+                address(new AerodromeSwapAdapter(cfg.aerodromeRouter, cfg.aerodromeFactory));
             vault.setAdapterCodeHashAllowed(adapter.codehash, true);
             d.adapter = adapter;
         }
@@ -551,7 +557,10 @@ abstract contract BasketVaultDeployBase is UpgradeAuthority {
 
     /// @dev Config check on chain for an Aerodrome CL pool (see `_addAerodromeAsset`). `fee()` and `liquidity()` share the Uniswap V3
     ///      ABI. The fee is in pips (hundredths of a bip), so the guard check is `NAV_DEVIATION_BPS * 100 > fee`, as for V3.
-    function _checkAerodromePool(AssetCfg memory a, address factory, Params memory p) internal view {
+    function _checkAerodromePool(AssetCfg memory a, address factory, Params memory p)
+        internal
+        view
+    {
         require(a.pool.code.length != 0, string.concat(a.symbol, ": pool has no code"));
         require(
             uint256(int256(IAerodromePool(a.pool).tickSpacing())) == uint256(a.poolFee),
