@@ -77,16 +77,22 @@ abstract contract BaseFixture is Test {
         vm.warp(vm.parseJsonUint(meta, ".timestamp"));
         vm.fee(vm.parseJsonUint(meta, ".basefee"));
 
+        // The slot index is parsed once: a parse per account would copy the whole meta file into memory once
+        // per account. Indexing thousands of slots costs more gas than a test has, so it runs unmetered (it is
+        // the fixture's own bookkeeping, not code under test).
+        vm.pauseGasMetering();
         address[] memory accounts = vm.parseJsonAddressArray(meta, ".accounts");
+        bytes32[][] memory slots = abi.decode(vm.parseJson(meta, ".slots"), (bytes32[][]));
+        require(slots.length == accounts.length, "fixture meta: one slot list per account");
         for (uint256 i = 0; i < accounts.length; i++) {
             address a = accounts[i];
             _fxAccount[a] = true;
-            bytes32[] memory slots =
-                vm.parseJsonBytes32Array(meta, string.concat(".slots[", vm.toString(i), "]"));
-            for (uint256 j = 0; j < slots.length; j++) {
-                _fxSlot[a][slots[j]] = true;
+            bytes32[] memory s = slots[i];
+            for (uint256 j = 0; j < s.length; j++) {
+                _fxSlot[a][s[j]] = true;
             }
         }
+        vm.resumeGasMetering();
     }
 
     function _assertFixtureCovered() private {
