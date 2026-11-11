@@ -150,13 +150,17 @@ allocation. Nothing else governs it.
 ```
 
 - `asset` is a stable key. A fixture,
-  `tests/fixtures/consensus-receipt.asset-map.json`, maps each key to the
-  fund's on-chain asset id per chain. It replaces the bucket-to-vault map.
+  `contracts/test/prototype/fixtures/receipt/asset-map.json`, maps each key
+  to the fund's on-chain asset id per chain. It replaces the bucket-to-vault
+  map. It lives there because the shared fixtures under `tests/fixtures/`
+  are byte-pinned to another repo.
 - `weight_bps` is the asset's target share of NAV. The list sums to 10,000.
   It is a weight, not an amount, because NAV moves between the receipt and
   each step.
 - `sleeve` is a **label**. It names the receipt bucket the asset is reported
   under. It is informational, not imperative. It does not reach the chain.
+  The asset map fixes each asset's bucket. A receipt label must match it.
+  Otherwise a relabel could pass any audit.
 - Sleeves are not separable. There is no per-sleeve share, NAV, deposit,
   redemption or plan. A holder always owns a pro-rata slice of every asset.
   "Sleeve" only names a way to slice the fund for reading.
@@ -476,8 +480,8 @@ These are the invariants the experiment must prove (gate G3). They join §8 of t
   same schema change. Its assembler builds `assets` and refuses a receipt
   that fails the bucket audit check. Who chooses the per-asset weights is
   open (§11, D8).
-- **Asset map fixture.** `consensus-receipt.asset-map.json` maps each asset
-  key to the fund's asset id per chain. It replaces the bucket-to-vault map.
+- **Asset map fixture.** `contracts/test/prototype/fixtures/receipt/asset-map.json`
+  maps each asset key to the fund's asset id and bucket per chain. It replaces the bucket-to-vault map.
 - **Dapp.** One deposit flow, one position, one NAV. The portfolio composite
   view (§2.2) becomes a per-asset breakdown, grouped by the receipt's sleeve
   labels. A plan panel shows target, current, path, steps, and cost.
@@ -562,7 +566,7 @@ smallest test set that still scores the gates. The full contracts come first.
    moves) and run each plan to the end with a simulated keeper. Between
    steps, move pool prices with arbitrage-sized swaps. Measure realized cost,
    time to converge, and steps skipped. This answers G4 and G5.
-3b. **Per-asset targets (owner, 2026-11-10).** *Next.* Remove sleeves from the
+3b. **Per-asset targets (owner, 2026-11-10).** *Done 2026-11-10: exact regression match.* Remove sleeves from the
    contracts, as §4.1 now describes. The rebalancer already works per asset,
    so step selection, path math and cost accounting do not change. The
    refactor must show that by test:
@@ -578,7 +582,7 @@ smallest test set that still scores the gates. The full contracts come first.
      sleeve design produced. G4 and G5 must then reproduce the §14 numbers
      exactly. Any difference is a bug in the refactor, not a new result.
    - Re-measure G1 sizes. Re-record the fixture only if a test reports a miss.
-3c. **Fallbacks for G4 and G5.** §13 scoring requires testing a stated
+3c. **Fallbacks for G4 and G5.** *Done 2026-11-10: the auction fails G4 and G5. LP response is a sensitivity only.* §13 scoring requires testing a stated
    fallback before a non-G1, non-G3 failure counts. This runs on the 3b
    contracts. The §13 thresholds and the scorer's cost definition stay fixed.
    - G4: an auction executor (§12) behind the existing `executeStep`
@@ -587,7 +591,7 @@ smallest test set that still scores the gates. The full contracts come first.
      range, where the sim holds liquidity fixed. Either model LP response
      outside the range, or record the gap as a stated limit of the result.
      The conclusion names which.
-4. **System size count.** Count the contracts, deploy stages, govern rows and
+4. **System size count.** *Next.* Count the contracts, deploy stages, govern rows and
    `ADMIN_ROLE` holders against today's. No client is built. This answers G6.
 5. **Conclusion.** Score every gate in §13. Write the result ADR (§3).
 
@@ -670,11 +674,11 @@ fixture pin it rests on.
 
 | Gate | Result | Evidence | Date |
 | --- | --- | --- | --- |
-| G1 | Pass | `SizeGate.t.sol`. Fund implementation is 22,775 bytes, 777 under the 23,552 limit. Rebalancer is 17,893 bytes. The fund fits only with three linked libraries: `FundFlowsLib` (19,555), `FundAdminLib` (12,072) and `FundValuationLib` (8,134). These hold code, not custody or accounting state. The fund also uses the counter admin floor, not the enumerable one. Fixture pin 55371881. | 2026-11-09 |
+| G1 | Pass | `SizeGate.t.sol`. After step 3b the fund implementation is 21,996 bytes, 1,556 under the 23,552 limit. Rebalancer is 18,001 bytes. The fund fits only with three linked libraries: `FundFlowsLib` (19,285), `FundAdminLib` (10,777) and `FundValuationLib` (8,038). These hold code, not custody or accounting state. The fund also uses the counter admin floor, not the enumerable one. Before step 3b the fund was 22,775 bytes (pin 55371881). Re-measured 2026-11-11 at pin 55462550. | 2026-11-11 |
 | G2 | Dropped | | |
 | G3 | Pass, with listed prototype gaps | 29 fixture tests pass offline at pin 55371881 (563 accounts, 2,346 slots, no RPC). `Invariants.t.sol` (16 runs of 32 calls, fixed seed, fail on revert) checks RB-1 to RB-8 and INV-1. `EndToEnd.t.sol` runs deposit, receipt, timelock apply, steps to convergence, redeem and `redeemInKind`. `Adversarial.t.sol` has a passing test for all 8 rows of §5.8. `Custody.t.sol` covers INV-2 (donation accrual, first-depositor inflation) and INV-3 (fee and quarantine control only through the timelock). Review found 19 issues. 18 were fixed, among them a frozen venue that blocked `redeemInKind`, an admin able to grant the rebalancer role, and a gas-starvation lever on `step()`. Open gaps: a plan opened at zero NAV has a zero cost budget and halts until the admin extends it; dust on a removed basket asset is not re-absorbed (INV-2 port from `BasketVault` not done); a frozen lending venue still blocks the USDC `redeem` path, as it does today. | 2026-11-09 |
-| G4 | Fail | `sim/RebalanceSim.t.sol` scored by `sim/score-sim.ts`, default parameters, 36 scored plans. Median realized cost is 17.02 bps of turnover. The worst plan costs 82.63 bps (JUMP-DOWN-1M-s2, receipt d07). Both exceed the 15 and 30 bps limits. Cost is measured against the reference price. Measured against the arrival price, the median is 5.48 bps and the worst is 9.13 bps. The tuned set also fails: median 17.76 bps, worst 83.40 bps. Fixture pin 55462550 (2,193 accounts, 17,310 slots), recorded through anvil forking Base. All 16 sim tests pass offline for each parameter set. | 2026-11-10 |
-| G5 | Not pass (no fail clause fired) | Same runs. No liquid-asset plan expired. Blocked skips are 4.99% of step attempts overall. One plan expired unconverged on deSPXA and the three lending assets: JUMP-DOWN-1M-s1, receipt d07. Its pool left the recorded LP range. Three JUMP-DOWN plans each skip more than 10% of their steps (27.0%, 61.3% and 13.5%). Without the five plans whose pool left its LP range, G5 passes: every plan converges and skips are 0.13%. The tuned set is worse: skips are 7.35%, and eight plans exceed 10%. | 2026-11-10 |
+| G4 | Fail | `sim/RebalanceSim.t.sol` scored by `sim/score-sim.ts`, default parameters, 36 scored plans. Median realized cost is 17.02 bps of turnover. The worst plan costs 82.63 bps (JUMP-DOWN-1M-s2, receipt d07). Both exceed the 15 and 30 bps limits. Cost is measured against the reference price. Measured against the arrival price, the median is 5.48 bps and the worst is 9.13 bps. The tuned set also fails: median 17.76 bps, worst 83.40 bps. Fixture pin 55462550 (2,193 accounts, 17,310 slots), recorded through anvil forking Base. All 16 sim tests pass offline for each parameter set. Fallback (step 3c, not the scored result): the auction executor also fails, median 28.72 bps and worst 61.71 bps. The LP re-centre sensitivity does not change G4: median 17.20 bps, worst 59.19 bps. | 2026-11-11 |
+| G5 | Not pass (no fail clause fired) | Same runs. No liquid-asset plan expired. Blocked skips are 4.99% of step attempts overall. One plan expired unconverged on deSPXA and the three lending assets: JUMP-DOWN-1M-s1, receipt d07. Its pool left the recorded LP range. Three JUMP-DOWN plans each skip more than 10% of their steps (27.0%, 61.3% and 13.5%). Without the five plans whose pool left its LP range, G5 passes: every plan converges and skips are 0.13%. The tuned set is worse: skips are 7.35%, and eight plans exceed 10%. Fallback (step 3c, not the scored result): the auction executor fails G5 at 10.63% blocked skips. With the LP re-centre sensitivity, G5 passes on the default steps (0.42% blocked, all plans converge). That model is an assumption, not a measurement. It does not replace this result. | 2026-11-11 |
 | G6 | Not run | | |
 | G7 | Dropped | | |
 
@@ -707,3 +711,83 @@ be overstated. Those five plans include every JUMP-DOWN plan.
 The §13 fallback to test next for G4 is an auction executor (§12). The
 result also depends on the cost measure. The reference-price reading fails.
 The arrival-price reading passes.
+
+**Step 3b (per-asset targets, 2026-11-10).** The contracts hold no sleeve.
+`AssetConfig` has no `sleeve` and no `intraBps`. The fund has no
+`setIntraBps` and no `targetSleeveBps`. `Plan` has no `sleeveBps`. The sleeve
+constants and the sleeve checks are gone. `applyReceipt`, `setTarget`,
+`setTargetAndOpenPlan` and `previewPlan` take `(assets, bps)`. An asset id is
+the fund asset address. That is the token for a basket asset. It is the
+adapter for a lending asset. `addAsset` refuses a second active asset with
+the same id. `PlanMath.assetTargets` runs the §4.1 checks. Each has its own
+error: `TargetAssetNotActive`, `TargetAssetDuplicate`, `TargetAssetMissing`,
+`TargetSumInvalid` and `TargetExceedsCap`. A refused vector reverts the whole
+`applyReceipt`, so nothing is released. `deactivateAsset` reverts with
+`AssetStillTargeted` until a vector names the asset with 0. So an inactive
+asset always has target 0.
+
+RB-9 tests. `TargetVector.t.sol` has 11 tests. They cover an unlisted active
+asset, a duplicate, an inactive asset, an unknown asset, a bad sum, a cap
+breach, a length mismatch and any-order vectors. They also cover a wrong
+payload digest, a duplicate asset id and deactivating a targeted asset. Each
+refusal is checked through `applyReceipt`, `setTarget` and `previewPlan`.
+After each refusal the receipt is still unreleased and no plan is open. The
+invariant run sends six refused vectors before each valid apply. It checks
+the persistent target in `invariant_targetVector`.
+
+The receipt side has a schema 1.1 fixture with an `assets` list and an asset
+map. They live in `contracts/test/prototype/fixtures/receipt/`.
+`scripts/prototype/check-receipt-assets.ts` runs the bucket audit. It has 14
+refuse fixtures, each with a named reason. Among them are a bucket sum mismatch, an unknown asset, a
+duplicate, a relabelled asset and entries out of canonical order. Its tests
+pass: 39 of 39.
+
+Regression verdict: exact match. The sim submits per-asset vectors. Each one
+equals the old sleeve split. The default set matches the sleeve baseline in
+every field of all 16 files. The tuned set does too. G4 and G5 are unchanged.
+The end-to-end test logs the same calls, steps and costs as before. 49
+fixture tests pass offline at pin 55462550 (2,198 accounts, 17,447 slots).
+
+| Contract | Before 3b (bytes) | After 3b (bytes) | G1 limit 23,552 |
+| --- | --- | --- | --- |
+| `RobotMoneyFund` | 22,775 | 21,996 | Pass, 1,556 under |
+| `Rebalancer` | 17,893 | 18,001 | Pass, 5,551 under |
+| `RebalanceGovernance` | 7,790 | 7,288 | Not gated |
+| `FundFlowsLib` (linked) | 19,555 | 19,285 | Under EIP-170 |
+| `FundAdminLib` (linked) | 12,072 | 10,777 | Under EIP-170 |
+| `FundValuationLib` (linked) | 8,134 | 8,038 | Under EIP-170 |
+
+**Step 3c (fallbacks, 2026-11-10).** Both fallbacks run on the 3b contracts.
+They use the same scenarios, seeds and pin. The scorer is unchanged. The G4
+and G5 rows above stay scored on the default run, as §13 says.
+
+G4 fallback: a Dutch auction executor (`AuctionStepExecutor.sol`). It sits
+behind `executeStep` as the basket swap adapter. Each leg opens at the TWAP
+quote plus 50 bps. The price falls over 300 seconds to the path's own floor.
+The step cost cap still binds. The sim's solver has no competitor. It keeps a
+5 bps margin and pays 0.25 USDC gas per leg. It re-quotes at its fill block.
+It can also fill at an outside venue of unlimited depth. Result: G4 fails.
+The median is 28.72 bps and the worst plan is 61.71 bps. G5 also fails:
+blocked skips are 10.63% of 11,421. Every scored plan converges. Most blocked
+fills hit the 50 bps step cost cap at the deSPXA floor. The auction lowers the
+worst plan. It raises the median and the skips. Its tests pass: 9 of 9.
+
+G5 fallback: LP response. The static sim holds LP positions fixed. A switch
+(`PROTO_SIM_LP=recenter`) models one LP that responds after a pool leaves its
+range. The LP waits 6 hours. It then adds half the pin's liquidity within 500
+ticks of the pool price. With it, G5 passes on the default steps. Blocked
+skips are 0.42% and every plan converges. The auction run also passes G5 with
+it, at 6.42%. G4 still fails: median 17.20 bps, worst 59.19 bps. Only the
+plans that left the LP range change.
+
+Recommendation: keep G4 and G5 as scored. Report the static G5 failure as a
+limit of fixed liquidity. Show the LP sensitivity next to it. Do not count it
+as a G5 pass. Its 6 hour lag and its depth are assumptions. The pin has no
+record of how Base LPs respond to a 10% move. Measured LP timing and depth
+after large moves would turn it into a verdict. The auction does not rescue
+G4.
+
+**Cost report (2026-11-11).** `one-vault-cost-report.md` explains the G4
+result. Most of the cost is the fund's own buying premium left in the basket
+pools, mostly deSPXA while the S&P is closed. The on-chain `costSpent` misses
+that premium, so it shows about a third of the median cost.
