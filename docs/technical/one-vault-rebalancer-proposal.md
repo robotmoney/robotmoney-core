@@ -18,8 +18,8 @@
   [ADR-0003 (rebalancing)](../adr/ADR-0003-basketvault-rebalancing-model.md)
   and [ADR-0017](../adr/ADR-0017-rmagent-retired-router-uses-three-vaults.md).
 - **Keeps unchanged:** the consensus receipt contract (§4.9), the Safe and
-  timelock as the only governance body, the lending adapters, the swap
-  adapters, ADR-0009 retirement (no assisted migration), ADR-0014 governed
+  timelock as the only governance body, the lending and swap adapters (each
+  with one added function, §6), ADR-0009 retirement (no assisted migration), ADR-0014 governed
   UUPS proxies, and the custody invariants INV-1 to INV-4.
 - **Changes off-chain:** the receipt payload gains an optional per-asset
   target list (schema 1.1, a minor bump, §4.1).
@@ -194,7 +194,8 @@ and `setTarget(assets, bps, params)` check only the vector itself:
   asset by forgetting it (an explicit 0 sells it);
 - the weights sum to 10,000;
 - a lending asset's target is at or below its `capBps`. That cap is a risk
-  ceiling on one venue, not an allocation choice.
+  ceiling on one venue, not an allocation choice;
+- a basket asset's target is inside its pool-share limit (§4.5, rule 3).
 
 Idle USDC carries no target. It absorbs rounding, as before.
 
@@ -203,8 +204,8 @@ reports group assets by the receipt's labels. They can slice the same assets
 another way later without a contract change.
 
 **What is still governed by the Safe.** Which assets are tradable at all:
-adding or retiring an asset, its adapter or pool, its TWAP window, and its
-`capBps`. Those choices define what a receipt may name. They do not set any
+adding or retiring an asset, its adapter or pool, its TWAP window, its price
+feed and that feed's maximum age, and its `capBps`. Those choices define what a receipt may name. They do not set any
 balance.
 
 ### 4.2 NAV
@@ -217,7 +218,7 @@ totalAssets = idle USDC
 
 NAV is a view and a guard. Since D11 it sets no share count and prices no
 flow (§5.9). The settlement checks compute it at the outside feeds for the
-share-price breaker and the caps (§5.9.3, checks 6 and 9).
+share-price breaker and the caps (§5.9.3, checks 6, 8 and 9).
 
 This is the union of the two NAV models that already exist. Basket assets
 keep their TWAP valuation, the ORA-4 spot-versus-TWAP deviation guard, and the
@@ -232,7 +233,8 @@ still does. Step 3d replaces it.
 
 A deposit is a request. It settles with its epoch (§5.9). The USDC of the
 requests that settle buys the same fraction of every asset the fund holds.
-Shares mint by that fraction. No NAV is read. Each purchase has a price limit
+Shares mint by that fraction. No NAV sets the share count. Each purchase has a
+price limit
 from the outside feed and the pool's TWAP. The depositors of that settlement
 pay the cost of the purchase. Each request carries its own limit.
 
@@ -286,10 +288,10 @@ skew its mix before the first plan.
 
 **Effect on the list.** wETH and cbBTC pass rule 1. Chainlink has ETH, BTC
 and cbBTC feeds on Base. deSPXA fails rule 1 today. It leaves the fund until
-a feed exists. Rule 1 excludes any asset whose reference market closes. That
-covers tokenized equities in general, not only deSPXA. PAXG, which the Hard
-Assets vault on `dev` holds, has not been assessed against this rule. The receipt's real-world-asset bucket is then 0, as the agent
-bucket already is. Steps 1 to 3c ran with deSPXA, and their results in §14
+a feed exists. The receipt's real-world-asset bucket is then 0, as the agent
+bucket already is. Rule 1 excludes any asset whose reference market closes.
+That covers tokenized equities in general, not only deSPXA. PAXG, which the
+Hard Assets vault on `dev` holds, has not been assessed against this rule. Steps 1 to 3c ran with deSPXA, and their results in §14
 stand as recorded. Step 3e reruns G4 and G5 on the new list. Those reruns are
 new results, not edits to the old ones. The example in §4.1 and the
 parameter notes in §5 that name deSPXA describe the list before this rule.
@@ -538,12 +540,14 @@ often and how long they wait (§13).
    before the user signs, and can set the limit from it.
 3. **Close and window.** The epoch closes after `epochLength`. Nothing from
    it settles for a further `settleWindow`.
-4. **Settle.** `settle` takes two inputs: the most requests and the most
-   USDC to process in this call. They exist for gas and for pool depth. They
-   can only make one call do less, and anyone may call again at once. The
-   caller chooses nothing else. The keeper settles first. Anyone can settle
-   after `keeperGrace` (D3). Requests are processed in the order they were
-   made, oldest first. Every price comes from chain state.
+4. **Settle.** `settle` takes two inputs: the most requests to look at and
+   the most USDC to process in this call. They exist for gas and for pool
+   depth. They can only make one call do less. The next call continues where
+   the last one stopped, so requests that are skipped cannot hold back the
+   ones behind them. The caller chooses nothing else. The keeper settles
+   first. Anyone can settle once `keeperGrace` has passed since the window
+   ended (D3). Requests are processed in the order they were made, oldest
+   first. Every price comes from chain state.
 5. **Eligibility is decided by the chain.** Before any trade the queue
    computes two bound prices from the per-swap limits of §5.9.3: the most a
    depositor can pay per share, and the least a redeemer can receive. A
@@ -555,7 +559,8 @@ often and how long they wait (§13).
 6. **Hold.** Shares from a deposit stay in the queue until
    `settle time + minHold`. Then they are delivered to the request's owner.
    Anyone may trigger that delivery. Shares in their hold have no exit, by
-   design (owner direction). Redemption USDC is claimable at once.
+   design (owner direction). The one exception is a return the Safe allows
+   after a freeze (§5.9.4). Redemption USDC is claimable at once.
 7. **Roll and expiry.** A request that is skipped, or that the period's cap
    leaves unfilled, stays pending. A request may fill in parts. Each fill is
    its own claim with its own unlock time. After `maxRoll` epochs an unfilled
@@ -564,16 +569,18 @@ often and how long they wait (§13).
 
 #### 5.9.3 One settlement, step by step
 
-`settle` runs in one transaction. Any failed check reverts it and changes no
-state. A blocked settlement stays pending. No role can settle past a failed
-check. `checkSettle` is a view that names the first failing check, so clients
+`settle` runs in one transaction. A failed check before the trades (checks 1
+to 6) reverts the call and changes no state. Each side then settles in its
+own call into the fund. If one side's call fails, that side changes no state
+and stays pending, and the other side still settles. No role can settle past
+a failed check. `checkSettle` is a view that names the first failing check, so clients
 and the watchdog can show the reason.
 
 **Before any trade**
 
 1. **Time and state.** The window of the oldest pending epoch has ended. The
-   caller is the keeper, or `keeperGrace` has passed. The queue is not
-   paused. While deposits are paused, the fund is shut down or a lending
+   caller is the keeper, or `keeperGrace` has passed since that window ended.
+   The queue is not paused. While deposits are paused, the fund is shut down or a lending
    asset is excluded, deposit requests are not processed, and redemptions
    settle alone.
 2. **Feed health.** The Base sequencer feed reports up, and has been up for
@@ -615,7 +622,9 @@ and the watchdog can show the reason.
 
    A cap is the larger of `maxEpochFlowBps` of NAV and `epochFlowFloorUsdc`.
    Each side has its own cap. A cap counts per `epochLength` of clock time,
-   so a backlog of epochs cannot stack several caps into one block.
+   so a backlog of epochs cannot stack several caps into one block. NAV here
+   is the value at the feeds from check 6. A cap never stops a settlement. It
+   leaves the rest of a request pending.
 
 **After the trades, in the same transaction**
 
@@ -638,9 +647,11 @@ and the watchdog can show the reason.
 
 - `cancel` of an unfilled request, by its owner.
 - `redeemInKind` for shares in a wallet. The fund asserts the proportion
-  check on it. It pays the idle USDC and the basket tokens at once. It pays
-  the lending part in USDC up to the period's in-kind allowance, which is the
-  size of a flow cap. Beyond that, or when a venue cannot pay, the lending
+  check on it. It pays the idle USDC and the basket tokens at once. Every leg
+  pays the exit fee. It pays the lending part in USDC up to the period's
+  in-kind allowance. The allowance is the larger of `maxEpochFlowBps` of the
+  fund's lending holdings and `epochFlowFloorUsdc`. It is counted in the
+  venues' own USDC amounts, so no price is read. Beyond that, or when a venue cannot pay, the lending
   part becomes a claim on a share of that position. The claim's value moves
   with the venue. Interest and losses are shared pro rata with the holders
   who stay.
@@ -655,7 +666,8 @@ Nobody can push them to an address.
 
 - `EMERGENCY_ROLE` can pause the queue. The exits stay open.
 - `EMERGENCY_ROLE` can freeze the shares from one settlement's deposits
-  while they are in their hold. A freeze ends by itself after `maxFreeze`.
+  while they are in their hold. A freeze ends by itself `maxFreeze` after the
+  freeze call.
   Before that, the Safe can release the shares to their depositors, or let
   each depositor take them back in kind. Nobody else can receive them.
 
@@ -664,7 +676,7 @@ Nobody can push them to an address.
 | Parameter | Default | Layer |
 | --- | --- | --- |
 | `epochLength`, `settleWindow`, `minHold` | 6 h, 1 h, 24 h | 4 |
-| `keeperGrace` | 6 h, the same parameter as §5.6 | 4 |
+| `keeperGrace` | 6 h. The queue's own value, with the same default as the step's (§5.6) | 4 |
 | `maxEpochFlowBps` | 500, for each side | 4 |
 | `epochFlowFloorUsdc` | 250,000 USDC | 4 |
 | `maxSharePriceMoveBps` | 1,000 for each epoch passed | 4 |
@@ -683,8 +695,15 @@ Nobody can push them to an address.
 
 Every value is an estimate until the sim sets it from the normal range. The
 reason is then recorded. `ADMIN_ROLE` sets each value through the timelock,
-inside hard bounds fixed in the code. `epochFlowFloorUsdc` exists so that a
-small or newly seeded fund can grow.
+inside hard bounds fixed in the code. `minHold` is at least 1 day and at most
+7 days. `maxFreeze` is at most 14 days. The bounds also refuse values that
+would stop every settlement. `epochFlowFloorUsdc` exists so that a small or
+newly seeded fund can grow.
+
+The queue stores the flow parameters, with the USDC feed, the sequencer feed
+and their maximum ages. Each basket asset's feed and its `maxFeedAge` live in
+the fund's asset config. The fund stores `poolShareBps`, `minSeedUsdc` and
+the in-kind allowance.
 
 #### 5.9.6 The vault interface: the ERC shape, not the letter
 
@@ -702,7 +721,7 @@ the fund also keeps the custody contract small.
 
 - The asset is USDC. The share is the fund's ERC-20.
 - `requestDeposit` and `requestRedeem` open requests. Shares leave the
-  owner's custody at the request.
+  caller's custody at the request.
 - `deposit`, `mint` and `redeem` on the queue claim a settled request.
 - The preview functions revert, as ERC-7540 requires for asynchronous flows.
 - Pending and claimable views, and the request events.
@@ -736,10 +755,10 @@ Lenders that list the share must use a capped rate, never the raw view.
   alarms. The sim reports the blocked share per check, and G9 bounds it.
 - **Feed dependence for liveness.** A feed outage, a sequencer outage or a
   USDC depeg stops settlement. It does not stop the exits.
-- **A venue that cannot pay** stops timed redemptions until it can. In-kind
-  exit stays open and defers the lending part.
+- **A venue that cannot pay** stops timed redemptions until it can. Deposits
+  still settle. In-kind exit stays open and defers the lending part.
 - **A venue at its supply cap** stops deposits until the cap frees or the
-  target changes.
+  target changes. Redemptions still settle.
 - **Fewer assets.** §4.5 excludes any asset without a feed that is live at
   all hours. That excludes tokenized equities.
 - **Large flows take several epochs.** A request above the cap fills in
@@ -790,7 +809,7 @@ it is: priced and booked at the TWAP alone.
 | `FlowQueue` | — | **New.** The entry point for requests and claims (§5.9.6). Holds pending USDC, escrowed shares and shares in their hold. Runs the settlement checks of §5.9.3. Holds none of the fund's assets. |
 | `Rebalancer` | — | **New.** Holds no funds. Computes and validates steps, then calls the fund. Separate contract to keep the fund under EIP-170. |
 | Lending and swap adapters | Used by their vaults | Unchanged, with two additions: the swap adapters need an exact-output swap with a price limit for the pro-rata purchase (§5.9.3, check 9), and each lending adapter exposes its venue's rate per unit (check 5). Their owning vault becomes the fund. |
-| `RobotMoneyGateway` (separate system) | Allows deposits into three vaults | Its allowed-destination list becomes the fund's queue. It must use request and claim (D10). Done in the gateway's own release. The fund does not name the gateway (architecture §1 dependency rule holds). |
+| `RobotMoneyGateway` (separate system) | Allows deposits into three vaults | Its allowed-destination list becomes the fund's queue. It calls only the deposit request. Shares are delivered to the request's owner (D10). Done in the gateway's own release. The fund does not name the gateway (architecture §1 dependency rule holds). |
 
 ### 6.1 Size and gas
 
@@ -831,7 +850,7 @@ These are the invariants the experiment must prove (gate G3). They join §8 of t
   against the outside feed (§5.10).
 - **RB-5.** No step runs while any traded asset fails the ORA-4 check, or
   before `stepInterval` has passed. From step 3e a step also needs healthy
-  feeds that agree with the TWAP and spot (§5.10).
+  feeds that agree with the TWAP (§5.10).
 - **RB-6.** Rebalancing state never blocks a redemption request, its
   settlement or `redeemInKind`.
 - **RB-7.** The rebalancer never moves the vault past `pathTarget(now)`.
@@ -841,35 +860,38 @@ These are the invariants the experiment must prove (gate G3). They join §8 of t
   to 10,000. No contract stores or reads a sleeve or category.
 - **RB-10.** No shares leave the queue and no USDC is paid before the
   epoch's settlement window ends (§5.9). The only exceptions are cancel,
-  in-kind exit and withdrawal of expired escrow, which return a user's own
-  escrow.
+  in-kind exit and withdrawal of expired escrow, which pay only that user.
 - **RB-11.** Shares from a deposit leave the queue no sooner than
-  `settle time + minHold`, and only to the request's owner.
+  `settle time + minHold`, and only to the request's owner. The one earlier
+  exit is an in-kind return to that owner, which the Safe allows after a
+  freeze.
 - **RB-12.** A blocked settlement trades nothing. No role can settle past a
   failed check. A cancel or an expiry returns exactly what was escrowed and
   not yet filled.
-- **RB-13.** No flow lowers the amount of any asset per share, except by
-  rounding in the holders' favour. The fund asserts this inside its own mint,
-  burn and in-kind functions, on the held amounts of active assets.
+- **RB-13.** No flow lowers the amount of any asset per share. Rounding only
+  raises it. The fund asserts this inside its own mint, burn and in-kind
+  functions, on the held amounts of active assets and idle USDC.
 - **RB-14.** No request fills outside its limit. The chain decides which
   requests take part. No caller does.
-- **RB-15.** A failed settlement changes no state. Cancel works for every
+- **RB-15.** A failed pre-trade check changes no state. A side whose call
+  into the fund fails changes no state. Cancel works for every
   unfilled request, and in-kind exit for every unfilled redemption request,
   also while the queue is paused.
-- **RB-16.** Nothing settles unless every check of §5.9.3 passes: time and
+- **RB-16.** Nothing settles unless checks 1 to 6 of §5.9.3 pass: time and
   state, feed health and the USDC peg, the TWAP quorum, TWAP against feed,
-  the lending rate bound, the share-price breaker, the flow caps and the TVL
-  cap, the per-swap price limits, the proportion check and the realized-price
-  check.
-- **RB-17.** No basket asset is active without a feed and pool history, and
-  no target exceeds its pool-share limit (§4.5).
+  the lending rate bound and the share-price breaker. A side settles only if
+  its per-swap price limits, the proportion check and the realized-price
+  check hold. No fill exceeds a flow cap or the TVL cap.
+- **RB-17.** No basket asset is active without a feed and pool history. No
+  lending asset is active unless its adapter exposes the venue's rate. No
+  target exceeds its pool-share limit (§4.5).
 - **RB-18.** Frozen held shares can only go to their depositors, as shares or
-  in kind. A freeze ends by itself after `maxFreeze` (§5.9.4).
+  in kind. A freeze ends by itself `maxFreeze` after the freeze call (§5.9.4).
 - **RB-19.** From step 3e, a step changes only its two traded assets and idle
   USDC, never the supply, and runs only when the feed checks of §5.10 pass.
 - **RB-20.** `settle` takes no price and no selection as input. Its two
   inputs only limit how much one call does. Requests are processed oldest
-  first, and anyone may call again at once.
+  first. The next permitted caller continues where the last call stopped.
 - **RB-21.** A deferred lending claim is a share of that position. Its owner
   and the fund's holders share the venue's later gains and losses pro rata.
 - **RB-22.** The exclusion ledger credits every queued share to its owner.
@@ -893,8 +915,9 @@ These are the invariants the experiment must prove (gate G3). They join §8 of t
 - **Dapp.** One deposit flow, one position, one NAV. The portfolio composite
   view (architecture §2.2) becomes a per-asset breakdown, grouped by the receipt's sleeve
   labels. A plan panel shows target, current, path, steps, and cost.
-- **Request and claim (D10).** The dapp, `rmpc`, the gateway and the indexer
-  need request, pending, claimable and claim views, and cancel. This is a new
+- **Request and claim (D10).** The dapp, `rmpc` and the indexer need request,
+  pending, claimable and claim views, and cancel. The gateway needs only the
+  deposit request. This is a new
   kind of surface for each client. It counts against G6. Three views serve
   them: the quotes (`quoteDeposit`, `quoteRedeem`), the reason a settlement is
   blocked (`checkSettle`), and the last healthy value (`lastGoodNav`).
@@ -904,7 +927,7 @@ These are the invariants the experiment must prove (gate G3). They join §8 of t
 - **Explorer and indexer.** New tables for plans, steps, epochs and requests.
   Router tables go read-only for history.
 - **Watchdog.** Watches step cost against caps, plan halts, and keeper
-  liveness. It also watches blocked epochs, by check, and feed health.
+  liveness. It also watches blocked settlements, by check, and feed health.
 - **publish-contracts.** New stages for the fund, the rebalancer and the
   queue. The router,
   registry-eligibility and three-vault stages go. The `apply-receipt` govern
@@ -1011,11 +1034,13 @@ smallest test set that still scores the gates. The full contracts come first.
      outside the range, or record the gap as a stated limit of the result.
      The conclusion names which.
 3d. **Attack mitigations: timed, quantity-based flows (owner, 2026-11-11).** *Next.*
-   Build and test the §5.9 design. Score G8. This runs on the 3b contracts.
+   Build and test the §5.9 design. Score G8 and G9. This runs on the 3b
+   contracts.
    The engineering plan is `one-vault-timed-flows-eng-plan.md`.
    - **Attack tests.** Each models the attacker's full profit and loss. Each
-     runs against the synchronous fund (the baseline) and the §5.9 fund. The
-     baseline is a frozen copy of the step 3c fund, kept for these tests.
+     runs against the §5.9 fund, and against the frozen synchronous fund where
+     the attack applies to it. That baseline is a frozen copy of the step 3c
+     fund, kept for these tests.
      - A1, Makina replay: one transaction, a flash loan, a pushed pool, then
        a deposit or a redeem. Once per basket pool.
      - A2, TWAP push: hold a pushed price for 1 to N blocks against the
@@ -1049,20 +1074,21 @@ smallest test set that still scores the gates. The full contracts come first.
    - **Tests for RB-10 to RB-18 and RB-20 to RB-22.** Each check of §5.9.3
      has a test that trips it alone and shows that nothing settles. G3 is
      scored again over RB-1 to RB-22, without RB-19.
-   - **Rerun the step 3 sim with timed flows.** Measure the deposit cost per
-     USDC, the wait, how often an epoch is blocked or rolled and by which
-     check, what netting deposits against redemptions would have saved, and
+   - **Rerun the step 3 sim with timed flows.** Measure the execution cost of
+     each flow against its feed value, the wait, how often a settlement is
+     blocked and by which check, what netting deposits against redemptions would have saved, and
      the change in G4 cost from
      ending deficit-first deposits. Both arms of that comparison run on the
      §4.5 asset list: the frozen synchronous fund and the timed fund. Set
-     every value of §5.9.5 from the sim's normal range. Score G9 from this
-     run. G4 and G5 are scored in step 3e (§13).
+     every value of §5.9.5 from the sim's normal range. The rules of step 3e
+     that replace deSPXA apply to this run too. Score G9 from this run. G4 and G5 are scored in step 3e (§13).
    - Write the attack results, G8 and G9 into §14.
 3e. **The layers on the rebalance, and the rerun.** *After 3d.* Build §5.10:
    feed checks and the balance check on each step (RB-19), the limit from the
    stricter of TWAP and feed for each direction, and cost booked against the
-   feed. Test a keeper's sandwich of a step and a budget halt forced by noise
-   (A20). Score G3 again with RB-19. Then rerun the step 3 sim on the final design and score G4 and
+   feed. Back off an asset only on the keeper's own failed calls. Test a
+   keeper's sandwich of a step and a budget halt forced by noise (A20, which
+   counts for G3). Score G3 again with RB-19. Then rerun the step 3 sim on the final design and score G4 and
    G5 (§13 says which run counts). These rules for the rerun are fixed now,
    before any result:
    - The asset list is §4.5: the three lending assets, wETH and cbBTC.
@@ -1102,7 +1128,7 @@ recorded so the conclusion can revisit it.
 | D7 | Deposit routing? | Deficit-first, through step 3c. Ended for deposits by D11. | It lowers rebalance cost. G4 measures by how much. |
 | D8 | Who chooses per-asset weights? | For the experiment, receipt fixtures carry hand-written asset weights. | The analysts sign bucket weights today. Production needs either per-asset analyst weights or a published, deterministic split rule in the assembler. That choice lives in `robotmoney-frontend` and is out of the experiment's scope. |
 | D9 | Are sleeves on chain? | No. The receipt labels each asset with a sleeve. The contracts keep only assets and targets. | One layer of allocation governance instead of two. Owner, 2026-11-10. |
-| D10 | Do deposits and redemptions settle in timed epochs (§5.9)? | Yes. Accepted by the owner, 2026-11-11. Customers can wait. `redeemInKind` stays instant. | It removes same-block and flash-loan flows. The cost is the synchronous-redemption promise in architecture §4.4, and the owner accepts that. If the design goes to production, the production path (§10) changes architecture §4.4. |
+| D10 | Do deposits and redemptions settle in timed epochs (§5.9)? | Yes. Accepted by the owner, 2026-11-11. Customers can wait. `redeemInKind` stays instant. | It removes same-block and flash-loan flows. The cost is the synchronous-redemption promise in architecture §4.4, and the owner accepts that. If the design goes to production, the production path (§10) changes architecture §4.4 and the PRD (`one-vault-prd-amendments.md`). |
 | D11 | How is a flow priced? | By quantity. A deposit buys the same fraction of every asset and mints by that fraction. A redemption pays realized proceeds of a pro-rata slice. NAV is a guard and prices no flow. Decided 2026-11-11 after research (§15.8). | Holders are safe whatever any price says, and whatever assets the fund holds. The cost is deficit-first deposits (D7) and an in-fund purchase with no audited precedent. If the measured deposit cost is too high, or instant deposits were ever required, a NAV mint at independent feeds is the alternative. |
 | D12 | What must an asset have to be listed? | An independent feed on Base that is live at all hours, a pool with one settlement window of history, and a largest position that fits its pool (§4.5). Approved 2026-11-11. deSPXA leaves until it has a feed. | The outside-feed layer needs a feed for every asset. The assets can change to fit the protocol. |
 | D13 | How closely does the fund follow ERC-4626 and ERC-7540? | In shape, not to the letter. Departures are listed in §5.9.6. Owner, 2026-11-11. | Being an ERC-4626 vault is a core requirement. Safety practice from hardened protocols comes before interface detail. |
@@ -1153,7 +1179,7 @@ result cannot move them.
 | G6 | Is the system smaller to build and operate? | Net contracts, deploy stages, govern rows and `ADMIN_ROLE` holders all go down, and every client change in §8 maps onto an existing surface. | Any of those counts goes up, or a client change in §8 needs a new kind of surface. | "Migration cost is not worth it" |
 | G7 | Dropped (owner, 2026-11-09): migration is out of scope. | | | |
 | G8 | Can an attacker drain value by moving prices? (Added 2026-11-11, before any step 3d result.) | Every attack test (A1 to A19, §10 step 3d) shows the attacker's net result (gain minus the cost of moving and holding prices, flash-loan fees and swap fees) is at most zero. No pending depositor or redeemer fills outside their limit. Holders lose at most 1 bps of NAV, and no asset amount per share falls. Every test of RB-10 to RB-18 and RB-20 to RB-22 passes. No tested way to block settlement for a day costs the attacker less than 1,000 USDC. (Amended 2026-11-11, before any result, per §15 and §17. The 1,000 USDC floor is a proposal the owner can change until step 3d runs.) | Any attack shows a positive net result for the attacker, or holders lose more than 1 bps of NAV, or a request fills outside its limit, in any attack scenario. Or settlement can be blocked for a day for less than the floor. | New risk: a pooled fund prices every flow from markets it does not control |
-| G9 | Are customers served? (Added 2026-11-11 after the review of §17, before any step 3d result. The thresholds are proposals the owner can change until step 3d runs.) | In the sim's scenarios without a price jump: at least 95% of settlements succeed at the keeper's first call after the window. The 95th percentile time from a redemption request to claimable USDC is at most 14 hours. The median execution cost of a flow is at most 15 bps of its size and no flow pays more than 30 bps, measured against the feed value and before the exit fee. | Any of those is missed. | The PRD's promises on withdrawal, preview and explicit failure (`docs/prd.md` §6, §9) |
+| G9 | Are customers served? (Added 2026-11-11 after the review of §17, before any step 3d result. The thresholds are proposals the owner can change until step 3d runs.) | In the sim's scenarios without a price jump: at least 95% of settlements succeed at the keeper's first call after the window. The 95th percentile time from a redemption request to claimable USDC is at most 14 hours. The median execution cost of a flow is at most 15 bps of its size and no flow pays more than 30 bps, measured against the feed value and before the exit fee. | Any of those is missed. | The PRD's promises on withdrawal, preview and explicit failure (`docs/prd.md` §2, §6, §9) |
 
 **Scoring.** All live gates pass: the rejection is invalidated. G1 or G3
 fails: the rejection is validated, because those are the reasons it was made. Any
@@ -1172,6 +1198,9 @@ reports both. The thresholds and the scorer's cost definition do not change.
 
 **G3 is scored again** in steps 3d and 3e, because §7 grew from RB-9 to
 RB-22 after its first score.
+
+**G1 from step 3d** also holds the queue to the limit the fund and the
+rebalancer have.
 
 ## 14. Evidence log
 
@@ -1696,7 +1725,8 @@ withdrawals are not needed. Customers can wait. The epochs stay, so the
 condition that would flip the decision does not apply.
 
 **One change to §15.4 item 2.** The settler names one mint ratio and the fund
-buys exact amounts of every asset. Every asset then grows by the same
+buys exact amounts of every asset (after §17 the chain sizes the purchase
+itself). Every asset then grows by the same
 fraction. The smallest-ratio rule and its surplus are no longer needed.
 §15.4 as a whole is a record of the first correction. §5.9 is the design.
 
@@ -1710,7 +1740,9 @@ Nothing here is built or tested yet.
 ### 16.1 Review of the documents before the layers
 
 This table describes §5.9 and the engineering plan as they stood before this
-section's changes. Every fix is now made.
+section's changes. Every fix is now made. After §17 two of them changed form:
+the growth bound on a lending position became a bound on the venue's own
+rate, and the value check became the per-swap limits.
 
 | Finding | Where | Fix |
 | --- | --- | --- |
@@ -1755,7 +1787,7 @@ exploit, not from a design.
 | Chainlink guidance | Check feed age and the sequencer. Pause when the reference market is closed. | Check 2. Rule 1 requires a feed that is live at all hours. | An asset whose feed has closed hours is not listed at all. |
 | Lesson: Makina, Harvest | A pool's spot price went into the share price in one transaction. | No flow settles in one transaction. No pool price sets a share count. | Layers 1 and 4. |
 | Lesson: Venus (2026), Inverse, Rari | A TWAP or a two-feed bound was beaten on a thin market by a held price. | Rule 3 of §4.5 caps the position against the pool's time-weighted liquidity. The feed must not come from the fund's own pool. | Even a beaten feed and TWAP together cannot dilute holders. |
-| Lesson: GMX v1, Summer.fi | The vault's own accounting state was corrupted or stale while outside prices were honest. | Check 10 compares real balances, not stored accounting. Check 5 bounds each venue's rate. | A donation becomes a gift to holders. A lending claim from an in-kind exit is a share of the position, so a stale mark is not paid out at face. |
+| Lesson: GMX v1, Summer.fi | The vault's own accounting state was corrupted or stale while outside prices were honest. | Check 10 compares real balances, net of owed claims, not stored accounting. Check 5 bounds each venue's rate. | A donation becomes a gift to holders. A lending claim from an in-kind exit is a share of the position, so a stale mark is not paid out at face. |
 | Lesson: Indexed Finance | A single-asset side door and a rebalance sized from the pool's own spot. | No single-asset mint path exists outside settlement. §5.10 for the rebalance. | The step's limit uses the stricter of TWAP and feed for each direction. |
 | Lesson: Balancer (2025), Bunni | Rounding on one path, repeated in tiny calls. | Every amount rounds for the holders. `minRequestUsdc`. | A fuzz test of many minimum-size requests in one epoch. |
 | Lesson: Cream, Resupply, Stream | A lender trusted a vault's own share price. | The convert views revert when a feed is unhealthy. | The documents tell lenders to use a capped rate, never the raw view. |
@@ -1798,7 +1830,7 @@ section is the record.
 
 | Question | Answer before the revision | What the revision does |
 | --- | --- | --- |
-| Product goals | Partly. Existing money follows an applied receipt. Four PRD promises broke without a recorded decision: one-transaction withdrawal, "withdrawals are never blocked", a preview, and a choice of exposure. | Quote views, a time limit on the freeze and an always-open in-kind exit restore what can be restored. The PRD changes are staged in `one-vault-prd-amendments.md`. The choice of exposure stays open (D2). |
+| Product goals | Partly. Existing money follows an applied receipt. Four PRD promises broke without a recorded decision: one-transaction withdrawal, "withdrawals are never blocked", a preview, and a choice of exposure. | Quote views, a time limit on the freeze and an in-kind exit that stays open for delivered shares restore what can be restored. The PRD changes are staged in `one-vault-prd-amendments.md`. The choice of exposure stays open (D2). |
 | Customers | Not well. No gate measured wait, blocked settlements or cost. A keeper could choose who traded. Small holders and agents had no path. | Gate G9. The chain decides who takes part. No minimum on a whole-balance redemption. An agent's request is owned by its depositor. |
 | Simplicity | No. Most of the weight served one cost saver, the match between users. | The match, the settler's price and selection inputs and the entry premium are removed. Every protective layer stays, by the owner's rule. The parameter count did not fall. |
 | Contract security | One rule lost money: the exclusion ledger read queued shares through a view. Several rules could stop the fund cheaply. | RB-20 to RB-22, the proportion check inside the fund, lending claims as position shares, no request cap. |
@@ -1832,7 +1864,7 @@ Nothing is built or tested.
 | Feeds quote USD and pools quote USDC. | Medium | Fixed: the USDC peg check (check 2). |
 | Three checks were one check at the default bands. | Simplicity | Fixed: the spot band and the value band became the per-swap limit. The two-NAV comparison is gone. |
 | The request functions were specified in two places. | Simplicity | Fixed: the queue is the entry point (§5.9.6). |
-| In the code the design keeps: in-kind exit reverts when a venue's value read reverts. A deferral to the zero address can never be cleared. A stranger's failed step backs off assets. | Medium, Low, Low | Listed as fixes in the engineering plan. |
+| In the code the design keeps: in-kind exit reverts when a venue's value read reverts. A deferral to the zero address can never be cleared. A stranger's failed step backs off assets. | Medium, Low, Low | The first two are fixes in the engineering plan (E23). The third is in §5.10 (step 3e). |
 | The rebalance step trades at the TWAP alone, and G4 failed. | Medium | Step 3e. |
 | One exposure for everyone, where 95% of launch weight is stable yield. | High (product) | Open: D2. The conclusion decides whether a stable-only vault stays. |
 | The receipt's four buckets shrink to two usable ones, and nobody signs per-asset weights. | High (product) | Open: D8. |
