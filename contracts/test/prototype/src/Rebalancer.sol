@@ -362,25 +362,20 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
     ///      `estCost = turnover × fund.poolFeeBps(i) / 10 000` (0 for Lending). PROTOTYPE ESTIMATE:
     ///      pool fee only. It ignores price impact and the slippage allowance, so it is a lower
     ///      bound; the realized cost is bounded above by `maxStepCostBps` per step and by
-    ///      `costBudgetBps` per plan. Reverts on an invalid sleeve vector (as the fund would at
-    ///      plan open), including `TargetExceedsCap` for a Lending target above its `capBps`.
-    function previewPlan(uint16[4] calldata sleeveBps)
+    ///      `costBudgetBps` per plan. Reverts on a refused vector with the same `PlanMath.assetTargets`
+    ///      errors the fund would raise at plan open (§4.1, RB-9), including `TargetExceedsCap`.
+    function previewPlan(address[] calldata assets, uint256[] calldata bps)
         external
         view
         returns (PlanPreviewRow[] memory rows, uint256 totalTurnover, uint256 totalEstCost)
     {
         IRobotMoneyFund f = _fund;
-        uint16[4] memory sb = sleeveBps;
-        PlanMath.validateSleeveBps(sb);
         AssetConfig[] memory cfgs = f.assetConfigs();
-        uint16[] memory targets = PlanMath.assetTargets(sb, cfgs);
+        uint16[] memory targets = PlanMath.assetTargets(assets, bps, cfgs);
         (uint256 nav,, uint256[] memory values) = f.portfolioValues();
         uint256 n = cfgs.length;
         rows = new PlanPreviewRow[](n);
         for (uint256 i; i < n; ++i) {
-            if (cfgs[i].kind == AssetKind.Lending && targets[i] > cfgs[i].capBps) {
-                revert IRobotMoneyFund.TargetExceedsCap(i, targets[i], cfgs[i].capBps);
-            }
             PlanPreviewRow memory r = rows[i];
             r.currentBps = PlanMath.weightBps(values[i], nav);
             r.targetBps = targets[i];

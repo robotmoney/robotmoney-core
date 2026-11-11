@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/technical/one-vault-rebalancer-proposal.md §5.1 (from receipt to plan), §6 (RouterGovernance →
-//            RebalanceGovernance), §7 RB-1, RB-8
+// Canonical: docs/technical/one-vault-rebalancer-proposal.md §5.1 (from receipt to plan), §4.1 (per-asset vector), §6 (RouterGovernance →
+//            RebalanceGovernance), §7 RB-1, RB-8, RB-9
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
 
@@ -24,13 +24,13 @@ import {IConsensusRecommendationReceipt} from "../../../../interfaces/IConsensus
 interface IRebalanceGovernance {
     // ─── Events ──────────────────────────────────────────────────────────────
 
-    /// @notice A receipt was released and its sleeve vector opened as plan `planId`.
+    /// @notice A receipt was released and its per-asset vector opened as plan `planId`.
     event ReceiptApplied(
-        bytes32 indexed receiptId, bytes32 payloadDigest, uint16[4] sleeveBps, uint256 indexed planId
+        bytes32 indexed receiptId, bytes32 payloadDigest, address[] assets, uint256[] bps, uint256 indexed planId
     );
 
-    /// @notice A receipt-less target was set and opened as plan `planId` (`setTarget`).
-    event TargetSet(uint16[4] sleeveBps, PlanParams params, uint256 indexed planId);
+    /// @notice A receipt-less per-asset vector was set and opened as plan `planId` (`setTarget`).
+    event TargetSet(address[] assets, uint256[] bps, PlanParams params, uint256 indexed planId);
 
     event DefaultPlanParamsSet(PlanParams params);
 
@@ -43,31 +43,31 @@ interface IRebalanceGovernance {
 
     // ─── Write surface ───────────────────────────────────────────────────────
 
-    /// @notice Release `receiptId` and open a plan to its sleeve vector, in one call (§5.1 step 2-3).
+    /// @notice Release `receiptId` and open a plan to its per-asset vector, in one call (§5.1 step 2-3).
     ///         TARGET_SETTER_ROLE only (the timelock: RB-1). `nonReentrant`.
     ///         Checks in order (RouterGovernance.applyReceipt, unchanged):
     ///         recorded (`ReceiptNotRecorded`), not released (`ReceiptAlreadyReleased`), stored digest
     ///         == `payloadDigest` (`PayloadDigestMismatch`), `recordedAt > lastAppliedRecordedAt`
-    ///         (`ReceiptNotNewerThanApplied`). Then `PlanMath.canonicalSleeveBps(sleeves, bps)`
-    ///         (sum 10 000, agent sleeve 0). Effects: `lastAppliedRecordedAt = recordedAt`,
+    ///         (`ReceiptNotNewerThanApplied`). Effects: `lastAppliedRecordedAt = recordedAt`,
     ///         `receipts.releaseReceipt(receiptId)`, then
-    ///         `fund.setTargetAndOpenPlan(sleeveBps, defaultPlanParams, receiptId)`. Any revert
-    ///         undoes the release. Emits `ReceiptApplied`.
-    /// @param sleeves Sleeve ids (SLEEVE_*: 0 agent_tokens, 1 conservative_defi_yield,
-    ///                2 protocol_tokens, 3 real_world_assets), each at most once.
-    /// @param bps     Parallel weights in bps.
+    ///         `fund.setTargetAndOpenPlan(assets, bps, defaultPlanParams, receiptId)`, which runs
+    ///         the §4.1 vector checks (RB-9). Any revert, a refused vector included, undoes the
+    ///         release. Emits `ReceiptApplied`.
+    /// @param assets  Asset ids, each active asset exactly once, any order. An id is the fund
+    ///                asset address (`PlanMath.assetId`): `token` for Basket, `adapter` for Lending.
+    /// @param bps     Parallel target weights in bps of NAV, summing to 10 000.
     /// @return planId The opened plan.
     function applyReceipt(
         bytes32 receiptId,
         bytes32 payloadDigest,
-        uint8[] calldata sleeves,
+        address[] calldata assets,
         uint256[] calldata bps
     ) external returns (uint256 planId);
 
     /// @notice Open a plan with no receipt (§6: bootstrap and drift correction; the old
-    ///         `setDefaultWeights`). ADMIN_ROLE only. Same sleeve validation as `applyReceipt`.
+    ///         `setDefaultWeights`). ADMIN_ROLE only. Same vector checks as `applyReceipt` (RB-9).
     ///         Does not touch `lastAppliedRecordedAt`. Emits `TargetSet`.
-    function setTarget(uint8[] calldata sleeves, uint256[] calldata bps, PlanParams calldata params)
+    function setTarget(address[] calldata assets, uint256[] calldata bps, PlanParams calldata params)
         external
         returns (uint256 planId);
 

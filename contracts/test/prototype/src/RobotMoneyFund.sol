@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4 (target architecture), §4.1-§4.4 (sleeves, NAV,
+// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4 (target architecture), §4.1-§4.4 (asset targets, NAV,
 //            deposits, redemptions), §5.1 (plan open), §5.3 (executeStep), §5.5 (plan states), §6 (contract
 //            changes), §6.1 (size), §7 (RB-1, RB-3, RB-4, RB-5, RB-6, RB-7)
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
@@ -36,10 +36,11 @@ import {FundAdminLib} from "./lib/FundAdminLib.sol";
 
 /// @title RobotMoneyFund
 /// @notice The one vault (§4): an ERC-4626 over USDC, share `rmFUND`, behind `GovernedUUPS` (ADR-0014). It holds
-///         Lending adapters (stable sleeve) and Basket tokens (protocol and RWA sleeves) grouped into four
-///         sleeves, a persistent target, and one rebalance plan at a time. It is the union of `RobotMoneyVault`
-///         (cap allocator, ADP-2 exclusion, `ExclusionLedger`) and `BasketVault` (TWAP NAV, ORA-4, realized-delta
-///         mint, proportional sell, `redeemInKind`, emergency unwind), plus the plan state and `executeStep`.
+///         a flat list of Lending adapters and Basket tokens, one persistent target weight per asset, and one
+///         rebalance plan at a time. No sleeve or category is stored or read (§4.1, RB-9). It is the union of
+///         `RobotMoneyVault` (cap allocator, ADP-2 exclusion, `ExclusionLedger`) and `BasketVault` (TWAP NAV,
+///         ORA-4, realized-delta mint, proportional sell, `redeemInKind`, emergency unwind), plus the plan state
+///         and `executeStep`.
 ///
 ///         Authority (RB-1, RB-3):
 ///         - GOVERNANCE_ROLE (RebalanceGovernance): `setTargetAndOpenPlan`.
@@ -289,12 +290,13 @@ contract RobotMoneyFund is
     // ═════════════════════════════════════════════════════════════════════════
 
     /// @inheritdoc IRobotMoneyFund
-    function setTargetAndOpenPlan(uint16[4] calldata sleeveBps, PlanParams calldata params, bytes32 receiptId)
-        external
-        onlyRole(GOVERNANCE_ROLE)
-        returns (uint256 planId)
-    {
-        return FundAdminLib.openPlan(_s(), sleeveBps, params, receiptId);
+    function setTargetAndOpenPlan(
+        address[] calldata assets,
+        uint256[] calldata bps,
+        PlanParams calldata params,
+        bytes32 receiptId
+    ) external onlyRole(GOVERNANCE_ROLE) returns (uint256 planId) {
+        return FundAdminLib.openPlan(_s(), assets, bps, params, receiptId);
     }
 
     /// @inheritdoc IRobotMoneyFund
@@ -456,10 +458,6 @@ contract RobotMoneyFund is
         return _s().targetBps;
     }
 
-    function targetSleeveBps() external view returns (uint16[4] memory) {
-        return _s().targetSleeveBps;
-    }
-
     function pathTarget(uint256 t) external view returns (uint256[] memory bps, uint256 idleBps) {
         return FundValuationLib.pathTarget(_s(), t);
     }
@@ -536,12 +534,6 @@ contract RobotMoneyFund is
     function deactivateAsset(uint256 index) external onlyRole(ADMIN_ROLE) {
         _requireNoLivePlan();
         FundAdminLib.deactivateAsset(_s(), index);
-    }
-
-    /// @inheritdoc IRobotMoneyFund
-    function setIntraBps(uint256[] calldata indices, uint16[] calldata intraBps) external onlyRole(ADMIN_ROLE) {
-        _requireNoLivePlan();
-        FundAdminLib.setIntraBps(_s(), indices, intraBps);
     }
 
     // ═════════════════════════════════════════════════════════════════════════

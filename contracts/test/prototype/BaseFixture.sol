@@ -21,6 +21,12 @@ import {VmSafe} from "forge-std/Vm.sol";
 ///         read first (before writing it) is in the fixture, and that every contract it called
 ///         either is in the fixture or was created by the test. A miss fails with the account and
 ///         slot, so the fix (re-record) is named.
+///
+///         The check is slow: it records every storage access and decodes it after each phase. A test that
+///         runs thousands of slots (the rebalance sim) turns it off by default through `_fixtureCheckByDefault`.
+///         `PROTO_FIXTURE_CHECK=1` (or `=0`) overrides the default for every test. The recorder's replay passes
+///         set it to 1, so each re-recorded fixture is proven to cover the sim. A deterministic run that passed
+///         the check on this fixture and code reads the same state when it runs without the check.
 abstract contract BaseFixture is Test {
     string internal constant ALLOC_PATH = "contracts/test/prototype/fixtures/base-state.alloc.json";
     string internal constant META_PATH = "contracts/test/prototype/fixtures/base-state.meta.json";
@@ -29,6 +35,8 @@ abstract contract BaseFixture is Test {
     error FixtureAccountMiss(address account);
 
     bool internal recording;
+    /// @dev Replay with the coverage check on (see the contract note).
+    bool internal fixtureCheck;
 
     mapping(address => bool) private _fxAccount;
     mapping(address => mapping(bytes32 => bool)) private _fxSlot;
@@ -43,15 +51,21 @@ abstract contract BaseFixture is Test {
             recording = true;
             vm.createSelectFork(rpc, vm.envUint("PROTO_PIN"));
         } else {
+            fixtureCheck = vm.envOr("PROTO_FIXTURE_CHECK", _fixtureCheckByDefault());
             _loadFixture();
         }
-        vm.startStateDiffRecording();
+        if (fixtureCheck) vm.startStateDiffRecording();
+    }
+
+    /// @dev Whether replay runs the coverage check when PROTO_FIXTURE_CHECK is unset.
+    function _fixtureCheckByDefault() internal view virtual returns (bool) {
+        return true;
     }
 
     /// @dev Put on every prototype test. Runs the coverage check after the test body in replay.
     modifier fixtureCovered() {
         _;
-        if (!recording) this.checkFixtureCoverageNow();
+        if (fixtureCheck) this.checkFixtureCoverageNow();
     }
 
     /// @dev Replay only: check everything recorded so far and restart the recording. A long test calls it
@@ -59,7 +73,7 @@ abstract contract BaseFixture is Test {
     ///      call's own memory and is freed on return: forge's EVM memory limit then bounds one phase, not the
     ///      whole test.
     function _fixtureCheckpoint() internal {
-        if (!recording) this.checkFixtureCoverageNow();
+        if (fixtureCheck) this.checkFixtureCoverageNow();
     }
 
     /// @dev Self-call target of `fixtureCovered` and `_fixtureCheckpoint`. Not a test.
@@ -76,6 +90,7 @@ abstract contract BaseFixture is Test {
         vm.roll(vm.parseJsonUint(meta, ".block"));
         vm.warp(vm.parseJsonUint(meta, ".timestamp"));
         vm.fee(vm.parseJsonUint(meta, ".basefee"));
+        if (!fixtureCheck) return;
 
         // The slot index is parsed once: a parse per account would copy the whole meta file into memory once
         // per account. Indexing thousands of slots costs more gas than a test has, so it runs unmetered (it is

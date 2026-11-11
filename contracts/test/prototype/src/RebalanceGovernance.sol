@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/technical/one-vault-rebalancer-proposal.md §5.1 (from receipt to plan), §5.6 (plan parameters),
-//            §6 (RouterGovernance → RebalanceGovernance), §7 RB-1, RB-8
+//            §6 (RouterGovernance → RebalanceGovernance), §4.1 (per-asset vector),
+//            §7 RB-1, RB-8, RB-9
 // Ported from: contracts/RouterGovernance.sol (applyReceipt checks, release role, GovernedUUPS proxy)
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
@@ -19,7 +20,6 @@ import {
     MAX_PLAN_DURATION,
     MAX_COST_BUDGET_BPS
 } from "./FundTypes.sol";
-import {PlanMath} from "./PlanMath.sol";
 import {IRobotMoneyFund} from "./interfaces/IRobotMoneyFund.sol";
 import {IRebalanceGovernance} from "./interfaces/IRebalanceGovernance.sol";
 
@@ -27,7 +27,7 @@ import {IRebalanceGovernance} from "./interfaces/IRebalanceGovernance.sol";
 /// @notice The fund's target setter (§5.1, §6). It holds the fund's `GOVERNANCE_ROLE` (the only gate
 ///         on `setTargetAndOpenPlan`) and moves the fund's target in two ways:
 ///         - `applyReceipt` releases a recorded Investment Committee consensus receipt and opens a
-///           plan to the receipt's sleeve vector in the same call. `TARGET_SETTER_ROLE` only.
+///           plan to the receipt's per-asset target vector in the same call. `TARGET_SETTER_ROLE` only.
 ///         - `setTarget` opens a plan with no receipt (bootstrap, drift correction; the old
 ///           `setDefaultWeights`). `ADMIN_ROLE` only.
 ///
@@ -40,15 +40,20 @@ import {IRebalanceGovernance} from "./interfaces/IRebalanceGovernance.sol";
 ///         the register's narrow `RECEIPT_RELEASER_ROLE`, never its `ADMIN_ROLE`.
 ///
 ///         Payload-digest binding is unchanged from `RouterGovernance`: the call names the digest
-///         the sleeve vector was derived from and reverts unless it equals the stored digest.
-///         `ReceiptApplied` records the digest, the canonical sleeve vector and the plan id
-///         together so anyone can re-derive the vector from the public payload and compare.
+///         the vector was derived from (the payload's `assets` field, schema 1.1) and reverts unless
+///         it equals the stored digest. `ReceiptApplied` records the digest, the vector and the
+///         plan id together so anyone can re-derive the vector from the public payload and compare.
+///         The bucket audit check (§4.1) is off-chain. No contract stores or reads a sleeve (RB-9).
+///
+///         Asset ids: a vector names each asset by its fund asset address (`PlanMath.assetId`):
+///         `token` for a Basket asset, `adapter` for a Lending asset.
 ///
 ///         Released is not applied: a receipt released outside `applyReceipt` carries no
 ///         target and `applyReceipt` refuses it forever (`ReceiptAlreadyReleased`). A refused
-///         vector (bad sleeve sum, non-zero agent bucket, out-of-bound plan params, a sleeve with
-///         no assets, a lending target above its cap) reverts the whole call, so it releases
-///         nothing.
+///         vector reverts the whole call, so it releases nothing. The fund runs the §4.1 checks
+///         (RB-9): an inactive or unknown asset (`TargetAssetNotActive`), a duplicate
+///         (`TargetAssetDuplicate`), a missing active asset (`TargetAssetMissing`), a bad sum
+///         (`TargetSumInvalid`), a lending target above its cap (`TargetExceedsCap`).
 ///
 ///         Runs behind its own ERC-1967 proxy (`GovernedUUPS`): `initialize` replaces the
 ///         constructor, the implementation is locked, and only `upgradeTimelock()` can upgrade or
@@ -121,18 +126,27 @@ contract RebalanceGovernance is
     // ─── Target setter: apply a consensus receipt (§5.1 steps 2-3) ───────────
 
     /// @inheritdoc IRebalanceGovernance
-    /// @dev §5.1 steps 2-3, RB-1. Check order is `RouterGovernance.applyReceipt` unchanged, then
-    ///      the sleeve vector is canonicalized (agent bucket 0, sum 10 000) before any state
-    ///      changes. The release and the plan open happen in one call; any revert undoes both.
+    /// @dev §5.1 steps 2-3, RB-1, RB-9. Check order is `RouterGovernance.applyReceipt` unchanged.
+    ///      The fund checks the vector inside `setTargetAndOpenPlan`. The release and the plan open
+    ///      happen in one call; any revert, a refused vector included, undoes both.
     // slither-disable-start reentrancy-events
     // `applyReceipt` is `nonReentrant` and both external calls go to contracts fixed at
     // initialization; the event follows them so it records what landed.
     function applyReceipt(
         bytes32 receiptId,
         bytes32 payloadDigest,
-        uint8[] calldata sleeves,
+        address[] calldata assets,
         uint256[] calldata bps
     ) external onlyRole(TARGET_SETTER_ROLE) nonReentrant returns (uint256 planId) {
+        _checkAndRelease(receiptId, payloadDigest);
+        planId = fund.setTargetAndOpenPlan(assets, bps, _defaultPlanParams, receiptId);
+
+        emit ReceiptApplied(receiptId, payloadDigest, assets, bps, planId);
+    }
+
+    /// @dev `applyReceipt`'s receipt checks, in `RouterGovernance.applyReceipt` order, then the release (own
+    ///      frame for stack depth). The digest binding is unchanged.
+    function _checkAndRelease(bytes32 receiptId, bytes32 payloadDigest) private {
         if (!receipts.isRecorded(receiptId)) revert ReceiptNotRecorded(receiptId);
         IConsensusRecommendationReceipt.Receipt memory r = receipts.getReceiptById(receiptId);
         if (r.released) revert ReceiptAlreadyReleased(receiptId);
@@ -142,13 +156,8 @@ contract RebalanceGovernance is
         uint64 last = lastAppliedRecordedAt;
         if (r.recordedAt <= last) revert ReceiptNotNewerThanApplied(receiptId, r.recordedAt, last);
 
-        uint16[4] memory sleeveBps = PlanMath.canonicalSleeveBps(sleeves, bps);
-
         lastAppliedRecordedAt = r.recordedAt;
         receipts.releaseReceipt(receiptId);
-        planId = fund.setTargetAndOpenPlan(sleeveBps, _defaultPlanParams, receiptId);
-
-        emit ReceiptApplied(receiptId, payloadDigest, sleeveBps, planId);
     }
 
     // slither-disable-end reentrancy-events
@@ -158,16 +167,15 @@ contract RebalanceGovernance is
     /// @inheritdoc IRebalanceGovernance
     /// @dev §6 (the old `setDefaultWeights`), RB-1. Opens a plan with `receiptId == 0`. Does not
     ///      touch `lastAppliedRecordedAt`, so a later receipt still applies.
-    function setTarget(uint8[] calldata sleeves, uint256[] calldata bps, PlanParams calldata params)
+    function setTarget(address[] calldata assets, uint256[] calldata bps, PlanParams calldata params)
         external
         onlyRole(ADMIN_ROLE)
         nonReentrant
         returns (uint256 planId)
     {
-        uint16[4] memory sleeveBps = PlanMath.canonicalSleeveBps(sleeves, bps);
         _checkPlanParams(params);
-        planId = fund.setTargetAndOpenPlan(sleeveBps, params, bytes32(0));
-        emit TargetSet(sleeveBps, params, planId);
+        planId = fund.setTargetAndOpenPlan(assets, bps, params, bytes32(0));
+        emit TargetSet(assets, bps, params, planId);
     }
 
     /// @inheritdoc IRebalanceGovernance

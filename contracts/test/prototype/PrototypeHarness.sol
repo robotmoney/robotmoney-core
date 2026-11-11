@@ -32,12 +32,9 @@ import {
     StepParams,
     Venue,
     Roles,
-    NUM_SLEEVES,
-    SLEEVE_STABLE,
-    SLEEVE_PROTOCOL,
-    SLEEVE_RWA,
     BPS
 } from "./src/FundTypes.sol";
+import {PlanMath} from "./src/PlanMath.sol";
 
 interface IHarnessSwapRouter02 {
     struct ExactInputSingleParams {
@@ -71,10 +68,11 @@ interface IHarnessV3Pool {
 ///         - `receipts`: the real `ConsensusRecommendationReceipt` behind its ERC-1967 proxy. `submitter` holds
 ///           `RECEIPT_SUBMITTER_ROLE`; `governance` holds only `RECEIPT_RELEASER_ROLE` (RB-8). Both grants run
 ///           through the timelock, the only path the register allows.
-///         - `fund`: `RobotMoneyFund` behind its proxy (§4) with six assets on real venues (§4.1):
-///           stable sleeve: Aave V3, Compound V3, Moonwell (MorphoAdapter), each a production lending adapter
-///           bound to the fund; protocol sleeve: wETH and cbBTC; RWA sleeve: deSPXA, all three on their Uniswap
-///           V3 fee-500 USDC pools through one vault-agnostic `UniswapV3SwapAdapter`.
+///         - `fund`: `RobotMoneyFund` behind its proxy (§4) with six assets on real venues (§4.1): three lending
+///           assets (Aave V3, Compound V3, Moonwell through MorphoAdapter), each a production lending adapter
+///           bound to the fund; three basket assets (wETH, cbBTC, deSPXA), all on their Uniswap V3 fee-500 USDC
+///           pools through one vault-agnostic `UniswapV3SwapAdapter`. The fund keeps no sleeve. The receipt
+///           bucket of each asset (`assetBucket`) is a test-side label only, as off-chain tools hold it.
 ///         - `rebalancer` (holds the fund's `REBALANCER_ROLE`, §5.3) and `governance` (holds `GOVERNANCE_ROLE`,
 ///           §5.1). `keeper` holds `KEEPER_ROLE` (§5.4). `emergency` holds the fund's `EMERGENCY_ROLE`.
 ///
@@ -111,6 +109,14 @@ abstract contract PrototypeHarness is BaseFixture {
     uint256 internal constant IDX_CBBTC = 4;
     uint256 internal constant IDX_DESPXA = 5;
     uint256 internal constant N_ASSETS = 6;
+
+    // ─── Receipt bucket labels (§4.1: off-chain only, never on chain) ─────────────────────────────────
+
+    uint256 internal constant BUCKET_AGENT = 0;
+    uint256 internal constant BUCKET_STABLE = 1;
+    uint256 internal constant BUCKET_PROTOCOL = 2;
+    uint256 internal constant BUCKET_RWA = 3;
+    uint256 internal constant N_BUCKETS = 4;
 
     // ─── Parameters (§5.6 suggested starts; fund guards as the vault families deploy them) ────────────
 
@@ -186,8 +192,13 @@ abstract contract PrototypeHarness is BaseFixture {
         _deployRebalancer();
         _deployGovernance();
         _wireRoles();
+        _beforeHandover();
         _handOverToTimelock();
     }
+
+    /// @dev Runs while this contract is still every deployer admin, right before the timelock handover. No-op by
+    ///      default. Phase 3c wires the auction executor here, so it needs no timelock call and no time shift.
+    function _beforeHandover() internal virtual {}
 
     function _deployTimelock() private {
         address[] memory proposers = new address[](1);
@@ -240,8 +251,7 @@ abstract contract PrototypeHarness is BaseFixture {
         vm.label(address(fund), "fund");
     }
 
-    /// @dev §4.1: stable sleeve = three lending venues (intra 40/30/30), protocol sleeve = wETH and cbBTC
-    ///      (50/50), RWA sleeve = deSPXA (100%). The agent sleeve has no asset and is pinned to 0.
+    /// @dev §4.1: a flat list of six assets. No sleeve, no intra-sleeve weight.
     function _addAssets() private {
         aaveAdapter = new AaveV3Adapter(AAVE_POOL, USDC, AAVE_A_USDC, address(fund));
         cometAdapter = new CompoundV3Adapter(COMET, USDC, address(fund));
@@ -257,20 +267,27 @@ abstract contract PrototypeHarness is BaseFixture {
         fund.setAdapterCodeHashAllowed(address(moonwellAdapter).codehash, true);
         fund.setAdapterCodeHashAllowed(address(swapAdapter).codehash, true);
 
-        assertEq(fund.addAsset(_lending(address(aaveAdapter), 4_000)), IDX_AAVE, "aave index");
-        assertEq(fund.addAsset(_lending(address(cometAdapter), 3_000)), IDX_COMET, "comet index");
-        assertEq(fund.addAsset(_lending(address(moonwellAdapter), 3_000)), IDX_MOONWELL, "moonwell index");
-        assertEq(fund.addAsset(_basket(SLEEVE_PROTOCOL, WETH, WETH_POOL, 5_000)), IDX_WETH, "weth index");
-        assertEq(fund.addAsset(_basket(SLEEVE_PROTOCOL, CBBTC, CBBTC_POOL, 5_000)), IDX_CBBTC, "cbbtc index");
-        assertEq(fund.addAsset(_basket(SLEEVE_RWA, DESPXA, DESPXA_POOL, 10_000)), IDX_DESPXA, "despxa index");
+        assertEq(fund.addAsset(_lending(address(aaveAdapter))), IDX_AAVE, "aave index");
+        assertEq(fund.addAsset(_lending(address(cometAdapter))), IDX_COMET, "comet index");
+        assertEq(fund.addAsset(_lending(address(moonwellAdapter))), IDX_MOONWELL, "moonwell index");
+        address basketAdapter = _basketAdapter(address(swapAdapter));
+        if (basketAdapter != address(swapAdapter)) fund.setAdapterCodeHashAllowed(basketAdapter.codehash, true);
+        assertEq(fund.addAsset(_basket(WETH, WETH_POOL, basketAdapter)), IDX_WETH, "weth index");
+        assertEq(fund.addAsset(_basket(CBBTC, CBBTC_POOL, basketAdapter)), IDX_CBBTC, "cbbtc index");
+        assertEq(fund.addAsset(_basket(DESPXA, DESPXA_POOL, basketAdapter)), IDX_DESPXA, "despxa index");
     }
 
-    function _lending(address adapter, uint16 intraBps) private pure returns (AssetConfig memory) {
+    /// @dev The swap adapter the basket assets use. The pool adapter by default. Phase 3c tests override it to
+    ///      put `AuctionStepExecutor` in front of it. Called once, after the fund exists and before any basket
+    ///      asset is added.
+    function _basketAdapter(address poolAdapter) internal virtual returns (address) {
+        return poolAdapter;
+    }
+
+    function _lending(address adapter) private pure returns (AssetConfig memory) {
         return AssetConfig({
             kind: AssetKind.Lending,
-            sleeve: SLEEVE_STABLE,
             active: true,
-            intraBps: intraBps,
             capBps: LENDING_CAP_BPS,
             adapter: adapter,
             token: address(0),
@@ -281,18 +298,12 @@ abstract contract PrototypeHarness is BaseFixture {
         });
     }
 
-    function _basket(uint8 sleeve, address token, address pool, uint16 intraBps)
-        private
-        view
-        returns (AssetConfig memory)
-    {
+    function _basket(address token, address pool, address adapter) private pure returns (AssetConfig memory) {
         return AssetConfig({
             kind: AssetKind.Basket,
-            sleeve: sleeve,
             active: true,
-            intraBps: intraBps,
             capBps: 0,
-            adapter: address(swapAdapter),
+            adapter: adapter,
             token: token,
             pool: pool,
             poolFee: POOL_FEE,
@@ -419,27 +430,19 @@ abstract contract PrototypeHarness is BaseFixture {
     //  Helpers: governance (§5.1)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @notice Record a well-formed consensus receipt for the sleeve vector `bps` ([agent, stable, protocol,
-    ///         rwa]) as the submitter. The payload is a canonical JSON string naming the four receipt buckets;
-    ///         `digest = keccak256(payload)` (kept in `receiptPayload[id]`), and `id` comes from the register's
-    ///         own `computeReceiptId`. Warps 1 s when needed so every receipt's `recordedAt` is strictly later
-    ///         than the previous one (governance refuses an older-or-equal receipt).
-    function recordReceipt(uint16[4] memory bps) internal returns (bytes32 id, bytes32 digest) {
+    /// @notice Record a well-formed schema 1.1 consensus receipt for the per-asset vector `v` (index-aligned to
+    ///         the fund's asset list) as the submitter. The payload is a canonical JSON string with the four
+    ///         bucket `weights` (the audit field, each the sum of its labelled assets) and the `assets` list
+    ///         (stable key, bucket label, weight). `digest = keccak256(payload)` (kept in `receiptPayload[id]`),
+    ///         and `id` comes from the register's own `computeReceiptId`. Warps 1 s when needed so every
+    ///         receipt's `recordedAt` is strictly later than the previous one (governance refuses an
+    ///         older-or-equal receipt).
+    function recordReceipt(uint16[6] memory v) internal returns (bytes32 id, bytes32 digest) {
         if (uint64(block.timestamp) <= _lastRecordedAt) vm.warp(uint256(_lastRecordedAt) + 1);
         uint256 n = ++_receiptNonce;
         string memory session = string.concat("proto-session-", vm.toString(n));
         string memory payload = string.concat(
-            '{"buckets":{"agent_tokens":',
-            vm.toString(uint256(bps[0])),
-            ',"conservative_defi_yield":',
-            vm.toString(uint256(bps[1])),
-            ',"protocol_tokens":',
-            vm.toString(uint256(bps[2])),
-            ',"real_world_assets":',
-            vm.toString(uint256(bps[3])),
-            '},"session_id":"',
-            session,
-            '","subject_id":"rmFUND"}'
+            '{"assets":', _assetsJson(v), ',"session_id":"', session, '","subject_id":"rmFUND","weights":', _bucketsJson(v), "}"
         );
         id = receipts.computeReceiptId(session, "rmFUND");
         digest = keccak256(bytes(payload));
@@ -449,37 +452,116 @@ abstract contract PrototypeHarness is BaseFixture {
         _lastRecordedAt = uint64(block.timestamp);
     }
 
+    function _assetsJson(uint16[6] memory v) private pure returns (string memory out) {
+        string[6] memory keys = ["aave-v3-usdc", "compound-v3-usdc", "morpho-usdc", "weth", "cbbtc", "despxa"];
+        string[4] memory labels = ["agent_tokens", "conservative_defi_yield", "protocol_tokens", "real_world_assets"];
+        out = "[";
+        for (uint256 i; i < N_ASSETS; ++i) {
+            out = string.concat(
+                out,
+                i == 0 ? "" : ",",
+                '{"asset":"',
+                keys[i],
+                '","sleeve":"',
+                labels[assetBucket(i)],
+                '","weight_bps":',
+                vm.toString(uint256(v[i])),
+                "}"
+            );
+        }
+        out = string.concat(out, "]");
+    }
+
+    function _bucketsJson(uint16[6] memory v) private pure returns (string memory) {
+        uint256[4] memory b = bucketsOf(v);
+        return string.concat(
+            '{"agent_tokens":',
+            vm.toString(b[BUCKET_AGENT]),
+            ',"conservative_defi_yield":',
+            vm.toString(b[BUCKET_STABLE]),
+            ',"protocol_tokens":',
+            vm.toString(b[BUCKET_PROTOCOL]),
+            ',"real_world_assets":',
+            vm.toString(b[BUCKET_RWA]),
+            "}"
+        );
+    }
+
     /// @notice Apply a recorded receipt through the timelock (schedule, warp `TIMELOCK_DELAY`, execute), the
     ///         only path RB-1 allows. Returns the opened plan id.
-    function applyReceiptViaTimelock(bytes32 id, bytes32 digest, uint16[4] memory bps)
+    function applyReceiptViaTimelock(bytes32 id, bytes32 digest, uint16[6] memory v)
         internal
         returns (uint256 planId)
     {
-        (uint8[] memory sleeves, uint256[] memory weights) = sleeveArrays(bps);
-        timelockExecute(address(governance), abi.encodeCall(governance.applyReceipt, (id, digest, sleeves, weights)));
+        (address[] memory assets, uint256[] memory weights) = assetArrays(v);
+        timelockExecute(address(governance), abi.encodeCall(governance.applyReceipt, (id, digest, assets, weights)));
         planId = fund.currentPlanId();
     }
 
-    /// @notice Record a receipt for `bps` and apply it through the timelock. Returns the plan id.
-    function recordAndApply(uint16[4] memory bps) internal returns (uint256 planId) {
-        (bytes32 id, bytes32 digest) = recordReceipt(bps);
-        planId = applyReceiptViaTimelock(id, digest, bps);
+    /// @notice Record a receipt for `v` and apply it through the timelock. Returns the plan id.
+    function recordAndApply(uint16[6] memory v) internal returns (uint256 planId) {
+        (bytes32 id, bytes32 digest) = recordReceipt(v);
+        planId = applyReceiptViaTimelock(id, digest, v);
     }
 
     /// @notice Open a receipt-less plan (`governance.setTarget`, ADMIN) through the timelock.
-    function setTargetViaTimelock(uint16[4] memory bps, PlanParams memory params) internal returns (uint256 planId) {
-        (uint8[] memory sleeves, uint256[] memory weights) = sleeveArrays(bps);
-        timelockExecute(address(governance), abi.encodeCall(governance.setTarget, (sleeves, weights, params)));
+    function setTargetViaTimelock(uint16[6] memory v, PlanParams memory params) internal returns (uint256 planId) {
+        (address[] memory assets, uint256[] memory weights) = assetArrays(v);
+        timelockExecute(address(governance), abi.encodeCall(governance.setTarget, (assets, weights, params)));
         planId = fund.currentPlanId();
     }
 
-    /// @notice The parallel (sleeve id, weight) arrays `applyReceipt` / `setTarget` take for `bps`.
-    function sleeveArrays(uint16[4] memory bps) internal pure returns (uint8[] memory ids, uint256[] memory w) {
-        ids = new uint8[](NUM_SLEEVES);
-        w = new uint256[](NUM_SLEEVES);
-        for (uint256 i; i < NUM_SLEEVES; ++i) {
-            ids[i] = uint8(i);
-            w[i] = bps[i];
+    /// @notice The asset id a target vector uses for fund asset `index` (`PlanMath.assetId`: the token for a
+    ///         basket asset, the adapter for a lending asset).
+    function assetIdOf(uint256 index) internal view returns (address) {
+        return PlanMath.assetId(fund.assetConfig(index));
+    }
+
+    /// @notice The parallel (asset id, weight) arrays `applyReceipt` / `setTarget` / `previewPlan` take for the
+    ///         index-aligned vector `v`. Every asset is listed, zeros included (§4.1).
+    function assetArrays(uint16[6] memory v) internal view returns (address[] memory ids, uint256[] memory w) {
+        ids = new address[](N_ASSETS);
+        w = new uint256[](N_ASSETS);
+        for (uint256 i; i < N_ASSETS; ++i) {
+            ids[i] = assetIdOf(i);
+            w[i] = v[i];
+        }
+    }
+
+    /// @notice An explicit per-asset vector [aave, comet, moonwell, wETH, cbBTC, deSPXA].
+    function assetVec(uint16 aave, uint16 comet, uint16 moonwell, uint16 weth, uint16 cbbtc, uint16 despxa)
+        internal
+        pure
+        returns (uint16[6] memory v)
+    {
+        v = [aave, comet, moonwell, weth, cbbtc, despxa];
+    }
+
+    /// @notice A per-asset vector written as bucket totals: the test's fixed split (lending 40/30/30, wETH and
+    ///         cbBTC 50/50, deSPXA 100%). Each asset gets its floor share and the bucket's last asset takes the
+    ///         rounding remainder. This is the split the earlier sleeve design used on chain, so the vectors
+    ///         and the plans they open are the same as before. It is a test-side helper, not a contract rule
+    ///         (§11 D8: a receipt carries its own per-asset weights).
+    function bucketVec(uint16 stable, uint16 protocol, uint16 rwa) internal pure returns (uint16[6] memory v) {
+        v[IDX_AAVE] = uint16(uint256(stable) * 4_000 / BPS);
+        v[IDX_COMET] = uint16(uint256(stable) * 3_000 / BPS);
+        v[IDX_MOONWELL] = stable - v[IDX_AAVE] - v[IDX_COMET];
+        v[IDX_WETH] = uint16(uint256(protocol) * 5_000 / BPS);
+        v[IDX_CBBTC] = protocol - v[IDX_WETH];
+        v[IDX_DESPXA] = rwa;
+    }
+
+    /// @notice The receipt bucket label of fund asset `index` (test-side table, §4.1).
+    function assetBucket(uint256 index) internal pure returns (uint256) {
+        if (index <= IDX_MOONWELL) return BUCKET_STABLE;
+        if (index <= IDX_CBBTC) return BUCKET_PROTOCOL;
+        return BUCKET_RWA;
+    }
+
+    /// @notice Bucket totals [agent, stable, protocol, rwa] of the per-asset vector `v` (the audit sums).
+    function bucketsOf(uint16[6] memory v) internal pure returns (uint256[4] memory b) {
+        for (uint256 i; i < N_ASSETS; ++i) {
+            b[assetBucket(i)] += v[i];
         }
     }
 
@@ -582,27 +664,19 @@ abstract contract PrototypeHarness is BaseFixture {
         return fund.currentWeightsBps();
     }
 
-    /// @notice Actual TWAP weight per sleeve [agent, stable, protocol, rwa] and of idle USDC, in bps of NAV,
-    ///         computed from `fund.portfolioValues()` (per-sleeve floor of the summed value, so it does not
-    ///         compound per-asset rounding).
-    function sleeveWeightsBps() internal view returns (uint256[4] memory bps, uint256 idleBps) {
+    /// @notice Actual TWAP weight per receipt bucket [agent, stable, protocol, rwa] and of idle USDC, in bps of
+    ///         NAV, from `fund.portfolioValues()` grouped by the test-side `assetBucket` labels (per-bucket floor
+    ///         of the summed value, so it does not compound per-asset rounding).
+    function bucketWeightsBps() internal view returns (uint256[4] memory bps, uint256 idleBps) {
         (uint256 nav, uint256 idle, uint256[] memory values) = fund.portfolioValues();
         if (nav == 0) return (bps, 0);
         uint256[4] memory sums;
-        AssetConfig[] memory cfgs = fund.assetConfigs();
         for (uint256 i; i < values.length; ++i) {
-            sums[cfgs[i].sleeve] += values[i];
+            sums[assetBucket(i)] += values[i];
         }
-        for (uint256 s; s < NUM_SLEEVES; ++s) {
-            bps[s] = sums[s] * BPS / nav;
+        for (uint256 b; b < N_BUCKETS; ++b) {
+            bps[b] = sums[b] * BPS / nav;
         }
         idleBps = idle * BPS / nav;
-    }
-
-    /// @notice A canonical sleeve vector [agent 0, stable, protocol, rwa].
-    function sleeveVec(uint16 stable, uint16 protocol, uint16 rwa) internal pure returns (uint16[4] memory v) {
-        v[1] = stable;
-        v[2] = protocol;
-        v[3] = rwa;
     }
 }

@@ -1,20 +1,12 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4.1 (asset target = sleeveBps × intraBps / 10 000),
+// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4.1 (per-asset target vector and its checks),
 //            §4.3 (deficit-first deposits), §5.1 (start snapshot), §5.2 (glide path), §5.3 step 3-4 (leg pick),
-//            §5.5 (toleranceBps convergence), §7 RB-7 (never past pathTarget)
+//            §5.5 (toleranceBps convergence), §7 RB-7 (never past pathTarget), RB-9 (vector checks)
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {
-    AssetConfig,
-    IFundEvents,
-    Plan,
-    NUM_SLEEVES,
-    SLEEVE_AGENT,
-    BPS,
-    IDLE_INDEX
-} from "./FundTypes.sol";
+import {AssetConfig, AssetKind, IFundEvents, Plan, BPS, IDLE_INDEX} from "./FundTypes.sol";
 
 /// @title PlanMath
 /// @notice The single home of the glide-path and weight math. Both `RobotMoneyFund` (start snapshot,
@@ -44,74 +36,62 @@ library PlanMath {
         uint256 under;
     }
 
-    // ─── Sleeve vectors (§4.1, §5.1) ─────────────────────────────────────────
+    // ─── Target vectors (§4.1, RB-9) ─────────────────────────────────────────
 
-    /// @notice Revert unless `sleeveBps` is a valid end target: sums to 10 000 and the agent sleeve
-    ///         is 0 (ADR-0017).
-    function validateSleeveBps(uint16[4] memory sleeveBps) internal pure {
-        if (sleeveBps[SLEEVE_AGENT] != 0) revert IFundEvents.AgentSleeveNotZero(sleeveBps[SLEEVE_AGENT]);
-        uint256 sum;
-        for (uint256 s; s < NUM_SLEEVES; ++s) {
-            sum += sleeveBps[s];
-        }
-        if (sum != BPS) revert IFundEvents.SleeveSumInvalid(sum);
+    /// @notice The id a target vector uses for fund asset `a`: its fund asset address. That is
+    ///         `token` for a Basket asset and `adapter` for a Lending asset.
+    function assetId(AssetConfig memory a) internal pure returns (address) {
+        return a.kind == AssetKind.Lending ? a.adapter : a.token;
     }
 
-    /// @notice Turn a receipt-shaped `(sleeves, bps)` pair into the canonical sleeve vector, then
-    ///         validate it (§5.1 step 2). `sleeves[k]` is a sleeve id (SLEEVE_*); each id may appear
-    ///         at most once; an omitted sleeve is 0.
-    /// @dev Reverts `InvalidParam` on a length mismatch, more than NUM_SLEEVES entries, an id
-    ///      >= NUM_SLEEVES, a duplicate id, or a bps value > 10 000.
-    function canonicalSleeveBps(uint8[] memory sleeves, uint256[] memory bps)
-        internal
-        pure
-        returns (uint16[4] memory out)
-    {
-        uint256 n = sleeves.length;
-        if (n != bps.length || n > NUM_SLEEVES) revert IFundEvents.InvalidParam();
-        bool[4] memory seen;
-        for (uint256 k; k < n; ++k) {
-            uint8 s = sleeves[k];
-            if (s >= NUM_SLEEVES || seen[s] || bps[k] > BPS) revert IFundEvents.InvalidParam();
-            seen[s] = true;
-            out[s] = uint16(bps[k]);
-        }
-        validateSleeveBps(out);
-    }
-
-    /// @notice Asset-level end targets: `sleeveBps[sleeve] × intraBps / 10 000` per active asset
-    ///         (§4.1). The floor-rounding remainder of each sleeve goes to that sleeve's LAST active
-    ///         asset, so each sleeve's asset targets sum to exactly `sleeveBps[sleeve]` and the
-    ///         whole vector sums to exactly 10 000 for a valid sleeve vector.
-    /// @dev Reverts `SleeveHasNoAssets` when a sleeve with a non-zero weight has no active asset,
-    ///      and `IntraSleeveSumInvalid` when a sleeve's active `intraBps` do not sum to 10 000 (a
-    ///      sleeve with zero weight is not checked). Inactive assets get 0.
-    function assetTargets(uint16[4] memory sleeveBps, AssetConfig[] memory assets)
+    /// @notice Turn a per-asset target vector `(ids, bps)` into index-aligned end targets over the
+    ///         fund's asset list `cfgs` (§4.1, §5.1 step 2). Inactive assets get 0. These are the
+    ///         only checks on a vector (§4.1, RB-9), each with its own error:
+    ///         - every listed id is an ACTIVE fund asset (`TargetAssetNotActive`);
+    ///         - no id is listed twice (`TargetAssetDuplicate`);
+    ///         - a Lending target is at or below its `capBps` (`TargetExceedsCap`);
+    ///         - the weights sum to 10 000 (`TargetSumInvalid`; a single weight above 10 000
+    ///           reverts at once and reports that weight);
+    ///         - every active asset is listed exactly once (`TargetAssetMissing`). An explicit 0
+    ///           sells an asset. Forgetting it never does.
+    ///         The per-entry checks run in list order, then the sum, then the missing-asset scan.
+    /// @dev Reverts `InvalidParam` when `ids` and `bps` differ in length. Ids are `assetId`.
+    function assetTargets(address[] memory ids, uint256[] memory bps, AssetConfig[] memory cfgs)
         internal
         pure
         returns (uint16[] memory targets)
     {
-        uint256 n = assets.length;
+        uint256 m = ids.length;
+        if (m != bps.length) revert IFundEvents.InvalidParam();
+        uint256 n = cfgs.length;
         targets = new uint16[](n);
-        for (uint8 s; s < NUM_SLEEVES; ++s) {
-            uint256 sw = sleeveBps[s];
-            if (sw == 0) continue;
-            uint256 intraSum;
-            uint256 given;
-            uint256 last = IDLE_INDEX;
-            for (uint256 i; i < n; ++i) {
-                AssetConfig memory a = assets[i];
-                if (!a.active || a.sleeve != s) continue;
-                intraSum += a.intraBps;
-                uint256 t = (sw * a.intraBps) / BPS;
-                targets[i] = uint16(t);
-                given += t;
-                last = i;
+        bool[] memory listed = new bool[](n);
+        uint256 sum;
+        for (uint256 k; k < m; ++k) {
+            uint256 i = _activeIndexOf(cfgs, ids[k]);
+            if (listed[i]) revert IFundEvents.TargetAssetDuplicate(ids[k]);
+            listed[i] = true;
+            uint256 b = bps[k];
+            if (b > BPS) revert IFundEvents.TargetSumInvalid(b);
+            if (cfgs[i].kind == AssetKind.Lending && b > cfgs[i].capBps) {
+                revert IFundEvents.TargetExceedsCap(i, b, cfgs[i].capBps);
             }
-            if (last == IDLE_INDEX) revert IFundEvents.SleeveHasNoAssets(s);
-            if (intraSum != BPS) revert IFundEvents.IntraSleeveSumInvalid(s, intraSum);
-            targets[last] += uint16(sw - given);
+            targets[i] = uint16(b);
+            sum += b;
         }
+        if (sum != BPS) revert IFundEvents.TargetSumInvalid(sum);
+        for (uint256 i; i < n; ++i) {
+            if (cfgs[i].active && !listed[i]) revert IFundEvents.TargetAssetMissing(assetId(cfgs[i]));
+        }
+    }
+
+    /// @dev Index of the ACTIVE entry whose `assetId` is `id`. `addAsset` keeps that entry unique.
+    ///      Reverts `TargetAssetNotActive` when no active entry matches (unknown or deactivated).
+    function _activeIndexOf(AssetConfig[] memory cfgs, address id) private pure returns (uint256) {
+        for (uint256 i; i < cfgs.length; ++i) {
+            if (cfgs[i].active && assetId(cfgs[i]) == id) return i;
+        }
+        revert IFundEvents.TargetAssetNotActive(id);
     }
 
     // ─── Weights ─────────────────────────────────────────────────────────────

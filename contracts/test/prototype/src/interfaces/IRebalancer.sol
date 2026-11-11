@@ -92,15 +92,17 @@ interface IRebalancer is IFundEvents {
 
     // ─── Previews (§5.7) ─────────────────────────────────────────────────────
 
-    /// @notice Preview a plan for a proposed sleeve vector at current TWAP. Per asset (index-
-    ///         aligned): current weight, the asset-level target (`PlanMath.assetTargets`),
-    ///         turnover `|target − current| × NAV / 10 000`, and estimated cost
-    ///         `turnover × fund.poolFeeBps(i) / 10 000`. Reverts on an invalid vector.
+    /// @notice Preview a plan for a proposed per-asset target vector at current TWAP. `assets`
+    ///         names each active asset by its fund asset address (`PlanMath.assetId`: `token` for
+    ///         Basket, `adapter` for Lending). `bps` is parallel. Per asset (index-aligned to the
+    ///         fund's list): current weight, the target, turnover `|target − current| × NAV /
+    ///         10 000`, and estimated cost `turnover × fund.poolFeeBps(i) / 10 000`. Reverts on a
+    ///         refused vector with the fund's §4.1 errors (RB-9).
     /// @return rows           Per-asset rows.
     /// @return totalTurnover  One-sided turnover: Σ max(target − current, 0) × NAV / 10 000
     ///                        (the same definition the fund uses for `plan.turnoverUsdc`).
     /// @return totalEstCost   Σ rows[i].estCostUsdc.
-    function previewPlan(uint16[4] calldata sleeveBps)
+    function previewPlan(address[] calldata assets, uint256[] calldata bps)
         external
         view
         returns (PlanPreviewRow[] memory rows, uint256 totalTurnover, uint256 totalEstCost);

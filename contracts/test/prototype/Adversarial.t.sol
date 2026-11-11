@@ -269,12 +269,12 @@ contract AdversarialTest is PrototypeHarness {
     //  §5.8 row 4: front-running a public receipt
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev A receipt raises the RWA sleeve. The plan buys deSPXA (the thin asset) slowly: every deSPXA buy is at
+    /// @dev A receipt raises the RWA bucket. The plan buys deSPXA (the thin asset) slowly: every deSPXA buy is at
     ///      most its small `maxStepUsdc`, and its holding never runs ahead of `pathTarget(now)` (RB-7), so a trader
     ///      positioned ahead of the public receipt faces a slow, capped buyer.
     function test_frontRunReceipt_thinAssetBoughtInCappedSlicesBehindPath() public fixtureCovered {
         _holdEverything();
-        recordAndApply(sleeveVec(4_000, 3_000, 3_000));
+        recordAndApply(bucketVec(4_000, 3_000, 3_000));
         // Three days in, the lending legs are over their path and deSPXA under it by more than its cap.
         vm.warp(block.timestamp + 3 days);
         uint256 despxaBuys;
@@ -436,7 +436,7 @@ contract AdversarialTest is PrototypeHarness {
     ///      a round trip every holder pays), and the next step does not sell an asset.
     function test_depositMidPlan_routesAlongPathNotPastIt() public fixtureCovered {
         deposit(alice, 100_000e6);
-        recordAndApply(sleeveVec(5_000, 5_000, 0));
+        recordAndApply(bucketVec(5_000, 5_000, 0));
         vm.warp(block.timestamp + 1 hours);
         deposit(bob, 50_000e6);
         (uint256 nav,, uint256[] memory values) = fund.portfolioValues();
@@ -458,7 +458,7 @@ contract AdversarialTest is PrototypeHarness {
     function test_venueFreeze_stallsOnlyThatAsset() public fixtureCovered {
         // Hold every asset (routed deposit), then retarget so deSPXA is the most underweight asset.
         uint256 spxaHeld = _holdEverything();
-        recordAndApply(sleeveVec(3_000, 4_000, 3_000));
+        recordAndApply(bucketVec(3_000, 4_000, 3_000));
         vm.warp(fund.plan().endTime);
         (,, uint256 firstBuy,) = rebalancer.previewStep();
         assertEq(firstBuy, IDX_DESPXA, "deSPXA is the first buy");
@@ -664,13 +664,13 @@ contract AdversarialTest is PrototypeHarness {
         address[6] memory callers =
             [address(this), keeper, stranger, address(timelock), address(rebalancer), emergency];
         PlanParams memory pp = PlanParams(PLAN_DURATION, COST_BUDGET_BPS);
-        (uint8[] memory ids, uint256[] memory w) = sleeveArrays(sleeveVec(10_000, 0, 0));
+        (address[] memory ids, uint256[] memory w) = assetArrays(bucketVec(10_000, 0, 0));
         for (uint256 i; i < callers.length; ++i) {
             vm.prank(callers[i]);
             vm.expectRevert(_unauthorized(callers[i], Roles.GOVERNANCE_ROLE));
-            fund.setTargetAndOpenPlan(sleeveVec(10_000, 0, 0), pp, bytes32(0));
+            fund.setTargetAndOpenPlan(ids, w, pp, bytes32(0));
         }
-        (bytes32 rid, bytes32 digest) = recordReceipt(sleeveVec(10_000, 0, 0));
+        (bytes32 rid, bytes32 digest) = recordReceipt(bucketVec(10_000, 0, 0));
         vm.prank(submitter);
         vm.expectRevert(_unauthorized(submitter, Roles.TARGET_SETTER_ROLE));
         governance.applyReceipt(rid, digest, ids, w);
@@ -747,9 +747,9 @@ contract AdversarialTest is PrototypeHarness {
             address(rebalancer), abi.encodeCall(rebalancer.setAssetStepParams, (IDX_CBBTC, AssetStepParams(0, 0)))
         );
         if (budgetBps == COST_BUDGET_BPS) {
-            planId = recordAndApply(sleeveVec(0, 10_000, 0));
+            planId = recordAndApply(bucketVec(0, 10_000, 0));
         } else {
-            planId = setTargetViaTimelock(sleeveVec(0, 10_000, 0), PlanParams(PLAN_DURATION, budgetBps));
+            planId = setTargetViaTimelock(bucketVec(0, 10_000, 0), PlanParams(PLAN_DURATION, budgetBps));
         }
         vm.warp(fund.plan().endTime);
         (SkipReason r, uint256 s, uint256 b,) = rebalancer.previewStep();
@@ -761,7 +761,7 @@ contract AdversarialTest is PrototypeHarness {
     /// @dev Plan to (60, 30, 10) at NAV 0, then a routed 100k deposit: the fund holds every asset. Returns the
     ///      deSPXA held.
     function _holdEverything() internal returns (uint256 spxaHeld) {
-        recordAndApply(sleeveVec(6_000, 3_000, 1_000));
+        recordAndApply(bucketVec(6_000, 3_000, 1_000));
         deposit(alice, 100_000e6);
         spxaHeld = IERC20(DESPXA).balanceOf(address(fund));
         assertGt(spxaHeld, 0, "fund holds deSPXA");

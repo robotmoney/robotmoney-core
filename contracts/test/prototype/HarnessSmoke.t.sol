@@ -43,7 +43,8 @@ contract HarnessSmokeTest is PrototypeHarness {
 
     /// @dev Receipt to plan through the timelock, a routed deposit, then a few keeper steps.
     function test_receiptPlanDepositStep() public fixtureCovered {
-        uint16[4] memory target = sleeveVec(6_000, 3_000, 1_000);
+        uint16[6] memory target = bucketVec(6_000, 3_000, 1_000);
+        uint256[4] memory tb = bucketsOf(target);
         uint256 planId = recordAndApply(target);
         assertEq(planId, 1, "first plan");
         assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Open), "open");
@@ -56,14 +57,14 @@ contract HarnessSmokeTest is PrototypeHarness {
         assertLe(nav, navBefore + amount, "nav <= deposit");
         assertGe(nav, navBefore + amount * (BPS - MAX_SLIPPAGE_BPS) / BPS, "nav >= floor");
 
-        (uint256[4] memory sw, uint256 idleBps) = sleeveWeightsBps();
-        assertEq(sw[0], 0, "agent sleeve empty");
+        (uint256[4] memory sw, uint256 idleBps) = bucketWeightsBps();
+        assertEq(sw[0], 0, "agent bucket empty");
         assertGt(sw[1], 0, "stable deployed");
         assertGt(sw[2], 0, "protocol bought");
         assertLe(sw[0] + sw[1] + sw[2] + sw[3] + idleBps, BPS, "weights <= 100%");
         // Deficit-first routing into a plan whose start equals its end (NAV 0 at open) lands near the target.
         for (uint256 s = 1; s < 4; ++s) {
-            assertApproxEqAbs(sw[s], target[s], 100, "sleeve near target after routed deposit");
+            assertApproxEqAbs(sw[s], tb[s], 100, "bucket near target after routed deposit");
         }
         (uint256[] memory aw,) = assetWeightsBps();
         assertEq(aw.length, N_ASSETS, "asset weights aligned");

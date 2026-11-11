@@ -22,9 +22,11 @@ import {
     IFundEvents,
     BPS,
     IDLE_INDEX,
-    AssetKind
+    AssetKind,
+    Roles
 } from "../src/FundTypes.sol";
 import {PlanMath} from "../src/PlanMath.sol";
+import {AuctionStepExecutor, IAuctionFiller} from "../src/AuctionStepExecutor.sol";
 import {SimLib} from "./SimLib.sol";
 
 interface ISimPool {
@@ -32,6 +34,18 @@ interface ISimPool {
     function liquidity() external view returns (uint128);
     function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool);
     function observe(uint32[] calldata secondsAgos) external view returns (int56[] memory, uint160[] memory);
+    function tickSpacing() external view returns (int24);
+    function mint(address recipient, int24 tickLower, int24 tickUpper, uint128 amount, bytes calldata data)
+        external
+        returns (uint256 amount0, uint256 amount1);
+    function burn(int24 tickLower, int24 tickUpper, uint128 amount) external returns (uint256 amount0, uint256 amount1);
+    function collect(
+        address recipient,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 amount0Requested,
+        uint128 amount1Requested
+    ) external returns (uint128 amount0, uint128 amount1);
 }
 
 /// @notice One-vault experiment, plan Step 3: the rebalance simulation behind gates G4 (cost) and G5 (convergence).
@@ -60,7 +74,32 @@ interface ISimPool {
 ///         timelock (the Safe's only path), then runs the same scenarios and seeds into out/prototype/tuned/.
 ///         Each tuned value is an env var PROTO_SIM_TUNED_<NAME> that falls back to the harness default, so the
 ///         tuned set is declared on the command line and written into every JSON (see `_applyTuned`).
-contract RebalanceSimTest is PrototypeHarness {
+///         PROTO_SIM_RUN=auction (phase 3c) keeps every default parameter and puts `AuctionStepExecutor` in front of
+///         the pool adapter. Each basket leg of a step is then a Dutch auction against its TWAP, filled by one
+///         modelled solver (`_auctionDecide`, `onAuctionLeg`). The model note at the top of
+///         src/AuctionStepExecutor.sol states every solver, fill price and latency assumption.
+///
+///         LP model (phase 3c, G5 fallback). PROTO_SIM_LP=static (or unset) holds every recorded LP position fixed:
+///         this is the scored run. PROTO_SIM_LP=recenter is a sensitivity switch on top of any PROTO_SIM_RUN. It
+///         writes to out/prototype/<run>-lprecenter/ and never changes the scored run. Its assumptions:
+///         - Trigger. At each slot start (before the keeper) the sim reads each basket pool's active liquidity. A
+///           pool with less than 1/100 of its pin liquidity is "outside", the same test as LEFT-PIN-LP-RANGE.
+///         - Lag. Liquidity returns only after the pool has been seen outside for LP_RECENTER_LAG_SEC (6 h, so 12
+///           to 13 slots). Until then the pool trades on whatever thin liquidity the pin left there.
+///         - Depth. One modelled LP then mints a single position of LP_RECENTER_DEPTH_BPS (50%) of the pin's
+///           active liquidity L. So near its centre the pool has half the pin's depth, never more.
+///         - Range. The position spans LP_RECENTER_HALF_WIDTH_TICKS (500 ticks, about 5% of price) each side of the
+///           pool's spot tick at the mint, rounded outward to the tick spacing. It is centred on the pool's own
+///           price, not on the reference: an LP manager sees the pool, not the fair value. So off-hours deSPXA
+///           impact the fund left in the price stays in the centre.
+///         - Move, not add. If the pool leaves that position too, the LP waits the lag again, then burns it and
+///           mints a new one at the new price. When the pin's own liquidity is active again (pool liquidity net of
+///           the modelled position >= 1/100 of the pin's), the modelled position is burned at once. It stands
+///           for pin LPs that moved, so it is never counted twice.
+///         - Funding. The sim mints the tokens the position needs, as the arbitrageur does. No price is set.
+///         Every number above is an assumption, not a measurement. The pin holds no history of how Base LPs on
+///         these pools respond to a 10% gap, so the result is a sensitivity, never the G5 verdict.
+contract RebalanceSimTest is PrototypeHarness, IAuctionFiller {
     using Math for uint256;
 
     // ─── Scenarios ─────────────────────────────────────────────────────────────────────────────────────
@@ -108,6 +147,35 @@ contract RebalanceSimTest is PrototypeHarness {
     /// @dev A pool counts as out of its pin LP range when its active liquidity is under 1/100 of the pin's.
     uint256 internal constant OUT_OF_RANGE_L_DIV = 100;
 
+    // ─── LP re-centre sensitivity (phase 3c, PROTO_SIM_LP=recenter). See the LP model in the contract note. ──
+
+    uint256 internal constant LP_RECENTER_LAG_SEC = 6 hours;
+    uint256 internal constant LP_RECENTER_DEPTH_BPS = 5_000;
+    int24 internal constant LP_RECENTER_HALF_WIDTH_TICKS = 500;
+
+    // ─── Auction run (phase 3c). See the model note in src/AuctionStepExecutor.sol. ──────────────────────
+
+    /// @dev Seconds from the open to the floor, and the owed premium over TWAP at the open.
+    uint32 internal constant AUCTION_DURATION = 300;
+    uint16 internal constant AUCTION_START_PREMIUM_BPS = 50;
+    /// @dev Base block time. The solver fills on this grid, one block after its price is met.
+    uint256 internal constant BLOCK_SEC = 2;
+    uint256 internal constant FILL_LATENCY_SEC = 2;
+    /// @dev The solver re-quotes at its fill block at most this many times. Past that the auction lapses.
+    uint256 internal constant AUCTION_REQUOTES = 4;
+    /// @dev The solver keeps this margin of each leg's output, plus this much gas per leg.
+    uint256 internal constant SOLVER_MARGIN_BPS = 5;
+    uint256 internal constant SOLVER_GAS_USDC = 250_000;
+    /// @dev External venue cost below the reference: wETH and cbBTC at any hour (CEX), deSPXA in US hours only.
+    uint256 internal constant EXT_MAJOR_BPS = 15;
+    uint256 internal constant EXT_DESPXA_BPS = 25;
+    uint8 internal constant VENUE_POOL = 1;
+    uint8 internal constant VENUE_EXTERNAL = 2;
+    /// @dev How the keeper call of one slot runs in the auction run.
+    uint8 internal constant MODE_KEEPER = 0;
+    uint8 internal constant MODE_FILL = 1;
+    uint8 internal constant MODE_LAPSE = 2;
+
     /// @dev Pre/post snapshot of the fund, all in one block.
     struct Snap {
         uint256 nav;
@@ -147,7 +215,10 @@ contract RebalanceSimTest is PrototypeHarness {
         uint256 failProbes;
         string failReasons;
         string flowFailReason;
+        /// @dev Actual TWAP weight per receipt bucket [agent, stable, protocol, rwa] at open (test-side labels).
         uint256[4] startSleeve;
+        /// @dev Bucket totals of the plan's per-asset target (the audit sums; the fund stores no sleeve).
+        uint256[4] endSleeve;
         uint256 startNav;
         /// @dev Execution cost against the reference walk (the model's fair price), not the pre-step spot.
         int256 execCostRef;
@@ -162,6 +233,23 @@ contract RebalanceSimTest is PrototypeHarness {
         /// @dev Peak fund deSPXA holdings, bps of the pool's deSPXA reserve and of deSPXA totalSupply.
         uint256 maxDespxaPoolShareBps;
         uint256 maxDespxaSupplyShareBps;
+        /// @dev Auction run only (written to JSON only in that run).
+        uint256 auctionOpens;
+        uint256 auctionFills;
+        uint256 auctionLapses;
+        uint256 auctionFillReverts;
+        uint256 auctionDelaySumSec;
+        uint256 poolLegs;
+        uint256 externalLegs;
+        uint256 solverShortLegs;
+        int256 solverPnlRef;
+        /// @dev LP re-centre run only (written to JSON only in that run), per basket pool.
+        uint256[3] lpRecenters;
+        uint256[3] lpWithdrawals;
+        /// @dev Keeper calls with the pool's total active liquidity, modelled position included, < 1% of the pin's.
+        uint256[3] lpThinCalls;
+        /// @dev Keeper calls with the modelled position in range.
+        uint256[3] lpModelCalls;
     }
 
     // ─── Run state ─────────────────────────────────────────────────────────────────────────────────────
@@ -202,6 +290,29 @@ contract RebalanceSimTest is PrototypeHarness {
     Acc internal acc;
     Snap internal lastPost;
     string[] internal planJson;
+
+    /// @dev Auction run: the executor, and the venue the solver chose per basket token for the coming fill.
+    bool internal auctionRun;
+    /// @dev PROTO_SIM_PROBE=1: name the revert of the first failed steps per plan (`stepFailProbes`).
+    bool internal failProbe;
+    /// @dev Call `previewStep` before each keeper step: for the auction run and the probe, or with
+    ///      PROTO_SIM_CHECK=1 to assert that it predicts what `step()` then does. A scored run reads the notional
+    ///      from the `RebalanceStep` event instead, since a preview runs the Rebalancer's whole decision again.
+    bool internal previewOn;
+    /// @dev The pre-step `portfolioValues` of the current keeper call, reused by `_observeMarket` (same state).
+    uint256 internal kNav;
+    uint256[] internal kValues;
+    AuctionStepExecutor internal auctionExec;
+    mapping(address token => uint8 venue) internal solverVenue;
+    uint256 internal auctionFailSelector;
+
+    /// @dev LP re-centre run: the switch, and the one modelled position per basket pool (lpL 0 = none).
+    bool internal lpRecenter;
+    int24[3] internal lpLower;
+    int24[3] internal lpUpper;
+    uint128[3] internal lpL;
+    /// @dev First slot start the pool was seen outside, 0 while it is not.
+    uint256[3] internal lpOutsideSince;
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
     //  Tests: one per (scenario, fund, seed), so each stays under the memory limit and runs in parallel.
@@ -275,53 +386,72 @@ contract RebalanceSimTest is PrototypeHarness {
     //  Driver
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
+    /// @dev The sim skips the per-slot fixture coverage check unless PROTO_FIXTURE_CHECK=1. The recorder's replay
+    ///      passes set it, so every fixture is checked against the full sim once. See BaseFixture.
+    function _fixtureCheckByDefault() internal pure override returns (bool) {
+        return false;
+    }
+
     function _run(uint256 scn, uint256 fundM, uint256 k) internal {
         if (!vm.envOr("PROTO_SIM", false)) {
             vm.skip(true);
             return;
         }
-        // Thousands of real swaps exceed forge's per-test gas. Nothing under test reads the meter except the
-        // Rebalancer's gas-starvation guard, which then never fires (as in EndToEnd).
-        vm.pauseGasMetering();
+        // Gas stays metered: paused metering costs forge work on every opcode. A plan burns about 1.5e9 gas, more
+        // than forge's per-test limit, so the loops refill the meter each slot (vm.resetGasMetering, top frame).
+        // A slot uses a few million gas, so the Rebalancer's gas-starvation guard never fires.
         _selectParams();
         _initSim(scn, fundM * 1_000_000e6, k);
         _genesis();
         _fixtureCheckpoint();
 
-        (uint16[4][] memory vecs, string[] memory labels) = _sequence(scn);
+        (uint16[6][] memory vecs, string[] memory labels) = _sequence(scn);
         for (uint256 i; i < vecs.length; ++i) {
             _runPlan(vecs[i], labels[i]);
             _fixtureCheckpoint();
             // One idle slot (noise, arb, flows; no keeper) before the next receipt.
+            vm.resetGasMetering();
             if (i + 1 < vecs.length) this.simSlot(false);
         }
         _writeJson(fundM);
-        vm.resumeGasMetering();
     }
 
-    function _sequence(uint256 scn) internal pure returns (uint16[4][] memory v, string[] memory l) {
+    /// @dev Per-asset receipt vectors [aave, comet, moonwell, wETH, cbBTC, deSPXA], exactly the `asset_bps` of
+    ///      contracts/test/prototype/fixtures/receipt/sim-asset-vectors.json: the targets the sleeve design
+    ///      produced, so G4 and G5 are comparable with the §14 baseline. `_vec` checks each one against the
+    ///      bucket totals it came from.
+    function _sequence(uint256 scn) internal pure returns (uint16[6][] memory v, string[] memory l) {
         if (scn == SCN_SEQ) {
-            v = new uint16[4][](4);
+            v = new uint16[6][](4);
             l = new string[](4);
             // R1' = deploy-2 receipt 0xdcf4.. with its 575 agent bps folded into stable (ADR-0017).
-            (v[0], l[0]) = (_vec(9_125, 525, 350), "R1p");
-            (v[1], l[1]) = (_vec(9_500, 500, 0), "d05");
-            (v[2], l[2]) = (_vec(8_000, 1_000, 1_000), "d07");
-            (v[3], l[3]) = (_vec(7_000, 1_500, 1_500), "d08");
+            (v[0], l[0]) = (_vec(assetVec(3_650, 2_737, 2_738, 262, 263, 350), 9_125, 525, 350), "R1p");
+            (v[1], l[1]) = (_vec(assetVec(3_800, 2_850, 2_850, 250, 250, 0), 9_500, 500, 0), "d05");
+            (v[2], l[2]) = (_vec(assetVec(3_200, 2_400, 2_400, 500, 500, 1_000), 8_000, 1_000, 1_000), "d07");
+            (v[3], l[3]) = (_vec(assetVec(2_800, 2_100, 2_100, 750, 750, 1_500), 7_000, 1_500, 1_500), "d08");
         } else if (scn == SCN_EXT || scn == SCN_EXT_PROBE) {
-            v = new uint16[4][](2);
+            v = new uint16[6][](2);
             l = new string[](2);
-            (v[0], l[0]) = (_vec(0, 5_000, 5_000), "X");
-            (v[1], l[1]) = (_vec(10_000, 0, 0), "G");
+            (v[0], l[0]) = (_vec(assetVec(0, 0, 0, 2_500, 2_500, 5_000), 0, 5_000, 5_000), "X");
+            (v[1], l[1]) = (_vec(assetVec(4_000, 3_000, 3_000, 0, 0, 0), 10_000, 0, 0), "G");
         } else {
-            v = new uint16[4][](1);
+            v = new uint16[6][](1);
             l = new string[](1);
-            (v[0], l[0]) = (_vec(8_000, 1_000, 1_000), "d07");
+            (v[0], l[0]) = (_vec(assetVec(3_200, 2_400, 2_400, 500, 500, 1_000), 8_000, 1_000, 1_000), "d07");
         }
     }
 
-    function _vec(uint16 stable, uint16 protocol, uint16 rwa) internal pure returns (uint16[4] memory) {
-        return sleeveVec(stable, protocol, rwa);
+    /// @dev Returns `v` after checking it equals the fixed bucket split of (stable, protocol, rwa) (`bucketVec`).
+    function _vec(uint16[6] memory v, uint16 stable, uint16 protocol, uint16 rwa)
+        internal
+        pure
+        returns (uint16[6] memory)
+    {
+        uint16[6] memory b = bucketVec(stable, protocol, rwa);
+        for (uint256 i; i < 6; ++i) {
+            require(v[i] == b[i], "sim vector != bucket split");
+        }
+        return v;
     }
 
     function _scnName(uint256 scn) internal pure returns (string memory) {
@@ -337,9 +467,21 @@ contract RebalanceSimTest is PrototypeHarness {
     /// @dev PROTO_SIM_RUN picks the parameter set. "default" changes nothing. "tuned" applies `_applyTuned`.
     function _selectParams() internal {
         runName = vm.envOr("PROTO_SIM_RUN", string("default"));
+        failProbe = vm.envOr("PROTO_SIM_PROBE", false);
+        previewOn = failProbe || vm.envOr("PROTO_SIM_CHECK", false) || _isAuctionEnv();
         bytes32 r = keccak256(bytes(runName));
-        require(r == keccak256("default") || r == keccak256("tuned"), "PROTO_SIM_RUN must be default or tuned");
+        require(
+            r == keccak256("default") || r == keccak256("tuned") || r == keccak256("auction"),
+            "PROTO_SIM_RUN must be default, tuned or auction"
+        );
         if (r == keccak256("tuned")) _applyTuned();
+        if (r == keccak256("auction")) {
+            require(address(auctionExec) != address(0), "auction run: executor not deployed");
+            auctionRun = true;
+        }
+        bytes32 lp = keccak256(bytes(vm.envOr("PROTO_SIM_LP", string("static"))));
+        require(lp == keccak256("static") || lp == keccak256("recenter"), "PROTO_SIM_LP must be static or recenter");
+        lpRecenter = lp == keccak256("recenter");
         PlanParams memory pp = governance.defaultPlanParams();
         uint256 interval = rebalancer.effectiveStepInterval();
         maxPlanSlots = (uint256(pp.duration) + rebalancer.stepParams().maxOverrun) / interval + LOOP_SLACK_SLOTS;
@@ -386,6 +528,30 @@ contract RebalanceSimTest is PrototypeHarness {
         pp.duration = uint64(vm.envOr("PROTO_SIM_TUNED_PLAN_DURATION", uint256(TUNED_PLAN_DURATION)));
         pp.costBudgetBps = uint16(vm.envOr("PROTO_SIM_TUNED_COST_BUDGET_BPS", uint256(pp.costBudgetBps)));
         timelockExecute(address(governance), abi.encodeCall(governance.setDefaultPlanParams, (pp)));
+    }
+
+    // ─── Auction run wiring (phase 3c) ─────────────────────────────────────────────────────────────────
+
+    function _isAuctionEnv() internal view returns (bool) {
+        return keccak256(bytes(vm.envOr("PROTO_SIM_RUN", string("default")))) == keccak256("auction");
+    }
+
+    /// @dev Auction run only: the executor sits in front of the pool adapter for every basket asset. Other runs
+    ///      keep the pool adapter, so their setup and every address they touch are unchanged.
+    function _basketAdapter(address poolAdapter) internal override returns (address) {
+        if (!_isAuctionEnv()) return poolAdapter;
+        auctionExec =
+            new AuctionStepExecutor(poolAdapter, address(fund), USDC, AUCTION_DURATION, AUCTION_START_PREMIUM_BPS);
+        vm.label(address(auctionExec), "auctionExecutor");
+        return address(auctionExec);
+    }
+
+    /// @dev Auction run only: bind the Rebalancer and grant the executor KEEPER_ROLE as the deployer admin, before
+    ///      the timelock handover. No timelock call, so the run's clock matches the default run's.
+    function _beforeHandover() internal override {
+        if (address(auctionExec) == address(0)) return;
+        auctionExec.bindRebalancer(address(rebalancer));
+        rebalancer.grantRole(Roles.KEEPER_ROLE, address(auctionExec));
     }
 
     // ─── Setup at the pin ──────────────────────────────────────────────────────────────────────────────
@@ -456,9 +622,9 @@ contract RebalanceSimTest is PrototypeHarness {
     /// @dev Genesis: a receipt-less 100%-stable (or d05) target at NAV 0, then the fund's money in 1M (5M: five
     ///      deposits at the per-deposit cap; 1M: four 250k deposits). Deposits route straight to target.
     function _genesis() internal {
-        uint16[4] memory g = (scenario == SCN_JUMP_DOWN || scenario == SCN_JUMP_UP)
-            ? _vec(9_500, 500, 0)
-            : _vec(10_000, 0, 0);
+        uint16[6] memory g = (scenario == SCN_JUMP_DOWN || scenario == SCN_JUMP_UP)
+            ? _vec(assetVec(3_800, 2_850, 2_850, 250, 250, 0), 9_500, 500, 0)
+            : _vec(assetVec(4_000, 3_000, 3_000, 0, 0, 0), 10_000, 0, 0);
         setTargetViaTimelock(g, governance.defaultPlanParams());
         uint256 n = fundSize > 1_000_000e6 ? fundSize / PER_DEPOSIT_CAP : 4;
         for (uint256 i; i < n; ++i) {
@@ -470,10 +636,11 @@ contract RebalanceSimTest is PrototypeHarness {
 
     // ─── One plan ──────────────────────────────────────────────────────────────────────────────────────
 
-    function _runPlan(uint16[4] memory vec, string memory label) internal {
+    function _runPlan(uint16[6] memory vec, string memory label) internal {
         this.simOpen(vec, label);
         _at(vm.getBlockTimestamp() + rebalancer.effectiveStepInterval());
         for (uint256 s; s < maxPlanSlots && fund.planStatus() == PlanStatus.Open; ++s) {
+            vm.resetGasMetering();
             this.simSlot(true);
             if (s % CHECKPOINT_EVERY == CHECKPOINT_EVERY - 1) _fixtureCheckpoint();
         }
@@ -481,14 +648,15 @@ contract RebalanceSimTest is PrototypeHarness {
     }
 
     /// @notice Self-call: open the plan through the receipt and timelock path and reset the accumulators.
-    function simOpen(uint16[4] calldata vec, string calldata label) external {
+    function simOpen(uint16[6] calldata vec, string calldata label) external {
         require(msg.sender == address(this), "self only");
-        (uint256[4] memory sw,) = sleeveWeightsBps();
+        (uint256[4] memory sw,) = bucketWeightsBps();
         uint256 navBefore = fund.totalAssets();
         uint256 id = recordAndApply(vec);
         delete acc;
         acc.planId = id;
         acc.startSleeve = sw;
+        acc.endSleeve = bucketsOf(vec);
         acc.startNav = navBefore;
         planLabel = label;
         ++planIndex;
@@ -500,6 +668,7 @@ contract RebalanceSimTest is PrototypeHarness {
     function simSlot(bool withKeeper) external {
         require(msg.sender == address(this), "self only");
         uint256 t0 = vm.getBlockTimestamp();
+        if (lpRecenter) _lpRespond();
         if (withKeeper) _keeper();
         _at(t0 + 600);
         _noise();
@@ -507,7 +676,10 @@ contract RebalanceSimTest is PrototypeHarness {
         _arb();
         _at(t0 + 1500);
         _flow();
-        _at(t0 + rebalancer.effectiveStepInterval());
+        uint256 interval = rebalancer.effectiveStepInterval();
+        // Auction run: the cooldown counts from the fill, so a filled slot lasts the interval plus the fill delay.
+        if (auctionRun) _at(Math.max(t0 + interval, uint256(fund.lastStepAt()) + interval));
+        else _at(t0 + interval);
         ++slotIndex;
         ++acc.slots;
     }
@@ -521,18 +693,26 @@ contract RebalanceSimTest is PrototypeHarness {
     // ─── Keeper ────────────────────────────────────────────────────────────────────────────────────────
 
     function _keeper() internal {
-        (SkipReason predicted,,, uint256 notional) = rebalancer.previewStep();
-        Snap memory pre = _snap();
+        // Auction run: open the auction and let the solver pick its fill time first. It may warp.
+        uint8 mode = auctionRun ? _auctionDecide() : MODE_KEEPER;
+        SkipReason predicted;
+        uint256 notional;
+        if (previewOn) (predicted,,, notional) = rebalancer.previewStep();
+        if (mode == MODE_FILL && predicted != SkipReason.None) mode = MODE_KEEPER;
+        Snap memory pre = _snapKeeper();
         _attribute(pre);
         uint160[3] memory spot = _spots();
         uint256 spentBefore = fund.plan().costSpent;
         // The first few failures per plan are replayed against the fund to name the revert (diagnostic only).
-        bool probe = predicted == SkipReason.None && acc.failProbes < MAX_FAIL_PROBES;
+        // Opt-in (PROTO_SIM_PROBE=1): the probe snapshots the whole state before every step that may trade.
+        bool probe = failProbe && predicted == SkipReason.None && acc.failProbes < MAX_FAIL_PROBES && !auctionRun;
         uint256 snap = probe ? vm.snapshotState() : 0;
         bool maskedOff = _observeMarket();
 
         vm.recordLogs();
-        (bool did, SkipReason why) = keeperStep();
+        (bool did, SkipReason why) = mode == MODE_FILL
+            ? _auctionFill()
+            : mode == MODE_LAPSE ? (false, SkipReason.StepFailed) : keeperStep();
         VmSafe.Log[] memory logs = vm.getRecordedLogs();
         Snap memory post = _snap();
         assertEq(post.supply, pre.supply, "a step mints and burns nothing");
@@ -550,16 +730,17 @@ contract RebalanceSimTest is PrototypeHarness {
             assertEq(post.nav, pre.nav, "skip: NAV unchanged");
             assertEq(fund.plan().costSpent, spentBefore, "skip: no cost");
             if (why == SkipReason.StepFailed) {
-                acc.lastFailSelector = _failSelector(logs);
+                acc.lastFailSelector = mode == MODE_KEEPER ? _failSelector(logs) : auctionFailSelector;
                 if (probe) _probeFailure(snap);
-            } else {
+            } else if (previewOn) {
                 assertEq(uint8(why), uint8(predicted), "previewStep predicts the skip");
             }
             if (probe) vm.deleteStateSnapshot(snap);
             return;
         }
         if (probe) vm.deleteStateSnapshot(snap);
-        assertEq(uint8(predicted), uint8(SkipReason.None), "previewStep predicts the trade");
+        if (previewOn) assertEq(uint8(predicted), uint8(SkipReason.None), "previewStep predicts the trade");
+        else notional = _stepNotional(logs);
         _booked(pre, post, spot, notional, spentBefore);
         if (fund.planStatus() != PlanStatus.Open) _concluded();
     }
@@ -569,7 +750,12 @@ contract RebalanceSimTest is PrototypeHarness {
     ///      blocked even when step() reports NothingToTrade or BelowMinStep for the remaining legs.
     function _observeMarket() internal returns (bool maskedOff) {
         for (uint256 b; b < N_BASKET; ++b) {
-            if (uint256(ISimPool(pools[b]).liquidity()) * OUT_OF_RANGE_L_DIV < pinL[b]) ++acc.outOfRangeCalls[b];
+            // The pin range test counts only the pin's own liquidity, net of any modelled LP position.
+            uint256 total = ISimPool(pools[b]).liquidity();
+            if ((total - _ownActiveL(b)) * OUT_OF_RANGE_L_DIV < pinL[b]) ++acc.outOfRangeCalls[b];
+            if (!lpRecenter) continue;
+            if (total * OUT_OF_RANGE_L_DIV < pinL[b]) ++acc.lpThinCalls[b];
+            if (_ownActiveL(b) > 0) ++acc.lpModelCalls[b];
         }
         uint256 q = IERC20(DESPXA).balanceOf(address(fund));
         uint256 poolBal = IERC20(DESPXA).balanceOf(DESPXA_POOL);
@@ -578,7 +764,8 @@ contract RebalanceSimTest is PrototypeHarness {
         if (supply > 0 && q * BPS / supply > acc.maxDespxaSupplyShareBps) acc.maxDespxaSupplyShareBps = q * BPS / supply;
 
         Plan memory p = fund.plan();
-        (uint256 nav,, uint256[] memory values) = fund.portfolioValues();
+        uint256 nav = kNav;
+        uint256[] memory values = kValues;
         uint256 minStep = rebalancer.stepParams().minStepUsdc;
         for (uint256 b; b < N_BASKET; ++b) {
             uint256 i = IDX_WETH + b;
@@ -719,6 +906,18 @@ contract RebalanceSimTest is PrototypeHarness {
         o.maxCostUsdc = notional.mulDiv(rebalancer.stepParams().maxStepCostBps, BPS);
     }
 
+    /// @dev The notional of the step `logs` hold (the Rebalancer's `RebalanceStep` event).
+    function _stepNotional(VmSafe.Log[] memory logs) internal view returns (uint256) {
+        bytes32 sig = IFundEvents.RebalanceStep.selector;
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].emitter == address(rebalancer) && logs[i].topics[0] == sig) {
+                (,, uint256 notional) = abi.decode(logs[i].data, (uint256, uint256, uint256));
+                return notional;
+            }
+        }
+        revert("executed step without RebalanceStep");
+    }
+
     function _failSelector(VmSafe.Log[] memory logs) internal view returns (uint256) {
         bytes32 sig = IFundEvents.RebalanceStepSkipped.selector;
         for (uint256 i; i < logs.length; ++i) {
@@ -747,6 +946,227 @@ contract RebalanceSimTest is PrototypeHarness {
         acc.interest += interest;
         if (resid < 0) acc.unexplainedDrop += uint256(-resid);
         acc.residualAbs += resid < 0 ? uint256(-resid) : uint256(resid);
+    }
+
+    // ─── Auction run: solver model (phase 3c) ──────────────────────────────────────────────────────────
+
+    /// @dev At the slot's keeper time. When the Rebalancer would trade a basket leg, the keeper opens the auction
+    ///      and the solver picks its fill time from its reservation per leg (`_solverPlan`). Then this warps to
+    ///      that time (MODE_FILL), or the auction lapses unfilled (MODE_LAPSE, booked as a blocked StepFailed
+    ///      attempt). Steps with no basket leg, and skips, go to the keeper's plain `step()` (MODE_KEEPER).
+    function _auctionDecide() internal returns (uint8) {
+        (SkipReason r, uint256 sell, uint256 buy, uint256 notional) = rebalancer.previewStep();
+        if (r != SkipReason.None) return MODE_KEEPER;
+        bool sellB = _isBasket(sell);
+        bool buyB = _isBasket(buy);
+        if (!sellB && !buyB) return MODE_KEEPER;
+        vm.prank(keeper);
+        auctionExec.open();
+        ++acc.auctionOpens;
+        uint256 opened = vm.getBlockTimestamp();
+        (bool ok, uint256 e, string memory why) = _solverPlan(sell, buy, notional, sellB, buyB);
+        if (ok) (ok, why) = _solverRequote(opened, e);
+        if (!ok) {
+            ++acc.auctionLapses;
+            auctionFailSelector = 0;
+            _auctionNote(string.concat("lapse:", vm.toString(sell), ">", vm.toString(buy), ":", vm.toString(notional), ":", why));
+            return MODE_LAPSE;
+        }
+        return MODE_FILL;
+    }
+
+    /// @dev The solver re-quotes at its fill block (the TWAP, the path notional and the floor move with time). It
+    ///      sends the fill only when the owed amount there is still within its reservation. Otherwise it waits for
+    ///      the new fill block and re-quotes again, at most `AUCTION_REQUOTES` times. Warps to the fill block.
+    ///      True when the fill goes out (or the Rebalancer no longer trades, which `_keeper` then books as a skip).
+    function _solverRequote(uint256 opened, uint256 e) internal returns (bool, string memory) {
+        for (uint256 k; k < AUCTION_REQUOTES; ++k) {
+            _at(opened + e);
+            (SkipReason r, uint256 sell, uint256 buy, uint256 notional) = rebalancer.previewStep();
+            if (r != SkipReason.None) return (true, "");
+            (bool ok, uint256 e2, string memory why) =
+                _solverPlan(sell, buy, notional, _isBasket(sell), _isBasket(buy));
+            if (!ok) return (false, string.concat("requote:", why));
+            if (e2 <= e) return (true, "");
+            e = e2;
+        }
+        _at(opened + e);
+        return (false, "requote-unsettled");
+    }
+
+    /// @dev The solver's fill delay for this step: per basket leg, the first block where the owed amount is at or
+    ///      below its reservation, the later of the two legs, plus one block of latency. False when a leg's
+    ///      reservation is below its TWAP floor (nobody fills). Leg sizes follow `FundFlowsLib` exactly: a basket
+    ///      sell gives the TWAP token amount for the notional (capped by the balance) and the buy leg spends
+    ///      min(USDC received, notional).
+    function _solverPlan(uint256 sell, uint256 buy, uint256 notional, bool sellB, bool buyB)
+        internal
+        returns (bool ok, uint256 e, string memory why)
+    {
+        StepOrder memory o = _order(sell, buy, notional);
+        uint256 usdcIn = notional;
+        uint256 eSell;
+        if (sellB) {
+            (ok, eSell, usdcIn) = _sellLegPlan(sell, notional, o.minSellUsdcOut);
+            if (!ok) return (false, 0, "sell-reservation-below-floor");
+        }
+        uint256 eBuy;
+        if (buyB) {
+            (ok, eBuy) = _buyLegPlan(buy, usdcIn, o.minBuyOut.mulDiv(usdcIn, notional));
+            if (!ok) return (false, 0, "buy-reservation-below-floor");
+        }
+        return (true, Math.max(eSell, eBuy) + FILL_LATENCY_SEC, "");
+    }
+
+    /// @dev The basket buy leg's fill delay for spending `usdcIn` with floor `floor`.
+    function _buyLegPlan(uint256 buy, uint256 usdcIn, uint256 floor) internal returns (bool, uint256) {
+        uint256 q = fund.assetTokenValue(buy, usdcIn);
+        return _fillDelay(q, floor, _reservation(buy - IDX_WETH, false, usdcIn));
+    }
+
+    /// @dev The basket sell leg's fill delay, and the USDC the buy leg then spends: min(owed at that delay, notional).
+    function _sellLegPlan(uint256 sell, uint256 notional, uint256 floor)
+        internal
+        returns (bool ok, uint256 e, uint256 usdcIn)
+    {
+        uint256 b = sell - IDX_WETH;
+        uint256 amt = Math.min(fund.assetTokenValue(sell, notional), IERC20(tokens[b]).balanceOf(address(fund)));
+        uint256 q = fund.assetUsdcValue(sell, amt);
+        (ok, e) = _fillDelay(q, floor, _reservation(b, true, amt));
+        if (ok) usdcIn = Math.min(auctionExec.owedAt(q, floor, e), notional);
+    }
+
+    /// @dev First block offset where `owedAt(q, floor, e) <= m`. False when m is below the floor.
+    function _fillDelay(uint256 q, uint256 floor, uint256 m) internal view returns (bool, uint256) {
+        if (m < floor) return (false, 0);
+        for (uint256 e; e <= AUCTION_DURATION; e += BLOCK_SEC) {
+            if (auctionExec.owedAt(q, floor, e) <= m) return (true, e);
+        }
+        return (true, AUCTION_DURATION);
+    }
+
+    /// @dev The most the solver will pay for one leg: its best venue's output, less its margin and gas. Records
+    ///      the venue for the fill. `fundSells`: the solver receives the token and pays USDC.
+    function _reservation(uint256 b, bool fundSells, uint256 amountIn) internal returns (uint256 m) {
+        address tIn = fundSells ? tokens[b] : USDC;
+        address tOut = fundSells ? USDC : tokens[b];
+        uint256 poolOut = _poolQuote(tIn, tOut, amountIn);
+        uint256 extOut = _extOut(b, fundSells, amountIn);
+        bool ext = extOut > poolOut;
+        solverVenue[tokens[b]] = ext ? VENUE_EXTERNAL : VENUE_POOL;
+        uint256 kept = (ext ? extOut : poolOut).mulDiv(BPS - SOLVER_MARGIN_BPS, BPS);
+        uint256 gas = fundSells ? SOLVER_GAS_USDC : _tokenForUsdcAt(SOLVER_GAS_USDC, _refSqrt(b), usdc0[b]);
+        m = kept > gas ? kept - gas : 0;
+    }
+
+    /// @dev The pool's output for `amountIn` now, by running the swap and reverting it.
+    function _poolQuote(address tIn, address tOut, uint256 amountIn) internal returns (uint256 out) {
+        uint256 snap = vm.snapshotState();
+        out = _poolSwap(tIn, tOut, amountIn);
+        vm.revertToStateAndDelete(snap);
+    }
+
+    /// @dev The solver's own exact-in swap on the same fee-500 pool through SwapRouter02, to itself. A swap the
+    ///      pool cannot take yields 0.
+    function _poolSwap(address tIn, address tOut, uint256 amountIn) internal returns (uint256 out) {
+        uint256 bal = IERC20(tIn).balanceOf(address(this));
+        if (bal < amountIn) {
+            if (tIn == USDC) fundUsdc(address(this), amountIn - bal);
+            else deal(tIn, address(this), amountIn);
+        }
+        IERC20(tIn).approve(ROUTER, amountIn);
+        uint256 before = IERC20(tOut).balanceOf(address(this));
+        try IHarnessSwapRouter02(ROUTER).exactInputSingle(
+            IHarnessSwapRouter02.ExactInputSingleParams(tIn, tOut, POOL_FEE, address(this), amountIn, 0, 0)
+        ) returns (uint256) {
+            out = IERC20(tOut).balanceOf(address(this)) - before;
+        } catch {
+            out = 0;
+        }
+    }
+
+    /// @dev The external venue's output at the reference walk less its cost. deSPXA has none outside US hours.
+    function _extOut(uint256 b, bool fundSells, uint256 amountIn) internal view returns (uint256) {
+        if (b == 2 && !_usMarketOpen(vm.getBlockTimestamp())) return 0;
+        uint256 cost = b == 2 ? EXT_DESPXA_BPS : EXT_MAJOR_BPS;
+        uint160 ref = _refSqrt(b);
+        uint256 fair = fundSells ? SimLib.spotUsdc(amountIn, ref, usdc0[b]) : _tokenForUsdcAt(amountIn, ref, usdc0[b]);
+        return fair.mulDiv(BPS - cost, BPS);
+    }
+
+    /// @dev Token units for `usdc` at sqrt price `sqrtP` (the inverse of `SimLib.spotUsdc`).
+    function _tokenForUsdcAt(uint256 usdc, uint160 sqrtP, bool usdcIsToken0) internal pure returns (uint256) {
+        if (usdcIsToken0) return Math.mulDiv(Math.mulDiv(usdc, sqrtP, SimLib.Q96), sqrtP, SimLib.Q96);
+        return Math.mulDiv(Math.mulDiv(usdc, SimLib.Q96, sqrtP), SimLib.Q96, sqrtP);
+    }
+
+    /// @dev The solver's fill. A revert (the step did not execute, for example the RB-4 cost cap) changes nothing
+    ///      and is booked as a blocked StepFailed attempt.
+    function _auctionFill() internal returns (bool, SkipReason) {
+        try auctionExec.fill() returns (uint256 e) {
+            ++acc.auctionFills;
+            acc.auctionDelaySumSec += e;
+            return (true, SkipReason.None);
+        } catch (bytes memory err) {
+            ++acc.auctionFillReverts;
+            auctionFailSelector = err.length >= 4 ? uint256(uint32(bytes4(err))) : 0;
+            _auctionNote(string.concat("fill-revert:", vm.toString(err)));
+            return (false, SkipReason.StepFailed);
+        }
+    }
+
+    function _auctionNote(string memory row) internal {
+        if (acc.failProbes >= MAX_FAIL_PROBES) return;
+        ++acc.failProbes;
+        acc.failReasons = string.concat(acc.failReasons, bytes(acc.failReasons).length == 0 ? "" : "|", row);
+    }
+
+    /// @inheritdoc IAuctionFiller
+    /// @dev The solver settles one leg: it already holds the fund's `amountIn`. It sources `tokenOut` at the venue
+    ///      it chose (pool swap, or the external venue minted at the reference less its cost) and approves the
+    ///      owed amount. It re-quoted at this block, so a shortfall is rare. It can come only from the order of
+    ///      two basket legs. The solver then pays the gap from its own pocket. That is counted in
+    ///      `solverShortLegs` and never charged to the fund.
+    function onAuctionLeg(address tokenIn, address tokenOut, uint256 amountIn, uint256 owed, uint256, uint256)
+        external
+    {
+        require(msg.sender == address(auctionExec), "executor only");
+        address token = tokenIn == USDC ? tokenOut : tokenIn;
+        uint256 b = _basketOf(token);
+        bool fundSells = tokenIn != USDC;
+        uint256 got;
+        if (solverVenue[token] == VENUE_EXTERNAL) {
+            got = _extOut(b, fundSells, amountIn);
+            _credit(tokenOut, got);
+            ++acc.externalLegs;
+        } else {
+            got = _poolSwap(tokenIn, tokenOut, amountIn);
+            ++acc.poolLegs;
+        }
+        if (got < owed) ++acc.solverShortLegs;
+        uint256 bal = IERC20(tokenOut).balanceOf(address(this));
+        if (bal < owed) _credit(tokenOut, owed - bal);
+        uint160 ref = _refSqrt(b);
+        acc.solverPnlRef += fundSells
+            ? SimLib.sub(got, owed)
+            : SimLib.spotUsdcSigned(SimLib.sub(got, owed), ref, usdc0[b]);
+        IERC20(tokenOut).approve(address(auctionExec), owed);
+    }
+
+    function _credit(address token, uint256 amount) internal {
+        if (token == USDC) fundUsdc(address(this), amount);
+        else deal(token, address(this), IERC20(token).balanceOf(address(this)) + amount);
+    }
+
+    function _isBasket(uint256 i) internal view returns (bool) {
+        return i != IDLE_INDEX && fund.assetConfig(i).kind == AssetKind.Basket;
+    }
+
+    function _basketOf(address token) internal view returns (uint256) {
+        for (uint256 b; b < N_BASKET; ++b) {
+            if (tokens[b] == token) return b;
+        }
+        revert("not a basket token");
     }
 
     // ─── Market ────────────────────────────────────────────────────────────────────────────────────────
@@ -851,6 +1271,85 @@ contract RebalanceSimTest is PrototypeHarness {
         got = IERC20(tokenOut).balanceOf(address(this)) - outBefore;
     }
 
+    // ─── LP re-centre sensitivity (PROTO_SIM_LP=recenter) ───────────────────────────────────────────────
+
+    /// @dev Slot start, before the keeper. See the LP model in the contract note for every assumption.
+    function _lpRespond() internal {
+        uint256 now_ = vm.getBlockTimestamp();
+        for (uint256 b; b < N_BASKET; ++b) {
+            uint256 total = ISimPool(pools[b]).liquidity();
+            uint256 own = _ownActiveL(b);
+            // The pin's own liquidity is back: the modelled LP stands for it, so it leaves at once.
+            if (lpL[b] > 0 && (total - own) * OUT_OF_RANGE_L_DIV >= pinL[b]) {
+                _lpBurn(b);
+                ++acc.lpWithdrawals[b];
+                lpOutsideSince[b] = 0;
+                continue;
+            }
+            if (total * OUT_OF_RANGE_L_DIV >= pinL[b]) {
+                lpOutsideSince[b] = 0;
+                continue;
+            }
+            if (lpOutsideSince[b] == 0) {
+                lpOutsideSince[b] = now_;
+                continue;
+            }
+            if (now_ - lpOutsideSince[b] < LP_RECENTER_LAG_SEC) continue;
+            if (lpL[b] > 0) _lpBurn(b);
+            _lpMint(b);
+            ++acc.lpRecenters[b];
+            lpOutsideSince[b] = 0;
+        }
+    }
+
+    /// @dev The modelled position's liquidity if the pool's spot tick is inside it, else 0. No call without one.
+    function _ownActiveL(uint256 b) internal view returns (uint256) {
+        if (lpL[b] == 0) return 0;
+        (, int24 tick,,,,,) = ISimPool(pools[b]).slot0();
+        return tick >= lpLower[b] && tick < lpUpper[b] ? lpL[b] : 0;
+    }
+
+    function _lpMint(uint256 b) internal {
+        ISimPool p = ISimPool(pools[b]);
+        (, int24 tick,,,,,) = p.slot0();
+        int24 sp = p.tickSpacing();
+        int24 lo = _floorTo(tick - LP_RECENTER_HALF_WIDTH_TICKS, sp);
+        int24 hi = -_floorTo(-(tick + LP_RECENTER_HALF_WIDTH_TICKS), sp);
+        uint128 l = uint128(pinL[b] * LP_RECENTER_DEPTH_BPS / BPS);
+        (lpLower[b], lpUpper[b], lpL[b]) = (lo, hi, l);
+        p.mint(address(this), lo, hi, l, abi.encode(b));
+    }
+
+    function _lpBurn(uint256 b) internal {
+        ISimPool p = ISimPool(pools[b]);
+        p.burn(lpLower[b], lpUpper[b], lpL[b]);
+        p.collect(address(this), lpLower[b], lpUpper[b], type(uint128).max, type(uint128).max);
+        lpL[b] = 0;
+    }
+
+    /// @dev Round `t` down to a multiple of `sp` (toward minus infinity).
+    function _floorTo(int24 t, int24 sp) internal pure returns (int24) {
+        int24 q = t / sp;
+        if (t % sp != 0 && t < 0) --q;
+        return q * sp;
+    }
+
+    /// @notice Uniswap V3 mint callback: the modelled LP pays the pool what the position needs.
+    function uniswapV3MintCallback(uint256 owed0, uint256 owed1, bytes calldata data) external {
+        uint256 b = abi.decode(data, (uint256));
+        require(msg.sender == pools[b], "pool only");
+        (address t0, address t1) = usdc0[b] ? (USDC, tokens[b]) : (tokens[b], USDC);
+        _lpPay(t0, owed0);
+        _lpPay(t1, owed1);
+    }
+
+    function _lpPay(address token, uint256 amount) internal {
+        if (amount == 0) return;
+        uint256 bal = IERC20(token).balanceOf(address(this));
+        if (bal < amount) _credit(token, amount - bal);
+        require(IERC20(token).transfer(msg.sender, amount), "lp pay");
+    }
+
     // ─── Flows ─────────────────────────────────────────────────────────────────────────────────────────
 
     /// @dev With p = 1/12 a deposit or redeem (p = 0.5 each) of 0.10%..0.50% of NAV, measured in its own block.
@@ -924,9 +1423,22 @@ contract RebalanceSimTest is PrototypeHarness {
 
     // ─── Snapshots ─────────────────────────────────────────────────────────────────────────────────────
 
+    /// @dev `_snap` that also keeps the full valuation for `_observeMarket`.
+    function _snapKeeper() internal returns (Snap memory s) {
+        uint256[] memory values;
+        (s.nav, s.idle, values) = fund.portfolioValues();
+        kNav = s.nav;
+        kValues = values;
+        _fill(s, values);
+    }
+
     function _snap() internal view returns (Snap memory s) {
         uint256[] memory values;
         (s.nav, s.idle, values) = fund.portfolioValues();
+        _fill(s, values);
+    }
+
+    function _fill(Snap memory s, uint256[] memory values) internal view {
         for (uint256 j; j < 3; ++j) {
             s.lend[j] = values[IDX_AAVE + j];
         }
@@ -981,11 +1493,8 @@ contract RebalanceSimTest is PrototypeHarness {
         vm.serializeUint(o, "startTime", p.startTime);
         vm.serializeUint(o, "endTime", p.endTime);
         vm.serializeUint(o, "startSleeveBps", _arr4(acc.startSleeve));
-        uint256[4] memory es;
-        for (uint256 s; s < 4; ++s) {
-            es[s] = p.sleeveBps[s];
-        }
-        vm.serializeUint(o, "endSleeveBps", _arr4(es));
+        // Field names kept from the sleeve design so the scored JSON is unchanged. Both are receipt bucket sums.
+        vm.serializeUint(o, "endSleeveBps", _arr4(acc.endSleeve));
         vm.serializeUint(o, "startBps", _arr16(p.startBps));
         vm.serializeUint(o, "endBps", _arr16(p.endBps));
         vm.serializeUint(o, "permissionlessAtOpen", uint256(p.startTime) + rebalancer.stepParams().keeperGrace);
@@ -1041,6 +1550,22 @@ contract RebalanceSimTest is PrototypeHarness {
         vm.serializeUint(o, "despxaArbClosedSlots", acc.despxaArbClosedSlots);
         vm.serializeUint(o, "maxDespxaPoolShareBps", acc.maxDespxaPoolShareBps);
         vm.serializeUint(o, "maxDespxaSupplyShareBps", acc.maxDespxaSupplyShareBps);
+        if (lpRecenter) {
+            vm.serializeUint(o, "lpRecenters", _arr3(acc.lpRecenters));
+            vm.serializeUint(o, "lpWithdrawals", _arr3(acc.lpWithdrawals));
+            vm.serializeUint(o, "lpThinCalls", _arr3(acc.lpThinCalls));
+            vm.serializeUint(o, "lpModelCalls", _arr3(acc.lpModelCalls));
+        }
+        if (!auctionRun) return;
+        vm.serializeUint(o, "auctionOpens", acc.auctionOpens);
+        vm.serializeUint(o, "auctionFills", acc.auctionFills);
+        vm.serializeUint(o, "auctionLapses", acc.auctionLapses);
+        vm.serializeUint(o, "auctionFillReverts", acc.auctionFillReverts);
+        vm.serializeUint(o, "auctionDelaySumSec", acc.auctionDelaySumSec);
+        vm.serializeUint(o, "auctionPoolLegs", acc.poolLegs);
+        vm.serializeUint(o, "auctionExternalLegs", acc.externalLegs);
+        vm.serializeUint(o, "solverShortLegs", acc.solverShortLegs);
+        vm.serializeInt(o, "solverPnlRef", acc.solverPnlRef);
     }
 
     function _jsonEnd(string memory o, Plan memory p) internal returns (string memory) {
@@ -1149,7 +1674,7 @@ contract RebalanceSimTest is PrototypeHarness {
             plans = string.concat(plans, i == 0 ? "" : ",", planJson[i]);
         }
         string memory full = string.concat('{"meta":', meta, ',"plans":[', plans, "]}");
-        string memory dir = string.concat("out/prototype/", runName);
+        string memory dir = string.concat("out/prototype/", runName, lpRecenter ? "-lprecenter" : "");
         vm.createDir(dir, true);
         string memory path =
             string.concat(dir, "/sim-", scnName, "-", vm.toString(fundM), "M-s", vm.toString(seedK), ".json");
@@ -1177,6 +1702,32 @@ contract RebalanceSimTest is PrototypeHarness {
             (cap[i], slip[i]) = (ap.maxStepUsdc, ap.maxStepSlippageBps);
         }
         vm.serializeUint(k, "maxStepUsdc", cap);
+        if (lpRecenter) {
+            vm.serializeString(
+                k,
+                "lpModel",
+                string.concat(
+                    "recenter: after a pool is seen with < 1/", vm.toString(OUT_OF_RANGE_L_DIV),
+                    " of its pin liquidity for ", vm.toString(LP_RECENTER_LAG_SEC), "s, one LP mints ",
+                    vm.toString(LP_RECENTER_DEPTH_BPS), "bps of the pin L over spot +-",
+                    vm.toString(int256(LP_RECENTER_HALF_WIDTH_TICKS)),
+                    " ticks; moved on a later exit, burned when the pin liquidity is active again"
+                )
+            );
+        }
+        if (auctionRun) {
+            vm.serializeString(
+                k,
+                "executor",
+                string.concat(
+                    "AuctionStepExecutor duration ", vm.toString(uint256(AUCTION_DURATION)), "s premium ",
+                    vm.toString(uint256(AUCTION_START_PREMIUM_BPS)), "bps; one solver, no inventory, margin ",
+                    vm.toString(SOLVER_MARGIN_BPS), "bps + gas ", vm.toString(SOLVER_GAS_USDC), " uUSDC per leg; venues: pool, or external at ref - ",
+                    vm.toString(EXT_MAJOR_BPS), "bps (wETH, cbBTC, 24/7) / ref - ", vm.toString(EXT_DESPXA_BPS),
+                    "bps (deSPXA, US hours only); fill one block after the price meets the reservation"
+                )
+            );
+        }
         return vm.serializeUint(k, "maxStepSlippageBps", slip);
     }
 
