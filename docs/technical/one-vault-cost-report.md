@@ -5,6 +5,13 @@ Status: report, 2026-11-11. Part of the one-vault experiment
 (§13, §14) and the other costs the design creates. It changes no gate,
 threshold or cost definition.
 
+**Update, 2026-11-11.** The numbers below are the step 3 results, with
+deSPXA in the fund. The owner has since approved an asset rule (proposal
+§4.5, D12) under which deSPXA leaves the fund until it has an independent
+price feed. Deposits also stopped filling deficits (D11). Step 3e reruns G4
+and G5 on the new asset list with cost booked against outside feeds, which
+is the fix §4 below asks for. This report stays as the record of step 3.
+
 Every number here comes from the rebalance sim (`contracts/test/prototype/sim/`)
 at Base pin 55462550. The sim replays real Base state with no RPC. Scores come
 from `bun contracts/test/prototype/sim/score-sim.ts`. "Plan" means one receipt
@@ -32,8 +39,9 @@ turnover unless a row says otherwise.
 
 ## 2. How cost is measured
 
-The scorer prints four readings for each plan. G4 is scored on the first. The
-definitions were fixed before the scored run.
+The scorer prints four readings for each plan. The contract books a fifth,
+`costSpent`. G4 is scored on the headline, which is the larger of the arrival
+and reference readings. The definitions were fixed before the scored run.
 
 | Reading | What it counts | Default median / worst (bps) | G4 limits 15 / 30 |
 | --- | --- | --- | --- |
@@ -50,8 +58,9 @@ Arbitrage closes only part of that gap before the next step. The next step buys
 at the raised price again. The fund ends up holding tokens it paid too much for.
 Holders lose that premium. The arrival reading cannot see it.
 
-So the arrival reading is not the right measure of what holders pay. G4 is
-correctly scored on the reference reading.
+So the arrival reading is not the right measure of what holders pay. The
+headline takes the larger of the two. Here that is the reference reading, so
+G4 is in effect scored on it, which is correct.
 
 ## 3. Where the cost comes from
 
