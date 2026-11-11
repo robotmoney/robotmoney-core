@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4 (target architecture), §4.1-§4.4 (sleeves, NAV,
+// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4 (target architecture), §4.1-§4.4 (asset targets, NAV,
 //            deposits, redemptions), §5.1 (setTargetAndOpenPlan), §5.3 (executeStep), §5.5 (plan admin), §6
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
@@ -17,7 +17,8 @@ import {
 
 /// @title IRobotMoneyFund
 /// @notice The one vault (`RobotMoneyFund`, share `rmFUND`): an ERC-4626 over USDC behind
-///         `GovernedUUPS`, holding lending adapters and basket tokens grouped into four sleeves.
+///         `GovernedUUPS`, holding a flat list of lending adapters and basket tokens. Each asset has one
+///         target weight. No contract stores or reads a sleeve or category (§4.1, RB-9).
 ///
 ///         Authority (RB-1, RB-3):
 ///         - `setTargetAndOpenPlan`  GOVERNANCE_ROLE only (RebalanceGovernance).
@@ -42,7 +43,6 @@ interface IRobotMoneyFund is IFundEvents {
 
     event AssetAdded(uint256 indexed index, AssetConfig config);
     event AssetDeactivated(uint256 indexed index);
-    event IntraBpsSet(uint256[] indices, uint16[] intraBps);
     event AdapterCodeHashAllowedSet(bytes32 indexed codeHash, bool allowed);
     event DepositsPaused(address indexed account);
     event DepositsUnpaused(address indexed account);
@@ -76,14 +76,15 @@ interface IRobotMoneyFund is IFundEvents {
     error MaxAssetsReached();
     /// @notice The asset still holds value, so it cannot be deactivated.
     error AssetStillHeld(uint256 index);
-    /// @notice Asset config (add, deactivate, intraBps) is frozen while a plan is live
+    /// @notice The fund's persistent target still gives the asset weight, so it cannot be deactivated.
+    ///         Apply a vector that names it with 0 first. Then no vector loses weight silently (RB-9).
+    error AssetStillTargeted(uint256 index, uint256 targetBps);
+    /// @notice Asset config (add, deactivate) is frozen while a plan is live
     ///         (Open, Halted or Paused). Close the plan first. `setAdapterCodeHashAllowed` is NOT
     ///         frozen: excluding a bad adapter (ADP-2) must never wait for a plan to end.
     error PlanLive(uint256 planId);
     /// @notice The plan is not in a status that allows this transition.
     error InvalidPlanTransition(uint256 planId, PlanStatus from, PlanStatus to);
-    /// @notice A Lending asset's end target exceeds its `capBps`.
-    error TargetExceedsCap(uint256 index, uint256 targetBps, uint256 capBps);
     /// @notice A step would move a leg past its path target (RB-7 guard inside the fund).
     error StepExceedsPath(uint256 index, uint256 notional, uint256 room);
     /// @notice `navBefore − navAfter` exceeded `order.maxCostUsdc` (RB-4).
@@ -98,8 +99,9 @@ interface IRobotMoneyFund is IFundEvents {
     error AdapterVaultMismatch(address adapter, address expected, address actual);
     /// @notice `addAsset`: the Lending adapter's `USDC()` is not the fund's asset.
     error AdapterAssetMismatch(address adapter, address expected, address actual);
-    /// @notice `addAsset`: an active entry already holds this Lending adapter or Basket token
-    ///         (one balance would count twice, NC-8).
+    /// @notice `addAsset`: an active entry already has this asset id (`PlanMath.assetId`), of
+    ///         either kind. One balance would count twice (NC-8), and a target vector could not
+    ///         tell the two entries apart.
     error DuplicateAsset(uint256 existingIndex);
     /// @notice Deposits are closed while a Lending asset is excluded (ADP-2, core 1788): a deposit
     ///         would mint against a NAV the excluded value has left.
@@ -178,10 +180,13 @@ interface IRobotMoneyFund is IFundEvents {
     // ═════════════════════════════════════════════════════════════════════════
 
     /// @notice Set the end target and open a plan (§5.1 step 3). GOVERNANCE_ROLE only (RB-1).
-    ///         1. `PlanMath.validateSleeveBps(sleeveBps)`; `params` within §5.6 bounds
-    ///            (`PlanParamOutOfBounds`).
-    ///         2. `endBps = PlanMath.assetTargets(sleeveBps, assets)`; every Lending target
-    ///            ≤ its `capBps` (`TargetExceedsCap`).
+    ///         1. `params` within §5.6 bounds (`PlanParamOutOfBounds`).
+    ///         2. `endBps = PlanMath.assetTargets(assets, bps, assetConfigs)`, which enforces the
+    ///            §4.1 checks (RB-9): every listed asset is active (`TargetAssetNotActive`), no
+    ///            asset is listed twice (`TargetAssetDuplicate`), every active asset is listed
+    ///            (`TargetAssetMissing`), the weights sum to 10 000 (`TargetSumInvalid`), and a
+    ///            Lending target is at or below its `capBps` (`TargetExceedsCap`). A length
+    ///            mismatch reverts `InvalidParam`.
     ///         3. If the current plan is live (Open, Halted, Paused): status → Superseded
     ///            (`PlanStatusChanged`). Plans never stack.
     ///         4. Value every asset at TWAP; `(startBps, startIdleBps) = PlanMath.snapshotStart`.
@@ -189,13 +194,18 @@ interface IRobotMoneyFund is IFundEvents {
     ///            endTime = now + duration, turnover and budget per `Plan` docs, costSpent 0.
     ///            The fund's persistent target (`targetBps()`) becomes `endBps`.
     ///         6. Emit `PlanOpened`.
-    /// @param sleeveBps Canonical sleeve vector [agent, stable, protocol, rwa].
+    /// @param assets    Asset ids, any order: each active asset's fund asset address
+    ///                  (`PlanMath.assetId`: `token` for Basket, `adapter` for Lending).
+    /// @param bps       Parallel target weights in bps of NAV. Idle USDC carries no target.
     /// @param params    Per-plan parameters.
     /// @param receiptId The applied receipt, or bytes32(0) for a `setTarget` plan.
     /// @return planId   The new plan's id.
-    function setTargetAndOpenPlan(uint16[4] calldata sleeveBps, PlanParams calldata params, bytes32 receiptId)
-        external
-        returns (uint256 planId);
+    function setTargetAndOpenPlan(
+        address[] calldata assets,
+        uint256[] calldata bps,
+        PlanParams calldata params,
+        bytes32 receiptId
+    ) external returns (uint256 planId);
 
     /// @notice Execute one step's legs (§5.3 steps 5-8). REBALANCER_ROLE only. `nonReentrant`.
     ///         Reverts unless the current plan is Open. Order of operations:
@@ -316,9 +326,6 @@ interface IRobotMoneyFund is IFundEvents {
     ///         all zero before the first plan). Survives the plan that set it.
     function targetBps() external view returns (uint16[] memory);
 
-    /// @notice The persistent end target per sleeve (all zero before the first plan).
-    function targetSleeveBps() external view returns (uint16[4] memory);
-
     /// @notice `pathTarget(t)` of the current plan per asset and for idle (§5.2), via
     ///         `PlanMath.pathTargetsBps`. With no plan ever opened returns zeros.
     function pathTarget(uint256 t) external view returns (uint256[] memory bps, uint256 idleBps);
@@ -356,7 +363,7 @@ interface IRobotMoneyFund is IFundEvents {
     function quarantineAddress() external pure returns (address);
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Admin: assets (add / deactivate / intraBps frozen while a plan is live → `PlanLive`)
+    //  Admin: assets (add / deactivate frozen while a plan is live → `PlanLive`)
     // ═════════════════════════════════════════════════════════════════════════
 
     /// @notice Allow or disallow an adapter runtime codehash (ADP-2 / NC-2). ADMIN_ROLE. NOT frozen
@@ -369,25 +376,21 @@ interface IRobotMoneyFund is IFundEvents {
     ///         adapter later returns belongs to the holders of the snapshot.
     function setAdapterCodeHashAllowed(bytes32 codeHash, bool allowed) external;
 
-    /// @notice Append an asset. ADMIN_ROLE. Checks: kind/sleeve pairing (Lending → SLEEVE_STABLE;
-    ///         Basket → SLEEVE_PROTOCOL or SLEEVE_RWA), adapter codehash allowlisted, Lending adapter
+    /// @notice Append an asset. ADMIN_ROLE. Checks: adapter codehash allowlisted, Lending adapter
     ///         binds VAULT == fund (`AdapterVaultMismatch`) and USDC == the fund's asset
     ///         (`AdapterAssetMismatch`), Basket pool pairs token with USDC (ORA-3), twapWindow in
     ///         bounds, pool cardinality and liquidity (BasketAssetConfigGuard), no active duplicate
-    ///         token/adapter (`DuplicateAsset`), `assetCount < MAX_FUND_ASSETS`, Basket poolFeeBps <
+    ///         asset id, across kinds (`DuplicateAsset`), `assetCount < MAX_FUND_ASSETS`, Basket poolFeeBps <
     ///         maxSlippageBps and < navDeviationGuardBps when non-zero (`BoundAtOrBelowPoolFee`).
-    ///         `config.active` is forced true. `config.intraBps` is stored as given; the per-sleeve
-    ///         sum is enforced at the next plan open (`IntraSleeveSumInvalid`).
+    ///         `config.active` is forced true. Its persistent target starts at 0. The next target
+    ///         vector must name it (`TargetAssetMissing`).
     /// @return index The new asset's index.
     function addAsset(AssetConfig calldata config) external returns (uint256 index);
 
     /// @notice Deactivate asset `index` (never removed, indices stay stable). ADMIN_ROLE. Reverts
-    ///         `AssetStillHeld` unless its value is 0. Its intraBps becomes 0.
+    ///         `AssetStillTargeted` unless its persistent target is 0. Reverts `AssetStillHeld`
+    ///         unless its value is 0. A target vector may no longer name it.
     function deactivateAsset(uint256 index) external;
-
-    /// @notice Set intra-sleeve weights for the listed assets. ADMIN_ROLE. Every sleeve touched
-    ///         must sum to 10 000 over its active assets after the write (`IntraSleeveSumInvalid`).
-    function setIntraBps(uint256[] calldata indices, uint16[] calldata intraBps) external;
 
     // ═════════════════════════════════════════════════════════════════════════
     //  Admin: caps, fees, guards (ADMIN_ROLE unless noted)

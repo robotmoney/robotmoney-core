@@ -42,7 +42,7 @@ contract EndToEndTest is PrototypeHarness {
     // The stale receipt of stage 2 (storage keeps stage 2 under the stack limit).
     bytes32 private _idOld;
     bytes32 private _dOld;
-    uint16[4] private _older;
+    uint16[6] private _older;
 
     // Step-loop tallies (storage keeps the loop body under the stack limit).
     uint256 private _executed;
@@ -69,8 +69,8 @@ contract EndToEndTest is PrototypeHarness {
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
     function test_endToEnd() public fixtureCovered {
-        uint16[4] memory initial = sleeveVec(6_000, 3_500, 500);
-        uint16[4] memory proposed = sleeveVec(3_000, 6_500, 500);
+        uint16[6] memory initial = bucketVec(6_000, 3_500, 500);
+        uint16[6] memory proposed = bucketVec(3_000, 6_500, 500);
 
         // Coverage checkpoints between stages (replay only) keep each state-diff decode under the memory limit.
         _stage1SetTargetAndDeposits(initial);
@@ -86,9 +86,9 @@ contract EndToEndTest is PrototypeHarness {
     //  Stage 1: setTarget, then deposits (§4.3)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    function _stage1SetTargetAndDeposits(uint16[4] memory initial) private {
+    function _stage1SetTargetAndDeposits(uint16[6] memory initial) private {
         // RB-1: no direct caller may open a plan; only the timelock path works.
-        (uint8[] memory ids, uint256[] memory w) = sleeveArrays(initial);
+        (address[] memory ids, uint256[] memory w) = assetArrays(initial);
         vm.expectRevert();
         governance.setTarget(ids, w, PlanParams(PLAN_DURATION, COST_BUDGET_BPS));
 
@@ -109,10 +109,11 @@ contract EndToEndTest is PrototypeHarness {
         uint256 nav = fund.totalAssets();
         assertLe(nav, amount, "realized delta <= deposit");
         assertGe(nav, amount.mulDiv(BPS - MAX_SLIPPAGE_BPS, BPS), "realized delta >= slippage floor");
-        (uint256[4] memory sw, uint256 idleBps) = sleeveWeightsBps();
-        assertEq(sw[0], 0, "agent sleeve empty");
+        (uint256[4] memory sw, uint256 idleBps) = bucketWeightsBps();
+        uint256[4] memory ib = bucketsOf(initial);
+        assertEq(sw[0], 0, "agent bucket empty");
         for (uint256 s = 1; s < 4; ++s) {
-            assertApproxEqAbs(sw[s], initial[s], 60, "sleeve at target after first deposit");
+            assertApproxEqAbs(sw[s], ib[s], 60, "bucket at target after first deposit");
         }
         assertLe(idleBps, 10, "first deposit fully deployed");
 
@@ -150,21 +151,21 @@ contract EndToEndTest is PrototypeHarness {
     //  Stage 2: receipts (§5.1, RB-1, RB-8)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    function _stage2Receipts(uint16[4] memory proposed) private returns (uint256 planId, bytes32 good) {
-        // Three receipts, oldest first: a valid older one, one with a non-zero agent bucket, the good one.
-        _older = sleeveVec(5_000, 4_500, 500);
-        uint16[4] memory agent = [uint16(500), 5_500, 3_500, 500];
+    function _stage2Receipts(uint16[6] memory proposed) private returns (uint256 planId, bytes32 good) {
+        // Three receipts, oldest first: a valid older one, one whose vector sums to 9 500, the good one.
+        _older = bucketVec(5_000, 4_500, 500);
+        uint16[6] memory short = bucketVec(5_000, 4_000, 500);
         (_idOld, _dOld) = recordReceipt(_older);
-        (bytes32 idAgent, bytes32 dAgent) = recordReceipt(agent);
+        (bytes32 idShort, bytes32 dShort) = recordReceipt(short);
         bytes32 dGood;
         (good, dGood) = recordReceipt(proposed);
 
-        // Non-zero agent bucket: refused, nothing released.
-        _applyExpectRevert(idAgent, dAgent, agent, abi.encodeWithSelector(IFundEvents.AgentSleeveNotZero.selector, 500));
-        assertFalse(receipts.isReleased(idAgent), "refused receipt not released");
+        // RB-9: a vector that does not sum to 10 000 is refused, nothing released.
+        _applyExpectRevert(idShort, dShort, short, abi.encodeWithSelector(IFundEvents.TargetSumInvalid.selector, 9_500));
+        assertFalse(receipts.isReleased(idShort), "refused receipt not released");
 
         // RB-1: the target setter is the timelock alone.
-        (uint8[] memory ids, uint256[] memory w) = sleeveArrays(proposed);
+        (address[] memory ids, uint256[] memory w) = assetArrays(proposed);
         vm.expectRevert();
         governance.applyReceipt(good, dGood, ids, w);
 
@@ -174,9 +175,9 @@ contract EndToEndTest is PrototypeHarness {
     }
 
     /// @dev Apply the good receipt. Plan 1 is superseded, and the release happens in the same call.
-    function _applyGood(bytes32 good, bytes32 dGood, uint16[4] memory proposed) private returns (uint256 planId) {
+    function _applyGood(bytes32 good, bytes32 dGood, uint16[6] memory proposed) private returns (uint256 planId) {
         // Schedule by hand so the snapshot below is taken in the block the plan opens in.
-        (uint8[] memory ids, uint256[] memory w) = sleeveArrays(proposed);
+        (address[] memory ids, uint256[] memory w) = assetArrays(proposed);
         bytes memory data = abi.encodeCall(governance.applyReceipt, (good, dGood, ids, w));
         bytes32 salt = keccak256(abi.encode("e2e", ++_e2eSalt));
         timelock.schedule(address(governance), 0, data, bytes32(0), salt, TIMELOCK_DELAY);
@@ -195,9 +196,6 @@ contract EndToEndTest is PrototypeHarness {
         assertEq(p.receiptId, good, "plan bound to the receipt");
         assertEq(p.startTime, block.timestamp, "starts now");
         assertEq(p.endTime, block.timestamp + PLAN_DURATION, "default duration");
-        for (uint256 s; s < 4; ++s) {
-            assertEq(p.sleeveBps[s], proposed[s], "end sleeve vector");
-        }
         // §5.1: the start is the ACTUAL weights, never the old plan's target.
         assertEq(p.navAtOpen, navOpen, "nav at open");
         uint16[] memory persistent = fund.targetBps();
@@ -205,6 +203,7 @@ contract EndToEndTest is PrototypeHarness {
         for (uint256 i; i < N_ASSETS; ++i) {
             assertEq(p.startBps[i], PlanMath.weightBps(valuesOpen[i], navOpen), "start = actual weight");
             assertEq(persistent[i], p.endBps[i], "persistent target = plan end");
+            assertEq(p.endBps[i], proposed[i], "end target = the receipt's per-asset vector");
             sumEnd += p.endBps[i];
         }
         assertEq(sumEnd, BPS, "end targets sum to 100%");
@@ -214,8 +213,8 @@ contract EndToEndTest is PrototypeHarness {
 
     /// @dev Stale: an older receipt is refused once a newer one applied, even with a valid vector. Replay: the
     ///      applied receipt cannot be applied twice.
-    function _refuseStaleAndReplay(bytes32 good, bytes32 dGood, uint16[4] memory proposed) private {
-        (bytes32 idOld, bytes32 dOld, uint16[4] memory older) = (_idOld, _dOld, _older);
+    function _refuseStaleAndReplay(bytes32 good, bytes32 dGood, uint16[6] memory proposed) private {
+        (bytes32 idOld, bytes32 dOld, uint16[6] memory older) = (_idOld, _dOld, _older);
         uint64 lastApplied = governance.lastAppliedRecordedAt();
         uint64 oldAt = receipts.getReceiptById(idOld).recordedAt;
         assertLt(oldAt, lastApplied, "older receipt really is older");
@@ -233,8 +232,8 @@ contract EndToEndTest is PrototypeHarness {
 
     /// @dev Schedule `applyReceipt` on the timelock, wait the delay, and expect the execution to revert with
     ///      `revertData` (the timelock bubbles the target's revert).
-    function _applyExpectRevert(bytes32 id, bytes32 digest, uint16[4] memory bps, bytes memory revertData) private {
-        (uint8[] memory ids, uint256[] memory w) = sleeveArrays(bps);
+    function _applyExpectRevert(bytes32 id, bytes32 digest, uint16[6] memory bps, bytes memory revertData) private {
+        (address[] memory ids, uint256[] memory w) = assetArrays(bps);
         bytes memory data = abi.encodeCall(governance.applyReceipt, (id, digest, ids, w));
         bytes32 salt = keccak256(abi.encode("e2e", ++_e2eSalt));
         timelock.schedule(address(governance), 0, data, bytes32(0), salt, TIMELOCK_DELAY);
@@ -247,7 +246,7 @@ contract EndToEndTest is PrototypeHarness {
     //  Stage 3: keeper steps until Converged (§5.3, §5.5, RB-4, RB-7)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    function _stage3StepUntilConverged(uint256 planId, bytes32 receiptId, uint16[4] memory proposed) private {
+    function _stage3StepUntilConverged(uint256 planId, bytes32 receiptId, uint16[6] memory proposed) private {
         // A 7-day path is ~340 real steps on real venues: more than forge's default 2^30 test gas. Metering is
         // paused for the loop only; nothing under test reads the meter except the Rebalancer's gas-starvation
         // guard, which then never fires.
@@ -287,9 +286,10 @@ contract EndToEndTest is PrototypeHarness {
             assertApproxEqAbs(wNow[i], p.endBps[i], TOLERANCE_BPS + 1, "asset within tolerance");
         }
         assertLe(idleBps, TOLERANCE_BPS, "idle within tolerance");
-        (uint256[4] memory sw,) = sleeveWeightsBps();
+        (uint256[4] memory sw,) = bucketWeightsBps();
+        uint256[4] memory pb = bucketsOf(proposed);
         for (uint256 s = 1; s < 4; ++s) {
-            assertApproxEqAbs(sw[s], proposed[s], 3 * TOLERANCE_BPS + 3, "sleeve at the receipt vector");
+            assertApproxEqAbs(sw[s], pb[s], 3 * TOLERANCE_BPS + 3, "bucket at the receipt's audit weight");
         }
 
         // A concluded plan does not trade.
@@ -362,7 +362,7 @@ contract EndToEndTest is PrototypeHarness {
     //  Stage 4: redemptions (§4.4, RB-6)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    function _stage4Redemptions(uint16[4] memory initial) private {
+    function _stage4Redemptions(uint16[6] memory initial) private {
         // §4.4: withdraw is not offered.
         vm.prank(alice);
         vm.expectRevert(IRobotMoneyFund.RedeemOnly.selector);

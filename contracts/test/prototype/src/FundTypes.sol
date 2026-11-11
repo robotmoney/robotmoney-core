@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4.1 (sleeves), §5.1 (plan), §5.3 (step),
+// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4.1 (per-asset targets), §5.1 (plan), §5.3 (step),
 //            §5.5 (plan states), §5.6 (governed parameters), §7 (RB invariants)
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
@@ -11,19 +11,7 @@ pragma solidity ^0.8.24;
 //  order is an interface change for all three engineers.
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ─── Sleeves (§4.1) ─────────────────────────────────────────────────────────
-
-/// @dev Number of sleeves. Sleeve ids are the receipt buckets in canonical order.
-uint256 constant NUM_SLEEVES = 4;
-
-/// @dev Sleeve id of the receipt bucket `agent_tokens`. Its weight is pinned to 0 (ADR-0017).
-uint8 constant SLEEVE_AGENT = 0;
-/// @dev Sleeve id of the receipt bucket `conservative_defi_yield` (lending adapters).
-uint8 constant SLEEVE_STABLE = 1;
-/// @dev Sleeve id of the receipt bucket `protocol_tokens` (wETH, cbBTC).
-uint8 constant SLEEVE_PROTOCOL = 2;
-/// @dev Sleeve id of the receipt bucket `real_world_assets` (deSPXA).
-uint8 constant SLEEVE_RWA = 3;
+// ─── Constants ──────────────────────────────────────────────────────────────
 
 /// @dev The basis-points denominator (same value as `BpsMath.BPS_DENOMINATOR`).
 uint256 constant BPS = 10_000;
@@ -154,12 +142,14 @@ enum SkipReason {
 
 /// @notice One fund asset (§4.1, §4.2). Index `i` in the fund's asset list is stable for the
 ///         fund's life: assets are deactivated, never removed, so plan arrays stay aligned.
+///         There is no sleeve or category field (§4.1, RB-9): the receipt's sleeve is an off-chain
+///         label only. Each asset's target weight comes straight from the target vector.
+///         Asset id: a target vector names an asset by `PlanMath.assetId`, its fund asset address.
+///         That is `token` for a Basket asset and `adapter` for a Lending asset. At most one ACTIVE
+///         entry has a given id (`addAsset` refuses a second, `DuplicateAsset`).
 /// @param kind       Lending or Basket.
-/// @param sleeve     Sleeve id (SLEEVE_*). Lending assets sit in SLEEVE_STABLE. Basket assets sit
-///                   in SLEEVE_PROTOCOL or SLEEVE_RWA. Nothing may sit in SLEEVE_AGENT.
 /// @param active     False after deactivation. An inactive asset has target 0 and must hold 0.
-/// @param intraBps   Intra-sleeve weight (§4.1). Over the active assets of one sleeve they sum to
-///                   10 000, or every one is 0 when the sleeve has no active asset.
+///                   A target vector may not name it (`TargetAssetNotActive`).
 /// @param capBps     Lending only: hard ceiling on this adapter's share of fund NAV (ADP ramp
 ///                   control, ported `capBps`). 0 means "no cap" for Basket, and is invalid for
 ///                   Lending (use 10 000 for uncapped). A target above `capBps` is refused at plan
@@ -180,9 +170,7 @@ enum SkipReason {
 /// @param venue      Basket venue (ignored for Lending).
 struct AssetConfig {
     AssetKind kind;
-    uint8 sleeve;
     bool active;
-    uint16 intraBps;
     uint16 capBps;
     address adapter;
     address token;
@@ -208,10 +196,10 @@ struct PlanParams {
 /// @param receiptId     The applied consensus receipt, or bytes32(0) for a `setTarget` plan.
 /// @param startTime     `block.timestamp` at open.
 /// @param endTime       `startTime + duration`.
-/// @param sleeveBps     The end target per sleeve, canonical order, sums to 10 000, [0] == 0.
 /// @param startBps      Per asset (length == assetCount at open): the actual TWAP weight at open,
 ///                      floor-rounded. Snapshot rule: if NAV at open is 0 the start equals the end.
-/// @param endBps        Per asset: `PlanMath.assetTargets(sleeveBps, ...)` at open. Sums to 10 000.
+/// @param endBps        Per asset: the target vector at open (`PlanMath.assetTargets`), index-aligned,
+///                      inactive assets 0. Sums to 10 000.
 /// @param startIdleBps  Idle USDC's weight at open: `10 000 - Σ startBps` (absorbs rounding). The
 ///                      idle path target glides from this to 0.
 /// @param navAtOpen     TWAP NAV at open (USDC, 6 decimals).
@@ -225,7 +213,6 @@ struct Plan {
     bytes32 receiptId;
     uint64 startTime;
     uint64 endTime;
-    uint16[4] sleeveBps;
     uint16[] startBps;
     uint16[] endBps;
     uint16 startIdleBps;
@@ -313,7 +300,7 @@ struct AssetStepParams {
 
 /// @notice One row of `Rebalancer.previewPlan` (§5.7 "Previewed").
 /// @param currentBps  Actual TWAP weight now.
-/// @param targetBps   Asset-level target from the proposed sleeve vector.
+/// @param targetBps   This asset's target in the proposed per-asset vector (0 for an inactive asset).
 /// @param turnoverUsdc |targetBps − currentBps| × NAV / 10 000.
 /// @param estCostUsdc turnoverUsdc × poolFeeBps / 10 000 (0 for Lending).
 struct PlanPreviewRow {
@@ -362,7 +349,6 @@ interface IFundEvents {
     event PlanOpened(
         uint256 indexed planId,
         bytes32 indexed receiptId,
-        uint16[4] sleeveBps,
         uint16[] startBps,
         uint16[] endBps,
         uint64 startTime,
@@ -419,14 +405,21 @@ interface IFundEvents {
 
     error ZeroAddress();
     error InvalidParam();
-    /// @notice A sleeve vector does not sum to 10 000.
-    error SleeveSumInvalid(uint256 sum);
-    /// @notice The agent sleeve weight is not 0 (ADR-0017).
-    error AgentSleeveNotZero(uint256 bps);
-    /// @notice A sleeve has a non-zero target but no active asset to hold it.
-    error SleeveHasNoAssets(uint8 sleeve);
-    /// @notice Active intra-sleeve weights of `sleeve` do not sum to 10 000.
-    error IntraSleeveSumInvalid(uint8 sleeve, uint256 sum);
+    // ── Target vector checks (§4.1, RB-9). Each refused vector reverts the whole call. ──
+
+    /// @notice A target vector names `asset`, which is not an active fund asset (unknown or
+    ///         deactivated).
+    error TargetAssetNotActive(address asset);
+    /// @notice A target vector names `asset` more than once.
+    error TargetAssetDuplicate(address asset);
+    /// @notice A target vector leaves out the active asset `asset`. An explicit 0 is required to
+    ///         sell an asset, so a vector can never sell one by forgetting it.
+    error TargetAssetMissing(address asset);
+    /// @notice A target vector's weights do not sum to 10 000. A single weight above 10 000 reverts
+    ///         at once and reports that weight.
+    error TargetSumInvalid(uint256 sum);
+    /// @notice A Lending asset's target exceeds its `capBps` (a risk ceiling on one venue).
+    error TargetExceedsCap(uint256 index, uint256 targetBps, uint256 capBps);
     /// @notice An asset index is out of range, inactive, or IDLE_INDEX where not allowed.
     error InvalidAssetIndex(uint256 index);
     /// @notice A plan parameter is out of its §5.6 bound.

@@ -4,7 +4,8 @@
 // Records the Base state the prototype tests read, so they replay offline in plain `forge test`.
 //
 //   bun scripts/prototype/record-base-fixture.ts [--pin N] [--rpc URL] [--match-path GLOB] [--sim]
-//                                                [--no-anvil]
+//                                                [--sim-runs tuned,default,auction,...] [--no-anvil]
+//                                                [--forge-out DIR] [--forge-cache DIR]
 //
 // 1. Picks a pin (upstream head minus 2 unless --pin is given). The public node is not an archive
 //    node, so record soon after picking a pin.
@@ -16,12 +17,21 @@
 // 3. Runs the prototype tests in record mode (PROTO_RECORD_RPC, PROTO_PIN). Forge forks at the pin
 //    and, when it exits, writes the original value of every account and slot it fetched to
 //    ~/.foundry/cache/rpc/base/<pin>. Passes add to the same cache. --sim adds the rebalance sim
-//    (PROTO_SIM=1): one pass with PROTO_SIM_RUN=tuned over the sim tests, then the default pass.
+//    (PROTO_SIM=1): first the LP re-centre sensitivity passes default-lprecenter and auction-lprecenter
+//    (PROTO_SIM_RUN=default or auction with PROTO_SIM_LP=recenter), then one pass with PROTO_SIM_RUN=tuned
+//    over the sim tests, then the default pass, then the auction pass (phase 3c). The last pass also runs
+//    every non-sim prototype test. --sim-runs picks a subset, in that order, for debugging only. Forge
+//    rewrites the pin's cache on each record, so a subset yields a fixture that covers only that subset.
+//    Record the committed fixture with all five runs.
 // 4. Stops anvil. Converts the cache into contracts/test/prototype/fixtures/base-state.alloc.json
 //    (genesis alloc for vm.loadAllocs) and base-state.meta.json (block env, account list, slot
 //    index).
-// 5. Runs the same passes again in replay mode with no RPC and no anvil, to prove the fixture
-//    covers them.
+// 5. Runs the same passes again in replay mode with no RPC and no anvil, with PROTO_FIXTURE_CHECK=1,
+//    to prove the fixture covers them. The sim skips that check by default to stay fast, so this
+//    pass is where its coverage is proven.
+//
+// --forge-out and --forge-cache pass --out and --cache-path to every forge run, so a recording does not
+// share build directories with other work in the same checkout.
 //
 // The RPC URL is never written to the fixture or printed. Only the upstream host is recorded.
 
@@ -40,6 +50,13 @@ const matchPath = arg("match-path") ?? "contracts/test/prototype/**";
 const simPath = "contracts/test/prototype/sim/*";
 const withSim = args.includes("--sim");
 const useAnvil = !args.includes("--no-anvil");
+const SIM_RUNS = ["default-lprecenter", "auction-lprecenter", "tuned", "default", "auction"];
+const simRuns = (arg("sim-runs") ?? SIM_RUNS.join(",")).split(",").filter((r) => r.length > 0);
+for (const r of simRuns) if (!SIM_RUNS.includes(r)) throw new Error(`--sim-runs: unknown run ${r}`);
+const forgeDirs = [
+  ...(arg("forge-out") ? ["--out", arg("forge-out")!] : []),
+  ...(arg("forge-cache") ? ["--cache-path", arg("forge-cache")!] : []),
+];
 const outDir = "contracts/test/prototype/fixtures";
 const host = new URL(rpc).host;
 
@@ -122,10 +139,18 @@ type Pass = { label: string; path: string; env: Record<string, string> };
 
 function passes(): Pass[] {
   if (!withSim) return [{ label: "prototype", path: matchPath, env: {} }];
-  return [
-    { label: "sim tuned", path: simPath, env: { PROTO_SIM: "1", PROTO_SIM_RUN: "tuned" } },
-    { label: "prototype + sim default", path: matchPath, env: { PROTO_SIM: "1", PROTO_SIM_RUN: "default" } },
-  ];
+  const runs = SIM_RUNS.filter((r) => simRuns.includes(r));
+  if (runs.length === 0) throw new Error("--sim-runs names no run");
+  // "<run>-lprecenter" is PROTO_SIM_RUN=<run> with the LP re-centre sensitivity switch on.
+  const simEnv = (r: string): Record<string, string> =>
+    r.endsWith("-lprecenter")
+      ? { PROTO_SIM: "1", PROTO_SIM_RUN: r.slice(0, -"-lprecenter".length), PROTO_SIM_LP: "recenter" }
+      : { PROTO_SIM: "1", PROTO_SIM_RUN: r, PROTO_SIM_LP: "static" };
+  return runs.map((r, i) =>
+    i === runs.length - 1
+      ? { label: `prototype + sim ${r}`, path: matchPath, env: simEnv(r) }
+      : { label: `sim ${r}`, path: simPath, env: simEnv(r) },
+  );
 }
 
 function pad32(hex: string): string {
@@ -177,7 +202,7 @@ try {
   const recordRpc = useAnvil ? await startAnvil(pin) : rpc;
   for (const p of passes()) {
     console.log(`record: ${p.label}`);
-    run(["forge", "test", "--match-path", p.path], { ...p.env, PROTO_RECORD_RPC: recordRpc, PROTO_PIN: String(pin) });
+    run(["forge", "test", "--match-path", p.path, ...forgeDirs], { ...p.env, PROTO_RECORD_RPC: recordRpc, PROTO_PIN: String(pin) });
   }
 } finally {
   stopAnvil();
@@ -233,7 +258,7 @@ console.log(
 );
 
 for (const p of passes()) {
-  console.log(`replay: ${p.label}, no RPC and no anvil`);
-  const replay = run(["forge", "test", "--match-path", p.path], { ...p.env, PROTO_RECORD_RPC: "", PROTO_PIN: "" });
+  console.log(`replay: ${p.label}, no RPC and no anvil, coverage check on`);
+  const replay = run(["forge", "test", "--match-path", p.path, ...forgeDirs], { ...p.env, PROTO_RECORD_RPC: "", PROTO_PIN: "", PROTO_FIXTURE_CHECK: "1" });
   console.log(replay.split("\n").filter((l) => /Suite result|passed|failed/.test(l)).join("\n"));
 }

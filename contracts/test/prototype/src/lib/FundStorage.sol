@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4.1 (sleeves), §4.2 (NAV), §5.1 (plan), §6.1 (size)
+// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4.1 (per-asset targets), §4.2 (NAV), §5.1 (plan), §6.1 (size)
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
 
@@ -21,7 +21,6 @@ import {AssetConfig, Plan} from "../FundTypes.sol";
 /// @param depositsPaused  EMERGENCY pause of deposit and mint only.
 /// @param shutdown        EMERGENCY shutdown: deposits closed, tvlCap 0, until ADMIN `restore`.
 /// @param lastStepAt      Timestamp of the last executed step over all plans (§5.3 step 1).
-/// @param targetSleeveBps Persistent end target per sleeve (§4.1).
 /// @param targetBps       Persistent end target per asset, index-aligned (pushed 0 on `addAsset`).
 /// @param plan            The current plan (§5.1, §5.5); the latest opened, possibly terminal.
 /// @param deferredTotal   Per asset: the amount the fund still owes to `redeemInKind` exits whose leg could not
@@ -42,7 +41,6 @@ struct FundState {
     bool depositsPaused;
     bool shutdown;
     uint64 lastStepAt;
-    uint16[4] targetSleeveBps;
     uint16[] targetBps;
     Plan plan;
     mapping(uint256 index => uint256) deferredTotal;

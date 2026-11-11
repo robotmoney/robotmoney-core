@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4.1 (sleeves, assets), §4.2 (ADP-2 exclusion),
+// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4.1 (assets, per-asset targets), §4.2 (ADP-2 exclusion),
 //            §5.1 (setTargetAndOpenPlan), §5.2 (glide path views), §5.6 (plan bounds), §6.1 (size)
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
@@ -18,10 +18,6 @@ import {
     PlanParams,
     PlanStatus,
     Venue,
-    NUM_SLEEVES,
-    SLEEVE_STABLE,
-    SLEEVE_PROTOCOL,
-    SLEEVE_RWA,
     BPS,
     MAX_FUND_ASSETS,
     MIN_PLAN_DURATION,
@@ -54,24 +50,24 @@ library FundAdminLib {
     /// @notice Append asset `c` (`IRobotMoneyFund.addAsset`). Checks, in order:
     ///         - `assetCount < MAX_FUND_ASSETS` (`MaxAssetsReached`); adapter non-zero (`ZeroAddress`);
     ///         - ADP-2 / NC-2: the adapter's runtime code hash is allowlisted (`AdapterCodeHashNotAllowed`);
-    ///         - no ACTIVE entry with the same adapter (Lending) or token (Basket) (`DuplicateAsset`, NC-8 /
-    ///           core 1789: two active entries would count one balance twice);
-    ///         - Lending: sleeve STABLE; token, pool, poolFee, twapWindow zero; capBps in [1, 10 000]
+    ///         - no ACTIVE entry with the same asset id (`PlanMath.assetId`: adapter for Lending, token for
+    ///           Basket), of either kind (`DuplicateAsset`, NC-8 / core 1789: two active entries would count
+    ///           one balance twice, and a target vector could not tell them apart);
+    ///         - Lending: token, pool, poolFee, twapWindow zero; capBps in [1, 10 000]
     ///           (`InvalidParam`); the adapter reports `VAULT() == fund` (`AdapterVaultMismatch`) and
     ///           `USDC() == usdc` (`AdapterAssetMismatch`);
-    ///         - Basket: sleeve PROTOCOL or RWA; venue V3 or Aerodrome (V4 is refused: its redeem sell
+    ///         - Basket: venue V3 or Aerodrome (V4 is refused: its redeem sell
     ///           anchor, core 1793, is not ported); token and pool non-zero; twapWindow in [600, 86 400];
     ///           ORA-3 execution pool == TWAP pool and pool usability (pair, cardinality, history,
     ///           liquidity) through the linked `BasketAssetConfigGuard`; pool fee strictly below
     ///           `maxSlippageBps` and below a non-zero `navDeviationGuardBps` (`BoundAtOrBelowPoolFee`).
-    ///         `active` is forced true, `intraBps` ≤ 10 000 is stored as given, `targetBps` grows by a 0.
+    ///         `active` is forced true and `targetBps` grows by a 0. There is no sleeve to check (§4.1).
     function addAsset(FundState storage s, AssetConfig memory c) public returns (uint256 index) {
         index = s.assets.length;
         if (index >= MAX_FUND_ASSETS) revert IRobotMoneyFund.MaxAssetsReached();
         if (c.adapter == address(0)) revert IFundEvents.ZeroAddress();
         bytes32 hash = c.adapter.codehash;
         if (!s.codeHashAllowed[hash]) revert IRobotMoneyFund.AdapterCodeHashNotAllowed(c.adapter, hash);
-        if (c.intraBps > BPS) revert IFundEvents.InvalidParam();
         if (c.kind == AssetKind.Lending) {
             _checkLending(s, c);
         } else {
@@ -86,18 +82,16 @@ library FundAdminLib {
 
     function _rejectDuplicate(FundState storage s, AssetConfig memory c) private view {
         uint256 n = s.assets.length;
+        address id = PlanMath.assetId(c);
         for (uint256 i; i < n; ++i) {
-            AssetConfig storage e = s.assets[i];
-            if (!e.active) continue;
-            if (c.kind == AssetKind.Lending ? e.adapter == c.adapter : e.token == c.token) {
-                revert IRobotMoneyFund.DuplicateAsset(i);
-            }
+            AssetConfig memory e = s.assets[i];
+            if (e.active && PlanMath.assetId(e) == id) revert IRobotMoneyFund.DuplicateAsset(i);
         }
     }
 
     function _checkLending(FundState storage s, AssetConfig memory c) private view {
         if (
-            c.sleeve != SLEEVE_STABLE || c.token != address(0) || c.pool != address(0) || c.poolFee != 0
+            c.token != address(0) || c.pool != address(0) || c.poolFee != 0
                 || c.twapWindow != 0 || c.capBps == 0 || c.capBps > BPS
         ) revert IFundEvents.InvalidParam();
         IFundLendingIdentity id = IFundLendingIdentity(c.adapter);
@@ -108,7 +102,6 @@ library FundAdminLib {
     }
 
     function _checkBasket(FundState storage s, AssetConfig memory c, uint256 index) private view {
-        if (c.sleeve != SLEEVE_PROTOCOL && c.sleeve != SLEEVE_RWA) revert IFundEvents.InvalidParam();
         // Uniswap V4 recorder pools need BasketVault's USDC sell anchor on redeem (core 1793,
         // `BasketViews.checkSellAnchor`), which this prototype does not port: refuse them (§4.2, §4.4).
         if (c.venue == Venue.V4) revert IFundEvents.InvalidParam();
@@ -136,10 +129,14 @@ library FundAdminLib {
     /// @notice Deactivate asset `i` (`IRobotMoneyFund.deactivateAsset`). The fund must hold nothing of it:
     ///         Lending `adapter.totalAssets() == 0`; Basket a zero balance or dust whose TWAP sale floor rounds
     ///         to 0 USDC (QA plan D6), and nothing still owed to in-kind exits (`deferredTotal`), else
-    ///         `AssetStillHeld`. `intraBps` becomes 0. A Lending entry's open
+    ///         `AssetStillHeld`. Its persistent target must already be 0, else `AssetStillTargeted`.
+    ///         So an inactive asset always has target 0 (RB-9), and deposits never route to it.
+    ///         A target vector may no longer name it. A Lending entry's open
     ///         exclusion record closes (`Removed`, core 1820); it stays claimable forever.
     function deactivateAsset(FundState storage s, uint256 i) public {
         if (i >= s.assets.length || !s.assets[i].active) revert IFundEvents.InvalidAssetIndex(i);
+        uint256 target = s.targetBps[i];
+        if (target != 0) revert IRobotMoneyFund.AssetStillTargeted(i, target);
         // Owed in-kind legs keep the entry: a later re-listing of the same token would otherwise count them.
         if (s.deferredTotal[i] != 0) revert IRobotMoneyFund.AssetStillHeld(i);
         AssetConfig storage a = s.assets[i];
@@ -159,34 +156,7 @@ library FundAdminLib {
             }
         }
         a.active = false;
-        a.intraBps = 0;
         emit IRobotMoneyFund.AssetDeactivated(i);
-    }
-
-    /// @notice Write intra-sleeve weights (`IRobotMoneyFund.setIntraBps`). Every listed index must be an active
-    ///         asset (`InvalidAssetIndex`). Every sleeve touched must then sum to 10 000 over its active assets
-    ///         (`IntraSleeveSumInvalid`).
-    function setIntraBps(FundState storage s, uint256[] memory indices, uint16[] memory intraBps) public {
-        uint256 m = indices.length;
-        if (m != intraBps.length || m == 0) revert IFundEvents.InvalidParam();
-        bool[4] memory touched;
-        for (uint256 k; k < m; ++k) {
-            uint256 i = indices[k];
-            if (i >= s.assets.length || !s.assets[i].active) revert IFundEvents.InvalidAssetIndex(i);
-            if (intraBps[k] > BPS) revert IFundEvents.InvalidParam();
-            s.assets[i].intraBps = intraBps[k];
-            touched[s.assets[i].sleeve] = true;
-        }
-        uint256 n = s.assets.length;
-        for (uint8 sl; sl < NUM_SLEEVES; ++sl) {
-            if (!touched[sl]) continue;
-            uint256 sum;
-            for (uint256 i; i < n; ++i) {
-                if (s.assets[i].active && s.assets[i].sleeve == sl) sum += s.assets[i].intraBps;
-            }
-            if (sum != BPS) revert IFundEvents.IntraSleeveSumInvalid(sl, sum);
-        }
-        emit IRobotMoneyFund.IntraBpsSet(indices, intraBps);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -238,20 +208,29 @@ library FundAdminLib {
     // ═════════════════════════════════════════════════════════════════════════
 
     /// @notice Body of `IRobotMoneyFund.setTargetAndOpenPlan` (the fund checks GOVERNANCE_ROLE, RB-1):
-    ///         validate the sleeve vector and params; `endBps = PlanMath.assetTargets`; every Lending end
-    ///         target ≤ its `capBps` (`TargetExceedsCap`); supersede a live plan (plans never stack); snapshot
-    ///         the ACTUAL TWAP weights as the start (never the old plan's target); store and emit.
-    function openPlan(FundState storage s, uint16[4] memory sleeveBps, PlanParams memory params, bytes32 receiptId)
-        public
-        returns (uint256 planId)
-    {
-        PlanMath.validateSleeveBps(sleeveBps);
+    ///         validate params; `endBps = PlanMath.assetTargets(assets, bps, s.assets)`, which runs every §4.1
+    ///         vector check (RB-9, including a Lending end target ≤ its `capBps`); supersede a live plan (plans
+    ///         never stack); snapshot the ACTUAL TWAP weights as the start (never the old plan's target); store
+    ///         and emit.
+    function openPlan(
+        FundState storage s,
+        address[] memory assets,
+        uint256[] memory bps,
+        PlanParams memory params,
+        bytes32 receiptId
+    ) public returns (uint256 planId) {
         if (
             params.duration < MIN_PLAN_DURATION || params.duration > MAX_PLAN_DURATION || params.costBudgetBps == 0
                 || params.costBudgetBps > MAX_COST_BUDGET_BPS
         ) revert IFundEvents.PlanParamOutOfBounds();
-        uint16[] memory endBps = _endTargets(s, sleeveBps);
+        return _open(s, PlanMath.assetTargets(assets, bps, s.assets), params, receiptId);
+    }
 
+    /// @dev `openPlan` after the vector became `endBps` (own frame for stack depth).
+    function _open(FundState storage s, uint16[] memory endBps, PlanParams memory params, bytes32 receiptId)
+        private
+        returns (uint256 planId)
+    {
         Plan storage p = s.plan;
         PlanStatus prev = p.status;
         if (prev == PlanStatus.Open || prev == PlanStatus.Halted || prev == PlanStatus.Paused) {
@@ -269,7 +248,6 @@ library FundAdminLib {
         p.receiptId = receiptId;
         p.startTime = uint64(block.timestamp);
         p.endTime = uint64(block.timestamp) + params.duration;
-        p.sleeveBps = sleeveBps;
         p.startBps = startBps;
         p.endBps = endBps;
         p.startIdleBps = startIdle;
@@ -279,25 +257,13 @@ library FundAdminLib {
         p.costSpent = 0;
         p.stepCount = 0;
 
-        s.targetSleeveBps = sleeveBps;
         s.targetBps = endBps;
         _emitOpened(p);
     }
 
-    /// @dev `PlanMath.assetTargets` over the current config, then the Lending `capBps` check.
-    function _endTargets(FundState storage s, uint16[4] memory sleeveBps) private view returns (uint16[] memory end) {
-        AssetConfig[] memory cfg = s.assets;
-        end = PlanMath.assetTargets(sleeveBps, cfg);
-        for (uint256 i; i < cfg.length; ++i) {
-            if (cfg[i].active && cfg[i].kind == AssetKind.Lending && end[i] > cfg[i].capBps) {
-                revert IRobotMoneyFund.TargetExceedsCap(i, end[i], cfg[i].capBps);
-            }
-        }
-    }
-
     function _emitOpened(Plan storage p) private {
         emit IFundEvents.PlanOpened(
-            p.id, p.receiptId, p.sleeveBps, p.startBps, p.endBps, p.startTime, p.endTime, p.turnoverUsdc, p.costBudget
+            p.id, p.receiptId, p.startBps, p.endBps, p.startTime, p.endTime, p.turnoverUsdc, p.costBudget
         );
     }
 }

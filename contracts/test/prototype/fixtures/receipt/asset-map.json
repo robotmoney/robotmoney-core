@@ -1,0 +1,132 @@
+{
+  "schema_version": "1.1",
+  "description": "Maps each receipt asset key (consensus receipt 1.1 `assets[].asset`) to the fund's on-chain asset id, per chain. One-vault experiment only (docs/technical/one-vault-rebalancer-proposal.md §4.1). It stands in for tests/fixtures/consensus-receipt.asset-map.json, which the proposal names. That path is byte-pinned to another repo, so the experiment keeps its map here.",
+  "canonical_asset_order": [
+    "morpho-usdc",
+    "aave-v3-usdc",
+    "compound-v3-usdc",
+    "weth",
+    "cbbtc",
+    "despxa"
+  ],
+  "id_contract": {
+    "on_chain_id": "asset_address",
+    "meaning": "The phase 3b fund names an asset by its fund asset address, PlanMath.assetId: the adapter address for a Lending asset, the token address for a Basket asset. The govern row submits applyReceipt(receiptId, digest, assets, bps) with assets as those addresses. fund_index is the index addAsset returns in the prototype harness. It is stable for the fund's life, orders the vector, and is what the sim and the tests index by.",
+    "deploy_time_addresses": "Basket token addresses are real Base addresses and fixed, so a Basket row carries its id. Every Lending id is a deploy-time address: the prototype harness creates each adapter with CREATE from the test contract. So a Lending row names its adapter by its harness role (the PrototypeHarness field that holds it), not by an address. The checker resolves a role only when it is given the address (--adapter ROLE=0x...). A production map would carry each adapter address from the deployment manifest.",
+    "bucket_policy": "Each row fixes the receipt bucket its asset is reported under. A receipt entry's `sleeve` label must equal its row's `bucket` (LABEL_MISMATCH). So the bucket audit binds the asset weights to the committee's bucket weights. Regrouping assets is a map change, not a contract change.",
+    "missing_key_policy": "A receipt key with no active row for the chain is refused (UNKNOWN_ASSET). An active row the receipt does not list is refused (ASSET_NOT_LISTED). Never substitute a default."
+  },
+  "chains": {
+    "8453": {
+      "deployment": "prototype harness, contracts/test/prototype/PrototypeHarness.sol (_addAssets), on the recorded Base fixture",
+      "assets": [
+        {
+          "asset": "aave-v3-usdc",
+          "bucket": "conservative_defi_yield",
+          "fund_index": 0,
+          "asset_id": {
+            "source": "adapter",
+            "adapter_role": "aaveAdapter",
+            "address": null
+          },
+          "active": true,
+          "kind": "Lending",
+          "cap_bps": 6000,
+          "adapter_role": "aaveAdapter",
+          "adapter_contract": "AaveV3Adapter",
+          "venue": "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
+          "token": null,
+          "pool": null
+        },
+        {
+          "asset": "compound-v3-usdc",
+          "bucket": "conservative_defi_yield",
+          "fund_index": 1,
+          "asset_id": {
+            "source": "adapter",
+            "adapter_role": "cometAdapter",
+            "address": null
+          },
+          "active": true,
+          "kind": "Lending",
+          "cap_bps": 6000,
+          "adapter_role": "cometAdapter",
+          "adapter_contract": "CompoundV3Adapter",
+          "venue": "0xb125E6687d4313864e53df431d5425969c15Eb2F",
+          "token": null,
+          "pool": null
+        },
+        {
+          "asset": "morpho-usdc",
+          "bucket": "conservative_defi_yield",
+          "fund_index": 2,
+          "asset_id": {
+            "source": "adapter",
+            "adapter_role": "moonwellAdapter",
+            "address": null
+          },
+          "active": true,
+          "kind": "Lending",
+          "cap_bps": 6000,
+          "adapter_role": "moonwellAdapter",
+          "adapter_contract": "MorphoAdapter",
+          "venue": "0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca",
+          "venue_note": "The Moonwell USDC MetaMorpho vault. The harness calls this asset MOONWELL. It is the fund's only Morpho venue.",
+          "token": null,
+          "pool": null
+        },
+        {
+          "asset": "weth",
+          "bucket": "protocol_tokens",
+          "fund_index": 3,
+          "asset_id": {
+            "source": "token",
+            "address": "0x4200000000000000000000000000000000000006"
+          },
+          "active": true,
+          "kind": "Basket",
+          "cap_bps": null,
+          "adapter_role": "swapAdapter",
+          "adapter_contract": "UniswapV3SwapAdapter",
+          "venue": null,
+          "token": "0x4200000000000000000000000000000000000006",
+          "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224"
+        },
+        {
+          "asset": "cbbtc",
+          "bucket": "protocol_tokens",
+          "fund_index": 4,
+          "asset_id": {
+            "source": "token",
+            "address": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+          },
+          "active": true,
+          "kind": "Basket",
+          "cap_bps": null,
+          "adapter_role": "swapAdapter",
+          "adapter_contract": "UniswapV3SwapAdapter",
+          "venue": null,
+          "token": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+          "pool": "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef"
+        },
+        {
+          "asset": "despxa",
+          "bucket": "real_world_assets",
+          "fund_index": 5,
+          "asset_id": {
+            "source": "token",
+            "address": "0x9c5C365e764829876243d0b289733B9D2b729685"
+          },
+          "active": true,
+          "kind": "Basket",
+          "cap_bps": null,
+          "adapter_role": "swapAdapter",
+          "adapter_contract": "UniswapV3SwapAdapter",
+          "venue": null,
+          "token": "0x9c5C365e764829876243d0b289733B9D2b729685",
+          "pool": "0xD08f1fb797BfaCdeD23323178672557034c64CfA"
+        }
+      ]
+    }
+  }
+}

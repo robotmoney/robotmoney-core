@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/technical/one-vault-rebalancer-proposal.md §4.4 (redemptions), §5.3 (step), §5.5 (plan lifecycle),
-//            §7 (RB-1 to RB-8). Development plan Step 2.5 (gate G3).
+//            §4.1 (per-asset target vector), §7 (RB-1 to RB-9). Development plan Step 2.5 (gate G3), phase 3b.
 // Experiment prototype only (contracts/test/prototype/). Not a production test.
 pragma solidity ^0.8.24;
 
@@ -9,7 +9,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {PrototypeHarness} from "./PrototypeHarness.sol";
-import {Plan, PlanParams, PlanStatus, SkipReason, IDLE_INDEX, BPS} from "./src/FundTypes.sol";
+import {Plan, PlanParams, PlanStatus, SkipReason, IFundEvents, IDLE_INDEX, BPS} from "./src/FundTypes.sol";
+import {IRebalanceGovernance} from "./src/interfaces/IRebalanceGovernance.sol";
 
 /// @title Invariants
 /// @notice One stateful invariant suite for the one-vault prototype (plan Step 2.5). The test contract is its own
@@ -32,6 +33,10 @@ import {Plan, PlanParams, PlanStatus, SkipReason, IDLE_INDEX, BPS} from "./src/F
 ///         - RB-7: an executed step's notional fits inside both legs' distance to `pathTarget(now)`, computed here
 ///           independently from the plan fields.
 ///         - RB-8: the receipt contract holds no assets and never calls the fund, the rebalancer or governance.
+///         - RB-9: every apply action first sends five refused per-asset vectors for the same receipt, built from
+///           the action's valid vector: an unlisted active asset, a duplicate, an unknown asset, a bad sum, and
+///           a lending cap breach. Each must revert with its own error, release nothing, and open no plan. The
+///           fund's persistent target always names every active asset and sums to 10 000 once a plan opened.
 ///         - Solvency: shares outstanding imply a positive `totalAssets`. The fund leaves no token allowance
 ///           standing to any spender it ever approved. The rebalancer and governance hold no assets.
 ///
@@ -77,6 +82,7 @@ contract Invariants is PrototypeHarness {
     uint256 public ghostRb5Market;
     uint256 public ghostRb7PastPath;
     uint256 public ghostRb8Calls;
+    uint256 public ghostRb9Violations;
     uint256 public ghostInv1Leaks;
     uint256 public ghostRedeemPayoutMismatch;
     /// @dev A keeper `step()` skipped NothingToTrade / BelowMinStep although, computed here independently,
@@ -89,6 +95,7 @@ contract Invariants is PrototypeHarness {
     uint256 public callsRedeem;
     uint256 public callsRedeemInKind;
     uint256 public callsApply;
+    uint256 public callsRb9Refused;
     uint256 public callsStep;
     uint256 public stepsExecuted;
     uint256 public callsWarp;
@@ -154,11 +161,11 @@ contract Invariants is PrototypeHarness {
 
         // Seed: one holder with an all-idle position, then a plan, so the first steps trade for real.
         deposit(holders[0], 20_000e6);
-        recordAndApply(sleeveVec(6_000, 3_000, 1_000));
+        recordAndApply(bucketVec(6_000, 3_000, 1_000));
         // A day into the 7-day plan, so the very first steps of a run have real deviations to trade.
         vm.warp(block.timestamp + 1 days);
 
-        if (!recording) {
+        if (fixtureCheck) {
             _loadCoverageIndex();
             _coverage(vm.stopAndReturnStateDiff());
         }
@@ -253,15 +260,19 @@ contract Invariants is PrototypeHarness {
         }
     }
 
-    /// @notice Record and apply a random valid receipt through the timelock (RB-1's only path). A valid receipt
-    ///         never fails to open a plan.
+    /// @notice Record a random valid receipt. First send each refused variant of its vector (RB-9), then apply the
+    ///         valid vector through the timelock (RB-1's only path). A valid receipt never fails to open a plan.
     function act_apply(uint256 a, uint256 b) external action(address(0), false) {
         uint16 stable = uint16(bound(a, 0, BPS));
         uint16 protocol = uint16(bound(b, 0, BPS - stable));
         uint16 rwa = uint16(BPS - stable - protocol);
-        (bytes32 id, bytes32 digest) = recordReceipt(sleeveVec(stable, protocol, rwa));
+        uint16[6] memory v = bucketVec(stable, protocol, rwa);
+        (bytes32 id, bytes32 digest) = recordReceipt(v);
+        for (uint256 kind; kind < 6; ++kind) {
+            _refuseBadVector(id, digest, v, kind);
+        }
         uint256 prevId = fund.currentPlanId();
-        try this.applyExternal(id, digest, sleeveVec(stable, protocol, rwa)) {
+        try this.applyExternal(id, digest, v) {
             ++callsApply;
             if (fund.currentPlanId() != prevId + 1 || fund.planStatus() != PlanStatus.Open) ++ghostApplyFailures;
         } catch {
@@ -270,9 +281,83 @@ contract Invariants is PrototypeHarness {
     }
 
     /// @dev External hop so a failed timelock execution can be caught. Only this contract may call it.
-    function applyExternal(bytes32 id, bytes32 digest, uint16[4] memory bps) external {
+    function applyExternal(bytes32 id, bytes32 digest, uint16[6] memory bps) external {
         require(msg.sender == address(this), "self only");
         applyReceiptViaTimelock(id, digest, bps);
+    }
+
+    /// @dev RB-9: send the timelock's `applyReceipt` call for receipt `id` with a refused variant of the valid
+    ///      vector `v`, as the timelock (the call the timelock would execute, with no schedule and no warp, so the
+    ///      run's time line and pool reads are unchanged). `kind` picks the variant: 0 an active asset left out
+    ///      (its weight moved to a basket asset), 1 a duplicate entry, 2 an unknown asset, 3 a sum of 10 001,
+    ///      4 a lending target above `capBps`, 5 the valid vector with a wrong payload digest. The call must
+    ///      revert with exactly that variant's error, the receipt must stay unreleased, and no plan or applied
+    ///      time may change.
+    function _refuseBadVector(bytes32 id, bytes32 digest, uint16[6] memory v, uint256 kind) private {
+        address[] memory ids;
+        uint256[] memory w;
+        bytes memory expected;
+        bytes32 sent = digest;
+        if (kind == 5) {
+            (ids, w) = assetArrays(v);
+            sent = keccak256("wrong");
+            expected = abi.encodeWithSelector(IRebalanceGovernance.PayloadDigestMismatch.selector, id, digest, sent);
+        } else {
+            (ids, w, expected) = _badVector(v, kind);
+        }
+        uint256 prevId = fund.currentPlanId();
+        uint64 prevApplied = governance.lastAppliedRecordedAt();
+        vm.prank(address(timelock));
+        try governance.applyReceipt(id, sent, ids, w) {
+            ++ghostRb9Violations;
+        } catch (bytes memory err) {
+            if (keccak256(err) != keccak256(expected)) ++ghostRb9Violations;
+        }
+        if (receipts.isReleased(id) || fund.currentPlanId() != prevId) ++ghostRb9Violations;
+        if (governance.lastAppliedRecordedAt() != prevApplied) ++ghostRb9Violations;
+        ++callsRb9Refused;
+    }
+
+    /// @dev The refused variant `kind` of `v` (see `_refuseBadVector`) and the exact revert data it must raise.
+    function _badVector(uint16[6] memory v, uint256 kind)
+        private
+        view
+        returns (address[] memory ids, uint256[] memory w, bytes memory expected)
+    {
+        (ids, w) = assetArrays(v);
+        if (kind == 0) {
+            // Leave out deSPXA. Its weight moves to wETH, so the sum stays 10 000 and no cap is hit.
+            address[] memory ids5 = new address[](N_ASSETS - 1);
+            uint256[] memory w5 = new uint256[](N_ASSETS - 1);
+            for (uint256 i; i < N_ASSETS - 1; ++i) {
+                ids5[i] = ids[i];
+                w5[i] = w[i];
+            }
+            w5[IDX_WETH] += w[IDX_DESPXA];
+            return (ids5, w5, abi.encodeWithSelector(IFundEvents.TargetAssetMissing.selector, DESPXA));
+        }
+        if (kind == 1 || kind == 2) {
+            // Append a zero-weight entry: aave again (duplicate), or an address that is no fund asset.
+            address extra = kind == 1 ? ids[IDX_AAVE] : stranger;
+            address[] memory ids7 = new address[](N_ASSETS + 1);
+            uint256[] memory w7 = new uint256[](N_ASSETS + 1);
+            for (uint256 i; i < N_ASSETS; ++i) {
+                ids7[i] = ids[i];
+                w7[i] = w[i];
+            }
+            ids7[N_ASSETS] = extra;
+            bytes4 sel = kind == 1 ? IFundEvents.TargetAssetDuplicate.selector : IFundEvents.TargetAssetNotActive.selector;
+            return (ids7, w7, abi.encodeWithSelector(sel, extra));
+        }
+        if (kind == 3) {
+            w[IDX_WETH] += 1;
+            return (ids, w, abi.encodeWithSelector(IFundEvents.TargetSumInvalid.selector, BPS + 1));
+        }
+        // Aave is the first entry, so its cap check fires before the sum check.
+        w[IDX_AAVE] = LENDING_CAP_BPS + 1;
+        expected = abi.encodeWithSelector(
+            IFundEvents.TargetExceedsCap.selector, IDX_AAVE, uint256(LENDING_CAP_BPS) + 1, uint256(LENDING_CAP_BPS)
+        );
     }
 
     /// @notice One keeper `step()` (optionally after one effective interval). Checks RB-4, RB-5 and RB-7 against
@@ -380,8 +465,7 @@ contract Invariants is PrototypeHarness {
     function act_unauthorizedOpen(uint256 who, uint256 a) external action(address(0), false) {
         address[4] memory callers = [stranger, keeper, submitter, holders[who % holders.length]];
         address c = callers[a % callers.length];
-        uint16[4] memory bps = sleeveVec(10_000, 0, 0);
-        (uint8[] memory s, uint256[] memory w) = sleeveArrays(bps);
+        (address[] memory s, uint256[] memory w) = assetArrays(bucketVec(10_000, 0, 0));
         PlanParams memory pp = PlanParams(PLAN_DURATION, COST_BUDGET_BPS);
         uint256 prevId = fund.currentPlanId();
 
@@ -394,7 +478,7 @@ contract Invariants is PrototypeHarness {
             ++ghostRb1Violations;
         } catch {}
         vm.prank(c);
-        try fund.setTargetAndOpenPlan(bps, pp, bytes32(0)) {
+        try fund.setTargetAndOpenPlan(s, w, pp, bytes32(0)) {
             ++ghostRb1Violations;
         } catch {}
         if (fund.currentPlanId() != prevId) ++ghostRb1Violations;
@@ -426,6 +510,21 @@ contract Invariants is PrototypeHarness {
         assertEq(ghostLivenessSkips, 0, "liveness: a step with a tradeable deviation skipped as nothing to trade");
         Plan memory p = fund.plan();
         assertTrue(p.costSpent <= p.costBudget || p.status == PlanStatus.Halted, "RB-4: costSpent > costBudget");
+    }
+
+    /// @notice RB-9: every refused vector reverted with its own error and released nothing. The fund's persistent
+    ///         target names every active asset (inactive assets 0) and sums to 10 000 once a plan has opened.
+    function invariant_targetVector() public fixtureCovered {
+        assertEq(ghostRb9Violations, 0, "RB-9: a refused vector did not revert with its error, or released");
+        if (fund.currentPlanId() == 0) return;
+        uint16[] memory t = fund.targetBps();
+        assertEq(t.length, fund.assetCount(), "RB-9: target is index-aligned to the asset list");
+        uint256 sum;
+        for (uint256 i; i < t.length; ++i) {
+            if (!fund.assetConfig(i).active) assertEq(t[i], 0, "RB-9: inactive asset has a target");
+            sum += t[i];
+        }
+        assertEq(sum, BPS, "RB-9: target does not sum to 10 000");
     }
 
     /// @notice RB-3 / INV-1: no asset left a system address for a non-holder, non-venue recipient.
@@ -473,7 +572,8 @@ contract Invariants is PrototypeHarness {
             "run",
             string.concat(
                 "deposits ", vm.toString(callsDeposit), ", redeems ", vm.toString(callsRedeem), ", inKind ",
-                vm.toString(callsRedeemInKind), ", applies ", vm.toString(callsApply), ", steps ",
+                vm.toString(callsRedeemInKind), ", applies ", vm.toString(callsApply), ", rb9Refused ",
+                vm.toString(callsRb9Refused), ", steps ",
                 vm.toString(stepsExecuted), "/", vm.toString(callsStep), ", priceMoves ", vm.toString(callsPrice)
             )
         );
@@ -586,7 +686,7 @@ contract Invariants is PrototypeHarness {
                 ++ghostRb8Calls;
             }
         }
-        if (!recording) _coverage(acc);
+        if (fixtureCheck) _coverage(acc);
     }
 
     function _loadCoverageIndex() private {
