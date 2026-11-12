@@ -13,6 +13,7 @@ import {
     SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
 import { manifestBase, scopeTable } from "../stage-table.ts";
+import { verifyFundSystem } from "./fund.ts";
 import { verifyGatewaySystem } from "./gateway.ts";
 import { SAFE_MANIFEST } from "../core-wiring.ts";
 import { isAddress, loadManifests, lc, type ManifestVault } from "./manifests.ts";
@@ -35,6 +36,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   // Issue 1892: the verifier of one system. `legacy` is a table from before the split (the combined deploy, deployments/8453/deploy-2): it keeps every check, the gateway ones included.
   const sys = opts.system ?? (opts.table.systems ? "vaults" : "legacy");
   if (sys === "gateway") return verifyGatewaySystem(opts);
+  if (sys === "fund") return verifyFundSystem(opts); // Deploy 4: the fund system has its own verifier
   const withGateway = sys === "legacy";
   const c = new Collector();
   const { chain, sheet } = opts;

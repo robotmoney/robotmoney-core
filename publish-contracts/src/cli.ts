@@ -156,7 +156,7 @@ export const USAGE = `publish contracts
   --submitter ADDR   govern --row register-submitter and the record-receipt verb: the consensus receipt SUBMITTER Safe, a SafeL2 1.4.1 multisig (threshold 2 or more, no module, no guard). It may be the governing Safe.
                      record-receipt: required on every chain; --signer is the gas payer and --owner-signer names the submitter Safe's owners (enough to reach its threshold).
   --payload FILE     govern with --row apply-receipt (required), or record-receipt (required, checked before any signer is built): the receipt payload file as served by the canonical route. Its receipt digest (domain line + bytes) is the anchored payloadDigest.
-  --system S         vaults (default) | gateway (issue 1892): the independent system to deploy and verify. gateway runs the stages gateway and gateway-handover against the vaults system's
+  --system S         vaults (default) | gateway (issue 1892) | fund (Deploy 4, the one-vault prototype as a rehearsal): the independent system to deploy and verify. gateway runs the stages gateway and gateway-handover against the vaults system's
                      manifests, with its own small sheet (GATEWAY_ADMIN_ADDRESS and GATEWAY_UPGRADE_TIMELOCK, no default, no AGENT_ name, no Safe), its own --evidence directory and its own
                      verifier. Only publish and verify run in it (docs/operations/contract-release-runbooks.md 4.13).
   --stage S          plan | deploy | all | a comma list of stage names (default: everything through verify)
@@ -310,6 +310,9 @@ export function parseCli(argv: string[]): Parsed {
   const system = (v.system as string | undefined) ?? "vaults";
   if (!(SYSTEM_NAMES as readonly string[]).includes(system)) throw new PublishError("USAGE", `--system must be ${SYSTEM_NAMES.join(" or ")}, got '${system}'\n${USAGE}`);
   if (system === "gateway" && verb !== undefined && verb !== "publish" && verb !== "verify") throw new PublishError("USAGE", `the ${verb} verb belongs to the vaults system: the gateway system runs publish and verify only (--system gateway)\n${USAGE}`);
+  // Deploy 4: the fund system runs publish and verify. Its governed calls go through the Safe tool on its own timelock; govern, pause-all, record-receipt and the vault verbs are the vaults system's.
+  if (system === "fund" && verb !== undefined && verb !== "publish" && verb !== "verify") throw new PublishError("USAGE", `the ${verb} verb belongs to the vaults system: the fund system runs publish and verify only (--system fund); its governed calls go through publish-contracts/src/safe/cli.ts on the fund-system timelock\n${USAGE}`);
+  if (system === "fund" && stage !== undefined && stage.split(",").includes("govern")) throw new PublishError("USAGE", `the fund system has no govern stage (--system fund)\n${USAGE}`);
   if (row !== undefined && row === "") throw new PublishError("USAGE", `--row needs a number or a name\n${USAGE}`);
   if (row !== undefined) {
     const stageNames = verb === undefined ? stage : undefined;
@@ -802,7 +805,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
             // A part-way govern run (GOVERN_PENDING, issue 1667) is not a failed verify: nothing was checked, so nothing is paused. Neither is a verify refused before
             // the verifier ran because it would compare a contract with the wrong build (QA plan v1 E1, redeploy-vault.ts verifyBuildRefusal).
             // Neither is a verify whose only failures are reads the RPC refused (RPC_REFUSED, issue 1851): an RPC without the data is not an incident.
-            if (a.system !== "gateway" && !isPublishError(e, "GOVERN_PENDING") && !isPublishError(e, "RPC_REFUSED") && !(isPublishError(e, "USAGE") && e.details.refused_before_verify === true)) postflight = "verify";
+            if (a.system === "vaults" && !isPublishError(e, "GOVERN_PENDING") && !isPublishError(e, "RPC_REFUSED") && !(isPublishError(e, "USAGE") && e.details.refused_before_verify === true)) postflight = "verify";
             throw e;
           }
         },
@@ -810,7 +813,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
           await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, ...(a.noWarp ? { warp: false as const } : {}), row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, proxy: a.proxy, implementation: a.implementation, migration: a.migration, upgradeBuild: a.upgradeBuild, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs && a.row === RETIRE_ROW ? { retire: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
         },
       });
-      try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { if (a.system !== "gateway") postflight = "postflight"; throw e; } // issue 1892: the gateway run owns no vault to pause
+      try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { if (a.system === "vaults") postflight = "postflight"; throw e; } // issue 1892: the gateway run owns no vault to pause
     } catch (e) {
       if (postflight && !a.dryRun) throw await pauseOnFailure(ctx, postflight, e, emergencySigner, deps.pauseAll);
       throw e;
@@ -826,7 +829,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     // report is the deployment's, filed under the original sha (coreHead names the checkout it was read from).
     const isoPath = join(ctx.evidenceDir, `isomorphism-${rpcChainId}.json`);
     if (shaRun || (toolRun && existsSync(isoPath))) log.log("info", "run.isomorphism_kept", { original_sha: (shaRun ?? toolRun)!.originalSha, note: "a run at a redeploy or tooling sha does not rewrite the deployment's isomorphism report" });
-    else if (!a.dryRun && a.system !== "gateway" && existsSync(ctx.evidenceDir)) { // issue 1892: the isomorphism report is the vaults deployment's
+    else if (!a.dryRun && a.system === "vaults" && existsSync(ctx.evidenceDir)) { // issue 1892: the isomorphism report is the vaults deployment's
       const cmp = a.compareSheet ? { path: a.compareSheet, sheet: parseSheet(readFileSync(resolve(cwd, a.compareSheet), "utf8"), sheetOpts) } : undefined;
       const report = await buildIsomorphismReport(ctx, { compareTo: cmp });
       writeReport(isoPath, toolRun ? { ...report, coreSha: toolRun.originalSha } : report);

@@ -117,11 +117,13 @@ export interface VerifySheet {
   defaultWeights: { vault: string; bps: number }[];
   /** Issue 1892, the gateway system only: the explicit governance inputs of the gateway sheet (GATEWAY_ADMIN_ADDRESS, GATEWAY_UPGRADE_TIMELOCK). */
   gateway?: { admin: Address; upgradeTimelock: Address };
+  /** Deploy 4, the fund system only: what the fund sheet decided (the keeper, the fund's caps and guards, every FLOW_*, REBALANCER_* and PLAN_* value by sheet name). */
+  fund?: { keeper: Address; tvlCap: bigint; perDepositCap: bigint; exitFeeBps: bigint; maxSlippageBps: bigint; navDeviationBps: bigint; minSeedUsdc: bigint; params: Record<string, bigint> };
 }
 
 export interface VerifyOptions {
   /** Issue 1892: the system to verify. Absent: `vaults` for a table that declares systems, else `legacy` (the combined deploy, deployments/8453/deploy-2: every check kept). */
-  system?: "vaults" | "gateway" | "legacy";
+  system?: "vaults" | "gateway" | "fund" | "legacy";
   /** Read access to the chain. Use viemReader(rpcUrl) in production. */
   chain: ChainReader;
   manifestDir: string;

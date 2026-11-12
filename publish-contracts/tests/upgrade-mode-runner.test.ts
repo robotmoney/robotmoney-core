@@ -11,7 +11,7 @@ import { COUNTS } from "./fixtures.ts";
 import { ADMIN, SCRIPT, world } from "./harness.ts";
 
 const table = getStageTable();
-const PROXY_STAGES = table.stages.filter((s) => s.proxies && s.system !== "gateway").map((s) => s.name); // issue 1892: the vaults system's proxy stages
+const PROXY_STAGES = table.stages.filter((s) => s.proxies && s.system === "vaults").map((s) => s.name); // issue 1892: the vaults system's proxy stages
 const forgeScripts = (w: ReturnType<typeof world>) => w.state().calls.filter((c: any) => c.tool === "forge" && c.args[0] === "script");
 const broadcastOf = (w: ReturnType<typeof world>, stage: string) => forgeScripts(w).filter((c: any) => String(c.args[1]).startsWith(table.stages.find((s) => s.name === stage)!.script) && c.args.includes("--broadcast"));
 const runManifest = (w: ReturnType<typeof world>) => JSON.parse(readFileSync(join(w.evidence, "publish-run.json"), "utf8"));

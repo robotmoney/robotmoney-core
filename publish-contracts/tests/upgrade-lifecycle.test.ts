@@ -160,7 +160,7 @@ describe("verify on a missed-deadline fixture exits 13 (issue 1859)", () => {
     w.sheet.upgradeMode = "upgradeable";
     w.sheet.freezeDeadline = due;
     w.opts.now = BigInt(Date.parse(due) / 1000) + 1n;
-    for (const st of getStageTable().stages.filter((x) => x.proxies)) {
+    for (const st of getStageTable().stages.filter((x) => x.proxies && x.system !== "fund")) {
       const p = join(w.manifestDir, stageManifestFile(getStageTable(), st.name));
       writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, "utf8")), upgrade_mode: "upgradeable" }));
     }
