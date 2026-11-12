@@ -9,7 +9,7 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 import {TickMath} from "../../../lib/TickMath.sol";
-import {PrototypeHarness, IHarnessSwapRouter02} from "../PrototypeHarness.sol";
+import {BaselineHarness, IHarnessSwapRouter02} from "../baseline/BaselineHarness.sol";
 import {
     Plan,
     PlanParams,
@@ -24,9 +24,9 @@ import {
     IDLE_INDEX,
     AssetKind,
     Roles
-} from "../src/FundTypes.sol";
-import {PlanMath} from "../src/PlanMath.sol";
-import {AuctionStepExecutor, IAuctionFiller} from "../src/AuctionStepExecutor.sol";
+} from "../baseline/src/FundTypes.sol";
+import {PlanMath} from "../baseline/src/PlanMath.sol";
+import {AuctionStepExecutor, IAuctionFiller} from "../baseline/src/AuctionStepExecutor.sol";
 import {SimLib} from "./SimLib.sol";
 
 interface ISimPool {
@@ -77,7 +77,7 @@ interface ISimPool {
 ///         PROTO_SIM_RUN=auction (phase 3c) keeps every default parameter and puts `AuctionStepExecutor` in front of
 ///         the pool adapter. Each basket leg of a step is then a Dutch auction against its TWAP, filled by one
 ///         modelled solver (`_auctionDecide`, `onAuctionLeg`). The model note at the top of
-///         src/AuctionStepExecutor.sol states every solver, fill price and latency assumption.
+///         baseline/src/AuctionStepExecutor.sol states every solver, fill price and latency assumption.
 ///
 ///         LP model (phase 3c, G5 fallback). PROTO_SIM_LP=static (or unset) holds every recorded LP position fixed:
 ///         this is the scored run. PROTO_SIM_LP=recenter is a sensitivity switch on top of any PROTO_SIM_RUN. It
@@ -99,7 +99,7 @@ interface ISimPool {
 ///         - Funding. The sim mints the tokens the position needs, as the arbitrageur does. No price is set.
 ///         Every number above is an assumption, not a measurement. The pin holds no history of how Base LPs on
 ///         these pools respond to a 10% gap, so the result is a sensitivity, never the G5 verdict.
-contract RebalanceSimTest is PrototypeHarness, IAuctionFiller {
+contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
     using Math for uint256;
 
     // ─── Scenarios ─────────────────────────────────────────────────────────────────────────────────────
@@ -153,7 +153,7 @@ contract RebalanceSimTest is PrototypeHarness, IAuctionFiller {
     uint256 internal constant LP_RECENTER_DEPTH_BPS = 5_000;
     int24 internal constant LP_RECENTER_HALF_WIDTH_TICKS = 500;
 
-    // ─── Auction run (phase 3c). See the model note in src/AuctionStepExecutor.sol. ──────────────────────
+    // ─── Auction run (phase 3c). See the model note in baseline/src/AuctionStepExecutor.sol. ──────────────────────
 
     /// @dev Seconds from the open to the floor, and the owed premium over TWAP at the open.
     uint32 internal constant AUCTION_DURATION = 300;
@@ -306,6 +306,14 @@ contract RebalanceSimTest is PrototypeHarness, IAuctionFiller {
     mapping(address token => uint8 venue) internal solverVenue;
     uint256 internal auctionFailSelector;
 
+    /// @dev PROTO_SIM_ASSETS=4.5: the deficit-first arm of the step 3d comparison (proposal §10 step 3d: "the change in
+    ///      G4 cost from ending deficit-first deposits. Both arms of that comparison run on the §4.5 asset list"). The
+    ///      same frozen fund and model, with the rules of step 3e for the rerun: every receipt's deSPXA weight is
+    ///      spread over its other assets in proportion (`_rule45`, the rule TimedFlowSim uses), so deSPXA stays at 0
+    ///      (listed, never bought), and the JUMP scenarios move wETH instead of deSPXA. Output in
+    ///      out/prototype/<run>-sync45/. Unset (the scored step 3 run) changes nothing.
+    bool internal assets45;
+
     /// @dev LP re-centre run: the switch, and the one modelled position per basket pool (lpL 0 = none).
     bool internal lpRecenter;
     int24[3] internal lpLower;
@@ -397,6 +405,11 @@ contract RebalanceSimTest is PrototypeHarness, IAuctionFiller {
             vm.skip(true);
             return;
         }
+        // PROTO_SIM_FLOWS=timed runs the timed arm (TimedFlowSim.t.sol, live fund) instead of this synchronous one.
+        if (keccak256(bytes(vm.envOr("PROTO_SIM_FLOWS", string("sync")))) == keccak256("timed")) {
+            vm.skip(true);
+            return;
+        }
         // Gas stays metered: paused metering costs forge work on every opcode. A plan burns about 1.5e9 gas, more
         // than forge's per-test limit, so the loops refill the meter each slot (vm.resetGasMetering, top frame).
         // A slot uses a few million gas, so the Rebalancer's gas-starvation guard never fires.
@@ -406,6 +419,11 @@ contract RebalanceSimTest is PrototypeHarness, IAuctionFiller {
         _fixtureCheckpoint();
 
         (uint16[6][] memory vecs, string[] memory labels) = _sequence(scn);
+        if (assets45) {
+            for (uint256 i; i < vecs.length; ++i) {
+                vecs[i] = _rule45(vecs[i]);
+            }
+        }
         for (uint256 i; i < vecs.length; ++i) {
             _runPlan(vecs[i], labels[i]);
             _fixtureCheckpoint();
@@ -454,6 +472,33 @@ contract RebalanceSimTest is PrototypeHarness, IAuctionFiller {
         return v;
     }
 
+    /// @notice Proposal §10 step 3e (PROTO_SIM_ASSETS=4.5 only): deSPXA's weight spread over the other five assets in
+    ///         proportion to their weights in the same receipt, floored, the remaining whole bps to the largest
+    ///         remainders (ties to the lower index); deSPXA 0. The same rule as `TimedFlowSim._rule3e`, in this
+    ///         contract's order [aave, comet, moonwell, wETH, cbBTC, deSPXA].
+    function _rule45(uint16[6] memory v) internal pure returns (uint16[6] memory out) {
+        uint256 s;
+        for (uint256 i; i < 5; ++i) {
+            s += v[i];
+        }
+        require(s + v[5] == BPS && s != 0, "rule 4.5: a receipt sums to 10 000 and holds a non-deSPXA asset");
+        uint256[5] memory rem;
+        uint256 sum;
+        for (uint256 i; i < 5; ++i) {
+            out[i] = uint16(uint256(v[i]) * BPS / s);
+            rem[i] = uint256(v[i]) * BPS % s;
+            sum += out[i];
+        }
+        for (uint256 r = BPS - sum; r > 0; --r) {
+            uint256 best = 5;
+            for (uint256 i; i < 5; ++i) {
+                if (v[i] != 0 && (best == 5 || rem[i] > rem[best])) best = i;
+            }
+            ++out[best];
+            rem[best] = 0;
+        }
+    }
+
     function _scnName(uint256 scn) internal pure returns (string memory) {
         if (scn == SCN_SEQ) return "SEQ";
         if (scn == SCN_EXT) return "EXT";
@@ -481,6 +526,14 @@ contract RebalanceSimTest is PrototypeHarness, IAuctionFiller {
         }
         bytes32 lp = keccak256(bytes(vm.envOr("PROTO_SIM_LP", string("static"))));
         require(lp == keccak256("static") || lp == keccak256("recenter"), "PROTO_SIM_LP must be static or recenter");
+        // Eng plan §4.4 names PROTO_SIM_FLOWS=timed for the timed-flow sim (step 3d): `sync`, the default, is this
+        // synchronous sim on the frozen fund; `timed` is TimedFlowSim.t.sol on the live fund (`_run` skips here).
+        bytes32 flows = keccak256(bytes(vm.envOr("PROTO_SIM_FLOWS", string("sync"))));
+        require(flows == keccak256("sync") || flows == keccak256("timed"), "PROTO_SIM_FLOWS must be sync or timed");
+        bytes32 assets = keccak256(bytes(vm.envOr("PROTO_SIM_ASSETS", string("step3"))));
+        require(assets == keccak256("step3") || assets == keccak256("4.5"), "PROTO_SIM_ASSETS must be step3 or 4.5");
+        assets45 = assets == keccak256("4.5");
+        require(!assets45 || (!auctionRun && lp == keccak256("static")), "PROTO_SIM_ASSETS=4.5: default or tuned only");
         lpRecenter = lp == keccak256("recenter");
         PlanParams memory pp = governance.defaultPlanParams();
         uint256 interval = rebalancer.effectiveStepInterval();
@@ -1200,7 +1253,8 @@ contract RebalanceSimTest is PrototypeHarness, IAuctionFiller {
         if (open) arbDespxaInv = 0; // the issuer redeems it; in hours the inventory is unlimited
         for (uint256 b; b < N_BASKET; ++b) {
             int256 z = SimLib.normal(seed, slotIndex, SimLib.TAG_WALK, b);
-            bool jump = b == 2 && acc.slots == JUMP_SLOT && acc.jumpAt == 0 && _isJump();
+            // PROTO_SIM_ASSETS=4.5 (step 3e rule): the scripted jump moves wETH (b = 0) instead of deSPXA.
+            bool jump = b == (assets45 ? 0 : 2) && acc.slots == JUMP_SLOT && acc.jumpAt == 0 && _isJump();
             bool closed = b == 2 && !open && !jump;
             // deSPXA's reference is frozen while the S&P is closed.
             if (!closed) refMilli[b] += int256(sigmaMilli[b]) * z / int256(SimLib.ONE);
@@ -1668,13 +1722,19 @@ contract RebalanceSimTest is PrototypeHarness, IAuctionFiller {
             "keeper t+0; noise t+600 (1-2 swaps/pool, u*D10bps); arb t+1200 (close a in [0.5,1) of gap to a zero-drift tick walk, sigma = pool 30-min mean-tick diff stdev x sqrt(3/2) (deSPXA: x sqrt(lookback/open intervals)); a=1 on jump; deSPXA: ref frozen and arb inventory = deSPXA bought back since the close outside Mon-Fri 14:30-21:00 UTC; wETH/cbBTC 24/7 unlimited); flows t+1500 (p=1/12, 0.10-0.50% NAV)"
         );
         vm.serializeString(m, "run", runName);
+        if (assets45) {
+            vm.serializeString(
+                m, "assets", "4.5: step 3e rules, deSPXA at 0 (its weight spread pro rata), JUMP moves wETH"
+            );
+        }
         string memory meta = vm.serializeString(m, "params", _paramsJson());
         string memory plans = "";
         for (uint256 i; i < planJson.length; ++i) {
             plans = string.concat(plans, i == 0 ? "" : ",", planJson[i]);
         }
         string memory full = string.concat('{"meta":', meta, ',"plans":[', plans, "]}");
-        string memory dir = string.concat("out/prototype/", runName, lpRecenter ? "-lprecenter" : "");
+        string memory dir =
+            string.concat("out/prototype/", runName, lpRecenter ? "-lprecenter" : "", assets45 ? "-sync45" : "");
         vm.createDir(dir, true);
         string memory path =
             string.concat(dir, "/sim-", scnName, "-", vm.toString(fundM), "M-s", vm.toString(seedK), ".json");

@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/technical/one-vault-rebalancer-proposal.md §4.1 (assets, per-asset targets), §4.2 (ADP-2 exclusion),
-//            §5.1 (setTargetAndOpenPlan), §5.2 (glide path views), §5.6 (plan bounds), §6.1 (size)
+//            §4.5 (asset admission rule, D12), §5.1 (setTargetAndOpenPlan), §5.2 (glide path views), §5.6 (plan
+//            bounds), §6.1 (size), §7 RB-17; docs/technical/one-vault-timed-flows-eng-plan.md E15, E20
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IStrategyAdapter} from "../../../../interfaces/IStrategyAdapter.sol";
+import {IObservablePool} from "../../../../interfaces/IObservablePool.sol";
 import {BasketAssetConfigGuard} from "../../../../lib/BasketAssetConfigGuard.sol";
 import {RobotMoneyVaultOps} from "../../../../lib/RobotMoneyVaultOps.sol";
 import {ExclusionLedger} from "../../../../ExclusionLedger.sol";
+import {FundExclusionLedger} from "../FundExclusionLedger.sol";
 import {
     AssetConfig,
     AssetKind,
+    FeedStatus,
     IFundEvents,
     Plan,
     PlanParams,
@@ -22,13 +26,21 @@ import {
     MAX_FUND_ASSETS,
     MIN_PLAN_DURATION,
     MAX_PLAN_DURATION,
-    MAX_COST_BUDGET_BPS
+    MAX_COST_BUDGET_BPS,
+    DEFAULT_MIN_SEED_USDC,
+    DEFAULT_POOL_SHARE_BPS,
+    DEFAULT_IN_KIND_BPS,
+    DEFAULT_IN_KIND_FLOOR_USDC,
+    DEFAULT_IN_KIND_PERIOD,
+    MAX_FEED_AGE
 } from "../FundTypes.sol";
 import {PlanMath} from "../PlanMath.sol";
 import {IRobotMoneyFund} from "../interfaces/IRobotMoneyFund.sol";
+import {ILendingRateAdapter} from "../interfaces/IFlowAdapters.sol";
+import {FeedLib} from "./FeedLib.sol";
 import {FundState, FundStorage} from "./FundStorage.sol";
 import {FundValuationLib} from "./FundValuationLib.sol";
-import {FundFlowsLib} from "./FundFlowsLib.sol";
+import {FundPositionLib} from "./FundPositionLib.sol";
 
 /// @dev The identity views every in-tree lending adapter exposes (immutables `USDC` and `VAULT`).
 interface IFundLendingIdentity {
@@ -61,8 +73,17 @@ library FundAdminLib {
     ///           ORA-3 execution pool == TWAP pool and pool usability (pair, cardinality, history,
     ///           liquidity) through the linked `BasketAssetConfigGuard`; pool fee strictly below
     ///           `maxSlippageBps` and below a non-zero `navDeviationGuardBps` (`BoundAtOrBelowPoolFee`).
+    ///         Step 3d admission rule (proposal §4.5, E15, RB-17):
+    ///         - Basket: a feed and its `maxFeedAge` (non-zero, `maxFeedAge ≤ MAX_FEED_AGE`; else `MissingFeed`),
+    ///           and the feed must read healthy now (`FeedLib.read`, else `FeedUnhealthy(index, status)`): a listed
+    ///           asset must have a live outside feed (rule 1). The pool must answer `observe` over one settlement
+    ///           window (`settleWindow`: the bound queue's, else `DEFAULT_SETTLE_WINDOW`), else
+    ///           `PoolHistoryTooShort(index, window)` (rule 2).
+    ///         - Lending: the adapter must answer `ratePerUnit()` with a non-zero rate (`LendingRateUnavailable`),
+    ///           the venue rate check 5 reads; and `feed`, `maxFeedAge` must be 0 (`InvalidParam`).
     ///         `active` is forced true and `targetBps` grows by a 0. There is no sleeve to check (§4.1).
     function addAsset(FundState storage s, AssetConfig memory c) public returns (uint256 index) {
+        requireNoLivePlan(s);
         index = s.assets.length;
         if (index >= MAX_FUND_ASSETS) revert IRobotMoneyFund.MaxAssetsReached();
         if (c.adapter == address(0)) revert IFundEvents.ZeroAddress();
@@ -91,9 +112,14 @@ library FundAdminLib {
 
     function _checkLending(FundState storage s, AssetConfig memory c) private view {
         if (
-            c.token != address(0) || c.pool != address(0) || c.poolFee != 0
-                || c.twapWindow != 0 || c.capBps == 0 || c.capBps > BPS
+            c.token != address(0) || c.pool != address(0) || c.poolFee != 0 || c.twapWindow != 0 || c.capBps == 0
+                || c.capBps > BPS || c.feed != address(0) || c.maxFeedAge != 0
         ) revert IFundEvents.InvalidParam();
+        // E15: the venue's own rate per unit (check 5) must be readable and non-zero.
+        (bool ok, bytes memory ret) = c.adapter.staticcall(abi.encodeCall(ILendingRateAdapter.ratePerUnit, ()));
+        if (!ok || ret.length < 32 || abi.decode(ret, (uint256)) == 0) {
+            revert IRobotMoneyFund.LendingRateUnavailable(c.adapter);
+        }
         IFundLendingIdentity id = IFundLendingIdentity(c.adapter);
         address vault = id.VAULT();
         if (vault != address(this)) revert IRobotMoneyFund.AdapterVaultMismatch(c.adapter, address(this), vault);
@@ -109,11 +135,25 @@ library FundAdminLib {
         if (c.twapWindow < FundStorage.MIN_TWAP_WINDOW || c.twapWindow > FundStorage.MAX_TWAP_WINDOW) {
             revert IFundEvents.InvalidParam();
         }
+        // E15, §4.5 rule 1: a live outside feed, with its maximum age.
+        if (c.feed == address(0) || c.maxFeedAge == 0 || c.maxFeedAge > MAX_FEED_AGE) {
+            revert IRobotMoneyFund.MissingFeed(index);
+        }
+        (FeedStatus st,) = FeedLib.read(c.feed, c.maxFeedAge);
+        if (st != FeedStatus.Ok) revert IRobotMoneyFund.FeedUnhealthy(index, st);
         BasketAssetConfigGuard.Venue venue = BasketAssetConfigGuard.Venue(uint8(c.venue));
         BasketAssetConfigGuard.requireExecutionPoolMatchesTwap(c.pool, c.poolFee, venue);
         BasketAssetConfigGuard.requirePoolUsable(
             c.pool, c.token, s.usdc, c.twapWindow, FundStorage.MIN_POOL_LIQUIDITY
         );
+        // E15, §4.5 rule 2: one settlement window of pool history (what check 3 reads at every settlement).
+        uint32 w = FundValuationLib.settleWindow(s);
+        uint32[] memory ago = new uint32[](2);
+        ago[0] = w;
+        try IObservablePool(c.pool).observe(ago) returns (int56[] memory, uint160[] memory) {}
+        catch {
+            revert IRobotMoneyFund.PoolHistoryTooShort(index, w);
+        }
         // Price the fee the same way `poolFeeBps` will once the entry exists (Aerodrome reads `fee()`).
         uint256 pips = c.poolFee;
         if (c.venue == Venue.Aerodrome) {
@@ -134,6 +174,7 @@ library FundAdminLib {
     ///         A target vector may no longer name it. A Lending entry's open
     ///         exclusion record closes (`Removed`, core 1820); it stays claimable forever.
     function deactivateAsset(FundState storage s, uint256 i) public {
+        requireNoLivePlan(s);
         if (i >= s.assets.length || !s.assets[i].active) revert IFundEvents.InvalidAssetIndex(i);
         uint256 target = s.targetBps[i];
         if (target != 0) revert IRobotMoneyFund.AssetStillTargeted(i, target);
@@ -162,6 +203,20 @@ library FundAdminLib {
     // ═════════════════════════════════════════════════════════════════════════
     //  ADP-2 exclusion (§4.2: "Lending adapters keep ADP-2 exclusion and the ExclusionLedger")
     // ═════════════════════════════════════════════════════════════════════════
+
+    /// @notice Create the fund's exclusion ledger, once, from the fund's initializer (replaces
+    ///         `RobotMoneyVaultOps.createLedger`). Step 3d (E13, RB-22): the ledger is `FundExclusionLedger`, the test
+    ///         copy whose per-holder balance is the fund's `ledgerBalanceOf` (wallet plus queued shares). It is stored
+    ///         in the same `RobotMoneyVaultOps.Exclusions` slot, typed as `ExclusionLedger`: the copy has the same
+    ///         ABI for every call the fund makes (`open`, `credit`, `finalize`, `checkpoint`), and the same enum
+    ///         ordinals. Its creation code lives here, in a linked library, so it does not count against the fund's
+    ///         EIP-170 budget. Reverts `InvalidParam` if a ledger already exists.
+    function createLedger(address usdc) public returns (address ledger) {
+        RobotMoneyVaultOps.Exclusions storage x = RobotMoneyVaultOps.exclusions();
+        if (address(x.ledger) != address(0)) revert IFundEvents.InvalidParam();
+        ledger = address(new FundExclusionLedger(address(this), IERC20(usdc)));
+        x.ledger = ExclusionLedger(ledger);
+    }
 
     /// @notice Match exclusion records to adapter eligibility (`RobotMoneyVaultOps.syncExclusions`, with
     ///         eligibility = code hash allowlisted). An active Lending entry whose code hash is no longer
@@ -192,15 +247,82 @@ library FundAdminLib {
     }
 
     /// @dev `syncExclusions` restore branch (own frame for stack depth): drain entry `i` into record `id`,
-    ///      leaving the USDC owed to in-kind exits (`deferredTotal`) in the adapter, then close the record.
+    ///      leaving the USDC owed to in-kind exits (`deferredTotal`) and the position claims' part in the adapter
+    ///      (`FundPositionLib.drain`, which also burns the holders' units), then close the record.
     function _restore(FundState storage s, RobotMoneyVaultOps.Exclusions storage x, uint256 i, uint256 id) private {
         ExclusionLedger ledger = x.ledger;
-        bool ok = FundFlowsLib.drain(
-            s.usdc, s.assets[i].adapter, ledger, id, ExclusionLedger.RecoverySource.Restoration, s.deferredTotal[i]
-        );
+        bool ok = FundPositionLib.drain(s, i, ledger, id, ExclusionLedger.RecoverySource.Restoration);
         if (!ok) revert IFundEvents.InvalidParam();
         delete x.openExclusionOf[i];
         ledger.finalize(id, ExclusionLedger.FinalizeReason.Restored);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Plan transitions (§5.5). Moved out of the fund in step 3d for its size budget (§6.1); the semantics are
+    //  the step 3c fund's, unchanged. The fund checks every role.
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /// @notice Which transition `planOp` runs.
+    /// @dev Conclude: `concludePlan(to)`, `arg = uint256(to)`; REBALANCER_ROLE. Open → Converged (now ≥ endTime) or
+    ///      Expired (now > endTime).
+    ///      Pause: `pauseRebalance`; EMERGENCY_ROLE. Open or Halted → Paused.
+    ///      Resume: `resumePlan`; ADMIN_ROLE. Paused → Open, or → Halted while `costSpent > costBudget`.
+    ///      Extend: `extendBudget(arg)`; ADMIN_ROLE. Live plan's budget += arg; Halted → Open when back in budget.
+    ///      Close: `closePlan`; ADMIN_ROLE. Live → Superseded.
+    ///      UnwindPause: the tail of `emergencyUnwind`; EMERGENCY_ROLE. Open or Halted → Paused, else nothing.
+    enum PlanOp {
+        Conclude,
+        Pause,
+        Resume,
+        Extend,
+        Close,
+        UnwindPause
+    }
+
+    /// @notice Run plan transition `op` (see `PlanOp`). Every transition emits exactly one `PlanStatusChanged`;
+    ///         a transition the current status does not allow reverts `InvalidPlanTransition`.
+    function planOp(FundState storage s, PlanOp op, uint256 arg) public {
+        Plan storage p = s.plan;
+        PlanStatus st = p.status;
+        if (op == PlanOp.Conclude) {
+            PlanStatus to = PlanStatus(arg);
+            bool timeOk = (to == PlanStatus.Converged && block.timestamp >= p.endTime)
+                || (to == PlanStatus.Expired && block.timestamp > p.endTime);
+            if (!timeOk) revert IRobotMoneyFund.InvalidPlanTransition(p.id, st, to);
+            _move(p, PlanStatus.Open, to);
+        } else if (op == PlanOp.Pause) {
+            _move(p, st == PlanStatus.Halted ? PlanStatus.Halted : PlanStatus.Open, PlanStatus.Paused);
+        } else if (op == PlanOp.Resume) {
+            _move(p, PlanStatus.Paused, p.costSpent > p.costBudget ? PlanStatus.Halted : PlanStatus.Open);
+        } else if (op == PlanOp.Extend) {
+            if (!_isLive(st)) revert IRobotMoneyFund.InvalidPlanTransition(p.id, st, st);
+            uint256 budget = p.costBudget + arg;
+            p.costBudget = budget;
+            emit IFundEvents.PlanBudgetExtended(p.id, arg, budget);
+            if (st == PlanStatus.Halted && p.costSpent <= budget) _move(p, PlanStatus.Halted, PlanStatus.Open);
+        } else if (op == PlanOp.Close) {
+            if (!_isLive(st)) revert IRobotMoneyFund.InvalidPlanTransition(p.id, st, PlanStatus.Superseded);
+            _move(p, st, PlanStatus.Superseded);
+        } else if (st == PlanStatus.Open || st == PlanStatus.Halted) {
+            _move(p, st, PlanStatus.Paused);
+        }
+    }
+
+    /// @notice Revert `PlanLive` while a plan is Open, Halted or Paused (asset config is frozen then).
+    function requireNoLivePlan(FundState storage s) internal view {
+        Plan storage p = s.plan;
+        if (_isLive(p.status)) revert IRobotMoneyFund.PlanLive(p.id);
+    }
+
+    /// @dev One plan transition `from → to` (§5.5), with exactly one `PlanStatusChanged`.
+    function _move(Plan storage p, PlanStatus from, PlanStatus to) private {
+        if (p.status != from) revert IRobotMoneyFund.InvalidPlanTransition(p.id, p.status, to);
+        p.status = to;
+        emit IFundEvents.PlanStatusChanged(p.id, from, to);
+    }
+
+    function _isLive(PlanStatus st) private pure returns (bool) {
+        return st == PlanStatus.Open || st == PlanStatus.Halted || st == PlanStatus.Paused;
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -223,8 +345,26 @@ library FundAdminLib {
             params.duration < MIN_PLAN_DURATION || params.duration > MAX_PLAN_DURATION || params.costBudgetBps == 0
                 || params.costBudgetBps > MAX_COST_BUDGET_BPS
         ) revert IFundEvents.PlanParamOutOfBounds();
-        return _open(s, PlanMath.assetTargets(assets, bps, s.assets), params, receiptId);
+        uint16[] memory endBps = PlanMath.assetTargets(assets, bps, s.assets);
+        FundValuationLib.requirePoolShare(s, endBps);
+        return _open(s, endBps, params, receiptId);
     }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Step 3d parameters the fund holds (§5.9.5)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /// @notice From the fund's `initialize`: the step 3d defaults the fund holds (`minSeedUsdc`, `poolShareBps`, the
+    ///         in-kind allowance of E20), then the exclusion ledger (`createLedger`).
+    function initFlows(FundState storage s, address usdc) public {
+        s.minSeedUsdc = DEFAULT_MIN_SEED_USDC;
+        s.poolShareBps = DEFAULT_POOL_SHARE_BPS;
+        s.inKindBps = DEFAULT_IN_KIND_BPS;
+        s.inKindFloorUsdc = DEFAULT_IN_KIND_FLOOR_USDC;
+        s.inKindPeriod = DEFAULT_IN_KIND_PERIOD;
+        createLedger(usdc);
+    }
+
 
     /// @dev `openPlan` after the vector became `endBps` (own frame for stack depth).
     function _open(FundState storage s, uint16[] memory endBps, PlanParams memory params, bytes32 receiptId)

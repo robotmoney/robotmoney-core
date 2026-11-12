@@ -5,7 +5,7 @@
 //
 //   bun scripts/prototype/record-base-fixture.ts [--pin N] [--rpc URL] [--match-path GLOB] [--sim]
 //                                                [--sim-runs tuned,default,auction,...] [--no-anvil]
-//                                                [--forge-out DIR] [--forge-cache DIR]
+//                                                [--forge-out DIR] [--forge-cache DIR] [--threads N]
 //
 // 1. Picks a pin (upstream head minus 2 unless --pin is given). The public node is not an archive
 //    node, so record soon after picking a pin.
@@ -19,10 +19,12 @@
 //    ~/.foundry/cache/rpc/base/<pin>. Passes add to the same cache. --sim adds the rebalance sim
 //    (PROTO_SIM=1): first the LP re-centre sensitivity passes default-lprecenter and auction-lprecenter
 //    (PROTO_SIM_RUN=default or auction with PROTO_SIM_LP=recenter), then one pass with PROTO_SIM_RUN=tuned
-//    over the sim tests, then the default pass, then the auction pass (phase 3c). The last pass also runs
-//    every non-sim prototype test. --sim-runs picks a subset, in that order, for debugging only. Forge
-//    rewrites the pin's cache on each record, so a subset yields a fixture that covers only that subset.
-//    Record the committed fixture with all five runs.
+//    over the sim tests, then the default pass, then the timed-flow sim (step 3d/3e, PROTO_SIM_FLOWS=timed)
+//    for tuned (timed-tuned) and for default with the sim attacks (timed-default, PROTO_SIM_ATTACKS=1, both
+//    arms, four seeds), then the auction pass (phase 3c). The last pass also runs every non-sim prototype
+//    test. --sim-runs picks a subset, in that order, for debugging only. Forge rewrites the pin's cache on
+//    each record, so a subset yields a fixture that covers only that subset. Record the committed fixture
+//    with all seven runs.
 // 4. Stops anvil. Converts the cache into contracts/test/prototype/fixtures/base-state.alloc.json
 //    (genesis alloc for vm.loadAllocs) and base-state.meta.json (block env, account list, slot
 //    index).
@@ -50,22 +52,46 @@ const matchPath = arg("match-path") ?? "contracts/test/prototype/**";
 const simPath = "contracts/test/prototype/sim/*";
 const withSim = args.includes("--sim");
 const useAnvil = !args.includes("--no-anvil");
-const SIM_RUNS = ["default-lprecenter", "auction-lprecenter", "tuned", "default", "auction"];
+const SIM_RUNS = [
+  "default-lprecenter",
+  "auction-lprecenter",
+  "tuned",
+  "default",
+  "timed-tuned",
+  "timed-default",
+  "auction",
+];
 const simRuns = (arg("sim-runs") ?? SIM_RUNS.join(",")).split(",").filter((r) => r.length > 0);
 for (const r of simRuns) if (!SIM_RUNS.includes(r)) throw new Error(`--sim-runs: unknown run ${r}`);
+// --threads N caps forge's test threads (forge -j). On a shared host a recording's forge holds the whole fork in
+// memory per thread; fewer threads lower its peak (a host out-of-memory kill shows as a signal below).
 const forgeDirs = [
   ...(arg("forge-out") ? ["--out", arg("forge-out")!] : []),
   ...(arg("forge-cache") ? ["--cache-path", arg("forge-cache")!] : []),
+  ...(arg("threads") ? ["--threads", arg("threads")!] : []),
 ];
 const outDir = "contracts/test/prototype/fixtures";
 const host = new URL(rpc).host;
+
+// A recording runs the committed defaults. These variables change what the sim and attack tests do (findings made to
+// fail, flow-parameter or lever overrides, tagged output dirs), so the fixture would not cover the default runs.
+const overrides = Object.keys(process.env).filter(
+  (k) =>
+    k === "PROTO_ATTACK_FINDINGS_FAIL" ||
+    k === "PROTO_SIM_TAG" ||
+    k === "PROTO_SIM_ATTACK_SEEDS" ||
+    k === "PROTO_SIM_ASSETS" ||
+    k.startsWith("PROTO_SIM_FLOW_") ||
+    k.startsWith("PROTO_LEVER_"),
+);
+if (overrides.length > 0) throw new Error(`unset before recording: ${overrides.join(", ")}`);
 
 function run(cmd: string[], env: Record<string, string> = {}): string {
   const p = Bun.spawnSync(cmd, { env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
   const out = p.stdout.toString() + p.stderr.toString();
   if (p.exitCode !== 0) {
     console.error(out);
-    throw new Error(`${cmd[0]} ${cmd[1] ?? ""} failed (exit ${p.exitCode})`);
+    throw new Error(`${cmd[0]} ${cmd[1] ?? ""} failed (exit ${p.exitCode}, signal ${p.signalCode ?? "none"})`);
   }
   return out;
 }
@@ -142,10 +168,25 @@ function passes(): Pass[] {
   const runs = SIM_RUNS.filter((r) => simRuns.includes(r));
   if (runs.length === 0) throw new Error("--sim-runs names no run");
   // "<run>-lprecenter" is PROTO_SIM_RUN=<run> with the LP re-centre sensitivity switch on.
-  const simEnv = (r: string): Record<string, string> =>
-    r.endsWith("-lprecenter")
-      ? { PROTO_SIM: "1", PROTO_SIM_RUN: r.slice(0, -"-lprecenter".length), PROTO_SIM_LP: "recenter" }
-      : { PROTO_SIM: "1", PROTO_SIM_RUN: r, PROTO_SIM_LP: "static" };
+  // "timed-<run>" is the timed-flow sim on the live fund (PROTO_SIM_FLOWS=timed); timed-default also runs the sim
+  // attacks (PROTO_SIM_ATTACKS=1). A G8 finding there is skipped, never failed, unless the caller's own
+  // environment sets PROTO_ATTACK_FINDINGS_FAIL, which a recording must not do.
+  const simEnv = (r: string): Record<string, string> => {
+    if (r.endsWith("-lprecenter")) {
+      return { PROTO_SIM: "1", PROTO_SIM_RUN: r.slice(0, -"-lprecenter".length), PROTO_SIM_LP: "recenter" };
+    }
+    if (r.startsWith("timed-")) {
+      const run = r.slice("timed-".length);
+      return {
+        PROTO_SIM: "1",
+        PROTO_SIM_RUN: run,
+        PROTO_SIM_LP: "static",
+        PROTO_SIM_FLOWS: "timed",
+        ...(run === "default" ? { PROTO_SIM_ATTACKS: "1" } : {}),
+      };
+    }
+    return { PROTO_SIM: "1", PROTO_SIM_RUN: r, PROTO_SIM_LP: "static" };
+  };
   return runs.map((r, i) =>
     i === runs.length - 1
       ? { label: `prototype + sim ${r}`, path: matchPath, env: simEnv(r) }
@@ -201,8 +242,9 @@ if (existsSync(cachePath) && statSync(cachePath).isFile() && statSync(cachePath)
 try {
   const recordRpc = useAnvil ? await startAnvil(pin) : rpc;
   for (const p of passes()) {
-    console.log(`record: ${p.label}`);
-    run(["forge", "test", "--match-path", p.path, ...forgeDirs], { ...p.env, PROTO_RECORD_RPC: recordRpc, PROTO_PIN: String(pin) });
+    console.log(`record: ${p.label} (${new Date().toISOString()})`);
+    const out = run(["forge", "test", "--match-path", p.path, ...forgeDirs], { ...p.env, PROTO_RECORD_RPC: recordRpc, PROTO_PIN: String(pin) });
+    console.log(out.split("\n").filter((l) => /Ran \d+ test suites/.test(l)).join("\n"));
   }
 } finally {
   stopAnvil();
@@ -257,8 +299,25 @@ console.log(
   `fixture: ${accounts.length} accounts, ${slots.reduce((n, s) => n + s.length, 0)} slots at block ${meta.block}`,
 );
 
+// Every replay pass runs, even after one fails, so one run proves (or disproves) the fixture for all of them. The
+// fixture is already written; a failed replay pass makes the script exit 1 at the end and names the pass.
+const replayFailed: string[] = [];
 for (const p of passes()) {
-  console.log(`replay: ${p.label}, no RPC and no anvil, coverage check on`);
-  const replay = run(["forge", "test", "--match-path", p.path, ...forgeDirs], { ...p.env, PROTO_RECORD_RPC: "", PROTO_PIN: "", PROTO_FIXTURE_CHECK: "1" });
-  console.log(replay.split("\n").filter((l) => /Suite result|passed|failed/.test(l)).join("\n"));
+  console.log(`replay: ${p.label}, no RPC and no anvil, coverage check on (${new Date().toISOString()})`);
+  const r = Bun.spawnSync(["forge", "test", "--match-path", p.path, ...forgeDirs], {
+    env: { ...process.env, ...p.env, PROTO_RECORD_RPC: "", PROTO_PIN: "", PROTO_FIXTURE_CHECK: "1" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const replay = r.stdout.toString() + r.stderr.toString();
+  console.log(replay.split("\n").filter((l) => /Suite result|passed|failed|^\[FAIL/.test(l)).join("\n"));
+  if (r.exitCode !== 0) {
+    replayFailed.push(p.label);
+    console.error(`replay: ${p.label} FAILED (exit ${r.exitCode})`);
+  }
 }
+if (replayFailed.length > 0) {
+  console.error(`replay failed for: ${replayFailed.join("; ")}`);
+  process.exit(1);
+}
+console.log(`replay: every pass passed (${new Date().toISOString()})`);

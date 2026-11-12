@@ -2,6 +2,8 @@
 // Canonical: docs/technical/one-vault-rebalancer-proposal.md §10 phase 3c (G4 fallback), §12 (auction-based
 //            rebalance), §13 (scoring), §5.3 (one step), §7 RB-2, RB-3, RB-4, RB-5
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
+// FROZEN BASELINE (one-vault scaffold, 2026-11-11): a copy of the step 3c synchronous fund and its tests. Never edit.
+// It is the sim's synchronous arm and the target of the baseline attack tests. The live tree is contracts/test/prototype/src.
 pragma solidity ^0.8.24;
 
 // ─── Model note (phase 3c) ─────────────────────────────────────────────────────────────────────────────
@@ -52,7 +54,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {IBasketSwapAdapter} from "../../../interfaces/IBasketSwapAdapter.sol";
+import {IBasketSwapAdapter} from "../../../../interfaces/IBasketSwapAdapter.sol";
 import {AssetConfig, AssetKind, SkipReason, BPS} from "./FundTypes.sol";
 import {IRobotMoneyFund} from "./interfaces/IRobotMoneyFund.sol";
 import {IRebalancer} from "./interfaces/IRebalancer.sol";

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/technical/one-vault-rebalancer-proposal.md §5.2 (glide path), §5.3 (one step), §5.4 (who calls),
 //            §5.5 (plan states), §5.6 (governed parameters), §5.7 (previewPlan), §5.8 (threats),
-//            §7 RB-2, RB-4, RB-5, RB-7
+//            §5.10 (the same layers on the rebalance, step 3e), §7 RB-2, RB-4, RB-5, RB-7, RB-19
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {
     ReentrancyGuardUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
@@ -23,6 +24,8 @@ import {
     StepOrder,
     StepParams,
     StepResult,
+    StepFeedCheck,
+    StepPrices,
     BPS,
     IDLE_INDEX,
     MIN_STEP_INTERVAL,
@@ -35,6 +38,7 @@ import {
 import {PlanMath} from "./PlanMath.sol";
 import {IRobotMoneyFund} from "./interfaces/IRobotMoneyFund.sol";
 import {IRebalancer} from "./interfaces/IRebalancer.sol";
+import {StepFeedLib} from "./lib/StepFeedLib.sol";
 
 /// @title Rebalancer
 /// @notice Step selection for the one vault (§5). It holds no funds, grants no token approvals and
@@ -53,13 +57,23 @@ import {IRebalancer} from "./interfaces/IRebalancer.sol";
 ///           with a longer TWAP window can never make the cooldown shorter than a window (§5.3.1).
 ///         - Each leg's slippage floor is clamped to `fund.maxSlippageBps()` at run time, so a
 ///           later lowering of the fund ceiling is honoured without re-setting every asset.
-///         - Per-asset backoff: when `executeStep` reverts, both non-idle legs are excluded from
-///           leg picking for one cooldown, so a frozen venue stalls only its own asset while the
-///           rest of the plan keeps converging (§5.8 "A venue freezes").
+///         - Per-asset backoff: when `executeStep` reverts on a KEEPER's call, both non-idle legs are
+///           excluded from leg picking for one cooldown, so a frozen venue stalls only its own asset
+///           while the rest of the plan keeps converging (§5.8 "A venue freezes"). Step 3e (§5.10): a
+///           stranger's failed call after `keeperGrace` backs nothing off, so nobody but the keeper
+///           can delay an asset's next step.
 ///         - Gas starvation: `executeStep` is only called with at least `STEP_GAS_FLOOR` gas left
 ///           (else `StepGasStarved`), and a revert that left this frame with under 1/63 of the gas it
 ///           forwarded is re-thrown, so a permissionless caller cannot force a fake `StepFailed` and a
 ///           backoff by sending too little gas.
+///
+///         Step 3e (proposal §5.10, RB-19; step-3 finish plan §3.5). Before leg picking, `step()` runs
+///         the feed checks of the step (`StepFeedLib.check`: checks 2 and 4 of §5.9.3 with the bound
+///         queue's feeds and parameters, the same code the fund runs inside `executeStep`). A failure
+///         skips the whole step (`SkipReason.FeedCheck`, `StepFeedBlocked`) and backs nothing off. The
+///         order's floors come from the stricter of each basket leg's TWAP and feed: a sale must receive
+///         at least the higher price less the asset's `maxStepSlippageBps`; a purchase must pay at most
+///         the lower price plus it (`_buildOrder`). The fund books the step's cost at the feeds.
 ///
 ///         Runs behind its own ERC-1967 proxy (`GovernedUUPS`). `fund` is set once at initialize.
 contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, GovernedUUPS, IRebalancer {
@@ -77,7 +91,13 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
     ///         the floor, an out-of-gas inside a nested frame (library, adapter, router, pool) hands every
     ///         parent its retained 1/64 back, slips past the `gasBefore / 63` check, and a permissionless
     ///         caller could book a fake `StepFailed` and choose which assets get masked.
-    uint256 public constant STEP_GAS_FLOOR = 4_000_000;
+    ///         Step 3e raised it from 4,000,000: the step now runs the feed checks twice (here and in the
+    ///         fund) and reads every held amount twice (RB-19). A basket-to-basket step on the live harness
+    ///         measured 2,425,429 gas for the whole keeper call (Step3e.t.sol `test_3e_stepGas_underTheFloor`),
+    ///         past half of 4,000,000; the scaffold's rule is a real step under half the floor
+    ///         (Adversarial.t.sol `test_keeperAbuse_gasStarvationCannotForceBackoff`). A higher floor only asks a
+    ///         caller for more gas; it loosens nothing.
+    uint256 public constant STEP_GAS_FLOOR = 6_000_000;
 
     // ─── Storage ─────────────────────────────────────────────────────────────
 
@@ -90,7 +110,8 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
 
     // ─── Internal decision record ────────────────────────────────────────────
 
-    /// @dev What `step()` would do now. `conclude` is None, Converged or Expired.
+    /// @dev What `step()` would do now. `conclude` is None, Converged or Expired. Step 3e: `feedCheck`,
+    ///      `feedIndex` and `detail` name a failed feed check; `px` holds the prices the floors use.
     struct Decision {
         SkipReason reason;
         PlanStatus conclude;
@@ -98,7 +119,18 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
         uint256 buyIndex;
         uint256 notional;
         uint256 detail;
+        StepFeedCheck feedCheck;
+        uint256 feedIndex;
+        StepPrices px;
     }
+
+    // ─── Step 3e events (§5.10) ──────────────────────────────────────────────
+
+    /// @notice `step()` skipped because a feed check of the step failed (checks 2 and 4 of §5.9.3, RB-19).
+    ///         `index` is the asset (IDLE_INDEX when not an asset's), `detail` the feed status, the USDC price
+    ///         or the TWAP's deviation from the feed in bps (see `StepFeedCheck`). Emitted with
+    ///         `RebalanceStepSkipped(planId, FeedCheck, IDLE_INDEX, IDLE_INDEX, uint256(check))`.
+    event StepFeedBlocked(uint256 indexed planId, StepFeedCheck check, uint256 index, uint256 detail);
 
     // ─── Initializer ─────────────────────────────────────────────────────────
 
@@ -155,6 +187,11 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
             f.concludePlan(d.conclude);
             return (false, SkipReason.Concluded);
         }
+        if (d.reason == SkipReason.FeedCheck) {
+            emit StepFeedBlocked(p.id, d.feedCheck, d.feedIndex, d.detail);
+            emit RebalanceStepSkipped(p.id, d.reason, IDLE_INDEX, IDLE_INDEX, uint256(d.feedCheck));
+            return (false, d.reason);
+        }
         if (d.reason != SkipReason.None) {
             emit RebalanceStepSkipped(p.id, d.reason, d.sellIndex, d.buyIndex, d.detail);
             return (false, d.reason);
@@ -182,8 +219,13 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
             if (gasleft() <= gasBefore / 63) revert StepGasStarved();
             uint256 selector;
             if (err.length >= 4) selector = uint256(uint32(bytes4(err)));
-            _backoff(f, d.sellIndex);
-            _backoff(f, d.buyIndex);
+            // Step 3e (§5.10): back off only on the keeper's own failed call. A stranger's failed call after
+            // keeperGrace must not delay an asset's next step (it could fail a step on purpose, e.g. by pushing
+            // a pool past the floor in the same transaction, to keep an asset out of leg picking).
+            if (hasRole(KEEPER_ROLE, msg.sender)) {
+                _backoff(f, d.sellIndex);
+                _backoff(f, d.buyIndex);
+            }
             emit RebalanceStepSkipped(p.id, SkipReason.StepFailed, d.sellIndex, d.buyIndex, selector);
             return (false, SkipReason.StepFailed);
         }
@@ -197,28 +239,42 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
         emit AssetBackoff(index, until);
     }
 
-    /// @dev §5.3 step 5: every floor comes from the TWAP, never from spot.
-    ///      Basket sell: TWAP USDC value of the tokens the fund will sell, × (1 − slip).
+    /// @dev §5.3 step 5 with the step 3e limits of §5.10: every floor comes from the TWAP and the feed,
+    ///      never from spot, and from the STRICTER of the two for each direction. `slip` = the asset's
+    ///      `maxStepSlippageBps`, clamped to the fund's ceiling. Each side is quoted on its own (the TWAP
+    ///      side exactly as step 3c quoted it, through the fund's TWAP views; the feed side from `d.px.feed`,
+    ///      read by `StepFeedLib.check` in this call) and the stricter quote is kept, so a floor is never
+    ///      looser than the step 3c TWAP floor. Floors round UP (in the holders' favour).
+    ///      Basket sell: the fund sells `amt = assetTokenValue(sell, notional)` tokens (TWAP); the floor is
+    ///        `max(amt at TWAP, amt at feed)` × (1 − slip): at least the higher price, less the bound.
     ///      Lending sell: notional × (1 − slip). Idle sell: 0.
-    ///      Basket buy: TWAP token amount for `notional`, × (1 − slip). Lending or idle buy: 0.
-    ///      Cost cap (§5.3 step 7, RB-4): notional × maxStepCostBps / 10 000.
+    ///      Basket buy: `max(tokens for notional at TWAP, tokens at feed)` / (1 + slip): the fund pays at most
+    ///        the lower price, plus the bound. Lending or idle buy: 0.
+    ///      Cost cap (§5.3 step 7, RB-4): notional × maxStepCostBps / 10 000; the fund applies it to the
+    ///      cost at the feeds and to the cost at the TWAP.
     function _buildOrder(IRobotMoneyFund f, Decision memory d) internal view returns (StepOrder memory o) {
         o.sellIndex = d.sellIndex;
         o.buyIndex = d.buyIndex;
         o.notionalUsdc = d.notional;
         uint256 ceiling = f.maxSlippageBps();
-        if (d.sellIndex != IDLE_INDEX) {
-            uint256 keep = BPS - _slip(d.sellIndex, ceiling);
-            if (f.assetConfig(d.sellIndex).kind == AssetKind.Basket) {
-                uint256 quote = f.assetUsdcValue(d.sellIndex, f.assetTokenValue(d.sellIndex, d.notional));
-                o.minSellUsdcOut = Math.mulDiv(quote, keep, BPS);
+        uint256 i = d.sellIndex;
+        if (i != IDLE_INDEX) {
+            uint256 keep = BPS - _slip(i, ceiling);
+            uint256 unit = d.px.unit[i];
+            if (unit != 0) {
+                uint256 amt = f.assetTokenValue(i, d.notional);
+                uint256 hi = Math.max(f.assetUsdcValue(i, amt), Math.mulDiv(amt, d.px.feed[i], unit, Math.Rounding.Ceil));
+                o.minSellUsdcOut = Math.mulDiv(hi, keep, BPS, Math.Rounding.Ceil);
             } else {
-                o.minSellUsdcOut = Math.mulDiv(d.notional, keep, BPS);
+                o.minSellUsdcOut = Math.mulDiv(d.notional, keep, BPS, Math.Rounding.Ceil);
             }
         }
-        if (d.buyIndex != IDLE_INDEX && f.assetConfig(d.buyIndex).kind == AssetKind.Basket) {
-            uint256 keep = BPS - _slip(d.buyIndex, ceiling);
-            o.minBuyOut = Math.mulDiv(f.assetTokenValue(d.buyIndex, d.notional), keep, BPS);
+        i = d.buyIndex;
+        if (i != IDLE_INDEX && d.px.unit[i] != 0) {
+            uint256 tokens = Math.max(
+                f.assetTokenValue(i, d.notional), Math.mulDiv(d.notional, d.px.unit[i], d.px.feed[i], Math.Rounding.Ceil)
+            );
+            o.minBuyOut = Math.mulDiv(tokens, BPS, BPS + _slip(i, ceiling), Math.Rounding.Ceil);
         }
         o.maxCostUsdc = Math.mulDiv(d.notional, _stepParams.maxStepCostBps, BPS);
     }
@@ -280,9 +336,21 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
             return d;
         }
 
+        // Step 3e (§5.10, RB-19): checks 2 and 4 of §5.9.3 before any trade, the same code the fund runs inside
+        // `executeStep`. Any failure skips the whole step: the TWAP of every basket asset feeds the NAV the path
+        // targets are computed from. Nothing backs off.
+        AssetConfig[] memory cfgs = f.assetConfigs();
+        (d.feedCheck, d.feedIndex, d.detail, d.px) =
+            StepFeedLib.check(cfgs, IERC4626(address(f)).asset(), f.flowQueue());
+        if (d.feedCheck != StepFeedCheck.Ok) {
+            d.reason = SkipReason.FeedCheck;
+            return d;
+        }
+        d.detail = 0;
+
         // 2. Eligible mask: active, tradeable (maxStepUsdc > 0), not backed off, passes ORA-4.
         //    An ORA-4 failure is masked out, so it is never a leg (RB-5).
-        (bool[] memory eligible, uint256 oraFail, uint256 backoffLeft) = _eligible(f, values.length);
+        (bool[] memory eligible, uint256 oraFail, uint256 backoffLeft) = _eligible(f, cfgs);
 
         // 3. Legs: most over vs most under pathTarget(now), at TWAP (RB-7 sizing below).
         PlanMath.Legs memory legs = PlanMath.pickLegs(values, idle, nav, p, block.timestamp, eligible);
@@ -314,14 +382,14 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
 
     /// @dev §5.3 step 2. Returns the candidate mask, the first asset that failed ORA-4 (IDLE_INDEX
     ///      if none) and the longest remaining backoff among masked assets (0 if none).
-    function _eligible(IRobotMoneyFund f, uint256 n)
+    function _eligible(IRobotMoneyFund f, AssetConfig[] memory cfgs)
         internal
         view
         returns (bool[] memory eligible, uint256 oraFail, uint256 backoffLeft)
     {
+        uint256 n = cfgs.length;
         eligible = new bool[](n);
         oraFail = IDLE_INDEX;
-        AssetConfig[] memory cfgs = f.assetConfigs();
         for (uint256 i; i < n; ++i) {
             if (!cfgs[i].active || _assetStepParams[i].maxStepUsdc == 0) continue;
             // Inclusive end: a keeper stepping on the cooldown cadence lands exactly on `until`, and must
@@ -399,6 +467,16 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
         IRobotMoneyFund f = _fund;
         Decision memory d = _decide(f, f.plan());
         return (d.reason, d.sellIndex, d.buyIndex, d.notional);
+    }
+
+    /// @notice Step 3e: what `step()` would send to `fund.executeStep` now (the legs, notional, floors from the
+    ///         stricter of TWAP and feed, and the cost cap), or why it would not trade. `order` is empty unless
+    ///         `reason == None`. For keepers, the dapp and tests.
+    function previewOrder() external view returns (SkipReason reason, StepOrder memory order) {
+        IRobotMoneyFund f = _fund;
+        Decision memory d = _decide(f, f.plan());
+        reason = d.reason;
+        if (reason == SkipReason.None) order = _buildOrder(f, d);
     }
 
     /// @inheritdoc IRebalancer

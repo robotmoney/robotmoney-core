@@ -7,12 +7,14 @@ pragma solidity ^0.8.24;
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {
     AssetConfig,
+    FeedStatus,
     IFundEvents,
     Plan,
     PlanParams,
     PlanStatus,
     StepOrder,
-    StepResult
+    StepResult,
+    StepFeedCheck
 } from "../FundTypes.sol";
 
 /// @title IRobotMoneyFund
@@ -113,6 +115,102 @@ interface IRobotMoneyFund is IFundEvents {
     /// @notice `bindRebalanceRoles` already ran (the plan roles bind once, RB-1).
     error RolesAlreadyBound();
 
+    // ─── Step 3d: timed flows (proposal §4.5, §5.9; eng plan E1 to E23) ─────
+
+    /// @notice `bindFlowRole` granted FLOW_ROLE to the queue, once (E1).
+    event FlowRoleBound(address indexed queue);
+    /// @notice `seed` minted `shares` to the fund itself for `usdc` (E14). Those shares never move.
+    event Seeded(uint256 usdc, uint256 shares);
+    /// @notice `mintInKind` bought the pro-rata slice and minted `sharesOut` to `to` (the queue) for `usdcSpent` (E3).
+    event MintedInKind(address indexed to, uint256 sharesOut, uint256 usdcSpent, uint256 supplyBefore);
+    /// @notice `sellForFlow` burned `shares` of `from` (the queue), sold their slice for `usdcGross`, paid `fee` to
+    ///         the fee recipient and `usdcOut` to `from` (E4).
+    event SoldForFlow(address indexed from, uint256 shares, uint256 usdcGross, uint256 fee, uint256 usdcOut);
+    /// @notice An in-kind exit turned `units` of lending position `index` into a position-share claim of
+    ///         `account` (E9, RB-21), beyond the period's allowance or because the venue could not pay.
+    event PositionClaimRecorded(uint256 indexed index, address indexed account, uint256 units);
+    /// @notice `account` redeemed `units` of its claim on lending position `index` for `usdc`, paid to `to`.
+    event PositionClaimed(uint256 indexed index, address indexed account, address to, uint256 units, uint256 usdc);
+    /// @notice ADMIN set the least seed (E14).
+    event MinSeedUsdcSet(uint256 minSeedUsdc);
+    /// @notice ADMIN set the pool-share rule (§4.5 rule 3).
+    event PoolShareBpsSet(uint16 poolShareBps);
+
+    /// @notice The fund's own `deposit`, `mint` and `redeem` are closed (E2): use the FlowQueue at `queue`
+    ///         (address(0) before `bindFlowRole`). `redeemInKind` stays open on the fund.
+    error UseFlowQueue(address queue);
+    /// @notice `bindFlowRole` already ran.
+    error FlowRoleAlreadyBound();
+    /// @notice `seed` already ran, or the supply is not zero (E14).
+    error AlreadySeeded();
+    /// @notice `seed` below `minSeedUsdc` (E14).
+    error SeedBelowMinimum(uint256 usdc, uint256 minSeedUsdc);
+    /// @notice `mintInKind` / `sellForFlow` on a fund with zero supply (E14: a ratio has no meaning there).
+    error NotSeeded();
+    /// @notice A per-leg limit array does not have one entry per asset (`assetCount()`).
+    error LegLimitsLength(uint256 given, uint256 expected);
+    /// @notice `mintInKind` would spend more than `maxUsdc` (E3).
+    error MintInKindOverMax(uint256 spent, uint256 maxUsdc);
+    /// @notice A flow leg broke its per-swap limit: a purchase needed more than `limit` USDC, or a sale returned
+    ///         less than `limit` USDC (proposal §5.9.3 checks 8 and 9). `amount` is what it needed or got.
+    error FlowLegLimit(uint256 index, uint256 amount, uint256 limit);
+    /// @notice Check 10 (RB-13), asserted inside the fund: for asset `index` (IDLE_INDEX for idle USDC)
+    ///         `after × supplyBefore < before × supplyAfter`. The comparison is exact; the lending margin is
+    ///         `LENDING_ROUNDING_UNITS`, applied to the amounts moved, never to this comparison.
+    error ProportionViolated(uint256 index, uint256 before, uint256 afterAmount, uint256 supplyBefore, uint256 supplyAfter);
+    /// @notice E19: a NAV view read an unhealthy feed for asset `index` (`IDLE_INDEX` for the USDC / USD feed).
+    error FeedUnhealthy(uint256 index, FeedStatus status);
+    /// @notice `addAsset` (E15, RB-17): a Basket asset without a feed or without a `maxFeedAge`.
+    error MissingFeed(uint256 index);
+    /// @notice `addAsset` (E15, RB-17): the pool cannot answer `observe` over one settlement window.
+    error PoolHistoryTooShort(uint256 index, uint32 window);
+    /// @notice `addAsset` (E15): a Lending adapter does not expose its venue's `ratePerUnit()`.
+    error LendingRateUnavailable(address adapter);
+    /// @notice `setTargetAndOpenPlan` (§4.5 rule 3, E15): `targetBps × tvlCap` is over `poolShareBps` of the
+    ///         pool's time-weighted active liquidity for asset `index`.
+    error PoolShareExceeded(uint256 index, uint256 targetUsdc, uint256 limitUsdc);
+    /// @notice `claimPosition`: `account` holds no claim units on lending position `index`.
+    error NoPositionClaim(uint256 index, address account);
+    /// @notice `mintInKind` (E3): lending venue `index` kept only `placed` of the `asked` USDC (it refused the supply:
+    ///         a supply cap, a pause). The whole purchase reverts, so the queue leaves the deposit side pending.
+    error LendingSupplyRefused(uint256 index, uint256 placed, uint256 asked);
+    /// @notice E14: the seed shares the fund holds for itself never move (no transfer, burn or in-kind exit).
+    error SeedSharesLocked();
+
+    // ─── Step 3d, fund-extras (E9, E15, E19, E20, E23; scaffold plan §7.4). Appended. ─────────────────
+
+    /// @notice ADMIN set the in-kind allowance (E20, coordinator ruling 6).
+    event InKindAllowanceSet(uint16 bps, uint128 floorUsdc, uint32 period);
+
+    /// @notice ADMIN_ROLE. Set the in-kind allowance: per period of `period` seconds, in-kind exits take lending USDC
+    ///         up to `max(bps × lending holdings / 10 000, floorUsdc)` (E20). `bps ≤ 10 000`, `floorUsdc ≤
+    ///         MAX_IN_KIND_FLOOR_USDC`, `period` in [MIN_IN_KIND_PERIOD, MAX_IN_KIND_PERIOD] (`InvalidParam`).
+    ///         The Safe keeps these equal to the queue's `maxEpochFlowBps`, `epochFlowFloorUsdc` and `epochLength`.
+    function setInKindAllowance(uint16 bps, uint128 floorUsdc, uint32 period) external;
+
+    /// @notice The in-kind allowance parameters and the lending USDC in-kind exits took in the current period.
+    function inKindAllowance() external view returns (uint16 bps, uint128 floorUsdc, uint32 period, uint256 usedNow);
+
+    // ─── Step 3e (proposal §5.10; RB-4, RB-5 and RB-19 from step 3e; step-3 finish plan §3.5). Appended. ─────
+
+    /// @notice `executeStep` refused: a feed check of the step failed before any trade (checks 2 and 4 of §5.9.3
+    ///         on the step, RB-19). See `StepFeedCheck` for `index` and `detail`.
+    error StepFeedCheckFailed(StepFeedCheck check, uint256 index, uint256 detail);
+    /// @notice RB-19: after the legs, asset `index` moved although it is not a leg, or a leg moved the wrong way (the
+    ///         sell leg grew, the buy leg shrank). Amounts are the holders' held amounts (`heldBalances`).
+    error StepBalanceChanged(uint256 index, uint256 before, uint256 afterAmount);
+    /// @notice RB-19: the share supply changed inside a step.
+    error StepSupplyChanged(uint256 before, uint256 afterSupply);
+
+    /// @notice The step's cost at both prices (proposal §5.10, RB-4 from step 3e). `feedNavBefore` and `feedNavAfter`
+    ///         value idle USDC and the step's two legs at the feeds (every other asset is unchanged, RB-19), so their
+    ///         difference is the fund's NAV change at the feeds. `feedCost` = `max(feedNavBefore − feedNavAfter, 0)` is
+    ///         the cost the plan books (`costSpent`, `StepExecuted.cost`). `twapCost` = `max(navBefore − navAfter, 0)`
+    ///         at the TWAP. The step reverts `StepCostExceeded` when either exceeds the order's `maxCostUsdc`.
+    event StepCostBooked(
+        uint256 indexed planId, uint256 feedNavBefore, uint256 feedNavAfter, uint256 feedCost, uint256 twapCost
+    );
+
     // ═════════════════════════════════════════════════════════════════════════
     //  ERC-4626 surface (§4.3, §4.4). Inherited signatures; semantics pinned here.
     // ═════════════════════════════════════════════════════════════════════════
@@ -157,6 +255,13 @@ interface IRobotMoneyFund is IFundEvents {
     ///         A leg that cannot pay out (a frozen basket token, a lending venue that is paused or
     ///         fully utilized) does not revert the exit: its amount is deferred to `receiver` (and the
     ///         fee share to `feeRecipient`) and later pulled with `claimDeferred` (§5.8 row 7).
+    ///         Step 3d (E9, E20, E23, RB-13, RB-21): asserts the proportion check. The lending part is paid in
+    ///         USDC up to the period's in-kind allowance (`inKindAllowance`), pro rata over the venues; the rest,
+    ///         and any part a venue cannot pay or whose value read reverts, becomes a claim on a share of that
+    ///         lending position (`positionClaimOf`, `claimPosition`), never a fixed USDC amount. `receiver ==
+    ///         address(0)` reverts `ZeroAddress`. Every claim or deferral is keyed to `owner` (E23), except for
+    ///         shares the FlowQueue escrows (`owner == flowQueue()`), where it is keyed to `receiver`, the request's
+    ///         owner the queue names. The exit fee applies to every leg, claims included.
     function redeemInKind(uint256 shares, address receiver, address owner) external;
 
     /// @notice Pull everything `msg.sender` is owed from asset `index` by past in-kind exits, to `to`.
@@ -168,6 +273,104 @@ interface IRobotMoneyFund is IFundEvents {
 
     /// @notice Total owed from asset `index`; excluded from NAV and from every pro-rata leg.
     function deferredTotal(uint256 index) external view returns (uint256);
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Step 3d: timed flows (proposal §4.3, §4.4, §4.5, §5.9; eng plan E1 to E23)
+    // ═════════════════════════════════════════════════════════════════════════
+    //
+    //  The ERC-4626 entry points change meaning in step 3d (E2): the fund's own `deposit`, `mint` and `redeem`
+    //  revert `UseFlowQueue(flowQueue())`; `withdraw` keeps reverting `RedeemOnly`; `totalAssets` and the convert
+    //  views revert `FeedUnhealthy` when a feed is unhealthy (E19). The block comment above describes the step 3c
+    //  behaviour that the frozen baseline (contracts/test/prototype/baseline/) keeps.
+    //  Units: USDC amounts are 6-decimal USDC units; share amounts are raw share units (10^18 per USDC unit at
+    //  the seed scale); prices use `PRICE_SCALE` (FundTypes). INTERFACES.md in the scaffold run directory lists
+    //  caller, units and rounding for every function here.
+
+    /// @notice ADMIN_ROLE, once: grant FLOW_ROLE to `queue` (E1). FLOW_ROLE is self-administered afterwards, so
+    ///         no ADMIN_ROLE holder can grant it to another address. Reverts `FlowRoleAlreadyBound`, `ZeroAddress`.
+    function bindFlowRole(address queue) external;
+
+    /// @notice The bound FlowQueue (address(0) before `bindFlowRole`).
+    function flowQueue() external view returns (address);
+
+    /// @notice ADMIN_ROLE, once, only at zero supply (E14): pull `usdc` (≥ `minSeedUsdc`) from the caller and mint
+    ///         `usdc × 10^18` shares (the existing share scale) to the fund itself. Those shares never move.
+    ///         Reverts `AlreadySeeded`, `SeedBelowMinimum`.
+    /// @return shares Shares minted to the fund.
+    function seed(uint256 usdc) external returns (uint256 shares);
+
+    /// @notice FLOW_ROLE only (E3). Buy the pro-rata slice for `sharesOut` new shares and mint them to the caller.
+    ///         For every active asset and idle USDC, on held amounts (`heldBalances`): the fund adds
+    ///         `ceil(held × sharesOut / supply)` (idle: kept from the USDC pulled; Lending: supplied, plus
+    ///         `LENDING_ROUNDING_UNITS`; Basket: an exact-output swap whose input is at most `maxUsdcPerLeg[i]`).
+    ///         Then it mints exactly `sharesOut` and asserts the proportion check (check 10, `ProportionViolated`).
+    ///         The caller's USDC falls by exactly `usdcSpent` (≤ `maxUsdc`, else `MintInKindOverMax`); unused USDC is
+    ///         never taken. A venue that refuses a supply reverts the call. Reverts `NotSeeded` at zero supply,
+    ///         `LegLimitsLength`, `FlowLegLimit`.
+    /// @param sharesOut      Shares to mint, computed by the caller and rounded DOWN.
+    /// @param maxUsdc        The most USDC the caller lets the fund take (approved to the fund).
+    /// @param maxUsdcPerLeg  Per asset index (length `assetCount()`): the most USDC the purchase of that Basket
+    ///                       asset may spend (check 9). Ignored for Lending and inactive assets.
+    /// @return usdcSpent     USDC taken from the caller.
+    function mintInKind(uint256 sharesOut, uint256 maxUsdc, uint256[] calldata maxUsdcPerLeg)
+        external
+        returns (uint256 usdcSpent);
+
+    /// @notice FLOW_ROLE only (E4). Burn `shares` of the caller, withdraw `floor(held × shares / supply)` of each
+    ///         Lending position less `LENDING_ROUNDING_UNITS`, sell the same fraction of each Basket token with at
+    ///         least `minUsdcPerLeg[i]` USDC out (check 8), add the pro-rata idle USDC, pay `exitFeeBps` of the
+    ///         realized gross to the fee recipient and the rest to the caller. Asserts the proportion check.
+    ///         Reverts `NotSeeded`, `LegLimitsLength`, `FlowLegLimit`, `ProportionViolated`.
+    /// @return usdcOut USDC paid to the caller, net of the exit fee.
+    function sellForFlow(uint256 shares, uint256[] calldata minUsdcPerLeg) external returns (uint256 usdcOut);
+
+    /// @notice Lending position `index` claim of `account` (E9, RB-21): its units and their USDC value today
+    ///         (`units × adapter.totalAssets() / positionUnits`, rounded down).
+    function positionClaimOf(uint256 index, address account) external view returns (uint256 units, uint256 usdcValue);
+
+    /// @notice Total units of lending position `index`, and the units held by claims (E9).
+    function positionUnits(uint256 index) external view returns (uint256 totalUnits, uint256 claimUnits);
+
+    /// @notice The caller redeems its whole claim on lending position `index` at today's value and the USDC goes
+    ///         to `to` (E9, RB-21). Reverts `NoPositionClaim`, `ZeroAddress`, or `DeferredShortfall` while the
+    ///         venue cannot pay (the claim then stays whole). fund-extras: it pays `LENDING_ROUNDING_UNITS` less than
+    ///         the claim's value (venue rounding falls on the claim, never on the holders) and burns the claim's
+    ///         units; a venue whose `withdraw` reverts reverts the call.
+    /// @return usdc USDC paid.
+    function claimPosition(uint256 index, address to) external returns (uint256 usdc);
+
+    /// @notice FLOW_ROLE only (E13, RB-22). Checkpoint `account` in the exclusion ledger BEFORE the queue changes
+    ///         its queued shares. A no-op while no exclusion record exists.
+    function ledgerCheckpoint(address account) external;
+
+    /// @notice What the exclusion ledger credits to `account` (E13): wallet shares plus the shares the queue holds
+    ///         for it (`IFlowQueue.queuedSharesOf`). 0 for the queue's own address.
+    function ledgerBalanceOf(address account) external view returns (uint256);
+
+    /// @notice Held amounts (E3, E4, check 7): idle USDC, and per asset index the amount the fund holds net of
+    ///         deferred in-kind claims (Lending: USDC in the adapter attributable to holders; Basket: tokens).
+    ///         Assets that are not counted (inactive, or a Lending asset under an open ADP-2 exclusion) read 0: no
+    ///         flow trades them, so the proportion check does not compare them. These are the amounts check 10
+    ///         compares.
+    function heldBalances() external view returns (uint256 idle, uint256[] memory held);
+
+    /// @notice The last NAV computed while every feed was healthy, and its time (E19). Never reverts.
+    ///         fund-extras: while `totalAssets()` reads (feeds healthy), it is `(totalAssets(), block.timestamp)`;
+    ///         otherwise the value the fund recorded at its last `seed`, `mintInKind`, `sellForFlow` or `executeStep`
+    ///         with healthy feeds, and that time; `(0, 0)` if it never recorded one.
+    function lastGoodNav() external view returns (uint256 nav, uint64 at);
+
+    /// @notice The least `seed` accepts (§5.9.5, fund-held).
+    function minSeedUsdc() external view returns (uint256);
+
+    /// @notice The pool-share rule (§4.5 rule 3, fund-held).
+    function poolShareBps() external view returns (uint16);
+
+    /// @notice ADMIN_ROLE. In [`MIN_MIN_SEED_USDC`, `MAX_MIN_SEED_USDC`].
+    function setMinSeedUsdc(uint256 newMin) external;
+
+    /// @notice ADMIN_ROLE. In (0, `MAX_POOL_SHARE_BPS`].
+    function setPoolShareBps(uint16 newBps) external;
 
     /// @notice ADMIN_ROLE, once: grant GOVERNANCE_ROLE to `governance` and REBALANCER_ROLE to
     ///         `rebalancer`. Both roles are self-administered, so after this no ADMIN_ROLE holder can
@@ -330,9 +533,8 @@ interface IRobotMoneyFund is IFundEvents {
     ///         `PlanMath.pathTargetsBps`. With no plan ever opened returns zeros.
     function pathTarget(uint256 t) external view returns (uint256[] memory bps, uint256 idleBps);
 
-    /// @notice The target deposits route against (§4.3): `pathTarget(now)` while a plan is live
-    ///         (Open, Halted, Paused), else `targetBps()`.
-    function currentTargetBps() external view returns (uint256[] memory bps);
+    // Step 3d: `currentTargetBps()` (the target step 3c deposits routed against) is removed with the old deposit
+    // path (scaffold plan §7.2 item 1; removed by `verify` once no live test read it). The baseline keeps it.
 
     /// @notice Actual TWAP weights per asset and idle, rounded down.
     function currentWeightsBps() external view returns (uint256[] memory bps, uint256 idleBps);

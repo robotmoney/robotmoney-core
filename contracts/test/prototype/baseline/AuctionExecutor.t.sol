@@ -2,19 +2,21 @@
 // Canonical: docs/technical/one-vault-rebalancer-proposal.md §10 phase 3c (G4 fallback), §12 (auction-based
 //            rebalance), §5.3 (one step), §7 RB-2, RB-3, RB-4, RB-5
 // Experiment prototype only (contracts/test/prototype/). Phase 3c.
+// FROZEN BASELINE (one-vault scaffold, 2026-11-11): a copy of the step 3c synchronous fund and its tests. Never edit.
+// It is the sim's synchronous arm and the target of the baseline attack tests. The live tree is contracts/test/prototype/src.
 pragma solidity ^0.8.24;
 
 import {Vm} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-import {PrototypeHarness} from "./PrototypeHarness.sol";
+import {BaselineHarness} from "./BaselineHarness.sol";
 import {AssetStepParams, Roles, SkipReason, BPS, IDLE_INDEX, AssetKind} from "./src/FundTypes.sol";
 import {AuctionStepExecutor, IAuctionFiller} from "./src/AuctionStepExecutor.sol";
 
 /// @notice Phase 3c: the auction executor behind `executeStep`. The test contract is the filler. It mints what
 ///         it owes, so these tests check the auction's rules, not a solver's sourcing (the sim models that).
-contract AuctionExecutorTest is PrototypeHarness, IAuctionFiller {
+contract AuctionExecutorTest is BaselineHarness, IAuctionFiller {
     uint32 internal constant DURATION = 300;
     uint16 internal constant PREMIUM_BPS = 50;
     uint256 internal constant ALICE_DEPOSIT = 1_000_000e6;
