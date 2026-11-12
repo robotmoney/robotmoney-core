@@ -122,7 +122,7 @@ enum SettleCheck {
 /// @param slices               Equal slices of `settleWindow` for the TWAP median (12, E6).
 /// @param quorum               Slices that must sit within `dispersionBps` of the median (9, check 3).
 /// @param dispersionBps        Slice band around the median (100, check 3).
-/// @param refBandBps           TWAP against feed band (50, check 4).
+/// @param refBandBps           TWAP against feed band (90, check 4; owner default 2026-11-12, lever L10).
 /// @param legBandBps           Per-swap limit band around the stricter of feed and TWAP (100, checks 8 and 9).
 ///                             Must be above every basket pool fee.
 /// @param sequencerGrace       Time the sequencer must have been up (1 h, check 2).
@@ -378,6 +378,11 @@ interface IFlowEvents {
     event ExpiredWithdrawn(uint256 indexed requestId, address indexed owner, uint256 amount);
 
     // ── Settlement (§5.9.3) ──
+    /// @notice A settle call recorded nothing while the per-call basket cap (`FlowLevers.basketCallBps`) left a side
+    ///         less room than its minimum fill: a thin basket pool holds every request (review Q-F5). The rooms the
+    ///         call had, in USDC.
+    event SettleCallRoomBelowMinimum(uint256 depositRoom, uint256 redeemRoom);
+
     event Settled(
         uint256 indexed settlementId,
         address indexed settler,
@@ -484,13 +489,17 @@ interface IFlowEvents {
 
 /// @dev Hard bounds of `FlowLevers`.
 uint16 constant MAX_BASKET_CALL_BPS = 10_000;
+/// @dev The owner's decided default for `FlowLevers.basketCallBps` (owner delegation, 2026-11-12; lever L5 of the
+///      step 3 finish report §8): 5 bps of each basket pool's time-weighted USDC depth per call. `initialize` sets it.
+uint16 constant DEFAULT_BASKET_CALL_BPS = 5;
 uint8 constant LEG_PRICE_STRICTER = 0;
 uint8 constant LEG_PRICE_TWAP_ONLY = 1;
 uint8 constant LEG_PRICE_FEED_ONLY = 2;
 
 /// @notice Candidate levers for the sandwich (D-AT-1, A7), slow-ramp (D-AT-2, A10) findings, built behind
-///         parameters so the owner can choose (step 3 finish plan §3.2, §4). Every field 0 (the default, and the
-///         state of a queue that never called `setFlowLevers`) leaves the queue exactly as proposal §5.9 describes.
+///         parameters so the owner can choose (step 3 finish plan §3.2, §4). `initialize` sets `basketCallBps` to
+///         `DEFAULT_BASKET_CALL_BPS` (5) and `legPriceMode` to `LEG_PRICE_STRICTER`, the decided defaults. Every field
+///         0 leaves the queue exactly as proposal §5.9 first described it (the lever measurements' L0 row).
 ///         Kept out of `FlowParams` on purpose: that struct is built field by field in tests other agents own, so a
 ///         new field there would break them (FlowParams stays append-free).
 /// @param basketCallBps Per-call cap on each basket leg of a settlement: one call may buy or sell at most

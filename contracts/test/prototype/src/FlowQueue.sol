@@ -50,6 +50,8 @@ import {
     MAX_LEND_RATE_GROWTH_BPS,
     FlowLevers,
     MAX_BASKET_CALL_BPS,
+    DEFAULT_BASKET_CALL_BPS,
+    LEG_PRICE_STRICTER,
     LEG_PRICE_FEED_ONLY
 } from "./FlowTypes.sol";
 import {IFlowQueue} from "./interfaces/IFlowQueue.sol";
@@ -64,7 +66,7 @@ import {FlowSettleLib} from "./lib/FlowSettleLib.sol";
 ///
 ///         Built by the `queue` agent (scaffold plan §7.3, 2026-11-11). This contract holds roles, the reentrancy
 ///         lock, the parameters and the getters; the logic lives in three linked libraries so the queue stays
-///         under 23,552 bytes (G1):
+///         under EIP-170, 24,576 bytes (G1):
 ///         - `FlowCheckLib`: checks 1 to 7 of §5.9.3, the bound prices (E12), `checkSettle`, the quotes (E21).
 ///         - `FlowSettleLib`: `settle` (walk, caps, eligibility) and the two sides (checks 8 to 12), each side in
 ///           its own self-call (`settleRedeemSide`, `settleDepositSide`) so a failed side changes no state.
@@ -111,6 +113,11 @@ contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gover
         _grantRole(EMERGENCY_ROLE, p.emergency);
         if (p.keeper != address(0)) _grantRole(KEEPER_ROLE, p.keeper);
         _setFlowParams(p.params);
+        // The owner's decided default levers (2026-11-12): the 5 bps per-call basket cap, limits from the stricter
+        // of TWAP and feed. ADMIN may change them later through `setFlowLevers`.
+        FlowLevers memory l = FlowLevers({basketCallBps: DEFAULT_BASKET_CALL_BPS, legPriceMode: LEG_PRICE_STRICTER});
+        s.levers = l;
+        emit FlowLeversSet(l);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -311,7 +318,8 @@ contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gover
     }
 
     /// @notice ADMIN_ROLE (timelock). The attack-finding levers of step 3 finish plan §3.2 (`FlowLevers`), appended
-    ///         by `levers` 2026-11-12. All zero (the default) is the design as written. Under the reentrancy lock like
+    ///         by `levers` 2026-11-12. `initialize` sets the decided defaults (`DEFAULT_BASKET_CALL_BPS`, stricter-of-both);
+    ///         all zero is the design as §5.9 first wrote it. Under the reentrancy lock like
     ///         `setFlowParams`. Changes nothing else: no cursor, epoch or reference moves.
     function setFlowLevers(FlowLevers calldata l) external onlyRole(ADMIN_ROLE) nonReentrant {
         if (l.basketCallBps > MAX_BASKET_CALL_BPS) revert FlowLeverOutOfBounds(0);
@@ -320,7 +328,7 @@ contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gover
         emit FlowLeversSet(l);
     }
 
-    /// @notice The attack-finding levers in force (all zero: none).
+    /// @notice The attack-finding levers in force (from `initialize`: the 5 bps per-call cap, stricter-of-both).
     function flowLevers() external view returns (FlowLevers memory) {
         return _s().levers;
     }

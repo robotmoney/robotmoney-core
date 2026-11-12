@@ -499,7 +499,7 @@ abstract contract PrototypeHarness is BaseFixture {
             slices: 12,
             quorum: 9,
             dispersionBps: 100,
-            refBandBps: 50,
+            refBandBps: 90,
             legBandBps: 100,
             sequencerGrace: 1 hours,
             usdcPegBandBps: 50,
@@ -656,6 +656,11 @@ abstract contract PrototypeHarness is BaseFixture {
         refreshFeeds();
         uint256 idle;
         for (uint256 k; k < 16 && idle < 2; ++k) {
+            // One keeper call per block, as on chain (Base: a block every 2 s): the per-call basket cap
+            // (`FlowLevers.basketCallBps`, on by default) is a budget per block, and check 5 allows a venue's rate
+            // no growth at all with no time elapsed.
+            vm.roll(block.number + 1);
+            if (k != 0) vm.warp(block.timestamp + 2);
             vm.prank(keeper);
             (SettleCheck check,) = queue.checkSettle();
             if (check == SettleCheck.Window) break;

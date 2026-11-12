@@ -392,21 +392,33 @@ library FundValuationLib {
         }
     }
 
+    /// @dev Slices `poolUsdcDepth` splits its window into, and how many of the thinnest it drops (review R-F2).
+    uint256 internal constant DEPTH_SLICES = 12;
+    uint256 internal constant DEPTH_DROP = 2;
+
     /// @notice The USDC a pool holds in its active range over the last `window` seconds, read from its
-    ///         time-weighted liquidity, never from a token balance (§4.5 rule 3). With one `observe([window, 0])`:
-    ///         the harmonic-mean in-range liquidity `L = window × 2^128 / Δ secondsPerLiquidityCumulativeX128` and the
-    ///         arithmetic-mean tick; `depth` is the USDC side of the virtual reserves of `L` at that tick
-    ///         (`L × sqrtP / 2^96` when USDC is token1, `L × 2^96 / sqrtP` when token0), rounded DOWN. Liquidity added
-    ///         and removed inside one transaction adds no seconds, so it does not count; liquidity held for part of the
-    ///         window counts by the harmonic mean, which the thinnest stretch dominates. The virtual reserve of the
-    ///         active liquidity is the scaffold's reading of "the asset held in the pool's active range": the
-    ///         design does not fix the range's width (see the fund-extras notes).
-    /// @return ok    False when `observe` reverts (too little history) or the window is 0.
+    ///         time-weighted liquidity, never from a token balance (§4.5 rule 3). One `observe` call returns
+    ///         `DEPTH_SLICES + 1` points; each slice's in-range liquidity is its harmonic mean
+    ///         `L_j = dt_j × 2^128 / Δ secondsPerLiquidityCumulativeX128`. The depth uses the third-thinnest slice
+    ///         (the `DEPTH_DROP` thinnest are dropped), priced at the window's arithmetic-mean tick: `depth` is the
+    ///         USDC side of the virtual reserves of that `L` (`L × sqrtP / 2^96` when USDC is token1,
+    ///         `L × 2^96 / sqrtP` when token0), rounded DOWN.
+    ///         Why not one harmonic mean over the whole window (the step 3 reading): a pool pushed out of its
+    ///         liquidity for a few seconds adds `dt × 2^128 / max(1, L)` for those seconds and drives one harmonic
+    ///         mean, so every cap read from it, to about 0 for a whole window (review R-F2). Dropping the two
+    ///         thinnest slices means thinning must be held through a full slice (`window / 12`, five minutes at the
+    ///         default) and the slices on both sides of it. Inflating needs liquidity held through ten of the twelve
+    ///         slices; liquidity added and removed inside one transaction adds no seconds and does not count.
+    /// @return ok    False when `observe` reverts (too little history) or the window is under `DEPTH_SLICES` seconds.
     /// @return depth USDC units.
     function poolUsdcDepth(address pool, address usdc, uint32 window) public view returns (bool ok, uint256 depth) {
-        if (window == 0) return (false, 0);
-        uint32[] memory ago = new uint32[](2);
-        ago[0] = window;
+        if (window < DEPTH_SLICES) return (false, 0);
+        uint32[] memory ago = new uint32[](DEPTH_SLICES + 1);
+        uint32 len = window / uint32(DEPTH_SLICES);
+        for (uint256 j; j < DEPTH_SLICES; ++j) {
+            ago[j] = window - uint32(j) * len;
+        }
+        // ago[DEPTH_SLICES] = 0 (now): the last slice also takes the remainder of `window / DEPTH_SLICES`.
         int56[] memory tc;
         uint160[] memory spl;
         try IObservablePool(pool).observe(ago) returns (int56[] memory t, uint160[] memory l) {
@@ -414,16 +426,37 @@ library FundValuationLib {
         } catch {
             return (false, 0);
         }
-        uint256 dSpl = uint256(spl[1] - spl[0]);
-        if (dSpl == 0) return (true, 0);
-        uint256 liq = (uint256(window) << 128) / dSpl;
-        int56 dTick = tc[1] - tc[0];
+        if (tc.length != DEPTH_SLICES + 1 || spl.length != DEPTH_SLICES + 1) return (false, 0);
+        uint256 liq = _thinSliceLiquidity(ago, spl);
+        int56 dTick = tc[DEPTH_SLICES] - tc[0];
         int56 w = int56(uint56(window));
         int56 meanTick = dTick / w;
         if (dTick < 0 && dTick % w != 0) meanTick--;
         uint256 sqrtP = TickMath.getSqrtRatioAtTick(int24(meanTick));
         depth = IObservablePool(pool).token1() == usdc ? liq.mulDiv(sqrtP, 1 << 96) : liq.mulDiv(1 << 96, sqrtP);
         ok = true;
+    }
+
+    /// @dev Each slice's harmonic in-range liquidity, sorted ascending; returns the one at rank `DEPTH_DROP`. A
+    ///      slice whose cumulative did not move (no seconds) counts as 0 liquidity, the conservative reading.
+    function _thinSliceLiquidity(uint32[] memory ago, uint160[] memory spl) private pure returns (uint256) {
+        uint256[] memory l = new uint256[](DEPTH_SLICES);
+        for (uint256 j; j < DEPTH_SLICES; ++j) {
+            uint256 dSpl = uint256(spl[j + 1] - spl[j]);
+            uint256 dt = uint256(ago[j] - ago[j + 1]);
+            l[j] = dSpl == 0 ? 0 : (dt << 128) / dSpl;
+        }
+        // Insertion sort: 12 elements.
+        for (uint256 i = 1; i < DEPTH_SLICES; ++i) {
+            uint256 v = l[i];
+            uint256 k = i;
+            while (k != 0 && l[k - 1] > v) {
+                l[k] = l[k - 1];
+                --k;
+            }
+            l[k] = v;
+        }
+        return l[DEPTH_DROP];
     }
 
     /// @notice The settlement window the admission rules read: the bound FlowQueue's `settleWindow`, or

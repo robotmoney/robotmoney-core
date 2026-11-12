@@ -79,6 +79,12 @@ library FundStepLib {
             revert IFundEvents.InvalidParam();
         }
         if (o.sellIndex == o.buyIndex) revert IFundEvents.InvalidAssetIndex(o.buyIndex);
+        // RB-4: a plan never spends more than its budget. The step's cost cap is at most what the budget has left,
+        // so a last step cannot overshoot it (review B-F5).
+        {
+            uint256 left = p.costBudget > p.costSpent ? p.costBudget - p.costSpent : 0;
+            if (o.maxCostUsdc > left) o.maxCostUsdc = left;
+        }
         _checkLeg(s, o.sellIndex);
         _checkLeg(s, o.buyIndex);
         StepPrices memory px = _stepFeeds(s);
@@ -93,7 +99,10 @@ library FundStepLib {
         p.costSpent += r.cost;
         p.stepCount += 1;
         s.lastStepAt = uint64(block.timestamp);
-        if (p.costSpent > p.costBudget) {
+        // Halt once the budget left is below this step's own cost: the next step like it could not fit, and only
+        // the Safe extends a budget (§5.5). Never past the budget (the cap above), so `costSpent ≤ costBudget`.
+        if (r.cost != 0 && p.costBudget - p.costSpent < r.cost) {
+            s.haltCost = r.cost;
             p.status = PlanStatus.Halted;
             emit IFundEvents.PlanStatusChanged(p.id, PlanStatus.Open, PlanStatus.Halted);
         }

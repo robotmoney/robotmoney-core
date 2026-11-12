@@ -39,7 +39,9 @@ import {
     FeedStatus,
     FundInitParams,
     IFundEvents,
+    Plan,
     PlanParams,
+    PlanStatus,
     StepOrder,
     Venue,
     BPS,
@@ -188,7 +190,7 @@ contract FundExtrasTest is BaseFixture {
             slices: 12,
             quorum: 9,
             dispersionBps: 100,
-            refBandBps: 50,
+            refBandBps: 90,
             legBandBps: 100,
             sequencerGrace: 1 hours,
             usdcPegBandBps: 50,
@@ -981,6 +983,16 @@ contract FundExtrasTest is BaseFixture {
     ///         counts only by its time-weighted share.
     function test_RB17_liquidityAddedNowDoesNotRaiseTheLimit() public fixtureCovered {
         (, uint256 depth0) = FundValuationLib.poolUsdcDepth(WETH_POOL, USDC, 1 hours);
+        // The control: the same pool and the same moments without the new liquidity. The window moves with time, so
+        // the slices it drops and adds change the depth a little on their own; the mint is measured against that.
+        uint256 snap = vm.snapshotState();
+        vm.warp(block.timestamp + 10 minutes);
+        _refreshFeeds();
+        (, uint256 ctl2) = FundValuationLib.poolUsdcDepth(WETH_POOL, USDC, 1 hours);
+        vm.warp(block.timestamp + 45 minutes);
+        _refreshFeeds();
+        (, uint256 ctl3) = FundValuationLib.poolUsdcDepth(WETH_POOL, USDC, 1 hours);
+        vm.revertToState(snap);
         IFxV3Pool pool = IFxV3Pool(WETH_POOL);
         (, int24 tick,,,,,) = pool.slot0();
         int24 lower = (tick / 10 - 50) * 10;
@@ -988,10 +1000,16 @@ contract FundExtrasTest is BaseFixture {
         pool.mint(address(this), lower, upper, 1e19, "");
         (, uint256 depth1) = FundValuationLib.poolUsdcDepth(WETH_POOL, USDC, 1 hours);
         assertEq(depth1, depth0, "same-transaction liquidity does not count");
+        // Since the review fix R-F2 the depth is the third-thinnest of twelve five-minute slices: liquidity counts only
+        // once it is held through ten of them.
         vm.warp(block.timestamp + 10 minutes);
         _refreshFeeds();
         (, uint256 depth2) = FundValuationLib.poolUsdcDepth(WETH_POOL, USDC, 1 hours);
-        assertGt(depth2, depth0, "held liquidity counts by its time share");
+        assertEq(depth2, ctl2, "held through two slices: not counted yet");
+        vm.warp(block.timestamp + 45 minutes);
+        _refreshFeeds();
+        (, uint256 depth3) = FundValuationLib.poolUsdcDepth(WETH_POOL, USDC, 1 hours);
+        assertGt(depth3, ctl3, "held through eleven slices: counted");
     }
 
     /// @dev Pays the pool for `test_RB17_liquidityAddedNowDoesNotRaiseTheLimit`.
@@ -1021,5 +1039,105 @@ contract FundExtrasTest is BaseFixture {
         assertGt(fresh.ratePerUnit(), 1e18, "Comet's supply index at the pin");
         assertEq(comet.ratePerUnit(), fresh.ratePerUnit(), "the listed copy reads the same index");
         assertEq(fund.assetConfig(IDX_COMET).adapter, address(comet), "Compound is listed in this file's fund");
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════
+    //  Adversarial code review of 2026-11-12 (proposal §14): the fund's errors, each failing before its fix
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════
+
+    /// @notice B-F1: an excluded lending venue holding only the fund's own rounding dust can be removed, so deposits
+    ///         reopen. Before the fix `deactivateAsset` needed `totalAssets() == 0` exactly.
+    function test_BF1_anExcludedVenueWithDustCanBeRemoved() public fixtureCovered {
+        _seed();
+        fund.setAdapterCodeHashAllowed(address(moonwell).codehash, false);
+        assertGt(fund.openExclusionOf(IDX_MOONWELL), 0, "excluded");
+        vm.mockCall(
+            address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), abi.encode(LENDING_ROUNDING_UNITS)
+        );
+        fund.deactivateAsset(IDX_MOONWELL);
+        assertEq(fund.openExclusionOf(IDX_MOONWELL), 0, "the record closed: deposits reopen");
+    }
+
+    /// @notice B-F1: an excluded venue whose `totalAssets()` read fails can be removed too (its value is in the
+    ///         ledger already).
+    function test_BF1_anExcludedVenueWhoseReadFailsCanBeRemoved() public fixtureCovered {
+        _seed();
+        fund.setAdapterCodeHashAllowed(address(moonwell).codehash, false);
+        vm.mockCallRevert(address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), "broken");
+        fund.deactivateAsset(IDX_MOONWELL);
+        assertEq(fund.openExclusionOf(IDX_MOONWELL), 0, "the record closed");
+    }
+
+    /// @notice B-F1 control: a counted venue whose read fails, or that holds more than dust, is never removed.
+    function test_BF1_aCountedVenueCannotBeRemovedUnread_control() public fixtureCovered {
+        _seed();
+        vm.mockCallRevert(address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), "broken");
+        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.AssetStillHeld.selector, IDX_MOONWELL));
+        fund.deactivateAsset(IDX_MOONWELL);
+        vm.clearMockedCalls();
+        vm.mockCall(
+            address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), abi.encode(LENDING_ROUNDING_UNITS + 1)
+        );
+        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.AssetStillHeld.selector, IDX_MOONWELL));
+        fund.deactivateAsset(IDX_MOONWELL);
+    }
+
+    /// @notice B-F3: a lending adapter whose inactive entry still has open position claims cannot be listed again,
+    ///         or those claims would be paid from new holders' money.
+    function test_BF3_anAdapterWithOpenClaimsCannotBeListedAgain() public fixtureCovered {
+        _aliceClaims();
+        (uint256 units,) = fund.positionClaimOf(IDX_MOONWELL, alice);
+        assertGt(units, 0, "alice holds Moonwell claims");
+        uint256[N_ASSETS] memory w = _weights();
+        uint256[] memory bps = new uint256[](N_ASSETS);
+        for (uint256 i; i < N_ASSETS; ++i) {
+            bps[i] = w[i];
+        }
+        bps[IDX_COMET] += bps[IDX_MOONWELL];
+        bps[IDX_MOONWELL] = 0;
+        fund.setTargetAndOpenPlan(_ids(), bps, PlanParams(1 days, 500), bytes32(0));
+        vm.warp(uint256(fund.plan().endTime) + 1);
+        _refreshFeeds();
+        fund.concludePlan(PlanStatus.Expired);
+        vm.mockCall(
+            address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), abi.encode(LENDING_ROUNDING_UNITS)
+        );
+        fund.deactivateAsset(IDX_MOONWELL);
+        vm.clearMockedCalls();
+        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.DuplicateAsset.selector, IDX_MOONWELL));
+        fund.addAsset(_lending(address(moonwell)));
+    }
+
+    /// @notice B-F4: §4.5 rule 3 holds after a TVL cap rise: a cap that puts a live target over its pool share is
+    ///         refused. A lower cap is never refused.
+    function test_BF4_aHigherTvlCapIsCheckedAgainstThePoolShare() public fixtureCovered {
+        _seedAndInvest();
+        vm.expectPartialRevert(IRobotMoneyFund.PoolShareExceeded.selector);
+        fund.setTvlCap(1e30);
+        fund.setTvlCap(TVL_CAP / 2);
+    }
+
+    /// @notice B-F5: a plan never spends more than its budget (RB-4): a last step whose cost would pass the budget is
+    ///         refused. Before the fix the step booked its cost and only then halted, past the budget.
+    function test_BF5_noStepOvershootsThePlanBudget() public fixtureCovered {
+        _seed();
+        uint256[N_ASSETS] memory w = _weights();
+        uint256[] memory bps = new uint256[](N_ASSETS);
+        for (uint256 i; i < N_ASSETS; ++i) {
+            bps[i] = w[i];
+        }
+        fund.setTargetAndOpenPlan(_ids(), bps, PlanParams(1 days, 1), bytes32(0));
+        vm.warp(block.timestamp + 1 days + 1);
+        _refreshFeeds();
+        for (uint256 i; i < N_ASSETS; ++i) {
+            (uint256 nav,,) = fund.portfolioValues();
+            uint256 notional = nav.mulDiv(w[i] * 99, BPS * 100);
+            uint256 minOut =
+                fund.assetConfig(i).kind == AssetKind.Basket ? fund.assetTokenValue(i, notional).mulDiv(98, 100) : 0;
+            try fund.executeStep(StepOrder(IDLE_INDEX, i, notional, 0, minOut, notional.mulDiv(100, BPS))) {} catch {}
+            Plan memory p = fund.plan();
+            assertLe(p.costSpent, p.costBudget, "RB-4: never past the budget");
+            if (p.status != PlanStatus.Open) break;
+        }
     }
 }

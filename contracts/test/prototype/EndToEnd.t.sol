@@ -110,11 +110,13 @@ contract EndToEndTest is PrototypeHarness {
     function test_happyPath_seedDepositSettleHoldDeliverRedeemSettleClaim() public fixtureCovered {
         _hpSeedAndInvest();
         coverageCheckpoint();
-        _hpDepositRequest(100_000e6);
+        // 20,000 USDC: one settlement under the per-call basket cap (5 bps of each pool's depth, the owner's default
+        // of 2026-11-12) at this fund's size; FlowQueue.t.sol's RB-13 tests split larger flows over blocks.
+        _hpDepositRequest(20_000e6);
         _hpDepositSettle();
         coverageCheckpoint();
         _hpHoldAndDelivery();
-        _hpRedeemAndClaim(100_000e6);
+        _hpRedeemAndClaim(20_000e6);
         coverageCheckpoint();
     }
 

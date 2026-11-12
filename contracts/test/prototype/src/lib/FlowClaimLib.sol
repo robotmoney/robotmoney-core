@@ -321,7 +321,10 @@ library FlowClaimLib {
         if (c.owner == address(0)) revert IFlowEvents.UnknownClaim(claimId);
         if (c.owner != msg.sender) revert IFlowEvents.NotRequestOwner(c.requestId, msg.sender);
         if (c.kind != RequestKind.Deposit) revert IFlowEvents.WrongRequestKind(c.requestId);
-        if (!s.settlements[c.settlementId].returnAllowed) revert IFlowEvents.ReturnNotAllowed(c.settlementId);
+        // Allowed AND still frozen: a freeze that ran out (not released) leaves `returnAllowed` set, and an early
+        // in-kind exit must not outlive the freeze it was allowed under (RB-11, review Q-F4).
+        Settlement storage st = s.settlements[c.settlementId];
+        if (!st.returnAllowed || st.frozenUntil <= block.timestamp) revert IFlowEvents.ReturnNotAllowed(c.settlementId);
         uint256 x = c.shares - c.claimed;
         if (x == 0) revert IFlowEvents.NothingToWithdraw(msg.sender);
         IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);

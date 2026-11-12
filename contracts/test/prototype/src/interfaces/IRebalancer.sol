@@ -32,6 +32,8 @@ interface IRebalancer is IFundEvents {
     ///         reverted on a step that used it (§5.8 "A venue freezes": a frozen venue stalls only its
     ///         own asset for one effective cooldown while the rest of the plan keeps converging).
     event AssetBackoff(uint256 indexed index, uint64 until);
+    /// @notice The depth cap on basket legs changed (`setStepDepthBps`, and once at initialize).
+    event StepDepthBpsSet(uint16 bps);
 
     // ─── Errors ──────────────────────────────────────────────────────────────
 
@@ -145,6 +147,20 @@ interface IRebalancer is IFundEvents {
 
     function stepParams() external view returns (StepParams memory);
     function assetStepParams(uint256 index) external view returns (AssetStepParams memory);
+
+    /// @notice Set the depth cap on basket legs: a basket leg's notional is at most `bps` of its pool's
+    ///         time-weighted USDC depth over one settlement window, beside its `maxStepUsdc`. Bounds
+    ///         `[1, MAX_STEP_DEPTH_BPS]` (`StepParamOutOfBounds`): the cap cannot be switched off.
+    function setStepDepthBps(uint16 bps) external;
+
+    /// @notice The depth cap on basket legs in bps (`DEFAULT_STEP_DEPTH_BPS` from initialize).
+    function stepDepthBps() external view returns (uint16);
+
+    /// @notice The notional cap a step applies to asset `index` now: its `maxStepUsdc`, and for a basket asset
+    ///         also `stepDepthBps` of its pool's USDC depth over one settlement window. 0 when the depth cannot be
+    ///         read (too little pool history). A basket asset whose cap is below `minStepUsdc` is masked from leg
+    ///         picking; with no other pair left the step skips `DepthCap` (fail closed, no stall behind it).
+    function assetStepCap(uint256 index) external view returns (uint256);
 
     /// @notice The fund this rebalancer drives. Set once at initialize, no setter.
     function fund() external view returns (IRobotMoneyFund);

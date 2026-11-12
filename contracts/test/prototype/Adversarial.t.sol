@@ -77,11 +77,12 @@ contract AdversarialTest is PrototypeHarness {
     //  §5.8 row 1: slippage on a large trade
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev A deviation many times `maxStepUsdc` is closed in capped slices: every step's notional is
-    ///      `min(over, under, maxStepUsdc)` and the idle leg moves by exactly the notional.
+    /// @dev A deviation many times the step cap is closed in capped slices: every step's notional is
+    ///      `min(over, under, cap)`, where the cap is `assetStepCap` (`maxStepUsdc` and 5 bps of the pool's
+    ///      time-weighted USDC depth, the owner's default of 2026-11-12), and the idle leg moves by exactly the notional.
     function test_bigTrade_isSplitIntoCappedSteps() public fixtureCovered {
         _wethOnlyPlan(COST_BUDGET_BPS);
-        uint256 cap = rebalancer.assetStepParams(IDX_WETH).maxStepUsdc;
+        uint256 cap = rebalancer.assetStepCap(IDX_WETH);
         uint256 gap = _wethGap();
         assertGt(gap, cap * 5, "deviation is many steps wide");
 
@@ -96,11 +97,12 @@ contract AdversarialTest is PrototypeHarness {
             }
             uint256 idleBefore = fund.idleUsdc();
             uint256 wethValueBefore = fund.assetValue(IDX_WETH);
+            cap = rebalancer.assetStepCap(IDX_WETH);
             (bool did,, StepLog memory l) = _stepAs(keeper);
             assertTrue(did, "step executed");
             assertEq(l.sell, IDLE_INDEX, "sell leg is idle");
             assertEq(l.buy, IDX_WETH, "buy leg is weth");
-            assertLe(l.notional, cap, "notional <= maxStepUsdc");
+            assertLe(l.notional, cap, "notional <= the step cap");
             assertEq(l.notional, cap, "deviation > cap: the step is exactly one cap slice");
             assertEq(idleBefore - fund.idleUsdc(), l.notional, "idle leg moved by exactly the notional");
             assertLe(fund.assetValue(IDX_WETH) - wethValueBefore, l.notional, "TWAP value bought <= notional");
@@ -513,7 +515,11 @@ contract AdversarialTest is PrototypeHarness {
         uint256 otherBefore = _valueExcept(IDX_CBBTC);
         uint256 failed;
         uint256 executed;
+        // A coverage checkpoint per phase: with the depth cap the steps are many and small, and one state diff of
+        // the whole test overruns forge's memory limit (MemoryOOG in the check, not in the code under test).
+        _fixtureCheckpoint();
         for (uint256 k; k < 10; ++k) {
+            if (k % 3 == 2) _fixtureCheckpoint();
             vm.warp(block.timestamp + rebalancer.effectiveStepInterval());
             (bool did, SkipReason why, StepLog memory l) = _stepAs(keeper);
             if (did) {
@@ -638,19 +644,34 @@ contract AdversarialTest is PrototypeHarness {
     //  §5.8 row 8: runaway cost
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev A tiny budget: the plan halts on the first step that overruns it, further steps do nothing (keeper
-    ///      or stranger), and only an ADMIN (timelock) budget extension reopens it.
+    /// @dev A tiny budget: the plan halts once the budget left is below the cost of its last step, never past the
+    ///      budget (RB-4; review fix B-F5: the step 3c fund halted one step past it), further steps do nothing
+    ///      (keeper or stranger), and only an ADMIN (timelock) budget extension reopens it.
     function test_runawayCost_haltsUntilAdminExtends() public fixtureCovered {
         uint256 planId = _wethOnlyPlan(1);
         Plan memory p = fund.plan();
         uint256 n = _previewNotional();
 
-        (uint256 executed,, PlanStatus st) = stepUntilDone(40);
+        uint256 executed;
+        uint256 lastCost;
+        PlanStatus st = fund.planStatus();
+        for (uint256 k; k < 40 && st == PlanStatus.Open; ++k) {
+            vm.warp(block.timestamp + rebalancer.effectiveStepInterval());
+            refreshFeeds();
+            alignFeedsToPools();
+            uint256 spent0 = fund.plan().costSpent;
+            (bool stepped,) = keeperStep();
+            if (stepped) {
+                ++executed;
+                lastCost = fund.plan().costSpent - spent0;
+            }
+            st = fund.planStatus();
+        }
         assertEq(uint8(st), uint8(PlanStatus.Halted), "plan halted");
         assertGt(executed, 0, "steps ran before the halt");
         p = fund.plan();
-        assertGt(p.costSpent, p.costBudget, "halted because spent > budget");
-        assertLe(p.costSpent, p.costBudget + n * MAX_STEP_COST_BPS / BPS, "overrun <= one capped step");
+        assertLe(p.costSpent, p.costBudget, "RB-4: never past the budget");
+        assertLt(p.costBudget - p.costSpent, lastCost, "halted because the budget left is below the last step's cost");
 
         uint256 wethBal = IERC20(WETH).balanceOf(address(fund));
         uint256 idle = fund.idleUsdc();
@@ -674,9 +695,9 @@ contract AdversarialTest is PrototypeHarness {
             abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, keeper, Roles.ADMIN_ROLE)
         );
         fund.extendBudget(1_000e6);
-        uint256 over = p.costSpent - p.costBudget;
-        if (over > 1) {
-            timelockExecute(address(fund), abi.encodeCall(fund.extendBudget, (over - 1)));
+        uint256 short = lastCost - (p.costBudget - p.costSpent);
+        if (short > 1) {
+            timelockExecute(address(fund), abi.encodeCall(fund.extendBudget, (short - 1)));
             assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Halted), "insufficient extension stays halted");
         }
         // EMERGENCY can pause a Halted plan at once (§5.5); a later extension then leaves it Paused, and ADMIN's
@@ -696,7 +717,7 @@ contract AdversarialTest is PrototypeHarness {
         alignFeedsToPools();
         (did,) = keeperStep();
         assertTrue(did, "reopened plan steps again");
-        assertLe(fund.plan().costSpent, fund.plan().costBudget + n * MAX_STEP_COST_BPS / BPS, "still bounded");
+        assertLe(fund.plan().costSpent, fund.plan().costBudget, "still within the budget");
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════

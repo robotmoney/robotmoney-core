@@ -48,6 +48,12 @@ uint16 constant MAX_TOLERANCE_BPS = 500;
 uint32 constant MAX_KEEPER_GRACE = 7 days;
 /// @dev Ceiling on `maxOverrun` (suggested start 7 days).
 uint32 constant MAX_OVERRUN = 30 days;
+/// @dev A basket leg's step notional is also capped at `stepDepthBps` of its pool's time-weighted USDC depth over one
+///      settlement window (`FundValuationLib.poolUsdcDepth`, the depth the §4.5 pool-share rule and the per-call
+///      flow cap read). Owner's decided default (delegation of 2026-11-12): 5 bps, the same as the flow cap.
+uint16 constant DEFAULT_STEP_DEPTH_BPS = 5;
+/// @dev Upper bound of `stepDepthBps` (1 % of depth). The setter refuses 0: the cap cannot be switched off.
+uint16 constant MAX_STEP_DEPTH_BPS = 100;
 
 // ─── Timed flows (step 3d: proposal §4.5, §5.9; eng plan E1 to E23) ─────────
 
@@ -170,7 +176,7 @@ enum Venue {
 ///         Terminal statuses: Converged, Superseded, Expired.
 ///
 ///         Open       --(path end reached, every asset within tolerance; Rebalancer)--> Converged
-///         Open       --(costSpent > costBudget, inside executeStep)-----------------> Halted
+///         Open       --(budget left < the step's cost, inside executeStep)----------> Halted
 ///         Halted     --(ADMIN extendBudget so costSpent <= costBudget)--------------> Open
 ///         Open       --(EMERGENCY pauseRebalance)-----------------------------------> Paused
 ///         Paused     --(ADMIN resumePlan)-------------------------------------------> Open
@@ -215,7 +221,11 @@ enum SkipReason {
     ///      sequencer, a basket feed, the USDC peg, or a basket TWAP outside `refBandBps` of its feed). No asset
     ///      backs off. `detail` carries the `StepFeedCheck` that failed; the Rebalancer's `StepFeedBlocked` event
     ///      names the asset and the feed status or deviation. Appended last so the earlier ordinals are unchanged.
-    FeedCheck
+    FeedCheck,
+    /// @dev No eligible pair is left, and at least one basket asset was masked because its step cap (its
+    ///      `maxStepUsdc` and `stepDepthBps` of its pool's USDC depth) is below `minStepUsdc`, or its depth could
+    ///      not be read. `detail` carries the first such asset index. Appended last (review R-F1).
+    DepthCap
 }
 
 /// @notice Which feed check of a rebalance step failed (step 3e, proposal §5.10: checks 2 and 4 of §5.9.3 run on

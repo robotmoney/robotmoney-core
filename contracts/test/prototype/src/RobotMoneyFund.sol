@@ -412,9 +412,7 @@ contract RobotMoneyFund is
 
     /// @inheritdoc IRobotMoneyFund
     function setPoolShareBps(uint16 newBps) external onlyRole(ADMIN_ROLE) {
-        if (newBps == 0 || newBps > MAX_POOL_SHARE_BPS) revert InvalidParam();
-        _s().poolShareBps = newBps;
-        emit PoolShareBpsSet(newBps);
+        FundAdminLib.setLimit(_s(), true, newBps);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -642,7 +640,7 @@ contract RobotMoneyFund is
     // ═════════════════════════════════════════════════════════════════════════
 
     function setTvlCap(uint256 newCap) external onlyRole(ADMIN_ROLE) {
-        _s().tvlCap = newCap;
+        FundAdminLib.setLimit(_s(), false, newCap);
     }
 
     function setPerDepositCap(uint256 newCap) external onlyRole(ADMIN_ROLE) {

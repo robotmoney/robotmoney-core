@@ -18,15 +18,16 @@ import {FlowClaimLib} from "./src/lib/FlowClaimLib.sol";
 import {PlanMath} from "./src/PlanMath.sol";
 
 /// @notice One-vault experiment (plan Step 2.2, gate G1; step 3d adds the queue): the fund, the rebalancer and the
-///         FlowQueue implementations each deploy with at least 1 KB of headroom under EIP-170 (24,576 bytes), and
+///         FlowQueue implementations each deploy under EIP-170 (24,576 bytes, a limit the chain enforces), and
 ///         every linked library they call deploys at all. Sizes are read from the code the harness actually
 ///         deployed (the ERC-1967 implementation behind each proxy, the libraries forge linked), compiled with the
-///         repo's production optimizer settings. The limit is never edited to pass.
+///         repo's production optimizer settings. The limit is never edited to pass. The 1 KB headroom G1 first asked
+///         for was a chosen margin, not a chain limit; the owner removed it on 2026-11-12 (proposal §13).
 contract SizeGateTest is PrototypeHarness {
     /// @dev EIP-170 runtime code limit.
     uint256 internal constant EIP170_LIMIT = 24_576;
-    /// @dev G1 headroom: 1 KB under the EIP-170 limit.
-    uint256 internal constant G1_MAX = EIP170_LIMIT - 1024; // 23,552
+    /// @dev G1: the EIP-170 limit itself (owner, 2026-11-12: the earlier 1 KB headroom was arbitrary).
+    uint256 internal constant G1_MAX = EIP170_LIMIT;
 
     function setUp() public override {
         super.setUp();
@@ -37,7 +38,7 @@ contract SizeGateTest is PrototypeHarness {
         assertTrue(impl != address(0) && impl != proxy, "proxy has an implementation");
     }
 
-    /// @notice G1 (§13): fund, rebalancer and queue implementation `code.length` <= 23,552 each. Logs every size for
+    /// @notice G1 (§13): fund, rebalancer and queue implementation `code.length` <= 24,576 (EIP-170) each. Logs every size for
     ///         the evidence log, including governance, the fund's exclusion ledger and each linked library.
     function test_G1_fundRebalancerAndQueueFitWithHeadroom() public fixtureCovered {
         uint256 fundSize = _impl(address(fund)).code.length;
@@ -46,7 +47,7 @@ contract SizeGateTest is PrototypeHarness {
         uint256 governanceSize = _impl(address(governance)).code.length;
         uint256 ledgerSize = fund.exclusionLedger().code.length;
 
-        console2.log("G1 limit (EIP-170 - 1 KB)   ", G1_MAX);
+        console2.log("G1 limit (EIP-170)          ", G1_MAX);
         console2.log("RobotMoneyFund impl         ", fundSize);
         console2.log("Rebalancer impl             ", rebalancerSize);
         console2.log("FlowQueue impl              ", queueSize);
@@ -69,9 +70,9 @@ contract SizeGateTest is PrototypeHarness {
         assertGt(fundSize, 0, "fund impl deployed");
         assertGt(rebalancerSize, 0, "rebalancer impl deployed");
         assertGt(queueSize, 0, "queue impl deployed");
-        assertLe(fundSize, G1_MAX, "G1: RobotMoneyFund impl exceeds 23,552 bytes");
-        assertLe(rebalancerSize, G1_MAX, "G1: Rebalancer impl exceeds 23,552 bytes");
-        assertLe(queueSize, G1_MAX, "G1: FlowQueue impl exceeds 23,552 bytes");
+        assertLe(fundSize, G1_MAX, "G1: RobotMoneyFund impl exceeds EIP-170 (24,576 bytes)");
+        assertLe(rebalancerSize, G1_MAX, "G1: Rebalancer impl exceeds EIP-170 (24,576 bytes)");
+        assertLe(queueSize, G1_MAX, "G1: FlowQueue impl exceeds EIP-170 (24,576 bytes)");
         // Every linked library must itself be deployable (EIP-170), or its caller cannot link.
         assertLe(address(FundValuationLib).code.length, EIP170_LIMIT, "FundValuationLib over EIP-170");
         assertLe(address(FundAdminLib).code.length, EIP170_LIMIT, "FundAdminLib over EIP-170");

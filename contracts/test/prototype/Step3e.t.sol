@@ -201,16 +201,16 @@ contract Step3eTest is PrototypeHarness {
         _assertFeedBlocked(StepFeedCheck.UsdcPeg, IDLE_INDEX, 0.994e8);
     }
 
-    /// @dev The wETH feed 60 bps above its pool (the TWAP sits at the pool in a quiet market): check 4 fails,
+    /// @dev The wETH feed 100 bps above its pool (the band is 90) (the TWAP sits at the pool in a quiet market): check 4 fails,
     ///      `detail` is the deviation in bps, rounded up, computed as the check does.
     function test_RB19_feedCheck_twapOutsideRefBand_noStep() public fixtureCovered {
         _buyWethReady();
-        _setFeedOffsetBps(IDX_WETH, 60);
+        _setFeedOffsetBps(IDX_WETH, 100);
         _assertFeedBlocked(StepFeedCheck.TwapVsFeed, IDX_WETH, _twapVsFeedBps(IDX_WETH));
         assertGt(_twapVsFeedBps(IDX_WETH), queue.flowParams().refBandBps, "outside the band");
     }
 
-    /// @dev 40 bps off (inside the 50 bps band) passes check 4: the band is the only bound. The buy still meets
+    /// @dev 40 bps off (inside the 90 bps band) passes check 4: the band is the only bound. The buy still meets
     ///      its floor (feed below TWAP would tighten it; here the feed is above, so the TWAP sets it).
     function test_RB19_feedCheck_twapInsideRefBand_steps() public fixtureCovered {
         _buyWethReady();
@@ -275,7 +275,7 @@ contract Step3eTest is PrototypeHarness {
         }
     }
 
-    /// @notice The feed 45 bps above the pool (inside the 50 bps band): a wETH sale must receive at least
+    /// @notice The feed 45 bps above the pool (inside the 90 bps band): a wETH sale must receive at least
     ///         feed x (1 - 50 bps), about the pool price less 5 bps, which the 5 bps pool fee alone denies. The step
     ///         fails inside the swap and trades nothing, where the step 3c TWAP-only floor (pool less 50 bps) would
     ///         have let it sell 45 bps under the outside price.
@@ -476,7 +476,8 @@ contract Step3eTest is PrototypeHarness {
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice The keeper (or anyone who orders trades around the keeper's call) buys wETH to push the pool up, calls
-    ///         `step()` while the step buys 50,000 USDC of wETH, and sells back. Push sizes inside and past the step's
+    ///         `step()` while the step buys wETH (12,707 USDC: the depth cap, 5 bps of the pool's time-weighted depth, binds
+    ///         under `maxStepUsdc` 50,000), and sells back. Push sizes inside and past the step's
     ///         limit; the best is scored. Holders' loss is measured beyond the honest step's own cost.
     function test_A20_keeperSandwichOfAStep_purchase() public fixtureCovered {
         _buyWethReady();
@@ -484,7 +485,7 @@ contract Step3eTest is PrototypeHarness {
     }
 
     /// @notice The same purchase sandwich in a fund of about 1,000,000 USDC (alice deposits 900,000 through the queue
-    ///         first), so the 50,000 USDC step is 5 % of NAV instead of half of it: G8's holders' bound is in bps of
+    ///         first), so the step is a small part of NAV: G8's holders' bound is in bps of
     ///         NAV, the attacker's net is not.
     function test_A20_keeperSandwichOfAStep_purchase_fundOf1M() public fixtureCovered {
         deposit(alice, 900_000e6);
@@ -493,7 +494,7 @@ contract Step3eTest is PrototypeHarness {
         _sandwich(true, "A20 keeper sandwich of a step, purchase leg, NAV 1M");
     }
 
-    /// @notice The same around a sale: the attacker sells wETH first, the step sells 25,000 USDC of wETH into the
+    /// @notice The same around a sale: the attacker sells wETH first, the step sells wETH (15,806 USDC, at the depth cap) into the
     ///         lowered pool, the attacker buys back.
     function test_A20_keeperSandwichOfAStep_sale() public fixtureCovered {
         _sellWethReady();
@@ -503,9 +504,10 @@ contract Step3eTest is PrototypeHarness {
     /// @notice A sandwich after the attacker held the pushed price for one TWAP window (no arbitrage: holding is free
     ///         in this model). The TWAP has followed the pool; the feed (the outside market) has not. Check 4 lets a
     ///         push inside `refBandBps` through, and the purchase limit then comes from the feed, the lower price.
+    ///         Pushes 30, 45 and 10 bps inside the band in force (`refBandBps` − 10: +80 at the default 90).
     function test_A20_keeperSandwichAfterATwapDrag_purchase() public fixtureCovered {
         _buyWethReady();
-        int256[2] memory pushes = [int256(30), int256(45)];
+        int256[3] memory pushes = [int256(30), int256(45), int256(uint256(queue.flowParams().refBandBps)) - 10];
         Pnl memory best;
         best.attackerNet = type(int256).min;
         uint256 honest = _honestLoss();

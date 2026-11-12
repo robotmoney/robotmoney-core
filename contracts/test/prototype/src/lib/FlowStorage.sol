@@ -116,8 +116,15 @@ struct FlowState {
     // ── Appended by `levers` (2026-11-12, step 3 finish plan §3.2). All zero: no lever, the design as written. ──
     /// @dev The attack-finding levers (`FlowLevers`), set by ADMIN_ROLE through `setFlowLevers`.
     FlowLevers levers;
-    /// @dev The block of the last settlement that traded while `levers.basketCallBps` was on (one per block).
+    /// @dev The block of the last settlement that traded while `levers.basketCallBps` was on.
     uint64 leverTradeBlock;
+    // ── Appended by the review fixes of 2026-11-12 (proposal §14). ──
+    /// @dev USDC value each side already traded in `leverTradeBlock`: the per-call cap is a per-block budget, so a
+    ///      small call in a block takes only its own part, not the whole block's room (review Q-F2).
+    uint128 leverBlockDep;
+    uint128 leverBlockRed;
+    /// @dev The exclusion ledger's record count at the last settlement (check 6, review Q-F3).
+    uint256 lastExclusionCount;
 }
 
 /// @notice Where a settle walk continues on one side (step 3 finish plan §3.1 item 2). `epoch == 0` means "start a new

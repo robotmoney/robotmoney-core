@@ -32,7 +32,9 @@ import {
     DEFAULT_IN_KIND_BPS,
     DEFAULT_IN_KIND_FLOOR_USDC,
     DEFAULT_IN_KIND_PERIOD,
-    MAX_FEED_AGE
+    MAX_FEED_AGE,
+    LENDING_ROUNDING_UNITS,
+    MAX_POOL_SHARE_BPS
 } from "../FundTypes.sol";
 import {PlanMath} from "../PlanMath.sol";
 import {IRobotMoneyFund} from "../interfaces/IRobotMoneyFund.sol";
@@ -101,13 +103,51 @@ library FundAdminLib {
         emit IRobotMoneyFund.AssetAdded(index, c);
     }
 
+    /// @notice Body of `setPoolShareBps` (`poolShare` true) and `setTvlCap` (false). §4.5 rule 3 holds for the live
+    ///         targets after either change (review B-F4): a tighter pool share or a higher TVL cap re-checks it. A
+    ///         looser pool share or a lower cap is never refused.
+    function setLimit(FundState storage s, bool poolShare, uint256 value) public {
+        bool check;
+        if (poolShare) {
+            if (value == 0 || value > MAX_POOL_SHARE_BPS) revert IFundEvents.InvalidParam();
+            check = value < s.poolShareBps;
+            s.poolShareBps = uint16(value);
+            emit IRobotMoneyFund.PoolShareBpsSet(uint16(value));
+        } else {
+            check = value > s.tvlCap;
+            s.tvlCap = value;
+        }
+        if (check) FundValuationLib.requirePoolShare(s, s.targetBps);
+    }
+
     function _rejectDuplicate(FundState storage s, AssetConfig memory c) private view {
         uint256 n = s.assets.length;
         address id = PlanMath.assetId(c);
         for (uint256 i; i < n; ++i) {
             AssetConfig memory e = s.assets[i];
-            if (e.active && PlanMath.assetId(e) == id) revert IRobotMoneyFund.DuplicateAsset(i);
+            if (PlanMath.assetId(e) != id) continue;
+            if (e.active) revert IRobotMoneyFund.DuplicateAsset(i);
+            // An inactive lending entry whose position claims are still open prices them from the adapter's whole
+            // `totalAssets()`; listing the same adapter again would let those claims read new holders' money
+            // (review B-F3).
+            if (e.kind == AssetKind.Lending && s.positionClaimTotal[i] != 0) revert IRobotMoneyFund.DuplicateAsset(i);
         }
+    }
+
+    /// @dev `deactivateAsset` for a lending entry (review B-F1). The holders' part of the adapter must be at most
+    ///      `LENDING_ROUNDING_UNITS` (the fund's own paths leave that much: `drain`, `claimPosition`, `sellForFlow`);
+    ///      the position claims' part may stay, it remains claimable. An adapter whose `totalAssets()` read fails
+    ///      may leave only while its exclusion record is open: its value is already in the ledger.
+    function _requireLendingEmpty(FundState storage s, uint256 i, address adapter, uint256 openId) private view {
+        (bool ok, bytes memory ret) = adapter.staticcall(abi.encodeCall(IStrategyAdapter.totalAssets, ()));
+        if (!ok || ret.length < 32) {
+            if (openId == 0) revert IRobotMoneyFund.AssetStillHeld(i);
+            return;
+        }
+        uint256 held = abi.decode(ret, (uint256));
+        uint256 units = s.positionUnits[i];
+        uint256 claims = units == 0 ? 0 : held.mulDiv(s.positionClaimTotal[i], units);
+        if (held > claims + LENDING_ROUNDING_UNITS) revert IRobotMoneyFund.AssetStillHeld(i);
     }
 
     function _checkLending(FundState storage s, AssetConfig memory c) private view {
@@ -182,9 +222,9 @@ library FundAdminLib {
         if (s.deferredTotal[i] != 0) revert IRobotMoneyFund.AssetStillHeld(i);
         AssetConfig storage a = s.assets[i];
         if (a.kind == AssetKind.Lending) {
-            if (IStrategyAdapter(a.adapter).totalAssets() != 0) revert IRobotMoneyFund.AssetStillHeld(i);
             RobotMoneyVaultOps.Exclusions storage x = RobotMoneyVaultOps.exclusions();
             uint256 id = x.openExclusionOf[i];
+            _requireLendingEmpty(s, i, a.adapter, id);
             if (id != 0) {
                 delete x.openExclusionOf[i];
                 x.ledger.finalize(id, ExclusionLedger.FinalizeReason.Removed);
@@ -266,8 +306,9 @@ library FundAdminLib {
     /// @dev Conclude: `concludePlan(to)`, `arg = uint256(to)`; REBALANCER_ROLE. Open → Converged (now ≥ endTime) or
     ///      Expired (now > endTime).
     ///      Pause: `pauseRebalance`; EMERGENCY_ROLE. Open or Halted → Paused.
-    ///      Resume: `resumePlan`; ADMIN_ROLE. Paused → Open, or → Halted while `costSpent > costBudget`.
-    ///      Extend: `extendBudget(arg)`; ADMIN_ROLE. Live plan's budget += arg; Halted → Open when back in budget.
+    ///      Resume: `resumePlan`; ADMIN_ROLE. Paused → Open, or → Halted while over budget (`_overBudget`).
+    ///      Extend: `extendBudget(arg)`; ADMIN_ROLE. Live plan's budget += arg; Halted → Open once the budget left
+    ///      covers the step that halted it.
     ///      Close: `closePlan`; ADMIN_ROLE. Live → Superseded.
     ///      UnwindPause: the tail of `emergencyUnwind`; EMERGENCY_ROLE. Open or Halted → Paused, else nothing.
     enum PlanOp {
@@ -293,13 +334,16 @@ library FundAdminLib {
         } else if (op == PlanOp.Pause) {
             _move(p, st == PlanStatus.Halted ? PlanStatus.Halted : PlanStatus.Open, PlanStatus.Paused);
         } else if (op == PlanOp.Resume) {
-            _move(p, PlanStatus.Paused, p.costSpent > p.costBudget ? PlanStatus.Halted : PlanStatus.Open);
+            _move(p, PlanStatus.Paused, _overBudget(s, p) ? PlanStatus.Halted : PlanStatus.Open);
         } else if (op == PlanOp.Extend) {
             if (!_isLive(st)) revert IRobotMoneyFund.InvalidPlanTransition(p.id, st, st);
             uint256 budget = p.costBudget + arg;
             p.costBudget = budget;
             emit IFundEvents.PlanBudgetExtended(p.id, arg, budget);
-            if (st == PlanStatus.Halted && p.costSpent <= budget) _move(p, PlanStatus.Halted, PlanStatus.Open);
+            if (st == PlanStatus.Halted && !_overBudget(s, p)) {
+                s.haltCost = 0;
+                _move(p, PlanStatus.Halted, PlanStatus.Open);
+            }
         } else if (op == PlanOp.Close) {
             if (!_isLive(st)) revert IRobotMoneyFund.InvalidPlanTransition(p.id, st, PlanStatus.Superseded);
             _move(p, st, PlanStatus.Superseded);
@@ -319,6 +363,13 @@ library FundAdminLib {
         if (p.status != from) revert IRobotMoneyFund.InvalidPlanTransition(p.id, p.status, to);
         p.status = to;
         emit IFundEvents.PlanStatusChanged(p.id, from, to);
+    }
+
+    /// @dev Over budget: spent past it (a plan from before the review fix B-F5), or the budget left is below the
+    ///      cost of the step that halted it.
+    function _overBudget(FundState storage s, Plan storage p) private view returns (bool) {
+        if (p.costSpent > p.costBudget) return true;
+        return p.costBudget - p.costSpent < s.haltCost;
     }
 
     function _isLive(PlanStatus st) private pure returns (bool) {
@@ -395,6 +446,7 @@ library FundAdminLib {
         p.turnoverUsdc = turnover;
         p.costBudget = turnover.mulDiv(params.costBudgetBps, BPS);
         p.costSpent = 0;
+        s.haltCost = 0;
         p.stepCount = 0;
 
         s.targetBps = endBps;

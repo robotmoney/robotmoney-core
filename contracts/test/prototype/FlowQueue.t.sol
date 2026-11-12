@@ -107,6 +107,25 @@ abstract contract FlowQueueBase is PrototypeHarness {
         return queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
     }
 
+    /// @notice The keeper settles once per block (a block every 2 s, as on Base) until request `id` is filled: the
+    ///         per-call basket cap (`FlowLevers.basketCallBps`, 5 bps of each pool's depth by default since 2026-11-12)
+    ///         is a budget per block, so it splits a large flow over blocks. Every part keeps every amount per share.
+    function _settleOverBlocks(uint256 id, string memory label) internal {
+        uint256 settled;
+        for (uint256 k; k < 64 && !queue.getRequest(id).closed; ++k) {
+            vm.roll(block.number + 1);
+            if (k != 0) vm.warp(block.timestamp + 2);
+            // The fixture coverage check per few parts: one state diff over many parts overruns forge's memory.
+            if (k % 4 == 3) coverageCheckpoint();
+            FundSnap memory part = _fundSnap();
+            if (_keeperSettle() != 0) {
+                ++settled;
+                _assertPerShareNotLower(part, string.concat(label, ": each part"));
+            }
+        }
+        assertGt(settled, 0, label);
+    }
+
     /// @notice Refresh the feeds, then `settle` as the keeper.
     function _settleNow() internal returns (uint256) {
         refreshFeeds();
@@ -688,9 +707,10 @@ contract FlowQueueTest is FlowQueueBase {
         warpToSettleable(id);
         refreshFeeds();
         FundSnap memory f0 = _fundSnap();
-        _keeperSettle();
+        _settleOverBlocks(id, "fuzz: the deposit settled");
         assertTrue(queue.getRequest(id).closed, "deposit filled");
         _assertPerShareNotLower(f0, "fuzz deposit");
+        coverageCheckpoint();
         // The same market model after the deposit (`hardening`, 2026-11-12): at 256 runs the fuzz draws a 250,000
         // USDC deposit into an 80 % basket fund, whose own purchase moves the wETH pool 57 bps from a feed that did
         // not move, and check 4 then blocks the redemption (`SettleBlocked(TwapVsFeed, wETH, 57)`; a G9 data point,
@@ -705,7 +725,7 @@ contract FlowQueueTest is FlowQueueBase {
         warpToSettleable(r);
         refreshFeeds();
         f0 = _fundSnap();
-        _keeperSettle();
+        _settleOverBlocks(r, "fuzz: the redemption settled");
         assertTrue(queue.getRequest(r).closed, "redemption filled");
         _assertPerShareNotLower(f0, "fuzz redemption");
         _assertBooks("fuzz");
@@ -1048,20 +1068,21 @@ contract FlowQueueTest is FlowQueueBase {
         assertLe(dev, p.refBandBps, "the median is still within refBandBps of the feed");
     }
 
-    /// @notice Check 4: a TWAP more than `refBandBps` (50) from its feed blocks with the asset and the deviation;
-    ///         40 bps passes.
+    /// @notice Check 4: a TWAP more than `refBandBps` (90 by default) from its feed blocks with the asset and the
+    ///         deviation; 10 bps inside the band passes. Sized from the band in force, so it holds at any default.
     function test_check4_aTwapOffItsFeed() public fixtureCovered {
         _pendingAtWindow();
+        uint256 band = queue.flowParams().refBandBps;
         uint256 p = poolPrice8(WETH_POOL, WETH);
-        setFeedPrice(IDX_WETH, p * 10_060 / BPS);
+        setFeedPrice(IDX_WETH, p * (BPS + band + 10) / BPS);
         uint256 dev = _expectBlocked(keeper, SettleCheck.TwapVsFeed, IDX_WETH);
-        assertGt(dev, queue.flowParams().refBandBps, "deviation above the band");
-        assertLe(dev, 62, "about 60 bps");
+        assertGt(dev, band, "deviation above the band");
+        assertLe(dev, band + 12, "about band + 10 bps");
         assertEq(queue.settlementCount(), 0, "nothing settled");
-        setFeedPrice(IDX_WETH, p * 10_040 / BPS);
+        setFeedPrice(IDX_WETH, p * (BPS + band - 10) / BPS);
         vm.prank(keeper);
         (SettleCheck check,) = queue.checkSettle();
-        assertEq(uint8(check), uint8(SettleCheck.Ok), "40 bps passes");
+        assertEq(uint8(check), uint8(SettleCheck.Ok), "band - 10 bps passes");
     }
 
     /// @notice Check 5: once a settlement recorded the venues' rates, a step into the venues and a gift to the
@@ -2619,7 +2640,7 @@ contract FlowQueueRandomSeedFuzzTest is FlowQueueBase {
         warpToSettleable(id);
         refreshFeeds();
         FundSnap memory f0 = _fundSnap();
-        assertGt(_keeperSettle(), 0, string.concat(label, ": the deposit settled"));
+        _settleOverBlocks(id, string.concat(label, ": the deposit settled"));
         assertTrue(queue.getRequest(id).closed, string.concat(label, ": deposit filled"));
         _assertPerShareNotLower(f0, string.concat(label, ": deposit"));
         _assertClaimsInsideLimits(claims0);
@@ -2636,7 +2657,7 @@ contract FlowQueueRandomSeedFuzzTest is FlowQueueBase {
         warpToSettleable(r);
         refreshFeeds();
         f0 = _fundSnap();
-        assertGt(_keeperSettle(), 0, string.concat(label, ": the redemption settled"));
+        _settleOverBlocks(r, string.concat(label, ": the redemption settled"));
         assertTrue(queue.getRequest(r).closed, string.concat(label, ": redemption filled"));
         _assertPerShareNotLower(f0, string.concat(label, ": redemption"));
         _assertClaimsInsideLimits(claims0);

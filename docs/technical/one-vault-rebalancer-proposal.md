@@ -277,8 +277,11 @@ protocol states what an asset must have. A basket asset is listed only if:
    cap is at most `poolShareBps` of the asset held in the pool's active
    range. That amount is read from the pool's time-weighted liquidity over one
    settlement window, not from its token balance. Liquidity added for one
-   transaction therefore does not count. The fund checks this when a target is
-   set.
+   transaction therefore does not count. The window is cut into 12 slices and
+   the third-thinnest slice sets the amount (review fix of 2026-11-12). A few
+   seconds of thin liquidity therefore cannot zero it, and added liquidity
+   counts only once it has been held through ten slices. The fund checks this
+   when a target is set, when the TVL cap rises and when `poolShareBps` falls.
 
 A lending asset is listed only if its venue exposes its own rate per unit,
 which the lending rate check reads (§5.9.3, check 5).
@@ -363,8 +366,9 @@ inputs come from chain state. The caller chooses nothing except **when**.
    leg is the most underweight asset. USDC is the hub for every pair: the
    lending assets and idle USDC are "USDC", and every basket pool is a USDC
    pool today.
-4. **Size.** `notional = min(overweight, underweight, maxStepUsdc[asset])`.
-   `maxStepUsdc` is a governed per-asset cap set from pool depth. wETH and
+4. **Size.** `notional = min(overweight, underweight, cap[asset])`. The cap
+   is the governed `maxStepUsdc`, and for a basket asset also `stepDepthBps`
+   (5) of its pool's time-weighted USDC depth. wETH and
    cbBTC can take far larger steps than deSPXA. A deviation below
    `minStepUsdc` is ignored, so dust never pays gas.
 5. **Floor.** `minOut = TWAP quote × (1 − maxStepSlippageBps)`. The floor
@@ -375,8 +379,11 @@ inputs come from chain state. The caller chooses nothing except **when**.
    is idle USDC.
 7. **Measure cost.** `cost = navBefore − navAfter`, both at TWAP. Revert if
    `cost > notional × maxStepCostBps`. Add it to `plan.costSpent`.
-8. **Budget.** If `plan.costSpent > plan.costBudget`, the plan moves to
-   `Halted`. Only the Safe can extend the budget or close the plan.
+8. **Budget.** A step's cost cap is at most the budget left, so a plan never
+   spends past its budget. When the budget left is below the cost of the step
+   just taken, the plan moves to `Halted`. Only the Safe can extend the budget
+   or close the plan (review fix of 2026-11-12; before it a plan halted one
+   step past its budget).
 9. **Emit** `RebalanceStep(planId, sellAsset, buyAsset, notional, amountIn,
    amountOut, cost, pathTarget)`.
 
@@ -427,6 +434,7 @@ decided.
 | `duration` | per plan, bounded globally | 7 days (min 1 day) | Length of the glide path |
 | `stepInterval` | global | max(longest TWAP window, 30 min) | Cooldown between steps |
 | `maxStepUsdc` | per asset | wETH/cbBTC: from depth study; deSPXA: small | Largest single trade |
+| `stepDepthBps` | global | 5 bps (owner default 2026-11-12) | A basket leg also trades at most this share of its pool's time-weighted USDC depth (§4.5's reading). It cannot be set to 0. An asset whose cap falls below `minStepUsdc` is skipped, so it never stalls the rest of the plan. |
 | `minStepUsdc` | global | 100 USDC | Ignore dust |
 | `maxStepSlippageBps` | per asset | above the pool fee, at or below `maxSlippageBps` | Swap floor against TWAP |
 | `maxStepCostBps` | global | 50 bps of notional | Per-step NAV-loss cap |
@@ -684,12 +692,13 @@ Nobody can push them to an address.
 | `minRequestUsdc` | 100 USDC | 4 |
 | `maxFreeze` | 7 days | 4 |
 | `slices`, `quorum`, `dispersionBps` | 12 of 5 min each, 9, 100 | 3 |
-| `refBandBps` | 50 | 2 and 3 |
+| `refBandBps` | 90 (was 50; owner default 2026-11-12, lever L10: the fund's own trades push its pools up to 97 bps from the feed at the keeper's calls, so 50 failed G9) | 2 and 3 |
 | `legBandBps` | 100, and above the pool fee | 2 and 3 |
 | `maxFeedAge` | Per feed: its heartbeat plus 5 minutes | 2 |
 | `sequencerGrace` | 1 h | 2 |
 | `usdcPegBandBps` | 50 | 2 |
 | `maxLendRateGrowthBps` | 10 per day | 2 |
+| `basketCallBps` | 5: in each block, each side may trade at most 5 bps of each basket pool's time-weighted USDC depth (owner default 2026-11-12, lever L5). A larger flow fills over several blocks. | 2 and 4 |
 | `poolShareBps` | 2,500 | Asset rule (§4.5) |
 | `minSeedUsdc` | 10,000 USDC | Asset rule (§4.5) |
 
@@ -713,8 +722,8 @@ flow. It departs from both where safety or size calls for it (owner,
 
 **Two addresses, one vault.** The queue is the entry point for requests and
 claims. The fund is the share token and holds every asset. ERC-7575 describes
-this split of entry point and share. The fund has 1,556 bytes left under G1,
-which is too little for the request and claim functions. Keeping them out of
+this split of entry point and share. The fund sits close to the EIP-170 limit
+(G1), which leaves too little room for the request and claim functions. Keeping them out of
 the fund also keeps the custody contract small.
 
 **Kept from the standards** (ERC-7540's text was read on 2026-11-11):
@@ -998,6 +1007,16 @@ only step that touches the network.
 Scope (owner, 2026-11-09): no migration, no gas measurement, and the
 smallest test set that still scores the gates. The full contracts come first.
 
+**Exception: Deploy 4 (owner, 2026-11-12).** The owner asked for one
+rehearsal deployment of this branch to Base mainnet (8453), before it merges
+and before an audit, through the real deploy tool and runbook. The reason
+given: it "will stress test our actual contract deployment tools better than
+many rounds of local testing." It is a rehearsal: caps of at most 1,000 USDC,
+a 1 USDC seed, and at most the deployer's 103 USDC at risk. It changes
+nothing above: the experiment's tests still run offline, and the production
+path below still needs an audit. The plan and its gates are in the Deploy 4
+release yaml.
+
 1. **Full prototype contracts.** *Done 2026-11-09.* Fund, rebalancer and governance, complete
    against §4, §5 and §6 in one pass.
 2. **Fixture tests.** *Done 2026-11-09: G1 pass, G3 pass with listed gaps.* Re-record the fixture, then a minimal set: the size
@@ -1171,7 +1190,7 @@ result cannot move them.
 
 | Gate | Question | Pass | Fail | Tests the rejection reason |
 | --- | --- | --- | --- | --- |
-| G1 | Does the fund fit EIP-170 with today's optimizer settings and the rebalancer split out? | Fund and rebalancer each deploy under 24,576 bytes with at least 1 KB headroom. | Either needs a further contract split that moves custody or accounting out of the fund. | ADR-0010 M-A2 (size pressure moves, it does not disappear) |
+| G1 | Does the fund fit EIP-170 with today's optimizer settings and the rebalancer split out? | Fund, rebalancer and queue each deploy under 24,576 bytes, the EIP-170 limit the chain enforces. (Amended 2026-11-12 by the owner: the 1 KB headroom first asked for was a chosen margin, not a chain limit, and is dropped. Every G1 result before this date was scored against 23,552 and passed it.) | Either needs a further contract split that moves custody or accounting out of the fund. | ADR-0010 M-A2 (size pressure moves, it does not disappear) |
 | G2 | Dropped (owner, 2026-11-09): gas is not a gate. | | | |
 | G3 | Do the invariants hold under adversarial tests? | Every RB invariant (§7) and every existing custody invariant has a passing invariant or fork test, and every §5.8 threat has a test that shows the defence works. | Any invariant cannot be made to hold without a design change to custody or share accounting. | Audited-design safety, the core of the rejection |
 | G4 | Is the shared rebalance cost acceptable? | Across the replayed receipts, median realized cost is at most 15 bps of turnover and no plan exceeds 30 bps. | Median above 15 bps, or any plan above 30 bps with default parameters. | New risk (D1). The reason ADR-0003 refused socialized cost |
@@ -1209,14 +1228,18 @@ fixture pin it rests on.
 
 | Gate | Result | Evidence | Date |
 | --- | --- | --- | --- |
-| G1 | Pass | `SizeGate.t.sol`. After step 3b the fund implementation is 21,996 bytes, 1,556 under the 23,552 limit. Rebalancer is 18,001 bytes. The fund fits only with three linked libraries: `FundFlowsLib` (19,285), `FundAdminLib` (10,777) and `FundValuationLib` (8,038). These hold code, not custody or accounting state. The fund also uses the counter admin floor, not the enumerable one. Before step 3b the fund was 22,775 bytes (pin 55371881). Re-measured 2026-11-11 at pin 55462550. | 2026-11-11 |
+| G1 | Pass (2026-11-12, at the EIP-170 limit of 24,576 bytes) | Step 3 finish, with the owner defaults and the review fixes: fund implementation 23,237 bytes (1,339 under), rebalancer 21,471, queue 18,957. The largest linked library, `FundAdminLib`, is 23,406. `SizeGate.t.sol` passes. Earlier results below. | 2026-11-12 |
+| G1 (earlier) | Pass | `SizeGate.t.sol`. After step 3b the fund implementation is 21,996 bytes, 1,556 under the 23,552 limit. Rebalancer is 18,001 bytes. The fund fits only with three linked libraries: `FundFlowsLib` (19,285), `FundAdminLib` (10,777) and `FundValuationLib` (8,038). These hold code, not custody or accounting state. The fund also uses the counter admin floor, not the enumerable one. Before step 3b the fund was 22,775 bytes (pin 55371881). Re-measured 2026-11-11 at pin 55462550. | 2026-11-11 |
 | G2 | Dropped | | |
-| G3 | Pass, with listed prototype gaps | 29 fixture tests pass offline at pin 55371881 (563 accounts, 2,346 slots, no RPC). `Invariants.t.sol` (16 runs of 32 calls, fixed seed, fail on revert) checks RB-1 to RB-8 and INV-1. `EndToEnd.t.sol` runs deposit, receipt, timelock apply, steps to convergence, redeem and `redeemInKind`. `Adversarial.t.sol` has a passing test for all 8 rows of §5.8. `Custody.t.sol` covers INV-2 (donation accrual, first-depositor inflation) and INV-3 (fee and quarantine control only through the timelock). Review found 19 issues. 18 were fixed, among them a frozen venue that blocked `redeemInKind`, an admin able to grant the rebalancer role, and a gas-starvation lever on `step()`. Open gaps: a plan opened at zero NAV has a zero cost budget and halts until the admin extends it; dust on a removed basket asset is not re-absorbed (INV-2 port from `BasketVault` not done); a frozen lending venue still blocks the USDC `redeem` path, as it does today. | 2026-11-09 |
-| G4 | Fail | `sim/RebalanceSim.t.sol` scored by `sim/score-sim.ts`, default parameters, 36 scored plans. Median realized cost is 17.02 bps of turnover. The worst plan costs 82.63 bps (JUMP-DOWN-1M-s2, receipt d07). Both exceed the 15 and 30 bps limits. Cost is measured against the reference price. Measured against the arrival price, the median is 5.48 bps and the worst is 9.13 bps. The tuned set also fails: median 17.76 bps, worst 83.40 bps. Fixture pin 55462550 (2,193 accounts, 17,310 slots), recorded through anvil forking Base. All 16 sim tests pass offline for each parameter set. Fallback (step 3c, not the scored result): the auction executor also fails, median 28.72 bps and worst 61.71 bps. The LP re-centre sensitivity does not change G4: median 17.20 bps, worst 59.19 bps. | 2026-11-11 |
-| G5 | Not pass (no fail clause fired) | Same runs. No liquid-asset plan expired. Blocked skips are 4.99% of step attempts overall. One plan expired unconverged on deSPXA and the three lending assets: JUMP-DOWN-1M-s1, receipt d07. Its pool left the recorded LP range. Three JUMP-DOWN plans each skip more than 10% of their steps (27.0%, 61.3% and 13.5%). Without the five plans whose pool left its LP range, G5 passes: every plan converges and skips are 0.13%. The tuned set is worse: skips are 7.35%, and eight plans exceed 10%. Fallback (step 3c, not the scored result): the auction executor fails G5 at 10.63% blocked skips. With the LP re-centre sensitivity, G5 passes on the default steps (0.42% blocked, all plans converge). That model is an assumption, not a measurement. It does not replace this result. | 2026-11-11 |
+| G3 | Pass (2026-11-12) | Step 3 finish: 372 tests pass, 0 fail and 5 are skipped as measured G8 findings, on the replay fixture at pin 55462550 with the coverage check on (`unit-4.log`). An adversarial code review of the queue, the fund and the rebalancer raised 15 points. The 13 errors are fixed, each with a test that fails on the code before its fix (`beforefix.log`; see "Step 3 finish" below). No invariant needed a change to custody or share accounting. Earlier result below. | 2026-11-12 |
+| G3 (earlier) | Pass, with listed prototype gaps | 29 fixture tests pass offline at pin 55371881 (563 accounts, 2,346 slots, no RPC). `Invariants.t.sol` (16 runs of 32 calls, fixed seed, fail on revert) checks RB-1 to RB-8 and INV-1. `EndToEnd.t.sol` runs deposit, receipt, timelock apply, steps to convergence, redeem and `redeemInKind`. `Adversarial.t.sol` has a passing test for all 8 rows of §5.8. `Custody.t.sol` covers INV-2 (donation accrual, first-depositor inflation) and INV-3 (fee and quarantine control only through the timelock). Review found 19 issues. 18 were fixed, among them a frozen venue that blocked `redeemInKind`, an admin able to grant the rebalancer role, and a gas-starvation lever on `step()`. Open gaps: a plan opened at zero NAV has a zero cost budget and halts until the admin extends it; dust on a removed basket asset is not re-absorbed (INV-2 port from `BasketVault` not done); a frozen lending venue still blocks the USDC `redeem` path, as it does today. | 2026-11-09 |
+| G4 | Pass (2026-11-12, the step 3e design at the owner defaults) | Timed default run, `sim/TimedFlowSim.t.sol` scored by `sim/score-sim.ts`, 36 scored plans: median 7.63 bps of turnover, worst 27.81 bps (SEQ-5M-s2, receipt d05). Other readings: arrival price 5.80 / 16.85, per traded 7.22 / 10.38, the plan's own `costSpent` 8.54 / 29.88. EXT-PROBE 5M beside it: 10.28 / 10.66. This is the run §13 scores (step 3e, the stated fallback). The step 3 result below stays as the result of the first design. | 2026-11-12 |
+| G4 (step 3) | Fail | `sim/RebalanceSim.t.sol` scored by `sim/score-sim.ts`, default parameters, 36 scored plans. Median realized cost is 17.02 bps of turnover. The worst plan costs 82.63 bps (JUMP-DOWN-1M-s2, receipt d07). Both exceed the 15 and 30 bps limits. Cost is measured against the reference price. Measured against the arrival price, the median is 5.48 bps and the worst is 9.13 bps. The tuned set also fails: median 17.76 bps, worst 83.40 bps. Fixture pin 55462550 (2,193 accounts, 17,310 slots), recorded through anvil forking Base. All 16 sim tests pass offline for each parameter set. Fallback (step 3c, not the scored result): the auction executor also fails, median 28.72 bps and worst 61.71 bps. The LP re-centre sensitivity does not change G4: median 17.20 bps, worst 59.19 bps. | 2026-11-11 |
+| G5 | Not pass (no fail clause fired), 2026-11-12 | Same timed default run. Blocked skips are 60 of 10,620 step attempts (0.56%); no plan is over 10% (worst 2.7%). The literal count of every skip reason is 10.20%. Three plans did not converge: SEQ-5M d05 in all three seeds halted on the cost budget. None expired unconverged on a liquid asset. So "every plan converges" is false, and no fail clause fired. The step 3 result below stays as the result of the first design. | 2026-11-12 |
+| G5 (step 3) | Not pass (no fail clause fired) | Same runs. No liquid-asset plan expired. Blocked skips are 4.99% of step attempts overall. One plan expired unconverged on deSPXA and the three lending assets: JUMP-DOWN-1M-s1, receipt d07. Its pool left the recorded LP range. Three JUMP-DOWN plans each skip more than 10% of their steps (27.0%, 61.3% and 13.5%). Without the five plans whose pool left its LP range, G5 passes: every plan converges and skips are 0.13%. The tuned set is worse: skips are 7.35%, and eight plans exceed 10%. Fallback (step 3c, not the scored result): the auction executor fails G5 at 10.63% blocked skips. With the LP re-centre sensitivity, G5 passes on the default steps (0.42% blocked, all plans converge). That model is an assumption, not a measurement. It does not replace this result. | 2026-11-11 |
 | G6 | Not run | | |
-| G8 | Not run | | |
-| G9 | Not run | | |
+| G8 | Fail (2026-11-12, at the owner defaults) | Deterministic tests (`Attacks.t.sol`, `Step3e.t.sol`) and the timed sim attacks (`sim/AttackSim.t.sol`, live fund, 4 seeds, each against an honest twin). Holders lost 0 in every sim run. Positive attacker nets: A10 slow ramp inside the band, deterministic +156.62 USDC (+110.1 after a flash fee), sim strict max +61.76 (best mean +16.04); A20 keeper sandwich of a step, sale leg +8.84 with holders 4.81 bps of NAV past the honest step; A2 sim strict max +0.35 (best mean +0.16); A6 sim strict max +467.55 in one run of eight, with 0 lost by holders and by pending users and a best mean of 0 (the gain is the hedge's gain in the simulated market, not value taken from the fund). The A20 purchase leg nets −0.12, but holders lose 1.26 bps past the honest step, over the 1 bps limit. Fixed by the defaults: the one-block sandwich of a settlement, A7, nets −211.1 (it was +297.11), sim A2 +0.35 (was +514.50), A20 purchase −0.12 (was +67.63). Blocking settlement for a day costs at least 5,050 USDC on every scored way. Every other attack test passes. | 2026-11-12 |
+| G9 | Pass (2026-11-12, at the owner defaults) | Timed default run, no-jump set: 99.20% of settlements succeed at the keeper's first call (497 of 501; the 4 misses are check 4). Redemption wait median 3.57 h, p95 6.53 h (0 unfilled past 14 h). Flow cost against the feed median 0.32 bps, max 18.95 bps. At `refBandBps` 50 it failed at 84.02% (step 3 finish report). | 2026-11-12 |
 | G7 | Dropped | | |
 
 **Step 3 simulation (2026-11-10).** The sim replays real Base state at pin
@@ -1323,6 +1346,61 @@ as a G5 pass. Its 6 hour lag and its depth are assumptions. The pin has no
 record of how Base LPs respond to a 10% move. Measured LP timing and depth
 after large moves would turn it into a verdict. The auction does not rescue
 G4.
+
+**Step 3 finish and the owner defaults (2026-11-12).** The owner delegated
+the open choices of the step 3 finish report. Three defaults are now in
+code:
+
+- the per-call basket cap of 5 bps of each pool's time-weighted USDC depth
+  (`FlowLevers.basketCallBps`, set by `FlowQueue.initialize`);
+- `refBandBps` 90;
+- each basket asset's step cap: `maxStepUsdc`, and 5 bps of its pool's
+  time-weighted USDC depth (`Rebalancer.stepDepthBps`, `assetStepCap`).
+
+At the pin the wETH step cap is about 12,700 USDC. A20 then changed:
+
+- purchase leg: from +67.63 to −0.12 USDC, and holders' loss from 9.28 to
+  1.26 bps;
+- sale leg: from +37.19 to +8.84 USDC, and holders' loss from 7.64 to
+  4.81 bps.
+
+The 1 KB headroom under EIP-170 was dropped from G1 (owner, same day).
+
+An adversarial code review in three independent parts (queue, fund,
+rebalancer) raised 15 points. 13 were errors, and each was fixed. Each test below fails on the
+code before its fix, with every fix switched off and the defaults kept
+(`~/tmp/onevault-finish/logs/beforefix.log`), and passes after it. All
+are in `ReviewFixes.t.sol` unless named.
+
+| Id | Error | Fix | Test |
+| --- | --- | --- | --- |
+| R-F1 | A basket asset whose depth cap is below `minStepUsdc` stalls the whole plan | Masked from leg picking; `SkipReason.DepthCap` | `test_RF1_*` (2) |
+| R-F2 | A few seconds of thin liquidity zero the depth for a whole window | Depth from the third-thinnest of 12 slices (§4.5) | `test_RF2_*` (2; one control) |
+| R-F4 | An upgraded proxy reads the depth cap as 0 | 0 reads as the default | `test_RF4_*` |
+| R-F5 | A converged plan is labelled Expired at the overrun edge | Convergence checked before expiry and cooldown | `test_RF5_*` |
+| Q-F1 | An excluded venue's failing rate read holds every settlement | Check 5 skips excluded venues; the read is gas-capped | `test_QF1_*` |
+| Q-F2 | One small call takes the whole block's room under the per-call cap | The cap is a budget per block and side | `test_QF2_*` |
+| Q-F3 | A revoke then re-allow between settlements trips check 6 | The ledger's record count finds the cycle; the venue is re-based | `test_QF3_*` |
+| Q-F4 | An allowed early return outlives a freeze that ran out | `takeReturn` needs the settlement still frozen | `test_QF4_*` |
+| Q-F5 | A cap below the minimum fill halts settlement silently | `SettleCallRoomBelowMinimum` event | `test_QF5_*` |
+| B-F1 | An excluded venue holding only rounding dust can never be removed, so deposits stay closed | Dust and the claims' part allowed; a failing read allowed while excluded | `FundExtras.t.sol` `test_BF1_*` (3; one control) |
+| B-F3 | Re-listing an adapter lets old position claims read new holders' money | Refused while an inactive entry has open claims | `FundExtras.t.sol` `test_BF3_*` |
+| B-F4 | A higher TVL cap or a lower `poolShareBps` skips §4.5 rule 3 | Both re-check it; a lower cap is never refused | `FundExtras.t.sol` `test_BF4_*` |
+| B-F5 | The last step overshoots the plan budget (RB-4) | The step's cost cap is the budget left; halt when the budget left is below the step's cost | `FundExtras.t.sol` `test_BF5_*` |
+
+Two review points were not changed, each for a stated reason:
+
+- **R-F3.** At 5 bps a plan as large as the pool-share limit may not finish
+  in `duration + maxOverrun`. That is the cost of the decided default, and
+  G5 measures it.
+- **B-F2.** Depth is read as the virtual reserve of the in-range liquidity
+  (`L·√P`), not the USDC inside a fixed price band. That is the documented
+  reading behind every measured cap, so changing it would change what the
+  decided 5 bps means. It is open for the owner.
+
+The tests now model one keeper call per block (2 s), because the cap is a
+budget per block. Large flows fill over several blocks, and every
+assertion holds after each part. No fixture re-record was needed.
 
 **Cost report (2026-11-11).** `one-vault-cost-report.md` explains the G4
 result. Most of the cost is the fund's own buying premium left in the basket

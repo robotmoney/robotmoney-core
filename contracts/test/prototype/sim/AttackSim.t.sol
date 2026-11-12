@@ -610,7 +610,14 @@ contract AttackSimTimedTest is TimedSimBase, AttackSimCore {
             rest -= RUNNER_USDC;
         }
         (hs[2 + N_RUNNERS], amts[2 + N_RUNNERS]) = (alice, rest);
+        // The world is built with the per-call basket cap off, so its 245,000 USDC genesis chunks fill in their
+        // period whatever the setting; the queue's defaults (5 bps since 2026-11-12) are put back before any attack.
+        FlowLevers memory defaults = queue.flowLevers();
+        vm.prank(address(timelock));
+        queue.setFlowLevers(FlowLevers({basketCallBps: 0, legPriceMode: defaults.legPriceMode}));
         this.worldDeposits(hs, amts);
+        vm.prank(address(timelock));
+        queue.setFlowLevers(defaults);
         // Levers (step 3 finish plan §3.2, `levers` 2026-11-12) go in AFTER the world is built, so every lever runs
         // the same holders and NAV, and a genesis chunk never meets a per-call cap (it must fill in its period).
         bool levered = LeverEnv.applyFromEnv(vm, queue, address(timelock));

@@ -27,7 +27,7 @@ import {
 } from "../FlowTypes.sol";
 import {IRobotMoneyFundFull} from "../interfaces/IRobotMoneyFund.sol";
 import {FlowEpochs, FlowState, WalkCursor} from "./FlowStorage.sol";
-import {FlowCheckLib} from "./FlowCheckLib.sol";
+import {FlowCheckLib, IExclusionLedgerView} from "./FlowCheckLib.sol";
 import {FundValuationLib} from "./FundValuationLib.sol";
 
 /// @notice The queue's per-side self-call entry points (`FlowQueue.settleRedeemSide` / `settleDepositSide`). Each
@@ -126,6 +126,7 @@ library FlowSettleLib {
         uint256 minRequestUsdc;
         uint256 budget;
         uint8 cls;
+        bool callRoomLow;
         Fill[] dep;
         Fill[] red;
         SidePos depPos;
@@ -163,6 +164,8 @@ library FlowSettleLib {
         _moveCursor(s, w.cls, RequestKind.Redeem, w.redPos, w.nRed == 0 || redOk);
         _moveCursor(s, w.cls, RequestKind.Deposit, w.depPos, w.nDep == 0 || depOk);
         _rememberOldest(s, c);
+        // A per-call basket cap below the minimum fill holds every request; say so (review Q-F5).
+        if (w.callRoomLow && w.nRed == 0 && w.nDep == 0) emit IFlowEvents.SettleCallRoomBelowMinimum(w.depRoom, w.redRoom);
         if (!redOk && !depOk) return 0;
 
         // ── Step 12: record ──
@@ -175,7 +178,15 @@ library FlowSettleLib {
         s.lastSettleEpoch = w.cur;
         s.lastSharePrice = c.sharePrice;
         _recordReferences(s, c);
-        if (s.levers.basketCallBps != 0) s.leverTradeBlock = uint64(block.number);
+        if (s.levers.basketCallBps != 0) {
+            if (s.leverTradeBlock != block.number) {
+                s.leverTradeBlock = uint64(block.number);
+                s.leverBlockDep = 0;
+                s.leverBlockRed = 0;
+            }
+            if (depOk) s.leverBlockDep += uint128(w.depTotal);
+            if (redOk) s.leverBlockRed += uint128(w.redValue);
+        }
         emit IFlowEvents.Settled(
             settlementId,
             msg.sender,
@@ -216,17 +227,16 @@ library FlowSettleLib {
     ///      value `v` buys or sells about `v × value_i / navFeed` of basket asset `i` (pro rata, E3, E4), so each side's
     ///      room is cut to `min_i(cap_i × navFeed / value_i)`, where `cap_i` is `callBps` of the pool's time-weighted
     ///      USDC depth over `window` and `value_i` the holding at its feed. A pool whose depth cannot be read gives
-    ///      no room (fail closed). A second call in a block that already recorded a settlement under the lever gets
-    ///      no room at all, so the parts of a large flow land in different blocks.
+    ///      no room (fail closed). The cap is a budget per block and side: a call in a block that already traded
+    ///      under the lever gets the cap less what that side already traded in the block, so the parts of a large
+    ///      flow land in different blocks, and a small call cannot take the whole block's room (review Q-F2).
+    ///      A side whose cap is below its minimum fill is flagged (`w.callRoomLow`), so the halt is visible.
     function _basketCallRoom(FlowState storage s, SettleContext memory c, Walk memory w, uint256 callBps, uint32 window)
         private
         view
     {
-        if (s.leverTradeBlock == block.number) {
-            w.depRoom = 0;
-            w.redRoom = 0;
-            return;
-        }
+        uint256 depCap = type(uint256).max;
+        uint256 redCap = type(uint256).max;
         AssetConfig[] memory cfg = IRobotMoneyFundFull(s.fund).assetConfigs();
         for (uint256 i; i < c.prices.length; ++i) {
             AssetPrice memory ap = c.prices[i];
@@ -234,9 +244,18 @@ library FlowSettleLib {
             uint256 value = c.held[i].mulDiv(ap.feedPerToken, ap.unit, Math.Rounding.Ceil);
             (bool ok, uint256 depth) = FundValuationLib.poolUsdcDepth(cfg[i].pool, s.usdc, window);
             uint256 room = ok && value != 0 ? depth.mulDiv(callBps, BPS).mulDiv(c.navFeed, value) : 0;
-            if (room < w.depRoom) w.depRoom = room;
-            if (room < w.redRoom) w.redRoom = room;
+            if (room < depCap) depCap = room;
+            if (room < redCap) redCap = room;
         }
+        if (depCap < w.minRequestUsdc || redCap < w.minRequestUsdc) w.callRoomLow = true;
+        if (s.leverTradeBlock == block.number) {
+            uint256 du = s.leverBlockDep;
+            uint256 ru = s.leverBlockRed;
+            depCap = depCap > du ? depCap - du : 0;
+            redCap = redCap > ru ? redCap - ru : 0;
+        }
+        if (depCap < w.depRoom) w.depRoom = depCap;
+        if (redCap < w.redRoom) w.redRoom = redCap;
     }
 
     /// @dev Walk side `kind`'s requests from this caller class's cursor (see the library note). Epochs with no open
@@ -442,11 +461,18 @@ library FlowSettleLib {
     ///      Check 6 (item 9): the exclusion mask and each lending venue's held amount per share.
     function _recordReferences(FlowState storage s, SettleContext memory c) private {
         s.lastExcludedMask = c.excludedMask;
+        s.lastExclusionCount = IExclusionLedgerView(IRobotMoneyFundFull(s.fund).exclusionLedger()).exclusionCount();
         AssetConfig[] memory cfg = IRobotMoneyFundFull(s.fund).assetConfigs();
         for (uint256 i; i < c.prices.length; ++i) {
             if (c.prices[i].kind != PRICE_KIND_LENDING) continue;
             bool ok;
             uint256 rate;
+            // An excluded venue's rate is neither read nor moved (review Q-F1): its reference stays the one from
+            // before the exclusion, and a restored venue is compared with it (growth over the elapsed time).
+            if (c.excludedMask & (1 << i) != 0) {
+                s.lastLendPerShare[i] = c.held[i].mulDiv(PRICE_SCALE, c.supply);
+                continue;
+            }
             if (i < cfg.length) (ok, rate) = FlowCheckLib.lendRate(cfg[i].adapter);
             s.lastLendRate[i] = ok ? rate : c.lendRates[i];
             s.lastLendPerShare[i] = c.held[i].mulDiv(PRICE_SCALE, c.supply);

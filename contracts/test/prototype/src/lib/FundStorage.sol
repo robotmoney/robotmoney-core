@@ -86,6 +86,10 @@ struct FundState {
     uint16 inKindBps;
     uint128 inKindFloorUsdc;
     uint32 inKindPeriod;
+    /// @dev The cost of the step that halted the current plan (0 while it never halted, or once an extension
+    ///      reopened it). A plan is over budget while its budget left is below it (review B-F5: `costSpent` never
+    ///      passes `costBudget` any more, so "spent > budget" can no longer say so).
+    uint256 haltCost;
 }
 
 /// @title FundStorage

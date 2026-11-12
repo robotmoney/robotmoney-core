@@ -141,7 +141,8 @@ const DEFAULT_PARAMS_TIMED: Record<string, unknown> = {
   flowParams: {
     epochLength: 21600, settleWindow: 3600, minHold: 86400, keeperGrace: 21600, maxEpochFlowBps: 500,
     epochFlowFloorUsdc: 250000000000, maxSharePriceMoveBps: 1000, maxRoll: 8, minRequestUsdc: 100000000,
-    maxFreeze: 604800, slices: 12, quorum: 9, dispersionBps: 100, refBandBps: 50, legBandBps: 100,
+    // refBandBps 90: owner default of 2026-11-12 (lever L10), proposal §5.9.5.
+    maxFreeze: 604800, slices: 12, quorum: 9, dispersionBps: 100, refBandBps: 90, legBandBps: 100,
     sequencerGrace: 3600, usdcPegBandBps: 50, maxLendRateGrowthBps: 10,
   },
 };

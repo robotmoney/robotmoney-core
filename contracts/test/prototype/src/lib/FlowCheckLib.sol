@@ -25,6 +25,15 @@ import {
 import {IRobotMoneyFundFull} from "../interfaces/IRobotMoneyFund.sol";
 import {ILendingRateAdapter} from "../interfaces/IFlowAdapters.sol";
 import {FlowEpochs, FlowState} from "./FlowStorage.sol";
+
+/// @dev The fund's exclusion ledger, as check 6 reads it (review Q-F3).
+interface IExclusionLedgerView {
+    function exclusionCount() external view returns (uint256);
+    function exclusions(uint256 id)
+        external
+        view
+        returns (uint256, address, uint48, uint40, bool, uint256, uint256, uint256, uint256);
+}
 import {FeedLib} from "./FeedLib.sol";
 import {TwapSlicesLib} from "./TwapSlicesLib.sol";
 
@@ -46,6 +55,10 @@ import {TwapSlicesLib} from "./TwapSlicesLib.sol";
 ///         with the sale limits, the two lending units withheld and the exit fee. `FlowSettleLib` verifies the
 ///         realized price of every side against the bound after its trade (check 11) and reverts that side if not.
 library FlowCheckLib {
+    /// @dev Gas given to a lending venue's `ratePerUnit` read (review Q-F1). The real adapters read a few slots of
+    ///      their venue (Aave's normalized income, a Morpho vault's share price, Comet's indexes).
+    uint256 internal constant LEND_RATE_GAS = 300_000;
+
     using Math for uint256;
 
     /// @dev Extra USDC units of slack in each bound's rounding term beyond the counted overhead.
@@ -129,19 +142,36 @@ library FlowCheckLib {
     ///         reference at the exclusion or the restore for that venue's part only, so the breaker still measures
     ///         every market move since the last settlement, and none of the governed step. Assumed default of this
     ///         run (plan §4); the owner may change it.
+    ///         A venue whose exclusion record opened AND closed since the last settlement (a revoke then a re-allow,
+    ///         or a revoke then a removal) shows the same mask bit at both ends; the ledger's record count shows it.
+    ///         Such a venue is re-based both ways: its per-share part at the last settlement leaves the reference
+    ///         and its per-share value now enters it (review Q-F3).
     function breakerReference(FlowState storage s, SettleContext memory m) public view returns (uint256 ref) {
         ref = s.lastSharePrice;
         uint256 changed = s.lastExcludedMask ^ m.excludedMask;
+        changed |= _cycledVenues(s, m);
         for (uint256 i; changed != 0 && i < m.prices.length; ++i) {
             if (changed & (1 << i) == 0) continue;
             changed &= ~(1 << i);
             if (m.prices[i].kind != PRICE_KIND_LENDING) continue;
-            if (m.excludedMask & (1 << i) != 0) {
-                uint256 v = s.lastLendPerShare[i];
-                ref = ref > v ? ref - v : 0;
-            } else {
-                ref += m.held[i].mulDiv(PRICE_SCALE, m.supply);
-            }
+            // Its part at the last settlement leaves (0 when it was excluded then: an excluded venue reads 0);
+            // unless excluded now, its part now enters.
+            uint256 v = s.lastLendPerShare[i];
+            ref = ref > v ? ref - v : 0;
+            if (m.excludedMask & (1 << i) == 0) ref += m.held[i].mulDiv(PRICE_SCALE, m.supply);
+        }
+    }
+
+    /// @dev Bit `i` set for each lending venue that had an exclusion record open since the last settlement and has
+    ///      the same mask bit now as then (its record cycled: opened and closed between two settlements).
+    function _cycledVenues(FlowState storage s, SettleContext memory m) private view returns (uint256 mask) {
+        address ledger = IRobotMoneyFundFull(s.fund).exclusionLedger();
+        uint256 count = IExclusionLedgerView(ledger).exclusionCount();
+        for (uint256 id = s.lastExclusionCount + 1; id <= count; ++id) {
+            (uint256 i,,,,,,,,) = IExclusionLedgerView(ledger).exclusions(id);
+            if (i >= 256 || i >= m.prices.length) continue;
+            uint256 bit = 1 << i;
+            if ((s.lastExcludedMask & bit) == (m.excludedMask & bit)) mask |= bit;
         }
     }
 
@@ -276,8 +306,12 @@ library FlowCheckLib {
     {
         uint256 elapsed = block.timestamp - s.lastSettleAt;
         rates = new uint256[](cfg.length);
+        IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
         for (uint256 i; i < cfg.length; ++i) {
             if (!cfg[i].active || cfg[i].kind != AssetKind.Lending) continue;
+            // An excluded venue counts as 0 and trades nothing (E13): its rate is not read, so a revoked adapter
+            // whose rate fails or jumps cannot hold every settlement, redemptions included (review Q-F1).
+            if (fund.openExclusionOf(i) != 0) continue;
             (bool rOk, uint256 rate) = lendRate(cfg[i].adapter);
             if (!rOk) return (false, i, type(uint256).max, rates);
             rates[i] = rate;
@@ -296,8 +330,9 @@ library FlowCheckLib {
     ///         reverts, returns short data or returns 0.
     function lendRate(address adapter) public view returns (bool ok, uint256 rate) {
         if (adapter.code.length == 0) return (false, 0);
+        // Gas-capped: a venue's rate read is a view of a few storage reads; a hostile adapter cannot burn the call.
         (bool success, bytes memory ret) =
-            adapter.staticcall(abi.encodeWithSelector(ILendingRateAdapter.ratePerUnit.selector));
+            adapter.staticcall{gas: LEND_RATE_GAS}(abi.encodeWithSelector(ILendingRateAdapter.ratePerUnit.selector));
         if (!success || ret.length < 32) return (false, 0);
         rate = abi.decode(ret, (uint256));
         ok = rate != 0;

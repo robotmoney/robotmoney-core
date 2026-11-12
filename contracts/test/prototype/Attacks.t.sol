@@ -33,6 +33,7 @@ import {
 import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
 import {IRobotMoneyFund as IBaselineFund} from "./baseline/src/interfaces/IRobotMoneyFund.sol";
 import {FundExclusionLedger} from "./src/FundExclusionLedger.sol";
+import {FundValuationLib} from "./src/lib/FundValuationLib.sol";
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════
 //  Shared types and interfaces (named so they never clash with the two harnesses' own)
@@ -424,9 +425,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     //  loss and the attacker's net is at most zero. The sim version (against arbitrage) is sim/AttackSim.t.sol.
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev The attacker holds shares and asks to redeem all of them. It pushes wETH 40 bps up (inside the 50 bps
-    ///      band) right after the request and holds it, free, through the window, so the fund sells the
-    ///      attacker's wETH slice into the pushed pool. Then it sells back what it bought and takes its USDC.
+    /// @dev The attacker holds shares and asks to redeem all of them. It pushes wETH up to 10 bps inside the band
+    ///      (`refBandBps` − 10: +80 bps at the default band of 90; it was +40 inside 50) right after the request and
+    ///      holds it, free, through the window and every block the redemption takes to fill (the per-call cap
+    ///      splits it, one keeper call per block), so the fund sells the attacker's wETH slice into the pushed pool.
+    ///      Then it sells back what it bought and takes its USDC.
     function test_A2_pushHeldInsideBand_redeemerSellsIntoIt_noArbitrage() public fixtureCovered {
         _world();
         uint256 atkShares = deposit(attacker, 100_000e6);
@@ -438,31 +441,33 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         fundUsdc(attacker, FLASH_USDC);
         _startAttacker();
         uint256 id = openRedeemRequest(attacker, atkShares, 0);
+        int256 push = int256(uint256(queue.flowParams().refBandBps)) - 10;
         uint256 bought;
-        (borrowed, bought) = _pushBps(attacker, WETH_POOL, WETH, USDC, 40);
+        (borrowed, bought) = _pushBps(attacker, WETH_POOL, WETH, USDC, push);
         warpToSettleable(id);
         refreshFeeds();
         vm.prank(keeper);
         (SettleCheck check,) = queue.checkSettle();
         assertEq(uint8(check), uint8(SettleCheck.Ok), "a push inside refBandBps passes check 4");
-        vm.prank(keeper);
-        queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        assertGt(_settleOverBlocks(keeper, id, 64), 0, "the redemption traded");
         assertEq(uint8(queue.requestStatus(id)), uint8(RequestStatus.Closed), "the redemption settled");
         _sellExact(attacker, WETH_POOL, WETH, USDC, bought);
         _claimRedeemUsdc(attacker);
-        _end("A2 timed, push +40 bps held through the window, no arbitrage", true);
+        _end(string.concat("A2 timed, push +", vm.toString(push), " bps (band - 10) held through the window, no arbitrage"), true);
     }
 
-    /// @dev A push past `refBandBps` held over the window blocks the settlement at check 4: nothing trades, the
-    ///      request stays pending, and the attacker pays the round trip for nothing.
+    /// @dev A push past `refBandBps` (band + 20 bps: +110 at the default 90) held over the window blocks the
+    ///      settlement at check 4: nothing trades, the request stays pending, and the attacker pays the round trip
+    ///      for nothing.
     function test_A2_pushHeldPastBand_blocksAndNothingTrades() public fixtureCovered {
         _world();
         _begin();
         uint256 vid = _victimDeposit(victim, 50_000e6);
         fundUsdc(attacker, FLASH_USDC);
         _startAttacker();
+        int256 push = int256(uint256(queue.flowParams().refBandBps)) + 20;
         uint256 bought;
-        (borrowed, bought) = _pushBps(attacker, WETH_POOL, WETH, USDC, 70);
+        (borrowed, bought) = _pushBps(attacker, WETH_POOL, WETH, USDC, push);
         warpToSettleable(vid);
         refreshFeeds();
         uint256 queueUsdc = IERC20(USDC).balanceOf(address(queue));
@@ -478,16 +483,17 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertEq(fund.totalSupply(), supply, "RB-12: nothing minted");
         assertEq(queue.getRequest(vid).remaining, 50_000e6, "the request stays pending");
         _sellExact(attacker, WETH_POOL, WETH, USDC, bought);
-        _end("A2 timed, push +70 bps held: blocked", true);
+        _end(string.concat("A2 timed, push +", vm.toString(push), " bps (band + 20) held: blocked"), true);
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
     //  A3: deflate, deposit, exit. Expected: the mint reads no price.
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev The attacker sells wETH to deflate the pool 40 bps (inside the band) and holds it through the window,
-    ///      asks to deposit, lets the fund buy its pro-rata wETH cheap, then buys its wETH back, waits out the hold
-    ///      and exits through the queue. The mint is by quantity, so cheaper wETH lowers the depositor's cost by
+    /// @dev The attacker sells wETH to deflate the pool 10 bps inside the band (`refBandBps` − 10: −80 bps at the
+    ///      default 90; it was −40 inside 50) and holds it through the window and every block its deposit takes to
+    ///      fill, asks to deposit, lets the fund buy its pro-rata wETH cheap, then buys its wETH back, waits out the
+    ///      hold and exits through the queue. The mint is by quantity, so cheaper wETH lowers the depositor's cost by
     ///      exactly what the attacker's own deflation gave away to the pool.
     function test_A3_deflateDepositExit_mintReadsNoPrice() public fixtureCovered {
         _world();
@@ -497,19 +503,19 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         _startAttacker();
 
         uint256 id = _reqDeposit(attacker, 100_000e6, type(uint256).max);
-        (uint256 sold, uint256 usdcGot) = _pushBps(attacker, WETH_POOL, WETH, USDC, -40);
+        int256 push = 10 - int256(uint256(queue.flowParams().refBandBps));
+        (uint256 sold, uint256 usdcGot) = _pushBps(attacker, WETH_POOL, WETH, USDC, push);
         borrowed = sold.mulDiv(refWeth, 1e18);
         warpToSettleable(id);
         refreshFeeds();
-        vm.prank(keeper);
-        queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        assertGt(_settleOverBlocks(keeper, id, 64), 0, "the deposit traded");
         assertEq(uint8(queue.requestStatus(id)), uint8(RequestStatus.Closed), "the deposit settled in the deflation");
         _sellExact(attacker, WETH_POOL, USDC, WETH, usdcGot);
         coverageCheckpoint();
         uint256 shares = deliverAfterHold(attacker);
         _takeCredit(attacker);
         redeem(attacker, shares);
-        _end("A3 timed, deflate -40 bps, deposit, exit", true);
+        _end(string.concat("A3 timed, deflate ", vm.toString(push), " bps (band - 10), deposit, exit"), true);
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -711,7 +717,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     }
 
     /// @dev The honest settlement first (a state snapshot), for the pending user's loss; then each push size from
-    ///      the same state.
+    ///      the same state. Since the per-call cap is on by default (2026-11-12) the victim's 250,000 USDC fills in
+    ///      parts, one call per block: the honest run settles them all, and each attack sandwiches EVERY part in
+    ///      its own block (push both pools, settle, sell back).
     function _a7(bool attackerSettles, string memory id) private {
         _world();
         uint256 vid = _victimDeposit(victim, 250_000e6);
@@ -722,51 +730,67 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         address caller = attackerSettles ? attacker : keeper;
 
         uint256 snap = vm.snapshotState();
-        assertGt(_settleAs(caller), 0, "the honest settlement trades");
-        Claim memory honest = queue.getClaim(queue.claimCount());
-        assertEq(honest.owner, victim, "the honest fill is the victim's");
-        vm.revertToState(snap);
+        {
+            uint256 parts = _settleOverBlocks(caller, vid, A7_MAX_PARTS);
+            assertGt(parts, 0, "the honest settlement trades");
+            assertTrue(queue.getRequest(vid).closed, "the honest run fills the victim");
+            emit log_named_uint(string.concat(id, ": honest parts (one per block)"), parts);
+        }
+        (uint256 hu, uint256 hs) = _victimFills(vid);
+        vm.revertToState(snap); // reverts this contract's storage too: keep the honest totals in locals until here
+        (honestUsdc, honestShares) = (hu, hs);
 
         int256[3] memory pushes = [int256(20), int256(50), int256(80)];
         AttackPnl memory best;
         best.attackerNet = type(int256).min;
         for (uint256 k; k < pushes.length; ++k) {
             snap = vm.snapshotState();
-            AttackPnl memory r = _a7Once(pushes[k], caller, honest, vid, id);
+            AttackPnl memory r = _a7Once(pushes[k], caller, vid, id);
             if (r.attackerNet > best.attackerNet) best = r;
             vm.revertToState(snap);
+            coverageCheckpoint();
         }
         _reportPnl(string.concat(id, ", best push"), best);
         _g8OrFinding(id, best);
     }
 
-    /// @dev One sandwich of `pushBps` on both basket pools around `caller`'s settlement.
-    function _a7Once(int256 pushBps, address caller, Claim memory honest, uint256 vid, string memory id)
+    /// @dev The most parts an A7 run settles (one per block) before it stops.
+    uint256 internal constant A7_MAX_PARTS = 40;
+    /// @dev The honest run's USDC and shares for the victim (A7), in storage for the stack.
+    uint256 internal honestUsdc;
+    uint256 internal honestShares;
+
+    /// @dev One sandwich of `pushBps` on both basket pools around each of `caller`'s settlements, one per block,
+    ///      until the victim's request closes or a call records nothing (the per-swap limit refused it). The honest
+    ///      run's USDC and shares for the victim are `honestUsdc`, `honestShares`.
+    function _a7Once(int256 pushBps, address caller, uint256 vid, string memory id)
         private
         returns (AttackPnl memory r)
     {
         fundUsdc(attacker, FLASH_USDC);
         _startAttacker();
-        (uint256 sw, uint256 bw) = _pushBps(attacker, WETH_POOL, WETH, USDC, pushBps);
-        (uint256 sc, uint256 bc) = _pushBps(attacker, CBBTC_POOL, CBBTC, USDC, pushBps);
-        borrowed = sw + sc;
-        uint256 sid = _settleAs(caller);
-        _sellExact(attacker, WETH_POOL, WETH, USDC, bw);
-        _sellExact(attacker, CBBTC_POOL, CBBTC, USDC, bc);
-        string memory label = string.concat(id, ", push +", vm.toString(pushBps), " bps");
-        if (sid != 0 && queue.getRequest(vid).remaining == 0) {
-            Claim memory c = queue.getClaim(queue.claimCount());
-            assertEq(c.owner, victim, "the victim's fill");
-            assertEq(c.shares, honest.shares, "the bound sets the shares: the push cannot change them");
-            assertLe(
-                c.usdc.mulDiv(PRICE_SCALE, c.shares, Math.Rounding.Ceil),
-                queue.getRequest(vid).limit,
-                "RB-14: the victim's fill is inside its limit"
-            );
-            pending = c.usdc > honest.usdc ? c.usdc - honest.usdc : 0;
-        } else {
-            emit log_named_string(label, "the per-swap limit refused the purchase: nothing settled");
+        uint256 parts;
+        for (uint256 k; k < A7_MAX_PARTS && !queue.getRequest(vid).closed; ++k) {
+            if (k != 0) _nextBlock();
+            else vm.roll(block.number + 1);
+            (uint256 sw, uint256 bw) = _pushBps(attacker, WETH_POOL, WETH, USDC, pushBps);
+            (uint256 sc, uint256 bc) = _pushBps(attacker, CBBTC_POOL, CBBTC, USDC, pushBps);
+            borrowed += sw + sc; // one flash loan per block: the 5 bps fee is paid on each
+            uint256 sid = _settleAs(caller);
+            _sellExact(attacker, WETH_POOL, WETH, USDC, bw);
+            _sellExact(attacker, CBBTC_POOL, CBBTC, USDC, bc);
+            if (sid == 0) break;
+            ++parts;
         }
+        string memory label = string.concat(id, ", push +", vm.toString(pushBps), " bps");
+        emit log_named_uint(string.concat(label, ": parts sandwiched"), parts);
+        (uint256 u, uint256 sh) = _victimFills(vid);
+        if (queue.getRequest(vid).closed) {
+            assertApproxEqRel(sh, honestShares, 1e15, "the bound sets the shares: the push cannot change them (to 0.1 %)");
+        } else {
+            emit log_named_string(label, "the per-swap limit refused a part: the rest waits");
+        }
+        pending = _extraCost(u, sh, honestUsdc, honestShares);
         r = _end(label, false);
         _assertPerShareNotLower(label);
     }
@@ -774,6 +798,40 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     function _settleAs(address caller) internal returns (uint256 sid) {
         vm.prank(caller);
         sid = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+    }
+
+    /// @dev `caller` settles once per block (Base: a block every 2 s) until request `id` closes, a call records no
+    ///      settlement, or `maxCalls` calls ran. Since 2026-11-12 the per-call basket cap (5 bps of each pool's
+    ///      time-weighted USDC depth, a budget per block) is on by default, so a flow larger than one call's room
+    ///      fills in parts over blocks. Returns the settlements recorded.
+    function _settleOverBlocks(address caller, uint256 id, uint256 maxCalls) internal returns (uint256 parts) {
+        for (uint256 k; k < maxCalls && !queue.getRequest(id).closed; ++k) {
+            if (k != 0) _nextBlock();
+            else vm.roll(block.number + 1);
+            if (_settleAs(caller) == 0) break;
+            ++parts;
+        }
+    }
+
+    /// @dev Request `vid`'s fills so far (deposit claims): the USDC paid and the shares got. RB-14 on each fill.
+    function _victimFills(uint256 vid) internal view returns (uint256 usdc, uint256 shares) {
+        uint256 limit = queue.getRequest(vid).limit;
+        uint256 n = queue.claimCount();
+        for (uint256 c = 1; c <= n; ++c) {
+            Claim memory cl = queue.getClaim(c);
+            if (cl.requestId != vid) continue;
+            assertLe(cl.usdc.mulDiv(PRICE_SCALE, cl.shares, Math.Rounding.Ceil), limit, "RB-14: each fill inside the limit");
+            usdc += cl.usdc;
+            shares += cl.shares;
+        }
+    }
+
+    /// @dev The victim's extra USDC against the honest run (`hu` USDC for `hs` shares): what it paid less what its
+    ///      `shares` cost at the honest price per share.
+    function _extraCost(uint256 usdc, uint256 shares, uint256 hu, uint256 hs) internal pure returns (uint256) {
+        if (shares == 0 || hs == 0) return 0;
+        uint256 fair = shares.mulDiv(hu, hs);
+        return usdc > fair ? usdc - fair : 0;
     }
 
     /// @dev The caller variant WITHOUT the 6-hour warp (step 3 finish plan §3.2, added by `levers` 2026-11-12). The
@@ -787,11 +845,14 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     ///      "before" copy, notes/levers.md) and on the fixed one.
     function test_A7_sandwich_byTheCallerAtWindowEnd_viaANeverFillableRequest() public fixtureCovered {
         uint256 vid = _a7BaitWorld();
-        (bool reaches, Claim memory honest) = _a7BaitProbe(vid);
+        (bool reaches, uint256 hu, uint256 hs) = _a7BaitProbe(vid);
         emit log_named_string(
             "A7 bait: the attacker's plain call at the victim's window end", reaches ? "fills the victim" : "does not reach the victim"
         );
-        if (reaches) _a7BaitSandwich(vid, honest);
+        if (reaches) {
+            (honestUsdc, honestShares) = (hu, hs);
+            _a7BaitSandwich(vid);
+        }
         else _a7BaitClosed(vid);
     }
 
@@ -812,13 +873,19 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         _begin();
     }
 
-    /// @dev In a snapshot: does the attacker's plain call now fill the victim? Returns the honest claim if so.
-    function _a7BaitProbe(uint256 vid) internal returns (bool reaches, Claim memory honest) {
+    /// @dev In a snapshot: does the attacker's plain call now fill any of the victim (the per-call cap may fill
+    ///      only a part)? If so, the honest run (the attacker's plain calls, one per block, until the victim closes)
+    ///      gives the victim's honest USDC and shares.
+    function _a7BaitProbe(uint256 vid) internal returns (bool reaches, uint256 hu, uint256 hs) {
         uint256 snap = vm.snapshotState();
+        vm.roll(block.number + 1);
         vm.prank(attacker);
         (bool callOk,) = address(queue).call(abi.encodeCall(queue.settle, (SETTLE_MAX_REQUESTS, type(uint256).max)));
-        reaches = callOk && queue.getRequest(vid).remaining == 0;
-        if (reaches) honest = queue.getClaim(queue.claimCount());
+        reaches = callOk && queue.getRequest(vid).remaining < 250_000e6;
+        if (reaches) {
+            _settleOverBlocks(attacker, vid, A7_MAX_PARTS);
+            (hu, hs) = _victimFills(vid);
+        }
         vm.revertToState(snap);
     }
 
@@ -840,13 +907,13 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     }
 
     /// @dev The keeper-free path is open: the pushes of `_a7`, best scored.
-    function _a7BaitSandwich(uint256 vid, Claim memory honest) internal {
+    function _a7BaitSandwich(uint256 vid) internal {
         int256[3] memory pushes = [int256(20), int256(50), int256(80)];
         AttackPnl memory best;
         best.attackerNet = type(int256).min;
         for (uint256 k; k < pushes.length; ++k) {
             uint256 snap = vm.snapshotState();
-            AttackPnl memory r = _a7Once(pushes[k], attacker, honest, vid, A7_BAIT_ID);
+            AttackPnl memory r = _a7Once(pushes[k], attacker, vid, A7_BAIT_ID);
             if (r.attackerNet > best.attackerNet) best = r;
             vm.revertToState(snap);
         }
@@ -859,7 +926,7 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     //  each way; G8 fails if a way costs less than 1,000 USDC a day.
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev Way 1: hold a basket pool past refBandBps (check 4). With no arbitrage a hold costs one round trip
+    /// @dev Way 1: hold a basket pool past refBandBps (check 4; band + 10 bps). With no arbitrage a hold costs one round trip
     ///      whatever its length, so the number logged here is a LOWER BOUND; the real cost of holding a price
     ///      against arbitrage for a day is the sim's (AttackSim A2/A10, not built). This way is not scored here.
     function test_A8_block_holdPastBandForADay_noArbitrageLowerBound() public fixtureCovered {
@@ -868,8 +935,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         uint256 vid = _victimDeposit(victim, 50_000e6);
         fundUsdc(attacker, FLASH_USDC);
         _startAttacker();
+        int256 push = int256(uint256(queue.flowParams().refBandBps)) + 10;
         uint256 bought;
-        (borrowed, bought) = _pushBps(attacker, WETH_POOL, WETH, USDC, 60);
+        (borrowed, bought) = _pushBps(attacker, WETH_POOL, WETH, USDC, push);
         warpToSettleable(vid);
         uint256 supply = fund.totalSupply();
         for (uint256 h; h < 24; ++h) {
@@ -882,12 +950,13 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertEq(fund.totalSupply(), supply, "nothing settled, nothing moved");
         assertEq(queue.getRequest(vid).remaining, 50_000e6, "the request waits, whole");
         _sellExact(attacker, WETH_POOL, WETH, USDC, bought);
-        AttackPnl memory r = _end("A8 way 1, hold +60 bps a day (no arbitrage: lower bound)", true);
+        AttackPnl memory r =
+            _end(string.concat("A8 way 1, hold +", vm.toString(push), " bps (band + 10) a day (no arbitrage: lower bound)"), true);
         emit log_named_uint("A8 way 1: cost for a day, NO arbitrage (lower bound, not scored)", uint256(-r.attackerNet));
         // After the hold, the next window settles.
         warpForward(block.timestamp + queue.flowParams().settleWindow);
         refreshFeeds();
-        _settleAs(keeper);
+        _settleOverBlocks(keeper, vid, 64);
         assertEq(uint8(queue.requestStatus(vid)), uint8(RequestStatus.Closed), "it settles once the push ends");
     }
 
@@ -980,9 +1049,12 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             assertEq(ke2, ke, "no stranger moves the keeper's cursor (epoch)");
             assertEq(ki2, ki, "no stranger moves the keeper's cursor (index)");
             assertEq(queue.getRequest(oldest).remaining, 50_000e6, "the griefing calls filled nothing");
+            vm.roll(block.number + 1);
             _settleAs(keeper);
             if (!queue.getRequest(oldest).closed) ++blockedRounds;
             assertEq(uint8(queue.requestStatus(oldest)), uint8(RequestStatus.Closed), "the keeper's first call fills the oldest");
+            // The per-call cap (a budget per block, on by default) leaves the newer one to the next blocks.
+            _settleOverBlocks(keeper, newer, 64);
             assertEq(uint8(queue.requestStatus(newer)), uint8(RequestStatus.Closed), "and the newer one");
             vm.warp(block.timestamp + 1 hours);
             coverageCheckpoint();
@@ -1096,13 +1168,16 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         emit log_named_uint("A9: lending USDC paid in kind this period", used1 - used0);
     }
 
-    /// @dev The first settlement after the window: the redemptions fill in the order they were made, up to the
-    ///      period's cap; a request the cap reaches fills in part and the ones behind it wait.
+    /// @dev The first period's settlements after the window (one call per block until the period's cap stops
+    ///      them): the redemptions fill in the order they were made, up to the period's cap; a request the cap
+    ///      reaches fills in part and the ones behind it wait.
     function _a9FirstSettlement() private {
         warpToSettleable(runIds[0]);
         refreshFeeds();
         FlowParams memory p = queue.flowParams();
-        _settleAs(keeper);
+        // One keeper call per block until the period's cap stops it (a call that records nothing): the per-call
+        // basket cap (on by default) splits the period's fills over blocks.
+        assertGt(_settleOverBlocks(keeper, runIds[2], 64), 0, "the run trades");
         (, uint256 redeemUsed) = queue.periodFlow(block.timestamp / p.epochLength);
         uint256 cap = Math.max(s0.navRef.mulDiv(p.maxEpochFlowBps, BPS), p.epochFlowFloorUsdc);
         assertLe(redeemUsed, cap + cap / 50, "RB-16: the period's fills stay within its cap (feed NAV)");
@@ -1144,8 +1219,12 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     //  past refBandBps; inside it the result is as A2. The sim version is sim/AttackSim.t.sol.
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev The attacker ramps wETH +5 bps every 5 minutes over the last hour of a pending deposit's window (spot
-    ///      +60 bps at the end, the slice median about +30 bps), so check 4 passes and the fund buys into the ramp.
+    /// @dev The attacker ramps wETH every 5 minutes over the last hour of a pending deposit's window, so check 4
+    ///      passes and the fund buys into the ramp. Two rates, the best scored: +5 bps (spot +60 bps at the end, the
+    ///      slice median about +30 bps), and the steepest the bands let through, `min((refBandBps − 10) / 6,
+    ///      (legBandBps − 10) / 12)` (+7 at the defaults 90 and 100: median about +42, spot +84 inside the per-swap
+    ///      band). The ramp is held while the keeper settles the victim's 250,000 USDC in parts, one call per block
+    ///      (the per-call cap, on by default since 2026-11-12), then sold back.
     function test_A10_slowRampInsideBand_noArbitrage() public fixtureCovered {
         _world();
         uint256 vid = _victimDeposit(victim, 250_000e6);
@@ -1156,29 +1235,51 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         uint256 snap = vm.snapshotState();
         vm.warp(windowEnd);
         refreshFeeds();
-        _settleAs(keeper);
-        Claim memory honest = queue.getClaim(queue.claimCount());
+        assertGt(_settleOverBlocks(keeper, vid, A7_MAX_PARTS), 0, "the honest settlement trades");
+        (uint256 hu, uint256 hs) = _victimFills(vid);
         vm.revertToState(snap);
 
+        FlowParams memory p = queue.flowParams();
+        int256[2] memory rates =
+            [int256(5), int256(Math.min((uint256(p.refBandBps) - 10) / 6, (uint256(p.legBandBps) - 10) / 12))];
+        AttackPnl memory best;
+        best.attackerNet = type(int256).min;
+        for (uint256 k; k < rates.length; ++k) {
+            snap = vm.snapshotState();
+            AttackPnl memory r = _a10Once(vid, windowEnd, rates[k], hu, hs);
+            if (r.attackerNet > best.attackerNet) best = r;
+            vm.revertToState(snap);
+            coverageCheckpoint();
+        }
+        _reportPnl("A10 timed ramp inside the band, best rate", best);
+        _g8OrFinding("A10 timed ramp inside the band", best);
+    }
+
+    /// @dev One A10 ramp of `rate` bps per 5 minutes, held through the keeper's parts (one per block).
+    function _a10Once(uint256 vid, uint256 windowEnd, int256 rate, uint256 hu, uint256 hs)
+        internal
+        returns (AttackPnl memory r)
+    {
         fundUsdc(attacker, FLASH_USDC);
         _startAttacker();
-        uint256 bought = _ramp(5, 12);
+        uint256 bought = _ramp(rate, 12);
+        vm.warp(windowEnd > block.timestamp ? windowEnd : block.timestamp);
         refreshFeeds();
         vm.prank(keeper);
         (SettleCheck check,) = queue.checkSettle();
         assertEq(uint8(check), uint8(SettleCheck.Ok), "a ramp the median keeps inside the band passes");
-        _settleAs(keeper);
+        assertGt(_settleOverBlocks(keeper, vid, A7_MAX_PARTS), 0, "the victim filled");
         _sellExact(attacker, WETH_POOL, WETH, USDC, bought);
-        Claim memory c = queue.getClaim(queue.claimCount());
-        assertEq(c.owner, victim, "the victim filled");
-        assertLe(c.usdc.mulDiv(PRICE_SCALE, c.shares, Math.Rounding.Ceil), queue.getRequest(vid).limit, "RB-14");
-        pending = c.usdc > honest.usdc ? c.usdc - honest.usdc : 0;
-        AttackPnl memory r = _end("A10 timed, ramp +5 bps / 5 min over the window (no arbitrage)", false);
-        _assertPerShareNotLower("A10");
-        _g8OrFinding("A10 timed ramp inside the band", r);
+        (uint256 u, uint256 sh) = _victimFills(vid);
+        pending = _extraCost(u, sh, hu, hs);
+        string memory label = string.concat("A10 timed, ramp +", vm.toString(rate), " bps / 5 min over the window (no arbitrage)");
+        r = _end(label, false);
+        _assertPerShareNotLower(label);
     }
 
-    /// @dev The same ramp at +10 bps every 5 minutes: the slice median leaves the band and check 4 blocks.
+    /// @dev The same ramp, steep enough that the slice median leaves the band: +(band + 30) / 6 bps every 5 minutes
+    ///      (+20 at the default band of 90, median about +120; it was +10 against 50), and check 4 (or the quorum)
+    ///      blocks.
     function test_A10_slowRampPastBand_blocks() public fixtureCovered {
         _world();
         uint256 vid = _victimDeposit(victim, 250_000e6);
@@ -1188,7 +1289,8 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         _begin();
         fundUsdc(attacker, FLASH_USDC);
         _startAttacker();
-        uint256 bought = _ramp(10, 12);
+        int256 rate = (int256(uint256(queue.flowParams().refBandBps)) + 30) / 6;
+        uint256 bought = _ramp(rate, 12);
         refreshFeeds();
         vm.prank(keeper);
         (SettleCheck check, uint256 index) = queue.checkSettle();
@@ -1200,7 +1302,7 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
         assertEq(fund.totalSupply(), supply, "nothing settled");
         _sellExact(attacker, WETH_POOL, WETH, USDC, bought);
-        _end("A10 timed, ramp +10 bps / 5 min: blocked", true);
+        _end(string.concat("A10 timed, ramp +", vm.toString(rate), " bps / 5 min: blocked"), true);
     }
 
     /// @dev `steps` pushes of `bps` on wETH, one every 5 minutes, ending 5 minutes after the last. Returns the wETH
@@ -1261,8 +1363,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
-    //  A12: a batch larger than pool depth. Expected: the call fails its per-swap limit and changes nothing;
-    //  smaller calls settle it in parts.
+    //  A12: a batch larger than pool depth. Expected: no call trades more than the pool bears; the batch settles
+    //  in parts. Before the per-call cap was on by default (2026-11-12) the whole batch failed its per-swap limit
+    //  and changed nothing; at the defaults the cap (5 bps of each pool's time-weighted depth per block) sizes
+    //  every call so it never reaches that limit.
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
     function test_A12_batchLargerThanPoolDepth_failsWhole_settlesInParts() public fixtureCovered {
@@ -1274,19 +1378,29 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         refreshFeeds();
         _begin();
         (uint160 sqrt0,,,,,,) = IAtkPool(WETH_POOL).slot0();
-        uint256 queueUsdc = IERC20(USDC).balanceOf(address(queue));
-        uint256 supply = fund.totalSupply();
-        vm.recordLogs();
-        assertEq(_settleAs(keeper), 0, "the whole batch trades nothing");
-        assertTrue(_sawSideFailed(RequestKind.Deposit), "the deposit side failed its per-swap limit");
-        assertEq(IERC20(USDC).balanceOf(address(queue)), queueUsdc, "RB-15: no USDC moved");
-        assertEq(fund.totalSupply(), supply, "RB-15: nothing minted");
-        (uint160 sqrt1,,,,,,) = IAtkPool(WETH_POOL).slot0();
-        assertEq(sqrt1, sqrt0, "the pool did not move");
+        uint256 wethPx0 = _spotPx(WETH_POOL, WETH, USDC);
+        uint256 room = _callRoomUsdc();
+        emit log_named_uint("A12: one call's room under the per-call cap (USDC units)", room);
+        assertLt(room, 2_000_000e6, "the batch is larger than one call's room");
 
-        // The keeper settles it in parts of 200,000 USDC; an arbitrageur brings the pool back between parts.
-        uint256 parts;
+        // The keeper's call with no USDC bound: the cap sizes it, the deposit side does not fail, the pool moves less
+        // than legBandBps.
+        vm.recordLogs();
+        vm.roll(block.number + 1);
+        uint256 sid0 = _settleAs(keeper);
+        assertGt(sid0, 0, "the capped call trades");
+        assertFalse(_sawSideFailed(RequestKind.Deposit), "no part of the batch failed its per-swap limit");
+        assertLe(queue.getSettlement(sid0).usdcIn, room + room / 100, "the call's USDC stays inside its room");
+        uint256 moved = (_spotPx(WETH_POOL, WETH, USDC) - wethPx0) * BPS / wethPx0;
+        emit log_named_uint("A12: wETH pool move of one capped call (bps)", moved);
+        assertLt(moved, queue.flowParams().legBandBps, "one call moves the pool less than the per-swap band");
+        _arbBackWeth(sqrt0);
+
+        // The keeper settles it in parts, one call per block (maxUsdc 200,000 USDC); an arbitrageur brings the pool
+        // back between parts.
+        uint256 parts = 1;
         for (uint256 k; k < 4; ++k) {
+            _nextBlock();
             vm.prank(keeper);
             uint256 sid = queue.settle(SETTLE_MAX_REQUESTS, 200_000e6);
             assertGt(sid, 0, "a part settles");
@@ -1296,6 +1410,24 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         }
         emit log_named_uint("A12: parts settled", parts);
         _assertPerShareNotLower("A12");
+    }
+
+    /// @dev One call's room under the per-call cap: `min_i(callBps × depth_i × navFeed / value_i)` over the basket
+    ///      assets (`FlowSettleLib._basketCallRoom`), at the feeds, with the depth over one settlement window.
+    function _callRoomUsdc() internal view returns (uint256 room) {
+        uint256 callBps = queue.flowLevers().basketCallBps;
+        uint32 window = queue.flowParams().settleWindow;
+        (uint256 navFeed,) = fund.lastGoodNav();
+        room = type(uint256).max;
+        for (uint256 i; i < listedAssets(); ++i) {
+            if (!isBasketIndex(i)) continue;
+            uint256 value = fund.assetValue(i);
+            if (value == 0) continue;
+            (bool ok, uint256 depth) = FundValuationLib.poolUsdcDepth(fund.assetConfig(i).pool, USDC, window);
+            assertTrue(ok, "A12: depth read");
+            uint256 r = depth.mulDiv(callBps, BPS).mulDiv(navFeed, value);
+            if (r < room) room = r;
+        }
     }
 
     /// @dev A fund that is 60 % wETH (the pool-share rule allows 6M of a 10M cap on the 26.8M-deep pool) with the
@@ -1608,8 +1740,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
 
     /// @dev The attacker (this contract, as an LP) adds ten times the pool's liquidity in a 3 % band around the
     ///      price before the window, so a large batch sized for that depth fits. Right before the keeper's call it
-    ///      pulls it. The batch then fails its per-swap limit: nothing settles, nobody loses; smaller calls settle.
-    ///      The LP's own round trip (tokens paid in, tokens collected) is the attacker's result.
+    ///      pulls it. The LP's own round trip (tokens paid in, tokens collected) is the attacker's result.
+    ///      Before the per-call cap was on by default (2026-11-12) the batch then failed its per-swap limit: nothing
+    ///      settled. At the defaults the call is sized by the cap from the pool's TIME-WEIGHTED depth, which the
+    ///      liquidity held through the window still inflates (logged): either the per-swap limit refuses the call
+    ///      (nothing settles), or the capped call settles a part inside every limit. Either way nobody loses.
     function test_A18_liquidityPulledBeforeSettlement_limitFailsNothingSettles() public fixtureCovered {
         _bigWorld();
         _setRef();
@@ -1623,16 +1758,41 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertGt(queue.settle(SETTLE_MAX_REQUESTS, 600_000e6), 0, "with the liquidity in place, the batch fits");
         vm.revertToState(snap);
 
+        uint256 roomHeld = _callRoomUsdc();
         _lpRemove();
+        emit log_named_uint("A18: one call's room with the LP's liquidity held through the window (USDC units)", roomHeld);
+        emit log_named_uint("A18: the same room right after the pull (time-weighted, so unchanged)", _callRoomUsdc());
         uint256 supply = fund.totalSupply();
         uint256 queueUsdc = IERC20(USDC).balanceOf(address(queue));
+        (uint160 sqrt0,,,,,,) = IAtkPool(WETH_POOL).slot0();
+        uint256 px0 = _spotPx(WETH_POOL, WETH, USDC);
         vm.recordLogs();
+        vm.roll(block.number + 1);
         vm.prank(keeper);
-        assertEq(queue.settle(SETTLE_MAX_REQUESTS, 600_000e6), 0, "pulled: the batch trades nothing");
-        assertTrue(_sawSideFailed(RequestKind.Deposit), "the per-swap limit refused it");
-        assertEq(fund.totalSupply(), supply, "nothing minted");
-        assertEq(IERC20(USDC).balanceOf(address(queue)), queueUsdc, "nobody's USDC moved");
-        assertEq(queue.getRequest(vid).remaining, 1_000_000e6, "the request waits, whole");
+        uint256 sid = queue.settle(SETTLE_MAX_REQUESTS, 600_000e6);
+        bool failed = _sawSideFailed(RequestKind.Deposit);
+        if (sid == 0) {
+            assertTrue(failed, "pulled: the per-swap limit refused it");
+            assertEq(fund.totalSupply(), supply, "nothing minted");
+            assertEq(IERC20(USDC).balanceOf(address(queue)), queueUsdc, "nobody's USDC moved");
+            assertEq(queue.getRequest(vid).remaining, 1_000_000e6, "the request waits, whole");
+            emit log_named_string("A18: after the pull", "the per-swap limit refused the call: nothing settled");
+        } else {
+            assertFalse(failed, "a call that recorded a settlement had no failed deposit side");
+            uint256 usdcIn = queue.getSettlement(sid).usdcIn;
+            assertLe(usdcIn, roomHeld + roomHeld / 100, "pulled: the call stays inside the cap's room");
+            assertLt(usdcIn, 600_000e6, "pulled: the cap, not maxUsdc, sized the call");
+            (uint256 u,) = _victimFills(vid); // RB-14 on the fill
+            assertEq(u, usdcIn, "the part is the victim's");
+            emit log_named_uint("A18: after the pull, the capped call settled (USDC units)", usdcIn);
+            emit log_named_uint(
+                "A18: wETH pool move of that call in the thinned pool (bps)", (_spotPx(WETH_POOL, WETH, USDC) - px0) * BPS / px0
+            );
+            // An arbitrageur brings the thinned pool back before the next part (as A12).
+            _arbBackWeth(sqrt0);
+        }
+        _assertPerShareNotLower("A18 pulled");
+        _nextBlock();
         vm.prank(keeper);
         assertGt(queue.settle(SETTLE_MAX_REQUESTS, 100_000e6), 0, "a smaller call settles a part");
         extraNet = _lpNet();
@@ -1778,13 +1938,14 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     //  from outside, holders' loss at most 1 bps of NAV). The attacker's net is reported, not scored: G8 is scored
     //  at the defaults by the attack tests above.
     //
-    //  Settings (`_lever`): L0 the defaults; L1, L2 `legBandBps` 50, 25; L3, L4 per-swap limits from the TWAP only,
+    //  Settings (`_lever`): L0 no lever (all zero, refBandBps 50: §5.9 as first written); L1, L2 `legBandBps` 50, 25; L3, L4 per-swap limits from the TWAP only,
     //  from the feed only; L5, L6, L7 a per-call cap on each basket leg of 5, 10, 20 bps of the pool's time-weighted
     //  depth (one trading settlement per block); L8 `legBandBps` 50 with the 10 bps cap; L9 `legBandBps` 25 from the
     //  feed only; L10, L11 `refBandBps` 90, 100 (the sim's G9 proposal, notes/sim.md §5, which must be priced
     //  against G8 first); L12, L13, L14 `legBandBps` 30, 35, 40; L15 `legBandBps` 35 with the 10 bps cap; L16, L17
     //  `legBandBps` 30 with the 10 and the 5 bps cap; L18, L19 `refBandBps` 90, 100 with the 5 bps cap; L20
-    //  `refBandBps` 90 with the 5 bps cap and `legBandBps` 50.
+    //  `refBandBps` 90 with the 5 bps cap and `legBandBps` 50. L18 is the owner's decided default of 2026-11-12 (the
+    //  queue's `initialize` and the harness), so the other rows each switch it off or change it explicitly.
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
     struct LeverSetting {
@@ -1820,7 +1981,7 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         require(id < LEVER_SETTINGS, "lever: unknown setting");
         l.legBand = 100;
         l.refBand = 50;
-        if (id == 0) l.name = "L0 default";
+        if (id == 0) l.name = "L0 no lever (design as first written)";
         else if (id == 1) (l.name, l.legBand) = ("L1 legBand 50", 50);
         else if (id == 2) (l.name, l.legBand) = ("L2 legBand 25", 25);
         else if (id == 3) (l.name, l.mode) = ("L3 limits from TWAP only", 1);
@@ -1838,12 +1999,14 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         else if (id == 15) (l.name, l.legBand, l.callBps) = ("L15 legBand 35 + cap 10 bps", 35, 10);
         else if (id == 16) (l.name, l.legBand, l.callBps) = ("L16 legBand 30 + cap 10 bps", 30, 10);
         else if (id == 17) (l.name, l.legBand, l.callBps) = ("L17 legBand 30 + cap 5 bps", 30, 5);
-        else if (id == 18) (l.name, l.refBand, l.callBps) = ("L18 refBand 90 + cap 5 bps", 90, 5);
+        else if (id == 18) (l.name, l.refBand, l.callBps) = ("L18 refBand 90 + cap 5 bps (the defaults)", 90, 5);
         else if (id == 19) (l.name, l.refBand, l.callBps) = ("L19 refBand 100 + cap 5 bps", 100, 5);
         else (l.name, l.refBand, l.callBps, l.legBand) = ("L20 refBand 90 + cap 5 bps + legBand 50", 90, 5, 50);
     }
 
-    /// @dev Put lever `l` in force as ADMIN (the timelock holds ADMIN_ROLE; pranked so no time passes).
+    /// @dev Put lever `l` in force as ADMIN (the timelock holds ADMIN_ROLE; pranked so no time passes). Every row
+    ///      sets its own bands and levers exactly, whatever the queue's defaults are: since 2026-11-12 `initialize`
+    ///      turns the 5 bps cap on and the harness band is 90, so the all-zero row L0 must switch them off itself.
     function _applyLever(LeverSetting memory l) internal {
         FlowParams memory p = queue.flowParams();
         if (p.legBandBps != l.legBand || p.refBandBps != l.refBand) {
@@ -1852,14 +2015,13 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             vm.prank(address(timelock));
             queue.setFlowParams(p);
         }
-        if (l.mode != 0 || l.callBps != 0) {
-            vm.prank(address(timelock));
-            queue.setFlowLevers(FlowLevers({basketCallBps: l.callBps, legPriceMode: l.mode}));
-        }
+        vm.prank(address(timelock));
+        queue.setFlowLevers(FlowLevers({basketCallBps: l.callBps, legPriceMode: l.mode}));
         FlowLevers memory now_ = queue.flowLevers();
         assertEq(now_.basketCallBps, l.callBps, "lever: cap in force");
         assertEq(now_.legPriceMode, l.mode, "lever: price mode in force");
         assertEq(queue.flowParams().legBandBps, l.legBand, "lever: legBand in force");
+        assertEq(queue.flowParams().refBandBps, l.refBand, "lever: refBand in force");
     }
 
     // ─── A7 under each lever ────────────────────────────────────────────────────────────────────────────
@@ -1996,8 +2158,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
 
     /// @dev A10 under lever `id` (no arbitrage, as `test_A10_slowRampInsideBand_noArbitrage`): the attacker ramps
     ///      wETH by `rate` every 5 minutes over the last hour of the victim's window (12 pushes), holds the ramp
-    ///      while the keeper settles once per block until the victim's request closes, then sells back. Rates 1 to 8
-    ///      bps (spot +12 to +96 bps at the window end); the honest run (no ramp) first.
+    ///      while the keeper settles once per block until the victim's request closes, then sells back. Rates 1 to 14
+    ///      bps (spot +12 to +168 bps at the window end: 10 to 14 reach the refBandBps 90 and 100 rows); the honest
+    ///      run (no ramp) first.
     function _leverA10(uint256 id) internal {
         LeverSetting memory l = _lever(id);
         _world();
@@ -2014,7 +2177,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         _leverLog(tag, h);
         vm.revertToState(snap);
 
-        int256[7] memory rates = [int256(1), int256(2), int256(3), int256(4), int256(5), int256(6), int256(8)];
+        // 10 to 14 reach the wider band of 90 to 100 (median about +60 to +84; spot +120 to +168, past legBandBps).
+        int256[10] memory rates =
+            [int256(1), int256(2), int256(3), int256(4), int256(5), int256(6), int256(8), int256(10), int256(12), int256(14)];
         LeverRun memory best;
         best.net = type(int256).min;
         for (uint256 k; k < rates.length; ++k) {

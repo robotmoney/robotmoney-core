@@ -33,12 +33,17 @@ import {
     MAX_STEP_COST_BPS,
     MAX_TOLERANCE_BPS,
     MAX_KEEPER_GRACE,
-    MAX_OVERRUN
+    MAX_OVERRUN,
+    DEFAULT_STEP_DEPTH_BPS,
+    MAX_STEP_DEPTH_BPS,
+    DEFAULT_SETTLE_WINDOW
 } from "./FundTypes.sol";
 import {PlanMath} from "./PlanMath.sol";
 import {IRobotMoneyFund} from "./interfaces/IRobotMoneyFund.sol";
 import {IRebalancer} from "./interfaces/IRebalancer.sol";
 import {StepFeedLib} from "./lib/StepFeedLib.sol";
+import {FundValuationLib} from "./lib/FundValuationLib.sol";
+import {IFlowQueue} from "./interfaces/IFlowQueue.sol";
 
 /// @title Rebalancer
 /// @notice Step selection for the one vault (§5). It holds no funds, grants no token approvals and
@@ -107,6 +112,8 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
     /// @dev Asset index → timestamp until which the asset is excluded from leg picking after a
     ///      failed `executeStep` (§5.8 venue freeze).
     mapping(uint256 index => uint64) private _backoffUntil;
+    /// @dev Depth cap on basket legs, in bps of the pool's time-weighted USDC depth (`assetStepCap`).
+    uint16 private _stepDepthBps;
 
     // ─── Internal decision record ────────────────────────────────────────────
 
@@ -159,6 +166,8 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
         _grantRole(ADMIN_ROLE, admin);
         if (keeper != address(0)) _grantRole(KEEPER_ROLE, keeper);
         _setStepParams(params);
+        _stepDepthBps = DEFAULT_STEP_DEPTH_BPS;
+        emit StepDepthBpsSet(DEFAULT_STEP_DEPTH_BPS);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -313,6 +322,16 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
             d.reason = SkipReason.PlanNotOpen;
             return d;
         }
+        (uint256 nav, uint256 idle, uint256[] memory values) = f.portfolioValues();
+
+        // §5.5: after the path ends, stop once every holding sits inside toleranceBps of its end. Checked before
+        // the expiry and the cooldown, so a plan that converged on its last step inside `maxOverrun` concludes
+        // Converged even when the next call lands after `endTime + maxOverrun` (review R-F5).
+        if (block.timestamp >= p.endTime && PlanMath.withinTolerance(values, idle, nav, p.endBps, sp.toleranceBps)) {
+            d.reason = SkipReason.Concluded;
+            d.conclude = PlanStatus.Converged;
+            return d;
+        }
         if (block.timestamp > uint256(p.endTime) + sp.maxOverrun) {
             d.reason = SkipReason.Concluded;
             d.conclude = PlanStatus.Expired;
@@ -320,20 +339,13 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
         }
 
         // 1. Cooldown (RB-5): at least one full TWAP window since the last executed step.
-        uint256 readyAt = uint256(f.lastStepAt()) + _effectiveInterval(f);
-        if (block.timestamp < readyAt) {
-            d.reason = SkipReason.Cooldown;
-            d.detail = readyAt - block.timestamp;
-            return d;
-        }
-
-        (uint256 nav, uint256 idle, uint256[] memory values) = f.portfolioValues();
-
-        // §5.5: after the path ends, stop once every holding sits inside toleranceBps of its end.
-        if (block.timestamp >= p.endTime && PlanMath.withinTolerance(values, idle, nav, p.endBps, sp.toleranceBps)) {
-            d.reason = SkipReason.Concluded;
-            d.conclude = PlanStatus.Converged;
-            return d;
+        {
+            uint256 readyAt = uint256(f.lastStepAt()) + _effectiveInterval(f);
+            if (block.timestamp < readyAt) {
+                d.reason = SkipReason.Cooldown;
+                d.detail = readyAt - block.timestamp;
+                return d;
+            }
         }
 
         // Step 3e (§5.10, RB-19): checks 2 and 4 of §5.9.3 before any trade, the same code the fund runs inside
@@ -350,17 +362,23 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
 
         // 2. Eligible mask: active, tradeable (maxStepUsdc > 0), not backed off, passes ORA-4.
         //    An ORA-4 failure is masked out, so it is never a leg (RB-5).
-        (bool[] memory eligible, uint256 oraFail, uint256 backoffLeft) = _eligible(f, cfgs);
+        //    A basket asset whose step cap (`_stepCap`, the depth cap included) is below `minStepUsdc` is masked
+        //    too, so it never becomes a leg that can only skip `BelowMinStep` while the rest of the plan waits
+        //    behind it (review R-F1).
+        (bool[] memory eligible, Mask memory m) = _eligible(f, cfgs, sp.minStepUsdc);
 
         // 3. Legs: most over vs most under pathTarget(now), at TWAP (RB-7 sizing below).
         PlanMath.Legs memory legs = PlanMath.pickLegs(values, idle, nav, p, block.timestamp, eligible);
         if (legs.over == 0 || legs.under == 0) {
-            if (oraFail != IDLE_INDEX) {
+            if (m.oraFail != IDLE_INDEX) {
                 d.reason = SkipReason.MarketDeviation;
-                d.detail = oraFail;
-            } else if (backoffLeft != 0) {
+                d.detail = m.oraFail;
+            } else if (m.depthCapped != IDLE_INDEX) {
+                d.reason = SkipReason.DepthCap;
+                d.detail = m.depthCapped;
+            } else if (m.backoffLeft != 0) {
                 d.reason = SkipReason.Cooldown;
-                d.detail = backoffLeft;
+                d.detail = m.backoffLeft;
             } else {
                 d.reason = SkipReason.NothingToTrade;
             }
@@ -369,10 +387,10 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
         d.sellIndex = legs.sellIndex;
         d.buyIndex = legs.buyIndex;
 
-        // 4. Size: min(over, under, maxStepUsdc of each non-idle leg). Never past path (RB-7).
-        uint256 notional = Math.min(legs.over, legs.under);
-        if (legs.sellIndex != IDLE_INDEX) notional = Math.min(notional, _assetStepParams[legs.sellIndex].maxStepUsdc);
-        if (legs.buyIndex != IDLE_INDEX) notional = Math.min(notional, _assetStepParams[legs.buyIndex].maxStepUsdc);
+        // 4. Size: min(over, under, the cap of each non-idle leg). Never past path (RB-7). A basket leg's cap is
+        //    also `stepDepthBps` of its pool's time-weighted USDC depth (`_stepCap`): a step is small against the
+        //    pool, so a keeper's sandwich of it gains little (A20), as the per-call cap does for a settlement.
+        uint256 notional = _size(f, cfgs, legs);
         d.notional = notional;
         if (notional < sp.minStepUsdc) {
             d.reason = SkipReason.BelowMinStep;
@@ -380,16 +398,24 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
         }
     }
 
-    /// @dev §5.3 step 2. Returns the candidate mask, the first asset that failed ORA-4 (IDLE_INDEX
-    ///      if none) and the longest remaining backoff among masked assets (0 if none).
-    function _eligible(IRobotMoneyFund f, AssetConfig[] memory cfgs)
+    /// @dev Why assets were masked: the first ORA-4 failure, the first asset whose step cap is below
+    ///      `minStepUsdc` (IDLE_INDEX if none), and the longest remaining backoff (0 if none).
+    struct Mask {
+        uint256 oraFail;
+        uint256 depthCapped;
+        uint256 backoffLeft;
+    }
+
+    /// @dev §5.3 step 2. Returns the candidate mask and why assets were masked (`Mask`).
+    function _eligible(IRobotMoneyFund f, AssetConfig[] memory cfgs, uint256 minStep)
         internal
         view
-        returns (bool[] memory eligible, uint256 oraFail, uint256 backoffLeft)
+        returns (bool[] memory eligible, Mask memory m)
     {
         uint256 n = cfgs.length;
         eligible = new bool[](n);
-        oraFail = IDLE_INDEX;
+        m.oraFail = IDLE_INDEX;
+        m.depthCapped = IDLE_INDEX;
         for (uint256 i; i < n; ++i) {
             if (!cfgs[i].active || _assetStepParams[i].maxStepUsdc == 0) continue;
             // Inclusive end: a keeper stepping on the cooldown cadence lands exactly on `until`, and must
@@ -397,16 +423,49 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
             uint256 until = _backoffUntil[i];
             if (until >= block.timestamp) {
                 uint256 left = until + 1 - block.timestamp;
-                if (left > backoffLeft) backoffLeft = left;
+                if (left > m.backoffLeft) m.backoffLeft = left;
                 continue;
             }
             (bool ok,) = f.marketCheck(i);
             if (!ok) {
-                if (oraFail == IDLE_INDEX) oraFail = i;
+                if (m.oraFail == IDLE_INDEX) m.oraFail = i;
+                continue;
+            }
+            if (cfgs[i].kind == AssetKind.Basket && _stepCap(f, cfgs, i) < minStep) {
+                if (m.depthCapped == IDLE_INDEX) m.depthCapped = i;
                 continue;
             }
             eligible[i] = true;
         }
+    }
+
+    /// @dev §5.3 step 4: `min(over, under, _stepCap(sell), _stepCap(buy))`, idle legs uncapped.
+    function _size(IRobotMoneyFund f, AssetConfig[] memory cfgs, PlanMath.Legs memory legs)
+        internal
+        view
+        returns (uint256 notional)
+    {
+        notional = Math.min(legs.over, legs.under);
+        if (legs.sellIndex != IDLE_INDEX) notional = Math.min(notional, _stepCap(f, cfgs, legs.sellIndex));
+        if (legs.buyIndex != IDLE_INDEX) notional = Math.min(notional, _stepCap(f, cfgs, legs.buyIndex));
+    }
+
+    /// @dev A leg's notional cap: `maxStepUsdc`, and for a basket asset also `_stepDepthBps` of its pool's USDC
+    ///      depth over one settlement window (the bound queue's `settleWindow`, else `DEFAULT_SETTLE_WINDOW`), read
+    ///      from time-weighted in-range liquidity (`FundValuationLib.poolUsdcDepth`), so liquidity added for one
+    ///      transaction does not raise it. A depth that cannot be read gives 0 (fail closed: the step skips
+    ///      `BelowMinStep`).
+    function _stepCap(IRobotMoneyFund f, AssetConfig[] memory cfgs, uint256 i) internal view returns (uint256 cap) {
+        cap = _assetStepParams[i].maxStepUsdc;
+        if (cap == 0 || cfgs[i].kind != AssetKind.Basket) return cap;
+        address q = f.flowQueue();
+        uint32 window = q == address(0) ? DEFAULT_SETTLE_WINDOW : IFlowQueue(q).flowParams().settleWindow;
+        (bool ok, uint256 depth) = FundValuationLib.poolUsdcDepth(cfgs[i].pool, IERC4626(address(f)).asset(), window);
+        // A proxy upgraded from an implementation without this slot reads 0: use the default, so the cap can
+        // never be off or zero by omission (review R-F4). The setter refuses 0.
+        uint256 bps = _stepDepthBps == 0 ? DEFAULT_STEP_DEPTH_BPS : _stepDepthBps;
+        uint256 depthCap = ok ? Math.mulDiv(depth, bps, BPS) : 0;
+        if (depthCap < cap) cap = depthCap;
     }
 
     /// @dev `max(stepInterval, fund.maxTwapWindow())` (§5.3 step 1, §5.6).
@@ -582,6 +641,25 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
         }
         _assetStepParams[index] = params;
         emit AssetStepParamsSet(index, params);
+    }
+
+    /// @inheritdoc IRebalancer
+    function setStepDepthBps(uint16 bps) external onlyRole(ADMIN_ROLE) {
+        if (bps == 0 || bps > MAX_STEP_DEPTH_BPS) revert StepParamOutOfBounds();
+        _stepDepthBps = bps;
+        emit StepDepthBpsSet(bps);
+    }
+
+    /// @inheritdoc IRebalancer
+    function stepDepthBps() external view returns (uint16) {
+        return _stepDepthBps == 0 ? DEFAULT_STEP_DEPTH_BPS : _stepDepthBps;
+    }
+
+    /// @inheritdoc IRebalancer
+    function assetStepCap(uint256 index) external view returns (uint256) {
+        IRobotMoneyFund f = _fund;
+        if (index >= f.assetCount()) revert InvalidAssetIndex(index);
+        return _stepCap(f, f.assetConfigs(), index);
     }
 
     /// @inheritdoc IRebalancer
