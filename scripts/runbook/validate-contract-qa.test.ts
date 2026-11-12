@@ -4,7 +4,7 @@ import { clearVectorProblems } from "./validate-contract-qa.ts";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { QA_DIR, ROOT, applicableSteps, loadModel, localForkProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, gateAbsentPaths, mainOutProblems, rebalanceRoundProblems, unwindGuardProblems, upgradeBuildGateProblems, validateAll } from "./validate-contract-qa.ts";
+import { FUND_MANIFEST_FILES, FUND_SHEET, FUND_VAULT_MANIFESTS, QA_DIR, ROOT, applicableSteps, commandProblems, isFundSheet, loadModel, parseRelease, parseSteps, localForkProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, gateAbsentPaths, mainOutProblems, rebalanceRoundProblems, unwindGuardProblems, upgradeBuildGateProblems, validateAll } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
 const RELEASE = "releases/v0.5.0.yaml";
@@ -48,7 +48,11 @@ test("the template can change while every committed release is pinned; only the 
   const pinned = [...validateAll(ROOT, model).releases.values()].filter((r) => r.templateSha !== undefined).map((r) => r.release);
   expect(pinned.length).toBeGreaterThan(0);
   for (const r of pinned) expect(p.filter((x) => x.includes(`runbook ${r}`) || x.includes(`releases/${r}.yaml`))).toEqual([]);
-  expect(p.every((x) => x.includes("v0.6.0"))).toBe(true);
+  // every problem names a release being prepared (unpinned): Deploy 4's v0.7.0-onevault copies the current template, so the edit is refused there
+  const unpinnedReleases = [...validateAll(ROOT, model).releases.values()].filter((r) => r.templateSha === undefined).map((r) => r.release);
+  expect(unpinnedReleases).toContain("v0.7.0-onevault");
+  expect(p.length).toBeGreaterThan(0);
+  expect(p.every((x) => unpinnedReleases.some((r) => x.includes(`runbook ${r}`) || x.includes(`releases/${r}.yaml`)))).toBe(true);
 });
 
 test("a pinned release that edits a template step fails against the template at its pin", () => {
@@ -583,4 +587,206 @@ test("the rounds before the rebalance run before the receipt is recorded, check 
   expect([...pre].filter((w) => post.has(w))).toEqual([]);
   // the Twin's receipt vectors weight every vault and differ from the default vector the sheet and the retire set, so the Twin run proves the split changed with three legs
   for (const id of ["P5.00-receipt-payload", "P8.19-v050-receipt-payload"]) expect(r.steps.find((s) => s.id === id)!.cmds[0]).toContain("USDC:8000,PROTO:1000,RWA:1000");
+});
+
+// ─── Deploy 4: the fund flow (releases/v0.7.0-onevault.yaml) ────────────────────────────────────────────────────
+const FUND_RELEASE = "releases/v0.7.0-onevault.yaml";
+const fundRelease = () => validateAll(ROOT, model).releases.get("v0.7.0-onevault")!;
+
+test("Deploy 4: the v0.7.0-onevault release keeps every template step and runs only the fund flow: no template step applies on any target, and production runs nothing", () => {
+  const r = fundRelease();
+  const t = validateAll(ROOT, model).template;
+  expect(r.flows).toEqual({ twin: ["fund"], rehearsal: ["fund"], production: ["fund"] });
+  const templateIds = new Set(t.steps.map((s) => s.id));
+  expect(r.steps.filter((s) => templateIds.has(s.id)).map((s) => s.id)).toEqual(t.steps.map((s) => s.id));
+  for (const target of ["twin", "rehearsal"]) {
+    const ids = applicableSteps(r, target).map((s) => s.id);
+    expect(ids.length, target).toBeGreaterThan(30);
+    expect(ids.filter((id) => templateIds.has(id)), target).toEqual([]);
+  }
+  expect(applicableSteps(r, "production")).toEqual([]);
+  expect(runnableProblems(r, "production").join("\n")).toContain("has no step that runs on production");
+  expect(runnableProblems(r, "rehearsal")).toEqual([]);
+  // every added step is of the fund flow, carries the release's added and never runs in production
+  for (const s of r.steps.filter((x) => !templateIds.has(x.id))) {
+    expect(s.added, s.id).toBe("v0.7.0-onevault");
+    expect(s.flow, s.id).toBe("fund");
+    expect(["twin", "rehearsal"].includes(s.onlyFor as string) || JSON.stringify(s.onlyFor) === JSON.stringify(["twin", "rehearsal"]), s.id).toBe(true);
+  }
+  // a mainnet run sends only what QA sent
+  for (const s of applicableSteps(r, "rehearsal").filter(sends)) expect(applicableSteps(r, "twin").map((x) => x.id), s.id).toContain(s.id);
+  expect(qaSupersetProblems(r)).toEqual([]);
+});
+
+test("Deploy 4: the fund steps publish and verify with --system fund, never run a vaults-only verb, and govern only through the Safe tool on the fund-system timelock", () => {
+  const r = fundRelease();
+  const fund = r.steps.filter((s) => s.flow === "fund");
+  const joined = fund.flatMap((s) => s.cmds.map((c) => ({ id: s.id, j: c.join(" ") })));
+  for (const { id, j } of joined.filter((x) => /publish-contracts\/src\/cli\.ts (publish|verify)\b/.test(x.j) || x.j.includes("--stage plan"))) expect(j, id).toContain("--system fund");
+  expect(joined.filter((x) => /publish-contracts\/src\/cli\.ts (govern|pause-all|record-receipt|redeploy-vault|deploy-implementation)\b/.test(x.j))).toEqual([]);
+  const proposals = joined.filter((x) => x.j.includes("publish-contracts/src/safe/cli.ts propose"));
+  expect(proposals.length).toBe(8);
+  for (const { id, j } of proposals) expect(j, id).toContain("--timelock {m:fund-timelock.timelock}");
+  const step = (id: string) => r.steps.find((s) => s.id === id)!;
+  expect(step("P1.61-fund-publish").irreversible).toBe(true);
+  expect(step("P1.61-fund-publish").notBefore).toEqual({ afterStep: "P1.60-fund-record-go", hours: 0 });
+  expect(step("P6.62-fund-claim-deposit").notBefore).toEqual({ afterStep: "P6.61-fund-settle-deposits", hours: 24 });
+  for (const id of ["P3.62-fund-register-submitter-execute", "P6.74-fund-apply-receipt-execute", "P9.62-fund-unpause-execute", "P9.71-fund-upgrade-execute"]) expect(step(id).notBefore?.hours, id).toBe("timelockDelay");
+  expect(step("P0.67-fund-sheet").cmds[0]).toEqual(["cp", FUND_SHEET, "{sheet}"]);
+  expect(step("P1.60-fund-record-go").cmds[0]!.join(" ")).toContain("{sheet:KEEPER_ADDRESS}");
+  // the open decisions of Deploy 4 and the owner's exception
+  expect(r.decisions.find((d) => d.id === "D4-1")).toMatchObject({ status: "decided", decidedOn: "2026-11-12", ref: "owner instruction in the Deploy 4 planning session, 2026-11-12" });
+  for (const id of ["D4-2", "D4-3", "D4-4", "D4-5"]) expect(r.decisions.find((d) => d.id === id)?.status, id).toBe("open");
+  expect(r.productionReady).toBe(false);
+});
+
+test("Deploy 4: a fund flow step is accepted, an unknown flow is refused with fund named, and a fund release may not run the new flow without the template's own rules", () => {
+  expect(problemsWith("releases/v0.6.0.yaml", (t) => t.replace('    flow: "upgrade"\n', '    flow: "sideways"\n')).join("\n")).toContain("flow is new | upgrade | fund");
+  expect(problemsWith(FUND_RELEASE, (t) => t.replace("  production: [\"fund\"]\n", "  production: [\"fund\", \"rollback\"]\n")).join("\n")).toContain("flows maps a target");
+  // without production: ["fund"], production would default to the new flow and send the template's transactions that the Twin (fund only) never sent
+  const noProd = problemsWith(FUND_RELEASE, (t) => t.replace("  production: [\"fund\"]\n", ""));
+  expect(noProd.join("\n")).toContain("P1.02-publish sends on production but does not run on twin");
+});
+
+test("Deploy 4: vaults: fund is accepted for a release that runs the fund flow and refused for any other", () => {
+  expect(fundRelease().vaults).toEqual(["fund"]);
+  expect(FUND_VAULT_MANIFESTS).toEqual(["fund"]);
+  const v060 = readFileSync(join(ROOT, QA_DIR, "releases/v0.6.0.yaml"), "utf8");
+  expect(() => parseRelease(v060.replace('vaults: ["vault", "protocol-asset-vault", "rwa-basket-vault"]', 'vaults: ["vault", "fund"]'), "v0.6.0")).toThrow("fund only for a release whose flows run the fund flow");
+  const p = problemsWith("releases/v0.6.0.yaml", (t) => t.replace('vaults: ["vault", "protocol-asset-vault", "rwa-basket-vault"]', 'vaults: ["fund"]'));
+  expect(p.join("\n")).toContain("runbook v0.6.0: vaults is a list of distinct vault manifest names");
+  // the fund release itself still refuses an unknown name and a repeated one
+  expect(problemsWith(FUND_RELEASE, (t) => t.replace('vaults: ["fund"]', 'vaults: ["fund", "router"]')).join("\n")).toContain("vaults is a list of distinct vault manifest names");
+  expect(problemsWith(FUND_RELEASE, (t) => t.replace('vaults: ["fund"]', 'vaults: ["fund", "fund"]')).join("\n")).toContain("vaults is a list of distinct vault manifest names");
+});
+
+test("Deploy 4: a fund step reads only the fund sheet's names and the fund system's manifests; a vaults step never reads them", () => {
+  expect(model.fundSheetNames.has("FUND_TVL_CAP")).toBe(true);
+  expect(model.fundSheetNames.has("KEEPER_ADDRESS")).toBe(true);
+  expect(model.sheetNames.has("FUND_TVL_CAP")).toBe(false);
+  expect([...model.fundManifestFiles].sort()).toEqual([...FUND_MANIFEST_FILES].sort());
+  const at = (flow: string | undefined, read: string) => commandProblems([{ id: "P6.99-x", standing: ["4.4"], description: "d", host: "control", phase: 6, cmds: [["bash", "-c", `echo ${read}`]], expectExit: 0, receipts: [], irreversible: false, ...(flow ? { flow } : {}) }] as never, model, null);
+  expect(at("fund", "{sheet:FUND_TVL_CAP} {sheet:KEEPER_ADDRESS} {m:fund.fund} {m:fund-timelock.timelock} {m:receipt.consensus_receipt} {m:safe.safe}")).toEqual([]);
+  expect(at("fund", "{sheet:VAULT_USDC_TVL_CAP}")).toEqual(["P6.99-x: unknown placeholder {sheet:VAULT_USDC_TVL_CAP}"]);
+  expect(at("fund", "{m:router.router}")).toEqual(["P6.99-x: unknown placeholder {m:router.router}"]);
+  expect(at(undefined, "{sheet:FUND_TVL_CAP}")).toEqual(["P6.99-x: unknown placeholder {sheet:FUND_TVL_CAP}"]);
+  expect(at("upgrade", "{m:queue.queue}")).toEqual(["P6.99-x: unknown placeholder {m:queue.queue}"]);
+  expect(at(undefined, "{sheet:ADMIN_ADDRESS} {m:vault.vault}")).toEqual([]);
+  // the committed fund release with a vaults name planted in a fund step is refused
+  const p = problemsWith(FUND_RELEASE, (t) => t.replace('"--sender", "{sheet:ADMIN_ADDRESS},{sheet:EMERGENCY_ADDRESS},{sheet:KEEPER_ADDRESS}"', '"--sender", "{sheet:ADMIN_ADDRESS},{sheet:SHARE_RECEIVER_ADDRESS},{sheet:KEEPER_ADDRESS}"'));
+  expect(p.join("\n")).toContain("P1.60-fund-record-go: unknown placeholder {sheet:SHARE_RECEIVER_ADDRESS}");
+});
+
+test("Deploy 4: a run sheet copied whole with cp FILE {sheet} counts as written, and a read before it is still refused", () => {
+  const st = (id: string, cmd: string[]) => ({ id, standing: ["4.3"], description: "d", host: "control", phase: 0, cmds: [cmd], expectExit: 0, receipts: [], irreversible: false });
+  const copy = st("P0.67-fund-sheet", ["cp", FUND_SHEET, "{sheet}"]);
+  const read = st("P0.70-read", ["bash", "-c", "echo {sheet:TIMELOCK_MIN_DELAY}"]);
+  const errs = (steps: unknown[]) => { const e: string[] = []; parseSteps(steps, "t", e); return e; };
+  expect(errs([copy, read])).toEqual([]);
+  expect(errs([read, copy])).toEqual(["t P0.70-read: {sheet:TIMELOCK_MIN_DELAY} is read before any step writes the run sheet (--out {sheet})"]);
+  // a cp that does not end at {sheet}, or copies more than one file, writes no run sheet
+  expect(errs([st("P0.67-x", ["cp", "{sheet}", "/elsewhere"]), read])).toHaveLength(1);
+  expect(errs([st("P0.67-x", ["cp", "a", "b", "{sheet}"]), read])).toHaveLength(1);
+  // the committed fund release copies the sheet before its first fund read
+  const r = fundRelease();
+  expect(r.steps.findIndex((s) => s.id === "P0.67-fund-sheet")).toBeLessThan(r.steps.findIndex((s) => s.id === "P0.70-fund-preflight-guards"));
+});
+
+test("Deploy 4: the Safe tool's action flags are read from its header (the usage line `safe-cli import` no longer cuts it), and a flag it does not have is refused", () => {
+  const flags = model.tools.get("publish-contracts/src/safe/cli.ts")!.flags;
+  for (const f of ["target", "data", "salt", "targets", "datas", "values", "bundle", "signer", "timelock", "action", "safe", "out"]) expect(flags.has(f), f).toBe(true);
+  const p = problemsWith(FUND_RELEASE, (t) => t.replace('"--action", "schedule", "--target", "{state:target-apply-receipt}"', '"--action", "schedule", "--description", "x", "--target", "{state:target-apply-receipt}"'));
+  expect(p.join("\n")).toContain("P6.73-fund-apply-receipt-schedule: --description is no publish-contracts/src/safe/cli.ts flag");
+});
+
+test("Deploy 4: the unwind guard rule follows where the govern step runs: the fund release never runs P3.01, a release that runs it still needs both guards", () => {
+  const r = fundRelease();
+  expect(r.steps.some((s) => s.id === "P3.01-govern-schedule")).toBe(true);
+  expect(unwindGuardProblems(r)).toEqual([]);
+  // the same steps with the new flow run on the Twin: P3.01 runs, so the PROTO and RWA guards are required
+  expect(unwindGuardProblems({ ...r, flows: { ...r.flows, twin: ["fund", "new"] } }).join("\n")).toContain("vault (PROTO) has no set-unwind-guard step");
+  // a release with no flows runs the new flow everywhere: unchanged
+  expect(unwindGuardProblems({ release: "vX", steps: r.steps }).length).toBe(2);
+});
+
+test("Deploy 4: the rebalance rule iterates the fund flow; the fund's apply is a Safe call, not --row apply-receipt, so it brackets nothing there, and every fund exercises label sends its call", () => {
+  const r = fundRelease();
+  expect(rebalanceRoundProblems(r.steps, "v0.7.0-onevault")).toEqual([]);
+  const labelled = r.steps.filter((s) => s.flow === "fund" && s.exercises !== undefined).map((s) => [s.id, s.exercises]);
+  expect(labelled).toEqual([["P6.62-fund-claim-deposit", "vault-deposit"], ["P6.65-fund-claim-redeem", "redeem"], ["P6.68-fund-redeem-in-kind", "redeem"]]);
+  expect(r.steps.some((s) => s.flow === "fund" && s.cmds.some((c) => c.join(" ").includes("--row apply-receipt")))).toBe(false);
+  // a fund-flow step that did run --row apply-receipt would be bracketed like any other flow
+  const fundApply = { ...APPLY, flow: "fund" };
+  expect(rebalanceRoundProblems([fundApply] as never, "t").join("\n")).toContain("the fund flow on twin has no vault-deposit step before P5.03-apply-receipt");
+  // a fund label whose step does not send its call is refused
+  const p = problemsWith(FUND_RELEASE, (t) => t.replace(stepBlock(t, "P6.66-fund-request-cancel"), (b) => b.replace('    added: "v0.7.0-onevault"\n', '    exercises: "vault-deposit"\n    added: "v0.7.0-onevault"\n')));
+  expect(p.join("\n")).toContain("P6.66-fund-request-cancel: exercises vault-deposit, but no command sends that call through scripts/runbook/cast-send.sh");
+});
+
+// The fund sheet (--check-sheet): the shared rules and the fund's own.
+const fundSheet = (edit: (t: string) => string = (t) => t) => parseSheetText(edit(readFileSync(join(ROOT, FUND_SHEET), "utf8").replace(/^KEEPER_ADDRESS=$/m, "KEEPER_ADDRESS=0x1111111111111111111111111111111111111111")));
+const line = (name: string, value: string) => (t: string) => t.replace(new RegExp(`^${name}=.*$`, "m"), `${name}=${value}`);
+
+test("Deploy 4: the committed fund sheet with the keeper filled passes on the rehearsal target, and a blank keeper is refused", () => {
+  expect(isFundSheet(fundSheet())).toBe(true);
+  expect(sheetProblems(fundSheet(), "rehearsal", 3)).toEqual([]);
+  const committed = parseSheetText(readFileSync(join(ROOT, FUND_SHEET), "utf8"));
+  expect(sheetProblems(committed, "rehearsal", 3)).toEqual(["sheet: KEEPER_ADDRESS is missing"]);
+});
+
+test("Deploy 4: each fund sheet rule refuses its own violation", () => {
+  const p = (edit: (t: string) => string, target = "rehearsal", signers: number | undefined = 3) => sheetProblems(fundSheet(edit), target, signers);
+  expect(p(line("FUND_TVL_CAP", "1000000001"))).toContain("sheet: FUND_TVL_CAP 1000000001 is above 1000 USDC; a rehearsal is a contained test");
+  expect(p(line("FUND_TVL_CAP", "1000000001"), "production", 3).join("\n")).not.toContain("FUND_TVL_CAP 1000000001 is above");
+  expect(p(line("FUND_PER_DEPOSIT_CAP", "1000000001"))).toContain("sheet: FUND_PER_DEPOSIT_CAP is above FUND_TVL_CAP");
+  expect(p(line("FUND_PER_DEPOSIT_CAP", "999999"))).toContain("sheet: FUND_PER_DEPOSIT_CAP 999999 is below the 1 USDC test request (1000000)");
+  expect(p(line("FUND_MIN_SEED_USDC", "1000001"))).toContain("sheet: FUND_MIN_SEED_USDC 1000001 is above SEED_DEPOSIT_USDC 1000000: the seed stage would refuse the seed");
+  expect(p((t) => line("FLOW_MIN_REQUEST_USDC", "200000000")(t))).toContain("sheet: FLOW_MIN_REQUEST_USDC 200000000 is above FUND_PER_DEPOSIT_CAP 100000000: no request could be made");
+  expect(p(line("KEEPER_ADDRESS", ""))).toContain("sheet: KEEPER_ADDRESS is missing");
+  expect(p(line("KEEPER_ADDRESS", "0x0000000000000000000000000000000000000003"))).toContain("sheet: KEEPER_ADDRESS is still the example placeholder 0x0000000000000000000000000000000000000003; type the real public address");
+  expect(p(line("KEEPER_ADDRESS", "keeper.eth"))).toContain("sheet: KEEPER_ADDRESS 'keeper.eth' is not an address");
+  expect(p(line("FUND_TVL_CAP", "1e9"))).toContain("sheet: FUND_TVL_CAP is '1e9', not a non-negative integer");
+  for (const n of ["FUND_PER_DEPOSIT_CAP", "FUND_MIN_SEED_USDC", "FLOW_MIN_REQUEST_USDC"]) expect(p((t) => t.replace(new RegExp(`^${n}=.*\\n`, "m"), "")), n).toContain(`sheet: ${n} is missing`);
+  for (const n of ["VAULT_USDC_TVL_CAP=1", "ROUTER_WEIGHTS=USDC:10000", "SHARE_RECEIVER_ADDRESS=0x1111111111111111111111111111111111111111", "GOVERN_UNPAUSE_VAULTS=1", "GATEWAY_ADMIN_ADDRESS=0x1"]) expect(p((t) => `${t}\n${n}\n`).join("\n"), n).toContain(`sheet: ${n.split("=")[0]} is refused in a fund sheet`);
+  // a fund sheet needs no vault cap
+  expect(p((t) => t).join("\n")).not.toContain("VAULT_");
+});
+
+test("Deploy 4: a fund sheet keeps every shared rule: chain, kind, delay band, the 1 USDC seed, the Safe owners and threshold, placeholders, the salt and the owner signer count", () => {
+  const p = (edit: (t: string) => string, target = "rehearsal", signers: number | null = 3) => sheetProblems(fundSheet(edit), target, signers ?? undefined).join("\n");
+  expect(p(line("CHAIN_ID", "1"))).toContain("sheet: CHAIN_ID is 1, rehearsal runs on 8453");
+  expect(p(line("DEPLOYMENT_KIND", "production"))).toContain("sheet: DEPLOYMENT_KIND is 'production', rehearsal needs 'rehearsal'");
+  expect(p(line("TIMELOCK_MIN_DELAY", "60"))).toContain("sheet: TIMELOCK_MIN_DELAY 60 is outside 900..172799 for rehearsal");
+  expect(p(line("SEED_DEPOSIT_USDC", "2000000"))).toContain("sheet: SEED_DEPOSIT_USDC is 2000000; the standing rule is 1 USDC (1000000)");
+  expect(p(line("SAFE_OWNERS", "0xa5dAD878b268bCf5c31E61b3bd665AEF61feA5CE,0x5c6b2a1fa3A59aCc9C943Cc93FAD204fBfB0935a"), "rehearsal", 2)).toContain("sheet: SAFE_OWNERS lists 2 owners, at least 3 are needed");
+  expect(p(line("SAFE_THRESHOLD", "3"))).toContain("sheet: SAFE_THRESHOLD 3 is not 2 to 2");
+  expect(p(line("EMERGENCY_ADDRESS", "0x0000000000000000000000000000000000000004"))).toContain("sheet: EMERGENCY_ADDRESS is still the example placeholder");
+  expect(p((t) => t.replace(/^SAFE_SALT_NONCE=.*\n/m, ""))).toContain("sheet: a rehearsal needs an explicit SAFE_SALT_NONCE no earlier run used");
+  expect(p((t) => t, "rehearsal", null)).toContain("no --owner-signers count");
+  expect(p((t) => t, "rehearsal", 2)).toContain("2 owner signer specs for 3 sheet owners");
+  expect(p(line("UPGRADE_MODE", "sometimes"))).toContain("sheet: UPGRADE_MODE is 'sometimes', not upgradeable or frozen");
+  // on the Twin the placeholder, salt and signer rules are the Twin's, as for a vaults sheet
+  expect(sheetProblems(fundSheet((t) => line("CHAIN_ID", "918453")(line("EXPECTED_CHAIN_ID", "918453")(t))), "twin", 0)).toEqual([]);
+});
+
+test("Deploy 4: a vaults sheet is checked exactly as before: never as a fund sheet, with every vault cap rule and no fund rule", () => {
+  const twin = parseSheetText(TWIN_SHEET);
+  expect(isFundSheet(twin)).toBe(false);
+  // the exact lists the checker gave before Deploy 4 (the same rules, in the same order)
+  expect(sheetProblems(twin, "rehearsal", 3)).toEqual([
+    "sheet: CHAIN_ID is 918453, rehearsal runs on 8453",
+    "sheet: EXPECTED_CHAIN_ID is 918453, rehearsal runs on 8453",
+    "sheet: DEPLOYMENT_KIND is 'twin', rehearsal needs 'rehearsal'",
+    "sheet: TIMELOCK_MIN_DELAY 60 is outside 900..172799 for rehearsal",
+    "sheet: VAULT_USDC_TVL_CAP 100000000000 is above 1000 USDC; a rehearsal is a contained test",
+    "sheet: VAULT_PROTO_TVL_CAP 100000000000 is above 1000 USDC; a rehearsal is a contained test",
+    "sheet: VAULT_RWA_TVL_CAP 100000000000 is above 1000 USDC; a rehearsal is a contained test",
+    "sheet: a rehearsal needs an explicit SAFE_SALT_NONCE no earlier run used",
+  ]);
+  expect(sheetProblems(parseSheetText(TWIN_SHEET.replace("VAULT_USDC_TVL_CAP=100000000000", "VAULT_USDC_TVL_CAP=1")), "twin")).toEqual(["sheet: DEPLOYMENT_KIND is 'twin', twin needs '' or 'production' or 'rehearsal'", "sheet: VAULT_USDC_PER_DEPOSIT_CAP is above its TVL cap"]);
+  expect(sheetProblems(parseSheetText(TWIN_SHEET), "rehearsal", 3).join("\n")).not.toMatch(/FUND_|KEEPER_|FLOW_/);
+  // a keeper line alone does not make a vaults sheet a fund sheet: its caps are still required
+  expect(sheetProblems(parseSheetText(`${TWIN_SHEET.replace(/^VAULT_RWA_TVL_CAP=.*\n/m, "")}KEEPER_ADDRESS=0x1111111111111111111111111111111111111111\n`), "twin").join("\n")).toContain("sheet: VAULT_RWA_TVL_CAP is missing");
+  const real = parseSheetText(readFileSync(join(ROOT, "deployments", "twin-918453", "stage-sheet.env"), "utf8"));
+  expect(sheetProblems(real, "twin", 0)).toEqual([]);
 });
