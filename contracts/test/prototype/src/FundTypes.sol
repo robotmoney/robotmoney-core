@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/technical/one-vault-rebalancer-proposal.md §4.1 (per-asset targets), §5.1 (plan), §5.3 (step),
-//            §5.5 (plan states), §5.6 (governed parameters), §7 (RB invariants)
+//            §5.5 (plan states), §5.6 (governed parameters), §7 (RB invariants), §4.5 (asset admission), §5.9 (timed
+//            flows, step 3d); docs/technical/one-vault-timed-flows-eng-plan.md E1 to E23
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
 
@@ -48,7 +49,70 @@ uint32 constant MAX_KEEPER_GRACE = 7 days;
 /// @dev Ceiling on `maxOverrun` (suggested start 7 days).
 uint32 constant MAX_OVERRUN = 30 days;
 
+// ─── Timed flows (step 3d: proposal §4.5, §5.9; eng plan E1 to E23) ─────────
+
+/// @dev Scale of every flow price (a request limit, a bound price, a realized price):
+///      `price = usdcUnits × PRICE_SCALE / shareUnits`. The fund mints 10^18 share units per USDC unit at the
+///      seed scale (`_decimalsOffset() == 18`), so a share bought at the seed scale costs exactly 1e18 (par).
+///      A higher price is worse for a depositor and better for a redeemer.
+uint256 constant PRICE_SCALE = 1e36;
+
+/// @dev Venue rounding margin (proposal §5.9.3 check 10, plan §9 "venue rounding"): the fund supplies this many
+///      USDC units MORE than the exact pro-rata amount to each lending venue in `mintInKind`, and withdraws this
+///      many LESS in `sellForFlow`, so a venue that rounds one or two units against the caller never fails the
+///      proportion check. The comparison itself is never loosened.
+uint256 constant LENDING_ROUNDING_UNITS = 2;
+
+/// @dev Default and hard bounds of the two flow parameters the FUND holds (§5.9.5; every other one lives in the
+///      queue's `FlowParams`). `minSeedUsdc`: the least `seed` accepts (E14). `poolShareBps`: the most of a
+///      pool's time-weighted active liquidity one basket target times the TVL cap may take (§4.5 rule 3, E15).
+uint256 constant DEFAULT_MIN_SEED_USDC = 10_000e6;
+uint256 constant MIN_MIN_SEED_USDC = 1e6;
+uint256 constant MAX_MIN_SEED_USDC = 10_000_000e6;
+uint16 constant DEFAULT_POOL_SHARE_BPS = 2_500;
+uint16 constant MAX_POOL_SHARE_BPS = 10_000;
+
+// ─── Step 3d, fund-extras (E9, E15, E19, E20; scaffold plan §7.4). Appended. ──
+
+/// @dev Units of a lending position created per USDC unit when the position's units start (E9, RB-21). Units are
+///      shares of that position: a fine scale keeps the rounding of each mint and burn far below one USDC unit.
+uint256 constant POSITION_UNITS_PER_USDC = 1e18;
+
+/// @dev The in-kind allowance of proposal §5.9.4 and E20, held by the fund (coordinator ruling 6, §5.9.5 "the fund
+///      stores ... the in-kind allowance"). Per period of `inKindPeriod` seconds, in-kind exits take lending USDC up
+///      to `max(inKindBps × lending holdings / 10 000, inKindFloorUsdc)`, counted in the venues' own USDC amounts.
+///      Defaults equal the queue's flow-cap defaults (§5.9.5: 500 bps, 250 000 USDC, a 6 h epoch); ADMIN_ROLE keeps
+///      them equal to the queue's values with `setInKindAllowance`.
+uint16 constant DEFAULT_IN_KIND_BPS = 500;
+uint128 constant DEFAULT_IN_KIND_FLOOR_USDC = 250_000e6;
+uint32 constant DEFAULT_IN_KIND_PERIOD = 6 hours;
+/// @dev Hard bounds of `setInKindAllowance` (the queue's epoch and flow-floor bounds).
+uint128 constant MAX_IN_KIND_FLOOR_USDC = 100_000_000e6;
+uint32 constant MIN_IN_KIND_PERIOD = 1 hours;
+uint32 constant MAX_IN_KIND_PERIOD = 7 days;
+
+/// @dev The settlement window the fund assumes before a FlowQueue is bound (§5.9.5 default). Used by the pool-history
+///      check of `addAsset` and the pool-share rule of `setTargetAndOpenPlan` (§4.5 rules 2 and 3, E15). Once a queue
+///      is bound both read the queue's own `FlowParams.settleWindow`.
+uint32 constant DEFAULT_SETTLE_WINDOW = 1 hours;
+
+/// @dev Upper bound on a basket asset's `maxFeedAge` at `addAsset` (E15): the longest Chainlink heartbeat on Base
+///      (24 h) plus margin. A larger value would switch the staleness check off.
+uint32 constant MAX_FEED_AGE = 2 days;
+
 // ─── Roles ──────────────────────────────────────────────────────────────────
+
+// ─── Step 3e (proposal §5.10, RB-19; step-3 finish plan §3.5). Appended. ─────
+
+/// @dev Prices a rebalance step reads for its feed checks, per fund asset index (`StepFeedLib.check`). Both are
+///      USDC units per whole token (`unit` raw units), rounded DOWN; 0 for a lending or inactive asset.
+///      `feed`: the Chainlink USD price converted to USDC with the USDC / USD feed. `twap`: the asset's own TWAP over
+///      its `twapWindow`, through its swap adapter (the TWAP the fund values NAV with and the Rebalancer sizes with).
+struct StepPrices {
+    uint256[] feed;
+    uint256[] twap;
+    uint256[] unit;
+}
 
 /// @title Roles
 /// @notice Role identifiers shared by the three prototype contracts. Contracts re-export them as
@@ -62,6 +126,10 @@ uint32 constant MAX_OVERRUN = 30 days;
 ///         | REBALANCER_ROLE    | Rebalancer proxy            | fund (`executeStep`, conclude) |
 ///         | KEEPER_ROLE        | keeper bot                  | rebalancer (`step` pre-grace)  |
 ///         | TARGET_SETTER_ROLE | TimelockController          | governance (`applyReceipt`)    |
+///         | FLOW_ROLE          | FlowQueue proxy             | fund (`mintInKind`, `sellForFlow`, `ledgerCheckpoint`) |
+///
+///         On the FlowQueue: ADMIN_ROLE (timelock: params, release, allowReturn, unpause), EMERGENCY_ROLE (pause,
+///         freezeSettlement) and KEEPER_ROLE (`settle` before `keeperGrace`).
 library Roles {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
@@ -70,7 +138,14 @@ library Roles {
     bytes32 internal constant KEEPER_ROLE = keccak256("KEEPER_ROLE");
     /// @dev RebalanceGovernance's port of RouterGovernance.WEIGHT_SETTER_ROLE. Self-administered.
     bytes32 internal constant TARGET_SETTER_ROLE = keccak256("TARGET_SETTER_ROLE");
+    /// @dev The FlowQueue's authority on the fund (E1). Bound once by `bindFlowRole`, then self-administered,
+    ///      exactly like GOVERNANCE_ROLE and REBALANCER_ROLE, so no ADMIN_ROLE holder can hand it to anyone else.
+    bytes32 internal constant FLOW_ROLE = keccak256("FLOW_ROLE");
 }
+
+/// @notice A function or branch of the scaffold that is not built yet. A stub reverts with this and a short
+///         name of what is missing. It never returns a value and never passes a check it did not run.
+error NotImplemented(string what);
 
 // ─── Enums ──────────────────────────────────────────────────────────────────
 
@@ -135,7 +210,60 @@ enum SkipReason {
     ///      `endTime + maxOverrun`, §5.5). The fund's `PlanStatusChanged` is the only event.
     ///      `previewStep` reports it while the plan is still Open, so a keeper knows a `step()` call
     ///      is due. Appended last so the earlier ordinals are unchanged.
-    Concluded
+    Concluded,
+    /// @dev Step 3e (proposal §5.10, RB-19): a feed check of the step failed (checks 2 and 4 of §5.9.3: the
+    ///      sequencer, a basket feed, the USDC peg, or a basket TWAP outside `refBandBps` of its feed). No asset
+    ///      backs off. `detail` carries the `StepFeedCheck` that failed; the Rebalancer's `StepFeedBlocked` event
+    ///      names the asset and the feed status or deviation. Appended last so the earlier ordinals are unchanged.
+    FeedCheck
+}
+
+/// @notice Which feed check of a rebalance step failed (step 3e, proposal §5.10: checks 2 and 4 of §5.9.3 run on
+///         every step, inside the fund's `executeStep` and before it in `Rebalancer.step()`). `StepFeedLib.check`.
+enum StepFeedCheck {
+    /// @dev Every check passed.
+    Ok,
+    /// @dev No FlowQueue is bound to the fund: the sequencer feed, the USDC feed and `refBandBps` live in its
+    ///      `FlowParams` and `feeds()` (proposal §5.9.5), so the step fails closed.
+    NoQueue,
+    /// @dev Check 2: the sequencer is down, or up for less than `sequencerGrace`. `detail` = the `FeedStatus`.
+    Sequencer,
+    /// @dev Check 2: an active basket asset's feed is not fresh and positive. `index` = the asset, `detail` = the
+    ///      `FeedStatus`.
+    Feed,
+    /// @dev Check 2: the USDC / USD feed is unhealthy (`detail` = the `FeedStatus`) or outside `usdcPegBandBps`
+    ///      (`detail` = its 8-decimal price).
+    UsdcPeg,
+    /// @dev Check 4 could not read an active basket asset's TWAP (the adapter reverted or priced a whole token at
+    ///      0). `index` = the asset.
+    TwapRead,
+    /// @dev Check 4: an active basket asset's TWAP over its `twapWindow` sits more than `refBandBps` from its feed.
+    ///      `index` = the asset, `detail` = the deviation in bps (rounded up).
+    TwapVsFeed
+}
+
+/// @notice Result of one Chainlink read (`FeedLib`, E16, proposal §5.9.3 check 2). `Ok` is the zero value only
+///         for readability in tests: a function that has not read a feed never returns `Ok`.
+///         Shared by the fund (E19: `totalAssets` reverts on an unhealthy feed) and the queue (check 2).
+enum FeedStatus {
+    /// @dev The feed answered, the answer is positive, the round is complete and younger than `maxAge`.
+    Ok,
+    /// @dev No feed is configured for the asset (address(0)). A basket asset cannot be active so (RB-17).
+    NoFeed,
+    /// @dev `latestRoundData` reverted or returned malformed data.
+    ReadFailed,
+    /// @dev `answer <= 0`.
+    NonPositive,
+    /// @dev `updatedAt == 0` or `answeredInRound < roundId`: the round is not complete.
+    RoundIncomplete,
+    /// @dev `block.timestamp - updatedAt > maxAge`.
+    Stale,
+    /// @dev The L2 sequencer uptime feed reports down (answer 1).
+    SequencerDown,
+    /// @dev The sequencer is up, but came up less than `sequencerGrace` ago.
+    SequencerGrace,
+    /// @dev The USDC / USD feed is outside `usdcPegBandBps` of 1.
+    OffPeg
 }
 
 // ─── Structs ────────────────────────────────────────────────────────────────
@@ -168,6 +296,11 @@ enum SkipReason {
 /// @param twapWindow Basket: TWAP window in seconds, within the BasketVault bounds
 ///                   [600, 86 400]. Lending: 0.
 /// @param venue      Basket venue (ignored for Lending).
+/// @param feed       Basket (step 3d, §4.5 rule 1, E15, E16): the independent Chainlink `<token> / USD` aggregator.
+///                   Required (non-zero) for a Basket asset at `addAsset`. Lending: address(0) (a lending asset is
+///                   checked through its venue's own rate per unit, check 5).
+/// @param maxFeedAge Basket: the most seconds since the feed's `updatedAt` for it to count as fresh (§5.9.5:
+///                   the feed's heartbeat plus 5 minutes). Non-zero for a Basket asset. Lending: 0.
 struct AssetConfig {
     AssetKind kind;
     bool active;
@@ -178,6 +311,8 @@ struct AssetConfig {
     uint24 poolFee;
     uint32 twapWindow;
     Venue venue;
+    address feed;
+    uint32 maxFeedAge;
 }
 
 /// @notice Per-plan parameters (§5.6 rows scoped "per plan"). Passed by RebalanceGovernance to

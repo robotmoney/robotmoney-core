@@ -35,6 +35,15 @@ interface IAavePool {
     function withdraw(address asset, uint256 amount, address to) external returns (uint256);
 }
 
+interface IProbeAggregator {
+    function decimals() external view returns (uint8);
+    function description() external view returns (string memory);
+    function latestRoundData()
+        external
+        view
+        returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
+}
+
 interface IComet {
     function supply(address asset, uint256 amount) external;
     function withdraw(address asset, uint256 amount) external;
@@ -57,6 +66,13 @@ contract BaseFixtureProbeTest is BaseFixture {
     address internal constant MOONWELL = 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca;
     uint24 internal constant FEE = 500;
     uint32 internal constant TWAP_WINDOW = 1800;
+
+    // Chainlink on Base (scaffold plan §4: each answered `description()` at the pin).
+    address internal constant FEED_ETH = 0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70;
+    address internal constant FEED_BTC = 0x64c911996D3c6aC71f9b455B1E8E7266BcbD848F;
+    address internal constant FEED_CBBTC = 0x07DA0E54543a844a80ABE69c8A12F22B3aA59f9D;
+    address internal constant FEED_USDC = 0x7e860098F58bBFC8648a4311b374B1D669a2bc6B;
+    address internal constant FEED_SEQUENCER = 0xBCF85224fc0756B9Fa45aA7892530B47e10b6433;
 
     /// @dev Real FiatToken balance slot (mapping at slot 9, balance in the low 255 bits), the same
     ///      write scripts/devnet/twin-fork.ts fund-usdc makes.
@@ -131,6 +147,38 @@ contract BaseFixtureProbeTest is BaseFixture {
         assertGe(bal, 10_000e6 - 1, "comet credits principal");
         IComet(COMET).withdraw(USDC, bal);
         assertGe(IERC20(USDC).balanceOf(address(this)), 10_000e6 - 1, "comet returns principal");
+    }
+
+    /// @dev Step 3d (E16, scaffold plan §7.5 item 7): each real Chainlink feed the step 3d design reads, at the pin,
+    ///      with no mock: its description and decimals, a complete positive round for the price feeds, and a status
+    ///      of 0 or 1 for the sequencer uptime feed. Every round is not later than the pin. The replay fixture holds
+    ///      none of these accounts until `verify` re-records (they are read only here and on the recorder's fork),
+    ///      so the test skips with that reason while a feed has no code; it never mocks one.
+    function test_feeds_realChainlinkAtThePin() public fixtureCovered {
+        address[4] memory feeds = [FEED_ETH, FEED_BTC, FEED_CBBTC, FEED_USDC];
+        string[4] memory names = ["ETH / USD", "BTC / USD", "cbBTC / USD", "USDC / USD"];
+        for (uint256 i; i < feeds.length; ++i) {
+            if (feeds[i].code.length == 0) {
+                vm.skip(true, "the replay fixture lacks the Chainlink feed accounts until verify re-records");
+            }
+            IProbeAggregator f = IProbeAggregator(feeds[i]);
+            assertEq(f.description(), names[i], "feed description");
+            assertEq(f.decimals(), 8, "price feed decimals");
+            (uint80 roundId, int256 answer,, uint256 updatedAt, uint80 answeredInRound) = f.latestRoundData();
+            assertGt(answer, 0, "positive price");
+            assertGe(answeredInRound, roundId, "complete round");
+            assertGt(updatedAt, 0, "round time");
+            assertLe(updatedAt, block.timestamp, "round not after the pin");
+        }
+        if (FEED_SEQUENCER.code.length == 0) {
+            vm.skip(true, "the replay fixture lacks the sequencer uptime feed until verify re-records");
+        }
+        IProbeAggregator seq = IProbeAggregator(FEED_SEQUENCER);
+        assertGt(bytes(seq.description()).length, 0, "sequencer feed description");
+        assertEq(seq.decimals(), 0, "sequencer feed decimals");
+        (, int256 status, uint256 startedAt,,) = seq.latestRoundData();
+        assertTrue(status == 0 || status == 1, "sequencer status is 0 (up) or 1 (down)");
+        assertLe(startedAt, block.timestamp, "status began before the pin");
     }
 
     function test_moonwell_depositRedeem() public fixtureCovered {

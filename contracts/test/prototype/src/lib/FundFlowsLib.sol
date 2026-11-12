@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4.3 (deficit-first deposits), §4.4 (redemptions),
-//            §5.3 steps 5-8 (executeStep), §5.8 (threats), §6 (emergency unwind), §7 RB-3, RB-4, RB-6, RB-7
+// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4.3 (pro-rata deposits), §4.4 (redemptions),
+//            §5.3 steps 5-8 (executeStep), §5.8 (threats), §5.9.3 checks 7 to 10 and §5.9.4 (timed flows), §6
+//            (emergency unwind), §7 RB-3, RB-4, RB-6, RB-7, RB-13, RB-21; docs/technical/one-vault-timed-flows-eng-plan.md
+//            E3, E4, E9, E14, E19 (`recordNav`), E20, E23; step 3e: proposal §5.10 and RB-19 (`executeStep`)
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
 
@@ -24,12 +26,16 @@ import {
     StepResult,
     BPS,
     IDLE_INDEX,
-    MAX_STEP_COST_BPS
+    MAX_STEP_COST_BPS,
+    LENDING_ROUNDING_UNITS
 } from "../FundTypes.sol";
 import {PlanMath} from "../PlanMath.sol";
 import {IRobotMoneyFund} from "../interfaces/IRobotMoneyFund.sol";
+import {IExactOutSwapAdapter} from "../interfaces/IFlowAdapters.sol";
 import {FundState} from "./FundStorage.sol";
 import {FundValuationLib} from "./FundValuationLib.sol";
+import {FundPositionLib} from "./FundPositionLib.sol";
+import {FundStepLib} from "./FundStepLib.sol";
 
 /// @title FundFlowsLib
 /// @notice Every value-moving path of `RobotMoneyFund` except the share mint/burn and the final payouts, as an
@@ -37,134 +43,168 @@ import {FundValuationLib} from "./FundValuationLib.sol";
 ///         the fund's). Every swap goes through `BasketSwaps.swap` with the asset's allowlisted
 ///         `IBasketSwapAdapter` and pays the fund itself. Every USDC that leaves the fund here goes to an
 ///         allowlisted Lending adapter, a Basket swap adapter, or the fund's `ExclusionLedger` (RB-3, INV-1).
-///         No function here takes a recipient.
+///         Recipients: the in-kind `receiver` (the holder's own choice, or the request owner the queue names), and
+///         `caller` of the FLOW_ROLE functions (the FlowQueue: refunds of unused USDC and sale proceeds).
 library FundFlowsLib {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Deposit (§4.3)
+    //  Step 3d flows (proposal §4.3, §4.4, §5.9.3 checks 7 to 10; eng plan E3, E4, E14)
+    //
+    //  Removed from the live fund (D11, scaffold plan §7.2 item 1): the step 3c deposit path that minted on the
+    //  realized TWAP NAV delta, its deficit-first routing against `currentTargetBps` (`PlanMath.deficitSplit`), and
+    //  the synchronous `redeemPayout`. The frozen copy under contracts/test/prototype/baseline/ keeps them.
+    //
+    //  Rounding (INTERFACES.md §2): every purchase rounds UP, every amount paid out rounds DOWN, the mint is the
+    //  caller's `sharesOut` (computed by the queue, rounded down). Lending legs move `LENDING_ROUNDING_UNITS` more
+    //  on a supply and less on a withdrawal, so venue rounding of one or two units never fails check 10. Check 10
+    //  itself is exact (`FundValuationLib.requireProportion`).
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// @notice The deposit path up to the mint (§4.3), ported from `BasketVault._deposit`. The fund holds
-    ///         `nonReentrant`, mints the returned shares and emits `Deposit`.
-    ///         1. Gates: `DepositsArePaused`, `FundIsShutdown`, `PerDepositCapExceeded`,
-    ///            `DepositsClosedDuringExclusion` while a Lending asset is excluded (core 1788), ORA-4 on every active Basket asset
-    ///            (`NavMarketDeviationExceeded`), `TVLCapExceeded` against the pre-deposit NAV.
-    ///         2. Pull `assets` USDC from `caller`; route deficit-first against `currentTargetBps()`.
-    ///         3. `delta = navAfter − navBefore` at TWAP; `DepositBelowSlippageFloor` when
-    ///            `delta < assets × (1 − maxSlippageBps)`; shares `= delta × (supplyBefore + 10^18) /
-    ///            (navBefore + 1)`, floored (AZ-BSK-1/-3: realized delta over the FULL pre-deposit NAV).
-    function deposit(FundState storage s, address caller, uint256 assets, uint256 supplyBefore)
-        public
-        returns (uint256 shares)
-    {
+    /// @dev Share units minted per USDC unit by `seed`: the fund's existing scale (`_decimalsOffset() == 18`), so the
+    ///      first share costs par (`PRICE_SCALE / 1e18`).
+    uint256 internal constant SEED_SHARES_PER_USDC = 1e18;
+
+    /// @notice Body of `IRobotMoneyFund.seed` (E14). The fund checks ADMIN_ROLE, holds `nonReentrant` and mints the
+    ///         returned shares to itself. Once, only at zero supply (`AlreadySeeded`), at least `minSeedUsdc`
+    ///         (`SeedBelowMinimum`). Pulls `usdc` from `caller`; it stays idle until the first plan moves it.
+    /// @param supply The fund's `totalSupply()` now.
+    /// @return shares `usdc × 10^18`.
+    function seed(FundState storage s, address caller, uint256 usdc, uint256 supply) public returns (uint256 shares) {
+        if (s.seeded || supply != 0) revert IRobotMoneyFund.AlreadySeeded();
+        uint256 minSeed = s.minSeedUsdc;
+        if (usdc < minSeed) revert IRobotMoneyFund.SeedBelowMinimum(usdc, minSeed);
+        s.seeded = true;
+        IERC20(s.usdc).safeTransferFrom(caller, address(this), usdc);
+        shares = usdc * SEED_SHARES_PER_USDC;
+        emit IRobotMoneyFund.Seeded(usdc, shares);
+        FundValuationLib.recordNav(s);
+    }
+
+    /// @notice Body of `IRobotMoneyFund.mintInKind` (E3, proposal §5.9.3 step 9) up to the mint. The fund checks
+    ///         FLOW_ROLE, holds `nonReentrant`, then mints exactly `sharesOut` to `caller`.
+    ///         1. Gates (defence in depth, the queue's check 1 already skips deposits then): `NotSeeded` at zero
+    ///            supply, `DepositsArePaused`, `FundIsShutdown`, `DepositsClosedDuringExclusion`; `InvalidParam`
+    ///            for `sharesOut == 0`; `LegLimitsLength`.
+    ///         2. Check 7: snapshot idle and every counted asset's held amount (`FundValuationLib.heldAmounts`).
+    ///         3. Pull `maxUsdc` from `caller`. For idle and each counted asset `want = ceil(held × sharesOut /
+    ///            supply)`: idle keeps it; Lending supplies `want + LENDING_ROUNDING_UNITS` (a venue that keeps less
+    ///            reverts `LendingSupplyRefused`); Basket buys exactly `want` tokens with `swapExactOut`, spending at
+    ///            most `maxUsdcPerLeg[i]` (check 9; the venue reverts above it, and `FlowLegLimit` if the adapter
+    ///            reports more).
+    ///         4. `spent` = idle part + lending supplies + the swap inputs the adapters report. `MintInKindOverMax`
+    ///            above `maxUsdc`; else `maxUsdc − spent` goes back to `caller`, so the caller's USDC falls by
+    ///            exactly `spent` (never by a balance difference).
+    ///         5. Check 10 with `supplyAfter = supply + sharesOut`. The mint that follows moves no asset, so the
+    ///            comparison holds after it too. An adapter that under-delivers tokens or keeps unreported USDC
+    ///            fails here.
+    /// @param supply The fund's `totalSupply()` before the mint.
+    function mintInKind(
+        FundState storage s,
+        address caller,
+        uint256 sharesOut,
+        uint256 maxUsdc,
+        uint256[] memory maxUsdcPerLeg,
+        uint256 supply
+    ) public returns (uint256 spent) {
+        if (supply == 0) revert IRobotMoneyFund.NotSeeded();
         if (s.depositsPaused) revert IRobotMoneyFund.DepositsArePaused();
         if (s.shutdown) revert IRobotMoneyFund.FundIsShutdown();
-        if (assets > s.perDepositCap) revert IRobotMoneyFund.PerDepositCapExceeded();
-        FundValuationLib.requireDepositable(s);
-        (uint256 navBefore,, uint256[] memory values) = FundValuationLib.portfolio(s);
-        if (navBefore + assets > s.tvlCap) revert IRobotMoneyFund.TVLCapExceeded();
-        uint256[] memory curBps = FundValuationLib.currentTargetBps(s);
-        IERC20(s.usdc).safeTransferFrom(caller, address(this), assets);
-        routeDeposit(s, assets, navBefore, values, curBps);
-        uint256 navAfter = FundValuationLib.nav(s);
-        uint256 delta = navAfter > navBefore ? navAfter - navBefore : 0;
-        uint256 floor = assets.mulDiv(BPS - s.maxSlippageBps, BPS);
-        if (delta < floor) revert IRobotMoneyFund.DepositBelowSlippageFloor(delta, floor);
-        shares = delta.mulDiv(supplyBefore + 1e18, navBefore + 1, Math.Rounding.Floor);
-    }
-
-    /// @notice Route `amount` USDC (already idle in the fund) deficit-first (§4.3, D7): `PlanMath.deficitSplit`
-    ///         against `curBps` (the current plan target), measured at `navBefore` with per-asset `values`.
-    ///         - Lending legs are clipped at the asset's `capBps` headroom of the post-deposit NAV (the
-    ///           ported `RobotMoneyVault` cap allocator), and a venue that refuses the supply hands the USDC
-    ///           back (security round 2); both stay idle.
-    ///         - Basket legs buy through the asset's swap adapter with `minOut = TWAP × (1 − maxSlippageBps)`
-    ///           (the `BasketVault._routeDeposit` floor). A leg whose floor rounds to 0 stays idle (dust).
-    ///         Excluded or inactive assets get nothing. The caller mints on the realized NAV delta.
-    function routeDeposit(
-        FundState storage s,
-        uint256 amount,
-        uint256 navBefore,
-        uint256[] memory values,
-        uint256[] memory curBps
-    ) public {
-        uint256[] memory alloc = PlanMath.deficitSplit(values, navBefore, amount, curBps);
-        uint256 navAfter = navBefore + amount;
-        uint256 n = alloc.length;
+        if (FundValuationLib.anyExcluded(s)) revert IRobotMoneyFund.DepositsClosedDuringExclusion();
+        if (sharesOut == 0) revert IFundEvents.InvalidParam();
+        uint256 n = s.assets.length;
+        if (maxUsdcPerLeg.length != n) revert IRobotMoneyFund.LegLimitsLength(maxUsdcPerLeg.length, n);
+        (uint256 idle0, uint256[] memory held0) = FundValuationLib.heldAmounts(s);
+        address usdc = s.usdc;
+        IERC20(usdc).safeTransferFrom(caller, address(this), maxUsdc);
+        spent = idle0.mulDiv(sharesOut, supply, Math.Rounding.Ceil);
         for (uint256 i; i < n; ++i) {
-            uint256 amt = alloc[i];
-            if (amt == 0 || !FundValuationLib.isCounted(s, i)) continue;
-            AssetConfig memory a = s.assets[i];
+            uint256 want = held0[i].mulDiv(sharesOut, supply, Math.Rounding.Ceil);
+            if (want == 0) continue;
+            AssetConfig storage a = s.assets[i];
             if (a.kind == AssetKind.Lending) {
-                uint256 cap = navAfter.mulDiv(a.capBps, BPS);
-                uint256 room = cap > values[i] ? cap - values[i] : 0;
-                if (amt > room) amt = room;
-                if (amt != 0) _deploy(s.usdc, a.adapter, amt);
+                spent += _supplyLeg(s, i, want + LENDING_ROUNDING_UNITS);
             } else {
-                uint256 minOut = _haircut(FundValuationLib.tokenValue(s, i, amt), s.maxSlippageBps);
-                if (minOut != 0) _swap(a, s.usdc, a.token, amt, minOut);
+                spent += _buyExact(a, usdc, i, want, maxUsdcPerLeg[i]);
             }
         }
+        if (spent > maxUsdc) revert IRobotMoneyFund.MintInKindOverMax(spent, maxUsdc);
+        if (maxUsdc != spent) IERC20(usdc).safeTransfer(caller, maxUsdc - spent);
+        FundValuationLib.requireProportion(s, idle0, held0, supply, supply + sharesOut);
+        emit IRobotMoneyFund.MintedInKind(caller, sharesOut, spent, supply);
+        FundValuationLib.recordNav(s);
     }
 
-    // ═════════════════════════════════════════════════════════════════════════
-    //  Redeem (§4.4)
-    // ═════════════════════════════════════════════════════════════════════════
-
-    /// @notice Realize `shares / supplyBefore` of every holding into USDC (§4.4): the pro-rata idle, a
-    ///         pro-rata `withdraw` from each counted Lending adapter, and a pro-rata sale of each active
-    ///         Basket token (`BasketVault._sellProportional`, unchanged: floor = TWAP of one unit less ×
-    ///         (1 − maxSlippageBps), a zero floor is dust and is skipped). Returns the realized gross.
-    /// @dev Short fills never revert here: a Lending leg pays what the adapter actually delivered (balance
-    ///      delta), never the asked amount. Each leg floors, so rounding favours the holders who stay.
-    ///      Called after the shares burned (nonReentrant fund entry). Never reads plan state (RB-6).
-    ///      Strict by design: a frozen venue (a Lending `withdraw` or a Basket swap that reverts) reverts the
-    ///      redeem, as on `BasketVault.redeem` and `RobotMoneyVault.redeem`. The design promises only that
-    ///      `redeemInKind` stays open under a venue freeze (§5.8 row 7); see `payInKind`. Every leg is taken
-    ///      from `heldBalance`, so value owed to past in-kind exits is never sold or paid twice.
-    function sellProportional(FundState storage s, uint256 shares, uint256 supplyBefore)
-        public
-        returns (uint256 usdcOut)
-    {
-        address usdc = s.usdc;
-        usdcOut = IERC20(usdc).balanceOf(address(this)).mulDiv(shares, supplyBefore);
+    /// @notice Body of `IRobotMoneyFund.sellForFlow` (E4, proposal §5.9.3 step 8) after the burn. The fund checks
+    ///         FLOW_ROLE, holds `nonReentrant` and has already burned `shares` of `caller` (burn before any external
+    ///         call). Never gated by plan state, pause or shutdown (RB-6).
+    ///         1. `LegLimitsLength`. Check 7 snapshot (the burn moved no asset).
+    ///         2. Realize `shares / supplyBefore` of every counted holding, each rounded DOWN: the idle part; each
+    ///            Lending position withdraws its part less `LENDING_ROUNDING_UNITS` (nothing when that is ≤ 0),
+    ///            measured by the fund's USDC delta; each Basket token sells its part through the production
+    ///            exact-input `swap` with `minUsdcPerLeg[i]` as the floor (check 8, `FlowLegLimit` if the delta is
+    ///            below it). A venue that cannot pay reverts the call, so the queue leaves redemptions pending.
+    ///         3. `exitFeeBps` of the realized gross (rounded down) to `feeRecipient`, the rest to `caller`.
+    ///         4. Check 10 with `supplyAfter = supplyBefore − shares`. Emits `SoldForFlow`.
+    /// @param supplyBefore The fund's `totalSupply()` before the burn.
+    /// @return net USDC paid to `caller`.
+    function sellForFlow(
+        FundState storage s,
+        address caller,
+        uint256 shares,
+        uint256[] memory minUsdcPerLeg,
+        uint256 supplyBefore
+    ) public returns (uint256 net) {
         uint256 n = s.assets.length;
+        if (minUsdcPerLeg.length != n) revert IRobotMoneyFund.LegLimitsLength(minUsdcPerLeg.length, n);
+        (uint256 idle0, uint256[] memory held0) = FundValuationLib.heldAmounts(s);
+        address usdc = s.usdc;
+        uint256 gross = idle0.mulDiv(shares, supplyBefore);
         for (uint256 i; i < n; ++i) {
-            if (s.assets[i].kind != AssetKind.Lending || !FundValuationLib.isCounted(s, i)) continue;
-            uint256 want = FundValuationLib.heldBalance(s, i).mulDiv(shares, supplyBefore);
-            if (want == 0) continue;
-            uint256 before = IERC20(usdc).balanceOf(address(this));
-            IStrategyAdapter(s.assets[i].adapter).withdraw(want);
-            usdcOut += IERC20(usdc).balanceOf(address(this)) - before;
-        }
-        for (uint256 i; i < n; ++i) {
+            uint256 amt = held0[i].mulDiv(shares, supplyBefore);
             AssetConfig memory a = s.assets[i];
-            if (!a.active || a.kind != AssetKind.Basket) continue;
-            uint256 sellAmount = FundValuationLib.heldBalance(s, i).mulDiv(shares, supplyBefore);
-            if (sellAmount == 0) continue;
-            // Core 1778: price one input unit less (a V3 pool rounds the fee-adjusted input down by one).
-            uint256 minOut = _haircut(FundValuationLib.usdcValue(s, i, sellAmount - 1), s.maxSlippageBps);
-            if (minOut == 0) continue;
-            usdcOut += _swap(a, a.token, usdc, sellAmount, minOut);
+            if (a.kind == AssetKind.Lending) {
+                if (amt <= LENDING_ROUNDING_UNITS) continue;
+                gross += FundPositionLib.take(s, i, amt - LENDING_ROUNDING_UNITS);
+            } else if (amt != 0) {
+                uint256 minOut = minUsdcPerLeg[i];
+                uint256 got = _swap(a, a.token, usdc, amt, minOut);
+                if (got < minOut) revert IRobotMoneyFund.FlowLegLimit(i, got, minOut);
+                gross += got;
+            }
         }
-    }
-
-    /// @notice Realize the redeemed shares (`sellProportional`), charge `exitFeeBps` on the REALIZED gross only
-    ///         (FEE-2 / NC-11), pay the fee to `feeRecipient` and the rest to `receiver` (the caller's own
-    ///         ERC-4626 receiver). Emits `ExitFeeCharged`. Returns the USDC paid to `receiver`.
-    function redeemPayout(FundState storage s, address owner, address receiver, uint256 shares, uint256 supplyBefore)
-        public
-        returns (uint256 net)
-    {
-        uint256 gross = sellProportional(s, shares, supplyBefore);
         uint256 fee = gross.mulDiv(s.exitFeeBps, BPS);
         net = gross - fee;
-        IERC20 usdc = IERC20(s.usdc);
-        if (fee != 0) usdc.safeTransfer(s.feeRecipient, fee);
-        usdc.safeTransfer(receiver, net);
-        emit IRobotMoneyFund.ExitFeeCharged(owner, gross, fee);
+        if (fee != 0) IERC20(usdc).safeTransfer(s.feeRecipient, fee);
+        if (net != 0) IERC20(usdc).safeTransfer(caller, net);
+        FundValuationLib.requireProportion(s, idle0, held0, supplyBefore, supplyBefore - shares);
+        emit IRobotMoneyFund.SoldForFlow(caller, shares, gross, fee, net);
+        FundValuationLib.recordNav(s);
+    }
+
+    /// @dev `mintInKind` lending leg (own frame for stack depth): supply `ask` to lending asset `i` for the holders
+    ///      (`FundPositionLib.supply` mints their units); a venue that keeps less reverts `LendingSupplyRefused`.
+    function _supplyLeg(FundState storage s, uint256 i, uint256 ask) private returns (uint256) {
+        uint256 placed = FundPositionLib.supply(s, i, ask);
+        if (placed < ask) revert IRobotMoneyFund.LendingSupplyRefused(i, placed, ask);
+        return ask;
+    }
+
+    /// @dev Buy exactly `amountOut` of Basket asset `a` with at most `limit` USDC through the asset's exact-output
+    ///      adapter (`IExactOutSwapAdapter`, the step 3d test copies). Approve `limit`, swap with recipient = the
+    ///      fund, clear the approval. Returns the input the adapter reports; the tokens are checked by check 10.
+    function _buyExact(AssetConfig storage a, address usdc, uint256 i, uint256 amountOut, uint256 limit)
+        private
+        returns (uint256 amountIn)
+    {
+        address adapter = a.adapter;
+        IERC20(usdc).forceApprove(adapter, limit);
+        amountIn = IExactOutSwapAdapter(adapter).swapExactOut(
+            usdc, a.token, a.poolFee, amountOut, limit, address(this), block.timestamp
+        );
+        IERC20(usdc).forceApprove(adapter, 0);
+        if (amountIn > limit) revert IRobotMoneyFund.FlowLegLimit(i, amountIn, limit);
     }
 
     /// @notice Permissionless foreign-token sweep to the fixed quarantine address (INV-1/INV-2). Reverts
@@ -200,33 +240,83 @@ library FundFlowsLib {
     ///      exactly what an unfrozen exit would have paid. A Lending claim is a fixed USDC amount: interest on
     ///      it, and any later venue loss, stay with the holders (prototype simplification).
     ///      The idle USDC leg uses a plain transfer: USDC failing for the fund itself stops every path.
-    function payInKind(FundState storage s, address receiver, uint256 shares, uint256 supplyBefore) public {
-        address usdc = s.usdc;
-        uint256 fee = s.exitFeeBps;
-        address feeTo = s.feeRecipient;
-        uint256 usdcLeg = IERC20(usdc).balanceOf(address(this)).mulDiv(shares, supplyBefore);
+    ///
+    ///      Step 3d (fund-core, proposal §5.9.4, RB-13): the legs are taken from one check 7 snapshot, each Lending
+    ///      leg asks for `LENDING_ROUNDING_UNITS` less than its exact part (nothing when that part is ≤ the margin),
+    ///      and check 10 is asserted at the end with `supplyAfter = supplyBefore − shares`.
+    ///
+    ///      Step 3d (fund-extras: E9, E20, E23, RB-21). The step 3c lending deferral above (a fixed USDC claim) is
+    ///      gone for lending legs: `FundPositionLib.inKindLending` pays the lending part in USDC up to the period's
+    ///      in-kind allowance and turns the rest, and any part a venue cannot pay, into a claim on a share of the
+    ///      position. E23: `receiver == address(0)` reverts `ZeroAddress`; the snapshot reads each lending venue's
+    ///      value under try/catch, and a venue whose read reverts becomes a claim on the exiter's units of it with no
+    ///      read at all (check 10 then skips that asset: its held amount cannot be read, and its units move exactly);
+    ///      every claim and every basket deferral is keyed to `owner`, or to `receiver` when `owner` is the bound
+    ///      FlowQueue (escrowed shares: `receiver` is the request's owner, E9).
+    function payInKind(FundState storage s, address receiver, address owner, uint256 shares, uint256 supplyBefore)
+        public
+    {
+        if (receiver == address(0)) revert IFundEvents.ZeroAddress();
+        address claimant = owner == s.flowQueue ? receiver : owner;
+        (uint256 idle0, uint256[] memory held0, uint256[] memory pos0) = _inKindSnapshot(s);
+        uint256 usdcLeg = idle0.mulDiv(shares, supplyBefore)
+            + FundPositionLib.inKindLending(s, held0, pos0, claimant, shares, supplyBefore);
+        _payLeg(s.usdc, receiver, usdcLeg, s.exitFeeBps, s.feeRecipient);
+        _inKindBasket(s, held0, receiver, claimant, shares, supplyBefore);
+        FundValuationLib.requireProportion(s, idle0, held0, supplyBefore, supplyBefore - shares);
+    }
+
+    /// @dev Check 7 snapshot of the in-kind exit, tolerant of a lending venue whose value read reverts (E23): idle
+    ///      USDC; per COUNTED asset the holders' held amount (`held`); per counted lending asset its position value
+    ///      (`pos`), or `FundPositionLib.UNREADABLE` with `held` 0 when `totalAssets()` reverted.
+    function _inKindSnapshot(FundState storage s)
+        private
+        view
+        returns (uint256 idle, uint256[] memory held, uint256[] memory pos)
+    {
+        idle = IERC20(s.usdc).balanceOf(address(this));
         uint256 n = s.assets.length;
+        held = new uint256[](n);
+        pos = new uint256[](n);
         for (uint256 i; i < n; ++i) {
-            if (s.assets[i].kind != AssetKind.Lending || !FundValuationLib.isCounted(s, i)) continue;
-            uint256 want = FundValuationLib.heldBalance(s, i).mulDiv(shares, supplyBefore);
-            if (want == 0) continue;
-            uint256 before = IERC20(usdc).balanceOf(address(this));
-            try IStrategyAdapter(s.assets[i].adapter).withdraw(want) returns (uint256) {} catch {}
-            uint256 got = IERC20(usdc).balanceOf(address(this)) - before;
-            usdcLeg += got;
-            if (got < want) _deferSplit(s, i, want - got, receiver, fee, feeTo);
+            if (!FundValuationLib.isCounted(s, i)) continue;
+            AssetConfig storage a = s.assets[i];
+            if (a.kind == AssetKind.Basket) {
+                held[i] = FundValuationLib.heldBalance(s, i);
+                continue;
+            }
+            try IStrategyAdapter(a.adapter).totalAssets() returns (uint256 p) {
+                uint256 owed = s.deferredTotal[i];
+                p = p > owed ? p - owed : 0;
+                pos[i] = p;
+                held[i] = FundValuationLib.holdersPart(s, i, p);
+            } catch {
+                pos[i] = FundPositionLib.UNREADABLE;
+            }
         }
-        _payLeg(usdc, receiver, usdcLeg, fee, feeTo);
+    }
+
+    /// @dev `payInKind` Basket legs (own frame for stack depth): each counted token's part, net of the fee; a
+    ///      transfer that fails is deferred to `claimant` (E23: keyed to the owner, who can pull it to any address).
+    function _inKindBasket(
+        FundState storage s,
+        uint256[] memory held0,
+        address receiver,
+        address claimant,
+        uint256 shares,
+        uint256 supplyBefore
+    ) private {
+        uint256 n = held0.length;
         for (uint256 i; i < n; ++i) {
             AssetConfig storage a = s.assets[i];
-            if (!a.active || a.kind != AssetKind.Basket) continue;
-            uint256 amount = FundValuationLib.heldBalance(s, i).mulDiv(shares, supplyBefore);
+            if (a.kind != AssetKind.Basket) continue;
+            uint256 amount = held0[i].mulDiv(shares, supplyBefore);
             if (amount == 0) continue;
-            uint256 feeAmt = amount.mulDiv(fee, BPS);
+            uint256 feeAmt = amount.mulDiv(s.exitFeeBps, BPS);
             if (!_tryTransfer(a.token, receiver, amount - feeAmt)) {
-                _deferSplit(s, i, amount, receiver, fee, feeTo);
-            } else if (feeAmt != 0 && !_tryTransfer(a.token, feeTo, feeAmt)) {
-                _defer(s, i, feeTo, feeAmt);
+                _deferSplit(s, i, amount, claimant);
+            } else if (feeAmt != 0 && !_tryTransfer(a.token, s.feeRecipient, feeAmt)) {
+                _defer(s, i, s.feeRecipient, feeAmt);
             }
         }
     }
@@ -258,19 +348,13 @@ library FundFlowsLib {
         emit IRobotMoneyFund.DeferredClaimed(index, account, to, amount);
     }
 
-    /// @dev Defer `amount` of asset `i` owed to an in-kind exit: the `feeBps` share to `feeTo`, the rest to
-    ///      `receiver` (the split an unfrozen leg would have paid).
-    function _deferSplit(
-        FundState storage s,
-        uint256 i,
-        uint256 amount,
-        address receiver,
-        uint256 feeBps,
-        address feeTo
-    ) private {
-        uint256 feeAmt = amount.mulDiv(feeBps, BPS);
-        _defer(s, i, receiver, amount - feeAmt);
-        _defer(s, i, feeTo, feeAmt);
+    /// @dev Defer `amount` of asset `i` owed to an in-kind exit: the `exitFeeBps` share to `feeRecipient`, the rest
+    ///      to `claimant` (the split an unfrozen leg would have paid). Step 3d: Basket legs only; a lending leg that
+    ///      cannot pay becomes a position claim (`FundPositionLib`).
+    function _deferSplit(FundState storage s, uint256 i, uint256 amount, address claimant) private {
+        uint256 feeAmt = amount.mulDiv(s.exitFeeBps, BPS);
+        _defer(s, i, claimant, amount - feeAmt);
+        _defer(s, i, s.feeRecipient, feeAmt);
     }
 
     function _defer(FundState storage s, uint256 i, address account, uint256 amount) private {
@@ -294,140 +378,23 @@ library FundFlowsLib {
     //  executeStep (§5.3 steps 5-8)
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// @notice The legs of one rebalance step (`IRobotMoneyFund.executeStep`). The fund checks the role and
-    ///         holds `nonReentrant`. Order: plan Open → legs valid and counted, ORA-4 on Basket legs (RB-5)
-    ///         → RB-7 path guard at `navBefore` → sell leg → buy leg → `navAfter` and the cost cap (RB-4)
-    ///         → plan accounting and the budget halt → `StepExecuted`.
-    function executeStep(FundState storage s, StepOrder memory o) public returns (StepResult memory r) {
-        Plan storage p = s.plan;
-        if (p.status != PlanStatus.Open) {
-            revert IRobotMoneyFund.InvalidPlanTransition(p.id, p.status, PlanStatus.Open);
-        }
-        // RB-4 defence in depth: whatever the caller asks, a step may never accept a loss above the global
-        // `MAX_STEP_COST_BPS` ceiling of its notional (the Rebalancer's governed cap sits at or below it).
-        if (o.notionalUsdc == 0 || o.maxCostUsdc > o.notionalUsdc.mulDiv(MAX_STEP_COST_BPS, BPS)) {
-            revert IFundEvents.InvalidParam();
-        }
-        if (o.sellIndex == o.buyIndex) revert IFundEvents.InvalidAssetIndex(o.buyIndex);
-        _checkLeg(s, o.sellIndex);
-        _checkLeg(s, o.buyIndex);
-        r.navBefore = _pathGuard(s, o);
-        _sellLeg(s, o, r);
-        _buyLeg(s, o, r);
-        r.navAfter = FundValuationLib.nav(s);
-        r.cost = r.navBefore > r.navAfter ? r.navBefore - r.navAfter : 0;
-        if (r.cost > o.maxCostUsdc) revert IRobotMoneyFund.StepCostExceeded(r.cost, o.maxCostUsdc);
-        p.costSpent += r.cost;
-        p.stepCount += 1;
-        s.lastStepAt = uint64(block.timestamp);
-        if (p.costSpent > p.costBudget) {
-            p.status = PlanStatus.Halted;
-            emit IFundEvents.PlanStatusChanged(p.id, PlanStatus.Open, PlanStatus.Halted);
-        }
-        _emitStep(p.id, o, r);
-    }
-
-    /// @dev A non-idle leg must name a counted (active, not excluded) asset, and a Basket leg must pass ORA-4
-    ///      (RB-5 defence in depth: the Rebalancer already masks failing assets).
-    function _checkLeg(FundState storage s, uint256 i) private view {
-        if (i == IDLE_INDEX) return;
-        if (i >= s.assets.length || !FundValuationLib.isCounted(s, i)) revert IFundEvents.InvalidAssetIndex(i);
-        if (s.assets[i].kind == AssetKind.Basket) FundValuationLib.requireMarket(s, i);
-    }
-
-    /// @dev RB-7 guard: at `navBefore` and `now`, the sell leg sits over its `pathTarget` value by at least the
-    ///      notional and a non-idle buy leg sits under it by at least the notional (`PlanMath.pathTargetValue`,
-    ///      the same function the Rebalancer sizes with). Returns `navBefore`.
-    function _pathGuard(FundState storage s, StepOrder memory o) private view returns (uint256 navBefore) {
-        uint256 idle;
-        uint256[] memory values;
-        (navBefore, idle, values) = FundValuationLib.portfolio(s);
-        Plan memory pm = s.plan;
-        uint256 n = o.notionalUsdc;
-        uint256 v = o.sellIndex == IDLE_INDEX ? idle : values[o.sellIndex];
-        uint256 t = PlanMath.pathTargetValue(pm, o.sellIndex, block.timestamp, navBefore);
-        if (v < t + n) revert IRobotMoneyFund.StepExceedsPath(o.sellIndex, n, v > t ? v - t : 0);
-        if (o.buyIndex == IDLE_INDEX) return navBefore;
-        v = values[o.buyIndex];
-        t = PlanMath.pathTargetValue(pm, o.buyIndex, block.timestamp, navBefore);
-        if (t < v + n) revert IRobotMoneyFund.StepExceedsPath(o.buyIndex, n, t > v ? t - v : 0);
-    }
-
-    /// @dev Sell leg → USDC (§5.3 step 6). Idle: take `notional` of idle (`InsufficientIdle`). Lending:
-    ///      `withdraw(notional)`, measured by the fund's balance delta. Basket: sell
-    ///      `min(balance, TWAP tokens for notional)` with floor `minSellUsdcOut`. Then require the USDC
-    ///      received ≥ `minSellUsdcOut` (`StepBelowMinOut`).
-    function _sellLeg(FundState storage s, StepOrder memory o, StepResult memory r) private {
-        address usdc = s.usdc;
-        uint256 n = o.notionalUsdc;
-        uint256 got;
-        if (o.sellIndex == IDLE_INDEX) {
-            uint256 idle = IERC20(usdc).balanceOf(address(this));
-            if (idle < n) revert IRobotMoneyFund.InsufficientIdle(n, idle);
-            r.amountIn = n;
-            got = n;
-        } else {
-            AssetConfig memory a = s.assets[o.sellIndex];
-            if (a.kind == AssetKind.Lending) {
-                uint256 before = IERC20(usdc).balanceOf(address(this));
-                IStrategyAdapter(a.adapter).withdraw(n);
-                got = IERC20(usdc).balanceOf(address(this)) - before;
-                r.amountIn = got;
-            } else {
-                uint256 amt = FundValuationLib.tokenValue(s, o.sellIndex, n);
-                uint256 bal = FundValuationLib.heldBalance(s, o.sellIndex);
-                if (amt > bal) amt = bal;
-                r.amountIn = amt;
-                got = _swap(a, a.token, usdc, amt, o.minSellUsdcOut);
-            }
-        }
-        if (got < o.minSellUsdcOut) revert IRobotMoneyFund.StepBelowMinOut(o.sellIndex, got, o.minSellUsdcOut);
-        r.usdcMoved = got;
-    }
-
-    /// @dev Buy leg (§5.3 step 6) with `spend = min(received, notional)`: idle keeps it; Lending deploys it
-    ///      (USDC the venue hands back stays idle; `amountOut` is what the adapter kept); Basket buys with floor
-    ///      `minBuyOut × spend / notional` (`StepBelowMinOut`). USDC received beyond the notional stays idle.
-    function _buyLeg(FundState storage s, StepOrder memory o, StepResult memory r) private {
-        uint256 spend = r.usdcMoved < o.notionalUsdc ? r.usdcMoved : o.notionalUsdc;
-        if (o.buyIndex == IDLE_INDEX) {
-            r.amountOut = spend;
-            return;
-        }
-        AssetConfig memory a = s.assets[o.buyIndex];
-        if (a.kind == AssetKind.Lending) {
-            r.amountOut = _deploy(s.usdc, a.adapter, spend);
-            return;
-        }
-        uint256 minOut = o.minBuyOut.mulDiv(spend, o.notionalUsdc);
-        uint256 got = _swap(a, s.usdc, a.token, spend, minOut);
-        if (got < minOut) revert IRobotMoneyFund.StepBelowMinOut(o.buyIndex, got, minOut);
-        r.amountOut = got;
-    }
-
-    /// @dev `StepExecuted` in its own frame (stack depth without viaIR).
-    function _emitStep(uint256 planId, StepOrder memory o, StepResult memory r) private {
-        emit IFundEvents.StepExecuted(
-            planId,
-            o.sellIndex,
-            o.buyIndex,
-            o.notionalUsdc,
-            r.amountIn,
-            r.usdcMoved,
-            r.amountOut,
-            r.navBefore,
-            r.navAfter,
-            r.cost
-        );
+    /// @notice Body of `IRobotMoneyFund.executeStep` (§5.3 steps 5-8; step 3e: proposal §5.10, RB-4 and RB-19 from step
+    ///         3e). Since step 3e the step lives in the linked `FundStepLib` (size, §6.1: the step 3e checks would have
+    ///         left this library 483 bytes under EIP-170). This forwarder keeps the fund's call site unchanged; the
+    ///         nested DELEGATECALL still runs as the fund. See `FundStepLib.executeStep`.
+    function executeStep(FundState storage s, StepOrder memory o) public returns (StepResult memory) {
+        return FundStepLib.executeStep(s, o);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
     //  Emergency unwind (§6: BasketVault.emergencyUnwind + RobotMoneyVault.emergencyWithdraw)
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// @notice Move every holding to idle USDC. Lending: drain each active adapter, tolerant of a failing
-    ///         adapter (`RobotMoneyVaultOps._emergencyPull`); an adapter under an open exclusion record is
-    ///         drained INTO its record, never into idle (exclusion is not confiscation, core 1820). Basket:
+    /// @notice Move every holding to idle USDC. Lending: drain the holders' part of each active adapter, tolerant
+    ///         of a failing adapter (`RobotMoneyVaultOps._emergencyPull`), leaving the position claims' part in
+    ///         the venue and burning the holders' units (`FundPositionLib.drain`, E9); an adapter under an open
+    ///         exclusion record is drained INTO its record, never into idle (exclusion is not confiscation, core
+    ///         1820). Basket:
     ///         sell each active balance with floor = TWAP × (1 − maxSlippageBps) (`BasketSwaps.unwindAll`); a
     ///         zero floor is dust and is skipped; a leg whose TWAP read fails is skipped and stays held (there
     ///         is no configured-floor override here, see the fund's NatSpec). A swap below its floor reverts
@@ -441,13 +408,8 @@ library FundFlowsLib {
             AssetConfig memory a = s.assets[i];
             if (!a.active) continue;
             if (a.kind == AssetKind.Lending) {
-                drain(
-                    usdc,
-                    a.adapter,
-                    x.ledger,
-                    x.openExclusionOf[i],
-                    ExclusionLedger.RecoverySource.EmergencyWithdraw,
-                    s.deferredTotal[i]
+                FundPositionLib.drain(
+                    s, i, x.ledger, x.openExclusionOf[i], ExclusionLedger.RecoverySource.EmergencyWithdraw
                 );
                 continue;
             }
@@ -464,53 +426,9 @@ library FundFlowsLib {
         recovered = afterBal > before ? afterBal - before : 0;
     }
 
-    /// @notice Withdraw `adapter`'s whole reported balance, tolerant of a failing adapter. With `id != 0` the
-    ///         USDC that arrived (balance delta, never the adapter's return value) moves into exclusion
-    ///         record `id` of `ledger` (`RobotMoneyVaultOps._drain` + `_credit`). `ok` is false when
-    ///         `totalAssets` or `withdraw` reverted. The `reserved` USDC (owed to in-kind exits, `deferredTotal`)
-    ///         is left in the adapter for `claimDeferred`: it belongs neither to idle nor to an exclusion record.
-    function drain(
-        address usdc,
-        address adapter,
-        ExclusionLedger ledger,
-        uint256 id,
-        ExclusionLedger.RecoverySource source,
-        uint256 reserved
-    ) public returns (bool ok) {
-        uint256 balance;
-        try IStrategyAdapter(adapter).totalAssets() returns (uint256 reported) {
-            balance = reported;
-        } catch {
-            return false;
-        }
-        if (balance <= reserved) return true;
-        balance -= reserved;
-        uint256 before = IERC20(usdc).balanceOf(address(this));
-        try IStrategyAdapter(adapter).withdraw(balance) returns (uint256) {}
-        catch {
-            return false;
-        }
-        if (id == 0) return true;
-        uint256 got = IERC20(usdc).balanceOf(address(this)) - before;
-        if (got == 0) return true;
-        IERC20(usdc).safeTransfer(address(ledger), got);
-        ledger.credit(id, got, source);
-        return true;
-    }
-
     // ═════════════════════════════════════════════════════════════════════════
     //  Helpers
     // ═════════════════════════════════════════════════════════════════════════
-
-    /// @dev Move `amount` USDC into Lending `adapter` and deploy it; return what the adapter kept (the fund's
-    ///      balance delta, `RobotMoneyVaultOps._allocate`). A refused supply comes straight back and stays idle.
-    function _deploy(address usdc, address adapter, uint256 amount) private returns (uint256 placed) {
-        uint256 before = IERC20(usdc).balanceOf(address(this));
-        IERC20(usdc).safeTransfer(adapter, amount);
-        IStrategyAdapter(adapter).deploy(amount);
-        uint256 handedBack = IERC20(usdc).balanceOf(address(this)) + amount - before;
-        placed = handedBack >= amount ? 0 : amount - handedBack;
-    }
 
     /// @dev Swap through the asset's adapter (`BasketSwaps.swap`: approve, swap with recipient = the fund,
     ///      clear approval). Returns `tokenOut` received by balance delta.

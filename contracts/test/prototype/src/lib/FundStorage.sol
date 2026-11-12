@@ -28,6 +28,30 @@ import {AssetConfig, Plan} from "../FundTypes.sol";
 ///                        Lending: USDC still inside the adapter. Never counted in NAV or in any pro-rata leg.
 /// @param deferredOf      Per asset and account: that account's part of `deferredTotal` (`claimDeferred`).
 /// @param rolesBound      `bindRebalanceRoles` ran (GOVERNANCE_ROLE and REBALANCER_ROLE bind once, RB-1).
+///
+///        Step 3d (proposal §4.5, §5.9; eng plan E1, E9, E13, E14, E19, E20). Appended after `rolesBound`:
+/// @param flowQueue          The FlowQueue that holds FLOW_ROLE (`bindFlowRole`, once). address(0) before binding.
+///                           `ledgerBalanceOf(flowQueue)` is 0 (E13: the queue's own address has no entitlement).
+/// @param flowRoleBound      `bindFlowRole` ran.
+/// @param seeded             `seed` ran (E14). Set once, never cleared.
+/// @param minSeedUsdc        Least USDC `seed` accepts (§5.9.5, default `DEFAULT_MIN_SEED_USDC`).
+/// @param poolShareBps       Pool-share rule of §4.5 rule 3 (default `DEFAULT_POOL_SHARE_BPS`).
+/// @param positionUnits      Per Lending asset index: total units of that lending position (E9, RB-21). Units are
+///                           minted and burned as the fund's position changes, so one unit is always the same
+///                           fraction of the position. Holders' units are `positionUnits - positionClaimTotal`.
+/// @param positionClaimTotal Per Lending asset index: units held by position-share claims of past in-kind exits.
+/// @param positionClaimOf    Per Lending asset index and account: that account's claim units (`claimPosition`).
+/// @param inKindUsed         Per period index (`block.timestamp / inKindPeriod`, below): lending USDC that left the
+///                           venues for in-kind exits in that period, fee included (E20 allowance).
+/// @param lastGoodNav        The last NAV computed while every feed was healthy (E19), USDC 6 decimals.
+/// @param lastGoodNavAt      Its timestamp.
+///
+///        Appended by fund-extras (scaffold plan §7.4):
+/// @param inKindBps          In-kind allowance per period, in bps of the fund's lending holdings (E20).
+/// @param inKindFloorUsdc    The allowance is at least this many USDC per period.
+/// @param inKindPeriod       Period length in seconds; `inKindUsed` is keyed by `block.timestamp / inKindPeriod`.
+///                           The fund holds these three itself (coordinator ruling 6, proposal §5.9.5), so
+///                           `inKindUsed` is keyed by this period, not by the queue's `epochLength`.
 struct FundState {
     AssetConfig[] assets;
     mapping(bytes32 codeHash => bool allowed) codeHashAllowed;
@@ -46,6 +70,22 @@ struct FundState {
     mapping(uint256 index => uint256) deferredTotal;
     mapping(uint256 index => mapping(address account => uint256)) deferredOf;
     bool rolesBound;
+    // ── Step 3d (append-only below this line) ──
+    address flowQueue;
+    bool flowRoleBound;
+    bool seeded;
+    uint256 minSeedUsdc;
+    uint16 poolShareBps;
+    mapping(uint256 index => uint256) positionUnits;
+    mapping(uint256 index => uint256) positionClaimTotal;
+    mapping(uint256 index => mapping(address account => uint256)) positionClaimOf;
+    mapping(uint256 period => uint256) inKindUsed;
+    uint256 lastGoodNav;
+    uint64 lastGoodNavAt;
+    // ── fund-extras (append-only below this line) ──
+    uint16 inKindBps;
+    uint128 inKindFloorUsdc;
+    uint32 inKindPeriod;
 }
 
 /// @title FundStorage

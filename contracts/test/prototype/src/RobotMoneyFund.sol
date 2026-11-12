@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/technical/one-vault-rebalancer-proposal.md §4 (target architecture), §4.1-§4.4 (asset targets, NAV,
 //            deposits, redemptions), §5.1 (plan open), §5.3 (executeStep), §5.5 (plan states), §6 (contract
-//            changes), §6.1 (size), §7 (RB-1, RB-3, RB-4, RB-5, RB-6, RB-7)
+//            changes), §6.1 (size), §7 (RB-1, RB-3, RB-4, RB-5, RB-6, RB-7); step 3d: §4.5, §5.9.4, §5.9.6, §7 (RB-13,
+//            RB-17, RB-21, RB-22); docs/technical/one-vault-timed-flows-eng-plan.md E1 to E4, E9, E13 to E15, E19,
+//            E20, E23
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
 
@@ -26,13 +28,18 @@ import {
     Roles,
     StepOrder,
     StepResult,
-    BPS
+    BPS,
+    MIN_MIN_SEED_USDC,
+    MAX_MIN_SEED_USDC,
+    MAX_POOL_SHARE_BPS
 } from "./FundTypes.sol";
 import {IRobotMoneyFund} from "./interfaces/IRobotMoneyFund.sol";
+import {IFlowQueue} from "./interfaces/IFlowQueue.sol";
 import {FundState, FundStorage} from "./lib/FundStorage.sol";
 import {FundValuationLib} from "./lib/FundValuationLib.sol";
 import {FundFlowsLib} from "./lib/FundFlowsLib.sol";
 import {FundAdminLib} from "./lib/FundAdminLib.sol";
+import {FundPositionLib} from "./lib/FundPositionLib.sol";
 
 /// @title RobotMoneyFund
 /// @notice The one vault (§4): an ERC-4626 over USDC, share `rmFUND`, behind `GovernedUUPS` (ADR-0014). It holds
@@ -54,7 +61,7 @@ import {FundAdminLib} from "./lib/FundAdminLib.sol";
 ///         - `redeem` and `redeemInKind` are never gated by plan state, pause or shutdown (RB-6).
 ///
 ///         Size (§6.1, G1): value-moving and validation logic lives in the delegatecall-linked
-///         `FundValuationLib`, `FundFlowsLib` and `FundAdminLib`, which in turn link the existing
+///         `FundValuationLib`, `FundFlowsLib`, `FundAdminLib` and (step 3d) `FundPositionLib`, which in turn link the existing
 ///         `TwapTickMath`, `BasketSwaps`, `BasketAssetConfigGuard` and `RobotMoneyVaultOps` (ledger creation).
 ///         The fund keeps ERC-4626 accounting, roles, plan transitions and lifecycle flags.
 ///
@@ -76,6 +83,8 @@ contract RobotMoneyFund is
     bytes32 public constant EMERGENCY_ROLE = Roles.EMERGENCY_ROLE;
     bytes32 public constant GOVERNANCE_ROLE = Roles.GOVERNANCE_ROLE;
     bytes32 public constant REBALANCER_ROLE = Roles.REBALANCER_ROLE;
+    /// @notice The FlowQueue's authority (E1): `mintInKind`, `sellForFlow`, `ledgerCheckpoint`. Bound once.
+    bytes32 public constant FLOW_ROLE = Roles.FLOW_ROLE;
 
     // ═════════════════════════════════════════════════════════════════════════
     //  Initializer (ADR-0014)
@@ -117,10 +126,12 @@ contract RobotMoneyFund is
         _setRoleAdmin(EMERGENCY_ROLE, ADMIN_ROLE);
         _setRoleAdmin(GOVERNANCE_ROLE, GOVERNANCE_ROLE);
         _setRoleAdmin(REBALANCER_ROLE, REBALANCER_ROLE);
+        _setRoleAdmin(FLOW_ROLE, FLOW_ROLE);
         _grantRole(ADMIN_ROLE, p.admin);
         _grantRole(EMERGENCY_ROLE, p.emergency);
 
-        RobotMoneyVaultOps.createLedger(IERC20(p.usdc));
+        // Step 3d defaults the fund holds (minSeedUsdc, poolShareBps, the in-kind allowance), then the ledger.
+        FundAdminLib.initFlows(s, p.usdc);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -137,106 +148,93 @@ contract RobotMoneyFund is
         return 18;
     }
 
-    /// @notice Idle USDC + Σ counted Lending `adapter.totalAssets()` + Σ active Basket balance × TWAP (§4.2).
-    ///         Never reads spot. An excluded Lending adapter (ADP-2) is not counted.
+    /// @notice Idle USDC + Σ counted Lending holders' part + Σ active Basket balance × TWAP (§4.2). Never reads
+    ///         spot. An excluded Lending adapter (ADP-2) and the position claims of past in-kind exits are not
+    ///         counted. Step 3d (E19, §5.9.6): reverts `FeedUnhealthy(index, status)` while a feed is unhealthy (the
+    ///         feeds of settlement check 2), and so do `convertToShares` and `convertToAssets`, which read it. A client
+    ///         reads `lastGoodNav` then.
     function totalAssets() public view override returns (uint256) {
-        return FundValuationLib.nav(_s());
+        return FundValuationLib.navChecked(_s());
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Deposit (§4.3)
+    //  ERC-4626 entry points (step 3d, E2, proposal §5.9.6): the fund is the share token, not the entry point
+    //
+    //  The step 3c deposit path (realized TWAP NAV delta mint, deficit-first routing) and the synchronous
+    //  `redeem` are removed from the live fund (D10, D11). The frozen baseline under
+    //  contracts/test/prototype/baseline/ keeps them. Requests and claims go through the FlowQueue.
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// @notice Deposit `assets` USDC; returns the shares ACTUALLY minted on the realized TWAP NAV delta
-    ///         (AZ-BSK-1/-2/-3). See `_depositFlow`.
-    function deposit(uint256 assets, address receiver) public override returns (uint256) {
-        return _depositFlow(assets, receiver);
+    /// @notice Closed (E2): reverts `UseFlowQueue(flowQueue())`. Deposit through `FlowQueue.requestDeposit`.
+    function deposit(uint256, address) public view override returns (uint256) {
+        _useQueue();
     }
 
-    /// @notice Mint at least `shares`: charges `previewMint(shares)` (grossed up by `maxSlippageBps`) and runs
-    ///         the deposit path, which mints on the realized delta and may mint more than `shares`. Returns
-    ///         the USDC charged.
-    function mint(uint256 shares, address receiver) public override returns (uint256 assets) {
-        assets = previewMint(shares);
-        _depositFlow(assets, receiver);
+    /// @notice Closed (E2): reverts `UseFlowQueue(flowQueue())`.
+    function mint(uint256, address) public view override returns (uint256) {
+        _useQueue();
     }
 
-    /// @dev The one deposit path (§4.3): `FundFlowsLib.deposit` runs the gates (pause, shutdown, per-deposit
-    ///      cap, ADP-2 exclusion, ORA-4, TVL cap), pulls and routes the USDC deficit-first, and returns the
-    ///      shares for the REALIZED TWAP NAV delta (`DepositBelowSlippageFloor` below the floor; denominator
-    ///      `navBefore + 1`, AZ-BSK-1/-3). The fund mints them.
-    function _depositFlow(uint256 assets, address receiver) private nonReentrant returns (uint256 shares) {
-        address caller = _msgSender();
-        shares = FundFlowsLib.deposit(_s(), caller, assets, totalSupply());
-        _mint(receiver, shares);
-        emit Deposit(caller, receiver, assets, shares);
+    /// @notice Closed (E2): reverts `UseFlowQueue(flowQueue())`. Redeem through `FlowQueue.requestRedeem`, or
+    ///         exit at once in kind with `redeemInKind`.
+    function redeem(uint256, address, address) public view override returns (uint256) {
+        _useQueue();
     }
 
-    /// @notice Floor on shares for `assets` (`BasketVault.previewDeposit`): converts
-    ///         `assets × (1 − maxSlippageBps)`. Reverts on ORA-4 (and while a Lending asset is excluded),
-    ///         as `deposit` would.
-    function previewDeposit(uint256 assets) public view override returns (uint256) {
-        FundValuationLib.requireDepositable(_s());
-        return _depositFloor(assets);
+    /// @notice Reverts `UseFlowQueue`: no synchronous price exists for a timed flow (ERC-7540 previews revert).
+    ///         `FlowQueue.quoteDeposit` gives the worst case instead (E21).
+    function previewDeposit(uint256) public view override returns (uint256) {
+        _useQueue();
     }
 
-    /// @notice Worst-case USDC to mint `shares`: the raw NAV grossed up by `1 / (1 − maxSlippageBps)`, rounded
-    ///         up (BasketVault H-1: `mint` never undercharges against `deposit`).
-    function previewMint(uint256 shares) public view override returns (uint256) {
-        uint256 gross = _convertToAssets(shares, Math.Rounding.Ceil);
-        return gross.mulDiv(BPS, BPS - _s().maxSlippageBps, Math.Rounding.Ceil);
+    /// @notice Reverts `UseFlowQueue` (see `previewDeposit`).
+    function previewMint(uint256) public view override returns (uint256) {
+        _useQueue();
     }
 
-    /// @notice 0 while paused, shut down or a Lending asset is excluded; else min(perDepositCap, TVL headroom).
-    function maxDeposit(address) public view override returns (uint256) {
-        FundState storage s = _s();
-        if (s.depositsPaused || s.shutdown || FundValuationLib.anyExcluded(s)) return 0;
-        uint256 current = totalAssets();
-        if (current >= s.tvlCap) return 0;
-        uint256 room = s.tvlCap - current;
-        return s.perDepositCap < room ? s.perDepositCap : room;
+    /// @notice Reverts `UseFlowQueue` (see `previewDeposit`; `FlowQueue.quoteRedeem`).
+    function previewRedeem(uint256) public view override returns (uint256) {
+        _useQueue();
     }
 
-    /// @notice `maxDeposit` through the slippage-discounted share floor (never reverts).
-    function maxMint(address receiver) public view override returns (uint256) {
-        return _depositFloor(maxDeposit(receiver));
+    /// @notice 0: the fund's own `deposit` is closed (ERC-4626 requires 0 for a disabled path, never a revert).
+    function maxDeposit(address) public pure override returns (uint256) {
+        return 0;
     }
 
-    function _depositFloor(uint256 assets) private view returns (uint256) {
-        return _convertToShares(assets.mulDiv(BPS - _s().maxSlippageBps, BPS), Math.Rounding.Floor);
+    /// @notice 0 (see `maxDeposit`).
+    function maxMint(address) public pure override returns (uint256) {
+        return 0;
+    }
+
+    /// @notice 0: the fund's own `redeem` is closed. `redeemInKind` stays open.
+    function maxRedeem(address) public pure override returns (uint256) {
+        return 0;
+    }
+
+    /// @dev Revert `UseFlowQueue` naming the bound queue (address(0) before `bindFlowRole`).
+    function _useQueue() private view {
+        revert UseFlowQueue(_s().flowQueue);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Redeem (§4.4, RB-6)
+    //  In-kind exit (§4.4, §5.9.4, RB-6, RB-13)
     // ═════════════════════════════════════════════════════════════════════════
-
-    /// @notice Burn `shares` of `owner` and pay `receiver` the realized pro-rata proceeds of every holding net
-    ///         of the exit fee (§4.4). Never gated by plan state, pause or shutdown (RB-6): it reads no plan
-    ///         state and no ORA-4 band. Returns the USDC actually paid (AZ-BSK-2).
-    /// @dev Burn before any external call (BasketVault `_withdraw` order). `FundFlowsLib.sellProportional`
-    ///      withdraws pro rata from each counted Lending adapter (a short fill pays what was realized) and sells
-    ///      pro rata of each Basket token under the TWAP × (1 − maxSlippageBps) floor. The exit fee is charged on
-    ///      the realized gross only (FEE-2 / NC-11).
-    function redeem(uint256 shares, address receiver, address owner) public override nonReentrant returns (uint256) {
-        if (shares == 0) return 0;
-        address caller = _msgSender();
-        if (caller != owner) _spendAllowance(owner, caller, shares);
-        uint256 supplyBefore = totalSupply();
-        _burn(owner, shares);
-        uint256 net = FundFlowsLib.redeemPayout(_s(), owner, receiver, shares, supplyBefore);
-        emit Withdraw(caller, receiver, owner, net, shares);
-        return net;
-    }
 
     /// @notice Oracle-free, swap-free exit of last resort (§4.4): pro-rata idle and Lending USDC as one leg,
-    ///         plus each active Basket token, each net of the exit fee. Never gated (RB-6).
+    ///         plus each active Basket token, each net of the exit fee. Never gated (RB-6). Step 3d: asserts the
+    ///         proportion check (check 10, RB-13) inside `FundFlowsLib.payInKind`; pays the lending part in USDC up to
+    ///         the period's in-kind allowance and the rest as claims on a share of each position (E9, E20, RB-21);
+    ///         refuses a zero `receiver` and survives a venue whose value read reverts (E23). The FlowQueue calls it
+    ///         with `owner == queue` and `receiver` = the request's owner for escrowed shares (`exitInKind`,
+    ///         `takeReturn`); then `caller == owner`, so no allowance is spent, and claims are keyed to `receiver`.
     function redeemInKind(uint256 shares, address receiver, address owner) external nonReentrant {
         if (shares == 0) return;
         address caller = _msgSender();
         if (caller != owner) _spendAllowance(owner, caller, shares);
         uint256 supplyBefore = totalSupply();
         _burn(owner, shares);
-        FundFlowsLib.payInKind(_s(), receiver, shares, supplyBefore);
+        FundFlowsLib.payInKind(_s(), receiver, owner, shares, supplyBefore);
         emit RedeemedInKind(owner, receiver, shares);
     }
 
@@ -255,14 +253,7 @@ contract RobotMoneyFund is
         return _s().deferredTotal[index];
     }
 
-    /// @notice Worst case: TWAP gross × (1 − maxSlippageBps) × (1 − exitFeeBps) (BasketVault.previewRedeem).
-    function previewRedeem(uint256 shares) public view override returns (uint256) {
-        FundState storage s = _s();
-        uint256 afterSlip = _convertToAssets(shares, Math.Rounding.Floor).mulDiv(BPS - s.maxSlippageBps, BPS);
-        return afterSlip - afterSlip.mulDiv(s.exitFeeBps, BPS);
-    }
-
-    /// @notice Not offered (§4.4): the fund holds inexact positions. Use `redeem`.
+    /// @notice Not offered (§4.4): the fund holds inexact positions. Redeem through the FlowQueue.
     function withdraw(uint256, address, address) public pure override returns (uint256) {
         revert RedeemOnly();
     }
@@ -278,11 +269,152 @@ contract RobotMoneyFund is
     }
 
     /// @dev core 1820: once an exclusion record exists, report both pre-change balances to the ledger before
-    ///      every mint, burn and transfer, so each holder's claim stays fixed at its balance at exclusion.
+    ///      every mint, burn and transfer, so each holder's claim stays fixed at its balance at exclusion. The
+    ///      ledger (`FundExclusionLedger`) reads `ledgerBalanceOf`, so a share the FlowQueue holds counts for its
+    ///      owner; the queue checkpoints that owner first through `ledgerCheckpoint` (E13, RB-22).
+    ///      E14: the seed shares the fund holds for itself never move (`SeedSharesLocked`). No fund path transfers
+    ///      or burns them; this makes that a checked rule rather than an absence.
     function _update(address from, address to, uint256 value) internal override {
+        if (from == address(this)) revert SeedSharesLocked();
         RobotMoneyVaultOps.Exclusions storage x = RobotMoneyVaultOps.exclusions();
         if (x.snapshots) x.ledger.checkpoint(from, to);
         super._update(from, to, value);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Step 3d: timed flows (proposal §4.3 to §4.5, §5.9; eng plan E1 to E23)
+    //
+    //  Real (fund-core, scaffold plan §7.2): `bindFlowRole`, `seed`, `mintInKind`, `sellForFlow`,
+    //  `ledgerCheckpoint`, `ledgerBalanceOf`, `heldBalances`, the getters and the two fund-held setters.
+    //  Real (fund-extras, §7.4): position units and claims (`positionClaimOf`, `claimPosition`, `positionUnits`),
+    //  the in-kind allowance (`setInKindAllowance`, `inKindAllowance`), `lastGoodNav`. No stub is left in the fund.
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /// @inheritdoc IRobotMoneyFund
+    function bindFlowRole(address queue) external onlyRole(ADMIN_ROLE) {
+        FundState storage s = _s();
+        if (s.flowRoleBound) revert FlowRoleAlreadyBound();
+        if (queue == address(0)) revert ZeroAddress();
+        s.flowRoleBound = true;
+        s.flowQueue = queue;
+        _grantRole(FLOW_ROLE, queue);
+        emit FlowRoleBound(queue);
+    }
+
+    function flowQueue() external view returns (address) {
+        return _s().flowQueue;
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    /// @dev Body in `FundFlowsLib.seed`; the shares are minted to the fund itself and never move (`_update`).
+    function seed(uint256 usdc) external onlyRole(ADMIN_ROLE) nonReentrant returns (uint256 shares) {
+        shares = FundFlowsLib.seed(_s(), _msgSender(), usdc, totalSupply());
+        _mint(address(this), shares);
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    /// @dev Body in `FundFlowsLib.mintInKind`, which buys the slice and asserts check 10 against
+    ///      `supply + sharesOut`; the mint here moves no asset, so the check still holds after it.
+    function mintInKind(uint256 sharesOut, uint256 maxUsdc, uint256[] calldata maxUsdcPerLeg)
+        external
+        onlyRole(FLOW_ROLE)
+        nonReentrant
+        returns (uint256 usdcSpent)
+    {
+        address caller = _msgSender();
+        usdcSpent = FundFlowsLib.mintInKind(_s(), caller, sharesOut, maxUsdc, maxUsdcPerLeg, totalSupply());
+        _mint(caller, sharesOut);
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    /// @dev Burn first (before any external call), then `FundFlowsLib.sellForFlow` sells the slice, pays and
+    ///      asserts check 10 against `supplyBefore − shares`.
+    function sellForFlow(uint256 shares, uint256[] calldata minUsdcPerLeg)
+        external
+        onlyRole(FLOW_ROLE)
+        nonReentrant
+        returns (uint256 usdcOut)
+    {
+        address caller = _msgSender();
+        uint256 supplyBefore = totalSupply();
+        if (supplyBefore == 0) revert NotSeeded();
+        _burn(caller, shares);
+        return FundFlowsLib.sellForFlow(_s(), caller, shares, minUsdcPerLeg, supplyBefore);
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function positionClaimOf(uint256 index, address account) external view returns (uint256, uint256) {
+        return FundPositionLib.claimOf(_s(), index, account);
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function positionUnits(uint256 index) external view returns (uint256 totalUnits, uint256 claimUnits) {
+        FundState storage s = _s();
+        return (s.positionUnits[index], s.positionClaimTotal[index]);
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    /// @dev Pays only `msg.sender`'s own claim, to the address it names (as `claimDeferred`, INV-1).
+    function claimPosition(uint256 index, address to) external nonReentrant returns (uint256) {
+        return FundPositionLib.claimPosition(_s(), index, _msgSender(), to);
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    /// @dev The ledger's own `checkpoint(account, 0)`: stores `account`'s `ledgerBalanceOf` as it stands now, once
+    ///      per record, before the queue changes it. A no-op until the first record opens (`snapshots`).
+    function ledgerCheckpoint(address account) external onlyRole(FLOW_ROLE) {
+        RobotMoneyVaultOps.Exclusions storage x = RobotMoneyVaultOps.exclusions();
+        if (x.snapshots) x.ledger.checkpoint(account, address(0));
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function ledgerBalanceOf(address account) external view returns (uint256) {
+        address q = _s().flowQueue;
+        if (account == q) return 0;
+        uint256 bal = balanceOf(account);
+        return q == address(0) ? bal : bal + IFlowQueue(q).queuedSharesOf(account);
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function heldBalances() external view returns (uint256 idle, uint256[] memory held) {
+        return FundValuationLib.heldBalances(_s());
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function lastGoodNav() external view returns (uint256, uint64) {
+        return FundValuationLib.lastGoodNav(_s());
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function setInKindAllowance(uint16 bps, uint128 floorUsdc, uint32 period) external onlyRole(ADMIN_ROLE) {
+        FundPositionLib.setInKindAllowance(_s(), bps, floorUsdc, period);
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function inKindAllowance() external view returns (uint16, uint128, uint32, uint256) {
+        return FundPositionLib.inKindAllowance(_s());
+    }
+
+    function minSeedUsdc() external view returns (uint256) {
+        return _s().minSeedUsdc;
+    }
+
+    function poolShareBps() external view returns (uint16) {
+        return _s().poolShareBps;
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function setMinSeedUsdc(uint256 newMin) external onlyRole(ADMIN_ROLE) {
+        if (newMin < MIN_MIN_SEED_USDC || newMin > MAX_MIN_SEED_USDC) revert InvalidParam();
+        _s().minSeedUsdc = newMin;
+        emit MinSeedUsdcSet(newMin);
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function setPoolShareBps(uint16 newBps) external onlyRole(ADMIN_ROLE) {
+        if (newBps == 0 || newBps > MAX_POOL_SHARE_BPS) revert InvalidParam();
+        _s().poolShareBps = newBps;
+        emit PoolShareBpsSet(newBps);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -311,23 +443,17 @@ contract RobotMoneyFund is
 
     /// @inheritdoc IRobotMoneyFund
     function concludePlan(PlanStatus to) external onlyRole(REBALANCER_ROLE) {
-        Plan storage p = _s().plan;
-        bool timeOk = (to == PlanStatus.Converged && block.timestamp >= p.endTime)
-            || (to == PlanStatus.Expired && block.timestamp > p.endTime);
-        if (!timeOk) revert InvalidPlanTransition(p.id, p.status, to);
-        _move(PlanStatus.Open, to);
+        _plan(FundAdminLib.PlanOp.Conclude, uint256(to));
     }
 
     /// @inheritdoc IRobotMoneyFund
     function pauseRebalance() external onlyRole(EMERGENCY_ROLE) {
-        PlanStatus st = _s().plan.status;
-        _move(st == PlanStatus.Halted ? PlanStatus.Halted : PlanStatus.Open, PlanStatus.Paused);
+        _plan(FundAdminLib.PlanOp.Pause, 0);
     }
 
     /// @inheritdoc IRobotMoneyFund
     function resumePlan() external onlyRole(ADMIN_ROLE) {
-        Plan storage p = _s().plan;
-        _move(PlanStatus.Paused, p.costSpent > p.costBudget ? PlanStatus.Halted : PlanStatus.Open);
+        _plan(FundAdminLib.PlanOp.Resume, 0);
     }
 
     /// @inheritdoc IRobotMoneyFund
@@ -343,37 +469,18 @@ contract RobotMoneyFund is
 
     /// @inheritdoc IRobotMoneyFund
     function extendBudget(uint256 addedUsdc) external onlyRole(ADMIN_ROLE) {
-        Plan storage p = _s().plan;
-        PlanStatus st = p.status;
-        if (!_isLive(st)) revert InvalidPlanTransition(p.id, st, st);
-        uint256 budget = p.costBudget + addedUsdc;
-        p.costBudget = budget;
-        emit PlanBudgetExtended(p.id, addedUsdc, budget);
-        if (st == PlanStatus.Halted && p.costSpent <= budget) _move(PlanStatus.Halted, PlanStatus.Open);
+        _plan(FundAdminLib.PlanOp.Extend, addedUsdc);
     }
 
     /// @inheritdoc IRobotMoneyFund
     function closePlan() external onlyRole(ADMIN_ROLE) {
-        PlanStatus st = _s().plan.status;
-        if (!_isLive(st)) revert InvalidPlanTransition(_s().plan.id, st, PlanStatus.Superseded);
-        _move(st, PlanStatus.Superseded);
+        _plan(FundAdminLib.PlanOp.Close, 0);
     }
 
-    /// @dev One plan transition `from → to` (§5.5), with exactly one `PlanStatusChanged`.
-    function _move(PlanStatus from, PlanStatus to) private {
-        Plan storage p = _s().plan;
-        if (p.status != from) revert InvalidPlanTransition(p.id, p.status, to);
-        p.status = to;
-        emit PlanStatusChanged(p.id, from, to);
-    }
-
-    function _isLive(PlanStatus st) private pure returns (bool) {
-        return st == PlanStatus.Open || st == PlanStatus.Halted || st == PlanStatus.Paused;
-    }
-
-    function _requireNoLivePlan() private view {
-        Plan storage p = _s().plan;
-        if (_isLive(p.status)) revert PlanLive(p.id);
+    /// @dev Every plan transition (§5.5) runs in `FundAdminLib.planOp` through this one call site (step 3d size
+    ///      budget, §6.1). The role is checked by the caller above.
+    function _plan(FundAdminLib.PlanOp op, uint256 arg) private {
+        FundAdminLib.planOp(_s(), op, arg);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -462,10 +569,6 @@ contract RobotMoneyFund is
         return FundValuationLib.pathTarget(_s(), t);
     }
 
-    function currentTargetBps() external view returns (uint256[] memory) {
-        return FundValuationLib.currentTargetBps(_s());
-    }
-
     function currentWeightsBps() external view returns (uint256[] memory bps, uint256 idleBps) {
         return FundValuationLib.currentWeightsBps(_s());
     }
@@ -526,13 +629,11 @@ contract RobotMoneyFund is
 
     /// @inheritdoc IRobotMoneyFund
     function addAsset(AssetConfig calldata c) external onlyRole(ADMIN_ROLE) returns (uint256 index) {
-        _requireNoLivePlan();
         return FundAdminLib.addAsset(_s(), c);
     }
 
     /// @inheritdoc IRobotMoneyFund
     function deactivateAsset(uint256 index) external onlyRole(ADMIN_ROLE) {
-        _requireNoLivePlan();
         FundAdminLib.deactivateAsset(_s(), index);
     }
 
@@ -611,10 +712,8 @@ contract RobotMoneyFund is
     ///      whose TWAP read fails is skipped and stays held; holders still exit it through `redeemInKind`.
     function emergencyUnwind() external onlyRole(EMERGENCY_ROLE) nonReentrant {
         _setDepositsPaused(true);
-        FundState storage s = _s();
-        uint256 recovered = FundFlowsLib.emergencyUnwind(s);
-        PlanStatus st = s.plan.status;
-        if (st == PlanStatus.Open || st == PlanStatus.Halted) _move(st, PlanStatus.Paused);
+        uint256 recovered = FundFlowsLib.emergencyUnwind(_s());
+        _plan(FundAdminLib.PlanOp.UnwindPause, 0);
         emit EmergencyUnwound(recovered);
     }
 

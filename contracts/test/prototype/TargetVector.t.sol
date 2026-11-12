@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4.1 (per-asset targets, the contract checks),
-//            §5.1 (receipt to plan), §10 phase 3b, §7 RB-9
-// Experiment prototype only (contracts/test/prototype/). Phase 3b.
+// Canonical: docs/technical/one-vault-rebalancer-proposal.md §4.1 (per-asset targets, the contract checks), §4.5
+//            (asset admission), §5.1 (receipt to plan), §10 phase 3b, §7 RB-9, RB-17
+// Experiment prototype only (contracts/test/prototype/). Phase 3b, on the step 3d asset list (integrate): the tests
+// that deactivated or relisted deSPXA (no longer listed, §4.5) use cbBTC; the step 3c versions live on in
+// baseline/TargetVector.t.sol.
 pragma solidity ^0.8.24;
 
 import {PrototypeHarness} from "./PrototypeHarness.sol";
-import {IFundEvents, AssetConfig, AssetKind, PlanParams, PlanStatus, Venue, BPS} from "./src/FundTypes.sol";
+import {IFundEvents, AssetConfig, PlanParams, PlanStatus, BPS} from "./src/FundTypes.sol";
 import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
 import {IRebalanceGovernance} from "./src/interfaces/IRebalanceGovernance.sol";
 
@@ -21,9 +23,9 @@ contract TargetVectorTest is PrototypeHarness {
         super.setUp();
     }
 
-    /// @dev The valid vector every test starts from: (60, 30, 10) split over the six assets.
-    function _valid() internal pure returns (uint16[6] memory) {
-        return bucketVec(6_000, 3_000, 1_000);
+    /// @dev The valid vector every test starts from: (65, 35) split over the listed assets.
+    function _valid() internal view returns (uint16[5] memory) {
+        return bucketVec(6_500, 3_500);
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -34,15 +36,7 @@ contract TargetVectorTest is PrototypeHarness {
     ///      explicit 0 is the only way to sell an asset.
     function test_rb9_unlistedActiveAsset_reverts() public fixtureCovered {
         (address[] memory ids, uint256[] memory w) = assetArrays(_valid());
-        address[] memory ids5 = new address[](N_ASSETS - 1);
-        uint256[] memory w5 = new uint256[](N_ASSETS - 1);
-        uint256 k;
-        for (uint256 i; i < N_ASSETS; ++i) {
-            if (i == IDX_MOONWELL) continue;
-            ids5[k] = ids[i];
-            w5[k] = w[i];
-            ++k;
-        }
+        (address[] memory ids5, uint256[] memory w5) = _without(ids, w, IDX_MOONWELL);
         w5[IDX_WETH - 1] += w[IDX_MOONWELL];
         _expectRefused(
             ids5, w5, abi.encodeWithSelector(IFundEvents.TargetAssetMissing.selector, address(moonwellAdapter))
@@ -60,26 +54,21 @@ contract TargetVectorTest is PrototypeHarness {
 
     /// @dev A deactivated asset may not be named, not even with weight 0. The vector without it applies.
     function test_rb9_inactiveAsset_reverts() public fixtureCovered {
-        timelockExecute(address(fund), abi.encodeCall(fund.deactivateAsset, (IDX_DESPXA)));
-        assertFalse(fund.assetConfig(IDX_DESPXA).active, "deSPXA deactivated");
+        timelockExecute(address(fund), abi.encodeCall(fund.deactivateAsset, (IDX_CBBTC)));
+        assertFalse(fund.assetConfig(IDX_CBBTC).active, "cbBTC deactivated");
 
-        // (60, 40) with deSPXA listed at 0.
-        uint16[6] memory v = bucketVec(6_000, 4_000, 0);
+        // (65, 35) with all of the protocol bucket on wETH and cbBTC listed at 0.
+        uint16[5] memory v = _cbbtcZero();
         (address[] memory ids, uint256[] memory w) = assetArrays(v);
-        bytes memory err = abi.encodeWithSelector(IFundEvents.TargetAssetNotActive.selector, DESPXA);
+        bytes memory err = abi.encodeWithSelector(IFundEvents.TargetAssetNotActive.selector, CBBTC);
         bytes32 rid = _expectRefusedNoApply(ids, w, err);
 
-        // The same receipt applies once deSPXA is left out: an inactive asset is not "missing".
-        address[] memory ids5 = new address[](N_ASSETS - 1);
-        uint256[] memory w5 = new uint256[](N_ASSETS - 1);
-        for (uint256 i; i < N_ASSETS - 1; ++i) {
-            ids5[i] = ids[i];
-            w5[i] = w[i];
-        }
+        // The same receipt applies once cbBTC is left out: an inactive asset is not "missing".
+        (address[] memory ids5, uint256[] memory w5) = _without(ids, w, IDX_CBBTC);
         _applyRaw(rid, ids5, w5);
         assertEq(fund.currentPlanId(), 1, "valid vector opened the plan");
         assertTrue(receipts.isReleased(rid), "released by the valid apply");
-        assertEq(fund.targetBps()[IDX_DESPXA], 0, "inactive asset target 0");
+        assertEq(fund.targetBps()[IDX_CBBTC], 0, "inactive asset target 0");
     }
 
     /// @dev An address that is no fund asset is refused with the same error as an inactive one.
@@ -107,7 +96,7 @@ contract TargetVectorTest is PrototypeHarness {
     /// @dev A lending target above its `capBps` is refused, even when the vector is otherwise valid.
     function test_rb9_capBreach_reverts() public fixtureCovered {
         uint16 over = LENDING_CAP_BPS + 1;
-        uint16[6] memory v = assetVec(over, 0, 0, uint16(BPS - over), 0, 0);
+        uint16[5] memory v = assetVec(over, 0, uint16(BPS - over), 0, 0);
         (address[] memory ids, uint256[] memory w) = assetArrays(v);
         _expectRefused(
             ids,
@@ -115,14 +104,14 @@ contract TargetVectorTest is PrototypeHarness {
             abi.encodeWithSelector(IFundEvents.TargetExceedsCap.selector, IDX_AAVE, over, LENDING_CAP_BPS)
         );
         // At the cap exactly, the same shape applies.
-        v = assetVec(LENDING_CAP_BPS, 0, 0, uint16(BPS - LENDING_CAP_BPS), 0, 0);
+        v = assetVec(LENDING_CAP_BPS, 0, uint16(BPS - LENDING_CAP_BPS), 0, 0);
         assertEq(recordAndApply(v), _planBase + 1, "a target at the cap applies");
     }
 
     /// @dev Parallel arrays of different length are refused (`InvalidParam`).
     function test_rb9_lengthMismatch_reverts() public fixtureCovered {
         (address[] memory ids, uint256[] memory w) = assetArrays(_valid());
-        uint256[] memory w5 = new uint256[](N_ASSETS - 1);
+        uint256[] memory w5 = new uint256[](ids.length - 1);
         for (uint256 i; i < w5.length; ++i) {
             w5[i] = w[i];
         }
@@ -131,19 +120,22 @@ contract TargetVectorTest is PrototypeHarness {
 
     /// @dev The order of the vector does not matter, and each asset gets exactly its listed weight.
     function test_rb9_anyOrder_setsExactPerAssetTargets() public fixtureCovered {
-        uint16[6] memory v = assetVec(2_500, 2_000, 1_500, 1_200, 1_300, 1_500);
+        uint16[5] memory v = cometListed
+            ? assetVec(2_500, 2_000, 1_200, 1_300, 3_000)
+            : assetVec(2_500, 5_000, 1_200, 1_300, 0);
         (address[] memory ids, uint256[] memory w) = assetArrays(v);
-        address[] memory rIds = new address[](N_ASSETS);
-        uint256[] memory rW = new uint256[](N_ASSETS);
-        for (uint256 i; i < N_ASSETS; ++i) {
-            rIds[i] = ids[N_ASSETS - 1 - i];
-            rW[i] = w[N_ASSETS - 1 - i];
+        uint256 n = ids.length;
+        address[] memory rIds = new address[](n);
+        uint256[] memory rW = new uint256[](n);
+        for (uint256 i; i < n; ++i) {
+            rIds[i] = ids[n - 1 - i];
+            rW[i] = w[n - 1 - i];
         }
         (bytes32 rid, bytes32 digest) = recordReceipt(v);
         _scheduleApply(rid, digest, rIds, rW, "");
         assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Open), "plan open");
         uint16[] memory t = fund.targetBps();
-        for (uint256 i; i < N_ASSETS; ++i) {
+        for (uint256 i; i < n; ++i) {
             assertEq(t[i], v[i], "exact per-asset target");
             assertEq(fund.plan().endBps[i], v[i], "plan end = the vector");
         }
@@ -172,82 +164,65 @@ contract TargetVectorTest is PrototypeHarness {
     }
 
     /// @dev An asset the persistent target still weights cannot be deactivated, even with no live plan and no
-    ///      holdings. Once a vector names it with 0, it deactivates, and its target stays 0 for deposits.
+    ///      holdings. Once a vector names it with 0, it deactivates, its target stays 0, and a deposit through the
+    ///      queue (pro rata over held, active assets, E3) buys none of it.
     function test_deactivate_targetedAsset_reverts() public fixtureCovered {
-        recordAndApply(_valid());
-        // Close before any step buys deSPXA: no live plan, no holdings, target still 1 000.
+        uint16[5] memory v = _valid();
+        recordAndApply(v);
+        // Close before any step buys cbBTC: no live plan, no holdings, target still the vector's.
         timelockExecute(address(fund), abi.encodeCall(fund.closePlan, ()));
-        assertEq(IERC20Like(DESPXA).balanceOf(address(fund)), 0, "no deSPXA bought");
-        assertEq(fund.targetBps()[IDX_DESPXA], 1_000, "deSPXA still targeted");
+        assertEq(IERC20Like(CBBTC).balanceOf(address(fund)), 0, "no cbBTC bought");
+        assertEq(fund.targetBps()[IDX_CBBTC], v[IDX_CBBTC], "cbBTC still targeted");
         _timelockExpectRevert(
             address(fund),
-            abi.encodeCall(fund.deactivateAsset, (IDX_DESPXA)),
-            abi.encodeWithSelector(IRobotMoneyFund.AssetStillTargeted.selector, IDX_DESPXA, uint256(1_000))
+            abi.encodeCall(fund.deactivateAsset, (IDX_CBBTC)),
+            abi.encodeWithSelector(IRobotMoneyFund.AssetStillTargeted.selector, IDX_CBBTC, uint256(v[IDX_CBBTC]))
         );
-        assertTrue(fund.assetConfig(IDX_DESPXA).active, "still active");
+        assertTrue(fund.assetConfig(IDX_CBBTC).active, "still active");
 
         // Name it with 0, close, then deactivate.
-        recordAndApply(bucketVec(6_000, 4_000, 0));
+        recordAndApply(_cbbtcZero());
         timelockExecute(address(fund), abi.encodeCall(fund.closePlan, ()));
-        timelockExecute(address(fund), abi.encodeCall(fund.deactivateAsset, (IDX_DESPXA)));
-        assertFalse(fund.assetConfig(IDX_DESPXA).active, "deactivated");
-        assertEq(fund.targetBps()[IDX_DESPXA], 0, "inactive asset target 0");
-        assertEq(fund.currentTargetBps()[IDX_DESPXA], 0, "deposits route nothing to it");
+        timelockExecute(address(fund), abi.encodeCall(fund.deactivateAsset, (IDX_CBBTC)));
+        assertFalse(fund.assetConfig(IDX_CBBTC).active, "deactivated");
+        assertEq(fund.targetBps()[IDX_CBBTC], 0, "inactive asset target 0");
 
         deposit(makeAddr("alice"), 1_000e6);
-        assertEq(IERC20Like(DESPXA).balanceOf(address(fund)), 0, "deposit bought no deSPXA");
+        assertEq(IERC20Like(CBBTC).balanceOf(address(fund)), 0, "deposit bought no cbBTC");
     }
 
     /// @dev `addAsset` refuses a second active entry with the same asset id, for a Basket token and a Lending
-    ///      adapter. After deactivation the same token may be re-added, and a vector naming it maps to the new
-    ///      index.
+    ///      adapter. After deactivation the same token may be re-added (with its feed, E15), and a vector naming it
+    ///      maps to the new index.
     function test_addAsset_duplicateId_reverts_and_relist_maps_to_new_index() public fixtureCovered {
-        AssetConfig memory b = AssetConfig({
-            kind: AssetKind.Basket,
-            active: true,
-            capBps: 0,
-            adapter: address(swapAdapter),
-            token: DESPXA,
-            pool: DESPXA_POOL,
-            poolFee: POOL_FEE,
-            twapWindow: TWAP_WINDOW,
-            venue: Venue.V3
-        });
-        AssetConfig memory l = AssetConfig({
-            kind: AssetKind.Lending,
-            active: true,
-            capBps: LENDING_CAP_BPS,
-            adapter: address(aaveAdapter),
-            token: address(0),
-            pool: address(0),
-            poolFee: 0,
-            twapWindow: 0,
-            venue: Venue.V3
-        });
+        AssetConfig memory b = basketConfig(CBBTC, CBBTC_POOL, FEED_CBBTC, DAY_FEED_MAX_AGE);
+        AssetConfig memory l = lendingConfig(address(aaveAdapter));
+        uint256 n = listedAssets();
         bytes memory addB = abi.encodeCall(fund.addAsset, (b));
         _timelockExpectRevert(
-            address(fund), addB, abi.encodeWithSelector(IRobotMoneyFund.DuplicateAsset.selector, IDX_DESPXA)
+            address(fund), addB, abi.encodeWithSelector(IRobotMoneyFund.DuplicateAsset.selector, IDX_CBBTC)
         );
         _timelockExpectRevert(
             address(fund),
             abi.encodeCall(fund.addAsset, (l)),
             abi.encodeWithSelector(IRobotMoneyFund.DuplicateAsset.selector, IDX_AAVE)
         );
-        assertEq(fund.assetCount(), N_ASSETS, "no entry added");
+        assertEq(fund.assetCount(), n, "no entry added");
 
-        // Genesis target is 0, so deSPXA deactivates. The same token then lists again at a new index.
-        timelockExecute(address(fund), abi.encodeCall(fund.deactivateAsset, (IDX_DESPXA)));
+        // Genesis target is 0, so cbBTC deactivates. The same token then lists again at a new index.
+        timelockExecute(address(fund), abi.encodeCall(fund.deactivateAsset, (IDX_CBBTC)));
         timelockExecute(address(fund), addB);
-        uint256 relisted = N_ASSETS;
-        assertEq(fund.assetCount(), N_ASSETS + 1, "re-added");
+        uint256 relisted = n;
+        assertEq(fund.assetCount(), n + 1, "re-added");
         assertTrue(fund.assetConfig(relisted).active, "new entry active");
 
-        // The vector names deSPXA by its token, so its weight lands on the new index.
-        recordAndApply(_valid());
+        // The vector names cbBTC by its token, so its weight lands on the new index.
+        uint16[5] memory v = _valid();
+        recordAndApply(v);
         uint16[] memory t = fund.targetBps();
-        assertEq(t.length, N_ASSETS + 1, "target grew with the asset list");
-        assertEq(t[IDX_DESPXA], 0, "old inactive entry target 0");
-        assertEq(t[relisted], 1_000, "new entry carries the deSPXA weight");
+        assertEq(t.length, n + 1, "target grew with the asset list");
+        assertEq(t[IDX_CBBTC], 0, "old inactive entry target 0");
+        assertEq(t[relisted], v[IDX_CBBTC], "new entry carries the cbBTC weight");
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -322,6 +297,31 @@ contract TargetVectorTest is PrototypeHarness {
         vm.warp(block.timestamp + TIMELOCK_DELAY);
         vm.expectRevert(err);
         timelock.execute(target, 0, data, bytes32(0), salt);
+    }
+
+    /// @dev `_valid()` with the whole protocol bucket on wETH and cbBTC at 0.
+    function _cbbtcZero() internal view returns (uint16[5] memory v) {
+        v = _valid();
+        v[IDX_WETH] += v[IDX_CBBTC];
+        v[IDX_CBBTC] = 0;
+    }
+
+    /// @dev `(ids, w)` without entry `skip`.
+    function _without(address[] memory ids, uint256[] memory w, uint256 skip)
+        internal
+        pure
+        returns (address[] memory ids2, uint256[] memory w2)
+    {
+        uint256 n = ids.length;
+        ids2 = new address[](n - 1);
+        w2 = new uint256[](n - 1);
+        uint256 k;
+        for (uint256 i; i < n; ++i) {
+            if (i == skip) continue;
+            ids2[k] = ids[i];
+            w2[k] = w[i];
+            ++k;
+        }
     }
 
     function _append(address[] memory ids, uint256[] memory w, address id, uint256 bps)
