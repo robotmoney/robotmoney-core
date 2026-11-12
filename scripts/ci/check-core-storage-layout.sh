@@ -50,7 +50,8 @@ FORGE="${FORGE:-forge}"
 PINS="$SNAPSHOT_DIR/pins.json"
 RENAMES="${RENAMES:-$REPO_ROOT/scripts/ci/storage-layout-renames.json}"
 
-# contract:source — the ten proxied core contracts (docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md; HardAssetsVault, ADR-0018).
+# contract:source — the ten proxied core contracts (docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md; HardAssetsVault, ADR-0018),
+# and the four proxies of the fund system (Deploy 4).
 CONTRACTS=(
   "RobotMoneyVault:contracts/RobotMoneyVault.sol"
   "ProtocolAssetVault:contracts/vaults/ProtocolAssetVault.sol"
@@ -62,6 +63,11 @@ CONTRACTS=(
   "RobotMoneyGateway:contracts/gateway/RobotMoneyGateway.sol"
   "ConsensusRecommendationReceipt:contracts/ConsensusRecommendationReceipt.sol"
   "RouterGovernance:contracts/RouterGovernance.sol"
+  # Deploy 4 (owner exception 2026-11-12): the fund system's four proxies, the one-vault prototype deployed as a rehearsal.
+  "RobotMoneyFund:contracts/test/prototype/src/RobotMoneyFund.sol"
+  "Rebalancer:contracts/test/prototype/src/Rebalancer.sol"
+  "RebalanceGovernance:contracts/test/prototype/src/RebalanceGovernance.sol"
+  "FlowQueue:contracts/test/prototype/src/FlowQueue.sol"
 )
 
 NORMALIZE='
@@ -144,7 +150,8 @@ inheritance_sources() {
 normalized_live() {
   local name="$1" src="$2" raw artifact libs ns enums f
   local -a sources=()
-  raw="$(cd "$REPO_ROOT" && "$FORGE" inspect "$name" storageLayout --json)" \
+  # The fully qualified name: the prototype tree holds a second contract of one of these names (Deploy 4).
+  raw="$(cd "$REPO_ROOT" && "$FORGE" inspect "$src:$name" storageLayout --json)" \
     || { echo "check-core-storage-layout: forge inspect $name failed" >&2; return 2; }
   artifact="$REPO_ROOT/out/$(basename "$src")/$name.json"
   [[ -s "$artifact" ]] || { echo "check-core-storage-layout: missing artifact $artifact (run forge build)" >&2; return 2; }
@@ -156,6 +163,25 @@ normalized_live() {
   jq -S --argjson libs "$libs" --argjson ns "$ns" --argjson enums "$enums" \
     "$NORMALIZE + {libraries: \$libs, namespaces: \$ns, enums: \$enums}" <<<"$raw" \
     || { echo "check-core-storage-layout: could not normalize $name" >&2; return 2; }
+}
+
+# Contracts that keep ALL their own state in one ERC-7201 namespace (Deploy 4: FlowQueue's FlowState), so `forge inspect`
+# lists no sequential storage row. Each must instead carry its own namespace, with members; every other contract keeps
+# the rule that its sequential layout is not empty.
+NAMESPACE_ONLY=(
+  "FlowQueue:robotmoney.storage.FlowQueue"
+)
+
+# nonempty_layout <name> <normalized-file>: 0 when the layout has a storage row, or when the contract is a NAMESPACE_ONLY
+# contract and the layout holds its own namespace with at least one member.
+nonempty_layout() {
+  local name="$1" file="$2" entry
+  [[ "$(jq '.storage | length' "$file")" -gt 0 ]] && return 0
+  for entry in "${NAMESPACE_ONLY[@]}"; do
+    [[ "${entry%%:*}" == "$name" ]] || continue
+    jq -e --arg id "${entry#*:}" '(.namespaces[$id] // []) | length > 0' "$file" >/dev/null && return 0
+  done
+  return 1
 }
 
 live_pins() {
@@ -263,7 +289,7 @@ case "${1:-}" in
     for entry in "${CONTRACTS[@]}"; do
       name="${entry%%:*}"; src="${entry#*:}"
       normalized_live "$name" "$src" >"$WORK/$name.json"
-      [[ "$(jq '.storage | length' "$WORK/$name.json")" -gt 0 ]] \
+      nonempty_layout "$name" "$WORK/$name.json" \
         || { echo "check-core-storage-layout: $name has an empty layout" >&2; exit 2; }
       compare "$name storage layout" "$WORK/$name.json" "$SNAPSHOT_DIR/$name.json" || rc=1
     done
@@ -421,13 +447,19 @@ case "${1:-}" in
     # Every committed snapshot must itself be in the normalized shape.
     for entry in "${CONTRACTS[@]}"; do
       n="${entry%%:*}"
-      if jq -e '(.storage | length) > 0 and (.structs | type) == "object" and (.libraries | type) == "array" and (.namespaces | length) > 0 and (.enums | type) == "object"' \
+      if nonempty_layout "$n" "$SNAPSHOT_DIR/$n.json" && jq -e '(.structs | type) == "object" and (.libraries | type) == "array" and (.namespaces | length) > 0 and (.enums | type) == "object"' \
         "$SNAPSHOT_DIR/$n.json" >/dev/null 2>&1; then
         echo "ok   committed snapshot $n.json is normalized"
       else
         echo "FAIL committed snapshot $n.json is missing or not normalized"; fails=$((fails + 1))
       fi
     done
+    # Deploy 4: an empty sequential layout passes only for a NAMESPACE_ONLY contract that holds its own namespace.
+    jq '.storage = [] | .namespaces["robotmoney.storage.FlowQueue"] = ["address fund;"]' "$WORK/live.json" >"$WORK/ns-only.json"
+    if nonempty_layout FlowQueue "$WORK/ns-only.json"; then echo "ok   a namespace-only FlowQueue layout is not empty"; else echo "FAIL a namespace-only FlowQueue layout was refused"; fails=$((fails + 1)); fi
+    jq '.storage = [] | del(.namespaces["robotmoney.storage.FlowQueue"])' "$WORK/live.json" >"$WORK/ns-gone.json"
+    if nonempty_layout FlowQueue "$WORK/ns-gone.json"; then echo "FAIL a FlowQueue layout without its namespace passed"; fails=$((fails + 1)); else echo "ok   a FlowQueue layout without its own namespace is empty"; fi
+    if nonempty_layout "$name" "$WORK/ns-only.json"; then echo "FAIL an empty sequential layout passed for $name, which is not NAMESPACE_ONLY"; fails=$((fails + 1)); else echo "ok   an empty sequential layout of $name is still an error"; fi
     if (( fails > 0 )); then
       echo "check-core-storage-layout selftest: $fails case(s) failed" >&2
       exit 1

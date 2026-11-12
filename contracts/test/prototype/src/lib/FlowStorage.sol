@@ -43,6 +43,7 @@ import {FlowLevers, FlowParams, Request, Claim, Settlement} from "../FlowTypes.s
 /// @param totalOwedUsdc     Σ redemption USDC settled and not yet paid.
 /// @param totalCreditUsdc   Σ usdcCredit.
 /// @param totalCreditShares Σ shareCredit.
+/// @custom:storage-location erc7201:robotmoney.storage.FlowQueue
 struct FlowState {
     address fund;
     address usdc;

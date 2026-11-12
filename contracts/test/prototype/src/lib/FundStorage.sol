@@ -52,6 +52,7 @@ import {AssetConfig, Plan} from "../FundTypes.sol";
 /// @param inKindPeriod       Period length in seconds; `inKindUsed` is keyed by `block.timestamp / inKindPeriod`.
 ///                           The fund holds these three itself (coordinator ruling 6, proposal §5.9.5), so
 ///                           `inKindUsed` is keyed by this period, not by the queue's `epochLength`.
+/// @custom:storage-location erc7201:robotmoney.storage.RobotMoneyFund
 struct FundState {
     AssetConfig[] assets;
     mapping(bytes32 codeHash => bool allowed) codeHashAllowed;

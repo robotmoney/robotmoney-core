@@ -1,0 +1,118 @@
+{
+  "enums": {},
+  "libraries": [
+    "contracts/lib/GovernedUUPS.sol:GovernedUpgrade",
+    "contracts/test/prototype/src/lib/FlowCheckLib.sol:FlowCheckLib",
+    "contracts/test/prototype/src/lib/FlowClaimLib.sol:FlowClaimLib",
+    "contracts/test/prototype/src/lib/FlowSettleLib.sol:FlowSettleLib"
+  ],
+  "namespaces": {
+    "openzeppelin.storage.AccessControl": [
+      "mapping(bytes32 role => RoleData) _roles;"
+    ],
+    "openzeppelin.storage.AccessControlEnumerable": [
+      "mapping(bytes32 role => EnumerableSet.AddressSet) _roleMembers;"
+    ],
+    "openzeppelin.storage.Initializable": [
+      "uint64 _initialized;",
+      "bool _initializing;"
+    ],
+    "openzeppelin.storage.ReentrancyGuard": [
+      "uint256 _status;"
+    ],
+    "robotmoney.storage.FlowQueue": [
+      "address fund;",
+      "address usdc;",
+      "address usdcFeed;",
+      "uint32 usdcFeedMaxAge;",
+      "address sequencerFeed;",
+      "FlowParams params;",
+      "bool paused;",
+      "mapping(uint256 id => Request) requests;",
+      "uint256 requestCount;",
+      "mapping(uint64 epoch => uint256[] ids) epochRequests;",
+      "uint64 oldestEpoch;",
+      "mapping(uint256 id => Claim) claims;",
+      "uint256 claimCount;",
+      "mapping(address owner => uint256[] ids) claimsOf;",
+      "mapping(address owner => uint256) claimCursor;",
+      "mapping(uint256 id => Settlement) settlements;",
+      "uint256 settlementCount;",
+      "mapping(address owner => uint256) usdcCredit;",
+      "mapping(address owner => uint256) shareCredit;",
+      "mapping(address owner => uint256) queuedShares;",
+      "mapping(uint256 period => uint256) depositUsed;",
+      "mapping(uint256 period => uint256) redeemUsed;",
+      "uint64 lastSettleAt;",
+      "uint256 lastSharePrice;",
+      "mapping(uint256 index => uint256) lastLendRate;",
+      "uint256 totalPendingUsdc;",
+      "uint256 totalEscrowShares;",
+      "uint256 totalHeldShares;",
+      "uint256 totalOwedUsdc;",
+      "uint256 totalCreditUsdc;",
+      "uint256 totalCreditShares;",
+      "mapping(uint64 epoch => uint256) epochOpen;",
+      "uint64 cursorEpoch;",
+      "uint256 cursorIndex;",
+      "mapping(uint256 requestId => uint256[] ids) requestClaims;",
+      "uint256 dustUsdc;",
+      "uint256 dustShares;",
+      "mapping(uint64 epoch => uint256[] ids)[2] sideIds;",
+      "mapping(uint64 epoch => uint256)[2] sideOpen;",
+      "WalkCursor[2][2] cursors;",
+      "uint64 epochAnchorIndex;",
+      "uint64 epochAnchorTime;",
+      "mapping(uint64 epoch => uint64) epochEnd;",
+      "uint64 lastSettleEpoch;",
+      "uint256 lastExcludedMask;",
+      "mapping(uint256 index => uint256) lastLendPerShare;",
+      "FlowLevers levers;",
+      "uint64 leverTradeBlock;"
+    ],
+    "robotmoney.storage.GovernedUUPS": [
+      "address upgradeTimelock;",
+      "bool upgradesFrozen;"
+    ],
+    "robotmoney.storage.RobotMoneyFund": [
+      "AssetConfig[] assets;",
+      "mapping(bytes32 codeHash => bool allowed) codeHashAllowed;",
+      "address usdc;",
+      "uint256 tvlCap;",
+      "uint256 perDepositCap;",
+      "uint256 exitFeeBps;",
+      "address feeRecipient;",
+      "uint256 maxSlippageBps;",
+      "uint256 navDeviationGuardBps;",
+      "bool depositsPaused;",
+      "bool shutdown;",
+      "uint64 lastStepAt;",
+      "uint16[] targetBps;",
+      "Plan plan;",
+      "mapping(uint256 index => uint256) deferredTotal;",
+      "mapping(uint256 index => mapping(address account => uint256)) deferredOf;",
+      "bool rolesBound;",
+      "address flowQueue;",
+      "bool flowRoleBound;",
+      "bool seeded;",
+      "uint256 minSeedUsdc;",
+      "uint16 poolShareBps;",
+      "mapping(uint256 index => uint256) positionUnits;",
+      "mapping(uint256 index => uint256) positionClaimTotal;",
+      "mapping(uint256 index => mapping(address account => uint256)) positionClaimOf;",
+      "mapping(uint256 period => uint256) inKindUsed;",
+      "uint256 lastGoodNav;",
+      "uint64 lastGoodNavAt;",
+      "uint16 inKindBps;",
+      "uint128 inKindFloorUsdc;",
+      "uint32 inKindPeriod;"
+    ],
+    "robotmoney.storage.RobotMoneyVaultExclusions": [
+      "ExclusionLedger ledger;",
+      "bool snapshots;",
+      "mapping(uint256 index => uint256 exclusionId) openExclusionOf;"
+    ]
+  },
+  "storage": [],
+  "structs": {}
+}
