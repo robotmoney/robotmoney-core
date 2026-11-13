@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { checkEvidence, checkEvidenceOnChain, type ChainReader } from "../src/evidence-check.ts";
 import { FUND_EVIDENCE_STAGES, checkFundEvidence } from "../src/evidence-fund.ts";
+import { keccak256, toHex } from "viem";
 
 const a = (n: number): string => `0x${n.toString(16).padStart(40, "0")}`;
 const h = (n: number): string => `0x${n.toString(16).padStart(64, "0")}`;
@@ -61,12 +62,17 @@ describe("a fund system evidence (Deploy 4)", () => {
 });
 
 describe("a fund system evidence on chain (Deploy 4)", () => {
-  const reader = (over: Partial<{ nonce: number; status: "success" | "reverted"; timelock: string; delay: bigint; proposer: boolean }> = {}): ChainReader => ({
+  const EXEC = keccak256(toHex("EXECUTOR_ROLE"));
+  const ZERO = "0x0000000000000000000000000000000000000000";
+  /** hasRole: PROPOSER_ROLE answers `proposer`; EXECUTOR_ROLE answers `safeExecutor` for the Safe and `openExecutor` for address(0) (decision D4-10). */
+  const hasRole = (over: { proposer?: boolean; safeExecutor?: boolean; openExecutor?: boolean }, args: unknown[]): boolean =>
+    args[0] === EXEC ? (String(args[1]).toLowerCase() === ZERO ? over.openExecutor ?? false : over.safeExecutor ?? true) : over.proposer ?? true;
+  const reader = (over: Partial<{ nonce: number; status: "success" | "reverted"; timelock: string; delay: bigint; proposer: boolean; safeExecutor: boolean; openExecutor: boolean }> = {}): ChainReader => ({
     getChainId: async () => 8453,
     getTransactionCount: async () => over.nonce ?? 644 + SUM + 5,
     getTransactionReceipt: async () => ({ status: over.status ?? "success", blockNumber: 1n, logs: [] }),
     getBlock: async () => ({ timestamp: 1n }),
-    readContract: async (r: { functionName: string }) => (r.functionName === "upgradeTimelock" ? over.timelock ?? TL : r.functionName === "getMinDelay" ? over.delay ?? 900n : over.proposer ?? true),
+    readContract: async (r: { functionName: string; args?: unknown[] }) => (r.functionName === "upgradeTimelock" ? over.timelock ?? TL : r.functionName === "getMinDelay" ? over.delay ?? 900n : hasRole(over, r.args ?? [])),
   } as unknown as ChainReader);
   test("receipts, each proxy's upgradeTimelock(), the delay and the Safe's proposer role read back; a nonce below the handover's is refused", async () => {
     expect(await checkEvidenceOnChain(fundEvidence(), reader(), COUNTS, { kind: "rehearsal" })).toEqual([]);
@@ -75,5 +81,9 @@ describe("a fund system evidence on chain (Deploy 4)", () => {
     expect((await checkEvidenceOnChain(fundEvidence(), reader({ delay: 172800n }), COUNTS, { kind: "rehearsal" })).join("\n")).toContain("fund timelock getMinDelay()");
     expect((await checkEvidenceOnChain(fundEvidence(), reader({ proposer: false }), COUNTS, { kind: "rehearsal" })).join("\n")).toContain("does not hold the timelock's PROPOSER_ROLE");
     expect((await checkEvidenceOnChain(fundEvidence(), reader({ nonce: 600 }), COUNTS, { kind: "rehearsal" })).join("\n")).toContain("below the recorded nonce at the handover");
+  });
+  test("decision D4-10: the Safe must hold the fund timelock's EXECUTOR_ROLE and address(0) must not (no open executor)", async () => {
+    expect((await checkEvidenceOnChain(fundEvidence(), reader({ safeExecutor: false }), COUNTS, { kind: "rehearsal" })).join("\n")).toContain("does not hold the timelock's EXECUTOR_ROLE");
+    expect((await checkEvidenceOnChain(fundEvidence(), reader({ openExecutor: true }), COUNTS, { kind: "rehearsal" })).join("\n")).toContain("the fund timelock's executor is open");
   });
 });

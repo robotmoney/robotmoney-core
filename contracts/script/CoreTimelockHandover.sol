@@ -177,9 +177,21 @@ abstract contract CoreTimelockHandover is UpgradeAuthority {
         );
         require(
             timelock.hasRole(timelock.PROPOSER_ROLE(), safe)
-                && timelock.hasRole(timelock.CANCELLER_ROLE(), safe)
-                && timelock.hasRole(timelock.EXECUTOR_ROLE(), address(0)),
-            "timelock roles are not proposer/canceller = Safe, executor = anyone"
+                && timelock.hasRole(timelock.CANCELLER_ROLE(), safe),
+            "timelock roles are not proposer/canceller = Safe"
+        );
+        // The executor this system's proxies predicted (`_timelockExecutor`): address(0) is ADR-0004's open executor; the
+        // fund system's is the Safe alone (decision D4-10), and then address(0) must NOT hold it.
+        address executor = _timelockExecutor(safe);
+        require(
+            timelock.hasRole(timelock.EXECUTOR_ROLE(), executor),
+            executor == address(0)
+                ? "timelock roles are not executor = anyone"
+                : "timelock EXECUTOR_ROLE is not the Safe"
+        );
+        require(
+            executor == address(0) || !timelock.hasRole(timelock.EXECUTOR_ROLE(), address(0)),
+            "timelock executor is open, the policy is safe-only"
         );
         require(
             !timelock.hasRole(timelock.DEFAULT_ADMIN_ROLE(), msg.sender),

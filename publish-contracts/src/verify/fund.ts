@@ -1,6 +1,6 @@
 // Deploy 4 (owner exception 2026-11-12): the fund system's verifier. It reads the chain and the fund system's manifests and checks every postcondition of the fund run on its own:
 // each proxy's code against the build (masked: links and immutables), its upgrade authority and release mode, the timelock (delay, Safe as only proposer and canceller,
-// executor open), the Safe (owners and threshold), the role handover (the timelock administers every contract, the deployer holds nothing, the emergency key and the keeper
+// executor the Safe alone, decision D4-10), the Safe (owners and threshold), the role handover (the timelock administers every contract, the deployer holds nothing, the emergency key and the keeper
 // hold their roles), the one-time bindings (plan roles, FLOW_ROLE, the receipt releaser), the fund's configuration and the queue's flow parameters against the sheet, and the
 // deployer nonce at the end of the deploy. It reads nothing of the vaults or gateway systems.
 import { existsSync, readFileSync } from "node:fs";
@@ -86,7 +86,11 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
   await c.runEq("timelock: getMinDelay() equals the sheet", async () => Number(await chain.read(addr.timelock, "function getMinDelay() view returns (uint256)")), sheet.timelockDelay);
   await c.runEq("timelock: PROPOSER_ROLE held by the Safe", () => hasRole(chain, addr.timelock, FUND_ROLES.PROPOSER, addr.safe), true);
   await c.runEq("timelock: CANCELLER_ROLE held by the Safe", () => hasRole(chain, addr.timelock, FUND_ROLES.CANCELLER, addr.safe), true);
-  await c.runEq("timelock: EXECUTOR_ROLE open (held by address 0)", () => hasRole(chain, addr.timelock, FUND_ROLES.EXECUTOR, ZERO), true);
+  // Owner decision D4-10 (2026-11-13): the fund timelock's only executor is the Safe; the vaults system keeps ADR-0004's open executor.
+  c.eq("fund-timelock: manifest executorPolicy is safe-only", tm.executorPolicy, "safe-only");
+  await c.runEq("timelock: EXECUTOR_ROLE held by the Safe", () => hasRole(chain, addr.timelock, FUND_ROLES.EXECUTOR, addr.safe), true);
+  await c.runEq("timelock: EXECUTOR_ROLE not open (not held by address 0)", () => hasRole(chain, addr.timelock, FUND_ROLES.EXECUTOR, ZERO), false);
+  await c.runEq("timelock: EXECUTOR_ROLE not held by the deployer", () => hasRole(chain, addr.timelock, FUND_ROLES.EXECUTOR, D), false);
   await c.runEq("timelock: PROPOSER_ROLE not held by the deployer", () => hasRole(chain, addr.timelock, FUND_ROLES.PROPOSER, D), false);
   await c.runEq("timelock: DEFAULT_ADMIN not held by the deployer", () => hasRole(chain, addr.timelock, Z32, D), false);
   await c.runEq("safe: threshold equals the sheet", async () => Number(await chain.read(addr.safe, "function getThreshold() view returns (uint256)")), sheet.safeThreshold);
