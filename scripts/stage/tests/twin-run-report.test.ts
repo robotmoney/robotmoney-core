@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { loadStageTable } from "../stage-table.ts";
-import { buildReport, labelRows, render } from "../twin-run-report.ts";
+import { buildReport, labelRows, render, systemTable } from "../twin-run-report.ts";
 
 const table = loadStageTable();
 const A = (n: number) => "0x" + n.toString(16).padStart(40, "0");
@@ -55,4 +55,16 @@ test("labelRows reads the devops format: [verify] then one bare label per line i
     { label: "chain: id equals sheet", ok: true },
     { label: "safe: has code", ok: true },
   ]);
+});
+
+test("Deploy 4: --system fund reports the fund system's stages only, with no vault set, so a fund run's manifest dir is complete", () => {
+  const fund = systemTable(table, "fund");
+  expect(fund.stages.map((s) => s.name)).toEqual(table.stages.filter((s) => s.system === "fund").map((s) => s.name));
+  expect(fund.vaults).toEqual([]);
+  const manifests = Object.fromEntries(fund.stages.map((s) => [s.manifest.split("/").pop()!, { chain_id: 918453 }]));
+  const r = buildReport({ table: fund, manifests, runManifest: { stages: Object.fromEntries(fund.stages.map((s) => [s.name, { count: 1 }])) }, labelsText: "[verify]\nfund: seeded\n" });
+  expect(r.problems).toEqual([]);
+  // the whole table on the same dir names every vaults manifest as missing
+  expect(buildReport({ table, manifests, runManifest: null, labelsText: null }).problems.some((p) => p.includes("vault.json"))).toBe(true);
+  expect(systemTable(table, "vaults").vaults).toEqual(table.vaults);
 });

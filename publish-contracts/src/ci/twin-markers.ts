@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // The scenario markers of the Twin system rehearsals (issue 1892) and the guard that requires them. twin-publish.ts prints one marker line per scenario it ran; a workflow step runs
-//   bun src/ci/twin-markers.ts check --log FILE --require vaultsOnly,receiptPath
+//   bun src/ci/twin-markers.ts check --log FILE --require vaultsOnly,receiptPath   (the fund run: --require fundFeeds,fundRun,fundFeedStaleRefusal)
 // and fails when a required marker is missing, appears with a zero count, or the log holds none. A removed scenario therefore turns the job red instead of passing silently.
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -10,8 +10,15 @@ export const MARKERS = {
   receiptPath: "TWIN-SCENARIO receipt-path:",
   gatewayRefusals: "TWIN-SCENARIO gateway-refusals-before-broadcast:",
   gatewayRun: "TWIN-SCENARIO gateway-run:",
+  // Deploy 4, the fund system's Twin run (twin-publish-fund.ts). Each names the fund in its own words, so no fund line can satisfy a vaults or gateway requirement.
+  fundFeeds: "TWIN-SCENARIO fund-feeds:",
+  fundRun: "TWIN-SCENARIO fund-run:",
+  fundFeedStaleRefusal: "TWIN-SCENARIO fund-feed-stale-refusal:",
 } as const;
 export type MarkerName = keyof typeof MARKERS;
+/** The markers of the vaults and gateway run (twin-publish.ts, the core-stages-twin-chain job) and of the fund run (twin-publish-fund.ts, the fund Twin pair). */
+export const VAULTS_RUN_MARKERS: MarkerName[] = ["vaultsOnly", "receiptPath", "gatewayRefusals", "gatewayRun"];
+export const FUND_RUN_MARKERS: MarkerName[] = ["fundFeeds", "fundRun", "fundFeedStaleRefusal"];
 
 /** What the vaults system must not leave behind, and what the gateway system writes. */
 export const GATEWAY_STAGES = ["gateway", "gateway-handover"];

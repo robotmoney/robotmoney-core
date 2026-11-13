@@ -12,12 +12,15 @@
 //
 // Usage:
 //   bun scripts/stage/twin-run-report.ts --manifest-dir DIR [--run-manifest FILE] [--labels FILE]
-//        [--table FILE] [--json-out FILE]
+//        [--table FILE] [--json-out FILE] [--system vaults|gateway|fund]
+// --system (Deploy 4) reports one system's stages only: a fund run's manifest dir holds no vaults manifest, and the vault set is the vaults system's alone (none for
+// the fund or the gateway). Without it every stage of the table is reported, as before.
 // Canonical: core issue 1499 (S9; core 1488, 1485, 1486).
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { loadStageTable, type StageTable } from "./stage-table.ts";
+import { scopeTable, type SystemName } from "../../publish-contracts/src/stage-table.ts";
 import { parseLabels } from "./label-diff.ts";
 
 export interface StageRow {
@@ -147,6 +150,11 @@ function readJson(path: string): Record<string, unknown> | null {
   return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : null;
 }
 
+/** Deploy 4: the table of one system's run. The vault set belongs to the vaults system; a fund or gateway run has none. */
+export function systemTable(t: StageTable, system: SystemName): StageTable {
+  return { ...scopeTable(t, system), vaults: system === "vaults" ? t.vaults : [] };
+}
+
 /** Reads every stage manifest the table names from `dir`. */
 export function loadManifests(table: StageTable, dir: string): Record<string, Record<string, unknown>> {
   const out: Record<string, Record<string, unknown>> = {};
@@ -170,6 +178,7 @@ function main(): number {
         labels: { type: "string" },
         table: { type: "string" },
         "json-out": { type: "string" },
+        system: { type: "string" },
       },
     }));
   } catch (e) {
@@ -180,7 +189,12 @@ function main(): number {
     console.error("--manifest-dir is required");
     return 64;
   }
-  const table = loadStageTable(v.table as string | undefined);
+  const full = loadStageTable(v.table as string | undefined);
+  if (v.system !== undefined && !["vaults", "gateway", "fund"].includes(v.system as string)) {
+    console.error(`--system is vaults, gateway or fund, got '${v.system}'`);
+    return 64;
+  }
+  const table = v.system === undefined ? full : systemTable(full, v.system as SystemName);
   let labelsText: string | null | undefined;
   if (v.labels) {
     if (!existsSync(v.labels as string)) {

@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { MARKERS, markerProblems, type MarkerName } from "../src/ci/twin-markers.ts";
+import { FUND_RUN_MARKERS, MARKERS, VAULTS_RUN_MARKERS, markerProblems, type MarkerName } from "../src/ci/twin-markers.ts";
 import { tmp } from "./fixtures.ts";
 import { REPO_ROOT } from "./repo-root.ts";
 
@@ -13,6 +13,9 @@ const GOOD = [
   `${MARKERS.receiptPath} receipt_id=0x01 submitter=0x02`,
   `${MARKERS.gatewayRefusals} scenarios=missing-upgrade-timelock,zero-upgrade-timelock,agent-input broadcasts=0`,
   `${MARKERS.gatewayRun} vaults_manifests_unchanged=true agents_at_handover=0 admin=0x03`,
+  `${MARKERS.fundFeeds} feeds=3 fresh=3 eth_margin_s=900 min_margin_s=300`,
+  `${MARKERS.fundRun} system=fund stages=10 verify_labels=40 sha=0x04`,
+  `${MARKERS.fundFeedStaleRefusal} scenarios=totalAssets,quoteDeposit index=2 status=Stale warped_s=12 fresh_probe=ok`,
 ].join("\n");
 
 describe("twin scenario markers", () => {
@@ -44,11 +47,27 @@ describe("twin scenario markers", () => {
     expect(run(GOOD)).toBe(0);
     expect(run(GOOD.split("\n").slice(1).join("\n"))).toBe(1);
   });
+  test("every marker belongs to exactly one run, and the fund markers name the fund", () => {
+    expect([...VAULTS_RUN_MARKERS, ...FUND_RUN_MARKERS].sort()).toEqual([...ALL].sort());
+    for (const name of FUND_RUN_MARKERS) expect(MARKERS[name]).toContain("fund-");
+    for (const name of VAULTS_RUN_MARKERS) expect(MARKERS[name]).not.toContain("fund");
+  });
+  test("a fund marker never satisfies a vaults requirement, nor a vaults marker a fund one", () => {
+    const fundOnly = GOOD.split("\n").filter((l) => FUND_RUN_MARKERS.some((n) => l.startsWith(MARKERS[n]))).join("\n");
+    const vaultsOnly = GOOD.split("\n").filter((l) => VAULTS_RUN_MARKERS.some((n) => l.startsWith(MARKERS[n]))).join("\n");
+    expect(markerProblems(fundOnly, VAULTS_RUN_MARKERS)).toHaveLength(VAULTS_RUN_MARKERS.length);
+    expect(markerProblems(vaultsOnly, FUND_RUN_MARKERS)).toHaveLength(FUND_RUN_MARKERS.length);
+    expect(markerProblems(fundOnly, FUND_RUN_MARKERS)).toEqual([]);
+  });
+  test("twin-publish-fund.ts prints every fund marker", () => {
+    const script = readFileSync(join(REPO_ROOT, "publish-contracts/src/ci/twin-publish-fund.ts"), "utf8");
+    for (const name of FUND_RUN_MARKERS) expect(script).toContain(`MARKERS.${name}`);
+  });
   test("twin-publish.ts prints every marker the workflow requires and the workflow requires them all", () => {
     const script = readFileSync(join(REPO_ROOT, "publish-contracts/src/ci/twin-publish.ts"), "utf8");
-    for (const name of ALL) expect(script).toContain(`MARKERS.${name}`);
+    for (const name of VAULTS_RUN_MARKERS) expect(script).toContain(`MARKERS.${name}`);
     const wf = readFileSync(join(REPO_ROOT, ".github/workflows/suite-28-core-stages.yml"), "utf8");
-    expect(wf).toContain(`--require ${ALL.join(",")}`);
+    expect(wf).toContain(`--require ${VAULTS_RUN_MARKERS.join(",")}`);
     for (const input of ['vaults-only: "true"', 'gateway: "true"']) expect(wf).toContain(input);
   });
 });
