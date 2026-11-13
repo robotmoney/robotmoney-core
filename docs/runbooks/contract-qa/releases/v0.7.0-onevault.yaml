@@ -1592,6 +1592,8 @@ steps:
       - ["bash", "-c", 'test "$(cast call "{m:fund-receipt.consensus_receipt}" "isRecorded(bytes32)(bool)" "{state:fund-receipt-id}")" = true']
       - ["bash", "-c", 'r=$(cast call "{m:fund-receipt.consensus_receipt}" "getReceiptById(bytes32)((bytes32,bytes32,string,address,uint64,uint64,bool))" "{state:fund-receipt-id}" | tr -d "()"); bun scripts/runbook/qa-assert.ts eq "$(echo "$r" | cut -d, -f2 | tr -d " ")" "{state:fund-receipt-digest}" && bun scripts/runbook/qa-assert.ts eq "$(echo "$r" | rev | cut -d, -f4 | rev | tr -d " ")" "{state:fund-submitter-safe}" && test "$(echo "$r" | rev | cut -d, -f1 | rev | tr -d " ")" = false']
     env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
     receipts: []
