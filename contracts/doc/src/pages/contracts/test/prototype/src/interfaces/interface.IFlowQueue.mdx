@@ -21,7 +21,8 @@ caller, units and rounding of every function.
 
 Authority:
 - KEEPER_ROLE: `settle` at once; anyone else only after `keeperGrace` (E10).
-- EMERGENCY_ROLE: `pause`, `freezeSettlement`.
+- EMERGENCY_ROLE: `pause`, `freezeSettlement`. Both stay on the hot key (owner review 2026-11-13): each only
+delays (a freeze ends by itself after `maxFreeze`, moves no value and pays no one), and the Safe ends it.
 - ADMIN_ROLE (timelock): `unpause`, `setFlowParams`, `releaseSettlement`, `allowReturn`.
 - A request's owner: `cancel`, `exitInKind`, `withdrawExpired`, `redeem`. Credits: `withdrawCredit`.
 - Anyone: requests (escrow from the caller only), `deposit` / `mint` (deliver to the owner only), views.

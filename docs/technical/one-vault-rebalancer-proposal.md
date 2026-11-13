@@ -400,7 +400,10 @@ indexer see why.
 - **Anyone after a grace period.** If no step has run for `keeperGrace`
   (for example 6 hours) while the plan is not converged, `step()` becomes
   permissionless. Rebalancing then never depends on Robot Money staying
-  online. This matches the "executor open" choice the timelock already made.
+  online. (The vaults system's timelock made the same "executor open" choice.
+  The fund's own timelock does not: only its Safe executes a ready operation,
+  decision D4-10 of 2026-11-13, §5.6. `step()` is not a timelock operation, so
+  the grace path is unchanged.)
 - The keeper may add timing jitter off-chain, so step times are not
   predictable to the second.
 
@@ -421,7 +424,8 @@ Open ──(path end reached and every asset within toleranceBps)──> Converg
   until converged or `maxOverrun` (for example 7 more days) passes.
 - `EMERGENCY_ROLE` can pause a plan at once (hot key, same split as
   `pauseDeposits`). Only the Safe through the timelock resumes, extends,
-  or closes it.
+  or closes it. The hot key holds only pauses: `shutdown` and
+  `emergencyUnwind` are the timelock's (§5.6, owner 2026-11-13).
 - Nothing about a plan's state ever touches deposits or redemptions.
 
 ### 5.6 Governed parameters
@@ -447,6 +451,32 @@ decided.
 The same rule that already binds `navDeviationGuardBps` applies: a slippage or
 deviation bound at or below the pool fee would make every step fail, so the
 deploy script refuses it.
+
+**Roles (owner, 2026-11-13, after the external review of Deploy 4).** The
+emergency hot key holds only levers that delay. Every lever that ends deposits
+or moves value goes through the Safe and the timelock delay.
+
+| Role | Held by | Powers |
+| --- | --- | --- |
+| `ADMIN_ROLE` | The fund-system timelock (the Safe proposes, cancels and, since D4-10, is the only executor) | Every parameter above, assets, caps, fees, `resumePlan`, `extendBudget`, `closePlan`, `unpauseDeposits`, `shutdown`, `restore`, `emergencyUnwind`; on the queue `setFlowParams`, `setFlowLevers`, `unpauseQueue`, `releaseSettlement`, `allowReturn`; every role grant |
+| `EMERGENCY_ROLE` | Emergency hot key | Fund: `pauseDeposits`, `pauseRebalance`. Queue: `pauseQueue`, `freezeSettlement` |
+| `KEEPER_ROLE` | Keeper bot | Queue `settle` and rebalancer `step()` before their grace periods |
+| `GOVERNANCE_ROLE`, `REBALANCER_ROLE`, `FLOW_ROLE` | Governance, rebalancer, queue contracts (bound once) | Open a plan; execute and conclude a step; mint and sell for a flow |
+| `TARGET_SETTER_ROLE` | The fund-system timelock | `applyReceipt` |
+
+`shutdown` (deposits closed, TVL cap 0) and `emergencyUnwind` (every holding
+sold to USDC) moved from `EMERGENCY_ROLE` to `ADMIN_ROLE` on 2026-11-13: one
+key could otherwise end the fund or sell it at a moment of its choosing. The
+hot key still stops every flow at once with `pauseDeposits`, `pauseRebalance`
+and `pauseQueue`. `freezeSettlement` stays on the hot key because it is
+pause-class: it only delays one settlement's held shares, ends by itself
+after `maxFreeze`, moves no value and pays no one, and only the Safe can
+release or return the shares (§5.9.4).
+
+**Executor (decision D4-10, owner 2026-11-13).** The fund-system timelock's
+only executor is its Safe, so executing a ready operation also takes two owner
+signatures. This departs from ADR-0004's open executor, which the vaults
+system keeps (ADR-0004 addendum 2026-11-13).
 
 ### 5.7 Who pays, and how it is disclosed
 
@@ -670,11 +700,12 @@ and the watchdog can show the reason.
 Returns of escrow, USDC refunds and in-kind returns are pulled by the owner.
 Nobody can push them to an address.
 
-**Emergency powers. Each can only delay or return.**
+**Emergency powers. Each can only delay or return.** `shutdown` and
+`emergencyUnwind` are not emergency powers: they are the timelock's (§5.6).
 
 - `EMERGENCY_ROLE` can pause the queue. The exits stay open.
 - `EMERGENCY_ROLE` can freeze the shares from one settlement's deposits
-  while they are in their hold. A freeze ends by itself `maxFreeze` after the
+  while they are in their hold (pause-class, so it stays on the hot key, §5.6). A freeze ends by itself `maxFreeze` after the
   freeze call.
   Before that, the Safe can release the shares to their depositors, or let
   each depositor take them back in kind. Nobody else can receive them.
@@ -683,7 +714,7 @@ Nobody can push them to an address.
 
 | Parameter | Default | Layer |
 | --- | --- | --- |
-| `epochLength`, `settleWindow`, `minHold` | 6 h, 1 h, 24 h | 4 |
+| `epochLength`, `settleWindow`, `minHold` | 6 h, 1 h, 1 h (24 h until decision D4-11, owner 2026-11-13: manipulations of large pools cannot be sustained for an hour) | 4 |
 | `keeperGrace` | 6 h. The queue's own value, with the same default as the step's (§5.6) | 4 |
 | `maxEpochFlowBps` | 500, for each side | 4 |
 | `epochFlowFloorUsdc` | 250,000 USDC | 4 |
@@ -704,8 +735,8 @@ Nobody can push them to an address.
 
 Every value is an estimate until the sim sets it from the normal range. The
 reason is then recorded. `ADMIN_ROLE` sets each value through the timelock,
-inside hard bounds fixed in the code. `minHold` is at least 1 day and at most
-7 days. `maxFreeze` is at most 14 days. The bounds also refuse values that
+inside hard bounds fixed in the code. `minHold` is at least 1 hour (1 day
+until decision D4-11) and at most 7 days. `maxFreeze` is at most 14 days. The bounds also refuse values that
 would stop every settlement. `epochFlowFloorUsdc` exists so that a small or
 newly seeded fund can grow.
 
@@ -1016,6 +1047,27 @@ a 1 USDC seed, and at most the deployer's 103 USDC at risk. It changes
 nothing above: the experiment's tests still run offline, and the production
 path below still needs an audit. The plan and its gates are in the Deploy 4
 release yaml.
+
+**Deploy 4 hardening, version `v0.8.0-onevault` (owner, 2026-11-13, after an
+external review of the live rehearsal).** Five changes on the branch
+`deploy4/hardening`, none of them on the live 8453 deployment. They change
+behavior, so the fund system's version moves from `v0.7.0-onevault` (Deploy 4,
+whose release yaml stays its record) to `v0.8.0-onevault`
+(`docs/runbooks/contract-qa/releases/v0.8.0-onevault.yaml`, rc tags
+`release/v0.8.0-onevault-rc.N-rehearsal`):
+
+- The emergency key holds only the pauses. `shutdown` and `emergencyUnwind`
+  are `ADMIN_ROLE`'s, so the Safe and the timelock delay (§5.6).
+- The keeper must hold gas before its first send. The validator refuses a
+  release whose first keeper send on a target has no hard balance check
+  before it (P3.63 on 8453).
+- Decision D4-10: the fund timelock's only executor is its Safe (§5.6). The
+  executor is part of the timelock's CREATE2 init code, so a fund deploy from
+  this branch predicts a different timelock address than Deploy 4's.
+- A runbook row (P2.61) records each Safe owner's live key from the
+  prove-control transaction, which carries every owner's signature.
+- Decision D4-11: deposit shares are held 1 hour, the new default and the new
+  floor (§5.9.5).
 
 1. **Full prototype contracts.** *Done 2026-11-09.* Fund, rebalancer and governance, complete
    against §4, §5 and §6 in one pass.
@@ -1584,7 +1636,7 @@ does not depend on a sim's arbitrage model.
 | `refBandBps` | 100 | Only for assets with a second source |
 | `settleBandBps` | 50, and above the pool fee | Caps a settlement sandwich at 50 bps of a leg |
 | `maxEpochNetBps` | 500 | The rate limit |
-| `minHold` | 24 h | Unchanged |
+| `minHold` | 24 h | Unchanged (1 h since decision D4-11, 2026-11-13) |
 | `maxRoll` | 8 epochs (48 h) | Then refund, by anyone |
 
 **Invariants this would use in place of RB-10 to RB-12:**
@@ -1857,7 +1909,7 @@ exploit, not from a design.
 | Uniswap v2 | Mint by the ratio of amounts. Check the invariant after the trade. Lock against reentrancy. Burn the first shares. | Layer 1. Check 10 after the trades. Seed shares locked for good. | The check covers every asset and the supply. It also covers `redeemInKind`. Each rebalance step gets a balance check of its own (RB-19). |
 | Set, Index Coop, Reserve | In-kind issuance. The depositor pays the swap cost. | A deposit buys a pro-rata slice. | The purchase happens inside the fund under the four layers. There is no outside zap to attack. The research found that zaps are where flow users lose. The per-swap limits and the user's own limit answer that. |
 | Reserve RToken | Hourly issuance and redemption throttles. Issuance stops when the basket is not ready. | `maxEpochFlowBps` on each side. No deposit settles while a lending asset is excluded or the fund is shut down. | Reserve throttles every redemption. Here the timed path and the lending part of an in-kind exit are throttled. The basket part of an in-kind exit is not, because it takes only its own slice. |
-| Enzyme | Chainlink-only pricing. In-kind redemption that cannot be blocked by a failing price. A timelock between deposit and exit. | Rule 1 of §4.5. `redeemInKind` reads no price. `minHold`. | Enzyme mints at the feed. Here the feed can only block. The hold is 24 hours and the shares are not in the user's hands during it. |
+| Enzyme | Chainlink-only pricing. In-kind redemption that cannot be blocked by a failing price. A timelock between deposit and exit. | Rule 1 of §4.5. `redeemInKind` reads no price. `minHold`. | Enzyme mints at the feed. Here the feed can only block. The hold is 1 hour (24 hours until decision D4-11, 2026-11-13) and the shares are not in the user's hands during it. |
 | Veda | Rate bounds and a minimum delay. A breach stops the vault. A share lock during which a deposit can be reversed. An optional share premium on deposits. | Checks 4 to 6. `minHold` in the queue. | No accountant posts a rate. During the hold, `EMERGENCY_ROLE` can freeze a settlement's deposit shares for at most `maxFreeze`. The Safe can let the depositors take them back in kind. Veda returns the deposited asset. Here a depositor gets the slice back, having paid the swap cost. The deposit premium is not adopted. |
 | Lagoon, Centrifuge | Request and claim. The price is not known when the request is made. | Epochs and the window. | No role proposes a valuation. Lagoon bars cancellation once a valuation is proposed, because its flows cross at that price. Here no flow crosses at a price, so a request can be cancelled until it fills. |
 | Sommelier | A share-price oracle checked against a TWAP. A two-day share lock. | Checks 4 and 6. | Two prices per asset plus the proportion check. |
