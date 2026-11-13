@@ -10,7 +10,8 @@
 - **Date:** 2026-11-07 (reframed as an experiment 2026-11-09; per-asset
   targets replace on-chain sleeves 2026-11-10; hardened timed flows and the
   asset rule 2026-11-11; netted, forward-priced flows decided 2026-11-13 and
-  not built, §5.11 and §18)
+  not built, §5.11 and §18; revised after an adversarial review the same
+  day, §19)
 - **Author:** lucky-tensor (drafted with Claude)
 - **Decider:** Product owner
 - **Would supersede, if the experiment invalidates the rejection:** the Portfolio Router (`docs/architecture.md`
@@ -316,9 +317,20 @@ carries more weight, so it is tightened in two ways.
    its active range, measured as in rule 3, is at least `minPoolDepthUsdc`.
    Rule 3 only compares the pool with the fund's own position. A small fund
    could pass it on a pool that is cheap to hold off its feed.
-5. **An asset that fails any rule is delisted.** Its target goes to 0 and the
-   rebalancer sells it. It is not kept at a small weight. A thin asset at
-   any weight is a way to block settlement and a leg nobody can price.
+5. **An asset that fails any rule is delisted.** Its target goes to 0 and
+   it is sold out. It is not kept at a small weight. A thin asset at any
+   weight is a way to block settlement and a leg nobody can price.
+
+   An ordinary step cannot do this sale. A step needs a healthy feed and a
+   TWAP that agrees with it (§5.10), and a failing asset has neither for
+   sure. So a delisted asset has its own sale path: keeper-only steps for
+   that asset alone, with its own price bound and its own cost budget, not
+   blocked by the checks of other assets. While it is being sold out,
+   deposits and the match stop. Redemptions still settle, and they sell
+   their slice of it under the same bound. Its checks no longer block the
+   settlement of the other assets. If its feed is dead there is no price
+   to bound a sale, and only the Safe's emergency unwind sells it. The
+   bound and the budget have no defaults yet.
 
 The fund checks rule 4 where it checks rule 3. `minPoolDepthUsdc` has no
 default yet. Step 3f sets it from the cost of holding a pool's TWAP outside
@@ -873,13 +885,21 @@ price someone asserts. Each step gets:
 - **Backoff only on the keeper's calls.** A stranger's failed call after the
   grace period must not delay an asset's next step.
 
+From step 3f (§5.11, §19): `step` is keeper-only (D20), so there is no
+stranger's call. And no step runs inside a settlement window: from the
+close of an epoch that has locked requests until that epoch's first
+successful settlement. The fund's own steps push its pools as far as
+97 bps from the feed (§5.9.5), and the guard band is 90. A step in the
+window could block the settlement or lean the match price.
+
 Until step 3e is built, §5.3 to §5.8 and RB-4 and RB-5 describe the step as
 it is: priced and booked at the TWAP alone.
 
 ### 5.11 Netted, forward-priced flows (step 3f)
 
-Decided by the owner 2026-11-13 (D16 to D19, §18). **Not built and not
-tested.** Until step 3f is built, §5.9 describes the flows as they are, and
+Decided by the owner 2026-11-13 (D16 to D19, §18). Revised the same day
+after an adversarial review of this section (D20 to D26, §19). **Not built
+and not tested.** Until step 3f is built, §5.9 describes the flows as they are, and
 the prototype, the Deploy 4 rehearsal and every result in §14 rest on §5.9.
 This section is the design that step 3f builds. Every size, bound and cost in
 it is an estimate.
@@ -969,16 +989,26 @@ is an argument, not a test result. Step 3f measures it.
    the epoch closes the request is locked. After that its escrow leaves the
    queue only by a fill or by expiry.
 4. **Window.** Nothing settles for `settleWindow` after the epoch closes.
-5. **Settle.** As today: the keeper first, anyone after `keeperGrace`,
-   `settle(maxRequests, maxUsdc)`, oldest first, no price and no selection as
-   input. Every locked, unexpired request takes part. Nothing is skipped for
-   a price.
+5. **Settle.** Only the keeper calls `settle` (D20). The keeper is a
+   team-operated account, preferably a multisig. It only keeps the state
+   machine moving and is not an actor with interests of its own. Nobody
+   else can settle, so there is no grace period. `settle(maxRequests,
+   maxUsdc)` keeps its two inputs, which only limit one call's work. Every
+   locked, unexpired request takes part. Nothing is skipped for a price. If
+   the keeper stops, nothing settles, and the wind-down trigger of §5.11.5
+   is the backstop.
 6. **Hold.** Unchanged. Shares from a deposit, matched or minted, stay in
    the queue until `settle time + minHold`.
 7. **Roll and expiry.** A request the caps leave unfilled, or a blocked
-   settlement leaves pending, rolls to the next settlement. After `maxRoll`
-   epochs it expires and can no longer fill. Its owner then withdraws the
-   escrow: the USDC of a deposit, the shares of a redemption.
+   settlement leaves pending, rolls to the next settlement. A deposit
+   request expires after `maxRoll` epochs, and its owner withdraws the
+   USDC. A redemption request does not expire by itself (D25). It keeps its
+   place in the order. After `maxRoll` epochs its owner may withdraw the
+   unfilled shares instead of waiting. A run then drains in order and
+   nobody is sent to the back.
+8. **Terms are fixed at the request** (D26). The exit fee, the hold and
+   the expiry time are stored on the request when it is made. A later
+   parameter change applies to later requests only.
 
 #### 5.11.4 One settlement under step 3f
 
@@ -986,6 +1016,23 @@ Checks 1 to 7 of §5.9.3 are unchanged. A failed check reverts the call and
 changes no state. Let `S` be the NAV per share of §4.2 with each basket
 asset at the TWAP of check 3. Checks 4 and 6 have then already compared it
 with the outside feeds.
+
+**One price and one set of totals per window.** At the first `settle` call
+after a window ends, the queue fixes `S` and the totals `D` and `R` of every
+locked request. Later calls for the same window only distribute. A batch
+split over several calls therefore gets one price, and the size of a call
+selects nobody (RB-23).
+
+**No match while a lending venue cannot pay** (D21). The NAV counts each
+lending position at the venue's own amount. A venue that is fully borrowed
+or impaired may not be worth that amount. A redeemer matched at `S` would
+then leave at face value, and the matched depositors would carry the loss.
+So before the match, the queue asks each lending venue whether it can pay
+out, now, the matched shares' part of the fund's position. If any venue
+cannot, there is no match in this settlement. `pauseDeposits` also stops
+the match, as it stops deposits. A loss that a venue has not marked and
+that does not show in its liquidity stays a residual. Every holder of the
+fund carries that same risk.
 
 **The match (replaces nothing, runs first).**
 
@@ -1013,13 +1060,22 @@ settlement gets the same blend of the matched price and the net side's
 realized price. Nobody is matched ahead of anybody else. Order decides only
 who fills when a cap leaves part of a side pending: the oldest first.
 
-**Caps.** The flow cap of each side per period counts the net amount, which
-is what touches the fund and the pools. The TVL cap applies to the net
-deposit. Matched volume changes neither NAV nor supply and uses no cap. The
-per-block basket cap (`basketCallBps`) applies to the net trade as today.
+**Caps.** The flow cap of each side per period counts every fill of that
+side, matched or net (D22). Holding a TWAP just inside the guard band costs
+a fixed amount, and the gain from it grows with the matched size. The cap
+bounds that size. The TVL cap applies to the net deposit, because only the
+net deposit adds NAV. The per-block basket cap (`basketCallBps`) applies to
+the net trade as today.
 
-**While deposits are stopped** (deposits paused, a lending asset excluded, or
-the fund shut down) there is no match. Redemptions settle alone, as today.
+**A net redemption does not stop on one venue** (D23). Today a lending
+venue that cannot pay reverts the whole redemption side (§5.9.7). From
+step 3f the fund pays that venue's part as a claim on the position (the
+mechanism of RB-21) and pays the rest in USDC.
+
+**While deposits are stopped** (deposits paused, a lending asset excluded,
+an asset being sold out under §4.5, or the fund in wind-down) there is no
+match. Redemptions settle alone, as today. A locked deposit request can be
+cancelled while deposits are stopped. No price is forming for it then.
 
 **After the trades.** Check 10, the proportion check inside the fund, is
 unchanged and covers the net side. Check 11 loses the users' limits: the
@@ -1027,28 +1083,49 @@ realized price of the net side must be inside the per-swap limits. Check 12
 is unchanged: each fill is a claim, and deposit claims unlock at
 `settle time + minHold`.
 
-#### 5.11.5 Exits and emergency powers under step 3f
+#### 5.11.5 Exits, the wind-down and emergency powers under step 3f
 
-**Exits that never depend on a price:**
+**Exits from a running fund that never depend on a price:**
 
-- `cancel`, while the request's epoch is open.
-- Expiry after `maxRoll` epochs. The owner pulls the escrow back.
-- **In-kind exit, in a wind-down only.** `redeemInKind` reverts while the
-  fund runs. It opens when the fund is shut down (`shutdown`, which the
-  emergency role calls and only the Safe reverses). From then on the goal
-  is to return the assets, no match and no deposit settles, and every
-  holder may take their pro-rata slice. The mechanics are unchanged: the
-  proportion check, the exit fee on every leg, the lending allowance and
-  the lending claims as position shares (RB-21). Shares escrowed for a
-  redemption come back to their owner by expiry first.
+- `cancel`, while the request's epoch is open, and for a locked deposit
+  while deposits are stopped.
+- Expiry of a deposit after `maxRoll` epochs. Withdrawal of a redemption's
+  unfilled shares after `maxRoll` epochs. The owner pulls the escrow back.
 
-**What a holder can do when settlement is stuck.** Wait, or withdraw an
-expired request and keep the shares. There is no exit from a running fund
-that skips the checks. If settlement cannot resume, the remedy is the
-wind-down: the fund is shut down and the in-kind exit opens. That step
-needs a role. It is the one place where a holder depends on one.
+There is no in-kind exit from a running fund.
 
-**Emergency powers** are unchanged. Each can only delay or return.
+**The wind-down.** The in-kind exit applies only once the goal is to wind
+the fund down (D18). The wind-down is a state, not a flag (D24):
+
+- **Who starts it.** The emergency role, at any time (`shutdown`). And
+  anyone, when the fund is stuck: a locked request exists whose epoch
+  closed at least `maxRoll` epochs ago, and no settlement has succeeded
+  since that epoch closed. A fund that keeps settling under its caps never
+  meets that test. A fund whose keeper has stopped, whose feeds are down
+  or whose checks keep failing meets it after `maxRoll` epochs. So no
+  holder depends on a key to reach the exit. At the defaults the bound is
+  54 hours from a request.
+- **What it does.** No settlement, no match and no deposit. The rebalancer
+  stops and its plan is paused. Every pending request is released at once
+  and its owner withdraws the escrow. Shares in their hold are delivered
+  on claim. Frozen shares keep their freeze, which still ends by itself.
+- **The exit.** `redeemInKind` opens for every holder. The mechanics are
+  unchanged: the proportion check, the exit fee on every leg, the lending
+  allowance and the lending claims as position shares (RB-21).
+- **Who ends it.** Only the Safe, through the timelock. The in-kind exit
+  stays open until that action executes, so holders have the timelock's
+  delay as notice.
+
+**Emergency powers. Each can only delay.**
+
+- `EMERGENCY_ROLE` can pause the queue. A pause ends by itself after
+  `maxPause` and cannot be set again for the same length of time (D24).
+  A pause counts as time without a settlement for the wind-down test.
+- `EMERGENCY_ROLE` can freeze the shares of one settlement's deposits,
+  matched or minted, while they are in their hold. A freeze ends by itself
+  after `maxFreeze`. The Safe can release it sooner. The in-kind return
+  after a freeze (`allowReturn`, `takeReturn`) is removed: it was an
+  in-kind exit from a running fund (D18).
 
 #### 5.11.6 What step 3f removes and adds
 
@@ -1058,13 +1135,19 @@ needs a role. It is the one place where a holder depends on one.
 | The price in `quoteDeposit` and `quoteRedeem` | D17. |
 | `exitInKind` on the queue, and `redeemInKind` while the fund runs | D18. |
 | "Cancel at any time" | The cutoff (RB-25). |
+| `settle` and `step` by anyone after `keeperGrace` | D20. Both are keeper-only. `keeperGrace` goes. |
+| `allowReturn` and `takeReturn` | D18. A freeze can be released or end by itself. |
 | The departure from ERC-7540 "each request takes a limit" (§5.9.6) | A standard request has no limit. The request functions now match the standard's shape. |
 
 | Added | What it is |
 | --- | --- |
 | The match | Book moves in the queue and one fee transfer. No new call into the fund. |
 | The cutoff | One comparison in `cancel`. |
-| The wind-down gate | One check on the existing `redeemInKind`. |
+| The wind-down state | A gate on `redeemInKind`, the trigger anyone can call on a stuck fund, the release of queue escrow, and the stop of the rebalancer. |
+| The venue liquidity test | One read per lending venue before a match. |
+| A pause that ends by itself | `maxPause`, as `maxFreeze` already works. |
+| No step in a settlement window | One time check in `step` (§5.10). |
+| A sale path for a delisted asset | Keeper-only steps for that asset, with its own bound and budget (§4.5). |
 | Asset rule 4 and delisting (§4.5) | A depth floor, checked where rule 3 is checked. |
 
 #### 5.11.7 What it costs, and what stays open
@@ -1072,16 +1155,23 @@ needs a role. It is the one place where a holder depends on one.
 - **A matched user trades at a computed price.** The loss is bounded by the
   checks, and it is another user's gain, never the holders' loss. It is the
   first price between users since §17.
-- **The caller of `settle` chooses the block.** The TWAP is taken over the
-  window that ends at the call. A caller on one side can wait for a window
-  that favours them. The keeper settles first, the median of the slices
-  moves slowly, and the feed guard bounds the result. Step 3f measures this
-  (A22).
+- **Liveness rests on the keeper.** Nobody else can settle or step (D20).
+  A stopped keeper costs users time, up to the wind-down trigger. The
+  keeper also picks the block of each settlement. It is trusted to settle
+  at the first block it can.
+- **A stuck fund can be wound down by anyone.** That is the backstop, and
+  it is also a way to harm the fund: whoever can block settlement for
+  `maxRoll` epochs can force a wind-down. The Safe can end it, after the
+  timelock's delay. A29 measures the cost of forcing one.
+- **Steps lose the settlement windows.** A plan cannot step while a window
+  with locked requests is open. A plan takes longer to converge. The sim
+  reports by how much.
 - **A TWAP lags the market.** The match price is up to a window old. It can
   differ from the true price by up to `refBandBps` without tripping the
   guard. That difference is one matched user's gain and the other's loss.
 - **A locked request cannot be cancelled.** A user who changes their mind
-  after the cutoff waits for the fill or the expiry.
+  after the cutoff waits for the fill or the expiry. The exception is a
+  deposit while deposits are stopped.
 - **No instant exit.** A holder's only way out of a running fund is a
   settlement.
 - **The user signs without a price.** They accept the market's move between
@@ -1089,8 +1179,8 @@ needs a role. It is the one place where a holder depends on one.
   bound what a single settlement can do.
 - **Two PRD promises change again**: the quote, and the in-kind exit that is
   "never blocked" (`one-vault-prd-amendments.md` §5).
-- **A stuck fund needs a role to open the exit.** Until the fund is shut
-  down, a holder of a fund whose settlements fail can only wait.
+- **A holder of a stuck fund waits up to `maxRoll` epochs.** Then anyone can
+  start the wind-down.
 - **The guard carries more weight.** The feeds still set no price. But the
   band between a TWAP and its feed is now the bound on what one matched
   user can lose to another. The asset rule's feed and depth requirements
@@ -1200,8 +1290,8 @@ These are the invariants the experiment must prove (gate G3). They join §8 of t
   The queue reports each change of an owner's queued shares to the ledger
   before the change happens.
 
-**From step 3f (§5.11, decided 2026-11-13, not built).** RB-23 to RB-26 are
-new. RB-14 ends: there are no limits. Five invariants change their wording:
+**From step 3f (§5.11, decided 2026-11-13, not built).** RB-23 to RB-32 are
+new. RB-14 ends: there are no limits. Seven invariants change their wording:
 
 - **RB-10 (3f).** No shares leave the queue and no USDC is paid before the
   epoch's settlement window ends. The only exceptions are a cancel before
@@ -1227,9 +1317,29 @@ new. RB-14 ends: there are no limits. Five invariants change their wording:
   feed guard of that call passed.
 - **RB-25.** A request can be cancelled only while its epoch is open. After
   that its escrow leaves the queue only by a fill or by expiry.
-- **RB-26.** `redeemInKind` pays only while the fund is shut down. Where it
-  pays, RB-13 and RB-21 hold. A Safe-allowed return after a freeze is
-  unchanged (RB-18).
+- **RB-26.** `redeemInKind` pays only while the fund is in wind-down. Where
+  it pays, RB-13 and RB-21 hold.
+- **RB-18 (3f).** Frozen held shares can only go to their depositors, as
+  shares. A freeze ends by itself `maxFreeze` after the freeze call. There
+  is no in-kind return.
+- **RB-20 (3f).** Only the keeper calls `settle` and `step`. `settle` takes
+  no price and no selection as input. The price and the totals of a window
+  are fixed at its first call.
+- **RB-27.** Anyone can start the wind-down once a locked request's epoch
+  closed `maxRoll` epochs ago with no successful settlement since. No role
+  and no pause can prevent that. Only the Safe through the timelock ends a
+  wind-down, and the in-kind exit stays open until it does.
+- **RB-28.** No match happens while any lending venue cannot pay out the
+  matched shares' part of the fund's position, or while deposits are
+  stopped.
+- **RB-29.** Every fill of a side, matched or net, counts against that
+  side's flow cap for the period.
+- **RB-30.** No step runs between the close of an epoch with locked
+  requests and that epoch's first successful settlement.
+- **RB-31.** A request's exit fee, hold and expiry are fixed when it is
+  made. A redemption request never loses its place in the order.
+- **RB-32.** A pause of the queue ends by itself after `maxPause` and
+  cannot be set again for the same length of time.
 - **RB-6 (3f).** Rebalancing state never blocks a redemption request or its
   settlement.
 
@@ -1471,18 +1581,20 @@ whose release yaml stays its record) to `v0.8.0-onevault`
    started.* Build and test §5.11 on the step 3e contracts. The engineering
    plan is `one-vault-timed-flows-eng-plan.md` §8. These rules are fixed now,
    before any result:
-   - **The mechanism:** requests without a limit, the cutoff, the match at
-     the NAV at the TWAP under the feed guards, one price per side, caps on
-     the net amount, in-kind only in a shut-down fund, asset rule 4 and
-     delisting. The fund and the queue must still
+   - **The mechanism:** requests without a limit, the cutoff, keeper-only
+     `settle` and `step`, the match at the NAV at the TWAP under the feed
+     guards, one price and one set of totals per window, the venue
+     liquidity test, caps on every fill, the wind-down state and its
+     trigger, the pause that ends by itself, terms fixed at the request,
+     no step in a settlement window, asset rule 4 and the sale path of a
+     delisted asset. The fund and the queue must still
      pass G1.
    - **Attack tests**, each with the attacker's full profit and loss, and
      the loss of each matched user and of the holders:
      - A21, a lagging TWAP: an informed user joins the side the TWAP's lag
        favours, inside the feed guard.
-     - A22, the caller's block: the caller of `settle` is on one side and
-       picks the block. Once as the keeper, once as a stranger after the
-       grace.
+     - A22, withdrawn. It tested a caller of `settle` with a side. Only the
+       keeper settles, and the keeper is not an actor (D20).
      - A23, a self-match: one owner on both sides. It must pay the fee, gain
        nothing, and dodge neither a cap nor the hold.
      - A24, the cutoff: a cancel after the epoch closes, and a request in
@@ -1494,11 +1606,23 @@ whose release yaml stays its record) to `v0.8.0-onevault`
        check 4 blocks, what holding it costs on a pool that passes §4.5, and
        the attacker's net result.
      - A28, a run with a match: many redeemers and few depositors. Who
-       fills, at what price, and what expiry and in-kind do around the caps.
+       fills, at what price, in what order, and how long the last one waits.
+     - A29, a forced wind-down: block settlement for `maxRoll` epochs, then
+       start the wind-down. Report the cost and what the attacker gains.
+     - A30, a lending venue that is fully borrowed or impaired while both
+       sides have requests: there must be no match, and the redeemers get a
+       position claim for that venue.
+     - A31, a plan in progress: steps at the edge of each settlement window
+       through a whole plan. Report blocked settlements and the lean on the
+       match price.
+     - A32, a pause held by a compromised emergency key: it must end by
+       itself, and the wind-down test must still count the time.
+     - A33, a parameter change by the timelock while requests are locked:
+       their fee, hold and expiry must not move.
    - **Rerun A1 to A19** on the step 3f fund. A13 ends with the limits. A9
-     and A14 use the in-kind exit only in a shut-down fund.
-   - **Tests for RB-23 to RB-26** and for the changed RB-6, RB-10, RB-12,
-     RB-15 and RB-16. G3 is scored again.
+     and A14 use the in-kind exit only in a wind-down.
+   - **Tests for RB-23 to RB-32** and for the changed RB-6, RB-10, RB-12,
+     RB-15, RB-16, RB-18 and RB-20. G3 is scored again.
    - **Rerun the timed sim.** Report the matched share of the flow volume,
      the gain of A10 and A2 against the step 3d fund on the same seeds, the
      loss of a matched user against the sim's true price, and how long a
@@ -1541,6 +1665,13 @@ recorded so the conclusion can revisit it.
 | D17 | Does a request carry a price limit, and does the user get a price before signing? | No, from step 3f. A request names a quantity. It can be cancelled until its epoch closes and is then locked. The quote views return terms and times, no price. Owner, 2026-11-13. This amends D14: no price moves value to or from holders, and one price moves value between matched users. | Forward pricing. A limit and an open cancel were the free look. The protocol's own bands protect the user. |
 | D18 | Is there an in-kind exit? | Not from a running fund, from step 3f. `redeemInKind` applies only once the goal is to wind the fund down: it opens when the fund is shut down. This amends D10. Owner, 2026-11-13. | An in-kind exit from a running fund is a free choice between the price and the assets, paid for by the other side of a match. In a wind-down there is no match and the goal is to return the assets. |
 | D19 | What happens to an asset with a thin pool? | It is delisted, at any weight. The asset rule gains an absolute depth floor (§4.5, rules 4 and 5). Owner, 2026-11-13. This tightens D12. | The design relies on its NAV: the TWAP as the price and the feeds as the guard. A thin pool is cheap to hold off its feed. |
+| D20 | Who calls `settle` and `step`? | Only the keeper, for now. Owner, 2026-11-13. The keeper is a team-operated account, preferably a multisig, that keeps the state machine moving. It is not an actor in the system. This amends D3: nobody settles or steps after a grace period. | A caller with a side could pick the block and the batch. With one trusted caller that question goes. Liveness then rests on the keeper, and the wind-down trigger (D24) is the backstop. |
+| D21 | Can a match happen while a lending venue cannot pay? | No. Before a match the queue tests that every lending venue can pay out the matched shares' part of its position. `pauseDeposits` stops the match too. Review fix, 2026-11-13 (§19). | The NAV counts a lending position at face. A matched redeemer would otherwise leave a damaged venue at full value at the depositors' cost. |
+| D22 | Does matched volume count against the flow caps? | Yes. Every fill of a side counts. Review fix, 2026-11-13. This reverses the first draft of §5.11. | Holding a TWAP inside the band is a fixed cost and its gain grows with matched size. |
+| D23 | What does a net redemption do when one lending venue cannot pay? | It pays that venue's part as a claim on the position and the rest in USDC. Review fix, 2026-11-13. | Lending is most of the fund. One full venue would otherwise stop every redemption, and there is no in-kind exit to go around it. |
+| D24 | How does a stuck fund reach the in-kind exit, and what are a pause and a wind-down? | Anyone can start the wind-down after `maxRoll` epochs without a successful settlement while a request is locked. The wind-down is a state: no settlement, the rebalancer stops, queue escrow is released, in-kind opens, and only the Safe through the timelock ends it. A pause ends by itself after `maxPause`. The in-kind return after a freeze is removed. Review fix, 2026-11-13. The owner has not yet ruled on the trigger by anyone. | D18 left a stuck fund with one way out, a call by the emergency key. This keeps "in-kind only in a wind-down" and removes the dependence on a key. The cost: blocking settlement for `maxRoll` epochs forces a wind-down. |
+| D25 | Does a redemption request expire? | No. It keeps its place. After `maxRoll` epochs its owner may withdraw the unfilled shares. Deposits still expire. Review fix, 2026-11-13. | In a run under the caps, expiry sent waiting redeemers to the back about five times. |
+| D26 | Can a parameter change alter a locked request? | No. The fee, the hold and the expiry are fixed at the request. Review fix, 2026-11-13. | A locked request cannot leave, so its terms must not move under it. |
 
 ## 12. Alternatives considered
 
@@ -1616,15 +1747,19 @@ thresholds below are proposals the owner can change until step 3f runs.
   or redeemer fills outside their limit" becomes: every net fill is inside
   its per-swap limits, and no matched user gets a price further than
   `refBandBps` from the sim's true value of a share at the settlement block.
-  The attack list is A1 to A12 and A14 to A28. The invariants are RB-10 to
-  RB-13, RB-15 to RB-18 and RB-20 to RB-26.
+  The attack list is A1 to A12, A14 to A21 and A23 to A33. The invariants
+  are RB-10 to RB-13, RB-15 to RB-18 and RB-20 to RB-32. The floor on the
+  cost of blocking settlement for a day now also guards against a forced
+  wind-down, so the owner should set it again before step 3f runs.
 - **G9** keeps its three thresholds. With no exit from a running fund, the
   95th percentile wait is the customer's whole protection, so the sim also
   reports the longest wait in the blocked scenarios. That number has no
   threshold yet.
-- **G3** is scored again over RB-1 to RB-26, without RB-14.
+- **G3** is scored again over RB-1 to RB-32, without RB-14.
+- **G5** is affected after all: a plan cannot step inside a settlement
+  window (RB-30). It is scored again on the step 3f run.
 - **G1** holds the fund and the queue to the same limit after the change.
-- G4 and G5 are not affected. A flow still does not change weights.
+- G4 is not affected by the flows. A flow still does not change weights.
 
 Step 5 scores G8 and G9 on the step 3f run if step 3f is built, because
 that is then the design that would go forward. The step 3d results stay in
@@ -2476,15 +2611,14 @@ wrong. The owner corrected both.
 
 ### 18.6 Still open
 
-- **The caller's choice of block** (§5.11.7). Measured by A22.
-- **Whether matched volume needs a cap of its own.** It does not touch the
-  fund. It does expose one user to another's size.
+- **The caller's choice of block.** Closed by D20: only the keeper settles.
+- **Whether matched volume needs a cap of its own.** Closed by D22: it
+  counts against the flow caps.
 - **The depth floor's value** (`minPoolDepthUsdc`). The sim sets it.
-- **Who starts a wind-down, and how fast.** `shutdown` is the emergency
-  role's call. A stuck fund has no exit until it is made.
-- **The freeze return.** After a freeze the Safe can let depositors take
-  held shares back in kind (RB-18). That is a reversal by the Safe, not a
-  user's exit, and it is left as it is. The owner has not ruled on it.
+- **Who starts a wind-down, and how fast.** Answered by D24, which the
+  owner has not yet ruled on: the emergency role at any time, and anyone
+  once the fund has been stuck for `maxRoll` epochs.
+- **The freeze return.** Removed by D24.
 - **The gateway.** An agent's request no longer carries a price limit. Its
   depositor's policy loses that field again (PRD amendment 4).
 - **PAXG** is still not assessed against §4.5.
@@ -2498,3 +2632,81 @@ wrong. The owner corrected both.
 - The code was read to confirm that step 3d settles both sides in one
   `settle` call with no match (`FlowSettleLib`). Nothing else was checked
   against the code.
+
+## 19. Adversarial review of step 3f, and the fixes
+
+Status: review record, 2026-11-13. Three independent reviewers read §5.11
+and the rest of this document the day it was written. None of them wrote
+it. A fourth, on the prototype's code, was stopped: step 3f is not built,
+and the prototype is not the design. Nothing here is tested.
+
+### 19.1 The owner's two rules for reading the review
+
+1. **The keeper is not an actor.** It is a team-operated account,
+   preferably a multisig, that keeps the state machine moving. Findings
+   that model the keeper as an attacker are set aside. `settle` and `step`
+   are keeper-only for now (D20).
+2. **The design is not implemented.** Findings that rest only on the
+   prototype's code are set aside. Findings about the design stand, also
+   where a reviewer found them by reading code.
+
+### 19.2 Findings and what became of each
+
+Severity is the reviewer's.
+
+| Finding | Severity | Resolution |
+| --- | --- | --- |
+| A match lets a redeemer leave a fully borrowed or impaired lending venue at face value. The matched depositors, who cannot cancel, carry the loss. | High | Fixed in design: D21, RB-28. A loss that is neither marked nor visible in liquidity stays a residual. |
+| A fund that normal stress can stop (a USDC depeg, a market faster than the TWAP) has no exit except a call by the emergency key. | Critical | Fixed in design: D24, RB-27. Anyone can start the wind-down after `maxRoll` blocked epochs. |
+| Matched volume used no cap. Holding a TWAP inside the band is a fixed cost and its gain grows with matched size. | High | Fixed in design: D22, RB-29. |
+| A delisted asset cannot be sold by a step, because a step needs the checks a failing asset fails. It would stay and block settlement. | High | Fixed in design: §4.5 rule 5, a sale path of its own. The bound and the budget are open. |
+| Steps and settlements had no ordering. The fund's own steps push pools up to 97 bps from the feed against a band of 90. | High | Fixed in design: RB-30. The cost is a slower plan. |
+| One lending venue that cannot pay stops every net redemption. | High | Fixed in design: D23. |
+| A pause was a total lock for at least the timelock's delay, and a compromised key could repeat it. | High | Fixed in design: D24, RB-32. |
+| A run takes about 11 days under the caps, and expiry sent waiting redeemers to the back. | High | Partly. D25 keeps their place. The length of a run is the cap's purpose and stays. |
+| The wind-down was a flag the Safe could reverse while holders left. It did not stop the rebalancer or release queue escrow. | Medium | Fixed in design: D24. |
+| The in-kind return after a freeze contradicted D18. | Medium | Fixed: removed. |
+| The timelock could change the fee, the hold and the expiry of locked requests. | Medium | Fixed in design: D26, RB-31. |
+| The caller of `settle` chose the block and the batch size, so each chunk of one window could get its own price. | High, Medium | Closed by D20, and by fixing the price and totals at a window's first call (RB-20). |
+| A depositor can ask for far more than they want, to take most of a scarce match. The surplus expires at no cost. | Medium | Open. The flow cap bounds the match. Allocation by age instead of by size is the stated option. |
+| A public plan tells users which way the fund will push its pools. A holder can also redeem before a costly plan and return after it. | Medium | Open. A31 measures the first. The second is an accepted cost of shared rebalancing (D1) with no test yet. |
+| A lending rate that jumps blocks settlement for days. | Low | Open. Excluding that venue from the settlement is the stated option. |
+
+### 19.3 What the reviewers could not break
+
+- A match changes neither the fund's assets nor its supply. Holders are
+  untouched.
+- A one-block push of a pool does not move the median of the slices.
+- A self-match pays the exit fee, gains nothing and does not shorten the
+  hold.
+- Nobody but the settler gets a look at the price after the cutoff, and
+  the settler is now the keeper.
+- The TVL cap holds through a match, because a match adds no NAV.
+- A request opened in another owner's name only gives that owner value.
+
+### 19.4 Two points about the experiment, left to the owner
+
+The reviewers raised two points that are judgments, not defects. They are
+recorded here and not acted on.
+
+1. **No gate result describes step 3f.** Every result in §14 was measured
+   on the step 3d and 3e design. One reviewer reads step 3f as a redesign
+   after a failed gate (G8), and reads the amended gates of §13 as moved
+   after results. §13 fixes the step 3f rules before any step 3f result.
+   Whether the conclusion (§10, step 5) is written on the built design
+   first is the owner's call.
+2. **The mix.** At the PRD's launch weights about 95% of the fund is
+   lending. One reviewer argues that the queue, the hold and the match
+   protect the pricing of the other 5% and take instant exit from the 95%.
+   The alternative it names is an instant lending vault beside a small
+   timed basket. That is the fallback D2 already lists and §13 says must
+   be tested before the conclusion.
+
+### 19.5 Unverified
+
+- No test and no sim backs any fix in this section.
+- The reviewers' sizes (a 3% loss to matched depositors, an 11-day run, a
+  20 bps lean from a held TWAP) are their arithmetic from §5.9.5, not
+  measurements.
+- Whether a lending venue's available liquidity can be read reliably
+  inside `settle`, for each of the three venues, is not checked.

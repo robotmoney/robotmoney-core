@@ -370,7 +370,8 @@ with them.
 ## 8. Step 3f: netted, forward-priced flows
 
 Status: plan, 2026-11-13. Not started. It implements proposal §5.11, D16 to
-D19 and RB-23 to RB-26, on the step 3e contracts. The rule above all rows
+D26 and RB-23 to RB-32, on the step 3e contracts. Rows E34 to E42 come
+from the adversarial review of the same day (proposal §19). The rule above all rows
 changes with it: quantity sets every share minted or burned, no price moves
 value to or from holders, and one price, the fund's NAV per share at the
 TWAP, moves value between the matched users of one settlement. The NAV
@@ -384,35 +385,53 @@ method does not change. The outside feeds stay guards.
 | E25 | Requests without a limit (replaces E12) | `requestDeposit(usdc, owner)` and `requestRedeem(shares, owner)`. The request stores no limit. The queue computes no bound price and skips no request for a price. | D17. Forward pricing. It also matches ERC-7540's request shape. |
 | E26 | The cutoff | `cancel` reverts `RequestLocked` once the request's epoch has closed. Expiry after `maxRoll` epochs is unchanged. | RB-25. An open cancel was the free look. |
 | E27 | One price per side | Every fill of a side in one settlement gets the same blend: the matched part at `S` and the net part at its realized price, split in proportion to the fill. Order only decides who fills when a cap leaves part of a side pending. | RB-23. Nobody is matched ahead of anybody else. |
-| E28 | Caps (amends E20) | The side caps per period and the TVL cap count the net amount only. `basketCallBps` applies to the net trade. Matched volume uses no cap. | The caps protect the fund and the pools. A match touches neither. Whether matched volume needs its own cap is open (proposal §18.6). |
-| E29 | In-kind (replaces E9 where it says "instant") | `redeemInKind` on the fund reverts `InKindClosed` unless the fund is shut down. The queue loses `exitInKind`. In a shut-down fund E9's mechanics and E23's fixes are unchanged. The freeze return (E17) is unchanged. | D18, RB-26. The in-kind exit applies only once the goal is to wind the fund down. |
+| E28 | Caps (amends E20) | Each side's cap per period counts every fill of that side, matched or net. The TVL cap counts the net deposit. `basketCallBps` applies to the net trade. | D22, RB-29. A held TWAP's gain grows with matched size, so the size is capped. |
+| E29 | In-kind (replaces E9 where it says "instant") | `redeemInKind` on the fund reverts `InKindClosed` unless the fund is in wind-down. The queue loses `exitInKind`, `allowReturn` and `takeReturn`. In a wind-down E9's mechanics and E23's fixes are unchanged. | D18, RB-26. The in-kind exit applies only once the goal is to wind the fund down. |
 | E30 | Not used | The first draft let redemption requests through a pause. The owner's correction removed the reason (proposal §18.4). | |
 | E31 | Terms views (replaces E21) | `quoteDeposit` and `quoteRedeem` return the fee, the cancel cutoff, the earliest settlement time and the end of the hold. No price. | D17. `lastGoodNav` is the value a client may show. |
 | E32 | Asset rule 4 and delisting (amends E15) | `setTargetAndOpenPlan`, a rise of the TVL cap and a fall of `poolShareBps` also check `minPoolDepthUsdc` against the pool's time-weighted depth. A failing asset can only take a target of 0. | D19. |
+| E34 | Keeper-only (amends E10) | `settle` on the queue and `step` on the rebalancer need `KEEPER_ROLE`. `keeperGrace` and the non-keeper cursor class go. | D20, RB-20. The keeper is a team-operated account, preferably a multisig, and not an actor. |
+| E35 | One price and one set of totals per window | The first `settle` call after a window fixes `S` and the totals `D` and `R` of the locked requests. Later calls for that window only distribute fills. | RB-23. A batch split over calls gets one price. |
+| E36 | Venue liquidity test | Before a match the queue asks each lending adapter whether the venue can pay out the matched shares' part of the position now. If one cannot, there is no match in that settlement. Each lending adapter gains a view for this. | D21, RB-28. |
+| E37 | Net redemption on a venue that cannot pay (amends E4) | The pro-rata sale records a position claim for that venue's part, as E9 does, and pays the rest. It does not revert. | D23. |
+| E38 | The wind-down state | `windDown()` on the fund: `EMERGENCY_ROLE` at any time, anyone when the queue reports a locked request whose epoch closed `maxRoll` epochs ago with no successful settlement since. It stops settlement, deposits and the rebalancer, releases every pending request to its owner, waives the hold for unfrozen held shares and opens `redeemInKind`. Only `ADMIN_ROLE` through the timelock ends it. | D24, RB-27. |
+| E39 | Pause that ends by itself | `pauseQueue` stores an end time `now + maxPause`. It cannot be called again before `end + maxPause`. A paused period counts as time without a settlement for E38. | D24, RB-32. |
+| E40 | Redemption requests keep their place | A redemption request does not expire. After `maxRoll` epochs its owner may withdraw the unfilled shares. A deposit request expires as before. A locked deposit can be cancelled while deposits are stopped. | D25. |
+| E41 | Terms fixed at the request | `Request` stores the exit fee, the hold and the expiry time. Settlement and claims read them from the request. | D26, RB-31. |
+| E42 | Steps and settlement windows; the sale of a delisted asset | `step` reverts between the close of an epoch with locked requests and that epoch's first successful settlement. A delisted asset is sold by keeper-only steps for that asset alone, with its own price bound and cost budget, outside the checks of other assets. Its checks leave the settlement. | RB-30, proposal §4.5 rule 5. The bound and the budget are open. |
 | E33 | The realized-price check (amends E7, check 11) | The net side's realized price must be inside its per-swap limits. There are no user limits to check. | D17. |
 
 ### 8.2 Contract changes
 
-- **`FlowQueue` and `FlowClaimLib`.** Drop the limit from the request
-  functions and from `Request`. `cancel` checks the cutoff. Remove
+- **`FlowQueue` and `FlowClaimLib`.** `settle` is keeper-only (E34). The
+  pause ends by itself (E39). Redemption requests do not expire (E40).
+  Terms are stored on the request (E41). `allowReturn` and `takeReturn`
+  go (E29). Drop the limit from the request functions and from `Request`. `cancel` checks the cutoff. Remove
   `exitInKind`. The quote views lose their price.
 - **`FlowCheckLib`.** Remove the bound prices and the limit-based
   eligibility. Keep checks 1 to 7 and return `S`, the NAV per share at the TWAP of check
   3.
-- **`FlowSettleLib`.** Add the match before the two sides. The walk no
+- **`FlowSettleLib`.** Fix the price and totals at a window's first call
+  (E35). Run the venue liquidity test (E36). Add the match before the two
+  sides. The walk no
   longer has a "refused by its own limit" outcome, so each side's cursor
   only passes closed and expired requests. Blend the price per side. Count
-  the caps on the net amount. A failed net side leaves the match standing.
-- **`RobotMoneyFund` and `FundFlowsLib`.** Gate `redeemInKind` on the
-  shut-down state (E29). Add
+  every fill against the caps (E28). A failed net side leaves the match standing.
+- **`Rebalancer`.** `step` is keeper-only and refuses a settlement window
+  (E34, E42). The sale path of a delisted asset (E42).
+- **Lending adapters (test copies).** A view of what the venue can pay out
+  now (E36).
+- **`RobotMoneyFund` and `FundFlowsLib`.** The wind-down state and its
+  trigger (E38). `redeemInKind` gated on it (E29). The position claim in
+  the pro-rata sale (E37). Add
   the depth check (E32). `mintInKind` and `sellForFlow` are unchanged.
 - **Sizes.** The queue loses the limit logic and gains the match. The fund
   gains two checks. Both are measured against G1 before anything else.
 
 ### 8.3 Tests
 
-- **`Attacks.t.sol` and `sim/AttackSim.t.sol`:** A21 to A28 as proposal §10
-  step 3f lists them. Each reports the attacker's net result, the loss of
+- **`Attacks.t.sol` and `sim/AttackSim.t.sol`:** A21 and A23 to A33 as
+  proposal §10 step 3f lists them. A22 is withdrawn (D20). Each reports the attacker's net result, the loss of
   each matched user against the sim's true price, and the holders' loss.
   A1 to A12 and A14 to A19 run again on the step 3f fund. A13 is removed
   with the limits.
@@ -426,7 +445,21 @@ method does not change. The outside feeds stay guards.
     block later.
   - RB-26: `redeemInKind` reverts for a wallet holder, for a pending request
     and for an expired request while the fund runs. It pays every holder
-    once the fund is shut down.
+    once the fund is in wind-down.
+  - RB-27: with every feed stale, the queue paused and the keeper silent,
+    anyone starts the wind-down after `maxRoll` epochs and every holder
+    exits in kind. Before that the call reverts. A fund that settles under
+    its caps never meets the test.
+  - RB-28: with one venue fully borrowed there is no match, and the net
+    redemption pays a position claim for that venue.
+  - RB-29: matched fills use up the side's cap.
+  - RB-30: a step inside a settlement window reverts.
+  - RB-31: a timelock change of the fee, the hold or `maxRoll` does not
+    move a locked request. A redemption request keeps its place past
+    `maxRoll` epochs.
+  - RB-32: a pause ends by itself and cannot be set again at once.
+  - RB-20: a non-keeper cannot call `settle` or `step`. Two calls for one
+    window give one price.
   - RB-24, the price: a pool pushed for one block does not move the match
     price. A TWAP held past `refBandBps` from its feed blocks the
     settlement.
@@ -446,15 +479,21 @@ method does not change. The outside feeds stay guards.
    E31, E33). The step 3d tests that used limits are rewritten or removed,
    each named in the report.
 3. The match and the blended price (E24, E27, E28).
-4. The wind-down gate on `redeemInKind` (E29).
+4. The wind-down state, its trigger and the gate on `redeemInKind` (E29,
+   E38), the pause (E39), requests that keep their place and their terms
+   (E40, E41).
+4a. Keeper-only calls, one price per window, the venue liquidity test and
+   the position claim in a net redemption (E34 to E37).
+4b. No step in a settlement window, and the sale path of a delisted asset
+   (E42).
 5. Asset rule 4 (E32).
-6. A21 to A28, then the rerun of A1 to A19.
+6. A21 and A23 to A33, then the rerun of A1 to A19.
 7. The sim rerun. Score G3, G8 and G9 and write them into proposal §14.
 
 ### 8.5 Risks
 
-- **The match is the first price between users since proposal §17.** If A21,
-  A22 or A27 shows a matched user losing more than `refBandBps`, or an
+- **The match is the first price between users since proposal §17.** If A21
+  or A27 shows a matched user losing more than `refBandBps`, or an
   attacker with a positive net result, the stated fallback is a tighter
   `refBandBps` for the match than for the net trade. If that also fails,
   the match is removed again and D17 to D19 stand without it.
@@ -462,8 +501,13 @@ method does not change. The outside feeds stay guards.
   changes is listed with its old and new assertion.
 - **G9 can fail on the cutoff.** A user who cannot cancel waits longer on a
   blocked settlement. The sim reports the wait.
-- **A stuck fund has no exit until it is shut down.** That is the owner's
-  decision (D18). The tests show what a holder can and cannot do, so the
-  PRD text can say it plainly.
+- **Anyone can wind down a stuck fund.** That removes the dependence on a
+  key and adds a way to harm the fund: block settlement for `maxRoll`
+  epochs, then start the wind-down. A29 measures the cost. The owner has
+  not yet ruled on this trigger (D24).
+- **Liveness rests on the keeper** (D20). The keeper's own failure is one
+  of the ways a fund becomes stuck.
+- **The scope grew.** The review added nine rows (E34 to E42). The size
+  measurement in work package 1 must include them.
 - **The Deploy 4 rehearsal runs the step 3d and 3e code.** Step 3f does not
   change it and is not deployed by it.
