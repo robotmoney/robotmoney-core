@@ -4,7 +4,7 @@ import { clearVectorProblems } from "./validate-contract-qa.ts";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FUND_MANIFEST_FILES, FUND_SHEET, FUND_VAULT_MANIFESTS, QA_DIR, ROOT, applicableSteps, commandProblems, isFundSheet, loadModel, parseRelease, parseSteps, localForkProblems, stateSelfReadProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, gateAbsentPaths, mainOutProblems, rebalanceRoundProblems, unwindGuardProblems, upgradeBuildGateProblems, validateAll } from "./validate-contract-qa.ts";
+import { FUND_MANIFEST_FILES, FUND_SHEET, FUND_VAULT_MANIFESTS, QA_DIR, ROOT, applicableSteps, commandProblems, isFundSheet, loadModel, parseRelease, parseSteps, localForkProblems, stateSelfReadProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, gateAbsentPaths, mainOutProblems, rebalanceRoundProblems, keeperGasProblems, holdWaitProblems, fundExecuteProblems, unwindGuardProblems, upgradeBuildGateProblems, validateAll } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
 const RELEASE = "releases/v0.5.0.yaml";
@@ -51,6 +51,7 @@ test("the template can change while every committed release is pinned; only the 
   // every problem names a release being prepared (unpinned): Deploy 4's v0.7.0-onevault copies the current template, so the edit is refused there
   const unpinnedReleases = [...validateAll(ROOT, model).releases.values()].filter((r) => r.templateSha === undefined).map((r) => r.release);
   expect(unpinnedReleases).toContain("v0.7.0-onevault");
+  expect(unpinnedReleases).toContain("v0.8.0-onevault");
   expect(p.length).toBeGreaterThan(0);
   expect(p.every((x) => unpinnedReleases.some((r) => x.includes(`runbook ${r}`) || x.includes(`releases/${r}.yaml`)))).toBe(true);
 });
@@ -589,11 +590,12 @@ test("the rounds before the rebalance run before the receipt is recorded, check 
   for (const id of ["P5.00-receipt-payload", "P8.19-v050-receipt-payload"]) expect(r.steps.find((s) => s.id === id)!.cmds[0]).toContain("USDC:8000,PROTO:1000,RWA:1000");
 });
 
-// ─── Deploy 4: the fund flow (releases/v0.7.0-onevault.yaml) ────────────────────────────────────────────────────
-const FUND_RELEASE = "releases/v0.7.0-onevault.yaml";
-const fundRelease = () => validateAll(ROOT, model).releases.get("v0.7.0-onevault")!;
+// ─── The fund flow (releases/v0.8.0-onevault.yaml, the hardened successor of Deploy 4's v0.7.0-onevault.yaml) ────────────────────────────────────────────────────
+const FUND_RELEASE = "releases/v0.8.0-onevault.yaml";
+const fundRelease = () => validateAll(ROOT, model).releases.get("v0.8.0-onevault")!;
+const deploy4Release = () => validateAll(ROOT, model).releases.get("v0.7.0-onevault")!;
 
-test("Deploy 4: the v0.7.0-onevault release keeps every template step and runs only the fund flow: no template step applies on any target, and production runs nothing", () => {
+test("the v0.8.0-onevault release keeps every template step and runs only the fund flow: no template step applies on any target, and production runs nothing", () => {
   const r = fundRelease();
   const t = validateAll(ROOT, model).template;
   expect(r.flows).toEqual({ twin: ["fund"], rehearsal: ["fund"], production: ["fund"] });
@@ -609,7 +611,7 @@ test("Deploy 4: the v0.7.0-onevault release keeps every template step and runs o
   expect(runnableProblems(r, "rehearsal")).toEqual([]);
   // every added step is of the fund flow, carries the release's added and never runs in production
   for (const s of r.steps.filter((x) => !templateIds.has(x.id))) {
-    expect(s.added, s.id).toBe("v0.7.0-onevault");
+    expect(s.added, s.id).toBe("v0.8.0-onevault");
     expect(s.flow, s.id).toBe("fund");
     expect(["twin", "rehearsal"].includes(s.onlyFor as string) || JSON.stringify(s.onlyFor) === JSON.stringify(["twin", "rehearsal"]), s.id).toBe(true);
   }
@@ -635,7 +637,7 @@ test("Deploy 4: the fund steps publish and verify with --system fund, never run 
   const step = (id: string) => r.steps.find((s) => s.id === id)!;
   expect(step("P1.61-fund-publish").irreversible).toBe(true);
   expect(step("P1.61-fund-publish").notBefore).toEqual({ afterStep: "P1.60-fund-record-go", hours: 0 });
-  expect(step("P6.62-fund-claim-deposit").notBefore).toEqual({ afterStep: "P6.61-fund-settle-deposits", hours: 24 });
+  expect(step("P6.62-fund-claim-deposit").notBefore).toEqual({ afterStep: "P6.61-fund-settle-deposits", hours: 1 }); // decision D4-11: a 1 h hold
   for (const id of ["P3.62-fund-register-submitter-execute", "P6.74-fund-apply-receipt-execute", "P9.62-fund-unpause-execute", "P9.71-fund-upgrade-execute", "P9.72-fund-verify-final"]) expect(step(id).notBefore?.hours, id).toBe("timelockDelay");
   // Deploy 4: the upgrade lifecycle changes code and reads the change back (P9.71: the slot is RebalancerV2 and upgradeMarker() answers 2), then upgrades back so the final
   // verify (P9.72, unchanged: every proxy's code the build's) runs on the release build
@@ -739,7 +741,7 @@ test("Deploy 4: the unwind guard rule follows where the govern step runs: the fu
 
 test("Deploy 4: the rebalance rule iterates the fund flow; the fund's apply is a Safe call, not --row apply-receipt, so it brackets nothing there, and every fund exercises label sends its call", () => {
   const r = fundRelease();
-  expect(rebalanceRoundProblems(r.steps, "v0.7.0-onevault")).toEqual([]);
+  expect(rebalanceRoundProblems(r.steps, "v0.8.0-onevault")).toEqual([]);
   const labelled = r.steps.filter((s) => s.flow === "fund" && s.exercises !== undefined).map((s) => [s.id, s.exercises]);
   expect(labelled).toEqual([["P6.62-fund-claim-deposit", "vault-deposit"], ["P6.65-fund-claim-redeem", "redeem"], ["P6.68-fund-redeem-in-kind", "redeem"]]);
   expect(r.steps.some((s) => s.flow === "fund" && s.cmds.some((c) => c.join(" ").includes("--row apply-receipt")))).toBe(false);
@@ -747,7 +749,7 @@ test("Deploy 4: the rebalance rule iterates the fund flow; the fund's apply is a
   const fundApply = { ...APPLY, flow: "fund" };
   expect(rebalanceRoundProblems([fundApply] as never, "t").join("\n")).toContain("the fund flow on twin has no vault-deposit step before P5.03-apply-receipt");
   // a fund label whose step does not send its call is refused
-  const p = problemsWith(FUND_RELEASE, (t) => t.replace(stepBlock(t, "P6.66-fund-request-cancel"), (b) => b.replace('    added: "v0.7.0-onevault"\n', '    exercises: "vault-deposit"\n    added: "v0.7.0-onevault"\n')));
+  const p = problemsWith(FUND_RELEASE, (t) => t.replace(stepBlock(t, "P6.66-fund-request-cancel"), (b) => b.replace('    added: "v0.8.0-onevault"\n', '    exercises: "vault-deposit"\n    added: "v0.8.0-onevault"\n')));
   expect(p.join("\n")).toContain("P6.66-fund-request-cancel: exercises vault-deposit, but no command sends that call through scripts/runbook/cast-send.sh");
 });
 
@@ -826,4 +828,107 @@ test("a command that writes a state file and reads it back as {state:X} is refus
   expect(stateSelfReadProblems([{ id: "P6.60", cmds: [["bash", "-c", 'cast call x > {runDir}/state/a && test "$(cat {runDir}/state/a)" = 1']] }])).toEqual([]);
   // reading a value an EARLIER command wrote, then writing it again, is fine
   expect(stateSelfReadProblems([{ id: "P6.61", cmds: [["bash", "-c", "echo {state:a} > {runDir}/state/a"]] }])).toEqual([]);
+});
+
+// ─── Deploy 4 hardening (owner, 2026-11-13) ────────────────────────────────────────────────────────────────────
+test("hardening: on every target the fund flow's first keeper send has a hard keeper-gas check before it (P3.63 on 8453, P0.71 on the Twin)", () => {
+  const r = fundRelease();
+  expect(keeperGasProblems(r)).toEqual([]);
+  for (const target of ["twin", "rehearsal"]) {
+    const run = applicableSteps(r, target);
+    const first = run.findIndex((s) => s.cmds.some((c) => c.includes("{keepercast}")));
+    expect(first, target).toBeGreaterThan(0);
+  }
+  expect(applicableSteps(r, "rehearsal").map((s) => s.id).indexOf("P3.63-fund-keeper-gas")).toBeLessThan(applicableSteps(r, "rehearsal").map((s) => s.id).indexOf("P6.61-fund-settle-deposits"));
+});
+
+test("hardening: a release whose keeper sends without a hard keeper-gas check is refused on that target", () => {
+  const r = fundRelease();
+  const drop = (id: string) => ({ ...r, steps: r.steps.filter((s) => s.id !== id) });
+  // without P3.63 the 8453 rehearsal has only P0.72's advisory balance line (|| echo advisory), which is no gate
+  const noFunding = keeperGasProblems(drop("P3.63-fund-keeper-gas"));
+  expect(noFunding.join("\n")).toContain("on rehearsal");
+  expect(noFunding.join("\n")).not.toContain("on twin"); // the Twin's P0.71 still sets and asserts the keeper's balance
+  expect(keeperGasProblems(drop("P0.71-fund-twin-fund")).join("\n")).toBe(""); // P3.63 runs on the Twin too
+  // the check turned advisory (a || fallback) is refused
+  const soft = { ...r, steps: r.steps.map((s) => (s.id === "P3.63-fund-keeper-gas" || s.id === "P0.71-fund-twin-fund" ? { ...s, cmds: s.cmds.map((c) => c.map((a) => a.includes("qa-assert.ts ge") ? `${a} || echo advisory` : a)) } : s)) };
+  expect(keeperGasProblems(soft).length).toBe(2);
+  // a gate that a rerun may skip (gateAbsent) does not count
+  const skippable = { ...r, steps: r.steps.map((s) => (s.id === "P3.63-fund-keeper-gas" || s.id === "P0.71-fund-twin-fund" ? { ...s, gateAbsent: "{runDir}/state/x" } : s)) };
+  expect(keeperGasProblems(skippable).length).toBe(2);
+  // P3.63 moved after the first keeper send no longer gates it on 8453
+  const i = r.steps.findIndex((s) => s.id === "P3.63-fund-keeper-gas");
+  const late = [...r.steps.slice(0, i), ...r.steps.slice(i + 1)];
+  late.splice(late.findIndex((s) => s.id === "P6.62-fund-claim-deposit"), 0, r.steps[i]!);
+  expect(keeperGasProblems({ ...r, steps: late }).join("\n")).toContain("P6.61-fund-settle-deposits sends from the keeper's key ({keepercast}) on rehearsal");
+});
+
+test("hardening: the planted drift (P3.63 dropped) fails the whole validator", () => {
+  const p = problemsWith(FUND_RELEASE, (t) => t.replace(stepBlock(t, "P3.63-fund-keeper-gas"), ""));
+  expect(p.join("\n")).toContain("no earlier step on rehearsal funds or checks the keeper's ETH");
+});
+
+test("decision D4-11: the deposit claim waits at least the sheet's FLOW_MIN_HOLD", () => {
+  const r = fundRelease();
+  const sheet = parseSheetText(readFileSync(join(ROOT, FUND_SHEET), "utf8"));
+  expect(sheet.FLOW_MIN_HOLD).toBe("3600");
+  expect(holdWaitProblems(r, sheet)).toEqual([]);
+  expect(holdWaitProblems(r, { ...sheet, FLOW_MIN_HOLD: "86400" }).join("\n")).toContain("P6.62-fund-claim-deposit claims deposit shares 1 h after P6.61-fund-settle-deposits, under the sheet's FLOW_MIN_HOLD of 86400 s");
+  const noWait = { ...r, steps: r.steps.map((s) => (s.id === "P6.62-fund-claim-deposit" ? { ...s, notBefore: undefined } : s)) };
+  expect(holdWaitProblems(noWait, sheet).join("\n")).toContain("P6.62-fund-claim-deposit claims deposit shares with no notBefore");
+  expect(holdWaitProblems(r, {}).join("\n")).toContain("has no FLOW_MIN_HOLD");
+  const d = r.decisions.find((x) => x.id === "D4-11")!;
+  expect(d.status).toBe("decided");
+  expect(d.answer).toContain("Owner, 2026-11-13: minHold 1 hour");
+});
+
+test("decision D4-10: every fund timelock execute goes through the Safe with two owner signatures, and the decision is recorded", () => {
+  const r = fundRelease();
+  expect(fundExecuteProblems(r)).toEqual([]);
+  const d = r.decisions.find((x) => x.id === "D4-10")!;
+  expect(d.status).toBe("decided");
+  expect(d.answer).toStartWith("Owner, 2026-11-13: Safe-only executor for the fund timelock");
+  const executes = r.steps.filter((s) => s.flow === "fund" && s.cmds.some((c) => c.join(" ").includes("--action execute")));
+  expect(executes.map((s) => s.id)).toEqual(["P3.62-fund-register-submitter-execute", "P6.74-fund-apply-receipt-execute", "P9.62-fund-unpause-execute", "P9.71-fund-upgrade-execute", "P9.72-fund-verify-final"]);
+  // one owner signature dropped: refused
+  const oneSig = { ...r, steps: r.steps.map((s) => (s.id === "P6.74-fund-apply-receipt-execute" ? { ...s, cmds: s.cmds.filter((c) => !c.includes("{ownerSigner2}")) } : s)) };
+  expect(fundExecuteProblems(oneSig).join("\n")).toContain("P6.74-fund-apply-receipt-execute proposes a fund timelock execute");
+  // a direct execute on the fund timelock (the open-executor path): refused
+  const direct = { ...r, steps: r.steps.map((s) => (s.id === "P9.62-fund-unpause-execute" ? { ...s, cmds: [...s.cmds, ["bash", "scripts/runbook/cast-send.sh", "{m:fund-timelock.timelock}", "execute(address,uint256,bytes,bytes32,bytes32)", "{cast}"]] } : s)) };
+  expect(fundExecuteProblems(direct).join("\n")).toContain("P9.62-fund-unpause-execute calls the fund timelock's execute directly");
+});
+
+test("owner liveness: P2.61 runs after the fund verify on the Twin and the rehearsal and reads the prove-control record with every SAFE_OWNERS entry", () => {
+  const r = fundRelease();
+  for (const target of ["twin", "rehearsal"]) {
+    const ids = applicableSteps(r, target).map((s) => s.id);
+    expect(ids.indexOf("P2.61-fund-owner-liveness"), target).toBe(ids.indexOf("P2.60-fund-verify") + 1);
+  }
+  const s = r.steps.find((x) => x.id === "P2.61-fund-owner-liveness")!;
+  const j = s.cmds.map((c) => c.join(" ")).join("\n");
+  expect(j).toContain("publish-contracts/src/ci/owner-liveness.ts --run-manifest {evidenceDir}/publish-run.json --owners {sheet:SAFE_OWNERS}");
+  expect(s.expectExit).toBe(0);
+  expect(s.receipts.some((x) => x.pattern === "owner-liveness.json" && x.required)).toBe(true);
+  // a flag the tool does not take is refused against the real CLI
+  const bad = { ...s, cmds: [[...s.cmds[0]!, "--no-such-flag", "x"]] };
+  expect(commandProblems([bad], model).join("\n")).toContain("--no-such-flag");
+});
+
+test("version bump (owner, 2026-11-13): v0.7.0-onevault stays Deploy 4's record and still validates, v0.8.0-onevault carries the hardening", () => {
+  const old = deploy4Release(), now = fundRelease();
+  expect(old.release).toBe("v0.7.0-onevault");
+  expect(now.release).toBe("v0.8.0-onevault");
+  // the record is unchanged: no D4-10 or D4-11, no owner liveness row, the 24 h hold
+  expect(old.decisions.map((d) => d.id)).not.toContain("D4-10");
+  expect(old.steps.map((s) => s.id)).not.toContain("P2.61-fund-owner-liveness");
+  expect(old.steps.find((s) => s.id === "P6.62-fund-claim-deposit")!.notBefore).toEqual({ afterStep: "P6.61-fund-settle-deposits", hours: 24 });
+  // it still passes the new rules (its keeper is funded by P3.63, its 24 h wait covers the 1 h hold, its executes go through the Safe)
+  const sheet = parseSheetText(readFileSync(join(ROOT, FUND_SHEET), "utf8"));
+  expect([...keeperGasProblems(old), ...fundExecuteProblems(old), ...holdWaitProblems(old, sheet)]).toEqual([]);
+  // the successor holds every step of the record plus P2.61, each added by v0.8.0-onevault
+  const added = (r: typeof old) => r.steps.filter((s) => s.added !== undefined).map((s) => s.id);
+  expect(added(now).filter((id) => id !== "P2.61-fund-owner-liveness")).toEqual(added(old));
+  expect(now.decisions.map((d) => d.id)).toEqual([...old.decisions.map((d) => d.id), "D4-10", "D4-11"]);
+  expect(runnableProblems(now, "rehearsal")).toEqual([]);
+  expect(runnableProblems(now, "twin")).toEqual([]);
 });
