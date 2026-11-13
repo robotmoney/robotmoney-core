@@ -4,7 +4,7 @@ import { clearVectorProblems } from "./validate-contract-qa.ts";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FUND_MANIFEST_FILES, FUND_SHEET, FUND_VAULT_MANIFESTS, QA_DIR, ROOT, applicableSteps, commandProblems, isFundSheet, loadModel, parseRelease, parseSteps, localForkProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, gateAbsentPaths, mainOutProblems, rebalanceRoundProblems, unwindGuardProblems, upgradeBuildGateProblems, validateAll } from "./validate-contract-qa.ts";
+import { FUND_MANIFEST_FILES, FUND_SHEET, FUND_VAULT_MANIFESTS, QA_DIR, ROOT, applicableSteps, commandProblems, isFundSheet, loadModel, parseRelease, parseSteps, localForkProblems, stateSelfReadProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, gateAbsentPaths, mainOutProblems, rebalanceRoundProblems, unwindGuardProblems, upgradeBuildGateProblems, validateAll } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
 const RELEASE = "releases/v0.5.0.yaml";
@@ -818,4 +818,11 @@ test("Deploy 4: a vaults sheet is checked exactly as before: never as a fund she
   expect(sheetProblems(parseSheetText(`${TWIN_SHEET.replace(/^VAULT_RWA_TVL_CAP=.*\n/m, "")}KEEPER_ADDRESS=0x1111111111111111111111111111111111111111\n`), "twin").join("\n")).toContain("sheet: VAULT_RWA_TVL_CAP is missing");
   const real = parseSheetText(readFileSync(join(ROOT, "deployments", "twin-918453", "stage-sheet.env"), "utf8"));
   expect(sheetProblems(real, "twin", 0)).toEqual([]);
+});
+
+test("a command that writes a state file and reads it back as {state:X} is refused: the runner resolves it before the command runs (P6.60, Deploy 4)", () => {
+  expect(stateSelfReadProblems([{ id: "P6.60", cmds: [["bash", "-c", "cast call x > {runDir}/state/a && test {state:a} = 1"]] }]).join()).toContain("reads {state:a}");
+  expect(stateSelfReadProblems([{ id: "P6.60", cmds: [["bash", "-c", 'cast call x > {runDir}/state/a && test "$(cat {runDir}/state/a)" = 1']] }])).toEqual([]);
+  // reading a value an EARLIER command wrote, then writing it again, is fine
+  expect(stateSelfReadProblems([{ id: "P6.61", cmds: [["bash", "-c", "echo {state:a} > {runDir}/state/a"]] }])).toEqual([]);
 });
