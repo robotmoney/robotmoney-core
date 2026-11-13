@@ -64,7 +64,8 @@
       "uint64 lastGoodNavAt;",
       "uint16 inKindBps;",
       "uint128 inKindFloorUsdc;",
-      "uint32 inKindPeriod;"
+      "uint32 inKindPeriod;",
+      "uint256 haltCost;"
     ],
     "robotmoney.storage.RobotMoneyVaultExclusions": [
       "ExclusionLedger ledger;",

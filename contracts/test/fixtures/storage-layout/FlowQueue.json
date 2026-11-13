@@ -68,7 +68,10 @@
       "uint256 lastExcludedMask;",
       "mapping(uint256 index => uint256) lastLendPerShare;",
       "FlowLevers levers;",
-      "uint64 leverTradeBlock;"
+      "uint64 leverTradeBlock;",
+      "uint128 leverBlockDep;",
+      "uint128 leverBlockRed;",
+      "uint256 lastExclusionCount;"
     ],
     "robotmoney.storage.GovernedUUPS": [
       "address upgradeTimelock;",
@@ -105,7 +108,8 @@
       "uint64 lastGoodNavAt;",
       "uint16 inKindBps;",
       "uint128 inKindFloorUsdc;",
-      "uint32 inKindPeriod;"
+      "uint32 inKindPeriod;",
+      "uint256 haltCost;"
     ],
     "robotmoney.storage.RobotMoneyVaultExclusions": [
       "ExclusionLedger ledger;",
