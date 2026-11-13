@@ -645,9 +645,10 @@ test("Deploy 4: the fund steps publish and verify with --system fund, never run 
   expect(step("P9.72-fund-verify-final").notBefore).toEqual({ afterStep: "P9.71-fund-upgrade-execute", hours: "timelockDelay" });
   expect(step("P0.67-fund-sheet").cmds[0]).toEqual(["cp", FUND_SHEET, "{sheet}"]);
   expect(step("P1.60-fund-record-go").cmds[0]!.join(" ")).toContain("{sheet:KEEPER_ADDRESS}");
-  // the open decisions of Deploy 4 and the owner's exception
+  // the decisions of Deploy 4: the owner's exception, the owner's conditional go (D4-2) and the keeper key (D4-3, recorded in D4-8)
   expect(r.decisions.find((d) => d.id === "D4-1")).toMatchObject({ status: "decided", decidedOn: "2026-11-12", ref: "owner instruction in the Deploy 4 planning session, 2026-11-12" });
-  for (const id of ["D4-2", "D4-3"]) expect(r.decisions.find((d) => d.id === id)?.status, id).toBe("open"); // the go and the push stay the owner's, open until the run
+  expect(r.decisions.find((d) => d.id === "D4-2")).toMatchObject({ status: "decided", decidedOn: "2026-11-12", ref: "owner, Deploy 4 planning session, 2026-11-12" });
+  expect(r.decisions.find((d) => d.id === "D4-3")).toMatchObject({ status: "decided", decidedOn: "2026-11-13", ref: "D4-8" });
   for (const id of ["D4-4", "D4-5", "D4-6", "D4-7", "D4-8"]) expect(r.decisions.find((d) => d.id === id)?.status, id).toBe("decided");
   expect(r.productionReady).toBe(false);
 });
