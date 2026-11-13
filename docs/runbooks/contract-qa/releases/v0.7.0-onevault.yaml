@@ -26,8 +26,8 @@ notes: |
   onlyFor twin or rehearsal, so a production run has no step and is refused (runnableProblems), besides the open decisions and productionReady false.
 
   The sheet. deployments/base-8453-rehearsal/deploy-4.env is the whole fund sheet (publish-contracts/src/sheet.ts FUND_SHEET_NAMES), not a fragment:
-  P0.67 copies it to {sheet}; on the Twin P0.68 overlays the throwaway keys, a Twin keeper and the Twin chain ids. KEEPER_ADDRESS is blank in the
-  committed file: the owner fills it and commits it before the rc tag (decision D4-3), and P0.69 refuses a blank or placeholder keeper.
+  P0.67 copies it to {sheet}; on the Twin P0.68 overlays the throwaway keys, a Twin keeper and the Twin chain ids. KEEPER_ADDRESS carries the
+  owner's keeper (decisions D4-3, D4-8), and P0.69 refuses a blank or placeholder keeper.
 
   Governance. The fund CLI runs publish and verify only (--system fund). Every governed call (register the receipt submitter, apply a receipt, restore the
   pause, the upgrade) is a Safe transaction to the fund-system timelock made with publish-contracts/src/safe/cli.ts: propose --action schedule (or
@@ -36,9 +36,9 @@ notes: |
   salt from the run directory, so the execute step proposes the same operation.
 
   Timing. A request settles from its epoch's end plus FLOW_SETTLE_WINDOW (at most 7 h at the sheet's 6 h epoch and 1 h window), and the settle steps
-  wait on chain time; deposit shares are held FLOW_MIN_HOLD (24 h, P6.62 notBefore 24 h). A plan concludes at its end (PLAN_DURATION, 7 days) or expires
-  after its end plus REBALANCER_MAX_OVERRUN (7 days), so P6.76 runs 7 to 14 days (decision D4-4). The Twin runs the same steps with the same waits:
-  QA runs everything the 8453 run sends (policy 4.14).
+  wait on chain time; deposit shares are held FLOW_MIN_HOLD (24 h, P6.62 notBefore 24 h). A plan concludes at its end (PLAN_DURATION, 1 day) or expires
+  after its end plus REBALANCER_MAX_OVERRUN (7 days), so P6.76 runs about a day (decision D4-4). The Twin runs every row up to P6.59; the timed queue
+  rows from P6.60 run first on 8453 (decision D4-9, a rehearsal-only deviation from policy 4.14).
 
   Placeholders this release adds (README "Placeholders"): {ownerSigner2} (the second owner's signer spec), {keepercast} and {emergencycast} (the keeper's
   and the emergency key's keystores for cast-send.sh, {keeperKeystore} and {emergencyKeystore}; on the Twin the config adds the run's passphrase file, the
@@ -75,16 +75,16 @@ decisions:
     ref: "owner instruction in the Deploy 4 planning session, 2026-11-12"
   - id: "D4-2"
     question: "Go to broadcast Deploy 4 on Base 8453: push the branch docs/single-vault-rebalancer-proposal (with the Deploy 4 tooling) and its pull request, cut and push the rc tag release/v0.7.0-onevault-rc.N-rehearsal at the commit the Twin run passed, and record the publish go (P1.60) on the rehearsal target"
-    status: open
-    answer: null
-    decidedOn: null
-    ref: null
+    status: decided
+    answer: "Yes, conditional: run the whole Deploy 4 rehearsal on 8453 without asking again while every gate passes (the Twin pair, frozen counts, the rc tag pushed, green CI, a clean dry run). It covers publishing, the governance steps, funding the keeper from the deployer, and the QA rounds. At most the deployer's 103 USDC and about 0.002 ETH are at risk. Any failure stops the run and is reported; no check is loosened. It covers pushing the branch and the rc tag the gates need, and no other deployment."
+    decidedOn: 2026-11-12
+    ref: "owner, Deploy 4 planning session, 2026-11-12"
   - id: "D4-3"
     question: "The keeper key: which public address is KEEPER_ADDRESS (KEEPER_ROLE on the queue and the rebalancer: settle and step first, anyone after the grace), who holds the key, and where its keystore lives. The owner creates it and fills the line in deploy-4.env before the rc tag"
-    status: open
-    answer: null
-    decidedOn: null
-    ref: null
+    status: decided
+    answer: "See D4-8: 0x75E3f84949d5e0aB621EEb06537A1a944274768B, keystore ~/robotmoney-keys/base-mainnet-test/KEEPER beside the other rehearsal keys, same passphrase scheme; deploy-4.env carries it."
+    decidedOn: 2026-11-13
+    ref: "D4-8"
   - id: "D4-4"
     question: "The rehearsal sizing of the plan: keep PLAN_DURATION at 7 days (604800) and REBALANCER_MIN_STEP_USDC at 100 USDC (100000000), or shorten and lower them. With NAV at most 1,000 USDC (FUND_TVL_CAP) most steps skip as BelowMinStep, so the plan would show no trade, and P6.76 runs 7 to 14 days until the plan converges or expires"
     status: decided
@@ -115,6 +115,12 @@ decisions:
     answer: "A Safe, as runbook 4.10 requires. publish-contracts record-receipt --system fund records the receipt directly on the fund register (fund-receipt.json) through the submitter Safe: threshold owners sign, the deployer only pays gas, every check of the vaults path runs first (P6.72). The payload is schema 1.1, per-asset weights, built and checked by scripts/runbook/fund-receipt-payload.ts and scripts/prototype/check-receipt-assets.ts (P6.70, P6.71)."
     decidedOn: 2026-11-13
     ref: "owner (coordinator) instruction in the Deploy 4 tooling session, 2026-11-13: close every runbook tool gap"
+  - id: "D4-9"
+    question: "The Twin is a fork pinned at one block, so its real Chainlink feeds go stale before any settlement window opens: the timed queue rows (P6.60 to P6.76) cannot run on the Twin without writing feed storage, which the owner ruled out on 2026-11-10. How are they covered"
+    status: decided
+    answer: "The Twin runs publish, verify and every row up to P6.59, where it records the fund's own stale-feed refusal (twin-feeds.ts probe). The timed queue rows P6.60 to P6.76 run for the first time on 8453, under the rehearsal caps (every cap at most 1,000 USDC; at most the deployer's 103 USDC at risk). This is a deviation from policy 4.14 (QA runs everything the 8453 run sends) for this rehearsal only, never for a production run."
+    decidedOn: 2026-11-13
+    ref: "owner answer in the Deploy 4 session, 2026-11-13: '8453 runs them first'"
 recovery: |
   Contracts are immutable; there is no in-place rollback (runbook 4.6). Before P1.61-fund-publish nothing was sent: fix on the branch and restart at
   P0.60. A failed P1.61 reruns the same command, and the runner adds --resume. After the handover the emergency key pauses deposits on the fund and pauses
@@ -1578,7 +1584,7 @@ steps:
     added: "v0.7.0-onevault"
   - id: "P6.75-fund-step-round"
     standing: ["4.9"]
-    description: "The keeper's first step() of the plan, right after the apply: it is mined, and the plan is still Open. At the rehearsal's size (NAV at most 1,000 USDC under a 100 USDC REBALANCER_MIN_STEP_USDC) it skips as BelowMinStep; the RebalanceStep or RebalanceStepSkipped event in the journaled receipt says which (decision D4-4)"
+    description: "The keeper's first step() of the plan, right after the apply: it is mined, and the plan is still Open. At the rehearsal's size (NAV at most 1,000 USDC, REBALANCER_MIN_STEP_USDC 1 USDC) it trades or skips; the RebalanceStep or RebalanceStepSkipped event in the journaled receipt says which (decision D4-4)"
     host: "control"
     phase: 6
     cmds:
