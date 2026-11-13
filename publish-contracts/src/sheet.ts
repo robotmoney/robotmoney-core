@@ -544,9 +544,9 @@ export interface FundSheet {
 }
 /** The fund's own ceilings (contracts/test/prototype/src/lib/FundStorage.sol), refused here before any transaction. */
 export const FUND_MAX_EXIT_FEE_BPS = 100n, FUND_MAX_SLIPPAGE_BPS = 500n, FUND_MAX_NAV_DEVIATION_BPS = 2000n;
-/** The queue's hard bounds a sheet value must sit in (contracts/test/prototype/src/FlowTypes.sol). The queue's initializer is the authority; this refuses early. */
+/** The queue's hard bounds a sheet value must sit in (contracts/test/prototype/src/FlowTypes.sol). The queue's initializer is the authority; this refuses early. FLOW_MIN_HOLD's floor is 1 hour (owner, 2026-11-13, decision D4-11). */
 export const FUND_FLOW_BOUNDS: Readonly<Record<string, [bigint, bigint]>> = {
-  FLOW_EPOCH_LENGTH: [3600n, 604800n], FLOW_SETTLE_WINDOW: [600n, 86400n], FLOW_MIN_HOLD: [86400n, 604800n], FLOW_KEEPER_GRACE: [3600n, 604800n],
+  FLOW_EPOCH_LENGTH: [3600n, 604800n], FLOW_SETTLE_WINDOW: [600n, 86400n], FLOW_MIN_HOLD: [3600n, 604800n], FLOW_KEEPER_GRACE: [3600n, 604800n],
   FLOW_MAX_EPOCH_FLOW_BPS: [1n, 10000n], FLOW_EPOCH_FLOOR_USDC: [0n, 100_000_000_000_000n], FLOW_MAX_SHARE_PRICE_MOVE_BPS: [1n, 5000n], FLOW_MAX_ROLL: [1n, 64n],
   FLOW_MIN_REQUEST_USDC: [1n, 1_000_000_000_000n], FLOW_MAX_FREEZE: [3600n, 1_209_600n], FLOW_SLICES: [3n, 48n], FLOW_QUORUM: [1n, 48n], FLOW_DISPERSION_BPS: [1n, 2000n],
   FLOW_REF_BAND_BPS: [1n, 2000n], FLOW_LEG_BAND_BPS: [1n, 2000n], FLOW_SEQUENCER_GRACE: [0n, 86400n], FLOW_USDC_PEG_BAND_BPS: [1n, 1000n], FLOW_MAX_LEND_RATE_GROWTH_BPS: [1n, 1000n],
