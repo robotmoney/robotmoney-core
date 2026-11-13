@@ -134,8 +134,11 @@ struct StepPrices {
 ///         | TARGET_SETTER_ROLE | TimelockController          | governance (`applyReceipt`)    |
 ///         | FLOW_ROLE          | FlowQueue proxy             | fund (`mintInKind`, `sellForFlow`, `ledgerCheckpoint`) |
 ///
+///         On the fund, EMERGENCY_ROLE holds only `pauseRebalance` and `pauseDeposits`; `shutdown` and `emergencyUnwind`
+///         are ADMIN_ROLE's (the timelock), owner 2026-11-13.
 ///         On the FlowQueue: ADMIN_ROLE (timelock: params, release, allowReturn, unpause), EMERGENCY_ROLE (pause,
-///         freezeSettlement) and KEEPER_ROLE (`settle` before `keeperGrace`).
+///         freezeSettlement: pause-class, it only delays one settlement's held shares, ends by itself after
+///         `maxFreeze` and moves no value) and KEEPER_ROLE (`settle` before `keeperGrace`).
 library Roles {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");

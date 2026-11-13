@@ -54,9 +54,12 @@ import {FundPositionLib} from "./lib/FundPositionLib.sol";
 ///         - REBALANCER_ROLE (Rebalancer): `executeStep`, `concludePlan`.
 ///           Both are self-administered and granted exactly once by `bindRebalanceRoles`, so no ADMIN_ROLE
 ///           holder can hand either to another address (the router's WEIGHT_SETTER_ROLE model).
-///         - EMERGENCY_ROLE (hot key): `pauseRebalance`, `pauseDeposits`, `shutdown`, `emergencyUnwind`.
+///         - EMERGENCY_ROLE (hot key): the pauses only, `pauseRebalance` and `pauseDeposits`. A pause only
+///           delays; one key cannot end the fund or sell its holdings (owner, 2026-11-13).
 ///         - ADMIN_ROLE (timelock): assets, caps, fees, guards, `resumePlan`, `extendBudget`, `closePlan`,
-///           `unpauseDeposits`, `restore`, and every role grant. ADMIN carries no upgrade power: only
+///           `unpauseDeposits`, `shutdown`, `restore`, `emergencyUnwind`, and every role grant. `shutdown`
+///           and `emergencyUnwind` are governed (Safe + timelock delay, owner 2026-11-13): each ends the
+///           fund's deposits or sells every holding, so no single hot key holds them. ADMIN carries no upgrade power: only
 ///           `upgradeTimelock()` upgrades or freezes the proxy.
 ///         - `redeem` and `redeemInKind` are never gated by plan state, pause or shutdown (RB-6).
 ///
@@ -725,8 +728,9 @@ contract RobotMoneyFund is
         _setDepositsPaused(false);
     }
 
-    /// @notice Deposits closed and `tvlCap` 0 until ADMIN `restore`. Redeems stay open.
-    function shutdown() external onlyRole(EMERGENCY_ROLE) {
+    /// @notice Deposits closed and `tvlCap` 0 until ADMIN `restore`. Redeems stay open. ADMIN_ROLE (the timelock: the
+    ///         Safe and the delay), not EMERGENCY_ROLE: the hot key pauses deposits at once instead (owner, 2026-11-13).
+    function shutdown() external onlyRole(ADMIN_ROLE) {
         FundState storage s = _s();
         s.shutdown = true;
         s.tvlCap = 0;
@@ -746,9 +750,11 @@ contract RobotMoneyFund is
     ///         tolerant of failure, excluded adapters drained into their exclusion record, Basket sold under the
     ///         TWAP floor), and pause an Open or Halted plan so the Rebalancer stops (it would otherwise buy
     ///         back, including after a queued `extendBudget` lands).
+    ///         ADMIN_ROLE (the timelock: the Safe and the delay), not EMERGENCY_ROLE: it sells every holding, so one hot
+    ///         key does not hold it; the hot key's `pauseDeposits` and `pauseRebalance` stop flows at once (owner, 2026-11-13).
     /// @dev Differs from BasketVault: there is no configured per-token floor or override path. A Basket leg
     ///      whose TWAP read fails is skipped and stays held; holders still exit it through `redeemInKind`.
-    function emergencyUnwind() external onlyRole(EMERGENCY_ROLE) nonReentrant {
+    function emergencyUnwind() external onlyRole(ADMIN_ROLE) nonReentrant {
         _setDepositsPaused(true);
         uint256 recovered = FundFlowsLib.emergencyUnwind(_s());
         _plan(FundAdminLib.PlanOp.UnwindPause, 0);
