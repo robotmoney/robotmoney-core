@@ -725,9 +725,18 @@ jobs:
         # contracts/test/prototype/** is not instrumented here: the gate below reads gateway coverage only, the
         # prototype suites run uninstrumented in forge-prototype-tests, and its EIP-170 SizeGate tests would
         # fail on instrumented bytecode for the same reason VaultCodeSizeGuard is excluded.
+        # Nor is it compiled here (--skip): not running its tests is not enough, because forge coverage still
+        # compiles every source, and the prototype tree with the Deploy 4 fund scripts and helper that import it
+        # raised this compile's peak from 5.28 GiB (dev, 42a4d2e1) to 8.65 GiB (43ff6a5f), past the 50% ceiling.
+        # The ceiling is unchanged. The skipped files are exactly those that import contracts/test/prototype/.
         run: >-
           python3 .github/scripts/run_coverage_memory_guard.py
           forge coverage --report lcov
+          --skip "contracts/test/prototype/**" contracts/script/DeployFund.s.sol contracts/script/DeployFundLibs.s.sol
+          contracts/script/DeployFundTimelock.s.sol contracts/script/DeployFundWiring.s.sol
+          contracts/script/DeployFlowQueue.s.sol contracts/script/DeployRebalancer.s.sol
+          contracts/script/DeployRebalanceGovernance.s.sol contracts/script/FundSystemBase.sol
+          contracts/test/helpers/FundUpgradeV2.sol
           --no-match-test "^testFail_"
           --no-match-contract "VaultCodeSizeGuard|GatewayAgentPolicyCodeSizeGuard"
           --no-match-path "contracts/test/{DeploySeedDeposit.t.sol,SafeIntegration.t.sol,VaultForkRegressions.t.sol,GovernanceExecutePathAfterHandover.t.sol,RwaBasketVaultFork.t.sol,HardAssetsVaultFork.t.sol,CoreStagesFork.t.sol,WithdrawalsNeverFrozen.t.sol,UniswapV4SwapAdapterFork.t.sol,RecorderManipulationFork.t.sol,UpgradeLifecycleFork.t.sol,prototype/**}"

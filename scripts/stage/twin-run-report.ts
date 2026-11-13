@@ -14,7 +14,8 @@
 //   bun scripts/stage/twin-run-report.ts --manifest-dir DIR [--run-manifest FILE] [--labels FILE]
 //        [--table FILE] [--json-out FILE] [--system vaults|gateway|fund]
 // --system (Deploy 4) reports one system's stages only: a fund run's manifest dir holds no vaults manifest, and the vault set is the vaults system's alone (none for
-// the fund or the gateway). Without it every stage of the table is reported, as before.
+// the fund or the gateway). Without it the report covers the vaults and gateway run's stages, as before Deploy 4: the fund system is never part of that run (its
+// own run, twin-publish-fund.ts, passes --system fund), so its stages are left out (defaultTable).
 // Canonical: core issue 1499 (S9; core 1488, 1485, 1486).
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -155,6 +156,11 @@ export function systemTable(t: StageTable, system: SystemName): StageTable {
   return { ...scopeTable(t, system), vaults: system === "vaults" ? t.vaults : [] };
 }
 
+/** Deploy 4: the table a report without --system reads: every stage but the fund system's, which a vaults and gateway run never publishes. */
+export function defaultTable(t: StageTable): StageTable {
+  return { ...t, stages: t.stages.filter((s) => s.system !== "fund") };
+}
+
 /** Reads every stage manifest the table names from `dir`. */
 export function loadManifests(table: StageTable, dir: string): Record<string, Record<string, unknown>> {
   const out: Record<string, Record<string, unknown>> = {};
@@ -194,7 +200,7 @@ function main(): number {
     console.error(`--system is vaults, gateway or fund, got '${v.system}'`);
     return 64;
   }
-  const table = v.system === undefined ? full : systemTable(full, v.system as SystemName);
+  const table = v.system === undefined ? defaultTable(full) : systemTable(full, v.system as SystemName);
   let labelsText: string | null | undefined;
   if (v.labels) {
     if (!existsSync(v.labels as string)) {
