@@ -100,8 +100,8 @@ describe("the fund sheet (Deploy 4)", () => {
       ["FLOW_SETTLE_WINDOW", "21600", "FLOW_SETTLE_WINDOW must be shorter than FLOW_EPOCH_LENGTH"],
       ["FLOW_QUORUM", "13", "FLOW_QUORUM exceeds FLOW_SLICES"],
       ["REBALANCER_MIN_STEP_USDC", "600000000000", "REBALANCER_MIN_STEP_USDC exceeds a per-asset max step"],
-      ["FLOW_BASKET_CALL_BPS", "6", "no stage of this tree sets it"],
-      ["REBALANCER_STEP_DEPTH_BPS", "4", "no stage of this tree sets it"],
+      ["FLOW_BASKET_CALL_BPS", "6", "no stage sets it"],
+      ["REBALANCER_STEP_DEPTH_BPS", "4", "no stage sets it"],
       ["TIMELOCK_MIN_DELAY", "600", "TIMELOCK_MIN_DELAY"],
       ["SAFE_THRESHOLD", "3", "SAFE_THRESHOLD 3 must be from 2 to 2"],
       ["FEE_RECIPIENT_ADDRESS", "0xf3F582464De7BD2cBf9d2ad40429e31D0F4724A3", "the fee recipient is never the deployer"],
@@ -113,10 +113,12 @@ describe("the fund sheet (Deploy 4)", () => {
 
 describe("the fund system's CLI verbs (Deploy 4)", () => {
   const base = ["--chain", "8453", "--rpc", "http://127.0.0.1:8545", "--sheet", "s.env", "--signer", "address:0x1111111111111111111111111111111111111111", "--core-sha", "a".repeat(40), "--system", "fund"];
-  test("publish and verify parse; govern, pause-all, record-receipt and a govern stage are refused", () => {
+  test("publish, verify and record-receipt parse; govern, pause-all, the vault verbs and a govern stage are refused", () => {
     expect(parseCli(["publish", ...base]).system).toBe("fund");
     expect(parseCli(["verify", ...base]).system).toBe("fund");
-    for (const v of ["govern", "pause-all", "record-receipt"]) expect(() => parseCli([v, ...base])).toThrow("the fund system runs publish and verify only");
+    const rec = ["--receipt-id", `0x${"11".repeat(32)}`, "--payload-digest", `0x${"22".repeat(32)}`, "--payload-uri", "https://x.invalid/r", "--payload", "p.json", "--submitter", "0x2222222222222222222222222222222222222222"];
+    expect(parseCli(["record-receipt", ...base, ...rec])).toMatchObject({ verb: "record-receipt", system: "fund" });
+    for (const v of ["govern", "pause-all", "redeploy-vault", "deploy-implementation"]) expect(() => parseCli([v, ...base])).toThrow("the fund system runs publish, verify and record-receipt only");
     expect(() => parseCli([...base, "--stage", "govern"])).toThrow("the fund system has no govern stage");
   });
 });

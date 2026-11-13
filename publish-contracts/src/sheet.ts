@@ -82,8 +82,8 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
 /**
  * Deploy 4: the fund system's own sheet names (the one-vault prototype, contracts/test/prototype/src), read by its stage scripts and refused in a vaults or gateway sheet.
  * Each FLOW_* name is one FlowParams field of the queue (proposal 5.9.5), each REBALANCER_* one step parameter (5.6). FLOW_BASKET_CALL_BPS and REBALANCER_STEP_DEPTH_BPS are
- * levers the one-vault fixes add in their initializers (FlowLevers.basketCallBps, Rebalancer.setStepDepthBps): no stage of this tree sets them, so the fund sheet holds
- * them at those initializers' value (FUND_LEVER_INIT_VALUES) and the verifier reads them back once the fixes are in.
+ * levers the contracts' initializers set (FlowLevers.basketCallBps, Rebalancer.stepDepthBps): no stage sets them, so the fund sheet holds
+ * them at those initializers' value (FUND_LEVER_INIT_VALUES) and the fund verifier reads both back.
  */
 export const FUND_ONLY_NAMES = [
   "KEEPER_ADDRESS",
@@ -95,7 +95,7 @@ export const FUND_ONLY_NAMES = [
   "FLOW_MAX_ROLL", "FLOW_MIN_REQUEST_USDC", "FLOW_MAX_FREEZE", "FLOW_SLICES", "FLOW_QUORUM", "FLOW_DISPERSION_BPS", "FLOW_REF_BAND_BPS", "FLOW_LEG_BAND_BPS",
   "FLOW_SEQUENCER_GRACE", "FLOW_USDC_PEG_BAND_BPS", "FLOW_MAX_LEND_RATE_GROWTH_BPS", "FLOW_BASKET_CALL_BPS",
 ] as const;
-/** The levers the fund sheet carries that no stage of this tree sets: each must equal the value the contract's initializer sets (see FUND_ONLY_NAMES). */
+/** The levers the fund sheet carries that no stage sets: each must equal the value the contract's initializer sets (see FUND_ONLY_NAMES). */
 export const FUND_LEVER_INIT_VALUES: Readonly<Record<string, bigint>> = { FLOW_BASKET_CALL_BPS: 5n, REBALANCER_STEP_DEPTH_BPS: 5n };
 /** Every name a fund sheet may carry: the shared names it reads, and its own. Required: all but FUND_OPTIONAL. */
 export const FUND_SHEET_NAMES = [
@@ -619,7 +619,7 @@ function fundSheet(v: Record<string, string>, opts: ParseSheetOpts): Sheet {
   }
   for (const [name, want] of Object.entries(FUND_LEVER_INIT_VALUES)) {
     const x = u(name);
-    if (x !== want) throw err(`${name} is ${x}, but no stage of this tree sets it: it holds the value the contract's initializer sets (${want}), so the sheet must say ${want}`, { name });
+    if (x !== want) throw err(`${name} is ${x}, but no stage sets it: it holds the value the contract's initializer sets (${want}), so the sheet must say ${want}`, { name });
     params[name] = x;
   }
   if (params.FLOW_SETTLE_WINDOW! >= params.FLOW_EPOCH_LENGTH!) throw err("FLOW_SETTLE_WINDOW must be shorter than FLOW_EPOCH_LENGTH", { name: "FLOW_SETTLE_WINDOW" });

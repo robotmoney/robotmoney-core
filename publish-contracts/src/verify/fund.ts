@@ -145,6 +145,10 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
     return { ok: diff.length === 0, detail: diff.length ? diff.join("; ") : `${FLOW_PARAM_FIELDS.length} fields equal` };
   });
 
+  // ---- the two levers the initializers set (Rebalancer.initialize: stepDepthBps; FlowQueue.initialize: FlowLevers.basketCallBps), against the sheet
+  await c.runEq("rebalancer: stepDepthBps() equals the sheet", async () => String(await chain.read(addr.rebalancer, "function stepDepthBps() view returns (uint16)")), String(f.params.REBALANCER_STEP_DEPTH_BPS));
+  await c.runEq("queue: flowLevers().basketCallBps equals the sheet", async () => String(((await chain.read(addr.queue, "function flowLevers() view returns ((uint16 basketCallBps, uint8 legPriceMode))")) as { basketCallBps: number }).basketCallBps), String(f.params.FLOW_BASKET_CALL_BPS));
+
   // ---- the deployer nonce at the end of the deploy: the start, the frozen counts and the one prove-control transaction
   await c.run("deployer: nonce at the handover equals start plus the fund frozen counts plus the control proof", async () => {
     const start = opts.deployerStartNonce ?? 0;

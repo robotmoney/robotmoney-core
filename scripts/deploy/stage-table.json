@@ -597,8 +597,11 @@
       "libraries": [],
       "vault": null,
       "create2Libraries": [
+        "FundValuationLib",
         "GovernedUpgrade",
-        "StepFeedLib"
+        "StepFeedLib",
+        "TickMath",
+        "TwapTickMath"
       ],
       "proxies": [
         {
