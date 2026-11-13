@@ -1,0 +1,50 @@
+---
+title: "FundTimelockPolicy"
+description: "The fund system's timelock executor policy (owner decision D4-10, 2026-11-13): the Safe is the only EXECUTOR_ROLE holder of the fund-system timelock, so a ready operation runs only when the Safe's owners sign its execution too. The vaults system keeps ADR-0004's open executor. Every fund-system stage that predicts the timelock (each proxy stage) and the handover stage that deploys it inherits this, so all of them predict one address."
+---
+
+# FundTimelockPolicy
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5a4971d7a33dccbd047914eb33075c6a54832433/contracts/script/FundTimelockPolicy.sol)
+
+**Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
+
+**Title:** FundTimelockPolicy
+
+The fund system's timelock executor policy (owner decision D4-10, 2026-11-13): the Safe is the only EXECUTOR_ROLE
+holder of the fund-system timelock, so a ready operation runs only when the Safe's owners sign its execution too.
+The vaults system keeps ADR-0004's open executor. Every fund-system stage that predicts the timelock (each proxy
+stage) and the handover stage that deploys it inherits this, so all of them predict one address.
+
+## Constants
+
+### FUND_EXECUTOR_POLICY
+
+Recorded in fund-timelock.json as `executorPolicy`.
+
+```solidity
+string public constant FUND_EXECUTOR_POLICY = "safe-only";
+```
+
+## Functions
+
+<a id="_timelockexecutor-address"></a>
+
+### _timelockExecutor
+
+```solidity
+function _timelockExecutor(address safe) internal pure virtual override returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+

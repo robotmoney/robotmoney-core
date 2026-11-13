@@ -83,6 +83,7 @@ function setUpgradeConfig(address timelock, GovernedUUPS.UpgradeMode mode) exter
 
 The init code of the core timelock for `safe` and `minDelay`: a `ProposerFloorTimelock`
 (an OZ `TimelockController` that cannot drop its last proposer; issue 1645 question 1).
+Its one executor is `_timelockExecutor(safe)`: `address(0)` (open, ADR-0004) unless a system overrides it.
 
 ```solidity
 function timelockInitCode(address safe, uint256 minDelay) public pure returns (bytes memory);
@@ -100,6 +101,35 @@ function timelockInitCode(address safe, uint256 minDelay) public pure returns (b
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bytes` |  |
+
+<a id="_timelockexecutor-address"></a>
+
+### _timelockExecutor
+
+<i>
+
+The one EXECUTOR_ROLE holder of the timelock this system's proxies name. The vaults system keeps ADR-0004's open
+executor (`address(0)`: anyone executes a ready operation). The fund system (Deploy 4) overrides it to the Safe
+(`FundTimelockPolicy`, owner decision D4-10 of 2026-11-13). It is part of the init code, so it moves the
+predicted CREATE2 address: every stage of one system must agree on it.
+
+</i>
+
+```solidity
+function _timelockExecutor(address) internal pure virtual returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
 
 <a id="predicttimelock-address-uint256"></a>
 
