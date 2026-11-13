@@ -266,7 +266,7 @@ contract FlowQueue is
 
     /// @notice EMERGENCY_ROLE. Pause requests and settlement (cancel, in-kind exit and withdrawals stay open).
     /// @dev Under the one reentrancy lock like every other entry point (eng plan §3.1).
-    function pause() external onlyRole(EMERGENCY_ROLE) nonReentrant {
+    function pauseQueue() external onlyRole(EMERGENCY_ROLE) nonReentrant {
         FlowState storage s = _s();
         if (s.paused) return;
         s.paused = true;
@@ -274,7 +274,7 @@ contract FlowQueue is
     }
 
     /// @notice ADMIN_ROLE.
-    function unpause() external onlyRole(ADMIN_ROLE) nonReentrant {
+    function unpauseQueue() external onlyRole(ADMIN_ROLE) nonReentrant {
         FlowState storage s = _s();
         if (!s.paused) return;
         s.paused = false;
@@ -392,7 +392,7 @@ contract FlowQueue is
         return (s.usdcFeed, s.usdcFeedMaxAge, s.sequencerFeed);
     }
 
-    function paused() external view returns (bool) {
+    function queuePaused() external view returns (bool) {
         return _s().paused;
     }
 

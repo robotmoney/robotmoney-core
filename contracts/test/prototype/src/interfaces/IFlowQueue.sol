@@ -133,10 +133,10 @@ interface IFlowQueue is IFlowEvents {
     function takeReturn(uint256 claimId) external;
 
     /// @notice EMERGENCY_ROLE. Pause requests and settlement. Cancel, in-kind exit and withdrawals stay open.
-    function pause() external;
+    function pauseQueue() external;
 
     /// @notice ADMIN_ROLE.
-    function unpause() external;
+    function unpauseQueue() external;
 
     /// @notice ADMIN_ROLE, inside the hard bounds of FlowTypes (`FlowParamOutOfBounds`).
     function setFlowParams(FlowParams calldata params) external;
@@ -159,7 +159,7 @@ interface IFlowQueue is IFlowEvents {
         view
         returns (address usdcFeed, uint32 usdcFeedMaxAge, address sequencerFeed);
 
-    function paused() external view returns (bool);
+    function queuePaused() external view returns (bool);
 
     /// @notice Epoch index of `block.timestamp` (`block.timestamp / epochLength`).
     function currentEpoch() external view returns (uint64);

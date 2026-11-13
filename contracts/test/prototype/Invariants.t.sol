@@ -443,7 +443,7 @@ contract Invariants is PrototypeHarness {
             // The only refusal for these inputs (100 to 20,000 USDC, at or above the minimum, under the per-deposit
             // cap, a non-zero owner and limit) is a paused queue.
             ++revertsCaught[H_REQUEST_DEPOSIT];
-            if (!queue.paused()) {
+            if (!queue.queuePaused()) {
                 _violation("deposit request refused while not paused", 0);
                 _mustSucceed(H_REQUEST_DEPOSIT, "a deposit request while not paused", err);
             }
@@ -482,7 +482,7 @@ contract Invariants is PrototypeHarness {
         } catch (bytes memory err) {
             // Legitimate refusals: paused, or below the minimum and not the whole balance (E11).
             ++revertsCaught[H_REQUEST_REDEEM];
-            if (!queue.paused() && bytes4(err) != IFlowEventsSel.BELOW_MIN) {
+            if (!queue.queuePaused() && bytes4(err) != IFlowEventsSel.BELOW_MIN) {
                 ++ghostRequestRedeemReverts;
                 _mustSucceed(
                     H_REQUEST_REDEEM,
@@ -981,10 +981,10 @@ contract Invariants is PrototypeHarness {
     function act_pause(bool on) public action(address(0), false, ACT_OTHER) {
         if (on) {
             vm.prank(emergency);
-            queue.pause();
+            queue.pauseQueue();
         } else {
             vm.prank(address(timelock));
-            queue.unpause();
+            queue.unpauseQueue();
         }
     }
 
@@ -1386,7 +1386,7 @@ contract Invariants is PrototypeHarness {
             ++revertsCaught[H_UNAUTHORIZED]; // expected: an unauthorized caller
         }
         vm.prank(c);
-        try queue.pause() {
+        try queue.pauseQueue() {
             ++ghostRb1Violations;
         } catch {
             ++revertsCaught[H_UNAUTHORIZED]; // expected: an unauthorized caller

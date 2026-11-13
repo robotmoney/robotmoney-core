@@ -1004,10 +1004,10 @@ contract FlowQueueTest is FlowQueueBase {
                 Roles.EMERGENCY_ROLE
             )
         );
-        queue.pause();
+        queue.pauseQueue();
         vm.prank(emergency);
-        queue.pause();
-        assertTrue(queue.paused(), "paused");
+        queue.pauseQueue();
+        assertTrue(queue.queuePaused(), "paused");
 
         fundUsdc(dave, 1_000e6);
         vm.startPrank(dave);
@@ -1043,9 +1043,9 @@ contract FlowQueueTest is FlowQueueBase {
                 Roles.ADMIN_ROLE
             )
         );
-        queue.unpause();
-        timelockExecute(address(queue), abi.encodeCall(queue.unpause, ()));
-        assertFalse(queue.paused(), "the admin unpaused");
+        queue.unpauseQueue();
+        timelockExecute(address(queue), abi.encodeCall(queue.unpauseQueue, ()));
+        assertFalse(queue.queuePaused(), "the admin unpaused");
         _assertBooks("RB-15 paused");
     }
 
@@ -1080,7 +1080,7 @@ contract FlowQueueTest is FlowQueueBase {
     function test_check1_aPausedQueue() public fixtureCovered {
         uint256 id = _pendingAtWindow();
         vm.prank(emergency);
-        queue.pause();
+        queue.pauseQueue();
         _expectBlocked(keeper, SettleCheck.Paused, IDLE_INDEX);
         vm.warp(block.timestamp + queue.flowParams().keeperGrace);
         refreshFeeds();

@@ -76,15 +76,15 @@ contract CustodyTest is PrototypeHarness {
             abi.encodeWithSignature("upgradeToAndCall(address,bytes)", stranger, bytes(""))
         );
         vm.prank(emergency);
-        queue.pause();
-        _expectAllRefused(address(queue), abi.encodeCall(FlowQueue.unpause, ()));
-        assertTrue(queue.paused(), "still paused");
+        queue.pauseQueue();
+        _expectAllRefused(address(queue), abi.encodeCall(FlowQueue.unpauseQueue, ()));
+        assertTrue(queue.queuePaused(), "still paused");
         assertEq(queue.flowParams().maxEpochFlowBps, 500, "unchanged");
 
         timelockExecute(address(queue), abi.encodeCall(FlowQueue.setFlowParams, (p)));
         assertEq(queue.flowParams().maxEpochFlowBps, 1_000, "timelock set the flow cap");
-        timelockExecute(address(queue), abi.encodeCall(FlowQueue.unpause, ()));
-        assertFalse(queue.paused(), "timelock unpaused");
+        timelockExecute(address(queue), abi.encodeCall(FlowQueue.unpauseQueue, ()));
+        assertFalse(queue.queuePaused(), "timelock unpaused");
     }
 
     /// @dev A USDC donation raises every holder's claim pro rata, the seed's included. The donor gets nothing back.

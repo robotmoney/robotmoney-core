@@ -1685,13 +1685,13 @@ steps:
   # lifecycle on one fund-system proxy and the final verify. ──
   - id: "P9.60-fund-pause"
     standing: ["4.5", "4.6"]
-    description: "The emergency key pauses deposits on the fund (pauseDeposits) and pauses the queue (pause); both read back paused, and a deposit request the deployer would send now reverts in simulation (requests and settlement are paused; cancel, in-kind exit and withdrawals stay open)"
+    description: "The emergency key pauses deposits on the fund (pauseDeposits) and pauses the queue (pauseQueue); both read back paused, and a deposit request the deployer would send now reverts in simulation (requests and settlement are paused; cancel, in-kind exit and withdrawals stay open)"
     host: "control"
     phase: 9
     cmds:
       - ["bash", "scripts/runbook/cast-send.sh", "{m:fund.fund}", "pauseDeposits()", "{emergencycast}"]
-      - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "pause()", "{emergencycast}"]
-      - ["bash", "-c", 'test "$(cast call "{m:fund.fund}" "depositsPaused()(bool)")" = true && test "$(cast call "{m:queue.queue}" "paused()(bool)")" = true']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "pauseQueue()", "{emergencycast}"]
+      - ["bash", "-c", 'test "$(cast call "{m:fund.fund}" "depositsPaused()(bool)")" = true && test "$(cast call "{m:queue.queue}" "queuePaused()(bool)")" = true']
       - ["bash", "-c", '! cast call --from "{sheet:ADMIN_ADDRESS}" "{m:queue.queue}" "requestDeposit(uint256,uint256,address)" 1000000 1 "{sheet:ADMIN_ADDRESS}" > /dev/null 2>&1']
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1703,11 +1703,11 @@ steps:
     added: "v0.7.0-onevault"
   - id: "P9.61-fund-unpause-schedule"
     standing: ["4.5"]
-    description: "The Safe restores both through the fund-system timelock (ADMIN_ROLE is the timelock's): ONE batch operation, fund.unpauseDeposits() and queue.unpause(), scheduled through the Safe tool"
+    description: "The Safe restores both through the fund-system timelock (ADMIN_ROLE is the timelock's): ONE batch operation, fund.unpauseDeposits() and queue.unpauseQueue(), scheduled through the Safe tool"
     host: "control"
     phase: 9
     cmds:
-      - ["bash", "-c", 'cast keccak "robotmoney.deploy4.unpause.{runDir}" > {runDir}/state/salt-unpause && echo "{m:fund.fund},{m:queue.queue}" > {runDir}/state/target-unpause && echo "$(cast calldata "unpauseDeposits()"),$(cast calldata "unpause()")" > {runDir}/state/data-unpause']
+      - ["bash", "-c", 'cast keccak "robotmoney.deploy4.unpause.{runDir}" > {runDir}/state/salt-unpause && echo "{m:fund.fund},{m:queue.queue}" > {runDir}/state/target-unpause && echo "$(cast calldata "unpauseDeposits()"),$(cast calldata "unpauseQueue()")" > {runDir}/state/data-unpause']
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "scheduleBatch", "--targets", "{state:target-unpause}", "--datas", "{state:data-unpause}", "--values", "0,0", "--salt", "{state:salt-unpause}", "--out", "{runDir}/bundles/unpause-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/unpause-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/unpause-schedule.json", "--signer", "{ownerSigner2}"]
@@ -1724,7 +1724,7 @@ steps:
     added: "v0.7.0-onevault"
   - id: "P9.62-fund-unpause-execute"
     standing: ["4.5"]
-    description: "After the timelock delay the Safe executes the batch: the operation reads done, the fund's depositsPaused and the queue's paused read false"
+    description: "After the timelock delay the Safe executes the batch: the operation reads done, the fund's depositsPaused and the queue's queuePaused read false"
     host: "control"
     phase: 9
     cmds:
@@ -1733,7 +1733,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/unpause-execute.json", "--signer", "{ownerSigner2}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/unpause-execute.json", "--signer", "{signer}"]
       - ["bash", "-c", 'id=$(cast call "{m:fund-timelock.timelock}" "hashOperationBatch(address[],uint256[],bytes[],bytes32,bytes32)(bytes32)" "[{state:target-unpause}]" "[0,0]" "[{state:data-unpause}]" "$(cast hash-zero)" "{state:salt-unpause}") && test "$(cast call "{m:fund-timelock.timelock}" "isOperationDone(bytes32)(bool)" "$id")" = true']
-      - ["bash", "-c", 'test "$(cast call "{m:fund.fund}" "depositsPaused()(bool)")" = false && test "$(cast call "{m:queue.queue}" "paused()(bool)")" = false']
+      - ["bash", "-c", 'test "$(cast call "{m:fund.fund}" "depositsPaused()(bool)")" = false && test "$(cast call "{m:queue.queue}" "queuePaused()(bool)")" = false']
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
