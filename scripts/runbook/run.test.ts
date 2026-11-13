@@ -55,10 +55,12 @@ test("notBefore waits from the earlier step's result: the delay and hours are re
   });
 });
 
-test("on the twin target a wait of hours is a Twin clock warp, never a wall sleep; timelock waits and every 8453 wait stay wall sleeps", () => {
+test("on the twin target a wait of hours is a Twin clock warp, never a wall sleep; the fund flow's timelock waits too; every 8453 wait stays a wall sleep", () => {
   expect(twinClockWait("twin", 24)).toBe(true);
   expect(twinClockWait("twin", 0)).toBe(false);
-  expect(twinClockWait("twin", "timelockDelay")).toBe(false);
+  expect(twinClockWait("twin", "timelockDelay")).toBe(false); // the vaults flows: govern warps by itself
+  expect(twinClockWait("twin", "timelockDelay", "fund")).toBe(true); // the fund flow's Safe executes do not
+  expect(twinClockWait("rehearsal", "timelockDelay", "fund")).toBe(false);
   expect(twinClockWait("rehearsal", 24)).toBe(false);
   expect(twinClockWait("production", 24)).toBe(false);
   withRun((runDir) => {

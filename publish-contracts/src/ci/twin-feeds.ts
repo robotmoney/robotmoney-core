@@ -13,8 +13,9 @@
 //   bun src/ci/twin-feeds.ts refresh --rpc URL --journal FILE [--advance-to T] [--out FILE]
 //        the Twin feed step: (with --advance-to, the clock first moves forward to T) one new round per basket and peg feed that restates the answer the feed reported at
 //        the pin, stamped at the fork's clock, written to the real aggregator's storage and read back through the real proxy; one JSON line per call to FILE.
-//   bun src/ci/twin-feeds.ts keep --rpc URL --journal FILE --stop-file FILE [--every S]
-//        the same refresh every S seconds (default 300) of the fork's clock until FILE exists: the heartbeat for a row that waits on the wall clock.
+//   bun src/ci/twin-feeds.ts keep --rpc URL --journal FILE --stop-file FILE [--every S] [--speed K]
+//        the same refresh every S seconds of wall time (default 300) until FILE exists: the heartbeat for a row that waits on the wall clock; with --speed K
+//        each beat first moves the clock K times the wall time since the last beat.
 // Every verb refuses any chain but 918453; refresh and keep also refuse an RPC that is not an anvil fork. The feed addresses, the maximum ages and the WETH asset index
 // are read from contracts/script/FundSystemBase.sol, the constants the deploy scripts use, so this file holds none of them.
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -380,7 +381,7 @@ export const journalLine = (r: RefreshRecord): string => JSON.stringify(r) + "\n
 if (import.meta.main) {
   const { positionals, values: v } = parseArgs({ allowPositionals: true, options: {
     rpc: { type: "string" }, "min-margin": { type: "string", default: "0" }, out: { type: "string" }, fund: { type: "string" }, queue: { type: "string" }, usdc: { type: "string" },
-    journal: { type: "string" }, "advance-to": { type: "string" }, every: { type: "string", default: "300" }, "stop-file": { type: "string" },
+    journal: { type: "string" }, "advance-to": { type: "string" }, every: { type: "string", default: "300" }, speed: { type: "string", default: "1" }, "stop-file": { type: "string" },
   } });
   const root = new URL("../../../", import.meta.url).pathname;
   const fail = (m: string, code = 1): never => { console.error(`twin-feeds: ${m}`); process.exit(code); };
@@ -414,27 +415,30 @@ if (import.meta.main) {
       console.log(`sequencer answer ${rec.sequencer.answer}, up for ${rec.sequencer.upForSec} s (not written); head ${rec.head.number} at ${rec.head.timestamp}`);
       if (rec.problems.length) fail(rec.problems.join("; "));
     } else if (positionals[0] === "keep") {
-      // The Twin heartbeat for a row that waits on the wall clock (P6.76's step loop): one refresh every --every seconds of the fork's clock, each journaled, until
-      // --stop-file exists. It only restates the pin answers, as refresh does; it never moves the clock.
+      // The Twin heartbeat for a row that waits on the wall clock (P6.76's step loop): one refresh every --every seconds of wall time, each journaled, until
+      // --stop-file exists. With --speed K (default 1) each beat also moves the fork clock K times the wall time since the last beat (forward only, as refresh
+      // --advance-to does), so a row that sleeps on the wall clock sees K times as much chain time: the Twin's compression of the plan's day and its overrun.
+      // It only restates the pin answers, as refresh does.
       if (!v.journal || !v["stop-file"]) fail("keep needs --journal FILE and --stop-file FILE", 2);
-      const every = Number(v.every);
-      if (!Number.isInteger(every) || every < 30 || every > 1200) fail("--every is 30 to 1200 seconds (ETH / USD's maxFeedAge is 1,500 s)", 2);
+      const every = Number(v.every), speed = Number(v.speed);
+      if (!Number.isInteger(every) || every < 5 || every > 600) fail("--every is 5 to 600 seconds of wall time (ETH / USD's maxFeedAge is 1,500 s)", 2);
+      if (!Number.isInteger(speed) || speed < 1 || speed > 1000) fail("--speed is a whole factor from 1 to 1000", 2);
       await requireTwinFork(rpc);
-      // The fork's clock: the head's time, or (anvil stamps the next block with the wall time plus its offset) the last refresh's block time plus the wall time since.
-      let last = 0, lastWall = 0;
+      let lastWall = 0, lastChain = 0;
       while (!existsSync(v["stop-file"]!)) {
-        const h = await head(rpc);
-        const now = Math.max(h.timestamp, last + Math.floor(Date.now() / 1000) - lastWall);
-        if (!last || now - last >= every) {
-          const rec = await refreshFeeds(rpc, ff);
+        const wall = Math.floor(Date.now() / 1000);
+        if (!lastWall || wall - lastWall >= every) {
+          const h = await head(rpc);
+          const advanceTo = speed > 1 && lastWall ? Math.max(h.timestamp, lastChain + speed * (wall - lastWall)) : undefined;
+          const rec = await refreshFeeds(rpc, ff, advanceTo === undefined ? {} : { advanceTo });
           appendFileSync(v.journal!, journalLine(rec));
           if (rec.problems.length) fail(rec.problems.join("; "));
-          last = rec.head.timestamp; lastWall = Math.floor(Date.now() / 1000);
-          console.log(`refresh at ${rec.head.timestamp}: ${rec.feeds.map((x) => `${x.name} round ${x.after.aggregatorRound}`).join(", ")}`);
+          lastWall = wall; lastChain = rec.head.timestamp;
+          console.log(`refresh at ${rec.head.timestamp}${rec.advanced ? ` (clock +${rec.advanced.to - rec.advanced.from} s)` : ""}: ${rec.feeds.map((x) => `${x.name} round ${x.after.aggregatorRound}`).join(", ")}`);
         }
-        await new Promise((s) => setTimeout(s, 5000));
+        await new Promise((r) => setTimeout(r, 1000));
       }
       console.log("keep: stop file found, the heartbeat ends");
-    } else fail("usage: twin-feeds.ts check --rpc URL [--min-margin S] [--out F] | probe --rpc URL --fund A --queue A --usdc N [--out F] | refresh --rpc URL --journal F [--advance-to T] [--out F] | keep --rpc URL --journal F --stop-file F [--every S]", 2);
+    } else fail("usage: twin-feeds.ts check --rpc URL [--min-margin S] [--out F] | probe --rpc URL --fund A --queue A --usdc N [--out F] | refresh --rpc URL --journal F [--advance-to T] [--out F] | keep --rpc URL --journal F --stop-file F [--every S] [--speed K]", 2);
   } catch (e) { fail((e as Error).message); }
 }

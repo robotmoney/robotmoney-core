@@ -103,10 +103,13 @@ export function readyAt(resultMtimeMs: number, hours: number | "timelockDelay", 
 const sleep = (s: number): void => { spawnSync("sleep", [String(s)], { stdio: "inherit" }); };
 
 /**
- * PURE. Whether a notBefore wait runs as a Twin clock warp: only on the twin target and only for a wait given in hours (the fund flow's 24 h hold, P6.62). A
- * "timelockDelay" wait stays a wall sleep on every target, and so does every wait on rehearsal and production, where nothing may move the chain's clock.
+ * PURE. Whether a notBefore wait runs as a Twin clock warp: only on the twin target, for a wait given in hours (the fund flow's 24 h hold, P6.62), and for a
+ * fund-flow timelock wait (its governed executes go through publish-contracts/src/safe/cli.ts, which simulates against the head block; an idle anvil mines
+ * none, so after a wall sleep the head still carries the schedule's time and the timelock refuses; the vaults flows' govern warps by itself). Every wait on
+ * rehearsal and production stays a wall sleep: nothing may move that chain's clock.
  */
-export const twinClockWait = (target: string | undefined, hours: number | "timelockDelay"): boolean => target === "twin" && typeof hours === "number" && hours > 0;
+export const twinClockWait = (target: string | undefined, hours: number | "timelockDelay", flow?: string | string[]): boolean =>
+  target === "twin" && (typeof hours === "number" ? hours > 0 : [flow ?? []].flat().includes("fund"));
 
 /** Runs one command of a step: stdin on this terminal, stdout and stderr shown and appended to the journal. Returns its exit code. */
 function runCommand(argv: string[], env: Record<string, string>, out: string, err: string, maxMinutes?: number): number {
@@ -151,12 +154,13 @@ function stepResult(step: RunbookStep, r: Resolver, opts: { runDir: string; shee
     if (!existsSync(after)) return `fail notBefore ${step.notBefore.afterStep} has no result`;
     const ready = readyAt(statSync(after).mtimeMs, step.notBefore.hours, opts.sheetDelay);
     const wait = ready - Math.floor(Date.now() / 1000);
-    if (wait > 0 && !opts.dryRun && twinClockWait(opts.target, step.notBefore.hours)) {
-      // The Twin's clock is anvil's: the wall time since the fork started plus every warp. A wait of hours there is one warp of the same seconds (journaled), so
-      // the chain sees the same elapsed time a wall sleep would give it. The timelock waits and every 8453 wait stay wall sleeps.
-      log(`${step.id}: notBefore ${step.notBefore.afterStep} + ${step.notBefore.hours} h: the Twin clock moves ${wait} s forward instead of a wall sleep`);
+    if (!opts.dryRun && twinClockWait(opts.target, step.notBefore.hours, step.flow)) {
+      // The Twin's clock is anvil's: the wall time since the fork started plus every warp, carried by a block only when one is mined. The wait is one warp of
+      // the remaining seconds (at least 1 s, so the head always carries the clock), journaled with the step: the chain sees the time a wall sleep would give it.
+      const by = Math.max(wait, 1);
+      log(`${step.id}: notBefore ${step.notBefore.afterStep} + ${step.notBefore.hours === "timelockDelay" ? `${opts.sheetDelay} s` : `${step.notBefore.hours} h`}: the Twin clock moves ${by} s forward instead of a wall sleep`);
       mkdirSync(join(runDir, "journal"), { recursive: true });
-      const code = runCommand(["bun", "publish-contracts/src/rehearsal/cli.ts", "warp", "--rpc", r.scalar("rpcUrl"), "--seconds", String(wait)], {}, join(runDir, "journal", `${step.id}.out`), join(runDir, "journal", `${step.id}.err`));
+      const code = runCommand(["bun", "publish-contracts/src/rehearsal/cli.ts", "warp", "--rpc", r.scalar("rpcUrl"), "--seconds", String(by)], {}, join(runDir, "journal", `${step.id}.out`), join(runDir, "journal", `${step.id}.err`));
       if (code !== 0) return `fail notBefore twin clock warp exit ${code}`;
     } else if (wait > 0 && !opts.dryRun) { log(`${step.id}: notBefore ${step.notBefore.afterStep} + ${step.notBefore.hours === "timelockDelay" ? `${opts.sheetDelay} s` : `${step.notBefore.hours} h`}: waiting ${wait} s (ready ${new Date(ready * 1000).toISOString()})`); sleep(wait); }
   }

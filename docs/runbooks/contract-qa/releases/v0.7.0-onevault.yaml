@@ -1683,11 +1683,11 @@ steps:
     added: "v0.7.0-onevault"
   - id: "P6.85-fund-twin-feeds-heartbeat"
     standing: ["9", "4.4"]
-    description: "On the Twin only, before P6.76 (the keeper steps once every effective step interval until the plan concludes, on the wall clock): the Twin feed heartbeat starts in the background (twin-feeds.ts keep --every 300, pid in feed-keep.pid): the same refresh whenever 300 s of fork clock passed since the last, each journaled in feed-refresh.jsonl, until P6.86 writes its stop file. It restates the pin answers only and never moves the clock"
+    description: "On the Twin only, before P6.76 (the keeper steps once every effective step interval until the plan concludes, on the wall clock): the Twin feed heartbeat starts in the background (twin-feeds.ts keep --every 30 --speed 96, pid in feed-keep.pid): every 30 s of wall time it moves the Twin clock 96 times the wall time since its last beat and restates the pin answers at the new time, each beat journaled in feed-refresh.jsonl, until P6.86 writes its stop file. So each of P6.76's 1,800 s sleeps is 48 h of Twin chain time: the plan's day and its overrun pass in a few loop turns, and the Twin sends one keeper step per turn where 8453 sends one per 1,800 s (decision D4-9)"
     host: "control"
     phase: 6
     cmds:
-      - ["bash", "-c", 'rm -f {runDir}/twin/feed-keep.stop && (nohup bun publish-contracts/src/ci/twin-feeds.ts keep --rpc "{rpcUrl}" --every 300 --journal {runDir}/twin/feed-refresh.jsonl --stop-file {runDir}/twin/feed-keep.stop > {runDir}/twin/feed-keep.log 2>&1 & echo $! > {runDir}/twin/feed-keep.pid) && sleep 20 && kill -0 "$(cat {runDir}/twin/feed-keep.pid)" && grep -q "refresh at" {runDir}/twin/feed-keep.log']
+      - ["bash", "-c", 'rm -f {runDir}/twin/feed-keep.stop && (nohup bun publish-contracts/src/ci/twin-feeds.ts keep --rpc "{rpcUrl}" --every 30 --speed 96 --journal {runDir}/twin/feed-refresh.jsonl --stop-file {runDir}/twin/feed-keep.stop > {runDir}/twin/feed-keep.log 2>&1 & echo $! > {runDir}/twin/feed-keep.pid) && sleep 20 && kill -0 "$(cat {runDir}/twin/feed-keep.pid)" && grep -q "refresh at" {runDir}/twin/feed-keep.log']
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
