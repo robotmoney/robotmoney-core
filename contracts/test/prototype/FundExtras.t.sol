@@ -797,7 +797,9 @@ contract FundExtrasTest is BaseFixture {
         vm.prank(emergency);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, emergency, Roles.ADMIN_ROLE
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                emergency,
+                Roles.ADMIN_ROLE
             )
         );
         fund.emergencyUnwind();

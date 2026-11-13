@@ -43,7 +43,10 @@ contract UpgradeAuthorityPredictionTest is Test {
             address predicted = a.predictTimelock(safes[i], delays[i]);
             bytes32 initCodeHash = keccak256(a.timelockInitCode(safes[i], delays[i]));
             if (fund) {
-                assertTrue(predicted != h.predictTimelock(safes[i], delays[i]), "the executor moves the address");
+                assertTrue(
+                    predicted != h.predictTimelock(safes[i], delays[i]),
+                    "the executor moves the address"
+                );
             }
             assertEq(
                 predicted,

@@ -1169,7 +1169,10 @@ contract AdversarialTest is PrototypeHarness {
     ///      `emergencyUnwind` end deposits or sell every holding, so they are ADMIN_ROLE's: the Safe through the
     ///      timelock and its delay. The emergency key, the keeper and a stranger are refused both; the timelock runs
     ///      both, and the role layout reads back.
-    function test_emergencyPowers_hotKeyPausesOnly_timelockShutsDownAndUnwinds() public fixtureCovered {
+    function test_emergencyPowers_hotKeyPausesOnly_timelockShutsDownAndUnwinds()
+        public
+        fixtureCovered
+    {
         _holdEverything();
         address[3] memory refused = [emergency, keeper, stranger];
         for (uint256 i; i < refused.length; ++i) {

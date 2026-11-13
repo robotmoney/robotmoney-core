@@ -143,9 +143,14 @@ contract DeployFundTimelock is CoreTimelockHandover, FundTimelockPolicy {
         TimelockController tl = TimelockController(payable(d.timelock));
         require(tl.getMinDelay() == d.minDelay, "timelock minDelay");
         // Decision D4-10: the Safe alone executes; nobody else, and not address(0) (an open executor).
-        require(tl.hasRole(tl.EXECUTOR_ROLE(), d.safe), "fund timelock EXECUTOR_ROLE is not the Safe");
+        require(
+            tl.hasRole(tl.EXECUTOR_ROLE(), d.safe), "fund timelock EXECUTOR_ROLE is not the Safe"
+        );
         require(!tl.hasRole(tl.EXECUTOR_ROLE(), address(0)), "fund timelock executor is open");
-        require(!tl.hasRole(tl.EXECUTOR_ROLE(), msg.sender), "deployer holds the fund timelock EXECUTOR_ROLE");
+        require(
+            !tl.hasRole(tl.EXECUTOR_ROLE(), msg.sender),
+            "deployer holds the fund timelock EXECUTOR_ROLE"
+        );
         address[4] memory admins = [d.fund, d.rebalancer, d.governance, d.queue];
         for (uint256 i = 0; i < admins.length; i++) {
             IAccessControl c = IAccessControl(admins[i]);
