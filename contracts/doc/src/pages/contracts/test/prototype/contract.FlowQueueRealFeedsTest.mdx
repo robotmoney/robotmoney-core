@@ -1,0 +1,296 @@
+---
+title: "FlowQueueRealFeedsTest"
+description: "Checks 2 and 4 of proposal §5.9.3 against the REAL Chainlink feeds at the pin, with no mock (`hardening`, step 3 plan §3.3 item 1)."
+---
+
+# FlowQueueRealFeedsTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowQueue.t.sol)
+
+**Inherits:** [FlowQueueBase](/contracts/test/prototype/abstract.FlowQueueBase)
+
+**Title:** FlowQueueRealFeedsTest
+
+Checks 2 and 4 of proposal §5.9.3 against the REAL Chainlink feeds at the pin, with no mock (`hardening`,
+step 3 plan §3.3 item 1).
+
+The harness places a `MockAggregator` at every feed address in its setUp. This contract reads each feed
+proxy's real code and the six storage words the mock overwrites (slots 0 to 5; the fixture holds all six)
+before the harness runs, and puts them back after it. From then on every feed read goes through the real
+`EACAggregatorProxy` to its real aggregator, at the pin, exactly as the fixture recorded it.
+
+Time. A request can settle only once its epoch's window has ended (7 h at the defaults), while the ETH /
+USD feed has a 25-minute `maxFeedAge`. So the one deposit request is placed with time moved back by one
+epoch plus the window, and time then returns to where setUp left it: the pin plus setUp's timelock delays
+(logged). Placing a request touches no feed, pool or venue (it escrows USDC and records its epoch), so the
+settlement reads the chain exactly as it stood at the pin. No test here calls `refreshFeeds`, `settleAll`
+or any other mock helper.
+
+## Constants
+
+### MOCK_WORDS
+
+<i>
+
+The storage words `MockAggregator.setRound` writes (slots 0 to 5).
+
+</i>
+
+```solidity
+uint256 private constant MOCK_WORDS = 6;
+```
+
+## State Variables
+
+### pinTime
+
+<i>
+
+The pin's timestamp (fixture meta, or the fork's block on the recorder's run).
+
+</i>
+
+```solidity
+uint256 internal pinTime;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="_capturerealfeeds-address-4"></a>
+
+### _captureRealFeeds
+
+<i>
+
+Load the pin's state the way `BaseFixture.setUp` will (the fixture in replay, a fork of the pin on the
+recorder's run) and read each feed's code and its first six storage words.
+
+</i>
+
+```solidity
+function _captureRealFeeds(address[4] memory feeds)
+        private
+        returns (bytes[4] memory code, bytes32[MOCK_WORDS][4] memory words, uint256 pin);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| feeds | `address[4]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| code | `bytes[4]` |  |
+| words | `bytes32[MOCK_WORDS][4]` |  |
+| pin | `uint256` |  |
+
+<a id="_requestendedbynow-uint256"></a>
+
+### _requestEndedByNow
+
+<i>
+
+One deposit request placed one epoch plus the window before now, so its window has ended now.
+
+</i>
+
+```solidity
+function _requestEndedByNow(uint256 usdc) internal returns (uint256 id);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+<a id="_read-uint256-uint256-flowparams"></a>
+
+### _read
+
+<i>
+
+Checks 2 to 4 for basket asset `i`, read here from the same feeds and pool, with the queue's parameters.
+
+</i>
+
+```solidity
+function _read(uint256 i, uint256 usdc8, FlowParams memory p)
+        internal
+        returns (AssetReading memory a);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+| usdc8 | `uint256` |  |
+| p | `FlowParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `AssetReading` |  |
+
+<a id="_gapbps-uint256-uint256"></a>
+
+### _gapBps
+
+<i>
+
+`|x − ref| / ref` in bps, rounded up (check 4's own rounding).
+
+</i>
+
+```solidity
+function _gapBps(uint256 x, uint256 ref) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| x | `uint256` |  |
+| ref | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_independentchecks2to4"></a>
+
+### _independentChecks2To4
+
+<i>
+
+Check 2 read through FeedLib with the queue's own feeds and limits (asserted healthy at the pin), then
+checks 3 and 4 for each basket asset in the queue's order. Returns the first failing check this reading
+predicts, with its asset and detail, or Ok.
+
+</i>
+
+```solidity
+function _independentChecks2To4()
+        internal
+        returns (SettleCheck expected, uint256 index, uint256 detail);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| expected | `SettleCheck` |  |
+| index | `uint256` |  |
+| detail | `uint256` |  |
+
+<a id="_readcheck2-flowparams"></a>
+
+### _readCheck2
+
+<i>
+
+Check 2's sequencer and USDC parts through FeedLib; returns the USDC / USD price (8 decimals).
+
+</i>
+
+```solidity
+function _readCheck2(FlowParams memory p) internal returns (uint256 usdc8);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `FlowParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc8 | `uint256` |  |
+
+<a id="test_checks2and4_realchainlinkfeedsatthepin"></a>
+
+### test_checks2And4_realChainlinkFeedsAtThePin
+
+At the pin, with the real feeds: check 2 (sequencer, both basket feeds, the USDC peg) and check 4
+(each slice-median TWAP within `refBandBps` of its feed) give the result an independent reading of the
+same feeds and pools predicts, the quote and the keeper's settlement agree with it, and the real gap
+between each feed and its pool is logged. If a real gap is over the band, the test asserts the
+settlement is blocked by check 4 for that asset with that gap; nothing is forced to pass.
+
+```solidity
+function test_checks2And4_realChainlinkFeedsAtThePin() public fixtureCovered;
+```
+
+<a id="test_check2_realethfeedgoesstalewithnonewround"></a>
+
+### test_check2_realEthFeedGoesStaleWithNoNewRound
+
+Check 2 against the real feeds as time passes with no new round (replay has none): once the real
+ETH / USD answer is older than its `maxFeedAge`, the keeper's settlement is blocked naming wETH as
+stale, and the fund's NAV view reverts with the same reason (E19).
+
+```solidity
+function test_check2_realEthFeedGoesStaleWithNoNewRound() public fixtureCovered;
+```
+
+## Structs
+
+### AssetReading
+
+<i>
+
+The independent reading of checks 2 to 4 for one basket asset.
+
+</i>
+
+```solidity
+struct AssetReading {
+        uint256 feed8;
+        uint256 feedAge;
+        uint256 feedUsdcPerToken;
+        uint256 spotUsdcPerToken;
+        uint256 twapUsdcPerToken;
+        uint256 spotGapBps;
+        uint256 twapGapBps;
+        uint8 inBand;
+        bool twapOk;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| feed8 | `uint256` |  |
+| feedAge | `uint256` |  |
+| feedUsdcPerToken | `uint256` |  |
+| spotUsdcPerToken | `uint256` |  |
+| twapUsdcPerToken | `uint256` |  |
+| spotGapBps | `uint256` |  |
+| twapGapBps | `uint256` |  |
+| inBand | `uint8` |  |
+| twapOk | `bool` |  |
+

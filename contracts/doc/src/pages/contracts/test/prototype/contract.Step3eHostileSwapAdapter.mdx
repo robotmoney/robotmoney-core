@@ -1,0 +1,147 @@
+---
+title: "Step3eHostileSwapAdapter"
+description: "`vm.etch` places it over the harness's swap adapter (whose code keeps no storage; every setting here is an immutable, so it survives the etch). It swaps exactly as the production `UniswapV3SwapAdapter` does (pull the input, SwapRouter02 `exactInputSingle` to the recipient with the caller's floor) and prices the TWAP through a real adapter copy. Then it misbehaves: - `GIFT` > 0: it sends `GIFT` of `GIFT_TOKEN` (an asset the step does not trade) to the fund, so a third asset moves inside the step. RB-19 must refuse the step. - `REENTER_FUND` set: it calls `redeemInKind` on the fund with shares it holds, which would change the supply inside the step. The fund's reentrancy guard must refuse it first."
+---
+
+# Step3eHostileSwapAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Step3e.t.sol)
+
+**Title:** Step3eHostileSwapAdapter
+
+`vm.etch` places it over the harness's swap adapter (whose code keeps no storage; every setting here is an
+immutable, so it survives the etch). It swaps exactly as the production `UniswapV3SwapAdapter` does (pull
+the input, SwapRouter02 `exactInputSingle` to the recipient with the caller's floor) and prices the TWAP
+through a real adapter copy. Then it misbehaves:
+- `GIFT` > 0: it sends `GIFT` of `GIFT_TOKEN` (an asset the step does not trade) to the fund, so a third
+asset moves inside the step. RB-19 must refuse the step.
+- `REENTER_FUND` set: it calls `redeemInKind` on the fund with shares it holds, which would change the
+supply inside the step. The fund's reentrancy guard must refuse it first.
+
+## Constants
+
+### ROUTER_
+
+```solidity
+address public immutable ROUTER_;
+```
+
+### REAL
+
+```solidity
+address public immutable REAL;
+```
+
+### GIFT_TOKEN
+
+```solidity
+address public immutable GIFT_TOKEN;
+```
+
+### GIFT
+
+```solidity
+uint256 public immutable GIFT;
+```
+
+### REENTER_FUND
+
+```solidity
+address public immutable REENTER_FUND;
+```
+
+### REENTER_SHARES
+
+```solidity
+uint256 public immutable REENTER_SHARES;
+```
+
+## Functions
+
+<a id="constructor-address-address-address-uint256-address-uint256"></a>
+
+### constructor
+
+```solidity
+constructor(
+        address router,
+        address real,
+        address giftToken,
+        uint256 gift,
+        address reenterFund,
+        uint256 shares
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| router | `address` |  |
+| real | `address` |  |
+| giftToken | `address` |  |
+| gift | `uint256` |  |
+| reenterFund | `address` |  |
+| shares | `uint256` |  |
+
+<a id="swap-address-address-uint24-uint256-uint256-address-uint256"></a>
+
+### swap
+
+```solidity
+function swap(
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address recipient,
+        uint256
+    ) external returns (uint256 amountOut);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| fee | `uint24` |  |
+| amountIn | `uint256` |  |
+| minAmountOut | `uint256` |  |
+| recipient | `address` |  |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut | `uint256` |  |
+
+<a id="twapprice-address-address-address-uint256-uint32"></a>
+
+### twapPrice
+
+```solidity
+function twapPrice(address pool, address base, address quote, uint256 amount, uint32 window)
+        external
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| base | `address` |  |
+| quote | `address` |  |
+| amount | `uint256` |  |
+| window | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

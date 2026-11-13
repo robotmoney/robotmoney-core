@@ -1,0 +1,132 @@
+---
+title: "FlowLibsHarness"
+description: "Exposes the internal library functions to the tests."
+---
+
+# FlowLibsHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowLibs.t.sol)
+
+Exposes the internal library functions to the tests.
+
+## Functions
+
+<a id="read-address-uint32"></a>
+
+### read
+
+```solidity
+function read(address feed, uint32 maxAge) external view returns (FeedStatus, uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| feed | `address` |  |
+| maxAge | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `FeedStatus` |  |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="sequencerup-address-uint32"></a>
+
+### sequencerUp
+
+```solidity
+function sequencerUp(address feed, uint32 grace) external view returns (bool, FeedStatus);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| feed | `address` |  |
+| grace | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+| &lt;none&gt; | `FeedStatus` |  |
+
+<a id="usdcpeg-address-uint32-uint16"></a>
+
+### usdcPeg
+
+```solidity
+function usdcPeg(address feed, uint32 maxAge, uint16 bandBps)
+        external
+        view
+        returns (bool, FeedStatus, uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| feed | `address` |  |
+| maxAge | `uint32` |  |
+| bandBps | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+| &lt;none&gt; | `FeedStatus` |  |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="median-address-uint32-uint8-uint16"></a>
+
+### median
+
+```solidity
+function median(address pool, uint32 window, uint8 slices, uint16 dispersionBps)
+        external
+        view
+        returns (bool, int24, uint8);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| window | `uint32` |  |
+| slices | `uint8` |  |
+| dispersionBps | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+| &lt;none&gt; | `int24` |  |
+| &lt;none&gt; | `uint8` |  |
+
+<a id="bandticks-uint16"></a>
+
+### bandTicks
+
+```solidity
+function bandTicks(uint16 bps) external pure returns (uint24);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint24` |  |
+

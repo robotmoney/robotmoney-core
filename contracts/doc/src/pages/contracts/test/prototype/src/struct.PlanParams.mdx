@@ -1,0 +1,26 @@
+---
+title: "PlanParams"
+description: "Per-plan parameters (§5.6 rows scoped \"per plan\"). Passed by RebalanceGovernance to `setTargetAndOpenPlan`. Global step parameters live on the Rebalancer (`StepParams`)."
+---
+
+# PlanParams
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundTypes.sol)
+
+Per-plan parameters (§5.6 rows scoped "per plan"). Passed by RebalanceGovernance to
+`setTargetAndOpenPlan`. Global step parameters live on the Rebalancer (`StepParams`).
+
+```solidity
+struct PlanParams {
+    uint64 duration;
+    uint16 costBudgetBps;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| duration | `uint64` | Glide-path length in seconds, in [MIN_PLAN_DURATION, MAX_PLAN_DURATION]. |
+| costBudgetBps | `uint16` | Total cost the plan may spend, in bps of its turnover, in<br/>[1, MAX_COST_BUDGET_BPS]. |
+

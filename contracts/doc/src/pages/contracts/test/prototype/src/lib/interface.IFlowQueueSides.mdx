@@ -1,0 +1,53 @@
+---
+title: "IFlowQueueSides"
+description: "The queue's per-side self-call entry points (`FlowQueue.settleRedeemSide` / `settleDepositSide`). Each side runs in its own call frame so that a failure anywhere in it, including checks 8 to 11 after the fund traded, reverts that side completely and leaves the other side's result standing (coordinator ruling 1, RB-15). Only the queue itself can call them (`OnlySelf`)."
+---
+
+# IFlowQueueSides
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FlowSettleLib.sol)
+
+The queue's per-side self-call entry points (`FlowQueue.settleRedeemSide` / `settleDepositSide`). Each
+side runs in its own call frame so that a failure anywhere in it, including checks 8 to 11 after the
+fund traded, reverts that side completely and leaves the other side's result standing (coordinator
+ruling 1, RB-15). Only the queue itself can call them (`OnlySelf`).
+
+## Functions
+
+<a id="settleredeemside-uint256-fill-settlecontext"></a>
+
+### settleRedeemSide
+
+```solidity
+function settleRedeemSide(uint256 settlementId, Fill[] calldata fills, SettleContext calldata c)
+        external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+| fills | `Fill[]` |  |
+| c | `SettleContext` |  |
+
+<a id="settledepositside-uint256-fill-settlecontext"></a>
+
+### settleDepositSide
+
+```solidity
+function settleDepositSide(
+        uint256 settlementId,
+        Fill[] calldata fills,
+        SettleContext calldata c
+    ) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+| fills | `Fill[]` |  |
+| c | `SettleContext` |  |
+

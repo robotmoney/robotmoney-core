@@ -1,0 +1,402 @@
+---
+title: "FundCoreTest"
+---
+
+# FundCoreTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FundCore.t.sol)
+
+**Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
+
+## Constants
+
+### LEG_BAND_BPS
+
+<i>
+
+Per-leg purchase limit and sale floor the test passes, around the pool's TWAP. The queue derives the
+real ones from the feeds and `legBandBps` (E12); the fund only enforces whatever it is given.
+
+</i>
+
+```solidity
+uint256 internal constant LEG_BAND_BPS = 300;
+```
+
+## State Variables
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+### queued
+
+<i>
+
+This contract plays the FlowQueue: its answer to the fund's `ledgerBalanceOf` read.
+
+</i>
+
+```solidity
+mapping(address => uint256) internal queued;
+```
+
+## Functions
+
+<a id="queuedsharesof-address"></a>
+
+### queuedSharesOf
+
+```solidity
+function queuedSharesOf(address account) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="feeds"></a>
+
+### feeds
+
+<i>
+
+As the bound queue: the fund's NAV views read the USDC and sequencer feeds from here (E19).
+
+</i>
+
+```solidity
+function feeds() external pure returns (address, uint32, address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+| &lt;none&gt; | `uint32` |  |
+| &lt;none&gt; | `address` |  |
+
+<a id="flowparams"></a>
+
+### flowParams
+
+<i>
+
+As the bound queue: the fund reads `settleWindow` and the peg band from here.
+
+</i>
+
+```solidity
+function flowParams() external pure returns (FlowParams memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `FlowParams` |  |
+
+<a id="_bindqueueatsetup"></a>
+
+### _bindQueueAtSetUp
+
+<i>
+
+This test binds FLOW_ROLE to itself, so the harness must not bind its queue.
+
+</i>
+
+```solidity
+function _bindQueueAtSetUp() internal pure override returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_seedusdc"></a>
+
+### _seedUsdc
+
+<i>
+
+The seed is under test here: the harness does not seed.
+
+</i>
+
+```solidity
+function _seedUsdc() internal pure override returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_seed-uint256"></a>
+
+### _seed
+
+<i>
+
+Seed through the timelock (the fund's ADMIN_ROLE), the only path E14 allows.
+
+</i>
+
+```solidity
+function _seed(uint256 usdc) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+
+<a id="_bindflowtothis"></a>
+
+### _bindFlowToThis
+
+<i>
+
+Bind FLOW_ROLE to this contract (the queue stand-in), once, through the timelock.
+
+</i>
+
+```solidity
+function _bindFlowToThis() internal;
+```
+
+<a id="_seedandinvest"></a>
+
+### _seedAndInvest
+
+<i>
+
+Seed, then let the real Rebalancer move the seed into every listed asset, so the fund holds idle USDC,
+the lending positions and two basket tokens before a flow. Asserts it does.
+Step 3e: a step reads the sequencer feed, the USDC feed and `refBandBps` from the bound queue, and with no
+queue bound it fails closed (`StepFeedCheck.NoQueue`). So FLOW_ROLE is bound to this stand-in (which
+answers `feeds()` and `flowParams()`) before the plan steps, not after.
+
+</i>
+
+```solidity
+function _seedAndInvest() internal;
+```
+
+<a id="_buylimits-uint256"></a>
+
+### _buyLimits
+
+<i>
+
+Per-leg purchase limits for `sharesOut`: TWAP value of each basket asset's exact part, plus the band.
+
+</i>
+
+```solidity
+function _buyLimits(uint256 sharesOut)
+        internal
+        view
+        returns (uint256[] memory limits, uint256 maxUsdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sharesOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| limits | `uint256[]` |  |
+| maxUsdc | `uint256` |  |
+
+<a id="_sellfloors-uint256"></a>
+
+### _sellFloors
+
+<i>
+
+Per-leg sale floors for `shares`: TWAP value of each basket asset's exact part, less the band.
+
+</i>
+
+```solidity
+function _sellFloors(uint256 shares) internal view returns (uint256[] memory floors);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| floors | `uint256[]` |  |
+
+<a id="_assertpersharenotlower-uint256-uint256-uint256-string"></a>
+
+### _assertPerShareNotLower
+
+<i>
+
+Check 10 restated from outside: every held amount per share is at least what it was.
+
+</i>
+
+```solidity
+function _assertPerShareNotLower(
+        uint256 idle0,
+        uint256[] memory held0,
+        uint256 supply0,
+        string memory label
+    ) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| idle0 | `uint256` |  |
+| held0 | `uint256[]` |  |
+| supply0 | `uint256` |  |
+| label | `string` |  |
+
+<a id="test_seed_mintsatthesharescaletothefundonce"></a>
+
+### test_seed_mintsAtTheShareScaleToTheFundOnce
+
+```solidity
+function test_seed_mintsAtTheShareScaleToTheFundOnce() public fixtureCovered;
+```
+
+<a id="test_seed_refusesbelowminimumandnonadmin"></a>
+
+### test_seed_refusesBelowMinimumAndNonAdmin
+
+```solidity
+function test_seed_refusesBelowMinimumAndNonAdmin() public fixtureCovered;
+```
+
+<a id="test_seedshares_nevermove"></a>
+
+### test_seedShares_neverMove
+
+```solidity
+function test_seedShares_neverMove() public fixtureCovered;
+```
+
+<a id="test_fundentrypoints_revertandnamethequeue"></a>
+
+### test_fundEntryPoints_revertAndNameTheQueue
+
+```solidity
+function test_fundEntryPoints_revertAndNameTheQueue() public fixtureCovered;
+```
+
+<a id="test_mintinkind_buysthesliceonrealpoolsandmints"></a>
+
+### test_mintInKind_buysTheSliceOnRealPoolsAndMints
+
+```solidity
+function test_mintInKind_buysTheSliceOnRealPoolsAndMints() public fixtureCovered;
+```
+
+<a id="test_sellforflow_sellsthesliceonrealpoolsandpays"></a>
+
+### test_sellForFlow_sellsTheSliceOnRealPoolsAndPays
+
+```solidity
+function test_sellForFlow_sellsTheSliceOnRealPoolsAndPays() public fixtureCovered;
+```
+
+<a id="test_mintinkind_failedleglimitrevertsandchangesnothing"></a>
+
+### test_mintInKind_failedLegLimitRevertsAndChangesNothing
+
+```solidity
+function test_mintInKind_failedLegLimitRevertsAndChangesNothing() public fixtureCovered;
+```
+
+<a id="test_mintinkind_overmaxusdcreverts"></a>
+
+### test_mintInKind_overMaxUsdcReverts
+
+```solidity
+function test_mintInKind_overMaxUsdcReverts() public fixtureCovered;
+```
+
+<a id="test_flowfunctions_onlyflowroleandleglength"></a>
+
+### test_flowFunctions_onlyFlowRoleAndLegLength
+
+```solidity
+function test_flowFunctions_onlyFlowRoleAndLegLength() public fixtureCovered;
+```
+
+<a id="test_mintinkind_refuseswhiledepositspaused"></a>
+
+### test_mintInKind_refusesWhileDepositsPaused
+
+```solidity
+function test_mintInKind_refusesWhileDepositsPaused() public fixtureCovered;
+```
+
+<a id="test_redeeminkind_keepseveryamountpershare"></a>
+
+### test_redeemInKind_keepsEveryAmountPerShare
+
+<i>
+
+RB-13 on the holder's own exit: the in-kind exit asserts check 10 too, with the lending legs two units
+short of exact.
+
+</i>
+
+```solidity
+function test_redeemInKind_keepsEveryAmountPerShare() public fixtureCovered;
+```
+
+<a id="test_ledger_isthefundcopyandcountsqueuedshares"></a>
+
+### test_ledger_isTheFundCopyAndCountsQueuedShares
+
+```solidity
+function test_ledger_isTheFundCopyAndCountsQueuedShares() public fixtureCovered;
+```
+
+<a id="test_heldbalances_matchestheholdings"></a>
+
+### test_heldBalances_matchesTheHoldings
+
+```solidity
+function test_heldBalances_matchesTheHoldings() public fixtureCovered;
+```
+

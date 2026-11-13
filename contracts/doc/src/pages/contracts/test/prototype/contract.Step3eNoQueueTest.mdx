@@ -1,0 +1,47 @@
+---
+title: "Step3eNoQueueTest"
+description: "The fund with no FlowQueue bound: the sequencer feed, the USDC feed and `refBandBps` are unknown, so a step fails closed (`StepFeedCheck.NoQueue`) in the Rebalancer and inside the fund."
+---
+
+# Step3eNoQueueTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Step3e.t.sol)
+
+**Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
+
+**Title:** Step3eNoQueueTest
+
+The fund with no FlowQueue bound: the sequencer feed, the USDC feed and `refBandBps` are unknown, so a step
+fails closed (`StepFeedCheck.NoQueue`) in the Rebalancer and inside the fund.
+
+## Functions
+
+<a id="_bindqueueatsetup"></a>
+
+### _bindQueueAtSetUp
+
+<i>
+
+Whether setUp binds the fund's FLOW_ROLE to the queue. A test that plays the queue itself (fund-core's
+unit test) returns false and binds itself.
+
+</i>
+
+```solidity
+function _bindQueueAtSetUp() internal pure override returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="test_rb19_feedcheck_noqueuebound_failsclosed"></a>
+
+### test_RB19_feedCheck_noQueueBound_failsClosed
+
+```solidity
+function test_RB19_feedCheck_noQueueBound_failsClosed() public fixtureCovered;
+```
+

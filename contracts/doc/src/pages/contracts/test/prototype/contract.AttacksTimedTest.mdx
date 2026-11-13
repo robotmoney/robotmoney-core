@@ -1,0 +1,2789 @@
+---
+title: "AttacksTimedTest"
+description: "Eng plan §4.1 against the step 3d fund and its FlowQueue, on the real Base fixture (no RPC). Each test plays the attacker on real pools and real lending venues, then computes the attacker's full net result, the holders' loss and the pending users' loss (`AttackPnl`), logs them (`G8` lines) and asserts G8 where the design claims it."
+---
+
+# AttacksTimedTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Attacks.t.sol)
+
+**Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness), [AttackBook](/contracts/test/prototype/abstract.AttackBook)
+
+**Title:** AttacksTimedTest
+
+Eng plan §4.1 against the step 3d fund and its FlowQueue, on the real Base fixture (no RPC). Each test plays
+the attacker on real pools and real lending venues, then computes the attacker's full net result, the
+holders' loss and the pending users' loss (`AttackPnl`), logs them (`G8` lines) and asserts G8 where the
+design claims it.
+
+The market model is deterministic and has NO arbitrageur: a price the attacker moves stays where it is
+until the attacker moves it back. That is the attacker's best case for holding a price (holding is free)
+and the defender's worst. The sim's arbitrage model (A2, A6, A9, A10 in `sim/AttackSim.t.sol`) prices
+holding against arbitrage; it is not built in this scaffold.
+
+Valuation: see `AttackPnl`. The reference prices are the pools' spot when the attack starts, after the
+world's own trades and `alignFeedsToPools` (a market at rest, feed and pool agreeing).
+
+Fixture coverage: every test carries `fixtureCovered` and calls `coverageCheckpoint()` between phases.
+Until the verify agent re-records the fixture, every test here stops at the queue's first USDC slot
+(requests.md, integrate's entry). Run with PROTO_FIXTURE_CHECK=0 to see the attack logic (diagnostic only).
+
+## Constants
+
+### ALICE_USDC
+
+<i>
+
+Alice, the holder the attacks aim at, deposits this through the queue in `_world`.
+
+</i>
+
+```solidity
+uint256 internal constant ALICE_USDC = 100_000e6;
+```
+
+### FLASH_USDC
+
+<i>
+
+A flash loan large enough for every push below; only what a push spends counts as borrowed.
+
+</i>
+
+```solidity
+uint256 internal constant FLASH_USDC = 30_000_000e6;
+```
+
+### LIMIT_MARGIN_BPS
+
+<i>
+
+A pending user's margin over the quote when setting a limit (E21: a client sets the limit from it).
+
+</i>
+
+```solidity
+uint256 internal constant LIMIT_MARGIN_BPS = 50;
+```
+
+### A7_MAX_PARTS
+
+<i>
+
+The most parts an A7 run settles (one per block) before it stops.
+
+</i>
+
+```solidity
+uint256 internal constant A7_MAX_PARTS = 40;
+```
+
+### A7_BAIT_ID
+
+```solidity
+string internal constant A7_BAIT_ID =
+        "A7 timed sandwich, the attacker settles at the window end through a never-fillable bait";
+```
+
+### LEVER_MAX_CALLS
+
+<i>
+
+The most settlements one run makes (one per block) before it stops: a capped flow fills in parts.
+
+</i>
+
+```solidity
+uint256 internal constant LEVER_MAX_CALLS = 16;
+```
+
+### LEVER_SETTINGS
+
+```solidity
+uint256 internal constant LEVER_SETTINGS = 21;
+```
+
+## State Variables
+
+### attacker
+
+```solidity
+address internal attacker = makeAddr("attacker");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### victim
+
+```solidity
+address internal victim = makeAddr("victim");
+```
+
+### victim2
+
+```solidity
+address internal victim2 = makeAddr("victim2");
+```
+
+### dave
+
+```solidity
+address internal dave = makeAddr("dave");
+```
+
+### refWeth
+
+<i>
+
+Reference prices (USDC per whole token) fixed at the attack start (`_setRef`).
+
+</i>
+
+```solidity
+uint256 internal refWeth;
+```
+
+### refCbbtc
+
+```solidity
+uint256 internal refCbbtc;
+```
+
+### s0
+
+```solidity
+Snap internal s0;
+```
+
+### v0
+
+```solidity
+uint256 internal v0;
+```
+
+### borrowed
+
+```solidity
+uint256 internal borrowed;
+```
+
+### pending
+
+```solidity
+uint256 internal pending;
+```
+
+### extraNet
+
+<i>
+
+A result the attacker made outside its own address (A18: the LP position this contract holds).
+
+</i>
+
+```solidity
+int256 internal extraNet;
+```
+
+### honestUsdc
+
+<i>
+
+The honest run's USDC and shares for the victim (A7), in storage for the stack.
+
+</i>
+
+```solidity
+uint256 internal honestUsdc;
+```
+
+### honestShares
+
+```solidity
+uint256 internal honestShares;
+```
+
+### runners
+
+```solidity
+address[4] internal runners;
+```
+
+### runIds
+
+```solidity
+uint256[3] internal runIds;
+```
+
+### runAmounts
+
+```solidity
+uint256[3] internal runAmounts;
+```
+
+### lpLower
+
+```solidity
+int24 internal lpLower;
+```
+
+### lpUpper
+
+```solidity
+int24 internal lpUpper;
+```
+
+### lpLiquidity
+
+```solidity
+uint128 internal lpLiquidity;
+```
+
+### lpPaidUsdc
+
+```solidity
+uint256 internal lpPaidUsdc;
+```
+
+### lpPaidWeth
+
+```solidity
+uint256 internal lpPaidWeth;
+```
+
+### lpGotUsdc
+
+```solidity
+uint256 internal lpGotUsdc;
+```
+
+### lpGotWeth
+
+```solidity
+uint256 internal lpGotWeth;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="test_a1_makinareplay_onetransaction_wethpool"></a>
+
+### test_A1_makinaReplay_oneTransaction_wethPool
+
+```solidity
+function test_A1_makinaReplay_oneTransaction_wethPool() public fixtureCovered;
+```
+
+<a id="test_a1_makinareplay_onetransaction_cbbtcpool"></a>
+
+### test_A1_makinaReplay_oneTransaction_cbbtcPool
+
+```solidity
+function test_A1_makinaReplay_oneTransaction_cbbtcPool() public fixtureCovered;
+```
+
+<a id="_a1-address-address-string"></a>
+
+### _a1
+
+<i>
+
+The attacker already holds shares from an honest deposit. In ONE transaction (no warp, no roll) it
+borrows, pushes `pool` 300 bps up (past every band), and then tries every flow: the fund's own entry
+points, a deposit request, a redemption request, `settle` (as itself and as the keeper would), and an
+in-kind exit of the rest. It cancels the requests, takes its credits and sells back what it bought.
+
+</i>
+
+```solidity
+function _a1(address pool, address token, string memory id) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| token | `address` |  |
+| id | `string` |  |
+
+<a id="_a1flows-uint256"></a>
+
+### _a1Flows
+
+<i>
+
+A1's flows, all inside the one transaction, with the pool pushed.
+
+</i>
+
+```solidity
+function _a1Flows(uint256 atkShares) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| atkShares | `uint256` |  |
+
+<a id="test_a2_pushheldinsideband_redeemersellsintoit_noarbitrage"></a>
+
+### test_A2_pushHeldInsideBand_redeemerSellsIntoIt_noArbitrage
+
+<i>
+
+The attacker holds shares and asks to redeem all of them. It pushes wETH up to 10 bps inside the band
+(`refBandBps` − 10: +80 bps at the default band of 90; it was +40 inside 50) right after the request and
+holds it, free, through the window and every block the redemption takes to fill (the per-call cap
+splits it, one keeper call per block), so the fund sells the attacker's wETH slice into the pushed pool.
+Then it sells back what it bought and takes its USDC.
+
+</i>
+
+```solidity
+function test_A2_pushHeldInsideBand_redeemerSellsIntoIt_noArbitrage() public fixtureCovered;
+```
+
+<a id="test_a2_pushheldpastband_blocksandnothingtrades"></a>
+
+### test_A2_pushHeldPastBand_blocksAndNothingTrades
+
+<i>
+
+A push past `refBandBps` (band + 20 bps: +110 at the default 90) held over the window blocks the
+settlement at check 4: nothing trades, the request stays pending, and the attacker pays the round trip
+for nothing.
+
+</i>
+
+```solidity
+function test_A2_pushHeldPastBand_blocksAndNothingTrades() public fixtureCovered;
+```
+
+<a id="test_a3_deflatedepositexit_mintreadsnoprice"></a>
+
+### test_A3_deflateDepositExit_mintReadsNoPrice
+
+<i>
+
+The attacker sells wETH to deflate the pool 10 bps inside the band (`refBandBps` − 10: −80 bps at the
+default 90; it was −40 inside 50) and holds it through the window and every block its deposit takes to
+fill, asks to deposit, lets the fund buy its pro-rata wETH cheap, then buys its wETH back, waits out the
+hold and exits through the queue. The mint is by quantity, so cheaper wETH lowers the depositor's cost by
+exactly what the attacker's own deflation gave away to the pool.
+
+</i>
+
+```solidity
+function test_A3_deflateDepositExit_mintReadsNoPrice() public fixtureCovered;
+```
+
+<a id="test_a4_lendingrate_giftdoesnotmoverate_realjumpblocks"></a>
+
+### test_A4_lendingRate_giftDoesNotMoveRate_realJumpBlocks
+
+```solidity
+function test_A4_lendingRate_giftDoesNotMoveRate_realJumpBlocks() public fixtureCovered;
+```
+
+<a id="test_a5_roundtrip_oneblockandconsecutiveblocks_impossible"></a>
+
+### test_A5_roundTrip_oneBlockAndConsecutiveBlocks_impossible
+
+```solidity
+function test_A5_roundTrip_oneBlockAndConsecutiveBlocks_impossible() public fixtureCovered;
+```
+
+<a id="_a5oneblock-uint256"></a>
+
+### _a5OneBlock
+
+<i>
+
+In the request's block, then in the next block: nothing settles, nothing is delivered, no exit.
+
+</i>
+
+```solidity
+function _a5OneBlock(uint256 id) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+<a id="_a5settleandhold-uint256"></a>
+
+### _a5SettleAndHold
+
+<i>
+
+The settlement, then the hold: no share leaves before settle time + minHold (RB-11).
+
+</i>
+
+```solidity
+function _a5SettleAndHold(uint256 id) private returns (uint64 unlockAt);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| unlockAt | `uint64` |  |
+
+<a id="test_a6_twaplagafterrealmove_nogainonthetimedfund"></a>
+
+### test_A6_twapLagAfterRealMove_noGainOnTheTimedFund
+
+<i>
+
+A real move: an outside trader lifts wETH 150 bps and the Chainlink feed follows at once, 30 minutes
+before the window of the attacker's request ends. The attacker asked to deposit before the move, betting
+on filling at the lagging TWAP. While the slice median still lags the feed, check 4 blocks; once it caught
+up, the fund buys the pro-rata slice at today's prices. The hedge (a short of the attacker's wETH exposure)
+has no P&L here because the price does not move again.
+
+</i>
+
+```solidity
+function test_A6_twapLagAfterRealMove_noGainOnTheTimedFund() public fixtureCovered;
+```
+
+<a id="test_a7_sandwich_bythecallerafterkeepergrace"></a>
+
+### test_A7_sandwich_byTheCallerAfterKeeperGrace
+
+<i>
+
+After keeperGrace anyone may settle, so the attacker is the caller: in ONE transaction it pushes both
+basket pools up, settles a pending deposit of the period cap's size, and sells back what it bought.
+Three push sizes inside the per-swap band; the best is scored.
+
+</i>
+
+```solidity
+function test_A7_sandwich_byTheCallerAfterKeeperGrace() public fixtureCovered;
+```
+
+<a id="test_a7_sandwich_ofthekeeperbyathirdparty"></a>
+
+### test_A7_sandwich_ofTheKeeperByAThirdParty
+
+<i>
+
+Before keeperGrace only the keeper settles. A third party who can order its trades around the keeper's
+call (the sequencer, or a keeper that colludes) runs the same sandwich around it.
+
+</i>
+
+```solidity
+function test_A7_sandwich_ofTheKeeperByAThirdParty() public fixtureCovered;
+```
+
+<a id="_a7-bool-string"></a>
+
+### _a7
+
+<i>
+
+The honest settlement first (a state snapshot), for the pending user's loss; then each push size from
+the same state. Since the per-call cap is on by default (2026-11-12) the victim's 250,000 USDC fills in
+parts, one call per block: the honest run settles them all, and each attack sandwiches EVERY part in
+its own block (push both pools, settle, sell back).
+
+</i>
+
+```solidity
+function _a7(bool attackerSettles, string memory id) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| attackerSettles | `bool` |  |
+| id | `string` |  |
+
+<a id="_a7once-int256-address-uint256-string"></a>
+
+### _a7Once
+
+<i>
+
+One sandwich of `pushBps` on both basket pools around each of `caller`'s settlements, one per block,
+until the victim's request closes or a call records nothing (the per-swap limit refused it). The honest
+run's USDC and shares for the victim are `honestUsdc`, `honestShares`.
+
+</i>
+
+```solidity
+function _a7Once(int256 pushBps, address caller, uint256 vid, string memory id)
+        private
+        returns (AttackPnl memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pushBps | `int256` |  |
+| caller | `address` |  |
+| vid | `uint256` |  |
+| id | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `AttackPnl` |  |
+
+<a id="_settleas-address"></a>
+
+### _settleAs
+
+```solidity
+function _settleAs(address caller) internal returns (uint256 sid);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sid | `uint256` |  |
+
+<a id="_settleoverblocks-address-uint256-uint256"></a>
+
+### _settleOverBlocks
+
+<i>
+
+`caller` settles once per block (Base: a block every 2 s) until request `id` closes, a call records no
+settlement, or `maxCalls` calls ran. Since 2026-11-12 the per-call basket cap (5 bps of each pool's
+time-weighted USDC depth, a budget per block) is on by default, so a flow larger than one call's room
+fills in parts over blocks. Returns the settlements recorded.
+
+</i>
+
+```solidity
+function _settleOverBlocks(address caller, uint256 id, uint256 maxCalls)
+        internal
+        returns (uint256 parts);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| id | `uint256` |  |
+| maxCalls | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| parts | `uint256` |  |
+
+<a id="_victimfills-uint256"></a>
+
+### _victimFills
+
+<i>
+
+Request `vid`'s fills so far (deposit claims): the USDC paid and the shares got. RB-14 on each fill.
+
+</i>
+
+```solidity
+function _victimFills(uint256 vid) internal view returns (uint256 usdc, uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vid | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+| shares | `uint256` |  |
+
+<a id="_extracost-uint256-uint256-uint256-uint256"></a>
+
+### _extraCost
+
+<i>
+
+The victim's extra USDC against the honest run (`hu` USDC for `hs` shares): what it paid less what its
+`shares` cost at the honest price per share.
+
+</i>
+
+```solidity
+function _extraCost(uint256 usdc, uint256 shares, uint256 hu, uint256 hs)
+        internal
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+| shares | `uint256` |  |
+| hu | `uint256` |  |
+| hs | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="test_a7_sandwich_bythecalleratwindowend_viaaneverfillablerequest"></a>
+
+### test_A7_sandwich_byTheCallerAtWindowEnd_viaANeverFillableRequest
+
+<i>
+
+The caller variant WITHOUT the 6-hour warp (step 3 finish plan §3.2, added by `levers` 2026-11-12). The
+attacker leaves a never-fillable deposit (limit 1) one epoch before the victim's. In the scaffold the
+keeper's grace counted from the oldest open epoch, so at the victim's own window end the bait's grace had
+passed and the attacker could settle the victim's epoch (review finding behind fix-queue item 1). Since
+item 1 a stranger reaches an epoch only after that epoch's own window end plus keeperGrace. The test
+first asks whether the attacker's plain call at the victim's window end fills the victim (in a snapshot):
+if not, the keeper-free path is closed, and one sandwich attempt is still played to log its cost; if
+it does, the three pushes of `_a7` are played and scored. The same body runs on the scaffold queue (the
+"before" copy, notes/levers.md) and on the fixed one.
+
+</i>
+
+```solidity
+function test_A7_sandwich_byTheCallerAtWindowEnd_viaANeverFillableRequest()
+        public
+        fixtureCovered;
+```
+
+<a id="_a7baitworld"></a>
+
+### _a7BaitWorld
+
+<i>
+
+The world, the bait (minRequestUsdc at limit 1) one epoch before the victim's 250,000 USDC deposit, then
+the victim's own window end (no keeperGrace warp), feeds fresh, the attack's reference fixed.
+
+</i>
+
+```solidity
+function _a7BaitWorld() internal returns (uint256 vid);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vid | `uint256` |  |
+
+<a id="_a7baitprobe-uint256"></a>
+
+### _a7BaitProbe
+
+<i>
+
+In a snapshot: does the attacker's plain call now fill any of the victim (the per-call cap may fill
+only a part)? If so, the honest run (the attacker's plain calls, one per block, until the victim closes)
+gives the victim's honest USDC and shares.
+
+</i>
+
+```solidity
+function _a7BaitProbe(uint256 vid) internal returns (bool reaches, uint256 hu, uint256 hs);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vid | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| reaches | `bool` |  |
+| hu | `uint256` |  |
+| hs | `uint256` |  |
+
+<a id="_a7baitclosed-uint256"></a>
+
+### _a7BaitClosed
+
+<i>
+
+The keeper-free path is closed: one sandwich attempt (+20 bps on both pools) to log what it costs.
+
+</i>
+
+```solidity
+function _a7BaitClosed(uint256 vid) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vid | `uint256` |  |
+
+<a id="_a7baitsandwich-uint256"></a>
+
+### _a7BaitSandwich
+
+<i>
+
+The keeper-free path is open: the pushes of `_a7`, best scored.
+
+</i>
+
+```solidity
+function _a7BaitSandwich(uint256 vid) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vid | `uint256` |  |
+
+<a id="test_a8_block_holdpastbandforaday_noarbitragelowerbound"></a>
+
+### test_A8_block_holdPastBandForADay_noArbitrageLowerBound
+
+<i>
+
+Way 1: hold a basket pool past refBandBps (check 4; band + 10 bps). With no arbitrage a hold costs one round trip
+whatever its length, so the number logged here is a LOWER BOUND; the real cost of holding a price
+against arbitrage for a day is the sim's (AttackSim A2/A10, not built). This way is not scored here.
+
+</i>
+
+```solidity
+function test_A8_block_holdPastBandForADay_noArbitrageLowerBound() public fixtureCovered;
+```
+
+<a id="test_a8_block_quorumdispersion_shortpusheveryhour"></a>
+
+### test_A8_block_quorumDispersion_shortPushEveryHour
+
+<i>
+
+Way 2: break the slice quorum (check 3). Every hour the attacker pushes wETH 130 bps for 25 minutes and
+releases it, so any trailing settle window holds about five slices out of the band. Each cycle is a real
+round trip, so 24 cycles a day are a lower bound that does not depend on arbitrage.
+
+</i>
+
+```solidity
+function test_A8_block_quorumDispersion_shortPushEveryHour() public fixtureCovered;
+```
+
+<a id="test_a8_block_perswaplimit_aroundeachkeepercall"></a>
+
+### test_A8_block_perSwapLimit_aroundEachKeeperCall
+
+<i>
+
+Way 3: push past the per-swap limit right before each keeper call and back right after (one
+transaction around the keeper's). The deposit side fails and waits; the redemption side still settles
+in the same call. Cost per attempt; per day at one keeper attempt per settle window (24), the slowest
+cadence the design implies.
+
+</i>
+
+```solidity
+function test_A8_block_perSwapLimit_aroundEachKeeperCall() public fixtureCovered;
+```
+
+<a id="test_a8_block_cursorgriefing_cannotstarvetheoldestrequest"></a>
+
+### test_A8_block_cursorGriefing_cannotStarveTheOldestRequest
+
+<i>
+
+Way 4: cursor griefing (D-AT-3; queue notes §4 item 12). In the scaffold, after keeperGrace anyone could
+call `settle(1, 0)`: it filled nothing but moved the shared cursor one request on, so a griefing call
+before each keeper call kept the keeper's walk past the OLDEST request (measured then: 448.27 USDC a day,
+under the 1,000 floor; test `test_A8_block_cursorGriefing_starvesTheOldestRequest`, rewritten here by
+`levers` 2026-11-12, step 3 finish plan §3.2). Since fix-queue's item 2 a call with no room walks
+nothing and moves no cursor, and the keeper keeps its own cursor, which no other caller moves.
+Rerun: four rounds, each with two fresh requests past keeperGrace and three griefing calls before the
+keeper's one call (`settle(1, 0)`, `settle(0, max)`, and `settle(1, 1)`, a room too small for any fill).
+The defence holds when the keeper's FIRST call of every round fills the oldest request. The way then
+blocks nothing, so it has no cost per day to score against the floor; the griefer's gas is logged.
+
+</i>
+
+```solidity
+function test_A8_block_cursorGriefing_cannotStarveTheOldestRequest() public fixtureCovered;
+```
+
+<a id="test_a8_block_giftabovelimitmargins_skipstightrequests"></a>
+
+### test_A8_block_giftAboveLimitMargins_skipsTightRequests
+
+<i>
+
+Way 5: a gift larger than pending users' limit margins. A gift raises the amount per share, so every
+deposit request whose limit sits within the gift's share of NAV above the quote is skipped (RB-14) and
+waits for its owner to re-quote. It costs the gift, which goes to the holders. Not a day block: one
+gift moves the price once.
+
+</i>
+
+```solidity
+function test_A8_block_giftAboveLimitMargins_skipsTightRequests() public fixtureCovered;
+```
+
+<a id="test_a9_run_oldestfirstundercap_inkindthenclaims"></a>
+
+### test_A9_run_oldestFirstUnderCap_inKindThenClaims
+
+```solidity
+function test_A9_run_oldestFirstUnderCap_inKindThenClaims() public fixtureCovered;
+```
+
+<a id="_a9holders"></a>
+
+### _a9Holders
+
+<i>
+
+Four more holders deposit 100,000 USDC each in one epoch.
+
+</i>
+
+```solidity
+function _a9Holders() private;
+```
+
+<a id="_a9inkindexit-address"></a>
+
+### _a9InKindExit
+
+<i>
+
+The fourth runner leaves at once in kind through the queue: basket tokens now, lending USDC up to the
+period's allowance, the rest as position claims.
+
+</i>
+
+```solidity
+function _a9InKindExit(address who) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+<a id="_a9firstsettlement"></a>
+
+### _a9FirstSettlement
+
+<i>
+
+The first period's settlements after the window (one call per block until the period's cap stops
+them): the redemptions fill in the order they were made, up to the period's cap; a request the cap
+reaches fills in part and the ones behind it wait.
+
+</i>
+
+```solidity
+function _a9FirstSettlement() private;
+```
+
+<a id="_a9venueloss-address"></a>
+
+### _a9VenueLoss
+
+<i>
+
+Aave loses 10 %. The in-kind exiter's Aave claim and the stayers' Aave holding lose the same fraction
+(RB-21): no later loss is pushed onto the holders who stayed.
+
+</i>
+
+```solidity
+function _a9VenueLoss(address exiter) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| exiter | `address` |  |
+
+<a id="test_a10_slowrampinsideband_noarbitrage"></a>
+
+### test_A10_slowRampInsideBand_noArbitrage
+
+<i>
+
+The attacker ramps wETH every 5 minutes over the last hour of a pending deposit's window, so check 4
+passes and the fund buys into the ramp. Two rates, the best scored: +5 bps (spot +60 bps at the end, the
+slice median about +30 bps), and the steepest the bands let through, `min((refBandBps − 10) / 6,
+(legBandBps − 10) / 12)` (+7 at the defaults 90 and 100: median about +42, spot +84 inside the per-swap
+band). The ramp is held while the keeper settles the victim's 250,000 USDC in parts, one call per block
+(the per-call cap, on by default since 2026-11-12), then sold back.
+
+</i>
+
+```solidity
+function test_A10_slowRampInsideBand_noArbitrage() public fixtureCovered;
+```
+
+<a id="_a10once-uint256-uint256-int256-uint256-uint256"></a>
+
+### _a10Once
+
+<i>
+
+One A10 ramp of `rate` bps per 5 minutes, held through the keeper's parts (one per block).
+
+</i>
+
+```solidity
+function _a10Once(uint256 vid, uint256 windowEnd, int256 rate, uint256 hu, uint256 hs)
+        internal
+        returns (AttackPnl memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vid | `uint256` |  |
+| windowEnd | `uint256` |  |
+| rate | `int256` |  |
+| hu | `uint256` |  |
+| hs | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `AttackPnl` |  |
+
+<a id="test_a10_slowramppastband_blocks"></a>
+
+### test_A10_slowRampPastBand_blocks
+
+<i>
+
+The same ramp, steep enough that the slice median leaves the band: +(band + 30) / 6 bps every 5 minutes
+(+20 at the default band of 90, median about +120; it was +10 against 50), and check 4 (or the quorum)
+blocks.
+
+</i>
+
+```solidity
+function test_A10_slowRampPastBand_blocks() public fixtureCovered;
+```
+
+<a id="_ramp-int256-uint256"></a>
+
+### _ramp
+
+<i>
+
+`steps` pushes of `bps` on wETH, one every 5 minutes, ending 5 minutes after the last. Returns the wETH
+bought; `borrowed` is the USDC the ramp spent (capital held, not a flash loan).
+
+</i>
+
+```solidity
+function _ramp(int256 bps, uint256 steps) private returns (uint256 bought);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `int256` |  |
+| steps | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bought | `uint256` |  |
+
+<a id="test_a11_holdgriefing_pooledaccount_eachfillunlocksonitsowndate"></a>
+
+### test_A11_holdGriefing_pooledAccount_eachFillUnlocksOnItsOwnDate
+
+```solidity
+function test_A11_holdGriefing_pooledAccount_eachFillUnlocksOnItsOwnDate()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a12_batchlargerthanpooldepth_failswhole_settlesinparts"></a>
+
+### test_A12_batchLargerThanPoolDepth_failsWhole_settlesInParts
+
+```solidity
+function test_A12_batchLargerThanPoolDepth_failsWhole_settlesInParts() public fixtureCovered;
+```
+
+<a id="_callroomusdc"></a>
+
+### _callRoomUsdc
+
+<i>
+
+One call's room under the per-call cap: `min_i(callBps × depth_i × navFeed / value_i)` over the basket
+assets (`FlowSettleLib._basketCallRoom`), at the feeds, with the depth over one settlement window.
+
+</i>
+
+```solidity
+function _callRoomUsdc() internal view returns (uint256 room);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| room | `uint256` |  |
+
+<a id="_bigworld"></a>
+
+### _bigWorld
+
+<i>
+
+A fund that is 60 % wETH (the pool-share rule allows 6M of a 10M cap on the 26.8M-deep pool) with the
+flow cap raised by ADMIN to 5M a period, so one batch can outgrow the pool.
+
+</i>
+
+```solidity
+function _bigWorld() internal;
+```
+
+<a id="_arbbackweth-uint160"></a>
+
+### _arbBackWeth
+
+<i>
+
+An arbitrageur sells wETH until the pool is back at `sqrtTarget` (a market that pulls a moved pool back
+to the outside price). Not part of any attacker's result.
+
+</i>
+
+```solidity
+function _arbBackWeth(uint160 sqrtTarget) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sqrtTarget | `uint160` |  |
+
+<a id="test_a13_floodofunfillablerequests_honeststillfills"></a>
+
+### test_A13_floodOfUnfillableRequests_honestStillFills
+
+```solidity
+function test_A13_floodOfUnfillableRequests_honestStillFills() public fixtureCovered;
+```
+
+<a id="test_a14_venueimpaired_exitersandstayerssharetheloss"></a>
+
+### test_A14_venueImpaired_exitersAndStayersShareTheLoss
+
+<i>
+
+Impaired: Aave loses 10 % after an in-kind exit left a position claim. Exiter and stayers share it; a
+timed redemption after it pays the impaired value (it does not take the stayers' money).
+
+</i>
+
+```solidity
+function test_A14_venueImpaired_exitersAndStayersShareTheLoss() public fixtureCovered;
+```
+
+<a id="test_a14_venueatsupplycap_depositswait_redemptionssettle"></a>
+
+### test_A14_venueAtSupplyCap_depositsWait_redemptionsSettle
+
+<i>
+
+At its supply cap Aave refuses the purchase's lending leg: the deposit side fails and waits, the
+redemption side of the same call settles. Once the venue takes supply again, the deposit settles.
+
+</i>
+
+```solidity
+function test_A14_venueAtSupplyCap_depositsWait_redemptionsSettle() public fixtureCovered;
+```
+
+<a id="test_a14_venuefullyborrowed_redemptionswait_depositssettle_inkindopen"></a>
+
+### test_A14_venueFullyBorrowed_redemptionsWait_depositsSettle_inKindOpen
+
+<i>
+
+Fully borrowed: Aave pays no withdrawal. Timed redemptions wait, deposits of the same call settle, and
+the in-kind exit stays open (the Aave leg becomes a position claim).
+
+</i>
+
+```solidity
+function test_A14_venueFullyBorrowed_redemptionsWait_depositsSettle_inKindOpen()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a15_giftstoadapterandfund_aregiftstoholders"></a>
+
+### test_A15_giftsToAdapterAndFund_areGiftsToHolders
+
+```solidity
+function test_A15_giftsToAdapterAndFund_areGiftsToHolders() public fixtureCovered;
+```
+
+<a id="test_a15_gifttoafreshlyseededfund_movesthemixatmostgiftoverminseed"></a>
+
+### test_A15_giftToAFreshlySeededFund_movesTheMixAtMostGiftOverMinSeed
+
+```solidity
+function test_A15_giftToAFreshlySeededFund_movesTheMixAtMostGiftOverMinSeed()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a16_emergencyfreezeseverysettlement_waitboundednovaluemoves"></a>
+
+### test_A16_emergencyFreezesEverySettlement_waitBoundedNoValueMoves
+
+```solidity
+function test_A16_emergencyFreezesEverySettlement_waitBoundedNoValueMoves()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a17_usdcdepeg_blockssettlement_exitsstayopen"></a>
+
+### test_A17_usdcDepeg_blocksSettlement_exitsStayOpen
+
+```solidity
+function test_A17_usdcDepeg_blocksSettlement_exitsStayOpen() public fixtureCovered;
+```
+
+<a id="test_a18_liquiditypulledbeforesettlement_limitfailsnothingsettles"></a>
+
+### test_A18_liquidityPulledBeforeSettlement_limitFailsNothingSettles
+
+<i>
+
+The attacker (this contract, as an LP) adds ten times the pool's liquidity in a 3 % band around the
+price before the window, so a large batch sized for that depth fits. Right before the keeper's call it
+pulls it. The LP's own round trip (tokens paid in, tokens collected) is the attacker's result.
+Before the per-call cap was on by default (2026-11-12) the batch then failed its per-swap limit: nothing
+settled. At the defaults the call is sized by the cap from the pool's TIME-WEIGHTED depth, which the
+liquidity held through the window still inflates (logged): either the per-swap limit refuses the call
+(nothing settles), or the capped call settles a part inside every limit. Either way nobody loses.
+
+</i>
+
+```solidity
+function test_A18_liquidityPulledBeforeSettlement_limitFailsNothingSettles()
+        public
+        fixtureCovered;
+```
+
+<a id="_lpnet"></a>
+
+### _lpNet
+
+<i>
+
+The LP's result at the reference price: what `_lpRemove` collected less what `_lpAdd` paid.
+
+</i>
+
+```solidity
+function _lpNet() internal view returns (int256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int256` |  |
+
+<a id="_lpadd-uint256-int24"></a>
+
+### _lpAdd
+
+<i>
+
+Mint `mult` times the pool's active liquidity in ±`halfBps` around the current tick, from this contract.
+
+</i>
+
+```solidity
+function _lpAdd(uint256 mult, int24 halfTicks) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| mult | `uint256` |  |
+| halfTicks | `int24` |  |
+
+<a id="_lpremove"></a>
+
+### _lpRemove
+
+```solidity
+function _lpRemove() internal;
+```
+
+<a id="uniswapv3mintcallback-uint256-uint256-bytes"></a>
+
+### uniswapV3MintCallback
+
+<i>
+
+Uniswap V3 mint callback: pay the pool what it asks, minting the tokens to this contract first.
+
+</i>
+
+```solidity
+function uniswapV3MintCallback(uint256 amount0Owed, uint256 amount1Owed, bytes calldata)
+        external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount0Owed | `uint256` |  |
+| amount1Owed | `uint256` |  |
+| _ | `bytes` |  |
+
+<a id="_paypool-address-uint256"></a>
+
+### _payPool
+
+```solidity
+function _payPool(address token, uint256 amount) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| amount | `uint256` |  |
+
+<a id="test_a19_exclusionledger_freshaddressgetsnothing_burnedredeemerkeepsclaim"></a>
+
+### test_A19_exclusionLedger_freshAddressGetsNothing_burnedRedeemerKeepsClaim
+
+```solidity
+function test_A19_exclusionLedger_freshAddressGetsNothing_burnedRedeemerKeepsClaim()
+        public
+        fixtureCovered;
+```
+
+<a id="_waitoutsharepricebreaker"></a>
+
+### _waitOutSharePriceBreaker
+
+<i>
+
+While check 6 (share price) blocks the keeper, move one epoch at a time (at most `maxRoll − 1`, so no
+request expires). Returns the epochs it held.
+
+</i>
+
+```solidity
+function _waitOutSharePriceBreaker() internal returns (uint256 epochs);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| epochs | `uint256` |  |
+
+<a id="_sawsidefailed-requestkind"></a>
+
+### _sawSideFailed
+
+<i>
+
+Whether the recorded logs hold a `SideFailed` of `kind` from the queue.
+
+</i>
+
+```solidity
+function _sawSideFailed(RequestKind kind) internal returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| kind | `RequestKind` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_lever-uint256"></a>
+
+### _lever
+
+```solidity
+function _lever(uint256 id) internal pure returns (LeverSetting memory l);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| l | `LeverSetting` |  |
+
+<a id="_applylever-leversetting"></a>
+
+### _applyLever
+
+<i>
+
+Put lever `l` in force as ADMIN (the timelock holds ADMIN_ROLE; pranked so no time passes). Every row
+sets its own bands and levers exactly, whatever the queue's defaults are: since 2026-11-12 `initialize`
+turns the 5 bps cap on and the harness band is 90, so the all-zero row L0 must switch them off itself.
+
+</i>
+
+```solidity
+function _applyLever(LeverSetting memory l) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| l | `LeverSetting` |  |
+
+<a id="test_lever_a7_caller_l00"></a>
+
+### test_lever_A7_caller_L00
+
+```solidity
+function test_lever_A7_caller_L00() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l01"></a>
+
+### test_lever_A7_caller_L01
+
+```solidity
+function test_lever_A7_caller_L01() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l02"></a>
+
+### test_lever_A7_caller_L02
+
+```solidity
+function test_lever_A7_caller_L02() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l03"></a>
+
+### test_lever_A7_caller_L03
+
+```solidity
+function test_lever_A7_caller_L03() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l04"></a>
+
+### test_lever_A7_caller_L04
+
+```solidity
+function test_lever_A7_caller_L04() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l05"></a>
+
+### test_lever_A7_caller_L05
+
+```solidity
+function test_lever_A7_caller_L05() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l06"></a>
+
+### test_lever_A7_caller_L06
+
+```solidity
+function test_lever_A7_caller_L06() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l07"></a>
+
+### test_lever_A7_caller_L07
+
+```solidity
+function test_lever_A7_caller_L07() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l08"></a>
+
+### test_lever_A7_caller_L08
+
+```solidity
+function test_lever_A7_caller_L08() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l09"></a>
+
+### test_lever_A7_caller_L09
+
+```solidity
+function test_lever_A7_caller_L09() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l10"></a>
+
+### test_lever_A7_caller_L10
+
+```solidity
+function test_lever_A7_caller_L10() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l11"></a>
+
+### test_lever_A7_caller_L11
+
+```solidity
+function test_lever_A7_caller_L11() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l12"></a>
+
+### test_lever_A7_caller_L12
+
+```solidity
+function test_lever_A7_caller_L12() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l13"></a>
+
+### test_lever_A7_caller_L13
+
+```solidity
+function test_lever_A7_caller_L13() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l14"></a>
+
+### test_lever_A7_caller_L14
+
+```solidity
+function test_lever_A7_caller_L14() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l15"></a>
+
+### test_lever_A7_caller_L15
+
+```solidity
+function test_lever_A7_caller_L15() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l16"></a>
+
+### test_lever_A7_caller_L16
+
+```solidity
+function test_lever_A7_caller_L16() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l17"></a>
+
+### test_lever_A7_caller_L17
+
+```solidity
+function test_lever_A7_caller_L17() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l18"></a>
+
+### test_lever_A7_caller_L18
+
+```solidity
+function test_lever_A7_caller_L18() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l19"></a>
+
+### test_lever_A7_caller_L19
+
+```solidity
+function test_lever_A7_caller_L19() public fixtureCovered;
+```
+
+<a id="test_lever_a7_caller_l20"></a>
+
+### test_lever_A7_caller_L20
+
+```solidity
+function test_lever_A7_caller_L20() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l00"></a>
+
+### test_lever_A7_thirdParty_L00
+
+```solidity
+function test_lever_A7_thirdParty_L00() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l01"></a>
+
+### test_lever_A7_thirdParty_L01
+
+```solidity
+function test_lever_A7_thirdParty_L01() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l02"></a>
+
+### test_lever_A7_thirdParty_L02
+
+```solidity
+function test_lever_A7_thirdParty_L02() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l03"></a>
+
+### test_lever_A7_thirdParty_L03
+
+```solidity
+function test_lever_A7_thirdParty_L03() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l04"></a>
+
+### test_lever_A7_thirdParty_L04
+
+```solidity
+function test_lever_A7_thirdParty_L04() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l05"></a>
+
+### test_lever_A7_thirdParty_L05
+
+```solidity
+function test_lever_A7_thirdParty_L05() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l06"></a>
+
+### test_lever_A7_thirdParty_L06
+
+```solidity
+function test_lever_A7_thirdParty_L06() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l07"></a>
+
+### test_lever_A7_thirdParty_L07
+
+```solidity
+function test_lever_A7_thirdParty_L07() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l08"></a>
+
+### test_lever_A7_thirdParty_L08
+
+```solidity
+function test_lever_A7_thirdParty_L08() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l09"></a>
+
+### test_lever_A7_thirdParty_L09
+
+```solidity
+function test_lever_A7_thirdParty_L09() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l10"></a>
+
+### test_lever_A7_thirdParty_L10
+
+```solidity
+function test_lever_A7_thirdParty_L10() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l11"></a>
+
+### test_lever_A7_thirdParty_L11
+
+```solidity
+function test_lever_A7_thirdParty_L11() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l12"></a>
+
+### test_lever_A7_thirdParty_L12
+
+```solidity
+function test_lever_A7_thirdParty_L12() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l13"></a>
+
+### test_lever_A7_thirdParty_L13
+
+```solidity
+function test_lever_A7_thirdParty_L13() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l14"></a>
+
+### test_lever_A7_thirdParty_L14
+
+```solidity
+function test_lever_A7_thirdParty_L14() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l15"></a>
+
+### test_lever_A7_thirdParty_L15
+
+```solidity
+function test_lever_A7_thirdParty_L15() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l16"></a>
+
+### test_lever_A7_thirdParty_L16
+
+```solidity
+function test_lever_A7_thirdParty_L16() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l17"></a>
+
+### test_lever_A7_thirdParty_L17
+
+```solidity
+function test_lever_A7_thirdParty_L17() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l18"></a>
+
+### test_lever_A7_thirdParty_L18
+
+```solidity
+function test_lever_A7_thirdParty_L18() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l19"></a>
+
+### test_lever_A7_thirdParty_L19
+
+```solidity
+function test_lever_A7_thirdParty_L19() public fixtureCovered;
+```
+
+<a id="test_lever_a7_thirdparty_l20"></a>
+
+### test_lever_A7_thirdParty_L20
+
+```solidity
+function test_lever_A7_thirdParty_L20() public fixtureCovered;
+```
+
+<a id="_levera7-uint256-bool"></a>
+
+### _leverA7
+
+<i>
+
+A7 under lever `id`: the same world, victim (250,000 USDC, limit from the quote under the lever plus
+the 50 bps margin) and caller as `_a7`. Each run settles once per block until the victim's request
+closes (a capped flow fills in parts); with a push, the attacker sandwiches EVERY one of those calls in
+its block (push both pools, settle, sell back). Pushes 5 to 90 bps; the honest run first.
+The victim's extra cost is its USDC per share against the honest run's, times its shares.
+
+</i>
+
+```solidity
+function _leverA7(uint256 id, bool attackerSettles) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+| attackerSettles | `bool` |  |
+
+<a id="_levera7run-address-uint256-int256"></a>
+
+### _leverA7Run
+
+```solidity
+function _leverA7Run(address caller, uint256 vid, int256 push)
+        internal
+        returns (LeverRun memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| vid | `uint256` |  |
+| push | `int256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `LeverRun` |  |
+
+<a id="test_lever_a10_ramp_l00"></a>
+
+### test_lever_A10_ramp_L00
+
+```solidity
+function test_lever_A10_ramp_L00() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l01"></a>
+
+### test_lever_A10_ramp_L01
+
+```solidity
+function test_lever_A10_ramp_L01() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l02"></a>
+
+### test_lever_A10_ramp_L02
+
+```solidity
+function test_lever_A10_ramp_L02() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l03"></a>
+
+### test_lever_A10_ramp_L03
+
+```solidity
+function test_lever_A10_ramp_L03() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l04"></a>
+
+### test_lever_A10_ramp_L04
+
+```solidity
+function test_lever_A10_ramp_L04() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l05"></a>
+
+### test_lever_A10_ramp_L05
+
+```solidity
+function test_lever_A10_ramp_L05() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l06"></a>
+
+### test_lever_A10_ramp_L06
+
+```solidity
+function test_lever_A10_ramp_L06() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l07"></a>
+
+### test_lever_A10_ramp_L07
+
+```solidity
+function test_lever_A10_ramp_L07() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l08"></a>
+
+### test_lever_A10_ramp_L08
+
+```solidity
+function test_lever_A10_ramp_L08() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l09"></a>
+
+### test_lever_A10_ramp_L09
+
+```solidity
+function test_lever_A10_ramp_L09() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l10"></a>
+
+### test_lever_A10_ramp_L10
+
+```solidity
+function test_lever_A10_ramp_L10() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l11"></a>
+
+### test_lever_A10_ramp_L11
+
+```solidity
+function test_lever_A10_ramp_L11() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l12"></a>
+
+### test_lever_A10_ramp_L12
+
+```solidity
+function test_lever_A10_ramp_L12() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l13"></a>
+
+### test_lever_A10_ramp_L13
+
+```solidity
+function test_lever_A10_ramp_L13() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l14"></a>
+
+### test_lever_A10_ramp_L14
+
+```solidity
+function test_lever_A10_ramp_L14() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l15"></a>
+
+### test_lever_A10_ramp_L15
+
+```solidity
+function test_lever_A10_ramp_L15() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l16"></a>
+
+### test_lever_A10_ramp_L16
+
+```solidity
+function test_lever_A10_ramp_L16() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l17"></a>
+
+### test_lever_A10_ramp_L17
+
+```solidity
+function test_lever_A10_ramp_L17() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l18"></a>
+
+### test_lever_A10_ramp_L18
+
+```solidity
+function test_lever_A10_ramp_L18() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l19"></a>
+
+### test_lever_A10_ramp_L19
+
+```solidity
+function test_lever_A10_ramp_L19() public fixtureCovered;
+```
+
+<a id="test_lever_a10_ramp_l20"></a>
+
+### test_lever_A10_ramp_L20
+
+```solidity
+function test_lever_A10_ramp_L20() public fixtureCovered;
+```
+
+<a id="_levera10-uint256"></a>
+
+### _leverA10
+
+<i>
+
+A10 under lever `id` (no arbitrage, as `test_A10_slowRampInsideBand_noArbitrage`): the attacker ramps
+wETH by `rate` every 5 minutes over the last hour of the victim's window (12 pushes), holds the ramp
+while the keeper settles once per block until the victim's request closes, then sells back. Rates 1 to 14
+bps (spot +12 to +168 bps at the window end: 10 to 14 reach the refBandBps 90 and 100 rows); the honest
+run (no ramp) first.
+
+</i>
+
+```solidity
+function _leverA10(uint256 id) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+<a id="_levera10run-uint256-uint256-int256"></a>
+
+### _leverA10Run
+
+```solidity
+function _leverA10Run(uint256 vid, uint256 windowEnd, int256 rate)
+        internal
+        returns (LeverRun memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vid | `uint256` |  |
+| windowEnd | `uint256` |  |
+| rate | `int256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `LeverRun` |  |
+
+<a id="test_lever_a8way3_l00"></a>
+
+### test_lever_A8way3_L00
+
+```solidity
+function test_lever_A8way3_L00() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l01"></a>
+
+### test_lever_A8way3_L01
+
+```solidity
+function test_lever_A8way3_L01() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l02"></a>
+
+### test_lever_A8way3_L02
+
+```solidity
+function test_lever_A8way3_L02() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l03"></a>
+
+### test_lever_A8way3_L03
+
+```solidity
+function test_lever_A8way3_L03() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l04"></a>
+
+### test_lever_A8way3_L04
+
+```solidity
+function test_lever_A8way3_L04() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l05"></a>
+
+### test_lever_A8way3_L05
+
+```solidity
+function test_lever_A8way3_L05() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l06"></a>
+
+### test_lever_A8way3_L06
+
+```solidity
+function test_lever_A8way3_L06() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l07"></a>
+
+### test_lever_A8way3_L07
+
+```solidity
+function test_lever_A8way3_L07() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l08"></a>
+
+### test_lever_A8way3_L08
+
+```solidity
+function test_lever_A8way3_L08() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l09"></a>
+
+### test_lever_A8way3_L09
+
+```solidity
+function test_lever_A8way3_L09() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l10"></a>
+
+### test_lever_A8way3_L10
+
+```solidity
+function test_lever_A8way3_L10() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l11"></a>
+
+### test_lever_A8way3_L11
+
+```solidity
+function test_lever_A8way3_L11() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l12"></a>
+
+### test_lever_A8way3_L12
+
+```solidity
+function test_lever_A8way3_L12() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l13"></a>
+
+### test_lever_A8way3_L13
+
+```solidity
+function test_lever_A8way3_L13() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l14"></a>
+
+### test_lever_A8way3_L14
+
+```solidity
+function test_lever_A8way3_L14() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l15"></a>
+
+### test_lever_A8way3_L15
+
+```solidity
+function test_lever_A8way3_L15() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l16"></a>
+
+### test_lever_A8way3_L16
+
+```solidity
+function test_lever_A8way3_L16() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l17"></a>
+
+### test_lever_A8way3_L17
+
+```solidity
+function test_lever_A8way3_L17() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l18"></a>
+
+### test_lever_A8way3_L18
+
+```solidity
+function test_lever_A8way3_L18() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l19"></a>
+
+### test_lever_A8way3_L19
+
+```solidity
+function test_lever_A8way3_L19() public fixtureCovered;
+```
+
+<a id="test_lever_a8way3_l20"></a>
+
+### test_lever_A8way3_L20
+
+```solidity
+function test_lever_A8way3_L20() public fixtureCovered;
+```
+
+<a id="_levera8way3-uint256"></a>
+
+### _leverA8way3
+
+<i>
+
+A8 way 3 (`test_A8_block_perSwapLimit_aroundEachKeeperCall`) under lever `id`: a 50,000 USDC deposit and
+a redemption of a quarter of alice's shares wait; the attacker pushes wETH up right before the keeper's
+call and sells back right after it. Pushes 0 (no attack: does the lever itself block the deposit?), then
+10 to 110 bps. The cheapest push after which the deposit is still whole is the blocking
+push; its round-trip cost × 24 keeper attempts a day is the way's cost per day (the scaffold's
+convention for way 3).
+
+</i>
+
+```solidity
+function _leverA8way3(uint256 id) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+<a id="_nextblock"></a>
+
+### _nextBlock
+
+<i>
+
+One block later (2 s, Base): a capped flow's next part, or the next keeper attempt.
+
+</i>
+
+```solidity
+function _nextBlock() internal;
+```
+
+<a id="_levercall-address-leverrun"></a>
+
+### _leverCall
+
+<i>
+
+One settlement as `caller`, recorded in `r`. Returns true when the run should stop: the call reverted
+(a check blocked it), or it recorded no settlement.
+
+</i>
+
+```solidity
+function _leverCall(address caller, LeverRun memory r) internal returns (bool stop);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| r | `LeverRun` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| stop | `bool` |  |
+
+<a id="_leverclose-uint256-leverrun"></a>
+
+### _leverClose
+
+<i>
+
+Close a run: the victim's fills of request `vid` (RB-14 asserted on each), the attacker's net, the
+holders' loss (asserted under 1 bps of NAV), check 10 from outside.
+
+</i>
+
+```solidity
+function _leverClose(uint256 vid, LeverRun memory r) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vid | `uint256` |  |
+| r | `LeverRun` |  |
+
+<a id="_victimloss-leverrun-leverrun"></a>
+
+### _victimLoss
+
+<i>
+
+The victim's extra cost in run `r` against the honest run `h`: its USDC less what its shares would have
+cost at the honest run's price per share (0 when either filled nothing).
+
+</i>
+
+```solidity
+function _victimLoss(LeverRun memory r, LeverRun memory h) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `LeverRun` |  |
+| h | `LeverRun` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_leverlog-string-leverrun"></a>
+
+### _leverLog
+
+<i>
+
+`LEVER,&lt;attack>,&lt;setting>,lvl,net,netAave,victimUsdc,victimShares,victimLoss,holdersLoss,calls,failedSides,reverted`
+
+</i>
+
+```solidity
+function _leverLog(string memory tag, LeverRun memory r) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tag | `string` |  |
+| r | `LeverRun` |  |
+
+<a id="_leverbest-string-leverrun-leverrun"></a>
+
+### _leverBest
+
+<i>
+
+`LEVER-BEST,&lt;attack>,&lt;setting>,honestCalls,honestVictimUsdc,honestFailedSides,honestReverted,bestLvl,
+bestNet,bestNetAave,bestVictimLoss,bestHoldersLoss,navRef`
+
+</i>
+
+```solidity
+function _leverBest(string memory tag, LeverRun memory h, LeverRun memory b) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tag | `string` |  |
+| h | `LeverRun` |  |
+| b | `LeverRun` |  |
+
+<a id="_world"></a>
+
+### _world
+
+<i>
+
+The fund every attack starts from: the seed invested by a 1-day plan to (65, 35), then alice's deposit
+through the queue, then the outside market catches up with the fund's own trades (`alignFeedsToPools`),
+so feed and pool agree when the attack starts.
+
+</i>
+
+```solidity
+function _world() internal;
+```
+
+<a id="_begin"></a>
+
+### _begin
+
+<i>
+
+Fix the reference prices at the pools' spot now and snapshot the fund (`s0`). Resets the attack's
+bookkeeping (`borrowed`, `pending`).
+
+</i>
+
+```solidity
+function _begin() internal;
+```
+
+<a id="_startattacker"></a>
+
+### _startAttacker
+
+<i>
+
+The attacker's value at the start, after its flash loan or capital is in place.
+
+</i>
+
+```solidity
+function _startAttacker() internal;
+```
+
+<a id="_end-string-bool"></a>
+
+### _end
+
+<i>
+
+Close the attack: the attacker's net against `v0`, the holders' loss against `s0`, the pending users'
+loss and the flash borrowing from storage. Logs it; when `g8`, asserts check 10 from outside (no held
+amount per share fell) and G8.
+
+</i>
+
+```solidity
+function _end(string memory id, bool g8) internal returns (AttackPnl memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `string` |  |
+| g8 | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `AttackPnl` |  |
+
+<a id="_setref"></a>
+
+### _setRef
+
+<i>
+
+Fix the reference prices at the pools' spot now.
+
+</i>
+
+```solidity
+function _setRef() internal;
+```
+
+<a id="_snap"></a>
+
+### _snap
+
+```solidity
+function _snap() internal view returns (Snap memory s);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `Snap` |  |
+
+<a id="_navref"></a>
+
+### _navRef
+
+<i>
+
+NAV at the reference prices: idle, each lending venue's holders' part, each basket token at its reference.
+
+</i>
+
+```solidity
+function _navRef() internal view returns (uint256 nav);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| nav | `uint256` |  |
+
+<a id="_sharevalue-uint256"></a>
+
+### _shareValue
+
+<i>
+
+Value of `shares` at the reference NAV per share.
+
+</i>
+
+```solidity
+function _shareValue(uint256 shares) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_valueof-address"></a>
+
+### _valueOf
+
+<i>
+
+Everything `who` owns, at the reference prices: USDC, wETH, cbBTC, wallet shares, every share the queue
+keeps for it (escrow, held deposit shares, share credit: `queuedSharesOf`), its USDC credit, its pending
+deposit escrow, its settled redemption USDC not yet taken, its lending position claims and its deferred
+basket legs.
+
+</i>
+
+```solidity
+function _valueOf(address who) internal view returns (uint256 v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256` |  |
+
+<a id="_holdersloss"></a>
+
+### _holdersLoss
+
+<i>
+
+NAV the share supply lost against the NAV per share of `s0`, at the reference prices (0 if it rose).
+
+</i>
+
+```solidity
+function _holdersLoss() internal view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_assertpersharenotlower-string"></a>
+
+### _assertPerShareNotLower
+
+<i>
+
+Check 10 from outside (RB-13): no held amount per share fell since `s0`.
+
+</i>
+
+```solidity
+function _assertPerShareNotLower(string memory label) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| label | `string` |  |
+
+<a id="_reqdeposit-address-uint256-uint256"></a>
+
+### _reqDeposit
+
+<i>
+
+`who` asks to deposit `usdc` it already holds (no funding), with limit `limit`.
+
+</i>
+
+```solidity
+function _reqDeposit(address who, uint256 usdc, uint256 limit) internal returns (uint256 id);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| usdc | `uint256` |  |
+| limit | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+<a id="_victimdeposit-address-uint256"></a>
+
+### _victimDeposit
+
+<i>
+
+A pending user's deposit request with a limit from the quote plus `LIMIT_MARGIN_BPS` (E21).
+
+</i>
+
+```solidity
+function _victimDeposit(address who, uint256 usdc) internal returns (uint256 id);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| usdc | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+<a id="_claimredeemusdc-address"></a>
+
+### _claimRedeemUsdc
+
+<i>
+
+`who` takes every settled redemption USDC it has (computed before the prank: a call inside the
+arguments would take the prank).
+
+</i>
+
+```solidity
+function _claimRedeemUsdc(address who) internal returns (uint256 usdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+
+<a id="_takecredit-address"></a>
+
+### _takeCredit
+
+<i>
+
+Pull `who`'s queue credits, if any.
+
+</i>
+
+```solidity
+function _takeCredit(address who) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+<a id="_movemarket-address-address-int256"></a>
+
+### _moveMarket
+
+<i>
+
+An outside trader (not the attacker) moves `token` at `pool` by `bps`: a real market move.
+
+</i>
+
+```solidity
+function _moveMarket(address pool, address token, int256 bps) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| token | `address` |  |
+| bps | `int256` |  |
+
+## Structs
+
+### Snap
+
+<i>
+
+The fund's state at the attack start (`_snap`).
+
+</i>
+
+```solidity
+struct Snap {
+        uint256 navRef;
+        uint256 supply;
+        uint256 idle;
+        uint256[] held;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| navRef | `uint256` |  |
+| supply | `uint256` |  |
+| idle | `uint256` |  |
+| held | `uint256[]` |  |
+
+### LeverSetting
+
+```solidity
+struct LeverSetting {
+        string name;
+        uint16 legBand;
+        uint16 refBand;
+        uint8 mode;
+        uint16 callBps;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name | `string` |  |
+| legBand | `uint16` |  |
+| refBand | `uint16` |  |
+| mode | `uint8` |  |
+| callBps | `uint16` |  |
+
+### LeverRun
+
+<i>
+
+One run of an attack under a lever: the attacker's net (flash fee 0 and Aave's 5 bps), the victim's fill,
+the holders' loss at the reference prices, the calls made, the deposit sides that failed, and whether a
+call reverted (a check blocked it).
+
+</i>
+
+```solidity
+struct LeverRun {
+        int256 lvl;
+        int256 net;
+        int256 netAave;
+        uint256 victimUsdc;
+        uint256 victimShares;
+        uint256 victimLoss;
+        uint256 holdersLoss;
+        uint256 navRef;
+        uint256 calls;
+        uint256 failedSides;
+        bool reverted;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| lvl | `int256` |  |
+| net | `int256` |  |
+| netAave | `int256` |  |
+| victimUsdc | `uint256` |  |
+| victimShares | `uint256` |  |
+| victimLoss | `uint256` |  |
+| holdersLoss | `uint256` |  |
+| navRef | `uint256` |  |
+| calls | `uint256` |  |
+| failedSides | `uint256` |  |
+| reverted | `bool` |  |
+

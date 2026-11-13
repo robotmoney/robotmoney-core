@@ -1,0 +1,83 @@
+---
+title: "SizeGateTest"
+description: "One-vault experiment (plan Step 2.2, gate G1): the fund implementation and the rebalancer implementation each deploy with at least 1 KB of headroom under EIP-170 (24,576 bytes). Sizes are read from the code the harness actually deployed (the ERC-1967 implementation behind each proxy), compiled with the repo's production optimizer settings."
+---
+
+# SizeGateTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/SizeGate.t.sol)
+
+**Inherits:** [BaselineHarness](/contracts/test/prototype/baseline/abstract.BaselineHarness)
+
+One-vault experiment (plan Step 2.2, gate G1): the fund implementation and the rebalancer
+implementation each deploy with at least 1 KB of headroom under EIP-170 (24,576 bytes).
+Sizes are read from the code the harness actually deployed (the ERC-1967 implementation
+behind each proxy), compiled with the repo's production optimizer settings.
+
+## Constants
+
+### EIP170_LIMIT
+
+<i>
+
+EIP-170 runtime code limit.
+
+</i>
+
+```solidity
+uint256 internal constant EIP170_LIMIT = 24_576;
+```
+
+### G1_MAX
+
+<i>
+
+G1 headroom: 1 KB under the EIP-170 limit.
+
+</i>
+
+```solidity
+uint256 internal constant G1_MAX = EIP170_LIMIT - 1024;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="_impl-address"></a>
+
+### _impl
+
+```solidity
+function _impl(address proxy) internal view returns (address impl);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| impl | `address` |  |
+
+<a id="test_g1_fundandrebalancerfitwithheadroom"></a>
+
+### test_G1_fundAndRebalancerFitWithHeadroom
+
+G1 (§13): fund implementation and rebalancer implementation `code.length` &lt;= 23,552 each.
+Logs governance and every prototype library for the §14 evidence log.
+
+```solidity
+function test_G1_fundAndRebalancerFitWithHeadroom() public fixtureCovered;
+```
+

@@ -1,0 +1,365 @@
+---
+title: "AuctionExecutorTest"
+description: "Phase 3c: the auction executor behind `executeStep`. The test contract is the filler. It mints what it owes, so these tests check the auction's rules, not a solver's sourcing (the sim models that)."
+---
+
+# AuctionExecutorTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/AuctionExecutor.t.sol)
+
+**Inherits:** [BaselineHarness](/contracts/test/prototype/baseline/abstract.BaselineHarness), [IAuctionFiller](/contracts/test/prototype/baseline/src/interface.IAuctionFiller)
+
+Phase 3c: the auction executor behind `executeStep`. The test contract is the filler. It mints what
+it owes, so these tests check the auction's rules, not a solver's sourcing (the sim models that).
+
+## Constants
+
+### DURATION
+
+```solidity
+uint32 internal constant DURATION = 300;
+```
+
+### PREMIUM_BPS
+
+```solidity
+uint16 internal constant PREMIUM_BPS = 50;
+```
+
+### ALICE_DEPOSIT
+
+```solidity
+uint256 internal constant ALICE_DEPOSIT = 1_000_000e6;
+```
+
+## State Variables
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### exec
+
+```solidity
+AuctionStepExecutor internal exec;
+```
+
+### legs
+
+```solidity
+Leg[] internal legs;
+```
+
+### payShort
+
+```solidity
+bool internal payShort;
+```
+
+### tryReenter
+
+```solidity
+bool internal tryReenter;
+```
+
+### fillReentryRefused
+
+```solidity
+bool internal fillReentryRefused;
+```
+
+### openReentryRefused
+
+```solidity
+bool internal openReentryRefused;
+```
+
+## Functions
+
+<a id="_basketadapter-address"></a>
+
+### _basketAdapter
+
+<i>
+
+The swap adapter the basket assets use. The pool adapter by default. Phase 3c tests override it to
+put `AuctionStepExecutor` in front of it. Called once, after the fund exists and before any basket
+asset is added.
+
+</i>
+
+```solidity
+function _basketAdapter(address poolAdapter) internal override returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| poolAdapter | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_beforehandover"></a>
+
+### _beforeHandover
+
+<i>
+
+The deployer binds the Rebalancer and grants the executor KEEPER_ROLE before the timelock handover.
+
+</i>
+
+```solidity
+function _beforeHandover() internal override;
+```
+
+<a id="onauctionleg-address-address-uint256-uint256-uint256-uint256"></a>
+
+### onAuctionLeg
+
+```solidity
+function onAuctionLeg(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 owed,
+        uint256 q,
+        uint256 floor
+    ) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| amountIn | `uint256` |  |
+| owed | `uint256` |  |
+| q | `uint256` |  |
+| floor | `uint256` |  |
+
+<a id="test_fillatopen_paystwappluspremium_tothefund"></a>
+
+### test_fillAtOpen_paysTwapPlusPremium_toTheFund
+
+<i>
+
+A fill in the open's block pays the start price: the leg's TWAP quote plus the premium. The fund
+gets the tokens, the filler gets the fund's USDC, and the executor keeps nothing (RB-3).
+
+</i>
+
+```solidity
+function test_fillAtOpen_paysTwapPlusPremium_toTheFund() public fixtureCovered;
+```
+
+<a id="test_owed_decayslinearly_tothetwapfloor"></a>
+
+### test_owed_decaysLinearly_toTheTwapFloor
+
+<i>
+
+The owed amount falls linearly from TWAP + premium toward the swap path's TWAP floor. Fills run at
+0, D/4 and D/2 (a wETH fill at the floor costs about `maxStepCostBps`, so RB-4 may refuse it). The
+curve itself reaches the floor at DURATION, stays there, and is never below it.
+
+</i>
+
+```solidity
+function test_owed_decaysLinearly_toTheTwapFloor() public fixtureCovered;
+```
+
+<a id="test_underpay_revertsthewholefill_withoutbackoff"></a>
+
+### test_underpay_revertsTheWholeFill_withoutBackoff
+
+<i>
+
+A filler that pays one unit short: the leg reverts, so the whole fill reverts. Nothing trades, no
+step is recorded and no asset backs off. A filler cannot book a fake failure.
+
+</i>
+
+```solidity
+function test_underpay_revertsTheWholeFill_withoutBackoff() public fixtureCovered;
+```
+
+<a id="test_openandfill_lifecycle"></a>
+
+### test_openAndFill_lifecycle
+
+<i>
+
+Open needs a step the Rebalancer would take now, and one auction at a time. Fill needs a live
+auction. After 2 × DURATION the auction lapses and can be opened again. After a fill the cooldown
+blocks the next open (RB-5).
+
+</i>
+
+```solidity
+function test_openAndFill_lifecycle() public fixtureCovered;
+```
+
+<a id="test_marketdeviation_afteropen_fillreverts"></a>
+
+### test_marketDeviation_afterOpen_fillReverts
+
+<i>
+
+RB-5: spot pushed past the ORA-4 guard after the open. The fill's step skips with MarketDeviation,
+so the fill reverts and nothing trades.
+
+</i>
+
+```solidity
+function test_marketDeviation_afterOpen_fillReverts() public fixtureCovered;
+```
+
+<a id="test_fillatdespxafloor_hitsthestepcostcap"></a>
+
+### test_fillAtDespxaFloor_hitsTheStepCostCap
+
+<i>
+
+RB-4 still binds inside a fill. deSPXA's TWAP floor sits 200 bps under TWAP, past the 50 bps step cost
+cap. A fill at that floor makes the fund revert StepCostExceeded. The whole fill reverts, nothing moves
+and no backoff is booked. A fill early on the curve, above the cap, trades.
+
+</i>
+
+```solidity
+function test_fillAtDespxaFloor_hitsTheStepCostCap() public fixtureCovered;
+```
+
+<a id="test_fillercannotreenter"></a>
+
+### test_fillerCannotReenter
+
+<i>
+
+The filler's callback cannot re-enter `fill` or `open`.
+
+</i>
+
+```solidity
+function test_fillerCannotReenter() public fixtureCovered;
+```
+
+<a id="test_outsideafill_swapspassthroughtothepool"></a>
+
+### test_outsideAFill_swapsPassThroughToThePool
+
+<i>
+
+Outside a fill every swap passes through to the pool: a routed deposit and a direct keeper step
+both trade in the pool, no auction leg is logged, and the executor keeps nothing.
+
+</i>
+
+```solidity
+function test_outsideAFill_swapsPassThroughToThePool() public fixtureCovered;
+```
+
+<a id="test_sellleg_owedusdc_attwappluspremium"></a>
+
+### test_sellLeg_owedUsdc_atTwapPlusPremium
+
+<i>
+
+A basket sell leg: the fund's tokens go to the filler and the fund is owed USDC at TWAP + premium,
+floored at the step's `minSellUsdcOut`.
+
+</i>
+
+```solidity
+function test_sellLeg_owedUsdc_atTwapPlusPremium() public fixtureCovered;
+```
+
+<a id="_wethbuyplan"></a>
+
+### _wethBuyPlan
+
+<i>
+
+Adversarial's wETH-only plan: 1M idle, cbBTC not traded, a receipt to (stable 0, protocol 100%),
+warped to the path end. The next step sells idle and buys wETH.
+
+</i>
+
+```solidity
+function _wethBuyPlan() internal;
+```
+
+<a id="_pushup-address-uint256-uint256"></a>
+
+### _pushUp
+
+```solidity
+function _pushUp(address pool, uint256 idx, uint256 minDev) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| idx | `uint256` |  |
+| minDev | `uint256` |  |
+
+<a id="_logged-vm-log-bytes32"></a>
+
+### _logged
+
+```solidity
+function _logged(Vm.Log[] memory logs, bytes32 topic) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| logs | `Vm.Log[]` |  |
+| topic | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+## Structs
+
+### Leg
+
+```solidity
+struct Leg {
+        address tokenIn;
+        address tokenOut;
+        uint256 amountIn;
+        uint256 owed;
+        uint256 q;
+        uint256 floor;
+        uint256 inReceived;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| amountIn | `uint256` |  |
+| owed | `uint256` |  |
+| q | `uint256` |  |
+| floor | `uint256` |  |
+| inReceived | `uint256` |  |
+

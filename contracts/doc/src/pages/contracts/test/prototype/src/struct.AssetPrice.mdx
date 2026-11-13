@@ -1,0 +1,33 @@
+---
+title: "AssetPrice"
+description: "Per-swap price limits of one basket asset for one settlement (E12, checks 8 and 9), in USDC units per whole token (`unit` base units). Computed before any trade from the feed (check 2) and the slice-median TWAP (check 3) only."
+---
+
+# AssetPrice
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+
+Per-swap price limits of one basket asset for one settlement (E12, checks 8 and 9), in USDC units per
+whole token (`unit` base units). Computed before any trade from the feed (check 2) and the slice-median
+TWAP (check 3) only.
+
+```solidity
+struct AssetPrice {
+    uint8 kind;
+    uint256 unit;
+    uint256 buyPerToken;
+    uint256 sellPerToken;
+    uint256 feedPerToken;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| kind | `uint8` | PRICE_KIND_NONE (inactive), PRICE_KIND_LENDING or PRICE_KIND_BASKET. |
+| unit | `uint256` | `10 ** decimals()` of the basket token (0 otherwise). |
+| buyPerToken | `uint256` | The most a purchase may pay: `min(feed, TWAP) × (1 + legBandBps)`, rounded UP. |
+| sellPerToken | `uint256` | The least a sale must receive: `max(feed, TWAP) × (1 − legBandBps)`, rounded DOWN. |
+| feedPerToken | `uint256` | At the feed (USD feed / USDC feed), rounded DOWN. NAV at the feeds (checks 6, caps). |
+

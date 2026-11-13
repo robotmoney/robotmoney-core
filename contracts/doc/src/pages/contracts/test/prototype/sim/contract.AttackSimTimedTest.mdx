@@ -1,0 +1,587 @@
+---
+title: "AttackSimTimedTest"
+description: "The four sim attacks against the live fund (eng plan §5 work package 6). World: the seed invested to (65, 35) by a 1-day plan, then alice, the attacker, the victim and ten runners deposit 5M USDC through the queue in 245,000 USDC chunks, one per cap period, while the market runs (so the arbitrageur takes back the fund's own impact), and their shares are delivered after the hold. Opt-in: PROTO_SIM_ATTACKS=1."
+---
+
+# AttackSimTimedTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/sim/AttackSim.t.sol)
+
+**Inherits:** [TimedSimBase](/contracts/test/prototype/sim/abstract.TimedSimBase), [AttackSimCore](/contracts/test/prototype/sim/abstract.AttackSimCore)
+
+**Title:** AttackSimTimedTest
+
+The four sim attacks against the live fund (eng plan §5 work package 6). World: the seed invested to
+(65, 35) by a 1-day plan, then alice, the attacker, the victim and ten runners deposit 5M USDC through the
+queue in 245,000 USDC chunks, one per cap period, while the market runs (so the arbitrageur takes back the
+fund's own impact), and their shares are delivered after the hold. Opt-in: PROTO_SIM_ATTACKS=1.
+
+## State Variables
+
+### aimFirstOutcome
+
+```solidity
+uint256 internal aimFirstOutcome;
+```
+
+### aimSeen
+
+```solidity
+bool internal aimSeen;
+```
+
+### a6State
+
+<i>
+
+The attacker's open position: 0 idle, 1 deposit requested, 2 shares held (in the hold), 3 redemption
+requested. The hedge is a short of `hedgeQ` basket tokens opened at `hedgePx` (reference).
+
+</i>
+
+```solidity
+uint256 internal a6State;
+```
+
+### a6Req
+
+```solidity
+uint256 internal a6Req;
+```
+
+### a6Spent
+
+```solidity
+uint256 internal a6Spent;
+```
+
+### a6Hedge
+
+```solidity
+int256 internal a6Hedge;
+```
+
+### hedgeQ
+
+```solidity
+uint256[2] internal hedgeQ;
+```
+
+### hedgePx
+
+```solidity
+uint256[2] internal hedgePx;
+```
+
+## Functions
+
+<a id="_fixturecheckbydefault"></a>
+
+### _fixtureCheckByDefault
+
+<i>
+
+`TimedSimBase` and `SimMarket` both reach Test; the harness's fixture default is the sim's (off).
+
+</i>
+
+```solidity
+function _fixtureCheckByDefault() internal pure override returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_skipoptin-string"></a>
+
+### _skipOptIn
+
+<i>
+
+`BaseFixture._skipCovered`, reached through the concrete test (this core is not a BaseFixture): the
+coverage check runs before the skip, so the recorder proves the skip without recording it.
+
+</i>
+
+```solidity
+function _skipOptIn(string memory why) internal override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| why | `string` |  |
+
+<a id="test_a2_sim_timed_twappushheldagainstarbitrage"></a>
+
+### test_A2_sim_timed_twapPushHeldAgainstArbitrage
+
+```solidity
+function test_A2_sim_timed_twapPushHeldAgainstArbitrage() public fixtureCovered;
+```
+
+<a id="test_a10_sim_timed_slowrampagainstarbitrage"></a>
+
+### test_A10_sim_timed_slowRampAgainstArbitrage
+
+```solidity
+function test_A10_sim_timed_slowRampAgainstArbitrage() public fixtureCovered;
+```
+
+<a id="test_a6_sim_timed_twaplagwithhedge"></a>
+
+### test_A6_sim_timed_twapLagWithHedge
+
+```solidity
+function test_A6_sim_timed_twapLagWithHedge() public fixtureCovered;
+```
+
+<a id="test_a9_sim_timed_run"></a>
+
+### test_A9_sim_timed_run
+
+```solidity
+function test_A9_sim_timed_run() public fixtureCovered;
+```
+
+<a id="_world"></a>
+
+### _world
+
+```solidity
+function _world() internal;
+```
+
+<a id="worlddeposits-address-uint256"></a>
+
+### worldDeposits
+
+Self-call: each holder's deposit through the queue, 245,000 USDC a period, the market running.
+
+```solidity
+function worldDeposits(address[] calldata hs, uint256[] calldata amts) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| hs | `address[]` |  |
+| amts | `uint256[]` |  |
+
+<a id="seedprep-uint256"></a>
+
+### seedPrep
+
+Self-call: switch to seed `s`, run the warm-up slots, then run to the first slot of a new epoch, so
+a request made next settles about 7 hours later (room for the longest hold and ramp).
+
+```solidity
+function seedPrep(uint256 s) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `uint256` |  |
+
+<a id="_atkslot"></a>
+
+### _atkSlot
+
+<i>
+
+`TimedFlowSim.simSlot` without a plan step or random flows: keeper retry, noise (+600), walk, arbitrage
+and feed rounds (+1200). The attacker starts at `startAt` and re-pushes after each market event.
+
+</i>
+
+```solidity
+function _atkSlot() internal;
+```
+
+<a id="_atkuntil-uint256"></a>
+
+### _atkUntil
+
+```solidity
+function _atkUntil(uint256 t) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `uint256` |  |
+
+<a id="_onsettlepre"></a>
+
+### _onSettlePre
+
+<i>
+
+Right before the keeper's call it aims at: the attacker's last push (a 1-block hold starts here).
+
+</i>
+
+```solidity
+function _onSettlePre() internal override;
+```
+
+<a id="_onsettlepost-uint16"></a>
+
+### _onSettlePost
+
+<i>
+
+Right after that call: the outcome is recorded and the attacker unwinds into its own push.
+
+</i>
+
+```solidity
+function _onSettlePost(uint16 outcome) internal override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| outcome | `uint16` |  |
+
+<a id="_grid-uint256-string-var-uint8"></a>
+
+### _grid
+
+<i>
+
+For each seed: the honest twin of each flow, then every variant from the same state.
+
+</i>
+
+```solidity
+function _grid(uint256 scn, string memory id, Var[] memory vs, uint8[] memory flows) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| scn | `uint256` |  |
+| id | `string` |  |
+| vs | `Var[]` |  |
+| flows | `uint8[]` |  |
+
+<a id="flowrun-var"></a>
+
+### flowRun
+
+Self-call: one A2 / A10 run. The flow's request at the first slot of an epoch, the keeper's call at
+its window end (`aimAt`), the attacker (if armed) from `aimAt − hold` (or the ramp's start) to right
+after that call; the run ends an hour after it.
+
+```solidity
+function flowRun(Var calldata v) external returns (Res memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `Var` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `Res` |  |
+
+<a id="_flowrequest-uint8"></a>
+
+### _flowRequest
+
+```solidity
+function _flowRequest(uint8 flow) internal returns (uint256 id);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| flow | `uint8` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+<a id="_result-uint256-uint8"></a>
+
+### _result
+
+<i>
+
+Claims taken, then everything valued at the reference walk.
+
+</i>
+
+```solidity
+function _result(uint256 id, uint8 flow) internal returns (Res memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+| flow | `uint8` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `Res` |  |
+
+<a id="_claimowed-address"></a>
+
+### _claimOwed
+
+```solidity
+function _claimOwed(address who) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+<a id="_valueref-address-uint256-uint256"></a>
+
+### _valueRef
+
+USDC, tokens and every share `who` holds or has queued or credited, at the reference walk.
+
+```solidity
+function _valueRef(address who, uint256 navRef, uint256 supply)
+        internal
+        view
+        returns (uint256 v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| navRef | `uint256` |  |
+| supply | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256` |  |
+
+<a id="a6run-bool-uint256"></a>
+
+### a6Run
+
+Self-call: 4 days of market; when armed, the attacker trades the lag (threshold `theta` bps).
+
+```solidity
+function a6Run(bool armed, uint256 theta) external returns (Res memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| armed | `bool` |  |
+| theta | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `Res` |  |
+
+<a id="_a6step-uint256"></a>
+
+### _a6Step
+
+```solidity
+function _a6Step(uint256 theta) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| theta | `uint256` |  |
+
+<a id="_a6markhedge"></a>
+
+### _a6MarkHedge
+
+<i>
+
+Close the short at the reference now: + q × (entry − now) per token.
+
+</i>
+
+```solidity
+function _a6MarkHedge() internal;
+```
+
+<a id="_lagbps"></a>
+
+### _lagBps
+
+<i>
+
+Reference over the fund's own 30-minute TWAP, weighted by the basket's value in the fund (bps).
+
+</i>
+
+```solidity
+function _lagBps() internal view returns (int256 lag);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| lag | `int256` |  |
+
+<a id="a9run-bool"></a>
+
+### a9Run
+
+Self-call: when `run`, runners 0-4 ask to redeem everything now and runners 5-9 one epoch later, with
+no limit; a runner still waiting 24 hours after its request exits the rest in kind. 4 days. Logs
+each runner's first fill, completion, USDC and in-kind value. The result's `atk` is the runners' total
+value and `vic` 0; the scored loss is the stayers' (holders').
+
+```solidity
+function a9Run(bool run) external returns (Res memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| run | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `Res` |  |
+
+<a id="_a9requests-uint256-uint256-uint256-uint256"></a>
+
+### _a9Requests
+
+```solidity
+function _a9Requests(
+        uint256[] memory ids,
+        uint256[] memory askedAt,
+        uint256 t0,
+        uint256 epochLen
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ids | `uint256[]` |  |
+| askedAt | `uint256[]` |  |
+| t0 | `uint256` |  |
+| epochLen | `uint256` |  |
+
+<a id="_a9inkind-uint256-uint256"></a>
+
+### _a9InKind
+
+```solidity
+function _a9InKind(uint256[] memory ids, uint256[] memory askedAt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ids | `uint256[]` |  |
+| askedAt | `uint256[]` |  |
+
+<a id="_positionvalue-address"></a>
+
+### _positionValue
+
+<i>
+
+Lending position claims from in-kind exits, at the venues' own value (`positionClaimOf`).
+
+</i>
+
+```solidity
+function _positionValue(address who) internal view returns (uint256 v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256` |  |
+
+<a id="_a9log-uint256-uint256-uint256-uint256"></a>
+
+### _a9Log
+
+```solidity
+function _a9Log(uint256 i, uint256 id, uint256 askedAt, uint256 value) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+| id | `uint256` |  |
+| askedAt | `uint256` |  |
+| value | `uint256` |  |
+
+<a id="_a9times-uint256-uint256"></a>
+
+### _a9Times
+
+```solidity
+function _a9Times(uint256 id, uint256 askedAt) internal view returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+| askedAt | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+

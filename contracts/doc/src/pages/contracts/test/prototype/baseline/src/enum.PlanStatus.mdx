@@ -1,0 +1,45 @@
+---
+title: "PlanStatus"
+description: "Plan lifecycle (§5.5). `None` is the zero value: no plan was ever opened. Live statuses (a plan exists that may still trade or be resumed): Open, Halted, Paused. Terminal statuses: Converged, Superseded, Expired."
+---
+
+# PlanStatus
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/src/FundTypes.sol)
+
+Plan lifecycle (§5.5). `None` is the zero value: no plan was ever opened.
+Live statuses (a plan exists that may still trade or be resumed): Open, Halted, Paused.
+Terminal statuses: Converged, Superseded, Expired.
+
+Open       --(path end reached, every asset within tolerance; Rebalancer)--> Converged
+Open       --(costSpent > costBudget, inside executeStep)-----------------> Halted
+Halted     --(ADMIN extendBudget so costSpent &lt;= costBudget)--------------> Open
+Open       --(EMERGENCY pauseRebalance)-----------------------------------> Paused
+Paused     --(ADMIN resumePlan)-------------------------------------------> Open
+live       --(new setTargetAndOpenPlan, or ADMIN closePlan)---------------> Superseded
+Open       --(now > endTime + maxOverrun; Rebalancer)---------------------> Expired
+
+```solidity
+enum PlanStatus {
+    None,
+    Open,
+    Converged,
+    Halted,
+    Paused,
+    Superseded,
+    Expired
+}
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| None |  |
+| Open |  |
+| Converged |  |
+| Halted |  |
+| Paused |  |
+| Superseded |  |
+| Expired |  |
+

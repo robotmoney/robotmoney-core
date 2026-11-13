@@ -1,0 +1,105 @@
+---
+title: "FundStorage"
+description: "ERC-7201 namespaced location of `FundState` (`robotmoney.storage.RobotMoneyFund`), so the fund's own state can never collide with the OpenZeppelin upgradeable namespaces behind `GovernedUUPS`."
+---
+
+# FundStorage
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/src/lib/FundStorage.sol)
+
+**Title:** FundStorage
+
+ERC-7201 namespaced location of `FundState` (`robotmoney.storage.RobotMoneyFund`), so the fund's
+own state can never collide with the OpenZeppelin upgradeable namespaces behind `GovernedUUPS`.
+
+## Constants
+
+### SLOT
+
+<i>
+
+keccak256(abi.encode(uint256(keccak256("robotmoney.storage.RobotMoneyFund")) - 1)) & ~bytes32(uint256(0xff))
+
+</i>
+
+```solidity
+bytes32 internal constant SLOT =
+        0x1f474ae58db9fb6ccfa907fed2f1bf5577ac55e97dddcd5c18f25868bd856c00;
+```
+
+### MIN_TWAP_WINDOW
+
+<i>
+
+Basket TWAP window bounds (BasketVault.MIN_TWAP_WINDOW / MAX_TWAP_WINDOW).
+
+</i>
+
+```solidity
+uint32 internal constant MIN_TWAP_WINDOW = 600;
+```
+
+### MAX_TWAP_WINDOW
+
+```solidity
+uint32 internal constant MAX_TWAP_WINDOW = 86_400;
+```
+
+### MIN_POOL_LIQUIDITY
+
+<i>
+
+BasketVault.MIN_POOL_LIQUIDITY: in-range liquidity floor checked at `addAsset`.
+
+</i>
+
+```solidity
+uint128 internal constant MIN_POOL_LIQUIDITY = 1e6;
+```
+
+### MAX_EXIT_FEE_BPS
+
+<i>
+
+BasketVault / RobotMoneyVault ceilings.
+
+</i>
+
+```solidity
+uint256 internal constant MAX_EXIT_FEE_BPS = 100;
+```
+
+### MAX_SLIPPAGE_BPS
+
+```solidity
+uint256 internal constant MAX_SLIPPAGE_BPS = 500;
+```
+
+### MAX_NAV_DEVIATION_BPS
+
+```solidity
+uint256 internal constant MAX_NAV_DEVIATION_BPS = 2_000;
+```
+
+## Functions
+
+<a id="layout"></a>
+
+### layout
+
+<i>
+
+The fund's state.
+
+</i>
+
+```solidity
+function layout() internal pure returns (FundState storage $);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| $ | `FundState` |  |
+

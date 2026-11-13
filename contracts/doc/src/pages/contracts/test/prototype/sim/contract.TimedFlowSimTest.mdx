@@ -1,0 +1,1443 @@
+---
+title: "TimedFlowSimTest"
+description: "One-vault experiment, steps 3d and 3e: the rebalance simulation with timed, quantity-based flows (eng plan §4.4, `PROTO_SIM_FLOWS=timed`). Each test is one (scenario, fund size, seed) of the step 3 sim, run on the live fund: the §4.5 list (Aave, Moonwell, wETH, cbBTC, Compound), the FlowQueue, the feeds."
+---
+
+# TimedFlowSimTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/sim/TimedFlowSim.t.sol)
+
+**Inherits:** [TimedSimBase](/contracts/test/prototype/sim/abstract.TimedSimBase)
+
+One-vault experiment, steps 3d and 3e: the rebalance simulation with timed, quantity-based flows
+(eng plan §4.4, `PROTO_SIM_FLOWS=timed`). Each test is one (scenario, fund size, seed) of the step 3 sim,
+run on the live fund: the §4.5 list (Aave, Moonwell, wETH, cbBTC, Compound), the FlowQueue, the feeds.
+
+What is the same as step 3 (`RebalanceSim.t.sol`, the synchronous arm on the frozen fund): scenarios,
+seeds (`SimLib.seedOf`, same scenario ids), the pin, the market model for wETH and cbBTC (`SimMarket`:
+the same draws), the keeper's step every `stepInterval`, the flow draws (one flow in 12 slots, 0.10 % to
+0.50 % of NAV, at t + 1500), the plan rows of the JSON and the scorer's cost definition.
+
+What the rules of step 3e change (proposal §10 step 3e, fixed before any result):
+- the asset list is §4.5: no deSPXA;
+- each replayed receipt's deSPXA weight is spread over its other assets in proportion to their weights in
+the same receipt (`_rule3e`; largest remainder to whole bps, ties to the lower step 3 index);
+- EXT moves between all lending and all basket, the basket being wETH and cbBTC at their receipt
+proportions (the general rule gives X = 50 / 50 wETH / cbBTC);
+- JUMP moves the wETH price by the size and at the slot step 3 moved deSPXA (`SimMarket._mkWalkAndArb`).
+
+What step 3d changes:
+- flows are requests with limits: a deposit or redemption request at t + 1500, its limit set from the
+queue's quote with `USER_LIMIT_SLACK_BPS` of room (a client's default, §5.9.2 step 2);
+- the keeper settles every epoch at the end of its window and retries a failed call every slot
+(`TimedSimBase`); the feeds follow the reference walk with their deviation threshold and heartbeat;
+- genesis: the seed (100,000 USDC, E14) is invested to the genesis target by a 1-day plan, then the
+genesis holders deposit `fund size − seed` through the queue in chunks of 245,000 USDC, one per cap
+period, and their shares are delivered after the hold. The market stands still during genesis (the
+walk starts with the first scenario plan), so NAV at the first plan is the step 3 fund size.
+
+Outputs, beside step 3's in `out/prototype/&lt;run>-timed/sim-&lt;scenario>-&lt;M>M-s&lt;k>.json`, scored by
+`score-sim.ts`: the plan rows (G4, G5, as step 3), and a `timed` block with every keeper attempt (its
+outcome by check and the market quantities each §5.9.5 value bounds), every settlement (both sides' cost
+against the feed and the reference, for netting) and every request (wait, fills, cost against the feed
+before the exit fee) for G9.
+
+Opt-in: PROTO_SIM=1 and PROTO_SIM_FLOWS=timed. PROTO_SIM_RUN=default|tuned as in step 3 (the tuned step
+and plan values of `RebalanceSim._applyTuned`). PROTO_SIM_FLOW_&lt;FIELD> overrides a FlowParams value and
+PROTO_SIM_USER_SLACK_BPS the clients' slack; either needs PROTO_SIM_TAG, which names the output
+directory (`&lt;run>-timed-&lt;tag>`), so an override never writes over the scored run.
+
+## Constants
+
+### SCN_SEQ
+
+```solidity
+uint256 internal constant SCN_SEQ = 0;
+```
+
+### SCN_EXT
+
+```solidity
+uint256 internal constant SCN_EXT = 1;
+```
+
+### SCN_EXT_PROBE
+
+```solidity
+uint256 internal constant SCN_EXT_PROBE = 2;
+```
+
+### SCN_JUMP_DOWN
+
+```solidity
+uint256 internal constant SCN_JUMP_DOWN = 3;
+```
+
+### SCN_JUMP_UP
+
+```solidity
+uint256 internal constant SCN_JUMP_UP = 4;
+```
+
+### LOOP_SLACK_SLOTS
+
+```solidity
+uint256 internal constant LOOP_SLACK_SLOTS = 4;
+```
+
+### JUMP_SLOT
+
+```solidity
+uint256 internal constant JUMP_SLOT = 168;
+```
+
+### JUMP_DOWN_USD_MILLITICKS
+
+```solidity
+int256 internal constant JUMP_DOWN_USD_MILLITICKS = -1_053_658;
+```
+
+### JUMP_UP_USD_MILLITICKS
+
+```solidity
+int256 internal constant JUMP_UP_USD_MILLITICKS = 953_149;
+```
+
+### FLOW_ONE_IN
+
+```solidity
+uint256 internal constant FLOW_ONE_IN = 12;
+```
+
+### FLOW_MIN_BPS
+
+```solidity
+uint256 internal constant FLOW_MIN_BPS = 10;
+```
+
+### FLOW_SPAN_BPS
+
+```solidity
+uint256 internal constant FLOW_SPAN_BPS = 41;
+```
+
+### OUT_OF_RANGE_L_DIV
+
+```solidity
+uint256 internal constant OUT_OF_RANGE_L_DIV = 100;
+```
+
+### N_SKIP
+
+```solidity
+uint256 internal constant N_SKIP = 16;
+```
+
+### GENESIS_CHUNK_USDC
+
+<i>
+
+Genesis deposit chunk: under the 250,000 USDC cap floor, so each fills whole in its own period.
+
+</i>
+
+```solidity
+uint256 internal constant GENESIS_CHUNK_USDC = 245_000e6;
+```
+
+### USER_LIMIT_SLACK_BPS
+
+<i>
+
+A client's room over the quote when it sets a request's limit (an assumption, written into the JSON).
+
+</i>
+
+```solidity
+uint256 internal constant USER_LIMIT_SLACK_BPS = 100;
+```
+
+### TUNED_PLAN_DURATION
+
+```solidity
+uint64 internal constant TUNED_PLAN_DURATION = 21 days;
+```
+
+### TUNED_MIN_STEP_USDC
+
+```solidity
+uint128 internal constant TUNED_MIN_STEP_USDC = 33e6;
+```
+
+## State Variables
+
+### LEND
+
+<i>
+
+Lending asset indices of the live fund: Aave, Moonwell, Compound.
+
+</i>
+
+```solidity
+uint256[3] internal LEND = [uint256(0), 1, 4];
+```
+
+### scenario
+
+```solidity
+uint256 internal scenario;
+```
+
+### fundSize
+
+```solidity
+uint256 internal fundSize;
+```
+
+### seedK
+
+```solidity
+uint256 internal seedK;
+```
+
+### scnName
+
+```solidity
+string internal scnName;
+```
+
+### pinBlock
+
+```solidity
+uint256 internal pinBlock;
+```
+
+### pinTimestamp
+
+```solidity
+uint256 internal pinTimestamp;
+```
+
+### depNonce
+
+```solidity
+uint256 internal depNonce;
+```
+
+### planIndex
+
+```solidity
+uint256 internal planIndex;
+```
+
+### planLabel
+
+```solidity
+string internal planLabel;
+```
+
+### runName
+
+```solidity
+string internal runName;
+```
+
+### runTag
+
+```solidity
+string internal runTag;
+```
+
+### userSlackBps
+
+```solidity
+uint256 internal userSlackBps;
+```
+
+### maxPlanSlots
+
+```solidity
+uint256 internal maxPlanSlots;
+```
+
+### marketStartAt
+
+```solidity
+uint256 internal marketStartAt;
+```
+
+### p0Usdc
+
+```solidity
+uint256[2] internal p0Usdc;
+```
+
+### finalW
+
+```solidity
+uint256[] internal finalW;
+```
+
+### finalIdle
+
+```solidity
+uint256 internal finalIdle;
+```
+
+### genesisDepositors
+
+```solidity
+address[] internal genesisDepositors;
+```
+
+### kNav
+
+```solidity
+uint256 internal kNav;
+```
+
+### kValues
+
+```solidity
+uint256[] internal kValues;
+```
+
+### acc
+
+```solidity
+Acc internal acc;
+```
+
+### lastPost
+
+```solidity
+Snap internal lastPost;
+```
+
+### settlePre
+
+```solidity
+Snap internal settlePre;
+```
+
+### planJson
+
+```solidity
+string[] internal planJson;
+```
+
+## Functions
+
+<a id="test_timed_seq_1m_s0"></a>
+
+### test_timed_SEQ_1M_s0
+
+```solidity
+function test_timed_SEQ_1M_s0() public fixtureCovered;
+```
+
+<a id="test_timed_seq_1m_s1"></a>
+
+### test_timed_SEQ_1M_s1
+
+```solidity
+function test_timed_SEQ_1M_s1() public fixtureCovered;
+```
+
+<a id="test_timed_seq_1m_s2"></a>
+
+### test_timed_SEQ_1M_s2
+
+```solidity
+function test_timed_SEQ_1M_s2() public fixtureCovered;
+```
+
+<a id="test_timed_seq_5m_s0"></a>
+
+### test_timed_SEQ_5M_s0
+
+```solidity
+function test_timed_SEQ_5M_s0() public fixtureCovered;
+```
+
+<a id="test_timed_seq_5m_s1"></a>
+
+### test_timed_SEQ_5M_s1
+
+```solidity
+function test_timed_SEQ_5M_s1() public fixtureCovered;
+```
+
+<a id="test_timed_seq_5m_s2"></a>
+
+### test_timed_SEQ_5M_s2
+
+```solidity
+function test_timed_SEQ_5M_s2() public fixtureCovered;
+```
+
+<a id="test_timed_ext_1m_s0"></a>
+
+### test_timed_EXT_1M_s0
+
+```solidity
+function test_timed_EXT_1M_s0() public fixtureCovered;
+```
+
+<a id="test_timed_ext_1m_s1"></a>
+
+### test_timed_EXT_1M_s1
+
+```solidity
+function test_timed_EXT_1M_s1() public fixtureCovered;
+```
+
+<a id="test_timed_ext_1m_s2"></a>
+
+### test_timed_EXT_1M_s2
+
+```solidity
+function test_timed_EXT_1M_s2() public fixtureCovered;
+```
+
+<a id="test_timed_ext_probe_5m_s0"></a>
+
+### test_timed_EXT_PROBE_5M_s0
+
+```solidity
+function test_timed_EXT_PROBE_5M_s0() public fixtureCovered;
+```
+
+<a id="test_timed_jump_down_1m_s0"></a>
+
+### test_timed_JUMP_DOWN_1M_s0
+
+```solidity
+function test_timed_JUMP_DOWN_1M_s0() public fixtureCovered;
+```
+
+<a id="test_timed_jump_down_1m_s1"></a>
+
+### test_timed_JUMP_DOWN_1M_s1
+
+```solidity
+function test_timed_JUMP_DOWN_1M_s1() public fixtureCovered;
+```
+
+<a id="test_timed_jump_down_1m_s2"></a>
+
+### test_timed_JUMP_DOWN_1M_s2
+
+```solidity
+function test_timed_JUMP_DOWN_1M_s2() public fixtureCovered;
+```
+
+<a id="test_timed_jump_up_1m_s0"></a>
+
+### test_timed_JUMP_UP_1M_s0
+
+```solidity
+function test_timed_JUMP_UP_1M_s0() public fixtureCovered;
+```
+
+<a id="test_timed_jump_up_1m_s1"></a>
+
+### test_timed_JUMP_UP_1M_s1
+
+```solidity
+function test_timed_JUMP_UP_1M_s1() public fixtureCovered;
+```
+
+<a id="test_timed_jump_up_1m_s2"></a>
+
+### test_timed_JUMP_UP_1M_s2
+
+```solidity
+function test_timed_JUMP_UP_1M_s2() public fixtureCovered;
+```
+
+<a id="_run-uint256-uint256-uint256"></a>
+
+### _run
+
+```solidity
+function _run(uint256 scn, uint256 fundM, uint256 k) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| scn | `uint256` |  |
+| fundM | `uint256` |  |
+| k | `uint256` |  |
+
+<a id="_sequence-uint256"></a>
+
+### _sequence
+
+<i>
+
+The step 3 vectors of `RebalanceSim._sequence` in its order [aave, comet, moonwell, wETH, cbBTC,
+deSPXA], each turned into a live vector [aave, moonwell, wETH, cbBTC, comet] by `_rule3e`.
+
+</i>
+
+```solidity
+function _sequence(uint256 scn)
+        internal
+        pure
+        returns (uint16[5][] memory v, string[] memory l);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| scn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5][]` |  |
+| l | `string[]` |  |
+
+<a id="_rule3e-uint16-6"></a>
+
+### _rule3e
+
+Proposal §10 step 3e: spread the deSPXA weight (`v6[5]`) over the other five in proportion to their
+weights in the same receipt: `w_i × 10 000 / (10 000 − deSPXA)`, floored, the remaining whole bps to
+the largest remainders (ties to the lower step 3 index). Returns the live order.
+
+```solidity
+function _rule3e(uint16[6] memory v6) internal pure returns (uint16[5] memory live);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v6 | `uint16[6]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| live | `uint16[5]` |  |
+
+<a id="_scnname-uint256"></a>
+
+### _scnName
+
+```solidity
+function _scnName(uint256 scn) internal pure returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| scn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_isjump"></a>
+
+### _isJump
+
+```solidity
+function _isJump() internal view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_selectparams"></a>
+
+### _selectParams
+
+```solidity
+function _selectParams() internal;
+```
+
+<a id="_applytuned"></a>
+
+### _applyTuned
+
+<i>
+
+`RebalanceSim._applyTuned` on the live list (wETH and cbBTC only).
+
+</i>
+
+```solidity
+function _applyTuned() internal;
+```
+
+<a id="_initsim-uint256-uint256-uint256"></a>
+
+### _initSim
+
+```solidity
+function _initSim(uint256 scn, uint256 size, uint256 k) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| scn | `uint256` |  |
+| size | `uint256` |  |
+| k | `uint256` |  |
+
+<a id="simgenesis"></a>
+
+### simGenesis
+
+Self-call: genesis (see the contract note). The market stands still; the feeds sit on the reference.
+
+```solidity
+function simGenesis() external;
+```
+
+<a id="_runplan-uint16-5-string"></a>
+
+### _runPlan
+
+```solidity
+function _runPlan(uint16[5] memory vec, string memory label) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vec | `uint16[5]` |  |
+| label | `string` |  |
+
+<a id="simopen-uint16-5-string"></a>
+
+### simOpen
+
+Self-call: open the plan through the receipt and timelock path and reset the accumulators.
+
+```solidity
+function simOpen(uint16[5] calldata vec, string calldata label) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vec | `uint16[5]` |  |
+| label | `string` |  |
+
+<a id="simslot-bool"></a>
+
+### simSlot
+
+Self-call: one slot. Keeper (retry a failed settle, then step) at t, noise at t+600, walk, arb and
+feed deviation rounds at t+1200, a flow request at t+1500; the keeper's scheduled settles land at
+each window end on the way (`_until`).
+
+```solidity
+function simSlot(bool withKeeper) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| withKeeper | `bool` |  |
+
+<a id="_keeper"></a>
+
+### _keeper
+
+```solidity
+function _keeper() internal;
+```
+
+<a id="_observemarket"></a>
+
+### _observeMarket
+
+<i>
+
+Per keeper call: LP-range counts, and whether a basket asset the Rebalancer masks out (ORA-4 or backoff)
+still sits at least `minStepUsdc` off its path (RebalanceSim `_observeMarket`, no deSPXA).
+
+</i>
+
+```solidity
+function _observeMarket() internal returns (bool maskedOff);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| maskedOff | `bool` |  |
+
+<a id="_concluded"></a>
+
+### _concluded
+
+```solidity
+function _concluded() internal;
+```
+
+<a id="_booked-snap-snap-uint160-2-uint256-uint256-int256"></a>
+
+### _booked
+
+<i>
+
+Book one executed step. `signed` is the TWAP NAV drop (step 3's fund cost), `feedSigned` the NAV drop at
+the feeds; the cost the fund booked (`costSpent`) must stay under the RB-4 cap, and which of the two it
+equals is counted (step 3e books against the feed, §5.10). Arrival cost at the pre-step spot and
+reference cost at the walk, as step 3.
+
+</i>
+
+```solidity
+function _booked(
+        Snap memory pre,
+        Snap memory post,
+        uint160[2] memory spot,
+        uint256 notional,
+        uint256 spentBefore,
+        int256 feedSigned
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pre | `Snap` |  |
+| post | `Snap` |  |
+| spot | `uint160[2]` |  |
+| notional | `uint256` |  |
+| spentBefore | `uint256` |  |
+| feedSigned | `int256` |  |
+
+<a id="_refvaluedelta-snap-snap"></a>
+
+### _refValueDelta
+
+```solidity
+function _refValueDelta(Snap memory a, Snap memory b) internal view returns (int256 dv);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `Snap` |  |
+| b | `Snap` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| dv | `int256` |  |
+
+<a id="_navref-snap"></a>
+
+### _navRef
+
+```solidity
+function _navRef(Snap memory s) internal view returns (uint256 v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `Snap` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256` |  |
+
+<a id="_stepnotional-vmsafe-log"></a>
+
+### _stepNotional
+
+```solidity
+function _stepNotional(VmSafe.Log[] memory logs) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| logs | `VmSafe.Log[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_faildetail-vmsafe-log"></a>
+
+### _failDetail
+
+<i>
+
+The skip's `detail` (the revert selector for StepFailed). Decoded as words, so a skip reason appended by
+step 3e never fails the decode.
+
+</i>
+
+```solidity
+function _failDetail(VmSafe.Log[] memory logs) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| logs | `VmSafe.Log[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_attribute-snap"></a>
+
+### _attribute
+
+<i>
+
+Between two events holdings change only by price and lending interest (RebalanceSim `_attribute`).
+
+</i>
+
+```solidity
+function _attribute(Snap memory b) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Snap` |  |
+
+<a id="_flow"></a>
+
+### _flow
+
+<i>
+
+RebalanceSim `_flow`'s draws, made into a request at t + 1500. The fill comes at a later settlement.
+
+</i>
+
+```solidity
+function _flow() internal;
+```
+
+<a id="_flowdeposit-uint256"></a>
+
+### _flowDeposit
+
+```solidity
+function _flowDeposit(uint256 amt) internal returns (bool ok);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amt | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+
+<a id="_flowredeem-uint256-uint256"></a>
+
+### _flowRedeem
+
+```solidity
+function _flowRedeem(uint256 amt, uint256 sl) internal returns (bool ok);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amt | `uint256` |  |
+| sl | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+
+<a id="_flowfail-string-bytes"></a>
+
+### _flowFail
+
+```solidity
+function _flowFail(string memory kind, bytes memory err) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| kind | `string` |  |
+| err | `bytes` |  |
+
+<a id="_onsettlepre"></a>
+
+### _onSettlePre
+
+<i>
+
+Around each keeper settle: the attribution before it, then the holders' dilution at the TWAP and at the
+reference (RebalanceSim's flow accounting, now per settlement).
+
+</i>
+
+```solidity
+function _onSettlePre() internal virtual override;
+```
+
+<a id="_onsettlepost-uint16"></a>
+
+### _onSettlePost
+
+```solidity
+function _onSettlePost(uint16 outcome) internal virtual override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| outcome | `uint16` |  |
+
+<a id="_snapkeeper"></a>
+
+### _snapKeeper
+
+```solidity
+function _snapKeeper() internal returns (Snap memory s);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `Snap` |  |
+
+<a id="_snap"></a>
+
+### _snap
+
+```solidity
+function _snap() internal view returns (Snap memory s);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `Snap` |  |
+
+<a id="_fill-snap-uint256"></a>
+
+### _fill
+
+```solidity
+function _fill(Snap memory s, uint256[] memory values) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `Snap` |  |
+| values | `uint256[]` |  |
+
+<a id="simclose"></a>
+
+### simClose
+
+Self-call: the always-true end state, then the plan row (RebalanceSim's fields, plus the timed ones).
+
+```solidity
+function simClose() external;
+```
+
+<a id="_jsonidentity-string-plan"></a>
+
+### _jsonIdentity
+
+```solidity
+function _jsonIdentity(string memory o, Plan memory p) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| o | `string` |  |
+| p | `Plan` |  |
+
+<a id="_jsoncost-string-plan"></a>
+
+### _jsonCost
+
+```solidity
+function _jsonCost(string memory o, Plan memory p) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| o | `string` |  |
+| p | `Plan` |  |
+
+<a id="_jsonsteps-string"></a>
+
+### _jsonSteps
+
+```solidity
+function _jsonSteps(string memory o) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| o | `string` |  |
+
+<a id="_jsonmodel-string"></a>
+
+### _jsonModel
+
+```solidity
+function _jsonModel(string memory o) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| o | `string` |  |
+
+<a id="_jsonend-string-plan"></a>
+
+### _jsonEnd
+
+```solidity
+function _jsonEnd(string memory o, Plan memory p) internal returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| o | `string` |  |
+| p | `Plan` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_offtolerance-uint256-uint16-uint256"></a>
+
+### _offTolerance
+
+```solidity
+function _offTolerance(uint256[] memory w, uint16[] memory endBps, uint256 tol)
+        internal
+        pure
+        returns (uint256[] memory idx, uint256[] memory gap, bool liquid);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `uint256[]` |  |
+| endBps | `uint16[]` |  |
+| tol | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| idx | `uint256[]` |  |
+| gap | `uint256[]` |  |
+| liquid | `bool` |  |
+
+<a id="_statusname-planstatus"></a>
+
+### _statusName
+
+```solidity
+function _statusName(PlanStatus s) internal pure returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `PlanStatus` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_arr4-uint256-4"></a>
+
+### _arr4
+
+```solidity
+function _arr4(uint256[4] memory a) internal pure returns (uint256[] memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256[4]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `uint256[]` |  |
+
+<a id="_arr16-uint16"></a>
+
+### _arr16
+
+```solidity
+function _arr16(uint16[] memory a) internal pure returns (uint256[] memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint16[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `uint256[]` |  |
+
+<a id="_arr2-uint256-2"></a>
+
+### _arr2
+
+```solidity
+function _arr2(uint256[2] memory a) internal pure returns (uint256[] memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256[2]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `uint256[]` |  |
+
+<a id="_writejson-uint256"></a>
+
+### _writeJson
+
+```solidity
+function _writeJson(uint256 fundM) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| fundM | `uint256` |  |
+
+<a id="_jsonmeta"></a>
+
+### _jsonMeta
+
+```solidity
+function _jsonMeta() internal returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_paramsjson"></a>
+
+### _paramsJson
+
+```solidity
+function _paramsJson() internal returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_flowparamsjson"></a>
+
+### _flowParamsJson
+
+```solidity
+function _flowParamsJson() internal returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_jsonattempts"></a>
+
+### _jsonAttempts
+
+<i>
+
+Every keeper attempt, as columns. Basket columns end in 0 (wETH) and 1 (cbBTC).
+
+</i>
+
+```solidity
+function _jsonAttempts() internal returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_jsonattemptstail-string-uint256"></a>
+
+### _jsonAttemptsTail
+
+```solidity
+function _jsonAttemptsTail(string memory k, uint256 n) internal returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| k | `string` |  |
+| n | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_jsonsettles"></a>
+
+### _jsonSettles
+
+<i>
+
+Every settlement that traded, as columns (USDC units).
+
+</i>
+
+```solidity
+function _jsonSettles() internal returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_jsonreqs"></a>
+
+### _jsonReqs
+
+<i>
+
+Every request the sim made, as columns. `status`: 1 pending, 2 expired, 3 closed (RequestStatus).
+
+</i>
+
+```solidity
+function _jsonReqs() internal returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+## Structs
+
+### Snap
+
+```solidity
+struct Snap {
+        uint256 nav;
+        uint256 idle;
+        uint256 supply;
+        uint256[3] lend;
+        uint256[2] q;
+        uint256[2] val;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| nav | `uint256` |  |
+| idle | `uint256` |  |
+| supply | `uint256` |  |
+| lend | `uint256[3]` |  |
+| q | `uint256[2]` |  |
+| val | `uint256[2]` |  |
+
+### Acc
+
+<i>
+
+Per-plan accumulators. The fields of RebalanceSim's `Acc` the scorer reads keep their meaning.
+
+</i>
+
+```solidity
+struct Acc {
+        uint256 planId;
+        uint256 slots;
+        uint256 calls;
+        uint256 executed;
+        uint256[16] byReason;
+        uint256 traded;
+        uint256 fundCost;
+        int256 signedCost;
+        int256 feedCost;
+        int256 execCost;
+        int256 basisCost;
+        uint256 maxStepFundBps;
+        int256 maxStepExecBps;
+        int256 priceMove;
+        int256 interest;
+        uint256 unexplainedDrop;
+        uint256 residualAbs;
+        uint256 deposits;
+        uint256 redeems;
+        uint256 depositRequests;
+        uint256 redeemRequests;
+        uint256 flowsBlocked;
+        uint256 flowLoss;
+        int256 dilution;
+        uint256 concludedAt;
+        uint256 jumpAt;
+        uint256 lastFailSelector;
+        string flowFailReason;
+        uint256[4] startSleeve;
+        uint256[4] endSleeve;
+        uint256 startNav;
+        int256 execCostRef;
+        uint256 flowLossRef;
+        uint256 maskedCalls;
+        uint256[2] outOfRangeCalls;
+        uint256 bookedAtTwap;
+        uint256 bookedAtFeed;
+        uint256 bookedOther;
+        uint256 bookedZero;
+        uint256 settleAttempts;
+        uint256 settleBlocked;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+| slots | `uint256` |  |
+| calls | `uint256` |  |
+| executed | `uint256` |  |
+| byReason | `uint256[16]` |  |
+| traded | `uint256` |  |
+| fundCost | `uint256` |  |
+| signedCost | `int256` |  |
+| feedCost | `int256` |  |
+| execCost | `int256` |  |
+| basisCost | `int256` |  |
+| maxStepFundBps | `uint256` |  |
+| maxStepExecBps | `int256` |  |
+| priceMove | `int256` |  |
+| interest | `int256` |  |
+| unexplainedDrop | `uint256` |  |
+| residualAbs | `uint256` |  |
+| deposits | `uint256` |  |
+| redeems | `uint256` |  |
+| depositRequests | `uint256` |  |
+| redeemRequests | `uint256` |  |
+| flowsBlocked | `uint256` |  |
+| flowLoss | `uint256` |  |
+| dilution | `int256` |  |
+| concludedAt | `uint256` |  |
+| jumpAt | `uint256` |  |
+| lastFailSelector | `uint256` |  |
+| flowFailReason | `string` |  |
+| startSleeve | `uint256[4]` |  |
+| endSleeve | `uint256[4]` |  |
+| startNav | `uint256` |  |
+| execCostRef | `int256` |  |
+| flowLossRef | `uint256` |  |
+| maskedCalls | `uint256` |  |
+| outOfRangeCalls | `uint256[2]` |  |
+| bookedAtTwap | `uint256` |  |
+| bookedAtFeed | `uint256` |  |
+| bookedOther | `uint256` |  |
+| bookedZero | `uint256` |  |
+| settleAttempts | `uint256` |  |
+| settleBlocked | `uint256` |  |
+

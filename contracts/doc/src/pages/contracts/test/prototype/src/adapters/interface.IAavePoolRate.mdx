@@ -1,0 +1,36 @@
+---
+title: "IAavePoolRate"
+description: "The Aave V3 Pool read the rate needs (not in the production `IAavePool`)."
+---
+
+# IAavePoolRate
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/adapters/AaveV3RateAdapter.sol)
+
+The Aave V3 Pool read the rate needs (not in the production `IAavePool`).
+
+## Functions
+
+<a id="getreservenormalizedincome-address"></a>
+
+### getReserveNormalizedIncome
+
+The reserve's normalized income: the liquidity index accrued to `block.timestamp`, in ray (1e27).
+One aToken unit supplied at index 1 ray is worth this many underlying units today.
+
+```solidity
+function getReserveNormalizedIncome(address asset) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

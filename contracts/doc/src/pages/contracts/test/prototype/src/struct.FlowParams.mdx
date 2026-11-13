@@ -1,0 +1,59 @@
+---
+title: "FlowParams"
+description: "Every queue parameter of proposal §5.9.5 except `poolShareBps` and `minSeedUsdc` (the fund holds those) and `maxFeedAge` (per feed, in the fund's `AssetConfig`; the USDC feed's in `FlowQueueInit`). `ADMIN_ROLE` sets it through the timelock inside the hard bounds above."
+---
+
+# FlowParams
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+
+Every queue parameter of proposal §5.9.5 except `poolShareBps` and `minSeedUsdc` (the fund holds those)
+and `maxFeedAge` (per feed, in the fund's `AssetConfig`; the USDC feed's in `FlowQueueInit`).
+`ADMIN_ROLE` sets it through the timelock inside the hard bounds above.
+
+```solidity
+struct FlowParams {
+    uint32 epochLength;
+    uint32 settleWindow;
+    uint32 minHold;
+    uint32 keeperGrace;
+    uint16 maxEpochFlowBps;
+    uint128 epochFlowFloorUsdc;
+    uint16 maxSharePriceMoveBps;
+    uint16 maxRoll;
+    uint128 minRequestUsdc;
+    uint32 maxFreeze;
+    uint8 slices;
+    uint8 quorum;
+    uint16 dispersionBps;
+    uint16 refBandBps;
+    uint16 legBandBps;
+    uint32 sequencerGrace;
+    uint16 usdcPegBandBps;
+    uint16 maxLendRateGrowthBps;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| epochLength | `uint32` | Epoch length and the clock-time period of each flow cap (§5.9.5: 6 h). |
+| settleWindow | `uint32` | Wait after an epoch closes before it may settle; also the TWAP window (1 h). |
+| minHold | `uint32` | Hold of deposit shares after their settlement (24 h, E8). |
+| keeperGrace | `uint32` | After the window ends, anyone may settle once this passed (6 h, E10). |
+| maxEpochFlowBps | `uint16` | Each side's cap per period, in bps of NAV at the feeds (500, E20). |
+| epochFlowFloorUsdc | `uint128` | Each side's cap is at least this (250 000 USDC, E20). |
+| maxSharePriceMoveBps | `uint16` | Share-price breaker per epoch passed since the last settlement (1 000, check 6). |
+| maxRoll | `uint16` | Epochs after which an unfilled request expires (8, E18). |
+| minRequestUsdc | `uint128` | Least request size (100 USDC, E11); a whole-balance redemption is exempt. |
+| maxFreeze | `uint32` | Longest freeze of one settlement's deposit shares (7 days, E17). |
+| slices | `uint8` | Equal slices of `settleWindow` for the TWAP median (12, E6). |
+| quorum | `uint8` | Slices that must sit within `dispersionBps` of the median (9, check 3). |
+| dispersionBps | `uint16` | Slice band around the median (100, check 3). |
+| refBandBps | `uint16` | TWAP against feed band (90, check 4; owner default 2026-11-12, lever L10). |
+| legBandBps | `uint16` | Per-swap limit band around the stricter of feed and TWAP (100, checks 8 and 9).<br/>Must be above every basket pool fee. |
+| sequencerGrace | `uint32` | Time the sequencer must have been up (1 h, check 2). |
+| usdcPegBandBps | `uint16` | USDC / USD band around 1 (50, check 2). |
+| maxLendRateGrowthBps | `uint16` | Most growth per day of a venue's rate per unit (10, check 5). |
+

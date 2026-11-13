@@ -1,0 +1,581 @@
+---
+title: "AttackSimCore"
+description: "The attacker in the market loop, for both arms: its push toward a target price, its unwind, and the result table each attack writes and scores. Harness-neutral (`SimMarket`)."
+---
+
+# AttackSimCore
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/sim/AttackSim.t.sol)
+
+**Inherits:** [SimMarket](/contracts/test/prototype/sim/abstract.SimMarket), [AttackBook](/contracts/test/prototype/abstract.AttackBook), [AttackSimSpec](/contracts/test/prototype/sim/abstract.AttackSimSpec)
+
+**Title:** AttackSimCore
+
+The attacker in the market loop, for both arms: its push toward a target price, its unwind, and the
+result table each attack writes and scores. Harness-neutral (`SimMarket`).
+
+## State Variables
+
+### attacker
+
+```solidity
+address internal attacker = makeAddr("sim-attacker");
+```
+
+### victim
+
+```solidity
+address internal victim = makeAddr("sim-victim");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("sim-alice");
+```
+
+### runners
+
+```solidity
+address[] internal runners;
+```
+
+### atk
+
+```solidity
+Atk internal atk;
+```
+
+### atkSpent
+
+```solidity
+uint256 internal atkSpent;
+```
+
+## Functions
+
+<a id="_optin"></a>
+
+### _optIn
+
+```solidity
+function _optIn() internal returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_skipoptin-string"></a>
+
+### _skipOptIn
+
+<i>
+
+`BaseFixture._skipCovered`, reached through the concrete test (this core is not a BaseFixture): the
+coverage check runs before the skip, so the recorder proves the skip without recording it.
+
+</i>
+
+```solidity
+function _skipOptIn(string memory why) internal virtual;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| why | `string` |  |
+
+<a id="_seeds"></a>
+
+### _seeds
+
+```solidity
+function _seeds() internal view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_arm-var-uint256-uint256"></a>
+
+### _arm
+
+Arm the attacker for the run (its starting token balances are what it unwinds back to).
+
+```solidity
+function _arm(Var memory v, uint256 startAt, uint256 aimAt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `Var` |  |
+| startAt | `uint256` |  |
+| aimAt | `uint256` |  |
+
+<a id="_level"></a>
+
+### _level
+
+The level now: fixed (A2), or `lvl` per slot since the ramp started, one step per slot boundary (A10).
+
+```solidity
+function _level() internal view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_atkpush"></a>
+
+### _atkPush
+
+The attacker trades pool b toward reference × (1 ± level), only in its own direction.
+
+```solidity
+function _atkPush() internal;
+```
+
+<a id="_atkunwind"></a>
+
+### _atkUnwind
+
+Back to the starting token balance of the pushed pool, into the pool as it stands.
+
+```solidity
+function _atkUnwind() internal;
+```
+
+<a id="_walletref-address"></a>
+
+### _walletRef
+
+Value at the reference walk of `who`'s USDC and basket tokens.
+
+```solidity
+function _walletRef(address who) internal view returns (uint256 v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256` |  |
+
+<a id="_row-uint256-var-res-res"></a>
+
+### _row
+
+```solidity
+function _row(uint256 k, Var memory v, Res memory h, Res memory a)
+        internal
+        pure
+        returns (Row memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| k | `uint256` |  |
+| v | `Var` |  |
+| h | `Res` |  |
+| a | `Res` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `Row` |  |
+
+<a id="_rowrun-uint256-res-res"></a>
+
+### _rowRun
+
+A9 has no profit-seeking attacker: `atk` holds the runners' value. The row's net is 0, `pendingLoss` is
+what the runners gave up against staying (negative: they did better), and the holders' loss is the
+stayers'.
+
+```solidity
+function _rowRun(uint256 k, Res memory h, Res memory a) internal pure returns (Row memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| k | `uint256` |  |
+| h | `Res` |  |
+| a | `Res` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `Row` |  |
+
+<a id="_score-string-string-row-uint256-bool"></a>
+
+### _score
+
+Write the rows to out/prototype/attack-sim/&lt;arm>-&lt;id>.json and score the worst one: the attacker's best
+net and the largest holders' loss over every variant and seed. `g8`: assert G8 (the timed fund); else
+report only (the frozen fund, whose exposure the design names, proposal §5.9.1).
+
+```solidity
+function _score(string memory arm, string memory id, Row[] memory rows, uint256 n, bool g8)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| arm | `string` |  |
+| id | `string` |  |
+| rows | `Row[]` |  |
+| n | `uint256` |  |
+| g8 | `bool` |  |
+
+<a id="_logbestmean-string-string-row-uint256"></a>
+
+### _logBestMean
+
+Beside the strict score (the best single run), the best variant by its mean over the seeds: a variant
+that delays the settlement also carries the market's move over the delay, which is zero-mean luck in
+a single run. Logged only; G8 stays scored on the best single run.
+
+```solidity
+function _logBestMean(string memory arm, string memory id, Row[] memory rows, uint256 n)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| arm | `string` |  |
+| id | `string` |  |
+| rows | `Row[]` |  |
+| n | `uint256` |  |
+
+<a id="_logbestontime-string-string-row-uint256"></a>
+
+### _logBestOnTime
+
+The best single run among those whose aimed call settled (outcome 0): no delay, so no timing luck.
+Logged only.
+
+```solidity
+function _logBestOnTime(string memory arm, string memory id, Row[] memory rows, uint256 n)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| arm | `string` |  |
+| id | `string` |  |
+| rows | `Row[]` |  |
+| n | `uint256` |  |
+
+<a id="_samevar-row-row"></a>
+
+### _sameVar
+
+```solidity
+function _sameVar(Row memory a, Row memory b) internal pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `Row` |  |
+| b | `Row` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_writerows-string-string-row-uint256"></a>
+
+### _writeRows
+
+```solidity
+function _writeRows(string memory arm, string memory id, Row[] memory rows, uint256 n)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| arm | `string` |  |
+| id | `string` |  |
+| rows | `Row[]` |  |
+| n | `uint256` |  |
+
+<a id="_levels-string-uint16-3"></a>
+
+### _levels
+
+<i>
+
+Three levels from `name` (comma-separated), else `dflt`. A lever run that sets it needs PROTO_SIM_TAG.
+
+</i>
+
+```solidity
+function _levels(string memory name, uint16[3] memory dflt)
+        internal
+        view
+        returns (uint16[3] memory l);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name | `string` |  |
+| dflt | `uint16[3]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| l | `uint16[3]` |  |
+
+<a id="_tagdir"></a>
+
+### _tagDir
+
+<i>
+
+PROTO_SIM_TAG names a lever run's own directory (attack-sim-&lt;tag>), so it never writes over the default.
+
+</i>
+
+```solidity
+function _tagDir() internal view returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_a2vars-uint8"></a>
+
+### _a2Vars
+
+A2's grid: 2 pools × 3 levels × 4 holds × the arm's flows. PROTO_LEVER_A2_LEVELS (three
+comma-separated bps, `levers` 2026-11-12) replaces the levels for a lever run that needs smaller pushes;
+unset, the scored grid is unchanged.
+
+```solidity
+function _a2Vars(uint8[] memory flows) internal view returns (Var[] memory vs);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| flows | `uint8[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vs | `Var[]` |  |
+
+<a id="_a10vars-uint8"></a>
+
+### _a10Vars
+
+A10's grid: 2 pools × 3 rates × 3 lengths × the arm's flows. `hold` carries the ramp's slots.
+PROTO_LEVER_A10_RATES (three comma-separated bps per slot) replaces the rates, as for A2.
+
+```solidity
+function _a10Vars(uint8[] memory flows) internal view returns (Var[] memory vs);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| flows | `uint8[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vs | `Var[]` |  |
+
+## Structs
+
+### Var
+
+<i>
+
+One variant of A2 or A10 (`ramp`): the flow aimed at, the pool, the level (bps, or bps per slot for a
+ramp), the hold in seconds (A2) or the ramp's slots (A10), and whether the attacker trades (false: the
+honest twin).
+
+</i>
+
+```solidity
+struct Var {
+        uint8 flow;
+        uint8 b;
+        uint16 lvl;
+        uint32 hold;
+        bool ramp;
+        bool attack;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| flow | `uint8` |  |
+| b | `uint8` |  |
+| lvl | `uint16` |  |
+| hold | `uint32` |  |
+| ramp | `bool` |  |
+| attack | `bool` |  |
+
+### Res
+
+<i>
+
+One run's end state, all at the reference walk: the attacker's and the pending user's value, NAV per
+share (1e18 scale) and the holders' shares, NAV, the outcome of the call aimed at, and what the attacker
+spent on its pushes (the flash loan).
+
+</i>
+
+```solidity
+struct Res {
+        int256 atk;
+        int256 vic;
+        uint256 hps;
+        uint256 holderShares;
+        uint256 navRef;
+        uint256 first;
+        uint256 spent;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| atk | `int256` |  |
+| vic | `int256` |  |
+| hps | `uint256` |  |
+| holderShares | `uint256` |  |
+| navRef | `uint256` |  |
+| first | `uint256` |  |
+| spent | `uint256` |  |
+
+### Atk
+
+<i>
+
+The attacker's live push. `startAt`: when it starts holding; `aimAt`: the call it aims at.
+
+</i>
+
+```solidity
+struct Atk {
+        bool armed;
+        bool active;
+        bool done;
+        bool up;
+        bool ramp;
+        uint8 b;
+        uint16 lvl;
+        uint64 startAt;
+        uint64 aimAt;
+        uint256[2] tok0;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| armed | `bool` |  |
+| active | `bool` |  |
+| done | `bool` |  |
+| up | `bool` |  |
+| ramp | `bool` |  |
+| b | `uint8` |  |
+| lvl | `uint16` |  |
+| startAt | `uint64` |  |
+| aimAt | `uint64` |  |
+| tok0 | `uint256[2]` |  |
+
+### Row
+
+<i>
+
+One scored row: the variant, the seed, the attacker's net and the losses against the honest twin.
+
+</i>
+
+```solidity
+struct Row {
+        uint256 seedK;
+        uint8 flow;
+        uint8 b;
+        uint16 lvl;
+        uint32 hold;
+        int256 net;
+        int256 pendingLoss;
+        int256 holdersLoss;
+        uint256 navRef;
+        uint256 first;
+        uint256 spent;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| seedK | `uint256` |  |
+| flow | `uint8` |  |
+| b | `uint8` |  |
+| lvl | `uint16` |  |
+| hold | `uint32` |  |
+| net | `int256` |  |
+| pendingLoss | `int256` |  |
+| holdersLoss | `int256` |  |
+| navRef | `uint256` |  |
+| first | `uint256` |  |
+| spent | `uint256` |  |
+

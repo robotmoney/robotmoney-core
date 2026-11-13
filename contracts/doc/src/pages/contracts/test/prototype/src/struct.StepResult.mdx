@@ -1,0 +1,33 @@
+---
+title: "StepResult"
+description: "What `RobotMoneyFund.executeStep` did."
+---
+
+# StepResult
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundTypes.sol)
+
+What `RobotMoneyFund.executeStep` did.
+
+```solidity
+struct StepResult {
+    uint256 navBefore;
+    uint256 navAfter;
+    uint256 amountIn;
+    uint256 usdcMoved;
+    uint256 amountOut;
+    uint256 cost;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| navBefore | `uint256` | TWAP NAV before the legs (same valuation as `totalAssets()`). |
+| navAfter | `uint256` | TWAP NAV after the legs. |
+| amountIn | `uint256` | Amount of the sold asset that left its position (basket tokens, or USDC for a<br/>lending or idle sell). |
+| usdcMoved | `uint256` | USDC that crossed the hub: received from the sell leg (or taken from idle). |
+| amountOut | `uint256` | Amount of the bought asset received (basket tokens, USDC kept by a lending<br/>adapter, or USDC left idle for an idle buy). |
+| cost | `uint256` | `navBefore > navAfter ? navBefore - navAfter : 0`. |
+

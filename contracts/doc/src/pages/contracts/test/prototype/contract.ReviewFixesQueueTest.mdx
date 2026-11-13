@@ -1,0 +1,96 @@
+---
+title: "ReviewFixesQueueTest"
+description: "One test per error the adversarial review of 2026-11-12 found in the queue, each failing on the code before its fix."
+---
+
+# ReviewFixesQueueTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/ReviewFixes.t.sol)
+
+**Inherits:** [FlowQueueFixesBase](/contracts/test/prototype/abstract.FlowQueueFixesBase)
+
+**Title:** ReviewFixesQueueTest
+
+One test per error the adversarial review of 2026-11-12 found in the queue, each failing on the code before
+its fix.
+
+## Functions
+
+<a id="_redemptionafterareference"></a>
+
+### _redemptionAfterAReference
+
+<i>
+
+Invested fund, bob a holder, a settlement as the reference, then bob's redemption request.
+
+</i>
+
+```solidity
+function _redemptionAfterAReference() private returns (uint256 red);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| red | `uint256` |  |
+
+<a id="test_qf1_anexcludedvenuewithafailingratedoesnotholdredemptions"></a>
+
+### test_QF1_anExcludedVenueWithAFailingRateDoesNotHoldRedemptions
+
+Q-F1: an excluded lending venue whose rate read fails does not hold the settlement (E13: redemptions
+settle alone during an exclusion). Before the fix check 5 read every active venue: `LendRate`.
+
+```solidity
+function test_QF1_anExcludedVenueWithAFailingRateDoesNotHoldRedemptions()
+        public
+        fixtureCovered;
+```
+
+<a id="test_qf2_asmallcalldoesnottakethewholeblocksroom"></a>
+
+### test_QF2_aSmallCallDoesNotTakeTheWholeBlocksRoom
+
+Q-F2: a small call first in a block takes only its own part of the block's room; the keeper's call in
+the same block still fills. Before the fix any trading call zeroed the block's room.
+
+```solidity
+function test_QF2_aSmallCallDoesNotTakeTheWholeBlocksRoom() public fixtureCovered;
+```
+
+<a id="test_qf3_arevokethenreallowbetweensettlementsdoesnottripthebreaker"></a>
+
+### test_QF3_aRevokeThenReallowBetweenSettlementsDoesNotTripTheBreaker
+
+Q-F3: a revoke then a re-allow of a lending venue between two settlements (the restore drains it
+into its record) does not trip the share-price breaker. Before the fix the mask was the same at both
+ends, nothing was re-based, and check 6 held both sides.
+
+```solidity
+function test_QF3_aRevokeThenReallowBetweenSettlementsDoesNotTripTheBreaker()
+        public
+        fixtureCovered;
+```
+
+<a id="test_qf4_anallowedreturnendswiththefreeze"></a>
+
+### test_QF4_anAllowedReturnEndsWithTheFreeze
+
+Q-F4: an allowed early return does not outlive a freeze that ran out by itself (RB-11).
+
+```solidity
+function test_QF4_anAllowedReturnEndsWithTheFreeze() public fixtureCovered;
+```
+
+<a id="test_qf5_acallcapbelowtheminimumfillisvisible"></a>
+
+### test_QF5_aCallCapBelowTheMinimumFillIsVisible
+
+Q-F5: a per-call basket cap below the minimum fill holds every request; the call says so.
+
+```solidity
+function test_QF5_aCallCapBelowTheMinimumFillIsVisible() public fixtureCovered;
+```
+
