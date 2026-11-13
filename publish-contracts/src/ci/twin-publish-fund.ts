@@ -14,10 +14,13 @@
 // The feeds: the fund's assets and its queue read the real Chainlink feeds, and a pinned fork serves each feed's round at the pin for as long as it runs (twin-feeds.ts).
 // Before the publish, every feed must stay fresh for FEED_MIN_MARGIN_IN more seconds (the fund stage's addAsset refuses a stale feed). After the verify, the probe shows
 // the fund's own refusal once ETH / USD is past its stale point: totalAssets() reverts FeedUnhealthy(WETH, Stale) and quoteDeposit SettleBlocked(Feed, WETH, Stale).
-// No feed is written and no mock is etched. The queue's timed rows (settle at least an hour after a request) cannot pass on a pinned fork; they run on 8453.
+// Then the Twin feed step (twin-feeds.ts refresh, owner decision 2026-11-13): each basket and peg feed gets one new round that restates the answer it reported at the
+// pin, at the fork's clock, written to the real aggregator's storage and journaled; totalAssets() must read again. No mock is etched, no pool, token, fund or queue
+// slot is written. The queue's timed rows run after this script, from the release runbook (releases/v0.7.0-onevault.yaml, P6.80 to P6.85 refresh before them).
 // The record: counts.json names `system: "fund"` (rehearsal-counts build --system fund), the markers are the fund's own (twin-markers.ts FUND_RUN_MARKERS), and the last
 // step writes twin-qa-fund.json { kind: "twin-qa-run", system: "fund", deploySha, ..., conclusion: "success" }, which a failed run never reaches.
-// Exports: TWIN_RUN_DIR, TWIN_MANIFEST_DIR, TWIN_DEPLOYER_ADDRESS, TWIN_COUNTS_JSON, TWIN_VERIFY_LABELS_FUND, TWIN_FEEDS_JSON, TWIN_FEED_PROBE_JSON, TWIN_QA_RECORD.
+// Exports: TWIN_RUN_DIR, TWIN_MANIFEST_DIR, TWIN_DEPLOYER_ADDRESS, TWIN_COUNTS_JSON, TWIN_VERIFY_LABELS_FUND, TWIN_FEEDS_JSON, TWIN_FEED_PROBE_JSON, TWIN_FEED_REFRESH_JSON,
+// TWIN_QA_RECORD.
 // Tests replace the tools: TWIN_CLI (src/cli.ts), TWIN_REHEARSAL_CLI (src/rehearsal/cli.ts), TWIN_FEEDS (src/ci/twin-feeds.ts), TWIN_COUNTS (src/ci/rehearsal-counts.ts), CAST.
 // Any tool that exits non-zero fails this script. Never use this against Base mainnet: every verb gets --chain 918453 and the CLI refuses YES=1 on 8453.
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -136,12 +139,22 @@ if (import.meta.main) {
   marker(`${MARKERS.fundFeedStaleRefusal} scenarios=totalAssets,quoteDeposit index=${probe.ethIndex} status=Stale warped_s=${probe.stale.warpedSec} fresh_probe=${probe.fresh.result}`);
   exportVar("TWIN_FEED_PROBE_JSON", probeJson);
 
+  // ---- the Twin feed step: restate each feed's pin answer at the fork's clock, then the fund reads again ----
+  const refreshJson = join(rh, "feed-refresh.json");
+  run([bun, feeds, "refresh", "--rpc", rpc, "--journal", join(rh, "feed-refresh.jsonl"), "--out", refreshJson], { cwd: pc });
+  const refresh = JSON.parse(readFileSync(refreshJson, "utf8")) as { pinBlock: number; feeds: { name: string; pin: { answer: string }; after: { answer: string; aggregatorRound: number } }[]; problems: string[] };
+  if (refresh.problems.length || refresh.feeds.length !== 3 || refresh.feeds.some((f) => f.after.answer !== f.pin.answer)) fail(`the feed refresh did not restate the three pin answers: ${refreshJson}`);
+  const navAfter = run([castBin, "call", field("fund", "fund"), "totalAssets()(uint256)", "--rpc-url", rpc], { stdoutTo: join(rh, "total-assets-after-refresh.txt") }).trim().split(" ")[0] ?? "";
+  if (!/^\d+$/.test(navAfter)) fail(`totalAssets() after the feed refresh read '${navAfter}'`);
+  marker(`${MARKERS.fundFeedRefresh} feeds=${refresh.feeds.length} pin_block=${refresh.pinBlock} rounds=${refresh.feeds.map((f) => `${f.name}:${f.after.aggregatorRound}`).join(",")} total_assets=${navAfter}`);
+  exportVar("TWIN_FEED_REFRESH_JSON", refreshJson);
+
   // ---- the record: written last, so a failed run has none ----
   const record = join(rh, "twin-qa-fund.json");
   writeFileSync(record, JSON.stringify({
     kind: "twin-qa-run", system: "fund", deploySha: sha, chainId: TWIN_CHAIN_ID, ...(env("PIN_BLOCK_IN") ? { pinBlock: Number(env("PIN_BLOCK_IN")) } : {}),
     deployer: { address: admin, fresh: !rehearsalMode, startNonce: Number(startNonce), nonceAfterPublish: Number(nonce) }, keeper,
-    stages: runStages, countsJson, counts: counts.counts, verifyLabels: labels.length, feedsBeforePublish: feedsJson, feedProbe: probeJson, markers,
+    stages: runStages, countsJson, counts: counts.counts, verifyLabels: labels.length, feedsBeforePublish: feedsJson, feedProbe: probeJson, feedRefresh: refreshJson, markers,
     finishedAt: new Date().toISOString(), conclusion: "success",
   }, null, 2) + "\n");
   exportVar("TWIN_QA_RECORD", record);
