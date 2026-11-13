@@ -15,7 +15,8 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///         - The upgrade authority. The timelock stage deploys the `TimelockController` LAST,
 ///           after every proxy. The proxies still name it from their first block: its address
 ///           is the CREATE2 address of the exact timelock the timelock stage deploys
-///           (proposer and canceller = the Safe, executor = anyone, no admin, `minDelay`),
+///           (proposer and canceller = the Safe, executor = anyone, or the Safe for the fund
+///           system: `_timelockExecutor`; no admin, `minDelay`),
 ///           through the canonical CREATE2 factory with `TIMELOCK_SALT`. CREATE2 binds the
 ///           init code, so nothing but that Safe-controlled timelock can ever have code at the
 ///           address: there is no interim deployer, EOA or placeholder upgrade authority. The
