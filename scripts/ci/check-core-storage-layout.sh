@@ -68,6 +68,9 @@ CONTRACTS=(
   "Rebalancer:contracts/test/prototype/src/Rebalancer.sol"
   "RebalanceGovernance:contracts/test/prototype/src/RebalanceGovernance.sol"
   "FlowQueue:contracts/test/prototype/src/FlowQueue.sol"
+  # Deploy 4: the rebalancer's test-only second implementation (helpers/FundUpgradeV2.sol), which deploy-implementation --system fund --contract RebalancerV2
+  # deploys for the runbook's upgrade lifecycle. Pinned so its snapshot, which must extend the Rebalancer's, is the contract's real layout.
+  "RebalancerV2:contracts/test/helpers/FundUpgradeV2.sol"
 )
 
 NORMALIZE='

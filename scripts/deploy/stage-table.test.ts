@@ -337,7 +337,10 @@ describe("stage-table.json", () => {
       // Deploy 4: the fund system's receipt register is the vaults system's contract, so one snapshot pins both
       const listed = [...new Set(proxyStages.flatMap((s) => s.proxies!.map((p) => p.contract)))].sort();
       // rmAGENT is retired and no stage deploys it, but the live v0.5.0 deployment runs AgentTokenVault behind a governed proxy. A governed upgrade of it must keep its layout, so the gate keeps snapshotting it.
-      expect([...listed, "AgentTokenVault"].sort()).toEqual(gated);
+      // Deploy 4: RebalancerV2 (helpers/FundUpgradeV2.sol) is the rebalancer's test-only second implementation. No stage deploys it (it is not in `listed`), only
+      // deploy-implementation --system fund --contract RebalancerV2 does, and the gate pins its layout so that verb's append-only check reads its real layout.
+      expect(listed).not.toContain("RebalancerV2");
+      expect([...listed, "AgentTokenVault", "RebalancerV2"].sort()).toEqual(gated);
       expect(listed).toHaveLength(13); // nine of the vaults and gateway systems, four of the fund system (Deploy 4)
       for (const s of proxyStages) for (const p of s.proxies!) {
         expect(existsSync(join(ROOT, p.layout)), p.layout).toBe(true);

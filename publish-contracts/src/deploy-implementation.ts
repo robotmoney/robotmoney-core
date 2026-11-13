@@ -16,6 +16,12 @@
 // A rerun with the same --proxy and --upgrade-build whose recorded implementation still has the build's code sends nothing and reprints the entry.
 // The release gate on 8453 runs in cli.ts before this module, as for govern.
 //
+// Deploy 4, `--system fund`: the same verb for a proxy of the fund system (the one-vault prototype), resolved from the fund system's table scope, with every check above.
+// The fund verifier writes no upgradeability.json, so the proxy is the fund stage manifest's and the run manifest must record a passed fund verify; the deployed snapshot is
+// the DEPLOY_SHA checkout's, which the live-code check above ties to the chain. `--contract NAME` names the proxy's reviewed second implementation (FUND_SECOND_IMPLEMENTATIONS,
+// a test-only child that really changes code): its own pinned snapshot must extend the deployed one, append-only, besides the base contract's gate. The fund system has no
+// govern row, so the printed next step is the fund Safe's schedule on the fund-system timelock (publish-contracts/src/safe/cli.ts).
+//
 // Canonical: docs/technical/contract-upgradeability-plan.md, docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md, docs/operations/contract-release-runbooks.md 4.12.
 import { scopeTable } from "./stage-table.ts";
 import { existsSync, readFileSync } from "node:fs";
@@ -27,13 +33,22 @@ import { LIBRARY_ADDRESS_CAUSE } from "./libs-adopt.ts";
 import { childEnv, confirmStage, loadRunManifest, manifestDir, receiptBlock, saveRunManifest, waitForReceiptBlock, type RunContext, type RunManifest } from "./runner.ts";
 import { getStageTable } from "./stages.ts";
 import { manifestBase } from "./stage-table.ts";
-import { UPGRADE_ROW, layoutGateProblems, runtimeCodeProblems } from "./upgrade-rows.ts";
+import { UPGRADE_ROW, layoutExtensionProblems, layoutGateProblems, layoutRenames, runtimeCodeProblems } from "./upgrade-rows.ts";
 import { artifactJson, compareCode, ERC1967_IMPLEMENTATION_SLOT, linkedLibraries, loadArtifact } from "./verify/codehash.ts";
 import { viemReader } from "./verify/reader.ts";
-import { proxySpecs, type ProxySpec } from "./verify/upgradeability.ts";
+import { layoutId, proxySpecs, type ProxySpec } from "./verify/upgradeability.ts";
 import { proxyBuildDirsOf, UPGRADEABILITY_MANIFEST } from "./verify-stage.ts";
 
 export const DEPLOY_IMPL_VERB = "deploy-implementation";
+
+/**
+ * Deploy 4: the reviewed second implementation of a fund-system proxy, by verifier name. Each is a test-only child of the release contract (contracts/test/helpers) that adds
+ * code and no state, with its own storage layout snapshot pinned by scripts/ci/check-core-storage-layout.sh. No stage deploys it: only `deploy-implementation --system fund
+ * --contract NAME` does, for the runbook's upgrade lifecycle. The vaults system has none (its second implementation is another checkout's build, --upgrade-build).
+ */
+export const FUND_SECOND_IMPLEMENTATIONS: Readonly<Record<string, { contract: string; layout: string }>> = {
+  rebalancer: { contract: "RebalancerV2", layout: "contracts/test/fixtures/storage-layout/RebalancerV2.json" },
+};
 
 /** One `implementation_deploys` entry of the run manifest. */
 export interface ImplementationDeploy {
@@ -53,6 +68,8 @@ export interface ImplementationDeploy {
   deployer: Address;
   core_sha: string;
   deployed_at: string;
+  /** Deploy 4: present (fund) only for a fund-system proxy. A vaults entry carries no system. */
+  system?: "fund";
 }
 
 /** The chain reads and the one send of the verb. Tests replace it with a stub chain. */
@@ -75,6 +92,11 @@ export const implementationDeploysOf = (m: RunManifest): ImplementationDeploy[] 
 export function upgradeCommand(ctx: Pick<RunContext, "chainId" | "coreSha" | "coreDir">, d: Pick<ImplementationDeploy, "proxy_name" | "implementation" | "build">): string {
   const build = d.build === ctx.coreDir ? "" : ` --upgrade-build ${d.build}`;
   return `bun publish-contracts/src/cli.ts govern --row ${UPGRADE_ROW} --proxy ${d.proxy_name} --implementation ${d.implementation}${build} --chain ${ctx.chainId} --core-sha ${ctx.coreSha} (plus the same --rpc, --sheet, --signer and --evidence)`;
+}
+
+/** Deploy 4: the fund system has no govern row. Its upgrade is ONE call the fund Safe schedules on the fund-system timelock with the Safe tool, then executes after the delay. */
+export function fundUpgradeCommand(ctx: Pick<RunContext, "chainId">, d: Pick<ImplementationDeploy, "proxy" | "implementation">): string {
+  return `bun publish-contracts/src/safe/cli.ts propose --action schedule --chain-id ${ctx.chainId} --target ${d.proxy} --data "$(cast calldata "upgradeToAndCall(address,bytes)" ${d.implementation} 0x)" (plus --rpc, --safe <the fund Safe>, --timelock <the fund-system timelock>, --salt and --out), then sign with two owners and execute; after the delay the same with --action execute`;
 }
 
 /**
@@ -122,43 +144,75 @@ export function realDeployImplApi(ctx: RunContext): DeployImplApi {
  * The `deploy-implementation` verb. Returns the entry it recorded (or reused) and the govern command to run next. Throws REFUSED with nothing sent for every refusal of the
  * header, and VERIFY (no entry recorded) when the deployed runtime code is not the build.
  */
-export async function runDeployImplementation(ctx: RunContext, o: { proxy: string; upgradeBuild?: string }, api: DeployImplApi = realDeployImplApi(ctx)): Promise<{ entry: ImplementationDeploy; reused: boolean; next: string }> {
+export async function runDeployImplementation(ctx: RunContext, o: { proxy: string; upgradeBuild?: string; system?: "vaults" | "fund"; contract?: string }, api: DeployImplApi = realDeployImplApi(ctx)): Promise<{ entry: ImplementationDeploy; reused: boolean; next: string }> {
   // Issue 1926: the build this verb reads and links must come from the pinned forge version. Read first: TOOL, before any file or chain read and before anything is sent.
   await assertPinnedForgeWith(() => api.forgeVersion());
   const t = getStageTable();
-  const spec: ProxySpec | undefined = proxySpecs(scopeTable(t, "legacy")).find((x) => x.name === o.proxy);
-  if (!spec) throw new PublishError("USAGE", `${DEPLOY_IMPL_VERB} needs --proxy NAME, one of ${proxySpecs(scopeTable(t, "legacy")).map((x) => x.name).join(", ")}; got ${o.proxy}`);
+  const fund = o.system === "fund";
+  const specs = proxySpecs(scopeTable(t, fund ? "fund" : "legacy"));
+  const spec: ProxySpec | undefined = specs.find((x) => x.name === o.proxy);
+  if (!spec) throw new PublishError("USAGE", `${DEPLOY_IMPL_VERB}${fund ? " --system fund" : ""} needs --proxy NAME, one of ${specs.map((x) => x.name).join(", ")}; got ${o.proxy}`);
+  // Deploy 4: the contract to deploy is the proxy's own, or the reviewed second implementation of a fund-system proxy. Nothing else.
+  const second = fund ? FUND_SECOND_IMPLEMENTATIONS[spec.name] : undefined;
+  if (o.contract !== undefined && o.contract !== spec.contract && o.contract !== second?.contract) {
+    throw new PublishError("USAGE", `${DEPLOY_IMPL_VERB} --proxy ${spec.name}: --contract ${o.contract} is not a reviewed implementation of ${spec.name} (expected ${[spec.contract, ...(second ? [second.contract] : [])].join(" or ")}). Nothing was sent.`);
+  }
+  const contract = o.contract ?? spec.contract;
+  const candidateLayout = contract === spec.contract ? spec.layout : second!.layout;
   const manifest = loadRunManifest(ctx.evidenceDir);
   if (!manifest) throw new PublishError("RESUME", `no run manifest in ${ctx.evidenceDir}: ${DEPLOY_IMPL_VERB} deploys into a deployment that exists. Pass the --evidence directory of the run that deployed it.`);
-  const recPath = join(manifestDir(ctx), UPGRADEABILITY_MANIFEST);
-  if (!existsSync(recPath)) throw new PublishError("INPUT_MISSING", `${DEPLOY_IMPL_VERB} reads ${recPath}, which does not exist: run verify first`, { path: recPath });
-  const rec = JSON.parse(readFileSync(recPath, "utf8"));
-  if (rec.chain_id !== undefined && Number(rec.chain_id) !== ctx.chainId) throw new PublishError("REFUSED", `${recPath} is for chain ${rec.chain_id}, not ${ctx.chainId}`);
-  const r = rec.proxies?.[spec.name];
-  if (!r?.proxy) throw new PublishError("REFUSED", `upgradeability.json has no ${spec.name}. Run verify first. Nothing was sent.`);
-  const proxy = getAddress(r.proxy) as Address;
+  const u = t.upgradeAuthority;
   const stageManifest = join(manifestDir(ctx), `${manifestBase(t.stages.find((x) => x.name === spec.stage)!.manifest)}.json`);
-  const m = JSON.parse(readFileSync(stageManifest, "utf8"));
-  if (lc(m[spec.field]) !== lc(proxy)) throw new PublishError("REFUSED", `${stageManifest} names ${spec.field} ${String(m[spec.field])}, upgradeability.json ${proxy}. Nothing was sent.`);
+  let proxy: Address, recordedLayoutId: string | null | undefined;
+  if (!fund) {
+    const recPath = join(manifestDir(ctx), UPGRADEABILITY_MANIFEST);
+    if (!existsSync(recPath)) throw new PublishError("INPUT_MISSING", `${DEPLOY_IMPL_VERB} reads ${recPath}, which does not exist: run verify first`, { path: recPath });
+    const rec = JSON.parse(readFileSync(recPath, "utf8"));
+    if (rec.chain_id !== undefined && Number(rec.chain_id) !== ctx.chainId) throw new PublishError("REFUSED", `${recPath} is for chain ${rec.chain_id}, not ${ctx.chainId}`);
+    const r = rec.proxies?.[spec.name];
+    if (!r?.proxy) throw new PublishError("REFUSED", `upgradeability.json has no ${spec.name}. Run verify first. Nothing was sent.`);
+    proxy = getAddress(r.proxy) as Address;
+    recordedLayoutId = r.layout_id;
+    const m = JSON.parse(readFileSync(stageManifest, "utf8"));
+    if (lc(m[spec.field]) !== lc(proxy)) throw new PublishError("REFUSED", `${stageManifest} names ${spec.field} ${String(m[spec.field])}, upgradeability.json ${proxy}. Nothing was sent.`);
+  } else {
+    // Deploy 4: the fund verifier records no upgradeability.json. The run must be the fund system's and its fund verify must have passed; the proxy is the stage manifest's.
+    if (manifest.system !== "fund") throw new PublishError("REFUSED", `the run manifest in ${ctx.evidenceDir} is the ${manifest.system ?? "vaults"} system's, not the fund system's. Nothing was sent.`);
+    const v = manifest.stages?.verify;
+    if (v?.status !== "done" || v.system !== "fund") throw new PublishError("REFUSED", `the fund run manifest in ${ctx.evidenceDir} records no passed fund verify: run verify --system fund first. Nothing was sent.`);
+    if (!existsSync(stageManifest)) throw new PublishError("INPUT_MISSING", `${DEPLOY_IMPL_VERB} reads ${stageManifest}, which does not exist`, { path: stageManifest });
+    const m = JSON.parse(readFileSync(stageManifest, "utf8"));
+    if (!/^0x[0-9a-fA-F]{40}$/.test(String(m[spec.field] ?? ""))) throw new PublishError("REFUSED", `${stageManifest} names no ${spec.field} address (got ${String(m[spec.field])}). Nothing was sent.`);
+    if (m.chain_id !== undefined && Number(m.chain_id) !== ctx.chainId) throw new PublishError("REFUSED", `${stageManifest} is for chain ${m.chain_id}, not ${ctx.chainId}`);
+    proxy = getAddress(m[spec.field]) as Address;
+    // The deployed snapshot is the DEPLOY_SHA checkout's: the live-code check below refuses a live implementation that is not this checkout's build.
+    if (u && existsSync(join(ctx.coreDir, spec.layout)) && existsSync(join(ctx.coreDir, u.layoutPins))) recordedLayoutId = layoutId(ctx.coreDir, spec.layout, u.layoutPins);
+  }
   const refuse = (why: string, details: Record<string, unknown> = {}): never => { throw new PublishError("REFUSED", `${DEPLOY_IMPL_VERB} --proxy ${spec.name}: ${why.replace(/\.$/, "")}. Nothing was sent.`, { proxy: spec.name, ...details }); };
 
   if (await api.upgradesFrozen(proxy)) refuse(`${proxy} reads upgradesFrozen() true. A frozen proxy is never upgraded again`);
   const build = o.upgradeBuild ?? ctx.coreDir;
   const outDir = join(build, "out");
-  const u = t.upgradeAuthority;
   if (!u) refuse("the stage table has no upgradeAuthority (layout pins)");
-  const layout = layoutGateProblems(spec, ctx.coreDir, build, u!.layoutPins, r.layout_id);
-  if (layout.length) refuse(`the storage layout gate refuses the build ${build}: ${layout.join("; ")}`, { layout });
+  const layout = layoutGateProblems(spec, ctx.coreDir, build, u!.layoutPins, recordedLayoutId);
+  // Deploy 4: a second implementation's own pinned snapshot must extend the deployed snapshot too (the base contract's gate above stays).
+  if (layout.length === 0 && candidateLayout !== spec.layout) {
+    const cand = join(build, candidateLayout);
+    if (!existsSync(cand)) layout.push(`${cand} does not exist`);
+    else layout.push(...layoutExtensionProblems(JSON.parse(readFileSync(join(ctx.coreDir, spec.layout), "utf8")), JSON.parse(readFileSync(cand, "utf8")), layoutRenames(build), spec.contract).map((p) => `${contract}: ${p}`));
+  }
+  if (layout.length) refuse(`the storage layout gate refuses the build ${build}${contract !== spec.contract ? ` (${contract})` : ""}: ${layout.join("; ")}`, { layout });
+  const nextOf = (e: ImplementationDeploy): string => (fund ? fundUpgradeCommand(ctx, e) : upgradeCommand(ctx, e));
 
   // A rerun with the same arguments: the recorded implementation, when it still has the build's code, is the answer.
   const list = implementationDeploysOf(manifest);
-  const prior = [...list].reverse().find((e) => e.proxy_name === spec.name && e.build === build);
+  const prior = [...list].reverse().find((e) => e.proxy_name === spec.name && e.build === build && (e.contract ?? spec.contract) === contract);
   if (prior) {
     let bad: string[];
-    try { bad = await runtimeCodeProblems((a) => api.getCode(a), prior.implementation, outDir, spec.contract); } catch (e) { bad = [(e as Error).message]; }
+    try { bad = await runtimeCodeProblems((a) => api.getCode(a), prior.implementation, outDir, contract); } catch (e) { bad = [(e as Error).message]; }
     if (bad.length === 0) {
       ctx.log.log("info", "deploy_implementation.reused", { proxy: spec.name, implementation: prior.implementation, deploy_tx: prior.deploy_tx, note: "recorded by an earlier run with the same arguments; nothing was sent" });
-      return { entry: prior, reused: true, next: upgradeCommand(ctx, prior) };
+      return { entry: prior, reused: true, next: nextOf(prior) };
     }
     ctx.log.log("warn", "deploy_implementation.recorded_stale", { proxy: spec.name, implementation: prior.implementation, problems: bad, note: "the recorded implementation no longer has the build's code: deploying a new one" });
   }
@@ -183,27 +237,28 @@ export async function runDeployImplementation(ctx: RunContext, o: { proxy: strin
     if (code === "" || code === "0x") refuse(`the live implementation links ${name} at ${at}, which has NO code on chain ${ctx.chainId}: the new implementation would link an empty address`, { library: name, address: at });
   }
   let art: any;
-  try { art = artifactJson(outDir, spec.contract); } catch (e) { refuse(`${(e as Error).message}: run forge build in the upgrade build first`); }
-  const linked = linkCreationCode(art, libraries, spec.contract);
+  try { art = artifactJson(outDir, contract); } catch (e) { refuse(`${(e as Error).message}: run forge build in the upgrade build first`); }
+  const linked = linkCreationCode(art, libraries, contract);
   if (!linked.code) refuse(linked.problems.join("; "), { problems: linked.problems, expected: libraries });
 
   const deployer = await ctx.signer.address();
   if (lc(deployer) !== lc(ctx.sheet.admin)) throw new PublishError("SIGNER", `the signer ${deployer} is not ADMIN_ADDRESS ${ctx.sheet.admin}: the deployer deploys the implementation`);
-  ctx.log.log("info", "deploy_implementation.preview", { proxy: spec.name, proxy_address: proxy, contract: spec.contract, build, live_implementation: live, libraries });
-  await confirmStage(ctx, DEPLOY_IMPL_VERB, `one CREATE from ${deployer}: a new ${spec.contract} for ${spec.name} (${proxy}) from ${outDir}, linked to ${Object.entries(libraries).map(([n, a]) => `${n} ${a}`).join(", ") || "no library"}`);
+  ctx.log.log("info", "deploy_implementation.preview", { proxy: spec.name, proxy_address: proxy, contract, build, live_implementation: live, libraries });
+  await confirmStage(ctx, DEPLOY_IMPL_VERB, `one CREATE from ${deployer}: a new ${contract} for ${spec.name} (${proxy}) from ${outDir}, linked to ${Object.entries(libraries).map(([n, a]) => `${n} ${a}`).join(", ") || "no library"}`);
   const sent = await api.create(linked.code!);
-  if (!sent.status || !sent.address) throw new PublishError("BROADCAST", `the ${spec.contract} deploy ${sent.txHash} reverted or created no contract. No entry was recorded.`, { tx: sent.txHash });
+  if (!sent.status || !sent.address) throw new PublishError("BROADCAST", `the ${contract} deploy ${sent.txHash} reverted or created no contract. No entry was recorded.`, { tx: sent.txHash });
   const implementation = getAddress(sent.address) as Address;
   let bad: string[];
-  try { bad = await runtimeCodeProblems((a) => api.getCode(a), implementation, outDir, spec.contract); } catch (e) { bad = [(e as Error).message]; }
-  if (bad.length) throw new PublishError("VERIFY", `the deployed ${implementation} (tx ${sent.txHash}) is not the build's ${spec.contract}: ${bad.join("; ")}. No entry was recorded: do not upgrade to it.`, { implementation, tx: sent.txHash, problems: bad });
+  try { bad = await runtimeCodeProblems((a) => api.getCode(a), implementation, outDir, contract); } catch (e) { bad = [(e as Error).message]; }
+  if (bad.length) throw new PublishError("VERIFY", `the deployed ${implementation} (tx ${sent.txHash}) is not the build's ${contract}: ${bad.join("; ")}. No entry was recorded: do not upgrade to it.`, { implementation, tx: sent.txHash, problems: bad });
 
   const entry: ImplementationDeploy = {
-    step: DEPLOY_IMPL_VERB, proxy_name: spec.name, proxy, contract: spec.contract, build, live_implementation: live, implementation,
+    step: DEPLOY_IMPL_VERB, proxy_name: spec.name, proxy, contract, build, live_implementation: live, implementation,
     code_hash: keccak256(await api.getCode(implementation)), libraries, deploy_tx: sent.txHash, deployer, core_sha: ctx.coreSha, deployed_at: (ctx.now?.() ?? new Date()).toISOString(),
+    ...(fund ? { system: "fund" as const } : {}),
   };
   manifest.implementation_deploys = [...list.filter((e) => e !== prior), entry];
   saveRunManifest(ctx.evidenceDir, manifest);
-  ctx.log.log("info", "deploy_implementation.done", { proxy: spec.name, implementation, code_hash: entry.code_hash, deploy_tx: sent.txHash });
-  return { entry, reused: false, next: upgradeCommand(ctx, entry) };
+  ctx.log.log("info", "deploy_implementation.done", { proxy: spec.name, contract, implementation, code_hash: entry.code_hash, deploy_tx: sent.txHash });
+  return { entry, reused: false, next: nextOf(entry) };
 }
