@@ -16,6 +16,7 @@ const GOOD = [
   `${MARKERS.fundFeeds} feeds=3 fresh=3 eth_margin_s=900 min_margin_s=300`,
   `${MARKERS.fundRun} system=fund stages=10 verify_labels=40 sha=0x04`,
   `${MARKERS.fundFeedStaleRefusal} scenarios=totalAssets,quoteDeposit index=2 status=Stale warped_s=12 fresh_probe=ok`,
+  `${MARKERS.fundFeedRefresh} feeds=3 pin_block=56730718 rounds=ETH/USD:13526,cbBTC/USD:19577,USDC/USD:86 total_assets=1000000`,
 ].join("\n");
 
 describe("twin scenario markers", () => {

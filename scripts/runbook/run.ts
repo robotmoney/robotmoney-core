@@ -102,6 +102,15 @@ export function readyAt(resultMtimeMs: number, hours: number | "timelockDelay", 
 
 const sleep = (s: number): void => { spawnSync("sleep", [String(s)], { stdio: "inherit" }); };
 
+/**
+ * PURE. Whether a notBefore wait runs as a Twin clock warp: only on the twin target, for a wait given in hours (the fund flow's 24 h hold, P6.62), and for a
+ * fund-flow timelock wait (its governed executes go through publish-contracts/src/safe/cli.ts, which simulates against the head block; an idle anvil mines
+ * none, so after a wall sleep the head still carries the schedule's time and the timelock refuses; the vaults flows' govern warps by itself). Every wait on
+ * rehearsal and production stays a wall sleep: nothing may move that chain's clock.
+ */
+export const twinClockWait = (target: string | undefined, hours: number | "timelockDelay", flow?: string | string[]): boolean =>
+  target === "twin" && (typeof hours === "number" ? hours > 0 : [flow ?? []].flat().includes("fund"));
+
 /** Runs one command of a step: stdin on this terminal, stdout and stderr shown and appended to the journal. Returns its exit code. */
 function runCommand(argv: string[], env: Record<string, string>, out: string, err: string, maxMinutes?: number): number {
   const prefix = maxMinutes === undefined ? [] : ["timeout", "--foreground", `${maxMinutes}m`];
@@ -122,10 +131,10 @@ export function withResume(argv: string[], resume: boolean): string[] {
   return [...argv, "--resume"];
 }
 
-export function runStep(step: RunbookStep, r: Resolver, opts: { runDir: string; sheetDelay: number; dryRun: boolean; resume?: boolean; log: (s: string) => void }): string {
+export function runStep(step: RunbookStep, r: Resolver, opts: { runDir: string; sheetDelay: number; dryRun: boolean; resume?: boolean; target?: string; log: (s: string) => void }): string {
   try { return stepResult(step, r, opts); } catch (e) { return `fail ${(e as Error).message}`; }
 }
-function stepResult(step: RunbookStep, r: Resolver, opts: { runDir: string; sheetDelay: number; dryRun: boolean; resume?: boolean; log: (s: string) => void }): string {
+function stepResult(step: RunbookStep, r: Resolver, opts: { runDir: string; sheetDelay: number; dryRun: boolean; resume?: boolean; target?: string; log: (s: string) => void }): string {
   const { runDir, log } = opts;
   const exits = Array.isArray(step.expectExit) ? step.expectExit : [step.expectExit];
   if (step.host !== "control") return `fail host ${step.host}: this runner runs control steps only`;
@@ -145,7 +154,15 @@ function stepResult(step: RunbookStep, r: Resolver, opts: { runDir: string; shee
     if (!existsSync(after)) return `fail notBefore ${step.notBefore.afterStep} has no result`;
     const ready = readyAt(statSync(after).mtimeMs, step.notBefore.hours, opts.sheetDelay);
     const wait = ready - Math.floor(Date.now() / 1000);
-    if (wait > 0 && !opts.dryRun) { log(`${step.id}: notBefore ${step.notBefore.afterStep} + ${step.notBefore.hours === "timelockDelay" ? `${opts.sheetDelay} s` : `${step.notBefore.hours} h`}: waiting ${wait} s (ready ${new Date(ready * 1000).toISOString()})`); sleep(wait); }
+    if (!opts.dryRun && twinClockWait(opts.target, step.notBefore.hours, step.flow)) {
+      // The Twin's clock is anvil's: the wall time since the fork started plus every warp, carried by a block only when one is mined. The wait is one warp of
+      // the remaining seconds (at least 1 s, so the head always carries the clock), journaled with the step: the chain sees the time a wall sleep would give it.
+      const by = Math.max(wait, 1);
+      log(`${step.id}: notBefore ${step.notBefore.afterStep} + ${step.notBefore.hours === "timelockDelay" ? `${opts.sheetDelay} s` : `${step.notBefore.hours} h`}: the Twin clock moves ${by} s forward instead of a wall sleep`);
+      mkdirSync(join(runDir, "journal"), { recursive: true });
+      const code = runCommand(["bun", "publish-contracts/src/rehearsal/cli.ts", "warp", "--rpc", r.scalar("rpcUrl"), "--seconds", String(by)], {}, join(runDir, "journal", `${step.id}.out`), join(runDir, "journal", `${step.id}.err`));
+      if (code !== 0) return `fail notBefore twin clock warp exit ${code}`;
+    } else if (wait > 0 && !opts.dryRun) { log(`${step.id}: notBefore ${step.notBefore.afterStep} + ${step.notBefore.hours === "timelockDelay" ? `${opts.sheetDelay} s` : `${step.notBefore.hours} h`}: waiting ${wait} s (ready ${new Date(ready * 1000).toISOString()})`); sleep(wait); }
   }
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(step.env ?? {})) { const x = r.text(v); if (x !== "") env[k] = x; }
@@ -203,7 +220,7 @@ async function main(argv: string[]): Promise<number> {
     const prior = readResult(runDir, step.id);
     if (!shouldRun(prior, step)) { log(`${step.id}: already passed`); continue; }
     const sheetDelay = (() => { try { return Number(parseSheetText(readFileSync(r.scalar("sheet"), "utf8")).TIMELOCK_MIN_DELAY ?? 0); } catch { return 0; } })();
-    const result = runStep(step, r, { runDir, sheetDelay, dryRun: v["dry-run"] === true, resume: prior?.startsWith("fail") === true && step.irreversible, log });
+    const result = runStep(step, r, { runDir, sheetDelay, dryRun: v["dry-run"] === true, resume: prior?.startsWith("fail") === true && step.irreversible, target: v.target, log });
     if (!v["dry-run"]) writeResult(runDir, step.id, result);
     log(`${step.id}: ${result}`);
     if (result.startsWith("fail")) { log(`stopped at ${step.id}. Fix the cause, then run the same command again: a passed step is not repeated.`); return 1; }

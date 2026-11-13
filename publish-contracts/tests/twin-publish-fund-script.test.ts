@@ -43,13 +43,15 @@ function stubs(): Record<string, string> {
       }`),
     TWIN_FEEDS: f("feeds.js", `
       const fs = require("node:fs"), a = process.argv.slice(2), v = (k) => a[a.indexOf(k) + 1];
-      fs.appendFileSync(process.env.STUB_LOG, "feeds " + a[0] + (a[0] === "probe" ? " fund=" + v("--fund") + " queue=" + v("--queue") + " usdc=" + v("--usdc") : " min=" + v("--min-margin")) + "\\n");
+      fs.appendFileSync(process.env.STUB_LOG, "feeds " + a[0] + (a[0] === "probe" ? " fund=" + v("--fund") + " queue=" + v("--queue") + " usdc=" + v("--usdc") : a[0] === "refresh" ? " journal=" + (a.includes("--journal") ? "yes" : "no") : " min=" + v("--min-margin")) + "\\n");
       if (process.env.STUB_FAIL === "feeds-" + a[0]) { console.error("stub: feeds " + a[0] + " failed"); process.exit(1); }
       if (a[0] === "check") fs.writeFileSync(v("--out"), JSON.stringify({ windows: [{ name: "ETH/USD", fresh: true, marginSec: 900 }, { name: "cbBTC/USD", fresh: true, marginSec: 80000 }, { name: "USDC/USD", fresh: true, marginSec: 70000 }] }));
+      else if (a[0] === "refresh") fs.writeFileSync(v("--out"), JSON.stringify({ pinBlock: 7, problems: [], feeds: ["ETH/USD", "cbBTC/USD", "USDC/USD"].map((name, i) => ({ name, pin: { answer: String(100 + i) }, after: { answer: process.env.STUB_REFRESH_ANSWER || String(100 + i), aggregatorRound: 10 + i } })) }));
       else fs.writeFileSync(v("--out"), JSON.stringify({ ethIndex: 2, fresh: { result: "ok" }, stale: { warpedSec: 600 }, problems: [] }));`),
     // cast: `nonce` answers the next value of STUB_NONCES (a comma list kept in a state file), `rpc` and `send` are logged.
     CAST: f("cast", `#!/usr/bin/env bash
 echo "cast $1 $2" >> "$STUB_LOG"
+if [ "$1" = call ]; then echo "$STUB_TOTAL_ASSETS"; fi
 if [ "$1" = nonce ]; then n=$(cat "$STUB_NONCE_STATE" 2>/dev/null || echo 0); echo "$STUB_NONCES" | cut -d, -f$((n + 1)); echo $((n + 1)) > "$STUB_NONCE_STATE"; fi
 `, 0o755),
   };
@@ -60,7 +62,7 @@ function runScript(env: Record<string, string> = {}) {
   const log = join(work, "log"), ghEnv = join(work, "env");
   writeFileSync(log, ""); writeFileSync(ghEnv, "");
   const r = Bun.spawnSync([process.execPath, join(REPO_ROOT, "publish-contracts/src/ci/twin-publish-fund.ts")], {
-    env: { ...process.env, ...stubs(), STUB_LOG: log, STUB_COUNTS: JSON.stringify(FUND_COUNTS), STUB_NONCES: String(fundSum + 1), STUB_NONCE_STATE: join(work, "nonce-state"), STUB_FAIL: "",
+    env: { ...process.env, ...stubs(), STUB_LOG: log, STUB_COUNTS: JSON.stringify(FUND_COUNTS), STUB_NONCES: String(fundSum + 1), STUB_NONCE_STATE: join(work, "nonce-state"), STUB_FAIL: "", STUB_TOTAL_ASSETS: "1000000 [1e6]",
       STUB_SHEET_COPY: join(work, "sheet.env"), GITHUB_WORKSPACE: REPO_ROOT, GITHUB_ENV: ghEnv, RPC_URL: "http://127.0.0.1:1", TWIN_RUN_PARENT: work, ...env },
     stdout: "pipe", stderr: "pipe",
   });
@@ -134,6 +136,26 @@ describe("twin-publish-fund step script", () => {
     expect(r.code).not.toBe(0);
     expect(r.exported.TWIN_QA_RECORD).toBeUndefined();
     expect(r.out).not.toContain("fund-feed-stale-refusal");
+  });
+  test("after the probe the Twin feed step restates the pin answers, with a journal, and the fund reads again before the record", () => {
+    const r = runScript();
+    expect(r.code).toBe(0);
+    const i = (l: string) => r.all.findIndex((x) => x.startsWith(l));
+    expect(i("feeds refresh journal=yes")).toBeGreaterThan(i("feeds probe"));
+    expect(i("cast call")).toBeGreaterThan(i("feeds refresh"));
+    expect(r.out).toContain("fund-feed-refresh: feeds=3 pin_block=7");
+    expect(r.out).toContain("total_assets=1000000");
+    expect(JSON.parse(readFileSync(r.exported.TWIN_QA_RECORD!, "utf8")).feedRefresh).toBe(r.exported.TWIN_FEED_REFRESH_JSON);
+  });
+  test("a refresh that writes any answer but the pin's fails the run and writes no record", () => {
+    const r = runScript({ STUB_REFRESH_ANSWER: "999" });
+    expect(r.code).not.toBe(0);
+    expect(r.exported.TWIN_QA_RECORD).toBeUndefined();
+  });
+  test("a fund that still refuses after the refresh fails the run and writes no record", () => {
+    const r = runScript({ STUB_TOTAL_ASSETS: "" });
+    expect(r.code).not.toBe(0);
+    expect(r.exported.TWIN_QA_RECORD).toBeUndefined();
   });
   test("a nonce that is not the fund counts plus the prove-control transaction fails the counts check", () => {
     const r = runScript({ STUB_NONCES: String(fundSum + 2) });

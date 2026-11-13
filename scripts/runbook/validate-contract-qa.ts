@@ -664,6 +664,19 @@ export function sends(s: Pick<RunbookStep, "cmds">): boolean {
   });
 }
 
+/**
+ * PURE. A command must not read {state:X} after it writes {runDir}/state/X: the runner resolves every placeholder of a command before it runs, so the read
+ * fails (or reads an earlier run's value) after the command's sends. Read the file the command wrote, "$(cat {runDir}/state/X)", or split the command.
+ */
+export function stateSelfReadProblems(steps: Pick<RunbookStep, "id" | "cmds">[]): string[] {
+  const out: string[] = [];
+  for (const s of steps) s.cmds.forEach((c, i) => {
+    const j = c.join(" ");
+    for (const m of j.matchAll(/\{runDir\}\/state\/([a-z0-9-]+)/g)) if (j.slice(m.index!).includes(`{state:${m[1]}}`)) out.push(`${s.id}: command ${i + 1} writes {runDir}/state/${m[1]} and then reads {state:${m[1]}}, which the runner resolves before the command runs; read "$(cat {runDir}/state/${m[1]})" instead`);
+  });
+  return [...new Set(out)];
+}
+
 /** PURE. No step starts, serves, waits for or stops a Twin fork, or runs anvil, as a command of this machine: the fork lives on the stage host (README "Hosts"), so the command is an ssh command whose remote script names it. */
 export function localForkProblems(steps: Pick<RunbookStep, "id" | "cmds">[]): string[] {
   const out: string[] = [];
@@ -812,7 +825,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
   problems.push(...commandProblems(template.steps, model, root));
   problems.push(...clearVectorProblems(template.steps, "template.yaml"));
   problems.push(...upgradeBuildGateProblems(template.steps, "template.yaml"));
-  problems.push(...recordStepProblems(template.steps), ...localForkProblems(template.steps));
+  problems.push(...recordStepProblems(template.steps), ...localForkProblems(template.steps), ...stateSelfReadProblems(template.steps));
   problems.push(...rebalanceRoundProblems(template.steps, "template.yaml"));
   problems.push(...gatewayRunbookProblems(root, model));
   const releases = new Map<string, ReleaseRunbook>();
@@ -841,7 +854,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
       problems.push(...commandProblems(r.steps, model, root));
       problems.push(...clearVectorProblems(r.steps, `releases/${f}`));
       problems.push(...upgradeBuildGateProblems(r.steps, `releases/${f}`));
-      problems.push(...recordStepProblems(r.steps), ...localForkProblems(r.steps));
+      problems.push(...recordStepProblems(r.steps), ...localForkProblems(r.steps), ...stateSelfReadProblems(r.steps));
       problems.push(...rebalanceRoundProblems(r.steps, `releases/${f}`));
     } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   }
