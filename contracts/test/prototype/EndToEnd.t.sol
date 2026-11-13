@@ -146,7 +146,7 @@ contract EndToEndTest is PrototypeHarness {
         assertEq(q.feeBps, 0, "quote: no deposit fee class");
         assertEq(
             q.holdEnds,
-            q.earliestSettle + 24 hours,
+            q.earliestSettle + 1 hours,
             "quote: hold ends minHold after the earliest settle"
         );
         assertEq(
@@ -212,7 +212,7 @@ contract EndToEndTest is PrototypeHarness {
         assertEq(st.time, block.timestamp, "settled now");
         assertGt(st.sharesMinted, 0, "shares minted to the queue");
         assertLe(st.usdcIn, usdc, "spent at most the request");
-        assertEq(st.holdEndsAt, block.timestamp + 24 hours, "hold ends minHold later");
+        assertEq(st.holdEndsAt, block.timestamp + 1 hours, "hold ends minHold later");
         assertLe(
             st.usdcIn * PRICE_SCALE,
             st.depositBoundPrice * st.sharesMinted,

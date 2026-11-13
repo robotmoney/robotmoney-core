@@ -95,7 +95,7 @@ describe("the fund sheet (Deploy 4)", () => {
       ["FUND_MAX_SLIPPAGE_BPS", "5", "must be above the 5 bps pool fee"],
       ["FUND_NAV_DEVIATION_BPS", "2001", "must be above the 5 bps pool fee and at most 2000"],
       ["FUND_EXIT_FEE_BPS", "101", "above the fund's ceiling"],
-      ["FLOW_MIN_HOLD", "3600", "FLOW_MIN_HOLD 3600 is outside the contract's bounds"],
+      ["FLOW_MIN_HOLD", "3599", "FLOW_MIN_HOLD 3599 is outside the contract's bounds"],
       ["FLOW_REF_BAND_BPS", "2001", "FLOW_REF_BAND_BPS 2001 is outside"],
       ["FLOW_SETTLE_WINDOW", "21600", "FLOW_SETTLE_WINDOW must be shorter than FLOW_EPOCH_LENGTH"],
       ["FLOW_QUORUM", "13", "FLOW_QUORUM exceeds FLOW_SLICES"],
