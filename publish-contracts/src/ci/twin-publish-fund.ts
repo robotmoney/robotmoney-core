@@ -16,7 +16,7 @@
 // the fund's own refusal once ETH / USD is past its stale point: totalAssets() reverts FeedUnhealthy(WETH, Stale) and quoteDeposit SettleBlocked(Feed, WETH, Stale).
 // Then the Twin feed step (twin-feeds.ts refresh, owner decision 2026-11-13): each basket and peg feed gets one new round that restates the answer it reported at the
 // pin, at the fork's clock, written to the real aggregator's storage and journaled; totalAssets() must read again. No mock is etched, no pool, token, fund or queue
-// slot is written. The queue's timed rows run after this script, from the release runbook (releases/v0.7.0-onevault.yaml, P6.80 to P6.85 refresh before them).
+// slot is written. The queue's timed rows run after this script, from the release runbook (releases/v0.7.0-onevault.yaml, whose Twin-only rows P6.80 to P6.86 refresh before them).
 // The record: counts.json names `system: "fund"` (rehearsal-counts build --system fund), the markers are the fund's own (twin-markers.ts FUND_RUN_MARKERS), and the last
 // step writes twin-qa-fund.json { kind: "twin-qa-run", system: "fund", deploySha, ..., conclusion: "success" }, which a failed run never reaches.
 // Exports: TWIN_RUN_DIR, TWIN_MANIFEST_DIR, TWIN_DEPLOYER_ADDRESS, TWIN_COUNTS_JSON, TWIN_VERIFY_LABELS_FUND, TWIN_FEEDS_JSON, TWIN_FEED_PROBE_JSON, TWIN_FEED_REFRESH_JSON,
