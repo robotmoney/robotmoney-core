@@ -842,6 +842,24 @@ steps:
     added: "v0.7.0-onevault"
 
   # ── Phase 4, verify again: the post-govern state. ──
+  - id: "P3.63-fund-keeper-gas"
+    standing: ["4.2", "4.10"]
+    description: "The keeper gets its gas from the deployer before its first send (the settle of P6.61): KEEPER_ROLE settles the queue and steps the rebalancer, and a new keeper key holds no ETH (Deploy 4 found it at 0 ETH, nonce 0, on 2026-11-13; P0.72 only warns). The deployer sends 0.001 ETH, about a hundred keeper sends on Base, journaled here so the report counts it as a step's transaction; the keeper must then hold at least 0.0009 ETH. The owner's go of 2026-11-12 covers funding a new keeper key from the deployer"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bash", "-c", 'echo "keeper before: $(cast balance "{sheet:KEEPER_ADDRESS}")"']
+      - ["bash", "scripts/runbook/cast-send.sh", "{sheet:KEEPER_ADDRESS}", "--value", "1000000000000000", "{cast}"]
+      - ["bash", "-c", 'b=$(cast balance "{sheet:KEEPER_ADDRESS}"); echo "keeper after: $b"; bun scripts/runbook/qa-assert.ts ge "$b" 900000000000000']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: true
+    notBefore: {"afterStep": "P3.62-fund-register-submitter-execute", "hours": 0}
+    flow: "fund"
+    onlyFor: ["twin", "rehearsal"]
+    added: "v0.7.0-onevault"
   - id: "P4.01-verify-post-govern"
     standing: ["4.3"]
     description: "Stage 12 again: all four unpause rows executed, all four vaults read depositsPaused false; a manifest that disagrees with the chain fails closed"
