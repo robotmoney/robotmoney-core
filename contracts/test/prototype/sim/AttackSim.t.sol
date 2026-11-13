@@ -195,11 +195,15 @@ abstract contract AttackSimCore is SimMarket, AttackBook, AttackSimSpec {
 
     function _optIn() internal returns (bool) {
         if (!vm.envOr("PROTO_SIM_ATTACKS", false)) {
-            vm.skip(true, "opt-in: the sim attacks run minutes; set PROTO_SIM_ATTACKS=1");
+            _skipOptIn("opt-in: the sim attacks run minutes; set PROTO_SIM_ATTACKS=1");
             return false;
         }
         return true;
     }
+
+    /// @dev `BaseFixture._skipCovered`, reached through the concrete test (this core is not a BaseFixture): the
+    ///      coverage check runs before the skip, so the recorder proves the skip without recording it.
+    function _skipOptIn(string memory why) internal virtual;
 
     function _seeds() internal view returns (uint256) {
         return vm.envOr("PROTO_SIM_ATTACK_SEEDS", SEEDS);
@@ -528,6 +532,10 @@ contract AttackSimTimedTest is TimedSimBase, AttackSimCore {
     /// @dev `TimedSimBase` and `SimMarket` both reach Test; the harness's fixture default is the sim's (off).
     function _fixtureCheckByDefault() internal pure override returns (bool) {
         return false;
+    }
+
+    function _skipOptIn(string memory why) internal override {
+        _skipCovered(why);
     }
 
     function test_A2_sim_timed_twapPushHeldAgainstArbitrage() public fixtureCovered {
@@ -996,6 +1004,10 @@ contract AttackSimBaselineTest is BaselineHarness, AttackSimCore {
     using Math for uint256;
 
     uint256 internal constant B_LEND_N = 3;
+
+    function _skipOptIn(string memory why) internal override {
+        _skipCovered(why);
+    }
 
     function _mkFundUsdc(address to, uint256 amount) internal override {
         fundUsdc(to, amount);

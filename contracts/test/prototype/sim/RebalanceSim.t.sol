@@ -402,12 +402,12 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
 
     function _run(uint256 scn, uint256 fundM, uint256 k) internal {
         if (!vm.envOr("PROTO_SIM", false)) {
-            vm.skip(true);
+            _skipCovered("");
             return;
         }
         // PROTO_SIM_FLOWS=timed runs the timed arm (TimedFlowSim.t.sol, live fund) instead of this synchronous one.
         if (keccak256(bytes(vm.envOr("PROTO_SIM_FLOWS", string("sync")))) == keccak256("timed")) {
-            vm.skip(true);
+            _skipCovered("");
             return;
         }
         // Gas stays metered: paused metering costs forge work on every opcode. A plan burns about 1.5e9 gas, more

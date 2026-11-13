@@ -251,11 +251,11 @@ contract TimedFlowSimTest is TimedSimBase {
 
     function _run(uint256 scn, uint256 fundM, uint256 k) internal {
         if (!vm.envOr("PROTO_SIM", false)) {
-            vm.skip(true);
+            _skipCovered("");
             return;
         }
         if (keccak256(bytes(vm.envOr("PROTO_SIM_FLOWS", string("sync")))) != keccak256("timed")) {
-            vm.skip(true);
+            _skipCovered("");
             return;
         }
         _selectParams();
