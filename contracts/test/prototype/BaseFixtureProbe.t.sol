@@ -159,7 +159,7 @@ contract BaseFixtureProbeTest is BaseFixture {
         string[4] memory names = ["ETH / USD", "BTC / USD", "cbBTC / USD", "USDC / USD"];
         for (uint256 i; i < feeds.length; ++i) {
             if (feeds[i].code.length == 0) {
-                vm.skip(true, "the replay fixture lacks the Chainlink feed accounts until verify re-records");
+                _skipCovered("the replay fixture lacks the Chainlink feed accounts until verify re-records");
             }
             IProbeAggregator f = IProbeAggregator(feeds[i]);
             assertEq(f.description(), names[i], "feed description");
@@ -171,7 +171,7 @@ contract BaseFixtureProbeTest is BaseFixture {
             assertLe(updatedAt, block.timestamp, "round not after the pin");
         }
         if (FEED_SEQUENCER.code.length == 0) {
-            vm.skip(true, "the replay fixture lacks the sequencer uptime feed until verify re-records");
+            _skipCovered("the replay fixture lacks the sequencer uptime feed until verify re-records");
         }
         IProbeAggregator seq = IProbeAggregator(FEED_SEQUENCER);
         assertGt(bytes(seq.description()).length, 0, "sequencer feed description");

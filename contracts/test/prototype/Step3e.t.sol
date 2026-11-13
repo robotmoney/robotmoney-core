@@ -856,7 +856,7 @@ contract Step3eTest is PrototypeHarness {
     function _finding(string memory why) internal {
         emit log_named_string("G8 FINDING", why);
         if (vm.envOr("PROTO_ATTACK_FINDINGS_FAIL", false)) revert(why);
-        vm.skip(true, why);
+        _skipCovered(why);
     }
 
     /// @dev Reference prices: each pool's spot now.

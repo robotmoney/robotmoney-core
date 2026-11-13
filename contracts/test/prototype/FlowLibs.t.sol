@@ -483,7 +483,7 @@ contract FlowRateAdaptersPinTest is BaseFixture {
     function test_pin_ratePerUnit_compoundV3() public fixtureCovered {
         address ext = ICometExtensionDelegate(COMET).extensionDelegate();
         if (ext.code.length == 0) {
-            vm.skip(true, "fixture lacks Comet's extension delegate (totalsBasic); re-record, see requests.md");
+            _skipCovered("fixture lacks Comet's extension delegate (totalsBasic); re-record, see requests.md");
         }
         _checkVenue(new CompoundV3RateAdapter(COMET, USDC, address(this)), "Compound V3");
     }

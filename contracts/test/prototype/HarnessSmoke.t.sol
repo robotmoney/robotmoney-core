@@ -149,7 +149,7 @@ contract HarnessSmokeTest is PrototypeHarness {
     /// @dev Compound V3 is listed only when the fixture holds Comet's extension delegate (see the harness note).
     function test_compoundListedWhenTheFixtureCoversIt() public fixtureCovered {
         if (!cometListed) {
-            vm.skip(true, "Compound V3 not listed: the replay fixture lacks Comet's extension delegate (re-record)");
+            _skipCovered("Compound V3 not listed: the replay fixture lacks Comet's extension delegate (re-record)");
         }
         assertEq(fund.assetConfig(IDX_COMET).adapter, address(cometAdapter), "Compound is the last asset");
         assertGt(ILendingRateAdapter(address(cometAdapter)).ratePerUnit(), 1e18, "Comet supply index");
