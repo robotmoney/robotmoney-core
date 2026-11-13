@@ -1296,7 +1296,7 @@ steps:
       - ["bash", "-c", 'cast call "{m:queue.queue}" "requestCount()(uint256)" | cut -d" " -f1 > {runDir}/state/fund-request-c']
       - ["bash", "-c", 'for id in {state:fund-request-a} {state:fund-request-b} {state:fund-request-c}; do r=$(cast call "{m:queue.queue}" "getRequest(uint256)((address,uint8,uint64,uint256,uint256,uint256,bool))" "$id"); bun scripts/runbook/qa-assert.ts eq "$(echo "$r" | tr -d "()" | cut -d, -f1)" "{sheet:ADMIN_ADDRESS}" || exit 1; test "$(cast call "{m:queue.queue}" "requestStatus(uint256)(uint8)" "$id")" = 1 || exit 1; done']
       - ["bash", "-c", 'cast call "{m:queue.queue}" "getRequest(uint256)((address,uint8,uint64,uint256,uint256,uint256,bool))" "{state:fund-request-c}" | tr -d "()" | cut -d, -f3 | tr -d " " | sed "s/[[].*//" > {runDir}/state/fund-request-epoch']
-      - ["bash", "-c", 'cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-usdc-after-requests && bun scripts/runbook/qa-assert.ts eq "$(bun scripts/runbook/qa-assert.ts sub {state:fund-usdc-before-requests} {state:fund-usdc-after-requests})" 3000000']
+      - ["bash", "-c", 'cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-usdc-after-requests && bun scripts/runbook/qa-assert.ts eq "$(bun scripts/runbook/qa-assert.ts sub {state:fund-usdc-before-requests} "$(cat {runDir}/state/fund-usdc-after-requests)")" 3000000']
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -1351,7 +1351,7 @@ steps:
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:fund-claim-a-usdc}", "1"]
       - ["bash", "-c", 'cast call "{m:fund.fund}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-shares-before-a']
       - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "deposit(uint256,address)", "{state:fund-claim-a-usdc}", "{sheet:ADMIN_ADDRESS}", "{cast}"]
-      - ["bash", "-c", 'cast call "{m:fund.fund}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-shares-after-a && bun scripts/runbook/qa-assert.ts sub {state:fund-shares-after-a} {state:fund-shares-before-a} > {runDir}/state/fund-shares-a']
+      - ["bash", "-c", 'cast call "{m:fund.fund}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-shares-after-a && bun scripts/runbook/qa-assert.ts sub "$(cat {runDir}/state/fund-shares-after-a)" {state:fund-shares-before-a} > {runDir}/state/fund-shares-a']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:fund-shares-a}", "1"]
       - ["bash", "-c", 'test "$(cast call "{m:queue.queue}" "claimableDepositRequest(uint256,address)(uint256)" "{state:fund-request-a}" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
     env:
@@ -1391,7 +1391,7 @@ steps:
       - ["bash", "-c", 'cast call "{m:queue.queue}" "quoteRedeem(uint256)((uint256,uint256,uint256,uint64,uint64))" "{state:fund-shares-a}" | tr -d "()" | cut -d, -f1 | cut -d" " -f1 > {runDir}/state/fund-redeem-bound && cat {runDir}/state/fund-redeem-bound']
       - ["bash", "scripts/runbook/cast-send.sh", "{m:fund.fund}", "approve(address,uint256)", "{m:queue.queue}", "{state:fund-shares-a}", "{cast}"]
       - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "requestRedeem(uint256,uint256,address)", "{state:fund-shares-a}", "{state:fund-redeem-bound}", "{sheet:ADMIN_ADDRESS}", "{cast}"]
-      - ["bash", "-c", 'cast call "{m:queue.queue}" "requestCount()(uint256)" | cut -d" " -f1 > {runDir}/state/fund-request-r && test "$(cast call "{m:queue.queue}" "requestStatus(uint256)(uint8)" "{state:fund-request-r}")" = 1']
+      - ["bash", "-c", 'cast call "{m:queue.queue}" "requestCount()(uint256)" | cut -d" " -f1 > {runDir}/state/fund-request-r && test "$(cast call "{m:queue.queue}" "requestStatus(uint256)(uint8)" "$(cat {runDir}/state/fund-request-r)")" = 1']
       - ["bash", "-c", 'cast call "{m:queue.queue}" "getRequest(uint256)((address,uint8,uint64,uint256,uint256,uint256,bool))" "{state:fund-request-r}" | tr -d "()" | cut -d, -f3 | tr -d " " | sed "s/[[].*//" > {runDir}/state/fund-redeem-epoch']
       - ["bash", "-c", 'test "$(cast call "{m:fund.fund}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
     env:
@@ -1448,7 +1448,7 @@ steps:
     cmds:
       - ["bash", "-c", 'cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-usdc-before-claim-r']
       - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "redeem(uint256,address,address)", "{state:fund-claim-r-shares}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "{cast}"]
-      - ["bash", "-c", 'cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-usdc-after-claim-r && bun scripts/runbook/qa-assert.ts sub {state:fund-usdc-after-claim-r} {state:fund-usdc-before-claim-r} > {runDir}/state/fund-usdc-claimed-r']
+      - ["bash", "-c", 'cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-usdc-after-claim-r && bun scripts/runbook/qa-assert.ts sub "$(cat {runDir}/state/fund-usdc-after-claim-r)" {state:fund-usdc-before-claim-r} > {runDir}/state/fund-usdc-claimed-r']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:fund-usdc-claimed-r}", "1"]
       - ["bash", "-c", 'test "$(cast call "{m:queue.queue}" "claimableRedeemRequest(uint256,address)(uint256)" "{state:fund-request-r}" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
     env:
@@ -1494,7 +1494,7 @@ steps:
       - ["bash", "-c", 'cast call "{m:queue.queue}" "claimableDepositRequest(uint256,address)(uint256)" "{state:fund-request-b}" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-claim-b-usdc']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:fund-claim-b-usdc}", "1"]
       - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "deposit(uint256,address)", "{state:fund-claim-b-usdc}", "{sheet:ADMIN_ADDRESS}", "{cast}"]
-      - ["bash", "-c", 'cast call "{m:fund.fund}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-shares-b && bun scripts/runbook/qa-assert.ts ge {state:fund-shares-b} 1']
+      - ["bash", "-c", 'cast call "{m:fund.fund}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-shares-b && bun scripts/runbook/qa-assert.ts ge "$(cat {runDir}/state/fund-shares-b)" 1']
       - ["bash", "-c", 'cast call "{m:queue.queue}" "quoteRedeem(uint256)((uint256,uint256,uint256,uint64,uint64))" "{state:fund-shares-b}" | tr -d "()" | cut -d, -f1 | cut -d" " -f1 > {runDir}/state/fund-exit-bound']
       - ["bash", "scripts/runbook/cast-send.sh", "{m:fund.fund}", "approve(address,uint256)", "{m:queue.queue}", "{state:fund-shares-b}", "{cast}"]
       - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "requestRedeem(uint256,uint256,address)", "{state:fund-shares-b}", "{state:fund-exit-bound}", "{sheet:ADMIN_ADDRESS}", "{cast}"]
@@ -1519,7 +1519,7 @@ steps:
       - ["bash", "-c", 'cast call "{m:queue.queue}" "claimableDepositRequest(uint256,address)(uint256)" "{state:fund-request-c}" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-claim-c-usdc']
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:fund-claim-c-usdc}", "1"]
       - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "deposit(uint256,address)", "{state:fund-claim-c-usdc}", "{sheet:ADMIN_ADDRESS}", "{cast}"]
-      - ["bash", "-c", 'cast call "{m:fund.fund}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-shares-c && bun scripts/runbook/qa-assert.ts ge {state:fund-shares-c} 1']
+      - ["bash", "-c", 'cast call "{m:fund.fund}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-shares-c && bun scripts/runbook/qa-assert.ts ge "$(cat {runDir}/state/fund-shares-c)" 1']
       - ["bash", "scripts/runbook/cast-send.sh", "{m:fund.fund}", "redeemInKind(uint256,address,address)", "{state:fund-shares-c}", "{sheet:ADMIN_ADDRESS}", "{sheet:ADMIN_ADDRESS}", "{cast}"]
       - ["bash", "-c", 'test "$(cast call "{m:fund.fund}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" = 0']
     env:
