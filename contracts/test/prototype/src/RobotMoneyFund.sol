@@ -95,17 +95,21 @@ contract RobotMoneyFund is
     ///         are self-administered and bound once later (`bindRebalanceRoles`: the governance and rebalancer
     ///         proxies take the fund address at their own initialization). Creates the fund's `ExclusionLedger` (ADP-2, core 1820) through the
     ///         linked `RobotMoneyVaultOps.createLedger`, so the ledger names this proxy as its only writer.
-    function initialize(FundInitParams calldata p, address upgradeTimelock, GovernedUUPS.UpgradeMode mode)
-        external
-        initializer
-    {
-        if (p.usdc == address(0) || p.feeRecipient == address(0) || p.admin == address(0) || p.emergency == address(0))
-        {
+    function initialize(
+        FundInitParams calldata p,
+        address upgradeTimelock,
+        GovernedUUPS.UpgradeMode mode
+    ) external initializer {
+        if (
+            p.usdc == address(0) || p.feeRecipient == address(0) || p.admin == address(0)
+                || p.emergency == address(0)
+        ) {
             revert ZeroAddress();
         }
         if (
-            p.exitFeeBps > FundStorage.MAX_EXIT_FEE_BPS || p.maxSlippageBps > FundStorage.MAX_SLIPPAGE_BPS
-                || p.maxSlippageBps == 0 || p.navDeviationGuardBps > FundStorage.MAX_NAV_DEVIATION_BPS
+            p.exitFeeBps > FundStorage.MAX_EXIT_FEE_BPS
+                || p.maxSlippageBps > FundStorage.MAX_SLIPPAGE_BPS || p.maxSlippageBps == 0
+                || p.navDeviationGuardBps > FundStorage.MAX_NAV_DEVIATION_BPS
         ) revert InvalidParam();
         __ERC20_init(p.name, p.symbol);
         __ERC4626_init(IERC20(p.usdc));
@@ -307,7 +311,12 @@ contract RobotMoneyFund is
 
     /// @inheritdoc IRobotMoneyFund
     /// @dev Body in `FundFlowsLib.seed`; the shares are minted to the fund itself and never move (`_update`).
-    function seed(uint256 usdc) external onlyRole(ADMIN_ROLE) nonReentrant returns (uint256 shares) {
+    function seed(uint256 usdc)
+        external
+        onlyRole(ADMIN_ROLE)
+        nonReentrant
+        returns (uint256 shares)
+    {
         shares = FundFlowsLib.seed(_s(), _msgSender(), usdc, totalSupply());
         _mint(address(this), shares);
     }
@@ -322,7 +331,8 @@ contract RobotMoneyFund is
         returns (uint256 usdcSpent)
     {
         address caller = _msgSender();
-        usdcSpent = FundFlowsLib.mintInKind(_s(), caller, sharesOut, maxUsdc, maxUsdcPerLeg, totalSupply());
+        usdcSpent =
+            FundFlowsLib.mintInKind(_s(), caller, sharesOut, maxUsdc, maxUsdcPerLeg, totalSupply());
         _mint(caller, sharesOut);
     }
 
@@ -343,12 +353,20 @@ contract RobotMoneyFund is
     }
 
     /// @inheritdoc IRobotMoneyFund
-    function positionClaimOf(uint256 index, address account) external view returns (uint256, uint256) {
+    function positionClaimOf(uint256 index, address account)
+        external
+        view
+        returns (uint256, uint256)
+    {
         return FundPositionLib.claimOf(_s(), index, account);
     }
 
     /// @inheritdoc IRobotMoneyFund
-    function positionUnits(uint256 index) external view returns (uint256 totalUnits, uint256 claimUnits) {
+    function positionUnits(uint256 index)
+        external
+        view
+        returns (uint256 totalUnits, uint256 claimUnits)
+    {
         FundState storage s = _s();
         return (s.positionUnits[index], s.positionClaimTotal[index]);
     }
@@ -386,7 +404,10 @@ contract RobotMoneyFund is
     }
 
     /// @inheritdoc IRobotMoneyFund
-    function setInKindAllowance(uint16 bps, uint128 floorUsdc, uint32 period) external onlyRole(ADMIN_ROLE) {
+    function setInKindAllowance(uint16 bps, uint128 floorUsdc, uint32 period)
+        external
+        onlyRole(ADMIN_ROLE)
+    {
         FundPositionLib.setInKindAllowance(_s(), bps, floorUsdc, period);
     }
 
@@ -455,7 +476,10 @@ contract RobotMoneyFund is
     }
 
     /// @inheritdoc IRobotMoneyFund
-    function bindRebalanceRoles(address governance, address rebalancer) external onlyRole(ADMIN_ROLE) {
+    function bindRebalanceRoles(address governance, address rebalancer)
+        external
+        onlyRole(ADMIN_ROLE)
+    {
         FundState storage s = _s();
         if (s.rolesBound) revert RolesAlreadyBound();
         if (governance == address(0) || rebalancer == address(0)) revert ZeroAddress();
@@ -505,7 +529,11 @@ contract RobotMoneyFund is
         return FundValuationLib.assetValue(_s(), index);
     }
 
-    function portfolioValues() external view returns (uint256 nav, uint256 idle, uint256[] memory values) {
+    function portfolioValues()
+        external
+        view
+        returns (uint256 nav, uint256 idle, uint256[] memory values)
+    {
         return FundValuationLib.portfolio(_s());
     }
 
@@ -580,7 +608,11 @@ contract RobotMoneyFund is
     }
 
     /// @inheritdoc IRobotMoneyFund
-    function config() external view returns (uint256 tvlCap, uint256 perDepositCap, uint256 exitFeeBps, address feeRecipient) {
+    function config()
+        external
+        view
+        returns (uint256 tvlCap, uint256 perDepositCap, uint256 exitFeeBps, address feeRecipient)
+    {
         FundState storage s = _s();
         return (s.tvlCap, s.perDepositCap, s.exitFeeBps, s.feeRecipient);
     }
@@ -618,7 +650,11 @@ contract RobotMoneyFund is
     ///         again. Basket assets are not touched retroactively (as on BasketVault).
     /// @dev Deliberately NOT frozen by a live plan: excluding a bad adapter must never wait for a plan to end.
     ///      Indices are untouched, so plan arrays stay aligned.
-    function setAdapterCodeHashAllowed(bytes32 codeHash, bool allowed) external onlyRole(ADMIN_ROLE) nonReentrant {
+    function setAdapterCodeHashAllowed(bytes32 codeHash, bool allowed)
+        external
+        onlyRole(ADMIN_ROLE)
+        nonReentrant
+    {
         if (codeHash == bytes32(0)) revert InvalidParam();
         _s().codeHashAllowed[codeHash] = allowed;
         emit AdapterCodeHashAllowedSet(codeHash, allowed);
@@ -626,7 +662,11 @@ contract RobotMoneyFund is
     }
 
     /// @inheritdoc IRobotMoneyFund
-    function addAsset(AssetConfig calldata c) external onlyRole(ADMIN_ROLE) returns (uint256 index) {
+    function addAsset(AssetConfig calldata c)
+        external
+        onlyRole(ADMIN_ROLE)
+        returns (uint256 index)
+    {
         return FundAdminLib.addAsset(_s(), c);
     }
 

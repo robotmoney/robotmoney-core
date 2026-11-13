@@ -91,7 +91,11 @@ contract QueueMockObservablePool {
         dropPoints = n;
     }
 
-    function observe(uint32[] calldata secondsAgos) external view returns (int56[] memory cum, uint160[] memory spl) {
+    function observe(uint32[] calldata secondsAgos)
+        external
+        view
+        returns (int56[] memory cum, uint160[] memory spl)
+    {
         require(!reverts, "OLD");
         uint256 n = secondsAgos.length - dropPoints;
         cum = new int56[](n);
@@ -120,7 +124,11 @@ contract FlowLibsHarness {
         return FeedLib.sequencerUp(feed, grace);
     }
 
-    function usdcPeg(address feed, uint32 maxAge, uint16 bandBps) external view returns (bool, FeedStatus, uint256) {
+    function usdcPeg(address feed, uint32 maxAge, uint16 bandBps)
+        external
+        view
+        returns (bool, FeedStatus, uint256)
+    {
         return FeedLib.usdcPeg(feed, maxAge, bandBps);
     }
 
@@ -412,7 +420,11 @@ contract FlowLibsTest is Test {
 
 /// @notice Two slices of 2 seconds whose cumulative deltas are -21 each (mean -10.5).
 contract OddDeltaPool {
-    function observe(uint32[] calldata secondsAgos) external pure returns (int56[] memory cum, uint160[] memory spl) {
+    function observe(uint32[] calldata secondsAgos)
+        external
+        pure
+        returns (int56[] memory cum, uint160[] memory spl)
+    {
         cum = new int56[](secondsAgos.length);
         spl = new uint160[](secondsAgos.length);
         for (uint256 k; k < secondsAgos.length; ++k) {
@@ -483,7 +495,9 @@ contract FlowRateAdaptersPinTest is BaseFixture {
     function test_pin_ratePerUnit_compoundV3() public fixtureCovered {
         address ext = ICometExtensionDelegate(COMET).extensionDelegate();
         if (ext.code.length == 0) {
-            _skipCovered("fixture lacks Comet's extension delegate (totalsBasic); re-record, see requests.md");
+            _skipCovered(
+                "fixture lacks Comet's extension delegate (totalsBasic); re-record, see requests.md"
+            );
         }
         _checkVenue(new CompoundV3RateAdapter(COMET, USDC, address(this)), "Compound V3");
     }
@@ -500,13 +514,19 @@ contract FlowRateAdaptersPinTest is BaseFixture {
         assertGt(r0, 1e18, "interest accrued since the venue opened");
         assertLt(r0, 2e18, "1e18 scale");
         // 2. A gift to the adapter. The adapter is fresh and holds no USDC, so the balance is written, not read.
-        vm.store(USDC, keccak256(abi.encode(address(adapter), uint256(9))), bytes32(uint256(1_000_000e6)));
+        vm.store(
+            USDC, keccak256(abi.encode(address(adapter), uint256(9))), bytes32(uint256(1_000_000e6))
+        );
         assertEq(adapter.ratePerUnit(), r0, "a gift to the adapter does not move the venue rate");
         // 3. One day of the venue's own accrual.
         vm.warp(block.timestamp + 1 days);
         uint256 r1 = adapter.ratePerUnit();
         assertGt(r1, r0, "interest accrues");
         emit log_named_uint("growth over one day, 1e8 = 100%", (r1 - r0) * 1e8 / r0);
-        assertLe((r1 - r0) * 10_000, r0 * DEFAULT_MAX_GROWTH_BPS, "normal accrual stays under the check 5 default");
+        assertLe(
+            (r1 - r0) * 10_000,
+            r0 * DEFAULT_MAX_GROWTH_BPS,
+            "normal accrual stays under the check 5 default"
+        );
     }
 }

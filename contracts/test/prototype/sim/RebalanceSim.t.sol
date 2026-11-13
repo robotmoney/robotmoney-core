@@ -33,12 +33,21 @@ interface ISimPool {
     function token0() external view returns (address);
     function liquidity() external view returns (uint128);
     function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool);
-    function observe(uint32[] calldata secondsAgos) external view returns (int56[] memory, uint160[] memory);
+    function observe(uint32[] calldata secondsAgos)
+        external
+        view
+        returns (int56[] memory, uint160[] memory);
     function tickSpacing() external view returns (int24);
-    function mint(address recipient, int24 tickLower, int24 tickUpper, uint128 amount, bytes calldata data)
+    function mint(
+        address recipient,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 amount,
+        bytes calldata data
+    ) external returns (uint256 amount0, uint256 amount1);
+    function burn(int24 tickLower, int24 tickUpper, uint128 amount)
         external
         returns (uint256 amount0, uint256 amount1);
-    function burn(int24 tickLower, int24 tickUpper, uint128 amount) external returns (uint256 amount0, uint256 amount1);
     function collect(
         address recipient,
         int24 tickLower,
@@ -438,15 +447,22 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
     ///      contracts/test/prototype/fixtures/receipt/sim-asset-vectors.json: the targets the sleeve design
     ///      produced, so G4 and G5 are comparable with the §14 baseline. `_vec` checks each one against the
     ///      bucket totals it came from.
-    function _sequence(uint256 scn) internal pure returns (uint16[6][] memory v, string[] memory l) {
+    function _sequence(uint256 scn)
+        internal
+        pure
+        returns (uint16[6][] memory v, string[] memory l)
+    {
         if (scn == SCN_SEQ) {
             v = new uint16[6][](4);
             l = new string[](4);
             // R1' = deploy-2 receipt 0xdcf4.. with its 575 agent bps folded into stable (ADR-0017).
-            (v[0], l[0]) = (_vec(assetVec(3_650, 2_737, 2_738, 262, 263, 350), 9_125, 525, 350), "R1p");
+            (v[0], l[0]) =
+            (_vec(assetVec(3_650, 2_737, 2_738, 262, 263, 350), 9_125, 525, 350), "R1p");
             (v[1], l[1]) = (_vec(assetVec(3_800, 2_850, 2_850, 250, 250, 0), 9_500, 500, 0), "d05");
-            (v[2], l[2]) = (_vec(assetVec(3_200, 2_400, 2_400, 500, 500, 1_000), 8_000, 1_000, 1_000), "d07");
-            (v[3], l[3]) = (_vec(assetVec(2_800, 2_100, 2_100, 750, 750, 1_500), 7_000, 1_500, 1_500), "d08");
+            (v[2], l[2]) =
+            (_vec(assetVec(3_200, 2_400, 2_400, 500, 500, 1_000), 8_000, 1_000, 1_000), "d07");
+            (v[3], l[3]) =
+            (_vec(assetVec(2_800, 2_100, 2_100, 750, 750, 1_500), 7_000, 1_500, 1_500), "d08");
         } else if (scn == SCN_EXT || scn == SCN_EXT_PROBE) {
             v = new uint16[6][](2);
             l = new string[](2);
@@ -455,7 +471,8 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         } else {
             v = new uint16[6][](1);
             l = new string[](1);
-            (v[0], l[0]) = (_vec(assetVec(3_200, 2_400, 2_400, 500, 500, 1_000), 8_000, 1_000, 1_000), "d07");
+            (v[0], l[0]) =
+            (_vec(assetVec(3_200, 2_400, 2_400, 500, 500, 1_000), 8_000, 1_000, 1_000), "d07");
         }
     }
 
@@ -481,7 +498,10 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         for (uint256 i; i < 5; ++i) {
             s += v[i];
         }
-        require(s + v[5] == BPS && s != 0, "rule 4.5: a receipt sums to 10 000 and holds a non-deSPXA asset");
+        require(
+            s + v[5] == BPS && s != 0,
+            "rule 4.5: a receipt sums to 10 000 and holds a non-deSPXA asset"
+        );
         uint256[5] memory rem;
         uint256 sum;
         for (uint256 i; i < 5; ++i) {
@@ -525,19 +545,32 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
             auctionRun = true;
         }
         bytes32 lp = keccak256(bytes(vm.envOr("PROTO_SIM_LP", string("static"))));
-        require(lp == keccak256("static") || lp == keccak256("recenter"), "PROTO_SIM_LP must be static or recenter");
+        require(
+            lp == keccak256("static") || lp == keccak256("recenter"),
+            "PROTO_SIM_LP must be static or recenter"
+        );
         // Eng plan §4.4 names PROTO_SIM_FLOWS=timed for the timed-flow sim (step 3d): `sync`, the default, is this
         // synchronous sim on the frozen fund; `timed` is TimedFlowSim.t.sol on the live fund (`_run` skips here).
         bytes32 flows = keccak256(bytes(vm.envOr("PROTO_SIM_FLOWS", string("sync"))));
-        require(flows == keccak256("sync") || flows == keccak256("timed"), "PROTO_SIM_FLOWS must be sync or timed");
+        require(
+            flows == keccak256("sync") || flows == keccak256("timed"),
+            "PROTO_SIM_FLOWS must be sync or timed"
+        );
         bytes32 assets = keccak256(bytes(vm.envOr("PROTO_SIM_ASSETS", string("step3"))));
-        require(assets == keccak256("step3") || assets == keccak256("4.5"), "PROTO_SIM_ASSETS must be step3 or 4.5");
+        require(
+            assets == keccak256("step3") || assets == keccak256("4.5"),
+            "PROTO_SIM_ASSETS must be step3 or 4.5"
+        );
         assets45 = assets == keccak256("4.5");
-        require(!assets45 || (!auctionRun && lp == keccak256("static")), "PROTO_SIM_ASSETS=4.5: default or tuned only");
+        require(
+            !assets45 || (!auctionRun && lp == keccak256("static")),
+            "PROTO_SIM_ASSETS=4.5: default or tuned only"
+        );
         lpRecenter = lp == keccak256("recenter");
         PlanParams memory pp = governance.defaultPlanParams();
         uint256 interval = rebalancer.effectiveStepInterval();
-        maxPlanSlots = (uint256(pp.duration) + rebalancer.stepParams().maxOverrun) / interval + LOOP_SLACK_SLOTS;
+        maxPlanSlots = (uint256(pp.duration) + rebalancer.stepParams().maxOverrun) / interval
+            + LOOP_SLACK_SLOTS;
     }
 
     /// @dev The ONE tuned set (§13: tuned once, chosen from the default run's data before the tuned run):
@@ -560,41 +593,57 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
     function _applyTuned() internal {
         StepParams memory sp = rebalancer.stepParams();
         sp.maxOverrun = uint32(vm.envOr("PROTO_SIM_TUNED_MAX_OVERRUN", uint256(sp.maxOverrun)));
-        sp.maxStepCostBps = uint16(vm.envOr("PROTO_SIM_TUNED_MAX_STEP_COST_BPS", uint256(sp.maxStepCostBps)));
-        sp.toleranceBps = uint16(vm.envOr("PROTO_SIM_TUNED_TOLERANCE_BPS", uint256(sp.toleranceBps)));
-        sp.minStepUsdc = uint128(vm.envOr("PROTO_SIM_TUNED_MIN_STEP_USDC", uint256(TUNED_MIN_STEP_USDC)));
+        sp.maxStepCostBps =
+            uint16(vm.envOr("PROTO_SIM_TUNED_MAX_STEP_COST_BPS", uint256(sp.maxStepCostBps)));
+        sp.toleranceBps =
+            uint16(vm.envOr("PROTO_SIM_TUNED_TOLERANCE_BPS", uint256(sp.toleranceBps)));
+        sp.minStepUsdc =
+            uint128(vm.envOr("PROTO_SIM_TUNED_MIN_STEP_USDC", uint256(TUNED_MIN_STEP_USDC)));
         timelockExecute(address(rebalancer), abi.encodeCall(rebalancer.setStepParams, (sp)));
 
         string[3] memory names = ["WETH", "CBBTC", "DESPXA"];
         for (uint256 b; b < N_BASKET; ++b) {
             uint256 i = IDX_WETH + b;
             AssetStepParams memory ap = rebalancer.assetStepParams(i);
-            ap.maxStepUsdc =
-                uint128(vm.envOr(string.concat("PROTO_SIM_TUNED_", names[b], "_MAX_STEP_USDC"), uint256(ap.maxStepUsdc)));
-            ap.maxStepSlippageBps = uint16(
-                vm.envOr(string.concat("PROTO_SIM_TUNED_", names[b], "_SLIPPAGE_BPS"), uint256(ap.maxStepSlippageBps))
+            ap.maxStepUsdc = uint128(
+                vm.envOr(
+                    string.concat("PROTO_SIM_TUNED_", names[b], "_MAX_STEP_USDC"),
+                    uint256(ap.maxStepUsdc)
+                )
             );
-            timelockExecute(address(rebalancer), abi.encodeCall(rebalancer.setAssetStepParams, (i, ap)));
+            ap.maxStepSlippageBps = uint16(
+                vm.envOr(
+                    string.concat("PROTO_SIM_TUNED_", names[b], "_SLIPPAGE_BPS"),
+                    uint256(ap.maxStepSlippageBps)
+                )
+            );
+            timelockExecute(
+                address(rebalancer), abi.encodeCall(rebalancer.setAssetStepParams, (i, ap))
+            );
         }
 
         PlanParams memory pp = governance.defaultPlanParams();
-        pp.duration = uint64(vm.envOr("PROTO_SIM_TUNED_PLAN_DURATION", uint256(TUNED_PLAN_DURATION)));
-        pp.costBudgetBps = uint16(vm.envOr("PROTO_SIM_TUNED_COST_BUDGET_BPS", uint256(pp.costBudgetBps)));
+        pp.duration =
+            uint64(vm.envOr("PROTO_SIM_TUNED_PLAN_DURATION", uint256(TUNED_PLAN_DURATION)));
+        pp.costBudgetBps =
+            uint16(vm.envOr("PROTO_SIM_TUNED_COST_BUDGET_BPS", uint256(pp.costBudgetBps)));
         timelockExecute(address(governance), abi.encodeCall(governance.setDefaultPlanParams, (pp)));
     }
 
     // ─── Auction run wiring (phase 3c) ─────────────────────────────────────────────────────────────────
 
     function _isAuctionEnv() internal view returns (bool) {
-        return keccak256(bytes(vm.envOr("PROTO_SIM_RUN", string("default")))) == keccak256("auction");
+        return
+            keccak256(bytes(vm.envOr("PROTO_SIM_RUN", string("default")))) == keccak256("auction");
     }
 
     /// @dev Auction run only: the executor sits in front of the pool adapter for every basket asset. Other runs
     ///      keep the pool adapter, so their setup and every address they touch are unchanged.
     function _basketAdapter(address poolAdapter) internal override returns (address) {
         if (!_isAuctionEnv()) return poolAdapter;
-        auctionExec =
-            new AuctionStepExecutor(poolAdapter, address(fund), USDC, AUCTION_DURATION, AUCTION_START_PREMIUM_BPS);
+        auctionExec = new AuctionStepExecutor(
+            poolAdapter, address(fund), USDC, AUCTION_DURATION, AUCTION_START_PREMIUM_BPS
+        );
         vm.label(address(auctionExec), "auctionExecutor");
         return address(auctionExec);
     }
@@ -626,7 +675,8 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
             int256 mean = _meanTick(p, TWAP_WINDOW);
             p0Tick[b] = mean;
             refMilli[b] = mean * 1000;
-            p0Usdc[b] = fund.assetUsdcValue(IDX_WETH + b, 10 ** IERC20Metadata(tokens[b]).decimals());
+            p0Usdc[b] =
+                fund.assetUsdcValue(IDX_WETH + b, 10 ** IERC20Metadata(tokens[b]).decimals());
             (uint160 sp,,,,,,) = p.slot0();
             pinL[b] = p.liquidity();
             depthAtPin[b] = SimLib.depth10Bps(p.liquidity(), sp, usdc0[b]);
@@ -635,7 +685,11 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
 
     /// @dev Stdev of 30-minute mean-tick changes (one tick = 1 bp of price, so this is the log-return stdev in
     ///      bps) over the longest lookback the observation ring holds: a deterministic ladder 48, 24, 12, 8, 4.
-    function _sigma(ISimPool p, bool equityHours) internal view returns (uint256 sigma, uint256 intervals) {
+    function _sigma(ISimPool p, bool equityHours)
+        internal
+        view
+        returns (uint256 sigma, uint256 intervals)
+    {
         uint256[5] memory ladder = [uint256(48), 24, 12, 8, 4];
         for (uint256 r; r < ladder.length; ++r) {
             uint256 n = ladder[r];
@@ -758,7 +812,8 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         uint256 spentBefore = fund.plan().costSpent;
         // The first few failures per plan are replayed against the fund to name the revert (diagnostic only).
         // Opt-in (PROTO_SIM_PROBE=1): the probe snapshots the whole state before every step that may trade.
-        bool probe = failProbe && predicted == SkipReason.None && acc.failProbes < MAX_FAIL_PROBES && !auctionRun;
+        bool probe = failProbe && predicted == SkipReason.None && acc.failProbes < MAX_FAIL_PROBES
+            && !auctionRun;
         uint256 snap = probe ? vm.snapshotState() : 0;
         bool maskedOff = _observeMarket();
 
@@ -779,11 +834,14 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         ++acc.calls;
         ++acc.byReason[uint8(why)];
         if (!did) {
-            if (maskedOff && (why == SkipReason.NothingToTrade || why == SkipReason.BelowMinStep)) ++acc.maskedCalls;
+            if (maskedOff && (why == SkipReason.NothingToTrade || why == SkipReason.BelowMinStep)) {
+                ++acc.maskedCalls;
+            }
             assertEq(post.nav, pre.nav, "skip: NAV unchanged");
             assertEq(fund.plan().costSpent, spentBefore, "skip: no cost");
             if (why == SkipReason.StepFailed) {
-                acc.lastFailSelector = mode == MODE_KEEPER ? _failSelector(logs) : auctionFailSelector;
+                acc.lastFailSelector =
+                    mode == MODE_KEEPER ? _failSelector(logs) : auctionFailSelector;
                 if (probe) _probeFailure(snap);
             } else if (previewOn) {
                 assertEq(uint8(why), uint8(predicted), "previewStep predicts the skip");
@@ -792,8 +850,11 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
             return;
         }
         if (probe) vm.deleteStateSnapshot(snap);
-        if (previewOn) assertEq(uint8(predicted), uint8(SkipReason.None), "previewStep predicts the trade");
-        else notional = _stepNotional(logs);
+        if (previewOn) {
+            assertEq(uint8(predicted), uint8(SkipReason.None), "previewStep predicts the trade");
+        } else {
+            notional = _stepNotional(logs);
+        }
         _booked(pre, post, spot, notional, spentBefore);
         if (fund.planStatus() != PlanStatus.Open) _concluded();
     }
@@ -813,8 +874,12 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         uint256 q = IERC20(DESPXA).balanceOf(address(fund));
         uint256 poolBal = IERC20(DESPXA).balanceOf(DESPXA_POOL);
         uint256 supply = IERC20(DESPXA).totalSupply();
-        if (poolBal > 0 && q * BPS / poolBal > acc.maxDespxaPoolShareBps) acc.maxDespxaPoolShareBps = q * BPS / poolBal;
-        if (supply > 0 && q * BPS / supply > acc.maxDespxaSupplyShareBps) acc.maxDespxaSupplyShareBps = q * BPS / supply;
+        if (poolBal > 0 && q * BPS / poolBal > acc.maxDespxaPoolShareBps) {
+            acc.maxDespxaPoolShareBps = q * BPS / poolBal;
+        }
+        if (supply > 0 && q * BPS / supply > acc.maxDespxaSupplyShareBps) {
+            acc.maxDespxaSupplyShareBps = q * BPS / supply;
+        }
 
         Plan memory p = fund.plan();
         uint256 nav = kNav;
@@ -841,12 +906,20 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
 
     /// @dev Book one executed step: (a) signed TWAP cost, (b) the fund's floored cost, (c) arrival-price
     ///      execution cost at the pre-step pool spot, (d) basis = a − c.
-    function _booked(Snap memory pre, Snap memory post, uint160[3] memory spot, uint256 notional, uint256 spentBefore)
-        internal
-    {
+    function _booked(
+        Snap memory pre,
+        Snap memory post,
+        uint160[3] memory spot,
+        uint256 notional,
+        uint256 spentBefore
+    ) internal {
         int256 signed = SimLib.sub(pre.nav, post.nav);
         uint256 fc = SimLib.pos(signed);
-        assertLe(fc, notional.mulDiv(rebalancer.stepParams().maxStepCostBps, BPS), "RB-4: step cost <= cap");
+        assertLe(
+            fc,
+            notional.mulDiv(rebalancer.stepParams().maxStepCostBps, BPS),
+            "RB-4: step cost <= cap"
+        );
         assertEq(fund.plan().costSpent, spentBefore + fc, "costSpent += measured cost");
 
         int256 dv = SimLib.sub(post.idle, pre.idle);
@@ -920,13 +993,22 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
             why = vm.toString(err);
         }
         string memory row = string.concat(
-            vm.toString(sell), ">", vm.toString(buy), ":", vm.toString(notional), ":", _legDev(sell), _legDev(buy), why
+            vm.toString(sell),
+            ">",
+            vm.toString(buy),
+            ":",
+            vm.toString(notional),
+            ":",
+            _legDev(sell),
+            _legDev(buy),
+            why
         );
         // Storage writes come after the revert, or the revert would undo them.
         vm.revertToStateAndDelete(afterFail);
         vm.deleteStateSnapshot(before);
         ++acc.failProbes;
-        acc.failReasons = string.concat(acc.failReasons, bytes(acc.failReasons).length == 0 ? "" : "|", row);
+        acc.failReasons =
+            string.concat(acc.failReasons, bytes(acc.failReasons).length == 0 ? "" : "|", row);
     }
 
     /// @dev "dev<bps>/tick<spot>/ref<ref>;" of a basket leg at the probe (spot-vs-TWAP deviation and the walk).
@@ -935,16 +1017,30 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         (, uint256 dev) = fund.marketCheck(i);
         (, int24 tick,,,,,) = ISimPool(pools[i - IDX_WETH]).slot0();
         return string.concat(
-            "dev", vm.toString(dev), "/tick", vm.toString(int256(tick)), "/ref", vm.toString(refMilli[i - IDX_WETH] / 1000),
-            "/L", vm.toString(uint256(ISimPool(pools[i - IDX_WETH]).liquidity())), "/t", vm.toString(vm.getBlockTimestamp()), ";"
+            "dev",
+            vm.toString(dev),
+            "/tick",
+            vm.toString(int256(tick)),
+            "/ref",
+            vm.toString(refMilli[i - IDX_WETH] / 1000),
+            "/L",
+            vm.toString(uint256(ISimPool(pools[i - IDX_WETH]).liquidity())),
+            "/t",
+            vm.toString(vm.getBlockTimestamp()),
+            ";"
         );
     }
 
-    function _order(uint256 sell, uint256 buy, uint256 notional) internal view returns (StepOrder memory o) {
+    function _order(uint256 sell, uint256 buy, uint256 notional)
+        internal
+        view
+        returns (StepOrder memory o)
+    {
         (o.sellIndex, o.buyIndex, o.notionalUsdc) = (sell, buy, notional);
         uint256 ceiling = fund.maxSlippageBps();
         if (sell != IDLE_INDEX) {
-            uint256 keep = BPS - Math.min(rebalancer.assetStepParams(sell).maxStepSlippageBps, ceiling);
+            uint256 keep =
+                BPS - Math.min(rebalancer.assetStepParams(sell).maxStepSlippageBps, ceiling);
             if (fund.assetConfig(sell).kind == AssetKind.Basket) {
                 uint256 quote = fund.assetUsdcValue(sell, fund.assetTokenValue(sell, notional));
                 o.minSellUsdcOut = quote.mulDiv(keep, BPS);
@@ -953,7 +1049,8 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
             }
         }
         if (buy != IDLE_INDEX && fund.assetConfig(buy).kind == AssetKind.Basket) {
-            uint256 keep = BPS - Math.min(rebalancer.assetStepParams(buy).maxStepSlippageBps, ceiling);
+            uint256 keep =
+                BPS - Math.min(rebalancer.assetStepParams(buy).maxStepSlippageBps, ceiling);
             o.minBuyOut = fund.assetTokenValue(buy, notional).mulDiv(keep, BPS);
         }
         o.maxCostUsdc = notional.mulDiv(rebalancer.stepParams().maxStepCostBps, BPS);
@@ -975,7 +1072,8 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         bytes32 sig = IFundEvents.RebalanceStepSkipped.selector;
         for (uint256 i; i < logs.length; ++i) {
             if (logs[i].emitter == address(rebalancer) && logs[i].topics[0] == sig) {
-                (, , , uint256 detail) = abi.decode(logs[i].data, (SkipReason, uint256, uint256, uint256));
+                (,,, uint256 detail) =
+                    abi.decode(logs[i].data, (SkipReason, uint256, uint256, uint256));
                 return detail;
             }
         }
@@ -1022,7 +1120,18 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         if (!ok) {
             ++acc.auctionLapses;
             auctionFailSelector = 0;
-            _auctionNote(string.concat("lapse:", vm.toString(sell), ">", vm.toString(buy), ":", vm.toString(notional), ":", why));
+            _auctionNote(
+                string.concat(
+                    "lapse:",
+                    vm.toString(sell),
+                    ">",
+                    vm.toString(buy),
+                    ":",
+                    vm.toString(notional),
+                    ":",
+                    why
+                )
+            );
             return MODE_LAPSE;
         }
         return MODE_FILL;
@@ -1072,7 +1181,10 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
     }
 
     /// @dev The basket buy leg's fill delay for spending `usdcIn` with floor `floor`.
-    function _buyLegPlan(uint256 buy, uint256 usdcIn, uint256 floor) internal returns (bool, uint256) {
+    function _buyLegPlan(uint256 buy, uint256 usdcIn, uint256 floor)
+        internal
+        returns (bool, uint256)
+    {
         uint256 q = fund.assetTokenValue(buy, usdcIn);
         return _fillDelay(q, floor, _reservation(buy - IDX_WETH, false, usdcIn));
     }
@@ -1083,7 +1195,9 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         returns (bool ok, uint256 e, uint256 usdcIn)
     {
         uint256 b = sell - IDX_WETH;
-        uint256 amt = Math.min(fund.assetTokenValue(sell, notional), IERC20(tokens[b]).balanceOf(address(fund)));
+        uint256 amt = Math.min(
+            fund.assetTokenValue(sell, notional), IERC20(tokens[b]).balanceOf(address(fund))
+        );
         uint256 q = fund.assetUsdcValue(sell, amt);
         (ok, e) = _fillDelay(q, floor, _reservation(b, true, amt));
         if (ok) usdcIn = Math.min(auctionExec.owedAt(q, floor, e), notional);
@@ -1100,7 +1214,10 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
 
     /// @dev The most the solver will pay for one leg: its best venue's output, less its margin and gas. Records
     ///      the venue for the fill. `fundSells`: the solver receives the token and pays USDC.
-    function _reservation(uint256 b, bool fundSells, uint256 amountIn) internal returns (uint256 m) {
+    function _reservation(uint256 b, bool fundSells, uint256 amountIn)
+        internal
+        returns (uint256 m)
+    {
         address tIn = fundSells ? tokens[b] : USDC;
         address tOut = fundSells ? USDC : tokens[b];
         uint256 poolOut = _poolQuote(tIn, tOut, amountIn);
@@ -1108,12 +1225,16 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         bool ext = extOut > poolOut;
         solverVenue[tokens[b]] = ext ? VENUE_EXTERNAL : VENUE_POOL;
         uint256 kept = (ext ? extOut : poolOut).mulDiv(BPS - SOLVER_MARGIN_BPS, BPS);
-        uint256 gas = fundSells ? SOLVER_GAS_USDC : _tokenForUsdcAt(SOLVER_GAS_USDC, _refSqrt(b), usdc0[b]);
+        uint256 gas =
+            fundSells ? SOLVER_GAS_USDC : _tokenForUsdcAt(SOLVER_GAS_USDC, _refSqrt(b), usdc0[b]);
         m = kept > gas ? kept - gas : 0;
     }
 
     /// @dev The pool's output for `amountIn` now, by running the swap and reverting it.
-    function _poolQuote(address tIn, address tOut, uint256 amountIn) internal returns (uint256 out) {
+    function _poolQuote(address tIn, address tOut, uint256 amountIn)
+        internal
+        returns (uint256 out)
+    {
         uint256 snap = vm.snapshotState();
         out = _poolSwap(tIn, tOut, amountIn);
         vm.revertToStateAndDelete(snap);
@@ -1129,9 +1250,14 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         }
         IERC20(tIn).approve(ROUTER, amountIn);
         uint256 before = IERC20(tOut).balanceOf(address(this));
-        try IHarnessSwapRouter02(ROUTER).exactInputSingle(
-            IHarnessSwapRouter02.ExactInputSingleParams(tIn, tOut, POOL_FEE, address(this), amountIn, 0, 0)
-        ) returns (uint256) {
+        try IHarnessSwapRouter02(ROUTER)
+            .exactInputSingle(
+                IHarnessSwapRouter02.ExactInputSingleParams(
+                    tIn, tOut, POOL_FEE, address(this), amountIn, 0, 0
+                )
+            ) returns (
+            uint256
+        ) {
             out = IERC20(tOut).balanceOf(address(this)) - before;
         } catch {
             out = 0;
@@ -1143,13 +1269,21 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         if (b == 2 && !_usMarketOpen(vm.getBlockTimestamp())) return 0;
         uint256 cost = b == 2 ? EXT_DESPXA_BPS : EXT_MAJOR_BPS;
         uint160 ref = _refSqrt(b);
-        uint256 fair = fundSells ? SimLib.spotUsdc(amountIn, ref, usdc0[b]) : _tokenForUsdcAt(amountIn, ref, usdc0[b]);
+        uint256 fair = fundSells
+            ? SimLib.spotUsdc(amountIn, ref, usdc0[b])
+            : _tokenForUsdcAt(amountIn, ref, usdc0[b]);
         return fair.mulDiv(BPS - cost, BPS);
     }
 
     /// @dev Token units for `usdc` at sqrt price `sqrtP` (the inverse of `SimLib.spotUsdc`).
-    function _tokenForUsdcAt(uint256 usdc, uint160 sqrtP, bool usdcIsToken0) internal pure returns (uint256) {
-        if (usdcIsToken0) return Math.mulDiv(Math.mulDiv(usdc, sqrtP, SimLib.Q96), sqrtP, SimLib.Q96);
+    function _tokenForUsdcAt(uint256 usdc, uint160 sqrtP, bool usdcIsToken0)
+        internal
+        pure
+        returns (uint256)
+    {
+        if (usdcIsToken0) {
+            return Math.mulDiv(Math.mulDiv(usdc, sqrtP, SimLib.Q96), sqrtP, SimLib.Q96);
+        }
         return Math.mulDiv(Math.mulDiv(usdc, SimLib.Q96, sqrtP), SimLib.Q96, sqrtP);
     }
 
@@ -1171,7 +1305,8 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
     function _auctionNote(string memory row) internal {
         if (acc.failProbes >= MAX_FAIL_PROBES) return;
         ++acc.failProbes;
-        acc.failReasons = string.concat(acc.failReasons, bytes(acc.failReasons).length == 0 ? "" : "|", row);
+        acc.failReasons =
+            string.concat(acc.failReasons, bytes(acc.failReasons).length == 0 ? "" : "|", row);
     }
 
     /// @inheritdoc IAuctionFiller
@@ -1180,9 +1315,14 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
     ///      owed amount. It re-quoted at this block, so a shortfall is rare. It can come only from the order of
     ///      two basket legs. The solver then pays the gap from its own pocket. That is counted in
     ///      `solverShortLegs` and never charged to the fund.
-    function onAuctionLeg(address tokenIn, address tokenOut, uint256 amountIn, uint256 owed, uint256, uint256)
-        external
-    {
+    function onAuctionLeg(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 owed,
+        uint256,
+        uint256
+    ) external {
         require(msg.sender == address(auctionExec), "executor only");
         address token = tokenIn == USDC ? tokenOut : tokenIn;
         uint256 b = _basketOf(token);
@@ -1254,14 +1394,16 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         for (uint256 b; b < N_BASKET; ++b) {
             int256 z = SimLib.normal(seed, slotIndex, SimLib.TAG_WALK, b);
             // PROTO_SIM_ASSETS=4.5 (step 3e rule): the scripted jump moves wETH (b = 0) instead of deSPXA.
-            bool jump = b == (assets45 ? 0 : 2) && acc.slots == JUMP_SLOT && acc.jumpAt == 0 && _isJump();
+            bool jump =
+                b == (assets45 ? 0 : 2) && acc.slots == JUMP_SLOT && acc.jumpAt == 0 && _isJump();
             bool closed = b == 2 && !open && !jump;
             // deSPXA's reference is frozen while the S&P is closed.
             if (!closed) refMilli[b] += int256(sigmaMilli[b]) * z / int256(SimLib.ONE);
             uint256 a = SimLib.ONE / 2 + SimLib.unit(seed, slotIndex, SimLib.TAG_ARB, b) / 2;
             if (jump) {
                 // The scripted jump is a gap move: the pool reprices to it whatever the hour.
-                int256 usdJump = scenario == SCN_JUMP_DOWN ? JUMP_DOWN_USD_MILLITICKS : JUMP_UP_USD_MILLITICKS;
+                int256 usdJump =
+                    scenario == SCN_JUMP_DOWN ? JUMP_DOWN_USD_MILLITICKS : JUMP_UP_USD_MILLITICKS;
                 refMilli[b] += usdc0[b] ? -usdJump : usdJump;
                 a = SimLib.ONE;
                 acc.jumpAt = vm.getBlockTimestamp();
@@ -1284,7 +1426,8 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
                 (, uint256 got) = _swapToLimitCapped(b, up, TickMath.getSqrtRatioAtTick(tt), 0);
                 arbDespxaInv += got;
             } else if (arbDespxaInv > 0) {
-                (uint256 spent,) = _swapToLimitCapped(b, up, TickMath.getSqrtRatioAtTick(tt), arbDespxaInv);
+                (uint256 spent,) =
+                    _swapToLimitCapped(b, up, TickMath.getSqrtRatioAtTick(tt), arbDespxaInv);
                 arbDespxaInv -= spent;
             }
         }
@@ -1318,9 +1461,12 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         uint256 inBefore = IERC20(tokenIn).balanceOf(address(this));
         uint256 outBefore = IERC20(tokenOut).balanceOf(address(this));
         IERC20(tokenIn).approve(ROUTER, amt);
-        IHarnessSwapRouter02(ROUTER).exactInputSingle(
-            IHarnessSwapRouter02.ExactInputSingleParams(tokenIn, tokenOut, POOL_FEE, address(this), amt, 0, limit)
-        );
+        IHarnessSwapRouter02(ROUTER)
+            .exactInputSingle(
+                IHarnessSwapRouter02.ExactInputSingleParams(
+                    tokenIn, tokenOut, POOL_FEE, address(this), amt, 0, limit
+                )
+            );
         spent = inBefore - IERC20(tokenIn).balanceOf(address(this));
         got = IERC20(tokenOut).balanceOf(address(this)) - outBefore;
     }
@@ -1443,7 +1589,8 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
     }
 
     function _flowDeposit(uint256 amt) internal returns (bool) {
-        address d = address(uint160(uint256(keccak256(abi.encode("rm-sim-depositor", seed, ++depNonce)))));
+        address d =
+            address(uint160(uint256(keccak256(abi.encode("rm-sim-depositor", seed, ++depNonce)))));
         fundUsdc(d, amt);
         vm.prank(d);
         IERC20(USDC).approve(address(fund), amt);
@@ -1457,7 +1604,9 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
     }
 
     function _flowRedeem(uint256 amt, uint256 sl) internal returns (bool) {
-        address h = genesisDepositors[SimLib.draw(seed, sl, SimLib.TAG_FLOW_WHO, 0) % genesisDepositors.length];
+        address h = genesisDepositors[
+            SimLib.draw(seed, sl, SimLib.TAG_FLOW_WHO, 0) % genesisDepositors.length
+        ];
         uint256 shares = fund.convertToShares(amt);
         uint256 bal = fund.balanceOf(h);
         if (shares > bal) shares = bal / 2;
@@ -1472,7 +1621,9 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
     }
 
     function _flowFail(string memory kind, bytes memory err) internal {
-        if (bytes(acc.flowFailReason).length == 0) acc.flowFailReason = string.concat(kind, ":", vm.toString(err));
+        if (bytes(acc.flowFailReason).length == 0) {
+            acc.flowFailReason = string.concat(kind, ":", vm.toString(err));
+        }
     }
 
     // ─── Snapshots ─────────────────────────────────────────────────────────────────────────────────────
@@ -1525,7 +1676,9 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         assertEq(p.id, acc.planId, "same plan throughout");
         assertEq(p.costSpent, acc.fundCost, "costSpent = sum of measured step costs");
         assertEq(p.stepCount, acc.executed, "fund counted every executed step");
-        if (st != PlanStatus.Halted) assertLe(p.costSpent, p.costBudget, "unhalted plan within budget");
+        if (st != PlanStatus.Halted) {
+            assertLe(p.costSpent, p.costBudget, "unhalted plan within budget");
+        }
 
         string memory o = string.concat("plan", vm.toString(planIndex));
         _jsonIdentity(o, p);
@@ -1551,7 +1704,9 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         vm.serializeUint(o, "endSleeveBps", _arr4(acc.endSleeve));
         vm.serializeUint(o, "startBps", _arr16(p.startBps));
         vm.serializeUint(o, "endBps", _arr16(p.endBps));
-        vm.serializeUint(o, "permissionlessAtOpen", uint256(p.startTime) + rebalancer.stepParams().keeperGrace);
+        vm.serializeUint(
+            o, "permissionlessAtOpen", uint256(p.startTime) + rebalancer.stepParams().keeperGrace
+        );
     }
 
     function _jsonCost(string memory o, Plan memory p) internal {
@@ -1586,7 +1741,9 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         vm.serializeUint(o, "skipBelowMinStep", acc.byReason[uint8(SkipReason.BelowMinStep)]);
         vm.serializeUint(o, "skipStepFailed", acc.byReason[uint8(SkipReason.StepFailed)]);
         vm.serializeUint(o, "skipPlanNotOpen", acc.byReason[uint8(SkipReason.PlanNotOpen)]);
-        vm.serializeString(o, "lastStepFailedSelector", vm.toString(bytes4(uint32(acc.lastFailSelector))));
+        vm.serializeString(
+            o, "lastStepFailedSelector", vm.toString(bytes4(uint32(acc.lastFailSelector)))
+        );
         vm.serializeString(o, "stepFailProbes", acc.failReasons);
         vm.serializeString(o, "firstFlowFailure", acc.flowFailReason);
         vm.serializeUint(o, "jumpAt", acc.jumpAt);
@@ -1632,7 +1789,8 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         vm.serializeBool(
             o,
             "convergedInWindow",
-            p.status == PlanStatus.Converged && at <= uint256(p.endTime) + rebalancer.stepParams().maxOverrun
+            p.status == PlanStatus.Converged
+                && at <= uint256(p.endTime) + rebalancer.stepParams().maxOverrun
         );
         assertGt(at, 0, "conclusion was observed");
         (uint256[] memory w, uint256 idleBps) = (finalW, finalIdle);
@@ -1640,7 +1798,9 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         vm.serializeUint(o, "finalIdleBps", idleBps);
         (uint256[] memory offIdx, uint256[] memory offGap, bool liquidOff) =
             _offTolerance(w, p.endBps, rebalancer.stepParams().toleranceBps);
-        if (p.status == PlanStatus.Converged) assertEq(offIdx.length, 0, "converged: every asset within tolerance");
+        if (p.status == PlanStatus.Converged) {
+            assertEq(offIdx.length, 0, "converged: every asset within tolerance");
+        }
         vm.serializeUint(o, "offToleranceAssets", offIdx);
         vm.serializeUint(o, "offToleranceGapBps", offGap);
         return vm.serializeBool(o, "liquidAssetOffTolerance", liquidOff);
@@ -1724,7 +1884,9 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
         vm.serializeString(m, "run", runName);
         if (assets45) {
             vm.serializeString(
-                m, "assets", "4.5: step 3e rules, deSPXA at 0 (its weight spread pro rata), JUMP moves wETH"
+                m,
+                "assets",
+                "4.5: step 3e rules, deSPXA at 0 (its weight spread pro rata), JUMP moves wETH"
             );
         }
         string memory meta = vm.serializeString(m, "params", _paramsJson());
@@ -1733,11 +1895,13 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
             plans = string.concat(plans, i == 0 ? "" : ",", planJson[i]);
         }
         string memory full = string.concat('{"meta":', meta, ',"plans":[', plans, "]}");
-        string memory dir =
-            string.concat("out/prototype/", runName, lpRecenter ? "-lprecenter" : "", assets45 ? "-sync45" : "");
+        string memory dir = string.concat(
+            "out/prototype/", runName, lpRecenter ? "-lprecenter" : "", assets45 ? "-sync45" : ""
+        );
         vm.createDir(dir, true);
-        string memory path =
-            string.concat(dir, "/sim-", scnName, "-", vm.toString(fundM), "M-s", vm.toString(seedK), ".json");
+        string memory path = string.concat(
+            dir, "/sim-", scnName, "-", vm.toString(fundM), "M-s", vm.toString(seedK), ".json"
+        );
         vm.writeFile(path, full);
     }
 
@@ -1767,9 +1931,13 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
                 k,
                 "lpModel",
                 string.concat(
-                    "recenter: after a pool is seen with < 1/", vm.toString(OUT_OF_RANGE_L_DIV),
-                    " of its pin liquidity for ", vm.toString(LP_RECENTER_LAG_SEC), "s, one LP mints ",
-                    vm.toString(LP_RECENTER_DEPTH_BPS), "bps of the pin L over spot +-",
+                    "recenter: after a pool is seen with < 1/",
+                    vm.toString(OUT_OF_RANGE_L_DIV),
+                    " of its pin liquidity for ",
+                    vm.toString(LP_RECENTER_LAG_SEC),
+                    "s, one LP mints ",
+                    vm.toString(LP_RECENTER_DEPTH_BPS),
+                    "bps of the pin L over spot +-",
                     vm.toString(int256(LP_RECENTER_HALF_WIDTH_TICKS)),
                     " ticks; moved on a later exit, burned when the pin liquidity is active again"
                 )
@@ -1780,10 +1948,18 @@ contract RebalanceSimTest is BaselineHarness, IAuctionFiller {
                 k,
                 "executor",
                 string.concat(
-                    "AuctionStepExecutor duration ", vm.toString(uint256(AUCTION_DURATION)), "s premium ",
-                    vm.toString(uint256(AUCTION_START_PREMIUM_BPS)), "bps; one solver, no inventory, margin ",
-                    vm.toString(SOLVER_MARGIN_BPS), "bps + gas ", vm.toString(SOLVER_GAS_USDC), " uUSDC per leg; venues: pool, or external at ref - ",
-                    vm.toString(EXT_MAJOR_BPS), "bps (wETH, cbBTC, 24/7) / ref - ", vm.toString(EXT_DESPXA_BPS),
+                    "AuctionStepExecutor duration ",
+                    vm.toString(uint256(AUCTION_DURATION)),
+                    "s premium ",
+                    vm.toString(uint256(AUCTION_START_PREMIUM_BPS)),
+                    "bps; one solver, no inventory, margin ",
+                    vm.toString(SOLVER_MARGIN_BPS),
+                    "bps + gas ",
+                    vm.toString(SOLVER_GAS_USDC),
+                    " uUSDC per leg; venues: pool, or external at ref - ",
+                    vm.toString(EXT_MAJOR_BPS),
+                    "bps (wETH, cbBTC, 24/7) / ref - ",
+                    vm.toString(EXT_DESPXA_BPS),
                     "bps (deSPXA, US hours only); fill one block after the price meets the reservation"
                 )
             );

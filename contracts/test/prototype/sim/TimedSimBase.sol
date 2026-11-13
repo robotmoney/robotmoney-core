@@ -377,7 +377,8 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
     function _observeSettle(AttemptRec memory a) internal view {
         FlowParams memory p = queue.flowParams();
         for (uint256 b; b < MK_N; ++b) {
-            (bool ok, int24[] memory means) = TwapSlicesLib.sliceMeans(mkPools[b], p.settleWindow, p.slices);
+            (bool ok, int24[] memory means) =
+                TwapSlicesLib.sliceMeans(mkPools[b], p.settleWindow, p.slices);
             uint256 unit = 10 ** IERC20Metadata(mkTokens[b]).decimals();
             uint256 feed = _feedPerToken(b);
             a.spotVsFeedBps[b] = _mkBps(_mkUsdcFor(b, unit, _mkSpotSqrt(b)), feed);
@@ -385,7 +386,8 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
             (int24 med, uint256 inBand, uint256 widest) = _sliceStats(means, p.dispersionBps);
             a.slicesInBand[b] = inBand;
             a.sliceDevBps[b] = widest;
-            a.twapVsFeedBps[b] = _mkBps(TwapTickMath.priceFromTick(med, mkTokens[b], MK_USDC, unit), feed);
+            a.twapVsFeedBps[b] =
+                _mkBps(TwapTickMath.priceFromTick(med, mkTokens[b], MK_USDC, unit), feed);
         }
         (uint256 navFeed,, uint256 supply) = _navFeedRef();
         if (lastSettlePx != 0 && supply != 0) {
@@ -400,7 +402,8 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
             uint256[3] memory rates = _lendRates();
             for (uint256 j; j < 3; ++j) {
                 if (lastLendRate[j] == 0 || rates[j] <= lastLendRate[j]) continue;
-                uint256 g = (rates[j] - lastLendRate[j]).mulDiv(BPS * 100 * 1 days, lastLendRate[j] * elapsed);
+                uint256 g = (rates[j] - lastLendRate[j])
+                .mulDiv(BPS * 100 * 1 days, lastLendRate[j] * elapsed);
                 if (g > a.lendGrowthCentiBpsPerDay) a.lendGrowthCentiBpsPerDay = g;
             }
         }
@@ -438,7 +441,8 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
     }
 
     function _lendRates() internal view returns (uint256[3] memory r) {
-        address[3] memory ad = [address(aaveAdapter), address(moonwellAdapter), address(cometAdapter)];
+        address[3] memory ad =
+            [address(aaveAdapter), address(moonwellAdapter), address(cometAdapter)];
         for (uint256 j; j < 3; ++j) {
             try ILendingRateAdapter(ad[j]).ratePerUnit() returns (uint256 x) {
                 r[j] = x;
@@ -499,7 +503,8 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
     function _bookDepositFill(VmSafe.Log memory log, Basis memory v) internal {
         uint256 k = reqIndex[uint256(log.topics[1])];
         if (k == 0) return;
-        (uint256 usdc, uint256 shares, uint64 unlockAt) = abi.decode(log.data, (uint256, uint256, uint64));
+        (uint256 usdc, uint256 shares, uint64 unlockAt) =
+            abi.decode(log.data, (uint256, uint256, uint64));
         ReqRec storage r = reqs[k - 1];
         r.filled += usdc;
         r.basis += usdc;
@@ -572,7 +577,11 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
     }
 
     /// @dev The selector and the first three words of revert data (zero where absent).
-    function _words(bytes memory err) internal pure returns (bytes4 sel, uint256 w0, uint256 w1, uint256 w2) {
+    function _words(bytes memory err)
+        internal
+        pure
+        returns (bytes4 sel, uint256 w0, uint256 w1, uint256 w2)
+    {
         if (err.length >= 4) sel = bytes4(err);
         if (err.length >= 36) {
             assembly {
@@ -610,7 +619,9 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
             lastDepBound = bound;
         } catch {
             quoteFailed = true;
-            bound = lastDepBound != 0 ? lastDepBound : _twapPx().mulDiv(BPS + 2 * queue.flowParams().legBandBps, BPS);
+            bound = lastDepBound != 0
+                ? lastDepBound
+                : _twapPx().mulDiv(BPS + 2 * queue.flowParams().legBandBps, BPS);
         }
         uint256 limit = bound.mulDiv(BPS + slackBps, BPS);
         vm.startPrank(who);
@@ -649,12 +660,19 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
             err = e;
         }
         vm.stopPrank();
-        if (ok) _recordReq(id, false, quoteFailed, shares, shares.mulDiv(_twapPx(), PRICE_SCALE), limit);
+        if (ok) {
+            _recordReq(id, false, quoteFailed, shares, shares.mulDiv(_twapPx(), PRICE_SCALE), limit);
+        }
     }
 
-    function _recordReq(uint256 id, bool isDeposit, bool quoteFailed, uint256 amount, uint256 value, uint256 limit)
-        internal
-    {
+    function _recordReq(
+        uint256 id,
+        bool isDeposit,
+        bool quoteFailed,
+        uint256 amount,
+        uint256 value,
+        uint256 limit
+    ) internal {
         ReqRec memory r;
         r.id = id;
         r.isDeposit = isDeposit;
@@ -728,7 +746,9 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
             keeperStep();
             coverageCheckpoint();
         }
-        require(fund.planStatus() != PlanStatus.Open, "sim genesis: the investing plan did not conclude");
+        require(
+            fund.planStatus() != PlanStatus.Open, "sim genesis: the investing plan did not conclude"
+        );
     }
 
     /// @notice Deposit `total` USDC through the queue for `holders`, one request of at most `chunk` per cap period
@@ -748,7 +768,10 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
             _stampQuiet();
             vm.prank(keeper);
             queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
-            require(queue.getRequest(id).closed, "sim genesis: a deposit chunk did not fill in its period");
+            require(
+                queue.getRequest(id).closed,
+                "sim genesis: a deposit chunk did not fill in its period"
+            );
             coverageCheckpoint();
         }
         for (uint256 i; i < holders.length; ++i) {
@@ -768,5 +791,4 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
         usdcFeedAt = now_;
         MockAggregator(FEED_SEQUENCER).setRound(0, 0, sequencerUpSince, now_);
     }
-
 }

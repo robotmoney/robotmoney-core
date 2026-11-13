@@ -90,7 +90,9 @@ library FundAdminLib {
         if (index >= MAX_FUND_ASSETS) revert IRobotMoneyFund.MaxAssetsReached();
         if (c.adapter == address(0)) revert IFundEvents.ZeroAddress();
         bytes32 hash = c.adapter.codehash;
-        if (!s.codeHashAllowed[hash]) revert IRobotMoneyFund.AdapterCodeHashNotAllowed(c.adapter, hash);
+        if (!s.codeHashAllowed[hash]) {
+            revert IRobotMoneyFund.AdapterCodeHashNotAllowed(c.adapter, hash);
+        }
         if (c.kind == AssetKind.Lending) {
             _checkLending(s, c);
         } else {
@@ -130,7 +132,9 @@ library FundAdminLib {
             // An inactive lending entry whose position claims are still open prices them from the adapter's whole
             // `totalAssets()`; listing the same adapter again would let those claims read new holders' money
             // (review B-F3).
-            if (e.kind == AssetKind.Lending && s.positionClaimTotal[i] != 0) revert IRobotMoneyFund.DuplicateAsset(i);
+            if (e.kind == AssetKind.Lending && s.positionClaimTotal[i] != 0) {
+                revert IRobotMoneyFund.DuplicateAsset(i);
+            }
         }
     }
 
@@ -138,8 +142,12 @@ library FundAdminLib {
     ///      `LENDING_ROUNDING_UNITS` (the fund's own paths leave that much: `drain`, `claimPosition`, `sellForFlow`);
     ///      the position claims' part may stay, it remains claimable. An adapter whose `totalAssets()` read fails
     ///      may leave only while its exclusion record is open: its value is already in the ledger.
-    function _requireLendingEmpty(FundState storage s, uint256 i, address adapter, uint256 openId) private view {
-        (bool ok, bytes memory ret) = adapter.staticcall(abi.encodeCall(IStrategyAdapter.totalAssets, ()));
+    function _requireLendingEmpty(FundState storage s, uint256 i, address adapter, uint256 openId)
+        private
+        view
+    {
+        (bool ok, bytes memory ret) =
+            adapter.staticcall(abi.encodeCall(IStrategyAdapter.totalAssets, ()));
         if (!ok || ret.length < 32) {
             if (openId == 0) revert IRobotMoneyFund.AssetStillHeld(i);
             return;
@@ -152,17 +160,20 @@ library FundAdminLib {
 
     function _checkLending(FundState storage s, AssetConfig memory c) private view {
         if (
-            c.token != address(0) || c.pool != address(0) || c.poolFee != 0 || c.twapWindow != 0 || c.capBps == 0
-                || c.capBps > BPS || c.feed != address(0) || c.maxFeedAge != 0
+            c.token != address(0) || c.pool != address(0) || c.poolFee != 0 || c.twapWindow != 0
+                || c.capBps == 0 || c.capBps > BPS || c.feed != address(0) || c.maxFeedAge != 0
         ) revert IFundEvents.InvalidParam();
         // E15: the venue's own rate per unit (check 5) must be readable and non-zero.
-        (bool ok, bytes memory ret) = c.adapter.staticcall(abi.encodeCall(ILendingRateAdapter.ratePerUnit, ()));
+        (bool ok, bytes memory ret) =
+            c.adapter.staticcall(abi.encodeCall(ILendingRateAdapter.ratePerUnit, ()));
         if (!ok || ret.length < 32 || abi.decode(ret, (uint256)) == 0) {
             revert IRobotMoneyFund.LendingRateUnavailable(c.adapter);
         }
         IFundLendingIdentity id = IFundLendingIdentity(c.adapter);
         address vault = id.VAULT();
-        if (vault != address(this)) revert IRobotMoneyFund.AdapterVaultMismatch(c.adapter, address(this), vault);
+        if (vault != address(this)) {
+            revert IRobotMoneyFund.AdapterVaultMismatch(c.adapter, address(this), vault);
+        }
         address asset = id.USDC();
         if (asset != s.usdc) revert IRobotMoneyFund.AdapterAssetMismatch(c.adapter, s.usdc, asset);
     }
@@ -172,7 +183,9 @@ library FundAdminLib {
         // `BasketViews.checkSellAnchor`), which this prototype does not port: refuse them (§4.2, §4.4).
         if (c.venue == Venue.V4) revert IFundEvents.InvalidParam();
         if (c.token == address(0) || c.pool == address(0)) revert IFundEvents.ZeroAddress();
-        if (c.twapWindow < FundStorage.MIN_TWAP_WINDOW || c.twapWindow > FundStorage.MAX_TWAP_WINDOW) {
+        if (
+            c.twapWindow < FundStorage.MIN_TWAP_WINDOW || c.twapWindow > FundStorage.MAX_TWAP_WINDOW
+        ) {
             revert IFundEvents.InvalidParam();
         }
         // E15, §4.5 rule 1: a live outside feed, with its maximum age.
@@ -201,9 +214,13 @@ library FundAdminLib {
             if (ok && data.length == 32) pips = abi.decode(data, (uint256));
         }
         uint256 feeBps = (pips + 99) / 100;
-        if (s.maxSlippageBps <= feeBps) revert IFundEvents.BoundAtOrBelowPoolFee(index, s.maxSlippageBps, feeBps);
+        if (s.maxSlippageBps <= feeBps) {
+            revert IFundEvents.BoundAtOrBelowPoolFee(index, s.maxSlippageBps, feeBps);
+        }
         uint256 guard = s.navDeviationGuardBps;
-        if (guard != 0 && guard <= feeBps) revert IFundEvents.BoundAtOrBelowPoolFee(index, guard, feeBps);
+        if (guard != 0 && guard <= feeBps) {
+            revert IFundEvents.BoundAtOrBelowPoolFee(index, guard, feeBps);
+        }
     }
 
     /// @notice Deactivate asset `i` (`IRobotMoneyFund.deactivateAsset`). The fund must hold nothing of it:
@@ -232,7 +249,8 @@ library FundAdminLib {
         } else {
             uint256 bal = IERC20(a.token).balanceOf(address(this));
             if (bal != 0) {
-                uint256 floor = FundValuationLib.usdcValue(s, i, bal) * (BPS - s.maxSlippageBps) / BPS;
+                uint256 floor =
+                    FundValuationLib.usdcValue(s, i, bal) * (BPS - s.maxSlippageBps) / BPS;
                 if (floor != 0) revert IRobotMoneyFund.AssetStillHeld(i);
             }
         }
@@ -266,7 +284,10 @@ library FundAdminLib {
     ///         eligible again and still has a record is drained INTO the record first (`InvalidParam` when
     ///         it cannot pay out), then the record closes (`Restored`) and the empty entry counts again.
     /// @return opened True when a record opened (the fund then checkpoints every share balance change).
-    function syncExclusions(FundState storage s, uint256 supply, bool restore) public returns (bool opened) {
+    function syncExclusions(FundState storage s, uint256 supply, bool restore)
+        public
+        returns (bool opened)
+    {
         RobotMoneyVaultOps.Exclusions storage x = RobotMoneyVaultOps.exclusions();
         ExclusionLedger ledger = x.ledger;
         uint256 n = s.assets.length;
@@ -289,9 +310,15 @@ library FundAdminLib {
     /// @dev `syncExclusions` restore branch (own frame for stack depth): drain entry `i` into record `id`,
     ///      leaving the USDC owed to in-kind exits (`deferredTotal`) and the position claims' part in the adapter
     ///      (`FundPositionLib.drain`, which also burns the holders' units), then close the record.
-    function _restore(FundState storage s, RobotMoneyVaultOps.Exclusions storage x, uint256 i, uint256 id) private {
+    function _restore(
+        FundState storage s,
+        RobotMoneyVaultOps.Exclusions storage x,
+        uint256 i,
+        uint256 id
+    ) private {
         ExclusionLedger ledger = x.ledger;
-        bool ok = FundPositionLib.drain(s, i, ledger, id, ExclusionLedger.RecoverySource.Restoration);
+        bool ok =
+            FundPositionLib.drain(s, i, ledger, id, ExclusionLedger.RecoverySource.Restoration);
         if (!ok) revert IFundEvents.InvalidParam();
         delete x.openExclusionOf[i];
         ledger.finalize(id, ExclusionLedger.FinalizeReason.Restored);
@@ -332,7 +359,9 @@ library FundAdminLib {
             if (!timeOk) revert IRobotMoneyFund.InvalidPlanTransition(p.id, st, to);
             _move(p, PlanStatus.Open, to);
         } else if (op == PlanOp.Pause) {
-            _move(p, st == PlanStatus.Halted ? PlanStatus.Halted : PlanStatus.Open, PlanStatus.Paused);
+            _move(
+                p, st == PlanStatus.Halted ? PlanStatus.Halted : PlanStatus.Open, PlanStatus.Paused
+            );
         } else if (op == PlanOp.Resume) {
             _move(p, PlanStatus.Paused, _overBudget(s, p) ? PlanStatus.Halted : PlanStatus.Open);
         } else if (op == PlanOp.Extend) {
@@ -345,7 +374,9 @@ library FundAdminLib {
                 _move(p, PlanStatus.Halted, PlanStatus.Open);
             }
         } else if (op == PlanOp.Close) {
-            if (!_isLive(st)) revert IRobotMoneyFund.InvalidPlanTransition(p.id, st, PlanStatus.Superseded);
+            if (!_isLive(st)) {
+                revert IRobotMoneyFund.InvalidPlanTransition(p.id, st, PlanStatus.Superseded);
+            }
             _move(p, st, PlanStatus.Superseded);
         } else if (st == PlanStatus.Open || st == PlanStatus.Halted) {
             _move(p, st, PlanStatus.Paused);
@@ -393,8 +424,8 @@ library FundAdminLib {
         bytes32 receiptId
     ) public returns (uint256 planId) {
         if (
-            params.duration < MIN_PLAN_DURATION || params.duration > MAX_PLAN_DURATION || params.costBudgetBps == 0
-                || params.costBudgetBps > MAX_COST_BUDGET_BPS
+            params.duration < MIN_PLAN_DURATION || params.duration > MAX_PLAN_DURATION
+                || params.costBudgetBps == 0 || params.costBudgetBps > MAX_COST_BUDGET_BPS
         ) revert IFundEvents.PlanParamOutOfBounds();
         uint16[] memory endBps = PlanMath.assetTargets(assets, bps, s.assets);
         FundValuationLib.requirePoolShare(s, endBps);
@@ -416,12 +447,13 @@ library FundAdminLib {
         createLedger(usdc);
     }
 
-
     /// @dev `openPlan` after the vector became `endBps` (own frame for stack depth).
-    function _open(FundState storage s, uint16[] memory endBps, PlanParams memory params, bytes32 receiptId)
-        private
-        returns (uint256 planId)
-    {
+    function _open(
+        FundState storage s,
+        uint16[] memory endBps,
+        PlanParams memory params,
+        bytes32 receiptId
+    ) private returns (uint256 planId) {
         Plan storage p = s.plan;
         PlanStatus prev = p.status;
         if (prev == PlanStatus.Open || prev == PlanStatus.Halted || prev == PlanStatus.Paused) {
@@ -430,7 +462,8 @@ library FundAdminLib {
         }
 
         (uint256 navNow,, uint256[] memory values) = FundValuationLib.portfolio(s);
-        (uint16[] memory startBps, uint16 startIdle) = PlanMath.snapshotStart(values, navNow, endBps);
+        (uint16[] memory startBps, uint16 startIdle) =
+            PlanMath.snapshotStart(values, navNow, endBps);
         uint256 turnover = PlanMath.turnoverUsdc(startBps, endBps, navNow);
 
         planId = uint256(p.id) + 1;
@@ -455,7 +488,14 @@ library FundAdminLib {
 
     function _emitOpened(Plan storage p) private {
         emit IFundEvents.PlanOpened(
-            p.id, p.receiptId, p.startBps, p.endBps, p.startTime, p.endTime, p.turnoverUsdc, p.costBudget
+            p.id,
+            p.receiptId,
+            p.startBps,
+            p.endBps,
+            p.startTime,
+            p.endTime,
+            p.turnoverUsdc,
+            p.costBudget
         );
     }
 }

@@ -41,16 +41,23 @@ contract DeployFlowQueue is FundSystemBase {
         vm.startBroadcast();
         d.queueImplementation = address(new FlowQueue());
         d.queue = _deployProxy(
-            d.queueImplementation, abi.encodeCall(FlowQueue.initialize, (p, d.upgrade.timelock, d.upgrade.mode))
+            d.queueImplementation,
+            abi.encodeCall(FlowQueue.initialize, (p, d.upgrade.timelock, d.upgrade.mode))
         );
         vm.stopBroadcast();
 
         FlowQueue q = FlowQueue(d.queue);
         require(q.hasRole(Roles.ADMIN_ROLE, p.admin), "queue: deployer lacks ADMIN_ROLE");
-        require(q.hasRole(Roles.EMERGENCY_ROLE, p.emergency), "queue: emergency key lacks EMERGENCY_ROLE");
+        require(
+            q.hasRole(Roles.EMERGENCY_ROLE, p.emergency),
+            "queue: emergency key lacks EMERGENCY_ROLE"
+        );
         require(q.hasRole(Roles.KEEPER_ROLE, p.keeper), "queue: keeper lacks KEEPER_ROLE");
         require(q.upgradeTimelock() == d.upgrade.timelock, "queue: upgradeTimelock");
-        require(keccak256(abi.encode(q.flowParams())) == keccak256(abi.encode(p.params)), "queue: flow params");
+        require(
+            keccak256(abi.encode(q.flowParams())) == keccak256(abi.encode(p.params)),
+            "queue: flow params"
+        );
         require(_implementationOf(d.queue) == d.queueImplementation, "queue: implementation slot");
         _writeDeploymentJson(d, p);
     }
@@ -77,7 +84,8 @@ contract DeployFlowQueue is FundSystemBase {
         f.keeperGrace = uint32(_envUintMax("FLOW_KEEPER_GRACE", type(uint32).max));
         f.maxEpochFlowBps = uint16(_envUintMax("FLOW_MAX_EPOCH_FLOW_BPS", type(uint16).max));
         f.epochFlowFloorUsdc = uint128(_envUintMax("FLOW_EPOCH_FLOOR_USDC", type(uint128).max));
-        f.maxSharePriceMoveBps = uint16(_envUintMax("FLOW_MAX_SHARE_PRICE_MOVE_BPS", type(uint16).max));
+        f.maxSharePriceMoveBps =
+            uint16(_envUintMax("FLOW_MAX_SHARE_PRICE_MOVE_BPS", type(uint16).max));
         f.maxRoll = uint16(_envUintMax("FLOW_MAX_ROLL", type(uint16).max));
         f.minRequestUsdc = uint128(_envUintMax("FLOW_MIN_REQUEST_USDC", type(uint128).max));
         f.maxFreeze = uint32(_envUintMax("FLOW_MAX_FREEZE", type(uint32).max));
@@ -88,7 +96,8 @@ contract DeployFlowQueue is FundSystemBase {
         f.legBandBps = uint16(_envUintMax("FLOW_LEG_BAND_BPS", type(uint16).max));
         f.sequencerGrace = uint32(_envUintMax("FLOW_SEQUENCER_GRACE", type(uint32).max));
         f.usdcPegBandBps = uint16(_envUintMax("FLOW_USDC_PEG_BAND_BPS", type(uint16).max));
-        f.maxLendRateGrowthBps = uint16(_envUintMax("FLOW_MAX_LEND_RATE_GROWTH_BPS", type(uint16).max));
+        f.maxLendRateGrowthBps =
+            uint16(_envUintMax("FLOW_MAX_LEND_RATE_GROWTH_BPS", type(uint16).max));
     }
 
     function _writeDeploymentJson(Deployed memory d, FlowQueueInit memory p) internal {
@@ -104,7 +113,8 @@ contract DeployFlowQueue is FundSystemBase {
         vm.serializeUint(obj, "min_request_usdc", p.params.minRequestUsdc);
         vm.serializeUint(obj, "epoch_flow_floor_usdc", p.params.epochFlowFloorUsdc);
         vm.serializeAddress(obj, "upgrade_timelock", d.upgrade.timelock);
-        string memory json = vm.serializeString(obj, "upgrade_mode", upgradeModeName(d.upgrade.mode));
+        string memory json =
+            vm.serializeString(obj, "upgrade_mode", upgradeModeName(d.upgrade.mode));
         vm.writeJson(json, outPath);
         console2.log("Wrote queue deployment JSON to", outPath);
     }

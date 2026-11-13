@@ -81,7 +81,9 @@ library PlanMath {
         }
         if (sum != BPS) revert IFundEvents.TargetSumInvalid(sum);
         for (uint256 i; i < n; ++i) {
-            if (cfgs[i].active && !listed[i]) revert IFundEvents.TargetAssetMissing(assetId(cfgs[i]));
+            if (cfgs[i].active && !listed[i]) {
+                revert IFundEvents.TargetAssetMissing(assetId(cfgs[i]));
+            }
         }
     }
 
@@ -179,7 +181,9 @@ library PlanMath {
         pure
         returns (uint256)
     {
-        if (endBps >= startBps) return startBps + ((endBps - startBps) * elapsed) / duration;
+        if (endBps >= startBps) {
+            return startBps + ((endBps - startBps) * elapsed) / duration;
+        }
         return startBps - ((startBps - endBps) * elapsed) / duration;
     }
 
@@ -212,21 +216,29 @@ library PlanMath {
 
     /// @notice A path target as a USDC value, computed without the intermediate bps truncation:
     ///         `nav × (start × d + (end − start) × e) / (d × 10 000)`, rounded toward `start`'s value.
-    function pathValue(uint256 startBps, uint256 endBps, uint256 elapsed, uint256 duration, uint256 nav)
-        internal
-        pure
-        returns (uint256)
-    {
+    function pathValue(
+        uint256 startBps,
+        uint256 endBps,
+        uint256 elapsed,
+        uint256 duration,
+        uint256 nav
+    ) internal pure returns (uint256) {
         uint256 scale = duration * BPS;
         if (endBps >= startBps) {
             return Math.mulDiv(nav, startBps * duration + (endBps - startBps) * elapsed, scale);
         }
         // Rounding toward start: round the subtracted movement down, i.e. the result up.
-        return Math.mulDiv(nav, startBps * duration - (startBps - endBps) * elapsed, scale, Math.Rounding.Ceil);
+        return Math.mulDiv(
+            nav, startBps * duration - (startBps - endBps) * elapsed, scale, Math.Rounding.Ceil
+        );
     }
 
     /// @notice `(over, under)` of a holding against its target value. At most one is non-zero.
-    function deviation(uint256 value, uint256 targetValue) internal pure returns (uint256 over, uint256 under) {
+    function deviation(uint256 value, uint256 targetValue)
+        internal
+        pure
+        returns (uint256 over, uint256 under)
+    {
         if (value > targetValue) return (value - targetValue, 0);
         return (0, targetValue - value);
     }
@@ -268,7 +280,10 @@ library PlanMath {
 
     /// @dev `pickLegs` inner step: replace the best sell / buy candidate when asset `i` is strictly
     ///      further over / under its target value.
-    function _consider(Legs memory legs, uint256 i, uint256 value, uint256 targetValue) private pure {
+    function _consider(Legs memory legs, uint256 i, uint256 value, uint256 targetValue)
+        private
+        pure
+    {
         (uint256 o, uint256 u) = deviation(value, targetValue);
         if (o > legs.over) {
             legs.over = o;

@@ -41,7 +41,9 @@ library LeverEnv {
         }
         FlowLevers memory l = queue.flowLevers();
         FlowLevers memory m = FlowLevers({
-            basketCallBps: uint16(vm.envOr("PROTO_LEVER_BASKET_CALL_BPS", uint256(l.basketCallBps))),
+            basketCallBps: uint16(
+                vm.envOr("PROTO_LEVER_BASKET_CALL_BPS", uint256(l.basketCallBps))
+            ),
             legPriceMode: uint8(vm.envOr("PROTO_LEVER_LEG_PRICE_MODE", uint256(l.legPriceMode)))
         });
         if (m.basketCallBps != l.basketCallBps || m.legPriceMode != l.legPriceMode) {
@@ -74,7 +76,10 @@ interface IAtkSimRouter {
     }
 
     function exactInputSingle(ExactInputSingleParams calldata p) external payable returns (uint256);
-    function exactOutputSingle(ExactOutputSingleParams calldata p) external payable returns (uint256);
+    function exactOutputSingle(ExactOutputSingleParams calldata p)
+        external
+        payable
+        returns (uint256);
 }
 
 /// @title AttackSimSpec
@@ -237,7 +242,9 @@ abstract contract AttackSimCore is SimMarket, AttackBook, AttackSimSpec {
         if (!atk.up && lvl >= BPS) lvl = BPS - 1;
         uint256 f = Math.sqrt((atk.up ? BPS + lvl : BPS - lvl) * 1e36 / BPS);
         uint160 ref = _mkRefSqrt(b);
-        uint160 target = mkUsdc0[b] ? uint160(uint256(ref).mulDiv(1e18, f)) : uint160(uint256(ref).mulDiv(f, 1e18));
+        uint160 target = mkUsdc0[b]
+            ? uint160(uint256(ref).mulDiv(1e18, f))
+            : uint160(uint256(ref).mulDiv(f, 1e18));
         uint160 sp = _mkSpotSqrt(b);
         // The token's USD price rises with sqrtP when the token is token0, and falls when it is token1.
         bool tokenPriceBelow = mkUsdc0[b] ? sp > target : sp < target;
@@ -248,9 +255,12 @@ abstract contract AttackSimCore is SimMarket, AttackBook, AttackSimSpec {
         uint256 usdc0 = IERC20(MK_USDC).balanceOf(attacker);
         vm.startPrank(attacker);
         IERC20(tIn).approve(MK_ROUTER, bal);
-        IAtkSimRouter(MK_ROUTER).exactInputSingle(
-            IAtkSimRouter.ExactInputSingleParams(tIn, tOut, MK_POOL_FEE, attacker, bal, 0, target)
-        );
+        IAtkSimRouter(MK_ROUTER)
+            .exactInputSingle(
+                IAtkSimRouter.ExactInputSingleParams(
+                    tIn, tOut, MK_POOL_FEE, attacker, bal, 0, target
+                )
+            );
         IERC20(tIn).approve(MK_ROUTER, 0);
         vm.stopPrank();
         if (atk.up) atkSpent += usdc0 - IERC20(MK_USDC).balanceOf(attacker);
@@ -268,15 +278,21 @@ abstract contract AttackSimCore is SimMarket, AttackBook, AttackSimSpec {
         if (bal > atk.tok0[b]) {
             uint256 x = bal - atk.tok0[b];
             IERC20(token).approve(MK_ROUTER, x);
-            IAtkSimRouter(MK_ROUTER).exactInputSingle(
-                IAtkSimRouter.ExactInputSingleParams(token, MK_USDC, MK_POOL_FEE, attacker, x, 0, 0)
-            );
+            IAtkSimRouter(MK_ROUTER)
+                .exactInputSingle(
+                    IAtkSimRouter.ExactInputSingleParams(
+                        token, MK_USDC, MK_POOL_FEE, attacker, x, 0, 0
+                    )
+                );
         } else if (bal < atk.tok0[b]) {
             uint256 u = IERC20(MK_USDC).balanceOf(attacker);
             IERC20(MK_USDC).approve(MK_ROUTER, u);
-            IAtkSimRouter(MK_ROUTER).exactOutputSingle(
-                IAtkSimRouter.ExactOutputSingleParams(MK_USDC, token, MK_POOL_FEE, attacker, atk.tok0[b] - bal, u, 0)
-            );
+            IAtkSimRouter(MK_ROUTER)
+                .exactOutputSingle(
+                    IAtkSimRouter.ExactOutputSingleParams(
+                        MK_USDC, token, MK_POOL_FEE, attacker, atk.tok0[b] - bal, u, 0
+                    )
+                );
             IERC20(MK_USDC).approve(MK_ROUTER, 0);
         }
         vm.stopPrank();
@@ -308,7 +324,11 @@ abstract contract AttackSimCore is SimMarket, AttackBook, AttackSimSpec {
         uint256 spent;
     }
 
-    function _row(uint256 k, Var memory v, Res memory h, Res memory a) internal pure returns (Row memory r) {
+    function _row(uint256 k, Var memory v, Res memory h, Res memory a)
+        internal
+        pure
+        returns (Row memory r)
+    {
         r.seedK = k;
         (r.flow, r.b, r.lvl, r.hold) = (v.flow, v.b, v.lvl, v.hold);
         r.net = a.atk - h.atk;
@@ -333,7 +353,9 @@ abstract contract AttackSimCore is SimMarket, AttackBook, AttackSimSpec {
     /// @notice Write the rows to out/prototype/attack-sim/<arm>-<id>.json and score the worst one: the attacker's best
     ///         net and the largest holders' loss over every variant and seed. `g8`: assert G8 (the timed fund); else
     ///         report only (the frozen fund, whose exposure the design names, proposal §5.9.1).
-    function _score(string memory arm, string memory id, Row[] memory rows, uint256 n, bool g8) internal {
+    function _score(string memory arm, string memory id, Row[] memory rows, uint256 n, bool g8)
+        internal
+    {
         _writeRows(arm, id, rows, n);
         uint256 worst;
         uint256 worstHolders;
@@ -348,8 +370,17 @@ abstract contract AttackSimCore is SimMarket, AttackBook, AttackSimSpec {
         emit log_named_string(
             string.concat(arm, " ", id, " worst variant"),
             string.concat(
-                "seed ", vm.toString(w.seedK), " flow ", vm.toString(uint256(w.flow)), " pool ", vm.toString(uint256(w.b)),
-                " level ", vm.toString(uint256(w.lvl)), " hold ", vm.toString(uint256(w.hold)), " first outcome ",
+                "seed ",
+                vm.toString(w.seedK),
+                " flow ",
+                vm.toString(uint256(w.flow)),
+                " pool ",
+                vm.toString(uint256(w.b)),
+                " level ",
+                vm.toString(uint256(w.lvl)),
+                " hold ",
+                vm.toString(uint256(w.hold)),
+                " first outcome ",
                 vm.toString(w.first)
             )
         );
@@ -369,7 +400,9 @@ abstract contract AttackSimCore is SimMarket, AttackBook, AttackSimSpec {
     /// @notice Beside the strict score (the best single run), the best variant by its mean over the seeds: a variant
     ///         that delays the settlement also carries the market's move over the delay, which is zero-mean luck in
     ///         a single run. Logged only; G8 stays scored on the best single run.
-    function _logBestMean(string memory arm, string memory id, Row[] memory rows, uint256 n) internal {
+    function _logBestMean(string memory arm, string memory id, Row[] memory rows, uint256 n)
+        internal
+    {
         int256 bestSum = type(int256).min;
         uint256 bestI;
         uint256 bestCount;
@@ -388,16 +421,27 @@ abstract contract AttackSimCore is SimMarket, AttackBook, AttackSimSpec {
         emit log_named_string(
             string.concat(arm, " ", id, " best variant by mean over seeds"),
             string.concat(
-                "mean net ", vm.toString(bestSum), " over ", vm.toString(bestCount), " seeds; flow ",
-                vm.toString(uint256(r.flow)), " pool ", vm.toString(uint256(r.b)), " level ", vm.toString(uint256(r.lvl)),
-                " hold ", vm.toString(uint256(r.hold))
+                "mean net ",
+                vm.toString(bestSum),
+                " over ",
+                vm.toString(bestCount),
+                " seeds; flow ",
+                vm.toString(uint256(r.flow)),
+                " pool ",
+                vm.toString(uint256(r.b)),
+                " level ",
+                vm.toString(uint256(r.lvl)),
+                " hold ",
+                vm.toString(uint256(r.hold))
             )
         );
     }
 
     /// @notice The best single run among those whose aimed call settled (outcome 0): no delay, so no timing luck.
     ///         Logged only.
-    function _logBestOnTime(string memory arm, string memory id, Row[] memory rows, uint256 n) internal {
+    function _logBestOnTime(string memory arm, string memory id, Row[] memory rows, uint256 n)
+        internal
+    {
         int256 best = type(int256).min;
         uint256 bi;
         for (uint256 i; i < n; ++i) {
@@ -408,8 +452,17 @@ abstract contract AttackSimCore is SimMarket, AttackBook, AttackSimSpec {
         emit log_named_string(
             string.concat(arm, " ", id, " best run settled at the aimed call"),
             string.concat(
-                "net ", vm.toString(best), "; seed ", vm.toString(r.seedK), " flow ", vm.toString(uint256(r.flow)),
-                " pool ", vm.toString(uint256(r.b)), " level ", vm.toString(uint256(r.lvl)), " hold ",
+                "net ",
+                vm.toString(best),
+                "; seed ",
+                vm.toString(r.seedK),
+                " flow ",
+                vm.toString(uint256(r.flow)),
+                " pool ",
+                vm.toString(uint256(r.b)),
+                " level ",
+                vm.toString(uint256(r.lvl)),
+                " hold ",
                 vm.toString(uint256(r.hold))
             )
         );
@@ -419,7 +472,9 @@ abstract contract AttackSimCore is SimMarket, AttackBook, AttackSimSpec {
         return a.flow == b.flow && a.b == b.b && a.lvl == b.lvl && a.hold == b.hold;
     }
 
-    function _writeRows(string memory arm, string memory id, Row[] memory rows, uint256 n) internal {
+    function _writeRows(string memory arm, string memory id, Row[] memory rows, uint256 n)
+        internal
+    {
         string memory k = string.concat(arm, id);
         uint256[][8] memory u;
         int256[][3] memory s;
@@ -459,7 +514,11 @@ abstract contract AttackSimCore is SimMarket, AttackBook, AttackSimSpec {
     }
 
     /// @dev Three levels from `name` (comma-separated), else `dflt`. A lever run that sets it needs PROTO_SIM_TAG.
-    function _levels(string memory name, uint16[3] memory dflt) internal view returns (uint16[3] memory l) {
+    function _levels(string memory name, uint16[3] memory dflt)
+        internal
+        view
+        returns (uint16[3] memory l)
+    {
         uint256[] memory d = new uint256[](3);
         (d[0], d[1], d[2]) = (dflt[0], dflt[1], dflt[2]);
         uint256[] memory v = vm.envOr(name, ",", d);
@@ -543,7 +602,7 @@ contract AttackSimTimedTest is TimedSimBase, AttackSimCore {
         _world();
         uint8[] memory flows = new uint8[](4);
         (flows[0], flows[1], flows[2], flows[3]) =
-            (FLOW_STRANGER_DEPOSIT, FLOW_OWN_REDEEM, FLOW_STRANGER_REDEEM, FLOW_OWN_DEPOSIT);
+        (FLOW_STRANGER_DEPOSIT, FLOW_OWN_REDEEM, FLOW_STRANGER_REDEEM, FLOW_OWN_DEPOSIT);
         _grid(SCN_A2_PUSH_HELD, "A2", _a2Vars(flows), flows);
     }
 
@@ -552,7 +611,7 @@ contract AttackSimTimedTest is TimedSimBase, AttackSimCore {
         _world();
         uint8[] memory flows = new uint8[](4);
         (flows[0], flows[1], flows[2], flows[3]) =
-            (FLOW_STRANGER_DEPOSIT, FLOW_OWN_REDEEM, FLOW_STRANGER_REDEEM, FLOW_OWN_DEPOSIT);
+        (FLOW_STRANGER_DEPOSIT, FLOW_OWN_REDEEM, FLOW_STRANGER_REDEEM, FLOW_OWN_DEPOSIT);
         _grid(SCN_A10_RAMP, "A10", _a10Vars(flows), flows);
     }
 
@@ -601,7 +660,10 @@ contract AttackSimTimedTest is TimedSimBase, AttackSimCore {
     function _world() internal {
         // A lever run (PROTO_SIM_FLOW_<FIELD>) needs PROTO_SIM_TAG, so it writes to attack-sim-<tag>/.
         bool overridden = _applyFlowOverrides();
-        require(!overridden || bytes(_tagDir()).length != 0, "attack sim: an override needs PROTO_SIM_TAG");
+        require(
+            !overridden || bytes(_tagDir()).length != 0,
+            "attack sim: an override needs PROTO_SIM_TAG"
+        );
         _mkInit(_seedOf(SCN_A2_PUSH_HELD, 0));
         _feedInit();
         _investQuiet(bucketVec(6_500, 3_500));
@@ -761,7 +823,8 @@ contract AttackSimTimedTest is TimedSimBase, AttackSimCore {
         }
         uint256 id = _flowRequest(v.flow);
         uint256 aimAt = queue.settleableAt(queue.getRequest(id).epoch);
-        uint256 startAt = v.ramp ? aimAt - (uint256(v.hold) - 1) * SLOT : (v.hold <= 2 ? aimAt : aimAt - v.hold);
+        uint256 startAt =
+            v.ramp ? aimAt - (uint256(v.hold) - 1) * SLOT : (v.hold <= 2 ? aimAt : aimAt - v.hold);
         require(startAt >= vm.getBlockTimestamp(), "flowRun: the hold starts before the request");
         _arm(v, startAt, aimAt);
         while (vm.getBlockTimestamp() < aimAt + 3_600) {
@@ -774,10 +837,15 @@ contract AttackSimTimedTest is TimedSimBase, AttackSimCore {
 
     function _flowRequest(uint8 flow) internal returns (uint256 id) {
         bool ok;
-        if (flow == FLOW_STRANGER_DEPOSIT) (ok, id,) = _reqDeposit(victim, FLOW_USDC, 100);
-        else if (flow == FLOW_OWN_DEPOSIT) (ok, id,) = _reqDeposit(attacker, FLOW_USDC, BPS);
-        else if (flow == FLOW_STRANGER_REDEEM) (ok, id,) = _reqRedeem(victim, fund.balanceOf(victim), 100);
-        else (ok, id,) = _reqRedeem(attacker, fund.balanceOf(attacker), BPS);
+        if (flow == FLOW_STRANGER_DEPOSIT) {
+            (ok, id,) = _reqDeposit(victim, FLOW_USDC, 100);
+        } else if (flow == FLOW_OWN_DEPOSIT) {
+            (ok, id,) = _reqDeposit(attacker, FLOW_USDC, BPS);
+        } else if (flow == FLOW_STRANGER_REDEEM) {
+            (ok, id,) = _reqRedeem(victim, fund.balanceOf(victim), 100);
+        } else {
+            (ok, id,) = _reqRedeem(attacker, fund.balanceOf(attacker), BPS);
+        }
         require(ok, "flowRun: the request reverted");
     }
 
@@ -813,7 +881,11 @@ contract AttackSimTimedTest is TimedSimBase, AttackSimCore {
     }
 
     /// @notice USDC, tokens and every share `who` holds or has queued or credited, at the reference walk.
-    function _valueRef(address who, uint256 navRef, uint256 supply) internal view returns (uint256 v) {
+    function _valueRef(address who, uint256 navRef, uint256 supply)
+        internal
+        view
+        returns (uint256 v)
+    {
         v = _walletRef(who);
         (uint256 cu, uint256 cs) = queue.creditOf(who);
         v += cu + (fund.balanceOf(who) + queue.queuedSharesOf(who) + cs).mulDiv(navRef, supply);
@@ -936,12 +1008,17 @@ contract AttackSimTimedTest is TimedSimBase, AttackSimCore {
             if (run) _a9Log(i, ids[i], askedAt[i], v);
         }
         r.hps = navRef.mulDiv(1e18, supply);
-        r.holderShares = fund.balanceOf(alice) + fund.balanceOf(address(fund)) + fund.balanceOf(attacker)
-            + fund.balanceOf(victim);
+        r.holderShares = fund.balanceOf(alice) + fund.balanceOf(address(fund))
+            + fund.balanceOf(attacker) + fund.balanceOf(victim);
         r.navRef = navRef;
     }
 
-    function _a9Requests(uint256[] memory ids, uint256[] memory askedAt, uint256 t0, uint256 epochLen) internal {
+    function _a9Requests(
+        uint256[] memory ids,
+        uint256[] memory askedAt,
+        uint256 t0,
+        uint256 epochLen
+    ) internal {
         for (uint256 i; i < N_RUNNERS; ++i) {
             if (ids[i] != 0 || vm.getBlockTimestamp() < t0 + (i < N_RUNNERS / 2 ? 0 : epochLen)) continue;
             (bool ok, uint256 id,) = _reqRedeem(runners[i], fund.balanceOf(runners[i]), BPS);
@@ -972,7 +1049,10 @@ contract AttackSimTimedTest is TimedSimBase, AttackSimCore {
     function _a9Log(uint256 i, uint256 id, uint256 askedAt, uint256 value) internal {
         string memory head = _a9Times(id, askedAt);
         string memory tail = string.concat(
-            " status ", vm.toString(uint256(uint8(queue.requestStatus(id)))), " value at ref ", vm.toString(value)
+            " status ",
+            vm.toString(uint256(uint8(queue.requestStatus(id)))),
+            " value at ref ",
+            vm.toString(value)
         );
         emit log_named_string(
             string.concat("A9 timed runner ", vm.toString(i)),
@@ -985,7 +1065,12 @@ contract AttackSimTimedTest is TimedSimBase, AttackSimCore {
         uint256 first = k == 0 ? 0 : reqs[k - 1].firstFillAt;
         uint256 doneAt = k == 0 ? 0 : reqs[k - 1].doneAt;
         return string.concat(
-            "asked ", vm.toString(askedAt), " first fill ", vm.toString(first), " done ", vm.toString(doneAt)
+            "asked ",
+            vm.toString(askedAt),
+            " first fill ",
+            vm.toString(first),
+            " done ",
+            vm.toString(doneAt)
         );
     }
 }
@@ -1077,7 +1162,9 @@ contract AttackSimBaselineTest is BaselineHarness, AttackSimCore {
 
     function _worldB() internal {
         _mkInit(_seedOf(SCN_A2_PUSH_HELD, 0));
-        setTargetViaTimelock(bucketVec(6_500, 3_500, 0), BaselinePlanParams(1 days, COST_BUDGET_BPS));
+        setTargetViaTimelock(
+            bucketVec(6_500, 3_500, 0), BaselinePlanParams(1 days, COST_BUDGET_BPS)
+        );
         address[] memory hs = new address[](3 + N_RUNNERS);
         uint256[] memory amts = new uint256[](3 + N_RUNNERS);
         (hs[0], amts[0]) = (attacker, FLOW_USDC);
@@ -1176,7 +1263,8 @@ contract AttackSimBaselineTest is BaselineHarness, AttackSimCore {
             deal(mkTokens[b], attacker, _mkTokenForUsdc(b, FLASH_USDC / 10, _mkRefSqrt(b)));
         }
         uint256 aimAt = vm.getBlockTimestamp() + 8 * SLOT;
-        uint256 startAt = v.ramp ? aimAt - (uint256(v.hold) - 1) * SLOT : (v.hold <= 2 ? aimAt : aimAt - v.hold);
+        uint256 startAt =
+            v.ramp ? aimAt - (uint256(v.hold) - 1) * SLOT : (v.hold <= 2 ? aimAt : aimAt - v.hold);
         _arm(v, startAt, aimAt);
         while (vm.getBlockTimestamp() < aimAt) {
             vm.resetGasMetering();
@@ -1184,13 +1272,16 @@ contract AttackSimBaselineTest is BaselineHarness, AttackSimCore {
         }
         atk.active = atk.armed;
         _atkPush();
-        bool ok = v.flow == FLOW_OWN_DEPOSIT ? _bDeposit(attacker, FLOW_USDC) : _bRedeemAll(attacker);
+        bool ok =
+            v.flow == FLOW_OWN_DEPOSIT ? _bDeposit(attacker, FLOW_USDC) : _bRedeemAll(attacker);
         _atkUnwind();
         while (vm.getBlockTimestamp() < aimAt + 3_600) {
             vm.resetGasMetering();
             _bSlot();
         }
-        if (v.flow == FLOW_OWN_DEPOSIT && ok) require(_bRedeemAll(attacker), "flowRunB: the exit redemption reverted");
+        if (v.flow == FLOW_OWN_DEPOSIT && ok) {
+            require(_bRedeemAll(attacker), "flowRunB: the exit redemption reverted");
+        }
         r = _resultB();
         r.first = ok ? 0 : 1;
     }
@@ -1240,7 +1331,9 @@ contract AttackSimBaselineTest is BaselineHarness, AttackSimCore {
         v += values[IDX_DESPXA];
         for (uint256 b; b < MK_N; ++b) {
             uint256 unit = 10 ** IERC20Metadata(mkTokens[b]).decimals();
-            v += IERC20(mkTokens[b]).balanceOf(address(fund)).mulDiv(_mkUsdcFor(b, unit, _mkRefSqrt(b)), unit);
+            v += IERC20(mkTokens[b])
+                .balanceOf(address(fund))
+                .mulDiv(_mkUsdcFor(b, unit, _mkRefSqrt(b)), unit);
         }
     }
 
@@ -1324,7 +1417,10 @@ contract AttackSimBaselineTest is BaselineHarness, AttackSimCore {
         r.first = b9Refused;
         r.atk = 0;
         for (uint256 i; i < N_RUNNERS; ++i) {
-            r.atk += int256(_walletRef(runners[i]) + fund.balanceOf(runners[i]).mulDiv(r.navRef, fund.totalSupply()));
+            r.atk += int256(
+                _walletRef(runners[i])
+                    + fund.balanceOf(runners[i]).mulDiv(r.navRef, fund.totalSupply())
+            );
         }
     }
 
@@ -1339,8 +1435,13 @@ contract AttackSimBaselineTest is BaselineHarness, AttackSimCore {
                 emit log_named_string(
                     string.concat("A9 baseline runner ", vm.toString(i)),
                     string.concat(
-                        "USDC ", vm.toString(got), " for shares worth ", vm.toString(fair), " at the reference (",
-                        vm.toString(_mkBps(got, fair)), " bps)"
+                        "USDC ",
+                        vm.toString(got),
+                        " for shares worth ",
+                        vm.toString(fair),
+                        " at the reference (",
+                        vm.toString(_mkBps(got, fair)),
+                        " bps)"
                     )
                 );
             } catch (bytes memory err) {
@@ -1375,7 +1476,10 @@ contract AttackSimBaselineTest is BaselineHarness, AttackSimCore {
 contract TimedFlowSimLeversTest is TimedFlowSimTest {
     function setUp() public override {
         if (!vm.envOr("PROTO_LEVER_TIMED", false)) {
-            vm.skip(true, "opt-in: PROTO_LEVER_TIMED=1 runs the timed sim under PROTO_LEVER_* (needs PROTO_SIM_TAG)");
+            vm.skip(
+                true,
+                "opt-in: PROTO_LEVER_TIMED=1 runs the timed sim under PROTO_LEVER_* (needs PROTO_SIM_TAG)"
+            );
             return;
         }
         super.setUp();

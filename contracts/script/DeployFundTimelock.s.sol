@@ -82,13 +82,22 @@ contract DeployFundTimelock is CoreTimelockHandover {
         _writeJson(d);
     }
 
-    function _validate(Deployed memory d, address[] memory owners, uint256 threshold) internal view {
+    function _validate(Deployed memory d, address[] memory owners, uint256 threshold)
+        internal
+        view
+    {
         address[6] memory c = [d.fund, d.rebalancer, d.governance, d.queue, d.receipts, d.safe];
         for (uint256 i = 0; i < c.length; i++) {
-            require(c[i] != address(0) && c[i].code.length > 0, "a fund-system address is zero or has no code");
+            require(
+                c[i] != address(0) && c[i].code.length > 0,
+                "a fund-system address is zero or has no code"
+            );
         }
         require(d.receiptAdmin != address(0), "RECEIPT_ADMIN_ADDRESS=0");
-        require(d.emergency != address(0) && d.keeper != address(0), "EMERGENCY_ADDRESS or KEEPER_ADDRESS is zero");
+        require(
+            d.emergency != address(0) && d.keeper != address(0),
+            "EMERGENCY_ADDRESS or KEEPER_ADDRESS is zero"
+        );
         require(d.minDelay > 0, "TIMELOCK_MIN_DELAY=0");
         // ACL-1 / F-01: the emergency key is independent of the deployer EOA.
         require(d.emergency != msg.sender, "EMERGENCY_ADDRESS == deployer EOA");
@@ -129,19 +138,46 @@ contract DeployFundTimelock is CoreTimelockHandover {
         }
         IAccessControl g = IAccessControl(d.governance);
         require(
-            g.hasRole(Roles.TARGET_SETTER_ROLE, d.timelock) && !g.hasRole(Roles.TARGET_SETTER_ROLE, msg.sender),
+            g.hasRole(Roles.TARGET_SETTER_ROLE, d.timelock)
+                && !g.hasRole(Roles.TARGET_SETTER_ROLE, msg.sender),
             "governance TARGET_SETTER_ROLE is not the timelock alone"
         );
         IAccessControl r = IAccessControl(d.receipts);
-        require(r.hasRole(Roles.ADMIN_ROLE, d.timelock) && r.hasRole(DEFAULT_ADMIN, d.timelock), "receipt admin is not the timelock");
-        require(!r.hasRole(Roles.ADMIN_ROLE, msg.sender) && !r.hasRole(DEFAULT_ADMIN, msg.sender), "deployer still administers the receipt register");
-        require(!r.hasRole(Roles.ADMIN_ROLE, d.governance), "governance holds the receipt ADMIN_ROLE");
-        require(IAccessControl(d.fund).hasRole(Roles.EMERGENCY_ROLE, d.emergency), "fund EMERGENCY_ROLE is not the emergency key");
-        require(IAccessControl(d.queue).hasRole(Roles.EMERGENCY_ROLE, d.emergency), "queue EMERGENCY_ROLE is not the emergency key");
-        require(!IAccessControl(d.fund).hasRole(Roles.EMERGENCY_ROLE, msg.sender), "deployer holds fund EMERGENCY_ROLE");
-        require(!IAccessControl(d.queue).hasRole(Roles.EMERGENCY_ROLE, msg.sender), "deployer holds queue EMERGENCY_ROLE");
-        require(IAccessControl(d.queue).hasRole(Roles.KEEPER_ROLE, d.keeper), "queue KEEPER_ROLE is not the keeper");
-        require(IAccessControl(d.rebalancer).hasRole(Roles.KEEPER_ROLE, d.keeper), "rebalancer KEEPER_ROLE is not the keeper");
+        require(
+            r.hasRole(Roles.ADMIN_ROLE, d.timelock) && r.hasRole(DEFAULT_ADMIN, d.timelock),
+            "receipt admin is not the timelock"
+        );
+        require(
+            !r.hasRole(Roles.ADMIN_ROLE, msg.sender) && !r.hasRole(DEFAULT_ADMIN, msg.sender),
+            "deployer still administers the receipt register"
+        );
+        require(
+            !r.hasRole(Roles.ADMIN_ROLE, d.governance), "governance holds the receipt ADMIN_ROLE"
+        );
+        require(
+            IAccessControl(d.fund).hasRole(Roles.EMERGENCY_ROLE, d.emergency),
+            "fund EMERGENCY_ROLE is not the emergency key"
+        );
+        require(
+            IAccessControl(d.queue).hasRole(Roles.EMERGENCY_ROLE, d.emergency),
+            "queue EMERGENCY_ROLE is not the emergency key"
+        );
+        require(
+            !IAccessControl(d.fund).hasRole(Roles.EMERGENCY_ROLE, msg.sender),
+            "deployer holds fund EMERGENCY_ROLE"
+        );
+        require(
+            !IAccessControl(d.queue).hasRole(Roles.EMERGENCY_ROLE, msg.sender),
+            "deployer holds queue EMERGENCY_ROLE"
+        );
+        require(
+            IAccessControl(d.queue).hasRole(Roles.KEEPER_ROLE, d.keeper),
+            "queue KEEPER_ROLE is not the keeper"
+        );
+        require(
+            IAccessControl(d.rebalancer).hasRole(Roles.KEEPER_ROLE, d.keeper),
+            "rebalancer KEEPER_ROLE is not the keeper"
+        );
     }
 
     /// @dev ADR-0014: keccak256 of the code of `proxy`'s ERC-1967 implementation.
@@ -156,8 +192,12 @@ contract DeployFundTimelock is CoreTimelockHandover {
         vm.serializeBytes32(hashes, "timelock", d.timelock.codehash);
         vm.serializeBytes32(hashes, "safe", d.safe.codehash);
         vm.serializeBytes32(hashes, "fund_implementation", _implementationCodeHash(d.fund));
-        vm.serializeBytes32(hashes, "rebalancer_implementation", _implementationCodeHash(d.rebalancer));
-        vm.serializeBytes32(hashes, "governance_implementation", _implementationCodeHash(d.governance));
+        vm.serializeBytes32(
+            hashes, "rebalancer_implementation", _implementationCodeHash(d.rebalancer)
+        );
+        vm.serializeBytes32(
+            hashes, "governance_implementation", _implementationCodeHash(d.governance)
+        );
         vm.serializeBytes32(hashes, "queue_implementation", _implementationCodeHash(d.queue));
         string memory hashesJson = vm.serializeBytes32(
             hashes, "consensus_receipt_implementation", _implementationCodeHash(d.receipts)

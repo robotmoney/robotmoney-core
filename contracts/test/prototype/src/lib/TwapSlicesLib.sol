@@ -40,7 +40,10 @@ library TwapSlicesLib {
         view
         returns (bool ok, int24 medianTick, uint8 inBand)
     {
-        if (pool.code.length == 0 || slices == 0 || slices > MAX_SLICES || window == 0 || window % slices != 0) {
+        if (
+            pool.code.length == 0 || slices == 0 || slices > MAX_SLICES || window == 0
+                || window % slices != 0
+        ) {
             return (false, 0, 0);
         }
         int24[] memory means;
@@ -87,7 +90,9 @@ library TwapSlicesLib {
             int56 delta = cum[j + 1] - cum[j];
             int56 m = delta / l;
             if (delta < 0 && delta % l != 0) m--;
-            if (m > int56(TickMath.MAX_TICK) || m < int56(TickMath.MIN_TICK)) return (false, means);
+            if (m > int56(TickMath.MAX_TICK) || m < int56(TickMath.MIN_TICK)) {
+                return (false, means);
+            }
             means[j] = int24(m);
         }
         ok = true;

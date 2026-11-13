@@ -135,8 +135,16 @@ contract AuctionStepExecutor is IBasketSwapAdapter, ReentrancyGuard {
     address private _filler;
     uint256 private _elapsed;
 
-    constructor(address inner, address fund, address usdc, uint32 duration, uint16 startPremiumBps) {
-        if (inner == address(0) || fund == address(0) || usdc == address(0)) revert ZeroAddress();
+    constructor(
+        address inner,
+        address fund,
+        address usdc,
+        uint32 duration,
+        uint16 startPremiumBps
+    ) {
+        if (inner == address(0) || fund == address(0) || usdc == address(0)) {
+            revert ZeroAddress();
+        }
         if (duration == 0 || startPremiumBps > BPS) revert InvalidParam();
         INNER = IBasketSwapAdapter(inner);
         FUND = fund;
@@ -163,7 +171,9 @@ contract AuctionStepExecutor is IBasketSwapAdapter, ReentrancyGuard {
     ///         Rebalancer would trade now (so the cooldown and ORA-4 hold first, RB-5), or while one is live.
     function open() external nonReentrant {
         uint256 at = openedAt;
-        if (at != 0 && block.timestamp <= at + 2 * uint256(DURATION)) revert AuctionLive(at + 2 * uint256(DURATION));
+        if (at != 0 && block.timestamp <= at + 2 * uint256(DURATION)) {
+            revert AuctionLive(at + 2 * uint256(DURATION));
+        }
         (SkipReason r,,,) = rebalancer.previewStep();
         if (r != SkipReason.None) revert NotReady(r);
         openedAt = uint64(block.timestamp);
@@ -217,7 +227,8 @@ contract AuctionStepExecutor is IBasketSwapAdapter, ReentrancyGuard {
         if (filler == address(0) || msg.sender != FUND) {
             IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
             IERC20(tokenIn).forceApprove(address(INNER), amountIn);
-            amountOut = INNER.swap(tokenIn, tokenOut, fee, amountIn, minAmountOut, recipient, deadline);
+            amountOut =
+                INNER.swap(tokenIn, tokenOut, fee, amountIn, minAmountOut, recipient, deadline);
             IERC20(tokenIn).forceApprove(address(INNER), 0);
             return amountOut;
         }
@@ -236,17 +247,23 @@ contract AuctionStepExecutor is IBasketSwapAdapter, ReentrancyGuard {
     }
 
     /// @inheritdoc IBasketSwapAdapter
-    function twapPrice(address pool, address baseToken, address quoteToken, uint256 baseAmount, uint32 window)
-        external
-        view
-        returns (uint256)
-    {
+    function twapPrice(
+        address pool,
+        address baseToken,
+        address quoteToken,
+        uint256 baseAmount,
+        uint32 window
+    ) external view returns (uint256) {
         return INNER.twapPrice(pool, baseToken, quoteToken, baseAmount, window);
     }
 
     /// @dev The fund's own TWAP quote for the leg: the active basket asset holding the non-USDC token, its pool
     ///      and window, through `INNER` (the same read as `FundValuationLib`).
-    function _twapQuote(address tokenIn, address tokenOut, uint256 amountIn) internal view returns (uint256) {
+    function _twapQuote(address tokenIn, address tokenOut, uint256 amountIn)
+        internal
+        view
+        returns (uint256)
+    {
         address token = tokenIn == USDC ? tokenOut : tokenIn;
         AssetConfig[] memory cfgs = IRobotMoneyFund(FUND).assetConfigs();
         for (uint256 i; i < cfgs.length; ++i) {

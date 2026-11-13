@@ -23,7 +23,10 @@ interface IAerodromeSlipstreamRouterExactOut {
         uint160 sqrtPriceLimitX96;
     }
 
-    function exactOutputSingle(ExactOutputSingleParams calldata params) external payable returns (uint256 amountIn);
+    function exactOutputSingle(ExactOutputSingleParams calldata params)
+        external
+        payable
+        returns (uint256 amountIn);
 }
 
 /// @title AerodromeExactOutSwapAdapter
@@ -58,19 +61,22 @@ contract AerodromeExactOutSwapAdapter is AerodromeSwapAdapter, IExactOutSwapAdap
 
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), maxAmountIn);
         IERC20(tokenIn).forceApprove(address(ROUTER), maxAmountIn);
-        amountIn = IAerodromeSlipstreamRouterExactOut(address(ROUTER)).exactOutputSingle(
-            IAerodromeSlipstreamRouterExactOut.ExactOutputSingleParams({
-                tokenIn: tokenIn,
-                tokenOut: tokenOut,
-                tickSpacing: tickSpacing,
-                recipient: recipient,
-                deadline: deadline,
-                amountOut: amountOut,
-                amountInMaximum: maxAmountIn,
-                sqrtPriceLimitX96: 0
-            })
-        );
+        amountIn = IAerodromeSlipstreamRouterExactOut(address(ROUTER))
+            .exactOutputSingle(
+                IAerodromeSlipstreamRouterExactOut.ExactOutputSingleParams({
+                    tokenIn: tokenIn,
+                    tokenOut: tokenOut,
+                    tickSpacing: tickSpacing,
+                    recipient: recipient,
+                    deadline: deadline,
+                    amountOut: amountOut,
+                    amountInMaximum: maxAmountIn,
+                    sqrtPriceLimitX96: 0
+                })
+            );
         IERC20(tokenIn).forceApprove(address(ROUTER), 0);
-        if (amountIn < maxAmountIn) IERC20(tokenIn).safeTransfer(msg.sender, maxAmountIn - amountIn);
+        if (amountIn < maxAmountIn) {
+            IERC20(tokenIn).safeTransfer(msg.sender, maxAmountIn - amountIn);
+        }
     }
 }

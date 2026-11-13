@@ -365,10 +365,20 @@ struct FlowBooks {
 interface IFlowEvents {
     // ── Requests (§5.9.2) ──
     event DepositRequested(
-        uint256 indexed requestId, address indexed owner, address indexed sender, uint256 usdc, uint256 maxUsdcPerShare, uint64 epoch
+        uint256 indexed requestId,
+        address indexed owner,
+        address indexed sender,
+        uint256 usdc,
+        uint256 maxUsdcPerShare,
+        uint64 epoch
     );
     event RedeemRequested(
-        uint256 indexed requestId, address indexed owner, address indexed sender, uint256 shares, uint256 minUsdcPerShare, uint64 epoch
+        uint256 indexed requestId,
+        address indexed owner,
+        address indexed sender,
+        uint256 shares,
+        uint256 minUsdcPerShare,
+        uint64 epoch
     );
     /// @notice The unfilled part went to the owner's credit (`withdrawCredit`).
     event RequestCancelled(uint256 indexed requestId, address indexed owner, uint256 unfilled);
@@ -394,19 +404,34 @@ interface IFlowEvents {
         uint256 usdcOut
     );
     event DepositFilled(
-        uint256 indexed requestId, uint256 indexed claimId, uint256 indexed settlementId, uint256 usdc, uint256 shares, uint64 unlockAt
+        uint256 indexed requestId,
+        uint256 indexed claimId,
+        uint256 indexed settlementId,
+        uint256 usdc,
+        uint256 shares,
+        uint64 unlockAt
     );
     event RedeemFilled(
-        uint256 indexed requestId, uint256 indexed claimId, uint256 indexed settlementId, uint256 shares, uint256 usdc
+        uint256 indexed requestId,
+        uint256 indexed claimId,
+        uint256 indexed settlementId,
+        uint256 shares,
+        uint256 usdc
     );
     /// @notice A pending request did not take part because its limit does not admit the bound price (E12, RB-14).
-    event RequestSkipped(uint256 indexed requestId, uint256 indexed settlementId, uint256 boundPrice, uint256 limit);
+    event RequestSkipped(
+        uint256 indexed requestId, uint256 indexed settlementId, uint256 boundPrice, uint256 limit
+    );
 
     // ── Claims and returns (§5.9.2 steps 6 and 7, E8, E22) ──
     /// @notice Unlocked deposit shares went to their owner. `caller` may be anyone (E8).
-    event SharesDelivered(address indexed owner, address indexed caller, uint256 shares, uint256 usdc);
+    event SharesDelivered(
+        address indexed owner, address indexed caller, uint256 shares, uint256 usdc
+    );
     /// @notice Settled redemption USDC went from the owner's claims to `receiver`.
-    event RedeemClaimed(address indexed owner, address indexed receiver, uint256 shares, uint256 usdc);
+    event RedeemClaimed(
+        address indexed owner, address indexed receiver, uint256 shares, uint256 usdc
+    );
     event CreditAdded(address indexed owner, uint256 usdc, uint256 shares);
     event CreditWithdrawn(address indexed owner, uint256 usdc, uint256 shares);
 

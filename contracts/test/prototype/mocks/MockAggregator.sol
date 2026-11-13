@@ -27,7 +27,9 @@ contract MockAggregator {
     /// @param answer_    The answer in `decimals_` (sequencer feed: 0 = up, 1 = down).
     /// @param startedAt_ Round start (sequencer feed: when the current status began).
     /// @param updatedAt_ Round update time (the age `FeedLib.read` checks).
-    function setRound(uint8 decimals_, int256 answer_, uint256 startedAt_, uint256 updatedAt_) external {
+    function setRound(uint8 decimals_, int256 answer_, uint256 startedAt_, uint256 updatedAt_)
+        external
+    {
         _decimals = decimals_;
         _answer = answer_;
         _startedAt = startedAt_;
@@ -57,7 +59,13 @@ contract MockAggregator {
     function latestRoundData()
         external
         view
-        returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
+        returns (
+            uint80 roundId,
+            int256 answer,
+            uint256 startedAt,
+            uint256 updatedAt,
+            uint80 answeredInRound
+        )
     {
         return (uint80(_roundId), _answer, _startedAt, _updatedAt, uint80(_answeredInRound));
     }

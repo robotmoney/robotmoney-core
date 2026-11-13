@@ -9,9 +9,19 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {IConsensusRecommendationReceipt} from "../../../interfaces/IConsensusRecommendationReceipt.sol";
+import {
+    IConsensusRecommendationReceipt
+} from "../../../interfaces/IConsensusRecommendationReceipt.sol";
 import {BaselineHarness} from "./BaselineHarness.sol";
-import {Plan, PlanParams, PlanStatus, SkipReason, IFundEvents, BPS, IDLE_INDEX} from "./src/FundTypes.sol";
+import {
+    Plan,
+    PlanParams,
+    PlanStatus,
+    SkipReason,
+    IFundEvents,
+    BPS,
+    IDLE_INDEX
+} from "./src/FundTypes.sol";
 import {PlanMath} from "./src/PlanMath.sol";
 import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
 import {IRebalanceGovernance} from "./src/interfaces/IRebalanceGovernance.sol";
@@ -110,7 +120,9 @@ contract EndToEndTest is BaselineHarness {
         assertGt(shares, 0, "alice shares");
         uint256 nav = fund.totalAssets();
         assertLe(nav, amount, "realized delta <= deposit");
-        assertGe(nav, amount.mulDiv(BPS - MAX_SLIPPAGE_BPS, BPS), "realized delta >= slippage floor");
+        assertGe(
+            nav, amount.mulDiv(BPS - MAX_SLIPPAGE_BPS, BPS), "realized delta >= slippage floor"
+        );
         (uint256[4] memory sw, uint256 idleBps) = bucketWeightsBps();
         uint256[4] memory ib = bucketsOf(initial);
         assertEq(sw[0], 0, "agent bucket empty");
@@ -142,18 +154,33 @@ contract EndToEndTest is BaselineHarness {
         deposit(bob, DEFICIT_DEPOSIT);
 
         (uint256 navAfter,, uint256[] memory vAfter) = fund.portfolioValues();
-        assertGe(navAfter - navBefore, DEFICIT_DEPOSIT.mulDiv(BPS - MAX_SLIPPAGE_BPS, BPS), "bob realized delta floor");
-        assertGt(vAfter[IDX_WETH] - vBefore[IDX_WETH], proRata, "deficit-first: wETH takes more than pro rata");
+        assertGe(
+            navAfter - navBefore,
+            DEFICIT_DEPOSIT.mulDiv(BPS - MAX_SLIPPAGE_BPS, BPS),
+            "bob realized delta floor"
+        );
+        assertGt(
+            vAfter[IDX_WETH] - vBefore[IDX_WETH],
+            proRata,
+            "deficit-first: wETH takes more than pro rata"
+        );
         uint256 targetNow = navAfter.mulDiv(curBps, BPS);
-        uint256 gapAfter = targetNow > vAfter[IDX_WETH] ? targetNow - vAfter[IDX_WETH] : vAfter[IDX_WETH] - targetNow;
-        assertLt(gapAfter, gapBefore - proRata, "deficit-first: wETH gap closed by more than pro rata");
+        uint256 gapAfter = targetNow > vAfter[IDX_WETH]
+            ? targetNow - vAfter[IDX_WETH]
+            : vAfter[IDX_WETH] - targetNow;
+        assertLt(
+            gapAfter, gapBefore - proRata, "deficit-first: wETH gap closed by more than pro rata"
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
     //  Stage 2: receipts (§5.1, RB-1, RB-8)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    function _stage2Receipts(uint16[6] memory proposed) private returns (uint256 planId, bytes32 good) {
+    function _stage2Receipts(uint16[6] memory proposed)
+        private
+        returns (uint256 planId, bytes32 good)
+    {
         // Three receipts, oldest first: a valid older one, one whose vector sums to 9 500, the good one.
         _older = bucketVec(5_000, 4_500, 500);
         uint16[6] memory short = bucketVec(5_000, 4_000, 500);
@@ -163,7 +190,12 @@ contract EndToEndTest is BaselineHarness {
         (good, dGood) = recordReceipt(proposed);
 
         // RB-9: a vector that does not sum to 10 000 is refused, nothing released.
-        _applyExpectRevert(idShort, dShort, short, abi.encodeWithSelector(IFundEvents.TargetSumInvalid.selector, 9_500));
+        _applyExpectRevert(
+            idShort,
+            dShort,
+            short,
+            abi.encodeWithSelector(IFundEvents.TargetSumInvalid.selector, 9_500)
+        );
         assertFalse(receipts.isReleased(idShort), "refused receipt not released");
 
         // RB-1: the target setter is the timelock alone.
@@ -177,7 +209,10 @@ contract EndToEndTest is BaselineHarness {
     }
 
     /// @dev Apply the good receipt. Plan 1 is superseded, and the release happens in the same call.
-    function _applyGood(bytes32 good, bytes32 dGood, uint16[6] memory proposed) private returns (uint256 planId) {
+    function _applyGood(bytes32 good, bytes32 dGood, uint16[6] memory proposed)
+        private
+        returns (uint256 planId)
+    {
         // Schedule by hand so the snapshot below is taken in the block the plan opens in.
         (address[] memory ids, uint256[] memory w) = assetArrays(proposed);
         bytes memory data = abi.encodeCall(governance.applyReceipt, (good, dGood, ids, w));
@@ -203,14 +238,20 @@ contract EndToEndTest is BaselineHarness {
         uint16[] memory persistent = fund.targetBps();
         uint256 sumEnd;
         for (uint256 i; i < N_ASSETS; ++i) {
-            assertEq(p.startBps[i], PlanMath.weightBps(valuesOpen[i], navOpen), "start = actual weight");
+            assertEq(
+                p.startBps[i], PlanMath.weightBps(valuesOpen[i], navOpen), "start = actual weight"
+            );
             assertEq(persistent[i], p.endBps[i], "persistent target = plan end");
             assertEq(p.endBps[i], proposed[i], "end target = the receipt's per-asset vector");
             sumEnd += p.endBps[i];
         }
         assertEq(sumEnd, BPS, "end targets sum to 100%");
-        assertGt(p.turnoverUsdc, navOpen.mulDiv(2_500, BPS), "materially different vector: big turnover");
-        assertEq(p.costBudget, p.turnoverUsdc.mulDiv(COST_BUDGET_BPS, BPS), "budget = turnover x bps");
+        assertGt(
+            p.turnoverUsdc, navOpen.mulDiv(2_500, BPS), "materially different vector: big turnover"
+        );
+        assertEq(
+            p.costBudget, p.turnoverUsdc.mulDiv(COST_BUDGET_BPS, BPS), "budget = turnover x bps"
+        );
     }
 
     /// @dev Stale: an older receipt is refused once a newer one applied, even with a valid vector. Replay: the
@@ -224,17 +265,27 @@ contract EndToEndTest is BaselineHarness {
             idOld,
             dOld,
             older,
-            abi.encodeWithSelector(IRebalanceGovernance.ReceiptNotNewerThanApplied.selector, idOld, oldAt, lastApplied)
+            abi.encodeWithSelector(
+                IRebalanceGovernance.ReceiptNotNewerThanApplied.selector, idOld, oldAt, lastApplied
+            )
         );
         assertFalse(receipts.isReleased(idOld), "stale receipt not released");
         _applyExpectRevert(
-            good, dGood, proposed, abi.encodeWithSelector(IRebalanceGovernance.ReceiptAlreadyReleased.selector, good)
+            good,
+            dGood,
+            proposed,
+            abi.encodeWithSelector(IRebalanceGovernance.ReceiptAlreadyReleased.selector, good)
         );
     }
 
     /// @dev Schedule `applyReceipt` on the timelock, wait the delay, and expect the execution to revert with
     ///      `revertData` (the timelock bubbles the target's revert).
-    function _applyExpectRevert(bytes32 id, bytes32 digest, uint16[6] memory bps, bytes memory revertData) private {
+    function _applyExpectRevert(
+        bytes32 id,
+        bytes32 digest,
+        uint16[6] memory bps,
+        bytes memory revertData
+    ) private {
         (address[] memory ids, uint256[] memory w) = assetArrays(bps);
         bytes memory data = abi.encodeCall(governance.applyReceipt, (id, digest, ids, w));
         bytes32 salt = keccak256(abi.encode("e2e", ++_e2eSalt));
@@ -248,7 +299,9 @@ contract EndToEndTest is BaselineHarness {
     //  Stage 3: keeper steps until Converged (§5.3, §5.5, RB-4, RB-7)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    function _stage3StepUntilConverged(uint256 planId, bytes32 receiptId, uint16[6] memory proposed) private {
+    function _stage3StepUntilConverged(uint256 planId, bytes32 receiptId, uint16[6] memory proposed)
+        private
+    {
         // A 7-day path is ~340 real steps on real venues: more than forge's default 2^30 test gas. Metering is
         // paused for the loop only; nothing under test reads the meter except the Rebalancer's gas-starvation
         // guard, which then never fires.
@@ -291,7 +344,9 @@ contract EndToEndTest is BaselineHarness {
         (uint256[4] memory sw,) = bucketWeightsBps();
         uint256[4] memory pb = bucketsOf(proposed);
         for (uint256 s = 1; s < 4; ++s) {
-            assertApproxEqAbs(sw[s], pb[s], 3 * TOLERANCE_BPS + 3, "bucket at the receipt's audit weight");
+            assertApproxEqAbs(
+                sw[s], pb[s], 3 * TOLERANCE_BPS + 3, "bucket at the receipt's audit weight"
+            );
         }
 
         // A concluded plan does not trade.
@@ -306,7 +361,8 @@ contract EndToEndTest is BaselineHarness {
     ///      `pathTarget(now)` (RB-7). A skip changes nothing.
     function _oneCheckedStep() private {
         Plan memory p = fund.plan();
-        (SkipReason predicted, uint256 sell, uint256 buy, uint256 notional) = rebalancer.previewStep();
+        (SkipReason predicted, uint256 sell, uint256 buy, uint256 notional) =
+            rebalancer.previewStep();
         Snap memory b = _snap();
 
         (bool did, SkipReason why) = keeperStep();
@@ -315,7 +371,9 @@ contract EndToEndTest is BaselineHarness {
 
         if (!did) {
             ++_skips[why];
-            if (why != SkipReason.StepFailed) assertEq(uint8(why), uint8(predicted), "previewStep predicts the skip");
+            if (why != SkipReason.StepFailed) {
+                assertEq(uint8(why), uint8(predicted), "previewStep predicts the skip");
+            }
             assertEq(a.nav, b.nav, "skip: NAV unchanged");
             assertEq(a.costSpent, b.costSpent, "skip: no cost");
             assertEq(a.stepCount, b.stepCount, "skip: no step counted");
@@ -336,7 +394,11 @@ contract EndToEndTest is BaselineHarness {
         _totalCost += cost;
 
         // NAV/share: supply is unchanged, so it moves only by the bounded step cost.
-        assertGe(a.pps + 1, b.pps.mulDiv(b.nav - maxCost, b.nav), "NAV/share loss bounded by the cost cap");
+        assertGe(
+            a.pps + 1,
+            b.pps.mulDiv(b.nav - maxCost, b.nav),
+            "NAV/share loss bounded by the cost cap"
+        );
         assertLe(a.pps, b.pps.mulDiv(b.nav + maxCost, b.nav) + 1, "NAV/share gain bounded");
 
         // RB-7: at the step's own valuation (navBefore, now), the sell leg is still at or over its path target
@@ -345,7 +407,11 @@ contract EndToEndTest is BaselineHarness {
         uint256 buyPath = PlanMath.pathTargetValue(p, buy, block.timestamp, b.nav);
         assertGe(_valueOf(a, sell) + 2, sellPath, "RB-7: sell leg not pushed under its path");
         assertLe(_valueOf(a, buy), buyPath + 2, "RB-7: buy leg not pushed over its path");
-        assertLe(_valueOf(b, sell) - _valueOf(a, sell), notional + 2, "sell leg moved at most the notional");
+        assertLe(
+            _valueOf(b, sell) - _valueOf(a, sell),
+            notional + 2,
+            "sell leg moved at most the notional"
+        );
     }
 
     function _snap() private view returns (Snap memory s) {
@@ -419,9 +485,15 @@ contract EndToEndTest is BaselineHarness {
         assertEq(IERC20(USDC).balanceOf(who) - usdcBefore, net, "paid what redeem returned");
         assertEq(fund.balanceOf(who), balBefore - shares, "shares burned");
         assertGe(net, floor, "redeem >= previewRedeem floor");
-        assertLe(net, gross.mulDiv(BPS - EXIT_FEE_BPS, BPS) + gross.mulDiv(1, BPS), "redeem <= fee-net value");
+        assertLe(
+            net,
+            gross.mulDiv(BPS - EXIT_FEE_BPS, BPS) + gross.mulDiv(1, BPS),
+            "redeem <= fee-net value"
+        );
         assertGt(IERC20(USDC).balanceOf(feeRecipient), feeBefore, "exit fee charged");
-        if (pps != 0) assertGe(fund.convertToAssets(PPS_UNIT) + 1, pps, "stayers' NAV/share not lowered");
+        if (pps != 0) {
+            assertGe(fund.convertToAssets(PPS_UNIT) + 1, pps, "stayers' NAV/share not lowered");
+        }
     }
 
     /// @dev `redeemInKind` pays the pro-rata USDC (idle plus lending) and each basket token, net of the exit fee,
@@ -454,7 +526,9 @@ contract EndToEndTest is BaselineHarness {
         uint256 expected = gross.mulDiv(BPS - EXIT_FEE_BPS, BPS);
         assertLe(got, expected + unitDust + 10, "in kind <= fee-net share of NAV");
         assertGe(got + expected.mulDiv(1, BPS) + 10, expected, "in kind ~= fee-net share of NAV");
-        if (pps != 0) assertGe(fund.convertToAssets(PPS_UNIT) + 1, pps, "stayers' NAV/share not lowered");
+        if (pps != 0) {
+            assertGe(fund.convertToAssets(PPS_UNIT) + 1, pps, "stayers' NAV/share not lowered");
+        }
     }
 
     function _basketBalances(address who) private view returns (uint256[3] memory b) {

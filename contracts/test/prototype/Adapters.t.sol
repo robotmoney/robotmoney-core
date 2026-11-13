@@ -15,7 +15,10 @@ import {TwapTickMath} from "../../lib/TwapTickMath.sol";
 
 /// @notice The Slipstream pool and factory reads these tests make.
 interface IAeroCLPoolRead {
-    function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, bool);
+    function slot0()
+        external
+        view
+        returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, bool);
     function fee() external view returns (uint24);
     function tickSpacing() external view returns (int24);
     function token0() external view returns (address);
@@ -23,7 +26,10 @@ interface IAeroCLPoolRead {
 }
 
 interface IAeroCLFactoryRead {
-    function getPool(address tokenA, address tokenB, int24 tickSpacing) external view returns (address);
+    function getPool(address tokenA, address tokenB, int24 tickSpacing)
+        external
+        view
+        returns (address);
 }
 
 /// @title AdaptersTest
@@ -112,8 +118,16 @@ contract AdaptersTest is BaseFixture {
     function _assertAdapterHoldsNothing() internal view {
         assertEq(IERC20(USDC).balanceOf(address(adapter)), 0, "adapter holds no USDC");
         assertEq(IERC20(WETH).balanceOf(address(adapter)), 0, "adapter holds no wETH");
-        assertEq(IERC20(USDC).allowance(address(adapter), AERO_ROUTER), 0, "USDC allowance to the router reset");
-        assertEq(IERC20(WETH).allowance(address(adapter), AERO_ROUTER), 0, "wETH allowance to the router reset");
+        assertEq(
+            IERC20(USDC).allowance(address(adapter), AERO_ROUTER),
+            0,
+            "USDC allowance to the router reset"
+        );
+        assertEq(
+            IERC20(WETH).allowance(address(adapter), AERO_ROUTER),
+            0,
+            "wETH allowance to the router reset"
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -124,7 +138,10 @@ contract AdaptersTest is BaseFixture {
     ///         gets exactly the amount out, the caller pays exactly `amountIn` (the unused input comes back in the same
     ///         call), the cost lies between the pool's spot before the swap and its spot after it plus the pool fee,
     ///         and the adapter keeps no balance and no allowance.
-    function test_aerodromeExactOut_deliversExactlyAmountOut_returnsTheRest_resetsTheAllowance() public fixtureCovered {
+    function test_aerodromeExactOut_deliversExactlyAmountOut_returnsTheRest_resetsTheAllowance()
+        public
+        fixtureCovered
+    {
         // USDC -> wETH, exactly 1 wETH.
         uint256 out = 1e18;
         uint256 spot0 = _usdcFor(out);
@@ -141,7 +158,11 @@ contract AdaptersTest is BaseFixture {
         emit log_named_decimal_uint("USDC paid for exactly 1 wETH", spent, 6);
         emit log_named_decimal_uint("USDC for 1 wETH at the spot after", spot1, 6);
         assertEq(IERC20(WETH).balanceOf(bob) - bobWeth0, out, "exactly amountOut to the recipient");
-        assertEq(IERC20(USDC).balanceOf(address(this)), usdc0 + maxIn - spent, "the caller paid exactly amountIn");
+        assertEq(
+            IERC20(USDC).balanceOf(address(this)),
+            usdc0 + maxIn - spent,
+            "the caller paid exactly amountIn"
+        );
         assertLe(spent, maxIn, "within maxAmountIn");
         assertGt(spot1, spot0, "the purchase moved the price up");
         assertGe(spent, spot0, "no better than the spot before");
@@ -155,10 +176,17 @@ contract AdaptersTest is BaseFixture {
         deal(WETH, address(this), maxWeth);
         IERC20(WETH).approve(address(adapter), maxWeth);
         uint256 bobUsdc0 = IERC20(USDC).balanceOf(bob);
-        uint256 wethSpent = adapter.swapExactOut(WETH, USDC, FEE_ARG, usdcOut, maxWeth, bob, block.timestamp);
+        uint256 wethSpent =
+            adapter.swapExactOut(WETH, USDC, FEE_ARG, usdcOut, maxWeth, bob, block.timestamp);
         uint256 wSpot1 = _wethFor(usdcOut);
-        assertEq(IERC20(USDC).balanceOf(bob) - bobUsdc0, usdcOut, "exactly amountOut to the recipient");
-        assertEq(IERC20(WETH).balanceOf(address(this)), maxWeth - wethSpent, "the caller paid exactly amountIn");
+        assertEq(
+            IERC20(USDC).balanceOf(bob) - bobUsdc0, usdcOut, "exactly amountOut to the recipient"
+        );
+        assertEq(
+            IERC20(WETH).balanceOf(address(this)),
+            maxWeth - wethSpent,
+            "the caller paid exactly amountIn"
+        );
         assertGt(wSpot1, wSpot0, "the sale moved the wETH price down");
         assertGe(wethSpent, wSpot0, "no better than the spot before");
         assertLe(wethSpent, _withFee(wSpot1) + 1, "no worse than the spot after plus the fee");
@@ -167,16 +195,22 @@ contract AdaptersTest is BaseFixture {
 
     /// @notice A `maxAmountIn` under the cost (check 9's per-swap limit, set below the spot value) reverts the whole
     ///         swap: nothing is pulled, nothing reaches the recipient, the pool does not move.
-    function test_aerodromeExactOut_aLimitUnderTheCostRevertsAndMovesNothing() public fixtureCovered {
+    function test_aerodromeExactOut_aLimitUnderTheCostRevertsAndMovesNothing()
+        public
+        fixtureCovered
+    {
         uint256 out = 1e18;
         uint256 maxIn = _usdcFor(out).mulDiv(9_990, 10_000); // 10 bps under the spot value
         uint256 usdc0 = IERC20(USDC).balanceOf(address(this)); // real dust at the pin (see the first test)
         _fundUsdc(address(this), maxIn);
         IERC20(USDC).approve(address(adapter), maxIn);
         (uint160 sqrt0,,,,,) = IAeroCLPoolRead(AERO_WETH_USDC).slot0();
-        (bool ok, bytes memory ret) = address(adapter).call(
-            abi.encodeCall(adapter.swapExactOut, (USDC, WETH, FEE_ARG, out, maxIn, bob, block.timestamp))
-        );
+        (bool ok, bytes memory ret) = address(adapter)
+            .call(
+                abi.encodeCall(
+                    adapter.swapExactOut, (USDC, WETH, FEE_ARG, out, maxIn, bob, block.timestamp)
+                )
+            );
         assertFalse(ok, "a limit under the cost reverts");
         emit log_named_bytes("revert data", ret);
         (uint160 sqrt1,,,,,) = IAeroCLPoolRead(AERO_WETH_USDC).slot0();
@@ -193,8 +227,14 @@ contract AdaptersTest is BaseFixture {
         uint256 usdc0 = IERC20(USDC).balanceOf(address(this)); // real dust at the pin (see the first test)
         _fundUsdc(address(this), 10_000e6);
         IERC20(USDC).approve(address(adapter), type(uint256).max);
-        assertEq(IAeroCLFactoryRead(AERO_FACTORY).getPool(USDC, WETH, 7), address(0), "no pool of tick spacing 7");
-        vm.expectRevert(abi.encodeWithSelector(AerodromeSwapAdapter.PoolNotFound.selector, USDC, WETH, int24(7)));
+        assertEq(
+            IAeroCLFactoryRead(AERO_FACTORY).getPool(USDC, WETH, 7),
+            address(0),
+            "no pool of tick spacing 7"
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(AerodromeSwapAdapter.PoolNotFound.selector, USDC, WETH, int24(7))
+        );
         adapter.swapExactOut(USDC, WETH, 7, 1e15, 10_000e6, bob, block.timestamp);
         vm.expectRevert(AerodromeSwapAdapter.InvalidTickSpacing.selector);
         adapter.swapExactOut(USDC, WETH, 0, 1e15, 10_000e6, bob, block.timestamp);
@@ -202,11 +242,23 @@ contract AdaptersTest is BaseFixture {
         adapter.swapExactOut(address(0), WETH, FEE_ARG, 1e15, 10_000e6, bob, block.timestamp);
         vm.expectRevert(AerodromeSwapAdapter.ZeroAddress.selector);
         adapter.swapExactOut(USDC, WETH, FEE_ARG, 1e15, 10_000e6, address(0), block.timestamp);
-        assertEq(adapter.swapExactOut(USDC, WETH, FEE_ARG, 0, 10_000e6, bob, block.timestamp), 0, "zero out");
-        assertEq(IERC20(USDC).balanceOf(address(this)), usdc0 + 10_000e6, "a zero amount out pulls nothing");
-        (bool ok,) = address(adapter).call(
-            abi.encodeCall(adapter.swapExactOut, (USDC, WETH, FEE_ARG, 1e15, 10_000e6, bob, block.timestamp - 1))
+        assertEq(
+            adapter.swapExactOut(USDC, WETH, FEE_ARG, 0, 10_000e6, bob, block.timestamp),
+            0,
+            "zero out"
         );
+        assertEq(
+            IERC20(USDC).balanceOf(address(this)),
+            usdc0 + 10_000e6,
+            "a zero amount out pulls nothing"
+        );
+        (bool ok,) = address(adapter)
+            .call(
+                abi.encodeCall(
+                    adapter.swapExactOut,
+                    (USDC, WETH, FEE_ARG, 1e15, 10_000e6, bob, block.timestamp - 1)
+                )
+            );
         assertFalse(ok, "an expired deadline is refused");
         assertEq(IERC20(USDC).balanceOf(address(this)), usdc0 + 10_000e6, "nothing pulled");
         _assertAdapterHoldsNothing();
@@ -217,7 +269,9 @@ contract AdaptersTest is BaseFixture {
     function test_aerodromeExactOut_inheritedTwapPriceReadsThePool() public fixtureCovered {
         uint256 twap = adapter.twapPrice(AERO_WETH_USDC, WETH, USDC, 1e18, TWAP_WINDOW);
         int24 meanTick = TwapTickMath.meanTick(AERO_WETH_USDC, TWAP_WINDOW);
-        assertEq(twap, TwapTickMath.priceFromTick(meanTick, WETH, USDC, 1e18), "the pool's mean tick");
+        assertEq(
+            twap, TwapTickMath.priceFromTick(meanTick, WETH, USDC, 1e18), "the pool's mean tick"
+        );
         uint256 spot = _usdcFor(1e18);
         emit log_named_decimal_uint("Aerodrome wETH / USDC 30-minute TWAP, USDC per wETH", twap, 6);
         emit log_named_decimal_uint("Aerodrome wETH / USDC spot, USDC per wETH", spot, 6);
@@ -225,7 +279,9 @@ contract AdaptersTest is BaseFixture {
         int24 uniSpacing = IAeroCLPoolRead(UNI_WETH_POOL).tickSpacing();
         address canonical = IAeroCLFactoryRead(AERO_FACTORY).getPool(WETH, USDC, uniSpacing);
         vm.expectRevert(
-            abi.encodeWithSelector(AerodromeSwapAdapter.PoolFactoryMismatch.selector, UNI_WETH_POOL, canonical)
+            abi.encodeWithSelector(
+                AerodromeSwapAdapter.PoolFactoryMismatch.selector, UNI_WETH_POOL, canonical
+            )
         );
         adapter.twapPrice(UNI_WETH_POOL, WETH, USDC, 1e18, TWAP_WINDOW);
     }

@@ -57,7 +57,9 @@ contract SizeGateTest is BaselineHarness {
         assertLe(fundSize, G1_MAX, "G1: RobotMoneyFund impl exceeds 23,552 bytes");
         assertLe(rebalancerSize, G1_MAX, "G1: Rebalancer impl exceeds 23,552 bytes");
         // Every linked library must itself be deployable (EIP-170), or the fund cannot link.
-        assertLe(address(FundValuationLib).code.length, EIP170_LIMIT, "FundValuationLib over EIP-170");
+        assertLe(
+            address(FundValuationLib).code.length, EIP170_LIMIT, "FundValuationLib over EIP-170"
+        );
         assertLe(address(FundAdminLib).code.length, EIP170_LIMIT, "FundAdminLib over EIP-170");
         assertLe(address(FundFlowsLib).code.length, EIP170_LIMIT, "FundFlowsLib over EIP-170");
         assertLe(governanceSize, EIP170_LIMIT, "RebalanceGovernance over EIP-170");

@@ -139,7 +139,8 @@ struct WalkCursor {
 /// @notice ERC-7201 namespaced location of `FlowState` (`robotmoney.storage.FlowQueue`).
 library FlowStorage {
     /// @dev keccak256(abi.encode(uint256(keccak256("robotmoney.storage.FlowQueue")) - 1)) & ~bytes32(uint256(0xff))
-    bytes32 internal constant SLOT = 0x5ca698e4220eb646640b8313725773ea79d9bb0180fc107a75b91aa030545000;
+    bytes32 internal constant SLOT =
+        0x5ca698e4220eb646640b8313725773ea79d9bb0180fc107a75b91aa030545000;
 
     function layout() internal pure returns (FlowState storage $) {
         bytes32 slot = SLOT;
@@ -179,7 +180,11 @@ library FlowEpochs {
 
     /// @notice The newest epoch, at or above `floor`, that ended at or before time `t` and can hold a request
     ///         (`found` false if none). Ends grow with the index, so every epoch from `floor` to it ended by `t`.
-    function newestEndedBy(FlowState storage s, uint256 t, uint64 floor) internal view returns (bool found, uint64 e) {
+    function newestEndedBy(FlowState storage s, uint256 t, uint64 floor)
+        internal
+        view
+        returns (bool found, uint64 e)
+    {
         uint256 i0 = s.epochAnchorIndex;
         uint256 t0 = s.epochAnchorTime;
         if (t >= t0) {

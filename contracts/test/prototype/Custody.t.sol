@@ -39,8 +39,13 @@ contract CustodyTest is PrototypeHarness {
         _expectAllRefused(address(fund), abi.encodeCall(RobotMoneyFund.setFeeRecipient, (stranger)));
         _expectAllRefused(address(fund), abi.encodeCall(RobotMoneyFund.setExitFeeBps, (100)));
         _expectAllRefused(address(fund), abi.encodeCall(RobotMoneyFund.setExitFeeBps, (0)));
-        _expectAllRefused(address(fund), abi.encodeWithSignature("upgradeToAndCall(address,bytes)", stranger, bytes("")));
-        _expectAllRefused(address(fund), abi.encodeCall(RobotMoneyFund.setInKindAllowance, (10_000, 0, 6 hours)));
+        _expectAllRefused(
+            address(fund),
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", stranger, bytes(""))
+        );
+        _expectAllRefused(
+            address(fund), abi.encodeCall(RobotMoneyFund.setInKindAllowance, (10_000, 0, 6 hours))
+        );
 
         (,, uint256 feeBps1, address recipient1) = fund.config();
         assertEq(feeBps1, feeBps0, "fee bps unchanged");
@@ -48,7 +53,9 @@ contract CustodyTest is PrototypeHarness {
 
         // The timelock path does take effect.
         address newRecipient = makeAddr("newFeeRecipient");
-        timelockExecute(address(fund), abi.encodeCall(RobotMoneyFund.setFeeRecipient, (newRecipient)));
+        timelockExecute(
+            address(fund), abi.encodeCall(RobotMoneyFund.setFeeRecipient, (newRecipient))
+        );
         timelockExecute(address(fund), abi.encodeCall(RobotMoneyFund.setExitFeeBps, (20)));
         (,, uint256 feeBps2, address recipient2) = fund.config();
         assertEq(feeBps2, 20, "timelock set fee bps");
@@ -64,7 +71,10 @@ contract CustodyTest is PrototypeHarness {
         FlowParams memory p = queue.flowParams();
         p.maxEpochFlowBps = 1_000;
         _expectAllRefused(address(queue), abi.encodeCall(FlowQueue.setFlowParams, (p)));
-        _expectAllRefused(address(queue), abi.encodeWithSignature("upgradeToAndCall(address,bytes)", stranger, bytes("")));
+        _expectAllRefused(
+            address(queue),
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", stranger, bytes(""))
+        );
         vm.prank(emergency);
         queue.pause();
         _expectAllRefused(address(queue), abi.encodeCall(FlowQueue.unpause, ()));
@@ -99,7 +109,10 @@ contract CustodyTest is PrototypeHarness {
         assertApproxEqAbs(a1 - a0, gift.mulDiv(sa, supply), 2, "alice gets her share of the gift");
         assertApproxEqAbs(b1 - b0, gift.mulDiv(sb, supply), 2, "bob gets his share of the gift");
         assertApproxEqAbs(
-            fund.convertToAssets(seedShares) - s0, gift.mulDiv(seedShares, supply), 2, "the seed's shares get theirs"
+            fund.convertToAssets(seedShares) - s0,
+            gift.mulDiv(seedShares, supply),
+            2,
+            "the seed's shares get theirs"
         );
     }
 

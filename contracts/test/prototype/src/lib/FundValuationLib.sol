@@ -57,7 +57,8 @@ library FundValuationLib {
         AssetConfig storage a = s.assets[i];
         if (!a.active) return false;
         if (a.kind == AssetKind.Basket) return true;
-        return s.codeHashAllowed[a.adapter.codehash] && RobotMoneyVaultOps.exclusions().openExclusionOf[i] == 0;
+        return s.codeHashAllowed[a.adapter.codehash]
+            && RobotMoneyVaultOps.exclusions().openExclusionOf[i] == 0;
     }
 
     /// @notice True while an active Lending asset is excluded (ADP-2). Deposits close meanwhile, as on
@@ -96,7 +97,11 @@ library FundValuationLib {
     }
 
     /// @notice The holders' part of lending position `i` worth `p`: `p × (units − claim units) / units`, DOWN.
-    function holdersPart(FundState storage s, uint256 i, uint256 p) internal view returns (uint256) {
+    function holdersPart(FundState storage s, uint256 i, uint256 p)
+        internal
+        view
+        returns (uint256)
+    {
         uint256 units = s.positionUnits[i];
         if (units == 0) return p;
         return p.mulDiv(units - s.positionClaimTotal[i], units);
@@ -107,7 +112,11 @@ library FundValuationLib {
     /// @notice Check 7 snapshot: idle USDC, and per asset index `heldBalance` of every COUNTED asset (inactive
     ///         assets and Lending assets under an open ADP-2 exclusion read 0: no flow trades them). Amounts, not
     ///         values: no price is read.
-    function heldAmounts(FundState storage s) internal view returns (uint256 idle, uint256[] memory held) {
+    function heldAmounts(FundState storage s)
+        internal
+        view
+        returns (uint256 idle, uint256[] memory held)
+    {
         idle = IERC20(s.usdc).balanceOf(address(this));
         uint256 n = s.assets.length;
         held = new uint256[](n);
@@ -117,7 +126,11 @@ library FundValuationLib {
     }
 
     /// @notice `IRobotMoneyFund.heldBalances`: `heldAmounts` as a linked view.
-    function heldBalances(FundState storage s) public view returns (uint256 idle, uint256[] memory held) {
+    function heldBalances(FundState storage s)
+        public
+        view
+        returns (uint256 idle, uint256[] memory held)
+    {
         return heldAmounts(s);
     }
 
@@ -141,7 +154,9 @@ library FundValuationLib {
     ) internal view {
         uint256 idleAfter = IERC20(s.usdc).balanceOf(address(this));
         if (idleAfter * supplyBefore < idleBefore * supplyAfter) {
-            revert IRobotMoneyFund.ProportionViolated(IDLE_INDEX, idleBefore, idleAfter, supplyBefore, supplyAfter);
+            revert IRobotMoneyFund.ProportionViolated(
+                IDLE_INDEX, idleBefore, idleAfter, supplyBefore, supplyAfter
+            );
         }
         uint256 n = heldBefore.length;
         for (uint256 i; i < n; ++i) {
@@ -248,17 +263,28 @@ library FundValuationLib {
     }
 
     /// @notice USDC value of `amount` of asset `i` at TWAP. Lending: identity.
-    function usdcValue(FundState storage s, uint256 i, uint256 amount) public view returns (uint256) {
+    function usdcValue(FundState storage s, uint256 i, uint256 amount)
+        public
+        view
+        returns (uint256)
+    {
         AssetConfig storage a = s.assets[i];
         if (a.kind == AssetKind.Lending || amount == 0) return amount;
-        return IBasketSwapAdapter(a.adapter).twapPrice(a.pool, a.token, s.usdc, amount, a.twapWindow);
+        return
+            IBasketSwapAdapter(a.adapter).twapPrice(a.pool, a.token, s.usdc, amount, a.twapWindow);
     }
 
     /// @notice Amount of asset `i` worth `usdcAmount` at TWAP. Lending: identity.
-    function tokenValue(FundState storage s, uint256 i, uint256 usdcAmount) public view returns (uint256) {
+    function tokenValue(FundState storage s, uint256 i, uint256 usdcAmount)
+        public
+        view
+        returns (uint256)
+    {
         AssetConfig storage a = s.assets[i];
         if (a.kind == AssetKind.Lending || usdcAmount == 0) return usdcAmount;
-        return IBasketSwapAdapter(a.adapter).twapPrice(a.pool, s.usdc, a.token, usdcAmount, a.twapWindow);
+        return
+            IBasketSwapAdapter(a.adapter)
+                .twapPrice(a.pool, s.usdc, a.token, usdcAmount, a.twapWindow);
     }
 
     // ─── ORA-4 (§4.3, §5.3 step 2) ───────────────────────────────────────────
@@ -268,7 +294,11 @@ library FundValuationLib {
     ///         cannot take or return USDC). A Basket asset whose TWAP, spot or probe read fails reads not ok
     ///         with `deviationBps == type(uint256).max`. Otherwise `ok` iff |spot − TWAP| / TWAP ≤ guard
     ///         (`TwapTickMath.deviationBps` arithmetic, with every external read wrapped in try/catch).
-    function marketCheck(FundState storage s, uint256 i) public view returns (bool ok, uint256 deviationBps) {
+    function marketCheck(FundState storage s, uint256 i)
+        public
+        view
+        returns (bool ok, uint256 deviationBps)
+    {
         if (i >= s.assets.length) return (false, 0);
         AssetConfig storage a = s.assets[i];
         if (a.kind == AssetKind.Lending) return (isCounted(s, i) || !a.active, 0);
@@ -283,14 +313,21 @@ library FundValuationLib {
     function requireMarket(FundState storage s, uint256 i) internal view {
         (bool ok, uint256 dev) = marketCheck(s, i);
         if (!ok) {
-            revert IRobotMoneyFund.NavMarketDeviationExceeded(s.assets[i].token, dev, s.navDeviationGuardBps);
+            revert IRobotMoneyFund.NavMarketDeviationExceeded(
+                s.assets[i].token, dev, s.navDeviationGuardBps
+            );
         }
     }
 
     /// @dev |spot − TWAP| / TWAP in bps on a 1 USDC probe of the token; `read` false when any read reverts.
-    function _deviation(address usdc, AssetConfig storage a) private view returns (bool read, uint256 dev) {
+    function _deviation(address usdc, AssetConfig storage a)
+        private
+        view
+        returns (bool read, uint256 dev)
+    {
         uint256 probe;
-        try IBasketSwapAdapter(a.adapter).twapPrice(a.pool, usdc, a.token, ORA4_PROBE_USDC, a.twapWindow) returns (
+        try IBasketSwapAdapter(a.adapter)
+            .twapPrice(a.pool, usdc, a.token, ORA4_PROBE_USDC, a.twapWindow) returns (
             uint256 q
         ) {
             probe = q;
@@ -317,7 +354,9 @@ library FundValuationLib {
     function _tryMeanTick(address pool, uint32 window) private view returns (bool ok, int24 tick) {
         uint32[] memory secondsAgos = new uint32[](2);
         secondsAgos[0] = window;
-        try IObservablePool(pool).observe(secondsAgos) returns (int56[] memory cums, uint160[] memory) {
+        try IObservablePool(pool).observe(secondsAgos) returns (
+            int56[] memory cums, uint160[] memory
+        ) {
             int56 delta = cums[1] - cums[0];
             int56 w = int56(uint56(window));
             tick = int24(delta / w);
@@ -343,7 +382,11 @@ library FundValuationLib {
     }
 
     /// @notice Largest `poolFeeBps` over active Basket assets and its index (0, 0 when none).
-    function maxPoolFeeBps(FundState storage s) public view returns (uint256 maxBps, uint256 index) {
+    function maxPoolFeeBps(FundState storage s)
+        public
+        view
+        returns (uint256 maxBps, uint256 index)
+    {
         uint256 n = s.assets.length;
         for (uint256 i; i < n; ++i) {
             if (!s.assets[i].active) continue;
@@ -388,7 +431,9 @@ library FundValuationLib {
             (bool ok, uint256 depth) = poolUsdcDepth(a.pool, s.usdc, w);
             if (!ok) revert IRobotMoneyFund.PoolHistoryTooShort(i, w);
             uint256 limitUsdc = depth.mulDiv(share, BPS);
-            if (targetUsdc > limitUsdc) revert IRobotMoneyFund.PoolShareExceeded(i, targetUsdc, limitUsdc);
+            if (targetUsdc > limitUsdc) {
+                revert IRobotMoneyFund.PoolShareExceeded(i, targetUsdc, limitUsdc);
+            }
         }
     }
 
@@ -411,7 +456,11 @@ library FundValuationLib {
     ///         slices; liquidity added and removed inside one transaction adds no seconds and does not count.
     /// @return ok    False when `observe` reverts (too little history) or the window is under `DEPTH_SLICES` seconds.
     /// @return depth USDC units.
-    function poolUsdcDepth(address pool, address usdc, uint32 window) public view returns (bool ok, uint256 depth) {
+    function poolUsdcDepth(address pool, address usdc, uint32 window)
+        public
+        view
+        returns (bool ok, uint256 depth)
+    {
         if (window < DEPTH_SLICES) return (false, 0);
         uint32[] memory ago = new uint32[](DEPTH_SLICES + 1);
         uint32 len = window / uint32(DEPTH_SLICES);
@@ -433,13 +482,19 @@ library FundValuationLib {
         int56 meanTick = dTick / w;
         if (dTick < 0 && dTick % w != 0) meanTick--;
         uint256 sqrtP = TickMath.getSqrtRatioAtTick(int24(meanTick));
-        depth = IObservablePool(pool).token1() == usdc ? liq.mulDiv(sqrtP, 1 << 96) : liq.mulDiv(1 << 96, sqrtP);
+        depth = IObservablePool(pool).token1() == usdc
+            ? liq.mulDiv(sqrtP, 1 << 96)
+            : liq.mulDiv(1 << 96, sqrtP);
         ok = true;
     }
 
     /// @dev Each slice's harmonic in-range liquidity, sorted ascending; returns the one at rank `DEPTH_DROP`. A
     ///      slice whose cumulative did not move (no seconds) counts as 0 liquidity, the conservative reading.
-    function _thinSliceLiquidity(uint32[] memory ago, uint160[] memory spl) private pure returns (uint256) {
+    function _thinSliceLiquidity(uint32[] memory ago, uint160[] memory spl)
+        private
+        pure
+        returns (uint256)
+    {
         uint256[] memory l = new uint256[](DEPTH_SLICES);
         for (uint256 j; j < DEPTH_SLICES; ++j) {
             uint256 dSpl = uint256(spl[j + 1] - spl[j]);
@@ -473,14 +528,22 @@ library FundValuationLib {
 
     /// @notice `pathTarget(t)` of the current plan per asset and idle (`PlanMath.pathTargetsBps`); zeros (one
     ///         per asset) before the first plan.
-    function pathTarget(FundState storage s, uint256 t) public view returns (uint256[] memory bps, uint256 idleBps) {
+    function pathTarget(FundState storage s, uint256 t)
+        public
+        view
+        returns (uint256[] memory bps, uint256 idleBps)
+    {
         if (s.plan.id == 0) return (new uint256[](s.assets.length), 0);
         Plan memory p = s.plan;
         return PlanMath.pathTargetsBps(p, t);
     }
 
     /// @notice Actual TWAP weights per asset and idle, rounded down.
-    function currentWeightsBps(FundState storage s) public view returns (uint256[] memory bps, uint256 idleBps) {
+    function currentWeightsBps(FundState storage s)
+        public
+        view
+        returns (uint256[] memory bps, uint256 idleBps)
+    {
         (uint256 total, uint256 idle, uint256[] memory values) = portfolio(s);
         return PlanMath.weightsBps(values, idle, total);
     }

@@ -78,9 +78,13 @@ contract FxMockAggregator {
 
 interface IFxV3Pool {
     function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool);
-    function mint(address recipient, int24 tickLower, int24 tickUpper, uint128 amount, bytes calldata data)
-        external
-        returns (uint256 amount0, uint256 amount1);
+    function mint(
+        address recipient,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 amount,
+        bytes calldata data
+    ) external returns (uint256 amount0, uint256 amount1);
     function token0() external view returns (address);
     function token1() external view returns (address);
 }
@@ -211,7 +215,9 @@ contract FundExtrasTest is BaseFixture {
         assertEq(fund.addAsset(_lending(address(aave))), IDX_AAVE, "aave");
         assertEq(fund.addAsset(_lending(address(moonwell))), IDX_MOONWELL, "moonwell");
         assertEq(fund.addAsset(_basket(WETH, WETH_POOL, FEED_ETH, ETH_MAX_AGE)), IDX_WETH, "weth");
-        assertEq(fund.addAsset(_basket(CBBTC, CBBTC_POOL, FEED_CBBTC, DAY_MAX_AGE)), IDX_CBBTC, "cbbtc");
+        assertEq(
+            fund.addAsset(_basket(CBBTC, CBBTC_POOL, FEED_CBBTC, DAY_MAX_AGE)), IDX_CBBTC, "cbbtc"
+        );
         assertEq(fund.addAsset(_lending(address(comet))), IDX_COMET, "comet");
         RobotMoneyFund(address(fund)).bindRebalanceRoles(address(this), address(this));
         fund.bindFlowRole(address(this));
@@ -236,7 +242,10 @@ contract FundExtrasTest is BaseFixture {
             address(
                 new ERC1967Proxy(
                     impl,
-                    abi.encodeCall(RobotMoneyFund.initialize, (p, address(this), GovernedUUPS.UpgradeMode.Upgradeable))
+                    abi.encodeCall(
+                        RobotMoneyFund.initialize,
+                        (p, address(this), GovernedUUPS.UpgradeMode.Upgradeable)
+                    )
                 )
             )
         );
@@ -296,7 +305,11 @@ contract FundExtrasTest is BaseFixture {
     }
 
     /// @dev USD price (8 decimals, USDC at 1) of one whole `token` at `pool`'s current tick.
-    function _poolPrice8(address pool, address token, uint256 unit) internal view returns (uint256) {
+    function _poolPrice8(address pool, address token, uint256 unit)
+        internal
+        view
+        returns (uint256)
+    {
         (, int24 tick,,,,,) = IFxV3Pool(pool).slot0();
         return TwapTickMath.priceFromTick(tick, token, USDC, unit) * 100;
     }
@@ -367,13 +380,18 @@ contract FundExtrasTest is BaseFixture {
 
     /// @dev One `executeStep` from idle into asset `i` for `notional` USDC.
     function _step(uint256 i, uint256 notional) internal {
-        uint256 minOut =
-            fund.assetConfig(i).kind == AssetKind.Basket ? fund.assetTokenValue(i, notional).mulDiv(98, 100) : 0;
+        uint256 minOut = fund.assetConfig(i).kind == AssetKind.Basket
+            ? fund.assetTokenValue(i, notional).mulDiv(98, 100)
+            : 0;
         fund.executeStep(StepOrder(IDLE_INDEX, i, notional, 0, minOut, notional.mulDiv(100, BPS)));
     }
 
     /// @dev Per-leg purchase limits for `sharesOut` around the TWAP (as FundCore.t.sol).
-    function _buyLimits(uint256 sharesOut) internal view returns (uint256[] memory limits, uint256 maxUsdc) {
+    function _buyLimits(uint256 sharesOut)
+        internal
+        view
+        returns (uint256[] memory limits, uint256 maxUsdc)
+    {
         (uint256 idle, uint256[] memory held) = fund.heldBalances();
         uint256 supply = fund.totalSupply();
         limits = new uint256[](held.length);
@@ -424,15 +442,19 @@ contract FundExtrasTest is BaseFixture {
     }
 
     /// @dev Check 10 restated from outside: every held amount per share is at least what it was.
-    function _assertPerShareNotLower(uint256 idle0, uint256[] memory held0, uint256 supply0, string memory label)
-        internal
-        view
-    {
+    function _assertPerShareNotLower(
+        uint256 idle0,
+        uint256[] memory held0,
+        uint256 supply0,
+        string memory label
+    ) internal view {
         (uint256 idle1, uint256[] memory held1) = fund.heldBalances();
         uint256 supply1 = fund.totalSupply();
         assertGe(idle1 * supply0, idle0 * supply1, string.concat(label, ": idle per share"));
         for (uint256 i; i < held0.length; ++i) {
-            assertGe(held1[i] * supply0, held0[i] * supply1, string.concat(label, ": asset per share"));
+            assertGe(
+                held1[i] * supply0, held0[i] * supply1, string.concat(label, ": asset per share")
+            );
         }
     }
 
@@ -450,7 +472,11 @@ contract FundExtrasTest is BaseFixture {
             assertGt(u, 0, "units started at the first supply");
             assertEq(c, 0, "no claim yet");
             (, uint256[] memory held) = fund.heldBalances();
-            assertEq(held[i], IStrategyAdapter(fund.assetConfig(i).adapter).totalAssets(), "holders own it all");
+            assertEq(
+                held[i],
+                IStrategyAdapter(fund.assetConfig(i).adapter).totalAssets(),
+                "holders own it all"
+            );
         }
         // A pro-rata purchase and sale move units by the value moved: the value of one unit never falls.
         uint256[N_LENDING] memory val0;
@@ -538,14 +564,20 @@ contract FundExtrasTest is BaseFixture {
         fund.redeemInKind(shares, alice, alice);
         _assertPerShareNotLower(idle0, held0, supply0, "beyond allowance");
         uint256 idlePart = idle0.mulDiv(shares, supply0);
-        assertEq(IERC20(USDC).balanceOf(alice) - usdcBefore, idlePart - idlePart.mulDiv(EXIT_FEE_BPS, BPS), "only idle");
+        assertEq(
+            IERC20(USDC).balanceOf(alice) - usdcBefore,
+            idlePart - idlePart.mulDiv(EXIT_FEE_BPS, BPS),
+            "only idle"
+        );
         for (uint256 k; k < N_LENDING; ++k) {
             uint256 i = _lendingIdx(k);
             uint256 want = held0[i].mulDiv(shares, supply0) - LENDING_ROUNDING_UNITS;
             (uint256 units, uint256 value) = fund.positionClaimOf(i, alice);
             (uint256 feeUnits, uint256 feeValue) = fund.positionClaimOf(i, feeRecipient);
             assertGt(units, 0, "claim recorded");
-            assertEq(feeUnits, (units + feeUnits).mulDiv(EXIT_FEE_BPS, BPS), "fee share as its own claim");
+            assertEq(
+                feeUnits, (units + feeUnits).mulDiv(EXIT_FEE_BPS, BPS), "fee share as its own claim"
+            );
             assertApproxEqAbs(value + feeValue, want, 2, "claim worth the slice");
             (, uint256 c) = _units(i);
             assertEq(c, units + feeUnits, "claim units total");
@@ -682,7 +714,12 @@ contract FundExtrasTest is BaseFixture {
         assertGt(held1[IDX_AAVE], held0[IDX_AAVE], "the venue paid interest");
         assertGt(claim1, claim0, "the claim earned it too");
         // claim1 / claim0 == held1 / held0, up to one unit of rounding on each side.
-        assertApproxEqAbs(claim1 * held0[IDX_AAVE], claim0 * held1[IDX_AAVE], held0[IDX_AAVE] + held1[IDX_AAVE], "pro rata");
+        assertApproxEqAbs(
+            claim1 * held0[IDX_AAVE],
+            claim0 * held1[IDX_AAVE],
+            held0[IDX_AAVE] + held1[IDX_AAVE],
+            "pro rata"
+        );
     }
 
     /// @notice The claim loses with the venue pro rata with the holders (a 10 % venue loss, mocked).
@@ -691,7 +728,11 @@ contract FundExtrasTest is BaseFixture {
         (, uint256 claim0) = fund.positionClaimOf(IDX_MOONWELL, alice);
         (, uint256[] memory held0) = fund.heldBalances();
         uint256 p = IStrategyAdapter(address(moonwell)).totalAssets();
-        vm.mockCall(address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), abi.encode(p * 9 / 10));
+        vm.mockCall(
+            address(moonwell),
+            abi.encodeCall(IStrategyAdapter.totalAssets, ()),
+            abi.encode(p * 9 / 10)
+        );
         (, uint256 claim1) = fund.positionClaimOf(IDX_MOONWELL, alice);
         (, uint256[] memory held1) = fund.heldBalances();
         assertApproxEqAbs(claim1, claim0 * 9 / 10, 2, "claim lost 10 %");
@@ -721,7 +762,9 @@ contract FundExtrasTest is BaseFixture {
         assertGe(held1[IDX_MOONWELL], held0[IDX_MOONWELL], "holders' part not lowered");
 
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.NoPositionClaim.selector, IDX_MOONWELL, alice));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.NoPositionClaim.selector, IDX_MOONWELL, alice)
+        );
         fund.claimPosition(IDX_MOONWELL, alice);
     }
 
@@ -730,9 +773,13 @@ contract FundExtrasTest is BaseFixture {
         _aliceClaims();
         (uint256 units, uint256 value) = fund.positionClaimOf(IDX_AAVE, alice);
         uint256 ask = value - LENDING_ROUNDING_UNITS;
-        vm.mockCall(address(aave), abi.encodeCall(IStrategyAdapter.withdraw, (ask)), abi.encode(uint256(0)));
+        vm.mockCall(
+            address(aave), abi.encodeCall(IStrategyAdapter.withdraw, (ask)), abi.encode(uint256(0))
+        );
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.DeferredShortfall.selector, IDX_AAVE, 0, ask));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.DeferredShortfall.selector, IDX_AAVE, 0, ask)
+        );
         fund.claimPosition(IDX_AAVE, alice);
         (uint256 after_,) = fund.positionClaimOf(IDX_AAVE, alice);
         assertEq(after_, units, "claim whole");
@@ -746,7 +793,11 @@ contract FundExtrasTest is BaseFixture {
         vm.prank(emergency);
         fund.emergencyUnwind();
         (, uint256[] memory held) = fund.heldBalances();
-        assertLe(held[IDX_AAVE], 2 * LENDING_ROUNDING_UNITS, "holders' part drained to idle, less the margin");
+        assertLe(
+            held[IDX_AAVE],
+            2 * LENDING_ROUNDING_UNITS,
+            "holders' part drained to idle, less the margin"
+        );
         assertGe(aave.totalAssets(), value + feeValue, "claims' part left in the venue");
         (, uint256 after_) = fund.positionClaimOf(IDX_AAVE, alice);
         assertGe(after_, value, "claim not lowered");
@@ -787,13 +838,19 @@ contract FundExtrasTest is BaseFixture {
         (uint256 u0, uint256 c0) = _units(IDX_MOONWELL);
         uint256 shares = fund.balanceOf(alice);
         uint256 supply0 = fund.totalSupply();
-        vm.mockCallRevert(address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), "venue down");
+        vm.mockCallRevert(
+            address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), "venue down"
+        );
         vm.prank(alice);
         fund.redeemInKind(shares, alice, alice);
         vm.clearMockedCalls();
         (uint256 units,) = fund.positionClaimOf(IDX_MOONWELL, alice);
         (uint256 feeUnits,) = fund.positionClaimOf(IDX_MOONWELL, feeRecipient);
-        assertEq(units + feeUnits, (u0 - c0).mulDiv(shares, supply0), "the exiter's units became its claim");
+        assertEq(
+            units + feeUnits,
+            (u0 - c0).mulDiv(shares, supply0),
+            "the exiter's units became its claim"
+        );
         (uint256 u1,) = _units(IDX_MOONWELL);
         assertEq(u1, u0, "nothing withdrawn from the unreadable venue");
         (uint256 aaveUnits,) = fund.positionClaimOf(IDX_AAVE, alice);
@@ -852,8 +909,9 @@ contract FundExtrasTest is BaseFixture {
         uint256 navAtFlow = fund.totalAssets();
         uint256 flowAt = block.timestamp;
         vm.warp(block.timestamp + ETH_MAX_AGE + 1);
-        bytes memory stale =
-            abi.encodeWithSelector(IRobotMoneyFund.FeedUnhealthy.selector, IDX_WETH, FeedStatus.Stale);
+        bytes memory stale = abi.encodeWithSelector(
+            IRobotMoneyFund.FeedUnhealthy.selector, IDX_WETH, FeedStatus.Stale
+        );
         vm.expectRevert(stale);
         fund.totalAssets();
         vm.expectRevert(stale);
@@ -872,21 +930,31 @@ contract FundExtrasTest is BaseFixture {
         _seed();
         FxMockAggregator(FEED_SEQUENCER).set(0, 1, block.timestamp, block.timestamp);
         vm.expectRevert(
-            abi.encodeWithSelector(IRobotMoneyFund.FeedUnhealthy.selector, IDLE_INDEX, FeedStatus.SequencerDown)
+            abi.encodeWithSelector(
+                IRobotMoneyFund.FeedUnhealthy.selector, IDLE_INDEX, FeedStatus.SequencerDown
+            )
         );
         fund.totalAssets();
         FxMockAggregator(FEED_SEQUENCER).set(0, 0, block.timestamp - 10 minutes, block.timestamp);
         vm.expectRevert(
-            abi.encodeWithSelector(IRobotMoneyFund.FeedUnhealthy.selector, IDLE_INDEX, FeedStatus.SequencerGrace)
+            abi.encodeWithSelector(
+                IRobotMoneyFund.FeedUnhealthy.selector, IDLE_INDEX, FeedStatus.SequencerGrace
+            )
         );
         fund.totalAssets();
         _refreshFeeds();
         FxMockAggregator(FEED_USDC).set(8, 0.98e8, block.timestamp, block.timestamp);
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.FeedUnhealthy.selector, IDLE_INDEX, FeedStatus.OffPeg));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRobotMoneyFund.FeedUnhealthy.selector, IDLE_INDEX, FeedStatus.OffPeg
+            )
+        );
         fund.totalAssets();
         FxMockAggregator(FEED_CBBTC).set(8, 0, block.timestamp, block.timestamp);
         vm.expectRevert(
-            abi.encodeWithSelector(IRobotMoneyFund.FeedUnhealthy.selector, IDX_CBBTC, FeedStatus.NonPositive)
+            abi.encodeWithSelector(
+                IRobotMoneyFund.FeedUnhealthy.selector, IDX_CBBTC, FeedStatus.NonPositive
+            )
         );
         fund.totalAssets();
         (uint256 nav, uint64 at) = fund.lastGoodNav();
@@ -898,7 +966,10 @@ contract FundExtrasTest is BaseFixture {
     //  E15 / RB-17: asset admission
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    function _freshFundWithAdapters() internal returns (IRobotMoneyFundFull f, address rate, address exactOut) {
+    function _freshFundWithAdapters()
+        internal
+        returns (IRobotMoneyFundFull f, address rate, address exactOut)
+    {
         f = _deployFund();
         rate = address(new AaveV3RateAdapter(AAVE_POOL, USDC, AAVE_A_USDC, address(f)));
         exactOut = address(new UniswapV3ExactOutSwapAdapter(ROUTER));
@@ -921,8 +992,11 @@ contract FundExtrasTest is BaseFixture {
         f.addAsset(c);
         // A feed that is not live (stale) is refused too.
         c.maxFeedAge = ETH_MAX_AGE;
-        FxMockAggregator(FEED_ETH).set(8, 3_000e8, block.timestamp, block.timestamp - ETH_MAX_AGE - 1);
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.FeedUnhealthy.selector, 0, FeedStatus.Stale));
+        FxMockAggregator(FEED_ETH)
+            .set(8, 3_000e8, block.timestamp, block.timestamp - ETH_MAX_AGE - 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.FeedUnhealthy.selector, 0, FeedStatus.Stale)
+        );
         f.addAsset(c);
         _refreshFeeds();
         assertEq(f.addAsset(c), 0, "a live feed is admitted");
@@ -935,7 +1009,9 @@ contract FundExtrasTest is BaseFixture {
         uint32[] memory ago = new uint32[](2);
         ago[0] = 1 hours;
         vm.mockCallRevert(WETH_POOL, abi.encodeCall(IObservablePool.observe, (ago)), "OLD");
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.PoolHistoryTooShort.selector, 0, uint32(1 hours)));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.PoolHistoryTooShort.selector, 0, uint32(1 hours))
+        );
         f.addAsset(c);
     }
 
@@ -943,7 +1019,9 @@ contract FundExtrasTest is BaseFixture {
         (IRobotMoneyFundFull f, address rate,) = _freshFundWithAdapters();
         AaveV3Adapter plain = new AaveV3Adapter(AAVE_POOL, USDC, AAVE_A_USDC, address(f));
         f.setAdapterCodeHashAllowed(address(plain).codehash, true);
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.LendingRateUnavailable.selector, address(plain)));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.LendingRateUnavailable.selector, address(plain))
+        );
         f.addAsset(_lending(address(plain)));
         AssetConfig memory c = _lending(rate);
         c.feed = FEED_ETH;
@@ -972,7 +1050,9 @@ contract FundExtrasTest is BaseFixture {
         uint256 cap = (limit + 1) * 10;
         fund.setTvlCap(cap);
         vm.expectRevert(
-            abi.encodeWithSelector(IRobotMoneyFund.PoolShareExceeded.selector, IDX_WETH, limit + 1, limit)
+            abi.encodeWithSelector(
+                IRobotMoneyFund.PoolShareExceeded.selector, IDX_WETH, limit + 1, limit
+            )
         );
         fund.setTargetAndOpenPlan(ids, bps, PlanParams(1 days, 30), bytes32(0));
         fund.setTvlCap(limit * 10);
@@ -1038,7 +1118,11 @@ contract FundExtrasTest is BaseFixture {
         CompoundV3RateAdapter fresh = new CompoundV3RateAdapter(COMET, USDC, address(fund));
         assertGt(fresh.ratePerUnit(), 1e18, "Comet's supply index at the pin");
         assertEq(comet.ratePerUnit(), fresh.ratePerUnit(), "the listed copy reads the same index");
-        assertEq(fund.assetConfig(IDX_COMET).adapter, address(comet), "Compound is listed in this file's fund");
+        assertEq(
+            fund.assetConfig(IDX_COMET).adapter,
+            address(comet),
+            "Compound is listed in this file's fund"
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1052,7 +1136,9 @@ contract FundExtrasTest is BaseFixture {
         fund.setAdapterCodeHashAllowed(address(moonwell).codehash, false);
         assertGt(fund.openExclusionOf(IDX_MOONWELL), 0, "excluded");
         vm.mockCall(
-            address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), abi.encode(LENDING_ROUNDING_UNITS)
+            address(moonwell),
+            abi.encodeCall(IStrategyAdapter.totalAssets, ()),
+            abi.encode(LENDING_ROUNDING_UNITS)
         );
         fund.deactivateAsset(IDX_MOONWELL);
         assertEq(fund.openExclusionOf(IDX_MOONWELL), 0, "the record closed: deposits reopen");
@@ -1063,7 +1149,9 @@ contract FundExtrasTest is BaseFixture {
     function test_BF1_anExcludedVenueWhoseReadFailsCanBeRemoved() public fixtureCovered {
         _seed();
         fund.setAdapterCodeHashAllowed(address(moonwell).codehash, false);
-        vm.mockCallRevert(address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), "broken");
+        vm.mockCallRevert(
+            address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), "broken"
+        );
         fund.deactivateAsset(IDX_MOONWELL);
         assertEq(fund.openExclusionOf(IDX_MOONWELL), 0, "the record closed");
     }
@@ -1071,14 +1159,22 @@ contract FundExtrasTest is BaseFixture {
     /// @notice B-F1 control: a counted venue whose read fails, or that holds more than dust, is never removed.
     function test_BF1_aCountedVenueCannotBeRemovedUnread_control() public fixtureCovered {
         _seed();
-        vm.mockCallRevert(address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), "broken");
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.AssetStillHeld.selector, IDX_MOONWELL));
+        vm.mockCallRevert(
+            address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), "broken"
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.AssetStillHeld.selector, IDX_MOONWELL)
+        );
         fund.deactivateAsset(IDX_MOONWELL);
         vm.clearMockedCalls();
         vm.mockCall(
-            address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), abi.encode(LENDING_ROUNDING_UNITS + 1)
+            address(moonwell),
+            abi.encodeCall(IStrategyAdapter.totalAssets, ()),
+            abi.encode(LENDING_ROUNDING_UNITS + 1)
         );
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.AssetStillHeld.selector, IDX_MOONWELL));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.AssetStillHeld.selector, IDX_MOONWELL)
+        );
         fund.deactivateAsset(IDX_MOONWELL);
     }
 
@@ -1100,11 +1196,15 @@ contract FundExtrasTest is BaseFixture {
         _refreshFeeds();
         fund.concludePlan(PlanStatus.Expired);
         vm.mockCall(
-            address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), abi.encode(LENDING_ROUNDING_UNITS)
+            address(moonwell),
+            abi.encodeCall(IStrategyAdapter.totalAssets, ()),
+            abi.encode(LENDING_ROUNDING_UNITS)
         );
         fund.deactivateAsset(IDX_MOONWELL);
         vm.clearMockedCalls();
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.DuplicateAsset.selector, IDX_MOONWELL));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.DuplicateAsset.selector, IDX_MOONWELL)
+        );
         fund.addAsset(_lending(address(moonwell)));
     }
 
@@ -1132,9 +1232,13 @@ contract FundExtrasTest is BaseFixture {
         for (uint256 i; i < N_ASSETS; ++i) {
             (uint256 nav,,) = fund.portfolioValues();
             uint256 notional = nav.mulDiv(w[i] * 99, BPS * 100);
-            uint256 minOut =
-                fund.assetConfig(i).kind == AssetKind.Basket ? fund.assetTokenValue(i, notional).mulDiv(98, 100) : 0;
-            try fund.executeStep(StepOrder(IDLE_INDEX, i, notional, 0, minOut, notional.mulDiv(100, BPS))) {} catch {}
+            uint256 minOut = fund.assetConfig(i).kind == AssetKind.Basket
+                ? fund.assetTokenValue(i, notional).mulDiv(98, 100)
+                : 0;
+            try fund.executeStep(
+                StepOrder(IDLE_INDEX, i, notional, 0, minOut, notional.mulDiv(100, BPS))
+            ) {}
+                catch {}
             Plan memory p = fund.plan();
             assertLe(p.costSpent, p.costBudget, "RB-4: never past the budget");
             if (p.status != PlanStatus.Open) break;

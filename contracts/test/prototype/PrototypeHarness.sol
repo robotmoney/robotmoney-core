@@ -39,7 +39,14 @@ import {
     Roles,
     BPS
 } from "./src/FundTypes.sol";
-import {Claim, FlowParams, FlowQueueInit, Request, RequestKind, SettleCheck} from "./src/FlowTypes.sol";
+import {
+    Claim,
+    FlowParams,
+    FlowQueueInit,
+    Request,
+    RequestKind,
+    SettleCheck
+} from "./src/FlowTypes.sol";
 import {PlanMath} from "./src/PlanMath.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 
@@ -311,7 +318,8 @@ abstract contract PrototypeHarness is BaseFixture {
             _proxy(
                 impl,
                 abi.encodeCall(
-                    RobotMoneyFund.initialize, (p, address(timelock), GovernedUUPS.UpgradeMode.Upgradeable)
+                    RobotMoneyFund.initialize,
+                    (p, address(timelock), GovernedUUPS.UpgradeMode.Upgradeable)
                 )
             )
         );
@@ -356,10 +364,18 @@ abstract contract PrototypeHarness is BaseFixture {
         fund.setAdapterCodeHashAllowed(address(swapAdapter).codehash, true);
 
         assertEq(fund.addAsset(lendingConfig(address(aaveAdapter))), IDX_AAVE, "aave index");
-        assertEq(fund.addAsset(lendingConfig(address(moonwellAdapter))), IDX_MOONWELL, "moonwell index");
-        assertEq(fund.addAsset(basketConfig(WETH, WETH_POOL, FEED_ETH, ETH_FEED_MAX_AGE)), IDX_WETH, "weth index");
         assertEq(
-            fund.addAsset(basketConfig(CBBTC, CBBTC_POOL, FEED_CBBTC, DAY_FEED_MAX_AGE)), IDX_CBBTC, "cbbtc index"
+            fund.addAsset(lendingConfig(address(moonwellAdapter))), IDX_MOONWELL, "moonwell index"
+        );
+        assertEq(
+            fund.addAsset(basketConfig(WETH, WETH_POOL, FEED_ETH, ETH_FEED_MAX_AGE)),
+            IDX_WETH,
+            "weth index"
+        );
+        assertEq(
+            fund.addAsset(basketConfig(CBBTC, CBBTC_POOL, FEED_CBBTC, DAY_FEED_MAX_AGE)),
+            IDX_CBBTC,
+            "cbbtc index"
         );
         if (cometListed) {
             fund.setAdapterCodeHashAllowed(address(cometAdapter).codehash, true);
@@ -424,7 +440,14 @@ abstract contract PrototypeHarness is BaseFixture {
                 impl,
                 abi.encodeCall(
                     Rebalancer.initialize,
-                    (address(fund), address(this), keeper, sp, address(timelock), GovernedUUPS.UpgradeMode.Upgradeable)
+                    (
+                        address(fund),
+                        address(this),
+                        keeper,
+                        sp,
+                        address(timelock),
+                        GovernedUUPS.UpgradeMode.Upgradeable
+                    )
                 )
             )
         );
@@ -433,10 +456,14 @@ abstract contract PrototypeHarness is BaseFixture {
         uint256 ceiling = fund.maxSlippageBps();
         rebalancer.setAssetStepParams(IDX_AAVE, AssetStepParams(LENDING_MAX_STEP_USDC, 0));
         rebalancer.setAssetStepParams(IDX_MOONWELL, AssetStepParams(LENDING_MAX_STEP_USDC, 0));
-        if (cometListed) rebalancer.setAssetStepParams(IDX_COMET, AssetStepParams(LENDING_MAX_STEP_USDC, 0));
-        uint16 majorSlip = uint16(Math.min(fund.poolFeeBps(IDX_WETH) + MAJOR_SLIPPAGE_OVER_FEE_BPS, ceiling));
+        if (cometListed) {
+            rebalancer.setAssetStepParams(IDX_COMET, AssetStepParams(LENDING_MAX_STEP_USDC, 0));
+        }
+        uint16 majorSlip =
+            uint16(Math.min(fund.poolFeeBps(IDX_WETH) + MAJOR_SLIPPAGE_OVER_FEE_BPS, ceiling));
         rebalancer.setAssetStepParams(IDX_WETH, AssetStepParams(MAJOR_MAX_STEP_USDC, majorSlip));
-        majorSlip = uint16(Math.min(fund.poolFeeBps(IDX_CBBTC) + MAJOR_SLIPPAGE_OVER_FEE_BPS, ceiling));
+        majorSlip =
+            uint16(Math.min(fund.poolFeeBps(IDX_CBBTC) + MAJOR_SLIPPAGE_OVER_FEE_BPS, ceiling));
         rebalancer.setAssetStepParams(IDX_CBBTC, AssetStepParams(MAJOR_MAX_STEP_USDC, majorSlip));
     }
 
@@ -476,7 +503,13 @@ abstract contract PrototypeHarness is BaseFixture {
         });
         address impl = address(new FlowQueue());
         queue = FlowQueue(
-            _proxy(impl, abi.encodeCall(FlowQueue.initialize, (p, address(timelock), GovernedUUPS.UpgradeMode.Upgradeable)))
+            _proxy(
+                impl,
+                abi.encodeCall(
+                    FlowQueue.initialize,
+                    (p, address(timelock), GovernedUUPS.UpgradeMode.Upgradeable)
+                )
+            )
         );
         vm.label(address(queue), "queue");
     }
@@ -519,8 +552,11 @@ abstract contract PrototypeHarness is BaseFixture {
         bytes[] memory payloads = new bytes[](2);
         targets[0] = address(receipts);
         targets[1] = address(receipts);
-        payloads[0] = abi.encodeCall(receipts.grantRole, (receipts.RECEIPT_SUBMITTER_ROLE(), submitter));
-        payloads[1] = abi.encodeCall(receipts.grantRole, (receipts.RECEIPT_RELEASER_ROLE(), address(governance)));
+        payloads[0] =
+            abi.encodeCall(receipts.grantRole, (receipts.RECEIPT_SUBMITTER_ROLE(), submitter));
+        payloads[1] = abi.encodeCall(
+            receipts.grantRole, (receipts.RECEIPT_RELEASER_ROLE(), address(governance))
+        );
         timelockExecuteBatch(targets, values, payloads);
     }
 
@@ -620,7 +656,10 @@ abstract contract PrototypeHarness is BaseFixture {
 
     /// @notice Fund `user` with `usdc` and open a deposit request for it with the limit `maxUsdcPerShare`
     ///         (PRICE_SCALE units). The user approves the queue and is the caller and the owner.
-    function openDepositRequest(address user, uint256 usdc, uint256 maxUsdcPerShare) internal returns (uint256 id) {
+    function openDepositRequest(address user, uint256 usdc, uint256 maxUsdcPerShare)
+        internal
+        returns (uint256 id)
+    {
         fundUsdc(user, usdc);
         vm.startPrank(user);
         IERC20(USDC).approve(address(queue), usdc);
@@ -630,7 +669,10 @@ abstract contract PrototypeHarness is BaseFixture {
 
     /// @notice `user` approves the queue for `shares` and opens a redemption request with the limit
     ///         `minUsdcPerShare` (PRICE_SCALE units, after the exit fee).
-    function openRedeemRequest(address user, uint256 shares, uint256 minUsdcPerShare) internal returns (uint256 id) {
+    function openRedeemRequest(address user, uint256 shares, uint256 minUsdcPerShare)
+        internal
+        returns (uint256 id)
+    {
         vm.startPrank(user);
         IERC20(address(fund)).approve(address(queue), shares);
         id = queue.requestRedeem(shares, minUsdcPerShare, user);
@@ -705,7 +747,10 @@ abstract contract PrototypeHarness is BaseFixture {
         uint256 latest;
         for (uint256 c = 1; c <= n; ++c) {
             Claim memory cl = queue.getClaim(c);
-            if (cl.kind == RequestKind.Deposit && cl.owner == user && cl.shares > cl.claimed && cl.unlockAt > latest) {
+            if (
+                cl.kind == RequestKind.Deposit && cl.owner == user && cl.shares > cl.claimed
+                    && cl.unlockAt > latest
+            ) {
                 latest = cl.unlockAt;
             }
         }
@@ -756,19 +801,28 @@ abstract contract PrototypeHarness is BaseFixture {
         uint256 n = ++_receiptNonce;
         string memory session = string.concat("proto-session-", vm.toString(n));
         string memory payload = string.concat(
-            '{"assets":', _assetsJson(v), ',"session_id":"', session, '","subject_id":"rmFUND","weights":', _bucketsJson(v), "}"
+            '{"assets":',
+            _assetsJson(v),
+            ',"session_id":"',
+            session,
+            '","subject_id":"rmFUND","weights":',
+            _bucketsJson(v),
+            "}"
         );
         id = receipts.computeReceiptId(session, "rmFUND");
         digest = keccak256(bytes(payload));
         receiptPayload[id] = payload;
         vm.prank(submitter);
-        receipts.recordReceipt(id, digest, string.concat("https://example.invalid/receipts/", session));
+        receipts.recordReceipt(
+            id, digest, string.concat("https://example.invalid/receipts/", session)
+        );
         _lastRecordedAt = uint64(block.timestamp);
     }
 
     function _assetsJson(uint16[5] memory v) private view returns (string memory out) {
         string[5] memory keys = ["aave-v3-usdc", "morpho-usdc", "weth", "cbbtc", "compound-v3-usdc"];
-        string[4] memory labels = ["agent_tokens", "conservative_defi_yield", "protocol_tokens", "real_world_assets"];
+        string[4] memory labels =
+            ["agent_tokens", "conservative_defi_yield", "protocol_tokens", "real_world_assets"];
         out = "[";
         for (uint256 i; i < listedAssets(); ++i) {
             out = string.concat(
@@ -808,7 +862,10 @@ abstract contract PrototypeHarness is BaseFixture {
         returns (uint256 planId)
     {
         (address[] memory assets, uint256[] memory weights) = assetArrays(v);
-        timelockExecute(address(governance), abi.encodeCall(governance.applyReceipt, (id, digest, assets, weights)));
+        timelockExecute(
+            address(governance),
+            abi.encodeCall(governance.applyReceipt, (id, digest, assets, weights))
+        );
         planId = fund.currentPlanId();
     }
 
@@ -819,9 +876,14 @@ abstract contract PrototypeHarness is BaseFixture {
     }
 
     /// @notice Open a receipt-less plan (`governance.setTarget`, ADMIN) through the timelock.
-    function setTargetViaTimelock(uint16[5] memory v, PlanParams memory params) internal returns (uint256 planId) {
+    function setTargetViaTimelock(uint16[5] memory v, PlanParams memory params)
+        internal
+        returns (uint256 planId)
+    {
         (address[] memory assets, uint256[] memory weights) = assetArrays(v);
-        timelockExecute(address(governance), abi.encodeCall(governance.setTarget, (assets, weights, params)));
+        timelockExecute(
+            address(governance), abi.encodeCall(governance.setTarget, (assets, weights, params))
+        );
         planId = fund.currentPlanId();
     }
 
@@ -839,9 +901,15 @@ abstract contract PrototypeHarness is BaseFixture {
     /// @notice The parallel (asset id, weight) arrays `applyReceipt` / `setTarget` / `previewPlan` take for the
     ///         index-aligned vector `v`. Every listed asset is listed, zeros included (§4.1). While Compound is not
     ///         listed, `v[IDX_COMET]` must be 0.
-    function assetArrays(uint16[5] memory v) internal view returns (address[] memory ids, uint256[] memory w) {
+    function assetArrays(uint16[5] memory v)
+        internal
+        view
+        returns (address[] memory ids, uint256[] memory w)
+    {
         uint256 n = listedAssets();
-        if (n < N_ASSETS) require(v[IDX_COMET] == 0, "assetArrays: Compound is not listed in this fixture");
+        if (n < N_ASSETS) {
+            require(v[IDX_COMET] == 0, "assetArrays: Compound is not listed in this fixture");
+        }
         ids = new address[](n);
         w = new uint256[](n);
         for (uint256 i; i < n; ++i) {
@@ -902,9 +970,11 @@ abstract contract PrototypeHarness is BaseFixture {
     }
 
     /// @notice Batch form of `timelockExecute`.
-    function timelockExecuteBatch(address[] memory targets, uint256[] memory values, bytes[] memory payloads)
-        internal
-    {
+    function timelockExecuteBatch(
+        address[] memory targets,
+        uint256[] memory values,
+        bytes[] memory payloads
+    ) internal {
         bytes32 salt = bytes32(++_saltNonce);
         timelock.scheduleBatch(targets, values, payloads, bytes32(0), salt, TIMELOCK_DELAY);
         vm.warp(block.timestamp + TIMELOCK_DELAY);
@@ -983,9 +1053,12 @@ abstract contract PrototypeHarness is BaseFixture {
             (tokenIn, tokenOut) = (token, USDC);
         }
         IERC20(tokenIn).approve(ROUTER, amountIn);
-        out = IHarnessSwapRouter02(ROUTER).exactInputSingle(
-            IHarnessSwapRouter02.ExactInputSingleParams(tokenIn, tokenOut, p.fee(), address(this), amountIn, 0, 0)
-        );
+        out = IHarnessSwapRouter02(ROUTER)
+            .exactInputSingle(
+                IHarnessSwapRouter02.ExactInputSingleParams(
+                    tokenIn, tokenOut, p.fee(), address(this), amountIn, 0, 0
+                )
+            );
     }
 
     /// @notice Token amount worth `usdcAmount` at `pool`'s current spot (slot0), raw units.

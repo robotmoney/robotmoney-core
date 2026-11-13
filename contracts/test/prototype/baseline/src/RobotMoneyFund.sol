@@ -88,17 +88,21 @@ contract RobotMoneyFund is
     ///         are self-administered and bound once later (`bindRebalanceRoles`: the governance and rebalancer
     ///         proxies take the fund address at their own initialization). Creates the fund's `ExclusionLedger` (ADP-2, core 1820) through the
     ///         linked `RobotMoneyVaultOps.createLedger`, so the ledger names this proxy as its only writer.
-    function initialize(FundInitParams calldata p, address upgradeTimelock, GovernedUUPS.UpgradeMode mode)
-        external
-        initializer
-    {
-        if (p.usdc == address(0) || p.feeRecipient == address(0) || p.admin == address(0) || p.emergency == address(0))
-        {
+    function initialize(
+        FundInitParams calldata p,
+        address upgradeTimelock,
+        GovernedUUPS.UpgradeMode mode
+    ) external initializer {
+        if (
+            p.usdc == address(0) || p.feeRecipient == address(0) || p.admin == address(0)
+                || p.emergency == address(0)
+        ) {
             revert ZeroAddress();
         }
         if (
-            p.exitFeeBps > FundStorage.MAX_EXIT_FEE_BPS || p.maxSlippageBps > FundStorage.MAX_SLIPPAGE_BPS
-                || p.maxSlippageBps == 0 || p.navDeviationGuardBps > FundStorage.MAX_NAV_DEVIATION_BPS
+            p.exitFeeBps > FundStorage.MAX_EXIT_FEE_BPS
+                || p.maxSlippageBps > FundStorage.MAX_SLIPPAGE_BPS || p.maxSlippageBps == 0
+                || p.navDeviationGuardBps > FundStorage.MAX_NAV_DEVIATION_BPS
         ) revert InvalidParam();
         __ERC20_init(p.name, p.symbol);
         __ERC4626_init(IERC20(p.usdc));
@@ -167,7 +171,11 @@ contract RobotMoneyFund is
     ///      cap, ADP-2 exclusion, ORA-4, TVL cap), pulls and routes the USDC deficit-first, and returns the
     ///      shares for the REALIZED TWAP NAV delta (`DepositBelowSlippageFloor` below the floor; denominator
     ///      `navBefore + 1`, AZ-BSK-1/-3). The fund mints them.
-    function _depositFlow(uint256 assets, address receiver) private nonReentrant returns (uint256 shares) {
+    function _depositFlow(uint256 assets, address receiver)
+        private
+        nonReentrant
+        returns (uint256 shares)
+    {
         address caller = _msgSender();
         shares = FundFlowsLib.deposit(_s(), caller, assets, totalSupply());
         _mint(receiver, shares);
@@ -219,7 +227,12 @@ contract RobotMoneyFund is
     ///      withdraws pro rata from each counted Lending adapter (a short fill pays what was realized) and sells
     ///      pro rata of each Basket token under the TWAP × (1 − maxSlippageBps) floor. The exit fee is charged on
     ///      the realized gross only (FEE-2 / NC-11).
-    function redeem(uint256 shares, address receiver, address owner) public override nonReentrant returns (uint256) {
+    function redeem(uint256 shares, address receiver, address owner)
+        public
+        override
+        nonReentrant
+        returns (uint256)
+    {
         if (shares == 0) return 0;
         address caller = _msgSender();
         if (caller != owner) _spendAllowance(owner, caller, shares);
@@ -260,7 +273,8 @@ contract RobotMoneyFund is
     /// @notice Worst case: TWAP gross × (1 − maxSlippageBps) × (1 − exitFeeBps) (BasketVault.previewRedeem).
     function previewRedeem(uint256 shares) public view override returns (uint256) {
         FundState storage s = _s();
-        uint256 afterSlip = _convertToAssets(shares, Math.Rounding.Floor).mulDiv(BPS - s.maxSlippageBps, BPS);
+        uint256 afterSlip =
+            _convertToAssets(shares, Math.Rounding.Floor).mulDiv(BPS - s.maxSlippageBps, BPS);
         return afterSlip - afterSlip.mulDiv(s.exitFeeBps, BPS);
     }
 
@@ -333,7 +347,10 @@ contract RobotMoneyFund is
     }
 
     /// @inheritdoc IRobotMoneyFund
-    function bindRebalanceRoles(address governance, address rebalancer) external onlyRole(ADMIN_ROLE) {
+    function bindRebalanceRoles(address governance, address rebalancer)
+        external
+        onlyRole(ADMIN_ROLE)
+    {
         FundState storage s = _s();
         if (s.rolesBound) revert RolesAlreadyBound();
         if (governance == address(0) || rebalancer == address(0)) revert ZeroAddress();
@@ -351,7 +368,9 @@ contract RobotMoneyFund is
         uint256 budget = p.costBudget + addedUsdc;
         p.costBudget = budget;
         emit PlanBudgetExtended(p.id, addedUsdc, budget);
-        if (st == PlanStatus.Halted && p.costSpent <= budget) _move(PlanStatus.Halted, PlanStatus.Open);
+        if (st == PlanStatus.Halted && p.costSpent <= budget) {
+            _move(PlanStatus.Halted, PlanStatus.Open);
+        }
     }
 
     /// @inheritdoc IRobotMoneyFund
@@ -402,7 +421,11 @@ contract RobotMoneyFund is
         return FundValuationLib.assetValue(_s(), index);
     }
 
-    function portfolioValues() external view returns (uint256 nav, uint256 idle, uint256[] memory values) {
+    function portfolioValues()
+        external
+        view
+        returns (uint256 nav, uint256 idle, uint256[] memory values)
+    {
         return FundValuationLib.portfolio(_s());
     }
 
@@ -481,7 +504,11 @@ contract RobotMoneyFund is
     }
 
     /// @inheritdoc IRobotMoneyFund
-    function config() external view returns (uint256 tvlCap, uint256 perDepositCap, uint256 exitFeeBps, address feeRecipient) {
+    function config()
+        external
+        view
+        returns (uint256 tvlCap, uint256 perDepositCap, uint256 exitFeeBps, address feeRecipient)
+    {
         FundState storage s = _s();
         return (s.tvlCap, s.perDepositCap, s.exitFeeBps, s.feeRecipient);
     }
@@ -519,7 +546,11 @@ contract RobotMoneyFund is
     ///         again. Basket assets are not touched retroactively (as on BasketVault).
     /// @dev Deliberately NOT frozen by a live plan: excluding a bad adapter must never wait for a plan to end.
     ///      Indices are untouched, so plan arrays stay aligned.
-    function setAdapterCodeHashAllowed(bytes32 codeHash, bool allowed) external onlyRole(ADMIN_ROLE) nonReentrant {
+    function setAdapterCodeHashAllowed(bytes32 codeHash, bool allowed)
+        external
+        onlyRole(ADMIN_ROLE)
+        nonReentrant
+    {
         if (codeHash == bytes32(0)) revert InvalidParam();
         _s().codeHashAllowed[codeHash] = allowed;
         emit AdapterCodeHashAllowedSet(codeHash, allowed);
@@ -527,7 +558,11 @@ contract RobotMoneyFund is
     }
 
     /// @inheritdoc IRobotMoneyFund
-    function addAsset(AssetConfig calldata c) external onlyRole(ADMIN_ROLE) returns (uint256 index) {
+    function addAsset(AssetConfig calldata c)
+        external
+        onlyRole(ADMIN_ROLE)
+        returns (uint256 index)
+    {
         _requireNoLivePlan();
         return FundAdminLib.addAsset(_s(), c);
     }

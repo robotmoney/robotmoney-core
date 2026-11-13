@@ -33,9 +33,14 @@ library FeedLib {
     /// @return status Why the read is not usable, or Ok.
     /// @return price8 The answer scaled to 8 decimals, rounded DOWN (0 unless Ok). An answer that scales to 0 is
     ///                `NonPositive`.
-    function read(address feed, uint32 maxAge) internal view returns (FeedStatus status, uint256 price8) {
+    function read(address feed, uint32 maxAge)
+        internal
+        view
+        returns (FeedStatus status, uint256 price8)
+    {
         if (feed == address(0)) return (FeedStatus.NoFeed, 0);
-        (bool ok, uint80 roundId, int256 answer,, uint256 updatedAt, uint80 answeredInRound) = _latest(feed);
+        (bool ok, uint80 roundId, int256 answer,, uint256 updatedAt, uint80 answeredInRound) =
+            _latest(feed);
         if (!ok) return (FeedStatus.ReadFailed, 0);
         (bool decOk, uint8 dec) = _decimals(feed);
         if (!decOk) return (FeedStatus.ReadFailed, 0);
@@ -56,7 +61,11 @@ library FeedLib {
     ///         the grace period.
     /// @return ok     True when the sequencer is up and has been for `grace`.
     /// @return status Ok, SequencerDown, SequencerGrace, RoundIncomplete, ReadFailed or NoFeed.
-    function sequencerUp(address feed, uint32 grace) internal view returns (bool ok, FeedStatus status) {
+    function sequencerUp(address feed, uint32 grace)
+        internal
+        view
+        returns (bool ok, FeedStatus status)
+    {
         if (feed == address(0)) return (false, FeedStatus.NoFeed);
         (bool callOk,, int256 answer, uint256 startedAt,,) = _latest(feed);
         if (!callOk) return (false, FeedStatus.ReadFailed);
@@ -92,10 +101,18 @@ library FeedLib {
     function _latest(address feed)
         private
         view
-        returns (bool ok, uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
+        returns (
+            bool ok,
+            uint80 roundId,
+            int256 answer,
+            uint256 startedAt,
+            uint256 updatedAt,
+            uint80 answeredInRound
+        )
     {
         if (feed.code.length == 0) return (false, 0, 0, 0, 0, 0);
-        (bool success, bytes memory ret) = feed.staticcall(abi.encodeWithSignature("latestRoundData()"));
+        (bool success, bytes memory ret) =
+            feed.staticcall(abi.encodeWithSignature("latestRoundData()"));
         if (!success || ret.length < 160) return (false, 0, 0, 0, 0, 0);
         uint256 r;
         uint256 a;

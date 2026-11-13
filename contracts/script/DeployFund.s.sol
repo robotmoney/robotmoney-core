@@ -12,8 +12,16 @@ import {RobotMoneyFund} from "../test/prototype/src/RobotMoneyFund.sol";
 import {AaveV3RateAdapter} from "../test/prototype/src/adapters/AaveV3RateAdapter.sol";
 import {CompoundV3RateAdapter} from "../test/prototype/src/adapters/CompoundV3RateAdapter.sol";
 import {MorphoRateAdapter} from "../test/prototype/src/adapters/MorphoRateAdapter.sol";
-import {UniswapV3ExactOutSwapAdapter} from "../test/prototype/src/adapters/UniswapV3ExactOutSwapAdapter.sol";
-import {AssetConfig, AssetKind, FundInitParams, Venue, Roles} from "../test/prototype/src/FundTypes.sol";
+import {
+    UniswapV3ExactOutSwapAdapter
+} from "../test/prototype/src/adapters/UniswapV3ExactOutSwapAdapter.sol";
+import {
+    AssetConfig,
+    AssetKind,
+    FundInitParams,
+    Venue,
+    Roles
+} from "../test/prototype/src/FundTypes.sol";
 import {FundSystemBase} from "./FundSystemBase.sol";
 
 /// @title DeployFund
@@ -100,8 +108,12 @@ contract DeployFund is FundSystemBase {
         i.maxSlippageBps = _envUintRequired("FUND_MAX_SLIPPAGE_BPS");
         i.navDeviationBps = _envUintRequired("FUND_NAV_DEVIATION_BPS");
         // §5.6: a slippage or deviation bound at or below the pool fee would make every step fail.
-        require(i.maxSlippageBps > POOL_FEE / 100, "FUND_MAX_SLIPPAGE_BPS is at or below the pool fee");
-        require(i.navDeviationBps > POOL_FEE / 100, "FUND_NAV_DEVIATION_BPS is at or below the pool fee");
+        require(
+            i.maxSlippageBps > POOL_FEE / 100, "FUND_MAX_SLIPPAGE_BPS is at or below the pool fee"
+        );
+        require(
+            i.navDeviationBps > POOL_FEE / 100, "FUND_NAV_DEVIATION_BPS is at or below the pool fee"
+        );
         i.lendingCapBps = uint16(_envUintMax("FUND_LENDING_CAP_BPS", 10_000));
         require(i.lendingCapBps > 0, "FUND_LENDING_CAP_BPS=0");
         i.minSeedUsdc = _envUintRequired("FUND_MIN_SEED_USDC");
@@ -145,9 +157,13 @@ contract DeployFund is FundSystemBase {
 
         // §4.5: three lending venues and two basket tokens; addAsset refuses an unhealthy feed (E15).
         require(f.addAsset(_lending(d.aaveAdapter, i.lendingCapBps)) == IDX_AAVE, "aave index");
-        require(f.addAsset(_lending(d.moonwellAdapter, i.lendingCapBps)) == IDX_MOONWELL, "moonwell index");
         require(
-            f.addAsset(_basket(d.swapAdapter, WETH, WETH_POOL, FEED_ETH, ETH_FEED_MAX_AGE)) == IDX_WETH,
+            f.addAsset(_lending(d.moonwellAdapter, i.lendingCapBps)) == IDX_MOONWELL,
+            "moonwell index"
+        );
+        require(
+            f.addAsset(_basket(d.swapAdapter, WETH, WETH_POOL, FEED_ETH, ETH_FEED_MAX_AGE))
+                == IDX_WETH,
             "weth index"
         );
         require(
@@ -205,9 +221,14 @@ contract DeployFund is FundSystemBase {
         RobotMoneyFund f = RobotMoneyFund(d.fund);
         require(d.assetCount == N_ASSETS, "fund: asset count");
         require(f.minSeedUsdc() == i.minSeedUsdc, "fund: minSeedUsdc");
-        require(f.balanceOf(d.fund) == d.seedShares && f.totalSupply() == d.seedShares, "fund: seed shares");
+        require(
+            f.balanceOf(d.fund) == d.seedShares && f.totalSupply() == d.seedShares,
+            "fund: seed shares"
+        );
         require(f.balanceOf(i.admin) == 0, "fund: the deployer holds shares");
-        require(f.hasRole(Roles.EMERGENCY_ROLE, i.emergency), "fund: emergency key lacks EMERGENCY_ROLE");
+        require(
+            f.hasRole(Roles.EMERGENCY_ROLE, i.emergency), "fund: emergency key lacks EMERGENCY_ROLE"
+        );
         require(!f.hasRole(Roles.EMERGENCY_ROLE, i.admin), "fund: deployer holds EMERGENCY_ROLE");
         require(f.upgradeTimelock() == d.upgrade.timelock, "fund: upgradeTimelock");
         require(_implementationOf(d.fund) == d.fundImplementation, "fund: implementation slot");
@@ -234,7 +255,8 @@ contract DeployFund is FundSystemBase {
         vm.serializeUint(obj, "tvl_cap", i.tvlCap);
         vm.serializeUint(obj, "per_deposit_cap", i.perDepositCap);
         vm.serializeAddress(obj, "upgrade_timelock", d.upgrade.timelock);
-        string memory json = vm.serializeString(obj, "upgrade_mode", upgradeModeName(d.upgrade.mode));
+        string memory json =
+            vm.serializeString(obj, "upgrade_mode", upgradeModeName(d.upgrade.mode));
         vm.writeJson(json, outPath);
         console2.log("Wrote fund deployment JSON to", outPath);
     }

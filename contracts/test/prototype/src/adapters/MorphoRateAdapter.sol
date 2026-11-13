@@ -15,7 +15,9 @@ contract MorphoRateAdapter is MorphoAdapter, ILendingRateAdapter {
     /// @notice The vault's share or asset decimals make the 1e18 scale impossible.
     error UnsupportedDecimals(uint8 shareDecimals, uint8 assetDecimals);
 
-    constructor(address morphoVault_, address usdc_, address vault_) MorphoAdapter(morphoVault_, usdc_, vault_) {}
+    constructor(address morphoVault_, address usdc_, address vault_)
+        MorphoAdapter(morphoVault_, usdc_, vault_)
+    {}
 
     /// @inheritdoc ILendingRateAdapter
     /// @dev USDC units per whole vault share, scaled so that 1 whole asset per whole share reads 1e18:
@@ -25,7 +27,9 @@ contract MorphoRateAdapter is MorphoAdapter, ILendingRateAdapter {
     function ratePerUnit() external view returns (uint256 rate1e18) {
         uint8 sd = IERC20Metadata(address(MORPHO_VAULT)).decimals();
         uint8 ad = IERC20Metadata(USDC).decimals();
-        if (uint256(sd) + 18 < ad || uint256(sd) + 18 - ad > 60) revert UnsupportedDecimals(sd, ad);
+        if (uint256(sd) + 18 < ad || uint256(sd) + 18 - ad > 60) {
+            revert UnsupportedDecimals(sd, ad);
+        }
         rate1e18 = MORPHO_VAULT.convertToAssets(10 ** (uint256(sd) + 18 - ad));
     }
 }

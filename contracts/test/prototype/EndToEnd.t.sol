@@ -11,7 +11,9 @@ import {Vm} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {IConsensusRecommendationReceipt} from "../../interfaces/IConsensusRecommendationReceipt.sol";
+import {
+    IConsensusRecommendationReceipt
+} from "../../interfaces/IConsensusRecommendationReceipt.sol";
 import {PrototypeHarness} from "./PrototypeHarness.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 import {
@@ -142,8 +144,16 @@ contract EndToEndTest is PrototypeHarness {
         Quote memory q = queue.quoteDeposit(usdc);
         assertGt(q.boundPrice, 0, "quote: bound price");
         assertEq(q.feeBps, 0, "quote: no deposit fee class");
-        assertEq(q.holdEnds, q.earliestSettle + 24 hours, "quote: hold ends minHold after the earliest settle");
-        assertEq(q.worstAmount, usdc.mulDiv(PRICE_SCALE, q.boundPrice), "quote: worst shares at the bound");
+        assertEq(
+            q.holdEnds,
+            q.earliestSettle + 24 hours,
+            "quote: hold ends minHold after the earliest settle"
+        );
+        assertEq(
+            q.worstAmount,
+            usdc.mulDiv(PRICE_SCALE, q.boundPrice),
+            "quote: worst shares at the bound"
+        );
         _hpDepositLimit = q.boundPrice.mulDiv(BPS + LIMIT_MARGIN_BPS, BPS);
 
         uint256 queueUsdc = IERC20(USDC).balanceOf(address(queue));
@@ -151,7 +161,9 @@ contract EndToEndTest is PrototypeHarness {
         assertEq(IERC20(USDC).balanceOf(address(queue)), queueUsdc + usdc, "escrow in the queue");
         assertEq(IERC20(USDC).balanceOf(alice), 0, "pulled from the caller");
         assertEq(queue.pendingDepositRequest(_hpDepositId, alice), usdc, "pending");
-        assertEq(uint8(queue.requestStatus(_hpDepositId)), uint8(RequestStatus.Pending), "status pending");
+        assertEq(
+            uint8(queue.requestStatus(_hpDepositId)), uint8(RequestStatus.Pending), "status pending"
+        );
         assertEq(queue.books().pendingUsdc, usdc, "books: pending USDC");
 
         // Check 1: nothing settles before the window of the request's epoch ends.
@@ -159,10 +171,18 @@ contract EndToEndTest is PrototypeHarness {
         (SettleCheck check,) = queue.checkSettle();
         assertEq(uint8(check), uint8(SettleCheck.Window), "window not ended");
         vm.prank(keeper);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.SettleBlocked.selector, SettleCheck.Window, IDLE_INDEX, 0));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IFlowEvents.SettleBlocked.selector, SettleCheck.Window, IDLE_INDEX, 0
+            )
+        );
         queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
         Request memory r = queue.getRequest(_hpDepositId);
-        assertEq(uint256(queue.settleableAt(r.epoch)), q.earliestSettle, "the quote named the earliest settle");
+        assertEq(
+            uint256(queue.settleableAt(r.epoch)),
+            q.earliestSettle,
+            "the quote named the earliest settle"
+        );
     }
 
     /// @dev §5.9.2 step 4 and §5.9.3: after the window, the keeper settles. One claim for alice with its unlock
@@ -193,9 +213,17 @@ contract EndToEndTest is PrototypeHarness {
         assertGt(st.sharesMinted, 0, "shares minted to the queue");
         assertLe(st.usdcIn, usdc, "spent at most the request");
         assertEq(st.holdEndsAt, block.timestamp + 24 hours, "hold ends minHold later");
-        assertLe(st.usdcIn * PRICE_SCALE, st.depositBoundPrice * st.sharesMinted, "check 11: realized <= bound");
+        assertLe(
+            st.usdcIn * PRICE_SCALE,
+            st.depositBoundPrice * st.sharesMinted,
+            "check 11: realized <= bound"
+        );
         assertEq(fund.totalSupply(), supply0 + st.sharesMinted, "the fund minted exactly sharesOut");
-        assertEq(fund.balanceOf(address(queue)), st.sharesMinted, "the queue holds the shares in their hold");
+        assertEq(
+            fund.balanceOf(address(queue)),
+            st.sharesMinted,
+            "the queue holds the shares in their hold"
+        );
         _assertPerShareNotLower(idle0, held0, supply0, "deposit");
 
         assertEq(queue.claimCount(), 1, "one claim");
@@ -206,10 +234,18 @@ contract EndToEndTest is PrototypeHarness {
         assertEq(c.unlockAt, st.holdEndsAt, "unlock at the end of the hold");
         assertEq(c.shares, st.sharesMinted, "one fill takes every share");
         assertEq(c.usdc, st.usdcIn, "one fill pays the whole cost");
-        assertLe(c.usdc.mulDiv(PRICE_SCALE, c.shares, Math.Rounding.Ceil), _hpDepositLimit, "RB-14: inside the limit");
-        assertEq(uint8(queue.requestStatus(_hpDepositId)), uint8(RequestStatus.Closed), "request filled");
+        assertLe(
+            c.usdc.mulDiv(PRICE_SCALE, c.shares, Math.Rounding.Ceil),
+            _hpDepositLimit,
+            "RB-14: inside the limit"
+        );
+        assertEq(
+            uint8(queue.requestStatus(_hpDepositId)), uint8(RequestStatus.Closed), "request filled"
+        );
         assertEq(queue.queuedSharesOf(alice), c.shares, "E13: held shares count for alice");
-        assertEq(fund.ledgerBalanceOf(alice), c.shares, "RB-22: the ledger sees alice's held shares");
+        assertEq(
+            fund.ledgerBalanceOf(alice), c.shares, "RB-22: the ledger sees alice's held shares"
+        );
 
         (uint256 creditUsdc, uint256 creditShares) = queue.creditOf(alice);
         assertEq(creditUsdc, usdc - st.usdcIn, "E22: unused USDC is alice's credit");
@@ -244,7 +280,9 @@ contract EndToEndTest is PrototypeHarness {
         assertEq(fund.balanceOf(alice), _hpShares, "shares delivered to the owner");
         assertEq(fund.balanceOf(bob), 0, "the caller receives nothing");
         assertEq(queue.queuedSharesOf(alice), 0, "nothing held for alice");
-        assertEq(fund.ledgerBalanceOf(alice), _hpShares, "RB-22: same ledger balance, now in the wallet");
+        assertEq(
+            fund.ledgerBalanceOf(alice), _hpShares, "RB-22: same ledger balance, now in the wallet"
+        );
 
         if (_hpCredit != 0) {
             vm.prank(alice);
@@ -303,7 +341,9 @@ contract EndToEndTest is PrototypeHarness {
         assertEq(fund.balanceOf(alice), 0, "shares pulled from the caller");
         assertEq(fund.balanceOf(address(queue)), shares, "escrow in the queue");
         assertEq(queue.queuedSharesOf(alice), shares, "E13: escrowed shares count for alice");
-        assertEq(fund.ledgerBalanceOf(alice), shares, "RB-22: ledger balance unchanged by the request");
+        assertEq(
+            fund.ledgerBalanceOf(alice), shares, "RB-22: ledger balance unchanged by the request"
+        );
         assertEq(queue.pendingRedeemRequest(id, alice), shares, "pending");
 
         warpToSettleable(id);
@@ -317,7 +357,9 @@ contract EndToEndTest is PrototypeHarness {
         Settlement memory st = queue.getSettlement(sid);
         assertEq(st.sharesBurned, shares, "burned alice's shares");
         assertEq(fund.totalSupply(), supply0 - shares, "supply fell by the shares");
-        assertGe(st.usdcOut * PRICE_SCALE, st.redeemBoundPrice * shares, "check 11: realized >= bound");
+        assertGe(
+            st.usdcOut * PRICE_SCALE, st.redeemBoundPrice * shares, "check 11: realized >= bound"
+        );
         assertGt(IERC20(USDC).balanceOf(feeRecipient), feeBefore, "exit fee charged");
         _assertPerShareNotLower(idle0, held0, supply0, "redemption");
         emit log_named_uint("redeem: shares burned", st.sharesBurned);
@@ -360,7 +402,9 @@ contract EndToEndTest is PrototypeHarness {
         assertEq(uint8(queue.requestStatus(id)), uint8(RequestStatus.Closed), "cancelled");
         (, uint256 creditShares) = queue.creditOf(alice);
         assertEq(creditShares, half, "escrow became a share credit");
-        assertEq(queue.queuedSharesOf(alice), half, "E13: a share credit stays counted until withdrawn");
+        assertEq(
+            queue.queuedSharesOf(alice), half, "E13: a share credit stays counted until withdrawn"
+        );
         assertEq(fund.ledgerBalanceOf(alice), shares, "RB-22: ledger balance unchanged");
         _assertBooks("after cancel");
         vm.prank(alice);
@@ -374,8 +418,11 @@ contract EndToEndTest is PrototypeHarness {
     function _seamExitInKind(uint256 q) private {
         uint256 id = openRedeemRequest(alice, q, 0);
         uint256 supply0 = fund.totalSupply();
-        uint256[3] memory before =
-            [IERC20(USDC).balanceOf(alice), IERC20(WETH).balanceOf(alice), IERC20(CBBTC).balanceOf(alice)];
+        uint256[3] memory before = [
+            IERC20(USDC).balanceOf(alice),
+            IERC20(WETH).balanceOf(alice),
+            IERC20(CBBTC).balanceOf(alice)
+        ];
         vm.prank(alice);
         queue.exitInKind(id);
         assertEq(fund.totalSupply(), supply0 - q, "the queue's escrowed shares were burned");
@@ -407,7 +454,9 @@ contract EndToEndTest is PrototypeHarness {
         refreshFeeds();
         assertEq(queue.maxMint(bob), 0, "frozen: nothing deliverable after the hold");
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.NotRequestOwner.selector, c.requestId, alice));
+        vm.expectRevert(
+            abi.encodeWithSelector(IFlowEvents.NotRequestOwner.selector, c.requestId, alice)
+        );
         queue.takeReturn(claimId);
         vm.prank(bob);
         vm.expectRevert(abi.encodeWithSelector(IFlowEvents.ReturnNotAllowed.selector, sid));
@@ -460,9 +509,13 @@ contract EndToEndTest is PrototypeHarness {
         assertEq(fund.plan().receiptId, bytes32(0), "setTarget plan has no receipt");
 
         // The fund's own entry points name the queue (E2).
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.UseFlowQueue.selector, address(queue)));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.UseFlowQueue.selector, address(queue))
+        );
         fund.deposit(1e6, alice);
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.UseFlowQueue.selector, address(queue)));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.UseFlowQueue.selector, address(queue))
+        );
         fund.previewRedeem(1e30);
 
         // A pro-rata deposit keeps every weight (§5.9.7 "deposits no longer fill deficits").
@@ -481,7 +534,10 @@ contract EndToEndTest is PrototypeHarness {
     //  Stage 2: receipts (§5.1, RB-1, RB-8)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    function _stage2Receipts(uint16[5] memory proposed) private returns (uint256 planId, bytes32 good) {
+    function _stage2Receipts(uint16[5] memory proposed)
+        private
+        returns (uint256 planId, bytes32 good)
+    {
         // Three receipts, oldest first: a valid older one, one whose vector sums to 9 500, the good one.
         _older = bucketVec(5_000, 5_000);
         uint16[5] memory short = bucketVec(5_000, 5_000);
@@ -492,7 +548,12 @@ contract EndToEndTest is PrototypeHarness {
         (good, dGood) = recordReceipt(proposed);
 
         // RB-9: a vector that does not sum to 10 000 is refused, nothing released.
-        _applyExpectRevert(idShort, dShort, short, abi.encodeWithSelector(IFundEvents.TargetSumInvalid.selector, 9_500));
+        _applyExpectRevert(
+            idShort,
+            dShort,
+            short,
+            abi.encodeWithSelector(IFundEvents.TargetSumInvalid.selector, 9_500)
+        );
         assertFalse(receipts.isReleased(idShort), "refused receipt not released");
 
         // RB-1: the target setter is the timelock alone.
@@ -506,7 +567,10 @@ contract EndToEndTest is PrototypeHarness {
     }
 
     /// @dev Apply the good receipt. Plan 1 is concluded by now; the release happens in the same call.
-    function _applyGood(bytes32 good, bytes32 dGood, uint16[5] memory proposed) private returns (uint256 planId) {
+    function _applyGood(bytes32 good, bytes32 dGood, uint16[5] memory proposed)
+        private
+        returns (uint256 planId)
+    {
         (address[] memory ids, uint256[] memory w) = assetArrays(proposed);
         bytes memory data = abi.encodeCall(governance.applyReceipt, (good, dGood, ids, w));
         bytes32 salt = keccak256(abi.encode("e2e", ++_e2eSalt));
@@ -531,14 +595,20 @@ contract EndToEndTest is PrototypeHarness {
         uint16[] memory persistent = fund.targetBps();
         uint256 sumEnd;
         for (uint256 i; i < listedAssets(); ++i) {
-            assertEq(p.startBps[i], PlanMath.weightBps(valuesOpen[i], navOpen), "start = actual weight");
+            assertEq(
+                p.startBps[i], PlanMath.weightBps(valuesOpen[i], navOpen), "start = actual weight"
+            );
             assertEq(persistent[i], p.endBps[i], "persistent target = plan end");
             assertEq(p.endBps[i], proposed[i], "end target = the receipt's per-asset vector");
             sumEnd += p.endBps[i];
         }
         assertEq(sumEnd, BPS, "end targets sum to 100%");
-        assertGt(p.turnoverUsdc, navOpen.mulDiv(2_500, BPS), "materially different vector: big turnover");
-        assertEq(p.costBudget, p.turnoverUsdc.mulDiv(COST_BUDGET_BPS, BPS), "budget = turnover x bps");
+        assertGt(
+            p.turnoverUsdc, navOpen.mulDiv(2_500, BPS), "materially different vector: big turnover"
+        );
+        assertEq(
+            p.costBudget, p.turnoverUsdc.mulDiv(COST_BUDGET_BPS, BPS), "budget = turnover x bps"
+        );
     }
 
     /// @dev Stale: an older receipt is refused once a newer one applied, even with a valid vector. Replay: the
@@ -552,17 +622,27 @@ contract EndToEndTest is PrototypeHarness {
             idOld,
             dOld,
             older,
-            abi.encodeWithSelector(IRebalanceGovernance.ReceiptNotNewerThanApplied.selector, idOld, oldAt, lastApplied)
+            abi.encodeWithSelector(
+                IRebalanceGovernance.ReceiptNotNewerThanApplied.selector, idOld, oldAt, lastApplied
+            )
         );
         assertFalse(receipts.isReleased(idOld), "stale receipt not released");
         _applyExpectRevert(
-            good, dGood, proposed, abi.encodeWithSelector(IRebalanceGovernance.ReceiptAlreadyReleased.selector, good)
+            good,
+            dGood,
+            proposed,
+            abi.encodeWithSelector(IRebalanceGovernance.ReceiptAlreadyReleased.selector, good)
         );
     }
 
     /// @dev Schedule `applyReceipt` on the timelock, wait the delay, and expect the execution to revert with
     ///      `revertData` (the timelock bubbles the target's revert).
-    function _applyExpectRevert(bytes32 id, bytes32 digest, uint16[5] memory bps, bytes memory revertData) private {
+    function _applyExpectRevert(
+        bytes32 id,
+        bytes32 digest,
+        uint16[5] memory bps,
+        bytes memory revertData
+    ) private {
         (address[] memory ids, uint256[] memory w) = assetArrays(bps);
         bytes memory data = abi.encodeCall(governance.applyReceipt, (id, digest, ids, w));
         bytes32 salt = keccak256(abi.encode("e2e", ++_e2eSalt));
@@ -576,7 +656,9 @@ contract EndToEndTest is PrototypeHarness {
     //  Stage 3: keeper steps until Converged (§5.3, §5.5, RB-4, RB-7)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    function _stage3StepUntilConverged(uint256 planId, bytes32 receiptId, uint16[5] memory proposed) private {
+    function _stage3StepUntilConverged(uint256 planId, bytes32 receiptId, uint16[5] memory proposed)
+        private
+    {
         // A 7-day path is ~340 real steps on real venues: more than forge's default test gas. Metering is paused
         // for the loop only; nothing under test reads the meter except the Rebalancer's gas-starvation guard,
         // which then never fires.
@@ -620,7 +702,9 @@ contract EndToEndTest is PrototypeHarness {
         (uint256[4] memory sw,) = bucketWeightsBps();
         uint256[4] memory pb = bucketsOf(proposed);
         for (uint256 s = 1; s < 3; ++s) {
-            assertApproxEqAbs(sw[s], pb[s], 3 * TOLERANCE_BPS + 3, "bucket at the receipt's audit weight");
+            assertApproxEqAbs(
+                sw[s], pb[s], 3 * TOLERANCE_BPS + 3, "bucket at the receipt's audit weight"
+            );
         }
 
         // A concluded plan does not trade.
@@ -640,7 +724,8 @@ contract EndToEndTest is PrototypeHarness {
         // pools before each step (the same model stage 4 uses).
         alignFeedsToPools();
         Plan memory p = fund.plan();
-        (SkipReason predicted, uint256 sell, uint256 buy, uint256 notional) = rebalancer.previewStep();
+        (SkipReason predicted, uint256 sell, uint256 buy, uint256 notional) =
+            rebalancer.previewStep();
         Snap memory b = _snap();
         b.feedLegs = _legsAtFeedsNow(sell, buy);
 
@@ -651,7 +736,9 @@ contract EndToEndTest is PrototypeHarness {
 
         if (!did) {
             ++_skips[why];
-            if (why != SkipReason.StepFailed) assertEq(uint8(why), uint8(predicted), "previewStep predicts the skip");
+            if (why != SkipReason.StepFailed) {
+                assertEq(uint8(why), uint8(predicted), "previewStep predicts the skip");
+            }
             assertEq(a.nav, b.nav, "skip: NAV unchanged");
             assertEq(a.costSpent, b.costSpent, "skip: no cost");
             assertEq(a.stepCount, b.stepCount, "skip: no step counted");
@@ -665,7 +752,11 @@ contract EndToEndTest is PrototypeHarness {
         uint256 maxCost = _assertStepCost(b, a, notional);
 
         // NAV/share: supply is unchanged, so it moves only by the bounded step cost.
-        assertGe(a.pps + 1, b.pps.mulDiv(b.nav - maxCost, b.nav), "NAV/share loss bounded by the cost cap");
+        assertGe(
+            a.pps + 1,
+            b.pps.mulDiv(b.nav - maxCost, b.nav),
+            "NAV/share loss bounded by the cost cap"
+        );
         assertLe(a.pps, b.pps.mulDiv(b.nav + maxCost, b.nav) + 1, "NAV/share gain bounded");
 
         // RB-7: at the step's own valuation (navBefore, now), the sell leg is still at or over its path target
@@ -674,20 +765,29 @@ contract EndToEndTest is PrototypeHarness {
         uint256 buyPath = PlanMath.pathTargetValue(p, buy, block.timestamp, b.nav);
         assertGe(_valueOf(a, sell) + 2, sellPath, "RB-7: sell leg not pushed under its path");
         assertLe(_valueOf(a, buy), buyPath + 2, "RB-7: buy leg not pushed over its path");
-        assertLe(_valueOf(b, sell) - _valueOf(a, sell), notional + 2, "sell leg moved at most the notional");
+        assertLe(
+            _valueOf(b, sell) - _valueOf(a, sell),
+            notional + 2,
+            "sell leg moved at most the notional"
+        );
     }
 
     /// @dev RB-4 (step 3e, proposal §5.10): NAV falls by at most maxStepCostBps of notional at the TWAP and at the
     ///      feeds, and the plan books exactly the cost at the feeds: the fall of idle plus the two legs at the feed
     ///      prices (every other asset is unchanged, RB-19), recomputed here from the held amounts (`feedLegs`).
     ///      Returns the cap.
-    function _assertStepCost(Snap memory b, Snap memory a, uint256 notional) private returns (uint256 maxCost) {
+    function _assertStepCost(Snap memory b, Snap memory a, uint256 notional)
+        private
+        returns (uint256 maxCost)
+    {
         maxCost = notional.mulDiv(MAX_STEP_COST_BPS, BPS);
         uint256 cost = b.nav > a.nav ? b.nav - a.nav : 0;
         uint256 feedCost = b.feedLegs > a.feedLegs ? b.feedLegs - a.feedLegs : 0;
         (uint256 bookedFeedCost, uint256 bookedTwapCost) = _lastCostBooked();
         assertEq(bookedTwapCost, cost, "the fund's TWAP cost = the measured TWAP NAV fall");
-        assertEq(bookedFeedCost, feedCost, "the booked cost = the fall at the feeds (idle + both legs)");
+        assertEq(
+            bookedFeedCost, feedCost, "the booked cost = the fall at the feeds (idle + both legs)"
+        );
         assertLe(cost, maxCost, "RB-4: step cost at the TWAP <= cap");
         assertLe(feedCost, maxCost, "RB-4: step cost at the feeds <= cap");
         assertLe(a.nav, b.nav + maxCost, "NAV does not jump on a step");
@@ -734,7 +834,9 @@ contract EndToEndTest is PrototypeHarness {
         bool found;
         for (uint256 i = logs.length; i > 0; --i) {
             Vm.Log memory l = logs[i - 1];
-            if (l.emitter != address(fund) || l.topics[0] != IRobotMoneyFund.StepCostBooked.selector) continue;
+            if (
+                l.emitter != address(fund) || l.topics[0] != IRobotMoneyFund.StepCostBooked.selector
+            ) continue;
             (,, feedCost, twapCost) = abi.decode(l.data, (uint256, uint256, uint256, uint256));
             found = true;
             break;
@@ -757,7 +859,9 @@ contract EndToEndTest is PrototypeHarness {
         vm.expectRevert(IFlowEvents.RedeemOnly.selector);
         queue.withdraw(1e6, alice, alice);
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.UseFlowQueue.selector, address(queue)));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.UseFlowQueue.selector, address(queue))
+        );
         fund.redeem(1e6, alice, alice);
 
         // Seven days of the plan buying wETH moved its pool about 80 bps from the pin's price, which the mock feed
@@ -811,10 +915,20 @@ contract EndToEndTest is PrototypeHarness {
 
         uint256 supply = fund.totalSupply();
         assertEq(fund.balanceOf(who), balBefore - shares, "shares burned");
-        assertGe(net, q.worstAmount.mulDiv(BPS - LIMIT_MARGIN_BPS, BPS), "redeem >= the quote's worst case");
-        assertLe(net, gross.mulDiv(BPS - EXIT_FEE_BPS, BPS) + gross / 1_000, "redeem <= fee-net value (+ interest)");
+        assertGe(
+            net,
+            q.worstAmount.mulDiv(BPS - LIMIT_MARGIN_BPS, BPS),
+            "redeem >= the quote's worst case"
+        );
+        assertLe(
+            net,
+            gross.mulDiv(BPS - EXIT_FEE_BPS, BPS) + gross / 1_000,
+            "redeem <= fee-net value (+ interest)"
+        );
         assertGt(IERC20(USDC).balanceOf(feeRecipient), feeBefore, "exit fee charged");
-        if (supply > SEED_USDC * 1e18) assertGt(fund.convertToAssets(PPS_UNIT), 0, "stayers keep a NAV");
+        if (supply > SEED_USDC * 1e18) {
+            assertGt(fund.convertToAssets(PPS_UNIT), 0, "stayers keep a NAV");
+        }
     }
 
     /// @dev `redeemInKind` pays the pro-rata USDC (idle plus lending) and each basket token, net of the exit fee,
@@ -826,17 +940,20 @@ contract EndToEndTest is PrototypeHarness {
         uint256 gross = fund.convertToAssets(shares);
         uint256 supply = fund.totalSupply();
         uint256 pps = supply > shares ? fund.convertToAssets(PPS_UNIT) : 0;
-        uint256[2] memory tokBefore = [IERC20(WETH).balanceOf(receiver), IERC20(CBBTC).balanceOf(receiver)];
+        uint256[2] memory tokBefore =
+            [IERC20(WETH).balanceOf(receiver), IERC20(CBBTC).balanceOf(receiver)];
         uint256 usdcBefore = IERC20(USDC).balanceOf(receiver);
         uint256 claimsBefore = _claimValue(receiver);
 
         vm.prank(owner);
         fund.redeemInKind(shares, receiver, owner);
 
-        uint256 got = IERC20(USDC).balanceOf(receiver) - usdcBefore + (_claimValue(receiver) - claimsBefore);
+        uint256 got =
+            IERC20(USDC).balanceOf(receiver) - usdcBefore + (_claimValue(receiver) - claimsBefore);
         assertGt(got, 0, "in kind: USDC leg paid or claimed");
         uint256[2] memory idx = [IDX_WETH, IDX_CBBTC];
-        uint256[2] memory tokAfter = [IERC20(WETH).balanceOf(receiver), IERC20(CBBTC).balanceOf(receiver)];
+        uint256[2] memory tokAfter =
+            [IERC20(WETH).balanceOf(receiver), IERC20(CBBTC).balanceOf(receiver)];
         // Each leg's fee is floored in token units, so the receiver can get up to one base unit of each token above
         // the exact fee-net amount. The unit goes from the fee recipient to the receiver.
         uint256 unitDust;
@@ -849,7 +966,9 @@ contract EndToEndTest is PrototypeHarness {
         uint256 expected = gross.mulDiv(BPS - EXIT_FEE_BPS, BPS);
         assertLe(got, expected + unitDust + 10, "in kind <= fee-net share of NAV");
         assertGe(got + expected.mulDiv(1, BPS) + 10, expected, "in kind ~= fee-net share of NAV");
-        if (pps != 0) assertGe(fund.convertToAssets(PPS_UNIT) + 1, pps, "stayers' NAV/share not lowered");
+        if (pps != 0) {
+            assertGe(fund.convertToAssets(PPS_UNIT) + 1, pps, "stayers' NAV/share not lowered");
+        }
     }
 
     /// @dev USDC value today of every lending position claim `who` holds (E9).
@@ -866,15 +985,19 @@ contract EndToEndTest is PrototypeHarness {
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
     /// @dev Check 10 restated from outside: every held amount per share is at least what it was.
-    function _assertPerShareNotLower(uint256 idle0, uint256[] memory held0, uint256 supply0, string memory label)
-        private
-        view
-    {
+    function _assertPerShareNotLower(
+        uint256 idle0,
+        uint256[] memory held0,
+        uint256 supply0,
+        string memory label
+    ) private view {
         (uint256 idle1, uint256[] memory held1) = fund.heldBalances();
         uint256 supply1 = fund.totalSupply();
         assertGe(idle1 * supply0, idle0 * supply1, string.concat(label, ": idle per share"));
         for (uint256 i; i < held0.length; ++i) {
-            assertGe(held1[i] * supply0, held0[i] * supply1, string.concat(label, ": asset per share"));
+            assertGe(
+                held1[i] * supply0, held0[i] * supply1, string.concat(label, ": asset per share")
+            );
         }
     }
 

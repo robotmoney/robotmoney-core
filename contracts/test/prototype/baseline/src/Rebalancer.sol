@@ -64,7 +64,12 @@ import {IRebalancer} from "./interfaces/IRebalancer.sol";
 ///           backoff by sending too little gas.
 ///
 ///         Runs behind its own ERC-1967 proxy (`GovernedUUPS`). `fund` is set once at initialize.
-contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, GovernedUUPS, IRebalancer {
+contract Rebalancer is
+    AdminFloorAccessControl,
+    ReentrancyGuardUpgradeable,
+    GovernedUUPS,
+    IRebalancer
+{
     // ─── Roles ───────────────────────────────────────────────────────────────
 
     /// @notice Sets step parameters and administers KEEPER_ROLE. Held by the timelock.
@@ -175,7 +180,15 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
         try f.executeStep(order) returns (StepResult memory r) {
             (uint256 sellPath, uint256 buyPath) = _legPathBps(p, d.sellIndex, d.buyIndex);
             emit RebalanceStep(
-                p.id, d.sellIndex, d.buyIndex, d.notional, r.amountIn, r.amountOut, r.cost, sellPath, buyPath
+                p.id,
+                d.sellIndex,
+                d.buyIndex,
+                d.notional,
+                r.amountIn,
+                r.amountOut,
+                r.cost,
+                sellPath,
+                buyPath
             );
             return (true, SkipReason.None);
         } catch (bytes memory err) {
@@ -186,7 +199,9 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
             if (err.length >= 4) selector = uint256(uint32(bytes4(err)));
             _backoff(f, d.sellIndex);
             _backoff(f, d.buyIndex);
-            emit RebalanceStepSkipped(p.id, SkipReason.StepFailed, d.sellIndex, d.buyIndex, selector);
+            emit RebalanceStepSkipped(
+                p.id, SkipReason.StepFailed, d.sellIndex, d.buyIndex, selector
+            );
             return (false, SkipReason.StepFailed);
         }
     }
@@ -204,7 +219,11 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
     ///      Lending sell: notional × (1 − slip). Idle sell: 0.
     ///      Basket buy: TWAP token amount for `notional`, × (1 − slip). Lending or idle buy: 0.
     ///      Cost cap (§5.3 step 7, RB-4): notional × maxStepCostBps / 10 000.
-    function _buildOrder(IRobotMoneyFund f, Decision memory d) internal view returns (StepOrder memory o) {
+    function _buildOrder(IRobotMoneyFund f, Decision memory d)
+        internal
+        view
+        returns (StepOrder memory o)
+    {
         o.sellIndex = d.sellIndex;
         o.buyIndex = d.buyIndex;
         o.notionalUsdc = d.notional;
@@ -212,7 +231,8 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
         if (d.sellIndex != IDLE_INDEX) {
             uint256 keep = BPS - _slip(d.sellIndex, ceiling);
             if (f.assetConfig(d.sellIndex).kind == AssetKind.Basket) {
-                uint256 quote = f.assetUsdcValue(d.sellIndex, f.assetTokenValue(d.sellIndex, d.notional));
+                uint256 quote =
+                    f.assetUsdcValue(d.sellIndex, f.assetTokenValue(d.sellIndex, d.notional));
                 o.minSellUsdcOut = Math.mulDiv(quote, keep, BPS);
             } else {
                 o.minSellUsdcOut = Math.mulDiv(d.notional, keep, BPS);
@@ -276,7 +296,10 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
         (uint256 nav, uint256 idle, uint256[] memory values) = f.portfolioValues();
 
         // §5.5: after the path ends, stop once every holding sits inside toleranceBps of its end.
-        if (block.timestamp >= p.endTime && PlanMath.withinTolerance(values, idle, nav, p.endBps, sp.toleranceBps)) {
+        if (
+            block.timestamp >= p.endTime
+                && PlanMath.withinTolerance(values, idle, nav, p.endBps, sp.toleranceBps)
+        ) {
             d.reason = SkipReason.Concluded;
             d.conclude = PlanStatus.Converged;
             return d;
@@ -287,7 +310,8 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
         (bool[] memory eligible, uint256 oraFail, uint256 backoffLeft) = _eligible(f, values.length);
 
         // 3. Legs: most over vs most under pathTarget(now), at TWAP (RB-7 sizing below).
-        PlanMath.Legs memory legs = PlanMath.pickLegs(values, idle, nav, p, block.timestamp, eligible);
+        PlanMath.Legs memory legs =
+            PlanMath.pickLegs(values, idle, nav, p, block.timestamp, eligible);
         if (legs.over == 0 || legs.under == 0) {
             if (oraFail != IDLE_INDEX) {
                 d.reason = SkipReason.MarketDeviation;
@@ -305,8 +329,12 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
 
         // 4. Size: min(over, under, maxStepUsdc of each non-idle leg). Never past path (RB-7).
         uint256 notional = Math.min(legs.over, legs.under);
-        if (legs.sellIndex != IDLE_INDEX) notional = Math.min(notional, _assetStepParams[legs.sellIndex].maxStepUsdc);
-        if (legs.buyIndex != IDLE_INDEX) notional = Math.min(notional, _assetStepParams[legs.buyIndex].maxStepUsdc);
+        if (legs.sellIndex != IDLE_INDEX) {
+            notional = Math.min(notional, _assetStepParams[legs.sellIndex].maxStepUsdc);
+        }
+        if (legs.buyIndex != IDLE_INDEX) {
+            notional = Math.min(notional, _assetStepParams[legs.buyIndex].maxStepUsdc);
+        }
         d.notional = notional;
         if (notional < sp.minStepUsdc) {
             d.reason = SkipReason.BelowMinStep;
@@ -381,7 +409,9 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
             PlanPreviewRow memory r = rows[i];
             r.currentBps = PlanMath.weightBps(values[i], nav);
             r.targetBps = targets[i];
-            uint256 diff = r.targetBps > r.currentBps ? r.targetBps - r.currentBps : r.currentBps - r.targetBps;
+            uint256 diff = r.targetBps > r.currentBps
+                ? r.targetBps - r.currentBps
+                : r.currentBps - r.targetBps;
             r.turnoverUsdc = Math.mulDiv(nav, diff, BPS);
             r.estCostUsdc = Math.mulDiv(r.turnoverUsdc, f.poolFeeBps(i), BPS);
             if (r.targetBps > r.currentBps) totalTurnover += r.turnoverUsdc;
@@ -453,7 +483,9 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
         uint256 n = f.assetCount();
         for (uint256 i; i < n; ++i) {
             uint256 cap = _assetStepParams[i].maxStepUsdc;
-            if (cap != 0 && cap < params.minStepUsdc) revert MaxStepBelowMinStep(i, cap, params.minStepUsdc);
+            if (cap != 0 && cap < params.minStepUsdc) {
+                revert MaxStepBelowMinStep(i, cap, params.minStepUsdc);
+            }
         }
         _stepParams = params;
         emit StepParamsSet(params);
@@ -488,12 +520,17 @@ contract Rebalancer is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gove
     ///      `fund.navDeviationGuardBps()` must also exceed that fee (`BoundAtOrBelowPoolFee`);
     ///      `maxStepUsdc ≥ minStepUsdc` (`MaxStepBelowMinStep`: a cap below the dust floor would make
     ///      every step on this asset skip `BelowMinStep` and, as the most-deviating asset, stall the plan).
-    function setAssetStepParams(uint256 index, AssetStepParams calldata params) external onlyRole(ADMIN_ROLE) {
+    function setAssetStepParams(uint256 index, AssetStepParams calldata params)
+        external
+        onlyRole(ADMIN_ROLE)
+    {
         IRobotMoneyFund f = _fund;
         if (index >= f.assetCount()) revert InvalidAssetIndex(index);
         if (params.maxStepUsdc != 0) {
             uint256 minStep = _stepParams.minStepUsdc;
-            if (params.maxStepUsdc < minStep) revert MaxStepBelowMinStep(index, params.maxStepUsdc, minStep);
+            if (params.maxStepUsdc < minStep) {
+                revert MaxStepBelowMinStep(index, params.maxStepUsdc, minStep);
+            }
             if (params.maxStepSlippageBps > f.maxSlippageBps()) revert StepParamOutOfBounds();
             if (f.assetConfig(index).kind == AssetKind.Basket) {
                 uint256 fee = f.poolFeeBps(index);

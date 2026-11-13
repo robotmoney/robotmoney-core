@@ -9,8 +9,9 @@ import {Vm} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {ReentrancyGuardUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {IBasketSwapAdapter} from "../../interfaces/IBasketSwapAdapter.sol";
 
 import {PrototypeHarness, IHarnessSwapRouter02, IHarnessV3Pool} from "./PrototypeHarness.sol";
@@ -53,7 +54,14 @@ contract Step3eHostileSwapAdapter {
     address public immutable REENTER_FUND;
     uint256 public immutable REENTER_SHARES;
 
-    constructor(address router, address real, address giftToken, uint256 gift, address reenterFund, uint256 shares) {
+    constructor(
+        address router,
+        address real,
+        address giftToken,
+        uint256 gift,
+        address reenterFund,
+        uint256 shares
+    ) {
         ROUTER_ = router;
         REAL = real;
         GIFT_TOKEN = giftToken;
@@ -73,9 +81,12 @@ contract Step3eHostileSwapAdapter {
     ) external returns (uint256 amountOut) {
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         IERC20(tokenIn).forceApprove(ROUTER_, amountIn);
-        amountOut = IHarnessSwapRouter02(ROUTER_).exactInputSingle(
-            IHarnessSwapRouter02.ExactInputSingleParams(tokenIn, tokenOut, fee, recipient, amountIn, minAmountOut, 0)
-        );
+        amountOut = IHarnessSwapRouter02(ROUTER_)
+            .exactInputSingle(
+                IHarnessSwapRouter02.ExactInputSingleParams(
+                    tokenIn, tokenOut, fee, recipient, amountIn, minAmountOut, 0
+                )
+            );
         IERC20(tokenIn).forceApprove(ROUTER_, 0);
         if (GIFT != 0) IERC20(GIFT_TOKEN).safeTransfer(recipient, GIFT);
         if (REENTER_FUND != address(0)) {
@@ -264,7 +275,10 @@ contract Step3eTest is PrototypeHarness {
             assertEq(uint8(r), uint8(SkipReason.None), "a step is ready");
             assertEq(o.sellIndex, IDX_WETH, "sells wETH");
             uint256 amt = fund.assetTokenValue(IDX_WETH, o.notionalUsdc);
-            uint256 hi = Math.max(fund.assetUsdcValue(IDX_WETH, amt), amt.mulDiv(_feedPx(IDX_WETH), 1e18, Math.Rounding.Ceil));
+            uint256 hi = Math.max(
+                fund.assetUsdcValue(IDX_WETH, amt),
+                amt.mulDiv(_feedPx(IDX_WETH), 1e18, Math.Rounding.Ceil)
+            );
             uint256 expected = hi.mulDiv(BPS - slip, BPS, Math.Rounding.Ceil);
             assertEq(o.minSellUsdcOut, expected, "floor = amt at the higher price x (1 - slip)");
             uint256 step3c = fund.assetUsdcValue(IDX_WETH, amt).mulDiv(BPS - slip, BPS);
@@ -279,7 +293,10 @@ contract Step3eTest is PrototypeHarness {
     ///         feed x (1 - 50 bps), about the pool price less 5 bps, which the 5 bps pool fee alone denies. The step
     ///         fails inside the swap and trades nothing, where the step 3c TWAP-only floor (pool less 50 bps) would
     ///         have let it sell 45 bps under the outside price.
-    function test_3e_limit_saleBelowTheFeedRefused_whereTheTwapFloorWouldPass() public fixtureCovered {
+    function test_3e_limit_saleBelowTheFeedRefused_whereTheTwapFloorWouldPass()
+        public
+        fixtureCovered
+    {
         _sellWethReady();
         _setFeedOffsetBps(IDX_WETH, 45);
         (SkipReason r, StepOrder memory o) = rebalancer.previewOrder();
@@ -341,8 +358,14 @@ contract Step3eTest is PrototypeHarness {
         o.maxCostUsdc = o.notionalUsdc.mulDiv(30, BPS);
         uint256 snap = vm.snapshotState();
         // What the fund would book without the cap: run it with the global ceiling, read the event, roll back.
-        StepOrder memory loose =
-            StepOrder(o.sellIndex, o.buyIndex, o.notionalUsdc, o.minSellUsdcOut, 0, o.notionalUsdc.mulDiv(500, BPS));
+        StepOrder memory loose = StepOrder(
+            o.sellIndex,
+            o.buyIndex,
+            o.notionalUsdc,
+            o.minSellUsdcOut,
+            0,
+            o.notionalUsdc.mulDiv(500, BPS)
+        );
         vm.recordLogs();
         vm.prank(address(rebalancer));
         fund.executeStep(loose);
@@ -351,7 +374,11 @@ contract Step3eTest is PrototypeHarness {
         assertGt(feedCost, o.maxCostUsdc, "the feed cost is above 30 bps");
         assertLt(twapCost, o.maxCostUsdc, "the TWAP cost is below it");
         vm.prank(address(rebalancer));
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.StepCostExceeded.selector, feedCost, o.maxCostUsdc));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRobotMoneyFund.StepCostExceeded.selector, feedCost, o.maxCostUsdc
+            )
+        );
         fund.executeStep(o);
     }
 
@@ -363,7 +390,9 @@ contract Step3eTest is PrototypeHarness {
     ///         step changed only its two legs (sell down, buy up) and idle, and never the supply.
     function test_RB19_everyExecutedStep_changesOnlyItsLegsAndIdle() public fixtureCovered {
         _investAtEnd(assetVec(2_500, 2_500, 2_500, 2_500, 0));
-        setTargetViaTimelock(assetVec(4_000, 1_000, 1_000, 4_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        setTargetViaTimelock(
+            assetVec(4_000, 1_000, 1_000, 4_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
         vm.warp(fund.plan().endTime);
         uint256 executed;
         for (uint256 k; k < 12 && fund.planStatus() == PlanStatus.Open; ++k) {
@@ -379,9 +408,13 @@ contract Step3eTest is PrototypeHarness {
             (, uint256[] memory h1) = fund.heldBalances();
             assertEq(fund.totalSupply(), supply0, "RB-19: supply unchanged");
             for (uint256 i; i < h0.length; ++i) {
-                if (i == o.sellIndex) assertLe(h1[i], h0[i], "RB-19: the sell leg did not grow");
-                else if (i == o.buyIndex) assertGe(h1[i], h0[i], "RB-19: the buy leg did not shrink");
-                else assertEq(h1[i], h0[i], "RB-19: every other asset unchanged");
+                if (i == o.sellIndex) {
+                    assertLe(h1[i], h0[i], "RB-19: the sell leg did not grow");
+                } else if (i == o.buyIndex) {
+                    assertGe(h1[i], h0[i], "RB-19: the buy leg did not shrink");
+                } else {
+                    assertEq(h1[i], h0[i], "RB-19: every other asset unchanged");
+                }
             }
         }
         assertGt(executed, 1, "several steps ran");
@@ -391,7 +424,9 @@ contract Step3eTest is PrototypeHarness {
     ///         during a wETH purchase): the fund refuses the step (`StepBalanceChanged` on cbBTC) and nothing moves.
     function test_RB19_balanceCheck_refusesAStepThatMovesAThirdAsset() public fixtureCovered {
         _investAtEnd(assetVec(2_500, 2_500, 2_500, 2_500, 0));
-        setTargetViaTimelock(assetVec(1_500, 2_000, 4_000, 2_500, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        setTargetViaTimelock(
+            assetVec(1_500, 2_000, 4_000, 2_500, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
         vm.warp(fund.plan().endTime);
         vm.warp(block.timestamp + rebalancer.effectiveStepInterval());
         _freshFeeds();
@@ -408,7 +443,10 @@ contract Step3eTest is PrototypeHarness {
         vm.prank(address(rebalancer));
         vm.expectRevert(
             abi.encodeWithSelector(
-                IRobotMoneyFund.StepBalanceChanged.selector, IDX_CBBTC, held0[IDX_CBBTC], held0[IDX_CBBTC] + gift
+                IRobotMoneyFund.StepBalanceChanged.selector,
+                IDX_CBBTC,
+                held0[IDX_CBBTC],
+                held0[IDX_CBBTC] + gift
             )
         );
         fund.executeStep(o);
@@ -462,13 +500,19 @@ contract Step3eTest is PrototypeHarness {
         (bool did, SkipReason why) = rebalancer.step();
         assertFalse(did, "no trade");
         assertEq(uint8(why), uint8(SkipReason.StepFailed), "the floor refused the pushed pool");
-        assertEq(rebalancer.assetBackoffUntil(IDX_WETH), 0, "a stranger's failure backs nothing off");
+        assertEq(
+            rebalancer.assetBackoffUntil(IDX_WETH), 0, "a stranger's failure backs nothing off"
+        );
         (SkipReason next,,,) = rebalancer.previewStep();
         assertEq(uint8(next), uint8(SkipReason.None), "wETH stays eligible");
 
         (did, why) = keeperStep();
         assertFalse(did, "the keeper's call fails too");
-        assertGt(rebalancer.assetBackoffUntil(IDX_WETH), block.timestamp, "the keeper's failure backs wETH off");
+        assertGt(
+            rebalancer.assetBackoffUntil(IDX_WETH),
+            block.timestamp,
+            "the keeper's failure backs wETH off"
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -507,7 +551,8 @@ contract Step3eTest is PrototypeHarness {
     ///         Pushes 30, 45 and 10 bps inside the band in force (`refBandBps` − 10: +80 at the default 90).
     function test_A20_keeperSandwichAfterATwapDrag_purchase() public fixtureCovered {
         _buyWethReady();
-        int256[3] memory pushes = [int256(30), int256(45), int256(uint256(queue.flowParams().refBandBps)) - 10];
+        int256[3] memory pushes =
+            [int256(30), int256(45), int256(uint256(queue.flowParams().refBandBps)) - 10];
         Pnl memory best;
         best.attackerNet = type(int256).min;
         uint256 honest = _honestLoss();
@@ -525,9 +570,13 @@ contract Step3eTest is PrototypeHarness {
             (bool did,) = keeperStep();
             _sellExact(attacker, WETH_POOL, WETH, USDC, bought);
             Pnl memory r = _pnl(v0, nav0, honest, spent, did);
-            string memory label = string.concat("A20 TWAP drag then sandwich, push +", vm.toString(pushes[k]), " bps");
+            string memory label = string.concat(
+                "A20 TWAP drag then sandwich, push +", vm.toString(pushes[k]), " bps"
+            );
             emit log_named_uint(string.concat(label, ": preview reason"), uint8(pr));
-            emit log_named_uint(string.concat(label, ": TWAP vs feed (bps)"), _twapVsFeedBps(IDX_WETH));
+            emit log_named_uint(
+                string.concat(label, ": TWAP vs feed (bps)"), _twapVsFeedBps(IDX_WETH)
+            );
             if (pr == SkipReason.None) {
                 uint256 slip = rebalancer.assetStepParams(IDX_WETH).maxStepSlippageBps;
                 emit log_named_uint(string.concat(label, ": step 3e minBuyOut (wei)"), o.minBuyOut);
@@ -552,13 +601,23 @@ contract Step3eTest is PrototypeHarness {
     ///         (zero-mean noise at the sim's thresholds). The plan buys 80 % basket from idle over one day. Does the
     ///         booking at the feeds (floored at 0 per step) halt it?
     function test_A20_noiseHalt_alternatingLagAtTheFeedThresholds() public fixtureCovered {
-        _noiseRun(ETH_FEED_DEV_BPS, CBBTC_FEED_DEV_BPS, false, "A20 noise, alternating lag at the feed thresholds");
+        _noiseRun(
+            ETH_FEED_DEV_BPS,
+            CBBTC_FEED_DEV_BPS,
+            false,
+            "A20 noise, alternating lag at the feed thresholds"
+        );
     }
 
     /// @notice The keeper steps only when each traded feed lags against the fund (below the pool for a purchase,
     ///         above for a sale) by its deviation threshold: the most a keeper's timing books with live feeds.
     function test_A20_noiseHalt_keeperTimesAdverseLag_atTheFeedThresholds() public fixtureCovered {
-        _noiseRun(ETH_FEED_DEV_BPS, CBBTC_FEED_DEV_BPS, true, "A20 noise, keeper times adverse lag at the thresholds");
+        _noiseRun(
+            ETH_FEED_DEV_BPS,
+            CBBTC_FEED_DEV_BPS,
+            true,
+            "A20 noise, keeper times adverse lag at the thresholds"
+        );
     }
 
     /// @notice The same at a 40 bps lag (inside `refBandBps`, and the most a purchase can book and still meet its
@@ -577,7 +636,9 @@ contract Step3eTest is PrototypeHarness {
     ///         margin the scaffold's gas-starvation test asserts (Adversarial.t.sol).
     function test_3e_stepGas_underTheFloor() public fixtureCovered {
         _investAtEnd(assetVec(2_500, 2_500, 2_500, 2_500, 0));
-        setTargetViaTimelock(assetVec(2_500, 2_500, 0, 5_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        setTargetViaTimelock(
+            assetVec(2_500, 2_500, 0, 5_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
         vm.warp(fund.plan().endTime + rebalancer.effectiveStepInterval());
         _freshFeeds();
         (SkipReason r, StepOrder memory o) = rebalancer.previewOrder();
@@ -609,7 +670,9 @@ contract Step3eTest is PrototypeHarness {
     /// @dev The seed (100,000 USDC) is idle. A 1-day plan to (aave 15 %, moonwell 15 %, wETH 50 %, cbBTC 20 %); warp to
     ///      its end; fresh feeds. The next step buys 50,000 USDC of wETH with idle USDC.
     function _buyWethReady() internal returns (uint256 planId) {
-        planId = setTargetViaTimelock(assetVec(1_500, 1_500, 5_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        planId = setTargetViaTimelock(
+            assetVec(1_500, 1_500, 5_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
         vm.warp(fund.plan().endTime);
         _freshFeeds();
         (SkipReason r, uint256 s, uint256 b,) = rebalancer.previewStep();
@@ -622,7 +685,9 @@ contract Step3eTest is PrototypeHarness {
     ///      cbBTC 20 %): the next step sells wETH into Aave.
     function _sellWethReady() internal {
         _investAtEnd(assetVec(2_500, 2_500, 5_000, 0, 0));
-        setTargetViaTimelock(assetVec(5_000, 3_000, 0, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        setTargetViaTimelock(
+            assetVec(5_000, 3_000, 0, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
         vm.warp(fund.plan().endTime + rebalancer.effectiveStepInterval());
         _freshFeeds();
         (SkipReason r, uint256 s,,) = rebalancer.previewStep();
@@ -654,7 +719,8 @@ contract Step3eTest is PrototypeHarness {
     function _setFeedOffsetBps(uint256 index, int256 bps) internal {
         (address pool, address token) = index == IDX_WETH ? (WETH_POOL, WETH) : (CBBTC_POOL, CBBTC);
         uint256 p = poolPrice8(pool, token);
-        uint256 f = bps >= 0 ? p.mulDiv(BPS + uint256(bps), BPS) : p.mulDiv(BPS - uint256(-bps), BPS);
+        uint256 f =
+            bps >= 0 ? p.mulDiv(BPS + uint256(bps), BPS) : p.mulDiv(BPS - uint256(-bps), BPS);
         setFeedPrice(index, f);
     }
 
@@ -695,7 +761,9 @@ contract Step3eTest is PrototypeHarness {
         vm.expectEmit(true, false, false, true, address(rebalancer));
         emit Rebalancer.StepFeedBlocked(planId, check, index, detail);
         vm.expectEmit(true, false, false, true, address(rebalancer));
-        emit IFundEvents.RebalanceStepSkipped(planId, SkipReason.FeedCheck, IDLE_INDEX, IDLE_INDEX, uint256(check));
+        emit IFundEvents.RebalanceStepSkipped(
+            planId, SkipReason.FeedCheck, IDLE_INDEX, IDLE_INDEX, uint256(check)
+        );
         (bool did, SkipReason why) = keeperStep();
         assertFalse(did, "no trade");
         assertEq(uint8(why), uint8(SkipReason.FeedCheck), "FeedCheck");
@@ -711,20 +779,28 @@ contract Step3eTest is PrototypeHarness {
 
     /// @dev Defence in depth: the fund refuses the step itself, whatever the order.
     function _assertFundRefusesFeed(StepFeedCheck check, uint256 index, uint256 detail) internal {
-        StepOrder memory o = StepOrder(IDLE_INDEX, IDX_WETH, 10_000e6, 0, 0, 10_000e6 * MAX_STEP_COST_BPS / BPS);
-        bytes memory want = abi.encodeWithSelector(IRobotMoneyFund.StepFeedCheckFailed.selector, check, index, detail);
+        StepOrder memory o =
+            StepOrder(IDLE_INDEX, IDX_WETH, 10_000e6, 0, 0, 10_000e6 * MAX_STEP_COST_BPS / BPS);
+        bytes memory want = abi.encodeWithSelector(
+            IRobotMoneyFund.StepFeedCheckFailed.selector, check, index, detail
+        );
         vm.prank(address(rebalancer));
         vm.expectRevert(want);
         fund.executeStep(o);
     }
 
     /// @dev The last `StepCostBooked` the fund emitted in the recorded logs.
-    function _lastCostBooked() internal returns (uint256 fb, uint256 fa, uint256 feedCost, uint256 twapCost) {
+    function _lastCostBooked()
+        internal
+        returns (uint256 fb, uint256 fa, uint256 feedCost, uint256 twapCost)
+    {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bool found;
         for (uint256 i = logs.length; i > 0; --i) {
             Vm.Log memory l = logs[i - 1];
-            if (l.emitter != address(fund) || l.topics[0] != IRobotMoneyFund.StepCostBooked.selector) continue;
+            if (
+                l.emitter != address(fund) || l.topics[0] != IRobotMoneyFund.StepCostBooked.selector
+            ) continue;
             (fb, fa, feedCost, twapCost) = abi.decode(l.data, (uint256, uint256, uint256, uint256));
             found = true;
             break;
@@ -751,7 +827,8 @@ contract Step3eTest is PrototypeHarness {
     /// @dev The honest step from this state (a snapshot), then each push size from the same state.
     function _sandwich(bool purchase, string memory id) internal {
         uint256 honest = _honestLoss();
-        int256[6] memory pushes = [int256(10), int256(20), int256(30), int256(40), int256(45), int256(60)];
+        int256[6] memory pushes =
+            [int256(10), int256(20), int256(30), int256(40), int256(45), int256(60)];
         Pnl memory best;
         best.attackerNet = type(int256).min;
         for (uint256 k; k < pushes.length; ++k) {
@@ -812,7 +889,10 @@ contract Step3eTest is PrototypeHarness {
         emit log_named_uint("  flash borrowed", r.borrowed);
         emit log_named_uint("  holders' loss at reference prices", r.holdersLoss);
         emit log_named_uint("  holders' loss beyond the honest step", r.extraLoss);
-        emit log_named_uint("  holders' loss beyond the honest step, bps of NAV x100", r.extraLoss * BPS * 100 / r.navRef);
+        emit log_named_uint(
+            "  holders' loss beyond the honest step, bps of NAV x100",
+            r.extraLoss * BPS * 100 / r.navRef
+        );
         emit log_named_uint("  NAV at reference prices", r.navRef);
         emit log_named_string(
             "G8",
@@ -895,11 +975,12 @@ contract Step3eTest is PrototypeHarness {
         uint256 outBefore = IERC20(tokenOut).balanceOf(who);
         vm.startPrank(who);
         IERC20(tokenIn).approve(ROUTER, inBefore);
-        IHarnessSwapRouter02(ROUTER).exactInputSingle(
-            IHarnessSwapRouter02.ExactInputSingleParams(
-                tokenIn, tokenOut, IHarnessV3Pool(pool).fee(), who, inBefore, 0, target
-            )
-        );
+        IHarnessSwapRouter02(ROUTER)
+            .exactInputSingle(
+                IHarnessSwapRouter02.ExactInputSingleParams(
+                    tokenIn, tokenOut, IHarnessV3Pool(pool).fee(), who, inBefore, 0, target
+                )
+            );
         IERC20(tokenIn).approve(ROUTER, 0);
         vm.stopPrank();
         spent = inBefore - IERC20(tokenIn).balanceOf(who);
@@ -918,18 +999,22 @@ contract Step3eTest is PrototypeHarness {
     }
 
     /// @dev `who` sells exactly `amountIn` of `tokenIn` for `tokenOut` at `pool` (the unwind of a push).
-    function _sellExact(address who, address pool, address tokenIn, address tokenOut, uint256 amountIn)
-        internal
-        returns (uint256 got)
-    {
+    function _sellExact(
+        address who,
+        address pool,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn
+    ) internal returns (uint256 got) {
         if (amountIn == 0) return 0;
         vm.startPrank(who);
         IERC20(tokenIn).approve(ROUTER, amountIn);
-        got = IHarnessSwapRouter02(ROUTER).exactInputSingle(
-            IHarnessSwapRouter02.ExactInputSingleParams(
-                tokenIn, tokenOut, IHarnessV3Pool(pool).fee(), who, amountIn, 0, 0
-            )
-        );
+        got = IHarnessSwapRouter02(ROUTER)
+            .exactInputSingle(
+                IHarnessSwapRouter02.ExactInputSingleParams(
+                    tokenIn, tokenOut, IHarnessV3Pool(pool).fee(), who, amountIn, 0, 0
+                )
+            );
         vm.stopPrank();
     }
 
@@ -957,13 +1042,17 @@ contract Step3eTest is PrototypeHarness {
     ///      above for a sale; `adverse` true). Logs the plan's booked cost against its budget and turnover, the TWAP
     ///      cost and the signed cost at the feeds (what a booking that nets gains against losses would hold).
     function _noiseRun(uint256 devWeth, uint256 devCbbtc, bool adverse, string memory id) internal {
-        setTargetViaTimelock(assetVec(1_000, 1_000, 4_000, 4_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        setTargetViaTimelock(
+            assetVec(1_000, 1_000, 4_000, 4_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
         Noise memory z;
         while (z.calls < 160 && fund.planStatus() == PlanStatus.Open) {
             vm.warp(block.timestamp + rebalancer.effectiveStepInterval());
             _freshFeeds();
             (SkipReason pr, StepOrder memory o) = rebalancer.previewOrder();
-            int256 sw = adverse ? _adverseSign(o, IDX_WETH, pr) : (z.calls % 2 == 0 ? int256(1) : int256(-1));
+            int256 sw = adverse
+                ? _adverseSign(o, IDX_WETH, pr)
+                : (z.calls % 2 == 0 ? int256(1) : int256(-1));
             int256 sc = adverse ? _adverseSign(o, IDX_CBBTC, pr) : sw;
             if (sw != 0) _setFeedOffsetBps(IDX_WETH, sw * int256(devWeth));
             if (sc != 0) _setFeedOffsetBps(IDX_CBBTC, sc * int256(devCbbtc));
@@ -983,7 +1072,9 @@ contract Step3eTest is PrototypeHarness {
             } else if (why == SkipReason.FeedCheck) {
                 ++z.feedSkips;
             }
-            if (fund.planStatus() == PlanStatus.Halted && z.haltedAtCall == 0) z.haltedAtCall = z.calls;
+            if (fund.planStatus() == PlanStatus.Halted && z.haltedAtCall == 0) {
+                z.haltedAtCall = z.calls;
+            }
             if (z.calls % 16 == 0) coverageCheckpoint();
         }
         _noiseReport(id, z);
@@ -1010,7 +1101,11 @@ contract Step3eTest is PrototypeHarness {
 
     /// @dev The sign of the feed lag that books the most cost on basket asset `i` for order `o`: below the pool when
     ///      the step buys `i`, above when it sells `i`, none otherwise.
-    function _adverseSign(StepOrder memory o, uint256 i, SkipReason pr) internal pure returns (int256) {
+    function _adverseSign(StepOrder memory o, uint256 i, SkipReason pr)
+        internal
+        pure
+        returns (int256)
+    {
         if (pr != SkipReason.None) return 0;
         if (o.buyIndex == i) return -1;
         if (o.sellIndex == i) return 1;
@@ -1020,7 +1115,9 @@ contract Step3eTest is PrototypeHarness {
     function _noiseReport(string memory id, Noise memory z) internal {
         uint256 turnover = fund.plan().turnoverUsdc;
         emit log_named_string("noise run", id);
-        emit log_named_uint("  plan status (1 Open, 2 Converged, 3 Halted, 6 Expired)", uint8(fund.planStatus()));
+        emit log_named_uint(
+            "  plan status (1 Open, 2 Converged, 3 Halted, 6 Expired)", uint8(fund.planStatus())
+        );
         emit log_named_uint("  halted at keeper call (0 = never)", z.haltedAtCall);
         emit log_named_uint("  keeper calls", z.calls);
         emit log_named_uint("  steps executed", z.executed);
@@ -1033,7 +1130,10 @@ contract Step3eTest is PrototypeHarness {
         emit log_named_uint("  TWAP cost sum (step 3c booking)", z.twapCost);
         emit log_named_uint("  TWAP cost, bps of turnover x100", z.twapCost * BPS * 100 / turnover);
         emit log_named_int("  signed cost at the feeds (gains net losses)", z.signedFeed);
-        emit log_named_int("  signed cost, bps of turnover x100", z.signedFeed * int256(BPS) * 100 / int256(turnover));
+        emit log_named_int(
+            "  signed cost, bps of turnover x100",
+            z.signedFeed * int256(BPS) * 100 / int256(turnover)
+        );
         emit log_named_uint("  largest booked step", z.maxStepBooked);
     }
 }
@@ -1047,7 +1147,9 @@ contract Step3eNoQueueTest is PrototypeHarness {
     }
 
     function test_RB19_feedCheck_noQueueBound_failsClosed() public fixtureCovered {
-        setTargetViaTimelock(assetVec(1_500, 1_500, 5_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        setTargetViaTimelock(
+            assetVec(1_500, 1_500, 5_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
         vm.warp(fund.plan().endTime);
         refreshFeeds();
         (SkipReason pr,,,) = rebalancer.previewStep();
@@ -1055,10 +1157,13 @@ contract Step3eNoQueueTest is PrototypeHarness {
         (bool did, SkipReason why) = keeperStep();
         assertFalse(did, "no trade");
         assertEq(uint8(why), uint8(SkipReason.FeedCheck), "FeedCheck");
-        StepOrder memory o = StepOrder(IDLE_INDEX, IDX_WETH, 10_000e6, 0, 0, 10_000e6 * MAX_STEP_COST_BPS / BPS);
+        StepOrder memory o =
+            StepOrder(IDLE_INDEX, IDX_WETH, 10_000e6, 0, 0, 10_000e6 * MAX_STEP_COST_BPS / BPS);
         vm.prank(address(rebalancer));
         vm.expectRevert(
-            abi.encodeWithSelector(IRobotMoneyFund.StepFeedCheckFailed.selector, StepFeedCheck.NoQueue, IDLE_INDEX, 0)
+            abi.encodeWithSelector(
+                IRobotMoneyFund.StepFeedCheckFailed.selector, StepFeedCheck.NoQueue, IDLE_INDEX, 0
+            )
         );
         fund.executeStep(o);
     }

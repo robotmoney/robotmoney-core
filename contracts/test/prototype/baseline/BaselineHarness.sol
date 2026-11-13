@@ -246,7 +246,8 @@ abstract contract BaselineHarness is BaseFixture {
             _proxy(
                 impl,
                 abi.encodeCall(
-                    RobotMoneyFund.initialize, (p, address(timelock), GovernedUUPS.UpgradeMode.Upgradeable)
+                    RobotMoneyFund.initialize,
+                    (p, address(timelock), GovernedUUPS.UpgradeMode.Upgradeable)
                 )
             )
         );
@@ -273,10 +274,14 @@ abstract contract BaselineHarness is BaseFixture {
         assertEq(fund.addAsset(_lending(address(cometAdapter))), IDX_COMET, "comet index");
         assertEq(fund.addAsset(_lending(address(moonwellAdapter))), IDX_MOONWELL, "moonwell index");
         address basketAdapter = _basketAdapter(address(swapAdapter));
-        if (basketAdapter != address(swapAdapter)) fund.setAdapterCodeHashAllowed(basketAdapter.codehash, true);
+        if (basketAdapter != address(swapAdapter)) {
+            fund.setAdapterCodeHashAllowed(basketAdapter.codehash, true);
+        }
         assertEq(fund.addAsset(_basket(WETH, WETH_POOL, basketAdapter)), IDX_WETH, "weth index");
         assertEq(fund.addAsset(_basket(CBBTC, CBBTC_POOL, basketAdapter)), IDX_CBBTC, "cbbtc index");
-        assertEq(fund.addAsset(_basket(DESPXA, DESPXA_POOL, basketAdapter)), IDX_DESPXA, "despxa index");
+        assertEq(
+            fund.addAsset(_basket(DESPXA, DESPXA_POOL, basketAdapter)), IDX_DESPXA, "despxa index"
+        );
     }
 
     /// @dev The swap adapter the basket assets use. The pool adapter by default. Phase 3c tests override it to
@@ -300,7 +305,11 @@ abstract contract BaselineHarness is BaseFixture {
         });
     }
 
-    function _basket(address token, address pool, address adapter) private pure returns (AssetConfig memory) {
+    function _basket(address token, address pool, address adapter)
+        private
+        pure
+        returns (AssetConfig memory)
+    {
         return AssetConfig({
             kind: AssetKind.Basket,
             active: true,
@@ -333,7 +342,14 @@ abstract contract BaselineHarness is BaseFixture {
                 impl,
                 abi.encodeCall(
                     Rebalancer.initialize,
-                    (address(fund), address(this), keeper, sp, address(timelock), GovernedUUPS.UpgradeMode.Upgradeable)
+                    (
+                        address(fund),
+                        address(this),
+                        keeper,
+                        sp,
+                        address(timelock),
+                        GovernedUUPS.UpgradeMode.Upgradeable
+                    )
                 )
             )
         );
@@ -343,11 +359,15 @@ abstract contract BaselineHarness is BaseFixture {
         for (uint256 i = IDX_AAVE; i <= IDX_MOONWELL; ++i) {
             rebalancer.setAssetStepParams(i, AssetStepParams(LENDING_MAX_STEP_USDC, 0));
         }
-        uint16 majorSlip = uint16(Math.min(fund.poolFeeBps(IDX_WETH) + MAJOR_SLIPPAGE_OVER_FEE_BPS, ceiling));
+        uint16 majorSlip =
+            uint16(Math.min(fund.poolFeeBps(IDX_WETH) + MAJOR_SLIPPAGE_OVER_FEE_BPS, ceiling));
         rebalancer.setAssetStepParams(IDX_WETH, AssetStepParams(MAJOR_MAX_STEP_USDC, majorSlip));
-        majorSlip = uint16(Math.min(fund.poolFeeBps(IDX_CBBTC) + MAJOR_SLIPPAGE_OVER_FEE_BPS, ceiling));
+        majorSlip =
+            uint16(Math.min(fund.poolFeeBps(IDX_CBBTC) + MAJOR_SLIPPAGE_OVER_FEE_BPS, ceiling));
         rebalancer.setAssetStepParams(IDX_CBBTC, AssetStepParams(MAJOR_MAX_STEP_USDC, majorSlip));
-        rebalancer.setAssetStepParams(IDX_DESPXA, AssetStepParams(DESPXA_MAX_STEP_USDC, uint16(ceiling)));
+        rebalancer.setAssetStepParams(
+            IDX_DESPXA, AssetStepParams(DESPXA_MAX_STEP_USDC, uint16(ceiling))
+        );
     }
 
     function _deployGovernance() private {
@@ -382,8 +402,11 @@ abstract contract BaselineHarness is BaseFixture {
         bytes[] memory payloads = new bytes[](2);
         targets[0] = address(receipts);
         targets[1] = address(receipts);
-        payloads[0] = abi.encodeCall(receipts.grantRole, (receipts.RECEIPT_SUBMITTER_ROLE(), submitter));
-        payloads[1] = abi.encodeCall(receipts.grantRole, (receipts.RECEIPT_RELEASER_ROLE(), address(governance)));
+        payloads[0] =
+            abi.encodeCall(receipts.grantRole, (receipts.RECEIPT_SUBMITTER_ROLE(), submitter));
+        payloads[1] = abi.encodeCall(
+            receipts.grantRole, (receipts.RECEIPT_RELEASER_ROLE(), address(governance))
+        );
         timelockExecuteBatch(targets, values, payloads);
     }
 
@@ -444,19 +467,29 @@ abstract contract BaselineHarness is BaseFixture {
         uint256 n = ++_receiptNonce;
         string memory session = string.concat("proto-session-", vm.toString(n));
         string memory payload = string.concat(
-            '{"assets":', _assetsJson(v), ',"session_id":"', session, '","subject_id":"rmFUND","weights":', _bucketsJson(v), "}"
+            '{"assets":',
+            _assetsJson(v),
+            ',"session_id":"',
+            session,
+            '","subject_id":"rmFUND","weights":',
+            _bucketsJson(v),
+            "}"
         );
         id = receipts.computeReceiptId(session, "rmFUND");
         digest = keccak256(bytes(payload));
         receiptPayload[id] = payload;
         vm.prank(submitter);
-        receipts.recordReceipt(id, digest, string.concat("https://example.invalid/receipts/", session));
+        receipts.recordReceipt(
+            id, digest, string.concat("https://example.invalid/receipts/", session)
+        );
         _lastRecordedAt = uint64(block.timestamp);
     }
 
     function _assetsJson(uint16[6] memory v) private pure returns (string memory out) {
-        string[6] memory keys = ["aave-v3-usdc", "compound-v3-usdc", "morpho-usdc", "weth", "cbbtc", "despxa"];
-        string[4] memory labels = ["agent_tokens", "conservative_defi_yield", "protocol_tokens", "real_world_assets"];
+        string[6] memory keys =
+            ["aave-v3-usdc", "compound-v3-usdc", "morpho-usdc", "weth", "cbbtc", "despxa"];
+        string[4] memory labels =
+            ["agent_tokens", "conservative_defi_yield", "protocol_tokens", "real_world_assets"];
         out = "[";
         for (uint256 i; i < N_ASSETS; ++i) {
             out = string.concat(
@@ -496,7 +529,10 @@ abstract contract BaselineHarness is BaseFixture {
         returns (uint256 planId)
     {
         (address[] memory assets, uint256[] memory weights) = assetArrays(v);
-        timelockExecute(address(governance), abi.encodeCall(governance.applyReceipt, (id, digest, assets, weights)));
+        timelockExecute(
+            address(governance),
+            abi.encodeCall(governance.applyReceipt, (id, digest, assets, weights))
+        );
         planId = fund.currentPlanId();
     }
 
@@ -507,9 +543,14 @@ abstract contract BaselineHarness is BaseFixture {
     }
 
     /// @notice Open a receipt-less plan (`governance.setTarget`, ADMIN) through the timelock.
-    function setTargetViaTimelock(uint16[6] memory v, PlanParams memory params) internal returns (uint256 planId) {
+    function setTargetViaTimelock(uint16[6] memory v, PlanParams memory params)
+        internal
+        returns (uint256 planId)
+    {
         (address[] memory assets, uint256[] memory weights) = assetArrays(v);
-        timelockExecute(address(governance), abi.encodeCall(governance.setTarget, (assets, weights, params)));
+        timelockExecute(
+            address(governance), abi.encodeCall(governance.setTarget, (assets, weights, params))
+        );
         planId = fund.currentPlanId();
     }
 
@@ -521,7 +562,11 @@ abstract contract BaselineHarness is BaseFixture {
 
     /// @notice The parallel (asset id, weight) arrays `applyReceipt` / `setTarget` / `previewPlan` take for the
     ///         index-aligned vector `v`. Every asset is listed, zeros included (§4.1).
-    function assetArrays(uint16[6] memory v) internal view returns (address[] memory ids, uint256[] memory w) {
+    function assetArrays(uint16[6] memory v)
+        internal
+        view
+        returns (address[] memory ids, uint256[] memory w)
+    {
         ids = new address[](N_ASSETS);
         w = new uint256[](N_ASSETS);
         for (uint256 i; i < N_ASSETS; ++i) {
@@ -531,11 +576,14 @@ abstract contract BaselineHarness is BaseFixture {
     }
 
     /// @notice An explicit per-asset vector [aave, comet, moonwell, wETH, cbBTC, deSPXA].
-    function assetVec(uint16 aave, uint16 comet, uint16 moonwell, uint16 weth, uint16 cbbtc, uint16 despxa)
-        internal
-        pure
-        returns (uint16[6] memory v)
-    {
+    function assetVec(
+        uint16 aave,
+        uint16 comet,
+        uint16 moonwell,
+        uint16 weth,
+        uint16 cbbtc,
+        uint16 despxa
+    ) internal pure returns (uint16[6] memory v) {
         v = [aave, comet, moonwell, weth, cbbtc, despxa];
     }
 
@@ -544,7 +592,11 @@ abstract contract BaselineHarness is BaseFixture {
     ///         rounding remainder. This is the split the earlier sleeve design used on chain, so the vectors
     ///         and the plans they open are the same as before. It is a test-side helper, not a contract rule
     ///         (§11 D8: a receipt carries its own per-asset weights).
-    function bucketVec(uint16 stable, uint16 protocol, uint16 rwa) internal pure returns (uint16[6] memory v) {
+    function bucketVec(uint16 stable, uint16 protocol, uint16 rwa)
+        internal
+        pure
+        returns (uint16[6] memory v)
+    {
         v[IDX_AAVE] = uint16(uint256(stable) * 4_000 / BPS);
         v[IDX_COMET] = uint16(uint256(stable) * 3_000 / BPS);
         v[IDX_MOONWELL] = stable - v[IDX_AAVE] - v[IDX_COMET];
@@ -577,9 +629,11 @@ abstract contract BaselineHarness is BaseFixture {
     }
 
     /// @notice Batch form of `timelockExecute`.
-    function timelockExecuteBatch(address[] memory targets, uint256[] memory values, bytes[] memory payloads)
-        internal
-    {
+    function timelockExecuteBatch(
+        address[] memory targets,
+        uint256[] memory values,
+        bytes[] memory payloads
+    ) internal {
         bytes32 salt = bytes32(++_saltNonce);
         timelock.scheduleBatch(targets, values, payloads, bytes32(0), salt, TIMELOCK_DELAY);
         vm.warp(block.timestamp + TIMELOCK_DELAY);
@@ -641,9 +695,12 @@ abstract contract BaselineHarness is BaseFixture {
             (tokenIn, tokenOut) = (token, USDC);
         }
         IERC20(tokenIn).approve(ROUTER, amountIn);
-        out = IHarnessSwapRouter02(ROUTER).exactInputSingle(
-            IHarnessSwapRouter02.ExactInputSingleParams(tokenIn, tokenOut, p.fee(), address(this), amountIn, 0, 0)
-        );
+        out = IHarnessSwapRouter02(ROUTER)
+            .exactInputSingle(
+                IHarnessSwapRouter02.ExactInputSingleParams(
+                    tokenIn, tokenOut, p.fee(), address(this), amountIn, 0, 0
+                )
+            );
     }
 
     /// @notice Token amount worth `usdcAmount` at `pool`'s current spot (slot0), raw units.

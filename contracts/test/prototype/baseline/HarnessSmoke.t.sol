@@ -30,9 +30,16 @@ contract HarnessSmokeTest is BaselineHarness {
         assertTrue(rebalancer.hasRole(Roles.KEEPER_ROLE, keeper), "keeper role");
         assertTrue(rebalancer.hasRole(Roles.ADMIN_ROLE, address(timelock)), "rebalancer admin");
         assertTrue(governance.hasRole(Roles.TARGET_SETTER_ROLE, address(timelock)), "target setter");
-        assertFalse(governance.hasRole(Roles.TARGET_SETTER_ROLE, address(this)), "deployer renounced setter");
-        assertTrue(receipts.hasRole(receipts.RECEIPT_RELEASER_ROLE(), address(governance)), "releaser");
-        assertFalse(receipts.hasRole(receipts.ADMIN_ROLE(), address(governance)), "governance not receipt admin");
+        assertFalse(
+            governance.hasRole(Roles.TARGET_SETTER_ROLE, address(this)), "deployer renounced setter"
+        );
+        assertTrue(
+            receipts.hasRole(receipts.RECEIPT_RELEASER_ROLE(), address(governance)), "releaser"
+        );
+        assertFalse(
+            receipts.hasRole(receipts.ADMIN_ROLE(), address(governance)),
+            "governance not receipt admin"
+        );
         assertEq(fund.assetCount(), N_ASSETS, "six assets");
 
         uint256 amount = 100_000e6;
@@ -40,7 +47,9 @@ contract HarnessSmokeTest is BaselineHarness {
         assertGt(shares, 0, "shares minted");
         assertEq(fund.totalAssets(), amount, "no plan: all idle, NAV == deposit");
         assertEq(fund.idleUsdc(), amount, "idle");
-        assertApproxEqAbs(fund.convertToAssets(fund.balanceOf(alice)), amount, 1, "alice owns the NAV");
+        assertApproxEqAbs(
+            fund.convertToAssets(fund.balanceOf(alice)), amount, 1, "alice owns the NAV"
+        );
     }
 
     /// @dev Receipt to plan through the timelock, a routed deposit, then a few keeper steps.

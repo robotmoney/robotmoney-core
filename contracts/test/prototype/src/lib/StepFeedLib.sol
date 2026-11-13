@@ -9,7 +9,13 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IBasketSwapAdapter} from "../../../../interfaces/IBasketSwapAdapter.sol";
 import {
-    AssetConfig, AssetKind, FeedStatus, StepFeedCheck, StepPrices, BPS, IDLE_INDEX
+    AssetConfig,
+    AssetKind,
+    FeedStatus,
+    StepFeedCheck,
+    StepPrices,
+    BPS,
+    IDLE_INDEX
 } from "../FundTypes.sol";
 import {FlowParams} from "../FlowTypes.sol";
 import {IFlowQueue} from "../interfaces/IFlowQueue.sol";
@@ -69,11 +75,12 @@ library StepFeedLib {
 
     /// @dev Check 2. Writes each active basket feed's 8-decimal USD price into `px8` and returns the USDC / USD
     ///      price (8 decimals).
-    function _check2(AssetConfig[] memory cfg, address queue, FlowParams memory p, uint256[] memory px8)
-        private
-        view
-        returns (StepFeedCheck, uint256, uint256, uint256 usdc8)
-    {
+    function _check2(
+        AssetConfig[] memory cfg,
+        address queue,
+        FlowParams memory p,
+        uint256[] memory px8
+    ) private view returns (StepFeedCheck, uint256, uint256, uint256 usdc8) {
         (address usdcFeed, uint32 usdcMaxAge, address seqFeed) = IFlowQueue(queue).feeds();
         {
             (bool up, FeedStatus st) = FeedLib.sequencerUp(seqFeed, p.sequencerGrace);
@@ -85,8 +92,12 @@ library StepFeedLib {
             if (st != FeedStatus.Ok) return (StepFeedCheck.Feed, i, uint256(st), 0);
             px8[i] = v;
         }
-        (bool pegOk, FeedStatus pst, uint256 u8) = FeedLib.usdcPeg(usdcFeed, usdcMaxAge, p.usdcPegBandBps);
-        if (!pegOk) return (StepFeedCheck.UsdcPeg, IDLE_INDEX, pst == FeedStatus.OffPeg ? u8 : uint256(pst), 0);
+        (bool pegOk, FeedStatus pst, uint256 u8) =
+            FeedLib.usdcPeg(usdcFeed, usdcMaxAge, p.usdcPegBandBps);
+        if (!pegOk) {
+            return
+                (StepFeedCheck.UsdcPeg, IDLE_INDEX, pst == FeedStatus.OffPeg ? u8 : uint256(pst), 0);
+        }
         return (StepFeedCheck.Ok, IDLE_INDEX, 0, u8);
     }
 
@@ -107,7 +118,8 @@ library StepFeedLib {
         if (feedPx == 0) return (StepFeedCheck.Feed, uint256(FeedStatus.NonPositive));
         (bool ok, uint256 twapPx) = _twap(a, usdc, unit);
         if (!ok || twapPx == 0) return (StepFeedCheck.TwapRead, 0);
-        uint256 dev = (twapPx > feedPx ? twapPx - feedPx : feedPx - twapPx).mulDiv(BPS, feedPx, Math.Rounding.Ceil);
+        uint256 dev = (twapPx > feedPx ? twapPx - feedPx : feedPx - twapPx)
+        .mulDiv(BPS, feedPx, Math.Rounding.Ceil);
         if (dev > refBandBps) return (StepFeedCheck.TwapVsFeed, dev);
         px.feed[i] = feedPx;
         px.twap[i] = twapPx;
@@ -117,7 +129,11 @@ library StepFeedLib {
 
     /// @notice USDC value of `amount` of asset `i` at the feed (`px.feed`, rounded DOWN). A lending asset and idle
     ///         USDC count one to one (`IDLE_INDEX` is idle).
-    function feedValue(StepPrices memory px, uint256 i, uint256 amount) internal pure returns (uint256) {
+    function feedValue(StepPrices memory px, uint256 i, uint256 amount)
+        internal
+        pure
+        returns (uint256)
+    {
         if (i == IDLE_INDEX || px.unit[i] == 0) return amount;
         return amount.mulDiv(px.feed[i], px.unit[i]);
     }
@@ -128,8 +144,15 @@ library StepFeedLib {
 
     /// @dev The asset's TWAP over its `twapWindow`: USDC for one whole token through its swap adapter. `ok` false when
     ///      the read reverts.
-    function _twap(AssetConfig memory a, address usdc, uint256 unit) private view returns (bool ok, uint256 v) {
-        try IBasketSwapAdapter(a.adapter).twapPrice(a.pool, a.token, usdc, unit, a.twapWindow) returns (uint256 q) {
+    function _twap(AssetConfig memory a, address usdc, uint256 unit)
+        private
+        view
+        returns (bool ok, uint256 v)
+    {
+        try IBasketSwapAdapter(a.adapter)
+            .twapPrice(a.pool, a.token, usdc, unit, a.twapWindow) returns (
+            uint256 q
+        ) {
             return (true, q);
         } catch {
             return (false, 0);

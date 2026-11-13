@@ -117,6 +117,7 @@ contract DeployTimelock is CoreTimelockHandover {
     bytes32 public constant RECEIPT_RELEASER_ROLE = keccak256("RECEIPT_RELEASER_ROLE");
     /// @dev OZ `AccessControl.DEFAULT_ADMIN_ROLE` is `bytes32(0)`.
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
+
     /// @notice SAFE_OWNERS and SAFE_THRESHOLD: what the Safe at SAFE_ADDRESS must look like.
     struct SafeSpec {
         address[] owners;

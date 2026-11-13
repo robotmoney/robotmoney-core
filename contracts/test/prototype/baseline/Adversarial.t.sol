@@ -86,8 +86,14 @@ contract AdversarialTest is BaselineHarness {
             assertEq(l.buy, IDX_WETH, "buy leg is weth");
             assertLe(l.notional, cap, "notional <= maxStepUsdc");
             assertEq(l.notional, cap, "deviation > cap: the step is exactly one cap slice");
-            assertEq(idleBefore - fund.idleUsdc(), l.notional, "idle leg moved by exactly the notional");
-            assertLe(fund.assetValue(IDX_WETH) - wethValueBefore, l.notional, "TWAP value bought <= notional");
+            assertEq(
+                idleBefore - fund.idleUsdc(), l.notional, "idle leg moved by exactly the notional"
+            );
+            assertLe(
+                fund.assetValue(IDX_WETH) - wethValueBefore,
+                l.notional,
+                "TWAP value bought <= notional"
+            );
         }
         assertGt(_wethGap(), 0, "large deviation still open after five capped steps");
     }
@@ -113,7 +119,9 @@ contract AdversarialTest is BaselineHarness {
         uint256 wethBal = IERC20(WETH).balanceOf(address(fund));
         uint256 idle = fund.idleUsdc();
         vm.expectEmit(true, false, false, true, address(rebalancer));
-        emit IFundEvents.RebalanceStepSkipped(planId, SkipReason.MarketDeviation, IDLE_INDEX, IDLE_INDEX, IDX_WETH);
+        emit IFundEvents.RebalanceStepSkipped(
+            planId, SkipReason.MarketDeviation, IDLE_INDEX, IDLE_INDEX, IDX_WETH
+        );
         (bool did, SkipReason why) = keeperStep();
         assertFalse(did, "no trade");
         assertEq(uint8(why), uint8(SkipReason.MarketDeviation), "market reason");
@@ -125,7 +133,9 @@ contract AdversarialTest is BaselineHarness {
         // Defence in depth: the fund itself refuses a Basket leg that fails ORA-4.
         vm.prank(address(rebalancer));
         vm.expectRevert(
-            abi.encodeWithSelector(IRobotMoneyFund.NavMarketDeviationExceeded.selector, WETH, dev, NAV_DEVIATION_BPS)
+            abi.encodeWithSelector(
+                IRobotMoneyFund.NavMarketDeviationExceeded.selector, WETH, dev, NAV_DEVIATION_BPS
+            )
         );
         fund.executeStep(honest);
     }
@@ -145,11 +155,16 @@ contract AdversarialTest is BaselineHarness {
         uint256 nav = fund.totalAssets();
         (bool did, SkipReason why, StepLog memory l) = _stepAs(keeper);
         assertFalse(did, "no trade");
-        assertEq(uint8(why), uint8(SkipReason.StepFailed), "swap floor from TWAP refused the pushed spot");
+        assertEq(
+            uint8(why), uint8(SkipReason.StepFailed), "swap floor from TWAP refused the pushed spot"
+        );
         assertEq(l.buy, IDX_WETH, "the weth leg was attempted");
         // Which check refused it matters: a floor quoted from SPOT (or 0) would let the swap fill at the pushed
         // price, and the step would then fail later on the cost cap instead. Only a TWAP floor fails in the swap.
-        assertTrue(l.detail != uint32(IRobotMoneyFund.StepCostExceeded.selector), "not the cost cap: the floor bit");
+        assertTrue(
+            l.detail != uint32(IRobotMoneyFund.StepCostExceeded.selector),
+            "not the cost cap: the floor bit"
+        );
         assertTrue(
             l.detail == uint32(bytes4(keccak256("Error(string)")))
                 || l.detail == uint32(IRobotMoneyFund.StepBelowMinOut.selector),
@@ -185,7 +200,11 @@ contract AdversarialTest is BaselineHarness {
 
         (, uint256 bought) = _pushUp(WETH_POOL, IDX_WETH, 3 * NAV_DEVIATION_BPS);
         vm.warp(block.timestamp + TWAP_WINDOW / 2);
-        assertLt(fund.assetTokenValue(IDX_WETH, n), honestTokens, "half-window hold bent the TWAP (and the floor)");
+        assertLt(
+            fund.assetTokenValue(IDX_WETH, n),
+            honestTokens,
+            "half-window hold bent the TWAP (and the floor)"
+        );
 
         // Held: the step cannot run against the pushed spot; inside one window of the last step the cooldown
         // binds before anything else.
@@ -206,7 +225,11 @@ contract AdversarialTest is BaselineHarness {
             uint256 got = IERC20(WETH).balanceOf(address(fund)) - before;
             if (block.timestamp < t0 + interval) {
                 assertFalse(traded, "no step within one interval of the last");
-                assertEq(uint8(why), uint8(SkipReason.Cooldown), "cooldown until a full window has passed");
+                assertEq(
+                    uint8(why),
+                    uint8(SkipReason.Cooldown),
+                    "cooldown until a full window has passed"
+                );
             }
             if (!traded) {
                 assertEq(got, 0, "skip: no weth moved");
@@ -243,14 +266,25 @@ contract AdversarialTest is BaselineHarness {
         bad = rebalancer.stepParams();
         uint256 twoFees = fee + fund.poolFeeBps(IDX_CBBTC);
         bad.maxStepCostBps = uint16(twoFees);
-        vm.expectRevert(abi.encodeWithSelector(IFundEvents.BoundAtOrBelowPoolFee.selector, IDX_WETH, twoFees, twoFees));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IFundEvents.BoundAtOrBelowPoolFee.selector, IDX_WETH, twoFees, twoFees
+            )
+        );
         rebalancer.setStepParams(bad);
 
-        vm.expectRevert(abi.encodeWithSelector(IFundEvents.BoundAtOrBelowPoolFee.selector, IDX_WETH, fee, fee));
+        vm.expectRevert(
+            abi.encodeWithSelector(IFundEvents.BoundAtOrBelowPoolFee.selector, IDX_WETH, fee, fee)
+        );
         rebalancer.setAssetStepParams(IDX_WETH, AssetStepParams(MAJOR_MAX_STEP_USDC, uint16(fee)));
 
         vm.expectRevert(
-            abi.encodeWithSelector(IRebalancer.MaxStepBelowMinStep.selector, IDX_DESPXA, MIN_STEP_USDC - 1, MIN_STEP_USDC)
+            abi.encodeWithSelector(
+                IRebalancer.MaxStepBelowMinStep.selector,
+                IDX_DESPXA,
+                MIN_STEP_USDC - 1,
+                MIN_STEP_USDC
+            )
         );
         rebalancer.setAssetStepParams(IDX_DESPXA, AssetStepParams(MIN_STEP_USDC - 1, ceiling));
 
@@ -258,13 +292,20 @@ contract AdversarialTest is BaselineHarness {
         bad.minStepUsdc = DESPXA_MAX_STEP_USDC + 1;
         vm.expectRevert(
             abi.encodeWithSelector(
-                IRebalancer.MaxStepBelowMinStep.selector, IDX_DESPXA, DESPXA_MAX_STEP_USDC, DESPXA_MAX_STEP_USDC + 1
+                IRebalancer.MaxStepBelowMinStep.selector,
+                IDX_DESPXA,
+                DESPXA_MAX_STEP_USDC,
+                DESPXA_MAX_STEP_USDC + 1
             )
         );
         rebalancer.setStepParams(bad);
         vm.stopPrank();
 
-        assertEq(rebalancer.effectiveStepInterval(), Math.max(sp.stepInterval, window), "interval >= window");
+        assertEq(
+            rebalancer.effectiveStepInterval(),
+            Math.max(sp.stepInterval, window),
+            "interval >= window"
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -286,11 +327,15 @@ contract AdversarialTest is BaselineHarness {
             if (!did || l.buy != IDX_DESPXA) continue;
             ++despxaBuys;
             assertLe(l.notional, DESPXA_MAX_STEP_USDC, "deSPXA buy <= its small maxStepUsdc");
-            if (despxaBuys == 1) assertEq(l.notional, DESPXA_MAX_STEP_USDC, "days in, the cap binds");
+            if (despxaBuys == 1) {
+                assertEq(l.notional, DESPXA_MAX_STEP_USDC, "days in, the cap binds");
+            }
             (uint256 nav,,) = fund.portfolioValues();
             (uint256[] memory t,) = fund.pathTarget(block.timestamp);
             assertLe(
-                fund.assetValue(IDX_DESPXA), nav * (t[IDX_DESPXA] + 1) / BPS, "deSPXA never ahead of pathTarget(now)"
+                fund.assetValue(IDX_DESPXA),
+                nav * (t[IDX_DESPXA] + 1) / BPS,
+                "deSPXA never ahead of pathTarget(now)"
             );
         }
         assertGt(despxaBuys, 1, "deSPXA was bought over several capped steps");
@@ -317,7 +362,9 @@ contract AdversarialTest is BaselineHarness {
         vm.prank(keeper);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, keeper, Roles.REBALANCER_ROLE
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                keeper,
+                Roles.REBALANCER_ROLE
             )
         );
         fund.executeStep(greedy);
@@ -335,7 +382,9 @@ contract AdversarialTest is BaselineHarness {
         assertEq(openAt, t0 + KEEPER_GRACE, "grace counts from the last step");
         vm.warp(block.timestamp + 1);
         vm.prank(stranger);
-        vm.expectRevert(abi.encodeWithSelector(IRebalancer.NotKeeperBeforeGrace.selector, stranger, openAt));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRebalancer.NotKeeperBeforeGrace.selector, stranger, openAt)
+        );
         rebalancer.step();
 
         // Worst timing 2: one second before the cooldown edge skips, exactly at the edge runs within the cap.
@@ -351,7 +400,9 @@ contract AdversarialTest is BaselineHarness {
         openAt = rebalancer.permissionlessAt();
         vm.warp(openAt - 1);
         vm.prank(stranger);
-        vm.expectRevert(abi.encodeWithSelector(IRebalancer.NotKeeperBeforeGrace.selector, stranger, openAt));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRebalancer.NotKeeperBeforeGrace.selector, stranger, openAt)
+        );
         rebalancer.step();
         vm.warp(openAt);
         if (_assertStepWithinCap(stranger)) ++ran;
@@ -408,8 +459,14 @@ contract AdversarialTest is BaselineHarness {
         uint256 navPreDeposit = fund.totalAssets();
         uint256 bobShares = deposit(bob, bobIn);
         uint256 bobDelta = fund.totalAssets() - navPreDeposit;
-        assertGe(fund.convertToAssets(aliceShares) + 1, aliceBefore, "bob's deposit does not dilute alice");
-        assertLe(fund.convertToAssets(bobShares), bobDelta, "bob's claim <= the realized value he added");
+        assertGe(
+            fund.convertToAssets(aliceShares) + 1,
+            aliceBefore,
+            "bob's deposit does not dilute alice"
+        );
+        assertLe(
+            fund.convertToAssets(bobShares), bobDelta, "bob's claim <= the realized value he added"
+        );
 
         uint256 navBefore = fund.totalAssets();
         uint256 supply = fund.totalSupply();
@@ -419,14 +476,25 @@ contract AdversarialTest is BaselineHarness {
         assertLe(l.cost, l.notional * MAX_STEP_COST_BPS / BPS, "step cost within cap");
         uint256 navAfter = fund.totalAssets();
         assertEq(fund.totalSupply(), supply, "a step mints and burns nothing");
-        assertEq(navBefore > navAfter ? navBefore - navAfter : 0, l.cost, "NAV moved by exactly the realized step cost");
+        assertEq(
+            navBefore > navAfter ? navBefore - navAfter : 0,
+            l.cost,
+            "NAV moved by exactly the realized step cost"
+        );
         // Share-price identity: claim_after = claim_before × navAfter / navBefore (to share-math rounding).
         assertApproxEqAbs(
-            fund.convertToAssets(aliceShares), aliceMid * navAfter / navBefore, 2, "alice moves only by the cost"
+            fund.convertToAssets(aliceShares),
+            aliceMid * navAfter / navBefore,
+            2,
+            "alice moves only by the cost"
         );
         uint256 bobGross = fund.convertToAssets(bobShares);
         assertLe(bobGross, bobDelta, "bob's gross claim never exceeds his realized delta");
-        assertLe(bobDelta - bobGross, l.cost * bobShares / supply + 2, "bob bears only his pro-rata cost share");
+        assertLe(
+            bobDelta - bobGross,
+            l.cost * bobShares / supply + 2,
+            "bob bears only his pro-rata cost share"
+        );
 
         vm.prank(bob);
         uint256 bobOut = fund.redeem(bobShares, bob, bob);
@@ -445,10 +513,14 @@ contract AdversarialTest is BaselineHarness {
         (uint256[] memory t, uint256 idlePath) = fund.pathTarget(block.timestamp);
         assertGt(idlePath, 9_000, "early in the plan idle's path is still high");
         for (uint256 i; i < values.length; ++i) {
-            assertLe(values[i], nav * (t[i] + 1) / BPS, "deposit did not push an asset past its path");
+            assertLe(
+                values[i], nav * (t[i] + 1) / BPS, "deposit did not push an asset past its path"
+            );
         }
         (SkipReason r, uint256 sell,,) = rebalancer.previewStep();
-        if (r == SkipReason.None || r == SkipReason.BelowMinStep) assertEq(sell, IDLE_INDEX, "no asset to sell back");
+        if (r == SkipReason.None || r == SkipReason.BelowMinStep) {
+            assertEq(sell, IDLE_INDEX, "no asset to sell back");
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -474,7 +546,10 @@ contract AdversarialTest is BaselineHarness {
             (bool did, SkipReason why, StepLog memory l) = _stepAs(keeper);
             if (did) {
                 ++executed;
-                assertTrue(l.sell != IDX_DESPXA && l.buy != IDX_DESPXA, "executed steps avoid the frozen asset");
+                assertTrue(
+                    l.sell != IDX_DESPXA && l.buy != IDX_DESPXA,
+                    "executed steps avoid the frozen asset"
+                );
             } else if (why == SkipReason.StepFailed) {
                 ++failed;
                 assertTrue(l.sell == IDX_DESPXA || l.buy == IDX_DESPXA, "only deSPXA legs fail");
@@ -483,7 +558,11 @@ contract AdversarialTest is BaselineHarness {
         }
         assertGt(failed, 0, "the frozen asset was attempted and failed");
         assertGt(executed, 0, "other assets kept trading");
-        assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Open), "plan still open, stalled on deSPXA only");
+        assertEq(
+            uint8(fund.planStatus()),
+            uint8(PlanStatus.Open),
+            "plan still open, stalled on deSPXA only"
+        );
         // The other underweight assets converged to their path targets; deSPXA alone stays short.
         (uint256[] memory w,) = assetWeightsBps();
         (uint256[] memory t,) = fund.pathTarget(block.timestamp);
@@ -513,10 +592,16 @@ contract AdversarialTest is BaselineHarness {
         // Conservation: the deSPXA leg is owed in full, the tokens never moved, the stayers keep exactly theirs.
         uint256 owedTotal = spxaHeld * shares / supply;
         uint256 feeShare = owedTotal * EXIT_FEE_BPS / BPS;
-        assertEq(fund.deferredOf(IDX_DESPXA, alice), owedTotal - feeShare, "alice's net deSPXA leg is deferred");
+        assertEq(
+            fund.deferredOf(IDX_DESPXA, alice),
+            owedTotal - feeShare,
+            "alice's net deSPXA leg is deferred"
+        );
         assertEq(fund.deferredOf(IDX_DESPXA, feeRecipient), feeShare, "the fee share is deferred");
         assertEq(fund.deferredTotal(IDX_DESPXA), owedTotal, "deferred == the pro-rata leg");
-        assertEq(IERC20(DESPXA).balanceOf(address(fund)), spxaHeld, "frozen tokens stay in the fund");
+        assertEq(
+            IERC20(DESPXA).balanceOf(address(fund)), spxaHeld, "frozen tokens stay in the fund"
+        );
         assertEq(IERC20(DESPXA).balanceOf(alice), 0, "nothing paid while frozen");
         assertApproxEqAbs(
             fund.assetValue(IDX_DESPXA),
@@ -530,7 +615,9 @@ contract AdversarialTest is BaselineHarness {
         uint256 aliceOwed = fund.deferredOf(IDX_DESPXA, alice);
         vm.prank(alice);
         fund.redeemInKind(shares, alice, alice);
-        assertGt(fund.deferredOf(IDX_DESPXA, alice), aliceOwed, "second exit defers its own leg on top");
+        assertGt(
+            fund.deferredOf(IDX_DESPXA, alice), aliceOwed, "second exit defers its own leg on top"
+        );
         assertEq(IERC20(DESPXA).balanceOf(address(fund)), spxaHeld, "still frozen in the fund");
 
         // The issuer lifts the freeze: alice pulls exactly what she is owed; the stayers' deSPXA is untouched.
@@ -542,10 +629,14 @@ contract AdversarialTest is BaselineHarness {
         assertEq(IERC20(DESPXA).balanceOf(alice), owed, "alice receives her deferred leg");
         assertEq(fund.deferredOf(IDX_DESPXA, alice), 0, "claim cleared");
         assertEq(
-            IERC20(DESPXA).balanceOf(address(fund)) - fund.deferredTotal(IDX_DESPXA), stayers, "stayers keep theirs"
+            IERC20(DESPXA).balanceOf(address(fund)) - fund.deferredTotal(IDX_DESPXA),
+            stayers,
+            "stayers keep theirs"
         );
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.NothingDeferred.selector, IDX_DESPXA, alice));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.NothingDeferred.selector, IDX_DESPXA, alice)
+        );
         fund.claimDeferred(IDX_DESPXA, alice);
     }
 
@@ -557,7 +648,9 @@ contract AdversarialTest is BaselineHarness {
         uint256 aaveHeld = fund.assetValue(IDX_AAVE);
         assertGt(aaveHeld, 0, "fund holds Aave");
         vm.mockCallRevert(
-            address(aaveAdapter), abi.encodeWithSelector(IStrategyAdapter.withdraw.selector), bytes("PAUSED")
+            address(aaveAdapter),
+            abi.encodeWithSelector(IStrategyAdapter.withdraw.selector),
+            bytes("PAUSED")
         );
         uint256 supply = fund.totalSupply();
         uint256 shares = fund.balanceOf(alice) / 5;
@@ -565,18 +658,27 @@ contract AdversarialTest is BaselineHarness {
         uint256 navBefore = fund.totalAssets();
         vm.prank(alice);
         fund.redeemInKind(shares, alice, alice);
-        assertGt(IERC20(USDC).balanceOf(alice), usdcBefore, "idle and the other lending venues paid");
+        assertGt(
+            IERC20(USDC).balanceOf(alice), usdcBefore, "idle and the other lending venues paid"
+        );
         assertGt(IERC20(WETH).balanceOf(alice), 0, "weth leg paid");
         assertGt(IERC20(DESPXA).balanceOf(alice), 0, "deSPXA leg paid");
         uint256 owed = aaveHeld * shares / supply;
         assertEq(fund.deferredTotal(IDX_AAVE), owed, "the Aave share is deferred in full");
         assertEq(
-            fund.deferredOf(IDX_AAVE, alice) + fund.deferredOf(IDX_AAVE, feeRecipient), owed, "net + fee share"
+            fund.deferredOf(IDX_AAVE, alice) + fund.deferredOf(IDX_AAVE, feeRecipient),
+            owed,
+            "net + fee share"
         );
-        assertApproxEqAbs(fund.assetValue(IDX_AAVE), aaveHeld - owed, 2, "NAV counts only the stayers' Aave");
+        assertApproxEqAbs(
+            fund.assetValue(IDX_AAVE), aaveHeld - owed, 2, "NAV counts only the stayers' Aave"
+        );
         // Stayers' NAV per share is unchanged by the stall (to rounding).
         assertApproxEqAbs(
-            fund.totalAssets() * supply / (supply - shares), navBefore, navBefore / 1e6 + 10, "no value shifted"
+            fund.totalAssets() * supply / (supply - shares),
+            navBefore,
+            navBefore / 1e6 + 10,
+            "no value shifted"
         );
 
         // Before the venue reopens, the claim waits (no partial payout, the claim stays whole).
@@ -588,7 +690,9 @@ contract AdversarialTest is BaselineHarness {
         uint256 before = IERC20(USDC).balanceOf(alice);
         vm.prank(alice);
         fund.claimDeferred(IDX_AAVE, alice);
-        assertEq(IERC20(USDC).balanceOf(alice) - before, aliceOwed, "alice receives her deferred USDC");
+        assertEq(
+            IERC20(USDC).balanceOf(alice) - before, aliceOwed, "alice receives her deferred USDC"
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -607,7 +711,9 @@ contract AdversarialTest is BaselineHarness {
         assertGt(executed, 0, "steps ran before the halt");
         p = fund.plan();
         assertGt(p.costSpent, p.costBudget, "halted because spent > budget");
-        assertLe(p.costSpent, p.costBudget + n * MAX_STEP_COST_BPS / BPS, "overrun <= one capped step");
+        assertLe(
+            p.costSpent, p.costBudget + n * MAX_STEP_COST_BPS / BPS, "overrun <= one capped step"
+        );
 
         uint256 wethBal = IERC20(WETH).balanceOf(address(fund));
         uint256 idle = fund.idleUsdc();
@@ -615,11 +721,15 @@ contract AdversarialTest is BaselineHarness {
         (bool did, SkipReason why) = keeperStep();
         assertFalse(did, "halted: keeper does nothing");
         assertEq(uint8(why), uint8(SkipReason.PlanNotOpen), "plan not open");
-        assertEq(rebalancer.permissionlessAt(), type(uint256).max, "no permissionless path while halted");
+        assertEq(
+            rebalancer.permissionlessAt(), type(uint256).max, "no permissionless path while halted"
+        );
         vm.warp(block.timestamp + KEEPER_GRACE + 1);
         vm.prank(stranger);
         vm.expectRevert(
-            abi.encodeWithSelector(IRebalancer.NotKeeperBeforeGrace.selector, stranger, type(uint256).max)
+            abi.encodeWithSelector(
+                IRebalancer.NotKeeperBeforeGrace.selector, stranger, type(uint256).max
+            )
         );
         rebalancer.step();
         assertEq(IERC20(WETH).balanceOf(address(fund)), wethBal, "no trade while halted");
@@ -628,28 +738,44 @@ contract AdversarialTest is BaselineHarness {
         // Only ADMIN extends; an extension that leaves spent > budget keeps it halted.
         vm.prank(keeper);
         vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, keeper, Roles.ADMIN_ROLE)
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, keeper, Roles.ADMIN_ROLE
+            )
         );
         fund.extendBudget(1_000e6);
         uint256 over = p.costSpent - p.costBudget;
         if (over > 1) {
             timelockExecute(address(fund), abi.encodeCall(fund.extendBudget, (over - 1)));
-            assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Halted), "insufficient extension stays halted");
+            assertEq(
+                uint8(fund.planStatus()),
+                uint8(PlanStatus.Halted),
+                "insufficient extension stays halted"
+            );
         }
         // EMERGENCY can pause a Halted plan at once (§5.5); a later extension then leaves it Paused, and ADMIN's
         // resume returns it to Halted while it is still over budget.
         vm.prank(emergency);
         fund.pauseRebalance();
-        assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Paused), "halted plan paused by the hot key");
+        assertEq(
+            uint8(fund.planStatus()), uint8(PlanStatus.Paused), "halted plan paused by the hot key"
+        );
         timelockExecute(address(fund), abi.encodeCall(fund.resumePlan, ()));
-        assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Halted), "resume of an over-budget plan: Halted");
+        assertEq(
+            uint8(fund.planStatus()),
+            uint8(PlanStatus.Halted),
+            "resume of an over-budget plan: Halted"
+        );
 
         timelockExecute(address(fund), abi.encodeCall(fund.extendBudget, (1_000e6)));
         assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Open), "extension reopens");
         assertEq(fund.currentPlanId(), planId, "same plan");
         (did,) = keeperStep();
         assertTrue(did, "reopened plan steps again");
-        assertLe(fund.plan().costSpent, fund.plan().costBudget + n * MAX_STEP_COST_BPS / BPS, "still bounded");
+        assertLe(
+            fund.plan().costSpent,
+            fund.plan().costBudget + n * MAX_STEP_COST_BPS / BPS,
+            "still bounded"
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -660,7 +786,10 @@ contract AdversarialTest is BaselineHarness {
     ///      are timelock-only. Only the rebalancer (REBALANCER_ROLE) executes or concludes a step. The sweep
     ///      refuses USDC, the share token, every asset token and every lending adapter, and sends a foreign
     ///      token only to the fixed quarantine.
-    function test_authority_governanceOpens_rebalancerExecutes_sweepRefusesHeld() public fixtureCovered {
+    function test_authority_governanceOpens_rebalancerExecutes_sweepRefusesHeld()
+        public
+        fixtureCovered
+    {
         _holdEverything();
 
         address[6] memory callers =
@@ -681,7 +810,11 @@ contract AdversarialTest is BaselineHarness {
         vm.prank(keeper);
         vm.expectRevert(_unauthorized(keeper, Roles.ADMIN_ROLE));
         governance.setTarget(ids, w, pp);
-        assertEq(governance.getRoleAdmin(Roles.TARGET_SETTER_ROLE), Roles.TARGET_SETTER_ROLE, "self-administered");
+        assertEq(
+            governance.getRoleAdmin(Roles.TARGET_SETTER_ROLE),
+            Roles.TARGET_SETTER_ROLE,
+            "self-administered"
+        );
         assertEq(fund.currentPlanId(), 1, "no plan opened outside the timelock");
 
         // The plan roles are self-administered and bound once: not even ADMIN (the timelock) can hand them out.
@@ -695,7 +828,8 @@ contract AdversarialTest is BaselineHarness {
         vm.stopPrank();
 
         StepOrder memory o = StepOrder(IDX_AAVE, IDLE_INDEX, 1_000e6, 0, 0, 1_000e6);
-        address[6] memory notRebalancer = [address(this), keeper, stranger, address(timelock), address(governance), emergency];
+        address[6] memory notRebalancer =
+            [address(this), keeper, stranger, address(timelock), address(governance), emergency];
         for (uint256 i; i < notRebalancer.length; ++i) {
             vm.prank(notRebalancer[i]);
             vm.expectRevert(_unauthorized(notRebalancer[i], Roles.REBALANCER_ROLE));
@@ -722,7 +856,9 @@ contract AdversarialTest is BaselineHarness {
             vm.prank(stranger);
             vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.ProtectedToken.selector, t));
             fund.sweepForeignToken(t);
-            if (erc20) assertEq(IERC20(t).balanceOf(address(fund)), bal, "protected balance untouched");
+            if (erc20) {
+                assertEq(IERC20(t).balanceOf(address(fund)), bal, "protected balance untouched");
+            }
         }
         assertGt(IERC20(WETH).balanceOf(address(fund)), 0, "weth is held");
         assertGt(IERC20(DESPXA).balanceOf(address(fund)), 0, "deSPXA is held");
@@ -746,12 +882,14 @@ contract AdversarialTest is BaselineHarness {
     function _wethOnlyPlan(uint16 budgetBps) internal returns (uint256 planId) {
         deposit(alice, ALICE_DEPOSIT);
         timelockExecute(
-            address(rebalancer), abi.encodeCall(rebalancer.setAssetStepParams, (IDX_CBBTC, AssetStepParams(0, 0)))
+            address(rebalancer),
+            abi.encodeCall(rebalancer.setAssetStepParams, (IDX_CBBTC, AssetStepParams(0, 0)))
         );
         if (budgetBps == COST_BUDGET_BPS) {
             planId = recordAndApply(bucketVec(0, 10_000, 0));
         } else {
-            planId = setTargetViaTimelock(bucketVec(0, 10_000, 0), PlanParams(PLAN_DURATION, budgetBps));
+            planId =
+                setTargetViaTimelock(bucketVec(0, 10_000, 0), PlanParams(PLAN_DURATION, budgetBps));
         }
         vm.warp(fund.plan().endTime);
         (SkipReason r, uint256 s, uint256 b,) = rebalancer.previewStep();
@@ -772,7 +910,9 @@ contract AdversarialTest is BaselineHarness {
     /// @dev Issuer freeze: every deSPXA `transfer` and `transferFrom` reverts.
     function _freezeDespxa() internal {
         vm.mockCallRevert(DESPXA, abi.encodeWithSelector(IERC20.transfer.selector), bytes("FROZEN"));
-        vm.mockCallRevert(DESPXA, abi.encodeWithSelector(IERC20.transferFrom.selector), bytes("FROZEN"));
+        vm.mockCallRevert(
+            DESPXA, abi.encodeWithSelector(IERC20.transferFrom.selector), bytes("FROZEN")
+        );
     }
 
     /// @dev wETH's distance below its path target, at TWAP.
@@ -815,7 +955,10 @@ contract AdversarialTest is BaselineHarness {
     /// @dev Buy the token on `pool` in growing chunks until asset `idx`'s ORA-4 deviation is at least
     ///      `minDev` bps. Chunks double while the deviation is under half the goal, then hold, so the final
     ///      deviation lands near the goal (about 1x to 1.5x). Returns the deviation and the tokens bought.
-    function _pushUp(address pool, uint256 idx, uint256 minDev) internal returns (uint256 dev, uint256 bought) {
+    function _pushUp(address pool, uint256 idx, uint256 minDev)
+        internal
+        returns (uint256 dev, uint256 bought)
+    {
         uint256 chunk = 25_000e6;
         (, dev) = fund.marketCheck(idx);
         for (uint256 k; k < 60 && dev < minDev; ++k) {
@@ -829,9 +972,12 @@ contract AdversarialTest is BaselineHarness {
     /// @dev Sell `amount` of `token` for USDC on its fee-500 pool from this contract.
     function _swapExactIn(address token, uint256 amount) internal {
         IERC20(token).approve(ROUTER, amount);
-        IHarnessSwapRouter02(ROUTER).exactInputSingle(
-            IHarnessSwapRouter02.ExactInputSingleParams(token, USDC, POOL_FEE, address(this), amount, 0, 0)
-        );
+        IHarnessSwapRouter02(ROUTER)
+            .exactInputSingle(
+                IHarnessSwapRouter02.ExactInputSingleParams(
+                    token, USDC, POOL_FEE, address(this), amount, 0, 0
+                )
+            );
     }
 
     /// @dev `step()` as `caller`, returning what the rebalancer logged.
@@ -847,10 +993,12 @@ contract AdversarialTest is BaselineHarness {
             bytes32 t0 = logs[i].topics[0];
             if (t0 == IFundEvents.RebalanceStep.selector) {
                 (l.sell, l.buy, l.notional,, l.amountOut, l.cost,,) = abi.decode(
-                    logs[i].data, (uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256)
+                    logs[i].data,
+                    (uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256)
                 );
             } else if (t0 == IFundEvents.RebalanceStepSkipped.selector) {
-                (, l.sell, l.buy, l.detail) = abi.decode(logs[i].data, (SkipReason, uint256, uint256, uint256));
+                (, l.sell, l.buy, l.detail) =
+                    abi.decode(logs[i].data, (SkipReason, uint256, uint256, uint256));
             }
         }
     }
@@ -882,6 +1030,9 @@ contract AdversarialTest is BaselineHarness {
     }
 
     function _unauthorized(address who, bytes32 role) internal pure returns (bytes memory) {
-        return abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, who, role);
+        return
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, who, role
+            );
     }
 }

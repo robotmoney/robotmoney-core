@@ -62,7 +62,10 @@ library FundPositionLib {
     ///         adapter kept (the fund's balance delta, `RobotMoneyVaultOps._allocate`: a refused supply comes straight
     ///         back and stays idle). Mints holders' units for the value the position gained. Reverts if the venue's
     ///         value read reverts (callers: `mintInKind`, a step's buy leg; both trade only counted assets).
-    function supply(FundState storage s, uint256 i, uint256 amount) public returns (uint256 placed) {
+    function supply(FundState storage s, uint256 i, uint256 amount)
+        public
+        returns (uint256 placed)
+    {
         address adapter = s.assets[i].adapter;
         IERC20 usdc = IERC20(s.usdc);
         uint256 p0 = FundValuationLib.positionValue(s, i);
@@ -147,7 +150,8 @@ library FundPositionLib {
         uint256 shares,
         uint256 supplyBefore
     ) public returns (uint256 usdcGot) {
-        (uint256[] memory want, uint256[] memory paid) = _wants(s, held0, pos0, shares, supplyBefore);
+        (uint256[] memory want, uint256[] memory paid) =
+            _wants(s, held0, pos0, shares, supplyBefore);
         uint256 n = held0.length;
         for (uint256 i; i < n; ++i) {
             if (s.assets[i].kind != AssetKind.Lending) continue;
@@ -206,9 +210,13 @@ library FundPositionLib {
     /// @notice Body of `IRobotMoneyFund.setInKindAllowance` (the fund checks ADMIN_ROLE). Bounds: `bps ≤ 10 000`,
     ///         `floorUsdc ≤ MAX_IN_KIND_FLOOR_USDC`, `period` in [MIN_IN_KIND_PERIOD, MAX_IN_KIND_PERIOD]
     ///         (`InvalidParam`). A new period length re-keys `inKindUsed`, so it takes effect from the next exit.
-    function setInKindAllowance(FundState storage s, uint16 bps, uint128 floorUsdc, uint32 period) public {
-        if (bps > BPS || floorUsdc > MAX_IN_KIND_FLOOR_USDC || period < MIN_IN_KIND_PERIOD || period > MAX_IN_KIND_PERIOD)
-        {
+    function setInKindAllowance(FundState storage s, uint16 bps, uint128 floorUsdc, uint32 period)
+        public
+    {
+        if (
+            bps > BPS || floorUsdc > MAX_IN_KIND_FLOOR_USDC || period < MIN_IN_KIND_PERIOD
+                || period > MAX_IN_KIND_PERIOD
+        ) {
             revert IFundEvents.InvalidParam();
         }
         s.inKindBps = bps;
@@ -230,10 +238,14 @@ library FundPositionLib {
 
     /// @dev One readable in-kind lending leg: withdraw `x` (≤ `want`) under try/catch, burn the holders' units for
     ///      what left, and turn the unpaid part of the exiter's slice into a claim. Returns the USDC that arrived.
-    function _leg(FundState storage s, uint256 i, uint256 p0, uint256 want, uint256 x, address claimant)
-        private
-        returns (uint256 got)
-    {
+    function _leg(
+        FundState storage s,
+        uint256 i,
+        uint256 p0,
+        uint256 want,
+        uint256 x,
+        address claimant
+    ) private returns (uint256 got) {
         uint256 u0 = s.positionUnits[i];
         if (u0 == 0) {
             // First units of a position that only ever received gifts: the holders own all of it (no claim exists).
@@ -249,9 +261,13 @@ library FundPositionLib {
 
     /// @dev E23: a lending leg whose value read reverted. No read and no withdrawal: the exiter's units of the
     ///      position, `floor(holders' units × shares / supplyBefore)`, become its claim.
-    function _claimUnread(FundState storage s, uint256 i, address claimant, uint256 shares, uint256 supplyBefore)
-        private
-    {
+    function _claimUnread(
+        FundState storage s,
+        uint256 i,
+        address claimant,
+        uint256 shares,
+        uint256 supplyBefore
+    ) private {
         uint256 holders = s.positionUnits[i] - s.positionClaimTotal[i];
         _claim(s, i, claimant, holders.mulDiv(shares, supplyBefore));
     }
@@ -380,7 +396,11 @@ library FundPositionLib {
 
     /// @dev Position value after a withdrawal that delivered `got`: the venue's own read, or `p0 − got` when the
     ///      read reverts after the withdrawal.
-    function _valueAfter(FundState storage s, uint256 i, uint256 p0, uint256 got) private view returns (uint256) {
+    function _valueAfter(FundState storage s, uint256 i, uint256 p0, uint256 got)
+        private
+        view
+        returns (uint256)
+    {
         try IStrategyAdapter(s.assets[i].adapter).totalAssets() returns (uint256 bal) {
             uint256 owed = s.deferredTotal[i];
             return bal > owed ? bal - owed : 0;

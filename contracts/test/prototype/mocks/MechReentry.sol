@@ -64,11 +64,19 @@ abstract contract MechReentry {
         address f = reFund;
         address v = reVictim;
         uint256 id = reRequestId;
-        _try(hook, q, abi.encodeWithSignature("settle(uint256,uint256)", uint256(256), type(uint256).max));
+        _try(
+            hook,
+            q,
+            abi.encodeWithSignature("settle(uint256,uint256)", uint256(256), type(uint256).max)
+        );
         _try(hook, q, abi.encodeWithSignature("withdrawCredit()"));
         _try(hook, q, abi.encodeWithSignature("mint(uint256,address)", uint256(1), v));
         _try(hook, q, abi.encodeWithSignature("deposit(uint256,address)", uint256(1), v));
-        _try(hook, q, abi.encodeWithSignature("redeem(uint256,address,address)", uint256(1), address(this), v));
+        _try(
+            hook,
+            q,
+            abi.encodeWithSignature("redeem(uint256,address,address)", uint256(1), address(this), v)
+        );
         _try(hook, q, abi.encodeWithSignature("cancel(uint256)", id));
         _try(hook, q, abi.encodeWithSignature("exitInKind(uint256)", id));
         _try(hook, q, abi.encodeWithSignature("withdrawExpired(uint256)", id));
@@ -76,12 +84,34 @@ abstract contract MechReentry {
         _try(
             hook,
             q,
-            abi.encodeWithSignature("requestDeposit(uint256,uint256,address)", uint256(100e6), type(uint256).max, v)
+            abi.encodeWithSignature(
+                "requestDeposit(uint256,uint256,address)", uint256(100e6), type(uint256).max, v
+            )
         );
-        _try(hook, f, abi.encodeWithSignature("redeemInKind(uint256,address,address)", uint256(1), address(this), v));
-        _try(hook, f, abi.encodeWithSignature("mintInKind(uint256,uint256,uint256[])", uint256(1), uint256(0), new uint256[](0)));
-        _try(hook, f, abi.encodeWithSignature("sellForFlow(uint256,uint256[])", uint256(1), new uint256[](0)));
-        _try(hook, f, abi.encodeWithSignature("claimPosition(uint256,address)", uint256(0), address(this)));
+        _try(
+            hook,
+            f,
+            abi.encodeWithSignature(
+                "redeemInKind(uint256,address,address)", uint256(1), address(this), v
+            )
+        );
+        _try(
+            hook,
+            f,
+            abi.encodeWithSignature(
+                "mintInKind(uint256,uint256,uint256[])", uint256(1), uint256(0), new uint256[](0)
+            )
+        );
+        _try(
+            hook,
+            f,
+            abi.encodeWithSignature("sellForFlow(uint256,uint256[])", uint256(1), new uint256[](0))
+        );
+        _try(
+            hook,
+            f,
+            abi.encodeWithSignature("claimPosition(uint256,address)", uint256(0), address(this))
+        );
     }
 
     function _try(bytes4 hook, address target, bytes memory data) private {

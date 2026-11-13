@@ -11,7 +11,15 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {BaselineHarness} from "./BaselineHarness.sol";
-import {Plan, PlanParams, PlanStatus, SkipReason, IFundEvents, IDLE_INDEX, BPS} from "./src/FundTypes.sol";
+import {
+    Plan,
+    PlanParams,
+    PlanStatus,
+    SkipReason,
+    IFundEvents,
+    IDLE_INDEX,
+    BPS
+} from "./src/FundTypes.sol";
 import {IRebalanceGovernance} from "./src/interfaces/IRebalanceGovernance.sol";
 
 /// @title Invariants
@@ -60,7 +68,8 @@ contract Invariants is BaselineHarness {
     bytes32 private constant STEP_EXECUTED_SIG = keccak256(
         "StepExecuted(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)"
     );
-    bytes32 private constant IMPL_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+    bytes32 private constant IMPL_SLOT =
+        0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
 
     /// @dev `redeem` is only required to succeed while every Basket asset's spot sits this far inside the
     ///      fund's slippage ceiling: the remaining room covers the pool fee and the pro-rata sale's own impact.
@@ -276,7 +285,9 @@ contract Invariants is BaselineHarness {
         uint256 prevId = fund.currentPlanId();
         try this.applyExternal(id, digest, v) {
             ++callsApply;
-            if (fund.currentPlanId() != prevId + 1 || fund.planStatus() != PlanStatus.Open) ++ghostApplyFailures;
+            if (fund.currentPlanId() != prevId + 1 || fund.planStatus() != PlanStatus.Open) {
+                ++ghostApplyFailures;
+            }
         } catch {
             ++ghostApplyFailures;
         }
@@ -295,7 +306,9 @@ contract Invariants is BaselineHarness {
     ///      4 a lending target above `capBps`, 5 the valid vector with a wrong payload digest. The call must
     ///      revert with exactly that variant's error, the receipt must stay unreleased, and no plan or applied
     ///      time may change.
-    function _refuseBadVector(bytes32 id, bytes32 digest, uint16[6] memory v, uint256 kind) private {
+    function _refuseBadVector(bytes32 id, bytes32 digest, uint16[6] memory v, uint256 kind)
+        private
+    {
         address[] memory ids;
         uint256[] memory w;
         bytes memory expected;
@@ -303,7 +316,9 @@ contract Invariants is BaselineHarness {
         if (kind == 5) {
             (ids, w) = assetArrays(v);
             sent = keccak256("wrong");
-            expected = abi.encodeWithSelector(IRebalanceGovernance.PayloadDigestMismatch.selector, id, digest, sent);
+            expected = abi.encodeWithSelector(
+                IRebalanceGovernance.PayloadDigestMismatch.selector, id, digest, sent
+            );
         } else {
             (ids, w, expected) = _badVector(v, kind);
         }
@@ -336,7 +351,8 @@ contract Invariants is BaselineHarness {
                 w5[i] = w[i];
             }
             w5[IDX_WETH] += w[IDX_DESPXA];
-            return (ids5, w5, abi.encodeWithSelector(IFundEvents.TargetAssetMissing.selector, DESPXA));
+            return
+                (ids5, w5, abi.encodeWithSelector(IFundEvents.TargetAssetMissing.selector, DESPXA));
         }
         if (kind == 1 || kind == 2) {
             // Append a zero-weight entry: aave again (duplicate), or an address that is no fund asset.
@@ -348,7 +364,9 @@ contract Invariants is BaselineHarness {
                 w7[i] = w[i];
             }
             ids7[N_ASSETS] = extra;
-            bytes4 sel = kind == 1 ? IFundEvents.TargetAssetDuplicate.selector : IFundEvents.TargetAssetNotActive.selector;
+            bytes4 sel = kind == 1
+                ? IFundEvents.TargetAssetDuplicate.selector
+                : IFundEvents.TargetAssetNotActive.selector;
             return (ids7, w7, abi.encodeWithSelector(sel, extra));
         }
         if (kind == 3) {
@@ -358,7 +376,10 @@ contract Invariants is BaselineHarness {
         // Aave is the first entry, so its cap check fires before the sum check.
         w[IDX_AAVE] = LENDING_CAP_BPS + 1;
         expected = abi.encodeWithSelector(
-            IFundEvents.TargetExceedsCap.selector, IDX_AAVE, uint256(LENDING_CAP_BPS) + 1, uint256(LENDING_CAP_BPS)
+            IFundEvents.TargetExceedsCap.selector,
+            IDX_AAVE,
+            uint256(LENDING_CAP_BPS) + 1,
+            uint256(LENDING_CAP_BPS)
         );
     }
 
@@ -394,8 +415,11 @@ contract Invariants is BaselineHarness {
         bool ready = _independentlyReady(pre);
         vm.prank(keeper);
         try rebalancer.step() returns (bool executed, SkipReason why) {
-            if (executed) _checkExecutedStep(pre);
-            else if (ready && (why == SkipReason.NothingToTrade || why == SkipReason.BelowMinStep)) {
+            if (executed) {
+                _checkExecutedStep(pre);
+            } else if (
+                ready && (why == SkipReason.NothingToTrade || why == SkipReason.BelowMinStep)
+            ) {
                 ++ghostLivenessSkips;
             }
         } catch {
@@ -415,13 +439,26 @@ contract Invariants is BaselineHarness {
         vm.recordLogs();
         _scanLogs(logs);
         for (uint256 k; k < logs.length; ++k) {
-            if (logs[k].emitter != address(fund) || logs[k].topics[0] != STEP_EXECUTED_SIG) continue;
-            (uint256 sellI, uint256 buyI, uint256 notional,,,, uint256 navBefore, uint256 navAfter, uint256 cost) =
-                abi.decode(logs[k].data, (uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256));
+            if (logs[k].emitter != address(fund) || logs[k].topics[0] != STEP_EXECUTED_SIG) {
+                continue;
+            }
+            (
+                uint256 sellI,
+                uint256 buyI,
+                uint256 notional,,,,
+                uint256 navBefore,
+                uint256 navAfter,
+                uint256 cost
+            ) = abi.decode(
+                logs[k].data,
+                (uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256)
+            );
 
             // RB-4: TWAP NAV falls at most maxStepCostBps of the notional, measured by the fund and by us.
             uint256 maxCost = notional.mulDiv(MAX_STEP_COST_BPS, BPS);
-            if (cost > maxCost || navBefore != pre.nav || navAfter + maxCost < navBefore) ++ghostRb4StepCost;
+            if (cost > maxCost || navBefore != pre.nav || navAfter + maxCost < navBefore) {
+                ++ghostRb4StepCost;
+            }
             if (fund.totalAssets() + maxCost < pre.nav) ++ghostRb4StepCost;
 
             // RB-5: no traded Basket asset failed ORA-4 just before the step.
@@ -447,7 +484,10 @@ contract Invariants is BaselineHarness {
     }
 
     /// @notice An outside trader moves a basket pool. wETH both ways (deal verified); cbBTC and deSPXA buys only.
-    function act_movePrice(uint256 which, uint256 usdc, bool buy) external action(address(0), true) {
+    function act_movePrice(uint256 which, uint256 usdc, bool buy)
+        external
+        action(address(0), true)
+    {
         which = which % 3;
         address pool = which == 0 ? WETH_POOL : which == 1 ? CBBTC_POOL : DESPXA_POOL;
         uint256 hi = which == 2 ? 5_000e6 : 500_000e6;
@@ -509,21 +549,34 @@ contract Invariants is BaselineHarness {
         assertEq(ghostRb5Cooldown, 0, "RB-5: a step ran before stepInterval");
         assertEq(ghostRb5Market, 0, "RB-5: a step traded an asset failing ORA-4");
         assertEq(ghostRb7PastPath, 0, "RB-7: a step moved past pathTarget(now)");
-        assertEq(ghostLivenessSkips, 0, "liveness: a step with a tradeable deviation skipped as nothing to trade");
+        assertEq(
+            ghostLivenessSkips,
+            0,
+            "liveness: a step with a tradeable deviation skipped as nothing to trade"
+        );
         Plan memory p = fund.plan();
-        assertTrue(p.costSpent <= p.costBudget || p.status == PlanStatus.Halted, "RB-4: costSpent > costBudget");
+        assertTrue(
+            p.costSpent <= p.costBudget || p.status == PlanStatus.Halted,
+            "RB-4: costSpent > costBudget"
+        );
     }
 
     /// @notice RB-9: every refused vector reverted with its own error and released nothing. The fund's persistent
     ///         target names every active asset (inactive assets 0) and sums to 10 000 once a plan has opened.
     function invariant_targetVector() public fixtureCovered {
-        assertEq(ghostRb9Violations, 0, "RB-9: a refused vector did not revert with its error, or released");
+        assertEq(
+            ghostRb9Violations,
+            0,
+            "RB-9: a refused vector did not revert with its error, or released"
+        );
         if (fund.currentPlanId() == 0) return;
         uint16[] memory t = fund.targetBps();
         assertEq(t.length, fund.assetCount(), "RB-9: target is index-aligned to the asset list");
         uint256 sum;
         for (uint256 i; i < t.length; ++i) {
-            if (!fund.assetConfig(i).active) assertEq(t[i], 0, "RB-9: inactive asset has a target");
+            if (!fund.assetConfig(i).active) {
+                assertEq(t[i], 0, "RB-9: inactive asset has a target");
+            }
             sum += t[i];
         }
         assertEq(sum, BPS, "RB-9: target does not sum to 10 000");
@@ -540,25 +593,41 @@ contract Invariants is BaselineHarness {
 
     /// @notice RB-8: the receipt contract never called the fund, rebalancer or governance, and holds nothing.
     function invariant_receiptInert() public fixtureCovered {
-        assertEq(ghostRb8Calls, 0, "RB-8: receipt contract called the fund, rebalancer or governance");
+        assertEq(
+            ghostRb8Calls, 0, "RB-8: receipt contract called the fund, rebalancer or governance"
+        );
         _assertHoldsNothing(address(receipts), "RB-8: receipts");
     }
 
     /// @notice Shares outstanding are backed; the rebalancer and governance hold nothing; no standing allowance.
     function invariant_solvencyAndHygiene() public fixtureCovered {
-        if (fund.totalSupply() > 0) assertGt(fund.totalAssets(), 0, "supply > 0 but totalAssets == 0");
+        if (fund.totalSupply() > 0) {
+            assertGt(fund.totalAssets(), 0, "supply > 0 but totalAssets == 0");
+        }
         _assertHoldsNothing(address(rebalancer), "rebalancer");
         _assertHoldsNothing(address(governance), "governance");
         for (uint256 i; i < approvedToken.length; ++i) {
             assertEq(
-                IERC20(approvedToken[i]).allowance(address(fund), approvedSpender[i]), 0, "fund left an allowance"
+                IERC20(approvedToken[i]).allowance(address(fund), approvedSpender[i]),
+                0,
+                "fund left an allowance"
             );
         }
         address[4] memory tokens = [USDC, WETH, CBBTC, DESPXA];
-        address[5] memory spenders = [address(swapAdapter), ROUTER, address(aaveAdapter), address(cometAdapter), address(moonwellAdapter)];
+        address[5] memory spenders = [
+            address(swapAdapter),
+            ROUTER,
+            address(aaveAdapter),
+            address(cometAdapter),
+            address(moonwellAdapter)
+        ];
         for (uint256 i; i < tokens.length; ++i) {
             for (uint256 j; j < spenders.length; ++j) {
-                assertEq(IERC20(tokens[i]).allowance(address(fund), spenders[j]), 0, "fund allowance to venue");
+                assertEq(
+                    IERC20(tokens[i]).allowance(address(fund), spenders[j]),
+                    0,
+                    "fund allowance to venue"
+                );
             }
         }
     }
@@ -569,14 +638,30 @@ contract Invariants is BaselineHarness {
     ///      a tradeable deviation was never skipped as "nothing to trade", so RB-4/5/7 are exercised whenever
     ///      a step could run.
     function afterInvariant() public fixtureCovered {
-        assertGt(callsDeposit + callsRedeem + callsRedeemInKind + callsApply + callsStep, 0, "run did nothing");
+        assertGt(
+            callsDeposit + callsRedeem + callsRedeemInKind + callsApply + callsStep,
+            0,
+            "run did nothing"
+        );
         emit log_named_string(
             "run",
             string.concat(
-                "deposits ", vm.toString(callsDeposit), ", redeems ", vm.toString(callsRedeem), ", inKind ",
-                vm.toString(callsRedeemInKind), ", applies ", vm.toString(callsApply), ", rb9Refused ",
-                vm.toString(callsRb9Refused), ", steps ",
-                vm.toString(stepsExecuted), "/", vm.toString(callsStep), ", priceMoves ", vm.toString(callsPrice)
+                "deposits ",
+                vm.toString(callsDeposit),
+                ", redeems ",
+                vm.toString(callsRedeem),
+                ", inKind ",
+                vm.toString(callsRedeemInKind),
+                ", applies ",
+                vm.toString(callsApply),
+                ", rb9Refused ",
+                vm.toString(callsRb9Refused),
+                ", steps ",
+                vm.toString(stepsExecuted),
+                "/",
+                vm.toString(callsStep),
+                ", priceMoves ",
+                vm.toString(callsPrice)
             )
         );
     }
@@ -606,7 +691,9 @@ contract Invariants is BaselineHarness {
         uint256 maxUnder = t > pre.idle ? t - pre.idle : 0;
         for (uint256 i; i < N_ASSETS; ++i) {
             if (!pre.marketOk[i] || rebalancer.assetStepParams(i).maxStepUsdc == 0) continue;
-            if (rebalancer.assetBackoffUntil(i) >= block.timestamp || !fund.assetConfig(i).active) continue;
+            if (rebalancer.assetBackoffUntil(i) >= block.timestamp || !fund.assetConfig(i).active) {
+                continue;
+            }
             t = _pathValue(pre.plan, i, block.timestamp, pre.nav);
             uint256 v = pre.values[i];
             if (v > t && v - t > maxOver) maxOver = v - t;
@@ -627,7 +714,11 @@ contract Invariants is BaselineHarness {
 
     /// @dev Independent port of the §5.2 path value: `nav × (start×d + (end−start)×e) / (d × 10 000)`, the
     ///      shrinking side rounded up (toward start). Idle's path ends at 0.
-    function _pathValue(Plan memory p, uint256 index, uint256 t, uint256 nav) private pure returns (uint256) {
+    function _pathValue(Plan memory p, uint256 index, uint256 t, uint256 nav)
+        private
+        pure
+        returns (uint256)
+    {
         uint256 e;
         uint256 d;
         if (p.endTime <= p.startTime) {
@@ -663,10 +754,13 @@ contract Invariants is BaselineHarness {
             }
             if (l.topics[0] != TRANSFER_SIG) continue;
             if (isSystem[from]) {
-                bool ok = venueOk[to] || to == feeRecipient || (to == actionHolder && actionHolder != address(0))
+                bool ok = venueOk[to] || to == feeRecipient
+                    || (to == actionHolder && actionHolder != address(0))
                     || (to == address(0) && from != address(fund));
                 if (!ok) _leak(from, to);
-            } else if (!actionIsMarket && (from == WETH_POOL || from == CBBTC_POOL || from == DESPXA_POOL)) {
+            } else if (
+                !actionIsMarket && (from == WETH_POOL || from == CBBTC_POOL || from == DESPXA_POOL)
+            ) {
                 if (to != address(fund)) _leak(from, to);
             }
         }
@@ -684,7 +778,10 @@ contract Invariants is BaselineHarness {
         for (uint256 i; i < acc.length; ++i) {
             VmSafe.AccountAccess memory x = acc[i];
             if (x.accessor != address(receipts) && x.accessor != receiptImpl) continue;
-            if (x.account == address(fund) || x.account == address(rebalancer) || x.account == address(governance)) {
+            if (
+                x.account == address(fund) || x.account == address(rebalancer)
+                    || x.account == address(governance)
+            ) {
                 ++ghostRb8Calls;
             }
         }
@@ -718,7 +815,8 @@ contract Invariants is BaselineHarness {
         }
         for (uint256 i; i < acc.length; ++i) {
             VmSafe.AccountAccess memory x = acc[i];
-            bool isCall = x.kind == VmSafe.AccountAccessKind.Call || x.kind == VmSafe.AccountAccessKind.StaticCall
+            bool isCall = x.kind == VmSafe.AccountAccessKind.Call
+                || x.kind == VmSafe.AccountAccessKind.StaticCall
                 || x.kind == VmSafe.AccountAccessKind.DelegateCall;
             if (
                 isCall && x.data.length != 0 && !_cvAccount[x.account] && !_cvCreated[x.account]
@@ -726,7 +824,9 @@ contract Invariants is BaselineHarness {
             ) _miss(x.account, bytes32(0));
             for (uint256 j; j < x.storageAccesses.length; ++j) {
                 VmSafe.StorageAccess memory s = x.storageAccesses[j];
-                if (!_cvAccount[s.account] || _cvCreated[s.account] || _cvSeen[s.account][s.slot]) continue;
+                if (!_cvAccount[s.account] || _cvCreated[s.account] || _cvSeen[s.account][s.slot]) {
+                    continue;
+                }
                 _cvSeen[s.account][s.slot] = true;
                 if (!s.isWrite && !_cvSlot[s.account][s.slot]) _miss(s.account, s.slot);
             }

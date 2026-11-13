@@ -58,7 +58,9 @@ interface IRobotMoneyFund is IFundEvents {
     ///         owed to `account` (`claimDeferred`) and left the holders' books.
     event InKindDeferred(uint256 indexed index, address indexed account, uint256 amount);
     /// @notice `account` pulled its deferred `amount` of asset `index` to `to`.
-    event DeferredClaimed(uint256 indexed index, address indexed account, address to, uint256 amount);
+    event DeferredClaimed(
+        uint256 indexed index, address indexed account, address to, uint256 amount
+    );
     /// @notice `bindRebalanceRoles` granted the two plan roles, once.
     event RebalanceRolesBound(address governance, address rebalancer);
 
@@ -279,7 +281,10 @@ interface IRobotMoneyFund is IFundEvents {
     function assetValue(uint256 index) external view returns (uint256);
 
     /// @notice One-call valuation: `nav == idle + Σ values == totalAssets()`.
-    function portfolioValues() external view returns (uint256 nav, uint256 idle, uint256[] memory values);
+    function portfolioValues()
+        external
+        view
+        returns (uint256 nav, uint256 idle, uint256[] memory values);
 
     /// @notice USDC value of `tokenAmount` of Basket asset `index` at its TWAP. Lending: identity.
     function assetUsdcValue(uint256 index, uint256 tokenAmount) external view returns (uint256);

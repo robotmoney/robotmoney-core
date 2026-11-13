@@ -8,7 +8,9 @@ pragma solidity ^0.8.24;
 
 import {PlanParams} from "../FundTypes.sol";
 import {IRobotMoneyFund} from "./IRobotMoneyFund.sol";
-import {IConsensusRecommendationReceipt} from "../../../../../interfaces/IConsensusRecommendationReceipt.sol";
+import {
+    IConsensusRecommendationReceipt
+} from "../../../../../interfaces/IConsensusRecommendationReceipt.sol";
 
 /// @title IRebalanceGovernance
 /// @notice Port of `RouterGovernance`: turns a recorded consensus receipt into a fund target and a
@@ -28,7 +30,11 @@ interface IRebalanceGovernance {
 
     /// @notice A receipt was released and its per-asset vector opened as plan `planId`.
     event ReceiptApplied(
-        bytes32 indexed receiptId, bytes32 payloadDigest, address[] assets, uint256[] bps, uint256 indexed planId
+        bytes32 indexed receiptId,
+        bytes32 payloadDigest,
+        address[] assets,
+        uint256[] bps,
+        uint256 indexed planId
     );
 
     /// @notice A receipt-less per-asset vector was set and opened as plan `planId` (`setTarget`).
@@ -69,9 +75,11 @@ interface IRebalanceGovernance {
     /// @notice Open a plan with no receipt (§6: bootstrap and drift correction; the old
     ///         `setDefaultWeights`). ADMIN_ROLE only. Same vector checks as `applyReceipt` (RB-9).
     ///         Does not touch `lastAppliedRecordedAt`. Emits `TargetSet`.
-    function setTarget(address[] calldata assets, uint256[] calldata bps, PlanParams calldata params)
-        external
-        returns (uint256 planId);
+    function setTarget(
+        address[] calldata assets,
+        uint256[] calldata bps,
+        PlanParams calldata params
+    ) external returns (uint256 planId);
 
     /// @notice Set the plan parameters `applyReceipt` uses. ADMIN_ROLE only. Bounds as
     ///         `setTargetAndOpenPlan` (`PlanParamOutOfBounds`). Emits `DefaultPlanParamsSet`.

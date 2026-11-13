@@ -18,7 +18,8 @@ contract CustodyTest is BaselineHarness {
     address internal stranger = makeAddr("stranger");
 
     function _expectAllRefused(bytes memory data) internal {
-        address[5] memory callers = [stranger, emergency, keeper, address(governance), address(rebalancer)];
+        address[5] memory callers =
+            [stranger, emergency, keeper, address(governance), address(rebalancer)];
         for (uint256 i; i < callers.length; ++i) {
             vm.prank(callers[i]);
             (bool ok,) = address(fund).call(data);
@@ -33,7 +34,9 @@ contract CustodyTest is BaselineHarness {
         _expectAllRefused(abi.encodeCall(RobotMoneyFund.setFeeRecipient, (stranger)));
         _expectAllRefused(abi.encodeCall(RobotMoneyFund.setExitFeeBps, (100)));
         _expectAllRefused(abi.encodeCall(RobotMoneyFund.setExitFeeBps, (0)));
-        _expectAllRefused(abi.encodeWithSignature("upgradeToAndCall(address,bytes)", stranger, bytes("")));
+        _expectAllRefused(
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", stranger, bytes(""))
+        );
 
         (,, uint256 feeBps1, address recipient1) = fund.config();
         assertEq(feeBps1, feeBps0, "fee bps unchanged");
@@ -41,7 +44,9 @@ contract CustodyTest is BaselineHarness {
 
         // The timelock path does take effect.
         address newRecipient = makeAddr("newFeeRecipient");
-        timelockExecute(address(fund), abi.encodeCall(RobotMoneyFund.setFeeRecipient, (newRecipient)));
+        timelockExecute(
+            address(fund), abi.encodeCall(RobotMoneyFund.setFeeRecipient, (newRecipient))
+        );
         timelockExecute(address(fund), abi.encodeCall(RobotMoneyFund.setExitFeeBps, (20)));
         (,, uint256 feeBps2, address recipient2) = fund.config();
         assertEq(feeBps2, 20, "timelock set fee bps");

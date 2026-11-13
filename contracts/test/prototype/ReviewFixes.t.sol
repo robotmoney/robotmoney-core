@@ -21,7 +21,9 @@ contract ReviewFixesRebalancerTest is PrototypeHarness {
     /// @notice R-F1: a basket asset whose step cap is below `minStepUsdc` (here: its depth cannot be read) must not
     ///         become a leg that can only skip `BelowMinStep`; the next asset behind it trades.
     function test_RF1_aDepthCappedAssetIsMaskedAndTheRestOfThePlanTrades() public fixtureCovered {
-        setTargetViaTimelock(assetVec(1_500, 1_500, 5_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        setTargetViaTimelock(
+            assetVec(1_500, 1_500, 5_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
         _depthUnreadable(WETH_POOL);
         vm.warp(block.timestamp + rebalancer.effectiveStepInterval());
         refreshFeeds();
@@ -44,11 +46,17 @@ contract ReviewFixesRebalancerTest is PrototypeHarness {
             vm.warp(block.timestamp + rebalancer.effectiveStepInterval());
             refreshFeeds();
             (why, s, b,) = rebalancer.previewStep();
-            if (why == SkipReason.DepthCap || block.timestamp > fund.plan().endTime + 2 hours) break;
+            if (why == SkipReason.DepthCap || block.timestamp > fund.plan().endTime + 2 hours) {
+                break;
+            }
             if (why == SkipReason.None) keeperStep();
             if (k % 8 == 7) coverageCheckpoint();
         }
-        assertEq(uint8(why), uint8(SkipReason.DepthCap), "only wETH is under target, and it is depth capped");
+        assertEq(
+            uint8(why),
+            uint8(SkipReason.DepthCap),
+            "only wETH is under target, and it is depth capped"
+        );
         assertEq(s, IDLE_INDEX, "no leg");
         assertEq(b, IDLE_INDEX, "no leg");
     }
@@ -59,7 +67,9 @@ contract ReviewFixesRebalancerTest is PrototypeHarness {
         uint256 capBefore = rebalancer.assetStepCap(IDX_WETH);
         vm.store(address(rebalancer), bytes32(uint256(4)), bytes32(0));
         assertEq(rebalancer.stepDepthBps(), 5, "the default");
-        assertEq(rebalancer.assetStepCap(IDX_WETH), capBefore, "the same cap as the initialized default");
+        assertEq(
+            rebalancer.assetStepCap(IDX_WETH), capBefore, "the same cap as the initialized default"
+        );
         assertGt(capBefore, 0, "non-zero");
     }
 
@@ -68,12 +78,18 @@ contract ReviewFixesRebalancerTest is PrototypeHarness {
     function test_RF5_aConvergedPlanIsNotLabelledExpiredAtTheOverrunEdge() public fixtureCovered {
         uint16[5] memory v = assetVec(1_500, 1_500, 5_000, 2_000, 0);
         investFund(v);
-        assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Converged), "setup: the first plan converged");
+        assertEq(
+            uint8(fund.planStatus()), uint8(PlanStatus.Converged), "setup: the first plan converged"
+        );
         setTargetViaTimelock(v, PlanParams(1 days, COST_BUDGET_BPS));
         vm.warp(uint256(fund.plan().endTime) + MAX_OVERRUN + 1);
         refreshFeeds();
         keeperStep();
-        assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Converged), "within tolerance: Converged, not Expired");
+        assertEq(
+            uint8(fund.planStatus()),
+            uint8(PlanStatus.Converged),
+            "within tolerance: Converged, not Expired"
+        );
     }
 
     /// @dev Make every depth read of `pool` revert (both the 2-point read of the code before the R-F2 fix and the
@@ -120,7 +136,11 @@ contract ThinStretchPool {
         return uint160((thickSecs << 128) / L + (thinSecs << 128));
     }
 
-    function observe(uint32[] calldata ago) external view returns (int56[] memory tc, uint160[] memory spl) {
+    function observe(uint32[] calldata ago)
+        external
+        view
+        returns (int56[] memory tc, uint160[] memory spl)
+    {
         tc = new int56[](ago.length);
         spl = new uint160[](ago.length);
         for (uint256 i; i < ago.length; ++i) {
@@ -174,13 +194,21 @@ contract ReviewFixesQueueTest is FlowQueueFixesBase {
 
     /// @notice Q-F1: an excluded lending venue whose rate read fails does not hold the settlement (E13: redemptions
     ///         settle alone during an exclusion). Before the fix check 5 read every active venue: `LendRate`.
-    function test_QF1_anExcludedVenueWithAFailingRateDoesNotHoldRedemptions() public fixtureCovered {
+    function test_QF1_anExcludedVenueWithAFailingRateDoesNotHoldRedemptions()
+        public
+        fixtureCovered
+    {
         uint256 red = _redemptionAfterAReference();
         timelockExecute(
-            address(fund), abi.encodeCall(fund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, false))
+            address(fund),
+            abi.encodeCall(
+                fund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, false)
+            )
         );
         assertGt(fund.openExclusionOf(IDX_MOONWELL), 0, "Moonwell excluded");
-        vm.mockCallRevert(address(moonwellAdapter), abi.encodeCall(ILendingRateAdapter.ratePerUnit, ()), "revoked");
+        vm.mockCallRevert(
+            address(moonwellAdapter), abi.encodeCall(ILendingRateAdapter.ratePerUnit, ()), "revoked"
+        );
         warpToSettleable(red);
         refreshFeeds();
         (bool ok, bytes memory ret) = _trySettle(keeper, SETTLE_MAX_REQUESTS, type(uint256).max);
@@ -210,7 +238,10 @@ contract ReviewFixesQueueTest is FlowQueueFixesBase {
     /// @notice Q-F3: a revoke then a re-allow of a lending venue between two settlements (the restore drains it
     ///         into its record) does not trip the share-price breaker. Before the fix the mask was the same at both
     ///         ends, nothing was re-based, and check 6 held both sides.
-    function test_QF3_aRevokeThenReallowBetweenSettlementsDoesNotTripTheBreaker() public fixtureCovered {
+    function test_QF3_aRevokeThenReallowBetweenSettlementsDoesNotTripTheBreaker()
+        public
+        fixtureCovered
+    {
         uint256 red = _redemptionAfterAReference();
         bytes32 h = address(moonwellAdapter).codehash;
         timelockExecute(address(fund), abi.encodeCall(fund.setAdapterCodeHashAllowed, (h, false)));

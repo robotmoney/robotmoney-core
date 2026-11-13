@@ -9,7 +9,14 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {AssetConfig, AssetKind, BPS, IDLE_INDEX, LENDING_ROUNDING_UNITS, PRICE_SCALE} from "../FundTypes.sol";
+import {
+    AssetConfig,
+    AssetKind,
+    BPS,
+    IDLE_INDEX,
+    LENDING_ROUNDING_UNITS,
+    PRICE_SCALE
+} from "../FundTypes.sol";
 import {
     AssetPrice,
     Claim,
@@ -35,8 +42,13 @@ import {FundValuationLib} from "./FundValuationLib.sol";
 ///         fund traded, reverts that side completely and leaves the other side's result standing (coordinator
 ///         ruling 1, RB-15). Only the queue itself can call them (`OnlySelf`).
 interface IFlowQueueSides {
-    function settleRedeemSide(uint256 settlementId, Fill[] calldata fills, SettleContext calldata c) external;
-    function settleDepositSide(uint256 settlementId, Fill[] calldata fills, SettleContext calldata c) external;
+    function settleRedeemSide(uint256 settlementId, Fill[] calldata fills, SettleContext calldata c)
+        external;
+    function settleDepositSide(
+        uint256 settlementId,
+        Fill[] calldata fills,
+        SettleContext calldata c
+    ) external;
 }
 
 /// @title FlowSettleLib
@@ -154,7 +166,9 @@ library FlowSettleLib {
         w.dep = new Fill[](w.budget);
         w.red = new Fill[](w.budget);
         _rooms(s, c, w, maxUsdc);
-        if (c.redeemBound != 0 && c.navFeed != 0 && w.redRoom != 0) w.redPos = _walkSide(s, c, w, RequestKind.Redeem);
+        if (c.redeemBound != 0 && c.navFeed != 0 && w.redRoom != 0) {
+            w.redPos = _walkSide(s, c, w, RequestKind.Redeem);
+        }
         if (c.depositsOpen && c.depositBound != 0 && w.depRoom != 0) {
             w.depPos = _walkSide(s, c, w, RequestKind.Deposit);
         }
@@ -165,7 +179,9 @@ library FlowSettleLib {
         _moveCursor(s, w.cls, RequestKind.Deposit, w.depPos, w.nDep == 0 || depOk);
         _rememberOldest(s, c);
         // A per-call basket cap below the minimum fill holds every request; say so (review Q-F5).
-        if (w.callRoomLow && w.nRed == 0 && w.nDep == 0) emit IFlowEvents.SettleCallRoomBelowMinimum(w.depRoom, w.redRoom);
+        if (w.callRoomLow && w.nRed == 0 && w.nDep == 0) {
+            emit IFlowEvents.SettleCallRoomBelowMinimum(w.depRoom, w.redRoom);
+        }
         if (!redOk && !depOk) return 0;
 
         // ── Step 12: record ──
@@ -202,7 +218,10 @@ library FlowSettleLib {
     /// @dev Each side's room in this call (E20, ruling 2): the period's cap less what the period already used (a
     ///      cap counts per epoch of clock time, so a backlog of epochs cannot stack caps), the TVL cap for
     ///      deposits, and `maxUsdc` for each side.
-    function _rooms(FlowState storage s, SettleContext memory c, Walk memory w, uint256 maxUsdc) private view {
+    function _rooms(FlowState storage s, SettleContext memory c, Walk memory w, uint256 maxUsdc)
+        private
+        view
+    {
         FlowParams memory p = s.params;
         w.cur = FlowEpochs.current(s);
         w.period = w.cur;
@@ -231,10 +250,13 @@ library FlowSettleLib {
     ///      under the lever gets the cap less what that side already traded in the block, so the parts of a large
     ///      flow land in different blocks, and a small call cannot take the whole block's room (review Q-F2).
     ///      A side whose cap is below its minimum fill is flagged (`w.callRoomLow`), so the halt is visible.
-    function _basketCallRoom(FlowState storage s, SettleContext memory c, Walk memory w, uint256 callBps, uint32 window)
-        private
-        view
-    {
+    function _basketCallRoom(
+        FlowState storage s,
+        SettleContext memory c,
+        Walk memory w,
+        uint256 callBps,
+        uint32 window
+    ) private view {
         uint256 depCap = type(uint256).max;
         uint256 redCap = type(uint256).max;
         AssetConfig[] memory cfg = IRobotMoneyFundFull(s.fund).assetConfigs();
@@ -243,7 +265,8 @@ library FlowSettleLib {
             if (ap.kind != PRICE_KIND_BASKET || c.held[i] == 0) continue;
             uint256 value = c.held[i].mulDiv(ap.feedPerToken, ap.unit, Math.Rounding.Ceil);
             (bool ok, uint256 depth) = FundValuationLib.poolUsdcDepth(cfg[i].pool, s.usdc, window);
-            uint256 room = ok && value != 0 ? depth.mulDiv(callBps, BPS).mulDiv(c.navFeed, value) : 0;
+            uint256 room =
+                ok && value != 0 ? depth.mulDiv(callBps, BPS).mulDiv(c.navFeed, value) : 0;
             if (room < depCap) depCap = room;
             if (room < redCap) redCap = room;
         }
@@ -312,7 +335,13 @@ library FlowSettleLib {
     /// @dev After the sides: the cursor of this caller class on side `kind`. A pass that reached the end starts again
     ///      at the oldest epoch. Otherwise the cursor stays on the first fill of a side that failed, else on the first
     ///      request held or filled in part, else where the walk stopped. A side not walked keeps its cursor.
-    function _moveCursor(FlowState storage s, uint8 cls, RequestKind kind, SidePos memory pos, bool sideOk) private {
+    function _moveCursor(
+        FlowState storage s,
+        uint8 cls,
+        RequestKind kind,
+        SidePos memory pos,
+        bool sideOk
+    ) private {
         if (!pos.walked) return;
         WalkCursor storage at = s.cursors[cls][uint8(kind)];
         if (pos.ended) {
@@ -342,10 +371,13 @@ library FlowSettleLib {
     }
 
     /// @dev Decide one request (see `Outcome`).
-    function _consider(FlowState storage s, SettleContext memory c, Walk memory w, RequestKind kind, uint256 id)
-        private
-        returns (Outcome)
-    {
+    function _consider(
+        FlowState storage s,
+        SettleContext memory c,
+        Walk memory w,
+        RequestKind kind,
+        uint256 id
+    ) private returns (Outcome) {
         Request storage r = s.requests[id];
         if (r.closed || r.remaining == 0) return Outcome.Pass;
         if (w.cur > uint256(r.epoch) + w.maxRoll) return Outcome.Pass; // expired (E18): only withdrawExpired or cancel
@@ -353,10 +385,13 @@ library FlowSettleLib {
         return _considerRedeem(c, w, id, r.remaining, r.limit);
     }
 
-    function _considerDeposit(SettleContext memory c, Walk memory w, uint256 id, uint256 remaining, uint256 limit)
-        private
-        returns (Outcome)
-    {
+    function _considerDeposit(
+        SettleContext memory c,
+        Walk memory w,
+        uint256 id,
+        uint256 remaining,
+        uint256 limit
+    ) private returns (Outcome) {
         // Refused at its whole remaining size, the size with the smallest rounding allowance: refused at any size.
         uint256 allowance = FlowCheckLib.depositAllowance(c.depositBound, remaining);
         if (allowance == type(uint256).max || limit < c.depositBound + allowance) {
@@ -367,7 +402,9 @@ library FlowSettleLib {
         if (amt == 0) return Outcome.Hold; // the cap, the TVL cap or `maxUsdc` leaves it pending (ruling 2)
         if (amt < remaining) {
             allowance = FlowCheckLib.depositAllowance(c.depositBound, amt);
-            if (allowance == type(uint256).max || limit < c.depositBound + allowance) return Outcome.Hold;
+            if (allowance == type(uint256).max || limit < c.depositBound + allowance) {
+                return Outcome.Hold;
+            }
         }
         w.dep[w.nDep++] = Fill({requestId: id, amount: amt, capValue: amt});
         w.depTotal += amt;
@@ -375,10 +412,13 @@ library FlowSettleLib {
     }
 
     /// @dev Redemptions count against the cap at their value at the feeds (rounded UP).
-    function _considerRedeem(SettleContext memory c, Walk memory w, uint256 id, uint256 remaining, uint256 limit)
-        private
-        returns (Outcome)
-    {
+    function _considerRedeem(
+        SettleContext memory c,
+        Walk memory w,
+        uint256 id,
+        uint256 remaining,
+        uint256 limit
+    ) private returns (Outcome) {
         // Written so a user limit near 2^256 cannot overflow and revert the whole call.
         uint256 allowance = FlowCheckLib.redeemAllowance(remaining);
         if (allowance >= c.redeemBound || limit > c.redeemBound - allowance) {
@@ -396,7 +436,9 @@ library FlowSettleLib {
         if (value > room) return Outcome.Hold;
         if (amt < remaining) {
             allowance = FlowCheckLib.redeemAllowance(amt);
-            if (allowance >= c.redeemBound || limit > c.redeemBound - allowance) return Outcome.Hold;
+            if (allowance >= c.redeemBound || limit > c.redeemBound - allowance) {
+                return Outcome.Hold;
+            }
         }
         w.red[w.nRed++] = Fill({requestId: id, amount: amt, capValue: value});
         w.redValue += value;
@@ -406,7 +448,11 @@ library FlowSettleLib {
     /// @dev The fill of a request with `remaining` against `room`: all of it if it fits; else a part of at least
     ///      `minFill` that leaves at least `minFill` behind (so no dust remainder is ever created, and every partial
     ///      fill is large enough for the bound's rounding term); else 0 (it waits).
-    function _partial(uint256 remaining, uint256 room, uint256 minFill) private pure returns (uint256) {
+    function _partial(uint256 remaining, uint256 room, uint256 minFill)
+        private
+        pure
+        returns (uint256)
+    {
         if (remaining <= room) return remaining;
         if (remaining < 2 * minFill) return 0;
         uint256 amt = room < remaining - minFill ? room : remaining - minFill;
@@ -429,7 +475,10 @@ library FlowSettleLib {
     ///      `SettleSideOutOfGas` unless it can hand the side its whole budget (`budget × 64/63` plus the call's
     ///      overhead must be left), so starving a side is impossible. The revert data copied back is capped at
     ///      `MAX_REASON_BYTES`, so a venue's huge revert data cannot burn `settle`'s own gas either.
-    function _runSide(SettleContext memory c, Walk memory w, RequestKind kind) private returns (bool ok) {
+    function _runSide(SettleContext memory c, Walk memory w, RequestKind kind)
+        private
+        returns (bool ok)
+    {
         bool red = kind == RequestKind.Redeem;
         Fill[] memory fills = red ? w.red : w.dep;
         uint256 n = red ? w.nRed : w.nDep;
@@ -438,7 +487,9 @@ library FlowSettleLib {
             ? abi.encodeCall(IFlowQueueSides.settleRedeemSide, (w.settlementId, fills, c))
             : abi.encodeCall(IFlowQueueSides.settleDepositSide, (w.settlementId, fills, c));
         uint256 budget = sideGas(c.prices.length, n);
-        if (gasleft() < budget + budget / 63 + SIDE_CALL_MARGIN) revert IFlowEvents.SettleSideOutOfGas(kind);
+        if (gasleft() < budget + budget / 63 + SIDE_CALL_MARGIN) {
+            revert IFlowEvents.SettleSideOutOfGas(kind);
+        }
         bytes memory reason;
         assembly ("memory-safe") {
             ok := call(budget, address(), 0, add(data, 32), mload(data), 0, 0)
@@ -461,7 +512,8 @@ library FlowSettleLib {
     ///      Check 6 (item 9): the exclusion mask and each lending venue's held amount per share.
     function _recordReferences(FlowState storage s, SettleContext memory c) private {
         s.lastExcludedMask = c.excludedMask;
-        s.lastExclusionCount = IExclusionLedgerView(IRobotMoneyFundFull(s.fund).exclusionLedger()).exclusionCount();
+        s.lastExclusionCount =
+            IExclusionLedgerView(IRobotMoneyFundFull(s.fund).exclusionLedger()).exclusionCount();
         AssetConfig[] memory cfg = IRobotMoneyFundFull(s.fund).assetConfigs();
         for (uint256 i; i < c.prices.length; ++i) {
             if (c.prices[i].kind != PRICE_KIND_LENDING) continue;
@@ -501,7 +553,9 @@ library FlowSettleLib {
         uint64 cur = FlowEpochs.current(s);
         uint64 from = cur > MAX_ROLL ? cur - MAX_ROLL : 0;
         for (uint64 e = from; e <= cur; ++e) {
-            if (s.epochOpen[e] != 0 && s.epochEnd[e] == 0) s.epochEnd[e] = uint64(FlowEpochs.endOf(s, e));
+            if (s.epochOpen[e] != 0 && s.epochEnd[e] == 0) {
+                s.epochEnd[e] = uint64(FlowEpochs.endOf(s, e));
+            }
         }
         uint256 endCur = FlowEpochs.endOf(s, cur);
         s.epochAnchorIndex = cur + 1;
@@ -515,9 +569,12 @@ library FlowSettleLib {
     /// @notice One call into the fund for every redemption fill (E4): `sellForFlow` with a minimum per sale (check 8),
     ///         then check 11 for the batch and for each fill against its own limit, then the claims (step 12).
     ///         Runs inside the queue's self-call; any revert here undoes the whole side.
-    function redeemSide(FlowState storage s, uint256 settlementId, Fill[] memory fills, SettleContext memory c)
-        public
-    {
+    function redeemSide(
+        FlowState storage s,
+        uint256 settlementId,
+        Fill[] memory fills,
+        SettleContext memory c
+    ) public {
         IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
         uint256 x;
         for (uint256 k; k < fills.length; ++k) {
@@ -562,9 +619,13 @@ library FlowSettleLib {
     }
 
     /// @dev Step 12 for the redemption fills: USDC per fill DOWN, each fill checked against its own limit.
-    function _recordRedeems(FlowState storage s, uint256 settlementId, Fill[] memory fills, uint256 x, uint256 out)
-        private
-    {
+    function _recordRedeems(
+        FlowState storage s,
+        uint256 settlementId,
+        Fill[] memory fills,
+        uint256 x,
+        uint256 out
+    ) private {
         IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
         uint256 period = FlowEpochs.current(s);
         uint256 paid;
@@ -583,7 +644,9 @@ library FlowSettleLib {
             s.totalEscrowShares -= f.amount;
             r.remaining -= f.amount;
             if (r.remaining == 0) _close(s, r);
-            Claim memory cl = _claim(f.requestId, r.owner, RequestKind.Redeem, settlementId, uint64(block.timestamp));
+            Claim memory cl = _claim(
+                f.requestId, r.owner, RequestKind.Redeem, settlementId, uint64(block.timestamp)
+            );
             cl.shares = f.amount;
             cl.usdc = usdcK;
             uint256 claimId = _newClaim(s, cl);
@@ -603,9 +666,12 @@ library FlowSettleLib {
     ///         a maximum per purchase (check 9), then check 11 for the batch and for each fill, then the claims with
     ///         their unlock time (E8) and the refund of unused USDC as credit (E22). The purchase is sized from the
     ///         fund's holdings AFTER the redemption side, read fresh here.
-    function depositSide(FlowState storage s, uint256 settlementId, Fill[] memory fills, SettleContext memory c)
-        public
-    {
+    function depositSide(
+        FlowState storage s,
+        uint256 settlementId,
+        Fill[] memory fills,
+        SettleContext memory c
+    ) public {
         IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
         uint256 u;
         for (uint256 k; k < fills.length; ++k) {
@@ -621,11 +687,12 @@ library FlowSettleLib {
             for (uint256 i; i < c.prices.length; ++i) {
                 AssetPrice memory ap = c.prices[i];
                 if (ap.kind == PRICE_KIND_LENDING) {
-                    worst += held[i].mulDiv(sharesOut, supply, Math.Rounding.Ceil) + LENDING_ROUNDING_UNITS;
+                    worst += held[i].mulDiv(sharesOut, supply, Math.Rounding.Ceil)
+                    + LENDING_ROUNDING_UNITS;
                 } else if (ap.kind == PRICE_KIND_BASKET) {
-                    maxIn[i] = held[i].mulDiv(sharesOut, supply, Math.Rounding.Ceil).mulDiv(
-                        ap.buyPerToken, ap.unit, Math.Rounding.Ceil
-                    );
+                    maxIn[i] = held[i]
+                        .mulDiv(sharesOut, supply, Math.Rounding.Ceil)
+                        .mulDiv(ap.buyPerToken, ap.unit, Math.Rounding.Ceil);
                     worst += maxIn[i];
                 }
             }
@@ -719,12 +786,15 @@ library FlowSettleLib {
             s.totalCreditUsdc += refundK;
             emit IFlowEvents.CreditAdded(owner, refundK, 0);
         }
-        Claim memory cl = _claim(f.requestId, owner, RequestKind.Deposit, b.settlementId, b.unlockAt);
+        Claim memory cl =
+            _claim(f.requestId, owner, RequestKind.Deposit, b.settlementId, b.unlockAt);
         cl.shares = sharesK;
         cl.usdc = costK;
         uint256 claimId = _newClaim(s, cl);
         s.depositUsed[b.period] += f.capValue;
-        emit IFlowEvents.DepositFilled(f.requestId, claimId, b.settlementId, costK, sharesK, b.unlockAt);
+        emit IFlowEvents.DepositFilled(
+            f.requestId, claimId, b.settlementId, costK, sharesK, b.unlockAt
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -739,11 +809,13 @@ library FlowSettleLib {
         s.requestClaims[c.requestId].push(claimId);
     }
 
-    function _claim(uint256 requestId, address owner, RequestKind kind, uint256 settlementId, uint64 unlockAt)
-        private
-        pure
-        returns (Claim memory c)
-    {
+    function _claim(
+        uint256 requestId,
+        address owner,
+        RequestKind kind,
+        uint256 settlementId,
+        uint64 unlockAt
+    ) private pure returns (Claim memory c) {
         c.requestId = requestId;
         c.owner = owner;
         c.kind = kind;

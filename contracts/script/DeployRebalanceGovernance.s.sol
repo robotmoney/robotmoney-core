@@ -59,8 +59,14 @@ contract DeployRebalanceGovernance is FundSystemBase {
         RebalanceGovernance g = RebalanceGovernance(d.governance);
         require(g.hasRole(Roles.ADMIN_ROLE, admin), "governance: deployer lacks ADMIN_ROLE");
         require(g.upgradeTimelock() == d.upgrade.timelock, "governance: upgradeTimelock");
-        require(address(g.fund()) == d.fund && address(g.receipts()) == d.receipts, "governance: fund or receipts");
-        require(_implementationOf(d.governance) == d.governanceImplementation, "governance: implementation slot");
+        require(
+            address(g.fund()) == d.fund && address(g.receipts()) == d.receipts,
+            "governance: fund or receipts"
+        );
+        require(
+            _implementationOf(d.governance) == d.governanceImplementation,
+            "governance: implementation slot"
+        );
         _writeDeploymentJson(d);
     }
 
@@ -75,7 +81,8 @@ contract DeployRebalanceGovernance is FundSystemBase {
         vm.serializeUint(obj, "plan_duration", d.plan.duration);
         vm.serializeUint(obj, "plan_cost_budget_bps", d.plan.costBudgetBps);
         vm.serializeAddress(obj, "upgrade_timelock", d.upgrade.timelock);
-        string memory json = vm.serializeString(obj, "upgrade_mode", upgradeModeName(d.upgrade.mode));
+        string memory json =
+            vm.serializeString(obj, "upgrade_mode", upgradeModeName(d.upgrade.mode));
         vm.writeJson(json, outPath);
         console2.log("Wrote fund-governance deployment JSON to", outPath);
     }

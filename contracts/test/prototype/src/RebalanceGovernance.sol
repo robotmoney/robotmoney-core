@@ -11,7 +11,9 @@ import {
     ReentrancyGuardUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {GovernedUUPS} from "../../../lib/GovernedUUPS.sol";
-import {IConsensusRecommendationReceipt} from "../../../interfaces/IConsensusRecommendationReceipt.sol";
+import {
+    IConsensusRecommendationReceipt
+} from "../../../interfaces/IConsensusRecommendationReceipt.sol";
 import {
     PlanParams,
     Roles,
@@ -167,12 +169,11 @@ contract RebalanceGovernance is
     /// @inheritdoc IRebalanceGovernance
     /// @dev §6 (the old `setDefaultWeights`), RB-1. Opens a plan with `receiptId == 0`. Does not
     ///      touch `lastAppliedRecordedAt`, so a later receipt still applies.
-    function setTarget(address[] calldata assets, uint256[] calldata bps, PlanParams calldata params)
-        external
-        onlyRole(ADMIN_ROLE)
-        nonReentrant
-        returns (uint256 planId)
-    {
+    function setTarget(
+        address[] calldata assets,
+        uint256[] calldata bps,
+        PlanParams calldata params
+    ) external onlyRole(ADMIN_ROLE) nonReentrant returns (uint256 planId) {
         _checkPlanParams(params);
         planId = fund.setTargetAndOpenPlan(assets, bps, params, bytes32(0));
         emit TargetSet(assets, bps, params, planId);

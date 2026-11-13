@@ -56,19 +56,36 @@ contract AuctionExecutorTest is BaselineHarness, IAuctionFiller {
     //  Filler
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    function onAuctionLeg(address tokenIn, address tokenOut, uint256 amountIn, uint256 owed, uint256 q, uint256 floor)
-        external
-    {
+    function onAuctionLeg(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 owed,
+        uint256 q,
+        uint256 floor
+    ) external {
         require(msg.sender == address(exec), "only the executor");
-        legs.push(Leg(tokenIn, tokenOut, amountIn, owed, q, floor, IERC20(tokenIn).balanceOf(address(this))));
+        legs.push(
+            Leg(
+                tokenIn,
+                tokenOut,
+                amountIn,
+                owed,
+                q,
+                floor,
+                IERC20(tokenIn).balanceOf(address(this))
+            )
+        );
         if (tryReenter) {
             try exec.fill() {}
             catch (bytes memory err) {
-                fillReentryRefused = bytes4(err) == ReentrancyGuard.ReentrancyGuardReentrantCall.selector;
+                fillReentryRefused =
+                    bytes4(err) == ReentrancyGuard.ReentrancyGuardReentrantCall.selector;
             }
             try exec.open() {}
             catch (bytes memory err) {
-                openReentryRefused = bytes4(err) == ReentrancyGuard.ReentrancyGuardReentrantCall.selector;
+                openReentryRefused =
+                    bytes4(err) == ReentrancyGuard.ReentrancyGuardReentrantCall.selector;
             }
         }
         uint256 pay = payShort ? owed - 1 : owed;
@@ -105,8 +122,16 @@ contract AuctionExecutorTest is BaselineHarness, IAuctionFiller {
         assertEq(l.q, q, "quote is the fund's own TWAP quote");
         assertEq(l.floor, floor, "floor is the swap path's TWAP floor");
         assertEq(l.owed, q * (BPS + PREMIUM_BPS) / BPS, "owed at the open = TWAP + premium");
-        assertEq(IERC20(WETH).balanceOf(address(fund)) - wethBefore, l.owed, "the fund received what it was owed");
-        assertEq(IERC20(USDC).balanceOf(address(this)) - usdcBefore, notional, "filler received the fund's USDC");
+        assertEq(
+            IERC20(WETH).balanceOf(address(fund)) - wethBefore,
+            l.owed,
+            "the fund received what it was owed"
+        );
+        assertEq(
+            IERC20(USDC).balanceOf(address(this)) - usdcBefore,
+            notional,
+            "filler received the fund's USDC"
+        );
         assertEq(IERC20(USDC).balanceOf(address(exec)), 0, "executor holds no USDC");
         assertEq(IERC20(WETH).balanceOf(address(exec)), 0, "executor holds no wETH");
         assertEq(fund.lastStepAt(), vm.getBlockTimestamp(), "the step was recorded");
@@ -143,10 +168,14 @@ contract AuctionExecutorTest is BaselineHarness, IAuctionFiller {
         assertGt(ratio[1], ratio[2], "keeps falling");
         uint256 start = 1e18 * (BPS + PREMIUM_BPS) / BPS;
         uint256 end = 1e18 * (BPS - rebalancer.assetStepParams(IDX_WETH).maxStepSlippageBps) / BPS;
-        assertApproxEqAbs(ratio[1], start - (start - end) / 4, 1e12, "a quarter of the way down at D/4");
+        assertApproxEqAbs(
+            ratio[1], start - (start - end) / 4, 1e12, "a quarter of the way down at D/4"
+        );
         assertApproxEqAbs(ratio[2], (start + end) / 2, 1e12, "halfway down at D/2");
         assertEq(exec.owedAt(l.q, l.floor, DURATION), l.floor, "the floor at DURATION");
-        assertEq(exec.owedAt(l.q, l.floor, 2 * uint256(DURATION)), l.floor, "the floor after DURATION");
+        assertEq(
+            exec.owedAt(l.q, l.floor, 2 * uint256(DURATION)), l.floor, "the floor after DURATION"
+        );
         assertEq(exec.owedAt(l.q, l.q * 2, 0), l.q * 2, "never below a floor above the start");
     }
 
@@ -163,7 +192,11 @@ contract AuctionExecutorTest is BaselineHarness, IAuctionFiller {
         uint256 wethBefore = IERC20(WETH).balanceOf(address(fund));
         uint256 idleBefore = fund.idleUsdc();
         payShort = true;
-        vm.expectRevert(abi.encodeWithSelector(AuctionStepExecutor.FillNotExecuted.selector, SkipReason.StepFailed));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AuctionStepExecutor.FillNotExecuted.selector, SkipReason.StepFailed
+            )
+        );
         exec.fill();
         assertEq(IERC20(WETH).balanceOf(address(fund)), wethBefore, "no wETH moved");
         assertEq(fund.idleUsdc(), idleBefore, "no USDC moved");
@@ -189,12 +222,16 @@ contract AuctionExecutorTest is BaselineHarness, IAuctionFiller {
         exec.open();
 
         vm.warp(expires + 1);
-        vm.expectRevert(abi.encodeWithSelector(AuctionStepExecutor.AuctionExpired.selector, expires));
+        vm.expectRevert(
+            abi.encodeWithSelector(AuctionStepExecutor.AuctionExpired.selector, expires)
+        );
         exec.fill();
         exec.open();
         exec.fill();
 
-        vm.expectRevert(abi.encodeWithSelector(AuctionStepExecutor.NotReady.selector, SkipReason.Cooldown));
+        vm.expectRevert(
+            abi.encodeWithSelector(AuctionStepExecutor.NotReady.selector, SkipReason.Cooldown)
+        );
         exec.open();
         vm.expectRevert(AuctionStepExecutor.NoAuction.selector);
         exec.fill();
@@ -208,7 +245,9 @@ contract AuctionExecutorTest is BaselineHarness, IAuctionFiller {
         _pushUp(WETH_POOL, IDX_WETH, NAV_DEVIATION_BPS + 1);
         uint256 wethBefore = IERC20(WETH).balanceOf(address(fund));
         vm.expectRevert(
-            abi.encodeWithSelector(AuctionStepExecutor.FillNotExecuted.selector, SkipReason.MarketDeviation)
+            abi.encodeWithSelector(
+                AuctionStepExecutor.FillNotExecuted.selector, SkipReason.MarketDeviation
+            )
         );
         exec.fill();
         assertEq(IERC20(WETH).balanceOf(address(fund)), wethBefore, "nothing traded");
@@ -221,10 +260,12 @@ contract AuctionExecutorTest is BaselineHarness, IAuctionFiller {
     function test_fillAtDespxaFloor_hitsTheStepCostCap() public fixtureCovered {
         deposit(alice, 100_000e6);
         timelockExecute(
-            address(rebalancer), abi.encodeCall(rebalancer.setAssetStepParams, (IDX_WETH, AssetStepParams(0, 0)))
+            address(rebalancer),
+            abi.encodeCall(rebalancer.setAssetStepParams, (IDX_WETH, AssetStepParams(0, 0)))
         );
         timelockExecute(
-            address(rebalancer), abi.encodeCall(rebalancer.setAssetStepParams, (IDX_CBBTC, AssetStepParams(0, 0)))
+            address(rebalancer),
+            abi.encodeCall(rebalancer.setAssetStepParams, (IDX_CBBTC, AssetStepParams(0, 0)))
         );
         recordAndApply(bucketVec(0, 0, 10_000));
         vm.warp(fund.plan().endTime);
@@ -243,7 +284,11 @@ contract AuctionExecutorTest is BaselineHarness, IAuctionFiller {
 
         uint256 snap = vm.snapshotState();
         vm.warp(t0 + DURATION);
-        vm.expectRevert(abi.encodeWithSelector(AuctionStepExecutor.FillNotExecuted.selector, SkipReason.StepFailed));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AuctionStepExecutor.FillNotExecuted.selector, SkipReason.StepFailed
+            )
+        );
         exec.fill();
         assertEq(IERC20(DESPXA).balanceOf(address(fund)), balBefore, "no deSPXA moved");
         assertEq(fund.idleUsdc(), idleBefore, "no USDC moved");
@@ -292,7 +337,10 @@ contract AuctionExecutorTest is BaselineHarness, IAuctionFiller {
         vm.warp(fund.plan().endTime);
         (SkipReason r, uint256 sell,, uint256 notional) = rebalancer.previewStep();
         assertEq(uint8(r), uint8(SkipReason.None), "a step is ready");
-        assertTrue(sell != IDLE_INDEX && fund.assetConfig(sell).kind == AssetKind.Basket, "sells a basket asset");
+        assertTrue(
+            sell != IDLE_INDEX && fund.assetConfig(sell).kind == AssetKind.Basket,
+            "sells a basket asset"
+        );
         address token = fund.assetConfig(sell).token;
         uint256 amt = fund.assetTokenValue(sell, notional);
         uint256 q = fund.assetUsdcValue(sell, amt);
@@ -308,7 +356,9 @@ contract AuctionExecutorTest is BaselineHarness, IAuctionFiller {
         assertEq(l.q, q, "quote is the fund's TWAP value");
         assertEq(l.owed, q * (BPS + PREMIUM_BPS) / BPS, "owed at the open = TWAP + premium");
         assertGe(l.inReceived, amt, "filler received the fund's tokens");
-        assertEq(balBefore - IERC20(token).balanceOf(address(fund)), amt, "fund paid exactly the leg");
+        assertEq(
+            balBefore - IERC20(token).balanceOf(address(fund)), amt, "fund paid exactly the leg"
+        );
         assertEq(IERC20(token).balanceOf(address(exec)), 0, "executor holds no token");
     }
 
@@ -321,7 +371,8 @@ contract AuctionExecutorTest is BaselineHarness, IAuctionFiller {
     function _wethBuyPlan() internal {
         deposit(alice, ALICE_DEPOSIT);
         timelockExecute(
-            address(rebalancer), abi.encodeCall(rebalancer.setAssetStepParams, (IDX_CBBTC, AssetStepParams(0, 0)))
+            address(rebalancer),
+            abi.encodeCall(rebalancer.setAssetStepParams, (IDX_CBBTC, AssetStepParams(0, 0)))
         );
         recordAndApply(bucketVec(0, 10_000, 0));
         vm.warp(fund.plan().endTime);

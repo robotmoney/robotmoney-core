@@ -104,7 +104,8 @@ abstract contract BaseFixture is Test {
     function _skipCovered(string memory reason) internal {
         if (fixtureCheck) this.checkFixtureCoverageNow();
         if (fixtureStrict) {
-            reason = bytes(reason).length == 0 ? SKIP_CHECKED : string.concat(reason, " ", SKIP_CHECKED);
+            reason =
+                bytes(reason).length == 0 ? SKIP_CHECKED : string.concat(reason, " ", SKIP_CHECKED);
         }
         if (bytes(reason).length == 0) vm.skip(true);
         else vm.skip(true, reason);
@@ -193,7 +194,9 @@ abstract contract BaseFixture is Test {
 
             for (uint256 j = 0; j < x.storageAccesses.length; j++) {
                 VmSafe.StorageAccess memory s = x.storageAccesses[j];
-                if (!_fxAccount[s.account] || _created[s.account] || _seen[s.account][s.slot]) continue;
+                if (!_fxAccount[s.account] || _created[s.account] || _seen[s.account][s.slot]) {
+                    continue;
+                }
                 _seen[s.account][s.slot] = true;
                 if (!_fxSlot[s.account][s.slot]) {
                     if (!s.isWrite) revert FixtureSlotMiss(s.account, s.slot);
@@ -236,8 +239,8 @@ abstract contract BaseFixture is Test {
             return;
         }
         if (
-            uint160(a) <= 0xffff || a == address(this) || a == VM_ADDRESS || a == CONSOLE || a == DEFAULT_SENDER
-                || a == LIBRARY_DEPLOYER
+            uint160(a) <= 0xffff || a == address(this) || a == VM_ADDRESS || a == CONSOLE
+                || a == DEFAULT_SENDER || a == LIBRARY_DEPLOYER
         ) return;
         // A contract the test created must be in the fixture (the record run reads every address it deploys to, so
         // the fixture holds its real balance). Other code the fixture lacks is forge's (linked libraries) or the

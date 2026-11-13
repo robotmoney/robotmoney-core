@@ -41,7 +41,8 @@ library FundValuationLib {
         AssetConfig storage a = s.assets[i];
         if (!a.active) return false;
         if (a.kind == AssetKind.Basket) return true;
-        return s.codeHashAllowed[a.adapter.codehash] && RobotMoneyVaultOps.exclusions().openExclusionOf[i] == 0;
+        return s.codeHashAllowed[a.adapter.codehash]
+            && RobotMoneyVaultOps.exclusions().openExclusionOf[i] == 0;
     }
 
     /// @notice True while an active Lending asset is excluded (ADP-2). Deposits close meanwhile, as on
@@ -105,17 +106,28 @@ library FundValuationLib {
     }
 
     /// @notice USDC value of `amount` of asset `i` at TWAP. Lending: identity.
-    function usdcValue(FundState storage s, uint256 i, uint256 amount) public view returns (uint256) {
+    function usdcValue(FundState storage s, uint256 i, uint256 amount)
+        public
+        view
+        returns (uint256)
+    {
         AssetConfig storage a = s.assets[i];
         if (a.kind == AssetKind.Lending || amount == 0) return amount;
-        return IBasketSwapAdapter(a.adapter).twapPrice(a.pool, a.token, s.usdc, amount, a.twapWindow);
+        return
+            IBasketSwapAdapter(a.adapter).twapPrice(a.pool, a.token, s.usdc, amount, a.twapWindow);
     }
 
     /// @notice Amount of asset `i` worth `usdcAmount` at TWAP. Lending: identity.
-    function tokenValue(FundState storage s, uint256 i, uint256 usdcAmount) public view returns (uint256) {
+    function tokenValue(FundState storage s, uint256 i, uint256 usdcAmount)
+        public
+        view
+        returns (uint256)
+    {
         AssetConfig storage a = s.assets[i];
         if (a.kind == AssetKind.Lending || usdcAmount == 0) return usdcAmount;
-        return IBasketSwapAdapter(a.adapter).twapPrice(a.pool, s.usdc, a.token, usdcAmount, a.twapWindow);
+        return
+            IBasketSwapAdapter(a.adapter)
+                .twapPrice(a.pool, s.usdc, a.token, usdcAmount, a.twapWindow);
     }
 
     // ─── ORA-4 (§4.3, §5.3 step 2) ───────────────────────────────────────────
@@ -125,7 +137,11 @@ library FundValuationLib {
     ///         cannot take or return USDC). A Basket asset whose TWAP, spot or probe read fails reads not ok
     ///         with `deviationBps == type(uint256).max`. Otherwise `ok` iff |spot − TWAP| / TWAP ≤ guard
     ///         (`TwapTickMath.deviationBps` arithmetic, with every external read wrapped in try/catch).
-    function marketCheck(FundState storage s, uint256 i) public view returns (bool ok, uint256 deviationBps) {
+    function marketCheck(FundState storage s, uint256 i)
+        public
+        view
+        returns (bool ok, uint256 deviationBps)
+    {
         if (i >= s.assets.length) return (false, 0);
         AssetConfig storage a = s.assets[i];
         if (a.kind == AssetKind.Lending) return (isCounted(s, i) || !a.active, 0);
@@ -152,14 +168,21 @@ library FundValuationLib {
     function requireMarket(FundState storage s, uint256 i) internal view {
         (bool ok, uint256 dev) = marketCheck(s, i);
         if (!ok) {
-            revert IRobotMoneyFund.NavMarketDeviationExceeded(s.assets[i].token, dev, s.navDeviationGuardBps);
+            revert IRobotMoneyFund.NavMarketDeviationExceeded(
+                s.assets[i].token, dev, s.navDeviationGuardBps
+            );
         }
     }
 
     /// @dev |spot − TWAP| / TWAP in bps on a 1 USDC probe of the token; `read` false when any read reverts.
-    function _deviation(address usdc, AssetConfig storage a) private view returns (bool read, uint256 dev) {
+    function _deviation(address usdc, AssetConfig storage a)
+        private
+        view
+        returns (bool read, uint256 dev)
+    {
         uint256 probe;
-        try IBasketSwapAdapter(a.adapter).twapPrice(a.pool, usdc, a.token, ORA4_PROBE_USDC, a.twapWindow) returns (
+        try IBasketSwapAdapter(a.adapter)
+            .twapPrice(a.pool, usdc, a.token, ORA4_PROBE_USDC, a.twapWindow) returns (
             uint256 q
         ) {
             probe = q;
@@ -186,7 +209,9 @@ library FundValuationLib {
     function _tryMeanTick(address pool, uint32 window) private view returns (bool ok, int24 tick) {
         uint32[] memory secondsAgos = new uint32[](2);
         secondsAgos[0] = window;
-        try IObservablePool(pool).observe(secondsAgos) returns (int56[] memory cums, uint160[] memory) {
+        try IObservablePool(pool).observe(secondsAgos) returns (
+            int56[] memory cums, uint160[] memory
+        ) {
             int56 delta = cums[1] - cums[0];
             int56 w = int56(uint56(window));
             tick = int24(delta / w);
@@ -212,7 +237,11 @@ library FundValuationLib {
     }
 
     /// @notice Largest `poolFeeBps` over active Basket assets and its index (0, 0 when none).
-    function maxPoolFeeBps(FundState storage s) public view returns (uint256 maxBps, uint256 index) {
+    function maxPoolFeeBps(FundState storage s)
+        public
+        view
+        returns (uint256 maxBps, uint256 index)
+    {
         uint256 n = s.assets.length;
         for (uint256 i; i < n; ++i) {
             if (!s.assets[i].active) continue;
@@ -243,7 +272,11 @@ library FundValuationLib {
 
     /// @notice `pathTarget(t)` of the current plan per asset and idle (`PlanMath.pathTargetsBps`); zeros (one
     ///         per asset) before the first plan.
-    function pathTarget(FundState storage s, uint256 t) public view returns (uint256[] memory bps, uint256 idleBps) {
+    function pathTarget(FundState storage s, uint256 t)
+        public
+        view
+        returns (uint256[] memory bps, uint256 idleBps)
+    {
         if (s.plan.id == 0) return (new uint256[](s.assets.length), 0);
         Plan memory p = s.plan;
         return PlanMath.pathTargetsBps(p, t);
@@ -265,7 +298,11 @@ library FundValuationLib {
     }
 
     /// @notice Actual TWAP weights per asset and idle, rounded down.
-    function currentWeightsBps(FundState storage s) public view returns (uint256[] memory bps, uint256 idleBps) {
+    function currentWeightsBps(FundState storage s)
+        public
+        view
+        returns (uint256[] memory bps, uint256 idleBps)
+    {
         (uint256 total, uint256 idle, uint256[] memory values) = portfolio(s);
         return PlanMath.weightsBps(values, idle, total);
     }

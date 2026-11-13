@@ -50,7 +50,9 @@ contract OwnerDefaultsTest is PrototypeHarness {
         uint32 w = queue.flowParams().settleWindow;
         _assertCap(IDX_WETH, WETH_POOL, w);
         _assertCap(IDX_CBBTC, CBBTC_POOL, w);
-        assertEq(rebalancer.assetStepCap(IDX_AAVE), LENDING_MAX_STEP_USDC, "lending: maxStepUsdc only");
+        assertEq(
+            rebalancer.assetStepCap(IDX_AAVE), LENDING_MAX_STEP_USDC, "lending: maxStepUsdc only"
+        );
     }
 
     /// @notice The setter refuses 0 (the cap cannot be switched off) and anything above `MAX_STEP_DEPTH_BPS`, and
@@ -73,7 +75,9 @@ contract OwnerDefaultsTest is PrototypeHarness {
     function test_defaults_everyStepStaysInsideTheDepthCap() public fixtureCovered {
         // A fund of about 200,000 USDC: half of it in wETH is several depth caps wide.
         deposit(makeAddr("alice"), 200_000e6);
-        setTargetViaTimelock(assetVec(1_500, 1_500, 5_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        setTargetViaTimelock(
+            assetVec(1_500, 1_500, 5_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
         uint256 executed;
         uint256 bound;
         for (uint256 k; k < 120 && fund.planStatus() == PlanStatus.Open; ++k) {
@@ -82,8 +86,12 @@ contract OwnerDefaultsTest is PrototypeHarness {
             (SkipReason r, uint256 s, uint256 b, uint256 notional) = rebalancer.previewStep();
             if (r == SkipReason.None) {
                 uint256 cap = type(uint256).max;
-                if (s != IDLE_INDEX && isBasketIndex(s)) cap = Math.min(cap, rebalancer.assetStepCap(s));
-                if (b != IDLE_INDEX && isBasketIndex(b)) cap = Math.min(cap, rebalancer.assetStepCap(b));
+                if (s != IDLE_INDEX && isBasketIndex(s)) {
+                    cap = Math.min(cap, rebalancer.assetStepCap(s));
+                }
+                if (b != IDLE_INDEX && isBasketIndex(b)) {
+                    cap = Math.min(cap, rebalancer.assetStepCap(b));
+                }
                 assertLe(notional, cap, "notional inside the leg's depth cap");
                 if (notional == cap) ++bound;
             }
@@ -100,7 +108,8 @@ contract OwnerDefaultsTest is PrototypeHarness {
     function _assertCap(uint256 index, address pool, uint32 w) private {
         (bool ok, uint256 depth) = FundValuationLib.poolUsdcDepth(pool, USDC, w);
         assertTrue(ok, "depth readable at the pin");
-        uint256 want = Math.min(uint256(MAJOR_MAX_STEP_USDC), Math.mulDiv(depth, DEFAULT_STEP_DEPTH_BPS, BPS));
+        uint256 want =
+            Math.min(uint256(MAJOR_MAX_STEP_USDC), Math.mulDiv(depth, DEFAULT_STEP_DEPTH_BPS, BPS));
         assertEq(rebalancer.assetStepCap(index), want, "cap = min(maxStepUsdc, 5 bps of depth)");
         emit log_named_uint("pool USDC depth", depth);
         emit log_named_uint("step cap", want);

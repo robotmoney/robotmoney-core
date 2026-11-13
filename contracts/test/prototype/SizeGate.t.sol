@@ -74,7 +74,9 @@ contract SizeGateTest is PrototypeHarness {
         assertLe(rebalancerSize, G1_MAX, "G1: Rebalancer impl exceeds EIP-170 (24,576 bytes)");
         assertLe(queueSize, G1_MAX, "G1: FlowQueue impl exceeds EIP-170 (24,576 bytes)");
         // Every linked library must itself be deployable (EIP-170), or its caller cannot link.
-        assertLe(address(FundValuationLib).code.length, EIP170_LIMIT, "FundValuationLib over EIP-170");
+        assertLe(
+            address(FundValuationLib).code.length, EIP170_LIMIT, "FundValuationLib over EIP-170"
+        );
         assertLe(address(FundAdminLib).code.length, EIP170_LIMIT, "FundAdminLib over EIP-170");
         assertLe(address(FundFlowsLib).code.length, EIP170_LIMIT, "FundFlowsLib over EIP-170");
         assertLe(address(FundPositionLib).code.length, EIP170_LIMIT, "FundPositionLib over EIP-170");

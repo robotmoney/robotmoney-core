@@ -400,7 +400,11 @@ interface IFundEvents {
     ///         for StepFailed, the notional for BelowMinStep, the seconds remaining for Cooldown,
     ///         0 otherwise.
     event RebalanceStepSkipped(
-        uint256 indexed planId, SkipReason reason, uint256 sellIndex, uint256 buyIndex, uint256 detail
+        uint256 indexed planId,
+        SkipReason reason,
+        uint256 sellIndex,
+        uint256 buyIndex,
+        uint256 detail
     );
 
     // ── Shared errors ──

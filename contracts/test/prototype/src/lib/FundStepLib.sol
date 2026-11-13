@@ -68,7 +68,10 @@ library FundStepLib {
     ///        both.
     ///      The order's floors (`minSellUsdcOut`, `minBuyOut`) come from the stricter of the TWAP and the feed in
     ///      `Rebalancer._buildOrder`; the fund enforces them as before.
-    function executeStep(FundState storage s, StepOrder memory o) public returns (StepResult memory r) {
+    function executeStep(FundState storage s, StepOrder memory o)
+        public
+        returns (StepResult memory r)
+    {
         Plan storage p = s.plan;
         if (p.status != PlanStatus.Open) {
             revert IRobotMoneyFund.InvalidPlanTransition(p.id, p.status, PlanStatus.Open);
@@ -114,7 +117,9 @@ library FundStepLib {
     ///      (RB-5 defence in depth: the Rebalancer already masks failing assets).
     function _checkLeg(FundState storage s, uint256 i) private view {
         if (i == IDLE_INDEX) return;
-        if (i >= s.assets.length || !FundValuationLib.isCounted(s, i)) revert IFundEvents.InvalidAssetIndex(i);
+        if (i >= s.assets.length || !FundValuationLib.isCounted(s, i)) {
+            revert IFundEvents.InvalidAssetIndex(i);
+        }
         if (s.assets[i].kind == AssetKind.Basket) FundValuationLib.requireMarket(s, i);
     }
 
@@ -130,10 +135,13 @@ library FundStepLib {
 
     /// @dev Step 3e after the legs: the RB-19 balance check against the snapshot `b`, then the cost at the feeds and
     ///      the cap on the larger of it and `twapCost` (RB-4). Emits `StepCostBooked`. Returns the cost the plan books.
-    function _stepBook(FundState storage s, StepOrder memory o, StepSnap memory b, StepPrices memory px, uint256 twapCost)
-        private
-        returns (uint256 cost)
-    {
+    function _stepBook(
+        FundState storage s,
+        StepOrder memory o,
+        StepSnap memory b,
+        StepPrices memory px,
+        uint256 twapCost
+    ) private returns (uint256 cost) {
         uint256 supply1 = IERC20(address(this)).totalSupply();
         if (supply1 != b.supply) revert IRobotMoneyFund.StepSupplyChanged(b.supply, supply1);
         (uint256 idle1, uint256[] memory held1) = FundValuationLib.heldAmounts(s);
@@ -158,14 +166,20 @@ library FundStepLib {
         pure
         returns (uint256 v)
     {
-        if (o.sellIndex != IDLE_INDEX) v = StepFeedLib.feedValue(px, o.sellIndex, held[o.sellIndex]);
+        if (o.sellIndex != IDLE_INDEX) {
+            v = StepFeedLib.feedValue(px, o.sellIndex, held[o.sellIndex]);
+        }
         if (o.buyIndex != IDLE_INDEX) v += StepFeedLib.feedValue(px, o.buyIndex, held[o.buyIndex]);
     }
 
     /// @dev RB-7 guard: at `navBefore` and `now`, the sell leg sits over its `pathTarget` value by at least the
     ///      notional and a non-idle buy leg sits under it by at least the notional (`PlanMath.pathTargetValue`,
     ///      the same function the Rebalancer sizes with). Returns `navBefore`.
-    function _pathGuard(FundState storage s, StepOrder memory o) private view returns (uint256 navBefore) {
+    function _pathGuard(FundState storage s, StepOrder memory o)
+        private
+        view
+        returns (uint256 navBefore)
+    {
         uint256 idle;
         uint256[] memory values;
         (navBefore, idle, values) = FundValuationLib.portfolio(s);
@@ -206,7 +220,9 @@ library FundStepLib {
                 got = _swap(a, a.token, usdc, amt, o.minSellUsdcOut);
             }
         }
-        if (got < o.minSellUsdcOut) revert IRobotMoneyFund.StepBelowMinOut(o.sellIndex, got, o.minSellUsdcOut);
+        if (got < o.minSellUsdcOut) {
+            revert IRobotMoneyFund.StepBelowMinOut(o.sellIndex, got, o.minSellUsdcOut);
+        }
         r.usdcMoved = got;
     }
 
@@ -248,12 +264,17 @@ library FundStepLib {
 
     /// @dev Swap through the asset's adapter (`BasketSwaps.swap`: approve, swap with recipient = the fund, clear
     ///      approval). Returns `tokenOut` received by balance delta. (A copy of `FundFlowsLib._swap`.)
-    function _swap(AssetConfig memory a, address tokenIn, address tokenOut, uint256 amountIn, uint256 minOut)
-        private
-        returns (uint256 got)
-    {
+    function _swap(
+        AssetConfig memory a,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minOut
+    ) private returns (uint256 got) {
         uint256 before = IERC20(tokenOut).balanceOf(address(this));
-        BasketSwaps.swap(a.adapter, tokenIn, tokenOut, a.poolFee, amountIn, minOut, ISwapRouter(address(0)));
+        BasketSwaps.swap(
+            a.adapter, tokenIn, tokenOut, a.poolFee, amountIn, minOut, ISwapRouter(address(0))
+        );
         got = IERC20(tokenOut).balanceOf(address(this)) - before;
     }
 }

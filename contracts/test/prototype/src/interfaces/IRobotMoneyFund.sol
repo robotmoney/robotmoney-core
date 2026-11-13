@@ -58,7 +58,9 @@ interface IRobotMoneyFund is IFundEvents {
     ///         owed to `account` (`claimDeferred`) and left the holders' books.
     event InKindDeferred(uint256 indexed index, address indexed account, uint256 amount);
     /// @notice `account` pulled its deferred `amount` of asset `index` to `to`.
-    event DeferredClaimed(uint256 indexed index, address indexed account, address to, uint256 amount);
+    event DeferredClaimed(
+        uint256 indexed index, address indexed account, address to, uint256 amount
+    );
     /// @notice `bindRebalanceRoles` granted the two plan roles, once.
     event RebalanceRolesBound(address governance, address rebalancer);
 
@@ -122,15 +124,21 @@ interface IRobotMoneyFund is IFundEvents {
     /// @notice `seed` minted `shares` to the fund itself for `usdc` (E14). Those shares never move.
     event Seeded(uint256 usdc, uint256 shares);
     /// @notice `mintInKind` bought the pro-rata slice and minted `sharesOut` to `to` (the queue) for `usdcSpent` (E3).
-    event MintedInKind(address indexed to, uint256 sharesOut, uint256 usdcSpent, uint256 supplyBefore);
+    event MintedInKind(
+        address indexed to, uint256 sharesOut, uint256 usdcSpent, uint256 supplyBefore
+    );
     /// @notice `sellForFlow` burned `shares` of `from` (the queue), sold their slice for `usdcGross`, paid `fee` to
     ///         the fee recipient and `usdcOut` to `from` (E4).
-    event SoldForFlow(address indexed from, uint256 shares, uint256 usdcGross, uint256 fee, uint256 usdcOut);
+    event SoldForFlow(
+        address indexed from, uint256 shares, uint256 usdcGross, uint256 fee, uint256 usdcOut
+    );
     /// @notice An in-kind exit turned `units` of lending position `index` into a position-share claim of
     ///         `account` (E9, RB-21), beyond the period's allowance or because the venue could not pay.
     event PositionClaimRecorded(uint256 indexed index, address indexed account, uint256 units);
     /// @notice `account` redeemed `units` of its claim on lending position `index` for `usdc`, paid to `to`.
-    event PositionClaimed(uint256 indexed index, address indexed account, address to, uint256 units, uint256 usdc);
+    event PositionClaimed(
+        uint256 indexed index, address indexed account, address to, uint256 units, uint256 usdc
+    );
     /// @notice ADMIN set the least seed (E14).
     event MinSeedUsdcSet(uint256 minSeedUsdc);
     /// @notice ADMIN set the pool-share rule (§4.5 rule 3).
@@ -157,7 +165,13 @@ interface IRobotMoneyFund is IFundEvents {
     /// @notice Check 10 (RB-13), asserted inside the fund: for asset `index` (IDLE_INDEX for idle USDC)
     ///         `after × supplyBefore < before × supplyAfter`. The comparison is exact; the lending margin is
     ///         `LENDING_ROUNDING_UNITS`, applied to the amounts moved, never to this comparison.
-    error ProportionViolated(uint256 index, uint256 before, uint256 afterAmount, uint256 supplyBefore, uint256 supplyAfter);
+    error ProportionViolated(
+        uint256 index,
+        uint256 before,
+        uint256 afterAmount,
+        uint256 supplyBefore,
+        uint256 supplyAfter
+    );
     /// @notice E19: a NAV view read an unhealthy feed for asset `index` (`IDLE_INDEX` for the USDC / USD feed).
     error FeedUnhealthy(uint256 index, FeedStatus status);
     /// @notice `addAsset` (E15, RB-17): a Basket asset without a feed or without a `maxFeedAge`.
@@ -189,7 +203,10 @@ interface IRobotMoneyFund is IFundEvents {
     function setInKindAllowance(uint16 bps, uint128 floorUsdc, uint32 period) external;
 
     /// @notice The in-kind allowance parameters and the lending USDC in-kind exits took in the current period.
-    function inKindAllowance() external view returns (uint16 bps, uint128 floorUsdc, uint32 period, uint256 usedNow);
+    function inKindAllowance()
+        external
+        view
+        returns (uint16 bps, uint128 floorUsdc, uint32 period, uint256 usedNow);
 
     // ─── Step 3e (proposal §5.10; RB-4, RB-5 and RB-19 from step 3e; step-3 finish plan §3.5). Appended. ─────
 
@@ -208,7 +225,11 @@ interface IRobotMoneyFund is IFundEvents {
     ///         the cost the plan books (`costSpent`, `StepExecuted.cost`). `twapCost` = `max(navBefore − navAfter, 0)`
     ///         at the TWAP. The step reverts `StepCostExceeded` when either exceeds the order's `maxCostUsdc`.
     event StepCostBooked(
-        uint256 indexed planId, uint256 feedNavBefore, uint256 feedNavAfter, uint256 feedCost, uint256 twapCost
+        uint256 indexed planId,
+        uint256 feedNavBefore,
+        uint256 feedNavAfter,
+        uint256 feedCost,
+        uint256 twapCost
     );
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -322,14 +343,22 @@ interface IRobotMoneyFund is IFundEvents {
     ///         realized gross to the fee recipient and the rest to the caller. Asserts the proportion check.
     ///         Reverts `NotSeeded`, `LegLimitsLength`, `FlowLegLimit`, `ProportionViolated`.
     /// @return usdcOut USDC paid to the caller, net of the exit fee.
-    function sellForFlow(uint256 shares, uint256[] calldata minUsdcPerLeg) external returns (uint256 usdcOut);
+    function sellForFlow(uint256 shares, uint256[] calldata minUsdcPerLeg)
+        external
+        returns (uint256 usdcOut);
 
     /// @notice Lending position `index` claim of `account` (E9, RB-21): its units and their USDC value today
     ///         (`units × adapter.totalAssets() / positionUnits`, rounded down).
-    function positionClaimOf(uint256 index, address account) external view returns (uint256 units, uint256 usdcValue);
+    function positionClaimOf(uint256 index, address account)
+        external
+        view
+        returns (uint256 units, uint256 usdcValue);
 
     /// @notice Total units of lending position `index`, and the units held by claims (E9).
-    function positionUnits(uint256 index) external view returns (uint256 totalUnits, uint256 claimUnits);
+    function positionUnits(uint256 index)
+        external
+        view
+        returns (uint256 totalUnits, uint256 claimUnits);
 
     /// @notice The caller redeems its whole claim on lending position `index` at today's value and the USDC goes
     ///         to `to` (E9, RB-21). Reverts `NoPositionClaim`, `ZeroAddress`, or `DeferredShortfall` while the
@@ -480,7 +509,10 @@ interface IRobotMoneyFund is IFundEvents {
     function assetValue(uint256 index) external view returns (uint256);
 
     /// @notice One-call valuation: `nav == idle + Σ values == totalAssets()`.
-    function portfolioValues() external view returns (uint256 nav, uint256 idle, uint256[] memory values);
+    function portfolioValues()
+        external
+        view
+        returns (uint256 nav, uint256 idle, uint256[] memory values);
 
     /// @notice USDC value of `tokenAmount` of Basket asset `index` at its TWAP. Lending: identity.
     function assetUsdcValue(uint256 index, uint256 tokenAmount) external view returns (uint256);

@@ -69,7 +69,9 @@ library FundAdminLib {
         if (index >= MAX_FUND_ASSETS) revert IRobotMoneyFund.MaxAssetsReached();
         if (c.adapter == address(0)) revert IFundEvents.ZeroAddress();
         bytes32 hash = c.adapter.codehash;
-        if (!s.codeHashAllowed[hash]) revert IRobotMoneyFund.AdapterCodeHashNotAllowed(c.adapter, hash);
+        if (!s.codeHashAllowed[hash]) {
+            revert IRobotMoneyFund.AdapterCodeHashNotAllowed(c.adapter, hash);
+        }
         if (c.kind == AssetKind.Lending) {
             _checkLending(s, c);
         } else {
@@ -93,12 +95,14 @@ library FundAdminLib {
 
     function _checkLending(FundState storage s, AssetConfig memory c) private view {
         if (
-            c.token != address(0) || c.pool != address(0) || c.poolFee != 0
-                || c.twapWindow != 0 || c.capBps == 0 || c.capBps > BPS
+            c.token != address(0) || c.pool != address(0) || c.poolFee != 0 || c.twapWindow != 0
+                || c.capBps == 0 || c.capBps > BPS
         ) revert IFundEvents.InvalidParam();
         IFundLendingIdentity id = IFundLendingIdentity(c.adapter);
         address vault = id.VAULT();
-        if (vault != address(this)) revert IRobotMoneyFund.AdapterVaultMismatch(c.adapter, address(this), vault);
+        if (vault != address(this)) {
+            revert IRobotMoneyFund.AdapterVaultMismatch(c.adapter, address(this), vault);
+        }
         address asset = id.USDC();
         if (asset != s.usdc) revert IRobotMoneyFund.AdapterAssetMismatch(c.adapter, s.usdc, asset);
     }
@@ -108,7 +112,9 @@ library FundAdminLib {
         // `BasketViews.checkSellAnchor`), which this prototype does not port: refuse them (§4.2, §4.4).
         if (c.venue == Venue.V4) revert IFundEvents.InvalidParam();
         if (c.token == address(0) || c.pool == address(0)) revert IFundEvents.ZeroAddress();
-        if (c.twapWindow < FundStorage.MIN_TWAP_WINDOW || c.twapWindow > FundStorage.MAX_TWAP_WINDOW) {
+        if (
+            c.twapWindow < FundStorage.MIN_TWAP_WINDOW || c.twapWindow > FundStorage.MAX_TWAP_WINDOW
+        ) {
             revert IFundEvents.InvalidParam();
         }
         BasketAssetConfigGuard.Venue venue = BasketAssetConfigGuard.Venue(uint8(c.venue));
@@ -123,9 +129,13 @@ library FundAdminLib {
             if (ok && data.length == 32) pips = abi.decode(data, (uint256));
         }
         uint256 feeBps = (pips + 99) / 100;
-        if (s.maxSlippageBps <= feeBps) revert IFundEvents.BoundAtOrBelowPoolFee(index, s.maxSlippageBps, feeBps);
+        if (s.maxSlippageBps <= feeBps) {
+            revert IFundEvents.BoundAtOrBelowPoolFee(index, s.maxSlippageBps, feeBps);
+        }
         uint256 guard = s.navDeviationGuardBps;
-        if (guard != 0 && guard <= feeBps) revert IFundEvents.BoundAtOrBelowPoolFee(index, guard, feeBps);
+        if (guard != 0 && guard <= feeBps) {
+            revert IFundEvents.BoundAtOrBelowPoolFee(index, guard, feeBps);
+        }
     }
 
     /// @notice Deactivate asset `i` (`IRobotMoneyFund.deactivateAsset`). The fund must hold nothing of it:
@@ -143,7 +153,9 @@ library FundAdminLib {
         if (s.deferredTotal[i] != 0) revert IRobotMoneyFund.AssetStillHeld(i);
         AssetConfig storage a = s.assets[i];
         if (a.kind == AssetKind.Lending) {
-            if (IStrategyAdapter(a.adapter).totalAssets() != 0) revert IRobotMoneyFund.AssetStillHeld(i);
+            if (IStrategyAdapter(a.adapter).totalAssets() != 0) {
+                revert IRobotMoneyFund.AssetStillHeld(i);
+            }
             RobotMoneyVaultOps.Exclusions storage x = RobotMoneyVaultOps.exclusions();
             uint256 id = x.openExclusionOf[i];
             if (id != 0) {
@@ -153,7 +165,8 @@ library FundAdminLib {
         } else {
             uint256 bal = IERC20(a.token).balanceOf(address(this));
             if (bal != 0) {
-                uint256 floor = FundValuationLib.usdcValue(s, i, bal) * (BPS - s.maxSlippageBps) / BPS;
+                uint256 floor =
+                    FundValuationLib.usdcValue(s, i, bal) * (BPS - s.maxSlippageBps) / BPS;
                 if (floor != 0) revert IRobotMoneyFund.AssetStillHeld(i);
             }
         }
@@ -173,7 +186,10 @@ library FundAdminLib {
     ///         eligible again and still has a record is drained INTO the record first (`InvalidParam` when
     ///         it cannot pay out), then the record closes (`Restored`) and the empty entry counts again.
     /// @return opened True when a record opened (the fund then checkpoints every share balance change).
-    function syncExclusions(FundState storage s, uint256 supply, bool restore) public returns (bool opened) {
+    function syncExclusions(FundState storage s, uint256 supply, bool restore)
+        public
+        returns (bool opened)
+    {
         RobotMoneyVaultOps.Exclusions storage x = RobotMoneyVaultOps.exclusions();
         ExclusionLedger ledger = x.ledger;
         uint256 n = s.assets.length;
@@ -195,10 +211,20 @@ library FundAdminLib {
 
     /// @dev `syncExclusions` restore branch (own frame for stack depth): drain entry `i` into record `id`,
     ///      leaving the USDC owed to in-kind exits (`deferredTotal`) in the adapter, then close the record.
-    function _restore(FundState storage s, RobotMoneyVaultOps.Exclusions storage x, uint256 i, uint256 id) private {
+    function _restore(
+        FundState storage s,
+        RobotMoneyVaultOps.Exclusions storage x,
+        uint256 i,
+        uint256 id
+    ) private {
         ExclusionLedger ledger = x.ledger;
         bool ok = FundFlowsLib.drain(
-            s.usdc, s.assets[i].adapter, ledger, id, ExclusionLedger.RecoverySource.Restoration, s.deferredTotal[i]
+            s.usdc,
+            s.assets[i].adapter,
+            ledger,
+            id,
+            ExclusionLedger.RecoverySource.Restoration,
+            s.deferredTotal[i]
         );
         if (!ok) revert IFundEvents.InvalidParam();
         delete x.openExclusionOf[i];
@@ -222,17 +248,19 @@ library FundAdminLib {
         bytes32 receiptId
     ) public returns (uint256 planId) {
         if (
-            params.duration < MIN_PLAN_DURATION || params.duration > MAX_PLAN_DURATION || params.costBudgetBps == 0
-                || params.costBudgetBps > MAX_COST_BUDGET_BPS
+            params.duration < MIN_PLAN_DURATION || params.duration > MAX_PLAN_DURATION
+                || params.costBudgetBps == 0 || params.costBudgetBps > MAX_COST_BUDGET_BPS
         ) revert IFundEvents.PlanParamOutOfBounds();
         return _open(s, PlanMath.assetTargets(assets, bps, s.assets), params, receiptId);
     }
 
     /// @dev `openPlan` after the vector became `endBps` (own frame for stack depth).
-    function _open(FundState storage s, uint16[] memory endBps, PlanParams memory params, bytes32 receiptId)
-        private
-        returns (uint256 planId)
-    {
+    function _open(
+        FundState storage s,
+        uint16[] memory endBps,
+        PlanParams memory params,
+        bytes32 receiptId
+    ) private returns (uint256 planId) {
         Plan storage p = s.plan;
         PlanStatus prev = p.status;
         if (prev == PlanStatus.Open || prev == PlanStatus.Halted || prev == PlanStatus.Paused) {
@@ -241,7 +269,8 @@ library FundAdminLib {
         }
 
         (uint256 navNow,, uint256[] memory values) = FundValuationLib.portfolio(s);
-        (uint16[] memory startBps, uint16 startIdle) = PlanMath.snapshotStart(values, navNow, endBps);
+        (uint16[] memory startBps, uint16 startIdle) =
+            PlanMath.snapshotStart(values, navNow, endBps);
         uint256 turnover = PlanMath.turnoverUsdc(startBps, endBps, navNow);
 
         planId = uint256(p.id) + 1;
@@ -265,7 +294,14 @@ library FundAdminLib {
 
     function _emitOpened(Plan storage p) private {
         emit IFundEvents.PlanOpened(
-            p.id, p.receiptId, p.startBps, p.endBps, p.startTime, p.endTime, p.turnoverUsdc, p.costBudget
+            p.id,
+            p.receiptId,
+            p.startBps,
+            p.endBps,
+            p.startTime,
+            p.endTime,
+            p.turnoverUsdc,
+            p.costBudget
         );
     }
 }

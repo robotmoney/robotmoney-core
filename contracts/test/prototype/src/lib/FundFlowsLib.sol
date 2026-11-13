@@ -71,7 +71,10 @@ library FundFlowsLib {
     ///         (`SeedBelowMinimum`). Pulls `usdc` from `caller`; it stays idle until the first plan moves it.
     /// @param supply The fund's `totalSupply()` now.
     /// @return shares `usdc × 10^18`.
-    function seed(FundState storage s, address caller, uint256 usdc, uint256 supply) public returns (uint256 shares) {
+    function seed(FundState storage s, address caller, uint256 usdc, uint256 supply)
+        public
+        returns (uint256 shares)
+    {
         if (s.seeded || supply != 0) revert IRobotMoneyFund.AlreadySeeded();
         uint256 minSeed = s.minSeedUsdc;
         if (usdc < minSeed) revert IRobotMoneyFund.SeedBelowMinimum(usdc, minSeed);
@@ -111,10 +114,14 @@ library FundFlowsLib {
         if (supply == 0) revert IRobotMoneyFund.NotSeeded();
         if (s.depositsPaused) revert IRobotMoneyFund.DepositsArePaused();
         if (s.shutdown) revert IRobotMoneyFund.FundIsShutdown();
-        if (FundValuationLib.anyExcluded(s)) revert IRobotMoneyFund.DepositsClosedDuringExclusion();
+        if (FundValuationLib.anyExcluded(s)) {
+            revert IRobotMoneyFund.DepositsClosedDuringExclusion();
+        }
         if (sharesOut == 0) revert IFundEvents.InvalidParam();
         uint256 n = s.assets.length;
-        if (maxUsdcPerLeg.length != n) revert IRobotMoneyFund.LegLimitsLength(maxUsdcPerLeg.length, n);
+        if (maxUsdcPerLeg.length != n) {
+            revert IRobotMoneyFund.LegLimitsLength(maxUsdcPerLeg.length, n);
+        }
         (uint256 idle0, uint256[] memory held0) = FundValuationLib.heldAmounts(s);
         address usdc = s.usdc;
         IERC20(usdc).safeTransferFrom(caller, address(this), maxUsdc);
@@ -157,7 +164,9 @@ library FundFlowsLib {
         uint256 supplyBefore
     ) public returns (uint256 net) {
         uint256 n = s.assets.length;
-        if (minUsdcPerLeg.length != n) revert IRobotMoneyFund.LegLimitsLength(minUsdcPerLeg.length, n);
+        if (minUsdcPerLeg.length != n) {
+            revert IRobotMoneyFund.LegLimitsLength(minUsdcPerLeg.length, n);
+        }
         (uint256 idle0, uint256[] memory held0) = FundValuationLib.heldAmounts(s);
         address usdc = s.usdc;
         uint256 gross = idle0.mulDiv(shares, supplyBefore);
@@ -194,15 +203,19 @@ library FundFlowsLib {
     /// @dev Buy exactly `amountOut` of Basket asset `a` with at most `limit` USDC through the asset's exact-output
     ///      adapter (`IExactOutSwapAdapter`, the step 3d test copies). Approve `limit`, swap with recipient = the
     ///      fund, clear the approval. Returns the input the adapter reports; the tokens are checked by check 10.
-    function _buyExact(AssetConfig storage a, address usdc, uint256 i, uint256 amountOut, uint256 limit)
-        private
-        returns (uint256 amountIn)
-    {
+    function _buyExact(
+        AssetConfig storage a,
+        address usdc,
+        uint256 i,
+        uint256 amountOut,
+        uint256 limit
+    ) private returns (uint256 amountIn) {
         address adapter = a.adapter;
         IERC20(usdc).forceApprove(adapter, limit);
-        amountIn = IExactOutSwapAdapter(adapter).swapExactOut(
-            usdc, a.token, a.poolFee, amountOut, limit, address(this), block.timestamp
-        );
+        amountIn = IExactOutSwapAdapter(adapter)
+            .swapExactOut(
+                usdc, a.token, a.poolFee, amountOut, limit, address(this), block.timestamp
+            );
         IERC20(usdc).forceApprove(adapter, 0);
         if (amountIn > limit) revert IRobotMoneyFund.FlowLegLimit(i, amountIn, limit);
     }
@@ -211,7 +224,9 @@ library FundFlowsLib {
     ///         `ProtectedToken` for USDC, the share token, every asset token (active or not) and every Lending
     ///         adapter address. Emits `ForeignTokenSwept`.
     function sweepForeign(FundState storage s, address token, address caller) public {
-        if (token == s.usdc || token == address(this)) revert IRobotMoneyFund.ProtectedToken(token);
+        if (token == s.usdc || token == address(this)) {
+            revert IRobotMoneyFund.ProtectedToken(token);
+        }
         uint256 n = s.assets.length;
         for (uint256 i; i < n; ++i) {
             if (token == s.assets[i].token || token == s.assets[i].adapter) {
@@ -253,9 +268,13 @@ library FundFlowsLib {
     ///      read at all (check 10 then skips that asset: its held amount cannot be read, and its units move exactly);
     ///      every claim and every basket deferral is keyed to `owner`, or to `receiver` when `owner` is the bound
     ///      FlowQueue (escrowed shares: `receiver` is the request's owner, E9).
-    function payInKind(FundState storage s, address receiver, address owner, uint256 shares, uint256 supplyBefore)
-        public
-    {
+    function payInKind(
+        FundState storage s,
+        address receiver,
+        address owner,
+        uint256 shares,
+        uint256 supplyBefore
+    ) public {
         if (receiver == address(0)) revert IFundEvents.ZeroAddress();
         address claimant = owner == s.flowQueue ? receiver : owner;
         (uint256 idle0, uint256[] memory held0, uint256[] memory pos0) = _inKindSnapshot(s);
@@ -382,7 +401,10 @@ library FundFlowsLib {
     ///         3e). Since step 3e the step lives in the linked `FundStepLib` (size, §6.1: the step 3e checks would have
     ///         left this library 483 bytes under EIP-170). This forwarder keeps the fund's call site unchanged; the
     ///         nested DELEGATECALL still runs as the fund. See `FundStepLib.executeStep`.
-    function executeStep(FundState storage s, StepOrder memory o) public returns (StepResult memory) {
+    function executeStep(FundState storage s, StepOrder memory o)
+        public
+        returns (StepResult memory)
+    {
         return FundStepLib.executeStep(s, o);
     }
 
@@ -409,13 +431,18 @@ library FundFlowsLib {
             if (!a.active) continue;
             if (a.kind == AssetKind.Lending) {
                 FundPositionLib.drain(
-                    s, i, x.ledger, x.openExclusionOf[i], ExclusionLedger.RecoverySource.EmergencyWithdraw
+                    s,
+                    i,
+                    x.ledger,
+                    x.openExclusionOf[i],
+                    ExclusionLedger.RecoverySource.EmergencyWithdraw
                 );
                 continue;
             }
             uint256 bal = FundValuationLib.heldBalance(s, i);
             if (bal == 0) continue;
-            try IBasketSwapAdapter(a.adapter).twapPrice(a.pool, a.token, usdc, bal, a.twapWindow) returns (
+            try IBasketSwapAdapter(a.adapter)
+                .twapPrice(a.pool, a.token, usdc, bal, a.twapWindow) returns (
                 uint256 v
             ) {
                 uint256 floor = _haircut(v, s.maxSlippageBps);
@@ -432,17 +459,24 @@ library FundFlowsLib {
 
     /// @dev Swap through the asset's adapter (`BasketSwaps.swap`: approve, swap with recipient = the fund,
     ///      clear approval). Returns `tokenOut` received by balance delta.
-    function _swap(AssetConfig memory a, address tokenIn, address tokenOut, uint256 amountIn, uint256 minOut)
-        private
-        returns (uint256 got)
-    {
+    function _swap(
+        AssetConfig memory a,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minOut
+    ) private returns (uint256 got) {
         uint256 before = IERC20(tokenOut).balanceOf(address(this));
-        BasketSwaps.swap(a.adapter, tokenIn, tokenOut, a.poolFee, amountIn, minOut, ISwapRouter(address(0)));
+        BasketSwaps.swap(
+            a.adapter, tokenIn, tokenOut, a.poolFee, amountIn, minOut, ISwapRouter(address(0))
+        );
         got = IERC20(tokenOut).balanceOf(address(this)) - before;
     }
 
     /// @dev Pay one in-kind leg: `exitFeeBps` of it to `feeTo`, the rest to `receiver`.
-    function _payLeg(address token, address receiver, uint256 amount, uint256 feeBps, address feeTo) private {
+    function _payLeg(address token, address receiver, uint256 amount, uint256 feeBps, address feeTo)
+        private
+    {
         if (amount == 0) return;
         uint256 fee = amount.mulDiv(feeBps, BPS);
         if (fee != 0) IERC20(token).safeTransfer(feeTo, fee);

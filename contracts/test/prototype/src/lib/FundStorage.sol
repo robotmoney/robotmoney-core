@@ -98,7 +98,8 @@ struct FundState {
 ///         own state can never collide with the OpenZeppelin upgradeable namespaces behind `GovernedUUPS`.
 library FundStorage {
     /// @dev keccak256(abi.encode(uint256(keccak256("robotmoney.storage.RobotMoneyFund")) - 1)) & ~bytes32(uint256(0xff))
-    bytes32 internal constant SLOT = 0x1f474ae58db9fb6ccfa907fed2f1bf5577ac55e97dddcd5c18f25868bd856c00;
+    bytes32 internal constant SLOT =
+        0x1f474ae58db9fb6ccfa907fed2f1bf5577ac55e97dddcd5c18f25868bd856c00;
 
     /// @dev Basket TWAP window bounds (BasketVault.MIN_TWAP_WINDOW / MAX_TWAP_WINDOW).
     uint32 internal constant MIN_TWAP_WINDOW = 600;

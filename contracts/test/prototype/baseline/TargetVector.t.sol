@@ -7,7 +7,15 @@
 pragma solidity ^0.8.24;
 
 import {BaselineHarness} from "./BaselineHarness.sol";
-import {IFundEvents, AssetConfig, AssetKind, PlanParams, PlanStatus, Venue, BPS} from "./src/FundTypes.sol";
+import {
+    IFundEvents,
+    AssetConfig,
+    AssetKind,
+    PlanParams,
+    PlanStatus,
+    Venue,
+    BPS
+} from "./src/FundTypes.sol";
 import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
 import {IRebalanceGovernance} from "./src/interfaces/IRebalanceGovernance.sol";
 
@@ -47,7 +55,11 @@ contract TargetVectorTest is BaselineHarness {
         }
         w5[IDX_WETH - 1] += w[IDX_MOONWELL];
         _expectRefused(
-            ids5, w5, abi.encodeWithSelector(IFundEvents.TargetAssetMissing.selector, address(moonwellAdapter))
+            ids5,
+            w5,
+            abi.encodeWithSelector(
+                IFundEvents.TargetAssetMissing.selector, address(moonwellAdapter)
+            )
         );
     }
 
@@ -56,7 +68,9 @@ contract TargetVectorTest is BaselineHarness {
         (address[] memory ids, uint256[] memory w) = assetArrays(_valid());
         (address[] memory ids7, uint256[] memory w7) = _append(ids, w, address(aaveAdapter), 0);
         _expectRefused(
-            ids7, w7, abi.encodeWithSelector(IFundEvents.TargetAssetDuplicate.selector, address(aaveAdapter))
+            ids7,
+            w7,
+            abi.encodeWithSelector(IFundEvents.TargetAssetDuplicate.selector, address(aaveAdapter))
         );
     }
 
@@ -88,19 +102,27 @@ contract TargetVectorTest is BaselineHarness {
     function test_rb9_unknownAsset_reverts() public fixtureCovered {
         (address[] memory ids, uint256[] memory w) = assetArrays(_valid());
         (address[] memory ids7, uint256[] memory w7) = _append(ids, w, stranger, 0);
-        _expectRefused(ids7, w7, abi.encodeWithSelector(IFundEvents.TargetAssetNotActive.selector, stranger));
+        _expectRefused(
+            ids7, w7, abi.encodeWithSelector(IFundEvents.TargetAssetNotActive.selector, stranger)
+        );
         // A basket asset is named by its token, never by its swap adapter or pool.
         ids[IDX_WETH] = WETH_POOL;
-        _expectRefused(ids, w, abi.encodeWithSelector(IFundEvents.TargetAssetNotActive.selector, WETH_POOL));
+        _expectRefused(
+            ids, w, abi.encodeWithSelector(IFundEvents.TargetAssetNotActive.selector, WETH_POOL)
+        );
     }
 
     /// @dev Weights that sum to anything but 10 000 are refused. A single weight above 10 000 reverts at once.
     function test_rb9_badSum_reverts() public fixtureCovered {
         (address[] memory ids, uint256[] memory w) = assetArrays(_valid());
         w[IDX_WETH] -= 1;
-        _expectRefused(ids, w, abi.encodeWithSelector(IFundEvents.TargetSumInvalid.selector, BPS - 1));
+        _expectRefused(
+            ids, w, abi.encodeWithSelector(IFundEvents.TargetSumInvalid.selector, BPS - 1)
+        );
         w[IDX_WETH] += 2;
-        _expectRefused(ids, w, abi.encodeWithSelector(IFundEvents.TargetSumInvalid.selector, BPS + 1));
+        _expectRefused(
+            ids, w, abi.encodeWithSelector(IFundEvents.TargetSumInvalid.selector, BPS + 1)
+        );
         uint256 huge = uint256(type(uint16).max) + 1;
         w[IDX_WETH] = huge;
         _expectRefused(ids, w, abi.encodeWithSelector(IFundEvents.TargetSumInvalid.selector, huge));
@@ -114,7 +136,9 @@ contract TargetVectorTest is BaselineHarness {
         _expectRefused(
             ids,
             w,
-            abi.encodeWithSelector(IFundEvents.TargetExceedsCap.selector, IDX_AAVE, over, LENDING_CAP_BPS)
+            abi.encodeWithSelector(
+                IFundEvents.TargetExceedsCap.selector, IDX_AAVE, over, LENDING_CAP_BPS
+            )
         );
         // At the cap exactly, the same shape applies.
         v = assetVec(LENDING_CAP_BPS, 0, 0, uint16(BPS - LENDING_CAP_BPS), 0, 0);
@@ -163,7 +187,9 @@ contract TargetVectorTest is BaselineHarness {
             wrong,
             ids,
             w,
-            abi.encodeWithSelector(IRebalanceGovernance.PayloadDigestMismatch.selector, rid, digest, wrong)
+            abi.encodeWithSelector(
+                IRebalanceGovernance.PayloadDigestMismatch.selector, rid, digest, wrong
+            )
         );
         assertFalse(receipts.isReleased(rid), "wrong digest released nothing");
         assertEq(fund.currentPlanId(), 0, "wrong digest opened no plan");
@@ -184,7 +210,9 @@ contract TargetVectorTest is BaselineHarness {
         _timelockExpectRevert(
             address(fund),
             abi.encodeCall(fund.deactivateAsset, (IDX_DESPXA)),
-            abi.encodeWithSelector(IRobotMoneyFund.AssetStillTargeted.selector, IDX_DESPXA, uint256(1_000))
+            abi.encodeWithSelector(
+                IRobotMoneyFund.AssetStillTargeted.selector, IDX_DESPXA, uint256(1_000)
+            )
         );
         assertTrue(fund.assetConfig(IDX_DESPXA).active, "still active");
 
@@ -203,7 +231,10 @@ contract TargetVectorTest is BaselineHarness {
     /// @dev `addAsset` refuses a second active entry with the same asset id, for a Basket token and a Lending
     ///      adapter. After deactivation the same token may be re-added, and a vector naming it maps to the new
     ///      index.
-    function test_addAsset_duplicateId_reverts_and_relist_maps_to_new_index() public fixtureCovered {
+    function test_addAsset_duplicateId_reverts_and_relist_maps_to_new_index()
+        public
+        fixtureCovered
+    {
         AssetConfig memory b = AssetConfig({
             kind: AssetKind.Basket,
             active: true,
@@ -228,7 +259,9 @@ contract TargetVectorTest is BaselineHarness {
         });
         bytes memory addB = abi.encodeCall(fund.addAsset, (b));
         _timelockExpectRevert(
-            address(fund), addB, abi.encodeWithSelector(IRobotMoneyFund.DuplicateAsset.selector, IDX_DESPXA)
+            address(fund),
+            addB,
+            abi.encodeWithSelector(IRobotMoneyFund.DuplicateAsset.selector, IDX_DESPXA)
         );
         _timelockExpectRevert(
             address(fund),
@@ -284,7 +317,9 @@ contract TargetVectorTest is BaselineHarness {
         _scheduleApply(rid, digest, ids, w, err);
         assertFalse(receipts.isReleased(rid), "refused vector released nothing");
         assertEq(fund.currentPlanId(), _planBase, "refused vector opened no plan");
-        assertEq(governance.lastAppliedRecordedAt(), appliedBefore, "refused vector left lastApplied");
+        assertEq(
+            governance.lastAppliedRecordedAt(), appliedBefore, "refused vector left lastApplied"
+        );
 
         PlanParams memory pp = PlanParams(PLAN_DURATION, COST_BUDGET_BPS);
         bytes memory data = abi.encodeCall(governance.setTarget, (ids, w, pp));
@@ -306,9 +341,13 @@ contract TargetVectorTest is BaselineHarness {
 
     /// @dev Schedule `applyReceipt` on the timelock, wait the delay, execute. A non-empty `err` is the expected
     ///      revert data (the timelock bubbles the target's revert).
-    function _scheduleApply(bytes32 rid, bytes32 digest, address[] memory ids, uint256[] memory w, bytes memory err)
-        internal
-    {
+    function _scheduleApply(
+        bytes32 rid,
+        bytes32 digest,
+        address[] memory ids,
+        uint256[] memory w,
+        bytes memory err
+    ) internal {
         bytes memory data = abi.encodeCall(governance.applyReceipt, (rid, digest, ids, w));
         bytes32 salt = keccak256(abi.encode("rb9", ++_salt));
         timelock.schedule(address(governance), 0, data, bytes32(0), salt, TIMELOCK_DELAY);

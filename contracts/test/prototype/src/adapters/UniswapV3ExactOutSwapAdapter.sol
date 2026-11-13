@@ -24,7 +24,10 @@ interface ISwapRouterExactOut {
         uint160 sqrtPriceLimitX96;
     }
 
-    function exactOutputSingle(ExactOutputSingleParams calldata params) external payable returns (uint256 amountIn);
+    function exactOutputSingle(ExactOutputSingleParams calldata params)
+        external
+        payable
+        returns (uint256 amountIn);
 }
 
 /// @title UniswapV3ExactOutSwapAdapter
@@ -58,18 +61,21 @@ contract UniswapV3ExactOutSwapAdapter is UniswapV3SwapAdapter, IExactOutSwapAdap
 
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), maxAmountIn);
         IERC20(tokenIn).forceApprove(address(ROUTER), maxAmountIn);
-        amountIn = ISwapRouterExactOut(address(ROUTER)).exactOutputSingle(
-            ISwapRouterExactOut.ExactOutputSingleParams({
-                tokenIn: tokenIn,
-                tokenOut: tokenOut,
-                fee: fee,
-                recipient: recipient,
-                amountOut: amountOut,
-                amountInMaximum: maxAmountIn,
-                sqrtPriceLimitX96: 0
-            })
-        );
+        amountIn = ISwapRouterExactOut(address(ROUTER))
+            .exactOutputSingle(
+                ISwapRouterExactOut.ExactOutputSingleParams({
+                    tokenIn: tokenIn,
+                    tokenOut: tokenOut,
+                    fee: fee,
+                    recipient: recipient,
+                    amountOut: amountOut,
+                    amountInMaximum: maxAmountIn,
+                    sqrtPriceLimitX96: 0
+                })
+            );
         IERC20(tokenIn).forceApprove(address(ROUTER), 0);
-        if (amountIn < maxAmountIn) IERC20(tokenIn).safeTransfer(msg.sender, maxAmountIn - amountIn);
+        if (amountIn < maxAmountIn) {
+            IERC20(tokenIn).safeTransfer(msg.sender, maxAmountIn - amountIn);
+        }
     }
 }

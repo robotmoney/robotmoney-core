@@ -9,7 +9,13 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {
-    Claim, FlowParams, IFlowEvents, Request, RequestKind, RequestStatus, Settlement
+    Claim,
+    FlowParams,
+    IFlowEvents,
+    Request,
+    RequestKind,
+    RequestStatus,
+    Settlement
 } from "../FlowTypes.sol";
 import {IRobotMoneyFundFull} from "../interfaces/IRobotMoneyFund.sol";
 import {FlowEpochs, FlowState} from "./FlowStorage.sol";
@@ -33,10 +39,12 @@ library FlowClaimLib {
     // ═════════════════════════════════════════════════════════════════════════
 
     /// @notice Body of `FlowQueue.requestDeposit`. Pulls `usdc` from `msg.sender` only (ruling 10).
-    function requestDeposit(FlowState storage s, uint256 usdc, uint256 maxUsdcPerShare, address owner)
-        public
-        returns (uint256 requestId)
-    {
+    function requestDeposit(
+        FlowState storage s,
+        uint256 usdc,
+        uint256 maxUsdcPerShare,
+        address owner
+    ) public returns (uint256 requestId) {
         _open(s, owner);
         if (usdc == 0 || maxUsdcPerShare == 0) revert IFlowEvents.ZeroAmount();
         FlowParams memory p = s.params;
@@ -49,7 +57,9 @@ library FlowClaimLib {
         uint256 before = IERC20(s.usdc).balanceOf(address(this));
         IERC20(s.usdc).safeTransferFrom(msg.sender, address(this), usdc);
         if (IERC20(s.usdc).balanceOf(address(this)) - before != usdc) {
-            revert IFlowEvents.FundResultMismatch(usdc, IERC20(s.usdc).balanceOf(address(this)) - before);
+            revert IFlowEvents.FundResultMismatch(
+                usdc, IERC20(s.usdc).balanceOf(address(this)) - before
+            );
         }
         emit IFlowEvents.DepositRequested(
             requestId, owner, msg.sender, usdc, maxUsdcPerShare, s.requests[requestId].epoch
@@ -59,10 +69,12 @@ library FlowClaimLib {
     /// @notice Body of `FlowQueue.requestRedeem`. Ledger hook for `owner` first, then pulls `shares` from
     ///         `msg.sender`. The minimum is valued at `lastGoodNav` (DOWN); a redemption of the caller's whole
     ///         wallet balance is exempt (E11).
-    function requestRedeem(FlowState storage s, uint256 shares, uint256 minUsdcPerShare, address owner)
-        public
-        returns (uint256 requestId)
-    {
+    function requestRedeem(
+        FlowState storage s,
+        uint256 shares,
+        uint256 minUsdcPerShare,
+        address owner
+    ) public returns (uint256 requestId) {
         _open(s, owner);
         if (shares == 0) revert IFlowEvents.ZeroAmount();
         IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
@@ -136,7 +148,10 @@ library FlowClaimLib {
     }
 
     /// @notice Body of `FlowQueue.withdrawExpired`: after `maxRoll` epochs the owner takes the unfilled escrow (E18).
-    function withdrawExpired(FlowState storage s, uint256 requestId) public returns (uint256 amount) {
+    function withdrawExpired(FlowState storage s, uint256 requestId)
+        public
+        returns (uint256 amount)
+    {
         Request storage r = _owned(s, requestId);
         if (FlowEpochs.current(s) <= uint256(r.epoch) + s.params.maxRoll) {
             revert IFlowEvents.RequestNotExpired(requestId);
@@ -287,7 +302,9 @@ library FlowClaimLib {
     ///         plan §3.1 item 6).
     function freeze(FlowState storage s, uint256 id) public {
         Settlement storage st = _settlement(s, id);
-        if (st.sharesMinted == 0 || block.timestamp >= st.holdEndsAt) revert IFlowEvents.FreezeOutsideHold(id);
+        if (st.sharesMinted == 0 || block.timestamp >= st.holdEndsAt) {
+            revert IFlowEvents.FreezeOutsideHold(id);
+        }
         if (st.frozenUntil > block.timestamp) revert IFlowEvents.SettlementAlreadyFrozen(id);
         st.frozenUntil = uint64(block.timestamp) + s.params.maxFreeze;
         st.returnAllowed = false;
@@ -324,7 +341,9 @@ library FlowClaimLib {
         // Allowed AND still frozen: a freeze that ran out (not released) leaves `returnAllowed` set, and an early
         // in-kind exit must not outlive the freeze it was allowed under (RB-11, review Q-F4).
         Settlement storage st = s.settlements[c.settlementId];
-        if (!st.returnAllowed || st.frozenUntil <= block.timestamp) revert IFlowEvents.ReturnNotAllowed(c.settlementId);
+        if (!st.returnAllowed || st.frozenUntil <= block.timestamp) {
+            revert IFlowEvents.ReturnNotAllowed(c.settlementId);
+        }
         uint256 x = c.shares - c.claimed;
         if (x == 0) revert IFlowEvents.NothingToWithdraw(msg.sender);
         IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
@@ -377,7 +396,11 @@ library FlowClaimLib {
 
     /// @notice Request ids made in `epoch`, in order: the deposit and redemption lists merged by id (ids grow in
     ///         creation order).
-    function epochRequests(FlowState storage s, uint64 epoch) public view returns (uint256[] memory ids) {
+    function epochRequests(FlowState storage s, uint64 epoch)
+        public
+        view
+        returns (uint256[] memory ids)
+    {
         uint256[] storage d = s.sideIds[uint8(RequestKind.Deposit)][epoch];
         uint256[] storage r = s.sideIds[uint8(RequestKind.Redeem)][epoch];
         ids = new uint256[](d.length + r.length);
@@ -391,14 +414,17 @@ library FlowClaimLib {
 
     /// @notice A deposit claim can be delivered now: its hold ended and its settlement is not frozen.
     function deliverable(FlowState storage s, Claim storage c) internal view returns (bool) {
-        return block.timestamp >= c.unlockAt && s.settlements[c.settlementId].frozenUntil <= block.timestamp;
+        return block.timestamp >= c.unlockAt
+            && s.settlements[c.settlementId].frozenUntil <= block.timestamp;
     }
 
     function status(FlowState storage s, uint256 requestId) public view returns (RequestStatus) {
         Request storage r = s.requests[requestId];
         if (r.owner == address(0)) return RequestStatus.None;
         if (r.closed) return RequestStatus.Closed;
-        if (FlowEpochs.current(s) > uint256(r.epoch) + s.params.maxRoll) return RequestStatus.Expired;
+        if (FlowEpochs.current(s) > uint256(r.epoch) + s.params.maxRoll) {
+            return RequestStatus.Expired;
+        }
         return RequestStatus.Pending;
     }
 
@@ -410,7 +436,9 @@ library FlowClaimLib {
         returns (uint256)
     {
         Request storage r = s.requests[requestId];
-        if (r.owner != controller || r.kind != kind || status(s, requestId) != RequestStatus.Pending) return 0;
+        if (
+            r.owner != controller || r.kind != kind || status(s, requestId) != RequestStatus.Pending
+        ) return 0;
         return r.remaining;
     }
 
@@ -467,10 +495,13 @@ library FlowClaimLib {
     }
 
     /// @dev The request goes on its side's list of its epoch (`sideIds`): each side walks its own (item 2).
-    function _newRequest(FlowState storage s, address owner, RequestKind kind, uint256 amount, uint256 limit)
-        private
-        returns (uint256 requestId)
-    {
+    function _newRequest(
+        FlowState storage s,
+        address owner,
+        RequestKind kind,
+        uint256 amount,
+        uint256 limit
+    ) private returns (uint256 requestId) {
         uint64 epoch = FlowEpochs.current(s);
         requestId = ++s.requestCount;
         s.requests[requestId] = Request({
@@ -488,14 +519,22 @@ library FlowClaimLib {
     }
 
     /// @dev The request, which must exist, belong to `msg.sender` and still hold escrow.
-    function _owned(FlowState storage s, uint256 requestId) private view returns (Request storage r) {
+    function _owned(FlowState storage s, uint256 requestId)
+        private
+        view
+        returns (Request storage r)
+    {
         r = s.requests[requestId];
         if (r.owner == address(0)) revert IFlowEvents.UnknownRequest(requestId);
         if (r.owner != msg.sender) revert IFlowEvents.NotRequestOwner(requestId, msg.sender);
         if (r.closed || r.remaining == 0) revert IFlowEvents.RequestNotPending(requestId);
     }
 
-    function _settlement(FlowState storage s, uint256 id) private view returns (Settlement storage st) {
+    function _settlement(FlowState storage s, uint256 id)
+        private
+        view
+        returns (Settlement storage st)
+    {
         if (id == 0 || id > s.settlementCount) revert IFlowEvents.UnknownSettlement(id);
         st = s.settlements[id];
     }

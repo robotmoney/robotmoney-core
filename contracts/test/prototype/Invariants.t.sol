@@ -121,9 +121,12 @@ contract Invariants is PrototypeHarness {
     bytes32 private constant STEP_EXECUTED_SIG = keccak256(
         "StepExecuted(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)"
     );
-    bytes32 private constant DEPOSIT_FILLED_SIG = keccak256("DepositFilled(uint256,uint256,uint256,uint256,uint256,uint64)");
-    bytes32 private constant REDEEM_FILLED_SIG = keccak256("RedeemFilled(uint256,uint256,uint256,uint256,uint256)");
-    bytes32 private constant IMPL_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+    bytes32 private constant DEPOSIT_FILLED_SIG =
+        keccak256("DepositFilled(uint256,uint256,uint256,uint256,uint256,uint64)");
+    bytes32 private constant REDEEM_FILLED_SIG =
+        keccak256("RedeemFilled(uint256,uint256,uint256,uint256,uint256)");
+    bytes32 private constant IMPL_SLOT =
+        0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
 
     /// @dev The in-kind allowance setUp gives the fund (ADMIN through the timelock), small so in-kind exits reach
     ///      position claims and RB-21 has something to hold.
@@ -331,7 +334,10 @@ contract Invariants is PrototypeHarness {
         }
         timelockExecute(
             address(fund),
-            abi.encodeCall(IRobotMoneyFund.setInKindAllowance, (uint16(500), IN_KIND_FLOOR_USDC, uint32(6 hours)))
+            abi.encodeCall(
+                IRobotMoneyFund.setInKindAllowance,
+                (uint16(500), IN_KIND_FLOOR_USDC, uint32(6 hours))
+            )
         );
         recordAndApply(bucketVec(6_500, 3_500));
         // A day into the 7-day plan, so the very first steps of a run have real deviations to trade.
@@ -422,7 +428,10 @@ contract Invariants is PrototypeHarness {
         _requestDeposit(h, amt, limit);
     }
 
-    function _requestDeposit(address h, uint256 amt, uint256 limit) private action(address(0), false, ACT_OTHER) {
+    function _requestDeposit(address h, uint256 amt, uint256 limit)
+        private
+        action(address(0), false, ACT_OTHER)
+    {
         fundUsdc(h, amt);
         vm.prank(h);
         IERC20(USDC).approve(address(queue), amt);
@@ -460,7 +469,10 @@ contract Invariants is PrototypeHarness {
         _requestRedeem(h, shares, limit);
     }
 
-    function _requestRedeem(address h, uint256 shares, uint256 limit) private action(address(0), false, ACT_OTHER) {
+    function _requestRedeem(address h, uint256 shares, uint256 limit)
+        private
+        action(address(0), false, ACT_OTHER)
+    {
         vm.prank(h);
         fund.approve(address(queue), shares);
         vm.prank(h);
@@ -472,7 +484,11 @@ contract Invariants is PrototypeHarness {
             ++revertsCaught[H_REQUEST_REDEEM];
             if (!queue.paused() && bytes4(err) != IFlowEventsSel.BELOW_MIN) {
                 ++ghostRequestRedeemReverts;
-                _mustSucceed(H_REQUEST_REDEEM, "a redemption request at or above the minimum while not paused", err);
+                _mustSucceed(
+                    H_REQUEST_REDEEM,
+                    "a redemption request at or above the minimum while not paused",
+                    err
+                );
             }
         }
         vm.prank(h);
@@ -503,7 +519,10 @@ contract Invariants is PrototypeHarness {
 
     SettlePre internal sp;
 
-    function _settle(address c, uint256 maxReq, uint256 maxUsdc) private action(address(0), false, ACT_SETTLE) {
+    function _settle(address c, uint256 maxReq, uint256 maxUsdc)
+        private
+        action(address(0), false, ACT_SETTLE)
+    {
         (uint256 cfDep, uint256 cfRed) = _counterfactualBounds();
         sp.cfDeposit = cfDep;
         sp.cfRedeem = cfRed;
@@ -519,11 +538,16 @@ contract Invariants is PrototypeHarness {
             ++callsSettle;
             // RB-16: `settle` runs the same pre-trade checks as `checkSettle` for the same caller in the same block,
             // so a call that `checkSettle` named blocked must revert, whether or not it would record anything.
-            if (sp.check != SettleCheck.Ok) _violation("RB-16: settle went through although checkSettle named a failed check", 16);
+            if (sp.check != SettleCheck.Ok) {
+                _violation(
+                    "RB-16: settle went through although checkSettle named a failed check", 16
+                );
+            }
             if (sid == 0) {
                 // RB-12 / RB-15: nothing recorded, nothing moved (a failed side changes no state).
                 if (
-                    IERC20(USDC).balanceOf(address(queue)) != sp.qUsdc || fund.balanceOf(address(queue)) != sp.qShares
+                    IERC20(USDC).balanceOf(address(queue)) != sp.qUsdc
+                        || fund.balanceOf(address(queue)) != sp.qShares
                         || queue.claimCount() != sp.claims
                 ) _violation("RB-12: a settle that recorded nothing moved a balance", 12);
                 return;
@@ -537,7 +561,9 @@ contract Invariants is PrototypeHarness {
             if (sp.check == SettleCheck.Ok) {
                 _mustSucceed(H_SETTLE, "settle reverted although checkSettle said Ok", err);
             } else if (!_isSettleBlocked(err, sp.check)) {
-                _mustSucceed(H_SETTLE, "settle reverted with other than the check checkSettle named", err);
+                _mustSucceed(
+                    H_SETTLE, "settle reverted with other than the check checkSettle named", err
+                );
             }
         }
     }
@@ -564,7 +590,8 @@ contract Invariants is PrototypeHarness {
     ///      its description for the failing invariant's message.
     function _mustSucceed(uint256 h, string memory what, bytes memory err) private {
         ++mustSucceedReverts[h];
-        lastMustSucceedRevert = string.concat(_handlerName(h), ": ", what, ", revert data ", vm.toString(err));
+        lastMustSucceedRevert =
+            string.concat(_handlerName(h), ": ", what, ", revert data ", vm.toString(err));
     }
 
     /// @dev The handler names, for the run summary and the failure messages.
@@ -609,9 +636,15 @@ contract Invariants is PrototypeHarness {
             // The same rule as the real call, for the keeper with no limits.
             ++revertsCaught[H_SETTLE_COUNTERFACTUAL];
             if (kc == SettleCheck.Ok) {
-                _mustSucceed(H_SETTLE_COUNTERFACTUAL, "the keeper's settle reverted although checkSettle said Ok", err);
+                _mustSucceed(
+                    H_SETTLE_COUNTERFACTUAL,
+                    "the keeper's settle reverted although checkSettle said Ok",
+                    err
+                );
             } else if (!_isSettleBlocked(err, kc)) {
-                _mustSucceed(H_SETTLE_COUNTERFACTUAL, "the keeper's settle reverted with another reason", err);
+                _mustSucceed(
+                    H_SETTLE_COUNTERFACTUAL, "the keeper's settle reverted with another reason", err
+                );
             }
         }
         // The counts above live in storage, which the revert below undoes: carry them over in memory.
@@ -641,7 +674,9 @@ contract Invariants is PrototypeHarness {
         (uint256 depUsed, uint256 redUsed) = queue.periodFlow(block.timestamp / p.epochLength);
         uint256 cap = Math.max(sp.navFeed.mulDiv(p.maxEpochFlowBps, BPS), p.epochFlowFloorUsdc);
         // NAV at the feeds here is recomputed outside the queue; 1 % slack covers its rounding, not a cap breach.
-        if (depUsed > cap + cap / 100 || redUsed > cap + cap / 100) _violation("RB-16: a period's fills passed its cap", 16);
+        if (depUsed > cap + cap / 100 || redUsed > cap + cap / 100) {
+            _violation("RB-16: a period's fills passed its cap", 16);
+        }
         (uint256 tvlCap,,,) = fund.config();
         if (_navAtFeeds() > tvlCap) _violation("RB-16: NAV passed the TVL cap", 16);
         // RB-14 and RB-11 from the fill events of the real call.
@@ -653,11 +688,17 @@ contract Invariants is PrototypeHarness {
             bytes32 t0 = logs[k].topics[0];
             if (t0 == DEPOSIT_FILLED_SIG) {
                 uint256 rid = uint256(logs[k].topics[1]);
-                (uint256 usdc, uint256 shares, uint64 unlockAt) = abi.decode(logs[k].data, (uint256, uint256, uint64));
-                if (usdc.mulDiv(PRICE_SCALE, shares, Math.Rounding.Ceil) > queue.getRequest(rid).limit) {
+                (uint256 usdc, uint256 shares, uint64 unlockAt) =
+                    abi.decode(logs[k].data, (uint256, uint256, uint64));
+                if (
+                    usdc.mulDiv(PRICE_SCALE, shares, Math.Rounding.Ceil)
+                        > queue.getRequest(rid).limit
+                ) {
                     _violation("RB-14: a deposit filled above its limit", 14);
                 }
-                if (unlockAt != block.timestamp + p.minHold) _violation("RB-11: a deposit claim unlocks early", 11);
+                if (unlockAt != block.timestamp + p.minHold) {
+                    _violation("RB-11: a deposit claim unlocks early", 11);
+                }
             } else if (t0 == REDEEM_FILLED_SIG) {
                 uint256 rid = uint256(logs[k].topics[1]);
                 (uint256 shares, uint256 usdc) = abi.decode(logs[k].data, (uint256, uint256));
@@ -689,12 +730,18 @@ contract Invariants is PrototypeHarness {
         try queue.mint(n, h) {
             ++callsDeliver;
             ghostSharesOut += n;
-            if (fund.balanceOf(h) - bal0 != n) _violation("RB-11: delivered shares did not reach the owner", 11);
+            if (fund.balanceOf(h) - bal0 != n) {
+                _violation("RB-11: delivered shares did not reach the owner", 11);
+            }
             for (uint256 c = 1; c <= count; ++c) {
                 Claim memory cl = queue.getClaim(c);
                 if (cl.claimed == claimed0[c]) continue;
-                if (cl.owner != h || cl.kind != RequestKind.Deposit) _violation("RB-11: another's claim moved", 11);
-                if (block.timestamp < cl.unlockAt) _violation("RB-11: a share left before its unlock", 11);
+                if (cl.owner != h || cl.kind != RequestKind.Deposit) {
+                    _violation("RB-11: another's claim moved", 11);
+                }
+                if (block.timestamp < cl.unlockAt) {
+                    _violation("RB-11: a share left before its unlock", 11);
+                }
                 if (queue.getSettlement(cl.settlementId).frozenUntil > block.timestamp) {
                     _violation("RB-18: a frozen settlement delivered", 18);
                 }
@@ -720,7 +767,9 @@ contract Invariants is PrototypeHarness {
         try queue.redeem(n, h, h) returns (uint256 paid) {
             ++callsClaim;
             ghostUsdcOut += paid;
-            if (IERC20(USDC).balanceOf(h) - u0 != paid) _violation("claim: the owner did not receive the USDC", 11);
+            if (IERC20(USDC).balanceOf(h) - u0 != paid) {
+                _violation("claim: the owner did not receive the USDC", 11);
+            }
         } catch (bytes memory err) {
             ++ghostClaimReverts;
             ++revertsCaught[H_CLAIM];
@@ -747,7 +796,9 @@ contract Invariants is PrototypeHarness {
             bool exact = r0.kind == RequestKind.Deposit
                 ? (cu1 - cu0 == r0.remaining && cs1 == cs0)
                 : (cs1 - cs0 == r0.remaining && cu1 == cu0);
-            if (!exact) _violation("RB-12: a cancel did not credit exactly the unfilled escrow", 12);
+            if (!exact) {
+                _violation("RB-12: a cancel did not credit exactly the unfilled escrow", 12);
+            }
         } catch (bytes memory err) {
             _violation("RB-15: cancel of a pending request reverted", 15);
             ++revertsCaught[H_CANCEL];
@@ -796,7 +847,9 @@ contract Invariants is PrototypeHarness {
         try queue.withdrawExpired(id) returns (uint256 amt) {
             ++callsExpired;
             uint256 b1 = isDeposit ? IERC20(USDC).balanceOf(h) : fund.balanceOf(h);
-            if (amt != r0.remaining || b1 - b0 != amt) _violation("RB-12: an expiry did not return exactly", 12);
+            if (amt != r0.remaining || b1 - b0 != amt) {
+                _violation("RB-12: an expiry did not return exactly", 12);
+            }
             if (isDeposit) ghostUsdcOut += amt;
             else ghostSharesOut += amt;
         } catch (bytes memory err) {
@@ -834,7 +887,10 @@ contract Invariants is PrototypeHarness {
         if (n == 0) return;
         uint256 id = 1 + k % n;
         Settlement memory s = queue.getSettlement(id);
-        if (s.sharesMinted == 0 || block.timestamp >= s.holdEndsAt || s.frozenUntil > block.timestamp) return;
+        if (
+            s.sharesMinted == 0 || block.timestamp >= s.holdEndsAt
+                || s.frozenUntil > block.timestamp
+        ) return;
         _freeze(id);
     }
 
@@ -861,7 +917,10 @@ contract Invariants is PrototypeHarness {
         }
     }
 
-    function _releaseOrReturn(uint256 id, bool release) private action(address(0), false, ACT_OTHER) {
+    function _releaseOrReturn(uint256 id, bool release)
+        private
+        action(address(0), false, ACT_OTHER)
+    {
         vm.prank(address(timelock));
         if (release) {
             try queue.releaseSettlement(id) {
@@ -889,7 +948,9 @@ contract Invariants is PrototypeHarness {
         uint256 n = queue.claimCount();
         for (uint256 c = 1; c <= n; ++c) {
             Claim memory cl = queue.getClaim(c);
-            if (cl.owner != h || cl.kind != RequestKind.Deposit || cl.claimed >= cl.shares) continue;
+            if (cl.owner != h || cl.kind != RequestKind.Deposit || cl.claimed >= cl.shares) {
+                continue;
+            }
             if (!queue.getSettlement(cl.settlementId).returnAllowed) continue;
             _takeReturn(h, c, cl.shares - cl.claimed);
             return;
@@ -973,7 +1034,9 @@ contract Invariants is PrototypeHarness {
                 _mustSucceed(
                     H_APPLY,
                     string.concat(
-                        "a valid receipt applied but no plan opened (plan status ", vm.toString(uint256(fund.planStatus())), ")"
+                        "a valid receipt applied but no plan opened (plan status ",
+                        vm.toString(uint256(fund.planStatus())),
+                        ")"
                     ),
                     ""
                 );
@@ -998,8 +1061,14 @@ contract Invariants is PrototypeHarness {
     ///      only when an independent reading agrees with it in full: the named asset is a basket asset that `v`
     ///      weights, the target is that weight of the TVL cap rounded up, the limit is the pool's depth read here
     ///      times `poolShareBps`, and the target is over it. Any other revert stays a must-succeed failure.
-    function _poolShareRefusalJustified(bytes memory err, uint16[5] memory v) private view returns (bool) {
-        if (err.length != 100 || bytes4(err) != IRobotMoneyFund.PoolShareExceeded.selector) return false;
+    function _poolShareRefusalJustified(bytes memory err, uint16[5] memory v)
+        private
+        view
+        returns (bool)
+    {
+        if (err.length != 100 || bytes4(err) != IRobotMoneyFund.PoolShareExceeded.selector) {
+            return false;
+        }
         uint256 i;
         uint256 target;
         uint256 limit;
@@ -1011,8 +1080,9 @@ contract Invariants is PrototypeHarness {
         if (i >= fund.assetCount() || !isBasketIndex(i) || v[i] == 0) return false;
         (uint256 tvlCap,,,) = fund.config();
         if (target != tvlCap.mulDiv(v[i], BPS, Math.Rounding.Ceil)) return false;
-        (bool ok, uint256 depth) =
-            FundValuationLib.poolUsdcDepth(fund.assetConfig(i).pool, USDC, queue.flowParams().settleWindow);
+        (bool ok, uint256 depth) = FundValuationLib.poolUsdcDepth(
+            fund.assetConfig(i).pool, USDC, queue.flowParams().settleWindow
+        );
         return ok && limit == depth.mulDiv(fund.poolShareBps(), BPS) && target > limit;
     }
 
@@ -1029,7 +1099,9 @@ contract Invariants is PrototypeHarness {
     ///      4 a lending target above `capBps`, 5 the valid vector with a wrong payload digest. The call must
     ///      revert with exactly that variant's error, the receipt must stay unreleased, and no plan or applied
     ///      time may change.
-    function _refuseBadVector(bytes32 id, bytes32 digest, uint16[5] memory v, uint256 kind) private {
+    function _refuseBadVector(bytes32 id, bytes32 digest, uint16[5] memory v, uint256 kind)
+        private
+    {
         address[] memory ids;
         uint256[] memory w;
         bytes memory expected;
@@ -1037,7 +1109,9 @@ contract Invariants is PrototypeHarness {
         if (kind == 5) {
             (ids, w) = assetArrays(v);
             sent = keccak256("wrong");
-            expected = abi.encodeWithSelector(IRebalanceGovernance.PayloadDigestMismatch.selector, id, digest, sent);
+            expected = abi.encodeWithSelector(
+                IRebalanceGovernance.PayloadDigestMismatch.selector, id, digest, sent
+            );
         } else {
             (ids, w, expected) = _badVector(v, kind);
         }
@@ -1074,7 +1148,8 @@ contract Invariants is PrototypeHarness {
                 ++k;
             }
             w5[IDX_WETH] += w[IDX_CBBTC];
-            return (ids5, w5, abi.encodeWithSelector(IFundEvents.TargetAssetMissing.selector, CBBTC));
+            return
+                (ids5, w5, abi.encodeWithSelector(IFundEvents.TargetAssetMissing.selector, CBBTC));
         }
         if (kind == 1 || kind == 2) {
             // Append a zero-weight entry: aave again (duplicate), or an address that is no fund asset.
@@ -1086,7 +1161,9 @@ contract Invariants is PrototypeHarness {
                 w7[i] = w[i];
             }
             ids7[ids.length] = extra;
-            bytes4 sel = kind == 1 ? IFundEvents.TargetAssetDuplicate.selector : IFundEvents.TargetAssetNotActive.selector;
+            bytes4 sel = kind == 1
+                ? IFundEvents.TargetAssetDuplicate.selector
+                : IFundEvents.TargetAssetNotActive.selector;
             return (ids7, w7, abi.encodeWithSelector(sel, extra));
         }
         if (kind == 3) {
@@ -1096,7 +1173,10 @@ contract Invariants is PrototypeHarness {
         // Aave is the first entry, so its cap check fires before the sum check.
         w[IDX_AAVE] = LENDING_CAP_BPS + 1;
         expected = abi.encodeWithSelector(
-            IFundEvents.TargetExceedsCap.selector, IDX_AAVE, uint256(LENDING_CAP_BPS) + 1, uint256(LENDING_CAP_BPS)
+            IFundEvents.TargetExceedsCap.selector,
+            IDX_AAVE,
+            uint256(LENDING_CAP_BPS) + 1,
+            uint256(LENDING_CAP_BPS)
         );
     }
 
@@ -1133,8 +1213,11 @@ contract Invariants is PrototypeHarness {
         bool ready = _independentlyReady(p0);
         vm.prank(keeper);
         try rebalancer.step() returns (bool executed, SkipReason why) {
-            if (executed) _checkExecutedStep(p0);
-            else if (ready && (why == SkipReason.NothingToTrade || why == SkipReason.BelowMinStep)) {
+            if (executed) {
+                _checkExecutedStep(p0);
+            } else if (
+                ready && (why == SkipReason.NothingToTrade || why == SkipReason.BelowMinStep)
+            ) {
                 ++ghostLivenessSkips;
             }
         } catch (bytes memory err) {
@@ -1156,13 +1239,26 @@ contract Invariants is PrototypeHarness {
         vm.recordLogs();
         _scanLogs(logs);
         for (uint256 k; k < logs.length; ++k) {
-            if (logs[k].emitter != address(fund) || logs[k].topics[0] != STEP_EXECUTED_SIG) continue;
-            (uint256 sellI, uint256 buyI, uint256 notional,,,, uint256 navBefore, uint256 navAfter, uint256 cost) =
-                abi.decode(logs[k].data, (uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256));
+            if (logs[k].emitter != address(fund) || logs[k].topics[0] != STEP_EXECUTED_SIG) {
+                continue;
+            }
+            (
+                uint256 sellI,
+                uint256 buyI,
+                uint256 notional,,,,
+                uint256 navBefore,
+                uint256 navAfter,
+                uint256 cost
+            ) = abi.decode(
+                logs[k].data,
+                (uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256)
+            );
 
             // RB-4: TWAP NAV falls at most maxStepCostBps of the notional, measured by the fund and by us.
             uint256 maxCost = notional.mulDiv(MAX_STEP_COST_BPS, BPS);
-            if (cost > maxCost || navBefore != p0.nav || navAfter + maxCost < navBefore) ++ghostRb4StepCost;
+            if (cost > maxCost || navBefore != p0.nav || navAfter + maxCost < navBefore) {
+                ++ghostRb4StepCost;
+            }
             if (_twapNav() + maxCost < p0.nav) ++ghostRb4StepCost;
 
             // RB-5: no traded Basket asset failed ORA-4 just before the step.
@@ -1190,7 +1286,10 @@ contract Invariants is PrototypeHarness {
     }
 
     /// @notice An outside trader moves a basket pool. wETH both ways (deal verified); cbBTC buys only.
-    function act_movePrice(uint256 which, uint256 usdc, bool buy) public action(address(0), true, ACT_OTHER) {
+    function act_movePrice(uint256 which, uint256 usdc, bool buy)
+        public
+        action(address(0), true, ACT_OTHER)
+    {
         which = which % 2;
         address pool = which == 0 ? WETH_POOL : CBBTC_POOL;
         usdc = bound(usdc, 100e6, 200_000e6);
@@ -1418,7 +1517,11 @@ contract Invariants is PrototypeHarness {
         invariant_RB22_ledgerCountsQueuedShares();
         invariant_conservation();
         (uint256 totalUnits, uint256 claimUnits) = fund.positionUnits(IDX_AAVE);
-        assertGt(claimUnits, 0, "in-kind exits past the allowance left position claims (RB-21 is not vacuous)");
+        assertGt(
+            claimUnits,
+            0,
+            "in-kind exits past the allowance left position claims (RB-21 is not vacuous)"
+        );
         emit log_named_uint("scripted run: Aave position units", totalUnits);
         emit log_named_uint("scripted run: Aave claim units", claimUnits);
     }
@@ -1429,16 +1532,28 @@ contract Invariants is PrototypeHarness {
 
     /// @notice RB-1, RB-6, RB-8 and the per-action ghosts: actions that must never fail did not.
     function invariant_mustNotRevert() public fixtureCovered {
-        if (bytes(lastMustSucceedRevert).length != 0) emit log_named_string("must-succeed revert", lastMustSucceedRevert);
+        if (bytes(lastMustSucceedRevert).length != 0) {
+            emit log_named_string("must-succeed revert", lastMustSucceedRevert);
+        }
         assertEq(ghostInKindReverts, 0, "RB-6: redeemInKind of own shares reverted");
-        assertEq(ghostRequestRedeemReverts, 0, "RB-6: a valid redemption request reverted while not paused");
+        assertEq(
+            ghostRequestRedeemReverts,
+            0,
+            "RB-6: a valid redemption request reverted while not paused"
+        );
         assertEq(ghostClaimReverts, 0, "a claim the queue reported claimable reverted");
         assertEq(ghostApplyFailures, 0, "valid receipt failed to open a plan through the timelock");
         assertEq(ghostStepReverts, 0, "keeper step() reverted (must skip, not revert)");
-        assertEq(ghostRb1Violations, 0, "RB-1: an unauthorized caller opened a plan or moved a flow");
+        assertEq(
+            ghostRb1Violations, 0, "RB-1: an unauthorized caller opened a plan or moved a flow"
+        );
         // `hardening` (step 3 plan §3.3 item 4): no call that had to succeed reverted, in any handler.
         for (uint256 h; h < N_HANDLERS; ++h) {
-            assertEq(mustSucceedReverts[h], 0, string.concat("a call that must succeed reverted in ", _handlerName(h)));
+            assertEq(
+                mustSucceedReverts[h],
+                0,
+                string.concat("a call that must succeed reverted in ", _handlerName(h))
+            );
         }
         if (coverageMiss) revert FixtureSlotMiss(coverageMissAccount, coverageMissSlot);
     }
@@ -1451,21 +1566,34 @@ contract Invariants is PrototypeHarness {
         assertEq(ghostRb5Cooldown, 0, "RB-5: a step ran before stepInterval");
         assertEq(ghostRb5Market, 0, "RB-5: a step traded an asset failing ORA-4");
         assertEq(ghostRb7PastPath, 0, "RB-7: a step moved past pathTarget(now)");
-        assertEq(ghostLivenessSkips, 0, "liveness: a step with a tradeable deviation skipped as nothing to trade");
+        assertEq(
+            ghostLivenessSkips,
+            0,
+            "liveness: a step with a tradeable deviation skipped as nothing to trade"
+        );
         Plan memory p = fund.plan();
-        assertTrue(p.costSpent <= p.costBudget || p.status == PlanStatus.Halted, "RB-4: costSpent > costBudget");
+        assertTrue(
+            p.costSpent <= p.costBudget || p.status == PlanStatus.Halted,
+            "RB-4: costSpent > costBudget"
+        );
     }
 
     /// @notice RB-9: every refused vector reverted with its own error and released nothing. The fund's persistent
     ///         target names every active asset (inactive assets 0) and sums to 10 000 once a plan has opened.
     function invariant_targetVector() public fixtureCovered {
-        assertEq(ghostRb9Violations, 0, "RB-9: a refused vector did not revert with its error, or released");
+        assertEq(
+            ghostRb9Violations,
+            0,
+            "RB-9: a refused vector did not revert with its error, or released"
+        );
         if (fund.currentPlanId() == 0) return;
         uint16[] memory t = fund.targetBps();
         assertEq(t.length, fund.assetCount(), "RB-9: target is index-aligned to the asset list");
         uint256 sum;
         for (uint256 i; i < t.length; ++i) {
-            if (!fund.assetConfig(i).active) assertEq(t[i], 0, "RB-9: inactive asset has a target");
+            if (!fund.assetConfig(i).active) {
+                assertEq(t[i], 0, "RB-9: inactive asset has a target");
+            }
             sum += t[i];
         }
         assertEq(sum, BPS, "RB-9: target does not sum to 10 000");
@@ -1482,7 +1610,9 @@ contract Invariants is PrototypeHarness {
 
     /// @notice RB-8: the receipt contract never called the fund, rebalancer or governance, and holds nothing.
     function invariant_receiptInert() public fixtureCovered {
-        assertEq(ghostRb8Calls, 0, "RB-8: receipt contract called the fund, rebalancer or governance");
+        assertEq(
+            ghostRb8Calls, 0, "RB-8: receipt contract called the fund, rebalancer or governance"
+        );
         _assertHoldsNothing(address(receipts), "RB-8: receipts");
     }
 
@@ -1496,17 +1626,33 @@ contract Invariants is PrototypeHarness {
         _assertHoldsNothing(address(governance), "governance");
         for (uint256 i; i < approvedToken.length; ++i) {
             assertEq(
-                IERC20(approvedToken[i]).allowance(address(fund), approvedSpender[i]), 0, "fund left an allowance"
+                IERC20(approvedToken[i]).allowance(address(fund), approvedSpender[i]),
+                0,
+                "fund left an allowance"
             );
         }
         address[3] memory tokens = [USDC, WETH, CBBTC];
-        address[5] memory spenders = [address(swapAdapter), ROUTER, address(aaveAdapter), address(cometAdapter), address(moonwellAdapter)];
+        address[5] memory spenders = [
+            address(swapAdapter),
+            ROUTER,
+            address(aaveAdapter),
+            address(cometAdapter),
+            address(moonwellAdapter)
+        ];
         for (uint256 i; i < tokens.length; ++i) {
             for (uint256 j; j < spenders.length; ++j) {
-                assertEq(IERC20(tokens[i]).allowance(address(fund), spenders[j]), 0, "fund allowance to venue");
+                assertEq(
+                    IERC20(tokens[i]).allowance(address(fund), spenders[j]),
+                    0,
+                    "fund allowance to venue"
+                );
             }
         }
-        assertEq(IERC20(USDC).allowance(address(queue), address(fund)), 0, "the queue left an allowance to the fund");
+        assertEq(
+            IERC20(USDC).allowance(address(queue), address(fund)),
+            0,
+            "the queue left an allowance to the fund"
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1517,7 +1663,9 @@ contract Invariants is PrototypeHarness {
     ///         was unlocked, unfrozen and the owner's.
     function invariant_RB10_RB11_queueExits() public fixtureCovered {
         _logLastViolation();
-        assertEq(ghostRb10, 0, "RB-10: USDC or shares left the queue outside a settlement, claim or exit");
+        assertEq(
+            ghostRb10, 0, "RB-10: USDC or shares left the queue outside a settlement, claim or exit"
+        );
         assertEq(ghostRb11, 0, "RB-11: a deposit share left early, frozen, or to someone else");
     }
 
@@ -1525,7 +1673,9 @@ contract Invariants is PrototypeHarness {
     ///         exit never reverted for a pending request, paused or not.
     function invariant_RB12_RB15_blockedAndExits() public fixtureCovered {
         _logLastViolation();
-        assertEq(ghostRb12, 0, "RB-12: a blocked settlement moved something, or a return was not exact");
+        assertEq(
+            ghostRb12, 0, "RB-12: a blocked settlement moved something, or a return was not exact"
+        );
         assertEq(ghostRb15, 0, "RB-15: cancel or in-kind exit reverted for a pending request");
     }
 
@@ -1544,9 +1694,16 @@ contract Invariants is PrototypeHarness {
         for (uint256 i; i < cfg.length; ++i) {
             if (!cfg[i].active) continue;
             if (cfg[i].kind == AssetKind.Basket) {
-                assertTrue(cfg[i].feed != address(0) && cfg[i].maxFeedAge != 0, "RB-17: a basket asset without a feed");
+                assertTrue(
+                    cfg[i].feed != address(0) && cfg[i].maxFeedAge != 0,
+                    "RB-17: a basket asset without a feed"
+                );
             } else {
-                assertGt(ILendingRateAdapter(cfg[i].adapter).ratePerUnit(), 0, "RB-17: a lending adapter without a rate");
+                assertGt(
+                    ILendingRateAdapter(cfg[i].adapter).ratePerUnit(),
+                    0,
+                    "RB-17: a lending adapter without a rate"
+                );
             }
         }
     }
@@ -1555,14 +1712,24 @@ contract Invariants is PrototypeHarness {
     ///         a depositor takes its own return (ghost from `act_takeReturn`).
     function invariant_RB18_freezeBounded() public fixtureCovered {
         _logLastViolation();
-        assertEq(ghostRb18, 0, "RB-18: a frozen share moved to someone else, or a freeze misbehaved");
+        assertEq(
+            ghostRb18, 0, "RB-18: a frozen share moved to someone else, or a freeze misbehaved"
+        );
         uint256 maxFreeze = queue.flowParams().maxFreeze;
         uint256 n = queue.settlementCount();
         for (uint256 id = 1; id <= n; ++id) {
             Settlement memory s = queue.getSettlement(id);
             if (s.frozenUntil == 0) continue;
-            assertLe(s.frozenUntil, uint256(ghostFreezeAt[id]) + maxFreeze, "RB-18: a freeze outlives maxFreeze");
-            assertLe(s.frozenUntil, uint256(s.holdEndsAt) + maxFreeze, "RB-18: a freeze outlives hold + maxFreeze");
+            assertLe(
+                s.frozenUntil,
+                uint256(ghostFreezeAt[id]) + maxFreeze,
+                "RB-18: a freeze outlives maxFreeze"
+            );
+            assertLe(
+                s.frozenUntil,
+                uint256(s.holdEndsAt) + maxFreeze,
+                "RB-18: a freeze outlives hold + maxFreeze"
+            );
         }
     }
 
@@ -1590,8 +1757,16 @@ contract Invariants is PrototypeHarness {
             }
             assertEq(units, claimUnits, "RB-21: claim units are exactly the claimants'");
             uint256 position = IStrategyAdapter(a.adapter).totalAssets();
-            assertLe(held[i] + value, position, "RB-21: holders and claims count more than the venue holds");
-            assertLe(position, held[i] + value + actors.length + 4, "RB-21: part of the position belongs to nobody");
+            assertLe(
+                held[i] + value,
+                position,
+                "RB-21: holders and claims count more than the venue holds"
+            );
+            assertLe(
+                position,
+                held[i] + value + actors.length + 4,
+                "RB-21: part of the position belongs to nobody"
+            );
         }
     }
 
@@ -1602,8 +1777,12 @@ contract Invariants is PrototypeHarness {
         for (uint256 k; k < holders.length; ++k) {
             address h = holders[k];
             uint256 q = queue.queuedSharesOf(h);
-            assertEq(fund.ledgerBalanceOf(h), fund.balanceOf(h) + q, "RB-22: ledger = wallet + queued");
-            assertEq(q, _independentQueued(h), "RB-22: queued shares = escrow + held + share credit");
+            assertEq(
+                fund.ledgerBalanceOf(h), fund.balanceOf(h) + q, "RB-22: ledger = wallet + queued"
+            );
+            assertEq(
+                q, _independentQueued(h), "RB-22: queued shares = escrow + held + share credit"
+            );
         }
         assertEq(fund.ledgerBalanceOf(address(queue)), 0, "RB-22: the queue has no entitlement");
     }
@@ -1614,7 +1793,8 @@ contract Invariants is PrototypeHarness {
     ///         setUp's plus minted, less burned by settlements and by in-kind exits.
     function invariant_conservation() public view {
         FlowBooks memory b = queue.books();
-        (uint256 pendingUsdc, uint256 escrowShares, uint256 heldShares, uint256 owedUsdc) = _independentBooks();
+        (uint256 pendingUsdc, uint256 escrowShares, uint256 heldShares, uint256 owedUsdc) =
+            _independentBooks();
         assertEq(b.pendingUsdc, pendingUsdc, "books: pending USDC = sum of open deposit escrow");
         assertEq(b.escrowShares, escrowShares, "books: escrow = sum of open redemption escrow");
         assertEq(b.heldShares, heldShares, "books: held = sum of undelivered deposit claims");
@@ -1624,12 +1804,20 @@ contract Invariants is PrototypeHarness {
         assertEq(b.creditShares, creditShares, "books: share credit = sum of owners' credits");
         uint256 qUsdc = IERC20(USDC).balanceOf(address(queue));
         uint256 qShares = fund.balanceOf(address(queue));
-        assertEq(qUsdc, b.pendingUsdc + b.owedUsdc + b.creditUsdc + b.dustUsdc, "queue USDC = its books");
-        assertEq(qShares, b.escrowShares + b.heldShares + b.creditShares + b.dustShares, "queue shares = its books");
+        assertEq(
+            qUsdc, b.pendingUsdc + b.owedUsdc + b.creditUsdc + b.dustUsdc, "queue USDC = its books"
+        );
+        assertEq(
+            qShares,
+            b.escrowShares + b.heldShares + b.creditShares + b.dustShares,
+            "queue shares = its books"
+        );
 
         (uint256 usdcIn, uint256 usdcOut, uint256 minted, uint256 burned) = _settledSinceStart();
         assertEq(
-            qUsdc + ghostUsdcOut + usdcIn, startQueueUsdc + ghostUsdcIn + usdcOut, "queue USDC = the flows booked"
+            qUsdc + ghostUsdcOut + usdcIn,
+            startQueueUsdc + ghostUsdcIn + usdcOut,
+            "queue USDC = the flows booked"
         );
         assertEq(
             qShares + ghostSharesOut + ghostQueueSharesBurned + burned,
@@ -1648,33 +1836,69 @@ contract Invariants is PrototypeHarness {
     ///      did something.
     function afterInvariant() public fixtureCovered {
         assertGt(
-            callsDepositRequest + callsRedeemRequest + callsSettle + callsRedeemInKind + callsApply + callsStep,
+            callsDepositRequest + callsRedeemRequest + callsSettle + callsRedeemInKind + callsApply
+                + callsStep,
             0,
             "run did nothing"
         );
         string memory flows = string.concat(
-            "requests ", vm.toString(callsDepositRequest), "/", vm.toString(callsRedeemRequest), ", settles ",
-            vm.toString(settlementsMade), "/", vm.toString(callsSettle)
+            "requests ",
+            vm.toString(callsDepositRequest),
+            "/",
+            vm.toString(callsRedeemRequest),
+            ", settles ",
+            vm.toString(settlementsMade),
+            "/",
+            vm.toString(callsSettle)
         );
         flows = string.concat(
-            flows, ", deliveries ", vm.toString(callsDeliver), ", claims ", vm.toString(callsClaim), ", cancels ",
+            flows,
+            ", deliveries ",
+            vm.toString(callsDeliver),
+            ", claims ",
+            vm.toString(callsClaim),
+            ", cancels ",
             vm.toString(callsCancel)
         );
         flows = string.concat(
-            flows, ", exitsInKind ", vm.toString(callsExitInKind), ", expired ", vm.toString(callsExpired), ", credits ",
+            flows,
+            ", exitsInKind ",
+            vm.toString(callsExitInKind),
+            ", expired ",
+            vm.toString(callsExpired),
+            ", credits ",
             vm.toString(callsCredit)
         );
         flows = string.concat(
-            flows, ", freezes ", vm.toString(callsFreeze), "/", vm.toString(callsRelease), "/", vm.toString(callsTakeReturn)
+            flows,
+            ", freezes ",
+            vm.toString(callsFreeze),
+            "/",
+            vm.toString(callsRelease),
+            "/",
+            vm.toString(callsTakeReturn)
         );
         emit log_named_string("run", flows);
         string memory rebal = string.concat(
-            "inKind ", vm.toString(callsRedeemInKind), ", applies ", vm.toString(callsApply), ", refused by the pool-share rule ",
-            vm.toString(callsApplyRefusedPoolShare), ", rb9Refused ", vm.toString(callsRb9Refused)
+            "inKind ",
+            vm.toString(callsRedeemInKind),
+            ", applies ",
+            vm.toString(callsApply),
+            ", refused by the pool-share rule ",
+            vm.toString(callsApplyRefusedPoolShare),
+            ", rb9Refused ",
+            vm.toString(callsRb9Refused)
         );
         rebal = string.concat(
-            rebal, ", steps ", vm.toString(stepsExecuted), "/", vm.toString(callsStep), ", priceMoves ",
-            vm.toString(callsPrice), ", warps ", vm.toString(callsWarp)
+            rebal,
+            ", steps ",
+            vm.toString(stepsExecuted),
+            "/",
+            vm.toString(callsStep),
+            ", priceMoves ",
+            vm.toString(callsPrice),
+            ", warps ",
+            vm.toString(callsWarp)
         );
         emit log_named_string("run (step 3c)", rebal);
         // Reverts each handler caught (expected ones included) and the must-succeed ones among them.
@@ -1682,7 +1906,13 @@ contract Invariants is PrototypeHarness {
         for (uint256 h; h < N_HANDLERS; ++h) {
             if (revertsCaught[h] == 0 && mustSucceedReverts[h] == 0) continue;
             caught = string.concat(
-                caught, _handlerName(h), " ", vm.toString(revertsCaught[h]), "/", vm.toString(mustSucceedReverts[h]), "; "
+                caught,
+                _handlerName(h),
+                " ",
+                vm.toString(revertsCaught[h]),
+                "/",
+                vm.toString(mustSucceedReverts[h]),
+                "; "
             );
         }
         emit log_named_string("reverts caught / must-succeed reverts", caught);
@@ -1711,7 +1941,9 @@ contract Invariants is PrototypeHarness {
         uint256 t = type(uint256).max;
         for (uint256 c = 1; c <= n; ++c) {
             Claim memory cl = queue.getClaim(c);
-            if (cl.owner != h || cl.kind != RequestKind.Deposit || cl.claimed >= cl.shares) continue;
+            if (cl.owner != h || cl.kind != RequestKind.Deposit || cl.claimed >= cl.shares) {
+                continue;
+            }
             if (cl.unlockAt > block.timestamp && cl.unlockAt < t) t = cl.unlockAt;
         }
         if (t != type(uint256).max) warpForward(t);
@@ -1745,7 +1977,9 @@ contract Invariants is PrototypeHarness {
     }
 
     function _logLastViolation() private {
-        if (bytes(ghostLastViolation).length != 0) emit log_named_string("last violation", ghostLastViolation);
+        if (bytes(ghostLastViolation).length != 0) {
+            emit log_named_string("last violation", ghostLastViolation);
+        }
     }
 
     /// @dev A request of `h` that still holds escrow: the `k`-th in id order (wrapping), of the redemption kind
@@ -1837,9 +2071,13 @@ contract Invariants is PrototypeHarness {
         nav = idle;
         uint256 usdc8 = uint256(feedPrice8[FEED_USDC]);
         for (uint256 i; i < held.length; ++i) {
-            if (i == IDX_WETH) nav += held[i].mulDiv(uint256(feedPrice8[FEED_ETH]) * 1e6, usdc8 * 1e18);
-            else if (i == IDX_CBBTC) nav += held[i].mulDiv(uint256(feedPrice8[FEED_CBBTC]) * 1e6, usdc8 * 1e8);
-            else nav += held[i];
+            if (i == IDX_WETH) {
+                nav += held[i].mulDiv(uint256(feedPrice8[FEED_ETH]) * 1e6, usdc8 * 1e18);
+            } else if (i == IDX_CBBTC) {
+                nav += held[i].mulDiv(uint256(feedPrice8[FEED_CBBTC]) * 1e6, usdc8 * 1e8);
+            } else {
+                nav += held[i];
+            }
         }
     }
 
@@ -1857,7 +2095,9 @@ contract Invariants is PrototypeHarness {
     function _checkPerShare(string memory where) private {
         (uint256 idle, uint256[] memory held) = fund.heldBalances();
         uint256 supply = fund.totalSupply();
-        if (idle * pre.supply < pre.idle * supply) _violation(string.concat("RB-13: idle per share fell in ", where), 13);
+        if (idle * pre.supply < pre.idle * supply) {
+            _violation(string.concat("RB-13: idle per share fell in ", where), 13);
+        }
         for (uint256 i; i < held.length; ++i) {
             if (held[i] * pre.supply < pre.held[i] * supply) {
                 _violation(string.concat("RB-13: an asset per share fell in ", where), 13);
@@ -1886,7 +2126,9 @@ contract Invariants is PrototypeHarness {
         uint256 maxUnder = t > p0.idle ? t - p0.idle : 0;
         for (uint256 i; i < p0.marketOk.length; ++i) {
             if (!p0.marketOk[i] || rebalancer.assetStepParams(i).maxStepUsdc == 0) continue;
-            if (rebalancer.assetBackoffUntil(i) >= block.timestamp || !fund.assetConfig(i).active) continue;
+            if (rebalancer.assetBackoffUntil(i) >= block.timestamp || !fund.assetConfig(i).active) {
+                continue;
+            }
             t = _pathValue(p0.plan, i, block.timestamp, p0.nav);
             uint256 v = p0.values[i];
             if (v > t && v - t > maxOver) maxOver = v - t;
@@ -1897,7 +2139,11 @@ contract Invariants is PrototypeHarness {
 
     /// @dev Independent port of the §5.2 path value: `nav × (start×d + (end−start)×e) / (d × 10 000)`, the
     ///      shrinking side rounded up (toward start). Idle's path ends at 0.
-    function _pathValue(Plan memory p, uint256 index, uint256 t, uint256 nav) private pure returns (uint256) {
+    function _pathValue(Plan memory p, uint256 index, uint256 t, uint256 nav)
+        private
+        pure
+        returns (uint256)
+    {
         uint256 e;
         uint256 d;
         if (p.endTime <= p.startTime) {
@@ -1938,8 +2184,10 @@ contract Invariants is PrototypeHarness {
             if (from == address(queue)) {
                 _checkQueueTransfer(to);
             } else if (isSystem[from]) {
-                bool ok = venueOk[to] || to == feeRecipient || (to == actionHolder && actionHolder != address(0))
-                    || (to == address(0) && from != address(fund)) || (from == address(fund) && to == address(queue));
+                bool ok = venueOk[to] || to == feeRecipient
+                    || (to == actionHolder && actionHolder != address(0))
+                    || (to == address(0) && from != address(fund))
+                    || (from == address(fund) && to == address(queue));
                 if (!ok) _leak(from, to);
             } else if (!actionIsMarket && (from == WETH_POOL || from == CBBTC_POOL)) {
                 if (to != address(fund)) _leak(from, to);
@@ -1971,7 +2219,10 @@ contract Invariants is PrototypeHarness {
         for (uint256 i; i < acc.length; ++i) {
             VmSafe.AccountAccess memory x = acc[i];
             if (x.accessor != address(receipts) && x.accessor != receiptImpl) continue;
-            if (x.account == address(fund) || x.account == address(rebalancer) || x.account == address(governance)) {
+            if (
+                x.account == address(fund) || x.account == address(rebalancer)
+                    || x.account == address(governance)
+            ) {
                 ++ghostRb8Calls;
             }
         }
@@ -2005,7 +2256,8 @@ contract Invariants is PrototypeHarness {
         }
         for (uint256 i; i < acc.length; ++i) {
             VmSafe.AccountAccess memory x = acc[i];
-            bool isCall = x.kind == VmSafe.AccountAccessKind.Call || x.kind == VmSafe.AccountAccessKind.StaticCall
+            bool isCall = x.kind == VmSafe.AccountAccessKind.Call
+                || x.kind == VmSafe.AccountAccessKind.StaticCall
                 || x.kind == VmSafe.AccountAccessKind.DelegateCall;
             if (
                 isCall && x.data.length != 0 && !_cvAccount[x.account] && !_cvCreated[x.account]
@@ -2013,7 +2265,9 @@ contract Invariants is PrototypeHarness {
             ) _miss(x.account, bytes32(0));
             for (uint256 j; j < x.storageAccesses.length; ++j) {
                 VmSafe.StorageAccess memory s = x.storageAccesses[j];
-                if (!_cvAccount[s.account] || _cvCreated[s.account] || _cvSeen[s.account][s.slot]) continue;
+                if (!_cvAccount[s.account] || _cvCreated[s.account] || _cvSeen[s.account][s.slot]) {
+                    continue;
+                }
                 _cvSeen[s.account][s.slot] = true;
                 if (!s.isWrite && !_cvSlot[s.account][s.slot]) _miss(s.account, s.slot);
             }

@@ -26,22 +26,38 @@ library SimLib {
     uint256 internal constant TAG_FLOW_WHO = 9;
 
     /// @notice The run seed: keccak256("rm-sim-v1", scenario, fund size, seed index).
-    function seedOf(uint256 scenarioId, uint256 fundUsdc, uint256 k) internal pure returns (uint256) {
+    function seedOf(uint256 scenarioId, uint256 fundUsdc, uint256 k)
+        internal
+        pure
+        returns (uint256)
+    {
         return uint256(keccak256(abi.encode("rm-sim-v1", scenarioId, fundUsdc, k)));
     }
 
     /// @notice One raw draw for (slot, stream, asset).
-    function draw(uint256 seed, uint256 slot, uint256 tag, uint256 asset) internal pure returns (uint256) {
+    function draw(uint256 seed, uint256 slot, uint256 tag, uint256 asset)
+        internal
+        pure
+        returns (uint256)
+    {
         return uint256(keccak256(abi.encode(seed, slot, tag, asset)));
     }
 
     /// @notice U[0,1) in 1e18 fixed point.
-    function unit(uint256 seed, uint256 slot, uint256 tag, uint256 asset) internal pure returns (uint256) {
+    function unit(uint256 seed, uint256 slot, uint256 tag, uint256 asset)
+        internal
+        pure
+        returns (uint256)
+    {
         return draw(seed, slot, tag, asset) % ONE;
     }
 
     /// @notice Approximately N(0,1) in 1e18 fixed point: (sum of 4 uniforms − 2) × sqrt(3).
-    function normal(uint256 seed, uint256 slot, uint256 tag, uint256 asset) internal pure returns (int256) {
+    function normal(uint256 seed, uint256 slot, uint256 tag, uint256 asset)
+        internal
+        pure
+        returns (int256)
+    {
         uint256 h = draw(seed, slot, tag, asset);
         uint256 s;
         for (uint256 j; j < 4; ++j) {
@@ -52,19 +68,31 @@ library SimLib {
 
     /// @notice USDC notional that moves an in-range V3 pool's price by 10 bps (sqrt price by ~5 bps).
     ///         USDC as token1: Δy = L·ΔsqrtP/2^96. USDC as token0: Δx = L·2^96·Δ(1/sqrtP).
-    function depth10Bps(uint128 liquidity, uint160 sqrtP, bool usdcIsToken0) internal pure returns (uint256) {
+    function depth10Bps(uint128 liquidity, uint160 sqrtP, bool usdcIsToken0)
+        internal
+        pure
+        returns (uint256)
+    {
         if (usdcIsToken0) return Math.mulDiv(liquidity, Q96, sqrtP) * 5 / 10_000;
         return Math.mulDiv(liquidity, sqrtP, Q96) * 5 / 10_000;
     }
 
     /// @notice USDC value of `amount` token units at sqrt price `sqrtP` (raw units both sides).
-    function spotUsdc(uint256 amount, uint160 sqrtP, bool usdcIsToken0) internal pure returns (uint256) {
+    function spotUsdc(uint256 amount, uint160 sqrtP, bool usdcIsToken0)
+        internal
+        pure
+        returns (uint256)
+    {
         if (usdcIsToken0) return Math.mulDiv(Math.mulDiv(amount, Q96, sqrtP), Q96, sqrtP);
         return Math.mulDiv(Math.mulDiv(amount, sqrtP, Q96), sqrtP, Q96);
     }
 
     /// @notice Signed USDC value of a signed token delta at spot.
-    function spotUsdcSigned(int256 delta, uint160 sqrtP, bool usdcIsToken0) internal pure returns (int256) {
+    function spotUsdcSigned(int256 delta, uint160 sqrtP, bool usdcIsToken0)
+        internal
+        pure
+        returns (int256)
+    {
         if (delta >= 0) return int256(spotUsdc(uint256(delta), sqrtP, usdcIsToken0));
         return -int256(spotUsdc(uint256(-delta), sqrtP, usdcIsToken0));
     }

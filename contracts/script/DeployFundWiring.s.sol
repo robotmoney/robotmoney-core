@@ -59,15 +59,37 @@ contract DeployFundWiring is FundSystemBase {
 
     function _check(Wired memory w) internal view {
         RobotMoneyFund f = RobotMoneyFund(w.fund);
-        require(f.hasRole(Roles.GOVERNANCE_ROLE, w.governance), "wiring: governance lacks GOVERNANCE_ROLE");
-        require(f.hasRole(Roles.REBALANCER_ROLE, w.rebalancer), "wiring: rebalancer lacks REBALANCER_ROLE");
-        require(f.hasRole(Roles.FLOW_ROLE, w.queue) && f.flowQueue() == w.queue, "wiring: queue lacks FLOW_ROLE");
+        require(
+            f.hasRole(Roles.GOVERNANCE_ROLE, w.governance),
+            "wiring: governance lacks GOVERNANCE_ROLE"
+        );
+        require(
+            f.hasRole(Roles.REBALANCER_ROLE, w.rebalancer),
+            "wiring: rebalancer lacks REBALANCER_ROLE"
+        );
+        require(
+            f.hasRole(Roles.FLOW_ROLE, w.queue) && f.flowQueue() == w.queue,
+            "wiring: queue lacks FLOW_ROLE"
+        );
         require(!f.hasRole(Roles.FLOW_ROLE, msg.sender), "wiring: deployer holds FLOW_ROLE");
-        require(!f.hasRole(Roles.REBALANCER_ROLE, msg.sender), "wiring: deployer holds REBALANCER_ROLE");
-        require(!f.hasRole(Roles.GOVERNANCE_ROLE, msg.sender), "wiring: deployer holds GOVERNANCE_ROLE");
-        require(IAccessControl(w.receipts).hasRole(RECEIPT_RELEASER_ROLE, w.governance), "wiring: governance cannot release receipts");
-        require(IAccessControl(w.queue).hasRole(Roles.KEEPER_ROLE, w.keeper), "wiring: keeper lacks queue KEEPER_ROLE");
-        require(IAccessControl(w.rebalancer).hasRole(Roles.KEEPER_ROLE, w.keeper), "wiring: keeper lacks rebalancer KEEPER_ROLE");
+        require(
+            !f.hasRole(Roles.REBALANCER_ROLE, msg.sender), "wiring: deployer holds REBALANCER_ROLE"
+        );
+        require(
+            !f.hasRole(Roles.GOVERNANCE_ROLE, msg.sender), "wiring: deployer holds GOVERNANCE_ROLE"
+        );
+        require(
+            IAccessControl(w.receipts).hasRole(RECEIPT_RELEASER_ROLE, w.governance),
+            "wiring: governance cannot release receipts"
+        );
+        require(
+            IAccessControl(w.queue).hasRole(Roles.KEEPER_ROLE, w.keeper),
+            "wiring: keeper lacks queue KEEPER_ROLE"
+        );
+        require(
+            IAccessControl(w.rebalancer).hasRole(Roles.KEEPER_ROLE, w.keeper),
+            "wiring: keeper lacks rebalancer KEEPER_ROLE"
+        );
     }
 
     function _writeDeploymentJson(Wired memory w) internal {

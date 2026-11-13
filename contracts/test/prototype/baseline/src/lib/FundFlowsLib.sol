@@ -134,7 +134,9 @@ library FundFlowsLib {
         usdcOut = IERC20(usdc).balanceOf(address(this)).mulDiv(shares, supplyBefore);
         uint256 n = s.assets.length;
         for (uint256 i; i < n; ++i) {
-            if (s.assets[i].kind != AssetKind.Lending || !FundValuationLib.isCounted(s, i)) continue;
+            if (s.assets[i].kind != AssetKind.Lending || !FundValuationLib.isCounted(s, i)) {
+                continue;
+            }
             uint256 want = FundValuationLib.heldBalance(s, i).mulDiv(shares, supplyBefore);
             if (want == 0) continue;
             uint256 before = IERC20(usdc).balanceOf(address(this));
@@ -147,7 +149,8 @@ library FundFlowsLib {
             uint256 sellAmount = FundValuationLib.heldBalance(s, i).mulDiv(shares, supplyBefore);
             if (sellAmount == 0) continue;
             // Core 1778: price one input unit less (a V3 pool rounds the fee-adjusted input down by one).
-            uint256 minOut = _haircut(FundValuationLib.usdcValue(s, i, sellAmount - 1), s.maxSlippageBps);
+            uint256 minOut =
+                _haircut(FundValuationLib.usdcValue(s, i, sellAmount - 1), s.maxSlippageBps);
             if (minOut == 0) continue;
             usdcOut += _swap(a, a.token, usdc, sellAmount, minOut);
         }
@@ -156,10 +159,13 @@ library FundFlowsLib {
     /// @notice Realize the redeemed shares (`sellProportional`), charge `exitFeeBps` on the REALIZED gross only
     ///         (FEE-2 / NC-11), pay the fee to `feeRecipient` and the rest to `receiver` (the caller's own
     ///         ERC-4626 receiver). Emits `ExitFeeCharged`. Returns the USDC paid to `receiver`.
-    function redeemPayout(FundState storage s, address owner, address receiver, uint256 shares, uint256 supplyBefore)
-        public
-        returns (uint256 net)
-    {
+    function redeemPayout(
+        FundState storage s,
+        address owner,
+        address receiver,
+        uint256 shares,
+        uint256 supplyBefore
+    ) public returns (uint256 net) {
         uint256 gross = sellProportional(s, shares, supplyBefore);
         uint256 fee = gross.mulDiv(s.exitFeeBps, BPS);
         net = gross - fee;
@@ -173,7 +179,9 @@ library FundFlowsLib {
     ///         `ProtectedToken` for USDC, the share token, every asset token (active or not) and every Lending
     ///         adapter address. Emits `ForeignTokenSwept`.
     function sweepForeign(FundState storage s, address token, address caller) public {
-        if (token == s.usdc || token == address(this)) revert IRobotMoneyFund.ProtectedToken(token);
+        if (token == s.usdc || token == address(this)) {
+            revert IRobotMoneyFund.ProtectedToken(token);
+        }
         uint256 n = s.assets.length;
         for (uint256 i; i < n; ++i) {
             if (token == s.assets[i].token || token == s.assets[i].adapter) {
@@ -202,14 +210,18 @@ library FundFlowsLib {
     ///      exactly what an unfrozen exit would have paid. A Lending claim is a fixed USDC amount: interest on
     ///      it, and any later venue loss, stay with the holders (prototype simplification).
     ///      The idle USDC leg uses a plain transfer: USDC failing for the fund itself stops every path.
-    function payInKind(FundState storage s, address receiver, uint256 shares, uint256 supplyBefore) public {
+    function payInKind(FundState storage s, address receiver, uint256 shares, uint256 supplyBefore)
+        public
+    {
         address usdc = s.usdc;
         uint256 fee = s.exitFeeBps;
         address feeTo = s.feeRecipient;
         uint256 usdcLeg = IERC20(usdc).balanceOf(address(this)).mulDiv(shares, supplyBefore);
         uint256 n = s.assets.length;
         for (uint256 i; i < n; ++i) {
-            if (s.assets[i].kind != AssetKind.Lending || !FundValuationLib.isCounted(s, i)) continue;
+            if (s.assets[i].kind != AssetKind.Lending || !FundValuationLib.isCounted(s, i)) {
+                continue;
+            }
             uint256 want = FundValuationLib.heldBalance(s, i).mulDiv(shares, supplyBefore);
             if (want == 0) continue;
             uint256 before = IERC20(usdc).balanceOf(address(this));
@@ -300,7 +312,10 @@ library FundFlowsLib {
     ///         holds `nonReentrant`. Order: plan Open → legs valid and counted, ORA-4 on Basket legs (RB-5)
     ///         → RB-7 path guard at `navBefore` → sell leg → buy leg → `navAfter` and the cost cap (RB-4)
     ///         → plan accounting and the budget halt → `StepExecuted`.
-    function executeStep(FundState storage s, StepOrder memory o) public returns (StepResult memory r) {
+    function executeStep(FundState storage s, StepOrder memory o)
+        public
+        returns (StepResult memory r)
+    {
         Plan storage p = s.plan;
         if (p.status != PlanStatus.Open) {
             revert IRobotMoneyFund.InvalidPlanTransition(p.id, p.status, PlanStatus.Open);
@@ -333,14 +348,20 @@ library FundFlowsLib {
     ///      (RB-5 defence in depth: the Rebalancer already masks failing assets).
     function _checkLeg(FundState storage s, uint256 i) private view {
         if (i == IDLE_INDEX) return;
-        if (i >= s.assets.length || !FundValuationLib.isCounted(s, i)) revert IFundEvents.InvalidAssetIndex(i);
+        if (i >= s.assets.length || !FundValuationLib.isCounted(s, i)) {
+            revert IFundEvents.InvalidAssetIndex(i);
+        }
         if (s.assets[i].kind == AssetKind.Basket) FundValuationLib.requireMarket(s, i);
     }
 
     /// @dev RB-7 guard: at `navBefore` and `now`, the sell leg sits over its `pathTarget` value by at least the
     ///      notional and a non-idle buy leg sits under it by at least the notional (`PlanMath.pathTargetValue`,
     ///      the same function the Rebalancer sizes with). Returns `navBefore`.
-    function _pathGuard(FundState storage s, StepOrder memory o) private view returns (uint256 navBefore) {
+    function _pathGuard(FundState storage s, StepOrder memory o)
+        private
+        view
+        returns (uint256 navBefore)
+    {
         uint256 idle;
         uint256[] memory values;
         (navBefore, idle, values) = FundValuationLib.portfolio(s);
@@ -383,7 +404,9 @@ library FundFlowsLib {
                 got = _swap(a, a.token, usdc, amt, o.minSellUsdcOut);
             }
         }
-        if (got < o.minSellUsdcOut) revert IRobotMoneyFund.StepBelowMinOut(o.sellIndex, got, o.minSellUsdcOut);
+        if (got < o.minSellUsdcOut) {
+            revert IRobotMoneyFund.StepBelowMinOut(o.sellIndex, got, o.minSellUsdcOut);
+        }
         r.usdcMoved = got;
     }
 
@@ -455,7 +478,8 @@ library FundFlowsLib {
             }
             uint256 bal = FundValuationLib.heldBalance(s, i);
             if (bal == 0) continue;
-            try IBasketSwapAdapter(a.adapter).twapPrice(a.pool, a.token, usdc, bal, a.twapWindow) returns (
+            try IBasketSwapAdapter(a.adapter)
+                .twapPrice(a.pool, a.token, usdc, bal, a.twapWindow) returns (
                 uint256 v
             ) {
                 uint256 floor = _haircut(v, s.maxSlippageBps);
@@ -506,7 +530,10 @@ library FundFlowsLib {
 
     /// @dev Move `amount` USDC into Lending `adapter` and deploy it; return what the adapter kept (the fund's
     ///      balance delta, `RobotMoneyVaultOps._allocate`). A refused supply comes straight back and stays idle.
-    function _deploy(address usdc, address adapter, uint256 amount) private returns (uint256 placed) {
+    function _deploy(address usdc, address adapter, uint256 amount)
+        private
+        returns (uint256 placed)
+    {
         uint256 before = IERC20(usdc).balanceOf(address(this));
         IERC20(usdc).safeTransfer(adapter, amount);
         IStrategyAdapter(adapter).deploy(amount);
@@ -516,17 +543,24 @@ library FundFlowsLib {
 
     /// @dev Swap through the asset's adapter (`BasketSwaps.swap`: approve, swap with recipient = the fund,
     ///      clear approval). Returns `tokenOut` received by balance delta.
-    function _swap(AssetConfig memory a, address tokenIn, address tokenOut, uint256 amountIn, uint256 minOut)
-        private
-        returns (uint256 got)
-    {
+    function _swap(
+        AssetConfig memory a,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minOut
+    ) private returns (uint256 got) {
         uint256 before = IERC20(tokenOut).balanceOf(address(this));
-        BasketSwaps.swap(a.adapter, tokenIn, tokenOut, a.poolFee, amountIn, minOut, ISwapRouter(address(0)));
+        BasketSwaps.swap(
+            a.adapter, tokenIn, tokenOut, a.poolFee, amountIn, minOut, ISwapRouter(address(0))
+        );
         got = IERC20(tokenOut).balanceOf(address(this)) - before;
     }
 
     /// @dev Pay one in-kind leg: `exitFeeBps` of it to `feeTo`, the rest to `receiver`.
-    function _payLeg(address token, address receiver, uint256 amount, uint256 feeBps, address feeTo) private {
+    function _payLeg(address token, address receiver, uint256 amount, uint256 feeBps, address feeTo)
+        private
+    {
         if (amount == 0) return;
         uint256 fee = amount.mulDiv(feeBps, BPS);
         if (fee != 0) IERC20(token).safeTransfer(feeTo, fee);

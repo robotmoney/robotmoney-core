@@ -16,7 +16,10 @@ import {PrototypeHarness} from "./PrototypeHarness.sol";
 import {BaselineHarness} from "./baseline/BaselineHarness.sol";
 import {SimLib} from "./sim/SimLib.sol";
 import {BPS, IDLE_INDEX, PRICE_SCALE, PlanParams} from "./src/FundTypes.sol";
-import {PlanParams as BaselinePlanParams, PlanStatus as PlanStatusB} from "./baseline/src/FundTypes.sol";
+import {
+    PlanParams as BaselinePlanParams,
+    PlanStatus as PlanStatusB
+} from "./baseline/src/FundTypes.sol";
 import {
     Claim,
     FlowBooks,
@@ -67,10 +70,16 @@ interface IAtkPool {
     function liquidity() external view returns (uint128);
     function tickSpacing() external view returns (int24);
     function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool);
-    function mint(address recipient, int24 tickLower, int24 tickUpper, uint128 amount, bytes calldata data)
+    function mint(
+        address recipient,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 amount,
+        bytes calldata data
+    ) external returns (uint256 amount0, uint256 amount1);
+    function burn(int24 tickLower, int24 tickUpper, uint128 amount)
         external
         returns (uint256 amount0, uint256 amount1);
-    function burn(int24 tickLower, int24 tickUpper, uint128 amount) external returns (uint256 amount0, uint256 amount1);
     function collect(
         address recipient,
         int24 tickLower,
@@ -93,7 +102,10 @@ interface IAtkRouter {
         uint160 sqrtPriceLimitX96;
     }
 
-    function exactInputSingle(ExactInputSingleParams calldata p) external payable returns (uint256 amountOut);
+    function exactInputSingle(ExactInputSingleParams calldata p)
+        external
+        payable
+        returns (uint256 amountOut);
 }
 
 interface IAtkAavePool {
@@ -136,7 +148,9 @@ abstract contract AttackBook is Test {
         emit log_named_string("attack", id);
         emit log_named_int("  attacker net (flash fee 0, Morpho)", r.attackerNet);
         emit log_named_int("  attacker net (flash fee 5 bps, Aave V3)", aave);
-        emit log_named_uint("  flash borrowed (USDC value of the one-transaction legs)", r.flashBorrowed);
+        emit log_named_uint(
+            "  flash borrowed (USDC value of the one-transaction legs)", r.flashBorrowed
+        );
         emit log_named_uint("  holders' loss at reference prices", r.holdersLoss);
         emit log_named_uint("  pending users' loss against the honest settlement", r.pendingLoss);
         emit log_named_uint("  NAV at reference prices", r.navRef);
@@ -183,7 +197,10 @@ abstract contract AttackBook is Test {
         );
         if (r.attackerNet <= 0) return;
         string memory why = string.concat(
-            id, ": G8 FINDING, the attacker nets +", vm.toString(r.attackerNet), " USDC units (see defects.md)"
+            id,
+            ": G8 FINDING, the attacker nets +",
+            vm.toString(r.attackerNet),
+            " USDC units (see defects.md)"
         );
         _finding(why);
     }
@@ -200,11 +217,16 @@ abstract contract AttackBook is Test {
     ///         1,000 USDC. Below it the test logs `G8 FINDING` and is skipped with the measured cost (see
     ///         `_g8OrFinding`).
     function _g8BlockFloorOrFinding(string memory id, uint256 costPerDayUsdc) internal {
-        emit log_named_uint(string.concat(id, ": cost to block for a day (USDC units)"), costPerDayUsdc);
+        emit log_named_uint(
+            string.concat(id, ": cost to block for a day (USDC units)"), costPerDayUsdc
+        );
         if (costPerDayUsdc >= G8_BLOCK_FLOOR_USDC) return;
         _finding(
             string.concat(
-                id, ": G8 FINDING, blocking for a day costs ", vm.toString(costPerDayUsdc), " USDC units < 1,000 USDC"
+                id,
+                ": G8 FINDING, blocking for a day costs ",
+                vm.toString(costPerDayUsdc),
+                " USDC units < 1,000 USDC"
             )
         );
     }
@@ -249,9 +271,12 @@ abstract contract AttackBook is Test {
         uint256 outBefore = IERC20(tokenOut).balanceOf(who);
         vm.startPrank(who);
         IERC20(tokenIn).approve(ATK_ROUTER, inBefore);
-        IAtkRouter(ATK_ROUTER).exactInputSingle(
-            IAtkRouter.ExactInputSingleParams(tokenIn, tokenOut, IAtkPool(pool).fee(), who, inBefore, 0, target)
-        );
+        IAtkRouter(ATK_ROUTER)
+            .exactInputSingle(
+                IAtkRouter.ExactInputSingleParams(
+                    tokenIn, tokenOut, IAtkPool(pool).fee(), who, inBefore, 0, target
+                )
+            );
         IERC20(tokenIn).approve(ATK_ROUTER, 0);
         vm.stopPrank();
         spent = inBefore - IERC20(tokenIn).balanceOf(who);
@@ -261,16 +286,22 @@ abstract contract AttackBook is Test {
     }
 
     /// @notice `who` sells exactly `amountIn` of `tokenIn` for `tokenOut` at `pool` (no limit). The unwind of a push.
-    function _sellExact(address who, address pool, address tokenIn, address tokenOut, uint256 amountIn)
-        internal
-        returns (uint256 got)
-    {
+    function _sellExact(
+        address who,
+        address pool,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn
+    ) internal returns (uint256 got) {
         if (amountIn == 0) return 0;
         vm.startPrank(who);
         IERC20(tokenIn).approve(ATK_ROUTER, amountIn);
-        got = IAtkRouter(ATK_ROUTER).exactInputSingle(
-            IAtkRouter.ExactInputSingleParams(tokenIn, tokenOut, IAtkPool(pool).fee(), who, amountIn, 0, 0)
-        );
+        got = IAtkRouter(ATK_ROUTER)
+            .exactInputSingle(
+                IAtkRouter.ExactInputSingleParams(
+                    tokenIn, tokenOut, IAtkPool(pool).fee(), who, amountIn, 0, 0
+                )
+            );
         vm.stopPrank();
     }
 
@@ -388,16 +419,22 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     function _a1Flows(uint256 atkShares) private {
         // The fund itself takes no flow (E2).
         vm.prank(attacker);
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.UseFlowQueue.selector, address(queue)));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.UseFlowQueue.selector, address(queue))
+        );
         fund.deposit(1e6, attacker);
         vm.prank(attacker);
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.UseFlowQueue.selector, address(queue)));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.UseFlowQueue.selector, address(queue))
+        );
         fund.redeem(1, attacker, attacker);
 
         // Requests only escrow. Nothing settles in this transaction (check 1, the window).
         uint256 dep = _reqDeposit(attacker, 100_000e6, type(uint256).max);
         uint256 red = openRedeemRequest(attacker, atkShares / 2, 0);
-        bytes memory window = abi.encodeWithSelector(IFlowEvents.SettleBlocked.selector, SettleCheck.Window, IDLE_INDEX, 0);
+        bytes memory window = abi.encodeWithSelector(
+            IFlowEvents.SettleBlocked.selector, SettleCheck.Window, IDLE_INDEX, 0
+        );
         vm.prank(attacker);
         vm.expectRevert(window);
         queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
@@ -416,7 +453,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         queue.cancel(red);
         queue.withdrawCredit();
         vm.stopPrank();
-        assertEq(uint8(queue.requestStatus(dep)), uint8(RequestStatus.Closed), "the deposit request never filled");
+        assertEq(
+            uint8(queue.requestStatus(dep)),
+            uint8(RequestStatus.Closed),
+            "the deposit request never filled"
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -450,10 +491,19 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         (SettleCheck check,) = queue.checkSettle();
         assertEq(uint8(check), uint8(SettleCheck.Ok), "a push inside refBandBps passes check 4");
         assertGt(_settleOverBlocks(keeper, id, 64), 0, "the redemption traded");
-        assertEq(uint8(queue.requestStatus(id)), uint8(RequestStatus.Closed), "the redemption settled");
+        assertEq(
+            uint8(queue.requestStatus(id)), uint8(RequestStatus.Closed), "the redemption settled"
+        );
         _sellExact(attacker, WETH_POOL, WETH, USDC, bought);
         _claimRedeemUsdc(attacker);
-        _end(string.concat("A2 timed, push +", vm.toString(push), " bps (band - 10) held through the window, no arbitrage"), true);
+        _end(
+            string.concat(
+                "A2 timed, push +",
+                vm.toString(push),
+                " bps (band - 10) held through the window, no arbitrage"
+            ),
+            true
+        );
     }
 
     /// @dev A push past `refBandBps` (band + 20 bps: +110 at the default 90) held over the window blocks the
@@ -483,7 +533,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertEq(fund.totalSupply(), supply, "RB-12: nothing minted");
         assertEq(queue.getRequest(vid).remaining, 50_000e6, "the request stays pending");
         _sellExact(attacker, WETH_POOL, WETH, USDC, bought);
-        _end(string.concat("A2 timed, push +", vm.toString(push), " bps (band + 20) held: blocked"), true);
+        _end(
+            string.concat("A2 timed, push +", vm.toString(push), " bps (band + 20) held: blocked"),
+            true
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -509,13 +562,22 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         warpToSettleable(id);
         refreshFeeds();
         assertGt(_settleOverBlocks(keeper, id, 64), 0, "the deposit traded");
-        assertEq(uint8(queue.requestStatus(id)), uint8(RequestStatus.Closed), "the deposit settled in the deflation");
+        assertEq(
+            uint8(queue.requestStatus(id)),
+            uint8(RequestStatus.Closed),
+            "the deposit settled in the deflation"
+        );
         _sellExact(attacker, WETH_POOL, USDC, WETH, usdcGot);
         coverageCheckpoint();
         uint256 shares = deliverAfterHold(attacker);
         _takeCredit(attacker);
         redeem(attacker, shares);
-        _end(string.concat("A3 timed, deflate ", vm.toString(push), " bps (band - 10), deposit, exit"), true);
+        _end(
+            string.concat(
+                "A3 timed, deflate ", vm.toString(push), " bps (band - 10), deposit, exit"
+            ),
+            true
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -541,7 +603,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         IERC20(USDC).approve(AAVE_POOL, gift);
         IAtkAavePool(AAVE_POOL).supply(USDC, gift, address(aaveAdapter), 0);
         vm.stopPrank();
-        assertEq(IAtkRateAdapter(address(aaveAdapter)).ratePerUnit(), rate0, "a gift does not move the venue rate");
+        assertEq(
+            IAtkRateAdapter(address(aaveAdapter)).ratePerUnit(),
+            rate0,
+            "a gift does not move the venue rate"
+        );
         vm.prank(keeper);
         (SettleCheck check,) = queue.checkSettle();
         assertEq(uint8(check), uint8(SettleCheck.Ok), "check 5 passes after the gift");
@@ -549,10 +615,22 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
         // The gift raised the Aave amount per share, so a share now costs more: the tight limit no longer admits
         // the bound and that request waits (RB-14 protects it); the loose one fills.
-        assertEq(uint8(queue.requestStatus(tight)), uint8(RequestStatus.Pending), "the tight limit waits (RB-14)");
-        assertEq(uint8(queue.requestStatus(loose)), uint8(RequestStatus.Closed), "the any-price deposit settled");
+        assertEq(
+            uint8(queue.requestStatus(tight)),
+            uint8(RequestStatus.Pending),
+            "the tight limit waits (RB-14)"
+        );
+        assertEq(
+            uint8(queue.requestStatus(loose)),
+            uint8(RequestStatus.Closed),
+            "the any-price deposit settled"
+        );
         AttackPnl memory r = _end("A4 timed, a 10,000 USDC gift to the Aave adapter", true);
-        assertLe(r.attackerNet, -int256(gift * 99 / 100), "the gifter loses its gift (less any pro-rata share)");
+        assertLe(
+            r.attackerNet,
+            -int256(gift * 99 / 100),
+            "the gifter loses its gift (less any pro-rata share)"
+        );
 
         // A real jump of the venue's own rate (+1 %, far over 10 bps a day) blocks every settlement at check 5.
         uint256 v2 = openDepositRequest(dave, 50_000e6, type(uint256).max);
@@ -608,7 +686,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
 
     /// @dev In the request's block, then in the next block: nothing settles, nothing is delivered, no exit.
     function _a5OneBlock(uint256 id) private {
-        bytes memory window = abi.encodeWithSelector(IFlowEvents.SettleBlocked.selector, SettleCheck.Window, IDLE_INDEX, 0);
+        bytes memory window = abi.encodeWithSelector(
+            IFlowEvents.SettleBlocked.selector, SettleCheck.Window, IDLE_INDEX, 0
+        );
         vm.prank(keeper);
         vm.expectRevert(window);
         queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
@@ -634,7 +714,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         uint256 claimId = queue.claimCount();
         Claim memory c = queue.getClaim(claimId);
         assertEq(c.owner, attacker, "the attacker's claim");
-        assertEq(c.unlockAt, block.timestamp + queue.flowParams().minHold, "unlocks minHold after the settlement");
+        assertEq(
+            c.unlockAt,
+            block.timestamp + queue.flowParams().minHold,
+            "unlocks minHold after the settlement"
+        );
         unlockAt = c.unlockAt;
         vm.prank(attacker);
         vm.expectRevert(abi.encodeWithSelector(IFlowEvents.NotEnoughClaimable.selector, 1, 0));
@@ -664,7 +748,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         uint256 windowEnd = queue.settleableAt(epoch);
         fundUsdc(attacker, 100_000e6);
         uint256 id = _reqDeposit(attacker, 100_000e6, type(uint256).max);
-        assertEq(queue.getRequest(id).epoch, epoch, "the request is in the epoch whose window ends in the lag");
+        assertEq(
+            queue.getRequest(id).epoch,
+            epoch,
+            "the request is in the epoch whose window ends in the lag"
+        );
 
         // The move lands 30 minutes before the window ends, so half the window's slices lag the feed.
         vm.warp(windowEnd - 30 minutes);
@@ -680,16 +768,23 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.prank(keeper);
         (SettleCheck check, uint256 index) = queue.checkSettle();
         assertTrue(
-            check == SettleCheck.TwapQuorum || check == SettleCheck.TwapVsFeed, "the lagging TWAP blocks (check 3 or 4)"
+            check == SettleCheck.TwapQuorum || check == SettleCheck.TwapVsFeed,
+            "the lagging TWAP blocks (check 3 or 4)"
         );
         assertEq(index, IDX_WETH, "on wETH");
-        emit log_named_uint("A6: the check that blocked in the lag (7 quorum, 8 TWAP vs feed)", uint8(check));
+        emit log_named_uint(
+            "A6: the check that blocked in the lag (7 quorum, 8 TWAP vs feed)", uint8(check)
+        );
 
         vm.warp(windowEnd + queue.flowParams().settleWindow);
         refreshFeeds();
         vm.prank(keeper);
         queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
-        assertEq(uint8(queue.requestStatus(id)), uint8(RequestStatus.Closed), "settled once the TWAP caught up");
+        assertEq(
+            uint8(queue.requestStatus(id)),
+            uint8(RequestStatus.Closed),
+            "settled once the TWAP caught up"
+        );
         coverageCheckpoint();
         uint256 shares = deliverAfterHold(attacker);
         _takeCredit(attacker);
@@ -786,7 +881,12 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         emit log_named_uint(string.concat(label, ": parts sandwiched"), parts);
         (uint256 u, uint256 sh) = _victimFills(vid);
         if (queue.getRequest(vid).closed) {
-            assertApproxEqRel(sh, honestShares, 1e15, "the bound sets the shares: the push cannot change them (to 0.1 %)");
+            assertApproxEqRel(
+                sh,
+                honestShares,
+                1e15,
+                "the bound sets the shares: the push cannot change them (to 0.1 %)"
+            );
         } else {
             emit log_named_string(label, "the per-swap limit refused a part: the rest waits");
         }
@@ -804,7 +904,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     ///      settlement, or `maxCalls` calls ran. Since 2026-11-12 the per-call basket cap (5 bps of each pool's
     ///      time-weighted USDC depth, a budget per block) is on by default, so a flow larger than one call's room
     ///      fills in parts over blocks. Returns the settlements recorded.
-    function _settleOverBlocks(address caller, uint256 id, uint256 maxCalls) internal returns (uint256 parts) {
+    function _settleOverBlocks(address caller, uint256 id, uint256 maxCalls)
+        internal
+        returns (uint256 parts)
+    {
         for (uint256 k; k < maxCalls && !queue.getRequest(id).closed; ++k) {
             if (k != 0) _nextBlock();
             else vm.roll(block.number + 1);
@@ -820,7 +923,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         for (uint256 c = 1; c <= n; ++c) {
             Claim memory cl = queue.getClaim(c);
             if (cl.requestId != vid) continue;
-            assertLe(cl.usdc.mulDiv(PRICE_SCALE, cl.shares, Math.Rounding.Ceil), limit, "RB-14: each fill inside the limit");
+            assertLe(
+                cl.usdc.mulDiv(PRICE_SCALE, cl.shares, Math.Rounding.Ceil),
+                limit,
+                "RB-14: each fill inside the limit"
+            );
             usdc += cl.usdc;
             shares += cl.shares;
         }
@@ -828,7 +935,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
 
     /// @dev The victim's extra USDC against the honest run (`hu` USDC for `hs` shares): what it paid less what its
     ///      `shares` cost at the honest price per share.
-    function _extraCost(uint256 usdc, uint256 shares, uint256 hu, uint256 hs) internal pure returns (uint256) {
+    function _extraCost(uint256 usdc, uint256 shares, uint256 hu, uint256 hs)
+        internal
+        pure
+        returns (uint256)
+    {
         if (shares == 0 || hs == 0) return 0;
         uint256 fair = shares.mulDiv(hu, hs);
         return usdc > fair ? usdc - fair : 0;
@@ -843,20 +954,26 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     ///      if not, the keeper-free path is closed, and one sandwich attempt is still played to log its cost; if
     ///      it does, the three pushes of `_a7` are played and scored. The same body runs on the scaffold queue (the
     ///      "before" copy, notes/levers.md) and on the fixed one.
-    function test_A7_sandwich_byTheCallerAtWindowEnd_viaANeverFillableRequest() public fixtureCovered {
+    function test_A7_sandwich_byTheCallerAtWindowEnd_viaANeverFillableRequest()
+        public
+        fixtureCovered
+    {
         uint256 vid = _a7BaitWorld();
         (bool reaches, uint256 hu, uint256 hs) = _a7BaitProbe(vid);
         emit log_named_string(
-            "A7 bait: the attacker's plain call at the victim's window end", reaches ? "fills the victim" : "does not reach the victim"
+            "A7 bait: the attacker's plain call at the victim's window end",
+            reaches ? "fills the victim" : "does not reach the victim"
         );
         if (reaches) {
             (honestUsdc, honestShares) = (hu, hs);
             _a7BaitSandwich(vid);
+        } else {
+            _a7BaitClosed(vid);
         }
-        else _a7BaitClosed(vid);
     }
 
-    string internal constant A7_BAIT_ID = "A7 timed sandwich, the attacker settles at the window end through a never-fillable bait";
+    string internal constant A7_BAIT_ID =
+        "A7 timed sandwich, the attacker settles at the window end through a never-fillable bait";
 
     /// @dev The world, the bait (minRequestUsdc at limit 1) one epoch before the victim's 250,000 USDC deposit, then
     ///      the victim's own window end (no keeperGrace warp), feeds fresh, the attack's reference fixed.
@@ -867,7 +984,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         uint256 bait = _reqDeposit(attacker, minUsdc, 1);
         vm.warp(block.timestamp + queue.flowParams().epochLength);
         vid = _victimDeposit(victim, 250_000e6);
-        assertEq(queue.getRequest(vid).epoch, queue.getRequest(bait).epoch + 1, "the victim asks one epoch after the bait");
+        assertEq(
+            queue.getRequest(vid).epoch,
+            queue.getRequest(bait).epoch + 1,
+            "the victim asks one epoch after the bait"
+        );
         warpToSettleable(vid);
         refreshFeeds();
         _begin();
@@ -880,7 +1001,8 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         uint256 snap = vm.snapshotState();
         vm.roll(block.number + 1);
         vm.prank(attacker);
-        (bool callOk,) = address(queue).call(abi.encodeCall(queue.settle, (SETTLE_MAX_REQUESTS, type(uint256).max)));
+        (bool callOk,) = address(queue)
+            .call(abi.encodeCall(queue.settle, (SETTLE_MAX_REQUESTS, type(uint256).max)));
         reaches = callOk && queue.getRequest(vid).remaining < 250_000e6;
         if (reaches) {
             _settleOverBlocks(attacker, vid, A7_MAX_PARTS);
@@ -898,11 +1020,17 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         (uint256 sc, uint256 bc) = _pushBps(attacker, CBBTC_POOL, CBBTC, USDC, 20);
         borrowed = sw + sc;
         vm.prank(attacker);
-        (bool tried,) = address(queue).call(abi.encodeCall(queue.settle, (SETTLE_MAX_REQUESTS, type(uint256).max)));
-        emit log_named_string("A7 bait: the sandwiched call", tried ? "returned (nothing of the victim's)" : "reverted");
+        (bool tried,) = address(queue)
+            .call(abi.encodeCall(queue.settle, (SETTLE_MAX_REQUESTS, type(uint256).max)));
+        emit log_named_string(
+            "A7 bait: the sandwiched call",
+            tried ? "returned (nothing of the victim's)" : "reverted"
+        );
         _sellExact(attacker, WETH_POOL, WETH, USDC, bw);
         _sellExact(attacker, CBBTC_POOL, CBBTC, USDC, bc);
-        assertEq(queue.getRequest(vid).remaining, 250_000e6, "the push changed nothing for the victim");
+        assertEq(
+            queue.getRequest(vid).remaining, 250_000e6, "the push changed nothing for the victim"
+        );
         _end(string.concat(A7_BAIT_ID, ", push +20 bps, keeper-free path closed"), true);
     }
 
@@ -950,14 +1078,27 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertEq(fund.totalSupply(), supply, "nothing settled, nothing moved");
         assertEq(queue.getRequest(vid).remaining, 50_000e6, "the request waits, whole");
         _sellExact(attacker, WETH_POOL, WETH, USDC, bought);
-        AttackPnl memory r =
-            _end(string.concat("A8 way 1, hold +", vm.toString(push), " bps (band + 10) a day (no arbitrage: lower bound)"), true);
-        emit log_named_uint("A8 way 1: cost for a day, NO arbitrage (lower bound, not scored)", uint256(-r.attackerNet));
+        AttackPnl memory r = _end(
+            string.concat(
+                "A8 way 1, hold +",
+                vm.toString(push),
+                " bps (band + 10) a day (no arbitrage: lower bound)"
+            ),
+            true
+        );
+        emit log_named_uint(
+            "A8 way 1: cost for a day, NO arbitrage (lower bound, not scored)",
+            uint256(-r.attackerNet)
+        );
         // After the hold, the next window settles.
         warpForward(block.timestamp + queue.flowParams().settleWindow);
         refreshFeeds();
         _settleOverBlocks(keeper, vid, 64);
-        assertEq(uint8(queue.requestStatus(vid)), uint8(RequestStatus.Closed), "it settles once the push ends");
+        assertEq(
+            uint8(queue.requestStatus(vid)),
+            uint8(RequestStatus.Closed),
+            "it settles once the push ends"
+        );
     }
 
     /// @dev Way 2: break the slice quorum (check 3). Every hour the attacker pushes wETH 130 bps for 25 minutes and
@@ -988,7 +1129,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertEq(fund.totalSupply(), supply, "nothing settled, nothing moved");
         assertEq(queue.getRequest(vid).remaining, 50_000e6, "the request waits, whole");
         AttackPnl memory r = _end("A8 way 2, quorum dispersion, 3 hourly cycles", true);
-        _g8BlockFloorOrFinding("A8 way 2 (quorum dispersion)", uint256(-r.attackerNet) * 24 / cycles);
+        _g8BlockFloorOrFinding(
+            "A8 way 2 (quorum dispersion)", uint256(-r.attackerNet) * 24 / cycles
+        );
     }
 
     /// @dev Way 3: push past the per-swap limit right before each keeper call and back right after (one
@@ -1008,12 +1151,20 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         (borrowed, bought) = _pushBps(attacker, WETH_POOL, WETH, USDC, 110);
         vm.recordLogs();
         _settleAs(keeper);
-        assertTrue(_sawSideFailed(RequestKind.Deposit), "the deposit side failed its per-swap limit");
+        assertTrue(
+            _sawSideFailed(RequestKind.Deposit), "the deposit side failed its per-swap limit"
+        );
         _sellExact(attacker, WETH_POOL, WETH, USDC, bought);
         assertEq(queue.getRequest(vid).remaining, 50_000e6, "the deposit waits, whole");
-        assertEq(uint8(queue.requestStatus(rid)), uint8(RequestStatus.Closed), "the redemption still settled");
+        assertEq(
+            uint8(queue.requestStatus(rid)),
+            uint8(RequestStatus.Closed),
+            "the redemption still settled"
+        );
         AttackPnl memory r = _end("A8 way 3, per-swap push around one keeper call", true);
-        _g8BlockFloorOrFinding("A8 way 3 (per-swap limit, 24 keeper attempts a day)", uint256(-r.attackerNet) * 24);
+        _g8BlockFloorOrFinding(
+            "A8 way 3 (per-swap limit, 24 keeper attempts a day)", uint256(-r.attackerNet) * 24
+        );
     }
 
     /// @dev Way 4: cursor griefing (D-AT-3; queue notes §4 item 12). In the scaffold, after keeperGrace anyone could
@@ -1041,30 +1192,46 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             uint256 g = gasleft();
             vm.startPrank(attacker);
             assertEq(queue.settle(1, 0), 0, "griefing call 1 (no room) fills nothing");
-            assertEq(queue.settle(0, type(uint256).max), 0, "griefing call 2 (no look) fills nothing");
+            assertEq(
+                queue.settle(0, type(uint256).max), 0, "griefing call 2 (no look) fills nothing"
+            );
             assertEq(queue.settle(1, 1), 0, "griefing call 3 (a room under any fill) fills nothing");
             vm.stopPrank();
             griefGas = g - gasleft();
             (uint64 ke2, uint256 ki2) = queue.settleCursor(true, RequestKind.Deposit);
             assertEq(ke2, ke, "no stranger moves the keeper's cursor (epoch)");
             assertEq(ki2, ki, "no stranger moves the keeper's cursor (index)");
-            assertEq(queue.getRequest(oldest).remaining, 50_000e6, "the griefing calls filled nothing");
+            assertEq(
+                queue.getRequest(oldest).remaining, 50_000e6, "the griefing calls filled nothing"
+            );
             vm.roll(block.number + 1);
             _settleAs(keeper);
             if (!queue.getRequest(oldest).closed) ++blockedRounds;
-            assertEq(uint8(queue.requestStatus(oldest)), uint8(RequestStatus.Closed), "the keeper's first call fills the oldest");
+            assertEq(
+                uint8(queue.requestStatus(oldest)),
+                uint8(RequestStatus.Closed),
+                "the keeper's first call fills the oldest"
+            );
             // The per-call cap (a budget per block, on by default) leaves the newer one to the next blocks.
             _settleOverBlocks(keeper, newer, 64);
-            assertEq(uint8(queue.requestStatus(newer)), uint8(RequestStatus.Closed), "and the newer one");
+            assertEq(
+                uint8(queue.requestStatus(newer)), uint8(RequestStatus.Closed), "and the newer one"
+            );
             vm.warp(block.timestamp + 1 hours);
             coverageCheckpoint();
         }
         uint256 perCallUsdc = griefGas.mulDiv(block.basefee, 1).mulDiv(refWeth, 1e18);
-        emit log_named_uint("A8 way 4: rounds of 4 in which the oldest request was passed over", blockedRounds);
+        emit log_named_uint(
+            "A8 way 4: rounds of 4 in which the oldest request was passed over", blockedRounds
+        );
         emit log_named_uint("A8 way 4: gas of the three griefing calls of the last round", griefGas);
-        emit log_named_uint("A8 way 4: their cost at the pin's base fee (USDC units, L1 data fee not counted)", perCallUsdc);
+        emit log_named_uint(
+            "A8 way 4: their cost at the pin's base fee (USDC units, L1 data fee not counted)",
+            perCallUsdc
+        );
         emit log_named_string(
-            "A8 way 4", "no block achieved: the way costs the griefer gas and holds back nothing (no cost per day applies)"
+            "A8 way 4",
+            "no block achieved: the way costs the griefer gas and holds back nothing (no cost per day applies)"
         );
         _end("A8 way 4, cursor griefing after fix-queue item 2 (gas only)", true);
     }
@@ -1106,7 +1273,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         _begin();
         // ADMIN (the timelock) lowers the in-kind floor so a 100,000 USDC exit reaches position claims (E20).
         timelockExecute(
-            address(fund), abi.encodeCall(IRobotMoneyFund.setInKindAllowance, (uint16(500), uint128(10_000e6), uint32(6 hours)))
+            address(fund),
+            abi.encodeCall(
+                IRobotMoneyFund.setInKindAllowance,
+                (uint16(500), uint128(10_000e6), uint32(6 hours))
+            )
         );
         refreshFeeds();
         for (uint256 k; k < 3; ++k) {
@@ -1122,13 +1293,18 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.warp(block.timestamp + queue.flowParams().epochLength);
         settleAll();
         for (uint256 k; k < 3; ++k) {
-            assertEq(uint8(queue.requestStatus(runIds[k])), uint8(RequestStatus.Closed), "the run fills over periods");
+            assertEq(
+                uint8(queue.requestStatus(runIds[k])),
+                uint8(RequestStatus.Closed),
+                "the run fills over periods"
+            );
         }
     }
 
     /// @dev Four more holders deposit 100,000 USDC each in one epoch.
     function _a9Holders() private {
-        runners = [makeAddr("runner1"), makeAddr("runner2"), makeAddr("runner3"), makeAddr("runner4")];
+        runners =
+            [makeAddr("runner1"), makeAddr("runner2"), makeAddr("runner3"), makeAddr("runner4")];
         uint256 last;
         for (uint256 k; k < 4; ++k) {
             last = openDepositRequest(runners[k], 100_000e6, type(uint256).max);
@@ -1162,7 +1338,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertGt(IERC20(CBBTC).balanceOf(who), 0, "cbBTC at once");
         assertGt(IERC20(USDC).balanceOf(who), 0, "idle and lending USDC up to the allowance");
         (,,, uint256 used1) = fund.inKindAllowance();
-        assertLe(used1 - used0, cap + 10, "E20: lending USDC in kind stays within the period's allowance");
+        assertLe(
+            used1 - used0, cap + 10, "E20: lending USDC in kind stays within the period's allowance"
+        );
         (uint256 units,) = fund.positionClaimOf(IDX_AAVE, who);
         assertGt(units, 0, "beyond the allowance: a claim on a share of the Aave position");
         emit log_named_uint("A9: lending USDC paid in kind this period", used1 - used0);
@@ -1180,11 +1358,15 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertGt(_settleOverBlocks(keeper, runIds[2], 64), 0, "the run trades");
         (, uint256 redeemUsed) = queue.periodFlow(block.timestamp / p.epochLength);
         uint256 cap = Math.max(s0.navRef.mulDiv(p.maxEpochFlowBps, BPS), p.epochFlowFloorUsdc);
-        assertLe(redeemUsed, cap + cap / 50, "RB-16: the period's fills stay within its cap (feed NAV)");
+        assertLe(
+            redeemUsed, cap + cap / 50, "RB-16: the period's fills stay within its cap (feed NAV)"
+        );
         bool touched;
         for (uint256 k = 3; k > 0; --k) {
             uint256 rem = queue.getRequest(runIds[k - 1]).remaining;
-            if (touched) assertEq(rem, 0, "an older request filled in full before a newer one got anything");
+            if (touched) {
+                assertEq(rem, 0, "an older request filled in full before a newer one got anything");
+            }
             if (rem < runAmounts[k - 1]) touched = true;
         }
         assertEq(queue.getRequest(runIds[0]).remaining, 0, "the oldest filled first");
@@ -1207,7 +1389,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         (, uint256[] memory held1) = fund.heldBalances();
         assertLt(claim1, claim0, "the claim lost value");
         assertApproxEqRel(
-            claim1 * 1e18 / claim0, held1[IDX_AAVE] * 1e18 / held0[IDX_AAVE], 1e14, "exiter and stayers lose alike"
+            claim1 * 1e18 / claim0,
+            held1[IDX_AAVE] * 1e18 / held0[IDX_AAVE],
+            1e14,
+            "exiter and stayers lose alike"
         );
         emit log_named_uint("A9: Aave claim, value before the loss", claim0);
         emit log_named_uint("A9: Aave claim, value after the loss", claim1);
@@ -1240,8 +1425,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.revertToState(snap);
 
         FlowParams memory p = queue.flowParams();
-        int256[2] memory rates =
-            [int256(5), int256(Math.min((uint256(p.refBandBps) - 10) / 6, (uint256(p.legBandBps) - 10) / 12))];
+        int256[2] memory rates = [
+            int256(5),
+            int256(Math.min((uint256(p.refBandBps) - 10) / 6, (uint256(p.legBandBps) - 10) / 12))
+        ];
         AttackPnl memory best;
         best.attackerNet = type(int256).min;
         for (uint256 k; k < rates.length; ++k) {
@@ -1267,12 +1454,16 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         refreshFeeds();
         vm.prank(keeper);
         (SettleCheck check,) = queue.checkSettle();
-        assertEq(uint8(check), uint8(SettleCheck.Ok), "a ramp the median keeps inside the band passes");
+        assertEq(
+            uint8(check), uint8(SettleCheck.Ok), "a ramp the median keeps inside the band passes"
+        );
         assertGt(_settleOverBlocks(keeper, vid, A7_MAX_PARTS), 0, "the victim filled");
         _sellExact(attacker, WETH_POOL, WETH, USDC, bought);
         (uint256 u, uint256 sh) = _victimFills(vid);
         pending = _extraCost(u, sh, hu, hs);
-        string memory label = string.concat("A10 timed, ramp +", vm.toString(rate), " bps / 5 min over the window (no arbitrage)");
+        string memory label = string.concat(
+            "A10 timed, ramp +", vm.toString(rate), " bps / 5 min over the window (no arbitrage)"
+        );
         r = _end(label, false);
         _assertPerShareNotLower(label);
     }
@@ -1294,7 +1485,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         refreshFeeds();
         vm.prank(keeper);
         (SettleCheck check, uint256 index) = queue.checkSettle();
-        assertTrue(check == SettleCheck.TwapVsFeed || check == SettleCheck.TwapQuorum, "the ramp is blocked");
+        assertTrue(
+            check == SettleCheck.TwapVsFeed || check == SettleCheck.TwapQuorum,
+            "the ramp is blocked"
+        );
         assertEq(index, IDX_WETH, "on wETH");
         uint256 supply = fund.totalSupply();
         vm.prank(keeper);
@@ -1321,7 +1515,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     //  deposit for a victim is a gift.
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    function test_A11_holdGriefing_pooledAccount_eachFillUnlocksOnItsOwnDate() public fixtureCovered {
+    function test_A11_holdGriefing_pooledAccount_eachFillUnlocksOnItsOwnDate()
+        public
+        fixtureCovered
+    {
         _world();
         _begin();
         address pooled = makeAddr("pooledAccount");
@@ -1340,7 +1537,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         uint256 id2 = queue.requestDeposit(minUsdc, type(uint256).max, pooled);
         vm.stopPrank();
         assertTrue(id2 != id1, "a stranger's request is a new request");
-        assertEq(keccak256(abi.encode(queue.getRequest(id1))), keccak256(abi.encode(before1)), "the owner's request is untouched");
+        assertEq(
+            keccak256(abi.encode(queue.getRequest(id1))),
+            keccak256(abi.encode(before1)),
+            "the owner's request is untouched"
+        );
         vm.prank(attacker);
         vm.expectRevert(abi.encodeWithSelector(IFlowEvents.NotRequestOwner.selector, id2, attacker));
         queue.cancel(id2);
@@ -1372,7 +1573,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     function test_A12_batchLargerThanPoolDepth_failsWhole_settlesInParts() public fixtureCovered {
         _bigWorld();
         for (uint256 k; k < 2; ++k) {
-            openDepositRequest(makeAddr(string.concat("big", vm.toString(k))), 1_000_000e6, type(uint256).max);
+            openDepositRequest(
+                makeAddr(string.concat("big", vm.toString(k))), 1_000_000e6, type(uint256).max
+            );
         }
         warpToSettleable(queue.requestCount());
         refreshFeeds();
@@ -1389,11 +1592,21 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.roll(block.number + 1);
         uint256 sid0 = _settleAs(keeper);
         assertGt(sid0, 0, "the capped call trades");
-        assertFalse(_sawSideFailed(RequestKind.Deposit), "no part of the batch failed its per-swap limit");
-        assertLe(queue.getSettlement(sid0).usdcIn, room + room / 100, "the call's USDC stays inside its room");
+        assertFalse(
+            _sawSideFailed(RequestKind.Deposit), "no part of the batch failed its per-swap limit"
+        );
+        assertLe(
+            queue.getSettlement(sid0).usdcIn,
+            room + room / 100,
+            "the call's USDC stays inside its room"
+        );
         uint256 moved = (_spotPx(WETH_POOL, WETH, USDC) - wethPx0) * BPS / wethPx0;
         emit log_named_uint("A12: wETH pool move of one capped call (bps)", moved);
-        assertLt(moved, queue.flowParams().legBandBps, "one call moves the pool less than the per-swap band");
+        assertLt(
+            moved,
+            queue.flowParams().legBandBps,
+            "one call moves the pool less than the per-swap band"
+        );
         _arbBackWeth(sqrt0);
 
         // The keeper settles it in parts, one call per block (maxUsdc 200,000 USDC); an arbitrageur brings the pool
@@ -1404,7 +1617,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             vm.prank(keeper);
             uint256 sid = queue.settle(SETTLE_MAX_REQUESTS, 200_000e6);
             assertGt(sid, 0, "a part settles");
-            assertLe(queue.getSettlement(sid).usdcIn, 200_000e6, "RB-20: maxUsdc only limits the call");
+            assertLe(
+                queue.getSettlement(sid).usdcIn, 200_000e6, "RB-20: maxUsdc only limits the call"
+            );
             ++parts;
             _arbBackWeth(sqrt0);
         }
@@ -1423,7 +1638,8 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             if (!isBasketIndex(i)) continue;
             uint256 value = fund.assetValue(i);
             if (value == 0) continue;
-            (bool ok, uint256 depth) = FundValuationLib.poolUsdcDepth(fund.assetConfig(i).pool, USDC, window);
+            (bool ok, uint256 depth) =
+                FundValuationLib.poolUsdcDepth(fund.assetConfig(i).pool, USDC, window);
             assertTrue(ok, "A12: depth read");
             uint256 r = depth.mulDiv(callBps, BPS).mulDiv(navFeed, value);
             if (r < room) room = r;
@@ -1475,11 +1691,19 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         g = gasleft();
         _settleAs(keeper);
         uint256 keeperGas1 = g - gasleft();
-        assertEq(queue.getRequest(honest).remaining, 50_000e6, "the first call only skipped flood requests");
+        assertEq(
+            queue.getRequest(honest).remaining,
+            50_000e6,
+            "the first call only skipped flood requests"
+        );
         g = gasleft();
         _settleAs(keeper);
         uint256 keeperGas2 = g - gasleft();
-        assertEq(uint8(queue.requestStatus(honest)), uint8(RequestStatus.Closed), "the honest request fills next call");
+        assertEq(
+            uint8(queue.requestStatus(honest)),
+            uint8(RequestStatus.Closed),
+            "the honest request fills next call"
+        );
         coverageCheckpoint();
         // The attacker takes its float back.
         vm.startPrank(attacker);
@@ -1505,7 +1729,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     function test_A14_venueImpaired_exitersAndStayersShareTheLoss() public fixtureCovered {
         _world();
         timelockExecute(
-            address(fund), abi.encodeCall(IRobotMoneyFund.setInKindAllowance, (uint16(500), uint128(1_000e6), uint32(6 hours)))
+            address(fund),
+            abi.encodeCall(
+                IRobotMoneyFund.setInKindAllowance, (uint16(500), uint128(1_000e6), uint32(6 hours))
+            )
         );
         refreshFeeds();
         uint256 half = fund.balanceOf(alice) / 2;
@@ -1522,7 +1749,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         uint256 rid = openRedeemRequest(alice, rest, 0);
         settleUntilFilled(rid);
         (, held) = fund.heldBalances();
-        assertGe(held[IDX_AAVE].mulDiv(1e36, fund.totalSupply()) + 1, aavePerShare, "stayers keep their Aave per share");
+        assertGe(
+            held[IDX_AAVE].mulDiv(1e36, fund.totalSupply()) + 1,
+            aavePerShare,
+            "stayers keep their Aave per share"
+        );
         vm.clearMockedCalls();
     }
 
@@ -1534,33 +1765,48 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         uint256 rid = openRedeemRequest(alice, fund.balanceOf(alice) / 4, 0);
         warpToSettleable(vid);
         refreshFeeds();
-        vm.mockCallRevert(AAVE_POOL, abi.encodeWithSelector(IAtkAavePool.supply.selector), bytes("51"));
+        vm.mockCallRevert(
+            AAVE_POOL, abi.encodeWithSelector(IAtkAavePool.supply.selector), bytes("51")
+        );
         vm.recordLogs();
         _settleAs(keeper);
         assertTrue(_sawSideFailed(RequestKind.Deposit), "the deposit side failed at the venue");
         assertEq(queue.getRequest(vid).remaining, 50_000e6, "the deposit waits, whole");
-        assertEq(uint8(queue.requestStatus(rid)), uint8(RequestStatus.Closed), "the redemption settled");
+        assertEq(
+            uint8(queue.requestStatus(rid)), uint8(RequestStatus.Closed), "the redemption settled"
+        );
         vm.clearMockedCalls();
         vm.warp(block.timestamp + queue.flowParams().epochLength);
         settleAll();
-        assertEq(uint8(queue.requestStatus(vid)), uint8(RequestStatus.Closed), "the deposit settles once supply opens");
+        assertEq(
+            uint8(queue.requestStatus(vid)),
+            uint8(RequestStatus.Closed),
+            "the deposit settles once supply opens"
+        );
     }
 
     /// @dev Fully borrowed: Aave pays no withdrawal. Timed redemptions wait, deposits of the same call settle, and
     ///      the in-kind exit stays open (the Aave leg becomes a position claim).
-    function test_A14_venueFullyBorrowed_redemptionsWait_depositsSettle_inKindOpen() public fixtureCovered {
+    function test_A14_venueFullyBorrowed_redemptionsWait_depositsSettle_inKindOpen()
+        public
+        fixtureCovered
+    {
         _world();
         uint256 vid = openDepositRequest(victim, 50_000e6, type(uint256).max);
         uint256 quarter = fund.balanceOf(alice) / 4;
         uint256 rid = openRedeemRequest(alice, quarter, 0);
         warpToSettleable(vid);
         refreshFeeds();
-        vm.mockCallRevert(AAVE_POOL, abi.encodeWithSelector(IAtkAavePool.withdraw.selector), bytes("32"));
+        vm.mockCallRevert(
+            AAVE_POOL, abi.encodeWithSelector(IAtkAavePool.withdraw.selector), bytes("32")
+        );
         vm.recordLogs();
         _settleAs(keeper);
         assertTrue(_sawSideFailed(RequestKind.Redeem), "the redemption side failed at the venue");
         assertEq(queue.getRequest(rid).remaining, quarter, "the redemption waits, whole");
-        assertEq(uint8(queue.requestStatus(vid)), uint8(RequestStatus.Closed), "the deposit settled");
+        assertEq(
+            uint8(queue.requestStatus(vid)), uint8(RequestStatus.Closed), "the deposit settled"
+        );
         vm.prank(alice);
         queue.exitInKind(rid);
         (uint256 units,) = fund.positionClaimOf(IDX_AAVE, alice);
@@ -1589,7 +1835,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         IERC20(USDC).transfer(address(queue), g);
         vm.stopPrank();
         uint256 nav1 = _navRef();
-        assertGe(nav1 + 10, s0.navRef + 3 * g - 2, "the adapter, idle and wETH gifts all count for the holders");
+        assertGe(
+            nav1 + 10,
+            s0.navRef + 3 * g - 2,
+            "the adapter, idle and wETH gifts all count for the holders"
+        );
         FlowBooks memory b = queue.books();
         assertEq(
             IERC20(USDC).balanceOf(address(queue)),
@@ -1599,11 +1849,15 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         // A deposit after the gifts pays the new amount per share: no free ride on the gift.
         uint256 vid = _victimDeposit(victim, 50_000e6);
         settleUntilFilled(vid);
-        AttackPnl memory r = _end("A15 timed, gifts to the Aave adapter, the fund and the queue", true);
+        AttackPnl memory r =
+            _end("A15 timed, gifts to the Aave adapter, the fund and the queue", true);
         assertLe(r.attackerNet, -int256(4 * g * 99 / 100), "the gifter loses every gift");
     }
 
-    function test_A15_giftToAFreshlySeededFund_movesTheMixAtMostGiftOverMinSeed() public fixtureCovered {
+    function test_A15_giftToAFreshlySeededFund_movesTheMixAtMostGiftOverMinSeed()
+        public
+        fixtureCovered
+    {
         refreshFeeds();
         _begin();
         uint256 g = 1_000e6;
@@ -1615,7 +1869,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         (uint256 idle, uint256[] memory held) = fund.heldBalances();
         uint256 wethValue = held[IDX_WETH].mulDiv(refWeth, 1e18);
         uint256 weightBps = wethValue.mulDiv(BPS, idle + wethValue);
-        assertLe(weightBps, g.mulDiv(BPS, fund.minSeedUsdc()), "the mix moved by at most gift / minSeedUsdc");
+        assertLe(
+            weightBps,
+            g.mulDiv(BPS, fund.minSeedUsdc()),
+            "the mix moved by at most gift / minSeedUsdc"
+        );
         emit log_named_uint("A15: wETH weight after the gift (bps)", weightBps);
         uint256 vid = openDepositRequest(victim, 50_000e6, type(uint256).max);
         settleUntilFilled(vid);
@@ -1629,7 +1887,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     //  maxFreeze; no value moves.
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    function test_A16_emergencyFreezesEverySettlement_waitBoundedNoValueMoves() public fixtureCovered {
+    function test_A16_emergencyFreezesEverySettlement_waitBoundedNoValueMoves()
+        public
+        fixtureCovered
+    {
         _world();
         uint256 v1 = openDepositRequest(victim, 50_000e6, type(uint256).max);
         settleUntilFilled(v1);
@@ -1653,7 +1914,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.expectRevert(abi.encodeWithSelector(IFlowEvents.SettlementAlreadyFrozen.selector, sid1));
         queue.freezeSettlement(sid1);
         uint64 until1 = queue.getSettlement(sid1).frozenUntil;
-        assertLe(until1, uint256(c1.unlockAt) + p.maxFreeze, "RB-18: a freeze ends by unlock + maxFreeze");
+        assertLe(
+            until1, uint256(c1.unlockAt) + p.maxFreeze, "RB-18: a freeze ends by unlock + maxFreeze"
+        );
 
         // ADMIN's release and a new freeze inside the hold cannot push settlement 2 past its own bound.
         timelockExecute(address(queue), abi.encodeCall(queue.releaseSettlement, (sid2)));
@@ -1661,7 +1924,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.prank(emergency);
         queue.freezeSettlement(sid2);
         uint64 until2 = queue.getSettlement(sid2).frozenUntil;
-        assertLe(until2, uint256(c2.unlockAt) + p.maxFreeze, "RB-18: release and refreeze stay inside the bound");
+        assertLe(
+            until2,
+            uint256(c2.unlockAt) + p.maxFreeze,
+            "RB-18: release and refreeze stay inside the bound"
+        );
 
         // Nothing moves while frozen; each freeze ends by itself; after the hold no new freeze.
         vm.warp(until1 - 1);
@@ -1671,7 +1938,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertEq(fund.balanceOf(address(queue)), queueShares, "the held shares stay in the queue");
         vm.warp(until1);
         queue.mint(c1.shares, victim);
-        assertEq(fund.balanceOf(victim), c1.shares, "the depositor gets exactly its shares when the freeze ends");
+        assertEq(
+            fund.balanceOf(victim),
+            c1.shares,
+            "the depositor gets exactly its shares when the freeze ends"
+        );
         vm.prank(emergency);
         vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FreezeOutsideHold.selector, sid1));
         queue.freezeSettlement(sid1);
@@ -1679,7 +1950,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         refreshFeeds();
         queue.mint(c2.shares, victim2);
         assertEq(fund.balanceOf(victim2), c2.shares, "the second depositor too");
-        emit log_named_uint("A16: longest wait after settlement (s)", until1 - (c1.unlockAt - p.minHold));
+        emit log_named_uint(
+            "A16: longest wait after settlement (s)", until1 - (c1.unlockAt - p.minHold)
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1745,7 +2018,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     ///      settled. At the defaults the call is sized by the cap from the pool's TIME-WEIGHTED depth, which the
     ///      liquidity held through the window still inflates (logged): either the per-swap limit refuses the call
     ///      (nothing settles), or the capped call settles a part inside every limit. Either way nobody loses.
-    function test_A18_liquidityPulledBeforeSettlement_limitFailsNothingSettles() public fixtureCovered {
+    function test_A18_liquidityPulledBeforeSettlement_limitFailsNothingSettles()
+        public
+        fixtureCovered
+    {
         _bigWorld();
         _setRef();
         _lpAdd(10, 300);
@@ -1755,13 +2031,22 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         _begin();
         uint256 snap = vm.snapshotState();
         vm.prank(keeper);
-        assertGt(queue.settle(SETTLE_MAX_REQUESTS, 600_000e6), 0, "with the liquidity in place, the batch fits");
+        assertGt(
+            queue.settle(SETTLE_MAX_REQUESTS, 600_000e6),
+            0,
+            "with the liquidity in place, the batch fits"
+        );
         vm.revertToState(snap);
 
         uint256 roomHeld = _callRoomUsdc();
         _lpRemove();
-        emit log_named_uint("A18: one call's room with the LP's liquidity held through the window (USDC units)", roomHeld);
-        emit log_named_uint("A18: the same room right after the pull (time-weighted, so unchanged)", _callRoomUsdc());
+        emit log_named_uint(
+            "A18: one call's room with the LP's liquidity held through the window (USDC units)",
+            roomHeld
+        );
+        emit log_named_uint(
+            "A18: the same room right after the pull (time-weighted, so unchanged)", _callRoomUsdc()
+        );
         uint256 supply = fund.totalSupply();
         uint256 queueUsdc = IERC20(USDC).balanceOf(address(queue));
         (uint160 sqrt0,,,,,,) = IAtkPool(WETH_POOL).slot0();
@@ -1776,17 +2061,22 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             assertEq(fund.totalSupply(), supply, "nothing minted");
             assertEq(IERC20(USDC).balanceOf(address(queue)), queueUsdc, "nobody's USDC moved");
             assertEq(queue.getRequest(vid).remaining, 1_000_000e6, "the request waits, whole");
-            emit log_named_string("A18: after the pull", "the per-swap limit refused the call: nothing settled");
+            emit log_named_string(
+                "A18: after the pull", "the per-swap limit refused the call: nothing settled"
+            );
         } else {
             assertFalse(failed, "a call that recorded a settlement had no failed deposit side");
             uint256 usdcIn = queue.getSettlement(sid).usdcIn;
-            assertLe(usdcIn, roomHeld + roomHeld / 100, "pulled: the call stays inside the cap's room");
+            assertLe(
+                usdcIn, roomHeld + roomHeld / 100, "pulled: the call stays inside the cap's room"
+            );
             assertLt(usdcIn, 600_000e6, "pulled: the cap, not maxUsdc, sized the call");
             (uint256 u,) = _victimFills(vid); // RB-14 on the fill
             assertEq(u, usdcIn, "the part is the victim's");
             emit log_named_uint("A18: after the pull, the capped call settled (USDC units)", usdcIn);
             emit log_named_uint(
-                "A18: wETH pool move of that call in the thinned pool (bps)", (_spotPx(WETH_POOL, WETH, USDC) - px0) * BPS / px0
+                "A18: wETH pool move of that call in the thinned pool (bps)",
+                (_spotPx(WETH_POOL, WETH, USDC) - px0) * BPS / px0
             );
             // An arbitrageur brings the thinned pool back before the next part (as A12).
             _arbBackWeth(sqrt0);
@@ -1820,12 +2110,16 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     function _lpRemove() internal {
         IAtkPool p = IAtkPool(WETH_POOL);
         p.burn(lpLower, lpUpper, lpLiquidity);
-        (uint128 a0, uint128 a1) = p.collect(address(this), lpLower, lpUpper, type(uint128).max, type(uint128).max);
-        (lpGotWeth, lpGotUsdc) = p.token0() == WETH ? (uint256(a0), uint256(a1)) : (uint256(a1), uint256(a0));
+        (uint128 a0, uint128 a1) =
+            p.collect(address(this), lpLower, lpUpper, type(uint128).max, type(uint128).max);
+        (lpGotWeth, lpGotUsdc) =
+            p.token0() == WETH ? (uint256(a0), uint256(a1)) : (uint256(a1), uint256(a0));
     }
 
     /// @dev Uniswap V3 mint callback: pay the pool what it asks, minting the tokens to this contract first.
-    function uniswapV3MintCallback(uint256 amount0Owed, uint256 amount1Owed, bytes calldata) external {
+    function uniswapV3MintCallback(uint256 amount0Owed, uint256 amount1Owed, bytes calldata)
+        external
+    {
         require(msg.sender == WETH_POOL, "mint callback: only the pool");
         address t0 = IAtkPool(WETH_POOL).token0();
         address t1 = IAtkPool(WETH_POOL).token1();
@@ -1850,7 +2144,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     //  shares were burned keeps its claim.
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    function test_A19_exclusionLedger_freshAddressGetsNothing_burnedRedeemerKeepsClaim() public fixtureCovered {
+    function test_A19_exclusionLedger_freshAddressGetsNothing_burnedRedeemerKeepsClaim()
+        public
+        fixtureCovered
+    {
         _world();
         FundExclusionLedger ledger = FundExclusionLedger(fund.exclusionLedger());
         address carol = makeAddr("carol");
@@ -1866,7 +2163,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
 
         // The record opens: Moonwell is excluded (ADMIN revokes its code hash).
         timelockExecute(
-            address(fund), abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, false))
+            address(fund),
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed,
+                (address(moonwellAdapter).codehash, false)
+            )
         );
         uint256 id = fund.openExclusionOf(IDX_MOONWELL);
         assertGt(id, 0, "a record opened");
@@ -1876,10 +2177,18 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         // (design observation, defects.md): wait it out, as a keeper would.
         warpToSettleable(rid);
         uint256 blockedEpochs = _waitOutSharePriceBreaker();
-        emit log_named_uint("A19: epochs check 6 held every settlement after the exclusion", blockedEpochs);
+        emit log_named_uint(
+            "A19: epochs check 6 held every settlement after the exclusion", blockedEpochs
+        );
         settleAll();
-        assertEq(uint8(queue.requestStatus(rid)), uint8(RequestStatus.Closed), "alice's redemption settled");
-        assertEq(queue.getRequest(did).remaining, 50_000e6, "deposits are not processed while excluded");
+        assertEq(
+            uint8(queue.requestStatus(rid)),
+            uint8(RequestStatus.Closed),
+            "alice's redemption settled"
+        );
+        assertEq(
+            queue.getRequest(did).remaining, 50_000e6, "deposits are not processed while excluded"
+        );
         // A fresh address gets shares after the record by transfer.
         uint256 moved = fund.balanceOf(alice) / 2;
         vm.prank(alice);
@@ -1887,15 +2196,26 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
 
         // Restore: the excluded position drains into the record; deposits reopen; dave is filled after the record.
         timelockExecute(
-            address(fund), abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, true))
+            address(fund),
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, true)
+            )
         );
         vm.warp(block.timestamp + queue.flowParams().epochLength);
         settleAll();
-        assertEq(uint8(queue.requestStatus(did)), uint8(RequestStatus.Closed), "dave filled after the record");
+        assertEq(
+            uint8(queue.requestStatus(did)),
+            uint8(RequestStatus.Closed),
+            "dave filled after the record"
+        );
         deliverAfterHold(dave);
 
-        assertEq(ledger.balanceAt(alice, id), aliceLedger, "alice keeps wallet + escrow at the record");
-        assertEq(ledger.balanceAt(carol, id), carolLedger, "carol keeps her held shares at the record");
+        assertEq(
+            ledger.balanceAt(alice, id), aliceLedger, "alice keeps wallet + escrow at the record"
+        );
+        assertEq(
+            ledger.balanceAt(carol, id), carolLedger, "carol keeps her held shares at the record"
+        );
         assertEq(ledger.balanceAt(dave, id), 0, "dave, filled after the record, has none");
         assertEq(ledger.balanceAt(attacker, id), 0, "a transfer after the record carries no claim");
         assertEq(ledger.balanceAt(address(queue), id), 0, "the queue itself has no entitlement");
@@ -1923,7 +2243,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     function _sawSideFailed(RequestKind kind) internal returns (bool) {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i; i < logs.length; ++i) {
-            if (logs[i].emitter != address(queue) || logs[i].topics[0] != IFlowEvents.SideFailed.selector) continue;
+            if (
+                logs[i].emitter != address(queue)
+                    || logs[i].topics[0] != IFlowEvents.SideFailed.selector
+            ) continue;
             (RequestKind k,) = abi.decode(logs[i].data, (RequestKind, bytes));
             if (k == kind) return true;
         }
@@ -1981,27 +2304,50 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         require(id < LEVER_SETTINGS, "lever: unknown setting");
         l.legBand = 100;
         l.refBand = 50;
-        if (id == 0) l.name = "L0 no lever (design as first written)";
-        else if (id == 1) (l.name, l.legBand) = ("L1 legBand 50", 50);
-        else if (id == 2) (l.name, l.legBand) = ("L2 legBand 25", 25);
-        else if (id == 3) (l.name, l.mode) = ("L3 limits from TWAP only", 1);
-        else if (id == 4) (l.name, l.mode) = ("L4 limits from feed only", 2);
-        else if (id == 5) (l.name, l.callBps) = ("L5 cap 5 bps of depth per call", 5);
-        else if (id == 6) (l.name, l.callBps) = ("L6 cap 10 bps of depth per call", 10);
-        else if (id == 7) (l.name, l.callBps) = ("L7 cap 20 bps of depth per call", 20);
-        else if (id == 8) (l.name, l.legBand, l.callBps) = ("L8 legBand 50 + cap 10 bps", 50, 10);
-        else if (id == 9) (l.name, l.legBand, l.mode) = ("L9 legBand 25 + feed only", 25, 2);
-        else if (id == 10) (l.name, l.refBand) = ("L10 refBand 90", 90);
-        else if (id == 11) (l.name, l.refBand) = ("L11 refBand 100", 100);
-        else if (id == 12) (l.name, l.legBand) = ("L12 legBand 30", 30);
-        else if (id == 13) (l.name, l.legBand) = ("L13 legBand 35", 35);
-        else if (id == 14) (l.name, l.legBand) = ("L14 legBand 40", 40);
-        else if (id == 15) (l.name, l.legBand, l.callBps) = ("L15 legBand 35 + cap 10 bps", 35, 10);
-        else if (id == 16) (l.name, l.legBand, l.callBps) = ("L16 legBand 30 + cap 10 bps", 30, 10);
-        else if (id == 17) (l.name, l.legBand, l.callBps) = ("L17 legBand 30 + cap 5 bps", 30, 5);
-        else if (id == 18) (l.name, l.refBand, l.callBps) = ("L18 refBand 90 + cap 5 bps (the defaults)", 90, 5);
-        else if (id == 19) (l.name, l.refBand, l.callBps) = ("L19 refBand 100 + cap 5 bps", 100, 5);
-        else (l.name, l.refBand, l.callBps, l.legBand) = ("L20 refBand 90 + cap 5 bps + legBand 50", 90, 5, 50);
+        if (id == 0) {
+            l.name = "L0 no lever (design as first written)";
+        } else if (id == 1) {
+            (l.name, l.legBand) = ("L1 legBand 50", 50);
+        } else if (id == 2) {
+            (l.name, l.legBand) = ("L2 legBand 25", 25);
+        } else if (id == 3) {
+            (l.name, l.mode) = ("L3 limits from TWAP only", 1);
+        } else if (id == 4) {
+            (l.name, l.mode) = ("L4 limits from feed only", 2);
+        } else if (id == 5) {
+            (l.name, l.callBps) = ("L5 cap 5 bps of depth per call", 5);
+        } else if (id == 6) {
+            (l.name, l.callBps) = ("L6 cap 10 bps of depth per call", 10);
+        } else if (id == 7) {
+            (l.name, l.callBps) = ("L7 cap 20 bps of depth per call", 20);
+        } else if (id == 8) {
+            (l.name, l.legBand, l.callBps) = ("L8 legBand 50 + cap 10 bps", 50, 10);
+        } else if (id == 9) {
+            (l.name, l.legBand, l.mode) = ("L9 legBand 25 + feed only", 25, 2);
+        } else if (id == 10) {
+            (l.name, l.refBand) = ("L10 refBand 90", 90);
+        } else if (id == 11) {
+            (l.name, l.refBand) = ("L11 refBand 100", 100);
+        } else if (id == 12) {
+            (l.name, l.legBand) = ("L12 legBand 30", 30);
+        } else if (id == 13) {
+            (l.name, l.legBand) = ("L13 legBand 35", 35);
+        } else if (id == 14) {
+            (l.name, l.legBand) = ("L14 legBand 40", 40);
+        } else if (id == 15) {
+            (l.name, l.legBand, l.callBps) = ("L15 legBand 35 + cap 10 bps", 35, 10);
+        } else if (id == 16) {
+            (l.name, l.legBand, l.callBps) = ("L16 legBand 30 + cap 10 bps", 30, 10);
+        } else if (id == 17) {
+            (l.name, l.legBand, l.callBps) = ("L17 legBand 30 + cap 5 bps", 30, 5);
+        } else if (id == 18) {
+            (l.name, l.refBand, l.callBps) = ("L18 refBand 90 + cap 5 bps (the defaults)", 90, 5);
+        } else if (id == 19) {
+            (l.name, l.refBand, l.callBps) = ("L19 refBand 100 + cap 5 bps", 100, 5);
+        } else {
+            (l.name, l.refBand, l.callBps, l.legBand) =
+            ("L20 refBand 90 + cap 5 bps + legBand 50", 90, 5, 50);
+        }
     }
 
     /// @dev Put lever `l` in force as ADMIN (the timelock holds ADMIN_ROLE; pranked so no time passes). Every row
@@ -2026,48 +2372,173 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
 
     // ─── A7 under each lever ────────────────────────────────────────────────────────────────────────────
 
-    function test_lever_A7_caller_L00() public fixtureCovered { _leverA7(0, true); }
-    function test_lever_A7_caller_L01() public fixtureCovered { _leverA7(1, true); }
-    function test_lever_A7_caller_L02() public fixtureCovered { _leverA7(2, true); }
-    function test_lever_A7_caller_L03() public fixtureCovered { _leverA7(3, true); }
-    function test_lever_A7_caller_L04() public fixtureCovered { _leverA7(4, true); }
-    function test_lever_A7_caller_L05() public fixtureCovered { _leverA7(5, true); }
-    function test_lever_A7_caller_L06() public fixtureCovered { _leverA7(6, true); }
-    function test_lever_A7_caller_L07() public fixtureCovered { _leverA7(7, true); }
-    function test_lever_A7_caller_L08() public fixtureCovered { _leverA7(8, true); }
-    function test_lever_A7_caller_L09() public fixtureCovered { _leverA7(9, true); }
-    function test_lever_A7_caller_L10() public fixtureCovered { _leverA7(10, true); }
-    function test_lever_A7_caller_L11() public fixtureCovered { _leverA7(11, true); }
-    function test_lever_A7_caller_L12() public fixtureCovered { _leverA7(12, true); }
-    function test_lever_A7_caller_L13() public fixtureCovered { _leverA7(13, true); }
-    function test_lever_A7_caller_L14() public fixtureCovered { _leverA7(14, true); }
-    function test_lever_A7_caller_L15() public fixtureCovered { _leverA7(15, true); }
-    function test_lever_A7_caller_L16() public fixtureCovered { _leverA7(16, true); }
-    function test_lever_A7_caller_L17() public fixtureCovered { _leverA7(17, true); }
-    function test_lever_A7_caller_L18() public fixtureCovered { _leverA7(18, true); }
-    function test_lever_A7_caller_L19() public fixtureCovered { _leverA7(19, true); }
-    function test_lever_A7_caller_L20() public fixtureCovered { _leverA7(20, true); }
-    function test_lever_A7_thirdParty_L00() public fixtureCovered { _leverA7(0, false); }
-    function test_lever_A7_thirdParty_L01() public fixtureCovered { _leverA7(1, false); }
-    function test_lever_A7_thirdParty_L02() public fixtureCovered { _leverA7(2, false); }
-    function test_lever_A7_thirdParty_L03() public fixtureCovered { _leverA7(3, false); }
-    function test_lever_A7_thirdParty_L04() public fixtureCovered { _leverA7(4, false); }
-    function test_lever_A7_thirdParty_L05() public fixtureCovered { _leverA7(5, false); }
-    function test_lever_A7_thirdParty_L06() public fixtureCovered { _leverA7(6, false); }
-    function test_lever_A7_thirdParty_L07() public fixtureCovered { _leverA7(7, false); }
-    function test_lever_A7_thirdParty_L08() public fixtureCovered { _leverA7(8, false); }
-    function test_lever_A7_thirdParty_L09() public fixtureCovered { _leverA7(9, false); }
-    function test_lever_A7_thirdParty_L10() public fixtureCovered { _leverA7(10, false); }
-    function test_lever_A7_thirdParty_L11() public fixtureCovered { _leverA7(11, false); }
-    function test_lever_A7_thirdParty_L12() public fixtureCovered { _leverA7(12, false); }
-    function test_lever_A7_thirdParty_L13() public fixtureCovered { _leverA7(13, false); }
-    function test_lever_A7_thirdParty_L14() public fixtureCovered { _leverA7(14, false); }
-    function test_lever_A7_thirdParty_L15() public fixtureCovered { _leverA7(15, false); }
-    function test_lever_A7_thirdParty_L16() public fixtureCovered { _leverA7(16, false); }
-    function test_lever_A7_thirdParty_L17() public fixtureCovered { _leverA7(17, false); }
-    function test_lever_A7_thirdParty_L18() public fixtureCovered { _leverA7(18, false); }
-    function test_lever_A7_thirdParty_L19() public fixtureCovered { _leverA7(19, false); }
-    function test_lever_A7_thirdParty_L20() public fixtureCovered { _leverA7(20, false); }
+    function test_lever_A7_caller_L00() public fixtureCovered {
+        _leverA7(0, true);
+    }
+
+    function test_lever_A7_caller_L01() public fixtureCovered {
+        _leverA7(1, true);
+    }
+
+    function test_lever_A7_caller_L02() public fixtureCovered {
+        _leverA7(2, true);
+    }
+
+    function test_lever_A7_caller_L03() public fixtureCovered {
+        _leverA7(3, true);
+    }
+
+    function test_lever_A7_caller_L04() public fixtureCovered {
+        _leverA7(4, true);
+    }
+
+    function test_lever_A7_caller_L05() public fixtureCovered {
+        _leverA7(5, true);
+    }
+
+    function test_lever_A7_caller_L06() public fixtureCovered {
+        _leverA7(6, true);
+    }
+
+    function test_lever_A7_caller_L07() public fixtureCovered {
+        _leverA7(7, true);
+    }
+
+    function test_lever_A7_caller_L08() public fixtureCovered {
+        _leverA7(8, true);
+    }
+
+    function test_lever_A7_caller_L09() public fixtureCovered {
+        _leverA7(9, true);
+    }
+
+    function test_lever_A7_caller_L10() public fixtureCovered {
+        _leverA7(10, true);
+    }
+
+    function test_lever_A7_caller_L11() public fixtureCovered {
+        _leverA7(11, true);
+    }
+
+    function test_lever_A7_caller_L12() public fixtureCovered {
+        _leverA7(12, true);
+    }
+
+    function test_lever_A7_caller_L13() public fixtureCovered {
+        _leverA7(13, true);
+    }
+
+    function test_lever_A7_caller_L14() public fixtureCovered {
+        _leverA7(14, true);
+    }
+
+    function test_lever_A7_caller_L15() public fixtureCovered {
+        _leverA7(15, true);
+    }
+
+    function test_lever_A7_caller_L16() public fixtureCovered {
+        _leverA7(16, true);
+    }
+
+    function test_lever_A7_caller_L17() public fixtureCovered {
+        _leverA7(17, true);
+    }
+
+    function test_lever_A7_caller_L18() public fixtureCovered {
+        _leverA7(18, true);
+    }
+
+    function test_lever_A7_caller_L19() public fixtureCovered {
+        _leverA7(19, true);
+    }
+
+    function test_lever_A7_caller_L20() public fixtureCovered {
+        _leverA7(20, true);
+    }
+
+    function test_lever_A7_thirdParty_L00() public fixtureCovered {
+        _leverA7(0, false);
+    }
+
+    function test_lever_A7_thirdParty_L01() public fixtureCovered {
+        _leverA7(1, false);
+    }
+
+    function test_lever_A7_thirdParty_L02() public fixtureCovered {
+        _leverA7(2, false);
+    }
+
+    function test_lever_A7_thirdParty_L03() public fixtureCovered {
+        _leverA7(3, false);
+    }
+
+    function test_lever_A7_thirdParty_L04() public fixtureCovered {
+        _leverA7(4, false);
+    }
+
+    function test_lever_A7_thirdParty_L05() public fixtureCovered {
+        _leverA7(5, false);
+    }
+
+    function test_lever_A7_thirdParty_L06() public fixtureCovered {
+        _leverA7(6, false);
+    }
+
+    function test_lever_A7_thirdParty_L07() public fixtureCovered {
+        _leverA7(7, false);
+    }
+
+    function test_lever_A7_thirdParty_L08() public fixtureCovered {
+        _leverA7(8, false);
+    }
+
+    function test_lever_A7_thirdParty_L09() public fixtureCovered {
+        _leverA7(9, false);
+    }
+
+    function test_lever_A7_thirdParty_L10() public fixtureCovered {
+        _leverA7(10, false);
+    }
+
+    function test_lever_A7_thirdParty_L11() public fixtureCovered {
+        _leverA7(11, false);
+    }
+
+    function test_lever_A7_thirdParty_L12() public fixtureCovered {
+        _leverA7(12, false);
+    }
+
+    function test_lever_A7_thirdParty_L13() public fixtureCovered {
+        _leverA7(13, false);
+    }
+
+    function test_lever_A7_thirdParty_L14() public fixtureCovered {
+        _leverA7(14, false);
+    }
+
+    function test_lever_A7_thirdParty_L15() public fixtureCovered {
+        _leverA7(15, false);
+    }
+
+    function test_lever_A7_thirdParty_L16() public fixtureCovered {
+        _leverA7(16, false);
+    }
+
+    function test_lever_A7_thirdParty_L17() public fixtureCovered {
+        _leverA7(17, false);
+    }
+
+    function test_lever_A7_thirdParty_L18() public fixtureCovered {
+        _leverA7(18, false);
+    }
+
+    function test_lever_A7_thirdParty_L19() public fixtureCovered {
+        _leverA7(19, false);
+    }
+
+    function test_lever_A7_thirdParty_L20() public fixtureCovered {
+        _leverA7(20, false);
+    }
 
     /// @dev A7 under lever `id`: the same world, victim (250,000 USDC, limit from the quote under the lever plus
     ///      the 50 bps margin) and caller as `_a7`. Each run settles once per block until the victim's request
@@ -2084,15 +2555,26 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         refreshFeeds();
         _begin();
         address caller = attackerSettles ? attacker : keeper;
-        string memory tag = string.concat(attackerSettles ? "A7-caller" : "A7-thirdParty", ",", l.name);
+        string memory tag =
+            string.concat(attackerSettles ? "A7-caller" : "A7-thirdParty", ",", l.name);
 
         uint256 snap = vm.snapshotState();
         LeverRun memory h = _leverA7Run(caller, vid, 0);
         _leverLog(tag, h);
         vm.revertToState(snap);
 
-        int256[10] memory pushes =
-            [int256(5), int256(10), int256(15), int256(20), int256(30), int256(40), int256(50), int256(65), int256(80), int256(90)];
+        int256[10] memory pushes = [
+            int256(5),
+            int256(10),
+            int256(15),
+            int256(20),
+            int256(30),
+            int256(40),
+            int256(50),
+            int256(65),
+            int256(80),
+            int256(90)
+        ];
         LeverRun memory best;
         best.net = type(int256).min;
         for (uint256 k; k < pushes.length; ++k) {
@@ -2107,7 +2589,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         _leverBest(tag, h, best);
     }
 
-    function _leverA7Run(address caller, uint256 vid, int256 push) internal returns (LeverRun memory r) {
+    function _leverA7Run(address caller, uint256 vid, int256 push)
+        internal
+        returns (LeverRun memory r)
+    {
         fundUsdc(attacker, FLASH_USDC);
         _startAttacker();
         borrowed = 0;
@@ -2134,27 +2619,89 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
 
     // ─── A10 under each lever ───────────────────────────────────────────────────────────────────────────
 
-    function test_lever_A10_ramp_L00() public fixtureCovered { _leverA10(0); }
-    function test_lever_A10_ramp_L01() public fixtureCovered { _leverA10(1); }
-    function test_lever_A10_ramp_L02() public fixtureCovered { _leverA10(2); }
-    function test_lever_A10_ramp_L03() public fixtureCovered { _leverA10(3); }
-    function test_lever_A10_ramp_L04() public fixtureCovered { _leverA10(4); }
-    function test_lever_A10_ramp_L05() public fixtureCovered { _leverA10(5); }
-    function test_lever_A10_ramp_L06() public fixtureCovered { _leverA10(6); }
-    function test_lever_A10_ramp_L07() public fixtureCovered { _leverA10(7); }
-    function test_lever_A10_ramp_L08() public fixtureCovered { _leverA10(8); }
-    function test_lever_A10_ramp_L09() public fixtureCovered { _leverA10(9); }
-    function test_lever_A10_ramp_L10() public fixtureCovered { _leverA10(10); }
-    function test_lever_A10_ramp_L11() public fixtureCovered { _leverA10(11); }
-    function test_lever_A10_ramp_L12() public fixtureCovered { _leverA10(12); }
-    function test_lever_A10_ramp_L13() public fixtureCovered { _leverA10(13); }
-    function test_lever_A10_ramp_L14() public fixtureCovered { _leverA10(14); }
-    function test_lever_A10_ramp_L15() public fixtureCovered { _leverA10(15); }
-    function test_lever_A10_ramp_L16() public fixtureCovered { _leverA10(16); }
-    function test_lever_A10_ramp_L17() public fixtureCovered { _leverA10(17); }
-    function test_lever_A10_ramp_L18() public fixtureCovered { _leverA10(18); }
-    function test_lever_A10_ramp_L19() public fixtureCovered { _leverA10(19); }
-    function test_lever_A10_ramp_L20() public fixtureCovered { _leverA10(20); }
+    function test_lever_A10_ramp_L00() public fixtureCovered {
+        _leverA10(0);
+    }
+
+    function test_lever_A10_ramp_L01() public fixtureCovered {
+        _leverA10(1);
+    }
+
+    function test_lever_A10_ramp_L02() public fixtureCovered {
+        _leverA10(2);
+    }
+
+    function test_lever_A10_ramp_L03() public fixtureCovered {
+        _leverA10(3);
+    }
+
+    function test_lever_A10_ramp_L04() public fixtureCovered {
+        _leverA10(4);
+    }
+
+    function test_lever_A10_ramp_L05() public fixtureCovered {
+        _leverA10(5);
+    }
+
+    function test_lever_A10_ramp_L06() public fixtureCovered {
+        _leverA10(6);
+    }
+
+    function test_lever_A10_ramp_L07() public fixtureCovered {
+        _leverA10(7);
+    }
+
+    function test_lever_A10_ramp_L08() public fixtureCovered {
+        _leverA10(8);
+    }
+
+    function test_lever_A10_ramp_L09() public fixtureCovered {
+        _leverA10(9);
+    }
+
+    function test_lever_A10_ramp_L10() public fixtureCovered {
+        _leverA10(10);
+    }
+
+    function test_lever_A10_ramp_L11() public fixtureCovered {
+        _leverA10(11);
+    }
+
+    function test_lever_A10_ramp_L12() public fixtureCovered {
+        _leverA10(12);
+    }
+
+    function test_lever_A10_ramp_L13() public fixtureCovered {
+        _leverA10(13);
+    }
+
+    function test_lever_A10_ramp_L14() public fixtureCovered {
+        _leverA10(14);
+    }
+
+    function test_lever_A10_ramp_L15() public fixtureCovered {
+        _leverA10(15);
+    }
+
+    function test_lever_A10_ramp_L16() public fixtureCovered {
+        _leverA10(16);
+    }
+
+    function test_lever_A10_ramp_L17() public fixtureCovered {
+        _leverA10(17);
+    }
+
+    function test_lever_A10_ramp_L18() public fixtureCovered {
+        _leverA10(18);
+    }
+
+    function test_lever_A10_ramp_L19() public fixtureCovered {
+        _leverA10(19);
+    }
+
+    function test_lever_A10_ramp_L20() public fixtureCovered {
+        _leverA10(20);
+    }
 
     /// @dev A10 under lever `id` (no arbitrage, as `test_A10_slowRampInsideBand_noArbitrage`): the attacker ramps
     ///      wETH by `rate` every 5 minutes over the last hour of the victim's window (12 pushes), holds the ramp
@@ -2178,8 +2725,18 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.revertToState(snap);
 
         // 10 to 14 reach the wider band of 90 to 100 (median about +60 to +84; spot +120 to +168, past legBandBps).
-        int256[10] memory rates =
-            [int256(1), int256(2), int256(3), int256(4), int256(5), int256(6), int256(8), int256(10), int256(12), int256(14)];
+        int256[10] memory rates = [
+            int256(1),
+            int256(2),
+            int256(3),
+            int256(4),
+            int256(5),
+            int256(6),
+            int256(8),
+            int256(10),
+            int256(12),
+            int256(14)
+        ];
         LeverRun memory best;
         best.net = type(int256).min;
         for (uint256 k; k < rates.length; ++k) {
@@ -2194,7 +2751,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         _leverBest(tag, h, best);
     }
 
-    function _leverA10Run(uint256 vid, uint256 windowEnd, int256 rate) internal returns (LeverRun memory r) {
+    function _leverA10Run(uint256 vid, uint256 windowEnd, int256 rate)
+        internal
+        returns (LeverRun memory r)
+    {
         fundUsdc(attacker, FLASH_USDC);
         _startAttacker();
         borrowed = 0;
@@ -2213,27 +2773,89 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
 
     // ─── A8 way 3 under each lever: the cheapest push that blocks the deposit side ───────────────────────
 
-    function test_lever_A8way3_L00() public fixtureCovered { _leverA8way3(0); }
-    function test_lever_A8way3_L01() public fixtureCovered { _leverA8way3(1); }
-    function test_lever_A8way3_L02() public fixtureCovered { _leverA8way3(2); }
-    function test_lever_A8way3_L03() public fixtureCovered { _leverA8way3(3); }
-    function test_lever_A8way3_L04() public fixtureCovered { _leverA8way3(4); }
-    function test_lever_A8way3_L05() public fixtureCovered { _leverA8way3(5); }
-    function test_lever_A8way3_L06() public fixtureCovered { _leverA8way3(6); }
-    function test_lever_A8way3_L07() public fixtureCovered { _leverA8way3(7); }
-    function test_lever_A8way3_L08() public fixtureCovered { _leverA8way3(8); }
-    function test_lever_A8way3_L09() public fixtureCovered { _leverA8way3(9); }
-    function test_lever_A8way3_L10() public fixtureCovered { _leverA8way3(10); }
-    function test_lever_A8way3_L11() public fixtureCovered { _leverA8way3(11); }
-    function test_lever_A8way3_L12() public fixtureCovered { _leverA8way3(12); }
-    function test_lever_A8way3_L13() public fixtureCovered { _leverA8way3(13); }
-    function test_lever_A8way3_L14() public fixtureCovered { _leverA8way3(14); }
-    function test_lever_A8way3_L15() public fixtureCovered { _leverA8way3(15); }
-    function test_lever_A8way3_L16() public fixtureCovered { _leverA8way3(16); }
-    function test_lever_A8way3_L17() public fixtureCovered { _leverA8way3(17); }
-    function test_lever_A8way3_L18() public fixtureCovered { _leverA8way3(18); }
-    function test_lever_A8way3_L19() public fixtureCovered { _leverA8way3(19); }
-    function test_lever_A8way3_L20() public fixtureCovered { _leverA8way3(20); }
+    function test_lever_A8way3_L00() public fixtureCovered {
+        _leverA8way3(0);
+    }
+
+    function test_lever_A8way3_L01() public fixtureCovered {
+        _leverA8way3(1);
+    }
+
+    function test_lever_A8way3_L02() public fixtureCovered {
+        _leverA8way3(2);
+    }
+
+    function test_lever_A8way3_L03() public fixtureCovered {
+        _leverA8way3(3);
+    }
+
+    function test_lever_A8way3_L04() public fixtureCovered {
+        _leverA8way3(4);
+    }
+
+    function test_lever_A8way3_L05() public fixtureCovered {
+        _leverA8way3(5);
+    }
+
+    function test_lever_A8way3_L06() public fixtureCovered {
+        _leverA8way3(6);
+    }
+
+    function test_lever_A8way3_L07() public fixtureCovered {
+        _leverA8way3(7);
+    }
+
+    function test_lever_A8way3_L08() public fixtureCovered {
+        _leverA8way3(8);
+    }
+
+    function test_lever_A8way3_L09() public fixtureCovered {
+        _leverA8way3(9);
+    }
+
+    function test_lever_A8way3_L10() public fixtureCovered {
+        _leverA8way3(10);
+    }
+
+    function test_lever_A8way3_L11() public fixtureCovered {
+        _leverA8way3(11);
+    }
+
+    function test_lever_A8way3_L12() public fixtureCovered {
+        _leverA8way3(12);
+    }
+
+    function test_lever_A8way3_L13() public fixtureCovered {
+        _leverA8way3(13);
+    }
+
+    function test_lever_A8way3_L14() public fixtureCovered {
+        _leverA8way3(14);
+    }
+
+    function test_lever_A8way3_L15() public fixtureCovered {
+        _leverA8way3(15);
+    }
+
+    function test_lever_A8way3_L16() public fixtureCovered {
+        _leverA8way3(16);
+    }
+
+    function test_lever_A8way3_L17() public fixtureCovered {
+        _leverA8way3(17);
+    }
+
+    function test_lever_A8way3_L18() public fixtureCovered {
+        _leverA8way3(18);
+    }
+
+    function test_lever_A8way3_L19() public fixtureCovered {
+        _leverA8way3(19);
+    }
+
+    function test_lever_A8way3_L20() public fixtureCovered {
+        _leverA8way3(20);
+    }
 
     /// @dev A8 way 3 (`test_A8_block_perSwapLimit_aroundEachKeeperCall`) under lever `id`: a 50,000 USDC deposit and
     ///      a redemption of a quarter of alice's shares wait; the attacker pushes wETH up right before the keeper's
@@ -2252,8 +2874,18 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         refreshFeeds();
         string memory tag = string.concat("A8way3,", l.name);
         int256[12] memory pushes = [
-            int256(0), int256(10), int256(15), int256(20), int256(25), int256(30), int256(40), int256(50), int256(65),
-            int256(80), int256(95), int256(110)
+            int256(0),
+            int256(10),
+            int256(15),
+            int256(20),
+            int256(25),
+            int256(30),
+            int256(40),
+            int256(50),
+            int256(65),
+            int256(80),
+            int256(95),
+            int256(110)
         ];
         int256 cheapest = -1;
         uint256 perDay;
@@ -2265,7 +2897,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             LeverRun memory r;
             r.lvl = pushes[k];
             uint256 bought;
-            if (pushes[k] != 0) (borrowed, bought) = _pushBps(attacker, WETH_POOL, WETH, USDC, pushes[k]);
+            if (pushes[k] != 0) {
+                (borrowed, bought) = _pushBps(attacker, WETH_POOL, WETH, USDC, pushes[k]);
+            }
             _leverCall(keeper, r);
             if (bought != 0) _sellExact(attacker, WETH_POOL, WETH, USDC, bought);
             _leverClose(vid, r);
@@ -2324,7 +2958,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         for (uint256 c = 1; c <= n; ++c) {
             Claim memory cl = queue.getClaim(c);
             if (cl.requestId != vid) continue;
-            assertLe(cl.usdc.mulDiv(PRICE_SCALE, cl.shares, Math.Rounding.Ceil), limit, "lever: RB-14, each fill inside the limit");
+            assertLe(
+                cl.usdc.mulDiv(PRICE_SCALE, cl.shares, Math.Rounding.Ceil),
+                limit,
+                "lever: RB-14, each fill inside the limit"
+            );
             r.victimUsdc += cl.usdc;
             r.victimShares += cl.shares;
         }
@@ -2332,7 +2970,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         r.netAave = r.net - int256(borrowed.mulDiv(AAVE_FLASH_FEE_BPS, BPS));
         r.holdersLoss = _holdersLoss();
         r.navRef = s0.navRef;
-        assertLe(r.holdersLoss, s0.navRef.mulDiv(G8_HOLDER_LOSS_BPS, BPS), "lever: holders lose at most 1 bps of NAV");
+        assertLe(
+            r.holdersLoss,
+            s0.navRef.mulDiv(G8_HOLDER_LOSS_BPS, BPS),
+            "lever: holders lose at most 1 bps of NAV"
+        );
         _assertPerShareNotLower("lever");
     }
 
@@ -2347,13 +2989,36 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     /// @dev `LEVER,<attack>,<setting>,lvl,net,netAave,victimUsdc,victimShares,victimLoss,holdersLoss,calls,failedSides,reverted`
     function _leverLog(string memory tag, LeverRun memory r) internal {
         string memory head = string.concat(
-            tag, ",", vm.toString(r.lvl), ",", vm.toString(r.net), ",", vm.toString(r.netAave), ",", vm.toString(r.victimUsdc)
+            tag,
+            ",",
+            vm.toString(r.lvl),
+            ",",
+            vm.toString(r.net),
+            ",",
+            vm.toString(r.netAave),
+            ",",
+            vm.toString(r.victimUsdc)
         );
         string memory tail = string.concat(
-            vm.toString(r.victimShares), ",", vm.toString(r.victimLoss), ",", vm.toString(r.holdersLoss), ",", vm.toString(r.calls)
+            vm.toString(r.victimShares),
+            ",",
+            vm.toString(r.victimLoss),
+            ",",
+            vm.toString(r.holdersLoss),
+            ",",
+            vm.toString(r.calls)
         );
         emit log_named_string(
-            "LEVER", string.concat(head, ",", tail, ",", vm.toString(r.failedSides), ",", r.reverted ? "reverted" : "ok")
+            "LEVER",
+            string.concat(
+                head,
+                ",",
+                tail,
+                ",",
+                vm.toString(r.failedSides),
+                ",",
+                r.reverted ? "reverted" : "ok"
+            )
         );
     }
 
@@ -2361,14 +3026,36 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     ///      bestNet,bestNetAave,bestVictimLoss,bestHoldersLoss,navRef`
     function _leverBest(string memory tag, LeverRun memory h, LeverRun memory b) internal {
         string memory honest = string.concat(
-            vm.toString(h.calls), ",", vm.toString(h.victimUsdc), ",", vm.toString(h.failedSides), ",", h.reverted ? "reverted" : "ok"
+            vm.toString(h.calls),
+            ",",
+            vm.toString(h.victimUsdc),
+            ",",
+            vm.toString(h.failedSides),
+            ",",
+            h.reverted ? "reverted" : "ok"
         );
         string memory best = string.concat(
-            vm.toString(b.lvl), ",", vm.toString(b.net), ",", vm.toString(b.netAave), ",", vm.toString(b.victimLoss)
+            vm.toString(b.lvl),
+            ",",
+            vm.toString(b.net),
+            ",",
+            vm.toString(b.netAave),
+            ",",
+            vm.toString(b.victimLoss)
         );
         emit log_named_string(
             "LEVER-BEST",
-            string.concat(tag, ",", honest, ",", best, ",", vm.toString(b.holdersLoss), ",", vm.toString(b.navRef))
+            string.concat(
+                tag,
+                ",",
+                honest,
+                ",",
+                best,
+                ",",
+                vm.toString(b.holdersLoss),
+                ",",
+                vm.toString(b.navRef)
+            )
         );
     }
 
@@ -2492,7 +3179,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         uint256 supply1 = fund.totalSupply();
         assertGe(idle1 * s0.supply, s0.idle * supply1, string.concat(label, ": idle per share"));
         for (uint256 i; i < s0.held.length; ++i) {
-            assertGe(held1[i] * s0.supply, s0.held[i] * supply1, string.concat(label, ": asset per share"));
+            assertGe(
+                held1[i] * s0.supply,
+                s0.held[i] * supply1,
+                string.concat(label, ": asset per share")
+            );
         }
     }
 
@@ -2589,7 +3280,8 @@ contract AttacksBaselineTest is BaselineHarness, AttackBook {
         vm.prank(attacker);
         fund.redeem(shares, attacker, attacker);
         _sellExact(attacker, WETH_POOL, WETH, USDC, bought);
-        AttackPnl memory r = _endB("A1 baseline, push +150 bps, deposit and redeem in one transaction");
+        AttackPnl memory r =
+            _endB("A1 baseline, push +150 bps, deposit and redeem in one transaction");
         _assertG8("A1 baseline", r);
 
         // A push past ORA-4 makes the deposit itself revert.
@@ -2622,13 +3314,19 @@ contract AttacksBaselineTest is BaselineHarness, AttackBook {
         assertTrue(ok, "after one window the TWAP agrees with the deflated spot: ORA-4 passes");
         uint256 wethBefore = IERC20(WETH).balanceOf(address(fund));
         uint256 shares = _depositB(attacker, PER_DEPOSIT_CAP);
-        assertEq(IERC20(WETH).balanceOf(address(fund)), wethBefore, "deficit-first: the deposit bought no wETH");
+        assertEq(
+            IERC20(WETH).balanceOf(address(fund)),
+            wethBefore,
+            "deficit-first: the deposit bought no wETH"
+        );
         _sellExact(attacker, WETH_POOL, USDC, WETH, usdcGot);
         vm.warp(block.timestamp + TWAP_WINDOW + 60);
         vm.prank(attacker);
         fund.redeem(shares, attacker, attacker);
         AttackPnl memory r = _endB("A3 baseline, deflate -500 bps held one window, deposit, exit");
-        assertGt(r.attackerNet, 0, "A3 baseline: the TWAP-priced mint pays the deflation (no arbitrage)");
+        assertGt(
+            r.attackerNet, 0, "A3 baseline: the TWAP-priced mint pays the deflation (no arbitrage)"
+        );
         assertGt(r.holdersLoss, 0, "A3 baseline: the holders pay it");
     }
 
@@ -2650,7 +3348,9 @@ contract AttacksBaselineTest is BaselineHarness, AttackBook {
         vm.stopPrank();
         AttackPnl memory r = _endB("A4 baseline, a 50,000 USDC gift to the Aave adapter");
         _assertG8("A4 baseline", r);
-        assertLt(r.attackerNet, -int256(gift / 2), "the gifter keeps only its pro-rata share of the gift");
+        assertLt(
+            r.attackerNet, -int256(gift / 2), "the gifter keeps only its pro-rata share of the gift"
+        );
     }
 
     // ─── A5: round trip ───────────────────────────────────────────────────────────────────────────────
@@ -2695,7 +3395,8 @@ contract AttacksBaselineTest is BaselineHarness, AttackBook {
         vm.warp(block.timestamp + TWAP_WINDOW + 60);
         vm.prank(attacker);
         fund.redeem(shares, attacker, attacker);
-        AttackPnl memory r = _endB("A6 baseline, deposit into a 190 bps real move, redeem after one window");
+        AttackPnl memory r =
+            _endB("A6 baseline, deposit into a 190 bps real move, redeem after one window");
         assertGt(r.attackerNet, 0, "A6 baseline: the lagging TWAP mints too many shares");
     }
 
@@ -2704,7 +3405,9 @@ contract AttacksBaselineTest is BaselineHarness, AttackBook {
     /// @dev Alice deposits 1M (idle: no plan yet), then a 1-day plan to (65, 35, 0) invests it.
     function _worldB() internal {
         deposit(alice, ALICE_USDC);
-        setTargetViaTimelock(bucketVec(6_500, 3_500, 0), BaselinePlanParams(1 days, COST_BUDGET_BPS));
+        setTargetViaTimelock(
+            bucketVec(6_500, 3_500, 0), BaselinePlanParams(1 days, COST_BUDGET_BPS)
+        );
         stepUntilDoneB(120);
         assertGt(IERC20(WETH).balanceOf(address(fund)), 0, "the fund holds wETH");
         coverageCheckpointB();
@@ -2745,8 +3448,10 @@ contract AttacksBaselineTest is BaselineHarness, AttackBook {
         for (uint256 i = IDX_AAVE; i <= IDX_MOONWELL; ++i) {
             nav += fund.assetValue(i);
         }
-        nav += (IERC20(WETH).balanceOf(address(fund)) - fund.deferredTotal(IDX_WETH)).mulDiv(refWeth, 1e18);
-        nav += (IERC20(CBBTC).balanceOf(address(fund)) - fund.deferredTotal(IDX_CBBTC)).mulDiv(refCbbtc, 1e8);
+        nav += (IERC20(WETH).balanceOf(address(fund)) - fund.deferredTotal(IDX_WETH))
+        .mulDiv(refWeth, 1e18);
+        nav += (IERC20(CBBTC).balanceOf(address(fund)) - fund.deferredTotal(IDX_CBBTC))
+        .mulDiv(refCbbtc, 1e8);
     }
 
     function _valueOfB(address who) internal view returns (uint256 v) {
@@ -2774,7 +3479,10 @@ contract AttacksBaselineTest is BaselineHarness, AttackBook {
         }
     }
 
-    function _stepChunk(uint256 n) internal returns (uint256 executed, uint256 calls, PlanStatusB status) {
+    function _stepChunk(uint256 n)
+        internal
+        returns (uint256 executed, uint256 calls, PlanStatusB status)
+    {
         (executed, calls, status) = stepUntilDone(n);
     }
 

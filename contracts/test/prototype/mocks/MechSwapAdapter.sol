@@ -68,26 +68,29 @@ contract MechSwapAdapter is MechReentry, IExactOutSwapAdapter {
         if (amountIn == 0) return 0;
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         IERC20(tokenIn).forceApprove(ROUTER, amountIn);
-        amountOut = ISwapRouter(ROUTER).exactInputSingle(
-            ISwapRouter.ExactInputSingleParams({
-                tokenIn: tokenIn,
-                tokenOut: tokenOut,
-                fee: fee,
-                recipient: recipient,
-                amountIn: amountIn,
-                amountOutMinimum: minAmountOut,
-                sqrtPriceLimitX96: 0
-            })
-        );
+        amountOut = ISwapRouter(ROUTER)
+            .exactInputSingle(
+                ISwapRouter.ExactInputSingleParams({
+                    tokenIn: tokenIn,
+                    tokenOut: tokenOut,
+                    fee: fee,
+                    recipient: recipient,
+                    amountIn: amountIn,
+                    amountOutMinimum: minAmountOut,
+                    sqrtPriceLimitX96: 0
+                })
+            );
         IERC20(tokenIn).forceApprove(ROUTER, 0);
     }
 
     /// @notice TWAP quote, as the production adapter (the fund's NAV reads it).
-    function twapPrice(address pool, address baseToken, address quoteToken, uint256 baseAmount, uint32 window)
-        external
-        view
-        returns (uint256 quoteAmount)
-    {
+    function twapPrice(
+        address pool,
+        address baseToken,
+        address quoteToken,
+        uint256 baseAmount,
+        uint32 window
+    ) external view returns (uint256 quoteAmount) {
         if (pool == address(0) || baseToken == address(0) || quoteToken == address(0)) revert ZeroAddress();
         if (window == 0) revert ZeroWindow();
         if (baseAmount == 0) return 0;
@@ -107,23 +110,26 @@ contract MechSwapAdapter is MechReentry, IExactOutSwapAdapter {
         uint256 deadline
     ) external returns (uint256 amountIn) {
         _reenter(this.swapExactOut.selector);
-        if (tokenIn == address(0) || tokenOut == address(0) || recipient == address(0)) revert ZeroAddress();
+        if (tokenIn == address(0) || tokenOut == address(0) || recipient == address(0)) {
+            revert ZeroAddress();
+        }
         if (block.timestamp > deadline) revert DeadlineExpired(deadline, block.timestamp);
         if (amountOut == 0) return 0;
         uint8 m = mode;
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), maxAmountIn);
         IERC20(tokenIn).forceApprove(ROUTER, maxAmountIn);
-        amountIn = ISwapRouterExactOut(ROUTER).exactOutputSingle(
-            ISwapRouterExactOut.ExactOutputSingleParams({
-                tokenIn: tokenIn,
-                tokenOut: tokenOut,
-                fee: fee,
-                recipient: m == UNDER_DELIVER ? address(this) : recipient,
-                amountOut: amountOut,
-                amountInMaximum: maxAmountIn,
-                sqrtPriceLimitX96: 0
-            })
-        );
+        amountIn = ISwapRouterExactOut(ROUTER)
+            .exactOutputSingle(
+                ISwapRouterExactOut.ExactOutputSingleParams({
+                    tokenIn: tokenIn,
+                    tokenOut: tokenOut,
+                    fee: fee,
+                    recipient: m == UNDER_DELIVER ? address(this) : recipient,
+                    amountOut: amountOut,
+                    amountInMaximum: maxAmountIn,
+                    sqrtPriceLimitX96: 0
+                })
+            );
         IERC20(tokenIn).forceApprove(ROUTER, 0);
         if (m == UNDER_DELIVER) {
             uint256 kept = amountOut * underDeliverBps / 10_000;
@@ -131,6 +137,8 @@ contract MechSwapAdapter is MechReentry, IExactOutSwapAdapter {
             IERC20(tokenOut).safeTransfer(recipient, amountOut - kept);
         }
         if (m == CHARGE_MAX) return maxAmountIn; // the unused input stays here, reported as spent
-        if (amountIn < maxAmountIn) IERC20(tokenIn).safeTransfer(msg.sender, maxAmountIn - amountIn);
+        if (amountIn < maxAmountIn) {
+            IERC20(tokenIn).safeTransfer(msg.sender, maxAmountIn - amountIn);
+        }
     }
 }

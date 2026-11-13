@@ -280,7 +280,11 @@ contract TimedFlowSimTest is TimedSimBase {
 
     /// @dev The step 3 vectors of `RebalanceSim._sequence` in its order [aave, comet, moonwell, wETH, cbBTC,
     ///      deSPXA], each turned into a live vector [aave, moonwell, wETH, cbBTC, comet] by `_rule3e`.
-    function _sequence(uint256 scn) internal pure returns (uint16[5][] memory v, string[] memory l) {
+    function _sequence(uint256 scn)
+        internal
+        pure
+        returns (uint16[5][] memory v, string[] memory l)
+    {
         if (scn == SCN_SEQ) {
             v = new uint16[5][](4);
             l = new string[](4);
@@ -308,7 +312,10 @@ contract TimedFlowSimTest is TimedSimBase {
         for (uint256 i; i < 5; ++i) {
             s += v6[i];
         }
-        require(s + v6[5] == BPS && s != 0, "rule 3e: a receipt sums to 10 000 and holds a non-deSPXA asset");
+        require(
+            s + v6[5] == BPS && s != 0,
+            "rule 3e: a receipt sums to 10 000 and holds a non-deSPXA asset"
+        );
         uint256[5] memory w;
         uint256[5] memory rem;
         uint256 sum;
@@ -346,7 +353,10 @@ contract TimedFlowSimTest is TimedSimBase {
     function _selectParams() internal {
         runName = vm.envOr("PROTO_SIM_RUN", string("default"));
         bytes32 r = keccak256(bytes(runName));
-        require(r == keccak256("default") || r == keccak256("tuned"), "timed: PROTO_SIM_RUN must be default or tuned");
+        require(
+            r == keccak256("default") || r == keccak256("tuned"),
+            "timed: PROTO_SIM_RUN must be default or tuned"
+        );
         require(
             keccak256(bytes(vm.envOr("PROTO_SIM_LP", string("static")))) == keccak256("static"),
             "timed: only the static LP model is built (PROTO_SIM_LP=recenter is a step 3c sensitivity)"
@@ -356,34 +366,52 @@ contract TimedFlowSimTest is TimedSimBase {
         bool overridden = _applyFlowOverrides();
         userSlackBps = vm.envOr("PROTO_SIM_USER_SLACK_BPS", USER_LIMIT_SLACK_BPS);
         if (userSlackBps != USER_LIMIT_SLACK_BPS) overridden = true;
-        require(!overridden || bytes(runTag).length != 0, "timed: an override needs PROTO_SIM_TAG (output dir)");
+        require(
+            !overridden || bytes(runTag).length != 0,
+            "timed: an override needs PROTO_SIM_TAG (output dir)"
+        );
         PlanParams memory pp = governance.defaultPlanParams();
         uint256 interval = rebalancer.effectiveStepInterval();
-        maxPlanSlots = (uint256(pp.duration) + rebalancer.stepParams().maxOverrun) / interval + LOOP_SLACK_SLOTS;
+        maxPlanSlots = (uint256(pp.duration) + rebalancer.stepParams().maxOverrun) / interval
+            + LOOP_SLACK_SLOTS;
     }
 
     /// @dev `RebalanceSim._applyTuned` on the live list (wETH and cbBTC only).
     function _applyTuned() internal {
         StepParams memory sp = rebalancer.stepParams();
         sp.maxOverrun = uint32(vm.envOr("PROTO_SIM_TUNED_MAX_OVERRUN", uint256(sp.maxOverrun)));
-        sp.maxStepCostBps = uint16(vm.envOr("PROTO_SIM_TUNED_MAX_STEP_COST_BPS", uint256(sp.maxStepCostBps)));
-        sp.toleranceBps = uint16(vm.envOr("PROTO_SIM_TUNED_TOLERANCE_BPS", uint256(sp.toleranceBps)));
-        sp.minStepUsdc = uint128(vm.envOr("PROTO_SIM_TUNED_MIN_STEP_USDC", uint256(TUNED_MIN_STEP_USDC)));
+        sp.maxStepCostBps =
+            uint16(vm.envOr("PROTO_SIM_TUNED_MAX_STEP_COST_BPS", uint256(sp.maxStepCostBps)));
+        sp.toleranceBps =
+            uint16(vm.envOr("PROTO_SIM_TUNED_TOLERANCE_BPS", uint256(sp.toleranceBps)));
+        sp.minStepUsdc =
+            uint128(vm.envOr("PROTO_SIM_TUNED_MIN_STEP_USDC", uint256(TUNED_MIN_STEP_USDC)));
         timelockExecute(address(rebalancer), abi.encodeCall(rebalancer.setStepParams, (sp)));
         string[2] memory names = ["WETH", "CBBTC"];
         for (uint256 b; b < MK_N; ++b) {
             uint256 i = IDX_WETH + b;
             AssetStepParams memory ap = rebalancer.assetStepParams(i);
-            ap.maxStepUsdc =
-                uint128(vm.envOr(string.concat("PROTO_SIM_TUNED_", names[b], "_MAX_STEP_USDC"), uint256(ap.maxStepUsdc)));
-            ap.maxStepSlippageBps = uint16(
-                vm.envOr(string.concat("PROTO_SIM_TUNED_", names[b], "_SLIPPAGE_BPS"), uint256(ap.maxStepSlippageBps))
+            ap.maxStepUsdc = uint128(
+                vm.envOr(
+                    string.concat("PROTO_SIM_TUNED_", names[b], "_MAX_STEP_USDC"),
+                    uint256(ap.maxStepUsdc)
+                )
             );
-            timelockExecute(address(rebalancer), abi.encodeCall(rebalancer.setAssetStepParams, (i, ap)));
+            ap.maxStepSlippageBps = uint16(
+                vm.envOr(
+                    string.concat("PROTO_SIM_TUNED_", names[b], "_SLIPPAGE_BPS"),
+                    uint256(ap.maxStepSlippageBps)
+                )
+            );
+            timelockExecute(
+                address(rebalancer), abi.encodeCall(rebalancer.setAssetStepParams, (i, ap))
+            );
         }
         PlanParams memory pp = governance.defaultPlanParams();
-        pp.duration = uint64(vm.envOr("PROTO_SIM_TUNED_PLAN_DURATION", uint256(TUNED_PLAN_DURATION)));
-        pp.costBudgetBps = uint16(vm.envOr("PROTO_SIM_TUNED_COST_BUDGET_BPS", uint256(pp.costBudgetBps)));
+        pp.duration =
+            uint64(vm.envOr("PROTO_SIM_TUNED_PLAN_DURATION", uint256(TUNED_PLAN_DURATION)));
+        pp.costBudgetBps =
+            uint16(vm.envOr("PROTO_SIM_TUNED_COST_BUDGET_BPS", uint256(pp.costBudgetBps)));
         timelockExecute(address(governance), abi.encodeCall(governance.setDefaultPlanParams, (pp)));
     }
 
@@ -398,7 +426,8 @@ contract TimedFlowSimTest is TimedSimBase {
         pinTimestamp = vm.getBlockTimestamp();
         _mkInit(SimLib.seedOf(scn, size, k));
         for (uint256 b; b < MK_N; ++b) {
-            p0Usdc[b] = fund.assetUsdcValue(IDX_WETH + b, 10 ** IERC20Metadata(mkTokens[b]).decimals());
+            p0Usdc[b] =
+                fund.assetUsdcValue(IDX_WETH + b, 10 ** IERC20Metadata(mkTokens[b]).decimals());
         }
     }
 
@@ -462,7 +491,9 @@ contract TimedFlowSimTest is TimedSimBase {
         _mkNoise();
         _until(t0 + 1200);
         bool jump = _isJump() && acc.slots == JUMP_SLOT && acc.jumpAt == 0;
-        _mkWalkAndArb(jump, scenario == SCN_JUMP_DOWN ? JUMP_DOWN_USD_MILLITICKS : JUMP_UP_USD_MILLITICKS);
+        _mkWalkAndArb(
+            jump, scenario == SCN_JUMP_DOWN ? JUMP_DOWN_USD_MILLITICKS : JUMP_UP_USD_MILLITICKS
+        );
         if (jump) acc.jumpAt = mkJumpAt;
         _feedDeviation();
         _until(t0 + 1500);
@@ -497,7 +528,9 @@ contract TimedFlowSimTest is TimedSimBase {
         ++acc.calls;
         ++acc.byReason[uint8(why)];
         if (!did) {
-            if (maskedOff && (why == SkipReason.NothingToTrade || why == SkipReason.BelowMinStep)) ++acc.maskedCalls;
+            if (maskedOff && (why == SkipReason.NothingToTrade || why == SkipReason.BelowMinStep)) {
+                ++acc.maskedCalls;
+            }
             assertEq(post.nav, pre.nav, "skip: NAV unchanged");
             assertEq(fund.plan().costSpent, spentBefore, "skip: no cost");
             if (why == SkipReason.StepFailed) acc.lastFailSelector = _failDetail(logs);
@@ -512,7 +545,9 @@ contract TimedFlowSimTest is TimedSimBase {
     ///      still sits at least `minStepUsdc` off its path (RebalanceSim `_observeMarket`, no deSPXA).
     function _observeMarket() internal returns (bool maskedOff) {
         for (uint256 b; b < MK_N; ++b) {
-            if (uint256(ISimPoolL(mkPools[b]).liquidity()) * OUT_OF_RANGE_L_DIV < mkPinL[b]) ++acc.outOfRangeCalls[b];
+            if (uint256(ISimPoolL(mkPools[b]).liquidity()) * OUT_OF_RANGE_L_DIV < mkPinL[b]) {
+                ++acc.outOfRangeCalls[b];
+            }
         }
         Plan memory p = fund.plan();
         uint256 minStep = rebalancer.stepParams().minStepUsdc;
@@ -549,7 +584,11 @@ contract TimedFlowSimTest is TimedSimBase {
     ) internal {
         int256 signed = SimLib.sub(pre.nav, post.nav);
         uint256 booked = fund.plan().costSpent - spentBefore;
-        assertLe(booked, notional.mulDiv(rebalancer.stepParams().maxStepCostBps, BPS), "RB-4: booked step cost <= cap");
+        assertLe(
+            booked,
+            notional.mulDiv(rebalancer.stepParams().maxStepCostBps, BPS),
+            "RB-4: booked step cost <= cap"
+        );
         if (booked == 0) ++acc.bookedZero;
         else if (booked == SimLib.pos(signed)) ++acc.bookedAtTwap;
         else if (booked == SimLib.pos(feedSigned)) ++acc.bookedAtFeed;
@@ -614,7 +653,8 @@ contract TimedFlowSimTest is TimedSimBase {
         bytes32 sig = IFundEvents.RebalanceStepSkipped.selector;
         for (uint256 i; i < logs.length; ++i) {
             if (logs[i].emitter == address(rebalancer) && logs[i].topics[0] == sig) {
-                (,,, uint256 detail) = abi.decode(logs[i].data, (uint256, uint256, uint256, uint256));
+                (,,, uint256 detail) =
+                    abi.decode(logs[i].data, (uint256, uint256, uint256, uint256));
                 return detail;
             }
         }
@@ -646,7 +686,8 @@ contract TimedFlowSimTest is TimedSimBase {
         uint256 sl = mkSlot;
         if (SimLib.draw(mkSeed, sl, SimLib.TAG_FLOW, 0) % FLOW_ONE_IN != 0) return;
         bool isDeposit = SimLib.draw(mkSeed, sl, SimLib.TAG_FLOW_DIR, 0) % 2 == 0;
-        uint256 bps = FLOW_MIN_BPS + SimLib.draw(mkSeed, sl, SimLib.TAG_FLOW_SIZE, 0) % FLOW_SPAN_BPS;
+        uint256 bps =
+            FLOW_MIN_BPS + SimLib.draw(mkSeed, sl, SimLib.TAG_FLOW_SIZE, 0) % FLOW_SPAN_BPS;
         (uint256 nav,,) = fund.portfolioValues();
         uint256 amt = nav.mulDiv(bps, BPS);
         bool ok = isDeposit ? _flowDeposit(amt) : _flowRedeem(amt, sl);
@@ -656,14 +697,18 @@ contract TimedFlowSimTest is TimedSimBase {
     }
 
     function _flowDeposit(uint256 amt) internal returns (bool ok) {
-        address d = address(uint160(uint256(keccak256(abi.encode("rm-sim-depositor", mkSeed, ++depNonce)))));
+        address d = address(
+            uint160(uint256(keccak256(abi.encode("rm-sim-depositor", mkSeed, ++depNonce))))
+        );
         bytes memory err;
         (ok,, err) = _reqDeposit(d, amt, userSlackBps);
         if (!ok) _flowFail("deposit", err);
     }
 
     function _flowRedeem(uint256 amt, uint256 sl) internal returns (bool ok) {
-        address h = genesisDepositors[SimLib.draw(mkSeed, sl, SimLib.TAG_FLOW_WHO, 0) % genesisDepositors.length];
+        address h = genesisDepositors[
+            SimLib.draw(mkSeed, sl, SimLib.TAG_FLOW_WHO, 0) % genesisDepositors.length
+        ];
         (uint256 nav,,) = fund.portfolioValues();
         uint256 shares = amt.mulDiv(fund.totalSupply(), nav);
         uint256 bal = fund.balanceOf(h);
@@ -675,7 +720,9 @@ contract TimedFlowSimTest is TimedSimBase {
     }
 
     function _flowFail(string memory kind, bytes memory err) internal {
-        if (bytes(acc.flowFailReason).length == 0) acc.flowFailReason = string.concat(kind, ":", vm.toString(err));
+        if (bytes(acc.flowFailReason).length == 0) {
+            acc.flowFailReason = string.concat(kind, ":", vm.toString(err));
+        }
     }
 
     /// @dev Around each keeper settle: the attribution before it, then the holders' dilution at the TWAP and at the
@@ -753,7 +800,9 @@ contract TimedFlowSimTest is TimedSimBase {
         assertEq(p.id, acc.planId, "same plan throughout");
         assertEq(p.costSpent, acc.fundCost, "costSpent = sum of booked step costs");
         assertEq(p.stepCount, acc.executed, "fund counted every executed step");
-        if (st != PlanStatus.Halted) assertLe(p.costSpent, p.costBudget, "unhalted plan within budget");
+        if (st != PlanStatus.Halted) {
+            assertLe(p.costSpent, p.costBudget, "unhalted plan within budget");
+        }
 
         string memory o = string.concat("plan", vm.toString(planIndex));
         _jsonIdentity(o, p);
@@ -777,7 +826,9 @@ contract TimedFlowSimTest is TimedSimBase {
         vm.serializeUint(o, "endSleeveBps", _arr4(acc.endSleeve));
         vm.serializeUint(o, "startBps", _arr16(p.startBps));
         vm.serializeUint(o, "endBps", _arr16(p.endBps));
-        vm.serializeUint(o, "permissionlessAtOpen", uint256(p.startTime) + rebalancer.stepParams().keeperGrace);
+        vm.serializeUint(
+            o, "permissionlessAtOpen", uint256(p.startTime) + rebalancer.stepParams().keeperGrace
+        );
     }
 
     function _jsonCost(string memory o, Plan memory p) internal {
@@ -829,7 +880,9 @@ contract TimedFlowSimTest is TimedSimBase {
         }
         vm.serializeUint(o, "skipOther", other);
         vm.serializeUint(o, "skipByReason", all);
-        vm.serializeString(o, "lastStepFailedSelector", vm.toString(bytes4(uint32(acc.lastFailSelector))));
+        vm.serializeString(
+            o, "lastStepFailedSelector", vm.toString(bytes4(uint32(acc.lastFailSelector)))
+        );
         vm.serializeString(o, "stepFailProbes", "");
         vm.serializeString(o, "firstFlowFailure", acc.flowFailReason);
         vm.serializeUint(o, "jumpAt", acc.jumpAt);
@@ -855,7 +908,8 @@ contract TimedFlowSimTest is TimedSimBase {
         vm.serializeBool(
             o,
             "convergedInWindow",
-            p.status == PlanStatus.Converged && at <= uint256(p.endTime) + rebalancer.stepParams().maxOverrun
+            p.status == PlanStatus.Converged
+                && at <= uint256(p.endTime) + rebalancer.stepParams().maxOverrun
         );
         assertGt(at, 0, "conclusion was observed");
         (uint256[] memory w, uint256 idleBps) = (finalW, finalIdle);
@@ -863,7 +917,9 @@ contract TimedFlowSimTest is TimedSimBase {
         vm.serializeUint(o, "finalIdleBps", idleBps);
         (uint256[] memory offIdx, uint256[] memory offGap, bool liquidOff) =
             _offTolerance(w, p.endBps, rebalancer.stepParams().toleranceBps);
-        if (p.status == PlanStatus.Converged) assertEq(offIdx.length, 0, "converged: every asset within tolerance");
+        if (p.status == PlanStatus.Converged) {
+            assertEq(offIdx.length, 0, "converged: every asset within tolerance");
+        }
         vm.serializeUint(o, "offToleranceAssets", offIdx);
         vm.serializeUint(o, "offToleranceGapBps", offGap);
         return vm.serializeBool(o, "liquidAssetOffTolerance", liquidOff);
@@ -930,15 +986,30 @@ contract TimedFlowSimTest is TimedSimBase {
             plans = string.concat(plans, i == 0 ? "" : ",", planJson[i]);
         }
         string memory full = string.concat(
-            '{"meta":', meta, ',"plans":[', plans, '],"timed":{"attempts":', _jsonAttempts(), ',"settlements":',
-            _jsonSettles(), ',"requests":', _jsonReqs(), "}}"
+            '{"meta":',
+            meta,
+            ',"plans":[',
+            plans,
+            '],"timed":{"attempts":',
+            _jsonAttempts(),
+            ',"settlements":',
+            _jsonSettles(),
+            ',"requests":',
+            _jsonReqs(),
+            "}}"
         );
         string memory dir = string.concat(
-            "out/prototype/", runName, "-timed", bytes(runTag).length == 0 ? "" : string.concat("-", runTag)
+            "out/prototype/",
+            runName,
+            "-timed",
+            bytes(runTag).length == 0 ? "" : string.concat("-", runTag)
         );
         vm.createDir(dir, true);
         vm.writeFile(
-            string.concat(dir, "/sim-", scnName, "-", vm.toString(fundM), "M-s", vm.toString(seedK), ".json"), full
+            string.concat(
+                dir, "/sim-", scnName, "-", vm.toString(fundM), "M-s", vm.toString(seedK), ".json"
+            ),
+            full
         );
     }
 
@@ -959,7 +1030,8 @@ contract TimedFlowSimTest is TimedSimBase {
         uint256[] memory sigN = new uint256[](MK_N);
         uint256[] memory dep = new uint256[](MK_N);
         for (uint256 b; b < MK_N; ++b) {
-            (ticks[b], sig[b], sigN[b], dep[b]) = (mkP0Tick[b], mkSigma[b], mkSigmaN[b], mkDepth10Bps[b]);
+            (ticks[b], sig[b], sigN[b], dep[b]) =
+            (mkP0Tick[b], mkSigma[b], mkSigmaN[b], mkDepth10Bps[b]);
         }
         vm.serializeInt(m, "p0TwapTick", ticks);
         vm.serializeUint(m, "sigmaMilliTicks", sig);

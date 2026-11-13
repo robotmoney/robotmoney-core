@@ -76,7 +76,9 @@ contract FundCoreTest is PrototypeHarness {
 
     /// @dev Bind FLOW_ROLE to this contract (the queue stand-in), once, through the timelock.
     function _bindFlowToThis() internal {
-        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.bindFlowRole, (address(this))));
+        timelockExecute(
+            address(fund), abi.encodeCall(IRobotMoneyFund.bindFlowRole, (address(this)))
+        );
     }
 
     /// @dev Seed, then let the real Rebalancer move the seed into every listed asset, so the fund holds idle USDC,
@@ -87,8 +89,9 @@ contract FundCoreTest is PrototypeHarness {
     function _seedAndInvest() internal {
         _seed(SEED_USDC);
         _bindFlowToThis();
-        uint16[5] memory v =
-            cometListed ? assetVec(2_500, 2_000, 1_750, 1_750, 2_000) : assetVec(3_500, 3_000, 1_750, 1_750, 0);
+        uint16[5] memory v = cometListed
+            ? assetVec(2_500, 2_000, 1_750, 1_750, 2_000)
+            : assetVec(3_500, 3_000, 1_750, 1_750, 0);
         setTargetViaTimelock(v, PlanParams(1 days, COST_BUDGET_BPS));
         stepUntilDone(80);
         (, uint256[] memory held) = fund.heldBalances();
@@ -100,7 +103,11 @@ contract FundCoreTest is PrototypeHarness {
     }
 
     /// @dev Per-leg purchase limits for `sharesOut`: TWAP value of each basket asset's exact part, plus the band.
-    function _buyLimits(uint256 sharesOut) internal view returns (uint256[] memory limits, uint256 maxUsdc) {
+    function _buyLimits(uint256 sharesOut)
+        internal
+        view
+        returns (uint256[] memory limits, uint256 maxUsdc)
+    {
         (uint256 idle, uint256[] memory held) = fund.heldBalances();
         uint256 supply = fund.totalSupply();
         limits = new uint256[](held.length);
@@ -140,7 +147,9 @@ contract FundCoreTest is PrototypeHarness {
         uint256 supply1 = fund.totalSupply();
         assertGe(idle1 * supply0, idle0 * supply1, string.concat(label, ": idle per share"));
         for (uint256 i; i < held0.length; ++i) {
-            assertGe(held1[i] * supply0, held0[i] * supply1, string.concat(label, ": asset per share"));
+            assertGe(
+                held1[i] * supply0, held0[i] * supply1, string.concat(label, ": asset per share")
+            );
         }
     }
 
@@ -168,12 +177,16 @@ contract FundCoreTest is PrototypeHarness {
         vm.prank(address(timelock));
         IERC20(USDC).approve(address(fund), minSeed);
         vm.prank(address(timelock));
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.SeedBelowMinimum.selector, minSeed - 1, minSeed));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.SeedBelowMinimum.selector, minSeed - 1, minSeed)
+        );
         fund.seed(minSeed - 1);
 
         vm.prank(alice);
         vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, alice, Roles.ADMIN_ROLE)
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, alice, Roles.ADMIN_ROLE
+            )
         );
         fund.seed(minSeed);
     }
@@ -194,7 +207,8 @@ contract FundCoreTest is PrototypeHarness {
         vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.UseFlowQueue.selector, address(0)));
         fund.deposit(1e6, alice);
         _bindFlowToThis();
-        bytes memory named = abi.encodeWithSelector(IRobotMoneyFund.UseFlowQueue.selector, address(this));
+        bytes memory named =
+            abi.encodeWithSelector(IRobotMoneyFund.UseFlowQueue.selector, address(this));
         vm.expectRevert(named);
         fund.deposit(1e6, alice);
         vm.expectRevert(named);
@@ -231,17 +245,29 @@ contract FundCoreTest is PrototypeHarness {
 
         uint256 spent = fund.mintInKind(sharesOut, maxUsdc, limits);
 
-        assertEq(balBefore - IERC20(USDC).balanceOf(address(this)), spent, "caller USDC fell by exactly spent");
+        assertEq(
+            balBefore - IERC20(USDC).balanceOf(address(this)),
+            spent,
+            "caller USDC fell by exactly spent"
+        );
         assertLe(spent, maxUsdc, "spent <= maxUsdc");
         assertGt(spent, 0, "spent something");
         assertEq(fund.balanceOf(address(this)), sharesOut, "minted exactly sharesOut to the caller");
         assertEq(fund.totalSupply(), supply0 + sharesOut, "supply grew by sharesOut");
-        assertEq(IERC20(USDC).allowance(address(fund), fund.assetConfig(IDX_WETH).adapter), 0, "approval cleared");
+        assertEq(
+            IERC20(USDC).allowance(address(fund), fund.assetConfig(IDX_WETH).adapter),
+            0,
+            "approval cleared"
+        );
         _assertPerShareNotLower(idle0, held0, supply0, "mintInKind");
         // Each basket asset grew by at least its exact pro-rata part.
         (, uint256[] memory held1) = fund.heldBalances();
         for (uint256 i = IDX_WETH; i <= IDX_CBBTC; ++i) {
-            assertGe(held1[i] - held0[i], held0[i].mulDiv(sharesOut, supply0, Math.Rounding.Ceil), "bought >= want");
+            assertGe(
+                held1[i] - held0[i],
+                held0[i].mulDiv(sharesOut, supply0, Math.Rounding.Ceil),
+                "bought >= want"
+            );
         }
     }
 
@@ -261,9 +287,13 @@ contract FundCoreTest is PrototypeHarness {
 
         uint256 net = fund.sellForFlow(sharesOut, floors);
 
-        assertEq(IERC20(USDC).balanceOf(address(this)) - balBefore, net, "paid exactly net to the caller");
+        assertEq(
+            IERC20(USDC).balanceOf(address(this)) - balBefore, net, "paid exactly net to the caller"
+        );
         uint256 fee = IERC20(USDC).balanceOf(feeRecipient) - feeBefore;
-        assertEq(fee, (net + fee).mulDiv(EXIT_FEE_BPS, BPS), "fee = exitFeeBps of the realized gross");
+        assertEq(
+            fee, (net + fee).mulDiv(EXIT_FEE_BPS, BPS), "fee = exitFeeBps of the realized gross"
+        );
         assertEq(fund.balanceOf(address(this)), 0, "shares burned");
         assertEq(fund.totalSupply(), supply0 - sharesOut, "supply fell by shares");
         _assertPerShareNotLower(idle0, held0, supply0, "sellForFlow");
@@ -311,8 +341,9 @@ contract FundCoreTest is PrototypeHarness {
     function test_flowFunctions_onlyFlowRoleAndLegLength() public fixtureCovered {
         _seedAndInvest();
         uint256[] memory limits = new uint256[](fund.assetCount());
-        bytes memory denied =
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, alice, Roles.FLOW_ROLE);
+        bytes memory denied = abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, alice, Roles.FLOW_ROLE
+        );
         vm.startPrank(alice);
         vm.expectRevert(denied);
         fund.mintInKind(1, 1, limits);
@@ -324,7 +355,9 @@ contract FundCoreTest is PrototypeHarness {
 
         uint256[] memory short = new uint256[](fund.assetCount() - 1);
         vm.expectRevert(
-            abi.encodeWithSelector(IRobotMoneyFund.LegLimitsLength.selector, fund.assetCount() - 1, fund.assetCount())
+            abi.encodeWithSelector(
+                IRobotMoneyFund.LegLimitsLength.selector, fund.assetCount() - 1, fund.assetCount()
+            )
         );
         fund.mintInKind(1, 0, short);
     }
@@ -386,7 +419,10 @@ contract FundCoreTest is PrototypeHarness {
         // Exclude Moonwell: a record opens with a snapshot of the supply.
         timelockExecute(
             address(fund),
-            abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, false))
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed,
+                (address(moonwellAdapter).codehash, false)
+            )
         );
         uint256 id = fund.openExclusionOf(IDX_MOONWELL);
         assertGt(id, 0, "record opened");
@@ -400,7 +436,9 @@ contract FundCoreTest is PrototypeHarness {
         vm.prank(alice);
         fund.transfer(bob, half);
 
-        assertEq(ledger.balanceAt(alice, id), sharesOut, "alice keeps wallet + queued at the snapshot");
+        assertEq(
+            ledger.balanceAt(alice, id), sharesOut, "alice keeps wallet + queued at the snapshot"
+        );
         assertEq(ledger.balanceAt(bob, id), 0, "bob, filled after the record, has none");
 
         // Deposits close while a lending asset is excluded (check 1, defence in depth in the fund).

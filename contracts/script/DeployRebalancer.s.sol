@@ -75,8 +75,10 @@ contract DeployRebalancer is FundSystemBase {
             toleranceBps: uint16(_envUintMax("REBALANCER_TOLERANCE_BPS", type(uint16).max)),
             minStepUsdc: uint128(_envUintMax("REBALANCER_MIN_STEP_USDC", type(uint128).max))
         });
-        i.lendingMaxStepUsdc = uint128(_envUintMax("REBALANCER_LENDING_MAX_STEP_USDC", type(uint128).max));
-        i.majorMaxStepUsdc = uint128(_envUintMax("REBALANCER_MAJOR_MAX_STEP_USDC", type(uint128).max));
+        i.lendingMaxStepUsdc =
+            uint128(_envUintMax("REBALANCER_LENDING_MAX_STEP_USDC", type(uint128).max));
+        i.majorMaxStepUsdc =
+            uint128(_envUintMax("REBALANCER_MAJOR_MAX_STEP_USDC", type(uint128).max));
         i.majorSlippageOverFeeBps = _envUintMax("REBALANCER_MAJOR_SLIPPAGE_OVER_FEE_BPS", 10_000);
     }
 
@@ -85,7 +87,9 @@ contract DeployRebalancer is FundSystemBase {
         d.rebalancerImplementation = address(new Rebalancer());
         d.rebalancer = _deployProxy(
             d.rebalancerImplementation,
-            abi.encodeCall(Rebalancer.initialize, (i.fund, i.admin, i.keeper, i.step, u.timelock, u.mode))
+            abi.encodeCall(
+                Rebalancer.initialize, (i.fund, i.admin, i.keeper, i.step, u.timelock, u.mode)
+            )
         );
         Rebalancer r = Rebalancer(d.rebalancer);
         RobotMoneyFund f = RobotMoneyFund(i.fund);
@@ -98,7 +102,9 @@ contract DeployRebalancer is FundSystemBase {
         r.setAssetStepParams(IDX_AAVE, AssetStepParams(i.lendingMaxStepUsdc, 0));
         r.setAssetStepParams(IDX_MOONWELL, AssetStepParams(i.lendingMaxStepUsdc, 0));
         r.setAssetStepParams(IDX_WETH, AssetStepParams(i.majorMaxStepUsdc, d.slippageBps[IDX_WETH]));
-        r.setAssetStepParams(IDX_CBBTC, AssetStepParams(i.majorMaxStepUsdc, d.slippageBps[IDX_CBBTC]));
+        r.setAssetStepParams(
+            IDX_CBBTC, AssetStepParams(i.majorMaxStepUsdc, d.slippageBps[IDX_CBBTC])
+        );
         r.setAssetStepParams(IDX_COMET, AssetStepParams(i.lendingMaxStepUsdc, 0));
     }
 
@@ -107,7 +113,10 @@ contract DeployRebalancer is FundSystemBase {
         require(r.hasRole(Roles.KEEPER_ROLE, i.keeper), "rebalancer: keeper lacks KEEPER_ROLE");
         require(r.hasRole(Roles.ADMIN_ROLE, i.admin), "rebalancer: deployer lacks ADMIN_ROLE");
         require(r.upgradeTimelock() == d.upgrade.timelock, "rebalancer: upgradeTimelock");
-        require(_implementationOf(d.rebalancer) == d.rebalancerImplementation, "rebalancer: implementation slot");
+        require(
+            _implementationOf(d.rebalancer) == d.rebalancerImplementation,
+            "rebalancer: implementation slot"
+        );
     }
 
     function _writeDeploymentJson(Deployed memory d, Inputs memory i) internal {
@@ -123,7 +132,8 @@ contract DeployRebalancer is FundSystemBase {
         vm.serializeUint(obj, "weth_slippage_bps", d.slippageBps[IDX_WETH]);
         vm.serializeUint(obj, "cbbtc_slippage_bps", d.slippageBps[IDX_CBBTC]);
         vm.serializeAddress(obj, "upgrade_timelock", d.upgrade.timelock);
-        string memory json = vm.serializeString(obj, "upgrade_mode", upgradeModeName(d.upgrade.mode));
+        string memory json =
+            vm.serializeString(obj, "upgrade_mode", upgradeModeName(d.upgrade.mode));
         vm.writeJson(json, outPath);
         console2.log("Wrote rebalancer deployment JSON to", outPath);
     }

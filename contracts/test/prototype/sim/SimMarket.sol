@@ -16,7 +16,10 @@ interface ISimMarketPool {
     function token0() external view returns (address);
     function liquidity() external view returns (uint128);
     function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool);
-    function observe(uint32[] calldata secondsAgos) external view returns (int56[] memory, uint160[] memory);
+    function observe(uint32[] calldata secondsAgos)
+        external
+        view
+        returns (int56[] memory, uint160[] memory);
 }
 
 interface ISimMarketRouter {
@@ -128,7 +131,8 @@ abstract contract SimMarket is Test {
             try p.observe(ago) returns (int56[] memory c, uint160[] memory) {
                 int256[] memory m = new int256[](n);
                 for (uint256 j; j < n; ++j) {
-                    m[j] = (int256(c[j + 1]) - int256(c[j])) * 1000 / int256(uint256(MK_SIGMA_WINDOW));
+                    m[j] =
+                        (int256(c[j + 1]) - int256(c[j])) * 1000 / int256(uint256(MK_SIGMA_WINDOW));
                 }
                 return (SimLib.stdevOfDiffs(m) * MK_SIGMA_DIFF_SCALE_E4 / 10_000, n);
             } catch {}
@@ -206,11 +210,15 @@ abstract contract SimMarket is Test {
 
     /// @dev `up`: pool price (token1 per token0) rises, so token1 goes in. A price-limited exact-input swap from
     ///      this contract with a generous minted input; the pool sizes it. Returns the input spent and the output.
-    function _mkSwapToLimit(uint256 b, bool up, uint160 limit) internal returns (uint256 spent, uint256 got) {
+    function _mkSwapToLimit(uint256 b, bool up, uint160 limit)
+        internal
+        returns (uint256 spent, uint256 got)
+    {
         bool usdcIn = up ? !mkUsdc0[b] : mkUsdc0[b];
         address tokenIn = usdcIn ? MK_USDC : mkTokens[b];
         address tokenOut = usdcIn ? mkTokens[b] : MK_USDC;
-        uint256 amt = usdcIn ? MK_ARB_BUDGET_USDC : _mkTokenForUsdc(b, MK_ARB_BUDGET_USDC, _mkSpotSqrt(b));
+        uint256 amt =
+            usdcIn ? MK_ARB_BUDGET_USDC : _mkTokenForUsdc(b, MK_ARB_BUDGET_USDC, _mkSpotSqrt(b));
         uint256 bal = IERC20(tokenIn).balanceOf(address(this));
         if (bal < amt) {
             if (usdcIn) _mkFundUsdc(address(this), amt - bal);
@@ -219,9 +227,12 @@ abstract contract SimMarket is Test {
         uint256 inBefore = IERC20(tokenIn).balanceOf(address(this));
         uint256 outBefore = IERC20(tokenOut).balanceOf(address(this));
         IERC20(tokenIn).approve(MK_ROUTER, amt);
-        ISimMarketRouter(MK_ROUTER).exactInputSingle(
-            ISimMarketRouter.ExactInputSingleParams(tokenIn, tokenOut, MK_POOL_FEE, address(this), amt, 0, limit)
-        );
+        ISimMarketRouter(MK_ROUTER)
+            .exactInputSingle(
+                ISimMarketRouter.ExactInputSingleParams(
+                    tokenIn, tokenOut, MK_POOL_FEE, address(this), amt, 0, limit
+                )
+            );
         spent = inBefore - IERC20(tokenIn).balanceOf(address(this));
         got = IERC20(tokenOut).balanceOf(address(this)) - outBefore;
     }
@@ -247,8 +258,14 @@ abstract contract SimMarket is Test {
     }
 
     /// @notice Token units of pool b for `usdc` at sqrt price `sqrtP` (the inverse of `_mkUsdcFor`).
-    function _mkTokenForUsdc(uint256 b, uint256 usdc, uint160 sqrtP) internal view returns (uint256) {
-        if (mkUsdc0[b]) return Math.mulDiv(Math.mulDiv(usdc, sqrtP, SimLib.Q96), sqrtP, SimLib.Q96);
+    function _mkTokenForUsdc(uint256 b, uint256 usdc, uint160 sqrtP)
+        internal
+        view
+        returns (uint256)
+    {
+        if (mkUsdc0[b]) {
+            return Math.mulDiv(Math.mulDiv(usdc, sqrtP, SimLib.Q96), sqrtP, SimLib.Q96);
+        }
         return Math.mulDiv(Math.mulDiv(usdc, SimLib.Q96, sqrtP), SimLib.Q96, sqrtP);
     }
 

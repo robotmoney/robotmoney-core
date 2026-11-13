@@ -102,8 +102,9 @@ library FlowCheckLib {
             uint256 openAt = FlowEpochs.endOf(s, oldest) + p.settleWindow + p.keeperGrace;
             if (block.timestamp < openAt) return (SettleCheck.Caller, IDLE_INDEX, openAt, c);
             // The oldest open epoch qualifies, so the newest that qualifies is at or above it.
-            (bool any, uint64 lastPublic) =
-                FlowEpochs.newestEndedBy(s, block.timestamp - p.settleWindow - p.keeperGrace, c.firstEpoch);
+            (bool any, uint64 lastPublic) = FlowEpochs.newestEndedBy(
+                s, block.timestamp - p.settleWindow - p.keeperGrace, c.firstEpoch
+            );
             c.lastEpoch = any && lastPublic > oldest ? lastPublic : oldest;
         }
         if (s.paused) return (SettleCheck.Paused, IDLE_INDEX, 0, c);
@@ -118,7 +119,8 @@ library FlowCheckLib {
         if (s.lastSharePrice != 0) {
             uint256 last = breakerReference(s, m);
             uint256 moved = m.sharePrice > last ? m.sharePrice - last : last - m.sharePrice;
-            uint256 moveBps = last == 0 ? type(uint256).max : moved.mulDiv(BPS, last, Math.Rounding.Ceil);
+            uint256 moveBps =
+                last == 0 ? type(uint256).max : moved.mulDiv(BPS, last, Math.Rounding.Ceil);
             uint256 epochsPassed = FlowEpochs.current(s) - s.lastSettleEpoch;
             if (epochsPassed == 0) epochsPassed = 1;
             if (moveBps > uint256(p.maxSharePriceMoveBps) * epochsPassed) {
@@ -146,7 +148,11 @@ library FlowCheckLib {
     ///         or a revoke then a removal) shows the same mask bit at both ends; the ledger's record count shows it.
     ///         Such a venue is re-based both ways: its per-share part at the last settlement leaves the reference
     ///         and its per-share value now enters it (review Q-F3).
-    function breakerReference(FlowState storage s, SettleContext memory m) public view returns (uint256 ref) {
+    function breakerReference(FlowState storage s, SettleContext memory m)
+        public
+        view
+        returns (uint256 ref)
+    {
         ref = s.lastSharePrice;
         uint256 changed = s.lastExcludedMask ^ m.excludedMask;
         changed |= _cycledVenues(s, m);
@@ -164,7 +170,11 @@ library FlowCheckLib {
 
     /// @dev Bit `i` set for each lending venue that had an exclusion record open since the last settlement and has
     ///      the same mask bit now as then (its record cycled: opened and closed between two settlements).
-    function _cycledVenues(FlowState storage s, SettleContext memory m) private view returns (uint256 mask) {
+    function _cycledVenues(FlowState storage s, SettleContext memory m)
+        private
+        view
+        returns (uint256 mask)
+    {
         address ledger = IRobotMoneyFundFull(s.fund).exclusionLedger();
         uint256 count = IExclusionLedgerView(ledger).exclusionCount();
         for (uint256 id = s.lastExclusionCount + 1; id <= count; ++id) {
@@ -213,8 +223,12 @@ library FlowCheckLib {
             feed8[i] = px;
         }
         {
-            (bool pegOk, FeedStatus st, uint256 u8) = FeedLib.usdcPeg(s.usdcFeed, s.usdcFeedMaxAge, p.usdcPegBandBps);
-            if (!pegOk) return (SettleCheck.UsdcPeg, IDLE_INDEX, st == FeedStatus.OffPeg ? u8 : uint256(st), c);
+            (bool pegOk, FeedStatus st, uint256 u8) =
+                FeedLib.usdcPeg(s.usdcFeed, s.usdcFeedMaxAge, p.usdcPegBandBps);
+            if (!pegOk) {
+                return
+                    (SettleCheck.UsdcPeg, IDLE_INDEX, st == FeedStatus.OffPeg ? u8 : uint256(st), c);
+            }
             f.usdc8 = u8;
         }
 
@@ -236,7 +250,8 @@ library FlowCheckLib {
                 c.prices[i].kind = PRICE_KIND_LENDING;
                 continue;
             }
-            (bool ok, uint256 devBps, AssetPrice memory ap) = _basketPrice(cfg[i], ticks[i], feed8[i], f, p);
+            (bool ok, uint256 devBps, AssetPrice memory ap) =
+                _basketPrice(cfg[i], ticks[i], feed8[i], f, p);
             if (!ok) return (SettleCheck.TwapVsFeed, i, devBps, c);
             c.prices[i] = ap;
         }
@@ -252,11 +267,14 @@ library FlowCheckLib {
         c.supply = fund.totalSupply();
         if (c.supply == 0) return (SettleCheck.SharePrice, IDLE_INDEX, 0, c);
         (c.idle, c.held) = fund.heldBalances();
-        if (c.held.length != cfg.length) return (SettleCheck.SharePrice, IDLE_INDEX, c.held.length, c);
+        if (c.held.length != cfg.length) {
+            return (SettleCheck.SharePrice, IDLE_INDEX, c.held.length, c);
+        }
         c.navFeed = c.idle;
         for (uint256 i; i < cfg.length; ++i) {
-            if (c.prices[i].kind == PRICE_KIND_LENDING) c.navFeed += c.held[i];
-            else if (c.prices[i].kind == PRICE_KIND_BASKET) {
+            if (c.prices[i].kind == PRICE_KIND_LENDING) {
+                c.navFeed += c.held[i];
+            } else if (c.prices[i].kind == PRICE_KIND_BASKET) {
                 c.navFeed += c.held[i].mulDiv(c.prices[i].feedPerToken, c.prices[i].unit);
             }
         }
@@ -269,11 +287,13 @@ library FlowCheckLib {
     /// @dev Per-swap limits of one basket asset, and check 4. Prices are USDC units per whole token. `f.legPriceMode`
     ///      is the `FlowLevers.legPriceMode` lever (step 3 finish plan §3.2): 0, the design, starts a purchase from the
     ///      lower of TWAP and feed and a sale from the higher; 1 from the TWAP only; 2 from the feed only.
-    function _basketPrice(AssetConfig memory a, int24 tick, uint256 px8, Feeds memory f, FlowParams memory p)
-        private
-        view
-        returns (bool ok, uint256 devBps, AssetPrice memory ap)
-    {
+    function _basketPrice(
+        AssetConfig memory a,
+        int24 tick,
+        uint256 px8,
+        Feeds memory f,
+        FlowParams memory p
+    ) private view returns (bool ok, uint256 devBps, AssetPrice memory ap) {
         ap.kind = PRICE_KIND_BASKET;
         ap.unit = 10 ** IERC20Metadata(a.token).decimals();
         uint256 feedDown = px8.mulDiv(f.usdcUnit, f.usdc8);
@@ -331,8 +351,9 @@ library FlowCheckLib {
     function lendRate(address adapter) public view returns (bool ok, uint256 rate) {
         if (adapter.code.length == 0) return (false, 0);
         // Gas-capped: a venue's rate read is a view of a few storage reads; a hostile adapter cannot burn the call.
-        (bool success, bytes memory ret) =
-            adapter.staticcall{gas: LEND_RATE_GAS}(abi.encodeWithSelector(ILendingRateAdapter.ratePerUnit.selector));
+        (bool success, bytes memory ret) = adapter.staticcall{gas: LEND_RATE_GAS}(
+            abi.encodeWithSelector(ILendingRateAdapter.ratePerUnit.selector)
+        );
         if (!success || ret.length < 32) return (false, 0);
         rate = abi.decode(ret, (uint256));
         ok = rate != 0;
@@ -388,7 +409,8 @@ library FlowCheckLib {
             uint256 xMin = minRequestUsdc.mulDiv(c.supply, vRed);
             if (xMin != 0) {
                 uint256 raw = vRed.mulDiv((BPS - c.exitFeeBps) * PRICE_SCALE, c.supply * BPS);
-                uint256 cut = (fRed + BOUND_SLACK_UNITS).mulDiv(PRICE_SCALE, xMin, Math.Rounding.Ceil);
+                uint256 cut =
+                    (fRed + BOUND_SLACK_UNITS).mulDiv(PRICE_SCALE, xMin, Math.Rounding.Ceil);
                 redeemBound = raw > cut ? raw - cut : 0;
             }
         }
@@ -455,7 +477,9 @@ library FlowCheckLib {
         (SettleCheck check, uint256 index, uint256 detail, SettleContext memory c) = market(s);
         if (check != SettleCheck.Ok) revert IFlowEvents.SettleBlocked(check, index, detail);
         uint256 allowance = depositAllowance(c.depositBound, usdc);
-        if (allowance == type(uint256).max) revert IFlowEvents.SettleBlocked(SettleCheck.DepositLeg, IDLE_INDEX, usdc);
+        if (allowance == type(uint256).max) {
+            revert IFlowEvents.SettleBlocked(SettleCheck.DepositLeg, IDLE_INDEX, usdc);
+        }
         q.boundPrice = c.depositBound + allowance;
         q.worstAmount = usdc.mulDiv(PRICE_SCALE, q.boundPrice);
         q.feeBps = 0;
@@ -468,14 +492,20 @@ library FlowCheckLib {
         (SettleCheck check, uint256 index, uint256 detail, SettleContext memory c) = market(s);
         if (check != SettleCheck.Ok) revert IFlowEvents.SettleBlocked(check, index, detail);
         uint256 allowance = redeemAllowance(shares);
-        if (c.redeemBound <= allowance) revert IFlowEvents.SettleBlocked(SettleCheck.RedeemLeg, IDLE_INDEX, shares);
+        if (c.redeemBound <= allowance) {
+            revert IFlowEvents.SettleBlocked(SettleCheck.RedeemLeg, IDLE_INDEX, shares);
+        }
         q.boundPrice = c.redeemBound - allowance;
         q.worstAmount = shares.mulDiv(q.boundPrice, PRICE_SCALE);
         q.feeBps = c.exitFeeBps;
         (q.earliestSettle, q.holdEnds) = _times(s, false);
     }
 
-    function _times(FlowState storage s, bool isDeposit) private view returns (uint64 earliest, uint64 holdEnds) {
+    function _times(FlowState storage s, bool isDeposit)
+        private
+        view
+        returns (uint64 earliest, uint64 holdEnds)
+    {
         earliest = uint64(settleableAt(s, FlowEpochs.current(s)));
         holdEnds = isDeposit ? earliest + s.params.minHold : earliest;
     }

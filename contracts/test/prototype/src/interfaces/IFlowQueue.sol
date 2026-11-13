@@ -44,13 +44,17 @@ interface IFlowQueue is IFlowEvents {
     ///         paused, `BelowMinRequest`, `AbovePerDepositCap`, `ZeroAddress`. Never changes an existing request.
     /// @param maxUsdcPerShare The most USDC per share the owner accepts (PRICE_SCALE). The request takes part in a
     ///                        settlement only if the deposit bound price is at or below it (E12, RB-14).
-    function requestDeposit(uint256 usdc, uint256 maxUsdcPerShare, address owner) external returns (uint256 requestId);
+    function requestDeposit(uint256 usdc, uint256 maxUsdcPerShare, address owner)
+        external
+        returns (uint256 requestId);
 
     /// @notice Calls the fund's `ledgerCheckpoint(owner)` first (E13, RB-22), then pulls `shares` of the fund from
     ///         the caller into escrow and opens a redemption request owned by `owner`. Reverts while paused,
     ///         `BelowMinRequest` (valued at `lastGoodNav`; a redemption of the caller's whole balance is exempt).
     /// @param minUsdcPerShare The least USDC per share after the exit fee the owner accepts (PRICE_SCALE).
-    function requestRedeem(uint256 shares, uint256 minUsdcPerShare, address owner) external returns (uint256 requestId);
+    function requestRedeem(uint256 shares, uint256 minUsdcPerShare, address owner)
+        external
+        returns (uint256 requestId);
 
     /// @notice The owner cancels the unfilled part of a pending or expired request; it goes to the owner's credit
     ///         (`withdrawCredit`, E22). Ledger hook first for a redemption. Open while paused.
@@ -100,10 +104,14 @@ interface IFlowQueue is IFlowEvents {
     /// @notice The owner (msg.sender == `owner`) takes the settled USDC of `shares` burned shares of its
     ///         redemption claims, oldest first, paid to `receiver`.
     /// @return assets USDC paid (rounded DOWN within a partly used claim).
-    function redeem(uint256 shares, address receiver, address owner) external returns (uint256 assets);
+    function redeem(uint256 shares, address receiver, address owner)
+        external
+        returns (uint256 assets);
 
     /// @notice Not offered (§5.9.6). Reverts `RedeemOnly`.
-    function withdraw(uint256 assets, address receiver, address owner) external returns (uint256 shares);
+    function withdraw(uint256 assets, address receiver, address owner)
+        external
+        returns (uint256 shares);
 
     // ═════════════════════════════════════════════════════════════════════════
     //  Emergency powers (§5.9.4, E17, RB-18): each can only delay or return
@@ -146,7 +154,10 @@ interface IFlowQueue is IFlowEvents {
     function flowParams() external view returns (FlowParams memory);
 
     /// @notice The USDC / USD feed, its maximum age, and the sequencer uptime feed.
-    function feeds() external view returns (address usdcFeed, uint32 usdcFeedMaxAge, address sequencerFeed);
+    function feeds()
+        external
+        view
+        returns (address usdcFeed, uint32 usdcFeedMaxAge, address sequencerFeed);
 
     function paused() external view returns (bool);
 
@@ -170,7 +181,10 @@ interface IFlowQueue is IFlowEvents {
     function creditOf(address owner) external view returns (uint256 usdc, uint256 shares);
 
     /// @notice USDC used on each side in clock-time period `period` (`timestamp / epochLength`, E20).
-    function periodFlow(uint256 period) external view returns (uint256 depositUsdc, uint256 redeemUsdc);
+    function periodFlow(uint256 period)
+        external
+        view
+        returns (uint256 depositUsdc, uint256 redeemUsdc);
 
     /// @notice Escrowed redemption shares plus deposit shares held (not yet delivered) for `account` (E13, RB-22).
     function queuedSharesOf(address account) external view returns (uint256);
@@ -183,16 +197,28 @@ interface IFlowQueue is IFlowEvents {
     function quoteRedeem(uint256 shares) external view returns (Quote memory);
 
     /// @notice ERC-7540: unfilled USDC of a pending deposit request of `controller` (its owner).
-    function pendingDepositRequest(uint256 requestId, address controller) external view returns (uint256 assets);
+    function pendingDepositRequest(uint256 requestId, address controller)
+        external
+        view
+        returns (uint256 assets);
 
     /// @notice ERC-7540: USDC cost of the unlocked, unfrozen, undelivered shares of that request's claims.
-    function claimableDepositRequest(uint256 requestId, address controller) external view returns (uint256 assets);
+    function claimableDepositRequest(uint256 requestId, address controller)
+        external
+        view
+        returns (uint256 assets);
 
     /// @notice ERC-7540: unfilled shares of a pending redemption request.
-    function pendingRedeemRequest(uint256 requestId, address controller) external view returns (uint256 shares);
+    function pendingRedeemRequest(uint256 requestId, address controller)
+        external
+        view
+        returns (uint256 shares);
 
     /// @notice ERC-7540: burned shares of that request's claims whose USDC is not yet taken.
-    function claimableRedeemRequest(uint256 requestId, address controller) external view returns (uint256 shares);
+    function claimableRedeemRequest(uint256 requestId, address controller)
+        external
+        view
+        returns (uint256 shares);
 
     /// @notice ERC-7540 claim limits: what `deposit` / `mint` / `redeem` can take for `owner` now.
     function maxDeposit(address owner) external view returns (uint256 assets);
@@ -220,5 +246,8 @@ interface IFlowQueue is IFlowEvents {
 
     /// @notice Where `settle` continues on side `kind`: the keeper's own position (`keeperClass`) or everyone else's.
     ///         `epoch == 0`: the next call starts a new pass at the oldest epoch (item 2).
-    function settleCursor(bool keeperClass, RequestKind kind) external view returns (uint64 epoch, uint256 index);
+    function settleCursor(bool keeperClass, RequestKind kind)
+        external
+        view
+        returns (uint64 epoch, uint256 index);
 }

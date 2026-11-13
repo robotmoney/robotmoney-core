@@ -75,7 +75,12 @@ import {FlowSettleLib} from "./lib/FlowSettleLib.sol";
 ///         (scaffold report §8.1).
 ///
 ///         Runs behind its own ERC-1967 proxy (`GovernedUUPS`), under the same upgrade timelock as the fund (E1).
-contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, GovernedUUPS, IFlowQueue {
+contract FlowQueue is
+    AdminFloorAccessControl,
+    ReentrancyGuardUpgradeable,
+    GovernedUUPS,
+    IFlowQueue
+{
     // ─── Roles (FundTypes.Roles) ─────────────────────────────────────────────
 
     bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
@@ -88,16 +93,18 @@ contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gover
 
     /// @notice Atomic proxy initialization. ADMIN_ROLE is self-administered; EMERGENCY_ROLE and KEEPER_ROLE are
     ///         administered by ADMIN_ROLE. The fund must later `bindFlowRole(address(this))`.
-    function initialize(FlowQueueInit calldata p, address upgradeTimelock_, UpgradeMode upgradeMode_)
-        external
-        initializer
-    {
+    function initialize(
+        FlowQueueInit calldata p,
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
+    ) external initializer {
         __AccessControlEnumerable_init();
         __ReentrancyGuard_init();
         __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
         if (
-            p.fund == address(0) || p.usdc == address(0) || p.admin == address(0) || p.emergency == address(0)
-                || p.usdcFeed == address(0) || p.sequencerFeed == address(0)
+            p.fund == address(0) || p.usdc == address(0) || p.admin == address(0)
+                || p.emergency == address(0) || p.usdcFeed == address(0)
+                || p.sequencerFeed == address(0)
         ) revert ZeroAddress();
         if (p.usdcFeedMaxAge == 0) revert FlowParamOutOfBounds(type(uint256).max);
         FlowState storage s = _s();
@@ -115,7 +122,8 @@ contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gover
         _setFlowParams(p.params);
         // The owner's decided default levers (2026-11-12): the 5 bps per-call basket cap, limits from the stricter
         // of TWAP and feed. ADMIN may change them later through `setFlowLevers`.
-        FlowLevers memory l = FlowLevers({basketCallBps: DEFAULT_BASKET_CALL_BPS, legPriceMode: LEG_PRICE_STRICTER});
+        FlowLevers memory l =
+            FlowLevers({basketCallBps: DEFAULT_BASKET_CALL_BPS, legPriceMode: LEG_PRICE_STRICTER});
         s.levers = l;
         emit FlowLeversSet(l);
     }
@@ -183,13 +191,19 @@ contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gover
     }
 
     /// @notice Self-call of `settle` for the redemption side (FlowSettleLib note). Only the queue may call it.
-    function settleRedeemSide(uint256 settlementId, Fill[] calldata fills, SettleContext calldata c) external {
+    function settleRedeemSide(uint256 settlementId, Fill[] calldata fills, SettleContext calldata c)
+        external
+    {
         if (msg.sender != address(this)) revert OnlySelf();
         FlowSettleLib.redeemSide(_s(), settlementId, fills, c);
     }
 
     /// @notice Self-call of `settle` for the deposit side. Only the queue may call it.
-    function settleDepositSide(uint256 settlementId, Fill[] calldata fills, SettleContext calldata c) external {
+    function settleDepositSide(
+        uint256 settlementId,
+        Fill[] calldata fills,
+        SettleContext calldata c
+    ) external {
         if (msg.sender != address(this)) revert OnlySelf();
         FlowSettleLib.depositSide(_s(), settlementId, fills, c);
     }
@@ -199,7 +213,11 @@ contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gover
     // ═════════════════════════════════════════════════════════════════════════
 
     /// @inheritdoc IFlowQueue
-    function deposit(uint256 assets, address receiver) external nonReentrant returns (uint256 shares) {
+    function deposit(uint256 assets, address receiver)
+        external
+        nonReentrant
+        returns (uint256 shares)
+    {
         (shares,) = FlowClaimLib.deliver(_s(), receiver, assets, false);
     }
 
@@ -209,7 +227,11 @@ contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gover
     }
 
     /// @inheritdoc IFlowQueue
-    function redeem(uint256 shares, address receiver, address owner) external nonReentrant returns (uint256) {
+    function redeem(uint256 shares, address receiver, address owner)
+        external
+        nonReentrant
+        returns (uint256)
+    {
         return FlowClaimLib.redeemClaims(_s(), shares, receiver, owner);
     }
 
@@ -275,13 +297,19 @@ contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gover
     ///      that does not split into whole slices of at least `MIN_SLICE_SECONDS`, and a window plus grace that
     ///      ends after a request expires (field 7, see below).
     function _setFlowParams(FlowParams memory p) private {
-        if (p.epochLength < MIN_EPOCH_LENGTH || p.epochLength > MAX_EPOCH_LENGTH) revert FlowParamOutOfBounds(0);
-        if (p.settleWindow < MIN_SETTLE_WINDOW || p.settleWindow > MAX_SETTLE_WINDOW) revert FlowParamOutOfBounds(1);
+        if (p.epochLength < MIN_EPOCH_LENGTH || p.epochLength > MAX_EPOCH_LENGTH) {
+            revert FlowParamOutOfBounds(0);
+        }
+        if (p.settleWindow < MIN_SETTLE_WINDOW || p.settleWindow > MAX_SETTLE_WINDOW) {
+            revert FlowParamOutOfBounds(1);
+        }
         if (p.minHold < MIN_HOLD || p.minHold > MAX_HOLD) revert FlowParamOutOfBounds(2);
         if (p.keeperGrace < MIN_FLOW_KEEPER_GRACE || p.keeperGrace > MAX_FLOW_KEEPER_GRACE) {
             revert FlowParamOutOfBounds(3);
         }
-        if (p.maxEpochFlowBps == 0 || p.maxEpochFlowBps > MAX_EPOCH_FLOW_BPS) revert FlowParamOutOfBounds(4);
+        if (p.maxEpochFlowBps == 0 || p.maxEpochFlowBps > MAX_EPOCH_FLOW_BPS) {
+            revert FlowParamOutOfBounds(4);
+        }
         if (p.epochFlowFloorUsdc > MAX_EPOCH_FLOW_FLOOR_USDC) revert FlowParamOutOfBounds(5);
         if (p.maxSharePriceMoveBps == 0 || p.maxSharePriceMoveBps > MAX_SHARE_PRICE_MOVE_BPS) {
             revert FlowParamOutOfBounds(6);
@@ -293,14 +321,18 @@ contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gover
             p.maxRoll == 0 || p.maxRoll > MAX_ROLL
                 || uint256(p.settleWindow) + p.keeperGrace >= uint256(p.maxRoll) * p.epochLength
         ) revert FlowParamOutOfBounds(7);
-        if (p.minRequestUsdc == 0 || p.minRequestUsdc > MAX_MIN_REQUEST_USDC) revert FlowParamOutOfBounds(8);
+        if (p.minRequestUsdc == 0 || p.minRequestUsdc > MAX_MIN_REQUEST_USDC) {
+            revert FlowParamOutOfBounds(8);
+        }
         if (p.maxFreeze < MIN_FREEZE || p.maxFreeze > MAX_FREEZE) revert FlowParamOutOfBounds(9);
         if (
             p.slices < MIN_SLICES || p.slices > MAX_SLICES || p.settleWindow % p.slices != 0
                 || p.settleWindow / p.slices < MIN_SLICE_SECONDS
         ) revert FlowParamOutOfBounds(10);
         if (p.quorum == 0 || p.quorum > p.slices) revert FlowParamOutOfBounds(11);
-        if (p.dispersionBps == 0 || p.dispersionBps > MAX_DISPERSION_BPS) revert FlowParamOutOfBounds(12);
+        if (p.dispersionBps == 0 || p.dispersionBps > MAX_DISPERSION_BPS) {
+            revert FlowParamOutOfBounds(12);
+        }
         if (p.refBandBps == 0 || p.refBandBps > MAX_REF_BAND_BPS) revert FlowParamOutOfBounds(13);
         // `legBandBps` must also be above every basket pool fee (§5.9.5), read from the fund now. An asset added
         // later with a higher fee is not re-checked here (scaffold gap, noted in the queue agent's notes).
@@ -309,7 +341,9 @@ contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gover
                 || p.legBandBps <= IRobotMoneyFundFull(_s().fund).maxPoolFeeBps()
         ) revert FlowParamOutOfBounds(14);
         if (p.sequencerGrace > MAX_SEQUENCER_GRACE) revert FlowParamOutOfBounds(15);
-        if (p.usdcPegBandBps == 0 || p.usdcPegBandBps > MAX_USDC_PEG_BAND_BPS) revert FlowParamOutOfBounds(16);
+        if (p.usdcPegBandBps == 0 || p.usdcPegBandBps > MAX_USDC_PEG_BAND_BPS) {
+            revert FlowParamOutOfBounds(16);
+        }
         if (p.maxLendRateGrowthBps == 0 || p.maxLendRateGrowthBps > MAX_LEND_RATE_GROWTH_BPS) {
             revert FlowParamOutOfBounds(17);
         }
@@ -349,7 +383,11 @@ contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gover
         return _s().params;
     }
 
-    function feeds() external view returns (address usdcFeed, uint32 usdcFeedMaxAge, address sequencerFeed) {
+    function feeds()
+        external
+        view
+        returns (address usdcFeed, uint32 usdcFeedMaxAge, address sequencerFeed)
+    {
         FlowState storage s = _s();
         return (s.usdcFeed, s.usdcFeedMaxAge, s.sequencerFeed);
     }
@@ -406,7 +444,11 @@ contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gover
         return (s.usdcCredit[owner], s.shareCredit[owner]);
     }
 
-    function periodFlow(uint256 period) external view returns (uint256 depositUsdc, uint256 redeemUsdc) {
+    function periodFlow(uint256 period)
+        external
+        view
+        returns (uint256 depositUsdc, uint256 redeemUsdc)
+    {
         FlowState storage s = _s();
         return (s.depositUsed[period], s.redeemUsed[period]);
     }
@@ -418,7 +460,11 @@ contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gover
     }
 
     /// @inheritdoc IFlowQueue
-    function settleCursor(bool keeperClass, RequestKind kind) external view returns (uint64 epoch, uint256 index) {
+    function settleCursor(bool keeperClass, RequestKind kind)
+        external
+        view
+        returns (uint64 epoch, uint256 index)
+    {
         WalkCursor storage at = _s().cursors[keeperClass ? 0 : 1][uint8(kind)];
         return (at.epoch, at.index);
     }
@@ -446,19 +492,35 @@ contract FlowQueue is AdminFloorAccessControl, ReentrancyGuardUpgradeable, Gover
         return FlowCheckLib.quoteRedeem(_s(), shares);
     }
 
-    function pendingDepositRequest(uint256 requestId, address controller) external view returns (uint256) {
+    function pendingDepositRequest(uint256 requestId, address controller)
+        external
+        view
+        returns (uint256)
+    {
         return FlowClaimLib.pending(_s(), requestId, controller, RequestKind.Deposit);
     }
 
-    function claimableDepositRequest(uint256 requestId, address controller) external view returns (uint256) {
+    function claimableDepositRequest(uint256 requestId, address controller)
+        external
+        view
+        returns (uint256)
+    {
         return FlowClaimLib.claimable(_s(), requestId, controller, RequestKind.Deposit);
     }
 
-    function pendingRedeemRequest(uint256 requestId, address controller) external view returns (uint256) {
+    function pendingRedeemRequest(uint256 requestId, address controller)
+        external
+        view
+        returns (uint256)
+    {
         return FlowClaimLib.pending(_s(), requestId, controller, RequestKind.Redeem);
     }
 
-    function claimableRedeemRequest(uint256 requestId, address controller) external view returns (uint256) {
+    function claimableRedeemRequest(uint256 requestId, address controller)
+        external
+        view
+        returns (uint256)
+    {
         return FlowClaimLib.claimable(_s(), requestId, controller, RequestKind.Redeem);
     }
 

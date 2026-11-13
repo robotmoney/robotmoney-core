@@ -35,11 +35,20 @@ contract HarnessSmokeTest is PrototypeHarness {
         assertTrue(rebalancer.hasRole(Roles.KEEPER_ROLE, keeper), "keeper role");
         assertTrue(rebalancer.hasRole(Roles.ADMIN_ROLE, address(timelock)), "rebalancer admin");
         assertTrue(governance.hasRole(Roles.TARGET_SETTER_ROLE, address(timelock)), "target setter");
-        assertFalse(governance.hasRole(Roles.TARGET_SETTER_ROLE, address(this)), "deployer renounced setter");
-        assertTrue(receipts.hasRole(receipts.RECEIPT_RELEASER_ROLE(), address(governance)), "releaser");
-        assertFalse(receipts.hasRole(receipts.ADMIN_ROLE(), address(governance)), "governance not receipt admin");
+        assertFalse(
+            governance.hasRole(Roles.TARGET_SETTER_ROLE, address(this)), "deployer renounced setter"
+        );
+        assertTrue(
+            receipts.hasRole(receipts.RECEIPT_RELEASER_ROLE(), address(governance)), "releaser"
+        );
+        assertFalse(
+            receipts.hasRole(receipts.ADMIN_ROLE(), address(governance)),
+            "governance not receipt admin"
+        );
         assertTrue(queue.hasRole(Roles.ADMIN_ROLE, address(timelock)), "queue admin = timelock");
-        assertFalse(queue.hasRole(Roles.ADMIN_ROLE, address(this)), "deployer renounced queue admin");
+        assertFalse(
+            queue.hasRole(Roles.ADMIN_ROLE, address(this)), "deployer renounced queue admin"
+        );
         assertTrue(queue.hasRole(Roles.KEEPER_ROLE, keeper), "queue keeper");
         assertTrue(queue.hasRole(Roles.EMERGENCY_ROLE, emergency), "queue emergency");
         assertEq(queue.share(), address(fund), "ERC-7575 share");
@@ -52,12 +61,16 @@ contract HarnessSmokeTest is PrototypeHarness {
             assertTrue(a.active, "active");
             if (isBasketIndex(i)) {
                 assertEq(uint8(a.kind), uint8(AssetKind.Basket), "basket kind");
-                assertTrue(a.feed != address(0) && a.maxFeedAge != 0, "basket feed and max age (E15)");
+                assertTrue(
+                    a.feed != address(0) && a.maxFeedAge != 0, "basket feed and max age (E15)"
+                );
                 assertEq(a.adapter, address(swapAdapter), "exact-output adapter copy");
             } else {
                 assertEq(uint8(a.kind), uint8(AssetKind.Lending), "lending kind");
                 assertEq(a.feed, address(0), "lending: no feed");
-                assertGt(ILendingRateAdapter(a.adapter).ratePerUnit(), 1e18, "venue rate per unit (E15)");
+                assertGt(
+                    ILendingRateAdapter(a.adapter).ratePerUnit(), 1e18, "venue rate per unit (E15)"
+                );
             }
         }
         (address usdcFeed, uint32 usdcAge, address seqFeed) = queue.feeds();
@@ -83,7 +96,9 @@ contract HarnessSmokeTest is PrototypeHarness {
         assertEq(fund.idleUsdc(), nav, "idle: everything stayed idle");
         (uint256 credit,) = queue.creditOf(alice);
         assertEq(SEED_USDC + amount - nav, credit, "the unused USDC is alice's credit");
-        assertApproxEqAbs(fund.convertToAssets(shares), nav - SEED_USDC, 2, "alice owns what she added");
+        assertApproxEqAbs(
+            fund.convertToAssets(shares), nav - SEED_USDC, 2, "alice owns what she added"
+        );
     }
 
     /// @dev Receipt to plan through the timelock, three keeper steps on the seed, a pro-rata deposit through the
@@ -130,7 +145,11 @@ contract HarnessSmokeTest is PrototypeHarness {
     function test_feedHelpers() public fixtureCovered {
         uint256 nav = fund.totalAssets();
         vm.warp(block.timestamp + ETH_FEED_MAX_AGE + 1);
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.FeedUnhealthy.selector, IDX_WETH, FeedStatus.Stale));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRobotMoneyFund.FeedUnhealthy.selector, IDX_WETH, FeedStatus.Stale
+            )
+        );
         fund.totalAssets();
         (uint256 good,) = fund.lastGoodNav();
         assertEq(good, nav, "lastGoodNav keeps the last healthy value");
@@ -149,9 +168,15 @@ contract HarnessSmokeTest is PrototypeHarness {
     /// @dev Compound V3 is listed only when the fixture holds Comet's extension delegate (see the harness note).
     function test_compoundListedWhenTheFixtureCoversIt() public fixtureCovered {
         if (!cometListed) {
-            _skipCovered("Compound V3 not listed: the replay fixture lacks Comet's extension delegate (re-record)");
+            _skipCovered(
+                "Compound V3 not listed: the replay fixture lacks Comet's extension delegate (re-record)"
+            );
         }
-        assertEq(fund.assetConfig(IDX_COMET).adapter, address(cometAdapter), "Compound is the last asset");
-        assertGt(ILendingRateAdapter(address(cometAdapter)).ratePerUnit(), 1e18, "Comet supply index");
+        assertEq(
+            fund.assetConfig(IDX_COMET).adapter, address(cometAdapter), "Compound is the last asset"
+        );
+        assertGt(
+            ILendingRateAdapter(address(cometAdapter)).ratePerUnit(), 1e18, "Comet supply index"
+        );
     }
 }

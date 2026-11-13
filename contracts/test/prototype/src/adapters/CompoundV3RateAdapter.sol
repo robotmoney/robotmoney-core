@@ -35,7 +35,9 @@ contract CompoundV3RateAdapter is CompoundV3Adapter, ILendingRateAdapter {
     /// @notice Comet has no supplied principal, so it has no rate.
     error NoSupplyBase();
 
-    constructor(address comet_, address usdc_, address vault_) CompoundV3Adapter(comet_, usdc_, vault_) {}
+    constructor(address comet_, address usdc_, address vault_)
+        CompoundV3Adapter(comet_, usdc_, vault_)
+    {}
 
     /// @inheritdoc ILendingRateAdapter
     /// @dev `totalSupply() × 1e18 / totalSupplyBase`, rounded DOWN: Comet's base supply index accrued to now (Comet
