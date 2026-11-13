@@ -1,0 +1,461 @@
+---
+title: "EndToEndTest"
+description: "One-vault experiment, plan Step 2.3: the whole life of the fund in one test, on real Base venues. Stage 1: a receipt-less `setTarget` plan; deposits land at target and deficit-first (§4.3). Stage 2: receipts; the bad ones are refused, the good one is released and opens a plan in the same timelock call (§5.1, RB-1). Stage 3: keeper steps until Converged, checking RB-7, RB-4, the plan budget and NAV/share after every step (§5.3, §5.5). Stage 4: redeem and redeemInKind after convergence and while a plan is Paused (RB-6); `withdraw` reverts `RedeemOnly` (§4.4). No market price, amount out or block number is hard-coded: every check is a relationship."
+---
+
+# EndToEndTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/EndToEnd.t.sol)
+
+**Inherits:** [BaselineHarness](/contracts/test/prototype/baseline/abstract.BaselineHarness)
+
+One-vault experiment, plan Step 2.3: the whole life of the fund in one test, on real Base venues.
+Stage 1: a receipt-less `setTarget` plan; deposits land at target and deficit-first (§4.3).
+Stage 2: receipts; the bad ones are refused, the good one is released and opens a plan in the same
+timelock call (§5.1, RB-1).
+Stage 3: keeper steps until Converged, checking RB-7, RB-4, the plan budget and NAV/share after
+every step (§5.3, §5.5).
+Stage 4: redeem and redeemInKind after convergence and while a plan is Paused (RB-6); `withdraw`
+reverts `RedeemOnly` (§4.4).
+No market price, amount out or block number is hard-coded: every check is a relationship.
+
+## Constants
+
+### PPS_UNIT
+
+<i>
+
+Raw share amount used to read NAV per share (shares carry a 10^18 virtual offset).
+
+</i>
+
+```solidity
+uint256 internal constant PPS_UNIT = 1e30;
+```
+
+### MAX_CALLS
+
+<i>
+
+Upper bound on keeper calls: a 7-day path at one call per interval, plus a day of overrun.
+
+</i>
+
+```solidity
+uint256 internal constant MAX_CALLS = 400;
+```
+
+### DEFICIT_DEPOSIT
+
+<i>
+
+Bob's deposit into the wETH deficit.
+
+</i>
+
+```solidity
+uint256 internal constant DEFICIT_DEPOSIT = 50_000e6;
+```
+
+## State Variables
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+### carol
+
+```solidity
+address internal carol = makeAddr("carol");
+```
+
+### _e2eSalt
+
+```solidity
+uint256 private _e2eSalt;
+```
+
+### _idOld
+
+```solidity
+bytes32 private _idOld;
+```
+
+### _dOld
+
+```solidity
+bytes32 private _dOld;
+```
+
+### _older
+
+```solidity
+uint16[6] private _older;
+```
+
+### _executed
+
+```solidity
+uint256 private _executed;
+```
+
+### _calls
+
+```solidity
+uint256 private _calls;
+```
+
+### _totalCost
+
+```solidity
+uint256 private _totalCost;
+```
+
+### _skips
+
+```solidity
+mapping(SkipReason => uint256) private _skips;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="test_endtoend"></a>
+
+### test_endToEnd
+
+```solidity
+function test_endToEnd() public fixtureCovered;
+```
+
+<a id="_stage1settargetanddeposits-uint16-6"></a>
+
+### _stage1SetTargetAndDeposits
+
+```solidity
+function _stage1SetTargetAndDeposits(uint16[6] memory initial) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| initial | `uint16[6]` |  |
+
+<a id="_deficitfirstdeposit"></a>
+
+### _deficitFirstDeposit
+
+<i>
+
+Knock wETH under its target with a real sale on its pool, let the TWAP absorb it (ORA-4), then a
+second deposit must fill wETH's shortfall before splitting the rest by weight: wETH gets more than
+its pro-rata share, and its gap to target shrinks.
+
+</i>
+
+```solidity
+function _deficitFirstDeposit() private;
+```
+
+<a id="_stage2receipts-uint16-6"></a>
+
+### _stage2Receipts
+
+```solidity
+function _stage2Receipts(uint16[6] memory proposed)
+        private
+        returns (uint256 planId, bytes32 good);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proposed | `uint16[6]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+| good | `bytes32` |  |
+
+<a id="_applygood-bytes32-bytes32-uint16-6"></a>
+
+### _applyGood
+
+<i>
+
+Apply the good receipt. Plan 1 is superseded, and the release happens in the same call.
+
+</i>
+
+```solidity
+function _applyGood(bytes32 good, bytes32 dGood, uint16[6] memory proposed)
+        private
+        returns (uint256 planId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| good | `bytes32` |  |
+| dGood | `bytes32` |  |
+| proposed | `uint16[6]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+
+<a id="_refusestaleandreplay-bytes32-bytes32-uint16-6"></a>
+
+### _refuseStaleAndReplay
+
+<i>
+
+Stale: an older receipt is refused once a newer one applied, even with a valid vector. Replay: the
+applied receipt cannot be applied twice.
+
+</i>
+
+```solidity
+function _refuseStaleAndReplay(bytes32 good, bytes32 dGood, uint16[6] memory proposed) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| good | `bytes32` |  |
+| dGood | `bytes32` |  |
+| proposed | `uint16[6]` |  |
+
+<a id="_applyexpectrevert-bytes32-bytes32-uint16-6-bytes"></a>
+
+### _applyExpectRevert
+
+<i>
+
+Schedule `applyReceipt` on the timelock, wait the delay, and expect the execution to revert with
+`revertData` (the timelock bubbles the target's revert).
+
+</i>
+
+```solidity
+function _applyExpectRevert(
+        bytes32 id,
+        bytes32 digest,
+        uint16[6] memory bps,
+        bytes memory revertData
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+| digest | `bytes32` |  |
+| bps | `uint16[6]` |  |
+| revertData | `bytes` |  |
+
+<a id="_stage3stepuntilconverged-uint256-bytes32-uint16-6"></a>
+
+### _stage3StepUntilConverged
+
+```solidity
+function _stage3StepUntilConverged(uint256 planId, bytes32 receiptId, uint16[6] memory proposed)
+        private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+| receiptId | `bytes32` |  |
+| proposed | `uint16[6]` |  |
+
+<a id="_onecheckedstep"></a>
+
+### _oneCheckedStep
+
+<i>
+
+One keeper `step()` with the per-step assertions: previewStep agrees with step, NAV moves by the
+measured cost only, cost &lt;= cap (RB-4), costSpent &lt;= budget, legs stay on their side of
+`pathTarget(now)` (RB-7). A skip changes nothing.
+
+</i>
+
+```solidity
+function _oneCheckedStep() private;
+```
+
+<a id="_snap"></a>
+
+### _snap
+
+```solidity
+function _snap() private view returns (Snap memory s);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `Snap` |  |
+
+<a id="_valueof-snap-uint256"></a>
+
+### _valueOf
+
+```solidity
+function _valueOf(Snap memory s, uint256 index) private pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `Snap` |  |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_stage4redemptions-uint16-6"></a>
+
+### _stage4Redemptions
+
+```solidity
+function _stage4Redemptions(uint16[6] memory initial) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| initial | `uint16[6]` |  |
+
+<a id="_checkedredeem-address-uint256"></a>
+
+### _checkedRedeem
+
+<i>
+
+`redeem` pays at least `previewRedeem` (the TWAP × slippage × fee floor), at most the fee-net TWAP
+value of the shares, burns exactly `shares`, charges the exit fee, and never lowers the remaining
+holders' NAV per share.
+
+</i>
+
+```solidity
+function _checkedRedeem(address who, uint256 shares) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| shares | `uint256` |  |
+
+<a id="_checkedredeeminkind-address-address-uint256"></a>
+
+### _checkedRedeemInKind
+
+<i>
+
+`redeemInKind` pays the pro-rata USDC (idle plus lending) and each basket token, net of the exit fee,
+with no swap: the TWAP value received is the fee-net share of NAV (to rounding), and stayers keep
+their NAV per share.
+
+</i>
+
+```solidity
+function _checkedRedeemInKind(address owner, address receiver, uint256 shares) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| receiver | `address` |  |
+| shares | `uint256` |  |
+
+<a id="_basketbalances-address"></a>
+
+### _basketBalances
+
+```solidity
+function _basketBalances(address who) private view returns (uint256[3] memory b);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256[3]` |  |
+
+## Structs
+
+### Snap
+
+<i>
+
+State captured right before one `step()` (same block as the step).
+
+</i>
+
+```solidity
+struct Snap {
+        uint256 nav;
+        uint256 idle;
+        uint256[] values;
+        uint256 pps;
+        uint256 costSpent;
+        uint32 stepCount;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| nav | `uint256` |  |
+| idle | `uint256` |  |
+| values | `uint256[]` |  |
+| pps | `uint256` |  |
+| costSpent | `uint256` |  |
+| stepCount | `uint32` |  |
+

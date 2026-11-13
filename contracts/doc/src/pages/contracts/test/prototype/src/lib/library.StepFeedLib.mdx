@@ -1,0 +1,220 @@
+---
+title: "StepFeedLib"
+description: "The feed checks of one rebalance step (step 3e, proposal §5.10): checks 2 and 4 of §5.9.3, run on every step. The fund runs it inside `executeStep` (so no caller can skip it, RB-19) and the Rebalancer runs the same code first, so a step that would fail is skipped with a reason (`SkipReason.FeedCheck`) instead of being tried. `check` is `public`: one linked copy serves both callers (it keeps the Rebalancer and `FundStepLib` small, §6.1), and both read the same state in the same transaction, so they agree."
+---
+
+# StepFeedLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/StepFeedLib.sol)
+
+**Title:** StepFeedLib
+
+The feed checks of one rebalance step (step 3e, proposal §5.10): checks 2 and 4 of §5.9.3, run on every
+step. The fund runs it inside `executeStep` (so no caller can skip it, RB-19) and the Rebalancer runs the
+same code first, so a step that would fail is skipped with a reason (`SkipReason.FeedCheck`) instead of
+being tried. `check` is `public`: one linked copy serves both callers (it keeps the Rebalancer and
+`FundStepLib` small, §6.1), and both read the same state in the same transaction, so they agree.
+
+The parameters are the settlement's own (proposal §5.10 "the same layers"): the sequencer feed, the USDC
+feed and their ages from the bound FlowQueue's `feeds()`; `sequencerGrace`, `usdcPegBandBps` and
+`refBandBps` from its `flowParams()`; each basket feed and its `maxFeedAge` from the fund's asset config.
+
+Check 4 compares each basket asset's feed with the TWAP the step itself uses: the asset's `twapWindow`
+TWAP through its swap adapter, the one the fund values NAV with and the Rebalancer sizes and floors with.
+(The settlement compares the slice-median TWAP of check 3; §5.10 asks a step for checks 2 and 4 only.)
+
+## Functions
+
+<a id="check-assetconfig-address-address"></a>
+
+### check
+
+Run checks 2 and 4 for a step now. Order as the settlement's `market`: the sequencer, every active
+basket feed, the USDC peg, then each active basket TWAP against its feed. Never reverts: a reverting or
+missing feed, a reverting TWAP read and a missing queue are each a failed check (fail closed).
+
+```solidity
+function check(AssetConfig[] memory cfg, address usdc, address queue)
+        public
+        view
+        returns (StepFeedCheck c, uint256 index, uint256 detail, StepPrices memory px);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cfg | `AssetConfig[]` | The fund's asset list (`assetConfigs()`). |
+| usdc | `address` | The fund's USDC. |
+| queue | `address` | The fund's bound FlowQueue (`flowQueue()`), or address(0). |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `StepFeedCheck` |      `Ok`, or the first check that failed. |
+| index | `uint256` |  The asset that failed (IDLE_INDEX when the failure is not an asset's). |
+| detail | `uint256` | The feed status, the USDC price, or the deviation in bps (see `StepFeedCheck`). |
+| px | `StepPrices` |     Per asset index: the feed and TWAP prices and the token unit (complete only when `Ok`). |
+
+<a id="_check2-assetconfig-address-flowparams-uint256"></a>
+
+### _check2
+
+<i>
+
+Check 2. Writes each active basket feed's 8-decimal USD price into `px8` and returns the USDC / USD
+price (8 decimals).
+
+</i>
+
+```solidity
+function _check2(
+        AssetConfig[] memory cfg,
+        address queue,
+        FlowParams memory p,
+        uint256[] memory px8
+    ) private view returns (StepFeedCheck, uint256, uint256, uint256 usdc8);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cfg | `AssetConfig[]` |  |
+| queue | `address` |  |
+| p | `FlowParams` |  |
+| px8 | `uint256[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `StepFeedCheck` |  |
+| &lt;none&gt; | `uint256` |  |
+| &lt;none&gt; | `uint256` |  |
+| usdc8 | `uint256` |  |
+
+<a id="_check4-assetconfig-address-uint256-uint256-uint16-stepprices-uint256"></a>
+
+### _check4
+
+<i>
+
+Check 4 for basket asset `i` (`a`). On entry `px.feed[i]` holds its 8-decimal USD price; on success it
+holds the feed price in USDC per whole token, and `px.twap[i]`, `px.unit[i]` are set.
+
+</i>
+
+```solidity
+function _check4(
+        AssetConfig memory a,
+        address usdc,
+        uint256 usdcUnit,
+        uint256 usdc8,
+        uint16 refBandBps,
+        StepPrices memory px,
+        uint256 i
+    ) private view returns (StepFeedCheck, uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `AssetConfig` |  |
+| usdc | `address` |  |
+| usdcUnit | `uint256` |  |
+| usdc8 | `uint256` |  |
+| refBandBps | `uint16` |  |
+| px | `StepPrices` |  |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `StepFeedCheck` |  |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="feedvalue-stepprices-uint256-uint256"></a>
+
+### feedValue
+
+USDC value of `amount` of asset `i` at the feed (`px.feed`, rounded DOWN). A lending asset and idle
+USDC count one to one (`IDLE_INDEX` is idle).
+
+```solidity
+function feedValue(StepPrices memory px, uint256 i, uint256 amount)
+        internal
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| px | `StepPrices` |  |
+| i | `uint256` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_isbasket-assetconfig"></a>
+
+### _isBasket
+
+```solidity
+function _isBasket(AssetConfig memory a) private pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `AssetConfig` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_twap-assetconfig-address-uint256"></a>
+
+### _twap
+
+<i>
+
+The asset's TWAP over its `twapWindow`: USDC for one whole token through its swap adapter. `ok` false when
+the read reverts.
+
+</i>
+
+```solidity
+function _twap(AssetConfig memory a, address usdc, uint256 unit)
+        private
+        view
+        returns (bool ok, uint256 v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `AssetConfig` |  |
+| usdc | `address` |  |
+| unit | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| v | `uint256` |  |
+

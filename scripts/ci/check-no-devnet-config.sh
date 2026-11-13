@@ -12,7 +12,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 dir="${1:-$root/contracts/script}"
-allow_chain_branch=("ExpectedChainGuard.sol" "DeployTimelock.s.sol")
+allow_chain_branch=("ExpectedChainGuard.sol" "CoreTimelockHandover.sol") # Deploy 4: the delay floor moved out of DeployTimelock.s.sol so both handovers share it
 
 status=0
 while IFS= read -r hit; do

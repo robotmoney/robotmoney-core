@@ -1,0 +1,40 @@
+---
+title: "FlowBooks"
+description: "The queue's own books (eng plan §4.3 conservation, §6 \"three accounting systems\"; appended by `queue`). Every amount the queue holds belongs to exactly one line. Absent gifts, the queue's USDC balance equals `pendingUsdc + owedUsdc + creditUsdc + dustUsdc` and its share balance equals `escrowShares + heldShares + creditShares + dustShares`. A gift only raises a balance above its books."
+---
+
+# FlowBooks
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+
+The queue's own books (eng plan §4.3 conservation, §6 "three accounting systems"; appended by `queue`).
+Every amount the queue holds belongs to exactly one line. Absent gifts, the queue's USDC balance equals
+`pendingUsdc + owedUsdc + creditUsdc + dustUsdc` and its share balance equals
+`escrowShares + heldShares + creditShares + dustShares`. A gift only raises a balance above its books.
+
+```solidity
+struct FlowBooks {
+    uint256 pendingUsdc;
+    uint256 owedUsdc;
+    uint256 creditUsdc;
+    uint256 dustUsdc;
+    uint256 escrowShares;
+    uint256 heldShares;
+    uint256 creditShares;
+    uint256 dustShares;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pendingUsdc | `uint256` | Σ unfilled deposit escrow (pending and expired requests). |
+| owedUsdc | `uint256` | Σ settled redemption USDC not yet taken with `redeem`. |
+| creditUsdc | `uint256` | Σ USDC credits waiting for `withdrawCredit` (cancels, unused purchase USDC). |
+| dustUsdc | `uint256` | USDC left over from per-request rounding. Belongs to no flow user. |
+| escrowShares | `uint256` | Σ unfilled redemption escrow (pending and expired requests). |
+| heldShares | `uint256` | Σ deposit shares in their hold or unlocked, not yet delivered or returned. |
+| creditShares | `uint256` | Σ share credits waiting for `withdrawCredit` (cancelled redemptions). |
+| dustShares | `uint256` | Shares left over from per-request rounding. Belongs to no flow user. |
+

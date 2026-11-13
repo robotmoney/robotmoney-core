@@ -1,0 +1,1065 @@
+---
+title: "FlowQueueTest"
+description: "Eng plan §4.2, bullet by bullet, against the wired harness. Each section names its bullet. Proposal §5.9.3 checks 1 to 6 have one test per way to trip them, each tripping that check alone (the checks before it pass, and the test shows nothing settles). Check 10 is tested under RB-13; steps 7 and 12 are actions that cannot fail on their own (eng plan §4.2)."
+---
+
+# FlowQueueTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowQueue.t.sol)
+
+**Inherits:** [FlowQueueBase](/contracts/test/prototype/abstract.FlowQueueBase)
+
+**Title:** FlowQueueTest
+
+Eng plan §4.2, bullet by bullet, against the wired harness. Each section names its bullet. Proposal
+§5.9.3 checks 1 to 6 have one test per way to trip them, each tripping that check alone (the checks before
+it pass, and the test shows nothing settles). Check 10 is tested under RB-13; steps 7 and 12 are actions
+that cannot fail on their own (eng plan §4.2).
+
+## Functions
+
+<a id="test_rb10_nothingleavesthequeuebeforethewindowends"></a>
+
+### test_RB10_nothingLeavesTheQueueBeforeTheWindowEnds
+
+RB-10: before the epoch's window ends nothing leaves the queue: no settlement, no claim, no expiry
+withdrawal, at the epoch's close or one second before the window ends. At the window's end the keeper
+settles.
+
+```solidity
+function test_RB10_nothingLeavesTheQueueBeforeTheWindowEnds() public fixtureCovered;
+```
+
+<a id="test_rb10_theexceptionspayonlythatuser"></a>
+
+### test_RB10_theExceptionsPayOnlyThatUser
+
+RB-10: the three exceptions (cancel, in-kind exit, withdrawal of expired escrow) each pay only the
+request's owner, and only what that request held.
+
+```solidity
+function test_RB10_theExceptionsPayOnlyThatUser() public fixtureCovered;
+```
+
+<a id="test_rb11_depositsharesstayforminholdandgoonlytotheowner"></a>
+
+### test_RB11_depositSharesStayForMinHoldAndGoOnlyToTheOwner
+
+RB-11: shares from a deposit stay in the queue until `settle time + minHold` (no delivery, cancel or
+return in the hold), then anyone may trigger their delivery, and they go only to the request's owner.
+
+```solidity
+function test_RB11_depositSharesStayForMinHoldAndGoOnlyToTheOwner() public fixtureCovered;
+```
+
+<a id="test_rb12_ablockedsettlementtradesnothingandnorolesettlespastit"></a>
+
+### test_RB12_aBlockedSettlementTradesNothingAndNoRoleSettlesPastIt
+
+RB-12: a blocked settlement trades nothing, and no role can settle past the failed check: the keeper,
+a stranger after `keeperGrace`, the emergency key, the fund, and the admin through the timelock all get
+the same `SettleBlocked`. Restoring the one broken input is all the keeper then needs.
+
+```solidity
+function test_RB12_aBlockedSettlementTradesNothingAndNoRoleSettlesPastIt()
+        public
+        fixtureCovered;
+```
+
+<a id="test_rb12_cancelandexpiryreturnexactlytheunfilledescrow"></a>
+
+### test_RB12_cancelAndExpiryReturnExactlyTheUnfilledEscrow
+
+RB-12: cancel and expiry return exactly the escrow not yet filled, also after a partial fill.
+
+```solidity
+function test_RB12_cancelAndExpiryReturnExactlyTheUnfilledEscrow() public fixtureCovered;
+```
+
+<a id="test_rb13_asettlementkeepseveryamountpershare"></a>
+
+### test_RB13_aSettlementKeepsEveryAmountPerShare
+
+RB-13: after a settlement of both sides, the amount of idle USDC and of every active asset per share
+is at least what it was before.
+
+```solidity
+function test_RB13_aSettlementKeepsEveryAmountPerShare() public fixtureCovered;
+```
+
+<a id="testfuzz_rb13_everysettlementkeepseveryamountpershare-uint16-uint256-uint256"></a>
+
+### testFuzz_RB13_everySettlementKeepsEveryAmountPerShare
+
+RB-13 as a fuzz test over the ratio (the deposit's and the redemption's size against the fund) and
+the holdings (the plan's stable/protocol split). Each run invests, settles a deposit, then a redemption,
+and checks every amount per share after each settlement.
+The seed is fixed so the recorder's fork run and every replay draw the same inputs: a replay with other
+inputs could touch pool slots the re-recorded fixture never saw. The dictionary is off for the same
+reason (`verify`): forge seeds it from the state loaded at setUp, which is the whole fixture in replay
+and only the fetched slots on the fork, so with it on the two modes would draw different inputs.
+`hardening` (step 3 plan §3.3 item 3): 256 runs (was 6). The variant with an unfixed seed is
+`FlowQueueRandomSeedFuzzTest.testFuzz_RB13_unfixedSeed_depositThenRedeemKeepsEveryAmountPerShare`.
+forge-config: default.fuzz.runs = 256
+forge-config: default.fuzz.seed = "0x6d656368616e69736d"
+forge-config: default.fuzz.dictionary-weight = 0
+
+```solidity
+function testFuzz_RB13_everySettlementKeepsEveryAmountPerShare(
+        uint16 stableBps,
+        uint256 usdc,
+        uint256 redeemBps
+    ) public fixtureCovered;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| stableBps | `uint16` |  |
+| usdc | `uint256` |  |
+| redeemBps | `uint256` |  |
+
+<a id="test_rb13_awrongpurchaseamountrevertsinsidethefund"></a>
+
+### test_RB13_aWrongPurchaseAmountRevertsInsideTheFund
+
+RB-13: a purchase of the wrong amount is refused inside the fund. The venue under-delivers 1 % of each
+basket purchase (`MechSwapAdapter.UNDER_DELIVER`), which is what a fund copy buying the wrong amount
+looks like from the fund's books. A direct `mintInKind` reverts `ProportionViolated`; through the queue
+the deposit side fails, changes nothing and stays pending.
+
+```solidity
+function test_RB13_aWrongPurchaseAmountRevertsInsideTheFund() public fixtureCovered;
+```
+
+<a id="test_rb13_aflowrolecallerthatskipsitscheckscannotbreaktheproportion"></a>
+
+### test_RB13_aFlowRoleCallerThatSkipsItsChecksCannotBreakTheProportion
+
+RB-13: a caller holding FLOW_ROLE that skips every queue check (no bound price, wide-open or zero leg
+limits, any size) still cannot lower any amount per share: the fund buys or sells the exact slice
+itself and asserts check 10, or the call reverts and changes nothing.
+
+```solidity
+function test_RB13_aFlowRoleCallerThatSkipsItsChecksCannotBreakTheProportion()
+        public
+        fixtureCovered;
+```
+
+<a id="test_rb14_arequestoutsidetheboundisskippedandstayspending"></a>
+
+### test_RB14_aRequestOutsideTheBoundIsSkippedAndStaysPending
+
+RB-14: a request whose limit does not admit the bound price is skipped (`RequestSkipped`) and stays
+pending in full; the settlement still succeeds for the others; no fill is outside its limit.
+
+```solidity
+function test_RB14_aRequestOutsideTheBoundIsSkippedAndStaysPending() public fixtureCovered;
+```
+
+<a id="test_rb15_arevertedsettleleaveseverybalanceandflag"></a>
+
+### test_RB15_aRevertedSettleLeavesEveryBalanceAndFlag
+
+RB-15: a reverted `settle` leaves every balance and flag unchanged (checked on the queue's balances,
+books, counters, every request and both users' credits and queued shares, and on the fund).
+
+```solidity
+function test_RB15_aRevertedSettleLeavesEveryBalanceAndFlag() public fixtureCovered;
+```
+
+<a id="test_rb15_cancelandexitinkindworkwhilepaused"></a>
+
+### test_RB15_cancelAndExitInKindWorkWhilePaused
+
+RB-15: while the queue is paused, requests and settlement stop, and cancel, in-kind exit, credit
+withdrawal and delivery stay open. Only the emergency key pauses; only the admin unpauses.
+
+```solidity
+function test_RB15_cancelAndExitInKindWorkWhilePaused() public fixtureCovered;
+```
+
+<a id="test_check1_anonkeeperbeforekeepergrace"></a>
+
+### test_check1_aNonKeeperBeforeKeeperGrace
+
+Check 1: a non-keeper before `keeperGrace` is refused (up to the last second); from the grace on,
+anyone settles.
+
+```solidity
+function test_check1_aNonKeeperBeforeKeeperGrace() public fixtureCovered;
+```
+
+<a id="test_check1_apausedqueue"></a>
+
+### test_check1_aPausedQueue
+
+Check 1: a paused queue settles nothing, for the keeper and for anyone after the grace.
+
+```solidity
+function test_check1_aPausedQueue() public fixtureCovered;
+```
+
+<a id="test_check2_astalefeed"></a>
+
+### test_check2_aStaleFeed
+
+Check 2: a basket feed older than its `maxFeedAge` (wETH, 1 500 s) blocks with its index.
+
+```solidity
+function test_check2_aStaleFeed() public fixtureCovered;
+```
+
+<a id="test_check2_anonpositivefeed"></a>
+
+### test_check2_aNonPositiveFeed
+
+Check 2: a basket feed that answers zero or a negative price blocks with its index.
+
+```solidity
+function test_check2_aNonPositiveFeed() public fixtureCovered;
+```
+
+<a id="test_check2_adownsequencer"></a>
+
+### test_check2_aDownSequencer
+
+Check 2: a sequencer that reports down, or came up less than `sequencerGrace` ago, blocks.
+
+```solidity
+function test_check2_aDownSequencer() public fixtureCovered;
+```
+
+<a id="test_check2_usdcoffitspeg"></a>
+
+### test_check2_usdcOffItsPeg
+
+Check 2: USDC outside `usdcPegBandBps` (50) of 1 blocks; inside it passes.
+
+```solidity
+function test_check2_usdcOffItsPeg() public fixtureCovered;
+```
+
+<a id="test_check3_fewerthanquorumslicesintheband"></a>
+
+### test_check3_fewerThanQuorumSlicesInTheBand
+
+Check 3: a pool pushed 25 minutes before the settlement leaves 5 of the 12 five-minute slices far
+from the median. The median stays at the old price (so check 4 would pass), but fewer than `quorum`
+(9) slices sit inside `dispersionBps`: the TWAP quorum blocks alone.
+
+```solidity
+function test_check3_fewerThanQuorumSlicesInTheBand() public fixtureCovered;
+```
+
+<a id="test_check4_atwapoffitsfeed"></a>
+
+### test_check4_aTwapOffItsFeed
+
+Check 4: a TWAP more than `refBandBps` (90 by default) from its feed blocks with the asset and the
+deviation; 10 bps inside the band passes. Sized from the band in force, so it holds at any default.
+
+```solidity
+function test_check4_aTwapOffItsFeed() public fixtureCovered;
+```
+
+<a id="test_check5_avenuerateoverthebound_agiftorastepdoesnot"></a>
+
+### test_check5_aVenueRateOverTheBound_aGiftOrAStepDoesNot
+
+Check 5: once a settlement recorded the venues' rates, a step into the venues and a gift to the
+Aave adapter (USDC and aUSDC) do not trip the check, because the venue's own rate does not move. A
+jump of the venue's own rate over `maxLendRateGrowthBps` per day blocks with the venue's index.
+
+```solidity
+function test_check5_aVenueRateOverTheBound_aGiftOrAStepDoesNot() public fixtureCovered;
+```
+
+<a id="test_check6_asharepricemoveoverthebreaker_andthelargerallowanceafterepochs"></a>
+
+### test_check6_aSharePriceMoveOverTheBreaker_andTheLargerAllowanceAfterEpochs
+
+Check 6: NAV per share at the feeds moving more than `maxSharePriceMoveBps` (1 000) in one epoch
+blocks (a 15 % gift to the fund); two epochs after the last settlement the allowance is 2 000 bps and
+the same move passes.
+
+```solidity
+function test_check6_aSharePriceMoveOverTheBreaker_andTheLargerAllowanceAfterEpochs()
+        public
+        fixtureCovered;
+```
+
+<a id="_assertredeemedalone-uint256-vm-log-string"></a>
+
+### _assertRedeemedAlone
+
+<i>
+
+Redemptions settled, the deposit request untouched and not attempted.
+
+</i>
+
+```solidity
+function _assertRedeemedAlone(uint256 sid, Vm.Log[] memory logs, string memory label)
+        internal
+        view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sid | `uint256` |  |
+| logs | `Vm.Log[]` |  |
+| label | `string` |  |
+
+<a id="_assertdepositedalone-uint256-string"></a>
+
+### _assertDepositedAlone
+
+<i>
+
+Deposits settled, the redemption request untouched: escrow, queued shares, books.
+
+</i>
+
+```solidity
+function _assertDepositedAlone(uint256 sid, string memory label) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sid | `uint256` |  |
+| label | `string` |  |
+
+<a id="test_check1_anexcludedlendingasset_redemptionssettlealone"></a>
+
+### test_check1_anExcludedLendingAsset_redemptionsSettleAlone
+
+Check 1: an excluded lending asset leaves deposits unprocessed; redemptions settle alone. (Moonwell
+holds 5 % here, so the exclusion moves NAV per share by less than check 6's breaker.)
+
+```solidity
+function test_check1_anExcludedLendingAsset_redemptionsSettleAlone() public fixtureCovered;
+```
+
+<a id="test_check1_pauseddeposits_redemptionssettlealone"></a>
+
+### test_check1_pausedDeposits_redemptionsSettleAlone
+
+Check 1: paused deposits leave deposits unprocessed; redemptions settle alone.
+
+```solidity
+function test_check1_pausedDeposits_redemptionsSettleAlone() public fixtureCovered;
+```
+
+<a id="test_check1_ashutdownfund_redemptionssettlealone"></a>
+
+### test_check1_aShutDownFund_redemptionsSettleAlone
+
+Check 1: a shut-down fund leaves deposits unprocessed; redemptions settle alone.
+
+```solidity
+function test_check1_aShutDownFund_redemptionsSettleAlone() public fixtureCovered;
+```
+
+<a id="test_check8_asaleunderitslimit_depositsstillsettle"></a>
+
+### test_check8_aSaleUnderItsLimit_depositsStillSettle
+
+Check 8: a sale under its limit. The wETH pool is pushed 3 % down in the settlement's block (a push
+inside one block leaves the slice median where it was, so checks 3 and 4 pass). The redemption side
+fails its per-sale limit and stays pending; the deposit side buys cheaper and settles.
+
+```solidity
+function test_check8_aSaleUnderItsLimit_depositsStillSettle() public fixtureCovered;
+```
+
+<a id="test_check8_avenuethatcannotpay_depositsstillsettle"></a>
+
+### test_check8_aVenueThatCannotPay_depositsStillSettle
+
+Check 8: a venue that cannot pay (Aave refuses every withdrawal). Timed redemptions wait; deposits
+still settle (they only supply).
+
+```solidity
+function test_check8_aVenueThatCannotPay_depositsStillSettle() public fixtureCovered;
+```
+
+<a id="test_check9_apurchaseoveritslimit_redemptionsstillsettle"></a>
+
+### test_check9_aPurchaseOverItsLimit_redemptionsStillSettle
+
+Check 9: a purchase over its limit. The wETH pool is pushed 3 % up in the settlement's block. The
+deposit side fails its per-purchase limit and stays pending; the redemption side sells dearer and
+settles.
+
+```solidity
+function test_check9_aPurchaseOverItsLimit_redemptionsStillSettle() public fixtureCovered;
+```
+
+<a id="test_check9_avenueatitssupplycap_redemptionsstillsettle"></a>
+
+### test_check9_aVenueAtItsSupplyCap_redemptionsStillSettle
+
+Check 9: a venue at its supply cap (Aave refuses the supply; the adapter hands the USDC back and the
+fund reverts `LendingSupplyRefused`). Deposits wait; redemptions still settle.
+
+```solidity
+function test_check9_aVenueAtItsSupplyCap_redemptionsStillSettle() public fixtureCovered;
+```
+
+<a id="_assertdepositpendingafterredemption-uint256-queuesnap-string"></a>
+
+### _assertDepositPendingAfterRedemption
+
+<i>
+
+Redemptions settled; the deposit request and its escrow untouched.
+
+</i>
+
+```solidity
+function _assertDepositPendingAfterRedemption(
+        uint256 sid,
+        QueueSnap memory q0,
+        string memory label
+    ) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sid | `uint256` |  |
+| q0 | `QueueSnap` |  |
+| label | `string` |  |
+
+<a id="test_check11_arealizedpriceoutsidethebound_forcedwithamockvenue"></a>
+
+### test_check11_aRealizedPriceOutsideTheBound_forcedWithAMockVenue
+
+Check 11 on the redemption side, forced with a mock venue: Aave pays half of each withdrawal and
+keeps the rest (`MechAaveAdapter.SHORT_PAY`). Every per-sale limit and the fund's proportion check pass
+(the position fell by exactly what the fund asked), so only the realized-price check sees the
+shortfall. The redemption side reverts `SettleBlocked(RealizedPrice)` and stays pending; deposits settle.
+
+```solidity
+function test_check11_aRealizedPriceOutsideTheBound_forcedWithAMockVenue()
+        public
+        fixtureCovered;
+```
+
+<a id="test_check11_adepositateveryleglimitstaysinsidethebound"></a>
+
+### test_check11_aDepositAtEveryLegLimitStaysInsideTheBound
+
+Check 11 on the deposit side restates check 9: even a venue that charges exactly its per-purchase
+limit on every basket leg (`MechSwapAdapter.CHARGE_MAX`, the worst case) settles at or under the bound,
+because the queue sizes `sharesOut` from that bound. Both sides settle; holders lose nothing.
+
+```solidity
+function test_check11_aDepositAtEveryLegLimitStaysInsideTheBound() public fixtureCovered;
+```
+
+<a id="test_caps_adepositoveritscapfillstothecapandtherestwaits"></a>
+
+### test_caps_aDepositOverItsCapFillsToTheCapAndTheRestWaits
+
+A deposit over its period cap fills up to the cap (the floor, 250 000 USDC, on a small fund), the
+rest stays pending, and nothing reverts; the next period fills the rest.
+
+```solidity
+function test_caps_aDepositOverItsCapFillsToTheCapAndTheRestWaits() public fixtureCovered;
+```
+
+<a id="test_caps_aredemptionoveritscapfillstothecap"></a>
+
+### test_caps_aRedemptionOverItsCapFillsToTheCap
+
+A redemption over its period cap fills up to the cap at its value at the feeds; the rest waits.
+
+```solidity
+function test_caps_aRedemptionOverItsCapFillsToTheCap() public fixtureCovered;
+```
+
+<a id="test_caps_adepositoverthetvlcapfillstothetvlcap"></a>
+
+### test_caps_aDepositOverTheTvlCapFillsToTheTvlCap
+
+A deposit over the TVL cap fills only up to the cap (NAV at the feeds); the rest waits and nothing
+reverts.
+
+```solidity
+function test_caps_aDepositOverTheTvlCapFillsToTheTvlCap() public fixtureCovered;
+```
+
+<a id="test_rb17_abasketassetwithoutafeedisrefused"></a>
+
+### test_RB17_aBasketAssetWithoutAFeedIsRefused
+
+RB-17: `addAsset` of a basket asset without a feed, without a feed age, or with a stale feed reverts.
+
+```solidity
+function test_RB17_aBasketAssetWithoutAFeedIsRefused() public fixtureCovered;
+```
+
+<a id="test_rb17_abasketassetwithoutpoolhistoryisrefused"></a>
+
+### test_RB17_aBasketAssetWithoutPoolHistoryIsRefused
+
+RB-17: `addAsset` of a basket asset whose pool cannot answer one settlement window of history
+reverts `PoolHistoryTooShort` (the pool's `observe` over the queue's 1 h window is made to fail).
+
+```solidity
+function test_RB17_aBasketAssetWithoutPoolHistoryIsRefused() public fixtureCovered;
+```
+
+<a id="test_rb17_alendingvenuewithoutitsrateisrefused"></a>
+
+### test_RB17_aLendingVenueWithoutItsRateIsRefused
+
+RB-17: a lending asset whose adapter does not expose the venue's rate (the production Aave adapter,
+allowlisted) is refused.
+
+```solidity
+function test_RB17_aLendingVenueWithoutItsRateIsRefused() public fixtureCovered;
+```
+
+<a id="test_rb17_atargetoverthepoolsharelimitisrefused_andsameblockliquiditydoesnothelp"></a>
+
+### test_RB17_aTargetOverThePoolShareLimitIsRefused_andSameBlockLiquidityDoesNotHelp
+
+RB-17: a target over the pool-share limit is refused through governance; liquidity minted into the
+pool in the same block as the call does not raise the limit; at the limit the target is accepted.
+
+```solidity
+function test_RB17_aTargetOverThePoolShareLimitIsRefused_andSameBlockLiquidityDoesNotHelp()
+        public
+        fixtureCovered;
+```
+
+<a id="_poolsharevector"></a>
+
+### _poolShareVector
+
+<i>
+
+wETH at 10 %.
+
+</i>
+
+```solidity
+function _poolShareVector() private pure returns (uint16[5] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint16[5]` |  |
+
+<a id="_poolsharetargetcall"></a>
+
+### _poolShareTargetCall
+
+```solidity
+function _poolShareTargetCall() private view returns (bytes memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_mintliquiditynow-uint32"></a>
+
+### _mintLiquidityNow
+
+<i>
+
+Mint a large position around the wETH pool's tick now, in the call's own block: it holds no seconds of
+the window, so the time-weighted depth must not change. Returns the pool-share limit of this block.
+
+</i>
+
+```solidity
+function _mintLiquidityNow(uint32 w) private returns (uint256 limitUsdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| limitUsdc | `uint256` |  |
+
+<a id="_helddeposit"></a>
+
+### _heldDeposit
+
+<i>
+
+Alice's deposit settled and in its hold. Returns the settlement and the claim.
+
+</i>
+
+```solidity
+function _heldDeposit() internal returns (uint256 sid, uint256 claimId);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sid | `uint256` |  |
+| claimId | `uint256` |  |
+
+<a id="test_rb18_frozensharescannotbedelivered"></a>
+
+### test_RB18_frozenSharesCannotBeDelivered
+
+RB-18: frozen shares cannot be delivered after their unlock; only the emergency key freezes, only
+inside the hold, and not twice.
+
+```solidity
+function test_RB18_frozenSharesCannotBeDelivered() public fixtureCovered;
+```
+
+<a id="test_rb18_releasegoesonlytothedepositors"></a>
+
+### test_RB18_releaseGoesOnlyToTheDepositors
+
+RB-18: the admin's release lets the shares go, but only to their depositor.
+
+```solidity
+function test_RB18_releaseGoesOnlyToTheDepositors() public fixtureCovered;
+```
+
+<a id="test_rb18_returninkindonlybythedepositor"></a>
+
+### test_RB18_returnInKindOnlyByTheDepositor
+
+RB-18: after `allowReturn`, each depositor alone pulls its slice back in kind; the shares are
+burned, the assets go to the depositor, and the keeper, the emergency key and strangers cannot take it.
+
+```solidity
+function test_RB18_returnInKindOnlyByTheDepositor() public fixtureCovered;
+```
+
+<a id="test_rb18_afreezeendsbyitselfmaxfreezeafterthefreezecall"></a>
+
+### test_RB18_aFreezeEndsByItselfMaxFreezeAfterTheFreezeCall
+
+RB-18: a freeze ends by itself `maxFreeze` after the freeze call (not after the settlement), and a
+new freeze is impossible once the hold is over, so a depositor waits at most `minHold + maxFreeze`.
+
+```solidity
+function test_RB18_aFreezeEndsByItselfMaxFreezeAfterTheFreezeCall() public fixtureCovered;
+```
+
+<a id="test_rb20_twosettlerswithdifferentinputsfillthesamerequestsatthesameboundprices"></a>
+
+### test_RB20_twoSettlersWithDifferentInputsFillTheSameRequestsAtTheSameBoundPrices
+
+RB-20: two settlers with different inputs (the keeper with the queue's maximum and any USDC; a
+stranger after the grace with 10 requests and 1 000 000 USDC) fill the same requests, the same
+amounts, at the same bound prices, from the same state.
+
+```solidity
+function test_RB20_twoSettlersWithDifferentInputsFillTheSameRequestsAtTheSameBoundPrices()
+        public
+        fixtureCovered;
+```
+
+<a id="test_rb20_asmallcalliscontinuedbythenext"></a>
+
+### test_RB20_aSmallCallIsContinuedByTheNext
+
+RB-20: a call with small inputs is continued by the next: four requests settled one per call fill in
+the order they were made; a call limited by `maxUsdc` fills part, and the next pass fills the rest
+before anything newer.
+
+```solidity
+function test_RB20_aSmallCallIsContinuedByTheNext() public fixtureCovered;
+```
+
+<a id="test_rb20_afloodofskippedrequestsdoesnotholdbacktheonesbehind"></a>
+
+### test_RB20_aFloodOfSkippedRequestsDoesNotHoldBackTheOnesBehind
+
+RB-20 (A13 shape): a flood of 260 requests whose limits never admit the bound does not hold back
+the honest request behind it: the first call looks at 256 and skips them all, the next continues
+at the cursor and fills the honest one. Gas of both calls is logged.
+
+```solidity
+function test_RB20_aFloodOfSkippedRequestsDoesNotHoldBackTheOnesBehind() public fixtureCovered;
+```
+
+<a id="test_rb20_thegasacallersendscannotchooseaside"></a>
+
+### test_RB20_theGasACallerSendsCannotChooseASide
+
+RB-20: the gas a caller sends cannot choose which side settles. Over gas limits from 160 % down to
+42 % of a full settlement's measured use, a call either settles both sides or reverts whole (the queue's
+`SettleSideOutOfGas` guard, or an out-of-gas elsewhere); it never records a settlement with one side
+missing. Every outcome is counted and logged before the assertion.
+Was skipped for defects.md mechanism-tests 1 (a nested out-of-gas in the sale escaped the 1/64 guard);
+`verify` fixed `FlowSettleLib._sideFailed` and removed the skip. `verify` also added a fine sweep (0.4 %
+steps from 104 % down to 40.4 %) after the coarse one (2 % steps), so a narrow window where a deep
+frame's out-of-gas comes back as a reason string ("STF", "TF") is also probed.
+`hardening` (2026-11-12): every successful call must have recorded exactly one new settlement and
+returned its id (a success that recorded nothing is counted and fails the test), and at least one
+limit must settle both sides.
+`verify` (2026-11-12, step 3 finish plan §3.1 item 4): each side's call into the fund now gets a fixed gas
+budget (`FlowSettleLib.sideGas`), and `settle` reverts `SettleSideOutOfGas` before a side whose whole
+budget it cannot hand over, so a two-sided settle needs a gas LIMIT of about 2.5x what it uses. The coarse
+sweep now runs from 600 % of use down to 45 % (about 9.4 % steps), and the fine sweep (0.4 % steps, 160
+limits) starts 10 % above the lowest coarse limit that settled both sides, so it straddles the new
+boundary, including the window where the first side fits and the second does not. Assertions unchanged.
+
+```solidity
+function test_RB20_theGasACallerSendsCannotChooseASide() public fixtureCovered;
+```
+
+<a id="_bobpositionclaims"></a>
+
+### _bobPositionClaims
+
+<i>
+
+Bob exits his escrowed shares in kind with no in-kind allowance, so each lending leg becomes a claim on
+a share of the position (E9), keyed to bob.
+
+</i>
+
+```solidity
+function _bobPositionClaims() internal;
+```
+
+<a id="test_rb21_apositionclaimgainsandloseswiththevenueprorata"></a>
+
+### test_RB21_aPositionClaimGainsAndLosesWithTheVenueProRata
+
+RB-21: the claim gains with the venue's interest and loses with a venue loss, pro rata with the
+holders' part of the same position.
+
+```solidity
+function test_RB21_aPositionClaimGainsAndLosesWithTheVenueProRata() public fixtureCovered;
+```
+
+<a id="test_rb21_adepositorastepintothevenuekeepstheclaimsshare"></a>
+
+### test_RB21_aDepositOrAStepIntoTheVenueKeepsTheClaimsShare
+
+RB-21: a deposit through the queue (which supplies Aave) and a rebalance step into Aave leave the
+claim's units unchanged, and its value moves only with the venue's own rate.
+
+```solidity
+function test_RB21_aDepositOrAStepIntoTheVenueKeepsTheClaimsShare() public fixtureCovered;
+```
+
+<a id="_ledgervector"></a>
+
+### _ledgerVector
+
+<i>
+
+Moonwell at 5 % so its exclusion stays inside check 6's breaker.
+
+</i>
+
+```solidity
+function _ledgerVector() internal pure returns (uint16[5] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint16[5]` |  |
+
+<a id="test_rb22_queuedsharescountfortheirownerwhenarecordopens"></a>
+
+### test_RB22_queuedSharesCountForTheirOwnerWhenARecordOpens
+
+RB-22: when a record opens, every queued share counts for its owner: a redeemer whose escrowed
+shares are burned afterwards keeps its claim; a depositor whose shares were in their hold keeps it; a
+holder who transfers wallet shares while others are queued keeps the balance of the record; the fresh
+address that received them gets nothing; the queue itself has no entitlement.
+
+```solidity
+function test_RB22_queuedSharesCountForTheirOwnerWhenARecordOpens() public fixtureCovered;
+```
+
+<a id="test_rb22_anaddressfilledafterarecordopenedgetsnothing"></a>
+
+### test_RB22_anAddressFilledAfterARecordOpenedGetsNothing
+
+RB-22 (A19): an address whose deposit fills after the record opened gets nothing from it, while the
+holders of the record's moment can claim what the restore recovered.
+
+```solidity
+function test_RB22_anAddressFilledAfterARecordOpenedGetsNothing() public fixtureCovered;
+```
+
+<a id="test_e8_arequestfilledintwosettlementshastwoclaims"></a>
+
+### test_E8_aRequestFilledInTwoSettlementsHasTwoClaims
+
+E8: a request filled in two settlements has two claims with two unlock times; the first delivers
+while the second is still in its hold.
+
+```solidity
+function test_E8_aRequestFilledInTwoSettlementsHasTwoClaims() public fixtureCovered;
+```
+
+<a id="test_e11_requestsizes"></a>
+
+### test_E11_requestSizes
+
+E11: a request under `minRequestUsdc` reverts; a deposit over the per-deposit cap reverts; both
+edges are accepted; a redemption under the minimum (valued at the last good NAV) reverts unless it is
+the caller's whole balance.
+
+```solidity
+function test_E11_requestSizes() public fixtureCovered;
+```
+
+<a id="test_e18_anexpiredrequestcannotfillandonlyitsownerwithdrawsit"></a>
+
+### test_E18_anExpiredRequestCannotFillAndOnlyItsOwnerWithdrawsIt
+
+E18: an expired request cannot fill (a live request of a later epoch fills beside it), and only its
+owner withdraws its escrow, once.
+
+```solidity
+function test_E18_anExpiredRequestCannotFillAndOnlyItsOwnerWithdrawsIt() public fixtureCovered;
+```
+
+<a id="test_e19_navviewsrevertonanunhealthyfeed_lastgoodnav_checksettle"></a>
+
+### test_E19_navViewsRevertOnAnUnhealthyFeed_lastGoodNav_checkSettle
+
+E19: after a warp with no feed update, `totalAssets` and both convert views revert with the stale
+feed; `lastGoodNav` returns the NAV of the last flow and its time; `checkSettle` names the first failing
+check in §5.9.3 order as the inputs are repaired one by one, and judges the caller.
+
+```solidity
+function test_E19_navViewsRevertOnAnUnhealthyFeed_lastGoodNav_checkSettle()
+        public
+        fixtureCovered;
+```
+
+<a id="test_e20_abacklogofthreeepochssettlesunderoneperiodscap"></a>
+
+### test_E20_aBacklogOfThreeEpochsSettlesUnderOnePeriodsCap
+
+E20: requests from three epochs left unsettled settle under one period's cap, oldest first; a second
+call in that period fills nothing more; the next period continues.
+
+```solidity
+function test_E20_aBacklogOfThreeEpochsSettlesUnderOnePeriodsCap() public fixtureCovered;
+```
+
+<a id="test_e20_aseededfundtakesadeposituptothefloor"></a>
+
+### test_E20_aSeededFundTakesADepositUpToTheFloor
+
+E20: a seeded fund (NAV 100 000 USDC, 5 % = 5 000) takes a deposit up to the floor in one settlement.
+
+```solidity
+function test_E20_aSeededFundTakesADepositUpToTheFloor() public fixtureCovered;
+```
+
+<a id="test_e21_aquoteisneverbetterthanasettlementinthesameblock"></a>
+
+### test_E21_aQuoteIsNeverBetterThanASettlementInTheSameBlock
+
+E21: a quote is never better than what a settlement in the same block allows: the deposit quote's
+price is at or above the settlement's bound and the realized cost per share; the redemption quote's
+price is at or below the bound and the realized proceeds per share; the worst amounts hold.
+
+```solidity
+function test_E21_aQuoteIsNeverBetterThanASettlementInTheSameBlock() public fixtureCovered;
+```
+
+<a id="test_e2_thequeuesfourpreviewsrevert"></a>
+
+### test_E2_theQueuesFourPreviewsRevert
+
+E2 / proposal §5.9.6 (`hardening`, step 3 plan §3.3 item 6): the queue's four ERC-4626 previews revert
+`PreviewNotSupported` for every amount and every caller, before and after a settlement, so no
+integrator can read a synchronous price from the asynchronous queue. The quotes (E21) are the only
+price views.
+
+```solidity
+function test_E2_theQueuesFourPreviewsRevert() public fixtureCovered;
+```
+
+<a id="_assertpreviewreverts-address-bytes-string"></a>
+
+### _assertPreviewReverts
+
+<i>
+
+`data` (a preview call) by `caller` must revert with exactly `PreviewNotSupported()`.
+
+</i>
+
+```solidity
+function _assertPreviewReverts(address caller, bytes memory data, string memory which)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| data | `bytes` |  |
+| which | `string` |  |
+
+<a id="test_e22_anownerthatcannotreceiveusdcblocksnobodyelse"></a>
+
+### test_E22_anOwnerThatCannotReceiveUsdcBlocksNobodyElse
+
+E22: an owner that cannot receive USDC (blacklisted by USDC) blocks nobody else: requests owned by it
+settle beside the others, its refunds and proceeds wait as credit and claims it pulls, others withdraw
+theirs, and it can still take its USDC to a receiver it names.
+
+```solidity
+function test_E22_anOwnerThatCannotReceiveUsdcBlocksNobodyElse() public fixtureCovered;
+```
+
+<a id="test_e23_inkindexitsurvivesarevertingvenueread_andrefusesazeroreceiver"></a>
+
+### test_E23_inKindExitSurvivesARevertingVenueRead_andRefusesAZeroReceiver
+
+E23: an in-kind exit through the queue still works when one venue's value read reverts (that leg
+becomes a claim on bob's units; the others pay), and a zero receiver is refused.
+
+```solidity
+function test_E23_inKindExitSurvivesARevertingVenueRead_andRefusesAZeroReceiver()
+        public
+        fixtureCovered;
+```
+
+<a id="test_rounding_manyminimumsizerequestsneverfavourtheflow"></a>
+
+### test_rounding_manyMinimumSizeRequestsNeverFavourTheFlow
+
+Rounding: twenty minimum-size deposits in one epoch, then twenty whole-balance redemptions: every
+fill pays at least the batch's average price per share and receives at most it, the fills never sum
+above what the fund minted or paid, and no amount per share falls.
+
+```solidity
+function test_rounding_manyMinimumSizeRequestsNeverFavourTheFlow() public fixtureCovered;
+```
+
+<a id="_assertbatchrounding-uint256-uint256-bool"></a>
+
+### _assertBatchRounding
+
+<i>
+
+Every fill of settlement `sid` against the batch: a deposit pays at least `usdcIn / sharesMinted` per
+share, a redemption receives at most `usdcOut / sharesBurned`, and the fills sum to no more than the batch.
+
+</i>
+
+```solidity
+function _assertBatchRounding(uint256 sid, uint256 claims0, bool isDeposit) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sid | `uint256` |  |
+| claims0 | `uint256` |  |
+| isDeposit | `bool` |  |
+
+<a id="test_rounding_venueroundingoftwounitsneverfailstheproportioncheck"></a>
+
+### test_rounding_venueRoundingOfTwoUnitsNeverFailsTheProportionCheck
+
+Rounding: a lending venue that rounds two units against the fund on every supply and withdrawal
+(`MechAaveAdapter.ROUND_AGAINST`, on top of Aave's own rounding) never fails the proportion check:
+both sides settle and no amount per share falls.
+
+```solidity
+function test_rounding_venueRoundingOfTwoUnitsNeverFailsTheProportionCheck()
+        public
+        fixtureCovered;
+```
+
+<a id="_asserteveryreentryfailed-mechreentry-string"></a>
+
+### _assertEveryReentryFailed
+
+<i>
+
+Every recorded re-entry attempt failed: into the queue on its one lock (or its self-call guard), into
+the fund on its lock or its role check.
+
+</i>
+
+```solidity
+function _assertEveryReentryFailed(MechReentry probe, string memory label) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| probe | `MechReentry` |  |
+| label | `string` |  |
+
+<a id="test_reentrancy_ahostilecallbackduringmintinkindorthesalecannotreenter"></a>
+
+### test_reentrancy_aHostileCallbackDuringMintInKindOrTheSaleCannotReenter
+
+Reentrancy: a hostile venue callback during `mintInKind` (exact-output purchases) and during the
+sale (exact-input sales) tries every queue entry point and the fund's flow functions: each is refused,
+the settlement completes once, and the books match.
+
+```solidity
+function test_reentrancy_aHostileCallbackDuringMintInKindOrTheSaleCannotReenter()
+        public
+        fixtureCovered;
+```
+
+<a id="test_reentrancy_ahostilevenueduringaclaimcannotreenter"></a>
+
+### test_reentrancy_aHostileVenueDuringAClaimCannotReenter
+
+Reentrancy: a hostile lending venue called during an in-kind exit from the queue (the claim path
+that hands control to outside code: the fund withdraws the lending leg) cannot re-enter the queue or
+the fund; the owner is paid once. The other claim paths (`deposit`, `mint`, `redeem`,
+`withdrawCredit`, `withdrawExpired`) move only USDC and the fund's own shares, which call no outside code.
+
+```solidity
+function test_reentrancy_aHostileVenueDuringAClaimCannotReenter() public fixtureCovered;
+```
+
+<a id="test_setflowparams_refusesawindowandgracethatoutlastexpiry"></a>
+
+### test_setFlowParams_refusesAWindowAndGraceThatOutlastExpiry
+
+`setFlowParams` refuses a window plus grace that reaches the expiry of a request (`maxRoll ×
+epochLength`), which would let every request expire before anyone may settle it (field 7).
+
+```solidity
+function test_setFlowParams_refusesAWindowAndGraceThatOutlastExpiry() public fixtureCovered;
+```
+

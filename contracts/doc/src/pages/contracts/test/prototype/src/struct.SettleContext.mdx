@@ -1,0 +1,51 @@
+---
+title: "SettleContext"
+description: "Everything `settle` decides before trading (checks 1 to 7 of proposal §5.9.3)."
+---
+
+# SettleContext
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+
+Everything `settle` decides before trading (checks 1 to 7 of proposal §5.9.3).
+
+```solidity
+struct SettleContext {
+    uint256 supply;
+    uint256 idle;
+    uint256[] held;
+    AssetPrice[] prices;
+    uint256 navFeed;
+    uint256 sharePrice;
+    uint256 exitFeeBps;
+    uint256 depositBound;
+    uint256 redeemBound;
+    uint256 tvlCap;
+    bool depositsOpen;
+    uint64 firstEpoch;
+    uint64 lastEpoch;
+    uint256[] lendRates;
+    uint256 excludedMask;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| supply | `uint256` | Fund share supply (check 7 snapshot). |
+| idle | `uint256` | Idle USDC (`heldBalances`). |
+| held | `uint256[]` | Held amount per asset index (`heldBalances`). |
+| prices | `AssetPrice[]` | Per asset index. |
+| navFeed | `uint256` | NAV at the feeds, USDC, rounded DOWN. |
+| sharePrice | `uint256` | `navFeed × PRICE_SCALE / supply` (check 6). |
+| exitFeeBps | `uint256` | The fund's exit fee. |
+| depositBound | `uint256` | The most a depositor can pay per share (PRICE_SCALE, UP), batch rounding included. |
+| redeemBound | `uint256` | The least a redeemer receives per share after the fee (PRICE_SCALE, DOWN); 0 = the<br/>redemption side cannot be bounded and does not trade. |
+| tvlCap | `uint256` | The fund's TVL cap (deposits must leave `navFeed + usdc ≤ tvlCap`). |
+| depositsOpen | `bool` | False while the fund pauses deposits, is shut down or excludes a lending asset (check 1):<br/>deposit requests are then not processed and redemptions settle alone. |
+| firstEpoch | `uint64` | The oldest epoch that can still hold a live (unexpired) request. |
+| lastEpoch | `uint64` | The newest epoch this caller may settle: its settlement window has ended, and for a caller<br/>without KEEPER_ROLE also its `keeperGrace` (step 3 finish plan §3.1 item 1). |
+| lendRates | `uint256[]` | Appended by `fix-queue`: per asset index, the lending venue's rate per unit that check 5 read<br/>and accepted (0 for other assets). The settlement records one of these when its read after<br/>the trades fails, never a stale reference (item 5). |
+| excludedMask | `uint256` | Appended by `fix-queue`: bit `i` set when asset `i` has an open exclusion record now (check 1;<br/>check 6's reference, item 9). |
+

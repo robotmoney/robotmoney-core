@@ -1,0 +1,52 @@
+---
+title: "SkipReason"
+description: "Why `Rebalancer.step()` returned without trading (§5.3, last paragraph)."
+---
+
+# SkipReason
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/src/FundTypes.sol)
+
+Why `Rebalancer.step()` returned without trading (§5.3, last paragraph).
+
+```solidity
+enum SkipReason {
+    /// @dev Not a skip: used as the `reason` return value when a step executed.
+    None,
+    /// @dev The fund's current plan is not `Open` (None, Halted, Paused or terminal).
+    PlanNotOpen,
+    /// @dev `block.timestamp < fund.lastStepAt() + stepInterval` (§5.3 step 1, RB-5).
+    Cooldown,
+    /// @dev A leg candidate failed the ORA-4 spot-vs-TWAP check and no eligible pair remained
+    ///      (§5.3 step 2, RB-5). `detail` carries the asset index.
+    MarketDeviation,
+    /// @dev No asset is over its path target while another (or idle) is under it.
+    NothingToTrade,
+    /// @dev The best pair's notional is below `minStepUsdc` (§5.3 step 4).
+    BelowMinStep,
+    /// @dev `fund.executeStep` reverted (venue freeze, short fill under `minOut`, cost cap, RB-7
+    ///      guard). The Rebalancer catches the revert so the keeper sees why. `detail` carries the
+    ///      revert selector as a uint.
+    StepFailed,
+    /// @dev Not a skip: this `step()` moved the Open plan to a terminal status through
+    ///      `fund.concludePlan` (Converged after `endTime` within `toleranceBps`, or Expired after
+    ///      `endTime + maxOverrun`, §5.5). The fund's `PlanStatusChanged` is the only event.
+    ///      `previewStep` reports it while the plan is still Open, so a keeper knows a `step()` call
+    ///      is due. Appended last so the earlier ordinals are unchanged.
+    Concluded
+}
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| None |  |
+| PlanNotOpen |  |
+| Cooldown |  |
+| MarketDeviation |  |
+| NothingToTrade |  |
+| BelowMinStep |  |
+| StepFailed |  |
+| Concluded |  |
+

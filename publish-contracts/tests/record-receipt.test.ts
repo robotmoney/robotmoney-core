@@ -1,11 +1,11 @@
 // Issues 1727, 1750, 1888: the record-receipt verb. The SUBMITTER SAFE anchors one consensus receipt DIRECTLY on the receipt contract, on every chain and in every mode
 // (production 8453, rehearsal 8453, Twin). The served payload bytes are mandatory: the digest and the id are recomputed from them. Every refusal happens before any signer is
 // constructed and before anything is sent: each case asserts the signer-constructor counters and the send counter are ZERO. No key reaches the evidence.
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { decodeFunctionData, getAddress, keccak256, toFunctionSelector, type Address, type Hex } from "viem";
-import { RECEIPT_RECORD_ABI, RECEIPT_SUBMITTER_ROLE, assertRecordInputs, recordReceipt, type RecordApi, type RecordRequest, type RecordSigners, type SafeSendRequest } from "../src/record-receipt.ts";
+import { RECEIPT_RECORD_ABI, RECEIPT_SUBMITTER_ROLE, assertRecordInputs, fundReceiptRef, loadRecordAddrs, recordReceipt, type RecordApi, type RecordRequest, type RecordSigners, type SafeSendRequest } from "../src/record-receipt.ts";
 import { RECEIPT_DOMAIN, deriveReceiptId, receiptPayloadDigest, supportedReceiptPayload } from "../src/receipt-digest.ts";
 import { loadRunManifest, newManifest, saveRunManifest, type RunContext } from "../src/runner.ts";
 import { parseCli } from "../src/cli.ts";
@@ -14,6 +14,12 @@ import { A, addr, setup, writeGovernManifests } from "./govern-world.ts";
 import { DEPLOYER, OWNERS, STANDIN, SUBSAFE, canonical, chainFor, signer, type SafeFacts } from "./submitter-world.ts";
 import { REPO_ROOT } from "./repo-root.ts";
 import { world } from "./harness.ts";
+import { tmp } from "./fixtures.ts";
+import { parseSheet } from "../src/sheet.ts";
+import { publishLogger } from "../src/log.ts";
+import { peekStageState, restoreStageState, useStageTable } from "../src/stages.ts";
+import { loadStageTable } from "../src/stage-table.ts";
+import { stageManifestName } from "../src/verify/constants.ts";
 
 const FIXTURES = join(REPO_ROOT, "tests", "fixtures");
 const bytes = (p: string): Uint8Array => new Uint8Array(readFileSync(p));
@@ -352,5 +358,148 @@ describe("record-receipt at the CLI seam: production 8453, rehearsal 8453 and Tw
     expect(() => parseCli([...common, "--submitter", SUBSAFE])).toThrow(/needs --payload FILE/);
     expect(parseCli([...common, "--submitter", SUBSAFE, "--payload", "p.json"])).toMatchObject({ verb: "record-receipt", submitter: SUBSAFE });
     expect(() => parseCli([...common, "--submitter", SUBSAFE, "--payload", "p.json", "--agent-label", "x"])).toThrow();
+  });
+});
+
+// Deploy 4: `record-receipt --system fund`. The submitter Safe records on the FUND system's own register (fund-receipt.json consensus_receipt), never the vaults system's,
+// with the fund's own timelock (fund-timelock.json) among the forbidden submitters. The payload is a schema 1.1 receipt (the per-asset `assets` list); every other check is the
+// vaults path's, and every refusal still fires before any signer is constructed.
+describe("record-receipt --system fund: the fund register, the same checks", () => {
+  const FUND_TABLE = loadStageTable(REPO_ROOT);
+  const FUND_SHEET = readFileSync(join(REPO_ROOT, "deployments", "base-8453-rehearsal", "deploy-4.env"), "utf8").replace(/^KEEPER_ADDRESS=$/m, "KEEPER_ADDRESS=0x1111111111111111111111111111111111111111");
+  const F = { receipt: addr(0xf006), timelock: addr(0xf001), safe: addr(0xf002) };
+  /** The schema 1.1 fixture the prototype checker accepts, as the canonical route would serve it (compact JSON, one newline). */
+  const FUND_DOC = JSON.parse(readFileSync(join(REPO_ROOT, "contracts", "test", "prototype", "fixtures", "receipt", "consensus-receipt-1.1.valid.json"), "utf8")) as Record<string, unknown>;
+  const FUND_SERVED = text(`${JSON.stringify(FUND_DOC)}\n`);
+  const FUND_DIGEST = receiptPayloadDigest(FUND_SERVED);
+  const FUND_RID = deriveReceiptId(String(FUND_DOC.session_id), String(FUND_DOC.subject_id));
+  let saved: ReturnType<typeof peekStageState>;
+  beforeEach(() => { saved = peekStageState(); useStageTable(FUND_TABLE, "fund"); });
+  afterEach(() => restoreStageState(saved));
+
+  function mkFund(opts: { vaultsManifests?: boolean } = {}) {
+    const coreDir = tmp("pc-record-fund-");
+    const dir = join(coreDir, "deployments", "8453");
+    mkdirSync(dir, { recursive: true });
+    const w = (f: string, o: object) => writeFileSync(join(dir, `${f}.json`), JSON.stringify(o));
+    w("safe", { safe: F.safe }); w("fund-timelock", { timelock: F.timelock }); w("fund-receipt", { consensus_receipt: F.receipt });
+    // the vaults system's manifests in the same directory: the fund run must never read them
+    if (opts.vaultsManifests !== false) { w("timelock", { timelock: A.timelock }); w(stageManifestName(FUND_TABLE, "receipt"), { consensus_receipt: A.receipt }); }
+    const sheet = parseSheet(FUND_SHEET, { system: "fund", now: () => Date.UTC(2026, 10, 12) });
+    const ctx = { coreDir, chainId: 8453, sheet, coreSha: "a".repeat(40), rpc: "http://x", evidenceDir: join(coreDir, "evidence"), log: publishLogger(() => {}), caller: { yes: false, confirm: "typed" }, prompt: async () => "record-receipt", resume: true } as unknown as RunContext;
+    saveRunManifest(ctx.evidenceDir, newManifest(ctx, addr(0xa001)));
+    const st = { role: true, recorded: null as null | { receiptId: Hex; payloadDigest: Hex; payloadUri: string; submitter: Address }, reqs: [] as SafeSendRequest[], facts: { ...canonical(), code: STANDIN } as SafeFacts, senderBuilt: 0, ownersBuilt: 0, readAt: [] as string[] };
+    const api: RecordApi = {
+      async read(address, _abi, fn, args = []) {
+        st.readAt.push(`${fn}@${address}`);
+        if (fn === "hasRole") { expect(args[0]).toBe(RECEIPT_SUBMITTER_ROLE); return (st.role && address === F.receipt) as never; }
+        if (fn === "isRecorded") return (st.recorded !== null) as never;
+        if (fn === "getReceiptById") return st.recorded as never;
+        throw new Error(`fake ${fn}`);
+      },
+      chain: { proxyCodehashPin: keccak256(STANDIN), getCode: (a) => chainFor(st.facts).getCode(a), getStorageAt: (a, s) => chainFor(st.facts).getStorageAt(a, s), read: (a, abi, fn, args) => chainFor(st.facts).read(a, abi, fn, args) },
+      async sendViaSafe(req) {
+        st.reqs.push(req);
+        const [receiptId, payloadDigest, payloadUri] = decodeFunctionData({ abi: RECEIPT_RECORD_ABI, data: req.data }).args as [Hex, Hex, string];
+        st.recorded = { receiptId, payloadDigest, payloadUri, submitter: req.safe };
+        return { txHash: `0x${"22".repeat(32)}` as Hex, status: "success", blockNumber: 6n, safe: req.safe, safeTxHash: `0x${"33".repeat(32)}` as Hex, nonce: 4, signers: await Promise.all(req.ownerSigners.map((s) => s.address())), sentBy: await req.sender.address(), executionSuccess: true, receiptRecorded: true };
+      },
+    };
+    const signers: RecordSigners = { sender: async () => { st.senderBuilt++; return signer(DEPLOYER); }, owners: async () => { st.ownersBuilt++; return OWNERS.map((o) => signer(o)); } };
+    const req = (r: Partial<RecordRequest> = {}): RecordRequest => ({ receiptId: FUND_RID, payloadDigest: FUND_DIGEST, payloadUri: URI, payload: FUND_SERVED, submitter: SUBSAFE, ...r });
+    const counters = () => ({ senderBuilt: st.senderBuilt, ownersBuilt: st.ownersBuilt, sends: st.reqs.length });
+    return { ctx, st, api, signers, req, counters };
+  }
+
+  test("the addresses come from the fund system's manifests: safe.json, fund-timelock.json and fund-receipt.json", () => {
+    const { ctx } = mkFund();
+    expect(loadRecordAddrs(ctx)).toEqual({ safe: F.safe, timelock: F.timelock, receipt: F.receipt });
+    expect(fundReceiptRef()).toBe("fund-receipt:consensus_receipt");
+    // the vaults system's receipt and timelock are not needed: a fund run with only its own manifests reads the same addresses
+    expect(loadRecordAddrs(mkFund({ vaultsManifests: false }).ctx)).toEqual({ safe: F.safe, timelock: F.timelock, receipt: F.receipt });
+  });
+
+  test("the Safe records the schema 1.1 receipt on the FUND register: every read and the one send target fund-receipt.json, never the vaults register", async () => {
+    const { ctx, st, api, signers, req } = mkFund();
+    const out = await recordReceipt(ctx, signers, req(), api);
+    expect(st.reqs).toHaveLength(1);
+    expect(st.reqs[0]!.to).toBe(F.receipt);
+    expect(st.reqs[0]!.to).not.toBe(A.receipt);
+    expect(st.reqs[0]!.safe).toBe(getAddress(SUBSAFE));
+    expect(st.reqs[0]!.ownerSigners).toHaveLength(2);
+    expect(decodeFunctionData({ abi: RECEIPT_RECORD_ABI, data: st.reqs[0]!.data }).args).toEqual([FUND_RID, FUND_DIGEST, URI]);
+    expect(st.readAt.every((r) => r.endsWith(`@${F.receipt}`))).toBe(true);
+    expect(st.readAt.some((r) => r.includes(A.receipt))).toBe(false);
+    expect(out).toMatchObject({ receipt_id: FUND_RID, payload_digest: FUND_DIGEST, submitter: getAddress(SUBSAFE), status: 1 });
+    expect(loadRunManifest(ctx.evidenceDir)!.recorded_receipts).toEqual([out]);
+  });
+
+  test("the digest and id are the one shared definition: domain line + canonical bytes, never a plain keccak256", () => {
+    expect(FUND_DIGEST).toBe(keccak256(new Uint8Array([...text(RECEIPT_DOMAIN), ...FUND_SERVED])));
+    expect(FUND_DIGEST).not.toBe(keccak256(FUND_SERVED));
+    expect(assertRecordInputs({ receiptId: FUND_RID, payloadDigest: FUND_DIGEST, payloadUri: URI, payload: FUND_SERVED }, "fund")).toEqual({ receiptId: FUND_RID, payloadDigest: FUND_DIGEST, payloadUri: URI });
+  });
+
+  test("the schema versions do not cross: the vaults path refuses a 1.1 payload and the fund path refuses a 1.0 one; the gateway system records nothing", () => {
+    expect(() => assertRecordInputs({ receiptId: FUND_RID, payloadDigest: FUND_DIGEST, payloadUri: URI, payload: FUND_SERVED })).toThrow(/schema_version is "1.1": only "1.0"/);
+    expect(() => assertRecordInputs({ receiptId: RID, payloadDigest: DIGEST, payloadUri: URI, payload: SERVED }, "fund")).toThrow(/schema_version is "1.0": only "1.1"/);
+    expect(() => assertRecordInputs({ receiptId: RID, payloadDigest: DIGEST, payloadUri: URI, payload: SERVED }, "gateway")).toThrow(/records no consensus receipt/);
+  });
+
+  const plain = keccak256(FUND_SERVED);
+  const json = (mutate: (o: Record<string, unknown>) => void): Uint8Array => { const o = JSON.parse(JSON.stringify(FUND_DOC)); mutate(o); return text(`${JSON.stringify(o)}\n`); };
+  const cases: { name: string; kind: "USAGE" | "GOVERN"; want: string; world?: (st: ReturnType<typeof mkFund>["st"]) => void; req?: () => Partial<RecordRequest> }[] = [
+    { name: "missing Safe", kind: "USAGE", want: "needs --submitter", req: () => ({ submitter: undefined }) },
+    { name: "a zero-address Safe", kind: "USAGE", want: "needs --submitter", req: () => ({ submitter: "0x0000000000000000000000000000000000000000" }) },
+    { name: "an EOA (no code)", kind: "USAGE", want: "single key", world: (st) => { st.facts.code = undefined; } },
+    { name: "missing payload", kind: "USAGE", want: "payload bytes are required", req: () => ({ payload: undefined }) },
+    { name: "empty payload", kind: "USAGE", want: "payload bytes are required", req: () => ({ payload: new Uint8Array(0) }) },
+    { name: "a 1.0 payload (the vaults schema)", kind: "USAGE", want: "schema_version", req: () => ({ payload: SERVED, receiptId: RID, payloadDigest: DIGEST }) },
+    { name: "unsupported schema_version", kind: "USAGE", want: "schema_version", req: () => ({ payload: json((o) => { o.schema_version = "2.0"; }) }) },
+    { name: "malformed payload (not JSON)", kind: "USAGE", want: "not valid JSON", req: () => ({ payload: text("{not json}\n") }) },
+    { name: "malformed payload (not UTF-8)", kind: "USAGE", want: "not valid UTF-8", req: () => ({ payload: new Uint8Array([0xff, 0xfe, 0x7b]) }) },
+    { name: "malformed payload (no trailing newline)", kind: "USAGE", want: "canonical form", req: () => ({ payload: FUND_SERVED.subarray(0, FUND_SERVED.length - 1) }) },
+    { name: "payload without session_id", kind: "USAGE", want: "no session_id and subject_id", req: () => ({ payload: json((o) => { delete o.session_id; }) }) },
+    { name: "wrong receipt id", kind: "USAGE", want: "is not the receipt id", req: () => ({ receiptId: `0x${"ab".repeat(32)}` }) },
+    { name: "wrong digest (a made-up one)", kind: "USAGE", want: "is not the receipt digest", req: () => ({ payloadDigest: `0x${"cd".repeat(32)}` }) },
+    { name: "wrong digest (plain keccak256 of the served bytes)", kind: "USAGE", want: plain, req: () => ({ payloadDigest: plain }) },
+    { name: "bad Safe configuration (threshold 1)", kind: "USAGE", want: "threshold is 1", world: (st) => { st.facts.threshold = 1n; } },
+    { name: "bad Safe configuration (a module)", kind: "USAGE", want: "modules are enabled", world: (st) => { st.facts.modules = [addr(0x30d)]; } },
+    { name: "bad Safe configuration (not the canonical proxy)", kind: "USAGE", want: "code hash", world: (st) => { st.facts.code = "0x6080" as Hex; } },
+    { name: "the FUND timelock as the submitter", kind: "USAGE", want: "the timelock", req: () => ({ submitter: F.timelock }) },
+    { name: "absent live RECEIPT_SUBMITTER_ROLE on the fund register", kind: "GOVERN", want: `on the receipt ${F.receipt}`, world: (st) => { st.role = false; } },
+  ];
+  let refused = 0;
+  for (const c of cases) {
+    test(`refused before any signer: ${c.name}`, async () => {
+      const { ctx, st, api, signers, req, counters } = mkFund();
+      c.world?.(st);
+      await expect(recordReceipt(ctx, signers, req(c.req?.()), api)).rejects.toMatchObject({ kind: c.kind, message: expect.stringContaining(c.want) });
+      expect(counters()).toEqual({ senderBuilt: 0, ownersBuilt: 0, sends: 0 });
+      expect(loadRunManifest(ctx.evidenceDir)!.recorded_receipts).toBeUndefined();
+      refused++;
+    });
+  }
+  test("every fund refusal ran, and the role read named the fund register", () => {
+    expect(refused).toBe(cases.length);
+  });
+  test("a missing fund-receipt.json is refused before any signer: the fund run never falls back to the vaults register", async () => {
+    const { ctx, api, signers, req, counters } = mkFund();
+    require("node:fs").rmSync(join(ctx.coreDir, "deployments", "8453", "fund-receipt.json"));
+    await expect(recordReceipt(ctx, signers, req(), api)).rejects.toMatchObject({ kind: "INPUT_MISSING", message: expect.stringContaining("fund-receipt.json") });
+    expect(counters()).toEqual({ senderBuilt: 0, ownersBuilt: 0, sends: 0 });
+  });
+  test("an exact rerun on the fund register sends nothing and builds no signer", async () => {
+    const { ctx, st, api, signers, req } = mkFund();
+    const first = await recordReceipt(ctx, signers, req(), api);
+    const again = await recordReceipt(ctx, signers, req(), api);
+    expect(st.reqs).toHaveLength(1);
+    expect(again).toEqual(first);
+  });
+  test("the vaults path is unchanged once the fund run hands the stage state back: it reads the vaults receipt stage", () => {
+    restoreStageState(saved);
+    const v = setup();
+    expect(loadRecordAddrs(v.ctx)).toEqual({ safe: A.safe, timelock: A.timelock, receipt: A.receipt });
+    useStageTable(FUND_TABLE, "fund");
   });
 });

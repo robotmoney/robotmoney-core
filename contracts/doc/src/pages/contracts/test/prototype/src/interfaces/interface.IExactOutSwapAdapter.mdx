@@ -1,0 +1,57 @@
+---
+title: "IExactOutSwapAdapter"
+description: "The swap adapter test copies of step 3d (`src/adapters/`, owned by the `queue` agent): the production exact-input swap and TWAP, plus an exact-output swap whose `maxAmountIn` is the per-swap price limit of the pro-rata purchase (proposal §5.9.3 check 9). The production adapters do not change (eng plan §3.3)."
+---
+
+# IExactOutSwapAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/interfaces/IFlowAdapters.sol)
+
+**Inherits:** [IBasketSwapAdapter](/contracts/interfaces/interface.IBasketSwapAdapter)
+
+**Title:** IExactOutSwapAdapter
+
+The swap adapter test copies of step 3d (`src/adapters/`, owned by the `queue` agent): the production
+exact-input swap and TWAP, plus an exact-output swap whose `maxAmountIn` is the per-swap price limit of
+the pro-rata purchase (proposal §5.9.3 check 9). The production adapters do not change (eng plan §3.3).
+
+## Functions
+
+<a id="swapexactout-address-address-uint24-uint256-uint256-address-uint256"></a>
+
+### swapExactOut
+
+Buy exactly `amountOut` of `tokenOut` for at most `maxAmountIn` of `tokenIn`, paid to `recipient`.
+Pulls `maxAmountIn` from the caller, sends the unused input back to the caller, and resets its
+allowance to the venue to 0. Reverts if the venue needs more than `maxAmountIn` or the deadline passed.
+
+```solidity
+function swapExactOut(
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        uint256 amountOut,
+        uint256 maxAmountIn,
+        address recipient,
+        uint256 deadline
+    ) external returns (uint256 amountIn);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| fee | `uint24` | Venue parameter, as `swap` (V3: fee pips; Aerodrome: tick spacing). |
+| amountOut | `uint256` |  |
+| maxAmountIn | `uint256` |  |
+| recipient | `address` |  |
+| deadline | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountIn | `uint256` | The input actually spent (≤ `maxAmountIn`). |
+

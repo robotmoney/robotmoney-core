@@ -1,0 +1,389 @@
+---
+title: "MechAaveAdapter"
+description: "A lending venue for `FlowQueue.t.sol` that `vm.etch` places over the harness's Aave V3 rate adapter (whose code keeps no storage). It sits at the same address, so the fund's real aUSDC position on the real Aave pool stays its own. The test allowlists this code hash through the timelock first, so the asset stays counted (ADP-2). Modes: - `HONEST`: supply and withdraw as the production `AaveV3Adapter`, with the venue rate of the copy. - `ROUND_AGAINST`: the venue rounds against the fund by `param` units on both sides, in its own books: a supply of `a` raises the position it reports (`totalAssets`) by exactly `a - param` (whatever Aave's own rounding of up to one unit did, the mock's `haircut` makes the total exactly `param`), and a withdrawal of `a` pays `a - param`. Proposal §5.9.3 check 10 says one or two units must never fail the proportion check. (Aave refuses a top-up supply that scales to zero, so the shortfall is booked in the reported position rather than by supplying less.) - `SHORT_PAY`: a withdrawal of `a` takes `a` out of the position but pays the fund `a × (1 − param / 10 000)` and keeps the rest: a venue that pays short without reverting. Any mode also runs the re-entry probe (`MechReentry`) while armed. USDC a mode keeps stays here."
+---
+
+# MechAaveAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/mocks/MechAaveAdapter.sol)
+
+**Inherits:** [MechReentry](/contracts/test/prototype/mocks/abstract.MechReentry), [ILendingRateAdapter](/contracts/test/prototype/src/interfaces/interface.ILendingRateAdapter)
+
+**Title:** MechAaveAdapter
+
+A lending venue for `FlowQueue.t.sol` that `vm.etch` places over the harness's Aave V3 rate adapter (whose
+code keeps no storage). It sits at the same address, so the fund's real aUSDC position on the real Aave
+pool stays its own. The test allowlists this code hash through the timelock first, so the asset stays
+counted (ADP-2). Modes:
+- `HONEST`: supply and withdraw as the production `AaveV3Adapter`, with the venue rate of the copy.
+- `ROUND_AGAINST`: the venue rounds against the fund by `param` units on both sides, in its own books:
+a supply of `a` raises the position it reports (`totalAssets`) by exactly `a - param` (whatever Aave's
+own rounding of up to one unit did, the mock's `haircut` makes the total exactly `param`), and a
+withdrawal of `a` pays `a - param`. Proposal §5.9.3 check 10 says one or two units must never fail the
+proportion check. (Aave refuses a top-up supply that scales to zero, so the shortfall is booked in the
+reported position rather than by supplying less.)
+- `SHORT_PAY`: a withdrawal of `a` takes `a` out of the position but pays the fund `a × (1 − param / 10 000)`
+and keeps the rest: a venue that pays short without reverting.
+Any mode also runs the re-entry probe (`MechReentry`) while armed. USDC a mode keeps stays here.
+
+## Constants
+
+### HONEST
+
+```solidity
+uint8 public constant HONEST = 0;
+```
+
+### ROUND_AGAINST
+
+```solidity
+uint8 public constant ROUND_AGAINST = 1;
+```
+
+### SHORT_PAY
+
+```solidity
+uint8 public constant SHORT_PAY = 2;
+```
+
+### RAY_TO_WAD
+
+```solidity
+uint256 private constant RAY_TO_WAD = 1e9;
+```
+
+### USDC
+
+```solidity
+address public immutable USDC;
+```
+
+### A_TOKEN
+
+```solidity
+IERC20 public immutable A_TOKEN;
+```
+
+### POOL
+
+```solidity
+address public immutable POOL;
+```
+
+### VAULT
+
+```solidity
+address public immutable VAULT;
+```
+
+## State Variables
+
+### mode
+
+```solidity
+uint8 public mode;
+```
+
+### param
+
+```solidity
+uint256 public param;
+```
+
+### haircut
+
+Units of the real aUSDC balance this venue does not report as the fund's (`ROUND_AGAINST`).
+
+```solidity
+uint256 public haircut;
+```
+
+### lastSupplyAsked
+
+The last supply: what the fund asked to place and what the position grew by.
+
+```solidity
+uint256 public lastSupplyAsked;
+```
+
+### lastSupplyCredited
+
+```solidity
+uint256 public lastSupplyCredited;
+```
+
+## Functions
+
+<a id="onlyvault"></a>
+
+### onlyVault
+
+```solidity
+modifier onlyVault();
+```
+
+<a id="constructor-address-address-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address pool_, address usdc_, address aToken_, address vault_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool_ | `address` |  |
+| usdc_ | `address` |  |
+| aToken_ | `address` |  |
+| vault_ | `address` |  |
+
+<a id="setmode-uint8-uint256"></a>
+
+### setMode
+
+Test knob (no access control: a test mock).
+
+```solidity
+function setMode(uint8 mode_, uint256 param_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| mode_ | `uint8` |  |
+| param_ | `uint256` |  |
+
+<a id="deploy-uint256"></a>
+
+### deploy
+
+Receive `amount` USDC from the vault and deploy it into the underlying protocol.
+
+<i>
+
+The in-tree lending adapters (Aave, Morpho, Compound) hand `amount` straight back to
+the vault, without reverting, when their venue refuses the supply (security round 2):
+a reserve at its supply cap, a frozen reserve, MetaMorpho `AllCapsReached`, a Comet
+supply-only pause. A venue that refuses withdrawals too (Aave reserve paused or
+inactive, Comet withdraw pause) reverts `VenueWithdrawalsClosed` instead (security
+round 3, `IVenueHealthAdapter`). The vault measures what the adapter kept by its own
+USDC balance, never by a return value, and leaves the rest idle
+(`RobotMoneyVaultOps._allocate`).
+
+</i>
+
+```solidity
+function deploy(uint256 amount) external onlyVault;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` | Amount of USDC (6-decimal units) to deploy into the protocol. |
+
+<a id="deploy-uint256-uint256"></a>
+
+### deploy
+
+```solidity
+function deploy(uint256 usdcIn, uint256) external onlyVault returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdcIn | `uint256` |  |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="withdraw-uint256"></a>
+
+### withdraw
+
+Withdraw `amount` USDC from the underlying protocol and return it to the vault.
+
+```solidity
+function withdraw(uint256 amount) external onlyVault returns (uint256 paid);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` | Amount of USDC to withdraw; pass `type(uint256).max` to withdraw all. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| paid | `uint256` | The amount of USDC actually withdrawn (may be ≤ amount on shortfall). |
+
+<a id="withdraw-uint256-uint256"></a>
+
+### withdraw
+
+```solidity
+function withdraw(uint256 usdcWanted, uint256) external onlyVault returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdcWanted | `uint256` |  |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="totalassets"></a>
+
+### totalAssets
+
+Live USDC value held by this adapter (principal + accrued interest).
+
+```solidity
+function totalAssets() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_reported"></a>
+
+### _reported
+
+<i>
+
+The position this venue reports to the fund: its aUSDC less the haircut.
+
+</i>
+
+```solidity
+function _reported() private view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="rateperunit"></a>
+
+### ratePerUnit
+
+```solidity
+function ratePerUnit() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="venuewithdrawable"></a>
+
+### venueWithdrawable
+
+```solidity
+function venueWithdrawable() external pure returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="isexact"></a>
+
+### isExact
+
+```solidity
+function isExact() external pure returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="sweepforeigntoken-address"></a>
+
+### sweepForeignToken
+
+```solidity
+function sweepForeignToken(address) external pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+<a id="harvestrewards"></a>
+
+### harvestRewards
+
+Claim any underlying-protocol reward tokens and forward them as
+USDC to the owning vault (custody invariant INV-2 — no emissions
+stranded on the adapter or router). Permissionless: anyone may
+trigger the harvest; the destination is always the vault, never a
+caller-supplied address (INV-1).
+
+<i>
+
+Adapters that have no on-chain claimable rewards (e.g. Aave
+interest accrues automatically in the aToken balance) implement
+this as a no-op. Adapters with discrete reward tokens claim them
+here, swap to USDC, and credit the vault. This function MUST NOT
+revert when there are no rewards to claim.
+
+</i>
+
+```solidity
+function harvestRewards() external;
+```
+
+<a id="_supply-uint256"></a>
+
+### _supply
+
+```solidity
+function _supply(uint256 amount) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+## Errors
+
+### OnlyVault
+
+```solidity
+error OnlyVault();
+```
+

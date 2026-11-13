@@ -1,0 +1,450 @@
+---
+title: "FlowQueueFixesTest"
+description: "One section per item of the step 3 finish plan §3.1. Each test fails on the scaffold's queue and passes on the fixed one, except the tests named \"control\", which pin behaviour the fix must keep."
+---
+
+# FlowQueueFixesTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowQueueFixes.t.sol)
+
+**Inherits:** [FlowQueueFixesBase](/contracts/test/prototype/abstract.FlowQueueFixesBase)
+
+**Title:** FlowQueueFixesTest
+
+One section per item of the step 3 finish plan §3.1. Each test fails on the scaffold's queue and passes on
+the fixed one, except the tests named "control", which pin behaviour the fix must keep.
+
+## Functions
+
+<a id="test_fix1_anonkeepersettlesonlyepochspasttheirowngrace"></a>
+
+### test_fix1_aNonKeeperSettlesOnlyEpochsPastTheirOwnGrace
+
+A never-fillable 100 USDC request opens an epoch; a fillable one opens the next. At the second's
+window end the first is past its keeper grace and the second is not. A stranger's call may walk the
+first epoch only: it fills nothing. The keeper fills the second at once, and a stranger may fill a
+request of that epoch once its own grace has passed.
+
+```solidity
+function test_fix1_aNonKeeperSettlesOnlyEpochsPastTheirOwnGrace() public fixtureCovered;
+```
+
+<a id="test_fix2_acallwithnoroompassesnothing"></a>
+
+### test_fix2_aCallWithNoRoomPassesNothing
+
+D-AT-3: a call with no room (`maxUsdc` 0) fills nothing and must move no cursor, so the next call,
+whoever makes it, starts at the oldest request.
+
+```solidity
+function test_fix2_aCallWithNoRoomPassesNothing() public fixtureCovered;
+```
+
+<a id="test_fix2_spentcapspassnothing_thenextperiodstartsattheoldestwaiting"></a>
+
+### test_fix2_spentCapsPassNothing_theNextPeriodStartsAtTheOldestWaiting
+
+A period's spent cap is no room either: the call that spent it must not pass the requests behind,
+so the next period's first call starts at the oldest one still waiting.
+
+```solidity
+function test_fix2_spentCapsPassNothing_theNextPeriodStartsAtTheOldestWaiting()
+        public
+        fixtureCovered;
+```
+
+<a id="test_fix2_astrangercannotmovethekeeperspass"></a>
+
+### test_fix2_aStrangerCannotMoveTheKeepersPass
+
+A stranger's call passes a request its own limit refuses (correct at that bound). The bound then
+falls (the basket feeds move 30 bps down, inside `refBandBps`), so the request is admissible. The
+keeper's pass starts at the oldest epoch and is moved only by the keeper's calls, so it fills that
+request; the scaffold's shared cursor made the keeper continue past it.
+
+```solidity
+function test_fix2_aStrangerCannotMoveTheKeepersPass() public fixtureCovered;
+```
+
+<a id="test_fix2_afloodofonesidedoesnotholdbacktheother"></a>
+
+### test_fix2_aFloodOfOneSideDoesNotHoldBackTheOther
+
+A flood of deposit requests that cannot fill (deposits paused) must not hold back a redemption behind
+it: each side walks its own requests. On the scaffold the flood took the first call's whole budget.
+
+```solidity
+function test_fix2_aFloodOfOneSideDoesNotHoldBackTheOther() public fixtureCovered;
+```
+
+<a id="_withepochlength-uint32"></a>
+
+### _withEpochLength
+
+```solidity
+function _withEpochLength(uint32 len) internal view returns (FlowParams memory p);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| len | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `FlowParams` |  |
+
+<a id="test_fix3_longerepochswithapendingrequest"></a>
+
+### test_fix3_longerEpochsWithAPendingRequest
+
+Longer epochs, with a request pending: it settles at the end of its own window (its epoch keeps the
+length it was opened with), and a request made after the change settles on the new schedule.
+
+```solidity
+function test_fix3_longerEpochsWithAPendingRequest() public fixtureCovered;
+```
+
+<a id="test_fix3_longerepochsafterasettlement"></a>
+
+### test_fix3_longerEpochsAfterASettlement
+
+Longer epochs after a settlement, nothing pending: the scaffold's stored oldest epoch then lay above
+every new epoch index and every settle reverted `Window`.
+
+```solidity
+function test_fix3_longerEpochsAfterASettlement() public fixtureCovered;
+```
+
+<a id="test_fix3_shorterepochswithapendingrequest"></a>
+
+### test_fix3_shorterEpochsWithAPendingRequest
+
+Shorter epochs, with a request pending: on the scaffold its epoch index fell below the walkable range
+at once (it looked expired, and no settle could reach it). Now it settles at its own window's end.
+
+```solidity
+function test_fix3_shorterEpochsWithAPendingRequest() public fixtureCovered;
+```
+
+<a id="test_fix3_shorterepochsnothingpending_control"></a>
+
+### test_fix3_shorterEpochsNothingPending_control
+
+Control: shorter epochs with nothing pending: requests made once the new length applies (from the end
+of the epoch in progress at the change) settle on the new schedule. (This worked on the scaffold too,
+where the new length applied at once.)
+
+```solidity
+function test_fix3_shorterEpochsNothingPending_control() public fixtureCovered;
+```
+
+<a id="test_fix3_alargermaxrolldoesnotorphanarevivedrequest"></a>
+
+### test_fix3_aLargerMaxRollDoesNotOrphanARevivedRequest
+
+A larger `maxRoll` makes an expired request live again. The scaffold's stored oldest epoch lay above
+it, so it read Pending and no settle could reach it (an orphan). Now any parameter change resets the
+walk, and it fills.
+
+```solidity
+function test_fix3_aLargerMaxRollDoesNotOrphanARevivedRequest() public fixtureCovered;
+```
+
+<a id="test_fix4_avenuethatburnsitsgasonsupplyfailsthedepositsidealone"></a>
+
+### test_fix4_aVenueThatBurnsItsGasOnSupplyFailsTheDepositSideAlone
+
+The deposit side's venue burns every unit of gas it gets. The redemption side still settles and the
+deposit side fails alone (on the scaffold the burn tripped the out-of-gas guard and reverted both).
+
+```solidity
+function test_fix4_aVenueThatBurnsItsGasOnSupplyFailsTheDepositSideAlone()
+        public
+        fixtureCovered;
+```
+
+<a id="test_fix4_avenuethatburnsitsgasonwithdrawfailstheredemptionsidealone"></a>
+
+### test_fix4_aVenueThatBurnsItsGasOnWithdrawFailsTheRedemptionSideAlone
+
+The redemption side's venue burns every unit of gas it gets: deposits still settle.
+
+```solidity
+function test_fix4_aVenueThatBurnsItsGasOnWithdrawFailsTheRedemptionSideAlone()
+        public
+        fixtureCovered;
+```
+
+<a id="test_fix4_thegasacallersendsstillcannotchooseaside"></a>
+
+### test_fix4_theGasACallerSendsStillCannotChooseASide
+
+The out-of-gas protection stays (RB-20): over gas limits from 600 % down to 35 % of a full
+settlement's use, an honest call settles both sides or reverts whole; with the deposit venue burning
+its gas, a call settles the redemption side (the deposit side failing alone) or reverts whole. No gas
+limit makes the redemption side fail or settles one side of the honest pair.
+
+```solidity
+function test_fix4_theGasACallerSendsStillCannotChooseASide() public fixtureCovered;
+```
+
+<a id="test_fix4_abatchof24fillspersidefitsitsbudget_control"></a>
+
+### test_fix4_aBatchOf24FillsPerSideFitsItsBudget_control
+
+Control and measurement for the fixed side budgets: 24 deposits and 24 redemptions, each from its own
+fresh owner (cold storage everywhere), settle in one keeper call on the five-asset fund, both sides
+inside their budgets. Run with -vvvv to read each side's gas in the trace (fix-queue notes). 24, so
+the call's gas limit stays under the 40M per call of the fixture recorder's fork.
+
+```solidity
+function test_fix4_aBatchOf24FillsPerSideFitsItsBudget_control() public fixtureCovered;
+```
+
+<a id="_gassweep-bytes-uint256-bool"></a>
+
+### _gasSweep
+
+```solidity
+function _gasSweep(bytes memory data, uint256 used, bool burning)
+        internal
+        returns (uint256[4] memory n);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+| used | `uint256` |  |
+| burning | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| n | `uint256[4]` |  |
+
+<a id="test_fix5_aratereadthatfailsafterthetradestillleavesareference"></a>
+
+### test_fix5_aRateReadThatFailsAfterTheTradeStillLeavesAReference
+
+The first settlement reads Aave's rate before its trades (check 5) and not after (the venue's read
+fails once it traded). The scaffold then skipped the record, left no reference, and a later 5 % jump
+of the rate passed check 5. Now the reference is the rate check 5 read, and the jump is caught.
+
+```solidity
+function test_fix5_aRateReadThatFailsAfterTheTradeStillLeavesAReference()
+        public
+        fixtureCovered;
+```
+
+<a id="test_fix5_asecondsettleinthesameblockpassescheck5_control"></a>
+
+### test_fix5_aSecondSettleInTheSameBlockPassesCheck5_control
+
+Control: a second settle in the same block, after the first supplied to every lending venue, passes
+check 5. With no time elapsed check 5 allows no growth, and the fund's own supply can move a venue's
+rate by a rounding unit, so the reference must be the rate read after the trades (a first version of
+this fix recorded the rate read before them, and `Attacks.t.sol` A19 then stopped at `LendRate` on
+Compound).
+
+```solidity
+function test_fix5_aSecondSettleInTheSameBlockPassesCheck5_control() public fixtureCovered;
+```
+
+<a id="_helddeposit"></a>
+
+### _heldDeposit
+
+```solidity
+function _heldDeposit() internal returns (uint256 sid, uint256 claimId);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sid | `uint256` |  |
+| claimId | `uint256` |  |
+
+<a id="test_fix6_releaseclearsthereturn"></a>
+
+### test_fix6_releaseClearsTheReturn
+
+After `allowReturn` the Safe releases instead. Release ends the return: the depositor can no longer
+take its held shares out early (RB-11); they deliver after the hold.
+
+```solidity
+function test_fix6_releaseClearsTheReturn() public fixtureCovered;
+```
+
+<a id="test_fix6_anewfreezestartswithreturnsdisallowed"></a>
+
+### test_fix6_aNewFreezeStartsWithReturnsDisallowed
+
+A freeze that ended by itself inside the hold, then a new freeze: the new freeze starts with returns
+disallowed, so only the Safe's new decision allows one.
+
+```solidity
+function test_fix6_aNewFreezeStartsWithReturnsDisallowed() public fixtureCovered;
+```
+
+<a id="_bookedqueue"></a>
+
+### _bookedQueue
+
+<i>
+
+A queue holding every kind of booked value: pending deposit escrow (bob), deposit shares in their hold
+(carol), settled redemption USDC not yet taken (dave), pending redemption escrow (erin), a USDC credit
+(bob's cancelled second deposit) and a share credit (erin's cancelled second redemption), and dust.
+
+</i>
+
+```solidity
+function _bookedQueue() internal returns (uint256 bobPending, uint256 erinPending);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bobPending | `uint256` |  |
+| erinPending | `uint256` |  |
+
+<a id="test_fix7_asweepsendsonlywhatliesabovethebooks"></a>
+
+### test_fix7_aSweepSendsOnlyWhatLiesAboveTheBooks
+
+A stranger sweeps gifts and dust to the fund; nothing booked moves, and afterwards every owner still
+takes all it is owed and the queue ends empty.
+
+```solidity
+function test_fix7_aSweepSendsOnlyWhatLiesAboveTheBooks() public fixtureCovered;
+```
+
+<a id="_everyonetakesall-uint256-uint256"></a>
+
+### _everyoneTakesAll
+
+<i>
+
+Every owner takes what the queue owes it, whatever settled meanwhile: each open request is cancelled,
+each settled redemption's USDC taken, each held deposit delivered after its hold, each credit withdrawn.
+
+</i>
+
+```solidity
+function _everyoneTakesAll(uint256, uint256) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` |  |
+| _ | `uint256` |  |
+
+<a id="testfuzz_fix7_asweepnevertakesbookedescrow-uint64-uint64-uint8"></a>
+
+### testFuzz_fix7_aSweepNeverTakesBookedEscrow
+
+forge-config: default.fuzz.runs = 8
+
+Any gift, swept at any point between flows, never takes booked escrow: after each sweep the queue's
+balances equal its obligations exactly, and at the end every owner is paid in full.
+
+```solidity
+function testFuzz_fix7_aSweepNeverTakesBookedEscrow(
+        uint64 giftUsdc,
+        uint64 giftShareBps,
+        uint8 when
+    ) public fixtureCovered;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| giftUsdc | `uint64` |  |
+| giftShareBps | `uint64` |  |
+| when | `uint8` |  |
+
+<a id="_sweepandcheck"></a>
+
+### _sweepAndCheck
+
+```solidity
+function _sweepAndCheck() internal;
+```
+
+<a id="test_fix8_thequeuesourcecallsnothingastub"></a>
+
+### test_fix8_theQueueSourceCallsNothingAStub
+
+The queue has no stub left (scaffold report §8.1), so its comments must not say it has.
+
+```solidity
+function test_fix8_theQueueSourceCallsNothingAStub() public view;
+```
+
+<a id="_excludedmoonwell"></a>
+
+### _excludedMoonwell
+
+<i>
+
+An invested fund, bob a holder, carol's deposit settled just now (the breaker's reference), bob's
+redemption request, then Moonwell (about a fifth of NAV) excluded; warp to the request's window, one
+epoch after the reference.
+
+</i>
+
+```solidity
+function _excludedMoonwell() internal returns (uint256 red);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| red | `uint256` |  |
+
+<a id="test_fix9_anexclusiondoesnotholdredemptionsatthebreaker"></a>
+
+### test_fix9_anExclusionDoesNotHoldRedemptionsAtTheBreaker
+
+Excluding Moonwell drops NAV per share at the feeds by its share (about 20 %, over the 10 % breaker
+for one epoch). The breaker measures market moves, not the governed exclusion, so redemptions settle
+at once, alone, as E13 says. The scaffold held them for an epoch.
+
+```solidity
+function test_fix9_anExclusionDoesNotHoldRedemptionsAtTheBreaker() public fixtureCovered;
+```
+
+<a id="test_fix9_thebreakerstillcatchesamarketmoveafteranexclusion"></a>
+
+### test_fix9_theBreakerStillCatchesAMarketMoveAfterAnExclusion
+
+The breaker still measures the market after an exclusion: a 15 % gift to the fund in the same epoch
+trips it. On the scaffold the exclusion's drop hid the gift (the net move was under the breaker).
+
+```solidity
+function test_fix9_theBreakerStillCatchesAMarketMoveAfterAnExclusion() public fixtureCovered;
+```
+
+<a id="test_fix9_arestoredoesnottripthebreaker_control"></a>
+
+### test_fix9_aRestoreDoesNotTripTheBreaker_control
+
+Control: a restore after the exclusion does not trip the breaker either; deposits settle again.
+
+```solidity
+function test_fix9_aRestoreDoesNotTripTheBreaker_control() public fixtureCovered;
+```
+

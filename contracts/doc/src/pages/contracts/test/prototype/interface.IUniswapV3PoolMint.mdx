@@ -1,0 +1,44 @@
+---
+title: "IUniswapV3PoolMint"
+description: "The Uniswap V3 pool's `mint` (RB-17 liquidity test)."
+---
+
+# IUniswapV3PoolMint
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowQueue.t.sol)
+
+The Uniswap V3 pool's `mint` (RB-17 liquidity test).
+
+## Functions
+
+<a id="mint-address-int24-int24-uint128-bytes"></a>
+
+### mint
+
+```solidity
+function mint(
+        address recipient,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 amount,
+        bytes calldata data
+    ) external returns (uint256 amount0, uint256 amount1);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| recipient | `address` |  |
+| tickLower | `int24` |  |
+| tickUpper | `int24` |  |
+| amount | `uint128` |  |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount0 | `uint256` |  |
+| amount1 | `uint256` |  |
+

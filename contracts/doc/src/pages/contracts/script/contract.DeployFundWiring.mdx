@@ -1,0 +1,112 @@
+---
+title: "DeployFundWiring"
+description: "The `fund-wiring` stage (Deploy 4), while the deployer still holds every admin role: - the fund's GOVERNANCE_ROLE and REBALANCER_ROLE, bound once (`bindRebalanceRoles`, self-administered after); - the fund's FLOW_ROLE, bound once to the queue (`bindFlowRole`, E1); - the receipt register's RECEIPT_RELEASER_ROLE to the governance contract (its applyReceipt releases the receipt in the same call, §5.1). The receipt SUBMITTER is registered later by the Safe through the timelock. Then it reads back that the keeper holds KEEPER_ROLE on the queue and the rebalancer (granted at their initialization) and that no plan role went anywhere else."
+---
+
+# DeployFundWiring
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/script/DeployFundWiring.s.sol)
+
+**Inherits:** [FundSystemBase](/contracts/script/abstract.FundSystemBase)
+
+**Title:** DeployFundWiring
+
+The `fund-wiring` stage (Deploy 4), while the deployer still holds every admin role:
+- the fund's GOVERNANCE_ROLE and REBALANCER_ROLE, bound once (`bindRebalanceRoles`, self-administered after);
+- the fund's FLOW_ROLE, bound once to the queue (`bindFlowRole`, E1);
+- the receipt register's RECEIPT_RELEASER_ROLE to the governance contract (its applyReceipt releases the
+receipt in the same call, §5.1). The receipt SUBMITTER is registered later by the Safe through the timelock.
+Then it reads back that the keeper holds KEEPER_ROLE on the queue and the rebalancer (granted at their
+initialization) and that no plan role went anywhere else.
+
+Required env vars (no defaults): FUND_ADDRESS, REBALANCER_ADDRESS, FUND_GOVERNANCE_ADDRESS, QUEUE_ADDRESS,
+FUND_RECEIPT_ADDRESS, KEEPER_ADDRESS, DEPLOYMENT_OUT.
+
+## Constants
+
+### MANIFEST_FILE
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+
+```solidity
+string public constant MANIFEST_FILE = "fund-wiring.json";
+```
+
+### RECEIPT_RELEASER_ROLE
+
+```solidity
+bytes32 public constant RECEIPT_RELEASER_ROLE = keccak256("RECEIPT_RELEASER_ROLE");
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+Forge broadcast entrypoint.
+
+```solidity
+function run() external returns (Wired memory w);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `Wired` |  |
+
+<a id="_check-wired"></a>
+
+### _check
+
+```solidity
+function _check(Wired memory w) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `Wired` |  |
+
+<a id="_writedeploymentjson-wired"></a>
+
+### _writeDeploymentJson
+
+```solidity
+function _writeDeploymentJson(Wired memory w) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `Wired` |  |
+
+## Structs
+
+### Wired
+
+```solidity
+struct Wired {
+        address fund;
+        address rebalancer;
+        address governance;
+        address queue;
+        address receipts;
+        address keeper;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| fund | `address` |  |
+| rebalancer | `address` |  |
+| governance | `address` |  |
+| queue | `address` |  |
+| receipts | `address` |  |
+| keeper | `address` |  |
+

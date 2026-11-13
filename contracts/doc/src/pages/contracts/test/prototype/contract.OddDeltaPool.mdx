@@ -1,0 +1,37 @@
+---
+title: "OddDeltaPool"
+description: "Two slices of 2 seconds whose cumulative deltas are -21 each (mean -10.5)."
+---
+
+# OddDeltaPool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowLibs.t.sol)
+
+Two slices of 2 seconds whose cumulative deltas are -21 each (mean -10.5).
+
+## Functions
+
+<a id="observe-uint32"></a>
+
+### observe
+
+```solidity
+function observe(uint32[] calldata secondsAgos)
+        external
+        pure
+        returns (int56[] memory cum, uint160[] memory spl);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| secondsAgos | `uint32[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cum | `int56[]` |  |
+| spl | `uint160[]` |  |
+

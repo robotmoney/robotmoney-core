@@ -149,7 +149,7 @@ describe("the one-time library address move: baseline and 8453 effective counts 
   test("a cross-check against the Deploy 3 file needs --accept-diff for the stages the table retired (agent, ic-policy, recorder) and the ones it added (receipt, hard: core 2008); the gateway system's key is not compared", () => {
     expect(m.acceptDiff).toEqual(["agent", "hard", "ic-policy", "receipt", "recorder"]);
     // a new baseline equal to Deploy 3 at every stage the table still has differs from it at exactly those stages
-    const keys = ["safe", ...getStageTable().stages.filter((s) => s.system !== "gateway").map((s) => s.name)];
+    const keys = ["safe", ...getStageTable().stages.filter((s) => s.system === "vaults").map((s) => s.name)];
     const same = Object.fromEntries(keys.map((k) => [k, anchor.counts[k] ?? 2]));
     expect(crossCheckDiff(same, anchor.counts).map((d) => d.stage)).toEqual(m.acceptDiff);
   });

@@ -1,0 +1,26 @@
+---
+title: "WalkCursor"
+description: "Where a settle walk continues on one side (step 3 finish plan §3.1 item 2). `epoch == 0` means \"start a new pass at the oldest epoch in range\" (epoch 0 is 1970 and is never in range)."
+---
+
+# WalkCursor
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FlowStorage.sol)
+
+Where a settle walk continues on one side (step 3 finish plan §3.1 item 2). `epoch == 0` means "start a new
+pass at the oldest epoch in range" (epoch 0 is 1970 and is never in range).
+
+```solidity
+struct WalkCursor {
+    uint64 epoch;
+    uint192 index;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| epoch | `uint64` |  |
+| index | `uint192` |  |
+

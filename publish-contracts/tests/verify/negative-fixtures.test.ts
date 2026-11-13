@@ -260,7 +260,7 @@ describe("issue 1842: fail-closed gateway pins and the governed freeze of an upg
   test("an upgradeable release whose proxy came up frozen in its initializer fails its freeze label", async () => {
     const w = buildWorld(918453);
     w.sheet.upgradeMode = "upgradeable";
-    for (const s of getStageTable().stages.filter((x) => x.proxies)) editManifest(w, `${manifestBase(s.manifest)}.json`, (o) => { o.upgrade_mode = "upgradeable"; });
+    for (const s of getStageTable().stages.filter((x) => x.proxies && x.system !== "fund")) editManifest(w, `${manifestBase(s.manifest)}.json`, (o) => { o.upgrade_mode = "upgradeable"; });
     for (const a of [GATEWAY, REGISTRY, ROUTER, GOV, REC, ...Object.values(VAULTS).map((v) => v.address)]) w.chain.set(a, "upgradesFrozen", a === GOV);
     expect(failed(await verifyDeployment(w.opts))).toEqual(["governance: upgradesFrozen() agrees with the release mode"]);
   });

@@ -64,11 +64,11 @@ describe("the stage runner on stub forge and cast", () => {
     expect(lastError(w)).toBeUndefined();
     const t = getStageTable();
     // each stage writes the manifest file the core table names
-    for (const s of t.stages.filter((x) => x.system !== "gateway")) expect(existsSync(join(w.coreDir, "deployments", "918453", basename(s.manifest))), s.manifest).toBe(true);
+    for (const s of t.stages.filter((x) => x.system === "vaults")) expect(existsSync(join(w.coreDir, "deployments", "918453", basename(s.manifest))), s.manifest).toBe(true);
     // the basket stages pass --libraries with the tick_math address from the libs manifest, the others do not
     const libsFile = JSON.parse(readFileSync(join(w.coreDir, "deployments", "918453", basename(t.stages.find((s) => s.name === "libs")!.manifest)), "utf8"));
     expect(libsFile.tick_math).toBeTruthy();
-    for (const st of t.stages.filter((x) => x.system !== "gateway")) {
+    for (const st of t.stages.filter((x) => x.system === "vaults")) {
       const calls = forgeScripts(w).filter((c: any) => String(c.args[1]).startsWith(st.script));
       expect(calls.length, st.name).toBeGreaterThan(0);
       for (const c of calls) {
@@ -79,7 +79,7 @@ describe("the stage runner on stub forge and cast", () => {
     }
     expect(forgeScripts(w).some((c: any) => c.args.includes("--libraries"))).toBe(true);
     // every required env name the table lists is set, DEPLOYMENT_OUT names the table's manifest, per-vault values land under core's names
-    for (const st of t.stages.filter((x) => x.system !== "gateway")) {
+    for (const st of t.stages.filter((x) => x.system === "vaults")) {
       const call = forgeScripts(w).find((c: any) => String(c.args[1]).startsWith(st.script) && c.args.includes("--broadcast"));
       for (const name of st.requiredEnv) expect(call.env[name], `${st.name} ${name}`).toBeTruthy();
       expect(call.env.DEPLOYMENT_OUT).toBe(`deployments/918453/${basename(st.manifest)}`);
@@ -175,7 +175,7 @@ describe("the stage runner on stub forge and cast", () => {
     const code = await w.run(["--stage", "deploy", "--dry-run"]);
     expect(code).toBe(0);
     expect(targetBroadcasts(w)).toEqual([]);
-    expect(simulations(w).length).toBe(getStageTable().stages.filter((s) => s.system !== "gateway").length);
+    expect(simulations(w).length).toBe(getStageTable().stages.filter((s) => s.system === "vaults").length);
     // only the control proof is skipped (a real Safe transaction signed by every owner), loudly, and the stage 11 gate with it
     expect(w.logs().filter((l) => l.event === "stage.dry_run_skipped").map((l) => l.stage)).toEqual(["prove-control"]);
     expect(w.logs().some((l) => l.event === "stage.control_proof_skipped")).toBe(true);
@@ -762,7 +762,9 @@ describe("the core timelock: pinned at the first proxy stage, adopted when someo
 // every other transaction; otherwise the run refuses before anything is sent. Exercised with an 8453 dry run (stub forge and cast; nothing reaches any chain).
 describe("issue 1926: on 8453 no stage links a library address without code", () => {
   const OUT = join(import.meta.dir, "fixtures", "build-out");
-  const BUILT = buildCreate2Libraries(getStageTable().create2Libraries!, OUT);
+  // Deploy 4: the vaults run derives its own system's libraries only (the fixture build holds no fund-system library)
+  const VAULTS_C2 = new Set(getStageTable().stages.filter((s) => s.system === "vaults").flatMap((s) => s.create2Libraries ?? []));
+  const BUILT = buildCreate2Libraries(getStageTable().create2Libraries!.filter((l) => VAULTS_C2.has(l.name)), OUT);
   const VAULT_LIBS = getStageTable().stages.find((s) => s.name === "vault")!.create2Libraries!.map((n) => BUILT.get(getStageTable().create2Libraries!.find((l) => l.name === n)!.artifact)!.address.toLowerCase());
   const TICK = "0x0000000000000000000000000000000000001009"; // the stub libs manifest's tick_math
   const OWNERS = ["A", "B", "C"].flatMap((o) => ["--owner-signer", `keystore:/k/OWNER_${o}`]);

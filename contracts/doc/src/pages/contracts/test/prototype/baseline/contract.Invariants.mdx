@@ -1,0 +1,1010 @@
+---
+title: "Invariants"
+description: "One stateful invariant suite for the one-vault prototype (plan Step 2.5). The test contract is its own handler, so every action runs through the same harness helpers the other prototype tests use (the timelock path, the keeper, real Base venues). Actions: deposit, redeem, redeemInKind, apply a random valid receipt through the timelock, keeper step, warp, price move, and an unauthorized plan-open attempt. Each action records what it saw in ghost variables. The `invariant_*` functions assert:"
+---
+
+# Invariants
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/Invariants.t.sol)
+
+**Inherits:** [BaselineHarness](/contracts/test/prototype/baseline/abstract.BaselineHarness)
+
+**Title:** Invariants
+
+One stateful invariant suite for the one-vault prototype (plan Step 2.5). The test contract is its own
+handler, so every action runs through the same harness helpers the other prototype tests use (the
+timelock path, the keeper, real Base venues). Actions: deposit, redeem, redeemInKind, apply a random
+valid receipt through the timelock, keeper step, warp, price move, and an unauthorized plan-open
+attempt. Each action records what it saw in ghost variables. The `invariant_*` functions assert:
+
+- RB-1: no caller other than the timelock opens a plan (unauthorized attempts always revert).
+- RB-2: `step()` takes no input (the handler calls the zero-argument selector; nothing else exists).
+- RB-3 / INV-1: every token transfer out of a system address (fund, adapters, rebalancer, governance,
+receipts) lands on an allowlisted venue, back in the fund, or (in a redemption) on the redeeming
+holder or the fee recipient. Every pool payout during a fund action goes to the fund.
+- RB-4: an executed step costs at most `maxStepCostBps` of its notional (TWAP NAV), and a plan's
+`costSpent` stays within `costBudget` unless the plan is Halted. A Halted plan never steps.
+- RB-5: no executed step before `lastStepAt + effectiveStepInterval`, and no Basket leg that failed
+ORA-4 just before the step.
+- RB-6: `redeemInKind` of a holder's own shares never reverts. `redeem` never reverts while every
+Basket asset sits well inside its slippage band (plan state never blocks it).
+- RB-7: an executed step's notional fits inside both legs' distance to `pathTarget(now)`, computed here
+independently from the plan fields.
+- RB-8: the receipt contract holds no assets and never calls the fund, the rebalancer or governance.
+- RB-9: every apply action first sends five refused per-asset vectors for the same receipt, built from
+the action's valid vector: an unlisted active asset, a duplicate, an unknown asset, a bad sum, and
+a lending cap breach. Each must revert with its own error, release nothing, and open no plan. The
+fund's persistent target always names every active asset and sums to 10 000 once a plan opened.
+- Solvency: shares outstanding imply a positive `totalAssets`. The fund leaves no token allowance
+standing to any spender it ever approved. The rebalancer and governance hold no assets.
+
+Fixture coverage: `BaseFixture.fixtureCovered` reads the state-diff recording once, but an invariant
+campaign interleaves many handler calls with many invariant checks. So in replay this suite also checks
+coverage per action (`_coverage`), with the same rule as `BaseFixture._assertFixtureCovered`.
+The fuzz seed is fixed so the record run and every replay make the same call sequences, and so
+touch the same pool ticks and slots. A random seed would wander onto state the fixture never read.
+forge-config: default.fuzz.seed = "0x6f6e652d7661756c74"
+forge-config: default.invariant.dictionary-weight = 0
+forge-config: default.invariant.runs = 16
+forge-config: default.invariant.depth = 32
+forge-config: default.invariant.fail-on-revert = true
+
+## Constants
+
+### TRANSFER_SIG
+
+```solidity
+bytes32 private constant TRANSFER_SIG = keccak256("Transfer(address,address,uint256)");
+```
+
+### APPROVAL_SIG
+
+```solidity
+bytes32 private constant APPROVAL_SIG = keccak256("Approval(address,address,uint256)");
+```
+
+### STEP_EXECUTED_SIG
+
+```solidity
+bytes32 private constant STEP_EXECUTED_SIG = keccak256(
+        "StepExecuted(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)"
+    );
+```
+
+### IMPL_SLOT
+
+```solidity
+bytes32 private constant IMPL_SLOT =
+        0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+```
+
+### REDEEM_MARGIN_BPS
+
+<i>
+
+`redeem` is only required to succeed while every Basket asset's spot sits this far inside the
+fund's slippage ceiling: the remaining room covers the pool fee and the pro-rata sale's own impact.
+
+</i>
+
+```solidity
+uint256 private constant REDEEM_MARGIN_BPS = 100;
+```
+
+## State Variables
+
+### holders
+
+```solidity
+address[3] internal holders;
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+### receiptImpl
+
+```solidity
+address internal receiptImpl;
+```
+
+### ghostRedeemUnexpectedReverts
+
+```solidity
+uint256 public ghostRedeemUnexpectedReverts;
+```
+
+### ghostInKindReverts
+
+```solidity
+uint256 public ghostInKindReverts;
+```
+
+### ghostApplyFailures
+
+```solidity
+uint256 public ghostApplyFailures;
+```
+
+### ghostStepReverts
+
+```solidity
+uint256 public ghostStepReverts;
+```
+
+### ghostRb1Violations
+
+```solidity
+uint256 public ghostRb1Violations;
+```
+
+### ghostRb4StepCost
+
+```solidity
+uint256 public ghostRb4StepCost;
+```
+
+### ghostRb4HaltedStepped
+
+```solidity
+uint256 public ghostRb4HaltedStepped;
+```
+
+### ghostRb4BudgetNotHalted
+
+```solidity
+uint256 public ghostRb4BudgetNotHalted;
+```
+
+### ghostRb5Cooldown
+
+```solidity
+uint256 public ghostRb5Cooldown;
+```
+
+### ghostRb5Market
+
+```solidity
+uint256 public ghostRb5Market;
+```
+
+### ghostRb7PastPath
+
+```solidity
+uint256 public ghostRb7PastPath;
+```
+
+### ghostRb8Calls
+
+```solidity
+uint256 public ghostRb8Calls;
+```
+
+### ghostRb9Violations
+
+```solidity
+uint256 public ghostRb9Violations;
+```
+
+### ghostInv1Leaks
+
+```solidity
+uint256 public ghostInv1Leaks;
+```
+
+### ghostRedeemPayoutMismatch
+
+```solidity
+uint256 public ghostRedeemPayoutMismatch;
+```
+
+### ghostLivenessSkips
+
+<i>
+
+A keeper `step()` skipped NothingToTrade / BelowMinStep although, computed here independently,
+some eligible holding sat over its path and another under it by at least `minStepUsdc`.
+
+</i>
+
+```solidity
+uint256 public ghostLivenessSkips;
+```
+
+### ghostLeakFrom
+
+```solidity
+address public ghostLeakFrom;
+```
+
+### ghostLeakTo
+
+```solidity
+address public ghostLeakTo;
+```
+
+### callsDeposit
+
+```solidity
+uint256 public callsDeposit;
+```
+
+### callsRedeem
+
+```solidity
+uint256 public callsRedeem;
+```
+
+### callsRedeemInKind
+
+```solidity
+uint256 public callsRedeemInKind;
+```
+
+### callsApply
+
+```solidity
+uint256 public callsApply;
+```
+
+### callsRb9Refused
+
+```solidity
+uint256 public callsRb9Refused;
+```
+
+### callsStep
+
+```solidity
+uint256 public callsStep;
+```
+
+### stepsExecuted
+
+```solidity
+uint256 public stepsExecuted;
+```
+
+### callsWarp
+
+```solidity
+uint256 public callsWarp;
+```
+
+### callsPrice
+
+```solidity
+uint256 public callsPrice;
+```
+
+### approvedToken
+
+<i>
+
+Every (token, spender) the fund ever emitted an Approval for.
+
+</i>
+
+```solidity
+address[] internal approvedToken;
+```
+
+### approvedSpender
+
+```solidity
+address[] internal approvedSpender;
+```
+
+### approvalSeen
+
+```solidity
+mapping(bytes32 => bool) internal approvalSeen;
+```
+
+### venueOk
+
+<i>
+
+Allowed recipients of a system transfer for the action in flight (see `_scanLogs`).
+
+</i>
+
+```solidity
+mapping(address => bool) internal venueOk;
+```
+
+### isSystem
+
+```solidity
+mapping(address => bool) internal isSystem;
+```
+
+### actionHolder
+
+```solidity
+address internal actionHolder;
+```
+
+### actionIsMarket
+
+```solidity
+bool internal actionIsMarket;
+```
+
+### _cvAccount
+
+```solidity
+mapping(address => bool) private _cvAccount;
+```
+
+### _cvSlot
+
+```solidity
+mapping(address => mapping(bytes32 => bool)) private _cvSlot;
+```
+
+### _cvSeen
+
+```solidity
+mapping(address => mapping(bytes32 => bool)) private _cvSeen;
+```
+
+### _cvCreated
+
+```solidity
+mapping(address => bool) private _cvCreated;
+```
+
+### coverageMissAccount
+
+```solidity
+address public coverageMissAccount;
+```
+
+### coverageMissSlot
+
+```solidity
+bytes32 public coverageMissSlot;
+```
+
+### coverageMiss
+
+```solidity
+bool public coverageMiss;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="action-address-bool"></a>
+
+### action
+
+<i>
+
+Opens the per-action recordings (logs for INV-1 / RB-4..7, state diff for RB-8 and coverage).
+
+</i>
+
+```solidity
+modifier action(address holder, bool market);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| holder | `address` |  |
+| market | `bool` |  |
+
+<a id="act_deposit-uint256-uint256"></a>
+
+### act_deposit
+
+Deposit `amt` (100 to 20k USDC) for a holder. May revert legitimately (caps, ORA-4, floors).
+
+```solidity
+function act_deposit(uint256 who, uint256 amt) external action(address(0), false);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `uint256` |  |
+| amt | `uint256` |  |
+
+<a id="act_redeem-uint256-uint256"></a>
+
+### act_redeem
+
+RB-6: a holder redeems a slice of its own shares to itself. Must succeed unless a Basket spot sits
+near the slippage ceiling (a market state, not a plan state). Checks the payout reached the holder.
+
+```solidity
+function act_redeem(uint256 who, uint256 frac) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `uint256` |  |
+| frac | `uint256` |  |
+
+<a id="_redeem-address-uint256"></a>
+
+### _redeem
+
+<i>
+
+`calm` is read inside the `action` recording, so its pool reads are fixture-coverage checked.
+
+</i>
+
+```solidity
+function _redeem(address h, uint256 shares) private action(h, false);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| h | `address` |  |
+| shares | `uint256` |  |
+
+<a id="act_redeeminkind-uint256-uint256"></a>
+
+### act_redeemInKind
+
+RB-6: `redeemInKind` of a holder's own shares never reverts, whatever the plan or the market.
+
+```solidity
+function act_redeemInKind(uint256 who, uint256 frac) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `uint256` |  |
+| frac | `uint256` |  |
+
+<a id="_redeeminkind-address-uint256"></a>
+
+### _redeemInKind
+
+```solidity
+function _redeemInKind(address h, uint256 shares) private action(h, false);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| h | `address` |  |
+| shares | `uint256` |  |
+
+<a id="act_apply-uint256-uint256"></a>
+
+### act_apply
+
+Record a random valid receipt. First send each refused variant of its vector (RB-9), then apply the
+valid vector through the timelock (RB-1's only path). A valid receipt never fails to open a plan.
+
+```solidity
+function act_apply(uint256 a, uint256 b) external action(address(0), false);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256` |  |
+| b | `uint256` |  |
+
+<a id="applyexternal-bytes32-bytes32-uint16-6"></a>
+
+### applyExternal
+
+<i>
+
+External hop so a failed timelock execution can be caught. Only this contract may call it.
+
+</i>
+
+```solidity
+function applyExternal(bytes32 id, bytes32 digest, uint16[6] memory bps) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+| digest | `bytes32` |  |
+| bps | `uint16[6]` |  |
+
+<a id="_refusebadvector-bytes32-bytes32-uint16-6-uint256"></a>
+
+### _refuseBadVector
+
+<i>
+
+RB-9: send the timelock's `applyReceipt` call for receipt `id` with a refused variant of the valid
+vector `v`, as the timelock (the call the timelock would execute, with no schedule and no warp, so the
+run's time line and pool reads are unchanged). `kind` picks the variant: 0 an active asset left out
+(its weight moved to a basket asset), 1 a duplicate entry, 2 an unknown asset, 3 a sum of 10 001,
+4 a lending target above `capBps`, 5 the valid vector with a wrong payload digest. The call must
+revert with exactly that variant's error, the receipt must stay unreleased, and no plan or applied
+time may change.
+
+</i>
+
+```solidity
+function _refuseBadVector(bytes32 id, bytes32 digest, uint16[6] memory v, uint256 kind)
+        private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+| digest | `bytes32` |  |
+| v | `uint16[6]` |  |
+| kind | `uint256` |  |
+
+<a id="_badvector-uint16-6-uint256"></a>
+
+### _badVector
+
+<i>
+
+The refused variant `kind` of `v` (see `_refuseBadVector`) and the exact revert data it must raise.
+
+</i>
+
+```solidity
+function _badVector(uint16[6] memory v, uint256 kind)
+        private
+        view
+        returns (address[] memory ids, uint256[] memory w, bytes memory expected);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[6]` |  |
+| kind | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ids | `address[]` |  |
+| w | `uint256[]` |  |
+| expected | `bytes` |  |
+
+<a id="act_step-bool"></a>
+
+### act_step
+
+One keeper `step()` (optionally after one effective interval). Checks RB-4, RB-5 and RB-7 against
+the state just before the call.
+
+```solidity
+function act_step(bool warpFirst) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| warpFirst | `bool` |  |
+
+<a id="_step"></a>
+
+### _step
+
+```solidity
+function _step() private action(address(0), false);
+```
+
+<a id="_checkexecutedstep-pre"></a>
+
+### _checkExecutedStep
+
+```solidity
+function _checkExecutedStep(Pre memory pre) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pre | `Pre` |  |
+
+<a id="act_warp-uint256"></a>
+
+### act_warp
+
+Time passes (1 minute to 2 days): cooldowns lapse, paths advance, plans end or expire.
+
+```solidity
+function act_warp(uint256 dt) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| dt | `uint256` |  |
+
+<a id="act_moveprice-uint256-uint256-bool"></a>
+
+### act_movePrice
+
+An outside trader moves a basket pool. wETH both ways (deal verified); cbBTC and deSPXA buys only.
+
+```solidity
+function act_movePrice(uint256 which, uint256 usdc, bool buy)
+        external
+        action(address(0), true);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| which | `uint256` |  |
+| usdc | `uint256` |  |
+| buy | `bool` |  |
+
+<a id="movepriceexternal-address-uint256-bool"></a>
+
+### movePriceExternal
+
+```solidity
+function movePriceExternal(address pool, uint256 usdc, bool buy) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| usdc | `uint256` |  |
+| buy | `bool` |  |
+
+<a id="act_unauthorizedopen-uint256-uint256"></a>
+
+### act_unauthorizedOpen
+
+RB-1: no account but the timelock can set a target or open a plan, by any of the three doors.
+
+```solidity
+function act_unauthorizedOpen(uint256 who, uint256 a) external action(address(0), false);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `uint256` |  |
+| a | `uint256` |  |
+
+<a id="invariant_mustnotrevert"></a>
+
+### invariant_mustNotRevert
+
+RB-1, RB-6, RB-8 and the per-action ghosts: actions that must never fail did not.
+
+```solidity
+function invariant_mustNotRevert() public fixtureCovered;
+```
+
+<a id="invariant_stepbounds"></a>
+
+### invariant_stepBounds
+
+RB-4, RB-5, RB-7 on every executed step; RB-4 budget on every plan.
+
+```solidity
+function invariant_stepBounds() public fixtureCovered;
+```
+
+<a id="invariant_targetvector"></a>
+
+### invariant_targetVector
+
+RB-9: every refused vector reverted with its own error and released nothing. The fund's persistent
+target names every active asset (inactive assets 0) and sums to 10 000 once a plan has opened.
+
+```solidity
+function invariant_targetVector() public fixtureCovered;
+```
+
+<a id="invariant_noleak"></a>
+
+### invariant_noLeak
+
+RB-3 / INV-1: no asset left a system address for a non-holder, non-venue recipient.
+
+```solidity
+function invariant_noLeak() public fixtureCovered;
+```
+
+<a id="invariant_receiptinert"></a>
+
+### invariant_receiptInert
+
+RB-8: the receipt contract never called the fund, rebalancer or governance, and holds nothing.
+
+```solidity
+function invariant_receiptInert() public fixtureCovered;
+```
+
+<a id="invariant_solvencyandhygiene"></a>
+
+### invariant_solvencyAndHygiene
+
+Shares outstanding are backed; the rebalancer and governance hold nothing; no standing allowance.
+
+```solidity
+function invariant_solvencyAndHygiene() public fixtureCovered;
+```
+
+<a id="afterinvariant"></a>
+
+### afterInvariant
+
+Per-run activity summary (shown with -vv). Guards against a vacuous run: handlers may not revert
+outside their own try blocks (`fail-on-revert = true`, so no action is silently dropped), the run
+did something, and `ghostLivenessSkips` (checked in `invariant_stepBounds`) proves a step that had
+a tradeable deviation was never skipped as "nothing to trade", so RB-4/5/7 are exercised whenever
+a step could run.
+
+```solidity
+function afterInvariant() public fixtureCovered;
+```
+
+<a id="_assertholdsnothing-address-string"></a>
+
+### _assertHoldsNothing
+
+```solidity
+function _assertHoldsNothing(address who, string memory label) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| label | `string` |  |
+
+<a id="_independentlyready-pre"></a>
+
+### _independentlyReady
+
+<i>
+
+Independent of `PlanMath.pickLegs`: the plan is Open and before its end (no conclusion pending), the
+cooldown has passed, and among idle and the eligible assets (active, `maxStepUsdc > 0`, not backed
+off, ORA-4 ok) one sits over its path value and one under it, each by at least `minStepUsdc`. Every
+non-zero `maxStepUsdc` is at least `minStepUsdc` (a `setAssetStepParams` bound), so such a step's
+notional is at least `minStepUsdc` and it must not skip NothingToTrade or BelowMinStep.
+
+</i>
+
+```solidity
+function _independentlyReady(Pre memory pre) private view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pre | `Pre` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_marketscalm"></a>
+
+### _marketsCalm
+
+<i>
+
+Every Basket asset's spot within `maxSlippageBps − REDEEM_MARGIN_BPS` of its TWAP.
+
+</i>
+
+```solidity
+function _marketsCalm() private view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_pathvalue-plan-uint256-uint256-uint256"></a>
+
+### _pathValue
+
+<i>
+
+Independent port of the §5.2 path value: `nav × (start×d + (end−start)×e) / (d × 10 000)`, the
+shrinking side rounded up (toward start). Idle's path ends at 0.
+
+</i>
+
+```solidity
+function _pathValue(Plan memory p, uint256 index, uint256 t, uint256 nav)
+        private
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Plan` |  |
+| index | `uint256` |  |
+| t | `uint256` |  |
+| nav | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_scanlogs-vmsafe-log"></a>
+
+### _scanLogs
+
+<i>
+
+INV-1 / RB-3 over one action's logs. A Transfer out of a system address must land on a venue (or the
+fund), on the redeeming holder, the fee recipient, or address(0) (a venue receipt-token burn). During a
+fund action, a pool pays only the fund. Approvals by the fund are remembered for the allowance check.
+
+</i>
+
+```solidity
+function _scanLogs(VmSafe.Log[] memory logs) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| logs | `VmSafe.Log[]` |  |
+
+<a id="_leak-address-address"></a>
+
+### _leak
+
+```solidity
+function _leak(address from, address to) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `address` |  |
+| to | `address` |  |
+
+<a id="_scanaccesses-vmsafe-accountaccess"></a>
+
+### _scanAccesses
+
+<i>
+
+RB-8 over one action's state diff (the receipt proxy or its implementation never touches the fund,
+rebalancer or governance), then the fixture coverage check in replay.
+
+</i>
+
+```solidity
+function _scanAccesses(VmSafe.AccountAccess[] memory acc) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| acc | `VmSafe.AccountAccess[]` |  |
+
+<a id="_loadcoverageindex"></a>
+
+### _loadCoverageIndex
+
+```solidity
+function _loadCoverageIndex() private;
+```
+
+<a id="_coverage-vmsafe-accountaccess"></a>
+
+### _coverage
+
+<i>
+
+Same rule as `BaseFixture._assertFixtureCovered`, but records the first miss for the invariant to
+report (a revert inside a handler would be swallowed by `fail-on-revert = false`).
+
+</i>
+
+```solidity
+function _coverage(VmSafe.AccountAccess[] memory acc) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| acc | `VmSafe.AccountAccess[]` |  |
+
+<a id="_miss-address-bytes32"></a>
+
+### _miss
+
+```solidity
+function _miss(address account, bytes32 slot) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+| slot | `bytes32` |  |
+
+## Structs
+
+### Pre
+
+```solidity
+struct Pre {
+        PlanStatus status;
+        uint256 readyAt;
+        uint256 nav;
+        uint256 idle;
+        uint256[] values;
+        bool[] marketOk;
+        Plan plan;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| status | `PlanStatus` |  |
+| readyAt | `uint256` |  |
+| nav | `uint256` |  |
+| idle | `uint256` |  |
+| values | `uint256[]` |  |
+| marketOk | `bool[]` |  |
+| plan | `Plan` |  |
+

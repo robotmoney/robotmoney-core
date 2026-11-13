@@ -1,0 +1,292 @@
+---
+title: "BaseFixtureProbeTest"
+description: "One-vault experiment: proves the replay fixture serves every venue the fund touches. Each test runs on real Base state from the committed fixture, with no RPC."
+---
+
+# BaseFixtureProbeTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/BaseFixtureProbe.t.sol)
+
+**Inherits:** [BaseFixture](/contracts/test/prototype/abstract.BaseFixture)
+
+One-vault experiment: proves the replay fixture serves every venue the fund touches.
+Each test runs on real Base state from the committed fixture, with no RPC.
+
+## Constants
+
+### USDC
+
+```solidity
+address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### WETH
+
+```solidity
+address internal constant WETH = 0x4200000000000000000000000000000000000006;
+```
+
+### CBBTC
+
+```solidity
+address internal constant CBBTC = 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf;
+```
+
+### DESPXA
+
+```solidity
+address internal constant DESPXA = 0x9c5C365e764829876243d0b289733B9D2b729685;
+```
+
+### WETH_POOL
+
+```solidity
+address internal constant WETH_POOL = 0xd0b53D9277642d899DF5C87A3966A349A798F224;
+```
+
+### CBBTC_POOL
+
+```solidity
+address internal constant CBBTC_POOL = 0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef;
+```
+
+### DESPXA_POOL
+
+```solidity
+address internal constant DESPXA_POOL = 0xD08f1fb797BfaCdeD23323178672557034c64CfA;
+```
+
+### ROUTER
+
+```solidity
+address internal constant ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
+```
+
+### AAVE_POOL
+
+```solidity
+address internal constant AAVE_POOL = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
+```
+
+### COMET
+
+```solidity
+address internal constant COMET = 0xb125E6687d4313864e53df431d5425969c15Eb2F;
+```
+
+### MOONWELL
+
+```solidity
+address internal constant MOONWELL = 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca;
+```
+
+### FEE
+
+```solidity
+uint24 internal constant FEE = 500;
+```
+
+### TWAP_WINDOW
+
+```solidity
+uint32 internal constant TWAP_WINDOW = 1800;
+```
+
+### FEED_ETH
+
+```solidity
+address internal constant FEED_ETH = 0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70;
+```
+
+### FEED_BTC
+
+```solidity
+address internal constant FEED_BTC = 0x64c911996D3c6aC71f9b455B1E8E7266BcbD848F;
+```
+
+### FEED_CBBTC
+
+```solidity
+address internal constant FEED_CBBTC = 0x07DA0E54543a844a80ABE69c8A12F22B3aA59f9D;
+```
+
+### FEED_USDC
+
+```solidity
+address internal constant FEED_USDC = 0x7e860098F58bBFC8648a4311b374B1D669a2bc6B;
+```
+
+### FEED_SEQUENCER
+
+```solidity
+address internal constant FEED_SEQUENCER = 0xBCF85224fc0756B9Fa45aA7892530B47e10b6433;
+```
+
+## Functions
+
+<a id="_fundusdc-address-uint256"></a>
+
+### _fundUsdc
+
+<i>
+
+Real FiatToken balance slot (mapping at slot 9, balance in the low 255 bits), the same
+write scripts/devnet/twin-fork.ts fund-usdc makes.
+
+</i>
+
+```solidity
+function _fundUsdc(address to, uint256 amount) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+<a id="_swap-address-address-uint256"></a>
+
+### _swap
+
+```solidity
+function _swap(address tokenIn, address tokenOut, uint256 amountIn) internal returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| amountIn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_twaptick-address"></a>
+
+### _twapTick
+
+```solidity
+function _twapTick(address pool) internal view returns (int24);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int24` |  |
+
+<a id="_roundtrip-address-address-uint256"></a>
+
+### _roundTrip
+
+```solidity
+function _roundTrip(address token, address pool, uint256 usdcIn) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| pool | `address` |  |
+| usdcIn | `uint256` |  |
+
+<a id="_abs-int256"></a>
+
+### _abs
+
+```solidity
+function _abs(int256 x) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| x | `int256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="test_weth_roundtrip_10k"></a>
+
+### test_weth_roundTrip_10k
+
+```solidity
+function test_weth_roundTrip_10k() public fixtureCovered;
+```
+
+<a id="test_cbbtc_roundtrip_10k"></a>
+
+### test_cbbtc_roundTrip_10k
+
+```solidity
+function test_cbbtc_roundTrip_10k() public fixtureCovered;
+```
+
+<a id="test_despxa_roundtrip_1k"></a>
+
+### test_despxa_roundTrip_1k
+
+```solidity
+function test_despxa_roundTrip_1k() public fixtureCovered;
+```
+
+<a id="test_aave_supplywithdraw"></a>
+
+### test_aave_supplyWithdraw
+
+```solidity
+function test_aave_supplyWithdraw() public fixtureCovered;
+```
+
+<a id="test_comet_supplywithdraw"></a>
+
+### test_comet_supplyWithdraw
+
+```solidity
+function test_comet_supplyWithdraw() public fixtureCovered;
+```
+
+<a id="test_feeds_realchainlinkatthepin"></a>
+
+### test_feeds_realChainlinkAtThePin
+
+<i>
+
+Step 3d (E16, scaffold plan §7.5 item 7): each real Chainlink feed the step 3d design reads, at the pin,
+with no mock: its description and decimals, a complete positive round for the price feeds, and a status
+of 0 or 1 for the sequencer uptime feed. Every round is not later than the pin. The replay fixture holds
+none of these accounts until `verify` re-records (they are read only here and on the recorder's fork),
+so the test skips with that reason while a feed has no code; it never mocks one.
+
+</i>
+
+```solidity
+function test_feeds_realChainlinkAtThePin() public fixtureCovered;
+```
+
+<a id="test_moonwell_depositredeem"></a>
+
+### test_moonwell_depositRedeem
+
+```solidity
+function test_moonwell_depositRedeem() public fixtureCovered;
+```
+

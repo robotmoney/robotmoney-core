@@ -1,0 +1,65 @@
+---
+title: "ISwapRouterExactOut"
+description: "Uniswap V3 SwapRouter02 exact-output entry point (not in the production `ISwapRouter`, which the production adapter does not need). SwapRouter02's struct has no deadline; the adapter enforces it."
+---
+
+# ISwapRouterExactOut
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/adapters/UniswapV3ExactOutSwapAdapter.sol)
+
+Uniswap V3 SwapRouter02 exact-output entry point (not in the production `ISwapRouter`, which the
+production adapter does not need). SwapRouter02's struct has no deadline; the adapter enforces it.
+
+## Functions
+
+<a id="exactoutputsingle-exactoutputsingleparams"></a>
+
+### exactOutputSingle
+
+```solidity
+function exactOutputSingle(ExactOutputSingleParams calldata params)
+        external
+        payable
+        returns (uint256 amountIn);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| params | `ExactOutputSingleParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountIn | `uint256` |  |
+
+## Structs
+
+### ExactOutputSingleParams
+
+```solidity
+struct ExactOutputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountOut;
+        uint256 amountInMaximum;
+        uint160 sqrtPriceLimitX96;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| fee | `uint24` |  |
+| recipient | `address` |  |
+| amountOut | `uint256` |  |
+| amountInMaximum | `uint256` |  |
+| sqrtPriceLimitX96 | `uint160` |  |
+

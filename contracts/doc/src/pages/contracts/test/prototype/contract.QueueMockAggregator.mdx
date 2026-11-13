@@ -1,0 +1,169 @@
+---
+title: "QueueMockAggregator"
+description: "A Chainlink aggregator whose answer the test sets. Etched at a real feed address (E16: \"tests move a feed with a mock aggregator placed at the feed's address\")."
+---
+
+# QueueMockAggregator
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowLibs.t.sol)
+
+A Chainlink aggregator whose answer the test sets. Etched at a real feed address (E16: "tests move a feed
+with a mock aggregator placed at the feed's address").
+
+## State Variables
+
+### decimals
+
+```solidity
+uint8 public decimals = 8;
+```
+
+### roundId
+
+```solidity
+uint80 public roundId = 1;
+```
+
+### answer
+
+```solidity
+int256 public answer;
+```
+
+### startedAt
+
+```solidity
+uint256 public startedAt;
+```
+
+### updatedAt
+
+```solidity
+uint256 public updatedAt;
+```
+
+### answeredInRound
+
+```solidity
+uint80 public answeredInRound = 1;
+```
+
+### reverts
+
+```solidity
+bool public reverts;
+```
+
+### shortData
+
+```solidity
+bool public shortData;
+```
+
+## Functions
+
+<a id="set-int256-uint256-uint256"></a>
+
+### set
+
+```solidity
+function set(int256 answer_, uint256 startedAt_, uint256 updatedAt_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| answer_ | `int256` |  |
+| startedAt_ | `uint256` |  |
+| updatedAt_ | `uint256` |  |
+
+<a id="setround-uint80-uint80"></a>
+
+### setRound
+
+```solidity
+function setRound(uint80 roundId_, uint80 answeredInRound_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| roundId_ | `uint80` |  |
+| answeredInRound_ | `uint80` |  |
+
+<a id="setdecimals-uint8"></a>
+
+### setDecimals
+
+```solidity
+function setDecimals(uint8 d) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `uint8` |  |
+
+<a id="setreverts-bool"></a>
+
+### setReverts
+
+```solidity
+function setReverts(bool r) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `bool` |  |
+
+<a id="setshortdata-bool"></a>
+
+### setShortData
+
+```solidity
+function setShortData(bool s) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `bool` |  |
+
+<a id="description"></a>
+
+### description
+
+```solidity
+function description() external pure returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="latestrounddata"></a>
+
+### latestRoundData
+
+```solidity
+function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint80` |  |
+| &lt;none&gt; | `int256` |  |
+| &lt;none&gt; | `uint256` |  |
+| &lt;none&gt; | `uint256` |  |
+| &lt;none&gt; | `uint80` |  |
+

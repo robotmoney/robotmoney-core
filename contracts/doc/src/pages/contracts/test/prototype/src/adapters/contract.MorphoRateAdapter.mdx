@@ -1,0 +1,75 @@
+---
+title: "MorphoRateAdapter"
+description: "Test copy of the production `MorphoAdapter` (step 3d, E15): every production function is inherited unchanged; `ratePerUnit()` is added. The venue is an ERC-4626 vault (Moonwell Flagship USDC, MetaMorpho)."
+---
+
+# MorphoRateAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/adapters/MorphoRateAdapter.sol)
+
+**Inherits:** [MorphoAdapter](/contracts/adapters/contract.MorphoAdapter), [ILendingRateAdapter](/contracts/test/prototype/src/interfaces/interface.ILendingRateAdapter)
+
+**Title:** MorphoRateAdapter
+
+Test copy of the production `MorphoAdapter` (step 3d, E15): every production function is inherited
+unchanged; `ratePerUnit()` is added. The venue is an ERC-4626 vault (Moonwell Flagship USDC, MetaMorpho).
+
+## Functions
+
+<a id="constructor-address-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address morphoVault_, address usdc_, address vault_)
+        MorphoAdapter(morphoVault_, usdc_, vault_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| morphoVault_ | `address` |  |
+| usdc_ | `address` |  |
+| vault_ | `address` |  |
+
+<a id="rateperunit"></a>
+
+### ratePerUnit
+
+<i>
+
+USDC units per whole vault share, scaled so that 1 whole asset per whole share reads 1e18:
+`convertToAssets(10 ** (shareDecimals + 18 − assetDecimals))`, the vault's own rounding (DOWN).
+MetaMorpho values its markets with interest accrued to now and does not count a donation of USDC
+or of its shares to this adapter, so a gift does not move it.
+
+</i>
+
+```solidity
+function ratePerUnit() external view returns (uint256 rate1e18);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rate1e18 | `uint256` |  |
+
+## Errors
+
+### UnsupportedDecimals
+
+The vault's share or asset decimals make the 1e18 scale impossible.
+
+```solidity
+error UnsupportedDecimals(uint8 shareDecimals, uint8 assetDecimals);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shareDecimals | `uint8` |  |
+| assetDecimals | `uint8` |  |
+

@@ -1,0 +1,154 @@
+---
+title: "FundTypes Constants"
+---
+
+# FundTypes Constants
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/src/FundTypes.sol)
+
+## BPS
+
+<i>
+
+The basis-points denominator (same value as `BpsMath.BPS_DENOMINATOR`).
+
+</i>
+
+```solidity
+uint256 constant BPS = 10_000;
+```
+
+## IDLE_INDEX
+
+<i>
+
+Sentinel asset index meaning "idle USDC" in a step leg (§5.3 step 6: either leg may be
+idle USDC). Never a valid index into the fund's asset list.
+
+</i>
+
+```solidity
+uint256 constant IDLE_INDEX = type(uint256).max;
+```
+
+## MAX_FUND_ASSETS
+
+<i>
+
+Hard cap on the fund's asset list length (lending plus basket). Keeps every per-asset loop
+(NAV, redeem, leg picking) bounded.
+
+</i>
+
+```solidity
+uint256 constant MAX_FUND_ASSETS = 12;
+```
+
+## MIN_PLAN_DURATION
+
+<i>
+
+Shortest permitted glide path (§5.6 `duration`, min 1 day).
+
+</i>
+
+```solidity
+uint64 constant MIN_PLAN_DURATION = 1 days;
+```
+
+## MAX_PLAN_DURATION
+
+<i>
+
+Longest permitted glide path.
+
+</i>
+
+```solidity
+uint64 constant MAX_PLAN_DURATION = 90 days;
+```
+
+## MAX_COST_BUDGET_BPS
+
+<i>
+
+Ceiling on a plan's `costBudgetBps` (5% of turnover). Suggested start is 30 bps.
+
+</i>
+
+```solidity
+uint16 constant MAX_COST_BUDGET_BPS = 500;
+```
+
+## MIN_STEP_INTERVAL
+
+<i>
+
+Floor on `stepInterval` (§5.6: max(longest TWAP window, 30 min)).
+
+</i>
+
+```solidity
+uint32 constant MIN_STEP_INTERVAL = 30 minutes;
+```
+
+## MAX_STEP_INTERVAL
+
+<i>
+
+Ceiling on `stepInterval`.
+
+</i>
+
+```solidity
+uint32 constant MAX_STEP_INTERVAL = 1 days;
+```
+
+## MAX_STEP_COST_BPS
+
+<i>
+
+Ceiling on `maxStepCostBps` (suggested start 50 bps).
+
+</i>
+
+```solidity
+uint16 constant MAX_STEP_COST_BPS = 500;
+```
+
+## MAX_TOLERANCE_BPS
+
+<i>
+
+Ceiling on `toleranceBps` (suggested start 50 bps).
+
+</i>
+
+```solidity
+uint16 constant MAX_TOLERANCE_BPS = 500;
+```
+
+## MAX_KEEPER_GRACE
+
+<i>
+
+Ceiling on `keeperGrace` (suggested start 6 hours).
+
+</i>
+
+```solidity
+uint32 constant MAX_KEEPER_GRACE = 7 days;
+```
+
+## MAX_OVERRUN
+
+<i>
+
+Ceiling on `maxOverrun` (suggested start 7 days).
+
+</i>
+
+```solidity
+uint32 constant MAX_OVERRUN = 30 days;
+```
+

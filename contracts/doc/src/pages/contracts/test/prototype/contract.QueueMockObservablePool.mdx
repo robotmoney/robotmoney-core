@@ -1,0 +1,107 @@
+---
+title: "QueueMockObservablePool"
+description: "An `observe` pool whose tick is constant inside each of `ticks.length` slices of `sliceLen` seconds ending now. `observe` answers only at slice boundaries (what TwapSlicesLib asks for)."
+---
+
+# QueueMockObservablePool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowLibs.t.sol)
+
+An `observe` pool whose tick is constant inside each of `ticks.length` slices of `sliceLen` seconds ending
+now. `observe` answers only at slice boundaries (what TwapSlicesLib asks for).
+
+## State Variables
+
+### ticks
+
+```solidity
+int24[] internal ticks;
+```
+
+### sliceLen
+
+```solidity
+uint32 internal sliceLen;
+```
+
+### reverts
+
+```solidity
+bool public reverts;
+```
+
+### dropPoints
+
+```solidity
+uint256 public dropPoints;
+```
+
+## Functions
+
+<a id="setslices-int24-uint32"></a>
+
+### setSlices
+
+```solidity
+function setSlices(int24[] memory ticks_, uint32 sliceLen_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ticks_ | `int24[]` |  |
+| sliceLen_ | `uint32` |  |
+
+<a id="setreverts-bool"></a>
+
+### setReverts
+
+```solidity
+function setReverts(bool r) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `bool` |  |
+
+<a id="setdroppoints-uint256"></a>
+
+### setDropPoints
+
+```solidity
+function setDropPoints(uint256 n) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| n | `uint256` |  |
+
+<a id="observe-uint32"></a>
+
+### observe
+
+```solidity
+function observe(uint32[] calldata secondsAgos)
+        external
+        view
+        returns (int56[] memory cum, uint160[] memory spl);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| secondsAgos | `uint32[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cum | `int56[]` |  |
+| spl | `uint160[]` |  |
+

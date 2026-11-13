@@ -49,6 +49,8 @@ fs_permissions = [
     # The Solidity core timelock predictions UpgradeAuthorityPrediction.t.sol writes for the
     # TypeScript parity check (scripts/ci/check-timelock-prediction-parity.ts, issue 1853).
     { access = "write", path = "./out/timelock-prediction-vectors.json" },
+    # One-vault experiment rebalance simulation output (contracts/test/prototype/sim, plan Step 3).
+    { access = "read-write", path = "./out/prototype" },
 ]
 
 # Custody-invariant suite (CustodyInvariant.t.sol, issue #929). Bounded runs/depth

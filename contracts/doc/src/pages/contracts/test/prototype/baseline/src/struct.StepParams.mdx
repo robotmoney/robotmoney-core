@@ -1,0 +1,33 @@
+---
+title: "StepParams"
+description: "Global step parameters held by the Rebalancer (§5.6 rows scoped \"global\")."
+---
+
+# StepParams
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/src/FundTypes.sol)
+
+Global step parameters held by the Rebalancer (§5.6 rows scoped "global").
+
+```solidity
+struct StepParams {
+    uint32 stepInterval;
+    uint32 keeperGrace;
+    uint32 maxOverrun;
+    uint16 maxStepCostBps;
+    uint16 toleranceBps;
+    uint128 minStepUsdc;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| stepInterval | `uint32` | Cooldown between executed steps. >= max(MIN_STEP_INTERVAL,<br/>fund.maxTwapWindow()), &lt;= MAX_STEP_INTERVAL. |
+| keeperGrace | `uint32` | After this long with no executed step on an Open plan, `step()` is open to<br/>anyone. In [stepInterval, MAX_KEEPER_GRACE]. |
+| maxOverrun | `uint32` | After `endTime + maxOverrun` an unconverged Open plan expires.<br/>&lt;= MAX_OVERRUN. |
+| maxStepCostBps | `uint16` | Per-step NAV-loss cap in bps of notional. In (max basket poolFeeBps,<br/>MAX_STEP_COST_BPS]. |
+| toleranceBps | `uint16` | Convergence band per asset (and idle) in bps of NAV. In [1, MAX_TOLERANCE_BPS]. |
+| minStepUsdc | `uint128` | Dust floor: a step below this notional is skipped `BelowMinStep`. |
+

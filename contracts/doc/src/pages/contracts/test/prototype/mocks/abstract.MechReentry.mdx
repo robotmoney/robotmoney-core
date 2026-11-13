@@ -1,0 +1,187 @@
+---
+title: "MechReentry"
+description: "Re-entry probe shared by the hostile venue mocks of `FlowQueue.t.sol`. While armed, every hook the venue exposes to the fund (a swap, a supply, a withdrawal) first tries each state-changing entry point of the FlowQueue and the fund from the venue's own address, records how each call ended, and then carries on honestly. The fund's basket tokens (wETH, cbBTC) and USDC have no transfer hooks, so the only external code the fund and the queue hand control to mid-flow is the venue adapter: this models the \"hostile token callback\" of the eng plan at that seam."
+---
+
+# MechReentry
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/mocks/MechReentry.sol)
+
+**Title:** MechReentry
+
+Re-entry probe shared by the hostile venue mocks of `FlowQueue.t.sol`. While armed, every hook the venue
+exposes to the fund (a swap, a supply, a withdrawal) first tries each state-changing entry point of the
+FlowQueue and the fund from the venue's own address, records how each call ended, and then carries on
+honestly. The fund's basket tokens (wETH, cbBTC) and USDC have no transfer hooks, so the only external
+code the fund and the queue hand control to mid-flow is the venue adapter: this models the "hostile token
+callback" of the eng plan at that seam.
+
+Storage: the venue mocks are etched over adapters whose own code keeps no storage (immutables only), so
+the fields below start at slot 0 without colliding with anything.
+
+## State Variables
+
+### _attempts
+
+```solidity
+Attempt[] internal _attempts;
+```
+
+### reQueue
+
+```solidity
+address public reQueue;
+```
+
+### reFund
+
+```solidity
+address public reFund;
+```
+
+### reVictim
+
+```solidity
+address public reVictim;
+```
+
+### reRequestId
+
+```solidity
+uint256 public reRequestId;
+```
+
+### reArmed
+
+```solidity
+bool public reArmed;
+```
+
+## Functions
+
+<a id="arm-address-address-address-uint256"></a>
+
+### arm
+
+Arm the probe: every later hook tries to re-enter `queue` and `fund`. `victim` is an owner whose
+claims a thief would want; `requestId` a request the probe tries to cancel or exit.
+
+```solidity
+function arm(address queue, address fund, address victim, uint256 requestId) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| queue | `address` |  |
+| fund | `address` |  |
+| victim | `address` |  |
+| requestId | `uint256` |  |
+
+<a id="disarm"></a>
+
+### disarm
+
+```solidity
+function disarm() external;
+```
+
+<a id="attemptcount"></a>
+
+### attemptCount
+
+```solidity
+function attemptCount() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="attemptat-uint256"></a>
+
+### attemptAt
+
+```solidity
+function attemptAt(uint256 i) external view returns (Attempt memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Attempt` |  |
+
+<a id="_reenter-bytes4"></a>
+
+### _reenter
+
+<i>
+
+Try every entry point once from this hook. Each call is expected to fail: the queue's one reentrancy
+lock, the fund's own lock, or the fund's role checks.
+
+</i>
+
+```solidity
+function _reenter(bytes4 hook) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| hook | `bytes4` |  |
+
+<a id="_try-bytes4-address-bytes"></a>
+
+### _try
+
+```solidity
+function _try(bytes4 hook, address target, bytes memory data) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| hook | `bytes4` |  |
+| target | `address` |  |
+| data | `bytes` |  |
+
+## Structs
+
+### Attempt
+
+One re-entry attempt: the hook it ran from, the target, the selector called, whether it succeeded and
+the first four bytes of its revert data.
+
+```solidity
+struct Attempt {
+        bytes4 hook;
+        address target;
+        bytes4 selector;
+        bool ok;
+        bytes4 err;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| hook | `bytes4` |  |
+| target | `address` |  |
+| selector | `bytes4` |  |
+| ok | `bool` |  |
+| err | `bytes4` |  |
+

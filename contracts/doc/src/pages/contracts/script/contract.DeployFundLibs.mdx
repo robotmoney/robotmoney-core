@@ -1,0 +1,146 @@
+---
+title: "DeployFundLibs"
+description: "The first stage of the `fund` system (Deploy 4). Deploys every library the one-vault contracts link, through the CREATE2 factory forge uses for script libraries (salt 0), before any stage that links them. The fund alone is 23 kB with its logic outside it (§6.1), so the libraries are most of the system's bytes."
+---
+
+# DeployFundLibs
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/script/DeployFundLibs.s.sol)
+
+**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+
+**Title:** DeployFundLibs
+
+The first stage of the `fund` system (Deploy 4). Deploys every library the one-vault contracts link, through
+the CREATE2 factory forge uses for script libraries (salt 0), before any stage that links them. The fund
+alone is 23 kB with its logic outside it (§6.1), so the libraries are most of the system's bytes.
+
+The script references each library's address, so forge deploys each one it finds without code at its
+CREATE2 address and leaves out each one already there (core issue 1721: the runner proves an adopted one is
+the build's library). The fund system links no `--libraries` address: TickMath is one of these CREATE2
+libraries here, at the same address the vaults system's `libs` stage gives it.
+
+Required env vars: DEPLOYMENT_OUT (output JSON path). EXPECTED_CHAIN_ID is mandatory and 8453 on Base.
+
+## Constants
+
+### MANIFEST_FILE
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+
+```solidity
+string public constant MANIFEST_FILE = "fund-libs.json";
+```
+
+### SQRT_RATIO_AT_TICK_ZERO
+
+sqrt(1.0001^0) * 2^96: the canonical answer for tick 0.
+
+```solidity
+uint160 public constant SQRT_RATIO_AT_TICK_ZERO = 79228162514264337593543950336;
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+Forge broadcast entrypoint.
+
+```solidity
+function run() external returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="runinprocess"></a>
+
+### runInProcess
+
+In-process variant for forge tests. No broadcast, no JSON written.
+
+```solidity
+function runInProcess() external returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_deploy"></a>
+
+### _deploy
+
+```solidity
+function _deploy() internal view returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_writedeploymentjson-deployed"></a>
+
+### _writeDeploymentJson
+
+```solidity
+function _writeDeploymentJson(Deployed memory d) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+## Structs
+
+### Deployed
+
+```solidity
+struct Deployed {
+        address tickMath;
+        address twapTickMath;
+        address basketSwaps;
+        address basketAssetConfigGuard;
+        address governedUpgrade;
+        address fundPositionLib;
+        address fundValuationLib;
+        address fundAdminLib;
+        address fundFlowsLib;
+        address fundStepLib;
+        address stepFeedLib;
+        address flowCheckLib;
+        address flowSettleLib;
+        address flowClaimLib;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tickMath | `address` |  |
+| twapTickMath | `address` |  |
+| basketSwaps | `address` |  |
+| basketAssetConfigGuard | `address` |  |
+| governedUpgrade | `address` |  |
+| fundPositionLib | `address` |  |
+| fundValuationLib | `address` |  |
+| fundAdminLib | `address` |  |
+| fundFlowsLib | `address` |  |
+| fundStepLib | `address` |  |
+| stepFeedLib | `address` |  |
+| flowCheckLib | `address` |  |
+| flowSettleLib | `address` |  |
+| flowClaimLib | `address` |  |
+
