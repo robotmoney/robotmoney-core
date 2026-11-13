@@ -666,7 +666,7 @@ test("Deploy 4: a fund step reads only the fund sheet's names and the fund syste
   expect(model.sheetNames.has("FUND_TVL_CAP")).toBe(false);
   expect([...model.fundManifestFiles].sort()).toEqual([...FUND_MANIFEST_FILES].sort());
   const at = (flow: string | undefined, read: string) => commandProblems([{ id: "P6.99-x", standing: ["4.4"], description: "d", host: "control", phase: 6, cmds: [["bash", "-c", `echo ${read}`]], expectExit: 0, receipts: [], irreversible: false, ...(flow ? { flow } : {}) }] as never, model, null);
-  expect(at("fund", "{sheet:FUND_TVL_CAP} {sheet:KEEPER_ADDRESS} {m:fund.fund} {m:fund-timelock.timelock} {m:receipt.consensus_receipt} {m:safe.safe}")).toEqual([]);
+  expect(at("fund", "{sheet:FUND_TVL_CAP} {sheet:KEEPER_ADDRESS} {m:fund.fund} {m:fund-timelock.timelock} {m:fund-receipt.consensus_receipt} {m:safe.safe}")).toEqual([]);
   expect(at("fund", "{sheet:VAULT_USDC_TVL_CAP}")).toEqual(["P6.99-x: unknown placeholder {sheet:VAULT_USDC_TVL_CAP}"]);
   expect(at("fund", "{m:router.router}")).toEqual(["P6.99-x: unknown placeholder {m:router.router}"]);
   expect(at(undefined, "{sheet:FUND_TVL_CAP}")).toEqual(["P6.99-x: unknown placeholder {sheet:FUND_TVL_CAP}"]);

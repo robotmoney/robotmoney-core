@@ -16,7 +16,7 @@ function scriptSource(path: string): string {
   const base = path.replace(/[^/]+$/, "");
   const extra = /BasketVaultDeployBase/.test(own) ? read(`${base}BasketVaultDeployBase.sol`) : "";
   // Issue 1808: the proxy stages read SAFE_ADDRESS, TIMELOCK_MIN_DELAY and UPGRADE_MODE through UpgradeAuthority.
-  const upgrade = /UpgradeAuthority|BasketVaultDeployBase|FundSystemBase|CoreTimelockHandover/.test(own) ? read(`${base}UpgradeAuthority.sol`) : "";
+  const upgrade = /UpgradeAuthority|BasketVaultDeployBase|FundSystemBase|CoreTimelockHandover|is DeployConsensusRecommendationReceipt/.test(own) ? read(`${base}UpgradeAuthority.sol`) : "";
   // Deploy 4: the fund stages share FundSystemBase (env readers, addresses), the two handovers CoreTimelockHandover (Safe check, delay floor, CREATE2 timelock).
   const fund = /FundSystemBase/.test(own) ? read(`${base}FundSystemBase.sol`) : "";
   const handover = /CoreTimelockHandover/.test(own) ? read(`${base}CoreTimelockHandover.sol`) : "";
