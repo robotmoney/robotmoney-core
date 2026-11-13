@@ -1164,6 +1164,51 @@ contract AdversarialTest is PrototypeHarness {
         }
     }
 
+    /// @dev Owner 2026-11-13 (external review of Deploy 4): the emergency hot key keeps only the pause-class levers
+    ///      (fund `pauseDeposits`, `pauseRebalance`; queue `pauseQueue`, `freezeSettlement`). `shutdown` and
+    ///      `emergencyUnwind` end deposits or sell every holding, so they are ADMIN_ROLE's: the Safe through the
+    ///      timelock and its delay. The emergency key, the keeper and a stranger are refused both; the timelock runs
+    ///      both, and the role layout reads back.
+    function test_emergencyPowers_hotKeyPausesOnly_timelockShutsDownAndUnwinds() public fixtureCovered {
+        _holdEverything();
+        address[3] memory refused = [emergency, keeper, stranger];
+        for (uint256 i; i < refused.length; ++i) {
+            vm.prank(refused[i]);
+            vm.expectRevert(_unauthorized(refused[i], Roles.ADMIN_ROLE));
+            fund.shutdown();
+            vm.prank(refused[i]);
+            vm.expectRevert(_unauthorized(refused[i], Roles.ADMIN_ROLE));
+            fund.emergencyUnwind();
+        }
+        assertFalse(fund.isShutdown(), "no refused caller shut the fund down");
+        assertFalse(fund.depositsPaused(), "no refused caller unwound the fund");
+        assertTrue(
+            IAccessControl(address(fund)).hasRole(Roles.EMERGENCY_ROLE, emergency),
+            "the emergency key keeps EMERGENCY_ROLE"
+        );
+        assertFalse(
+            IAccessControl(address(fund)).hasRole(Roles.ADMIN_ROLE, emergency),
+            "the emergency key holds no ADMIN_ROLE"
+        );
+
+        // The pauses stay on the hot key, at once.
+        vm.prank(emergency);
+        fund.pauseDeposits();
+        assertTrue(fund.depositsPaused(), "the hot key pauses deposits");
+        vm.prank(emergency);
+        queue.pauseQueue();
+
+        // The governed path: the Safe's timelock unwinds (an operation scheduled, the delay, executed) and shuts down.
+        uint256 idleBefore = fund.idleUsdc();
+        vm.prank(address(timelock));
+        fund.emergencyUnwind();
+        assertGe(fund.idleUsdc(), idleBefore, "the unwind moved holdings to idle USDC");
+        timelockExecute(address(fund), abi.encodeCall(fund.shutdown, ()));
+        assertTrue(fund.isShutdown(), "the timelock shut the fund down");
+        (uint256 tvlCap,,,) = fund.config();
+        assertEq(tvlCap, 0, "shutdown closes the TVL cap");
+    }
+
     function _unauthorized(address who, bytes32 role) internal pure returns (bytes memory) {
         return
             abi.encodeWithSelector(

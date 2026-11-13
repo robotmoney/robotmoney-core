@@ -1363,7 +1363,8 @@ contract FlowQueueTest is FlowQueueBase {
     /// @notice Check 1: a shut-down fund leaves deposits unprocessed; redemptions settle alone.
     function test_check1_aShutDownFund_redemptionsSettleAlone() public fixtureCovered {
         _twoSidedSetup(bucketVec(6_500, 3_500));
-        vm.prank(emergency);
+        // ADMIN_ROLE (the timelock) since the owner's 2026-11-13 split; the emergency key only pauses.
+        vm.prank(address(timelock));
         fund.shutdown();
         vm.recordLogs();
         uint256 sid = _keeperSettle();
