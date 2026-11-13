@@ -383,7 +383,11 @@ jobs:
         run: forge build
 
       - name: forge test (one-vault prototype and Deploy 4 fund system)
-        run: bash .github/scripts/forge_test_require_executed.sh -vvv --no-match-test "^testFail_" --match-path "contracts/test/prototype/**"
+        # -vv, not -vvv: -vvv makes forge keep an execution trace of every test in case it fails, and the replay
+        # suites run hundreds of millions of gas each. Measured with the runner's 4 threads: 19.7 GB peak with -vvv,
+        # 2.4 GB without, on a runner with 16 GB, where the step was killed (exit 143) twice at about 28 minutes.
+        # Which tests run and what passes are unchanged; for a failure's trace rerun that test locally with -vvvv.
+        run: bash .github/scripts/forge_test_require_executed.sh -vv --no-match-test "^testFail_" --match-path "contracts/test/prototype/**"
 
   invariant:
     name: forge-invariant-fuzz-tests
