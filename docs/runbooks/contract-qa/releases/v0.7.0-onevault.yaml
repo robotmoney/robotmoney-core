@@ -85,10 +85,28 @@ decisions:
     ref: null
   - id: "D4-4"
     question: "The rehearsal sizing of the plan: keep PLAN_DURATION at 7 days (604800) and REBALANCER_MIN_STEP_USDC at 100 USDC (100000000), or shorten and lower them. With NAV at most 1,000 USDC (FUND_TVL_CAP) most steps skip as BelowMinStep, so the plan would show no trade, and P6.76 runs 7 to 14 days until the plan converges or expires"
-    status: open
-    answer: null
-    decidedOn: null
-    ref: null
+    status: decided
+    answer: "Shorten and lower them, as rehearsal sizing for a NAV of at most 1,000 USDC: PLAN_DURATION=86400 (1 day, the contract minimum) so the keeper-step rows finish inside the QA window, and REBALANCER_MIN_STEP_USDC=1000000 (1 USDC) so steps trade at this NAV. deploy-4.env carries both. A production sizing is a separate decision."
+    decidedOn: 2026-11-13
+    ref: "owner (coordinator) decision in the Deploy 4 tooling session, 2026-11-13"
+  - id: "D4-6"
+    question: "Must Deploy 4 wait for a merge to dev: the frozen counts on a reviewed commit merged to dev (runbook 3, step 5) and the one-vault branch merged first"
+    status: decided
+    answer: "No. Deploy 4 runs from the branch deploy4/tooling (on docs/single-vault-rebalancer-proposal). The deploy checkout is the release candidate tag release/v0.7.0-onevault-rc.N-rehearsal. The frozen counts for that sha are committed on the same branch in a later commit, and the counts checkout is that later commit. The {gate} list placeholder expands to nothing for this run: --counts-require-origin-dev would refuse a counts commit that is not on origin/dev. The gate still proves the counts file is committed and clean in the counts checkout. The branch merges to dev only after Deploy 4 succeeds. This is a deviation from runbook 3 step 5 for this rehearsal only, never for a production run. It follows the Deploy 3 precedent (releases/v0.5.0.yaml, rc-tag-and-branch-counts)."
+    decidedOn: 2026-11-13
+    ref: "owner (coordinator) decision in the Deploy 4 tooling session, 2026-11-13"
+  - id: "D4-7"
+    question: "Does the fund deploy paused, with a Safe unpause round before the first request, as the vaults do (deployPaused, stage 13)"
+    status: decided
+    answer: "No. The fund deploys open: RobotMoneyFund.initialize leaves depositsPaused false and DeployFund.s.sol does not pause it, so no row schedules or executes an unpause round for the fund before the QA rounds. The only unpause in this runbook is the pause drill's own restore (P9.61, P9.62), which undoes the drill's pause through the Safe and the timelock. Flows are bounded by FUND_TVL_CAP (1,000 USDC) and run through the queue only."
+    decidedOn: 2026-11-13
+    ref: "owner (coordinator) decision in the Deploy 4 tooling session, 2026-11-13"
+  - id: "D4-8"
+    question: "The keeper key of the fund system (KEEPER_ROLE on the queue and the rebalancer)"
+    status: decided
+    answer: "0x75E3f84949d5e0aB621EEb06537A1a944274768B, the owner's new keeper key (public address only; its keystore stays beside the others under the same passphrase scheme). deploy-4.env carries it."
+    decidedOn: 2026-11-13
+    ref: "owner (coordinator) decision in the Deploy 4 tooling session, 2026-11-13"
   - id: "D4-5"
     question: "The fund register's receipt submitter: a Safe, as runbook 4.10 requires (then a tool must send the Safe's recordReceipt transaction, which none does yet: P6.72 fails until it exists), or a key for this rehearsal only"
     status: open
