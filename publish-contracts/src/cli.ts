@@ -601,23 +601,8 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     if (rowRefusal !== undefined) throw new PublishError("USAGE", rowRefusal);
     // The single-vault redeploy is refused on 8453 in production HERE, before any signer or passphrase exists (issue 1796).
     if (a.verb === REDEPLOY_VERB) { const why = redeployRefusal(rpcChainId, sheet.kind); if (why !== undefined) throw new PublishError("USAGE", why); }
-    // Too few owner signers for a run that reaches prove-control on 8453 is refused HERE, before any signer, forge call or stage 1 (qa-plan B1, review-security-031):
-    // the proof needs every owner, and finding that out at stage 11 left stages 1-10 broadcast with the deployer holding every role.
-    const shortfall = ownerSignerShortfall({ chainId: rpcChainId, verb: a.verb, stage: a.stage, dryRun: a.dryRun, specs: a.ownerSigners, sheet, claimOf: (spec) => claimedOwnerOf(spec, cwd) });
-    if (shortfall !== undefined) throw shortfall;
-    log.log("info", "run.checks_ok", { deployment_kind: sheet.kind, chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
 
     const coreDir = a.coreDir ? resolve(cwd, a.coreDir) : defaultCoreDir(cwd);
-    const manifestOut = env[MANIFEST_DIR_ENV] ? resolve(cwd, env[MANIFEST_DIR_ENV]!) : undefined;
-    if (manifestOut) log.log("info", "run.manifest_dir", { dir: manifestOut, source: MANIFEST_DIR_ENV });
-    const head = readGitHead(coreDir);
-    if (head !== a.coreSha) throw new PublishError("USAGE", `the core checkout ${coreDir} is at ${head ?? "an unknown commit"}, not the DEPLOY_SHA ${a.coreSha}`);
-    // DEPLOY_SHA: HEAD must equal it and the tree must be clean (a modified file would run code the sha does not name)
-    // read-only `git -C DIR status --porcelain` through the injectable runner: the one allowed spawn besides forge and cast
-    const dirty = await dirtyTreeLines(run, coreDir, rpcChainId, castEnv);
-    if (dirty.length > 0) throw new PublishError("USAGE", `the core checkout ${coreDir} has uncommitted changes (${dirty.length}): ${dirty.slice(0, 5).join("; ")}. A deploy runs the DEPLOY_SHA exactly; commit, stash or clean first.`, { dirty: dirty.slice(0, 20) });
-    // exitFeeBps is bounded by the vault maximum defined in the core contracts at the DEPLOY_SHA
-    assertExitFeeBound(coreDir, sheet.vaults);
     // the stage table is core's, at the DEPLOY_SHA: no script, env, artifact or manifest name is kept in this repo.
     // Issue 1833: the per-vault rules this CLI loaded from its own checkout must be that table's, or the CLI runs from another sha. Checked before any verb runs.
     // Issue 1851: except the emergency pause-all, which reads no per-vault rule: a mismatch there is one warning naming both tables, never a refusal.
@@ -634,6 +619,23 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     }
     stageState = peekStageState(); // issue 1892: the stage list is process-wide; the run puts back what it found (a test process runs many mains)
     useStageTable(stageTable, a.system);
+    // Too few owner signers for a run that reaches prove-control on 8453 is refused HERE, before any signer, forge call or stage 1 (qa-plan B1, review-security-031):
+    // the proof needs every owner, and finding that out at stage 11 left stages 1-10 broadcast with the deployer holding every role. It reads the stage list of the
+    // run's system, so it runs right after the table is in use: before it (Deploy 4, 2026-11-13) a fresh CLI process crashed on 8453 with an empty stage list.
+    const shortfall = ownerSignerShortfall({ chainId: rpcChainId, verb: a.verb, stage: a.stage, dryRun: a.dryRun, specs: a.ownerSigners, sheet, claimOf: (spec) => claimedOwnerOf(spec, cwd) });
+    if (shortfall !== undefined) throw shortfall;
+    log.log("info", "run.checks_ok", { deployment_kind: sheet.kind, chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
+    // The checkout checks read only, as the table load above does: the owner check and the table come first, so a refusal names its own cause.
+    const manifestOut = env[MANIFEST_DIR_ENV] ? resolve(cwd, env[MANIFEST_DIR_ENV]!) : undefined;
+    if (manifestOut) log.log("info", "run.manifest_dir", { dir: manifestOut, source: MANIFEST_DIR_ENV });
+    const head = readGitHead(coreDir);
+    if (head !== a.coreSha) throw new PublishError("USAGE", `the core checkout ${coreDir} is at ${head ?? "an unknown commit"}, not the DEPLOY_SHA ${a.coreSha}`);
+    // DEPLOY_SHA: HEAD must equal it and the tree must be clean (a modified file would run code the sha does not name)
+    // read-only `git -C DIR status --porcelain` through the injectable runner: the one allowed spawn besides forge and cast
+    const dirty = await dirtyTreeLines(run, coreDir, rpcChainId, castEnv);
+    if (dirty.length > 0) throw new PublishError("USAGE", `the core checkout ${coreDir} has uncommitted changes (${dirty.length}): ${dirty.slice(0, 5).join("; ")}. A deploy runs the DEPLOY_SHA exactly; commit, stash or clean first.`, { dirty: dirty.slice(0, 20) });
+    // exitFeeBps is bounded by the vault maximum defined in the core contracts at the DEPLOY_SHA
+    assertExitFeeBound(coreDir, sheet.vaults);
     const evidenceDir = resolve(cwd, a.evidence ?? join("evidence", `publish-${rpcChainId}-${a.coreSha.slice(0, 12)}`));
     const buildCtx = (frozen: RunContext["frozen"], measure: boolean, lazySigner = false): RunContext => {
       if (a.signer!.startsWith("address:") && !a.dryRun) throw new PublishError("USAGE", "an address: signer cannot sign: it is accepted with --dry-run only");
