@@ -1262,6 +1262,23 @@ steps:
     flow: "fund"
     onlyFor: "twin"
     added: "v0.7.0-onevault"
+  - id: "P6.80-fund-twin-feeds-refresh"
+    standing: ["9", "4.4"]
+    description: "On the Twin only, right after P6.59 proved the refusal: the Twin feed step (twin-feeds.ts refresh, owner decision 2026-11-13, D4-9): each basket and peg feed (ETH / USD, cbBTC / USD, USDC / USD) gets one new round on its real aggregator that restates the answer it reported at the pin block, stamped at the fork clock, read back through the real proxy and journaled in feed-refresh.jsonl; the sequencer feed is read, never written; no pool, token, fund or queue slot is written and no code is etched. Then the fund and the queue read again: totalAssets() and quoteDeposit of FLOW_MIN_REQUEST_USDC return. The pools stay at the pin, so the restated pin answer keeps check 4 (each basket TWAP within FLOW_REF_BAND_BPS of its feed) where it was at the pin"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bun", "publish-contracts/src/ci/twin-feeds.ts", "refresh", "--rpc", "{rpcUrl}", "--journal", "{runDir}/twin/feed-refresh.jsonl", "--out", "{runDir}/twin/feed-refresh-P6.80.json"]
+      - ["bash", "-c", 'cast call "{m:fund.fund}" "totalAssets()(uint256)" && cast call "{m:queue.queue}" "quoteDeposit(uint256)((uint256,uint256,uint256,uint64,uint64))" "{sheet:FLOW_MIN_REQUEST_USDC}"']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/twin", "pattern": "feed-refresh.jsonl", "required": true}
+    irreversible: false
+    flow: "fund"
+    onlyFor: "twin"
+    added: "v0.7.0-onevault"
   - id: "P6.60-fund-request-deposits"
     standing: ["4.4"]
     description: "The deployer approves the queue for 3 USDC and requests three deposits of 1 USDC (FLOW_MIN_REQUEST_USDC), each bounded by quoteDeposit's boundPrice, in one step: each request is the newest id, owned by the deployer, pending; the deployer's USDC fell by exactly 3 USDC (the queue escrows it)"
@@ -1288,6 +1305,22 @@ steps:
     flow: "fund"
     onlyFor: ["twin", "rehearsal"]
     writes: ["fund-deposit-bound", "fund-usdc-before-requests", "fund-request-a", "fund-request-b", "fund-request-c", "fund-request-epoch", "fund-usdc-after-requests"]
+    added: "v0.7.0-onevault"
+  - id: "P6.81-fund-twin-clock-settle-deposits"
+    standing: ["9", "4.4"]
+    description: "On the Twin only, before P6.61: the Twin clock moves forward to settleableAt of the requests' epoch (the epoch end plus FLOW_SETTLE_WINDOW, the time P6.61 waits for; anvil_setNextBlockTimestamp, never back), then the Twin feed step (twin-feeds.ts refresh, owner decision 2026-11-13, D4-9): each basket and peg feed (ETH / USD, cbBTC / USD, USDC / USD) gets one new round on its real aggregator that restates the answer it reported at the pin block, stamped at the fork clock, read back through the real proxy and journaled in feed-refresh.jsonl; the sequencer feed is read, never written; no pool, token, fund or queue slot is written and no code is etched. An idle anvil mines no block, so P6.61's wait on the latest block's time would never end on the Twin; on 8453 it waits on the live chain"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'at=$(cast call "{m:queue.queue}" "settleableAt(uint64)(uint64)" "{state:fund-request-epoch}" | cut -d" " -f1) && echo "settleable at $at" && bun publish-contracts/src/ci/twin-feeds.ts refresh --rpc "{rpcUrl}" --advance-to "$at" --journal {runDir}/twin/feed-refresh.jsonl --out {runDir}/twin/feed-refresh-P6.81.json']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/twin", "pattern": "feed-refresh.jsonl", "required": true}
+    irreversible: false
+    flow: "fund"
+    onlyFor: "twin"
     added: "v0.7.0-onevault"
   - id: "P6.61-fund-settle-deposits"
     standing: ["4.4"]
@@ -1332,6 +1365,23 @@ steps:
     writes: ["fund-claim-a-usdc", "fund-shares-before-a", "fund-shares-after-a", "fund-shares-a"]
     exercises: "vault-deposit"
     added: "v0.7.0-onevault"
+  - id: "P6.82-fund-twin-feeds-after-hold"
+    standing: ["9", "4.4"]
+    description: "On the Twin only, after P6.62 (whose 24 h FLOW_MIN_HOLD the runner passes on the Twin by one journaled clock warp of the remaining seconds, scripts/runbook/run.ts): the Twin feed step (twin-feeds.ts refresh, owner decision 2026-11-13, D4-9): each basket and peg feed (ETH / USD, cbBTC / USD, USDC / USD) gets one new round on its real aggregator that restates the answer it reported at the pin block, stamped at the fork clock, read back through the real proxy and journaled in feed-refresh.jsonl; the sequencer feed is read, never written; no pool, token, fund or queue slot is written and no code is etched. P6.63's quoteRedeem needs fresh feeds"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bun", "publish-contracts/src/ci/twin-feeds.ts", "refresh", "--rpc", "{rpcUrl}", "--journal", "{runDir}/twin/feed-refresh.jsonl", "--out", "{runDir}/twin/feed-refresh-P6.82.json"]
+      - ["bash", "-c", 'cast call "{m:fund.fund}" "totalAssets()(uint256)" && cast call "{m:queue.queue}" "quoteDeposit(uint256)((uint256,uint256,uint256,uint64,uint64))" "{sheet:FLOW_MIN_REQUEST_USDC}"']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/twin", "pattern": "feed-refresh.jsonl", "required": true}
+    irreversible: false
+    flow: "fund"
+    onlyFor: "twin"
+    added: "v0.7.0-onevault"
   - id: "P6.63-fund-request-redeem"
     standing: ["4.4"]
     description: "The deployer approves the queue for request A's shares (its whole fund balance, so FLOW_MIN_REQUEST_USDC does not apply) and requests their redemption bounded by quoteRedeem's boundPrice: the request is the newest id, pending, and the deployer holds no fund shares (the queue escrows them)"
@@ -1352,6 +1402,22 @@ steps:
     flow: "fund"
     onlyFor: ["twin", "rehearsal"]
     writes: ["fund-redeem-bound", "fund-request-r", "fund-redeem-epoch"]
+    added: "v0.7.0-onevault"
+  - id: "P6.83-fund-twin-clock-settle-redeem"
+    standing: ["9", "4.4"]
+    description: "On the Twin only, before P6.64: the Twin clock moves forward to settleableAt of the redemption's epoch, then the Twin feed step (twin-feeds.ts refresh, owner decision 2026-11-13, D4-9): each basket and peg feed (ETH / USD, cbBTC / USD, USDC / USD) gets one new round on its real aggregator that restates the answer it reported at the pin block, stamped at the fork clock, read back through the real proxy and journaled in feed-refresh.jsonl; the sequencer feed is read, never written; no pool, token, fund or queue slot is written and no code is etched"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'at=$(cast call "{m:queue.queue}" "settleableAt(uint64)(uint64)" "{state:fund-redeem-epoch}" | cut -d" " -f1) && echo "settleable at $at" && bun publish-contracts/src/ci/twin-feeds.ts refresh --rpc "{rpcUrl}" --advance-to "$at" --journal {runDir}/twin/feed-refresh.jsonl --out {runDir}/twin/feed-refresh-P6.83.json']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/twin", "pattern": "feed-refresh.jsonl", "required": true}
+    irreversible: false
+    flow: "fund"
+    onlyFor: "twin"
     added: "v0.7.0-onevault"
   - id: "P6.64-fund-settle-redeem"
     standing: ["4.4"]
@@ -1582,6 +1648,23 @@ steps:
     notBefore: {"afterStep": "P6.73-fund-apply-receipt-schedule", "hours": "timelockDelay"}
     maxMinutes: 60
     added: "v0.7.0-onevault"
+  - id: "P6.84-fund-twin-feeds-before-step"
+    standing: ["9", "4.4"]
+    description: "On the Twin only, after the apply's timelock wait (P6.74) and before the keeper's first step (P6.75), whose checks 2 and 4 read the feeds: the Twin feed step (twin-feeds.ts refresh, owner decision 2026-11-13, D4-9): each basket and peg feed (ETH / USD, cbBTC / USD, USDC / USD) gets one new round on its real aggregator that restates the answer it reported at the pin block, stamped at the fork clock, read back through the real proxy and journaled in feed-refresh.jsonl; the sequencer feed is read, never written; no pool, token, fund or queue slot is written and no code is etched"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bun", "publish-contracts/src/ci/twin-feeds.ts", "refresh", "--rpc", "{rpcUrl}", "--journal", "{runDir}/twin/feed-refresh.jsonl", "--out", "{runDir}/twin/feed-refresh-P6.84.json"]
+      - ["bash", "-c", 'cast call "{m:fund.fund}" "totalAssets()(uint256)" && cast call "{m:queue.queue}" "quoteDeposit(uint256)((uint256,uint256,uint256,uint64,uint64))" "{sheet:FLOW_MIN_REQUEST_USDC}"']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/twin", "pattern": "feed-refresh.jsonl", "required": true}
+    irreversible: false
+    flow: "fund"
+    onlyFor: "twin"
+    added: "v0.7.0-onevault"
   - id: "P6.75-fund-step-round"
     standing: ["4.9"]
     description: "The keeper's first step() of the plan, right after the apply: it is mined, and the plan is still Open. At the rehearsal's size (NAV at most 1,000 USDC, REBALANCER_MIN_STEP_USDC 1 USDC) it trades or skips; the RebalanceStep or RebalanceStepSkipped event in the journaled receipt says which (decision D4-4)"
@@ -1597,6 +1680,22 @@ steps:
     irreversible: false
     flow: "fund"
     onlyFor: ["twin", "rehearsal"]
+    added: "v0.7.0-onevault"
+  - id: "P6.85-fund-twin-feeds-heartbeat"
+    standing: ["9", "4.4"]
+    description: "On the Twin only, before P6.76 (the keeper steps once every effective step interval until the plan concludes, on the wall clock): the Twin feed heartbeat starts in the background (twin-feeds.ts keep --every 300, pid in feed-keep.pid): the same refresh whenever 300 s of fork clock passed since the last, each journaled in feed-refresh.jsonl, until P6.86 writes its stop file. It restates the pin answers only and never moves the clock"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'rm -f {runDir}/twin/feed-keep.stop && (nohup bun publish-contracts/src/ci/twin-feeds.ts keep --rpc "{rpcUrl}" --every 300 --journal {runDir}/twin/feed-refresh.jsonl --stop-file {runDir}/twin/feed-keep.stop > {runDir}/twin/feed-keep.log 2>&1 & echo $! > {runDir}/twin/feed-keep.pid) && sleep 20 && kill -0 "$(cat {runDir}/twin/feed-keep.pid)" && grep -q "refresh at" {runDir}/twin/feed-keep.log']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/twin", "pattern": "feed-refresh.jsonl", "required": true}
+    irreversible: false
+    flow: "fund"
+    onlyFor: "twin"
     added: "v0.7.0-onevault"
   - id: "P6.76-fund-step-until-concluded"
     standing: ["4.9"]
@@ -1615,6 +1714,24 @@ steps:
     maxMinutes: 21000
     added: "v0.7.0-onevault"
 
+  - id: "P6.86-fund-twin-feeds-heartbeat-stop"
+    standing: ["9", "4.4"]
+    description: "On the Twin only, after P6.76: the feed heartbeat of P6.85 stops (its stop file is written and the process is gone) and one last refresh, journaled, gives the drill rows fresh feeds: each basket and peg feed (ETH / USD, cbBTC / USD, USDC / USD) gets one new round on its real aggregator that restates the answer it reported at the pin block, stamped at the fork clock, read back through the real proxy and journaled in feed-refresh.jsonl; the sequencer feed is read, never written; no pool, token, fund or queue slot is written and no code is etched"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", 'touch {runDir}/twin/feed-keep.stop && for i in $(seq 1 30); do kill -0 "$(cat {runDir}/twin/feed-keep.pid)" 2>/dev/null || break; sleep 1; done; ! kill -0 "$(cat {runDir}/twin/feed-keep.pid)" 2>/dev/null && grep -q "the heartbeat ends" {runDir}/twin/feed-keep.log']
+      - ["bun", "publish-contracts/src/ci/twin-feeds.ts", "refresh", "--rpc", "{rpcUrl}", "--journal", "{runDir}/twin/feed-refresh.jsonl", "--out", "{runDir}/twin/feed-refresh-P6.86.json"]
+      - ["bash", "-c", 'cast call "{m:fund.fund}" "totalAssets()(uint256)" && cast call "{m:queue.queue}" "quoteDeposit(uint256)((uint256,uint256,uint256,uint64,uint64))" "{sheet:FLOW_MIN_REQUEST_USDC}"']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/twin", "pattern": "feed-refresh.jsonl", "required": true}
+    irreversible: false
+    flow: "fund"
+    onlyFor: "twin"
+    added: "v0.7.0-onevault"
   # ── Phase 9, failure drills: the pause path and the recovery path run on real contracts. ──
   - id: "P9.01-pause-all"
     standing: ["4.5", "4.6"]
