@@ -1,4 +1,5 @@
 // The Twin pre-deploy of the CREATE2 libraries (issues 1721, 1808), on a stub RPC that keeps code by address.
+import { linkedSystemsCreate2Libraries } from "../src/libs-build.ts";
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { keccak256, type Hex } from "viem";
@@ -9,8 +10,7 @@ import { PREDEPLOY_SENDER, predeployLibraries } from "../src/rehearsal/predeploy
 const OUT = join(import.meta.dir, "fixtures", "build-out");
 const tick = { name: "tick_math", artifact: "TickMath", path: "contracts/lib/TickMath.sol" };
 // Deploy 4: the Twin pre-deploy serves the vaults and gateway systems; the fund system's libraries are created by its own stages
-const NON_FUND = new Set(getStageTable().stages.filter((s) => s.system !== "fund").flatMap((s) => s.create2Libraries ?? []));
-const LIBS = [tick, ...getStageTable().create2Libraries!.filter((l) => NON_FUND.has(l.name))];
+const LIBS = [tick, ...linkedSystemsCreate2Libraries(getStageTable())];
 const BUILT = buildCreate2Libraries(LIBS, OUT);
 
 /** A fake anvil: eth_sendTransaction to the factory deploys the library whose creation code the data carries. */
