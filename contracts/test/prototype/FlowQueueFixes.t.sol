@@ -923,6 +923,9 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
     function test_fix6_aNewFreezeStartsWithReturnsDisallowed() public fixtureCovered {
         FlowParams memory p = queue.flowParams();
         p.maxFreeze = 1 hours;
+        // The freeze must run out INSIDE the hold, after the timelock's allowReturn: a hold longer than maxFreeze plus
+        // the timelock delay (the 1 h default of decision D4-11 is not; 24 h is inside the hold bounds).
+        p.minHold = 24 hours;
         _setParams(p);
         (uint256 sid, uint256 claimId) = _heldDeposit();
         vm.prank(emergency);
