@@ -1,6 +1,7 @@
 // Issue 1727 with PR 1722: the relative start nonce of a rehearsal composes with adoption: the expected nonce is start + sum(effectiveCounts) + proof at every site.
 // The start is recorded at the FIRST stage (safe), before libs is adopted. A rehearsal on 8453 where the libraries already exist: libs adopts at 0 transactions and proto adopts three
 // CREATE2 libraries (7 transactions instead of 10). A stray deployer transaction before, between or after the adopted stages is refused.
+import { linkedSystemsCreate2Libraries } from "../src/libs-build.ts";
 import { describe, expect, test } from "bun:test";
 import { cpSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -12,7 +13,7 @@ import { COUNTS } from "./fixtures.ts";
 import { SCRIPT, world, type World } from "./harness.ts";
 
 const OUT = join(import.meta.dir, "fixtures", "build-out");
-const BUILT = buildCreate2Libraries(getStageTable().create2Libraries!, OUT);
+const BUILT = buildCreate2Libraries(linkedSystemsCreate2Libraries(getStageTable()), OUT); // Deploy 4: the vaults run, without the fund system's libraries
 const THREE = [BUILT.get("BasketAssetConfigGuard")!, BUILT.get("TwapTickMath")!, BUILT.get("BasketViews")!, BUILT.get("BasketSwaps")!];
 // Issue 1808: the vault stage adopts GovernedUpgrade and RobotMoneyVaultOps, proto the basket libraries. The gateway system adopts GatewayWindows in its own run (issue 1892).
 const VAULT_LIBS = [BUILT.get("GovernedUpgrade")!, BUILT.get("RobotMoneyVaultOps")!];

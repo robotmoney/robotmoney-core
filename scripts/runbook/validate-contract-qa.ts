@@ -306,6 +306,9 @@ export function loadModel(root: string = ROOT): CliModel {
   tools.set("scripts/runbook/qa-assert.ts", { verbs: new Set(["eq", "ge", "within-bps", "receipt-id", "receipt-digest", "sub", "router-legs", "legs-differ", "receipt-changes-split"]), flags: new Set() });
   tools.set("scripts/runbook/run-record.ts", { verbs: new Set(["go", "nonce", "report", "signoff"]), flags: new Set(["kind", "run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag", "step", "vaults", "release", "sender", "mark"]) });
   tools.set("scripts/runbook/receipt-payload.ts", { flags: new Set(["out", "weights", "session-id"]) });
+  // Deploy 4: the fund system's schema 1.1 payload builder (its flags are its own FLAGS table) and the prototype's receipt checker (the flags of its usage header).
+  tools.set("scripts/runbook/fund-receipt-payload.ts", { flags: new Set([...(/const FLAGS = new Set\(\[([^\]]*)\]/.exec(read(root, "scripts/runbook/fund-receipt-payload.ts"))?.[1] ?? "").matchAll(/"([a-z][a-z0-9-]*)"/g)].map((m) => m[1]!)) });
+  tools.set("scripts/prototype/check-receipt-assets.ts", { flags: flagsIn(read(root, "scripts/prototype/check-receipt-assets.ts").split(/^import /m)[0]!) });
 
   const rs = read(root, "clients/rust-payment-client/src/cli.rs");
   const variants = (enumName: string): Set<string> => {
@@ -335,7 +338,7 @@ export function expandArgv(argv: string[]): string[] {
 /** Words of a `bash -c` string, quotes and shell punctuation removed. */
 export const wordsOf = (script: string): string[] => script.replace(/["'`]/g, " ").split(/[\s;|&()<>]+/).filter(Boolean);
 
-const KNOWN_TOOLS = ["publish-contracts/src/cli.ts", "scripts/stage/core-stack.ts", "target/debug/rmpc", "publish-contracts/src/safe/cli.ts", "publish-contracts/src/rehearsal/cli.ts", "scripts/devnet/twin-fork.ts", "publish-contracts/src/evidence-check.ts", "scripts/ci/check-sha-green.ts", "publish-contracts/src/ci/merge-sheet.ts", "publish-contracts/src/ci/scan-rehearsal-secrets.ts", "scripts/stage/dapp-served-check.ts", "scripts/release/preflight-guards.sh", "scripts/runbook/validate-contract-qa.ts", "scripts/runbook/qa-assert.ts", "scripts/runbook/run-record.ts", "scripts/runbook/receipt-payload.ts"];
+const KNOWN_TOOLS = ["publish-contracts/src/cli.ts", "scripts/stage/core-stack.ts", "target/debug/rmpc", "publish-contracts/src/safe/cli.ts", "publish-contracts/src/rehearsal/cli.ts", "scripts/devnet/twin-fork.ts", "publish-contracts/src/evidence-check.ts", "scripts/ci/check-sha-green.ts", "publish-contracts/src/ci/merge-sheet.ts", "publish-contracts/src/ci/scan-rehearsal-secrets.ts", "scripts/stage/dapp-served-check.ts", "scripts/release/preflight-guards.sh", "scripts/runbook/validate-contract-qa.ts", "scripts/runbook/qa-assert.ts", "scripts/runbook/run-record.ts", "scripts/runbook/receipt-payload.ts", "scripts/runbook/fund-receipt-payload.ts", "scripts/prototype/check-receipt-assets.ts"];
 
 /** The invocations of known tools in one command: the tool and the words after it. A `bash -c` script is searched word by word. */
 export function invocations(argv: string[]): { tool: string; args: string[] }[] {

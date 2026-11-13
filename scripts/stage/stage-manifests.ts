@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import stageTable from "../deploy/stage-table.json";
 
 export interface StageTableShape {
-  stages: { name: string; manifest?: string | null; system?: "vaults" | "gateway" }[];
+  stages: { name: string; manifest?: string | null; system?: "vaults" | "gateway" | "fund" }[];
   vaults: { key: string; stage: string; manifest: string }[];
 }
 export const STAGE_TABLE: StageTableShape = stageTable as StageTableShape;
@@ -18,9 +18,10 @@ export function manifestOf(stage: string, table: StageTableShape = STAGE_TABLE):
   return basename(row.manifest);
 }
 
-/** Every manifest a full publish writes: one per stage that has one. */
+/** Every manifest a full publish of the stage stack writes (the vaults and gateway systems): one per stage that has one. Deploy 4: the fund system is never part of
+ *  the stage stack; its run writes its own manifests to its own directory. */
 export function allManifests(table: StageTableShape = STAGE_TABLE): string[] {
-  return table.stages.filter((s) => s.manifest).map((s) => basename(s.manifest as string));
+  return table.stages.filter((s) => s.manifest && s.system !== "fund").map((s) => basename(s.manifest as string));
 }
 
 export function expectedManifestCount(table: StageTableShape = STAGE_TABLE): number {

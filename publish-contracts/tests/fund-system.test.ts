@@ -118,7 +118,7 @@ describe("the fund system's CLI verbs (Deploy 4)", () => {
     expect(parseCli(["verify", ...base]).system).toBe("fund");
     const rec = ["--receipt-id", `0x${"11".repeat(32)}`, "--payload-digest", `0x${"22".repeat(32)}`, "--payload-uri", "https://x.invalid/r", "--payload", "p.json", "--submitter", "0x2222222222222222222222222222222222222222"];
     expect(parseCli(["record-receipt", ...base, ...rec])).toMatchObject({ verb: "record-receipt", system: "fund" });
-    for (const v of ["govern", "pause-all", "redeploy-vault", "deploy-implementation"]) expect(() => parseCli([v, ...base])).toThrow("the fund system runs publish, verify and record-receipt only");
+    for (const v of ["govern", "pause-all", "redeploy-vault"]) expect(() => parseCli([v, ...base])).toThrow("belongs to the vaults system: the fund system runs publish, verify, record-receipt");
     expect(() => parseCli([...base, "--stage", "govern"])).toThrow("the fund system has no govern stage");
   });
 });

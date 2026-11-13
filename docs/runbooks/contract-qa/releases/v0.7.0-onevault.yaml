@@ -47,16 +47,18 @@ notes: |
   equals {v050ManifestDir} and {evidenceDir} equals {v050EvidenceDir} (a rule of the v0.6.0 upgrade flow): the fund run's config sets them equal. The
   run is complete when P10.62-fund-signoff wrote go/signoff.json (the runner's closing line names the template's P10.52).
 
-  What no tool does yet, so the run cannot complete until it exists. (1) Recording a receipt on the fund register through the submitter Safe: publish-contracts
-  record-receipt refuses --system fund, and safe/cli.ts propose builds only timelock calls, not a Safe transaction to another contract. P6.72 therefore only
-  reads the record back and fails until a tool sends it (decision D4-5); every step after it waits on it. (2) A fund receipt payload or vector builder:
-  receipt-payload.ts writes the vaults system's bucket weights, and nothing maps a receipt payload to the fund's per-asset vector or checks that the applied
-  vector is the payload's, so the vector is the operator's {fundTargetAssets} and {fundTargetBps}, checked only for its length and its 10000 bps sum.
-  (3) A second fund-system implementation: deploy-implementation refuses --system fund, so the upgrade lifecycle (P9.70, P9.71) upgrades the rebalancer
-  proxy to the implementation it already runs. It proves the governed path (Safe, timelock, upgradeToAndCall, the slot read back) and not a version change.
-  (4) The Twin cannot refresh price feeds: a pinned fork serves no new feed round, so a settle or a step past a feed's maximum age is refused there with
-  checkSettle Feed or a skipped step; the 8453 rehearsal reads live feeds. (5) The fund stages' frozen counts at the rc sha come from the Twin run (P1.62);
-  no step of this file commits them.
+  Tools (2026-11-13). The receipt is built as a schema 1.1 per-asset payload by scripts/runbook/fund-receipt-payload.ts and checked by
+  scripts/prototype/check-receipt-assets.ts (P6.70, P6.71); publish-contracts record-receipt --system fund records it on the fund register through the
+  submitter Safe (P6.72, decision D4-5); the applied vector is the receipt's own (P6.73). The upgrade lifecycle deploys RebalancerV2
+  (contracts/test/helpers/FundUpgradeV2.sol: the Rebalancer plus upgradeMarker(), no new state, never a stage) with deploy-implementation --system fund,
+  upgrades the rebalancer to it through the fund Safe and timelock, reads the new code back, and upgrades back to the release build so the final verify
+  compares the release (P9.69 to P9.72). The fund stages' frozen counts at the rc sha are committed on this branch in a later commit (decision D4-6).
+
+  What is still open. The Twin cannot refresh price feeds: a pinned fork serves no new feed round while its clock moves on, so ETH / USD is stale there 300 to
+  1,500 s of chain time after the pin. P0.71 requires 600 s of freshness before the publish; P6.59 records the fund's refusal (FeedUnhealthy,
+  SettleBlocked Feed) once past it; P6.60 and every settle then refuse on the Twin, so the Twin run stops at P6.60 and the queue's timed rows are proven on
+  8453 only, which reads live feeds (README, The fund flow). That breaks the rule that QA sends everything 8453 sends: an owner decision, not a tool fix.
+  No feed storage is ever written.
 
   The pinned records v0.4.0, v0.5.0 and v0.6.0 are not changed. Open owner decisions are the decisions: list below. A production run refuses while any is
   open, and so does productionReady: false.
@@ -108,11 +110,11 @@ decisions:
     decidedOn: 2026-11-13
     ref: "owner (coordinator) decision in the Deploy 4 tooling session, 2026-11-13"
   - id: "D4-5"
-    question: "The fund register's receipt submitter: a Safe, as runbook 4.10 requires (then a tool must send the Safe's recordReceipt transaction, which none does yet: P6.72 fails until it exists), or a key for this rehearsal only"
-    status: open
-    answer: null
-    decidedOn: null
-    ref: null
+    question: "The fund register's receipt submitter: a Safe, as runbook 4.10 requires (then a tool must send the Safe's recordReceipt transaction), or a key for this rehearsal only"
+    status: decided
+    answer: "A Safe, as runbook 4.10 requires. publish-contracts record-receipt --system fund records the receipt directly on the fund register (fund-receipt.json) through the submitter Safe: threshold owners sign, the deployer only pays gas, every check of the vaults path runs first (P6.72). The payload is schema 1.1, per-asset weights, built and checked by scripts/runbook/fund-receipt-payload.ts and scripts/prototype/check-receipt-assets.ts (P6.70, P6.71)."
+    decidedOn: 2026-11-13
+    ref: "owner (coordinator) instruction in the Deploy 4 tooling session, 2026-11-13: close every runbook tool gap"
 recovery: |
   Contracts are immutable; there is no in-place rollback (runbook 4.6). Before P1.61-fund-publish nothing was sent: fix on the branch and restart at
   P0.60. A failed P1.61 reruns the same command, and the runner adds --resume. After the handover the emergency key pauses deposits on the fund and pauses
@@ -388,25 +390,6 @@ steps:
     onlyFor: ["twin", "rehearsal"]
     maxMinutes: 30
     added: "v0.7.0-onevault"
-  - id: "P0.65-fund-twin-fork"
-    standing: ["9"]
-    description: "The Twin chain (918453) of the fund run, started as P0.12 starts it for the vaults flows: a pinned lazy fork of Base on the stage host (never on this machine), the host checkout at the run's sha, port 8545 checked free, an ssh tunnel to {tunnelPort} reopened on every invocation, anvil.json copied back. A pinned fork serves no new feed round, so a fund settle or step past a feed's maximum age is refused there (the release's notes)"
-    host: "control"
-    phase: 0
-    cmds:
-      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; mkdir -p $HOME/{stageDir} && cd {stageCore} && git fetch -q origin && git checkout -q --detach {coreSha} && git submodule update -q --init --recursive && test -z \"$(git status --porcelain)\" && test \"$(git rev-parse HEAD)\" = {coreSha} && if test -s $HOME/{stageDir}/twin/anvil.json && (echo >/dev/tcp/127.0.0.1/8545) 2>/dev/null; then echo \"the fork on 8545 already runs\"; elif (echo >/dev/tcp/127.0.0.1/8545) 2>/dev/null; then echo \"port 8545 is busy on the stage host\" >&2; exit 70; else bun scripts/devnet/twin-fork.ts start --port 8545 --state-dir $HOME/{stageDir}/twin; fi"]
-      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; cd {stageCore} && bun scripts/devnet/twin-fork.ts wait-ready --port 8545 --state-dir $HOME/{stageDir}/twin"]
-      - ["bash", "-c", "ssh -o BatchMode=yes -S {runDir}/tunnel-8545.sock -O check {stageHost} 2>/dev/null || { rm -f {runDir}/tunnel-8545.sock; ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -f -N -M -S {runDir}/tunnel-8545.sock -L {tunnelPort}:127.0.0.1:8545 {stageHost}; }"]
-      - ["bash", "-c", "mkdir -p {runDir}/twin && scp -q {stageHost}:{stageDir}/twin/anvil.json {runDir}/twin/anvil.json"]
-    expectExit: 0
-    receipts:
-      - {"dir": "{runDir}/twin", "pattern": "anvil.json", "required": true}
-    irreversible: false
-    flow: "fund"
-    onlyFor: "twin"
-    refresh: true
-    maxMinutes: 15
-    added: "v0.7.0-onevault"
   - id: "P0.66-fund-twin-keys"
     standing: ["4.3"]
     description: "Throwaway keystores for the deployer, pauser, emergency key and three Safe owners, and a second set whose DEPLOYER keystore is the Twin keeper ({runDir}/keeper-keys/DEPLOYER); the passphrase stays in a 0600 file; the public addresses, the keeper and the Twin chain ids become the fund sheet fragment"
@@ -482,19 +465,40 @@ steps:
     onlyFor: ["twin", "rehearsal"]
     maxMinutes: 30
     added: "v0.7.0-onevault"
+  - id: "P0.65-fund-twin-fork"
+    standing: ["9"]
+    description: "The Twin chain (918453) of the fund run, started as P0.12 starts it for the vaults flows: a pinned lazy fork of Base on the stage host (never on this machine), the host checkout at the run's sha, port 8545 checked free, an ssh tunnel to {tunnelPort} reopened on every invocation, anvil.json copied back. It starts after the sheet and build checks, right before P0.71, because the fund's feeds are fresh on it only for a while: a pinned fork serves each Chainlink feed's round at the pin forever, while its clock moves on (anvil stamps a new block with the pin's time plus the wall time since it started, and a warp adds to it), so ETH / USD (maxFeedAge 1,500 s) goes stale 300 to 1,500 s of chain time after the pin and cbBTC / USD and USDC / USD (86,700 s) within a day (README, The fund flow). To restart it at a fresh pin, stop it on the host (twin-fork.ts stop, as P10.63 does) and invoke the run again: this step starts a new fork and P0.71 funds it again"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; mkdir -p $HOME/{stageDir} && cd {stageCore} && git fetch -q origin && git checkout -q --detach {coreSha} && git submodule update -q --init --recursive && test -z \"$(git status --porcelain)\" && test \"$(git rev-parse HEAD)\" = {coreSha} && if test -s $HOME/{stageDir}/twin/anvil.json && (echo >/dev/tcp/127.0.0.1/8545) 2>/dev/null; then echo \"the fork on 8545 already runs\"; elif (echo >/dev/tcp/127.0.0.1/8545) 2>/dev/null; then echo \"port 8545 is busy on the stage host\" >&2; exit 70; else bun scripts/devnet/twin-fork.ts start --port 8545 --state-dir $HOME/{stageDir}/twin; fi"]
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; cd {stageCore} && bun scripts/devnet/twin-fork.ts wait-ready --port 8545 --state-dir $HOME/{stageDir}/twin"]
+      - ["bash", "-c", "ssh -o BatchMode=yes -S {runDir}/tunnel-8545.sock -O check {stageHost} 2>/dev/null || { rm -f {runDir}/tunnel-8545.sock; ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -f -N -M -S {runDir}/tunnel-8545.sock -L {tunnelPort}:127.0.0.1:8545 {stageHost}; }"]
+      - ["bash", "-c", "mkdir -p {runDir}/twin && scp -q {stageHost}:{stageDir}/twin/anvil.json {runDir}/twin/anvil.json"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/twin", "pattern": "anvil.json", "required": true}
+    irreversible: false
+    flow: "fund"
+    onlyFor: "twin"
+    refresh: true
+    maxMinutes: 15
+    added: "v0.7.0-onevault"
   - id: "P0.71-fund-twin-fund"
     standing: ["9"]
-    description: "On the Twin fork only: gas for every throwaway key and the keeper, and the real FiatToken balance of the deployer"
+    description: "On the Twin fork only: gas for every throwaway key and the keeper, and the real FiatToken balance of the deployer. Then the fund's real feeds are read on the fork (publish-contracts/src/ci/twin-feeds.ts check, read only): each must stay fresh for 600 s more, the time the publish needs to reach its fund stage, whose addAsset refuses a stale feed. A pinned fork serves no newer round, so a feed too close to its maximum age fails this step: stop the fork on the host and invoke the run again (P0.65 starts a new fork at a fresh pin, this step funds it again). No feed is written and no mock is etched"
     host: "control"
     phase: 0
     cmds:
       - ["bun", "publish-contracts/src/rehearsal/cli.ts", "fund-gas", "--rpc", "{rpcUrl}", "--sheet", "{sheet}"]
       - ["bun", "publish-contracts/src/rehearsal/cli.ts", "fund-usdc", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--usdc-units", "2000000000"]
       - ["bash", "-c", 'cast rpc anvil_setBalance "{sheet:KEEPER_ADDRESS}" 0x8ac7230489e80000 > /dev/null && bun scripts/runbook/qa-assert.ts ge "$(cast balance "{sheet:KEEPER_ADDRESS}")" 1000000000000000000']
+      - ["bun", "publish-contracts/src/ci/twin-feeds.ts", "check", "--rpc", "{rpcUrl}", "--min-margin", "600", "--out", "{runDir}/twin/feeds-before-publish.json"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
-    receipts: []
+    receipts:
+      - {"dir": "{runDir}/twin", "pattern": "feeds-before-publish.json", "required": true}
     irreversible: false
     flow: "fund"
     onlyFor: "twin"
@@ -628,13 +632,17 @@ steps:
     added: "v0.7.0-onevault"
   - id: "P1.62-fund-twin-counts"
     standing: ["3"]
-    description: "The Twin run measured and wrote the per-stage counts of the fund stages for the sha; the 8453 rehearsal's plan and verify read the committed file"
+    description: "The Twin run measured and wrote the per-stage counts of the fund stages for the sha: the counts file of the sha exists, and the fund's counts.json built from it (rehearsal-counts build --system fund: the fund's stage counts only, named system fund, so it is never read as the vaults system's) holds every fund deployer stage and the deployer's nonce equals their sum plus the prove-control transaction. The 8453 rehearsal's plan and verify read the committed file, which holds every system's keys"
     host: "control"
     phase: 1
     cmds:
       - ["test", "-s", "{countsDir}/{coreSha}.json"]
+      - ["bash", "-c", 'bun publish-contracts/src/ci/rehearsal-counts.ts build --system fund --counts-dir {countsDir} --sha {coreSha} --nonce "$(cast nonce "{sheet:ADMIN_ADDRESS}")" --out {runDir}/twin/counts-fund.json --run-manifest {evidenceDir}/publish-run.json && bun publish-contracts/src/ci/rehearsal-counts.ts check --file {runDir}/twin/counts-fund.json']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
-    receipts: []
+    receipts:
+      - {"dir": "{runDir}/twin", "pattern": "counts-fund.json", "required": true}
     irreversible: false
     flow: "fund"
     onlyFor: "twin"
@@ -1234,6 +1242,20 @@ steps:
   # the keeper settles an epoch from its end plus FLOW_SETTLE_WINDOW (at most 7 h after a request at the sheet's 6 h epoch and 1 h window); deposit shares are
   # held FLOW_MIN_HOLD (24 h) before the claim delivers them. A redemption request below FLOW_MIN_REQUEST_USDC reverts unless it is the owner's whole balance,
   # so every exit here takes one whole claim's shares: P6.60 requests three deposits (A for P6.62 and P6.63, B for P6.67, C for P6.68). ──
+  - id: "P6.59-fund-twin-feeds-stale"
+    standing: ["9", "4.4"]
+    description: "On the Twin only: the fund's own refusal on the fork's frozen feeds, recorded. By here the Twin clock is past the ETH / USD round's stale point (the publish plus the 900 s timelock waits; else the step moves the clock forward to one second past it, never back). publish-contracts/src/ci/twin-feeds.ts probe reads, at an explicit block, totalAssets() of the fund (FeedUnhealthy(2, Stale), WETH is asset 2) and quoteDeposit of the queue (SettleBlocked(Feed, 2, Stale)) and fails on any other answer; it writes no feed and etches no mock. The queue's rows after it need fresh feeds: P6.60's quote and every settle (at least an hour after its request, past the 1,500 s ETH age on any pinned fork) refuse with this same check on the Twin, so the Twin run stops at P6.60 and those rows are proven only on the 8453 rehearsal, which reads live feeds (README, The fund flow)"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bun", "publish-contracts/src/ci/twin-feeds.ts", "probe", "--rpc", "{rpcUrl}", "--fund", "{m:fund.fund}", "--queue", "{m:queue.queue}", "--usdc", "{sheet:FLOW_MIN_REQUEST_USDC}", "--out", "{runDir}/twin/feed-probe.json"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/twin", "pattern": "feed-probe.json", "required": true}
+    irreversible: false
+    flow: "fund"
+    onlyFor: "twin"
+    added: "v0.7.0-onevault"
   - id: "P6.60-fund-request-deposits"
     standing: ["4.4"]
     description: "The deployer approves the queue for 3 USDC and requests three deposits of 1 USDC (FLOW_MIN_REQUEST_USDC), each bounded by quoteDeposit's boundPrice, in one step: each request is the newest id, owned by the deployer, pending; the deployer's USDC fell by exactly 3 USDC (the queue escrows it)"
@@ -1455,39 +1477,47 @@ steps:
     added: "v0.7.0-onevault"
   - id: "P6.70-fund-receipt-payload"
     standing: ["4.10"]
-    description: "The Twin's receipt payload: the real production envelope (scripts/runbook/receipt-payload.ts). Its bucket weights are the vaults system's; nothing binds them to the fund's per-asset vector yet (no fund receipt payload builder exists), so the vector the Safe applies is the run's {fundTargetAssets} and {fundTargetBps}. On 8453 the operator passes the receipt the canonical route serves as {receiptFile}"
+    description: "The fund receipt payload, schema 1.1 (scripts/runbook/fund-receipt-payload.ts): the real production envelope with the per-asset assets list of the deployed fund, read on chain (assetConfigs() of the fund in fund.json, each asset matched to its canonical asset map row by token or by the manifest's adapter), weighted by {fundTargetBps} (fund index order, summing to 10000), and the bucket weights the sums of those assets. The tool checks the payload with check-receipt-assets and the shared digest rule before it writes {receiptFile}, and writes this deployment's asset map to {runDir}/fund-asset-map.json. It runs on the rehearsal too: no canonical route serves a schema 1.1 fund receipt, so the run builds it, and the operator serves these exact bytes at {receiptUri} before P6.72"
     host: "control"
     phase: 6
     cmds:
-      - ["bun", "scripts/runbook/receipt-payload.ts", "--out", "{receiptFile}"]
+      - ["bash", "-c", "bun scripts/runbook/fund-receipt-payload.ts --rpc {rpcUrl} --fund-manifest {manifestDir}/fund.json --chain {chainId} --bps \"{fundTargetBps}\" --out {receiptFile} --map-out {runDir}/fund-asset-map.json > {runDir}/fund-receipt-payload.json"]
     expectExit: 0
-    receipts: []
+    receipts:
+      - {"dir": "{runDir}", "pattern": "fund-asset-map.json", "required": true}
     irreversible: false
     flow: "fund"
-    onlyFor: "twin"
+    onlyFor: ["twin", "rehearsal"]
     added: "v0.7.0-onevault"
   - id: "P6.71-fund-receipt-offline"
     standing: ["4.10"]
-    description: "The receipt id and the payload digest come from the one shared definition, never a plain keccak256 of the file"
+    description: "The payload passes scripts/prototype/check-receipt-assets.ts against this deployment's asset map (every schema 1.1 rule: field order, the bucket audit, every active asset listed in canonical order, the lending caps), and the per-asset vector it derives is the one the Safe applies: one on-chain id per fund asset (none unresolved, as many as the fund has) and the bps of {fundTargetBps}. The receipt id and the payload digest come from the one shared definition, never a plain keccak256 of the file"
     host: "control"
     phase: 6
     cmds:
+      - ["bash", "-c", "bun scripts/prototype/check-receipt-assets.ts {receiptFile} --map {runDir}/fund-asset-map.json --chain {chainId} > {runDir}/fund-receipt-vector.json"]
+      - ["bash", "-c", 'n=$(cast call "{m:fund.fund}" "assetCount()(uint256)" | cut -d" " -f1); test "$(jq -r ".asset_ids | length" {runDir}/fund-receipt-vector.json)" = "$n" && jq -e "all(.asset_ids[]; . != null)" {runDir}/fund-receipt-vector.json > /dev/null && bun scripts/runbook/qa-assert.ts eq "$(jq -r ".bps | join(\",\")" {runDir}/fund-receipt-vector.json)" "$(echo "{fundTargetBps}" | tr -d "[] ")"']
+      - ["bash", "-c", 'echo "[$(jq -r ".asset_ids | join(\",\")" {runDir}/fund-receipt-vector.json)]" > {runDir}/state/fund-target-assets && echo "[$(jq -r ".bps | join(\",\")" {runDir}/fund-receipt-vector.json)]" > {runDir}/state/fund-target-bps']
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts receipt-id {receiptFile} > {runDir}/state/fund-receipt-id"]
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts receipt-digest {receiptFile} > {runDir}/state/fund-receipt-digest"]
+      - ["bash", "-c", 'bun scripts/runbook/qa-assert.ts eq "$(jq -r .receipt_id {runDir}/fund-receipt-payload.json)" "{state:fund-receipt-id}" && bun scripts/runbook/qa-assert.ts eq "$(jq -r .payload_digest {runDir}/fund-receipt-payload.json)" "{state:fund-receipt-digest}"']
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
     receipts: []
     irreversible: false
     flow: "fund"
     onlyFor: ["twin", "rehearsal"]
-    writes: ["fund-receipt-id", "fund-receipt-digest"]
+    writes: ["fund-target-assets", "fund-target-bps", "fund-receipt-id", "fund-receipt-digest"]
     added: "v0.7.0-onevault"
   - id: "P6.72-fund-record-receipt"
     standing: ["4.10"]
-    description: "The submitter Safe records the receipt directly on the fund register (recordReceipt(receiptId, payloadDigest, payloadUri), threshold owners sign, the deployer pays), and the register reads it recorded, unreleased, with the run's digest and the submitter Safe as its submitter. NO TOOL SENDS THIS YET: publish-contracts record-receipt refuses --system fund, and publish-contracts/src/safe/cli.ts propose builds timelock calls only, not a Safe transaction to another contract. Until one exists the step fails at its read-back and the run stops here (decision D4-5)"
+    description: "The submitter Safe records the receipt directly on the fund register with publish-contracts record-receipt --system fund (recordReceipt(receiptId, payloadDigest, payloadUri) on fund-receipt.json's consensus_receipt, never the vaults register): the payload bytes, the digest and the id are checked against each other (schema 1.1) and the submitter Safe and its live RECEIPT_SUBMITTER_ROLE on the fund register are read before any signer exists; the two owners sign ({ownerSigner}, {ownerSigner2}; threshold 2), the deployer pays. Then the register reads it recorded, unreleased, with the run's digest and the submitter Safe as its submitter. A receipt id is recorded once, so a wrong digest cannot be corrected; a rerun of the same receipt sends nothing"
     host: "control"
     phase: 6
     cmds:
-      - ["bash", "-c", 'test "$(cast call "{m:fund-receipt.consensus_receipt}" "isRecorded(bytes32)(bool)" "{state:fund-receipt-id}")" = true || { echo "the receipt {state:fund-receipt-id} is not recorded on the fund register: no tool records it through the submitter Safe yet (decision D4-5)" >&2; exit 1; }']
+      - ["bun", "publish-contracts/src/cli.ts", "record-receipt", "{common}", "--system", "fund", "--owner-signer", "{ownerSigner}", "--owner-signer", "{ownerSigner2}", "{gate}", "--receipt-id", "{state:fund-receipt-id}", "--payload-digest", "{state:fund-receipt-digest}", "--payload", "{receiptFile}", "--payload-uri", "{receiptUri}", "--submitter", "{state:fund-submitter-safe}"]
+      - ["bash", "-c", 'test "$(cast call "{m:fund-receipt.consensus_receipt}" "isRecorded(bytes32)(bool)" "{state:fund-receipt-id}")" = true']
       - ["bash", "-c", 'r=$(cast call "{m:fund-receipt.consensus_receipt}" "getReceiptById(bytes32)((bytes32,bytes32,string,address,uint64,uint64,bool))" "{state:fund-receipt-id}" | tr -d "()"); bun scripts/runbook/qa-assert.ts eq "$(echo "$r" | cut -d, -f2 | tr -d " ")" "{state:fund-receipt-digest}" && bun scripts/runbook/qa-assert.ts eq "$(echo "$r" | rev | cut -d, -f4 | rev | tr -d " ")" "{state:fund-submitter-safe}" && test "$(echo "$r" | rev | cut -d, -f1 | rev | tr -d " ")" = false']
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1500,13 +1530,13 @@ steps:
     added: "v0.7.0-onevault"
   - id: "P6.73-fund-apply-receipt-schedule"
     standing: ["4.9", "4.10"]
-    description: "The governing Safe schedules ONE call on the fund-system timelock, RebalanceGovernance.applyReceipt(receiptId, payloadDigest, assets, bps) (TARGET_SETTER_ROLE is the timelock's): the receipt reads recorded and unreleased, the vector names as many assets as the fund has and its bps sum to 10000. The vector is the run's {fundTargetAssets} and {fundTargetBps}: no tool derives it from the receipt payload yet"
+    description: "The governing Safe schedules ONE call on the fund-system timelock, RebalanceGovernance.applyReceipt(receiptId, payloadDigest, assets, bps) (TARGET_SETTER_ROLE is the timelock's): the receipt reads recorded and unreleased, the vector names as many assets as the fund has and its bps sum to 10000. The vector is the one check-receipt-assets derived from the recorded payload in P6.71 (fund-target-assets, fund-target-bps), so the applied vector is the receipt's"
     host: "control"
     phase: 6
     cmds:
       - ["bash", "-c", 'test "$(cast call "{m:fund-receipt.consensus_receipt}" "isRecorded(bytes32)(bool)" "{state:fund-receipt-id}")" = true && test "$(cast call "{m:fund-receipt.consensus_receipt}" "isReleased(bytes32)(bool)" "{state:fund-receipt-id}")" = false']
-      - ["bash", "-c", 'n=$(cast call "{m:fund.fund}" "assetCount()(uint256)" | cut -d" " -f1); test "$(echo "{fundTargetAssets}" | grep -oE "0x[0-9a-fA-F]{40}" | wc -l)" = "$n" && test "$(echo "{fundTargetBps}" | tr -d "[] " | tr , "\n" | grep -c .)" = "$n" && bun scripts/runbook/qa-assert.ts eq "$(echo "{fundTargetBps}" | tr -d "[] " | awk -F, ''{ s = 0; for (i = 1; i <= NF; i++) s += $i; print s }'')" 10000']
-      - ["bash", "-c", 'cast keccak "robotmoney.deploy4.apply-receipt.{runDir}" > {runDir}/state/salt-apply-receipt && echo "{m:fund-governance.governance}" > {runDir}/state/target-apply-receipt && cast calldata "applyReceipt(bytes32,bytes32,address[],uint256[])" "{state:fund-receipt-id}" "{state:fund-receipt-digest}" "{fundTargetAssets}" "{fundTargetBps}" > {runDir}/state/data-apply-receipt']
+      - ["bash", "-c", 'n=$(cast call "{m:fund.fund}" "assetCount()(uint256)" | cut -d" " -f1); test "$(echo "{state:fund-target-assets}" | grep -oE "0x[0-9a-fA-F]{40}" | wc -l)" = "$n" && test "$(echo "{state:fund-target-bps}" | tr -d "[] " | tr , "\n" | grep -c .)" = "$n" && bun scripts/runbook/qa-assert.ts eq "$(echo "{state:fund-target-bps}" | tr -d "[] " | awk -F, ''{ s = 0; for (i = 1; i <= NF; i++) s += $i; print s }'')" 10000']
+      - ["bash", "-c", 'cast keccak "robotmoney.deploy4.apply-receipt.{runDir}" > {runDir}/state/salt-apply-receipt && echo "{m:fund-governance.governance}" > {runDir}/state/target-apply-receipt && cast calldata "applyReceipt(bytes32,bytes32,address[],uint256[])" "{state:fund-receipt-id}" "{state:fund-receipt-digest}" "{state:fund-target-assets}" "{state:fund-target-bps}" > {runDir}/state/data-apply-receipt']
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "schedule", "--target", "{state:target-apply-receipt}", "--data", "{state:data-apply-receipt}", "--salt", "{state:salt-apply-receipt}", "--out", "{runDir}/bundles/apply-receipt-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/apply-receipt-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/apply-receipt-schedule.json", "--signer", "{ownerSigner2}"]
@@ -1709,14 +1739,37 @@ steps:
     notBefore: {"afterStep": "P9.61-fund-unpause-schedule", "hours": "timelockDelay"}
     maxMinutes: 60
     added: "v0.7.0-onevault"
-  - id: "P9.70-fund-upgrade-schedule"
+  - id: "P9.69-fund-deploy-implementation"
     standing: ["4.12"]
-    description: "The upgrade lifecycle on the rebalancer proxy: the ERC-1967 slot reads the manifest's implementation, upgradesFrozen is false and upgradeTimelock is the fund-system timelock; the Safe schedules ONE call, upgradeToAndCall(the implementation, empty). It is the implementation the proxy already runs: deploy-implementation refuses --system fund, so no tool deploys a second fund-system implementation yet (the release's notes)"
+    description: "The deployer deploys the rebalancer's second implementation, RebalancerV2 (contracts/test/helpers/FundUpgradeV2.sol: the Rebalancer plus upgradeMarker(), no new state), with deploy-implementation --system fund: forge pinned, the release gate on 8453, the proxy unfrozen, RebalancerV2's pinned layout extending the deployed Rebalancer's, the live implementation the build's, linked to the libraries it links; its code read back against the build. The new implementation answers upgradeMarker() 2 and is not the manifest's"
     host: "control"
     phase: 9
     cmds:
-      - ["bash", "-c", 'bun scripts/runbook/qa-assert.ts eq "$(cast implementation "{m:rebalancer.rebalancer}")" "{m:rebalancer.rebalancer_implementation}" && test "$(cast call "{m:rebalancer.rebalancer}" "upgradesFrozen()(bool)")" = false && bun scripts/runbook/qa-assert.ts eq "$(cast call "{m:rebalancer.rebalancer}" "upgradeTimelock()(address)")" "{m:fund-timelock.timelock}"']
-      - ["bash", "-c", 'cast keccak "robotmoney.deploy4.upgrade-rebalancer.{runDir}" > {runDir}/state/salt-upgrade-rebalancer && echo "{m:rebalancer.rebalancer}" > {runDir}/state/target-upgrade-rebalancer && cast calldata "upgradeToAndCall(address,bytes)" "{m:rebalancer.rebalancer_implementation}" 0x > {runDir}/state/data-upgrade-rebalancer']
+      - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--system", "fund", "--proxy", "rebalancer", "--contract", "RebalancerV2", "{common}", "{gate}"]
+      - ["bash", "-c", "grep '\"event\":\"deploy_implementation\"' {journal:P9.69-fund-deploy-implementation} | tail -n 1 | jq -r .implementation > {runDir}/state/rebalancer-v2-implementation"]
+      - ["bash", "-c", '! bun scripts/runbook/qa-assert.ts eq "{state:rebalancer-v2-implementation}" "{m:rebalancer.rebalancer_implementation}" && test "$(cast call "{state:rebalancer-v2-implementation}" "upgradeMarker()(uint256)")" = 2']
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "fund"
+    onlyFor: ["twin", "rehearsal"]
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    writes: ["rebalancer-v2-implementation"]
+    maxMinutes: 60
+    added: "v0.7.0-onevault"
+  - id: "P9.70-fund-upgrade-schedule"
+    standing: ["4.12"]
+    description: "The upgrade lifecycle on the rebalancer proxy: the ERC-1967 slot reads the manifest's implementation, upgradesFrozen is false, upgradeTimelock is the fund-system timelock and the proxy answers no upgradeMarker(); the rebalancer's fund and step parameters are recorded; the Safe schedules ONE call, upgradeToAndCall(RebalancerV2 of P9.69, empty)"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["bash", "-c", 'bun scripts/runbook/qa-assert.ts eq "$(cast implementation "{m:rebalancer.rebalancer}")" "{m:rebalancer.rebalancer_implementation}" && test "$(cast call "{m:rebalancer.rebalancer}" "upgradesFrozen()(bool)")" = false && bun scripts/runbook/qa-assert.ts eq "$(cast call "{m:rebalancer.rebalancer}" "upgradeTimelock()(address)")" "{m:fund-timelock.timelock}" && ! cast call "{m:rebalancer.rebalancer}" "upgradeMarker()(uint256)" > /dev/null 2>&1']
+      - ["bash", "-c", 'echo "$(cast call "{m:rebalancer.rebalancer}" "fund()(address)")-$(cast call "{m:rebalancer.rebalancer}" "stepParams()")" > {runDir}/state/rebalancer-state-before']
+      - ["bash", "-c", 'cast keccak "robotmoney.deploy4.upgrade-rebalancer.{runDir}" > {runDir}/state/salt-upgrade-rebalancer && echo "{m:rebalancer.rebalancer}" > {runDir}/state/target-upgrade-rebalancer && cast calldata "upgradeToAndCall(address,bytes)" "{state:rebalancer-v2-implementation}" 0x > {runDir}/state/data-upgrade-rebalancer']
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "schedule", "--target", "{state:target-upgrade-rebalancer}", "--data", "{state:data-upgrade-rebalancer}", "--salt", "{state:salt-upgrade-rebalancer}", "--out", "{runDir}/bundles/upgrade-rebalancer-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-rebalancer-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-rebalancer-schedule.json", "--signer", "{ownerSigner2}"]
@@ -1730,11 +1783,11 @@ steps:
     flow: "fund"
     onlyFor: ["twin", "rehearsal"]
     sheetIs: {"UPGRADE_MODE": "upgradeable"}
-    writes: ["salt-upgrade-rebalancer", "target-upgrade-rebalancer", "data-upgrade-rebalancer"]
+    writes: ["rebalancer-state-before", "salt-upgrade-rebalancer", "target-upgrade-rebalancer", "data-upgrade-rebalancer"]
     added: "v0.7.0-onevault"
   - id: "P9.71-fund-upgrade-execute"
     standing: ["4.12"]
-    description: "After the timelock delay the Safe executes the upgrade through the timelock: the operation reads done, the implementation slot reads the scheduled implementation, the proxy is still unfrozen and still names the fund-system timelock; another governed upgrade can replace it until a freeze"
+    description: "After the timelock delay the Safe executes the upgrade through the timelock: the operation reads done, the implementation slot reads RebalancerV2 (not the manifest's), the proxy answers upgradeMarker() 2 (the code changed) with its fund and step parameters unchanged, still unfrozen and still naming the fund-system timelock. Then the Safe schedules ONE call back, upgradeToAndCall(the manifest's implementation, empty), so the release build runs again before the final verify"
     host: "control"
     phase: 9
     cmds:
@@ -1743,34 +1796,50 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-rebalancer-execute.json", "--signer", "{ownerSigner2}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-rebalancer-execute.json", "--signer", "{signer}"]
       - ["bash", "-c", 'id=$(cast call "{m:fund-timelock.timelock}" "hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)" "{state:target-upgrade-rebalancer}" 0 "{state:data-upgrade-rebalancer}" "$(cast hash-zero)" "{state:salt-upgrade-rebalancer}") && test "$(cast call "{m:fund-timelock.timelock}" "isOperationDone(bytes32)(bool)" "$id")" = true']
-      - ["bash", "-c", 'bun scripts/runbook/qa-assert.ts eq "$(cast implementation "{m:rebalancer.rebalancer}")" "{m:rebalancer.rebalancer_implementation}" && test "$(cast call "{m:rebalancer.rebalancer}" "upgradesFrozen()(bool)")" = false && bun scripts/runbook/qa-assert.ts eq "$(cast call "{m:rebalancer.rebalancer}" "upgradeTimelock()(address)")" "{m:fund-timelock.timelock}"']
+      - ["bash", "-c", 'bun scripts/runbook/qa-assert.ts eq "$(cast implementation "{m:rebalancer.rebalancer}")" "{state:rebalancer-v2-implementation}" && ! bun scripts/runbook/qa-assert.ts eq "$(cast implementation "{m:rebalancer.rebalancer}")" "{m:rebalancer.rebalancer_implementation}" && test "$(cast call "{m:rebalancer.rebalancer}" "upgradeMarker()(uint256)")" = 2 && test "$(cast call "{m:rebalancer.rebalancer}" "fund()(address)")-$(cast call "{m:rebalancer.rebalancer}" "stepParams()")" = "{state:rebalancer-state-before}" && test "$(cast call "{m:rebalancer.rebalancer}" "upgradesFrozen()(bool)")" = false && bun scripts/runbook/qa-assert.ts eq "$(cast call "{m:rebalancer.rebalancer}" "upgradeTimelock()(address)")" "{m:fund-timelock.timelock}"']
+      - ["bash", "-c", 'cast keccak "robotmoney.deploy4.restore-rebalancer.{runDir}" > {runDir}/state/salt-restore-rebalancer && cast calldata "upgradeToAndCall(address,bytes)" "{m:rebalancer.rebalancer_implementation}" 0x > {runDir}/state/data-restore-rebalancer']
+      - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "schedule", "--target", "{state:target-upgrade-rebalancer}", "--data", "{state:data-restore-rebalancer}", "--salt", "{state:salt-restore-rebalancer}", "--out", "{runDir}/bundles/restore-rebalancer-schedule.json"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/restore-rebalancer-schedule.json", "--signer", "{ownerSigner}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/restore-rebalancer-schedule.json", "--signer", "{ownerSigner2}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/restore-rebalancer-schedule.json", "--signer", "{signer}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
     receipts:
       - {"dir": "{runDir}/bundles", "pattern": "upgrade-rebalancer-execute.json", "required": true}
+      - {"dir": "{runDir}/bundles", "pattern": "restore-rebalancer-schedule.json", "required": true}
     irreversible: false
     flow: "fund"
     onlyFor: ["twin", "rehearsal"]
     sheetIs: {"UPGRADE_MODE": "upgradeable"}
     notBefore: {"afterStep": "P9.70-fund-upgrade-schedule", "hours": "timelockDelay"}
+    writes: ["salt-restore-rebalancer", "data-restore-rebalancer"]
     maxMinutes: 60
     added: "v0.7.0-onevault"
   - id: "P9.72-fund-verify-final"
     standing: ["4.5", "4.12"]
-    description: "The fund verifier passes again after every flow, the drill and the upgrade: every proxy's code still the build's, the roles unchanged, the deployer holding no fund share and no role"
+    description: "After the timelock delay the Safe executes the upgrade back: the operation reads done, the implementation slot reads the manifest's implementation again, the proxy answers no upgradeMarker() and keeps its fund and step parameters. Then the fund verifier passes again after every flow, the drill and both upgrades: every proxy's code still the build's, the roles unchanged, the deployer holding no fund share and no role"
     host: "control"
     phase: 9
     cmds:
+      - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "execute", "--target", "{state:target-upgrade-rebalancer}", "--data", "{state:data-restore-rebalancer}", "--salt", "{state:salt-restore-rebalancer}", "--out", "{runDir}/bundles/restore-rebalancer-execute.json"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/restore-rebalancer-execute.json", "--signer", "{ownerSigner}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/restore-rebalancer-execute.json", "--signer", "{ownerSigner2}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/restore-rebalancer-execute.json", "--signer", "{signer}"]
+      - ["bash", "-c", 'id=$(cast call "{m:fund-timelock.timelock}" "hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)" "{state:target-upgrade-rebalancer}" 0 "{state:data-restore-rebalancer}" "$(cast hash-zero)" "{state:salt-restore-rebalancer}") && test "$(cast call "{m:fund-timelock.timelock}" "isOperationDone(bytes32)(bool)" "$id")" = true']
+      - ["bash", "-c", 'bun scripts/runbook/qa-assert.ts eq "$(cast implementation "{m:rebalancer.rebalancer}")" "{m:rebalancer.rebalancer_implementation}" && ! cast call "{m:rebalancer.rebalancer}" "upgradeMarker()(uint256)" > /dev/null 2>&1 && test "$(cast call "{m:rebalancer.rebalancer}" "fund()(address)")-$(cast call "{m:rebalancer.rebalancer}" "stepParams()")" = "{state:rebalancer-state-before}" && test "$(cast call "{m:rebalancer.rebalancer}" "upgradesFrozen()(bool)")" = false']
       - ["bun", "publish-contracts/src/cli.ts", "verify", "{common}", "--system", "fund", "{gate}"]
     env:
       PUBLISH_MANIFEST_DIR: "{manifestDir}"
       YES: "{yes}"
+      ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
-    receipts: []
+    receipts:
+      - {"dir": "{runDir}/bundles", "pattern": "restore-rebalancer-execute.json", "required": true}
     irreversible: false
     flow: "fund"
     onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P9.71-fund-upgrade-execute", "hours": "timelockDelay"}
     maxMinutes: 60
     added: "v0.7.0-onevault"
 

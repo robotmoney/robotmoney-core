@@ -622,21 +622,33 @@ test("Deploy 4: the fund steps publish and verify with --system fund, never run 
   const r = fundRelease();
   const fund = r.steps.filter((s) => s.flow === "fund");
   const joined = fund.flatMap((s) => s.cmds.map((c) => ({ id: s.id, j: c.join(" ") })));
-  for (const { id, j } of joined.filter((x) => /publish-contracts\/src\/cli\.ts (publish|verify)\b/.test(x.j) || x.j.includes("--stage plan"))) expect(j, id).toContain("--system fund");
-  expect(joined.filter((x) => /publish-contracts\/src\/cli\.ts (govern|pause-all|record-receipt|redeploy-vault|deploy-implementation)\b/.test(x.j))).toEqual([]);
+  for (const { id, j } of joined.filter((x) => /publish-contracts\/src\/cli\.ts (publish|verify|record-receipt|deploy-implementation)\b/.test(x.j) || x.j.includes("--stage plan"))) expect(j, id).toContain("--system fund");
+  // record-receipt --system fund records on the fund register (P6.72, the only step that runs it)
+  expect(joined.filter((x) => /publish-contracts\/src\/cli\.ts record-receipt\b/.test(x.j)).map((x) => x.id)).toEqual(["P6.72-fund-record-receipt"]);
+  // deploy-implementation --system fund deploys the rebalancer's second implementation (P9.69, the only step that runs it); the upgrade itself is the fund Safe's
+  expect(joined.filter((x) => /publish-contracts\/src\/cli\.ts deploy-implementation\b/.test(x.j)).map((x) => x.id)).toEqual(["P9.69-fund-deploy-implementation"]);
+  expect(joined.find((x) => x.id === "P9.69-fund-deploy-implementation")!.j).toContain("--proxy rebalancer --contract RebalancerV2");
+  expect(joined.filter((x) => /publish-contracts\/src\/cli\.ts (govern|pause-all|redeploy-vault)\b/.test(x.j))).toEqual([]);
   const proposals = joined.filter((x) => x.j.includes("publish-contracts/src/safe/cli.ts propose"));
-  expect(proposals.length).toBe(8);
+  expect(proposals.length).toBe(10);
   for (const { id, j } of proposals) expect(j, id).toContain("--timelock {m:fund-timelock.timelock}");
   const step = (id: string) => r.steps.find((s) => s.id === id)!;
   expect(step("P1.61-fund-publish").irreversible).toBe(true);
   expect(step("P1.61-fund-publish").notBefore).toEqual({ afterStep: "P1.60-fund-record-go", hours: 0 });
   expect(step("P6.62-fund-claim-deposit").notBefore).toEqual({ afterStep: "P6.61-fund-settle-deposits", hours: 24 });
-  for (const id of ["P3.62-fund-register-submitter-execute", "P6.74-fund-apply-receipt-execute", "P9.62-fund-unpause-execute", "P9.71-fund-upgrade-execute"]) expect(step(id).notBefore?.hours, id).toBe("timelockDelay");
+  for (const id of ["P3.62-fund-register-submitter-execute", "P6.74-fund-apply-receipt-execute", "P9.62-fund-unpause-execute", "P9.71-fund-upgrade-execute", "P9.72-fund-verify-final"]) expect(step(id).notBefore?.hours, id).toBe("timelockDelay");
+  // Deploy 4: the upgrade lifecycle changes code and reads the change back (P9.71: the slot is RebalancerV2 and upgradeMarker() answers 2), then upgrades back so the final
+  // verify (P9.72, unchanged: every proxy's code the build's) runs on the release build
+  expect(step("P9.70-fund-upgrade-schedule").cmds.map((c) => c.join(" ")).join("\n")).toContain('upgradeToAndCall(address,bytes)" "{state:rebalancer-v2-implementation}"');
+  expect(step("P9.71-fund-upgrade-execute").cmds.map((c) => c.join(" ")).join("\n")).toContain('"upgradeMarker()(uint256)")" = 2');
+  expect(step("P9.72-fund-verify-final").cmds.at(-1)).toEqual(["bun", "publish-contracts/src/cli.ts", "verify", "{common}", "--system", "fund", "{gate}"]);
+  expect(step("P9.72-fund-verify-final").notBefore).toEqual({ afterStep: "P9.71-fund-upgrade-execute", hours: "timelockDelay" });
   expect(step("P0.67-fund-sheet").cmds[0]).toEqual(["cp", FUND_SHEET, "{sheet}"]);
   expect(step("P1.60-fund-record-go").cmds[0]!.join(" ")).toContain("{sheet:KEEPER_ADDRESS}");
   // the open decisions of Deploy 4 and the owner's exception
   expect(r.decisions.find((d) => d.id === "D4-1")).toMatchObject({ status: "decided", decidedOn: "2026-11-12", ref: "owner instruction in the Deploy 4 planning session, 2026-11-12" });
-  for (const id of ["D4-2", "D4-3", "D4-4", "D4-5"]) expect(r.decisions.find((d) => d.id === id)?.status, id).toBe("open");
+  for (const id of ["D4-2", "D4-3"]) expect(r.decisions.find((d) => d.id === id)?.status, id).toBe("open"); // the go and the push stay the owner's, open until the run
+  for (const id of ["D4-4", "D4-5", "D4-6", "D4-7", "D4-8"]) expect(r.decisions.find((d) => d.id === id)?.status, id).toBe("decided");
   expect(r.productionReady).toBe(false);
 });
 
@@ -699,6 +711,21 @@ test("Deploy 4: the Safe tool's action flags are read from its header (the usage
   expect(p.join("\n")).toContain("P6.73-fund-apply-receipt-schedule: --description is no publish-contracts/src/safe/cli.ts flag");
 });
 
+test("Deploy 4: the fund receipt tools are in the tool model: their flags are read from the scripts themselves, and a flag they do not have is refused", () => {
+  const payload = model.tools.get("scripts/runbook/fund-receipt-payload.ts")!.flags;
+  for (const f of ["out", "bps", "rpc", "fund-manifest", "assets", "asset-ids", "chain", "map-out", "session-id"]) expect(payload.has(f), f).toBe(true);
+  const check = model.tools.get("scripts/prototype/check-receipt-assets.ts")!.flags;
+  for (const f of ["map", "schema", "chain", "adapter"]) expect(check.has(f), f).toBe(true);
+  expect(problemsWith(FUND_RELEASE, (t) => t)).toEqual([]);
+  const p1 = problemsWith(FUND_RELEASE, (t) => t.replace("--fund-manifest {manifestDir}/fund.json", "--fund-manifest {manifestDir}/fund.json --weights USDC:10000"));
+  expect(p1.join("\n")).toContain("P6.70-fund-receipt-payload: --weights is no scripts/runbook/fund-receipt-payload.ts flag");
+  const p2 = problemsWith(FUND_RELEASE, (t) => t.replace("--map {runDir}/fund-asset-map.json", "--asset-map {runDir}/fund-asset-map.json"));
+  expect(p2.join("\n")).toContain("P6.71-fund-receipt-offline: --asset-map is no scripts/prototype/check-receipt-assets.ts flag");
+  // record-receipt is irreversible wherever it runs: the fund step keeps the rule
+  const p3 = problemsWith(FUND_RELEASE, (t) => t.replace(/(  - id: "P6\.72-fund-record-receipt"[\s\S]*?)irreversible: true/, "$1irreversible: false"));
+  expect(p3.join("\n")).toContain("P6.72-fund-record-receipt: it publishes, records a receipt or pushes a tag, so it is irreversible: true");
+});
+
 test("Deploy 4: the unwind guard rule follows where the govern step runs: the fund release never runs P3.01, a release that runs it still needs both guards", () => {
   const r = fundRelease();
   expect(r.steps.some((s) => s.id === "P3.01-govern-schedule")).toBe(true);
@@ -727,11 +754,13 @@ test("Deploy 4: the rebalance rule iterates the fund flow; the fund's apply is a
 const fundSheet = (edit: (t: string) => string = (t) => t) => parseSheetText(edit(readFileSync(join(ROOT, FUND_SHEET), "utf8").replace(/^KEEPER_ADDRESS=$/m, "KEEPER_ADDRESS=0x1111111111111111111111111111111111111111")));
 const line = (name: string, value: string) => (t: string) => t.replace(new RegExp(`^${name}=.*$`, "m"), `${name}=${value}`);
 
-test("Deploy 4: the committed fund sheet with the keeper filled passes on the rehearsal target, and a blank keeper is refused", () => {
+test("Deploy 4: the committed fund sheet (keeper decided, D4-8) passes on the rehearsal target, and a blank keeper is refused", () => {
   expect(isFundSheet(fundSheet())).toBe(true);
   expect(sheetProblems(fundSheet(), "rehearsal", 3)).toEqual([]);
   const committed = parseSheetText(readFileSync(join(ROOT, FUND_SHEET), "utf8"));
-  expect(sheetProblems(committed, "rehearsal", 3)).toEqual(["sheet: KEEPER_ADDRESS is missing"]);
+  expect(committed.KEEPER_ADDRESS).toBe("0x75E3f84949d5e0aB621EEb06537A1a944274768B");
+  expect(sheetProblems(committed, "rehearsal", 3)).toEqual([]);
+  expect(sheetProblems({ ...committed, KEEPER_ADDRESS: "" }, "rehearsal", 3)).toEqual(["sheet: KEEPER_ADDRESS is missing"]);
 });
 
 test("Deploy 4: each fund sheet rule refuses its own violation", () => {
