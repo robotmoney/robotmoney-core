@@ -15,6 +15,12 @@ History of the versions:
    settler's price and selection inputs and the entry premium are removed,
    because they protected nobody.
 
+5. Step 3f, decided by the owner 2026-11-13 and not built (§8 of this
+   plan, proposal §5.11 and §18). No per-request limit, a cancel cutoff, a
+   match between the two sides of a settlement, and no instant in-kind
+   exit from a running fund. §1 to §7 below are the step 3d plan as it was built. §8 says which
+   rows step 3f replaces.
+
 This plan runs on the prototype under `contracts/test/prototype/` only.
 Production contracts and canonical docs do not change. The experiment's rules
 still hold: forge tests on the recorded Base fixture, with no RPC in a test
@@ -46,14 +52,14 @@ only bound a trade or stop a settlement.
 | E2 | Interface | As listed in proposal §5.9.6. The queue has `requestDeposit`, `requestRedeem`, claims through `deposit`, `mint` and `redeem`, reverting previews, pending and claimable views, `cancel`, `exitInKind`, and the quote views. The fund is the share token. Its own `deposit`, `mint` and `redeem` revert and name the queue. `withdraw` reverts `RedeemOnly`. There are no operators. | Owner, 2026-11-11: follow the best hardened practice, not the ERC letter. ERC-7575 describes the split of entry point and share. |
 | E3 | Deposit | `fund.mintInKind(ratio, maxUsdc, limits)`. The fund keeps `ratio × idle` USDC idle, supplies `ratio × held` plus two units to each lending venue, and buys `ratio × balance` of each basket token with an exact-output swap whose `maxIn` comes from `limits`. It mints `ratio × supply` shares to the queue. Purchases round up and the mint rounds down. It asserts the proportion check itself. It returns the USDC spent. A venue that refuses a supply reverts the call. | Every asset grows by at least the same fraction as the supply. No price sets the share count. The fund does not trust its caller for the invariant. |
 | E4 | Redemption | The existing pro-rata sale (`FundFlowsLib.redeemPayout`), called by the queue, with a minimum-out per sale from `limits`. Lending withdrawals ask for two units less than the exact amount. The fund asserts the proportion check itself. | It pays realized proceeds and reads no price for the payout. |
-| E5 | No netting | Deposits and redemptions of one epoch are not matched against each other. Each trades. The sim reports what netting would have saved. | Netting needs a price between users. That price was the main source of attacks in the review (proposal §17.3). |
+| E5 | No netting | Deposits and redemptions of one epoch are not matched against each other. Each trades. The sim reports what netting would have saved. | Netting needs a price between users. That price was the main source of attacks in the review (proposal §17.3). Step 3f replaces this row (§8). |
 | E6 | TWAP | Computed at settlement from one `observe` call per pool: the median of the `slices` slice means over the last `settleWindow`. No checkpoint call and no checkpoint storage. | A one-transaction push leaves no trace in the pool's history. The keeper has no checkpoint duty. |
 | E7 | Checks | The twelve steps of proposal §5.9.3, in that order. Before trading: time and state, feed health and the USDC peg, TWAP quorum, TWAP against feed, lending rate, share price, snapshot. Then redemptions and deposits with per-swap limits. After trading: the proportion check inside the fund, the realized-price check, the record. A failed pre-trade check reverts and changes no state. Each side then settles in its own call into the fund, made with try and catch. A side that fails stays pending and the other still settles. A cap never reverts a settlement. | Four independent layers must agree. No role sets a price or overrides a block. A failed call cannot grief. |
 | E8 | The hold | Each fill is its own claim with its own unlock time. Shares from a deposit stay in the queue until `settle time + minHold`. Then anyone may trigger their delivery to the request's owner. Shares in their hold have no exit. The fund's `_update` gets no lock. | Pooled accounts work, because each fill unlocks on its own date. Owner direction: no exit for one day after a deposit. |
-| E9 | In-kind exit | `redeemInKind` stays on the fund, instant, with the proportion check asserted. It pays the lending part in USDC up to the period's in-kind allowance. Every leg pays the exit fee. Beyond that, or when a venue cannot pay, it records a claim on a share of that position. The fund keeps units per lending position for this, minted and burned as the position changes. `exitInKind` on the queue calls it for escrowed redemption shares and passes the user as the receiver. | No price is read. A claim fixed in USDC would pay a stale mark and leave later loss with the holders who stay (RB-21). |
+| E9 | In-kind exit | `redeemInKind` stays on the fund, instant, with the proportion check asserted. It pays the lending part in USDC up to the period's in-kind allowance. Every leg pays the exit fee. Beyond that, or when a venue cannot pay, it records a claim on a share of that position. The fund keeps units per lending position for this, minted and burned as the position changes. `exitInKind` on the queue calls it for escrowed redemption shares and passes the user as the receiver. | No price is read. A claim fixed in USDC would pay a stale mark and leave later loss with the holders who stay (RB-21). Step 3f replaces this row (§8). |
 | E10 | Who settles, and with what | The keeper first. Anyone after `keeperGrace`. `settle(maxRequests, maxUsdc)`. The two inputs only limit one call's work. `maxRequests` counts every request the call looks at, skipped ones too. A cursor lets the next call continue where the last one stopped. Requests are processed oldest first. The grace is the queue's own `keeperGrace`, and it starts when the window ends. | The caller has no price and no selection to choose (RB-20). A small call harms nobody, because the next call continues. |
 | E11 | Request size | At least `minRequestUsdc` (default 100 USDC), valued at the last healthy NAV for a redemption. No minimum for a redemption of an owner's whole balance. A deposit is at most the per-deposit cap. | It limits dust. A small holder can still leave. |
-| E12 | Limits | Each request stores its limit. Before trading, the queue computes two bound prices from the per-swap limits: the most a depositor can pay per share, and the least a redeemer can receive. A request takes part only if its limit admits the bound. Others are skipped and stay pending. | Every fill is inside its limit by construction (RB-14). No caller selects anyone. |
+| E12 | Limits | Each request stores its limit. Before trading, the queue computes two bound prices from the per-swap limits: the most a depositor can pay per share, and the least a redeemer can receive. A request takes part only if its limit admits the bound. Others are skipped and stay pending. | Every fill is inside its limit by construction (RB-14). No caller selects anyone. Step 3f replaces this row (§8). |
 | E13 | Exclusion ledger and fund state | The queue calls a fund hook before every change of an owner's queued shares: request, fill, cancel, exit and delivery. The ledger then checkpoints the owner with wallet shares plus queued shares. The queue's own address has no entitlement. While a lending asset is excluded, deposits are paused or the fund is shut down, deposit requests are not processed, and redemptions settle alone (check 1). | The ledger fixes claims by lazy checkpoints taken before a balance changes. A view alone would let a fresh address claim old recovery money (RB-22). |
 | E14 | Empty fund | `fund.seed(usdc)`: `ADMIN_ROLE`, once, only at zero supply, at least `minSeedUsdc`. It mints at the fund's existing share scale to the fund itself. Those shares are locked for good. `mintInKind` needs a non-zero supply. | A ratio has no meaning on an empty fund. A small gift must not skew a new fund. |
 | E15 | Asset admission (D12) | `addAsset` requires a feed address and its `maxFeedAge` for a basket asset, and checks that the pool holds one settlement window of observations. A lending asset's adapter must expose the venue's rate per unit. `setTargetAndOpenPlan` checks the pool-share rule from the pool's time-weighted liquidity. The prototype's asset list drops deSPXA. | The outside-feed layer needs a feed for every asset. Liquidity added for one transaction must not count. |
@@ -62,7 +68,7 @@ only bound a trade or stop a settlement.
 | E18 | Request list | The queue keeps one array of requests per epoch. `settle` walks the arrays of the last `maxRoll + 1` epochs, oldest first. A cancelled or filled request is skipped. There is no cap on the number of requests. After `maxRoll` epochs an unfilled request expires, and its owner withdraws the escrow. | A cap of 200 slots could be held for about 20,000 USDC of float. A flood now only costs the keeper skips. |
 | E19 | Views | `totalAssets` and the convert functions revert when a feed is unhealthy. `lastGoodNav` returns the last healthy value and its time. `checkSettle` returns the first failing check. | A lender must not read a number nobody should trust. Clients still need a value and a reason. |
 | E20 | Caps | Each side has a cap per `epochLength` of clock time: the larger of `maxEpochFlowBps` of NAV and `epochFlowFloorUsdc`. A deposit must also leave NAV at or under the TVL cap. A cap never reverts a settlement. It leaves the rest pending. The lending part of in-kind exits has its own allowance: the larger of `maxEpochFlowBps` of the fund's lending holdings and `epochFlowFloorUsdc`, counted in the venues' own USDC amounts, so no price is read. | A rate limit on both directions. A backlog cannot stack caps. Without a floor a newly seeded fund could grow only 5% per epoch. |
-| E21 | Quotes | `quoteDeposit(usdc)` and `quoteRedeem(shares)` return the current bound price, the fee, the earliest settlement time and the end of the hold. | The previews revert. A user and an agent need the worst case before signing. |
+| E21 | Quotes | `quoteDeposit(usdc)` and `quoteRedeem(shares)` return the current bound price, the fee, the earliest settlement time and the end of the hold. | The previews revert. A user and an agent need the worst case before signing. Step 3f replaces this row (§8). |
 | E22 | Returns are pulled | Escrow returns, USDC refunds and in-kind returns are credited to the owner, who withdraws them. | A push to an address that cannot receive would block others. |
 | E23 | Fixes in the code the design keeps | In-kind exit wraps a venue's value read, and defers that leg if the read reverts. A zero receiver is rejected, and a deferral is keyed to the owner. | The review found that one reverting venue read stops every in-kind exit, and that a deferral to the zero address can never be cleared (proposal §17.2). |
 
@@ -360,3 +366,104 @@ with them.
 - The layers on the rebalance step, and the G4 and G5 rerun on the final
   design. That is step 3e.
 - Changes to receipts.
+
+## 8. Step 3f: netted, forward-priced flows
+
+Status: plan, 2026-11-13. Not started. It implements proposal §5.11, D16 to
+D19 and RB-23 to RB-26, on the step 3e contracts. The rule above all rows
+changes with it: quantity sets every share minted or burned, no price moves
+value to or from holders, and one price, the fund's NAV per share at the
+TWAP, moves value between the matched users of one settlement. The NAV
+method does not change. The outside feeds stay guards.
+
+### 8.1 Design decisions
+
+| ID | Decision | Choice | Why |
+| --- | --- | --- | --- |
+| E24 | The match (replaces E5) | Inside `settle`, after checks 1 to 7 and before the net side. `S` is the NAV per share of proposal §4.2, with each basket asset at the TWAP of check 3 (E6). Checks 4 and 6 have compared it with the feeds before the match runs. `M = min(redeem shares, deposit USDC / S)`. The queue moves `M` shares in its own books from redeemers' escrow to depositors' hold, credits redeemers `M × S` minus the exit fee, and pays the fee to the fee recipient. No call into the fund except the ledger hook. | Matched volume never reaches a pool. The fund's assets and supply do not change (RB-24). |
+| E25 | Requests without a limit (replaces E12) | `requestDeposit(usdc, owner)` and `requestRedeem(shares, owner)`. The request stores no limit. The queue computes no bound price and skips no request for a price. | D17. Forward pricing. It also matches ERC-7540's request shape. |
+| E26 | The cutoff | `cancel` reverts `RequestLocked` once the request's epoch has closed. Expiry after `maxRoll` epochs is unchanged. | RB-25. An open cancel was the free look. |
+| E27 | One price per side | Every fill of a side in one settlement gets the same blend: the matched part at `S` and the net part at its realized price, split in proportion to the fill. Order only decides who fills when a cap leaves part of a side pending. | RB-23. Nobody is matched ahead of anybody else. |
+| E28 | Caps (amends E20) | The side caps per period and the TVL cap count the net amount only. `basketCallBps` applies to the net trade. Matched volume uses no cap. | The caps protect the fund and the pools. A match touches neither. Whether matched volume needs its own cap is open (proposal §18.6). |
+| E29 | In-kind (replaces E9 where it says "instant") | `redeemInKind` on the fund reverts `InKindClosed` unless the fund is shut down. The queue loses `exitInKind`. In a shut-down fund E9's mechanics and E23's fixes are unchanged. The freeze return (E17) is unchanged. | D18, RB-26. The in-kind exit applies only once the goal is to wind the fund down. |
+| E30 | Not used | The first draft let redemption requests through a pause. The owner's correction removed the reason (proposal §18.4). | |
+| E31 | Terms views (replaces E21) | `quoteDeposit` and `quoteRedeem` return the fee, the cancel cutoff, the earliest settlement time and the end of the hold. No price. | D17. `lastGoodNav` is the value a client may show. |
+| E32 | Asset rule 4 and delisting (amends E15) | `setTargetAndOpenPlan`, a rise of the TVL cap and a fall of `poolShareBps` also check `minPoolDepthUsdc` against the pool's time-weighted depth. A failing asset can only take a target of 0. | D19. |
+| E33 | The realized-price check (amends E7, check 11) | The net side's realized price must be inside its per-swap limits. There are no user limits to check. | D17. |
+
+### 8.2 Contract changes
+
+- **`FlowQueue` and `FlowClaimLib`.** Drop the limit from the request
+  functions and from `Request`. `cancel` checks the cutoff. Remove
+  `exitInKind`. The quote views lose their price.
+- **`FlowCheckLib`.** Remove the bound prices and the limit-based
+  eligibility. Keep checks 1 to 7 and return `S`, the NAV per share at the TWAP of check
+  3.
+- **`FlowSettleLib`.** Add the match before the two sides. The walk no
+  longer has a "refused by its own limit" outcome, so each side's cursor
+  only passes closed and expired requests. Blend the price per side. Count
+  the caps on the net amount. A failed net side leaves the match standing.
+- **`RobotMoneyFund` and `FundFlowsLib`.** Gate `redeemInKind` on the
+  shut-down state (E29). Add
+  the depth check (E32). `mintInKind` and `sellForFlow` are unchanged.
+- **Sizes.** The queue loses the limit logic and gains the match. The fund
+  gains two checks. Both are measured against G1 before anything else.
+
+### 8.3 Tests
+
+- **`Attacks.t.sol` and `sim/AttackSim.t.sol`:** A21 to A28 as proposal §10
+  step 3f lists them. Each reports the attacker's net result, the loss of
+  each matched user against the sim's true price, and the holders' loss.
+  A1 to A12 and A14 to A19 run again on the step 3f fund. A13 is removed
+  with the limits.
+- **`FlowQueue.t.sol`:** one test per new invariant.
+  - RB-23: two requests of one side in one settlement get the same price,
+    whatever their order.
+  - RB-24: across a match the fund's held amounts and supply are equal
+    before and after, and the queue's books balance to the unit.
+  - RB-25: a cancel in the open epoch returns the escrow. A cancel after the
+    close reverts. A request in the last block of an epoch is locked one
+    block later.
+  - RB-26: `redeemInKind` reverts for a wallet holder, for a pending request
+    and for an expired request while the fund runs. It pays every holder
+    once the fund is shut down.
+  - RB-24, the price: a pool pushed for one block does not move the match
+    price. A TWAP held past `refBandBps` from its feed blocks the
+    settlement.
+  - The changed RB-6, RB-10, RB-12, RB-15 and RB-16: a blocked settlement matches
+    nothing. A failed net side leaves the match and changes nothing else.
+- **`FundCore.t.sol`:** asset rule 4 refuses a target on a pool under the
+  depth floor and allows a target of 0.
+- **Sim (`sim/TimedFlowSim.t.sol`):** the matched share of the volume, the
+  gain of A10 and A2 against the step 3d fund on the same seeds, the longest
+  wait in the blocked scenarios, and the G9 outputs of §4.4 again.
+
+### 8.4 Work packages, in order
+
+1. Sizes first: a throwaway build with the limit logic removed and the gates
+   added, measured against G1.
+2. The queue without limits, with the cutoff and the terms views (E25, E26,
+   E31, E33). The step 3d tests that used limits are rewritten or removed,
+   each named in the report.
+3. The match and the blended price (E24, E27, E28).
+4. The wind-down gate on `redeemInKind` (E29).
+5. Asset rule 4 (E32).
+6. A21 to A28, then the rerun of A1 to A19.
+7. The sim rerun. Score G3, G8 and G9 and write them into proposal §14.
+
+### 8.5 Risks
+
+- **The match is the first price between users since proposal §17.** If A21,
+  A22 or A27 shows a matched user losing more than `refBandBps`, or an
+  attacker with a positive net result, the stated fallback is a tighter
+  `refBandBps` for the match than for the net trade. If that also fails,
+  the match is removed again and D17 to D19 stand without it.
+- **Rewriting the step 3d tests can hide a regression.** Every test that
+  changes is listed with its old and new assertion.
+- **G9 can fail on the cutoff.** A user who cannot cancel waits longer on a
+  blocked settlement. The sim reports the wait.
+- **A stuck fund has no exit until it is shut down.** That is the owner's
+  decision (D18). The tests show what a holder can and cannot do, so the
+  PRD text can say it plainly.
+- **The Deploy 4 rehearsal runs the step 3d and 3e code.** Step 3f does not
+  change it and is not deployed by it.

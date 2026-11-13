@@ -1,6 +1,6 @@
 # One-vault experiment: staged PRD amendments
 
-Status: draft, 2026-11-11. Not applied. `docs/prd.md` describes the live
+Status: draft, 2026-11-11, extended 2026-11-13 (§5). Not applied. `docs/prd.md` describes the live
 three-vault product and stays as it is while the experiment runs
 (`one-vault-rebalancer-proposal.md`, status line). This file lists what the
 PRD would have to say if the one-vault design goes to production. It exists
@@ -64,6 +64,8 @@ was changed.
 
 ## 4. What must be settled before any of this is applied
 
+- Whether step 3f is built (§5). If it is, §5 replaces amendments 1 to 4.
+
 - The experiment's conclusion (proposal §10, step 5). None of this applies if
   the rejection of ADR-0010 is validated.
 - D2: whether a stable-only vault stays beside the fund.
@@ -74,3 +76,33 @@ was changed.
   system).
 - The Hard Assets vault on `dev`, which this branch predates. Its asset has
   not been assessed against the listing rule.
+
+## 5. Changes if step 3f is built (owner, 2026-11-13)
+
+The owner reviewed the flows on 2026-11-13 and found that several promises
+to users were what made the design unsafe (proposal §18). Step 3f removes
+the per-request price limit, the worst-case quote and the in-kind exit
+from a running fund, and matches deposits against redemptions (proposal §5.11, D16 to
+D19). It is decided and not built. If it is built, amendments 1 to 4 above
+change as follows. Amendments 5 to 11 stand.
+
+| # | Text of §1 that no longer holds | What step 3f does | Why it is still reasonable | Proposed text |
+| --- | --- | --- | --- | --- |
+| 1 | "A holder of delivered shares can leave in a single transaction by taking a pro-rata slice of the fund's assets (in-kind exit)." | There is no exit from a running fund except a settled redemption. A redemption is a request. It can be cancelled until its epoch closes. A request that is not filled expires back to its owner as shares. The in-kind exit opens only when the fund is shut down to be wound down. | An in-kind exit from a running fund let one user choose between the price and the assets at another user's cost. The owner decided that customers can wait. | "A redemption to USDC is a request. It can be cancelled until the end of the period in which it was made. It settles from the next settlement after its window. A rate limit can spread a large request over several settlements, and an unfilled request expires back to its owner. The product states the cancel cutoff and the earliest settlement time before the holder approves. The fund does not offer a withdrawal of a chosen USDC amount, and it does not offer an exit in kind while it runs. If the fund is wound down, every holder can take a pro-rata slice of its assets." |
+| 2 | "The in-kind exit of delivered shares is never blocked, by anyone. … A delayed request can always be cancelled, or converted to an in-kind exit." | A USDC redemption is the only exit from a running fund, and the safety checks, a rate limit or a pause can delay it. The in-kind exit opens when the fund is shut down, which the emergency role does. | This is the weakest of the amendments, and the PRD should say so plainly. The promise "nobody can keep a holder's assets" becomes "a fund that cannot settle is wound down, and a wound-down fund pays every holder in kind". A holder depends on the wind-down being started. | "New deposits can be halted for incident response. A USDC redemption can be delayed by the protocol's safety checks, by a rate limit or by a pause. While the fund runs there is no other exit. If the fund is wound down, every holder can take a pro-rata slice of its assets, and nobody can block that. Shares from a deposit are held for at least one day before they are delivered. An emergency freeze of held shares ends by itself, after 7 days by default and never after more than 14." |
+| 3 | "Deposits and redemptions must provide a quote before user approval: the worst price the protocol's limits allow … Each request carries the user's own price limit, and never fills outside it." | A request names a quantity and no price. It is priced at its settlement, which is later than the request. The product shows the fee, the cancel cutoff, the earliest settlement time, the end of the hold, and the last known value as an indication. | This is how a regulated fund takes an order: at the next price, which nobody knows yet. It is what stops trading on a stale price. The protocol's own limits bound every settlement. | "Deposits and redemptions must show their terms before user approval: the fee, the time until which the request can be cancelled, the earliest settlement time, the end of the hold, and the last known share value marked as an indication. The price is set at settlement and is the same for every request of that settlement." The success measure becomes "percentage of attempted operations that show their terms before user approval". |
+| 4 | "… with the depositor as the request's owner and a price limit inside the depositor's policy." | An agent's request carries no price limit. | The agent still cannot receive shares, redirect funds, cancel or redeem. The depositor's policy keeps its amount limits and expiry. | "… An agent's only on-chain action is a deposit request into the fund's queue, with the depositor as the request's owner. Shares are delivered to the owner, and anyone may trigger that delivery. An agent cannot cancel or redeem." |
+
+Passages in §1.1 follow the same replacements.
+
+One row of §2 changes too. "§9, lines 387-388: surfaces must expose fees,
+net amounts, limits and refusal reasons" was kept by the quote views. Under
+step 3f the surfaces expose fees, limits, times and refusal reasons, and a
+net amount only after settlement. That needs an amendment of its own:
+"Surfaces must expose fees, limits, settlement times and refusal reasons
+before approval, and net amounts once a request has settled."
+
+Still to settle before this section applies: the result of step 3f
+(proposal §13), and who starts a wind-down and how fast (proposal §18.6).
+Amendment 2 turns a guarantee into a dependence on a role, so it needs the
+owner's explicit sign-off.
