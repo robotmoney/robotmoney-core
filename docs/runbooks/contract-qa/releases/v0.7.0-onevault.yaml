@@ -1463,11 +1463,11 @@ steps:
     added: "v0.7.0-onevault"
   - id: "P6.66-fund-request-cancel"
     standing: ["4.4"]
-    description: "A request, then its cancel: the deployer requests a 1 USDC deposit and cancels it at once (before any settle can fill it); the request reads Closed, the 1 USDC is the deployer's credit, withdrawCredit pays it back, and the deployer's USDC equals its balance before the request"
+    description: "A request, then its cancel: the deployer requests a 1 USDC deposit and cancels it at once (before any settle can fill it); the request reads Closed, the 1 USDC is the deployer's credit, withdrawCredit pays the whole credit back, and the deployer's USDC is its balance before the request plus the credit it held before the request (the unspent remainder an earlier settlement credited, 4,323 units on the Twin run of 2026-11-13: the cancelled 1 USDC comes back in full)"
     host: "control"
     phase: 6
     cmds:
-      - ["bash", "-c", 'cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-usdc-before-cancel']
+      - ["bash", "-c", 'cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1 > {runDir}/state/fund-usdc-before-cancel && cast call "{m:queue.queue}" "creditOf(address)(uint256,uint256)" "{sheet:ADMIN_ADDRESS}" | head -n 1 | cut -d" " -f1 > {runDir}/state/fund-credit-before-cancel']
       - ["bash", "-c", 'cast call "{m:queue.queue}" "quoteDeposit(uint256)((uint256,uint256,uint256,uint64,uint64))" 1000000 | tr -d "()" | cut -d, -f1 | cut -d" " -f1 > {runDir}/state/fund-cancel-bound']
       - ["bash", "scripts/runbook/cast-send.sh", "{usdc}", "approve(address,uint256)", "{m:queue.queue}", "1000000", "{cast}"]
       - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "requestDeposit(uint256,uint256,address)", "1000000", "{state:fund-cancel-bound}", "{sheet:ADMIN_ADDRESS}", "{cast}"]
@@ -1475,7 +1475,7 @@ steps:
       - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "cancel(uint256)", "{state:fund-request-d}", "{cast}"]
       - ["bash", "-c", 'test "$(cast call "{m:queue.queue}" "requestStatus(uint256)(uint8)" "{state:fund-request-d}")" = 3 && bun scripts/runbook/qa-assert.ts ge "$(cast call "{m:queue.queue}" "creditOf(address)(uint256,uint256)" "{sheet:ADMIN_ADDRESS}" | head -n 1)" 1000000']
       - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "withdrawCredit()", "{cast}"]
-      - ["bash", "-c", 'bun scripts/runbook/qa-assert.ts eq "$(cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}")" {state:fund-usdc-before-cancel} && test "$(cast call "{m:queue.queue}" "creditOf(address)(uint256,uint256)" "{sheet:ADMIN_ADDRESS}" | head -n 1 | cut -d" " -f1)" = 0']
+      - ["bash", "-c", 'bun scripts/runbook/qa-assert.ts eq "$(bun scripts/runbook/qa-assert.ts sub "$(cast call "{usdc}" "balanceOf(address)(uint256)" "{sheet:ADMIN_ADDRESS}" | cut -d" " -f1)" {state:fund-usdc-before-cancel})" {state:fund-credit-before-cancel} && test "$(cast call "{m:queue.queue}" "creditOf(address)(uint256,uint256)" "{sheet:ADMIN_ADDRESS}" | head -n 1 | cut -d" " -f1)" = 0']
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -1483,7 +1483,7 @@ steps:
     irreversible: false
     flow: "fund"
     onlyFor: ["twin", "rehearsal"]
-    writes: ["fund-usdc-before-cancel", "fund-cancel-bound", "fund-request-d"]
+    writes: ["fund-usdc-before-cancel", "fund-credit-before-cancel", "fund-cancel-bound", "fund-request-d"]
     added: "v0.7.0-onevault"
   - id: "P6.67-fund-exit-in-kind"
     standing: ["4.4"]
