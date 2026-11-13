@@ -44,7 +44,17 @@ export interface TableSystem {
    * explicit timelock (the gateway system).
    */
   upgradeAuthorityStage?: string;
+  /**
+   * The one EXECUTOR_ROLE holder of the system's core-scheme timelock (part of its CREATE2 init code, so of the address every proxy names). Absent or "open": address(0),
+   * anyone executes a ready operation (ADR-0004, the vaults system). "safe": the Safe alone (the fund system, owner decision D4-10 of 2026-11-13; UpgradeAuthority
+   * `_timelockExecutor`, contracts/script/FundTimelockPolicy.sol).
+   */
+  timelockExecutor?: TimelockExecutor;
 }
+/** Who executes a ready operation on a core-scheme timelock: anyone (address(0)) or the Safe alone. */
+export type TimelockExecutor = "open" | "safe";
+/** The timelock executor of `system` (default open). */
+export const timelockExecutorOf = (t: Pick<StageTable, "systems">, system: string | undefined): TimelockExecutor => (system !== undefined ? t.systems?.[system as SystemName]?.timelockExecutor : undefined) ?? "open";
 /**
  * One proxied core contract a stage deploys (issue 1809): the manifest field of the proxy and of its implementation, the build artifact of the implementation and the
  * committed storage-layout snapshot (contracts/test/fixtures/storage-layout, gated by scripts/ci/check-core-storage-layout.sh) whose bytes identify its layout.
@@ -200,6 +210,8 @@ function systemProblems(t: StageTable, where: string): void {
     if (JSON.stringify(listed) !== JSON.stringify(def!.stages)) bad(`${where}: system ${name} lists stages [${def!.stages.join(", ")}] but the table's stages of that system are [${listed.join(", ")}], in table order`);
     if (!Array.isArray(def!.requires) || def!.requires.some((r) => !(r in sys) || r === name)) bad(`${where}: system ${name} requires an unknown system or itself`);
     if (def!.upgradeAuthorityStage !== undefined && !def!.stages.includes(def!.upgradeAuthorityStage)) bad(`${where}: system ${name} names upgradeAuthorityStage ${def!.upgradeAuthorityStage}, which is not one of its stages`);
+    if (def!.timelockExecutor !== undefined && def!.timelockExecutor !== "open" && def!.timelockExecutor !== "safe") bad(`${where}: system ${name} timelockExecutor must be open or safe`);
+    if (def!.timelockExecutor === "safe" && def!.upgradeAuthorityStage === undefined) bad(`${where}: system ${name} sets timelockExecutor safe but deploys no timelock of its own (upgradeAuthorityStage)`);
   }
   for (const s of t.stages) if (s.system === undefined || !(s.system in sys)) bad(`${where}: stage ${s.name} names ${s.system === undefined ? "no system" : `undeclared system '${s.system}'`}`);
   if (sys.vaults && sys.vaults.requires.length > 0) bad(`${where}: the vaults system requires nothing: no vaults-system stage depends on the gateway (SYS-1)`);

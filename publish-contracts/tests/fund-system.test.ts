@@ -7,7 +7,8 @@ import { parseCli } from "../src/cli.ts";
 import { requiredSheetNames, resolveEnv } from "../src/core-wiring.ts";
 import { FUND_ONLY_NAMES, SHEET_SPEC, parseSheet } from "../src/sheet.ts";
 import { buildStages, handoverStageOf, peekStageState, restoreStageState, useStageTable, STAGE_NAMES, DEPLOYER_STAGES, proofNoncesBefore } from "../src/stages.ts";
-import { loadStageTable, parseStageTable, scopeTable } from "../src/stage-table.ts";
+import { loadStageTable, parseStageTable, scopeTable, timelockExecutorOf } from "../src/stage-table.ts";
+import { predictCoreTimelock } from "../src/timelock-pin.ts";
 import { FUND_PROXY_NAMES, proxySpecs } from "../src/verify/upgradeability.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -64,6 +65,24 @@ describe("the fund system's stage rows (Deploy 4)", () => {
     const foreign = JSON.parse(JSON.stringify(raw));
     foreign.systems.fund.upgradeAuthorityStage = "timelock";
     expect(() => parseStageTable(foreign)).toThrow("names upgradeAuthorityStage timelock, which is not one of its stages");
+  });
+  test("decision D4-10: the fund system's timelock executor is the Safe, the vaults system's stays open, and the prediction differs", () => {
+    const raw = JSON.parse(readFileSync(join(ROOT, "scripts", "deploy", "stage-table.json"), "utf8"));
+    const t = parseStageTable(raw);
+    expect(timelockExecutorOf(t, "fund")).toBe("safe");
+    expect(timelockExecutorOf(t, "vaults")).toBe("open");
+    expect(timelockExecutorOf(t, undefined)).toBe("open");
+    const bad = JSON.parse(JSON.stringify(raw));
+    bad.systems.fund.timelockExecutor = "anyone";
+    expect(() => parseStageTable(bad)).toThrow("system fund timelockExecutor must be open or safe");
+    const noOwn = JSON.parse(JSON.stringify(raw));
+    noOwn.systems.vaults.timelockExecutor = "safe";
+    expect(() => parseStageTable(noOwn)).toThrow("system vaults sets timelockExecutor safe but deploys no timelock of its own");
+    const OUT = join(ROOT, "publish-contracts", "tests", "fixtures", "build-out");
+    const SAFE = "0x00000000000000000000000000000000000050fe";
+    const open = predictCoreTimelock(t.upgradeAuthority!, OUT, SAFE, 900n), safe = predictCoreTimelock(t.upgradeAuthority!, OUT, SAFE, 900n, "safe");
+    expect(safe.address).not.toBe(open.address);
+    expect(predictCoreTimelock(t.upgradeAuthority!, OUT, SAFE, 900n, "open").address).toBe(open.address);
   });
 });
 

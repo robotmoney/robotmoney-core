@@ -825,6 +825,12 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     if (d !== undefined) delayAgrees("fund timelock getMinDelay()", d as bigint);
     const proposer = await read("timelock hasRole(PROPOSER_ROLE, safe)", ev.timelock?.address, "function hasRole(bytes32, address) view returns (bool)", "hasRole", [keccak256(toHex("PROPOSER_ROLE")), ev.safe?.address]);
     if (proposer === false) bad("the fund system's Safe does not hold the timelock's PROPOSER_ROLE on chain");
+    // Owner decision D4-10 (2026-11-13): the Safe alone executes on the fund timelock (the vaults system keeps ADR-0004's open executor).
+    const EXEC = keccak256(toHex("EXECUTOR_ROLE"));
+    const safeExec = await read("timelock hasRole(EXECUTOR_ROLE, safe)", ev.timelock?.address, "function hasRole(bytes32, address) view returns (bool)", "hasRole", [EXEC, ev.safe?.address]);
+    if (safeExec === false) bad("the fund system's Safe does not hold the timelock's EXECUTOR_ROLE on chain (decision D4-10: Safe-only executor)");
+    const openExec = await read("timelock hasRole(EXECUTOR_ROLE, address(0))", ev.timelock?.address, "function hasRole(bytes32, address) view returns (bool)", "hasRole", [EXEC, "0x0000000000000000000000000000000000000000"]);
+    if (openExec === true) bad("the fund timelock's executor is open (address(0) holds EXECUTOR_ROLE); decision D4-10 makes the Safe its only executor");
     return p;
   }
   const want = finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), startNonceOf(ev, kind, bad)) + redeployTxs(ev);
