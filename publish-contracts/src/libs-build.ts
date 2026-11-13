@@ -25,7 +25,10 @@ export function buildLibraryArtifacts(core: string, t: StageTable, forge = proce
   const linked = t.libraries.map((l) => ({ name: l.name, artifact: l.artifact, path: l.path }));
   build(linked.map((l) => l.path), "link-out");
   const addr = [...buildCreate2Libraries(linked, join(scratch, "link-out")).values()];
-  const c2 = t.create2Libraries ?? [];
+  // Deploy 4: the vaults and gateway systems' create2 libraries only. The fund system links no --libraries address (its TickMath is a create2 library too), so its libraries
+  // compiled here with --libraries would derive other addresses than the fund stages create; its stages derive and adopt their own (runner.ts activeCreate2Libraries).
+  const listed = new Set(t.stages.filter((s) => s.system !== "fund").flatMap((s) => s.create2Libraries ?? []));
+  const c2 = (t.create2Libraries ?? []).filter((l) => listed.has(l.name));
   build(c2.map((l) => l.path), "c2-out", addr.flatMap((a) => ["--libraries", `${linked.find((l) => l.artifact === a.artifact)!.path}:${a.artifact}:${a.address}`]));
   return { linkOut: join(scratch, "link-out"), c2Out: join(scratch, "c2-out"), linked, create2: c2 };
 }

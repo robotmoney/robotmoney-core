@@ -17,6 +17,7 @@
 // The release gate on 8453 runs in cli.ts before this module, as for govern.
 //
 // Canonical: docs/technical/contract-upgradeability-plan.md, docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md, docs/operations/contract-release-runbooks.md 4.12.
+import { scopeTable } from "./stage-table.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAddress, keccak256, type Address, type Hex } from "viem";
@@ -125,8 +126,8 @@ export async function runDeployImplementation(ctx: RunContext, o: { proxy: strin
   // Issue 1926: the build this verb reads and links must come from the pinned forge version. Read first: TOOL, before any file or chain read and before anything is sent.
   await assertPinnedForgeWith(() => api.forgeVersion());
   const t = getStageTable();
-  const spec: ProxySpec | undefined = proxySpecs(t).find((x) => x.name === o.proxy);
-  if (!spec) throw new PublishError("USAGE", `${DEPLOY_IMPL_VERB} needs --proxy NAME, one of ${proxySpecs(t).map((x) => x.name).join(", ")}; got ${o.proxy}`);
+  const spec: ProxySpec | undefined = proxySpecs(scopeTable(t, "legacy")).find((x) => x.name === o.proxy);
+  if (!spec) throw new PublishError("USAGE", `${DEPLOY_IMPL_VERB} needs --proxy NAME, one of ${proxySpecs(scopeTable(t, "legacy")).map((x) => x.name).join(", ")}; got ${o.proxy}`);
   const manifest = loadRunManifest(ctx.evidenceDir);
   if (!manifest) throw new PublishError("RESUME", `no run manifest in ${ctx.evidenceDir}: ${DEPLOY_IMPL_VERB} deploys into a deployment that exists. Pass the --evidence directory of the run that deployed it.`);
   const recPath = join(manifestDir(ctx), UPGRADEABILITY_MANIFEST);

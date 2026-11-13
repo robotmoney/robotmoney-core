@@ -3,6 +3,7 @@
 // bun src/cli.ts [publish|verify|govern] --chain 8453 --rpc URL --sheet FILE --signer SPEC --environment NAME --core-sha SHA [--stage S] [--row R] [--resume] [--dry-run]
 // The positional verbs are the consumer contract of core's Twin harness (see README.md, "Core harness contract").
 // A rehearsal and production differ only in these arguments. It spawns forge, cast, a read-only git status and core's config-check (bun). Logs are JSON on stderr.
+import { scopeTable } from "./stage-table.ts";
 import { createInterface } from "node:readline";
 import { readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -744,7 +745,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       const ub = await assertUpgradeBuildGate({ dir: resolve(a.upgradeBuild), kind: sheet.kind, env, chainId: rpcChainId, dirty: (d) => dirtyTreeLines(run, d, rpcChainId, castEnv), readHead: readGitHead,
         releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, remoteTag: deps.remoteTag, checkShaGreen: deps.checkShaGreen, onBranch: deps.rcOnReleaseBranch,
         // review-security-003: the artifacts the verb deploys and compares with must be built from that tree. An unknown --proxy names none here; the verb refuses it with USAGE.
-        artifacts: proxySpecs(getStageTable()).filter((x) => x.name === a.proxy).map((x) => x.contract), trackedFiles: deps.trackedFiles, forgeConfig: deps.forgeConfig });
+        artifacts: proxySpecs(scopeTable(getStageTable(), "legacy")).filter((x) => x.name === a.proxy).map((x) => x.contract), trackedFiles: deps.trackedFiles, forgeConfig: deps.forgeConfig });
       log.log("info", "upgrade_build.release_gate", { ok: true, upgrade_build: resolve(a.upgradeBuild), sha: ub.sha, tag: ub.tag });
     }
     // deploy-implementation (issue 1861): the release gate above ran on 8453 as for govern. No counts, no stages: one CREATE from the deployer and its implementation_deploys entry.

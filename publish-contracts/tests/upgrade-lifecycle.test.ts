@@ -173,8 +173,12 @@ describe("verify on a missed-deadline fixture exits 13 (issue 1859)", () => {
   }
   test("a freeze names the gateway system's proxy only when the record lists it (issue 1892)", () => {
     const table = getStageTable();
-    const specs = proxySpecs(table);
     const sys = (stage: string) => table.stages.find((x) => x.name === stage)?.system;
+    // Deploy 4: a fund-system proxy names the fund system's own timelock, so a vaults freeze never names it, even when a record lists it
+    const all = proxySpecs(table);
+    const fundRecord = { proxies: Object.fromEntries(all.map((s) => [s.name, {}])) };
+    expect(freezeSpecsFor(all, sys, fundRecord).filter((s) => sys(s.stage) === "fund")).toEqual([]);
+    const specs = all.filter((s) => sys(s.stage) !== "fund");
     expect(specs.map((s) => s.name)).toContain("gateway");
     const vaultsRecord = { proxies: Object.fromEntries(specs.filter((s) => s.name !== "gateway").map((s) => [s.name, {}])) };
     expect(freezeSpecsFor(specs, sys, vaultsRecord).map((s) => s.name)).toEqual(specs.map((s) => s.name).filter((n) => n !== "gateway"));

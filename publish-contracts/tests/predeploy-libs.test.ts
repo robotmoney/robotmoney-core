@@ -8,7 +8,9 @@ import { PREDEPLOY_SENDER, predeployLibraries } from "../src/rehearsal/predeploy
 
 const OUT = join(import.meta.dir, "fixtures", "build-out");
 const tick = { name: "tick_math", artifact: "TickMath", path: "contracts/lib/TickMath.sol" };
-const LIBS = [tick, ...getStageTable().create2Libraries!];
+// Deploy 4: the Twin pre-deploy serves the vaults and gateway systems; the fund system's libraries are created by its own stages
+const NON_FUND = new Set(getStageTable().stages.filter((s) => s.system !== "fund").flatMap((s) => s.create2Libraries ?? []));
+const LIBS = [tick, ...getStageTable().create2Libraries!.filter((l) => NON_FUND.has(l.name))];
 const BUILT = buildCreate2Libraries(LIBS, OUT);
 
 /** A fake anvil: eth_sendTransaction to the factory deploys the library whose creation code the data carries. */
