@@ -73,6 +73,7 @@ stale docs). For Twin chain work, match CI with `foundryup --install v1.8.5`.
 
 **Jobs:**
 - `unit` — forge unit tests; runs immediately on trigger
+- `prototype` (`forge-prototype-tests`) — every test under `contracts/test/prototype/**` (the one-vault experiment and the Deploy 4 fund system that deploys from `contracts/test/prototype/src`), under `.github/scripts/forge_test_require_executed.sh`, with a 45-minute budget; runs in parallel with `unit`. Its stateful invariants, random-seed queue fuzz and simulations take longer than the `unit` job's 20 minutes, so `unit` and the coverage run exclude `prototype/**` and this job gates it instead. Coverage does not instrument it: the coverage gate reads gateway coverage only, and the prototype's EIP-170 size tests would fail on instrumented bytecode
 - `invariant` — forge fuzz/invariant tests; runs in parallel with `unit`
 - `coverage` — coverage gate check; **needs `unit` and `invariant`** (only worth running if tests pass)
 - `contract-build-reproducibility` — issue 1926: builds two `git worktree` checkouts of the commit at different absolute paths under `$RUNNER_TEMP` with the pinned forge, the way the deploy stages compile, and runs `publish-contracts/src/ci/check-build-reproducible.ts`. Every library, CREATE2 library and proxy implementation of the stage table must have byte-identical creation and runtime code, and no artifact's metadata may hold an absolute path. The step greps the summary line for a non-zero compared count, 0 differ and 0 absolute paths. Required (`scripts/ci/required-checks.json`).
