@@ -1,5 +1,7 @@
 # Cross-Cutting Contradictions, Compounding Failure Chains & Unresolved Design Trade-Offs (v0.8.0 / Step 3f)
 
+> **Pass 3 final draft (2026-11-14).** This Pass 2 synthesis is kept as the record. Its chains and theme index are superseded by the root causes in `00-executive-summary.md` §3 and `06-pass-3-adversarial-critique.md` §5. Its severities are superseded by `00` §4.
+
 **Worktree:** `/drive2/home/lucas/tmp/superfield-worktrees/robotmoney-core/design-review-0.8.0`  
 **Scope:** Synthesis of design documents and Pass-2-verified domain reviews `01`–`04` (implementation code `.sol`, `.rs`, `.ts` excluded).  
 **Primary Sources:**

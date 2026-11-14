@@ -1,5 +1,7 @@
 # Architecture & Internal Coherence Review (v0.8.0 / Step 3f Design)
 
+> **Pass 3 final draft (2026-11-14).** The severities in this chapter are Pass 2's. Each finding carries its Pass 3 rating. `00-executive-summary.md` §4 and `06-pass-3-adversarial-critique.md` govern.
+
 **Review Scope:** Design documents only (implementation code `.sol`, `.rs`, `.ts` excluded).  
 **Worktree:** `/drive2/home/lucas/tmp/superfield-worktrees/robotmoney-core/design-review-0.8.0`  
 **Disposition Tags:** `[DEFEATED]` (initial concern disproven by the design docs), `[CORRECTED]` (severity/framing calibrated to reflect intentional baseline vs. genuine defect), `[EXPANDED]` (scope enlarged with newly identified coherence/design gaps).
@@ -50,6 +52,8 @@ The proposal tests invalidating the rejection of `ADR-0010` by replacing the thr
 
 ### ARCH-01 `[CORRECTED]`: Top-level diagram (`§4`) lacks `v0.8.0-onevault` baseline scoping vs. Step 3f (`§5.11`), while `§5.6` is an intentional pre-3f baseline
 
+> **Pass 3:** Low (was Medium). Captions and forward links only. See `06`.
+
 - **Severity:** Medium (downgraded from High)
 - **Exact Citations:**
   - Unqualified diagram / step descriptions: `docs/technical/one-vault-rebalancer-proposal.md` §4 (L116, L122, L124), §5.4 (L486–492), §5.6 (L533, L549)
@@ -67,6 +71,8 @@ The proposal tests invalidating the rejection of `ADR-0010` by replacing the thr
 ---
 
 ### ARCH-02 `[CORRECTED]`: Stale 1-day hold in `§1` & `§9` (wrong even for `v0.8.0`), missing Step 3f delta in `§8`, and ambiguous early `unpause*` override
+
+> **Pass 3:** Medium. Confirmed at `proposal.md` L61 and L1612. See `06`.
 
 - **Severity:** Medium (downgraded from High)
 - **Exact Citations:**
@@ -87,6 +93,8 @@ The proposal tests invalidating the rejection of `ADR-0010` by replacing the thr
 ---
 
 ### ARCH-03 `[EXPANDED]`: Invariant list (`§7`), Step 3f eng plan (`§8.2`), library architecture (`§6.1`), and evidence log (`§14`) have critical gaps on delisted-asset slice claims (`D30`), `RB-19`/`RB-22`, and EIP-170 limits (`deSPXA` sub-point `[DEFEATED]`)
+
+> **Pass 3:** Medium (was High). Its D30 part is SAFE-08 and its RB-22 part is FLOW-02. The residual is size headroom, which the plan already measures first. Root R8. See `06`.
 
 - **Severity:** High
 - **Exact Citations:**
@@ -115,6 +123,8 @@ The proposal tests invalidating the rejection of `ADR-0010` by replacing the thr
 
 ### ARCH-04 `[DEFEATED]`: "ERC-4626 in shape" and ERC-7540 claims in `§1`, `§4`, `§6`, and `§5.11.6`
 
+> **Pass 3:** Defeated. Agreed. See `06`.
+
 - **Severity:** None — **`[DEFEATED]`** (was High)
 - **Exact Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md` §5.9.6 (L840–874, 7-row departures table at L864–872), §5.11.6 (L1244, L1248)
@@ -140,6 +150,8 @@ The proposal tests invalidating the rejection of `ADR-0010` by replacing the thr
 
 ### ARCH-05 `[EXPANDED]`: Asset admission & delisting (`§4.5`, D12/D19/D30) has undefined parameters, unspecified slice-claim mechanics, and a timelock deadlock during market/feed failures
 
+> **Pass 3:** Medium (was High). Its D30 part is SAFE-08. The parameters are already recorded open. A dead-feed halt is the stuck-fund case the owner accepted under D24; the design should say so for this trigger. See `06`.
+
 - **Severity:** High
 - **Exact Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md` §4.5 (L317–345, L348, L374–376), §5.6 (L562–565), §5.11.4 (L1077–1079, L1151–1157), §5.11.9 DEP-01 (L1347–1350), §7 RB-19 (L1470–1471) & RB-34 (L1549–1552), §11 D12/D19/D30 (L1887, L1894, L1905), §21.4 (L3071–3072)
@@ -161,6 +173,8 @@ The proposal tests invalidating the rejection of `ADR-0010` by replacing the thr
 
 ### ARCH-06: `ADR-0004` vs. `proposal.md` governance & admission rules divergence and internal `ADR-0004` contradiction
 
+> **Pass 3:** Low (was Medium). Confirmed: ADR-0004 L218 contradicts its own amendment, which governs. See `06`.
+
 - **Severity:** Medium
 - **Exact Citations:**
   - `docs/adr/ADR-0004-agent-token-shortlist-governance.md` (L93–110, L172–178, L198–200, L218, L266–268)
@@ -176,6 +190,8 @@ The proposal tests invalidating the rejection of `ADR-0010` by replacing the thr
 
 ### ARCH-07 `[CORRECTED]`: `one-vault-prd-amendments.md` tracks four unamended Step 3f PRD breaks and contains a concrete settlement-timing bug in `§5 (L91)`
 
+> **Pass 3:** Low. Agreed. See `06`.
+
 - **Severity:** Low (Tracked Open Work) (downgraded from Medium)
 - **Exact Citations:**
   - `docs/technical/one-vault-prd-amendments.md` §3 (L59–63), §4 (L65–78), §5 (L80–118, specifically **L91** timing bug and **L109–118** explicit open-work table; L119 unverified line-number note)
@@ -189,6 +205,8 @@ The proposal tests invalidating the rejection of `ADR-0010` by replacing the thr
 ---
 
 ### ARCH-08 `[EXPANDED]`: Role & authority inconsistencies (`TARGET_SETTER_ROLE`, UUPS upgrades) and missing `DEP-03`/`E47` exclusivity checks on internal system roles
+
+> **Pass 3:** Medium. Confirmed. Root R9. See `06`.
 
 - **Severity:** Medium
 - **Exact Citations:**
@@ -211,6 +229,8 @@ The proposal tests invalidating the rejection of `ADR-0010` by replacing the thr
 ---
 
 ### ARCH-09: `VaultRegistry` removal & `G6` operational complexity gate remain unverified
+
+> **Pass 3:** Low. Agreed. See `06`.
 
 - **Severity:** Low / Open Question
 - **Exact Citations:**

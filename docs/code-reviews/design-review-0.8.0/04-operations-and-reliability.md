@@ -1,5 +1,7 @@
 # Operations, Reliability & 0.7.0 Lessons Learned
 
+> **Pass 3 final draft (2026-11-14).** The severities in this chapter are Pass 2's. Each finding carries its Pass 3 rating. `00-executive-summary.md` §4 and `06-pass-3-adversarial-critique.md` govern.
+
 **Scope & Documents Reviewed:**
 - `docs/technical/one-vault-rebalancer-proposal.md`: §4.5 (L288–386), §5.6–§5.8 (L517–598), §5.9.3–§5.9.5 (L700–839), §5.10–§5.11.9 (L910–1376), §7 (L1416–1553), §8–§11 (L1554–1906), §19.1–§19.2 (L2880–2911), §20–§21.2 (L2951–3052).
 - `docs/technical/one-vault-timed-flows-eng-plan.md`: §8.1 E33–E51 (L390–419).
@@ -55,6 +57,8 @@
 ## 3. Numbered Findings
 
 ### OPS-01 — High: Operational Contradiction Between `D20` (Team Multisig Keeper) and `DEP-03` (Single `KEEPER_ROLE` Holder) Under `D4-10`
+
+> **Pass 3:** Medium (was High). There is no contradiction: a multisig is one address. The 48-hour keeper replacement delay is real. Adopt the keeper smart account. Root R6. See `06`.
 - **Citations:** `docs/technical/one-vault-rebalancer-proposal.md` §5.6 (L525, L549, L562–565), §5.8 (L593), §5.9.5 (L824), §5.11.3 item 5 (L1039–1045), §5.11.5 (L1177, L1182–1190), §5.11.9 (L1355), §8 (L1582, L1591–1592), §10 (L1674–1676), §11 `D20` (L1895), `D24` (L1899), §14 (L2183–2184), §19.1 Rule 1 (L2882–2885), §19.2 (L2897); `docs/technical/one-vault-timed-flows-eng-plan.md` §8.1 `E47` (L414); `docs/adr/ADR-0004-agent-token-shortlist-governance.md` (L190–196, L266–268); `docs/code-reviews/0.7.0/08-deployment-challenge.md` (L52–86).
 - **Problem Description:** Within Owner Rule 1 (§19.1 L2882–2885), `D20` (§11 L1895), and `D24` (§11 L1899), the keeper is a team-operated non-actor, `keeperGrace` is intentionally removed, and no permissionless fallback or wind-down exists. However, `D20` (§5.11.3 item 5 L1039–1040) directly contradicts `DEP-03` (§5.11.9 L1355 / `E47` L414):
   1. `D20` specifies *"The keeper is a team-operated account, preferably a multisig,"* yet human multisig signers cannot co-sign automated 30-minute `step()` calls (`stepInterval`, §5.6 L525) and multi-block `settle()` calls (`basketCallBps = 5`, §5.9.5 L824; §14 L2183–2184).
@@ -65,6 +69,8 @@
   2. Specify automated keeper gas-balance monitoring, alert thresholds, and top-up automation in the Watchdog/Keeper runbook (§8 L1582, L1591–1592).
 
 ### OPS-02 — High: `maxPause` Cooldown Deadlocks the Wind-Down Notice Protection (`shutdown` + `pauseDeposits`)
+
+> **Pass 3:** High. Merged into root R1 with FLOW-03. See `06`.
 - **Citations:** `docs/technical/one-vault-rebalancer-proposal.md` §5.11.5 (L1190–1197, L1217–1222), §7 `RB-32` (L1543–1545), §11 `D24` (L1899), `D29` (L1904), §21.2 (L3045); `docs/technical/one-vault-timed-flows-eng-plan.md` §8.1 `E39` (L406), `E51` (L418).
 - **Problem Description:** Scheduling `shutdown` exposes the upcoming wind-down for the 48-hour timelock delay. To prevent redeemers from matching at NAV against locked depositors during this notice window, §5.11.5 (L1192–1197) relies on a **runbook rule** (`D29` L1904; §21.2 L3045) to call `pauseDeposits` alongside scheduling `shutdown`. However, under `D29` / `RB-32` (§5.11.5 L1218–1219; §7 L1543–1545), `pauseDeposits` auto-expires after `maxPause` (72h default) and **cannot be set again for another `maxPause` (72h)**. Furthermore, `RB-32` / `E51` only enforces `maxPause >= timelockDelay`, permitting the **`maxPause == timelockDelay` edge case** (e.g., 48h == 48h): unless `pauseDeposits` is called simultaneously with or after `shutdown` scheduling and Safe signers execute `shutdown` at the exact instant the timelock matures under `D4-10`, the pause auto-expires *before* `shutdown` executes.
 - **Impact:** If `EMERGENCY_ROLE` used `pauseDeposits` earlier in an escalating incident and that pause expired within the last `maxPause` (72h), `EMERGENCY_ROLE` is locked out of calling `pauseDeposits` when the Safe schedules `shutdown`. Operators must then either delay wind-down by up to 72 hours or expose locked depositors to 48 hours of adverse-selection NAV matching; similarly, at `maxPause == timelockDelay` (or with any >24h Safe execution lag at 72h default), notice protection lapses mid-timelock.
@@ -73,6 +79,8 @@
   2. Strengthen the `RB-32` / `E51` lower bound from `maxPause >= timelockDelay` to `maxPause >= timelockDelay + epochLength` (e.g., ≥54h at 48h timelock + 6h epoch) if `EMERGENCY_ROLE` pauses remain part of wind-down notice coverage.
 
 ### OPS-03 — Medium: Operational Defects Under Intentional 48h Safe-Only Timelock Governance (`D4-10`, `D24`, `D30`)
+
+> **Pass 3:** Medium. Not re-checked in Pass 3. See `06`.
 - **Citations:** `docs/technical/one-vault-rebalancer-proposal.md` §5.6 (L541–565), §5.9.5 (L816), §5.11.5 (L1182–1236), §5.11.8 (L1308–1311), §10 (L1672–1681), §11 `D24` (L1899), `D30` (L1905), §18.6 (L2855–2857), §19.2 (L2897); `docs/adr/ADR-0004-agent-token-shortlist-governance.md` (L266–268).
 - **Problem Description:** The 48-hour Safe-only timelock delay on `shutdown` and `emergencyUnwind` is an **intentional owner decision** (`D4-10`, `D24`, `D30`; §18.6 L2855–2857; §19.2 L2897). Within that accepted governance model, three concrete operational defects remain:
   1. **Compromised `EMERGENCY_ROLE` cleanup persistence:** A compromised `EMERGENCY_ROLE` can halt deposits, queue, and rebalancer for `maxPause` (72h) and freeze one settlement's deposit shares for `maxFreeze` (7 days default, §5.9.5 L816). Revoking `EMERGENCY_ROLE` through the 48h timelock leaves those active pauses and freezes in place unless explicitly cleared by `ADMIN_ROLE` (`unpause*` / `releaseSettlement`, §5.11.5 L1233–1236).
@@ -85,6 +93,8 @@
   3. Document Safe signer-availability SLAs and pre-staged execution procedures for the two-step propose + execute requirement under `D4-10`.
 
 ### OPS-04 — High: Step 3f `RUN-01` 48h Redemption Strand and Deferred `v0.9.0-onevault` Verification Gaps (`DEP-01`–`03`, `SIM-01`–`02`, `ARCH-08`)
+
+> **Pass 3:** Medium (was High). The launch pools are Uniswap V3, whose fee is fixed. The strand stands for pools with adjustable fees. Its fix builds on D30, so specify D30 first. Its role part is ARCH-08. Roots R9, R10. See `06`.
 - **Citations:** `docs/technical/one-vault-rebalancer-proposal.md` §4 (L108), §4.5 rule 5 & rule 6 (L325–360), §5.6 (L550–551), §5.9.3 checks 8 & 11 (L738–741, L768–770), §5.11.3 item 3 (L1031–1035), §5.11.4 (L1081–1082, L1088–1089, L1128–1136, L1160–1161), §5.11.5 (L1177), §5.11.9 (L1322–1376), §7 `RB-25`, `RB-26`, `RB-28`, `RB-33` (L1519–1525, L1531–1534, L1546–1548), §10 (L1788–1789, L1847–1852), §11 `D18`, `D30` (L1893, L1905), §20 (L2951–3012); `docs/technical/one-vault-timed-flows-eng-plan.md` §8.1 `E33`, `E43`–`E48` (L410–415, L419); `docs/code-reviews/0.7.0/01-findings-index.md` (L1–30), `08-deployment-challenge.md` (L1–109), `09-receipt-and-economic-challenge.md` (L1–114), `10-recovery-and-accounting.md` (L1–19); `docs/code-reviews/design-review-0.8.0/01-architecture-and-coherence.md` (`ARCH-08`, L146–156).
 - **Problem Description:**
   1. **Step 3f `RUN-01` 48-hour redemption strand (elevates `OPS-04` to High):** Under §4.5 rule 6 (L350–352) and `RB-33` (L1546–1548), each round re-reads active pools' fees; when a pool's fee rises so `poolFee + feeMarginBps >= legBandBps` (or `poolFee >= legBandBps`), §5.11.4 (L1088–1089) **stops deposits and the match**, which forces all queued redemptions into **100% net redemptions** (§5.11.4 L1081–1082). Because an asset is never delisted automatically (`D30`, §4.5 rule 5 L325; §11 L1905), those net redemptions must sell a pro-rata slice of that exact over-fee pool (§5.11.4 L1128–1132). Under §5.9.3 Check 8 (L738–741) and Step 3f Check 11 (§5.9.3 L768–770; §5.11.4 L1160–1161; `E33` L419), every sale leg must achieve at least `max(feed, TWAP) * (1 - legBandBps)`. When `poolFee >= legBandBps` (or `poolFee + priceImpact > legBandBps` where `poolFee + feeMarginBps >= legBandBps`), the sale immediately reverts on Check 8 / Check 11—and under Step 3f (`D18`, `RB-26`, `RB-25`), redeemers have neither running-fund `redeemInKind` (§5.11.5 L1177) nor post-cutoff `cancel` (§5.11.3 item 3 L1031–1035).
@@ -97,6 +107,8 @@
   3. Gate `v0.9.0-onevault` on closing all six 0.7.0 P2 findings (`DEP-01`–`03`, `SIM-01`–`02`, `RUN-01`) with executed tests and re-proving the three voided §20.3 traces.
 
 ### OPS-05 — Low: Minor Un-Marked `§8` Govern Row (`allow-settlement-return`) and Missing Forward Pointer from `§5.6` to `§5.11.8`
+
+> **Pass 3:** Low. Agreed. See `06`.
 - **Citations:** `docs/technical/one-vault-rebalancer-proposal.md` §5.6 (L533, L547, L549), §5.9.5 (L810), §5.10 (L934–935), §5.11 (L941–946), §5.11.8 (L1311), §8 (L1590) vs. §5.11.5 (L1228–1230), §5.11.6 (L1246–1247).
 - **Problem Description:** `§5.10` (L934–935) and `§5.11` (L941–946) explicitly state that `§5.6` and `§5.9` remain the `v0.8.0-onevault` baseline until Step 3f (`v0.9.0-onevault`) is built, and `§5.11.8` (L1311) explicitly reconciles `§5.6`'s three changed roles rows (`keeperGrace`, `allowReturn`, `pauseQueue`) for Step 3f. However, two minor cross-referencing omissions remain:
   1. `§8` (L1590) still lists `allow-settlement-return` as a `publish-contracts` govern row without a Step 3f (`v0.9.0-onevault`) removal tag (`allowReturn`/`takeReturn` removed under `D18`, §5.11.5 L1228–1230; §5.11.6 L1247).
@@ -105,18 +117,24 @@
 - **Recommendation:** Annotate `allow-settlement-return` in `§8` (L1590) as `v0.8.0-onevault` only / removed in Step 3f (`v0.9.0-onevault`), and add a brief forward pointer in `§5.6` (L533, L547, L549) and `§5.9.5` (L810) to `§5.11.8` (L1311).
 
 ### OPS-06 — Medium: Off-Chain Semantic Binding & Unresolved Per-Asset Weight Authority (D8)
+
+> **Pass 3:** Medium. Confirmed; already recorded open in `§20.4`. See `06`.
 - **Citations:** `docs/technical/one-vault-rebalancer-proposal.md` §8 (L1560–1565), §11 D8 (L1883), §20.4 (L3002–3005); `docs/code-reviews/0.7.0/09-receipt-and-economic-challenge.md` (L77–95).
 - **Problem Description:** `RebalanceGovernance.applyReceipt` does not verify on-chain that the supplied `(assets, bps)` vector matches the receipt payload (§20.4 L3002–3005), and D8 (§11 L1883; §8 L1564–1565) leaves who chooses per-asset weights unresolved for production.
 - **Impact:** Production rebalancing depends on off-chain payload builders (`fund-receipt-payload.ts`) and manual Safe signer verification; a compromised or buggy off-chain builder can supply an arbitrary valid weight vector.
 - **Recommendation:** Resolve D8 before production (analyst-signed per-asset weights or a deterministic, verifiable split rule) and require `publish-contracts` / Safe UIs to render the decoded receipt alongside the `(assets, bps)` vector.
 
 ### OPS-07 — Low: Automatic Deposit-Stop Resumption Creates Cancel-Window Coupling for Depositors
+
+> **Pass 3:** Low. Agreed. See `06`.
 - **Citations:** `docs/technical/one-vault-rebalancer-proposal.md` §5.11.3 item 8 (L1057–1063), §5.11.4 (L1081–1090), §8 (L1571–1583).
 - **Problem Description:** Automatic deposit stops (e.g., D21 venue illiquidity or §4.5 rule 6 pool-fee spike) can end mid-epoch without a timelock, immediately folding remaining deposits into the open epoch with cancellation closing at that epoch's end (§5.11.3 item 8).
 - **Impact:** If the dApp, indexer, or Watchdog (§8) lags, depositors intending to cancel during a stop may miss the epoch close and be locked into forward-priced settlement.
 - **Recommendation:** Ensure Watchdog and dApp prominently surface deposit-stop transitions and exact epoch-close cancel deadlines.
 
 ### OPS-08 — Low: Indefinite Maintenance Burden for Retired Vaults' TWAP Pools and Price Sources
+
+> **Pass 3:** Low. Not re-checked in Pass 3. See `06`.
 - **Citations:** `docs/technical/one-vault-rebalancer-proposal.md` §9 item 6 (L1613–1614).
 - **Problem Description:** §9 item 6 requires retired vaults (`rmUSDC`, `rmPROTO`, `rmRWA`) to maintain TWAP pools and V3 price sources indefinitely after migration.
 - **Impact:** Ongoing operational, liquidity, and Watchdog monitoring overhead persists for retired contracts alongside the new single-vault system.

@@ -1,144 +1,143 @@
-# Design Review 0.8.0 — Executive Summary
+# Design Review 0.8.0 — Executive Summary (Final Draft)
 
-**Target Branch:** `docs/onevault-netted-forward-priced-flows` (commit `decef7c99`)  
-**Review Scope:** Design documents only (`docs/technical/*`, `docs/adr/*`, `docs/code-reviews/0.7.0/*`); all implementation code (`.sol`, `.rs`, `.ts`) excluded.  
-**Revision Status:** Pass 2 Verified Synthesis (`01`–`05`, `README.md`) — incorporates corrected launch-weight and timing math, expanded insolvency/deferred-claim proofs, and explicit tracking of defeated Pass-1 claims.  
-**Date:** 2026-11-14  
-**Worktree:** `/drive2/home/lucas/tmp/superfield-worktrees/robotmoney-core/design-review-0.8.0`
+**Target branch:** `docs/onevault-netted-forward-priced-flows` (design text at commit `decef7c99`)
+**Scope:** Design documents only. No implementation code.
+**Status:** Final draft. Pass 3 critique (`06`) applied to the Pass 2 review (`01` to `05`).
+**Date:** 2026-11-14
 
 ---
 
-## 1. Overall Verdict & 5-Pillar Scorecard
+## 1. Verdict
 
-**Overall Verdict: NO-GO for Step 3f (`v0.9.0-onevault`) implementation or mainnet deployment without targeted design fixes.**
+**The core of step 3f is sound. Implementation of `v0.9.0-onevault` should wait for four spec edits and two owner decisions.**
 
-The core single-vault + netted forward-priced `FlowQueue` architecture is sound in intent—replacing TWAP-booked rebalance cost with feed-based cost accounting (`Step 3e`), dropping `deSPXA`, netting opposing flows at TWAP NAV, and transparently documenting ERC-4626/7540 departures (`§5.9.6`). Moreover, Pass 2 verification confirmed that Safe-only timelocked wind-down (`D24`), removing `keeperGrace` (`D20`), and disabling running-fund `redeemInKind` (`D18`) are **explicitly owner-accepted policies (`§5.11.7 L1270–1274`, `§18.4 L2823–2829`, `§19.2 L2897`)**, defeating Pass 1's `SAFE-04` and ERC-4626/7540 misrepresentation claims (`ARCH-04`, `FLOW-09`).
+What survives three reviews:
 
-Nevertheless, Step 3f remains **NO-GO** due to **2 standalone Critical accounting defects** (`FLOW-01` cap-denominator queue insolvency & whale dilution; `FLOW-02` multi-round overwrite & Step 8d lazy touch breaking `RB-22` `ExclusionLedger` attribution) and **10 High findings** spanning un-specified `D30` delisted-asset slice claims (`ARCH-03`, `ARCH-05`, `SAFE-08`), EIP-170 size margin (`ARCH-03`), `D20` multisig vs `DEP-03` single `KEEPER_ROLE` contradiction (`OPS-01`), Step 3f `RUN-01` 48h redemption stranding (`OPS-04`), `RB-32` wind-down notice deadlock (`FLOW-03`, `OPS-02`), `RB-31` + `RB-32` pause-expiry dead code (`FLOW-04`), `RB-30` zero-block rollover starvation (`SAFE-01`), and `D21` asymmetric forced matching on impaired lending venues (`SAFE-02`).
+- the whole match, booked once at the fund's TWAP NAV, with the feeds as guards;
+- the net remainder traded as a pro-rata slice by quantity;
+- the cancel cutoff and forward pricing;
+- the Safe-only, timelocked wind-down.
 
-| Pillar | Rating | Assessment Summary | Key Drivers |
+No finding shows any of these unsound. Pass 2 rated two findings Critical. Both are real. Both have contained fixes, so both are High here.
+
+What must change before building:
+
+| Root | Problem | Fix |
+| --- | --- | --- |
+| R1 | The only fast protection for locked depositors, the emergency key's `pauseDeposits`, can be switched off by its cooldown. A scheduled wind-down or adapter revoke is public for 48 hours. | No cooldown on `pauseDeposits`. Pair every scheduled wind-down and adapter revoke with it. |
+| R2 | The match is booked lazily, but the loss-recovery ledger needs every change of ownership as it happens. A redeemer who left can collect the recovery on shares they sold. | The queue's per-owner view resolves every match from per-side accumulators. Keep the existing rule that no match runs while an exclusion is open. |
+| R3 | The match fraction divides by totals that were capped. With more queued than the cap, the queue books more shares than are escrowed. | Divide by the uncapped locked totals. |
+| R4 | Claims on a delisted asset's slice, and the rebalancer's handling of lending claims, are one sentence each. | Specify claim units, exclusion from NAV and caps, the split of sale proceeds, and the rules for `step()`. |
+
+---
+
+## 2. Scorecard
+
+| Pillar | Rating | Why |
+| --- | --- | --- |
+| Coherent | Amber | Stale text in five places (the hold, "blend the price", "settlement window"), the D30 claims underspecified, ADR-0004 contradicts its own amendment. |
+| Correct | Red | R2 and R3: the match as written misbooks shares and misattributes recovery. Both are spec edits. |
+| Safe | Red | R1: locked depositors can lose their only protection during a public 48-hour notice. R4: delisting can double-count. |
+| Reliable to operate | Amber | Replacing the keeper takes the timelock (R6). Steps stop whenever the queue does (R5). Both have known fixes. |
+| Honest to customers | Amber | No slippage estimate, last-block cancel, PRD amendments still open or misworded. |
+
+---
+
+## 3. Root causes
+
+Pass 2 counted 10 High findings. They are four problems. The pause cooldown appeared three times, and the delisted-slice gap appeared three times. `06` §5 has the reasoning.
+
+| Root | Severity | Findings | One-line fix |
 | --- | --- | --- | --- |
-| **1. Coherent** | **Needs Work (Amber)** | Pass 2 **defeated** `ARCH-04` & `FLOW-09` (`§5.9.6` documents the ERC-7575 split & all 7 departures; `§5.11.6` removes only row 1), and recognized `§5.6`/`§5.9` as intentional `v0.8.0-onevault` baseline (`§5.11.8 L1311`, downgrading `ARCH-01`, `ARCH-02`, `OPS-05`) and `one-vault-prd-amendments.md §5 (L109–118)` as tracked open work (`ARCH-07`). Genuine coherence defects remain: missing `D30` slice-claim integration across `RB-34`/`RB-19`/`timed-flows-eng-plan.md §8.2`, `§1`/`§9` stale 1-day hold (wrong even for `v0.8.0`), missing `§4`/`§8` deltas & early `unpause*` ambiguity, `RB-30` `[epochClose, roundEnd]` vs `"settlement window"` conflict, `"Blend the price per side"` in `§8.2` & `§8.4 WP3`, `ADR-0004 L218`, `§5 (L91)` timing bug, and `TARGET_SETTER_ROLE` placement. | `ARCH-01`–`03`, `ARCH-05`–`08`, `FLOW-07`, `SAFE-01`, `SAFE-08`, `SAFE-10`, `OPS-05` *(defeated: `ARCH-04`, `FLOW-09`)* |
-| **2. Correct** | **Failing (Red)** | Two **Critical** math/state flaws: `Step 8a–8b` (`§21.1` Row 3) applies capped fractions to `D_total > cap_D`, creating immediate share/USDC queue insolvency and `RB-29` breaches (`FLOW-01`); lazy O(1) Step 8d accounting overwrites multi-round `S, f`, mixes per-round `minHold`/`freezeSettlement`, and misattributes `RB-22` `ExclusionLedger` recovery from Depositor D to exited Redeemer R (`FLOW-02`). Additionally: `D30` slice-claim double-counting & missing proceeds split (`ARCH-03`, `SAFE-08`), `RB-31`+`RB-32` post-`pauseDeposits` continuation dead code (`FLOW-04`), unburned share dust (`FLOW-06`), `minStepUsdc` convergence deadlock (`SAFE-05`), `Rule 6` omitting `maxStepSlippageBps` (`SAFE-07`), and `cost` floor / `0 < 0` / `§5.5` label bugs (`SAFE-06`). | `FLOW-01` (**Critical**), `FLOW-02` (**Critical**), `ARCH-03`, `FLOW-04`, `FLOW-06`, `SAFE-05`–`08` |
-| **3. Safe** | **Failing (Red)** | `SAFE-04` is **defeated by owner decisions `D18`/`D20`/`D24`**, and `SAFE-03` launch-weight skew is **corrected to `4.5 bps`** ($90\text{ bps} \times 5\%$ at 5% basket weight; `settleWindow == TWAP_window` at defaults). High safety risks remain: `RB-30` zero-block rollover starvation & `pauseQueue` coupling (`SAFE-01`), `D21` asymmetric forced matching against locked depositors when an impaired venue holds $\ge 5\%$ liquidity & `RB-32` blocks `pauseDeposits` (`SAFE-02`), missing `settleWindow >= TWAP_window` (`E51`/`§7`) & unbounded basket weight (`SAFE-03`), `D23`/`RB-21` & `D30` claim collisions (`SAFE-08`, `ARCH-03`), `RobotMoneyFund` (23,237 B) & `FundAdminLib` (23,406 B) sitting ~1.2–1.3 KB below EIP-170 before Step 3f (`ARCH-03`), and missing `DEP-03`/`E47` internal-role & UUPS upgrade checks (`ARCH-08`). | `SAFE-01`, `SAFE-02`, `SAFE-08`, `SAFE-03`, `SAFE-09`, `ARCH-03`, `ARCH-05`, `ARCH-08` *(defeated: `SAFE-04`)* |
-| **4. Reliable to Operate** | **Failing (Red)** | Within the accepted `D18`/`D20`/`D24` governance model, `D20` ("preferably a multisig") conflicts with `DEP-03` (single `KEEPER_ROLE`), forcing a 48h `D4-10` rotation on any bot crash/gas loss (`OPS-01`); `RUN-01` (pool fee $\ge \text{legBandBps}$) stops deposits/match and strands **100% net redemptions** on Check 8/Check 11 for ≥48h (`OPS-04`, upgraded to **High**); `RB-32`'s 72h cooldown & `maxPause == timelockDelay` edge deadlock `shutdown` + `pauseDeposits` notice protection (`FLOW-03`, `OPS-02`); dead-feed delisting/`emergencyUnwind` awaits 48h timelock (`ARCH-05`); `EMERGENCY_ROLE` revocation needs atomic `unpause*`/`releaseSettlement` & Safe SLAs (`OPS-03`); `FLOW-05` ends rounds on 1st net fail; and `DEP-01`–`03`/`SIM-01`–`02` remain open (`OPS-04`). | `OPS-01`, `OPS-02`, `OPS-04`, `FLOW-03`–`05`, `ARCH-05`, `OPS-03` *(defeated: `SAFE-04`, `keeperGrace`)* |
-| **5. Honest to Customers** | **Needs Work (Amber)** | `ARCH-04` & `FLOW-09` are **defeated** (`§5.9.6` accurately documents ERC-7575 & all 7 departures) and `FLOW-10` band exposure is accepted (`§21.2 L3050`). Genuine honesty issues remain: unquoted 0-vs-`legBandBps` slippage variance and last-block cancel baiting (`FLOW-08`), four unamended Step 3f PRD breaks (`ARCH-07`, `FLOW-08`), `one-vault-prd-amendments.md §5 (L91)` misstating notice return as `"after the next settlement"` / `"After 48 hours"` instead of `"when that round ends"` / `maxRoll` epochs (`ARCH-07`, `FLOW-10`), `OPS-07` auto-resumption cancel lag, and `OPS-06` on-chain receipt-to-target semantic binding (`D8`). | `FLOW-08`, `FLOW-10`, `ARCH-07`, `OPS-06`, `OPS-07` *(defeated: `ARCH-04`, `FLOW-09`)* |
+| R1 | High | FLOW-03, OPS-02, SAFE-02, P3-01 | No cooldown on `pauseDeposits`; pair every wind-down and adapter revoke with it |
+| R2 | High | FLOW-02 | Queue view resolves matches from per-side accumulators; no match while an exclusion is open |
+| R3 | High | FLOW-01 | Divide by the uncapped locked totals |
+| R4 | High | SAFE-08 (with ARCH-03 and ARCH-05 parts) | Specify D30 claim units, NAV exclusion, proceeds split and `step()` rules |
+| R5 | Medium | SAFE-01, FLOW-05, P3-02 | The first call of a round requires no step in the prior `settleWindow`; steps are free otherwise |
+| R6 | Medium | OPS-01 | Keeper is a team smart account with rotatable bot keys |
+| R7 | Medium | FLOW-04 | The round records "deposits stopped" at its first call |
+| R8 | Medium | ARCH-03 residual | Size build first, as the plan already says |
+| R9 | Medium | ARCH-08, OPS-04 part | Extend the role read-back (E47) to internal roles and the keeper account |
+| R10 | Medium | OPS-04 residual | Specify D30 first, then reuse it for a pool whose fee can change |
 
 ---
 
-## 2. Findings Defeated, Corrected & Elevated in Pass 2 Revision
+## 4. Findings index
 
-Full verification details and citations are in [`05-cross-cutting-contradictions-and-gaps.md`](./05-cross-cutting-contradictions-and-gaps.md#2-defeated-findings--corrected-pass-1-claims):
+Pass 2 ratings are kept for the record. The Pass 3 rating governs. "Not re-checked" means Pass 3 did not test the claim and kept the Pass 2 rating.
 
-- **Fully Defeated Findings (3):**
-  - **`ARCH-04` (`[DEFEATED]`, was High)** & **`FLOW-09` (`[DEFEATED]`):** `one-vault-rebalancer-proposal.md §5.9.6 (L840–874)` explicitly defines the ERC-7575 two-address split and all 7 departures; `§1`/`§6`/`§11`/`§15.8` cross-link `§5.9.6`; and `§5.11.6 (L1248)` removes specifically and only row 1 (`limits`).
-  - **`SAFE-04` (`[DEFEATED BY OWNER DECISION (D18, D20, D24)]`, was High):** Safe-only timelocked `shutdown`, removal of `keeperGrace`, and wind-down-only `redeemInKind` (along with rejecting permissionless triggers after `maxRoll` blocked epochs) were explicitly confirmed by the owner in `§18.4 item 1 (L2823–2829)`, `§19.1 Rule 1 (L2882–2885)`, `§19.2 Row 2 (L2897)`, and `§5.11.7 (L1270–1274)`. All `keeperGrace` / permissionless-wind-down recommendations are retracted (leaving team-keeper SPOF in `OPS-01`).
-- **Defeated Sub-Parts & Severity Downgrades:**
-  - **`ARCH-03` `deSPXA` sub-point (`[DEFEATED]`):** `§4.5 (L383–386)` explicitly defines `§4.1` and `§5` `deSPXA` references as pre-rule history (`ARCH-03` remains **High** due to expanded `D30` slice claims, `RB-19`/`RB-22`, and EIP-170 gaps).
-  - **`SAFE-03` (High → Medium):** Retracted erroneous `85–90 bps` skew and default-overlap claims. At launch weights (5% basket / 95% lending, `§19.4`), 90 bps TWAP skew moves fund-wide `S` by **$90\text{ bps} \times 5\% = 4.5\text{ bps}$** (`§21.3 L3056–3057`), and `settleWindow == TWAP_window == 1h` keeps `step()` out of `settle()`'s TWAP at defaults; surviving flaws are missing `settleWindow >= TWAP_window` (`E51`/`§7`) and unbounded basket weight (`§21.4 L3075–3077`).
-  - **`SAFE-06` (Medium → Low / Medium):** Retracted "unreachable halt" claim (`newBudgetLeft < lastStepCost` in `§5.3 step 8 L468–470` triggers whenever a step uses `>50%` of prior `budgetLeft`), leaving `navBefore - navAfter` `0`-floor, `§5.5 (L501)` stale label, `0 < 0` edge case, and dynamic TVL budget.
-  - **`SAFE-10` (Low):** Defeated Parts 1 & 3 (`timed-flows-eng-plan.md §1–§7` is explicitly the Step 3d baseline per `L1, L18–22`; `§8` is the Step 3f delta); Check 6 omission in `proposal.md §5.10 (L915–916)` survives.
-  - **`ARCH-01` & `ARCH-02` (High → Medium), `OPS-05` (Medium → Low), `ARCH-07` (Medium → Low), `OPS-03` (High → Medium):** Recognized `§5.6`/`§5.9` as intentional `v0.8.0-onevault` baseline (`§5.11.8 L1311`), `one-vault-prd-amendments.md §5 (L109–118)` as tracked open work, and `§21.2 (L3050)` as accepting redemption band exposure (`FLOW-10`), while isolating `§1`/`§9` stale 1-day hold, `§4`/`§8` deltas, early `unpause*`, `§5 (L91)` timing bug, and `EMERGENCY_ROLE` batch cleanup/SLAs.
-- **Elevations & Expanded Proofs:**
-  - **`FLOW-01` (High → Critical)** and **`FLOW-02` (High → Critical):** Numerical cap-denominator insolvency + FIFO/whale-dilution proof (`FLOW-01`), and multi-round overwrite + Step 8d lazy touch vs `RB-22` `ExclusionLedger` attribution proof (`FLOW-02`).
-  - **`SAFE-08` (Medium → High)** & **`ARCH-03` / `ARCH-05` (`[EXPANDED]`):** Added `D30` delisted-asset slice-claim gaps (`RB-34` balance/NAV exclusion, proceeds split, `RB-19`/`step()`, `timed-flows-eng-plan.md §8.2` omission).
-  - **`OPS-04` (Medium → High):** Elevated for Step 3f `RUN-01` (pool fee $\ge \text{legBandBps}$ stopping deposits/match and stranding 100% net redemptions on Check 8/Check 11 for ≥48h) and `ARCH-08` internal-role `DEP-03` blind spots.
+| ID | Pass 2 | Pass 3 | Disposition | Root | Summary |
+| --- | --- | --- | --- | --- | --- |
+| FLOW-01 | Critical | **High** | Confirmed; fix corrected | R3 | Match fraction uses capped totals and over-books shares. Fix is the denominator. The FIFO-prefix fix reverses D27 and does not close over-asking. |
+| FLOW-02 | Critical | **High** | Confirmed; scope corrected | R2 | Lazy booking against RB-22 misattributes recovery. "Multi-round overwrite" assumed one storage slot the design does not have. |
+| FLOW-03 | High | **High** | Merged | R1 | Cooldown can block the wind-down pairing. Its timelocked fixes protect nobody during the notice. |
+| FLOW-04 | High | Medium | Corrected | R7 | Stop lifecycle undefined for round-time causes. The "dead code" half is harmless and Low. |
+| FLOW-05 | Medium | Medium | Confirmed | R5 | A round ends on one failed net call. Adopt only with SAFE-01's fix. |
+| FLOW-06 | Medium | Low | Corrected | | Share dust is rounding units. |
+| FLOW-07 | Medium | Medium | Confirmed | | "Blend the price per side" still in eng plan L435 and L530. |
+| FLOW-08 | Medium | Medium | Confirmed | | No slippage estimate, last-block cancel, unamended PRD promises. |
+| FLOW-09 | Defeated | Defeated | Agreed | | |
+| FLOW-10 | Low | Low | Confirmed | | PRD amendment row 1 says "after the next settlement" and "48 hours". |
+| SAFE-01 | High | Medium | Corrected | R5 | Steps stop whenever the queue is blocked. No value moves. Its fix cannot read a reverted check. |
+| SAFE-02 | High | **High** | Corrected; merged | R1 | Valid core is the lock after the cutoff with a switchable pause. "Asymmetric matching" defeated: a depositor loses the same matched or minted. Hot-key exclusion and routing-away fixes defeated. |
+| SAFE-03 | Medium | Low | Corrected | | The `settleWindow ≥ TWAP window` bound is an identity. No basket weight cap stays an open owner item. |
+| SAFE-04 | Defeated | Defeated | Agreed | | |
+| SAFE-05 | Medium | Low | Corrected | | Scenario B already fixed (R-F1). Scenario A needs a fund under about 100k USDC. |
+| SAFE-06 | Low/Medium | Low | Corrected | | Prose gaps about measured, built behaviour. |
+| SAFE-07 | Medium | Low | Corrected | | A skip when feed and TWAP disagree is the stricter-price rule working. The proposed fix loosens it. |
+| SAFE-08 | High | **High** | Confirmed | R4 | D30 slice claims and `step()` against lending claims unspecified. |
+| SAFE-09 | Medium | Medium | Confirmed | | Already recorded open in `§19.2`. |
+| SAFE-10 | Low | Low | Corrected | | No harm shown. Say the omission is deliberate. |
+| OPS-01 | High | Medium | Corrected | R6 | No contradiction: a multisig is one address. The 48-hour replacement delay is real. |
+| OPS-02 | High | **High** | Merged | R1 | Same as FLOW-03. |
+| OPS-03 | Medium | Medium | Not re-checked | | |
+| OPS-04 | High | Medium | Corrected | R9, R10 | Launch pools are Uniswap V3, whose fee is fixed. Stands for pools with adjustable fees. |
+| OPS-05 | Low | Low | Agreed | | |
+| OPS-06 | Medium | Medium | Confirmed | | Already recorded open in `§20.4`. |
+| OPS-07 | Low | Low | Agreed | | |
+| OPS-08 | Low | Low | Not re-checked | | |
+| ARCH-01 | Medium | Low | Confirmed | | Captions and forward links. |
+| ARCH-02 | Medium | Medium | Confirmed | | The hold is still "one day" in `§1` L61 and `§9` L1612. |
+| ARCH-03 | High | Medium | Corrected | R8 | Its D30 and RB-22 parts are counted under SAFE-08 and FLOW-02. Residual is size headroom. |
+| ARCH-04 | Defeated | Defeated | Agreed | | |
+| ARCH-05 | High | Medium | Corrected | | D30 part is SAFE-08. Parameters already open. Dead-feed halt is the stuck-fund case accepted under D24. |
+| ARCH-06 | Medium | Low | Confirmed | | ADR-0004 L218 against its own amendment. |
+| ARCH-07 | Low | Low | Agreed | | |
+| ARCH-08 | Medium | Medium | Confirmed | R9 | Internal roles need the exclusivity read-back. |
+| ARCH-09 | Low | Low | Agreed | | G6 not run. |
+| P3-01 | | **High** | New | R1 | A scheduled adapter revoke is public for 48 hours. Redeemers leave at face, locked depositors buy at face, net deposits fund the venue being removed. |
+| P3-02 | | Medium | New | R5 | FLOW-05's fix, adopted alone, stops the rebalancer whenever any request is locked. |
 
----
-
-## 3. Severity Breakdown & Consolidated Findings Index
-
-Across the four domain reviews (`01`–`04`), **37 finding IDs** were evaluated, yielding **34 active findings** (`2 Critical`, `10 High`, `14 Medium`, `8 Low`) and **3 defeated findings** (`ARCH-04`, `FLOW-09`, `SAFE-04`):
-
-| Category | Critical | High | Medium | Low* | Defeated | Total (Active / All) |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Architecture & Coherence (`ARCH-01`–`09`) | 0 | 2 | 4 | 2 | 1 | 8 / 9 |
-| Flows, Pricing & Honesty (`FLOW-01`–`10`) | 2 | 2 | 4 | 1 | 1 | 9 / 10 |
-| Rebalancer Economics & Safety (`SAFE-01`–`10`) | 0 | 3 | 4 | 2 | 1 | 9 / 10 |
-| Operations & Reliability (`OPS-01`–`08`) | 0 | 3 | 2 | 3 | 0 | 8 / 8 |
-| **Total** | **2** | **10** | **14** | **8** | **3** | **34 / 37** |
-
-*\*Note: `Low` includes `SAFE-06` (rated `Low / Medium`, downgraded from `Medium`), `ARCH-07` (`Low (Tracked Open Work)`), and `ARCH-09` (`Low / Open Question`); if `SAFE-06` is grouped under `Medium`, active counts are `2 Critical, 10 High, 15 Medium, 7 Low`. `Defeated` includes `ARCH-04` (`None [DEFEATED]`), `FLOW-09` (tagged `Low [DEFEATED]` in `02`), and `SAFE-04` (`[DEFEATED BY OWNER DECISION (D18, D20, D24)]`).*
-
-### Consolidated Findings Index
-
-| ID | Severity & Tag | 1-Line Summary | Detail Document |
-| --- | --- | --- | --- |
-| `ARCH-01` | Medium `[CORRECTED]` | `§4` diagram lacks `v0.8.0-onevault` baseline note & `§5.4`/`§5.6` lack forward-links to `§5.11.8` (`§5.6` itself is intentional `v0.8.0` baseline). | [01-architecture-and-coherence.md](./01-architecture-and-coherence.md#arch-01-corrected-top-level-diagram-4-lacks-v080-onevault-baseline-scoping-vs-step-3f-511-while-56-is-an-intentional-pre-3f-baseline) |
-| `ARCH-02` | Medium `[CORRECTED]` | `§1` (`L61`) & `§9` (`L1612`) hold stale 1-day hold (wrong even for `v0.8.0`); `§8` lacks Step 3f delta; early `unpause*` override ambiguous. | [01-architecture-and-coherence.md](./01-architecture-and-coherence.md#arch-02-corrected-stale-1-day-hold-in-1--9-wrong-even-for-v080-missing-step-3f-delta-in-8-and-ambiguous-early-unpause-override) |
-| `ARCH-03` | High `[EXPANDED]` | Missing `D30` slice-claim accounting (`RB-34`, `RB-19`, `§8.2`), incomplete `RB-22`, stale `§6.1`, EIP-170 size ceiling, lagging `§14` (`deSPXA` `[DEFEATED]`). | [01-architecture-and-coherence.md](./01-architecture-and-coherence.md#arch-03-expanded-invariant-list-7-step-3f-eng-plan-82-library-architecture-61-and-evidence-log-14-have-critical-gaps-on-delisted-asset-slice-claims-d30-rb-19rb-22-and-eip-170-limits-despxa-sub-point-defeated) |
-| `ARCH-04` | None `[DEFEATED]` | Defeated: `§5.9.6` (`L840–874`) & `§5.11.6` (`L1248`) explicitly specify ERC-7575 split and all 7 departures; retired-vault PRD item stays in `ARCH-07`. | [01-architecture-and-coherence.md](./01-architecture-and-coherence.md#arch-04-defeated-erc-4626-in-shape-and-erc-7540-claims-in-1-4-6-and-5116) |
-| `ARCH-05` | High `[EXPANDED]` | Undefined Step 3f defaults (`minPoolDepthUsdc`, `feeMarginBps`, delist bound/budget), unspecified `D30` slice-claim mechanics, and 48h timelock deadlock. | [01-architecture-and-coherence.md](./01-architecture-and-coherence.md#arch-05-expanded-asset-admission--delisting-45-d12d19d30-has-undefined-parameters-unspecified-slice-claim-mechanics-and-a-timelock-deadlock-during-marketfeed-failures) |
-| `ARCH-06` | Medium | `ADR-0004 L218` single-signer cancel contradiction; disconnected admission gates and unstated 48h timelock delay in `proposal.md`. | [01-architecture-and-coherence.md](./01-architecture-and-coherence.md#arch-06-adr-0004-vs-proposalmd-governance--admission-rules-divergence-and-internal-adr-0004-contradiction) |
-| `ARCH-07` | Low (Tracked Open Work) `[CORRECTED]` | `one-vault-prd-amendments.md §5 (L109–118)` tracks 4 unamended Step 3f breaks; concrete timing bug in `§5 (L91)` (`"after the next settlement"`). | [01-architecture-and-coherence.md](./01-architecture-and-coherence.md#arch-07-corrected-one-vault-prd-amendmentsmd-tracks-four-unamended-step-3f-prd-breaks-and-contains-a-concrete-settlement-timing-bug-in-5-l91) |
-| `ARCH-08` | Medium `[EXPANDED]` | `TARGET_SETTER_ROLE` placement, UUPS upgrade invariants, and missing `DEP-03`/`E47` exclusivity checks for `FLOW`/`REBALANCER`/`GOVERNANCE`/`TARGET_SETTER`/`RECEIPT_SUBMITTER` roles. | [01-architecture-and-coherence.md](./01-architecture-and-coherence.md#arch-08-expanded-role--authority-inconsistencies-target_setter_role-uups-upgrades-and-missing-dep-03e47-exclusivity-checks-on-internal-system-roles) |
-| `ARCH-09` | Low / Open Question | `VaultRegistry` removal (`D4`) & `G6` operational/client complexity gate remain unverified (`Not run`). | [01-architecture-and-coherence.md](./01-architecture-and-coherence.md#arch-09-vaultregistry-removal--g6-operational-complexity-gate-remain-unverified) |
-| `FLOW-01` | **Critical** | Step 8a–8b (`§21.1` Row 3) match fraction causes queue insolvency, breaches `RB-29`, breaks FIFO, and enables `§19.2 L2908` whale dilution. | [02-flows-pricing-and-honesty.md](./02-flows-pricing-and-honesty.md#flow-01--match-fraction-formula-causes-queue-insolvency-breaches-rb-29-and-enables-whale-dilution-when-queued-volume-exceeds-the-cap) |
-| `FLOW-02` | **Critical** | Lazy O(1) Step 8d match accounting breaks multi-round rolls, per-round `minHold`/`freezeSettlement`, and `ExclusionLedger` (`RB-22`) attribution. | [02-flows-pricing-and-honesty.md](./02-flows-pricing-and-honesty.md#flow-02--lazy-o1-match-accounting-breaks-multi-round-rolls-per-settlement-holdsfreezes-and-exclusionledger-rb-22-attribution) |
-| `FLOW-03` | High | `pauseDeposits` cooldown (`RB-32`) can block the mandatory `shutdown` + `pauseDeposits` wind-down pairing. | [02-flows-pricing-and-honesty.md](./02-flows-pricing-and-honesty.md#flow-03--pausedeposits-cooldown-rb-32-can-block-the-mandatory-shutdown--pausedeposits-wind-down-pairing) |
-| `FLOW-04` | High | Transient deposit stops (`D21`, `RB-33`) lack `cancel` lifecycle, and `RB-31` + `RB-32` mathematically make post-`pauseDeposits` continuation dead code. | [02-flows-pricing-and-honesty.md](./02-flows-pricing-and-honesty.md#flow-04--transient-deposit-stop-causes-have-undefined-cancel-lifecycle-and-rb-31--rb-32-makes-post-pausedeposits-continuation-dead-code) |
-| `FLOW-05` | Medium | Ending a round immediately on any net-side call failure prevents retries and forces a full epoch wait (7h). | [02-flows-pricing-and-honesty.md](./02-flows-pricing-and-honesty.md#flow-05--ending-a-round-immediately-on-any-net-side-call-failure-prevents-retries-and-forces-a-full-epoch-wait) |
-| `FLOW-06` | Medium | Unspecified handling of swept share dust from match rounding leaves unowned shares in `totalSupply`. | [02-flows-pricing-and-honesty.md](./02-flows-pricing-and-honesty.md#flow-06--unspecified-handling-of-swept-share-dust-from-match-rounding) |
-| `FLOW-07` | Medium | Stale `"Blend the price per side"` / `"blended price"` in `one-vault-timed-flows-eng-plan.md §8.2 (L435)` & `§8.4 WP3 (L530)` contradicts D27/E27. | [02-flows-pricing-and-honesty.md](./02-flows-pricing-and-honesty.md#flow-07--stale-blend-the-price-per-side-specification-in-engineering-plan-82-and-84-contradicts-d27--e27) |
-| `FLOW-08` | Medium | Customer honesty: hidden 0-vs-`legBandBps` slippage variance, last-block cancel baiting (`§21.2 L3052`), and unamended PRD promises. | [02-flows-pricing-and-honesty.md](./02-flows-pricing-and-honesty.md#flow-08--customer-honesty-hidden-slippage-variance-last-block-cancel-baiting-and-unamended-prd-promises) |
-| `FLOW-09` | Low `[DEFEATED]` | Defeated: `§5.9.6` discloses all 7 departures and `§5.11.6 (L1248)` removes specifically and only row 1 (`limits`). | [02-flows-pricing-and-honesty.md](./02-flows-pricing-and-honesty.md#flow-09--defeated-overstated-erc-7540-alignment-in-5116) |
-| `FLOW-10` | Low | `prd-amendments.md §5 (L91)` notice return timing & hardcoded 48h bug (long-waiting band exposure accepted in `§21.2 L3050`). | [02-flows-pricing-and-honesty.md](./02-flows-pricing-and-honesty.md#flow-10--prd-5-l91-specification-bug-on-notice-return-timing--hardcoded-48h-long-waiting-band-exposure-already-accepted-in-212) |
-| `SAFE-01` | High | `RB-30` zero-block rollover starvation (48h / indefinite), `pauseQueue` coupling, and `[epochClose, roundEnd]` vs `"settlement window"` contradiction. | [03-rebalancer-economics-and-safety.md](./03-rebalancer-economics-and-safety.md#safe-01--rb-30-zero-block-rollover-starvation-pausequeue-coupling--step-3f-scope-contradiction) |
-| `SAFE-02` | High | `D21` allows asymmetric forced matching on locked depositors when an impaired lending venue holds $\ge 5\%$ liquidity & `RB-32` blocks `pauseDeposits`. | [03-rebalancer-economics-and-safety.md](./03-rebalancer-economics-and-safety.md#safe-02--lending-venue-impairment--asymmetric-forced-matching-on-locked-depositors-d21--rb-32) |
-| `SAFE-03` | Medium `[CORRECTED]` | Missing `settleWindow >= TWAP_window` bound (`E51`/`§7`) & unbounded basket weight (launch skew corrected to `4.5 bps` at 5% basket weight). | [03-rebalancer-economics-and-safety.md](./03-rebalancer-economics-and-safety.md#safe-03--missing-settlewindow--twap_window-parameter-bound--unbounded-basket-weight-skew) |
-| `SAFE-04` | `[DEFEATED]` | Defeated by Owner Decision (`D18`, `D20`, `D24`): Safe-only timelocked wind-down & no `keeperGrace` explicitly accepted (`§5.11.7`, `§18.4`, `§19.2`). | [03-rebalancer-economics-and-safety.md](./03-rebalancer-economics-and-safety.md#safe-04--defeated-by-owner-decision-d18-d20-d24-loss-of-exit-liveness-under-step-3f-during-feedusdc-outage-or-multisigtimelock-delay) |
-| `SAFE-05` | Medium | Glide-path plan convergence deadlock from `minStepUsdc` + `toleranceBps` + skipped illiquid assets (`cap[asset] < minStepUsdc`). | [03-rebalancer-economics-and-safety.md](./03-rebalancer-economics-and-safety.md#safe-05--glide-path-plan-convergence-deadlock-minstepusdc--tolerancebps--stepdepthbps) |
-| `SAFE-06` | Low / Medium `[CORRECTED]` | `navBefore - navAfter` `0`-floor, `§5.5 (L501)` stale halt label, `0 < 0` zero-budget edge case, and dynamic TVL budget (Part 2 reachability corrected). | [03-rebalancer-economics-and-safety.md](./03-rebalancer-economics-and-safety.md#safe-06--rebalancer-cost-accounting-bugs-navbefore---navafter-floor-55-stale-halt-label--0--0-edge-case-dynamic-turnover) |
-| `SAFE-07` | Medium | `maxStepSlippageBps` below `refBandBps` (90 bps) under `§5.10`'s `min/max(TWAP, feed)` causes `step()` reverts; `§4.5 Rule 6` / `RB-33` omits it. | [03-rebalancer-economics-and-safety.md](./03-rebalancer-economics-and-safety.md#safe-07--purchase-slippage-bound-vs-refbandbps-deadlock--missing-maxstepslippagebps-check-in-rb-33) |
-| `SAFE-08` | High | Unspecified deferred-claim interactions: `D23`/`RB-21` lending units vs `step()`, and `D30` delisted-asset slice claims (`RB-34`, `RB-19`, `§8.2`). | [03-rebalancer-economics-and-safety.md](./03-rebalancer-economics-and-safety.md#safe-08--unspecified-deferred-claim-interactions-d23rb-21-lending-units--d30-delisted-asset-slice-claims) |
-| `SAFE-09` | Medium | TWAP quorum (9/12 slices) manipulation (`4.5 bps` at 5% weight, scales with weight) & tight `maxLendRateGrowthBps` (10 bps/day) Check 5 DoS. | [03-rebalancer-economics-and-safety.md](./03-rebalancer-economics-and-safety.md#safe-09--twap-quorum-manipulation--maxlendrategrowthbps-false-positive-settlement-dos) |
-| `SAFE-10` | Low | `§5.10 (L915–916)` omits Check 6 (`maxSharePriceMoveBps`) on `Rebalancer.step()` (Pass-1 `§3.1`/`§3.4` contradictions defeated). | [03-rebalancer-economics-and-safety.md](./03-rebalancer-economics-and-safety.md#safe-10--check-6-maxsharepricemovebps-asymmetry-on-rebalancerstep) |
-| `OPS-01` | High | Operational contradiction between `D20` ("preferably a multisig") and `DEP-03` (single `KEEPER_ROLE` holder) under 48h `D4-10` rotation. | [04-operations-and-reliability.md](./04-operations-and-reliability.md#ops-01--high-operational-contradiction-between-d20-team-multisig-keeper-and-dep-03-single-keeper_role-holder-under-d4-10) |
-| `OPS-02` | High | `maxPause` cooldown (`RB-32`) & `maxPause == timelockDelay` edge deadlock `shutdown` + `pauseDeposits` wind-down notice protection. | [04-operations-and-reliability.md](./04-operations-and-reliability.md#ops-02--high-maxpause-cooldown-deadlocks-the-wind-down-notice-protection-shutdown--pausedeposits) |
-| `OPS-03` | Medium | Operational defects under intentional 48h `D4-10` Safe timelock: `EMERGENCY_ROLE` revocation cleanup persistence, `unpauseRebalance`/`resumePlan`, Safe SLAs. | [04-operations-and-reliability.md](./04-operations-and-reliability.md#ops-03--medium-operational-defects-under-intentional-48h-safe-only-timelock-governance-d4-10-d24-d30) |
-| `OPS-04` | High | Step 3f `RUN-01` 48h redemption strand (pool fee $\ge \text{legBandBps}$ reverts Check 8/11) and deferred `DEP-01`–`03` / `SIM-01`–`02` / `ARCH-08` gates. | [04-operations-and-reliability.md](./04-operations-and-reliability.md#ops-04--high-step-3f-run-01-48h-redemption-strand-and-deferred-v090-onevault-verification-gaps-dep-0103-sim-0102-arch-08) |
-| `OPS-05` | Low | Minor un-marked `§8 (L1590)` govern row (`allow-settlement-return`) and missing forward pointer from `§5.6`/`§5.9.5` to `§5.11.8`. | [04-operations-and-reliability.md](./04-operations-and-reliability.md#ops-05--low-minor-un-marked-8-govern-row-allow-settlement-return-and-missing-forward-pointer-from-56-to-5118) |
-| `OPS-06` | Medium | Off-chain receipt-to-target semantic binding gap (`RebalanceGovernance.applyReceipt`) & unresolved per-asset weight authority (`D8`). | [04-operations-and-reliability.md](./04-operations-and-reliability.md#ops-06--medium-off-chain-semantic-binding--unresolved-per-asset-weight-authority-d8) |
-| `OPS-07` | Low | Automatic deposit-stop resumption creates cancel-window coupling for depositors if dApp/Watchdog lags. | [04-operations-and-reliability.md](./04-operations-and-reliability.md#ops-07--low-automatic-deposit-stop-resumption-creates-cancel-window-coupling-for-depositors) |
-| `OPS-08` | Low | Indefinite maintenance burden for retired vaults' (`rmUSDC`, `rmPROTO`, `rmRWA`) TWAP pools and V3 price sources. | [04-operations-and-reliability.md](./04-operations-and-reliability.md#ops-08--low-indefinite-maintenance-burden-for-retired-vaults-twap-pools-and-price-sources) |
+**Totals:** 0 Critical, 7 High, 15 Medium, 14 Low, 3 Defeated, 39 IDs.
 
 ---
 
-## 4. Top 6 Compounding Failure Chains
+## 5. Remediation
 
-Detailed causal proofs and citations for all six chains are in [`05-cross-cutting-contradictions-and-gaps.md`](./05-cross-cutting-contradictions-and-gaps.md#4-compounding-failure-chains--concrete-architectural-resolutions):
+### Before implementation: spec edits
 
-1. **Chain 1 — Keeper SPOF, `RUN-01` Redemption Strand & Timelock Latency (`OPS-01` + `OPS-04` (`RUN-01`) + `ARCH-05` + `OPS-03` + `FLOW-05`):** With `SAFE-04` defeated under owner decisions `D18`/`D20`/`D24`, genuine operational fragility stems from `D20` ("preferably a multisig") conflicting with `DEP-03` (single `KEEPER_ROLE`) behind a 48h `D4-10` rotation (`OPS-01`), `RUN-01` pool-fee hikes ($\ge \text{legBandBps}$) stopping deposits/match while stranding 100% net redemptions on Check 8/Check 11 for ≥48h (`OPS-04`), 48h dead-feed delisting/`emergencyUnwind` latency (`ARCH-05`), unbatched `EMERGENCY_ROLE` revocation cleanup/Safe SLAs (`OPS-03`), and 7h round terminations on any single net-side failure (`FLOW-05`).
-2. **Chain 2 — Wind-Down Notice Protection Deadlock (`FLOW-03` + `OPS-02` + `OPS-03`):** Because `shutdown` is public in the 48h timelock, `§5.11.5` pairs it via runbook with `pauseDeposits`. `RB-32`'s 72h `maxPause` cooldown can block `EMERGENCY_ROLE` from pausing deposits when `shutdown` is scheduled, and `maxPause == timelockDelay` (permitted by `RB-32`/`E51`) lets notice protection lapse *before* `shutdown` executes.
-3. **Chain 3 — Rebalancer–Flow Mutual Interference (`SAFE-01` + `SAFE-03` + `SAFE-08` + `ARCH-03` + `ARCH-05` + `SAFE-10`):** Zero-block round rollovers (`§5.11.4 L1135–1136`) and `pauseQueue` starve `step()` and `D30` delistings for 48h or indefinitely (`SAFE-01`, compounded by `[epochClose, roundEnd]` vs `"settlement window"` contradiction); while `SAFE-03` launch-weight skew is only `4.5 bps` and `settleWindow == TWAP_window` at defaults, missing `settleWindow >= TWAP_window` (`E51`/`§7`) and unbounded basket weight (`§21.4`) leave TWAP bleed and `90 bps` skew unchecked; and both `D23`/`RB-21` lending units (`step()` vs `"Neither is paid first"`) and `D30` delisted-asset slice claims (`RB-34` balance/NAV exclusion, proceeds split, `RB-19`, `§8.2` omission) collide across `RobotMoneyFund`, `FlowQueue`, and `Rebalancer`.
-4. **Chain 4 — Match-Queue Insolvency, Multi-Round Corruption & `ExclusionLedger` (`FLOW-01` [Critical] + `FLOW-02` [Critical] + `FLOW-06` + `ARCH-03` + `OPS-04`):** `Step 8a–8b` (`§21.1` Row 3) allocates $1\text{M}$ shares against $500\text{k}$ escrowed when $D_{\text{total}} = 1\text{M} > \text{cap}_D = 500\text{k}$ (`FLOW-01`, while changing denominator to $D_{\text{total}}$ breaks FIFO and permits `§19.2 L2908` whale dilution); single-round `S, f` overwrites rolled rounds, conflates per-round `minHold`/`freezeSettlement`, and Step 8d lazy touch misattributes `RB-22` `ExclusionLedger` recovery on excluded impaired lending assets from Depositor D to exited Redeemer R (`FLOW-02`); unburned share dust inflates `totalSupply` (`FLOW-06`); and `§7` lacks conservation and zero-supply/`seed` invariants.
-5. **Chain 5 — Lending Venue Impairment & Asymmetric Transient-Stop Traps (`SAFE-02` + `FLOW-04` + `OPS-04` (`RUN-01`) + `SAFE-09` + `OPS-07`):** Although `§5.11.4 (L1100–1102)` treats unmarked losses symmetrically for passive holders, an impaired venue retaining $\ge 5\%$ liquidity passes D21 and forces **locked depositors** into face-value matching against fast redeemers when `RB-32` blocks `pauseDeposits` (`SAFE-02`); transient stops (Causes 3 & 5) lack `cancel` lifecycle state and **`RB-31` + `RB-32` mathematically make post-`pauseDeposits` continuation dead code** (`FLOW-04`); `RUN-01` strands redemptions (`OPS-04`); and `maxLendRateGrowthBps` (10 bps/day) triggers false Check 5 DoS (`SAFE-09`).
-6. **Chain 6 — Specification Drift, EIP-170 Ceiling, Role Exclusivity & Customer Honesty (`ARCH-01`–`03`, `ARCH-06`–`09`, `FLOW-07`–`08`, `FLOW-10`, `SAFE-06`–`07`, `SAFE-10`, `OPS-04`–`06`, `OPS-08`):** `RobotMoneyFund` (23,237 B) and `FundAdminLib` (23,406 B) sit ~1.2–1.3 KB under EIP-170 before Step 3f + `E42` slice claims (`ARCH-03`); `DEP-03`/`E47` omit exclusivity verification on internal roles (`FLOW_ROLE`, `REBALANCER_ROLE`, `GOVERNANCE_ROLE`, `TARGET_SETTER_ROLE`, `RECEIPT_SUBMITTER_ROLE`) & UUPS upgraders (`ARCH-08`); stale specs (`§1`/`§9` 1-day hold, `§8.2`/`§8.4` `"blend"`, `§5.5 L501`, `Rule 6` missing `maxStepSlippageBps`, `ADR-0004 L218`) persist; and customers face unquoted slippage variance, last-block cancel baiting (`FLOW-08`), four unamended PRD breaks, `§5 (L91)`'s wrong notice-return timing (`ARCH-07`/`FLOW-10`), and off-chain receipt-binding risk (`OPS-06`).
+1. **R3.** Fix the denominators of step 8b. Add a conservation invariant for the match.
+2. **R2.** Specify per-side running accumulators for the match. Make `queuedSharesOf` resolve every booked match. State in RB-22 that a match changes ownership at booking and that no match runs while an exclusion is open.
+3. **R1.** Remove the cooldown from `pauseDeposits` (or the alternative in decision 1). Extend the D29 pairing rule to every scheduled adapter revoke.
+4. **R4.** Specify D30 claim units, their exclusion from `heldBalance`, NAV, the caps and the proportion check, the split of each sale's proceeds, and what `step()` does with venues that carry lending claims. Fix eng plan §8.2, which says `sellForFlow` is unchanged.
+5. **R5.** Replace RB-30 with the inverted rule. Then let a round stay open for retries (FLOW-05).
+6. **R7.** Define the stop for round-time causes as recorded at the round's first call.
+
+### Before release
+
+7. **R6.** Make the keeper a team smart account with rotatable bot keys. Add its configuration to the DEP-03 read-back.
+8. **R8.** Run the size build first, inclusive of the D30 claims.
+9. **R9.** Extend E47 to `FLOW_ROLE`, `REBALANCER_ROLE`, `GOVERNANCE_ROLE`, `TARGET_SETTER_ROLE`, `RECEIPT_SUBMITTER_ROLE` and upgrade authority.
+10. **R10.** For any asset on a pool with an adjustable fee, reuse the D30 claim for a pool that fails its band.
+
+### Text
+
+11. Fix the stale hold (ARCH-02), "blend the price" (FLOW-07), "settlement window" for RB-30 (SAFE-01), ADR-0004 L218 (ARCH-06), PRD amendment row 1 (FLOW-10) and the slice wording of `§5.9.5` (SAFE-03).
 
 ---
 
-## 5. Prioritized Remediation Roadmap
+## 6. Owner decisions
 
-### Phase A: Must-Fix Math, Accounting & Coupling Blockers Before Implementation (Step 3f / `v0.9.0`)
-1. **Fix Match-Cap Insolvency & Multi-Round `ExclusionLedger` Attribution (`FLOW-01`, `FLOW-02`, `FLOW-06`, `ARCH-03`):** Restrict `Step 8a–8b` matching to the **oldest FIFO prefix** summing to $\text{cap}_D$ / $\text{cap}_R / S$ (splitting only the boundary request) and reconcile `RB-23`/`RB-24`; replace single-round `S, f` with per-round prefix-product accumulators + per-round `settleTime`/`frozen`; fix `RB-22` via an aggregate `FlowQueue` `ExclusionLedger` account with cohort tracking or a round-aware `ExclusionLedger` (covering matches & wind-down releases); burn swept share dust; and add whole-system conservation, zero-supply/`seed`, and exit-fee invariants to `§7`.
-2. **Close `D23`/`D30` Deferred-Claim Specs & Rebalancer–Flow Coupling (`SAFE-01`, `SAFE-03`, `SAFE-05`–`08`, `FLOW-05`, `ARCH-03`, `ARCH-05`):** Narrow `RB-30` to `[epochClose, firstSettleCallOrRoundAbort]` and allow `step()` during `pauseQueue` / failed `settle()` checks unless `pauseRebalance`; enforce `settleWindow >= slices × sliceLength` in `E51`/`§7` and decide on a total basket weight cap (`§21.4`); specify `step()` pro-rata splitting (or skipping) on `RB-21` venues; extend `RB-34` exclusion (`heldBalance`, NAV/`S`, caps, `RB-13`, `sellForFlow`) and define USDC proceeds splits for `D30` slice claims (`E42`, `E50`), `RB-19`, and `timed-flows-eng-plan.md §8.2`; require `maxStepSlippageBps > refBandBps + poolFee + feeMarginBps` in `Rule 6`/`RB-33`/`§5.6`; floor `cost` at `0` and fix `0 < 0` / `§5.5` halt logic; filter `cap < minStepUsdc` in `§5.3 step 3`; and keep rounds open on failed net-side `try/catch` calls (`FLOW-05`).
-3. **Define Missing Parameters & Restore EIP-170 Headroom (`ARCH-03`, `ARCH-05`):** Specify defaults/bounds for `minPoolDepthUsdc`, `feeMarginBps`, delisting sale price bound & cost budget, and `maxStepSlippageBps`. Split/refactor `FundAdminLib` (23,406 B) and `RobotMoneyFund` (23,237 B) and run `G1` inclusive of `E42` slice claims.
-4. **Resolve Venue Impairment, Transient Stops & `RUN-01` (`SAFE-02`, `FLOW-04`, `OPS-04`, `SAFE-09`):** Add an `EMERGENCY_ROLE` per-venue exclusion/deposit-stop lever (or bad-debt guard) to D21 exempt from `RB-32` cooldown; separate state-based stops from round-time skips via `depositStopEpoch` and resolve `RB-31` + `RB-32` expiry pause vs dead-code continuation; convert `RUN-01`-failing pool redemption slices into `D30`-style claims (or `EMERGENCY_ROLE` pool-slice quarantine); and calibrate `maxLendRateGrowthBps` (`§19.2 L2910`).
-
-### Phase B: Must-Fix Operational, Governance & Verification Safeguards
-1. **Resolve Keeper Operational SPOF Within `D20`/`DEP-03` (`OPS-01`):** Deploy a dedicated **Keeper Safe / smart account with 1-of-N automated bot session keys** as the single `KEEPER_ROLE` holder (distinguishing Keeper Safe from governance Safe in `DEP-03`) OR amend `DEP-03`/`E47` to allow a **2-key pre-attested primary + standby team keeper pair**, plus Watchdog automated gas monitoring/top-up.
-2. **Enforce Wind-Down Notice Protection & Safe Cleanup (`FLOW-03`, `OPS-02`, `OPS-03`):** Add an `ADMIN_ROLE` `windDownPending` / `adminPauseDeposits()` state exempt from `EMERGENCY_ROLE`'s `RB-32` cooldown; strengthen `RB-32`/`E51` to `maxPause >= timelockDelay + epochLength`; document atomic `scheduleBatch`/`executeBatch` revocation of `EMERGENCY_ROLE` with `unpause*`/`releaseSettlement`; clarify `unpauseRebalance` vs `resumePlan`; and establish Safe signer-availability SLAs.
-3. **Close 0.7.0 Verification & Role-Exclusivity Gates (`ARCH-08`, `OPS-04`):** Extend `DEP-03` (`§5.11.9 L1353–1359`) & `E47 (L414)` to verify exclusive membership on `FLOW_ROLE`, `REBALANCER_ROLE`, `GOVERNANCE_ROLE`, `TARGET_SETTER_ROLE`, `RECEIPT_SUBMITTER_ROLE`, and UUPS upgrade authority (plus upgrade storage-preservation invariants), and require executed `DEP-01`, `DEP-02` (recursive library attestation), `SIM-01`, `SIM-02`, and re-proved `§20.3` traces before scoring any Step 3f gate.
-
-### Phase C: Documentation, PRD & ADR Reconciliation
-1. **Reconcile `proposal.md` & `timed-flows-eng-plan.md` (`ARCH-01`–`02`, `ARCH-08`, `FLOW-07`, `SAFE-10`, `OPS-05`, `OPS-08`, `ARCH-09`):** Fix `§1 (L61)` and `§9 (L1612)` to **1 hour (`D4-11`)**; add `v0.8.0-onevault` baseline captions and forward-links to `§5.11.8` in `§4`, `§5.4`, `§5.6`, `§5.9.5`, and `§8` (`allow-settlement-return`); clarify `TARGET_SETTER_ROLE` placement and early `unpause*` authority; replace `"Blend the price per side"` / `"blended price"` in `timed-flows-eng-plan.md §8.2 (L435)` & `§8.4 WP3 (L530)`; document Check 6 behavior in `§5.10`; add retired-vault sunset criteria in `§9`; and measure `G6` (`ARCH-09`).
-2. **Reconcile `ADR-0004`, PRD Amendments & Customer Disclosures (`ARCH-06`, `ARCH-07`, `FLOW-08`, `FLOW-10`, `OPS-06`, `OPS-07`):** Fix `ADR-0004 L218` (Safe-threshold cancel), link `ADR-0004` admission/48h delay rules in `proposal.md`, fix `one-vault-prd-amendments.md §5 (L91)` (`"when that round ends"` / `maxRoll` epochs) and `L114` (`§6`), draft the four tracked `§5 (L109–118)` amendments, close `cancel` a buffer before `epochClose` (`§21.2 L3052`), surface bands/stop transitions/keeper liveness in UI, and decide `D8` + on-chain receipt binding (`OPS-06`).
-
-### Open Owner Decisions Requiring Sign-Off (Synced with `05` §5)
-1. **Team Multisig Keeper (`D20`) vs. Single `KEEPER_ROLE` (`DEP-03`) (`OPS-01`):** Use a Keeper Safe with 1-of-N automated bot session keys under `DEP-03`, or amend `DEP-03`/`E47` to permit a 2-key primary + standby team keeper EOA pair?
-2. **Cap Overflow Matching (`FLOW-01`):** Adopt FIFO-prefix matching up to `cap_D` / `cap_R` (preserves conservation, `RB-29`, FIFO, and prevents `§19.2 L2908` whale dilution), or divide by `D_total` / `R_total`?
-3. **Deferred-Claim (`D23`/`D30`) & `RUN-01` Mechanics (`SAFE-08`, `ARCH-03`, `ARCH-05`, `OPS-04`):** Specify `step()` vs `RB-21` claim units (split vs skip), `D30` slice-claim exclusion (`RB-34`) & USDC proceeds splitting (`E42`, `E50`), and `RUN-01` net-redemption handling (`D30`-style slice claim vs `EMERGENCY_ROLE` pool-slice quarantine).
-4. **Unspecified Step 3f Parameters & Basket Weight Cap (`ARCH-05`, `SAFE-03`, `SAFE-07`):** Set defaults/bounds for `minPoolDepthUsdc`, `feeMarginBps`, delisting sale price bound & cost budget, `maxStepSlippageBps`, `settleWindow >= slices × sliceLength`, and whether to cap total basket weight (`§21.4 L3075–3077`).
-5. **`RB-31` + `RB-32` Pause Expiry vs. Continuation (`FLOW-04`):** Pause/extend deposit `expiry` while deposits are stopped (`§5.11.3 item 8`), or delete the unreachable post-`pauseDeposits` continuation branch?
-6. **Stable-Only Vault (`D2`) & `PAXG` Eligibility (`ARCH-07`):** Confirm standalone stable-only vault disposition and `PAXG` `D12` Rule 1 eligibility.
-7. **Per-Asset Weight Authority (`D8`) & On-Chain Receipt Binding (`OPS-06`):** Choose production per-asset weight authority and whether `RebalanceGovernance.applyReceipt` must verify `(assets, bps)` on-chain.
+1. **R1: which lever protects locked depositors?** (a) No cooldown on `pauseDeposits`, recommended. (b) A direct, untimelocked deposit stop for the Safe.
+2. **FLOW-01: how is a scarce match shared?** Pro rata by size, as D27 says now, or oldest first. The insolvency is fixed either way. Oldest first reverses D27 and moves over-asking from size to time.
+3. **Already open, unchanged:** a weight cap on basket assets, the four undefined step 3f parameters, the last-block cancel, per-asset weight authority (D8), and on-chain binding of a receipt to its target vector.

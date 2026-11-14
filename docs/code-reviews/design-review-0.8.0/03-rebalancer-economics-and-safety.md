@@ -1,5 +1,7 @@
 # Design Review: Rebalancer Economics, Oracles & Smart Contract Safety
 
+> **Pass 3 final draft (2026-11-14).** The severities in this chapter are Pass 2's. Each finding carries its Pass 3 rating. `00-executive-summary.md` §4 and `06-pass-3-adversarial-critique.md` govern.
+
 **Reviewer Scope:** Rebalancer economics, oracle/TWAP/feed design, DEX/lending execution, flow-vs-rebalance interaction, and §7 invariants (design documents only; implementation code ignored).  
 **Target Worktree:** `/drive2/home/lucas/tmp/superfield-worktrees/robotmoney-core/design-review-0.8.0`
 
@@ -64,6 +66,8 @@ Reviewing `one-vault-rebalancer-proposal.md` §7 (L1416–1552) against step 3e/
 ## 4. Numbered Findings
 
 ### SAFE-01 — `RB-30` Zero-Block Rollover Starvation, `pauseQueue` Coupling & Step 3f Scope Contradiction
+
+> **Pass 3:** Medium (was High). The coupling is real; no value moves. Five places say "settlement window" where RB-30 means the round. The fix below cannot work as written: a failed `settle` check reverts and records nothing. Working fix: the first call of a round requires no step in the prior `settleWindow`; steps are free otherwise. Root R5. See `06`.
 - **Severity:** High
 - **Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md` §4.5 Rule 5 (`L335–336`), §5.9.5 (`epochLength = 6h`, `settleWindow = 1h`, `maxRoll = 8`, `L809`, `L814`), §5.10 (`L927–932`), §5.11.3 items 5 & 7 (`L1037–1056`), §5.11.4 (`L1135–1136`), §5.11.6 (`L1258`), §5.11.7 (`L1275–1276`), §7 `RB-30` (`L1537–1539`), §11 `D25` (`L1900`), `D30` (`L1905`), §13 (`L1996–1997`)
@@ -81,6 +85,8 @@ Reviewing `one-vault-rebalancer-proposal.md` §7 (L1416–1552) against step 3e/
 ---
 
 ### SAFE-02 — Lending Venue Impairment & Asymmetric Forced Matching on Locked Depositors (D21 / RB-32)
+
+> **Pass 3:** High, narrowed and merged into root R1. "Asymmetric forced matching" is defeated: a depositor loses the same amount matched or minted; the match changes only who receives the money. The valid core is the lock after the cutoff, protected only by a pause the cooldown can switch off. Defeated fixes: a hot-key venue exclusion moves value (ADP-2) against the v0.8.0 role split; routing deposits away breaks the pro-rata purchase. See `06`.
 - **Severity:** High
 - **Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md` §4.2 (`L221–224`), §4.5 (`L362–372`), §5.6 (`L547–548`), §5.9.5 (`maxEpochFlowBps = 500`, `L811`), §5.11.3 item 3 (`L1031–1035`), §5.11.4 (`L1081–1102`, `L1144–1148`), §5.11.5 (`L1218–1219`), §7 `RB-25` (`L1519–1523`), `RB-28` (`L1531–1534`), `RB-32` (`L1543–1545`), §11 `D21` (`L1896`), `D28` (`L1903`)
@@ -97,6 +103,8 @@ Reviewing `one-vault-rebalancer-proposal.md` §7 (L1416–1552) against step 3e/
 ---
 
 ### SAFE-03 — Missing `settleWindow >= TWAP_window` Parameter Bound & Unbounded Basket Weight Skew
+
+> **Pass 3:** Low (was Medium). The bound is an identity: check 3 takes its slices from the last `settleWindow`. Reword `§5.9.5` as "slice length = `settleWindow / slices`". The basket weight cap stays an open owner item. See `06`.
 - **Severity:** Medium *(downgraded from `High` after correcting Pass 1 weighting math and `settleWindow` timing errors)*
 - **Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md` §4.2 (`L218–225`), §4.5 (`L296–304`), §5.9.3 checks 3–4 (`L720–725`), §5.9.5 (`L809`, `L811`, `L817–818`), §5.10 (`L930–932`), §5.11.2 (`L1012–1020`), §5.11.4 (`L1074–1076`, `L1104–1122`), §7 `RB-30` (`L1537–1539`), §19.4 (`L2935–2937`), §21.2 (`L3036`), §21.3 (`L3056–3057`), §21.4 (`L3075–3077`)
@@ -118,6 +126,8 @@ Reviewing `one-vault-rebalancer-proposal.md` §7 (L1416–1552) against step 3e/
 ---
 
 ### SAFE-04 — `[DEFEATED BY OWNER DECISION (D18, D20, D24)]` Loss of Exit Liveness Under Step 3f During Feed/USDC Outage or Multisig/Timelock Delay
+
+> **Pass 3:** Defeated by owner decision. Agreed. See `06`.
 - **Status / Severity:** **`[DEFEATED BY OWNER DECISION (D18, D20, D24)]`** *(Originally rated `High` in Pass 1 / `Critical` by §19 reviewer; explicitly evaluated and rejected by the owner)*
 - **Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md` §5.11.5 (`L1177–1213`), §5.11.7 (`L1270–1274`), §7 `RB-20 (3f)` (`L1506`), `RB-26` (`L1524–1525`), `RB-27` (`L1526–1530`), §11 `D18` (`L1893`), `D20` (`L1895`), `D24` (`L1899`), §18.4 item 1 (`L2823–2829`), §19.1 Rule 1 (`L2882–2885`), §19.2 Row 2 (`L2897`)
@@ -135,6 +145,8 @@ Reviewing `one-vault-rebalancer-proposal.md` §7 (L1416–1552) against step 3e/
 ---
 
 ### SAFE-05 — Glide-Path Plan Convergence Deadlock (`minStepUsdc` + `toleranceBps` + `stepDepthBps`)
+
+> **Pass 3:** Low (was Medium). Scenario B is already fixed and tested (R-F1, `proposal.md` L2159). Scenario A needs a fund under about 100k USDC. See `06`.
 - **Severity:** Medium
 - **Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md` §5.3 steps 3–4 (`L450–459`), §5.5 (`L498–510`), §5.6 (`L527–528`, `L532`), §14 (`L2159 R-F1`)
@@ -154,6 +166,8 @@ Reviewing `one-vault-rebalancer-proposal.md` §7 (L1416–1552) against step 3e/
 ---
 
 ### SAFE-06 — Rebalancer Cost Accounting Bugs (`navBefore - navAfter` Floor, `§5.5` Stale Halt Label / `0 < 0` Edge Case, Dynamic Turnover)
+
+> **Pass 3:** Low. Prose gaps about built, measured behaviour (`§14`). See `06`.
 - **Severity:** Low / Medium *(downgraded from `Medium` after correcting Part 2)*
 - **Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md` §5.3 steps 7–8 (`L466–472`), §5.5 (`L501`), §5.6 (`costBudgetBps`, `L531`), §5.10 (`L920–921`), §14 (`L2016`, `L2171 B-F5`)
@@ -171,6 +185,8 @@ Reviewing `one-vault-rebalancer-proposal.md` §7 (L1416–1552) against step 3e/
 ---
 
 ### SAFE-07 — Purchase Slippage Bound vs `refBandBps` Deadlock & Missing `maxStepSlippageBps` Check in `RB-33`
+
+> **Pass 3:** Low (was Medium). A skip when feed and TWAP disagree is the stricter-price rule of `§5.10` working as meant. The proposed fix loosens the step's protection. State the relation instead. See `06`.
 - **Severity:** Medium
 - **Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md` §4.5 Rule 6 (`L346–360`), §5.6 (`L529`, `L537–539`), §5.9.5 (`refBandBps = 90`, `L818`), §5.10 (`L917–919`), §7 `RB-33` (`L1546–1548`)
@@ -186,6 +202,8 @@ Reviewing `one-vault-rebalancer-proposal.md` §7 (L1416–1552) against step 3e/
 ---
 
 ### SAFE-08 — Unspecified Deferred-Claim Interactions: `D23`/`RB-21` Lending Units & `D30` Delisted-Asset Slice Claims
+
+> **Pass 3:** High. Confirmed. The single home of the D30 gap, which ARCH-03 and ARCH-05 repeat. Root R4. See `06`.
 - **Severity:** High *(upgraded from `Medium`)*
 - **Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md` §4.2 (`L221–224`), §4.5 Rule 5 (`L331–344`, esp. `L337–342`), §5.3 step 6 (`L463–465`), §5.10 (`L922–923`), §5.11.4 (`L1077–1079`, `L1151–1157`), §7 `RB-19` (`L1470–1471`), `RB-21` (`L1475–1476`), `RB-34` (`L1549–1552`), §11 `D23` (`L1898`), `D30` (`L1905`)
@@ -211,6 +229,8 @@ Reviewing `one-vault-rebalancer-proposal.md` §7 (L1416–1552) against step 3e/
 ---
 
 ### SAFE-09 — TWAP Quorum Manipulation & `maxLendRateGrowthBps` False-Positive Settlement DoS
+
+> **Pass 3:** Medium. Confirmed; already recorded open in `§19.2`. See `06`.
 - **Severity:** Medium
 - **Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md` §4.2 (`L221–224`), §5.9.3 checks 5 & 6 (`L726–732`), §5.9.5 (`L811`, `L817–823`), §5.11.1 (`L997`), §5.11.4 (`L1144–1146`), §19.2 (`L2910`), §19.4 (`L2935–2937`), §21.3 (`L3056–3057`), §21.4 (`L3075–3077`)
@@ -226,6 +246,8 @@ Reviewing `one-vault-rebalancer-proposal.md` §7 (L1416–1552) against step 3e/
 ---
 
 ### SAFE-10 — Check 6 (`maxSharePriceMoveBps`) Asymmetry on `Rebalancer.step()`
+
+> **Pass 3:** Low. No harm shown; state that the omission is deliberate. See `06`.
 - **Severity:** Low
 - **Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md` §5.3 step 2 (`L447–449`), §5.9.3 check 6 (`L730–732`), §5.10 (`L915–916`)

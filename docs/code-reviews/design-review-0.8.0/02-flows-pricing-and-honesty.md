@@ -1,5 +1,7 @@
 # Design Review 0.8.0 — Netted Forward-Priced Flows, Share Pricing & Customer Honesty
 
+> **Pass 3 final draft (2026-11-14).** The severities in this chapter are Pass 2's. Each finding carries its Pass 3 rating. `00-executive-summary.md` §4 and `06-pass-3-adversarial-critique.md` govern.
+
 **Worktree:** `/drive2/home/lucas/tmp/superfield-worktrees/robotmoney-core/design-review-0.8.0`  
 **Scope:** Design documents only (implementation code `.sol`, `.rs`, `.ts` excluded by instruction).
 
@@ -64,6 +66,8 @@ Decisions D16–D30 are reflected across `§5.11` and `one-vault-timed-flows-eng
 
 ### FLOW-01 — Match Fraction Formula Causes Queue Insolvency, Breaches `RB-29`, and Enables Whale Dilution When Queued Volume Exceeds the Cap
 
+> **Pass 3:** High (was Critical). Confirmed defect. The fix is the denominator: divide by the uncapped locked totals. The FIFO-prefix fix below reverses D27 and RB-23 and moves over-asking from size to time; it is an owner decision, not a fix. Root R3. See `06`.
+
 - **Severity:** Critical
 - **Exact Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md §21.1` Row 3 (`L3027`), `§5.11.4` steps 8a–8b (`L1106–1112`), `§5.11.4` (`L1138–1140, L1144–1145`), `§7 RB-23` (`L1508–1511`), `§7 RB-29` (`L1535–1536`), `§11 D22` (`L1897`), `§19.2` (`L2908`)
@@ -88,6 +92,8 @@ Decisions D16–D30 are reflected across `§5.11` and `one-vault-timed-flows-eng
 ---
 
 ### FLOW-02 — Lazy O(1) Match Accounting Breaks Multi-Round Rolls, Per-Settlement Holds/Freezes, and `ExclusionLedger` (`RB-22`) Attribution
+
+> **Pass 3:** High (was Critical). Confirmed core: lazy booking contradicts RB-22. The "multi-round overwrite" half assumes one storage slot the design does not have. Simpler fix: the queue's per-owner view resolves every match from per-side accumulators, and no match runs while an exclusion is open (already RB-28). Root R2. See `06`.
 
 - **Severity:** Critical
 - **Exact Citations:**
@@ -119,6 +125,8 @@ Decisions D16–D30 are reflected across `§5.11` and `one-vault-timed-flows-eng
 
 ### FLOW-03 — `pauseDeposits` Cooldown (`RB-32`) Can Block the Mandatory `shutdown` + `pauseDeposits` Wind-Down Pairing
 
+> **Pass 3:** High. Merged into root R1 with OPS-02, SAFE-02 and P3-01. Both fixes below fail: a Safe pause through the timelock executes no earlier than `shutdown`. Working fix: no cooldown on `pauseDeposits`. See `06`.
+
 - **Severity:** High
 - **Exact Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md §5.11.5 (L1190–1197, L1217–1222)`, `§7 RB-32 (L1543–1545)`, `§21.2 (L3045)`
@@ -135,6 +143,8 @@ Decisions D16–D30 are reflected across `§5.11` and `one-vault-timed-flows-eng
 ---
 
 ### FLOW-04 — Transient Deposit-Stop Causes Have Undefined `cancel` Lifecycle and `RB-31` + `RB-32` Makes Post-`pauseDeposits` Continuation Dead Code
+
+> **Pass 3:** Medium (was High). Part 1 confirmed: define the stop as recorded at the round's first call. Part 2 corrected to Low: the proof holds only for a full-length `pauseDeposits`, the rule still serves the other causes, and an expired deposit is withdrawn with no loss. Root R7. See `06`.
 
 - **Severity:** High
 - **Exact Citations:**
@@ -171,6 +181,8 @@ Decisions D16–D30 are reflected across `§5.11` and `one-vault-timed-flows-eng
 
 ### FLOW-05 — Ending a Round Immediately on Any Net-Side Call Failure Prevents Retries and Forces a Full Epoch Wait
 
+> **Pass 3:** Medium. Confirmed. Adopt only together with SAFE-01's corrected fix (P3-02). Root R5. See `06`.
+
 - **Severity:** Medium
 - **Exact Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md §5.11.4 (L1134–1136)`
@@ -187,6 +199,8 @@ Decisions D16–D30 are reflected across `§5.11` and `one-vault-timed-flows-eng
 
 ### FLOW-06 — Unspecified Handling of Swept Share Dust from Match Rounding
 
+> **Pass 3:** Low (was Medium). Share dust is rounding units. See `06`.
+
 - **Severity:** Medium
 - **Exact Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md §5.11.4 step 8e (L1121–1122)`
@@ -201,6 +215,8 @@ Decisions D16–D30 are reflected across `§5.11` and `one-vault-timed-flows-eng
 ---
 
 ### FLOW-07 — Stale "Blend the Price Per Side" Specification in Engineering Plan §8.2 and §8.4 Contradicts D27 / E27
+
+> **Pass 3:** Medium. Confirmed at eng plan L435 and L530. See `06`.
 
 - **Severity:** Medium
 - **Exact Citations:**
@@ -219,6 +235,8 @@ Decisions D16–D30 are reflected across `§5.11` and `one-vault-timed-flows-eng
 
 ### FLOW-08 — Customer Honesty: Hidden Slippage Variance, Last-Block Cancel Baiting, and Unamended PRD Promises
 
+> **Pass 3:** Medium. Confirmed. The last-block cancel was already recorded open in `§21.2`. See `06`.
+
 - **Severity:** Medium
 - **Exact Citations:**
   - `docs/technical/one-vault-rebalancer-proposal.md §5.11.3 item 2 (L1027–1030)`, `§5.11.7 (L1278–1294)`, `§21.2 (L3052)`
@@ -236,6 +254,8 @@ Decisions D16–D30 are reflected across `§5.11` and `one-vault-timed-flows-eng
 ---
 
 ### FLOW-09 — [DEFEATED] Overstated ERC-7540 Alignment in §5.11.6
+
+> **Pass 3:** Defeated. Agreed. See `06`.
 
 - **Severity:** Low `[DEFEATED]`
 - **Exact Citations:**
@@ -257,6 +277,8 @@ Decisions D16–D30 are reflected across `§5.11` and `one-vault-timed-flows-eng
 ---
 
 ### FLOW-10 — PRD §5 (L91) Specification Bug on Notice Return Timing & Hardcoded 48h (Long-Waiting Band Exposure Already Accepted in §21.2)
+
+> **Pass 3:** Low. Confirmed. See `06`.
 
 - **Severity:** Low
 - **Exact Citations:**
